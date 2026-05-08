@@ -97,6 +97,7 @@ pub fn spawn_hud(mut commands: Commands) {
                         for _ in 0..MAX_TRACE {
                             r.spawn((
                                 TraceSeg,
+                                BarLerp(0.0),
                                 Node { width: Val::Px(BAR_W), height: Val::Px(0.0), ..default() },
                                 BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.0)),
                             ));
@@ -133,7 +134,7 @@ pub fn update_hud(
     mut frame_bars: Query<(&mut Node, &mut BackgroundColor, &mut BarLerp), (With<FrameBar>, Without<TraceSeg>, Without<TraceHistBar>)>,
     trace_bar_ents: Query<Entity, (With<TraceHistBar>, Without<FrameBar>, Without<TraceSeg>)>,
     children_q: Query<&Children, (With<TraceHistBar>, Without<FrameBar>)>,
-    mut trace_segs: Query<(&mut Node, &mut BackgroundColor), (With<TraceSeg>, Without<FrameBar>, Without<TraceHistBar>)>,
+    mut trace_segs: Query<(&mut Node, &mut BackgroundColor, &mut BarLerp), (With<TraceSeg>, Without<FrameBar>, Without<TraceHistBar>)>,
 ) {
     if keys.just_pressed(KeyCode::Backquote)
         && (keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight))
@@ -161,6 +162,14 @@ pub fn update_hud(
     }
     current_trace.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
     current_trace.truncate(MAX_TRACE);
+    // Assign stable colors to any new system names
+    for (name, _) in &current_trace {
+        if !data.name_colors.contains_key(name) {
+            let ci = data.next_color;
+            data.name_colors.insert(name.clone(), ci);
+            data.next_color = ci + 1;
+        }
+    }
     data.trace_snapshots.push(current_trace.clone());
     if data.trace_snapshots.len() > BARS {
         data.trace_snapshots.remove(0);
@@ -215,22 +224,27 @@ pub fn update_hud(
 
     // Trace history bars: 60-frame compound stacked bars
     let all_times: Vec<f64> = data.trace_snapshots.iter().flat_map(|s| s.iter().map(|(_, ms)| *ms)).collect();
-    let trace_max = all_times.iter().cloned().fold(0.0f64, f64::max).max(0.001) as f32;
+    let raw_max = all_times.iter().cloned().fold(0.0f64, f64::max).max(0.001) as f32;
+    data.smoothed_trace_max += (raw_max - data.smoothed_trace_max) * LERP_SPEED;
+    let trace_max = data.smoothed_trace_max;
 
     let bar_entities: Vec<Entity> = trace_bar_ents.iter().collect();
     for (snap, &bar_ent) in data.trace_snapshots.iter().rev().zip(bar_entities.iter()) {
         let mut sorted: Vec<(String, f64)> = snap.clone();
-        sorted.sort_by(|a, b| a.0.cmp(&b.0));
+        sorted.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
 
         if let Ok(children) = children_q.get(bar_ent) {
             for (slot, child) in children.iter().enumerate() {
-                if let Ok((mut node, mut bg)) = trace_segs.get_mut(child) {
-                    if let Some((_name, ms)) = sorted.get(slot) {
-                        let h = (*ms as f32 / trace_max * TRACE_H).max(0.0);
-                        node.height = Val::Px(h);
-                        bg.0 = span_color(slot);
+                if let Ok((mut node, mut bg, mut lerp)) = trace_segs.get_mut(child) {
+                    if let Some((name, ms)) = sorted.get(slot) {
+                        let target = (*ms as f32 / trace_max * TRACE_H).max(0.0);
+                        lerp.0 += (target - lerp.0) * LERP_SPEED;
+                        node.height = Val::Px(lerp.0);
+                        let ci = data.name_colors.get(name).copied().unwrap_or(0);
+                        bg.0 = span_color(ci);
                     } else {
-                        node.height = Val::Px(0.0);
+                        lerp.0 += (0.0 - lerp.0) * LERP_SPEED;
+                        node.height = Val::Px(lerp.0);
                     }
                 }
             }
@@ -249,7 +263,8 @@ pub fn update_hud(
     for (i, (mut t, mut tc)) in text_group.p2().iter_mut().enumerate() {
         if let Some((name, ms)) = cum_sorted.get(i) {
             t.0 = format!("{}  {:.2}ms", name, ms);
-            tc.0 = span_color(i);
+            let ci = data.name_colors.get(name).copied().unwrap_or(0);
+            tc.0 = span_color(ci);
         } else {
             t.0 = String::new();
         }

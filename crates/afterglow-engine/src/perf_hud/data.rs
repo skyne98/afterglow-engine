@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use bevy::prelude::*;
 
 const MAX_HISTORY: usize = 60;
@@ -15,6 +16,9 @@ pub struct PerfData {
     pub trace_snapshots: Vec<Vec<(String, f64)>>,
     pub update_time_ms: f64,
     pub extraction_time_ms: f64,
+    pub name_colors: HashMap<String, usize>,
+    pub next_color: usize,
+    pub smoothed_trace_max: f32,
 }
 
 impl Resource for PerfData {}
@@ -27,6 +31,9 @@ impl Default for PerfData {
             trace_snapshots: Vec::with_capacity(MAX_HISTORY),
             update_time_ms: 0.0,
             extraction_time_ms: 0.0,
+            name_colors: HashMap::new(),
+            next_color: 0,
+            smoothed_trace_max: 0.001,
         }
     }
 }
