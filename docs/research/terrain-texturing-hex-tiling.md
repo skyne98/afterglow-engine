@@ -7,6 +7,12 @@
 Bevy 0.18 has **no built-in terrain blending** — no splat map material, no triplanar mapping,
 no terrain shader. It provides the plumbing via `ExtendedMaterial` and custom shaders.
 
+### Note on Approach
+
+These techniques blend textures on a **single terrain mesh** (splat maps, triplanar mapping).
+They do NOT blend between separate meshes. For blending between different meshes at LOD
+seams, a different approach (vertex morphing, stencil buffers) is needed.
+
 ### Approaches
 
 #### ExtendedMaterial<StandardMaterial, E>
@@ -85,7 +91,6 @@ weight_i /= (weight_x + weight_y + weight_z)
 |---|---|
 | **plumesplat** | `ExtendedMaterial` + texture arrays (256 layers), triplanar, height blending, stochastic tiling, full PBR |
 | **bevy_regions** | u16 biome ID texture, CPU-based region painting |
-| **saddle-rendering-stochastic-texturing** | Anti-repetition: hex tiling, texture bombing, triplanar |
 
 ## 2. Hex Tiling
 
@@ -180,7 +185,6 @@ fn hex_tiling(uv: vec2<f32>, tex: texture_2d<f32>, samp: sampler) -> vec4<f32> {
 
 | Source | Format | Notes |
 |---|---|---|
-| **saddle-rendering-stochastic-texturing** | Rust/Bevy/WGSL | Full hex tiling + triplanar + height blending |
 | **three-hex-tiling** | Three.js/GLSL | Reference impl with configurable params |
 | **Neyret's Shadertoy** | GLSL | Original algorithm |
 
@@ -188,6 +192,5 @@ fn hex_tiling(uv: vec2<f32>, tex: texture_2d<f32>, samp: sampler) -> vec4<f32> {
 
 - https://crates.io/crates/plumesplat
 - https://crates.io/crates/bevy_regions
-- saddle-rendering-stochastic-texturing (GitHub)
 - https://www.shadertoy.com/view/4t2XWh (Neyret's original hex tiling)
 - https://iquilezles.org/articles/hexagons/ (hex grid math)
