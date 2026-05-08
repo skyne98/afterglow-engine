@@ -41,19 +41,44 @@ management complexity. Ghosting. Query is more expensive than trilinear grid.
 
 ### 3. Spatial Hash Radiance Caching (SHaRC)
 
-Probes stored in a **spatial hash table** instead of a grid (RTXGI v2.x).
+**In simple terms**: a `HashMap<vec3, Probe>`.
 
-**How it works**: `hash = hash3(worldPos) % numSlots`. Hash table with
-cuckoo/hopscotch hashing. Candidates generated each frame from camera ray
-hit points, assigned to slots, aged/evicted with LRU.
+Instead of a fixed 3D array (`probes[x][y][z]`), SHaRC stores probes in a
+hash table keyed by world position:
 
-**Pros**: Memory proportional to scene complexity (not grid). Naturally
-adaptive. Scales to large scenes. Configurable probe count.
+```rust
+let slot = hash3(world_position) % TABLE_SIZE;
+probes[slot] = /* probe data */;
+```
 
-**Cons**: Hash collisions cause probe conflicts. No natural interpolation
-structure. Temporal stability harder. Complex eviction policy.
+**How probe positions are generated (seeding):**
+Each frame, cast rays from the camera. Every surface hit point becomes a
+candidate probe position. Hash it → store it in the table if the slot
+is empty or the existing probe is older.
 
-**Used by**: RTXGI v2.x, "The Cavern" RTXGI 2.0 demo
+**Eviction (LRU):**
+Each probe has a last-accessed timestamp. When a new candidate maps to
+the same slot, the older one is evicted. Probes not seen by camera rays
+for a while naturally get replaced.
+
+**Query at shading time:**
+For a pixel at world position P, compute `hash3(P)` and read that probe.
+To get 8 neighbors for interpolation, hash 8 nearby offsets of P (e.g.
+P ± halfSpacing on each axis). If a slot is empty, skip it and interpolate
+from fewer probes.
+
+**Why this beats a grid:**
+- Probe density automatically matches where the camera looks — complex
+  corners get more probes, blank walls get fewer
+- Memory is proportional to scene complexity, not a fixed volume
+- Unbounded — works at any world scale without reconfiguration
+- No wasted probes inside geometry or empty space
+
+**Tradeoff vs grid:**
+- Grid trilinear interpolation is trivial (`wx·wy·wz`) and always has 8
+  probes. SHaRC may have empty neighbor slots → noisier interpolation
+- Hash collisions can cause probe conflicts
+- Eviction policy needs care to avoid probe flicker
 
 ### 4. Neural Radiance Caching (NRC)
 
