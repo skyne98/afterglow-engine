@@ -1,0 +1,9 @@
+/target
+**/*.rs.bk
+.env
+*.swp
+*.swo
+.idea/
+*.iml
+.vscode/
+*.code-workspace

@@ -1,0 +1,12 @@
+[package]
+name = "ax"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+afterglow-engine = { path = "../afterglow-engine" }
+clap.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
