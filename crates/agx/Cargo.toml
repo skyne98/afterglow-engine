@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 afterglow-engine = { path = "../afterglow-engine" }
+bevy.workspace = true
 clap.workspace = true
 tokio.workspace = true
 anyhow.workspace = true

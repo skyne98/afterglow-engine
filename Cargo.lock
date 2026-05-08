@@ -101,6 +101,7 @@ version = "0.1.0"
 dependencies = [
  "afterglow-engine",
  "anyhow",
+ "bevy",
  "clap",
  "tokio",
  "tracing",
