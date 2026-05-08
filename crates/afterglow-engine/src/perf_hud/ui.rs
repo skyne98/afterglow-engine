@@ -69,6 +69,8 @@ pub fn spawn_hud(mut commands: Commands) {
             Visibility::Visible,
         ))
         .with_children(|r| {
+            r.spawn((Text("AFTERGLOW-ENGINE".into()), TextFont { font_size: FONT_SZ * 1.4, ..default() }, TextColor(Color::srgb(0.6, 0.9, 1.0))));
+            r.spawn((Text("for games that feel half-remembered".into()), TextFont { font_size: FONT_SZ * 0.8, ..default() }, TextColor(Color::srgb(0.4, 0.6, 0.8))));
             r.spawn((FpsText, Text("".into()), TextFont { font_size: FONT_SZ, ..default() }, TextColor(Color::srgb(0.0, 1.0, 0.6))));
             r.spawn((FrameTimeText, Text("".into()), TextFont { font_size: FONT_SZ, ..default() }, TextColor(Color::srgb(1.0, 0.6, 0.2))));
 
@@ -179,14 +181,12 @@ pub fn update_hud(
     for mut t in &mut text_group.p0() {
         let fpss: Vec<f64> = data.history.iter().map(|s| s.fps).collect();
         let cur = data.history.last().map(|s| s.fps as u64).unwrap_or(0);
-        let min = fpss.iter().cloned().fold(f64::MAX, f64::min) as u64;
-        let max = fpss.iter().cloned().fold(0.0f64, f64::max) as u64;
         let avg = fpss.iter().sum::<f64>() / fpss.len().max(1) as f64;
         let mut sfps = fpss.clone();
         sfps.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
         let p5 = sfps.get((sfps.len() as f64 * 0.05) as usize).copied().unwrap_or(0.0) as u64;
         let p1 = sfps.get((sfps.len() as f64 * 0.01) as usize).copied().unwrap_or(0.0) as u64;
-        t.0 = format!("FPS {}  MIN {}  MAX {}  AVG {:.0}  P5 {}  P1 {}", cur, min, max, avg, p5, p1);
+        t.0 = format!("FPS {}  AVG {:.0}  P5 {}  P1 {}", cur, avg, p5, p1);
     }
 
     // Frame time text row
