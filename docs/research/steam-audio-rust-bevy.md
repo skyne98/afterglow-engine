@@ -1,5 +1,21 @@
 # Steam Audio + Rust + Bevy — Integration Guide
 
+## Verification
+
+Tested successfully on **Fedora 43, Ryzen 7 6800U, Mesa/RADV**:
+
+```
+$ cargo add audionimbus --features auto-install
+$ cargo run
+Creating Steam Audio context...
+✓ Context created successfully
+✓ HRTF loaded
+=== Steam Audio WORKS on this Linux machine ===
+```
+
+The `auto-install` feature downloads Steam Audio 4.8.1 (~172MB) at build time
+and links it automatically. Your final binary needs `libphonon.so` alongside it.
+
 ## Overview
 
 Steam Audio is Valve's industry-standard spatial audio SDK. It provides physics-based
