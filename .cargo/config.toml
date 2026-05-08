@@ -10,6 +10,18 @@ codegen-units = 256
 [profile.dev.package.bevy]
 opt-level = 1
 
+[profile.dev.package.wgpu]
+opt-level = 1
+
+[profile.dev.package.wgpu-core]
+opt-level = 1
+
+[profile.dev.package.wgpu-hal]
+opt-level = 1
+
+[profile.dev.package.naga]
+opt-level = 1
+
 [profile.dev.package.afterglow-engine]
 opt-level = 2
 
