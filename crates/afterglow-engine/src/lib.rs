@@ -1,14 +1,12 @@
 mod setup;
 
-use bevy::anti_alias::taa::TemporalAntiAliasPlugin;
 use bevy::prelude::*;
 
 pub struct AfterglowEnginePlugin;
 
 impl Plugin for AfterglowEnginePlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(TemporalAntiAliasPlugin)
-            .add_systems(Startup, setup::spawn_scene);
+        app.add_systems(Startup, setup::spawn_scene);
     }
 }
 
