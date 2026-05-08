@@ -9,3 +9,9 @@ codegen-units = 256
 
 [profile.dev.package.bevy]
 opt-level = 1
+
+[profile.dev.package.afterglow-engine]
+opt-level = 2
+
+[profile.dev.package.agx]
+opt-level = 2

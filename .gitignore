@@ -7,3 +7,5 @@
 *.iml
 .vscode/
 *.code-workspace
+trace-*.json
+*.trace

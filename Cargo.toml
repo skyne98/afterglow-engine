@@ -14,4 +14,5 @@ thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { version = "4", features = ["derive"] }
-bevy = { version = "0.18.1", default-features = true, features = ["dynamic_linking"] }
+bevy = { version = "0.18.1", default-features = true, features = ["dynamic_linking", "bevy_dev_tools", "sysinfo_plugin", "trace", "trace_chrome"] }
+tiny_http = "0.12"

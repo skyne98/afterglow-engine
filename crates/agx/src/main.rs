@@ -1,4 +1,3 @@
-use bevy::app::AppExit;
 use clap::Parser;
 
 #[derive(Parser)]
@@ -8,15 +7,7 @@ struct Cli {
     name: Option<String>,
 }
 
-fn main() -> AppExit {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
-        )
-        .init();
-
+fn main() -> bevy::app::AppExit {
     let _cli = Cli::parse();
-
     afterglow_engine::run()
 }
