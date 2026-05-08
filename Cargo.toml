@@ -2,7 +2,7 @@
 resolver = "3"
 members = [
     "crates/afterglow-engine",
-    "crates/ax",
+    "crates/agx",
 ]
 
 [workspace.dependencies]
