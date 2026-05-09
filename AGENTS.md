@@ -11,4 +11,4 @@
 - Always clean up temporary files
 - KISS and YAGNI
 - No files above 500 LOC
-- Build system lives in build-system/ — use `./b <command>` (bun-based, modular)
+- Build system lives in build-system/ — use `bun run <command>` (e.g. `bun run native`, `bun run wasm`, `bun run check`)

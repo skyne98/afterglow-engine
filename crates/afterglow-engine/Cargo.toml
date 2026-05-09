@@ -11,6 +11,7 @@ thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 bevy.workspace = true
+bevy_shader = "0.18"
 
 [dependencies.web-time]
 workspace = true
