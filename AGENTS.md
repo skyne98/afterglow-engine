@@ -8,6 +8,9 @@
 - Write extensive unit and regression tests; do not rely on memory, write tests for everything
 - Legacy code is bad; delete legacy code, embrace new code and systems
 - From time to time, spawn a subagent to look at the code and suggest cleanups — you might have left a mess
+- For research-heavy tasks or parallel synthesis, prefer `opencode` subagents with `opencode-go/deepseek-v4-flash`
+- When using `opencode` research agents, keep them read-only by default, give them narrow prompts, ask for primary-source links, and merge the findings back into `docs/research/` yourself
+- Preferred `opencode` pattern for research agents: `opencode run -m opencode-go/deepseek-v4-flash --pure --dir /path/to/repo "...prompt..."`
 - Always clean up temporary files
 - KISS and YAGNI
 - No files above 500 LOC
