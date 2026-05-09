@@ -141,13 +141,88 @@ A simplified heightmap for rendering the world at extreme distances (far LOD).
 - Base color layer + detail textures.
 - Low-res shadow map per tile.
 
-### Culling Pipeline
+## Open World Architecture
 
-1. **WMO BSP trees**: Frustum + occlusion culling per group.
-2. **ADT MCRF**: Per-tile object reference culling.
-3. **Antiportals**: Manually placed occluders in WMO groups.
-4. **Draw distance / fog**: Horizon-based fade.
-5. **VRS (VALAR)**: Post-process shading rate reduction in low-detail regions.
+### ADT Tile Grid
+
+The world is partitioned into a square grid of ADT files (terrain tiles), each covering **533.33m × 533.33m** in-game. The grid layout:
+
+```
+Tile: 33×33 verts  (one ADT file, ~533m²)
+Chunk: 8×8 tiles   (64 ADTs, ~4.3km²)
+Continent: 64×64 chunks (4096 ADTs, ~273km²)
+```
+
+Each ADT file contains:
+- **Heightmap** (129×129 per-corner heights for the full-resolution mesh)
+- **Texture alpha layers** (up to 4+ blended ground textures)
+- **Low-resolution shadow map** (precomputed static shadows on terrain)
+- **Object placement arrays** (MDDF for M2 doodads, MODF for WMO buildings)
+- **MCRF references** (which objects are visible from this tile — a per-tile visibility list)
+- **Liquid data** (water/lava planes with height and render flags)
+
+### Tile Streaming
+
+The client streams ADT tiles dynamically around the player:
+
+1. **Always loaded**: The tile the player occupies + the 8 surrounding tiles (3×3 grid).
+2. **Ring loading**: As the player crosses a tile boundary, new tiles are loaded and distant tiles are unloaded — the 3×3 window slides.
+3. **Priority queue**: Tiles closer to the player load first; distant tile LOD loads later.
+4. **Async I/O**: ADT files are loaded from disk (or SSD) on background threads, decompressed, and parsed into renderable geometry.
+
+### Level of Detail (LOD)
+
+#### Terrain LOD
+
+| Distance | Technique |
+|---|---|
+| **Near** (0–~200m) | Full-resolution terrain mesh (per-corner heightmap from ADT MCNK). Multi-texture alpha blending. Detail textures. |
+| **Mid** (~200–~800m) | Simplified mesh (fewer verts per tile). Mipmapped terrain textures. |
+| **Far** (~800–~1500m) | Coarse terrain approximation. Horizon terrain (WDL) blended in. |
+| **Horizon** (>~1500m) | **WDL** — a separate low-resolution heightmap covering the entire continent. No texture, rendered in fog color as a silhouette/shadow. |
+
+The transition between these LOD levels is smoothed by **fog blending**. WoW uses distance fog not just as an atmospheric effect, but as a **culling mechanism** — the fog color matches the horizon terrain color, so the seam between LOD levels is invisible.
+
+Horizon rendering uses a **second, extremely low-poly terrain layer** with no texture — just fog-colored geometry. By blending the near terrain out and the horizon terrain in, WoW achieves seemingly unlimited view distances at negligible GPU cost.
+
+#### Object LOD (M2 + WMO)
+
+- **M2 models** (trees, doodads, NPCs): Have multiple baked LOD meshes at decreasing polygon counts. Models fade in/out at distance thresholds using alpha blending.
+- **WMO buildings**: Fade out at distance. Size category in ADT controls max rendering distance.
+- **MCRF-based culling**: Objects not referenced in the current tile's MCRF chunk are never drawn — this is a per-tile explicit visibility list authored by the world designers.
+
+#### Draw Distance Settings (CVars)
+
+| CVar | Effect |
+|---|---|
+| `farclip` | Controls detailed draw distance — where fog starts. Beyond this, only terrain is visible. |
+| `horizonfarclip` | Controls how far the horizon terrain (WDL) extends. |
+| Environment Detail | LOD bias for objects — higher = further before LOD switches. |
+| View Distance | Master multiplier for all draw distances. |
+
+Legion (2016) significantly improved draw distance by overhauling terrain and water rendering at range plus adding proper LOD for trees and buildings.
+
+### Phasing
+
+Phasing is a **server-driven** system that allows different versions of the same world tile to coexist. The server tells the client which "phase" the player is in based on quest progress, story milestones, etc.
+
+- Each phase can have different ADT data, different object placements, different WMO/BSP state.
+- The client phases are swapped seamlessly as the player crosses phase boundaries.
+- Phasing changes are communicated via the game protocol (not a rendering technique per se, but critical for how the open world is presented).
+
+### Open World Culling Pipeline (Full)
+
+```
+1. ADT page grid → which tiles are within farclip + horizonfarclip
+2. Per-tile WDT check → does the tile exist? Load it.
+3. ADT MCRF → per-tile object visibility reference (which M2/WMO instances to consider)
+4. WMO BSP tree → frustum + occlusion culling per building group
+5. WMO antiportal → manually placed occluders cull geometry behind them
+6. Object LOD → fade out distant M2/WMO based on size category + distance
+7. Terrain LOD → switch from full ADT mesh → simplified mesh → WDL horizon
+8. Fog blending → mask LOD transitions, cap final visible distance
+9. VALAR (VRS) → post-process shading rate reduction in low-detail regions
+```
 
 ## External Tools & Ecosystem
 
@@ -165,6 +240,9 @@ A simplified heightmap for rendering the world at extreme distances (far LOD).
 - [wowdev.wiki — WMO/Rendering](https://wowdev.wiki/WMO/Rendering)
 - [wowdev.wiki — ADT/v18](https://wowdev.wiki/ADT/v18)
 - [wowdev.wiki — M2](https://wowdev.wiki/M2)
+- [wowdev.wiki — WDT](https://wowdev.wiki/WDT)
+- [wowdev.wiki — WDL](https://wowdev.wiki/WDL)
 - [Intel: VALAR in World of Warcraft](https://www.intel.com/content/www/us/en/developer/articles/technical/velocity-luminance-adaptive-rasterization.html)
 - [Wowpedia: CVar gxApi](https://wowpedia.fandom.com/wiki/CVar_gxApi)
 - [Engadget: WoW's Evolving Engine](https://www.engadget.com/2013-10-21-world-of-warcrafts-evolving-engine.html)
+- [Rock Paper Shotgun: WoW Legion Draw Distance](https://www.rockpapershotgun.com/world-of-warcraft-legion-draw-distance)
