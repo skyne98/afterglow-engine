@@ -3,20 +3,18 @@ use bevy::anti_alias::taa::TemporalAntiAliasing;
 use bevy::prelude::*;
 use web_time::Instant;
 
-use crate::material::GouraudMaterial;
 use crate::perf_hud;
 
 pub(super) fn spawn_scene(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<GouraudMaterial>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     commands.spawn((
-        Mesh3d(meshes.add(Sphere::new(0.5))),
-        MeshMaterial3d(materials.add(GouraudMaterial {
-            base_color: Color::srgb(0.2, 0.6, 1.0).to_linear().to_vec4(),
-            alpha_mode: AlphaMode::Opaque,
-            base_color_texture: None,
+        Mesh3d(meshes.add(Cuboid::from_size(Vec3::splat(1.0)))),
+        MeshMaterial3d(materials.add(StandardMaterial {
+            base_color: Color::srgb(0.2, 0.6, 1.0),
+            ..default()
         })),
         Rotates { speed: 0.5 },
     ));

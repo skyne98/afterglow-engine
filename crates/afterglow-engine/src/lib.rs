@@ -1,8 +1,7 @@
-mod material;
 mod perf_hud;
 mod setup;
 
-use bevy::{app::PluginGroupBuilder, pbr::MaterialPlugin, prelude::*, window::WindowPlugin};
+use bevy::{app::PluginGroupBuilder, prelude::*, window::WindowPlugin};
 use perf_hud::{
     AccumMap, PerfHudPlugin, collect_frame, record_update_end, record_update_start, setup_tracing,
     sync_shared_metrics, trace_collector::reset_trace_data, update_hud,
@@ -12,31 +11,28 @@ pub struct AfterglowEnginePlugin {
     trace_accum: AccumMap,
 }
 
-    impl Plugin for AfterglowEnginePlugin {
-        fn build(&self, app: &mut App) {
-            app.add_plugins((
-                PerfHudPlugin {
-                    trace_accum: self.trace_accum.clone(),
-                },
-                MaterialPlugin::<material::GouraudMaterial>::default(),
-            ))
-            .add_systems(Startup, setup::spawn_scene)
-            .add_systems(
-                Update,
-                (
-                    record_update_start,
-                    setup::rotate_cubes,
-                    setup::update_light,
-                    collect_frame,
-                    update_hud,
-                    record_update_end,
-                    sync_shared_metrics,
-                )
-                    .chain(),
+impl Plugin for AfterglowEnginePlugin {
+    fn build(&self, app: &mut App) {
+        app.add_plugins(PerfHudPlugin {
+            trace_accum: self.trace_accum.clone(),
+        })
+        .add_systems(Startup, setup::spawn_scene)
+        .add_systems(
+            Update,
+            (
+                record_update_start,
+                setup::rotate_cubes,
+                setup::update_light,
+                collect_frame,
+                update_hud,
+                record_update_end,
+                sync_shared_metrics,
             )
-            .add_systems(Update, reset_trace_data.after(sync_shared_metrics));
-        }
+                .chain(),
+        )
+        .add_systems(Update, reset_trace_data.after(sync_shared_metrics));
     }
+}
 
 pub fn run() -> bevy::app::AppExit {
     let trace_data = setup_tracing();
