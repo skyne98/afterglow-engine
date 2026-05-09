@@ -70,6 +70,18 @@ afterglow-engine
 | `AGX_METRICS_PORT` | `9877` | HTTP metrics server port |
 | `RUST_LOG` | `"info"` | Tracing filter |
 
+### Platform Notes
+
+- Native builds install formatted stderr tracing plus the trace collector layer.
+- Wasm builds install only the trace collector layer. This keeps startup off
+  `std::time`, which is unsupported on `wasm32-unknown-unknown`.
+- Wasm builds disable Bevy's anti-alias plugin and omit camera TAA because the
+  Bevy 0.18 TAA pipeline fails WebGL validation in browser builds.
+- Wasm builds disable Bevy's audio plugin until the engine exposes an explicit
+  user-gesture driven audio startup flow.
+- The HTTP metrics server is native-only; wasm builds keep the shared metrics
+  resource but do not bind a socket.
+
 ### HTTP API
 
 - `GET /metrics` or `GET /` → JSON: FPS stats, frame time stats, top 15 trace spans
@@ -109,6 +121,7 @@ afterglow-engine
 | tracing | 0.1 | — |
 | tracing-subscriber | 0.3 | env-filter |
 | tiny_http | 0.12 | — |
+| web-time | 1 | wasm-compatible timing |
 
 ## Crate: `agx` (binary)
 

@@ -4,14 +4,16 @@ pub mod trace_collector;
 mod ui;
 
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
 
-use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
-use bevy::prelude::*;
+use bevy::{
+    diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},
+    prelude::*,
+};
+use web_time::Instant;
 
 pub use data::PerfData;
 pub use server::SharedMetrics;
-pub use trace_collector::{setup_tracing, AccumMap};
+pub use trace_collector::{AccumMap, setup_tracing};
 pub use ui::update_hud;
 
 pub struct PerfHudPlugin {
@@ -38,7 +40,10 @@ impl Plugin for PerfHudPlugin {
             .init_resource::<FrameProfiler>()
             .insert_resource(SharedMetrics(shared))
             .add_systems(Startup, ui::spawn_hud)
-            .add_systems(PostUpdate, (record_postupdate_start, record_postupdate_end).chain());
+            .add_systems(
+                PostUpdate,
+                (record_postupdate_start, record_postupdate_end).chain(),
+            );
     }
 }
 
@@ -49,7 +54,12 @@ pub struct FrameProfiler {
 }
 
 impl Default for FrameProfiler {
-    fn default() -> Self { Self { update_start: None, postupdate_start: None } }
+    fn default() -> Self {
+        Self {
+            update_start: None,
+            postupdate_start: None,
+        }
+    }
 }
 
 pub fn record_update_start(mut profiler: ResMut<FrameProfiler>) {
@@ -81,15 +91,22 @@ pub fn sync_shared_metrics(data: Res<PerfData>, shared: Res<SharedMetrics>) {
     }
 }
 
-pub fn collect_frame(
-    mut data: ResMut<PerfData>,
-    store: Res<DiagnosticsStore>,
-) {
-    let fps = store.get(&FrameTimeDiagnosticsPlugin::FPS).and_then(|d| d.smoothed()).unwrap_or(0.0);
-    let ft = store.get(&FrameTimeDiagnosticsPlugin::FRAME_TIME).and_then(|d| d.value()).unwrap_or(0.0);
+pub fn collect_frame(mut data: ResMut<PerfData>, store: Res<DiagnosticsStore>) {
+    let fps = store
+        .get(&FrameTimeDiagnosticsPlugin::FPS)
+        .and_then(|d| d.smoothed())
+        .unwrap_or(0.0);
+    let ft = store
+        .get(&FrameTimeDiagnosticsPlugin::FRAME_TIME)
+        .and_then(|d| d.value())
+        .unwrap_or(0.0);
 
     let systems = data.frame_systems.drain(..).collect();
-    data.push(data::FrameSample { fps, frame_time_ms: ft, systems });
+    data.push(data::FrameSample {
+        fps,
+        frame_time_ms: ft,
+        systems,
+    });
 }
 
 pub fn record_system(data: &mut PerfData, name: &str, elapsed_ms: f64) {

@@ -1,0 +1,14 @@
+{
+  "private": true,
+  "scripts": {
+    "native": "bun run build-system/build.ts native",
+    "native-release": "bun run build-system/build.ts native-release",
+    "build-wasm": "bun run build-system/build.ts build-wasm",
+    "wasm": "bun run build-system/build.ts wasm",
+    "check": "bun run build-system/build.ts check",
+    "test": "bun run build-system/build.ts test",
+    "fmt": "bun run build-system/build.ts fmt",
+    "clippy": "bun run build-system/build.ts clippy",
+    "doctor": "bun run build-system/build.ts doctor"
+  }
+}

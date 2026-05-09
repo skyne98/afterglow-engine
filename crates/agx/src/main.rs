@@ -7,7 +7,11 @@ struct Cli {
     name: Option<String>,
 }
 
-fn main() -> bevy::app::AppExit {
+fn main() {
+    #[cfg(not(target_arch = "wasm32"))]
     let _cli = Cli::parse();
-    afterglow_engine::run()
+    #[cfg(target_arch = "wasm32")]
+    let _cli = Cli::try_parse_from(std::iter::empty::<String>());
+
+    afterglow_engine::run();
 }

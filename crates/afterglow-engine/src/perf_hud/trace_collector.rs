@@ -1,12 +1,12 @@
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
 use bevy::prelude::*;
 use serde::Serialize;
-use tracing_subscriber::layer::Context;
-use tracing_subscriber::registry::LookupSpan;
-use tracing_subscriber::Layer;
+use tracing_subscriber::{Layer, layer::Context, registry::LookupSpan};
+use web_time::Instant;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct SpanSample {
@@ -66,12 +66,16 @@ pub fn setup_tracing() -> TraceData {
         enter_times: Mutex::new(HashMap::new()),
     };
 
-    use tracing_subscriber::fmt;
-    use tracing_subscriber::prelude::*;
-    use tracing_subscriber::EnvFilter;
+    install_tracing_subscriber(layer);
 
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info"));
+    TraceData { accum }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn install_tracing_subscriber(layer: TraceCollectorLayer) {
+    use tracing_subscriber::{EnvFilter, fmt, prelude::*};
+
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
     let subscriber = tracing_subscriber::registry()
         .with(filter)
@@ -82,8 +86,17 @@ pub fn setup_tracing() -> TraceData {
         Ok(()) => eprintln!("[TraceCollectorLayer] installed"),
         Err(e) => eprintln!("[TraceCollectorLayer] FAILED: {e:?}"),
     }
+}
 
-    TraceData { accum }
+#[cfg(target_arch = "wasm32")]
+fn install_tracing_subscriber(layer: TraceCollectorLayer) {
+    use tracing_subscriber::{EnvFilter, prelude::*};
+
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+
+    let subscriber = tracing_subscriber::registry().with(filter).with(layer);
+
+    let _ = tracing::subscriber::set_global_default(subscriber);
 }
 
 pub fn reset_trace_data(trace: Res<TraceData>) {

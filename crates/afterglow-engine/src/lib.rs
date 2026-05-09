@@ -1,9 +1,11 @@
 mod perf_hud;
 mod setup;
 
-use bevy::prelude::*;
-use perf_hud::trace_collector::reset_trace_data;
-use perf_hud::{collect_frame, record_update_end, record_update_start, setup_tracing, sync_shared_metrics, update_hud, AccumMap, PerfHudPlugin};
+use bevy::{app::PluginGroupBuilder, prelude::*, window::WindowPlugin};
+use perf_hud::{
+    AccumMap, PerfHudPlugin, collect_frame, record_update_end, record_update_start, setup_tracing,
+    sync_shared_metrics, trace_collector::reset_trace_data, update_hud,
+};
 
 pub struct AfterglowEnginePlugin {
     trace_accum: AccumMap,
@@ -11,9 +13,13 @@ pub struct AfterglowEnginePlugin {
 
 impl Plugin for AfterglowEnginePlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(PerfHudPlugin { trace_accum: self.trace_accum.clone() })
-            .add_systems(Startup, setup::spawn_scene)
-            .add_systems(Update, (
+        app.add_plugins(PerfHudPlugin {
+            trace_accum: self.trace_accum.clone(),
+        })
+        .add_systems(Startup, setup::spawn_scene)
+        .add_systems(
+            Update,
+            (
                 record_update_start,
                 setup::rotate_cubes,
                 setup::update_light,
@@ -21,8 +27,10 @@ impl Plugin for AfterglowEnginePlugin {
                 update_hud,
                 record_update_end,
                 sync_shared_metrics,
-            ).chain())
-            .add_systems(Update, reset_trace_data.after(sync_shared_metrics));
+            )
+                .chain(),
+        )
+        .add_systems(Update, reset_trace_data.after(sync_shared_metrics));
     }
 }
 
@@ -32,8 +40,61 @@ pub fn run() -> bevy::app::AppExit {
 
     App::new()
         .insert_resource(trace_data)
-        .add_plugins((DefaultPlugins, AfterglowEnginePlugin { trace_accum }))
+        .add_plugins((default_plugins(), AfterglowEnginePlugin { trace_accum }))
         .run()
+}
+
+fn default_plugins() -> PluginGroupBuilder {
+    let window = {
+        #[cfg(target_arch = "wasm32")]
+        {
+            Window {
+                fit_canvas_to_parent: true,
+                ..default()
+            }
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            default()
+        }
+    };
+
+    let render = {
+        #[cfg(target_arch = "wasm32")]
+        {
+            bevy::render::settings::WgpuSettings {
+                backends: Some(
+                    bevy::render::settings::Backends::BROWSER_WEBGPU
+                        | bevy::render::settings::Backends::GL,
+                ),
+                ..default()
+            }
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            default()
+        }
+    };
+
+    let plugins = DefaultPlugins
+        .set(WindowPlugin {
+            primary_window: Some(window),
+            ..default()
+        })
+        .set(bevy::render::RenderPlugin {
+            render_creation: bevy::render::settings::RenderCreation::Automatic(
+                bevy::render::settings::WgpuSettings { ..render },
+            ),
+            ..default()
+        })
+        .build();
+
+    #[cfg(target_arch = "wasm32")]
+    let plugins = plugins
+        .disable::<bevy::anti_alias::AntiAliasPlugin>()
+        .disable::<bevy::audio::AudioPlugin>();
+
+    plugins
 }
 
 #[cfg(test)]
@@ -45,8 +106,11 @@ mod tests {
     #[test]
     fn plugin_registers() {
         let mut app = App::new();
-        app.add_plugins((bevy::MinimalPlugins, AfterglowEnginePlugin {
-            trace_accum: Arc::new(Mutex::new(std::collections::HashMap::new())),
-        }));
+        app.add_plugins((
+            bevy::MinimalPlugins,
+            AfterglowEnginePlugin {
+                trace_accum: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            },
+        ));
     }
 }

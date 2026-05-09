@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use bevy::prelude::*;
+use std::collections::HashMap;
 
 const MAX_HISTORY: usize = 60;
 
@@ -65,7 +65,12 @@ impl PerfData {
                 let avg = times.iter().sum::<f64>() / times.len() as f64;
                 let p95 = percentile(&times, 95.0);
                 let p99 = percentile(&times, 99.0);
-                SystemStats { name, avg, p95, p99 }
+                SystemStats {
+                    name,
+                    avg,
+                    p95,
+                    p99,
+                }
             })
             .collect();
 
@@ -85,7 +90,9 @@ pub struct SystemStats {
 
 fn percentile(sorted: &[f64], p: f64) -> f64 {
     let n = sorted.len();
-    if n == 0 { return 0.0; }
+    if n == 0 {
+        return 0.0;
+    }
     let idx = ((n as f64) * p / 100.0).ceil() as usize - 1;
     sorted[idx.clamp(0, n - 1)]
 }

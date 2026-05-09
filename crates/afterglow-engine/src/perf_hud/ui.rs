@@ -1,5 +1,7 @@
-use bevy::prelude::*;
-use bevy::window::{Monitor, PrimaryMonitor};
+use bevy::{
+    prelude::*,
+    window::{Monitor, PrimaryMonitor},
+};
 
 use super::data::PerfData;
 
@@ -69,56 +71,139 @@ pub fn spawn_hud(mut commands: Commands) {
             Visibility::Visible,
         ))
         .with_children(|r| {
-            r.spawn((Text("AFTERGLOW-ENGINE".into()), TextFont { font_size: FONT_SZ * 1.4, ..default() }, TextColor(Color::srgb(0.6, 0.9, 1.0))));
-            r.spawn((Text("for games that feel half-remembered".into()), TextFont { font_size: FONT_SZ * 0.8, ..default() }, TextColor(Color::srgb(0.4, 0.6, 0.8))));
-            r.spawn((FpsText, Text("".into()), TextFont { font_size: FONT_SZ, ..default() }, TextColor(Color::srgb(0.0, 1.0, 0.6))));
-            r.spawn((FrameTimeText, Text("".into()), TextFont { font_size: FONT_SZ, ..default() }, TextColor(Color::srgb(1.0, 0.6, 0.2))));
+            r.spawn((
+                Text("AFTERGLOW-ENGINE".into()),
+                TextFont {
+                    font_size: FONT_SZ * 1.4,
+                    ..default()
+                },
+                TextColor(Color::srgb(0.6, 0.9, 1.0)),
+            ));
+            r.spawn((
+                Text("for games that feel half-remembered".into()),
+                TextFont {
+                    font_size: FONT_SZ * 0.8,
+                    ..default()
+                },
+                TextColor(Color::srgb(0.4, 0.6, 0.8)),
+            ));
+            r.spawn((
+                FpsText,
+                Text("".into()),
+                TextFont {
+                    font_size: FONT_SZ,
+                    ..default()
+                },
+                TextColor(Color::srgb(0.0, 1.0, 0.6)),
+            ));
+            r.spawn((
+                FrameTimeText,
+                Text("".into()),
+                TextFont {
+                    font_size: FONT_SZ,
+                    ..default()
+                },
+                TextColor(Color::srgb(1.0, 0.6, 0.2)),
+            ));
 
             // FT bar history
             let w = BARS as f32 * (BAR_W + GAP);
-            r.spawn((Node { width: Val::Px(w), height: Val::Px(FT_H), flex_direction: FlexDirection::Row, align_items: AlignItems::End, ..default() },)).with_children(|r| {
-                for _ in 0..BARS {
-                    r.spawn((
-                        FrameBar,
-                        BarLerp(0.0),
-                        Node { width: Val::Px(BAR_W), height: Val::Px(0.0), margin: UiRect::right(Val::Px(GAP)), ..default() },
-                        BackgroundColor(Color::BLACK),
-                    ));
-                }
-            });
-            r.spawn((Text("frame time".into()), TextFont { font_size: FONT_SZ * 0.75, ..default() }, TextColor(Color::srgb(0.6, 0.6, 0.6))));
+            r.spawn((Node {
+                width: Val::Px(w),
+                height: Val::Px(FT_H),
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::End,
+                ..default()
+            },))
+                .with_children(|r| {
+                    for _ in 0..BARS {
+                        r.spawn((
+                            FrameBar,
+                            BarLerp(0.0),
+                            Node {
+                                width: Val::Px(BAR_W),
+                                height: Val::Px(0.0),
+                                margin: UiRect::right(Val::Px(GAP)),
+                                ..default()
+                            },
+                            BackgroundColor(Color::BLACK),
+                        ));
+                    }
+                });
+            r.spawn((
+                Text("frame time".into()),
+                TextFont {
+                    font_size: FONT_SZ * 0.75,
+                    ..default()
+                },
+                TextColor(Color::srgb(0.6, 0.6, 0.6)),
+            ));
 
             // Trace history bars: 60 stacked compound bars
-            r.spawn((Text("system trace history".into()), TextFont { font_size: FONT_SZ * 0.75, ..default() }, TextColor(Color::srgb(0.6, 0.6, 0.6))));
-            r.spawn((Node { width: Val::Px(w), height: Val::Px(TRACE_H), flex_direction: FlexDirection::Row, align_items: AlignItems::End, ..default() },)).with_children(|r| {
-                for _ in 0..BARS {
-                    r.spawn((
-                        TraceHistBar,
-                        Node { width: Val::Px(BAR_W), height: Val::Px(TRACE_H), flex_direction: FlexDirection::Column, justify_content: JustifyContent::End, margin: UiRect::right(Val::Px(GAP)), ..default() },
-                    )).with_children(|r| {
-                        for _ in 0..MAX_TRACE {
-                            r.spawn((
-                                TraceSeg,
-                                BarLerp(0.0),
-                                Node { width: Val::Px(BAR_W), height: Val::Px(0.0), ..default() },
-                                BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.0)),
-                            ));
-                        }
-                    });
-                }
-            });
+            r.spawn((
+                Text("system trace history".into()),
+                TextFont {
+                    font_size: FONT_SZ * 0.75,
+                    ..default()
+                },
+                TextColor(Color::srgb(0.6, 0.6, 0.6)),
+            ));
+            r.spawn((Node {
+                width: Val::Px(w),
+                height: Val::Px(TRACE_H),
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::End,
+                ..default()
+            },))
+                .with_children(|r| {
+                    for _ in 0..BARS {
+                        r.spawn((
+                            TraceHistBar,
+                            Node {
+                                width: Val::Px(BAR_W),
+                                height: Val::Px(TRACE_H),
+                                flex_direction: FlexDirection::Column,
+                                justify_content: JustifyContent::End,
+                                margin: UiRect::right(Val::Px(GAP)),
+                                ..default()
+                            },
+                        ))
+                        .with_children(|r| {
+                            for _ in 0..MAX_TRACE {
+                                r.spawn((
+                                    TraceSeg,
+                                    BarLerp(0.0),
+                                    Node {
+                                        width: Val::Px(BAR_W),
+                                        height: Val::Px(0.0),
+                                        ..default()
+                                    },
+                                    BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.0)),
+                                ));
+                            }
+                        });
+                    }
+                });
 
             // Legend: top 5 trace system names
-            r.spawn((Node { flex_direction: FlexDirection::Column, row_gap: Val::Px(0.0), ..default() },)).with_children(|r| {
-                for _ in 0..MAX_TRACE {
-                    r.spawn((
-                        SysLegendItem,
-                        Text("".into()),
-                        TextFont { font_size: FONT_SZ * 0.8, ..default() },
-                        TextColor(Color::srgb(0.8, 0.8, 0.8)),
-                    ));
-                }
-            });
+            r.spawn((Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(0.0),
+                ..default()
+            },))
+                .with_children(|r| {
+                    for _ in 0..MAX_TRACE {
+                        r.spawn((
+                            SysLegendItem,
+                            Text("".into()),
+                            TextFont {
+                                font_size: FONT_SZ * 0.8,
+                                ..default()
+                            },
+                            TextColor(Color::srgb(0.8, 0.8, 0.8)),
+                        ));
+                    }
+                });
         });
 }
 
@@ -133,19 +218,31 @@ pub fn update_hud(
         Query<&mut Text, (With<FrameTimeText>, Without<FpsText>)>,
         Query<(&mut Text, &mut TextColor), With<SysLegendItem>>,
     )>,
-    mut frame_bars: Query<(&mut Node, &mut BackgroundColor, &mut BarLerp), (With<FrameBar>, Without<TraceSeg>, Without<TraceHistBar>)>,
+    mut frame_bars: Query<
+        (&mut Node, &mut BackgroundColor, &mut BarLerp),
+        (With<FrameBar>, Without<TraceSeg>, Without<TraceHistBar>),
+    >,
     trace_bar_ents: Query<Entity, (With<TraceHistBar>, Without<FrameBar>, Without<TraceSeg>)>,
     children_q: Query<&Children, (With<TraceHistBar>, Without<FrameBar>)>,
-    mut trace_segs: Query<(&mut Node, &mut BackgroundColor, &mut BarLerp), (With<TraceSeg>, Without<FrameBar>, Without<TraceHistBar>)>,
+    mut trace_segs: Query<
+        (&mut Node, &mut BackgroundColor, &mut BarLerp),
+        (With<TraceSeg>, Without<FrameBar>, Without<TraceHistBar>),
+    >,
 ) {
     if keys.just_pressed(KeyCode::Backquote)
         && (keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight))
     {
         for mut v in &mut hud {
-            *v = if *v == Visibility::Visible { Visibility::Hidden } else { Visibility::Visible };
+            *v = if *v == Visibility::Visible {
+                Visibility::Hidden
+            } else {
+                Visibility::Visible
+            };
         }
     }
-    let refresh_hz = monitor.iter().next()
+    let refresh_hz = monitor
+        .iter()
+        .next()
         .and_then(|m| m.refresh_rate_millihertz)
         .map(|mhz| mhz as f64 / 1000.0)
         .unwrap_or(60.0);
@@ -184,8 +281,14 @@ pub fn update_hud(
         let avg = fpss.iter().sum::<f64>() / fpss.len().max(1) as f64;
         let mut sfps = fpss.clone();
         sfps.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
-        let p5 = sfps.get((sfps.len() as f64 * 0.05) as usize).copied().unwrap_or(0.0) as u64;
-        let p1 = sfps.get((sfps.len() as f64 * 0.01) as usize).copied().unwrap_or(0.0) as u64;
+        let p5 = sfps
+            .get((sfps.len() as f64 * 0.05) as usize)
+            .copied()
+            .unwrap_or(0.0) as u64;
+        let p1 = sfps
+            .get((sfps.len() as f64 * 0.01) as usize)
+            .copied()
+            .unwrap_or(0.0) as u64;
         t.0 = format!("FPS {}  AVG {:.0}  P5 {}  P1 {}", cur, avg, p5, p1);
     }
 
@@ -195,18 +298,28 @@ pub fn update_hud(
         let mut sorted: Vec<f64> = data.history.iter().map(|s| s.frame_time_ms).collect();
         sorted.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
         let avg = sorted.iter().sum::<f64>() / sorted.len().max(1) as f64;
-        let p95 = sorted.get((sorted.len() as f64 * 0.95) as usize).copied().unwrap_or(0.0);
-        let p99 = sorted.get((sorted.len() as f64 * 0.99) as usize).copied().unwrap_or(0.0);
+        let p95 = sorted
+            .get((sorted.len() as f64 * 0.95) as usize)
+            .copied()
+            .unwrap_or(0.0);
+        let p99 = sorted
+            .get((sorted.len() as f64 * 0.99) as usize)
+            .copied()
+            .unwrap_or(0.0);
         t.0 = format!(
             "FT {:.1}ms  AVG {:.1}  P95 {:.1}  P99 {:.1}  @{}Hz",
             last.map(|s| s.frame_time_ms).unwrap_or(0.0),
-            avg, p95, p99,
+            avg,
+            p95,
+            p99,
             refresh_hz as u64,
         );
     }
 
     // Frame time bars (lerp-smoothed)
-    for (sample, (mut node, mut bg, mut lerp)) in data.history.iter().rev().zip(frame_bars.iter_mut()) {
+    for (sample, (mut node, mut bg, mut lerp)) in
+        data.history.iter().rev().zip(frame_bars.iter_mut())
+    {
         let ft_val = sample.frame_time_ms as f32;
         let ratio = (ft_val / red_threshold_ms as f32).clamp(0.0, 1.0);
         let target = (ratio * FT_H).max(1.0);
@@ -217,13 +330,18 @@ pub fn update_hud(
         } else if ft_val >= red_threshold_ms as f32 {
             bg.0 = Color::hsl(0.0, 0.9, 0.5);
         } else {
-            let t = (ft_val - green_threshold_ms as f32) / (red_threshold_ms as f32 - green_threshold_ms as f32);
+            let t = (ft_val - green_threshold_ms as f32)
+                / (red_threshold_ms as f32 - green_threshold_ms as f32);
             bg.0 = Color::hsl(120.0 * (1.0 - t), 0.9, 0.5);
         }
     }
 
     // Trace history bars: 60-frame compound stacked bars
-    let all_times: Vec<f64> = data.trace_snapshots.iter().flat_map(|s| s.iter().map(|(_, ms)| *ms)).collect();
+    let all_times: Vec<f64> = data
+        .trace_snapshots
+        .iter()
+        .flat_map(|s| s.iter().map(|(_, ms)| *ms))
+        .collect();
     let raw_max = all_times.iter().cloned().fold(0.0f64, f64::max).max(0.001) as f32;
     data.smoothed_trace_max += (raw_max - data.smoothed_trace_max) * LERP_SPEED;
     let trace_max = data.smoothed_trace_max;

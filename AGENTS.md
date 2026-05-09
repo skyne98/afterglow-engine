@@ -11,3 +11,4 @@
 - Always clean up temporary files
 - KISS and YAGNI
 - No files above 500 LOC
+- Build system lives in build-system/ — use `./b <command>` (bun-based, modular)

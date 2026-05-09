@@ -2,6 +2,16 @@
 linker = "clang"
 rustflags = ["-C", "link-arg=-fuse-ld=mold"]
 
+[target.wasm32-unknown-unknown]
+rustflags = ["--cfg=web_sys_unstable_apis"]
+
+[profile.wasm-release]
+inherits = "release"
+opt-level = "z"
+lto = "thin"
+strip = "symbols"
+codegen-units = 1
+
 [profile.dev]
 split-debuginfo = "unpacked"
 incremental = true

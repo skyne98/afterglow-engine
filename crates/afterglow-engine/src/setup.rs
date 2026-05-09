@@ -1,5 +1,7 @@
+#[cfg(not(target_arch = "wasm32"))]
 use bevy::anti_alias::taa::TemporalAntiAliasing;
 use bevy::prelude::*;
+use web_time::Instant;
 
 use crate::perf_hud;
 
@@ -26,12 +28,18 @@ pub(super) fn spawn_scene(
         Transform::from_xyz(3.0, 5.0, 2.0),
     ));
 
+    let camera_transform = Transform::from_xyz(-3.0, 2.0, 5.0).looking_at(Vec3::ZERO, Vec3::Y);
+
+    #[cfg(not(target_arch = "wasm32"))]
     commands.spawn((
         Camera3d::default(),
         Msaa::Off,
         TemporalAntiAliasing::default(),
-        Transform::from_xyz(-3.0, 2.0, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
+        camera_transform,
     ));
+
+    #[cfg(target_arch = "wasm32")]
+    commands.spawn((Camera3d::default(), Msaa::Off, camera_transform));
 }
 
 #[derive(Component)]
@@ -44,7 +52,7 @@ pub fn rotate_cubes(
     mut query: Query<(&Rotates, &mut Transform)>,
     mut data: ResMut<perf_hud::PerfData>,
 ) {
-    let start = std::time::Instant::now();
+    let start = Instant::now();
     for (r, mut t) in &mut query {
         t.rotate_y(r.speed * time.delta_secs());
     }
@@ -56,7 +64,7 @@ pub fn update_light(
     mut query: Query<&mut Transform, With<PointLight>>,
     mut data: ResMut<perf_hud::PerfData>,
 ) {
-    let start = std::time::Instant::now();
+    let start = Instant::now();
     for mut t in &mut query {
         t.translation.x = 3.0 * time.elapsed_secs().cos();
         t.translation.z = 2.0 * time.elapsed_secs().sin();

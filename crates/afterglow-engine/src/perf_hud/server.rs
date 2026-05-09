@@ -1,12 +1,17 @@
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(not(target_arch = "wasm32"))]
 use std::thread;
 
 use bevy::prelude::*;
 use serde::Serialize;
 
-use super::data::{PerfData, SystemStats};
-use super::trace_collector::{AccumMap, SpanSample};
+use super::{
+    data::{PerfData, SystemStats},
+    trace_collector::{AccumMap, SpanSample},
+};
 
 #[derive(Serialize)]
 struct MetricsResponse {
@@ -49,7 +54,20 @@ struct SysMetrics {
 #[derive(Resource)]
 pub struct SharedMetrics(pub Arc<Mutex<PerfData>>);
 
-pub fn start_metrics_server(port: u16, shared: Arc<Mutex<PerfData>>, trace_accum: Option<AccumMap>) {
+pub fn start_metrics_server(
+    port: u16,
+    shared: Arc<Mutex<PerfData>>,
+    trace_accum: Option<AccumMap>,
+) {
+    #[cfg(not(target_arch = "wasm32"))]
+    spawn_metrics_server(port, shared, trace_accum);
+
+    #[cfg(target_arch = "wasm32")]
+    let _ = (port, shared, trace_accum);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn spawn_metrics_server(port: u16, shared: Arc<Mutex<PerfData>>, trace_accum: Option<AccumMap>) {
     let running = Arc::new(AtomicBool::new(true));
     let flag = running.clone();
 
@@ -71,30 +89,40 @@ pub fn start_metrics_server(port: u16, shared: Arc<Mutex<PerfData>>, trace_accum
                     let url = request.url().to_string();
                     if url == "/metrics" || url == "/" || url == "/traces" {
                         let data = shared.lock().unwrap();
-                        let top_spans = trace_accum.as_ref().and_then(|a| a.lock().ok()).map(|acc| {
-                            let mut spans: Vec<_> = acc.iter().map(|(name, (total, count))| {
-                                super::trace_collector::SpanSample {
-                                    name: name.clone(),
-                                    duration_ms: *total,
-                                    count: *count,
+                        let top_spans = trace_accum
+                            .as_ref()
+                            .and_then(|a| a.lock().ok())
+                            .map(|acc| {
+                                let mut spans: Vec<_> = acc
+                                    .iter()
+                                    .map(|(name, (total, count))| {
+                                        super::trace_collector::SpanSample {
+                                            name: name.clone(),
+                                            duration_ms: *total,
+                                            count: *count,
+                                        }
+                                    })
+                                    .collect();
+                                spans.sort_by(|a, b| {
+                                    b.duration_ms.partial_cmp(&a.duration_ms).unwrap()
+                                });
+                                if url != "/traces" {
+                                    spans.truncate(15);
                                 }
-                            }).collect();
-                            spans.sort_by(|a, b| b.duration_ms.partial_cmp(&a.duration_ms).unwrap());
-                            if url != "/traces" {
-                                spans.truncate(15);
-                            }
-                            spans
-                        }).unwrap_or_default();
+                                spans
+                            })
+                            .unwrap_or_default();
                         let resp = build_response(&data, &top_spans);
                         let json = serde_json::to_string(&resp).unwrap_or_default();
-                        let response = tiny_http::Response::from_string(json)
-                            .with_header(
-                                "Content-Type: application/json".parse::<tiny_http::Header>().unwrap(),
-                            );
+                        let response = tiny_http::Response::from_string(json).with_header(
+                            "Content-Type: application/json"
+                                .parse::<tiny_http::Header>()
+                                .unwrap(),
+                        );
                         let _ = request.respond(response);
                     } else {
-                        let response = tiny_http::Response::from_string("not found")
-                            .with_status_code(404);
+                        let response =
+                            tiny_http::Response::from_string("not found").with_status_code(404);
                         let _ = request.respond(response);
                     }
                 }
@@ -114,16 +142,28 @@ fn build_response(data: &PerfData, trace_spans: &[SpanSample]) -> MetricsRespons
 
     let mut sfps = fpss.clone();
     sfps.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
-    let p5 = sfps.get((sfps.len() as f64 * 0.05) as usize).copied().unwrap_or(0.0) as u64;
-    let p1 = sfps.get((sfps.len() as f64 * 0.01) as usize).copied().unwrap_or(0.0) as u64;
+    let p5 = sfps
+        .get((sfps.len() as f64 * 0.05) as usize)
+        .copied()
+        .unwrap_or(0.0) as u64;
+    let p1 = sfps
+        .get((sfps.len() as f64 * 0.01) as usize)
+        .copied()
+        .unwrap_or(0.0) as u64;
 
     let fts: Vec<f64> = data.history.iter().map(|s| s.frame_time_ms).collect();
     let cur_ft = data.history.last().map(|s| s.frame_time_ms).unwrap_or(0.0);
     let avg_ft = fts.iter().sum::<f64>() / fts.len().max(1) as f64;
     let mut sft = fts.clone();
     sft.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
-    let p95_ft = sft.get((sft.len() as f64 * 0.95) as usize).copied().unwrap_or(0.0);
-    let p99_ft = sft.get((sft.len() as f64 * 0.99) as usize).copied().unwrap_or(0.0);
+    let p95_ft = sft
+        .get((sft.len() as f64 * 0.95) as usize)
+        .copied()
+        .unwrap_or(0.0);
+    let p99_ft = sft
+        .get((sft.len() as f64 * 0.99) as usize)
+        .copied()
+        .unwrap_or(0.0);
 
     let top = data.top_systems_sorted();
     let systems: Vec<SysMetrics> = top
@@ -142,8 +182,21 @@ fn build_response(data: &PerfData, trace_spans: &[SpanSample]) -> MetricsRespons
     let render_ms = (total_ms - update_ms - extraction_ms).max(0.0);
 
     MetricsResponse {
-        fps: FpsMetrics { current: cur_fps, min: min_fps, max: max_fps, avg: avg_fps, p5, p1 },
-        frame_time: FtMetrics { current: cur_ft, avg: avg_ft, p95: p95_ft, p99: p99_ft, refresh_hz: 60 },
+        fps: FpsMetrics {
+            current: cur_fps,
+            min: min_fps,
+            max: max_fps,
+            avg: avg_fps,
+            p5,
+            p1,
+        },
+        frame_time: FtMetrics {
+            current: cur_ft,
+            avg: avg_ft,
+            p95: p95_ft,
+            p99: p99_ft,
+            refresh_hz: 60,
+        },
         systems,
         update_time_ms: update_ms,
         extraction_time_ms: extraction_ms,
