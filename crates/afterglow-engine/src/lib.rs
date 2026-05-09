@@ -77,6 +77,10 @@ fn default_plugins() -> PluginGroupBuilder {
     };
 
     let plugins = DefaultPlugins
+        .set(bevy::log::LogPlugin {
+            custom_layer: perf_hud::trace_collector::bevy_trace_layer,
+            ..default()
+        })
         .set(WindowPlugin {
             primary_window: Some(window),
             ..default()

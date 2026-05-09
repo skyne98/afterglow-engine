@@ -72,9 +72,11 @@ afterglow-engine
 
 ### Platform Notes
 
-- Native builds install formatted stderr tracing plus the trace collector layer.
-- Wasm builds install only the trace collector layer. This keeps startup off
-  `std::time`, which is unsupported on `wasm32-unknown-unknown`.
+- Native builds attach the custom trace collector through Bevy's `LogPlugin`,
+  keeping a single tracing subscriber for stderr logs and in-memory span metrics.
+- The engine no longer enables Bevy's `trace_chrome` output, so normal runs do
+  not emit `trace-*.json` files.
+- Wasm builds attach the same collector to Bevy's wasm logging stack.
 - Wasm builds disable Bevy's anti-alias plugin and omit camera TAA because the
   Bevy 0.18 TAA pipeline fails WebGL validation in browser builds.
 - Wasm builds disable Bevy's audio plugin until the engine exposes an explicit
@@ -115,7 +117,9 @@ afterglow-engine
 
 | Crate | Version | Feature |
 |---|---|---|
-| bevy | 0.18.1 | dynamic_linking, bevy_dev_tools, sysinfo_plugin, trace, trace_chrome |
+| bevy (workspace) | 0.18.1 | webgpu |
+| bevy (native engine) | 0.18.1 | bevy_dev_tools, trace |
+| bevy (native agx) | 0.18.1 | dynamic_linking, bevy_dev_tools, sysinfo_plugin, trace |
 | serde | 1 | derive |
 | serde_json | 1 | — |
 | tracing | 0.1 | — |

@@ -3,7 +3,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use bevy::prelude::*;
+use bevy::{app::App, log::BoxedLayer, prelude::*};
 use serde::Serialize;
 use tracing_subscriber::{Layer, layer::Context, registry::LookupSpan};
 use web_time::Instant;
@@ -60,43 +60,17 @@ where
 }
 
 pub fn setup_tracing() -> TraceData {
-    let accum: AccumMap = Arc::new(Mutex::new(HashMap::new()));
-    let layer = TraceCollectorLayer {
-        accum: accum.clone(),
-        enter_times: Mutex::new(HashMap::new()),
-    };
-
-    install_tracing_subscriber(layer);
-
-    TraceData { accum }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn install_tracing_subscriber(layer: TraceCollectorLayer) {
-    use tracing_subscriber::{EnvFilter, fmt, prelude::*};
-
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-
-    let subscriber = tracing_subscriber::registry()
-        .with(filter)
-        .with(fmt::Layer::default().with_writer(std::io::stderr))
-        .with(layer);
-
-    match tracing::subscriber::set_global_default(subscriber) {
-        Ok(()) => eprintln!("[TraceCollectorLayer] installed"),
-        Err(e) => eprintln!("[TraceCollectorLayer] FAILED: {e:?}"),
+    TraceData {
+        accum: Arc::new(Mutex::new(HashMap::new())),
     }
 }
 
-#[cfg(target_arch = "wasm32")]
-fn install_tracing_subscriber(layer: TraceCollectorLayer) {
-    use tracing_subscriber::{EnvFilter, prelude::*};
-
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-
-    let subscriber = tracing_subscriber::registry().with(filter).with(layer);
-
-    let _ = tracing::subscriber::set_global_default(subscriber);
+pub(crate) fn bevy_trace_layer(app: &mut App) -> Option<BoxedLayer> {
+    let accum = app.world().get_resource::<TraceData>()?.accum.clone();
+    Some(Box::new(TraceCollectorLayer {
+        accum,
+        enter_times: Mutex::new(HashMap::new()),
+    }))
 }
 
 pub fn reset_trace_data(trace: Res<TraceData>) {
@@ -105,5 +79,25 @@ pub fn reset_trace_data(trace: Res<TraceData>) {
     // Just clear for the next frame.
     if let Ok(mut acc) = trace.accum.lock() {
         acc.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{TraceData, bevy_trace_layer, setup_tracing};
+    use bevy::app::App;
+
+    #[test]
+    fn bevy_trace_layer_requires_trace_data_resource() {
+        let mut app = App::new();
+        assert!(bevy_trace_layer(&mut app).is_none());
+    }
+
+    #[test]
+    fn bevy_trace_layer_uses_existing_trace_data_resource() {
+        let mut app = App::new();
+        app.insert_resource(setup_tracing());
+        assert!(app.world().contains_resource::<TraceData>());
+        assert!(bevy_trace_layer(&mut app).is_some());
     }
 }

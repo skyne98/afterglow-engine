@@ -13,4 +13,4 @@ tracing-subscriber.workspace = true
 wasm-bindgen.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-bevy = { workspace = true, features = ["dynamic_linking", "bevy_dev_tools", "sysinfo_plugin", "trace", "trace_chrome"] }
+bevy = { workspace = true, features = ["dynamic_linking", "bevy_dev_tools", "sysinfo_plugin", "trace"] }

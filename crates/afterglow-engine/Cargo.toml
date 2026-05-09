@@ -16,5 +16,5 @@ bevy.workspace = true
 workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-bevy = { workspace = true, features = ["bevy_dev_tools", "trace", "trace_chrome"] }
+bevy = { workspace = true, features = ["bevy_dev_tools", "trace"] }
 tiny_http.workspace = true
