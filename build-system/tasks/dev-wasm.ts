@@ -1,4 +1,4 @@
-import { runInDevShell } from "../utils/nix";
+import { runInDevShell, inNixShell } from "../utils/nix";
 import { requireTools } from "../utils/detect";
 
 const FLAGS = "--profile wasm-release --target wasm32-unknown-unknown -p agx";
@@ -6,6 +6,11 @@ const ROOT = new URL("../../", import.meta.url).pathname;
 const WASM = new URL("../../wasm/", import.meta.url).pathname;
 
 let building = false;
+
+async function hasWasmBindgen(): Promise<boolean> {
+  const r = Bun.spawnSync(["which", "wasm-bindgen"]);
+  return r.exitCode === 0;
+}
 
 async function build(): Promise<boolean> {
   if (building) return false;
@@ -26,7 +31,19 @@ const RELOAD_SCRIPT = `
 <script>(function(){var s=new EventSource("/__lr");s.addEventListener("reload",function(){s.close();location.reload()});s.addEventListener("error",function(){s.close()})})();<\/script>`;
 
 export async function devServe(): Promise<void> {
-  await requireTools(["cargo", "wasm-bindgen"], "Run `nix develop` or add to NixOS packages");
+  await requireTools(["cargo"], "Run `nix develop` or add to NixOS packages");
+
+  const inShell = await inNixShell();
+  const hasWbg = await hasWasmBindgen();
+
+  if (!hasWbg && !inShell) {
+    // Enter nix shell provides wasm-bindgen, handled by runInDevShell inside build()
+    console.log("  [afterglow] will use nix shell for wasm-bindgen");
+  } else if (!hasWbg) {
+    console.error("\n  Missing tool: wasm-bindgen");
+    console.error("  Ensure your flake/nix-shell provides wasm-bindgen");
+    process.exit(1);
+  }
 
   const port = parseInt(process.env.PORT || "4000", 10);
   await build();
