@@ -227,11 +227,11 @@ pub fn update_hud(
     keys: Res<ButtonInput<KeyCode>>,
     mut hud: Query<&mut Visibility, With<HudRoot>>,
     mut text_group: ParamSet<(
-        Query<&mut Text, (With<FpsText>, Without<FrameTimeText>)>,
-        Query<&mut Text, (With<FrameTimeText>, Without<FpsText>)>,
+        Query<&mut Text, (With<FpsText>, Without<FrameTimeText>, Without<RenderInfoText>)>,
+        Query<&mut Text, (With<FrameTimeText>, Without<FpsText>, Without<RenderInfoText>)>,
         Query<(&mut Text, &mut TextColor), With<SysLegendItem>>,
+        Query<&mut Text, (With<RenderInfoText>, Without<FpsText>, Without<FrameTimeText>)>,
     )>,
-    mut render_info_text: Query<&mut Text, With<RenderInfoText>>,
     mut frame_bars: Query<
         (&mut Node, &mut BackgroundColor, &mut BarLerp),
         (With<FrameBar>, Without<TraceSeg>, Without<TraceHistBar>),
@@ -308,7 +308,7 @@ pub fn update_hud(
 
     // Render info text row
     if let Some(info) = &adapter_info {
-        for mut t in &mut render_info_text {
+        for mut t in &mut text_group.p3() {
             let backend = format!("{:?}", info.backend);
             t.0 = format!("{}  [{}]", info.name, backend);
         }
