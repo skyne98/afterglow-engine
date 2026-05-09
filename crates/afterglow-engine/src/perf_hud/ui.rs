@@ -15,6 +15,9 @@ pub struct FpsText;
 pub struct FrameTimeText;
 
 #[derive(Component)]
+pub struct RenderInfoText;
+
+#[derive(Component)]
 pub struct FrameBar;
 
 #[derive(Component)]
@@ -86,6 +89,15 @@ pub fn spawn_hud(mut commands: Commands) {
                     ..default()
                 },
                 TextColor(Color::srgb(0.4, 0.6, 0.8)),
+            ));
+            r.spawn((
+                RenderInfoText,
+                Text("".into()),
+                TextFont {
+                    font_size: FONT_SZ,
+                    ..default()
+                },
+                TextColor(Color::srgb(0.6, 0.6, 0.7)),
             ));
             r.spawn((
                 FpsText,
@@ -210,6 +222,7 @@ pub fn spawn_hud(mut commands: Commands) {
 pub fn update_hud(
     mut data: ResMut<PerfData>,
     trace_accum: Option<Res<super::trace_collector::TraceData>>,
+    adapter_info: Option<Res<bevy::render::renderer::RenderAdapterInfo>>,
     monitor: Query<&Monitor, With<PrimaryMonitor>>,
     keys: Res<ButtonInput<KeyCode>>,
     mut hud: Query<&mut Visibility, With<HudRoot>>,
@@ -218,6 +231,7 @@ pub fn update_hud(
         Query<&mut Text, (With<FrameTimeText>, Without<FpsText>)>,
         Query<(&mut Text, &mut TextColor), With<SysLegendItem>>,
     )>,
+    mut render_info_text: Query<&mut Text, With<RenderInfoText>>,
     mut frame_bars: Query<
         (&mut Node, &mut BackgroundColor, &mut BarLerp),
         (With<FrameBar>, Without<TraceSeg>, Without<TraceHistBar>),
@@ -290,6 +304,14 @@ pub fn update_hud(
             .copied()
             .unwrap_or(0.0) as u64;
         t.0 = format!("FPS {}  AVG {:.0}  P5 {}  P1 {}", cur, avg, p5, p1);
+    }
+
+    // Render info text row
+    if let Some(info) = &adapter_info {
+        for mut t in &mut render_info_text {
+            let backend = format!("{:?}", info.backend);
+            t.0 = format!("{}  [{}]", info.name, backend);
+        }
     }
 
     // Frame time text row
