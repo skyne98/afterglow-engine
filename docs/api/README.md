@@ -10,6 +10,9 @@ Two crates: `afterglow-engine` (library) and `agx` (binary CLI).
 ```
 afterglow-engine
 ├── lib.rs
+├── core/
+│   ├── mod.rs
+│   └── identity.rs
 ├── setup.rs           (private)
 └── perf_hud/
     ├── mod.rs
@@ -26,6 +29,13 @@ afterglow-engine
 | `AfterglowEnginePlugin` | struct impl Plugin | Main engine plugin. Builds scene, registers HUD, tracing, metrics. |
 | `AfterglowEnginePlugin::trace_accum` | field: AccumMap | Shared accumulator for tracing span data |
 | `run()` | fn → AppExit | Creates App with DefaultPlugins + AfterglowEnginePlugin, runs it |
+
+### Re-exported Public Modules
+
+| Module | Description |
+|---|---|
+| `core` | Engine foundation systems. Currently owns stable identity and chunk membership. |
+| `core::identity` | Stable entity IDs, chunk IDs, persistence/replication markers, and registry resources. |
 
 ### Re-exported from `perf_hud`
 
@@ -52,13 +62,15 @@ afterglow-engine
 
 **Update (after sync):** `reset_trace_data`
 
-**PostUpdate (chained):** `record_postupdate_start` → `record_postupdate_end`
+**PostUpdate:** `maintain_stable_entity_registry`
 
 ### Resources
 
 | Resource | Type |
 |---|---|
 | `TraceData` | `{ accum: AccumMap }` |
+| `StableIdAllocator` | Monotonic allocator for process-local stable IDs |
+| `StableEntityRegistry` | Runtime maps for stable ID ↔ entity and chunk → entities |
 | `PerfData` | History, frame systems, trace snapshots, timing, name colors |
 | `FrameProfiler` | `{ update_start: Option<Instant>, postupdate_start: Option<Instant> }` |
 | `SharedMetrics` | `Arc<Mutex<PerfData>>` for HTTP server |
@@ -93,6 +105,12 @@ afterglow-engine
 
 | Component | Module | Purpose |
 |---|---|---|
+| `StableEntityId(u128)` | core::identity | Durable ID for save/load and replication. Raw Bevy `Entity` must not be serialized or replicated. |
+| `ChunkId(u64)` | core::identity | Stable chunk identifier. |
+| `ChunkMembership { chunk }` | core::identity | Assigns an entity to a chunk for residency, save/load, and interest management. |
+| `Persistent` | core::identity | Entity should receive/keep a stable ID and participate in persistence. |
+| `Replicated` | core::identity | Entity should receive/keep a stable ID and participate in replication. |
+| `RuntimeOnly` | core::identity | Entity is excluded from automatic stable ID assignment. |
 | `Rotates { speed: f32 }` | setup | Marker + rotation speed |
 | `HudRoot` | ui | HUD container |
 | `FpsText` | ui | FPS text label |
@@ -107,6 +125,8 @@ afterglow-engine
 
 | Type | Fields | Description |
 |---|---|---|
+| `StableIdAllocator` | next | Allocates nonzero `StableEntityId` values for persistent/replicated entities missing one. |
+| `StableEntityRegistry` | stable_to_entity, entity_to_stable, chunk_to_entities, duplicate_ids | Rebuilt after updates from entities with `StableEntityId` and optional `ChunkMembership`. |
 | `FrameSample` | fps, frame_time_ms, systems | One frame's metrics |
 | `PerfData` | history, frame_systems, trace_snapshots, update_time_ms, extraction_time_ms, name_colors, next_color, smoothed_trace_max | Full performance data store |
 | `SystemStats` | name, avg, p95, p99 | Per-system timing stats |
