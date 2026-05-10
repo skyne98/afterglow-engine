@@ -20,6 +20,9 @@ afterglow-engine
 │   └── tests.rs       (cfg(test))
 ├── network/
 │   ├── mod.rs
+│   ├── commands.rs
+│   ├── commands/
+│   │   └── tests.rs   (cfg(test))
 │   └── tests.rs       (cfg(test))
 ├── world/
 │   ├── mod.rs
@@ -51,6 +54,7 @@ afterglow-engine
 | `core::schedule` | Ordered engine system sets for input, command building, simulation, persistence prep, and debug/metrics. |
 | `input` | Generic per-game input axis/action bindings and per-tick `PlayerCommand` generation. |
 | `network` | Transport-independent peer, channel, packet, and fake transport primitives. |
+| `network::commands` | Versioned wire envelope for serializing generic `PlayerCommand` batches. |
 | `world` | Chunk/cell loading systems. Currently owns the built-in demo cell loader. |
 | `world::chunk` | Chunk IDs, demo-cell load state, and demo-cell loading system. |
 | `testing` | Test app builders. Available in unit tests and through the `test-support` feature. |
@@ -190,6 +194,13 @@ afterglow-engine
 | `NetworkTransport` | trait | Minimal transport interface for polling events, sending packets, and disconnecting peers. |
 | `MemoryTransport` | local_peer, protocol, queues, faults | Deterministic in-memory fake transport for unit tests and protocol development. |
 | `FaultConfig` | drop_every, duplicate_every, delay_ticks, reverse_delivery | Deterministic packet fault injection for fake transport tests. |
+| `CommandEnvelope` | protocol, commands | Versioned wire payload for one batch of player commands. |
+| `WirePlayerCommand` | player, tick, axes, actions, pointers | Explicit transport DTO for `PlayerCommand`. |
+| `WireAxisValue` | axis, value | Explicit transport DTO for one named axis value. |
+| `WirePointerInput` | device, id, position, delta, pressure, tilt, twist, primary | Explicit transport DTO for pointer input. |
+| `CommandDecodeError` | InvalidJson, ProtocolMismatch | Decode failure for malformed or incompatible command payloads. |
+| `encode_player_commands()` | — | Serializes `PlayerCommand` values into a versioned command envelope. |
+| `decode_player_commands()` | — | Deserializes and validates a versioned command envelope. |
 | `testing::unit_app()` | — | Builds a minimal non-rendering app with `AfterglowCorePlugin`. |
 | `testing::asset_unit_app()` | — | Builds a minimal non-rendering app with assets and core systems. |
 | `testing::headless_render::app()` | — | `test-support` only. Builds a no-window render app using a real GPU adapter, or returns `None` if unavailable. |

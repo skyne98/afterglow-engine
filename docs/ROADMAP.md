@@ -57,7 +57,7 @@ Deep dive: [bevy-integration-world-runtime.md](research/bevy-integration-world-r
 - [x] Loopback and deterministic fake transport with packet loss, duplication, reorder, latency, and disconnect injection
 - [x] Mock multi-client RPG networking harness for 3D interaction, rollback, security, and stress tests
 - [ ] Server-authoritative simulation path using the same local-server model as single-player
-- [ ] Serialize `PlayerCommand` input by simulation tick
+- [x] Serialize `PlayerCommand` input by simulation tick
 - [ ] Network player identity model: platform identity, session peer ID, player ID, and stable entity ID mapping
 - [ ] Snapshot/delta replication for player state and interactable objects
 - [ ] Interest management tied to chunks, cells, visibility, and persistent state ownership

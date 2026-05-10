@@ -1,6 +1,8 @@
 use bevy::prelude::*;
 use std::collections::{BTreeSet, VecDeque};
 
+pub mod commands;
+
 #[derive(Resource, Clone, Copy, Debug, Eq, PartialEq, Reflect)]
 pub struct NetworkProtocol {
     pub version: ProtocolVersion,
