@@ -1,6 +1,7 @@
 pub mod core;
 mod perf_hud;
 mod setup;
+pub mod world;
 
 use bevy::{app::PluginGroupBuilder, prelude::*, window::WindowPlugin};
 use core::AfterglowCorePlugin;
@@ -8,6 +9,7 @@ use perf_hud::{
     AccumMap, PerfHudPlugin, collect_frame, record_update_end, record_update_start, setup_tracing,
     sync_shared_metrics, trace_collector::reset_trace_data, update_hud,
 };
+use world::AfterglowWorldPlugin;
 
 pub struct AfterglowEnginePlugin {
     trace_accum: AccumMap,
@@ -19,7 +21,7 @@ impl Plugin for AfterglowEnginePlugin {
             trace_accum: self.trace_accum.clone(),
         })
         .add_plugins(AfterglowCorePlugin)
-        .add_systems(Startup, setup::spawn_scene)
+        .add_plugins(AfterglowWorldPlugin)
         .add_systems(
             Update,
             (

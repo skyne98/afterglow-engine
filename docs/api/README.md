@@ -13,6 +13,9 @@ afterglow-engine
 ├── core/
 │   ├── mod.rs
 │   └── identity.rs
+├── world/
+│   ├── mod.rs
+│   └── chunk.rs
 ├── setup.rs           (private)
 └── perf_hud/
     ├── mod.rs
@@ -36,6 +39,8 @@ afterglow-engine
 |---|---|
 | `core` | Engine foundation systems. Currently owns stable identity and chunk membership. |
 | `core::identity` | Stable entity IDs, chunk IDs, persistence/replication markers, and registry resources. |
+| `world` | Chunk/cell loading systems. Currently owns the built-in demo cell loader. |
+| `world::chunk` | Chunk IDs, demo-cell load state, and demo-cell loading system. |
 
 ### Re-exported from `perf_hud`
 
@@ -49,7 +54,7 @@ afterglow-engine
 
 ### Systems Registered (execution order)
 
-**Startup:** `spawn_scene`, `spawn_hud`
+**Startup:** `load_demo_cell`, `spawn_hud`
 
 **Update (chained):**
 1. `record_update_start`
@@ -71,6 +76,7 @@ afterglow-engine
 | `TraceData` | `{ accum: AccumMap }` |
 | `StableIdAllocator` | Monotonic allocator for process-local stable IDs |
 | `StableEntityRegistry` | Runtime maps for stable ID ↔ entity and chunk → entities |
+| `DemoCellState` | Tracks the built-in demo cell chunk and whether it has been loaded |
 | `PerfData` | History, frame systems, trace snapshots, timing, name colors |
 | `FrameProfiler` | `{ update_start: Option<Instant>, postupdate_start: Option<Instant> }` |
 | `SharedMetrics` | `Arc<Mutex<PerfData>>` for HTTP server |
@@ -127,6 +133,8 @@ afterglow-engine
 |---|---|---|
 | `StableIdAllocator` | next | Allocates nonzero `StableEntityId` values for persistent/replicated entities missing one. |
 | `StableEntityRegistry` | stable_to_entity, entity_to_stable, chunk_to_entities, duplicate_ids | Rebuilt after updates from entities with `StableEntityId` and optional `ChunkMembership`. |
+| `DemoCellState` | chunk, load_state | Resource used by the demo loader to spawn one stable-ID chunk once. |
+| `ChunkLoadState` | Unloaded, Loaded | Minimal chunk load state for the built-in demo cell. |
 | `FrameSample` | fps, frame_time_ms, systems | One frame's metrics |
 | `PerfData` | history, frame_systems, trace_snapshots, update_time_ms, extraction_time_ms, name_colors, next_color, smoothed_trace_max | Full performance data store |
 | `SystemStats` | name, avg, p95, p99 | Per-system timing stats |
