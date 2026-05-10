@@ -29,6 +29,9 @@ afterglow-engine
 │   ├── interest.rs
 │   ├── interest/
 │   │   └── tests.rs   (cfg(test))
+│   ├── prediction.rs
+│   ├── prediction/
+│   │   └── tests.rs   (cfg(test))
 │   ├── replication.rs
 │   ├── replication/
 │   │   └── tests.rs   (cfg(test))
@@ -69,6 +72,7 @@ afterglow-engine
 | `network::authority` | Server-side command validation for peer ownership and duplicate simulation ticks. |
 | `network::commands` | Versioned wire envelope for serializing generic `PlayerCommand` batches. |
 | `network::interest` | Chunk-based interest map for filtering snapshots and deltas by player visibility. |
+| `network::prediction` | Client-side command history and replay buffer for prediction after authoritative snapshots. |
 | `network::replication` | Stable-ID keyed snapshot/delta state primitives. |
 | `network::session` | Session identity maps between peers, platform identities, players, and avatars. |
 | `world` | Chunk/cell loading systems. Currently owns the built-in demo cell loader. |
@@ -119,6 +123,7 @@ afterglow-engine
 | `PlayerCommandQueue` | Current-frame local player commands |
 | `NetworkProtocol` | Active engine network protocol version |
 | `ServerCommandBuffer` | Per-frame accepted/rejected server-authoritative command buffer plus tick dedupe state |
+| `ClientPredictionBuffer` | Local command history used to replay prediction after authoritative snapshots |
 | `InterestMap` | Chunk visibility map for players and replicated entities |
 | `NetworkSession` | Runtime peer/player/platform/avatar identity map |
 | `StableIdAllocator` | Monotonic allocator for process-local stable IDs |
@@ -149,6 +154,7 @@ afterglow-engine
 |---|---|
 | `cargo bench -p afterglow-engine --bench replication` | Measures replication snapshot, delta, apply, and interest-filter costs at multiple entity counts |
 | `cargo bench -p afterglow-engine --bench authority` | Measures bulk server-authoritative command validation and duplicate tick rejection |
+| `cargo bench -p afterglow-engine --bench prediction` | Measures client prediction command recording and replay/rebase costs |
 
 ### Platform Notes
 
@@ -227,6 +233,8 @@ afterglow-engine
 | `RejectedPlayerCommand` | peer, player, tick, reason | Rejected command metadata for logging, metrics, disconnect policy, or client correction. |
 | `CommandRejectReason` | UnknownPlayer, PlayerNotOwned, DuplicateTick | Generic command authority rejection reason. |
 | `CommandAuthorityResult` | Accepted, Rejected | Result returned by `ServerCommandBuffer::submit`. |
+| `ClientPredictionBuffer` | commands, acknowledged | Per-player local command history for client prediction. Games apply commands immediately, then call `replay_after` when an authoritative snapshot/correction arrives. |
+| `PredictionReplay` | player, authoritative_tick, commands | Ordered unacknowledged commands to replay on top of authoritative state. |
 | `CommandEnvelope` | protocol, commands | Versioned wire payload for one batch of player commands. |
 | `WirePlayerCommand` | player, tick, axes, actions, pointers | Explicit transport DTO for `PlayerCommand`. |
 | `WireAxisValue` | axis, value | Explicit transport DTO for one named axis value. |

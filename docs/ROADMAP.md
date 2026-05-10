@@ -61,7 +61,7 @@ Deep dive: [bevy-integration-world-runtime.md](research/bevy-integration-world-r
 - [x] Network player identity model: platform identity, session peer ID, player ID, and stable entity ID mapping
 - [x] Snapshot/delta replication for player state and interactable objects
 - [x] Interest management tied to chunks, cells, visibility, and persistent state ownership
-- [ ] Client prediction for player movement and cheap core interactions
+- [x] Client prediction for player movement and cheap core interactions
 - [ ] Reconciliation from authoritative snapshots and correction packets
 - [ ] Interpolation for remote entities
 - [ ] Replication-compatible save/load data and reconnect baselines
