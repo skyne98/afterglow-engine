@@ -4,6 +4,7 @@ use std::collections::{BTreeSet, VecDeque};
 pub mod authority;
 pub mod commands;
 pub mod interest;
+pub mod interpolation;
 pub mod prediction;
 pub mod reconciliation;
 pub mod replication;
@@ -113,6 +114,7 @@ impl Plugin for AfterglowNetworkPlugin {
             .init_resource::<authority::ServerCommandBuffer>()
             .init_resource::<prediction::ClientPredictionBuffer>()
             .init_resource::<reconciliation::ClientReconciliationQueue>()
+            .init_resource::<interpolation::RemoteInterpolationBuffer>()
             .init_resource::<interest::InterestMap>()
             .init_resource::<session::NetworkSession>()
             .add_systems(

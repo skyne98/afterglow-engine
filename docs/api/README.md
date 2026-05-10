@@ -29,6 +29,9 @@ afterglow-engine
 │   ├── interest.rs
 │   ├── interest/
 │   │   └── tests.rs   (cfg(test))
+│   ├── interpolation.rs
+│   ├── interpolation/
+│   │   └── tests.rs   (cfg(test))
 │   ├── prediction.rs
 │   ├── prediction/
 │   │   └── tests.rs   (cfg(test))
@@ -75,6 +78,7 @@ afterglow-engine
 | `network::authority` | Server-side command validation for peer ownership and duplicate simulation ticks. |
 | `network::commands` | Versioned wire envelope for serializing generic `PlayerCommand` batches. |
 | `network::interest` | Chunk-based interest map for filtering snapshots and deltas by player visibility. |
+| `network::interpolation` | Remote entity sample buffering, interpolation, and bounded extrapolation. |
 | `network::prediction` | Client-side command history and replay buffer for prediction after authoritative snapshots. |
 | `network::reconciliation` | Reconciles authoritative snapshot/delta/correction ticks with local prediction history. |
 | `network::replication` | Stable-ID keyed snapshot/delta state primitives. |
@@ -131,6 +135,7 @@ afterglow-engine
 | `ServerCommandBuffer` | Per-frame accepted/rejected server-authoritative command buffer plus tick dedupe state |
 | `ClientPredictionBuffer` | Local command history used to replay prediction after authoritative snapshots |
 | `ClientReconciliationQueue` | Per-frame reconciliation results created from authoritative updates |
+| `RemoteInterpolationBuffer` | Buffered remote entity samples for rendering remote entities smoothly behind server time |
 | `InterestMap` | Chunk visibility map for players and replicated entities |
 | `NetworkSession` | Runtime peer/player/platform/avatar identity map |
 | `StableIdAllocator` | Monotonic allocator for process-local stable IDs |
@@ -163,6 +168,7 @@ afterglow-engine
 | `cargo bench -p afterglow-engine --bench authority` | Measures bulk server-authoritative command validation and duplicate tick rejection |
 | `cargo bench -p afterglow-engine --bench prediction` | Measures client prediction command recording and replay/rebase costs |
 | `cargo bench -p afterglow-engine --bench reconciliation` | Measures authoritative correction reconciliation against local prediction history |
+| `cargo bench -p afterglow-engine --bench interpolation` | Measures remote entity interpolation and bounded extrapolation costs |
 
 ### Platform Notes
 
@@ -247,6 +253,10 @@ afterglow-engine
 | `AuthoritativeCorrection` | player, tick, source | Generic correction packet metadata. Carries the authoritative tick; game-specific state stays in snapshots/deltas or game packets. |
 | `AuthoritativeUpdateSource` | Snapshot, Delta, Correction | Source classification for reconciliation metrics and client policy. |
 | `ReconciliationResult` | player, authoritative_tick, source, replay_commands | Commands the game should replay after applying authoritative state. |
+| `RemoteInterpolationBuffer` | delay_ticks, max_extrapolation_ticks, samples | Per-entity remote sample buffer. Renders behind latest server tick for interpolation and extrapolates only within a configured tick limit. |
+| `RemoteEntitySample` | fields | Generic scalar sample fields such as `pos_x`, `pos_y`, `pos_z`, yaw, or animation blend values. |
+| `SmoothedEntitySample` | entity, tick, mode, fields | Result returned to game/render systems for a remote entity at render time. |
+| `SmoothingMode` | Exact, Interpolated, Extrapolated | Classifies how a remote sample was produced. |
 | `CommandEnvelope` | protocol, commands | Versioned wire payload for one batch of player commands. |
 | `WirePlayerCommand` | player, tick, axes, actions, pointers | Explicit transport DTO for `PlayerCommand`. |
 | `WireAxisValue` | axis, value | Explicit transport DTO for one named axis value. |
@@ -306,7 +316,8 @@ first-person open-world RPG simulation. It uses `MemoryTransport` and JSON
 packet payloads to cover multi-client joins, 3D position/chunk math, snapshots,
 chunk interest, authority, duplicate ticks, rollback-style save/restore,
 malformed/spoofed/hacked client behavior, door use, item pickup conflicts,
-combat events, and many simultaneous NPC/world-state changes.
+combat events, client prediction, reconciliation, remote interpolation,
+bounded extrapolation, and many simultaneous NPC/world-state changes.
 
 ## Docs
 
