@@ -64,7 +64,7 @@ Deep dive: [bevy-integration-world-runtime.md](research/bevy-integration-world-r
 - [x] Client prediction for player movement and cheap core interactions
 - [x] Reconciliation from authoritative snapshots and correction packets
 - [x] Interpolation and bounded extrapolation for remote entities
-- [ ] Replication-compatible save/load data and reconnect baselines
+- [x] Replication-compatible save/load data and reconnect baselines
 - [ ] Selective GGRS rollback prototype for small deterministic subsystems, not the whole streaming RPG world
 - [ ] Iroh transport backend for non-Steam NAT traversal and encrypted peer/dedicated-server transport
 - [ ] Optional Steam backend feature: Steam identity/auth, lobbies, invites, and SteamNetworkingSockets transport

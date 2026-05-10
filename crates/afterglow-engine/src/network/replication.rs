@@ -1,4 +1,5 @@
 use crate::core::identity::StableEntityId;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -13,19 +14,19 @@ pub struct ReplicatedEntityState {
     fields: BTreeMap<String, Vec<u8>>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct WorldSnapshot {
     pub tick: u32,
     pub entities: Vec<EntitySnapshot>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct EntitySnapshot {
     pub entity: StableEntityId,
     pub fields: Vec<FieldValue>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct WorldDelta {
     pub from_tick: u32,
     pub to_tick: u32,
@@ -33,14 +34,14 @@ pub struct WorldDelta {
     pub removed: Vec<StableEntityId>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct EntityDelta {
     pub entity: StableEntityId,
     pub changed: Vec<FieldValue>,
     pub removed: Vec<String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct FieldValue {
     pub name: String,
     pub value: Vec<u8>,

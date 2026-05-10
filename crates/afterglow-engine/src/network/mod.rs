@@ -1,7 +1,9 @@
 use bevy::prelude::*;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, VecDeque};
 
 pub mod authority;
+pub mod baseline;
 pub mod commands;
 pub mod interest;
 pub mod interpolation;
@@ -23,10 +25,36 @@ impl Default for NetworkProtocol {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd, Reflect)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Reflect,
+    Serialize,
+    Deserialize,
+)]
 pub struct PeerId(pub u64);
 
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd, Reflect)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Reflect,
+    Serialize,
+    Deserialize,
+)]
 pub struct NetworkPlayerId(pub u64);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Reflect)]
@@ -111,6 +139,7 @@ pub struct AfterglowNetworkPlugin;
 impl Plugin for AfterglowNetworkPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<NetworkProtocol>()
+            .init_resource::<baseline::ReconnectBaselineStore>()
             .init_resource::<authority::ServerCommandBuffer>()
             .init_resource::<prediction::ClientPredictionBuffer>()
             .init_resource::<reconciliation::ClientReconciliationQueue>()

@@ -10,6 +10,7 @@ fn network_plugin_registers_protocol_resource() {
         app.world().resource::<NetworkProtocol>().version,
         ProtocolVersion::CURRENT
     );
+    app.world().resource::<baseline::ReconnectBaselineStore>();
     app.world().resource::<authority::ServerCommandBuffer>();
     app.world().resource::<prediction::ClientPredictionBuffer>();
     app.world()

@@ -23,6 +23,9 @@ afterglow-engine
 │   ├── authority.rs
 │   ├── authority/
 │   │   └── tests.rs   (cfg(test))
+│   ├── baseline.rs
+│   ├── baseline/
+│   │   └── tests.rs   (cfg(test))
 │   ├── commands.rs
 │   ├── commands/
 │   │   └── tests.rs   (cfg(test))
@@ -76,6 +79,7 @@ afterglow-engine
 | `input` | Generic per-game input axis/action bindings and per-tick `PlayerCommand` generation. |
 | `network` | Transport-independent peer, channel, packet, and fake transport primitives. |
 | `network::authority` | Server-side command validation for peer ownership and duplicate simulation ticks. |
+| `network::baseline` | Replication-compatible save data and reconnect baseline helpers. |
 | `network::commands` | Versioned wire envelope for serializing generic `PlayerCommand` batches. |
 | `network::interest` | Chunk-based interest map for filtering snapshots and deltas by player visibility. |
 | `network::interpolation` | Remote entity sample buffering, interpolation, and bounded extrapolation. |
@@ -132,6 +136,7 @@ afterglow-engine
 | `SimulationTick` | Monotonic command tick counter |
 | `PlayerCommandQueue` | Current-frame local player commands |
 | `NetworkProtocol` | Active engine network protocol version |
+| `ReconnectBaselineStore` | Per-peer/player reconnect baselines built from replication snapshots |
 | `ServerCommandBuffer` | Per-frame accepted/rejected server-authoritative command buffer plus tick dedupe state |
 | `ClientPredictionBuffer` | Local command history used to replay prediction after authoritative snapshots |
 | `ClientReconciliationQueue` | Per-frame reconciliation results created from authoritative updates |
@@ -169,6 +174,7 @@ afterglow-engine
 | `cargo bench -p afterglow-engine --bench prediction` | Measures client prediction command recording and replay/rebase costs |
 | `cargo bench -p afterglow-engine --bench reconciliation` | Measures authoritative correction reconciliation against local prediction history |
 | `cargo bench -p afterglow-engine --bench interpolation` | Measures remote entity interpolation and bounded extrapolation costs |
+| `cargo bench -p afterglow-engine --bench baseline` | Measures replication save serialization, restore, and interest-filtered reconnect baseline costs |
 
 ### Platform Notes
 
@@ -242,6 +248,9 @@ afterglow-engine
 | `NetworkTransport` | trait | Minimal transport interface for polling events, sending packets, and disconnecting peers. |
 | `MemoryTransport` | local_peer, protocol, queues, faults | Deterministic in-memory fake transport for unit tests and protocol development. |
 | `FaultConfig` | drop_every, duplicate_every, delay_ticks, reverse_delivery | Deterministic packet fault injection for fake transport tests. |
+| `ReplicationSaveData` | tick, snapshot | Serializable save payload built from a `ReplicationWorld` snapshot and restorable back into `ReplicationWorld`. |
+| `ReconnectBaseline` | peer, player, snapshot | Full or interest-filtered authoritative snapshot used when a player reconnects. |
+| `ReconnectBaselineStore` | baselines | Runtime map of reconnect baselines keyed by `(PeerId, NetworkPlayerId)`. |
 | `ServerCommandBuffer` | accepted, rejected, seen_ticks | Server-authoritative command intake. Validates peer ownership through `NetworkSession`, rejects duplicate player ticks, and exposes accepted generic `PlayerCommand`s for simulation. |
 | `AuthoritativePlayerCommand` | peer, command | Accepted command tagged with the transport peer that submitted it. |
 | `RejectedPlayerCommand` | peer, player, tick, reason | Rejected command metadata for logging, metrics, disconnect policy, or client correction. |
