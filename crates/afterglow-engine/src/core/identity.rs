@@ -3,7 +3,19 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 #[derive(
-    Component, Clone, Copy, Debug, Default, Eq, Hash, PartialEq, Reflect, Serialize, Deserialize,
+    Component,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Reflect,
+    Serialize,
+    Deserialize,
 )]
 #[reflect(Component, Serialize, Deserialize)]
 pub struct StableEntityId(pub u128);
@@ -25,7 +37,19 @@ impl StableEntityId {
 }
 
 #[derive(
-    Component, Clone, Copy, Debug, Default, Eq, Hash, PartialEq, Reflect, Serialize, Deserialize,
+    Component,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Reflect,
+    Serialize,
+    Deserialize,
 )]
 #[reflect(Component, Serialize, Deserialize)]
 pub struct ChunkId(pub u64);

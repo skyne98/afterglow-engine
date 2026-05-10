@@ -23,6 +23,9 @@ afterglow-engine
 │   ├── commands.rs
 │   ├── commands/
 │   │   └── tests.rs   (cfg(test))
+│   ├── replication.rs
+│   ├── replication/
+│   │   └── tests.rs   (cfg(test))
 │   ├── session.rs
 │   ├── session/
 │   │   └── tests.rs   (cfg(test))
@@ -58,6 +61,7 @@ afterglow-engine
 | `input` | Generic per-game input axis/action bindings and per-tick `PlayerCommand` generation. |
 | `network` | Transport-independent peer, channel, packet, and fake transport primitives. |
 | `network::commands` | Versioned wire envelope for serializing generic `PlayerCommand` batches. |
+| `network::replication` | Stable-ID keyed snapshot/delta state primitives. |
 | `network::session` | Session identity maps between peers, platform identities, players, and avatars. |
 | `world` | Chunk/cell loading systems. Currently owns the built-in demo cell loader. |
 | `world::chunk` | Chunk IDs, demo-cell load state, and demo-cell loading system. |
@@ -126,6 +130,12 @@ afterglow-engine
 | `cargo test -p afterglow-engine` | Fast unit tests and renderless app tests |
 | `cargo test -p afterglow-engine --features test-support` | Unit tests plus real-adapter headless GPU render tests |
 | `bun run test` | Runs normal cargo tests, then the `test-support` headless-render test suite |
+
+### Benchmark Commands
+
+| Command | Purpose |
+|---|---|
+| `cargo bench -p afterglow-engine --bench replication` | Measures replication snapshot, delta, and apply costs at multiple entity counts |
 
 ### Platform Notes
 
@@ -210,6 +220,13 @@ afterglow-engine
 | `PeerSession` | peer, platform, players | One connected transport peer and the local/splitscreen players it owns. |
 | `PlayerSession` | player, peer, avatar | One session player, its owning peer, and optional controlled stable world entity. |
 | `PlatformIdentity` | Local, Steam, Iroh, Anonymous | Backend-neutral authenticated identity descriptor. |
+| `ReplicationWorld` | entities | Generic stable-ID keyed replicated state map used to build snapshots and deltas. |
+| `ReplicatedEntityState` | fields | Byte-valued field map for one replicated entity. |
+| `WorldSnapshot` | tick, entities | Full replication baseline. |
+| `WorldDelta` | from_tick, to_tick, changes, removed | Delta from one snapshot to a later state. |
+| `EntitySnapshot` | entity, fields | Full entity state inside a snapshot. |
+| `EntityDelta` | entity, changed, removed | Per-entity changed and removed fields. |
+| `FieldValue` | name, value | One byte-valued replicated field. |
 | `testing::unit_app()` | — | Builds a minimal non-rendering app with `AfterglowCorePlugin`. |
 | `testing::asset_unit_app()` | — | Builds a minimal non-rendering app with assets and core systems. |
 | `testing::headless_render::app()` | — | `test-support` only. Builds a no-window render app using a real GPU adapter, or returns `None` if unavailable. |

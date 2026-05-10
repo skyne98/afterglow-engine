@@ -2,6 +2,7 @@ use bevy::prelude::*;
 use std::collections::{BTreeSet, VecDeque};
 
 pub mod commands;
+pub mod replication;
 pub mod session;
 
 #[derive(Resource, Clone, Copy, Debug, Eq, PartialEq, Reflect)]
