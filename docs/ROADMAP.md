@@ -62,7 +62,7 @@ Deep dive: [bevy-integration-world-runtime.md](research/bevy-integration-world-r
 - [x] Snapshot/delta replication for player state and interactable objects
 - [x] Interest management tied to chunks, cells, visibility, and persistent state ownership
 - [x] Client prediction for player movement and cheap core interactions
-- [ ] Reconciliation from authoritative snapshots and correction packets
+- [x] Reconciliation from authoritative snapshots and correction packets
 - [ ] Interpolation for remote entities
 - [ ] Replication-compatible save/load data and reconnect baselines
 - [ ] Selective GGRS rollback prototype for small deterministic subsystems, not the whole streaming RPG world

@@ -32,6 +32,9 @@ afterglow-engine
 │   ├── prediction.rs
 │   ├── prediction/
 │   │   └── tests.rs   (cfg(test))
+│   ├── reconciliation.rs
+│   ├── reconciliation/
+│   │   └── tests.rs   (cfg(test))
 │   ├── replication.rs
 │   ├── replication/
 │   │   └── tests.rs   (cfg(test))
@@ -73,6 +76,7 @@ afterglow-engine
 | `network::commands` | Versioned wire envelope for serializing generic `PlayerCommand` batches. |
 | `network::interest` | Chunk-based interest map for filtering snapshots and deltas by player visibility. |
 | `network::prediction` | Client-side command history and replay buffer for prediction after authoritative snapshots. |
+| `network::reconciliation` | Reconciles authoritative snapshot/delta/correction ticks with local prediction history. |
 | `network::replication` | Stable-ID keyed snapshot/delta state primitives. |
 | `network::session` | Session identity maps between peers, platform identities, players, and avatars. |
 | `world` | Chunk/cell loading systems. Currently owns the built-in demo cell loader. |
@@ -99,6 +103,8 @@ afterglow-engine
 
 **Update / `BuildCommands`:** `clear_server_command_buffer`
 
+**Update / `BuildCommands`:** `clear_reconciliation_queue`
+
 **Update / `DebugAndMetrics` (chained):**
 1. `record_update_start`
 2. `rotate_cubes`
@@ -124,6 +130,7 @@ afterglow-engine
 | `NetworkProtocol` | Active engine network protocol version |
 | `ServerCommandBuffer` | Per-frame accepted/rejected server-authoritative command buffer plus tick dedupe state |
 | `ClientPredictionBuffer` | Local command history used to replay prediction after authoritative snapshots |
+| `ClientReconciliationQueue` | Per-frame reconciliation results created from authoritative updates |
 | `InterestMap` | Chunk visibility map for players and replicated entities |
 | `NetworkSession` | Runtime peer/player/platform/avatar identity map |
 | `StableIdAllocator` | Monotonic allocator for process-local stable IDs |
@@ -155,6 +162,7 @@ afterglow-engine
 | `cargo bench -p afterglow-engine --bench replication` | Measures replication snapshot, delta, apply, and interest-filter costs at multiple entity counts |
 | `cargo bench -p afterglow-engine --bench authority` | Measures bulk server-authoritative command validation and duplicate tick rejection |
 | `cargo bench -p afterglow-engine --bench prediction` | Measures client prediction command recording and replay/rebase costs |
+| `cargo bench -p afterglow-engine --bench reconciliation` | Measures authoritative correction reconciliation against local prediction history |
 
 ### Platform Notes
 
@@ -235,6 +243,10 @@ afterglow-engine
 | `CommandAuthorityResult` | Accepted, Rejected | Result returned by `ServerCommandBuffer::submit`. |
 | `ClientPredictionBuffer` | commands, acknowledged | Per-player local command history for client prediction. Games apply commands immediately, then call `replay_after` when an authoritative snapshot/correction arrives. |
 | `PredictionReplay` | player, authoritative_tick, commands | Ordered unacknowledged commands to replay on top of authoritative state. |
+| `ClientReconciliationQueue` | results | Per-frame results from reconciling authoritative updates against local prediction history. |
+| `AuthoritativeCorrection` | player, tick, source | Generic correction packet metadata. Carries the authoritative tick; game-specific state stays in snapshots/deltas or game packets. |
+| `AuthoritativeUpdateSource` | Snapshot, Delta, Correction | Source classification for reconciliation metrics and client policy. |
+| `ReconciliationResult` | player, authoritative_tick, source, replay_commands | Commands the game should replay after applying authoritative state. |
 | `CommandEnvelope` | protocol, commands | Versioned wire payload for one batch of player commands. |
 | `WirePlayerCommand` | player, tick, axes, actions, pointers | Explicit transport DTO for `PlayerCommand`. |
 | `WireAxisValue` | axis, value | Explicit transport DTO for one named axis value. |

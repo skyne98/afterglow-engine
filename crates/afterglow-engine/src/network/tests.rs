@@ -12,6 +12,8 @@ fn network_plugin_registers_protocol_resource() {
     );
     app.world().resource::<authority::ServerCommandBuffer>();
     app.world().resource::<prediction::ClientPredictionBuffer>();
+    app.world()
+        .resource::<reconciliation::ClientReconciliationQueue>();
     app.world().resource::<interest::InterestMap>();
     app.world().resource::<session::NetworkSession>();
 }

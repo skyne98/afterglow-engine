@@ -5,6 +5,7 @@ pub mod authority;
 pub mod commands;
 pub mod interest;
 pub mod prediction;
+pub mod reconciliation;
 pub mod replication;
 pub mod session;
 
@@ -111,11 +112,17 @@ impl Plugin for AfterglowNetworkPlugin {
         app.init_resource::<NetworkProtocol>()
             .init_resource::<authority::ServerCommandBuffer>()
             .init_resource::<prediction::ClientPredictionBuffer>()
+            .init_resource::<reconciliation::ClientReconciliationQueue>()
             .init_resource::<interest::InterestMap>()
             .init_resource::<session::NetworkSession>()
             .add_systems(
                 Update,
                 authority::clear_server_command_buffer
+                    .in_set(crate::core::schedule::AfterglowSet::BuildCommands),
+            )
+            .add_systems(
+                Update,
+                reconciliation::clear_reconciliation_queue
                     .in_set(crate::core::schedule::AfterglowSet::BuildCommands),
             );
     }

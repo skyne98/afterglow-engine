@@ -32,6 +32,10 @@ harness = false
 name = "prediction"
 harness = false
 
+[[bench]]
+name = "reconciliation"
+harness = false
+
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 bevy = { workspace = true, features = ["bevy_dev_tools", "trace"] }
 tiny_http.workspace = true
