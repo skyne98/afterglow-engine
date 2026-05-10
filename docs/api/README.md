@@ -12,7 +12,8 @@ afterglow-engine
 ├── lib.rs
 ├── core/
 │   ├── mod.rs
-│   └── identity.rs
+│   ├── identity.rs
+│   └── schedule.rs
 ├── world/
 │   ├── mod.rs
 │   └── chunk.rs
@@ -39,6 +40,7 @@ afterglow-engine
 |---|---|
 | `core` | Engine foundation systems. Currently owns stable identity and chunk membership. |
 | `core::identity` | Stable entity IDs, chunk IDs, persistence/replication markers, and registry resources. |
+| `core::schedule` | Ordered engine system sets for input, command building, simulation, persistence prep, and debug/metrics. |
 | `world` | Chunk/cell loading systems. Currently owns the built-in demo cell loader. |
 | `world::chunk` | Chunk IDs, demo-cell load state, and demo-cell loading system. |
 
@@ -56,7 +58,9 @@ afterglow-engine
 
 **Startup:** `load_demo_cell`, `spawn_hud`
 
-**Update (chained):**
+**Update sets:** `ReadInput` → `BuildCommands` → `Simulate` → `ApplyGameplay` → `PreparePersistence` → `DebugAndMetrics`
+
+**Update / `DebugAndMetrics` (chained):**
 1. `record_update_start`
 2. `rotate_cubes`
 3. `update_light`
@@ -131,6 +135,7 @@ afterglow-engine
 
 | Type | Fields | Description |
 |---|---|---|
+| `AfterglowSet` | ReadInput, BuildCommands, Simulate, ApplyGameplay, PreparePersistence, DebugAndMetrics | Ordered engine system sets for deterministic feature layering. |
 | `StableIdAllocator` | next | Allocates nonzero `StableEntityId` values for persistent/replicated entities missing one. |
 | `StableEntityRegistry` | stable_to_entity, entity_to_stable, chunk_to_entities, duplicate_ids | Rebuilt after updates from entities with `StableEntityId` and optional `ChunkMembership`. |
 | `DemoCellState` | chunk, load_state | Resource used by the demo loader to spawn one stable-ID chunk once. |

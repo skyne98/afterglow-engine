@@ -4,7 +4,7 @@ mod setup;
 pub mod world;
 
 use bevy::{app::PluginGroupBuilder, prelude::*, window::WindowPlugin};
-use core::AfterglowCorePlugin;
+use core::{AfterglowCorePlugin, schedule::AfterglowSet};
 use perf_hud::{
     AccumMap, PerfHudPlugin, collect_frame, record_update_end, record_update_start, setup_tracing,
     sync_shared_metrics, trace_collector::reset_trace_data, update_hud,
@@ -33,9 +33,15 @@ impl Plugin for AfterglowEnginePlugin {
                 record_update_end,
                 sync_shared_metrics,
             )
-                .chain(),
+                .chain()
+                .in_set(AfterglowSet::DebugAndMetrics),
         )
-        .add_systems(Update, reset_trace_data.after(sync_shared_metrics));
+        .add_systems(
+            Update,
+            reset_trace_data
+                .after(sync_shared_metrics)
+                .in_set(AfterglowSet::DebugAndMetrics),
+        );
     }
 }
 
