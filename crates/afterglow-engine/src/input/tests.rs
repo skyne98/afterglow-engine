@@ -1,5 +1,5 @@
 use super::*;
-use crate::{core::AfterglowCorePlugin, testing::unit_app};
+use crate::{core::AfterglowCorePlugin, network::NetworkPlayerId, testing::unit_app};
 
 #[test]
 fn maps_configured_keys_to_axis_values() {
@@ -18,11 +18,11 @@ fn maps_configured_keys_to_axis_values() {
         [],
         &bindings,
         &VirtualInputState::default(),
-        StableEntityId::from_raw(7),
+        NetworkPlayerId(7),
         12,
     );
 
-    assert_eq!(command.stable_player, StableEntityId::from_raw(7));
+    assert_eq!(command.player, NetworkPlayerId(7));
     assert_eq!(command.tick, 12);
     assert_eq!(
         command.axes,
@@ -58,7 +58,7 @@ fn maps_configured_buttons_to_ordered_string_actions() {
         [],
         &bindings,
         &VirtualInputState::default(),
-        StableEntityId::from_raw(1),
+        NetworkPlayerId(1),
         0,
     );
 
@@ -87,7 +87,7 @@ fn default_bindings_do_not_emit_game_specific_inputs() {
         [],
         &PlayerInputBindings::default(),
         &VirtualInputState::default(),
-        StableEntityId::from_raw(1),
+        NetworkPlayerId(1),
         0,
     );
 
@@ -114,7 +114,7 @@ fn maps_gamepad_axes_and_buttons_to_named_inputs() {
         [&gamepad],
         &bindings,
         &VirtualInputState::default(),
-        StableEntityId::from_raw(1),
+        NetworkPlayerId(1),
         0,
     );
 
@@ -148,7 +148,7 @@ fn virtual_input_supports_touch_and_pen_editor_feeds() {
         [],
         &PlayerInputBindings::default(),
         &virtual_input,
-        StableEntityId::from_raw(1),
+        NetworkPlayerId(1),
         0,
     );
 
@@ -159,9 +159,12 @@ fn virtual_input_supports_touch_and_pen_editor_feeds() {
 }
 
 #[test]
-fn input_plugin_enqueues_one_command_per_tick() {
+fn input_plugin_enqueues_one_command_per_local_player() {
     let mut app = unit_app();
     app.add_plugins(AfterglowInputPlugin);
+    app.world_mut()
+        .resource_mut::<LocalPlayers>()
+        .add_player(NetworkPlayerId(2));
 
     app.world_mut()
         .resource_mut::<PlayerInputBindings>()
@@ -181,7 +184,9 @@ fn input_plugin_enqueues_one_command_per_tick() {
     app.update();
 
     let queue = app.world().resource::<PlayerCommandQueue>();
-    assert_eq!(queue.commands().len(), 1);
+    assert_eq!(queue.commands().len(), 2);
+    assert_eq!(queue.commands()[0].player, NetworkPlayerId(1));
+    assert_eq!(queue.commands()[1].player, NetworkPlayerId(2));
     assert_eq!(queue.commands()[0].tick, 0);
     assert_eq!(queue.commands()[0].axes[0].axis, InputAxis::new("move.y"));
     assert_eq!(queue.commands()[0].axes[0].value, 1.0);
@@ -189,7 +194,7 @@ fn input_plugin_enqueues_one_command_per_tick() {
     app.update();
 
     let queue = app.world().resource::<PlayerCommandQueue>();
-    assert_eq!(queue.commands().len(), 1);
+    assert_eq!(queue.commands().len(), 2);
     assert_eq!(queue.commands()[0].tick, 1);
 }
 

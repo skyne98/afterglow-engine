@@ -53,8 +53,9 @@ Deep dive: [bevy-integration-gameplay-audio-ui.md](research/bevy-integration-gam
 
 Deep dive: [bevy-integration-world-runtime.md](research/bevy-integration-world-runtime.md), [iroh-networking.md](research/iroh-networking.md), [bevy-ggrs-rollback.md](research/bevy-ggrs-rollback.md), [steam-multiplayer.md](research/steam-multiplayer.md).
 
-- [ ] Transport-independent network protocol: peers, channels, packet headers, versions, disconnect reasons
-- [ ] Loopback and deterministic fake transport with packet loss, duplication, reorder, latency, and disconnect injection
+- [x] Transport-independent network protocol: peers, channels, packet headers, versions, disconnect reasons
+- [x] Loopback and deterministic fake transport with packet loss, duplication, reorder, latency, and disconnect injection
+- [x] Mock multi-client RPG networking harness for 3D interaction, rollback, security, and stress tests
 - [ ] Server-authoritative simulation path using the same local-server model as single-player
 - [ ] Serialize `PlayerCommand` input by simulation tick
 - [ ] Network player identity model: platform identity, session peer ID, player ID, and stable entity ID mapping

@@ -1,0 +1,276 @@
+use bevy::prelude::*;
+use std::collections::{BTreeSet, VecDeque};
+
+#[derive(Resource, Clone, Copy, Debug, Eq, PartialEq, Reflect)]
+pub struct NetworkProtocol {
+    pub version: ProtocolVersion,
+}
+
+impl Default for NetworkProtocol {
+    fn default() -> Self {
+        Self {
+            version: ProtocolVersion::CURRENT,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd, Reflect)]
+pub struct PeerId(pub u64);
+
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd, Reflect)]
+pub struct NetworkPlayerId(pub u64);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Reflect)]
+pub struct ProtocolVersion {
+    pub major: u16,
+    pub minor: u16,
+    pub patch: u16,
+}
+
+impl ProtocolVersion {
+    pub const CURRENT: Self = Self {
+        major: 0,
+        minor: 1,
+        patch: 0,
+    };
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Reflect)]
+pub enum NetChannel {
+    Control,
+    Commands,
+    Snapshots,
+    Events,
+    Bulk,
+    Custom(u16),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Reflect)]
+pub enum DeliveryMode {
+    Reliable,
+    Unreliable,
+    UnreliableSequenced,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Reflect)]
+pub struct PacketHeader {
+    pub protocol: ProtocolVersion,
+    pub channel: NetChannel,
+    pub delivery: DeliveryMode,
+    pub sequence: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Reflect)]
+pub struct NetworkPacket {
+    pub from: PeerId,
+    pub to: PeerId,
+    pub header: PacketHeader,
+    pub payload: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Reflect)]
+pub enum DisconnectReason {
+    Local,
+    Remote,
+    Timeout,
+    ProtocolMismatch {
+        expected: ProtocolVersion,
+        got: ProtocolVersion,
+    },
+    Transport(String),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Reflect)]
+pub enum TransportEvent {
+    Connected(PeerId),
+    Disconnected {
+        peer: PeerId,
+        reason: DisconnectReason,
+    },
+    Packet(NetworkPacket),
+}
+
+pub trait NetworkTransport {
+    fn local_peer(&self) -> PeerId;
+    fn poll_events(&mut self, out: &mut Vec<TransportEvent>);
+    fn send(&mut self, to: PeerId, channel: NetChannel, delivery: DeliveryMode, payload: Vec<u8>);
+    fn disconnect(&mut self, peer: PeerId, reason: DisconnectReason);
+}
+
+pub struct AfterglowNetworkPlugin;
+
+impl Plugin for AfterglowNetworkPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<NetworkProtocol>();
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct FaultConfig {
+    pub drop_every: Option<u64>,
+    pub duplicate_every: Option<u64>,
+    pub delay_ticks: u32,
+    pub reverse_delivery: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct MemoryTransport {
+    local_peer: PeerId,
+    protocol: ProtocolVersion,
+    connected: BTreeSet<PeerId>,
+    incoming: VecDeque<TransportEvent>,
+    outgoing: VecDeque<NetworkPacket>,
+    delayed: Vec<ScheduledEvent>,
+    next_sequence: u64,
+    faults: FaultConfig,
+}
+
+#[derive(Clone, Debug)]
+struct ScheduledEvent {
+    remaining_ticks: u32,
+    event: TransportEvent,
+}
+
+impl MemoryTransport {
+    pub fn new(local_peer: PeerId) -> Self {
+        Self {
+            local_peer,
+            protocol: ProtocolVersion::CURRENT,
+            connected: BTreeSet::new(),
+            incoming: VecDeque::new(),
+            outgoing: VecDeque::new(),
+            delayed: Vec::new(),
+            next_sequence: 0,
+            faults: FaultConfig::default(),
+        }
+    }
+
+    pub fn with_faults(mut self, faults: FaultConfig) -> Self {
+        self.faults = faults;
+        self
+    }
+
+    pub fn connect_pair(a: PeerId, b: PeerId) -> (Self, Self) {
+        let mut left = Self::new(a);
+        let mut right = Self::new(b);
+        left.connect_peer(b);
+        right.connect_peer(a);
+        (left, right)
+    }
+
+    pub fn connect_peer(&mut self, peer: PeerId) {
+        if self.connected.insert(peer) {
+            self.incoming.push_back(TransportEvent::Connected(peer));
+        }
+    }
+
+    pub fn pump_pair(left: &mut Self, right: &mut Self) {
+        let left_packets = left.collect_outgoing();
+        let right_packets = right.collect_outgoing();
+        right.receive_packets(left_packets);
+        left.receive_packets(right_packets);
+        left.advance_tick();
+        right.advance_tick();
+    }
+
+    pub fn collect_outgoing(&mut self) -> Vec<NetworkPacket> {
+        self.outgoing.drain(..).collect()
+    }
+
+    pub fn receive_packets(&mut self, mut packets: Vec<NetworkPacket>) {
+        if self.faults.reverse_delivery {
+            packets.reverse();
+        }
+        for packet in packets {
+            if packet.to != self.local_peer {
+                continue;
+            }
+            if self.should_drop(packet.header.sequence) {
+                continue;
+            }
+            let duplicate = self.should_duplicate(packet.header.sequence);
+            self.schedule(TransportEvent::Packet(packet.clone()));
+            if duplicate {
+                self.schedule(TransportEvent::Packet(packet));
+            }
+        }
+    }
+
+    fn should_drop(&self, sequence: u64) -> bool {
+        self.faults
+            .drop_every
+            .is_some_and(|every| every > 0 && (sequence + 1) % every == 0)
+    }
+
+    fn should_duplicate(&self, sequence: u64) -> bool {
+        self.faults
+            .duplicate_every
+            .is_some_and(|every| every > 0 && (sequence + 1) % every == 0)
+    }
+
+    fn schedule(&mut self, event: TransportEvent) {
+        if self.faults.delay_ticks == 0 {
+            self.incoming.push_back(event);
+            return;
+        }
+        self.delayed.push(ScheduledEvent {
+            remaining_ticks: self.faults.delay_ticks,
+            event,
+        });
+    }
+
+    pub fn advance_tick(&mut self) {
+        let mut ready = Vec::new();
+        for delayed in &mut self.delayed {
+            delayed.remaining_ticks = delayed.remaining_ticks.saturating_sub(1);
+        }
+        self.delayed.retain(|delayed| {
+            if delayed.remaining_ticks == 0 {
+                ready.push(delayed.event.clone());
+                false
+            } else {
+                true
+            }
+        });
+        self.incoming.extend(ready);
+    }
+}
+
+impl NetworkTransport for MemoryTransport {
+    fn local_peer(&self) -> PeerId {
+        self.local_peer
+    }
+
+    fn poll_events(&mut self, out: &mut Vec<TransportEvent>) {
+        out.extend(self.incoming.drain(..));
+    }
+
+    fn send(&mut self, to: PeerId, channel: NetChannel, delivery: DeliveryMode, payload: Vec<u8>) {
+        if !self.connected.contains(&to) {
+            return;
+        }
+        let sequence = self.next_sequence;
+        self.next_sequence = self.next_sequence.saturating_add(1);
+        self.outgoing.push_back(NetworkPacket {
+            from: self.local_peer,
+            to,
+            header: PacketHeader {
+                protocol: self.protocol,
+                channel,
+                delivery,
+                sequence,
+            },
+            payload,
+        });
+    }
+
+    fn disconnect(&mut self, peer: PeerId, reason: DisconnectReason) {
+        if self.connected.remove(&peer) {
+            self.incoming
+                .push_back(TransportEvent::Disconnected { peer, reason });
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests;

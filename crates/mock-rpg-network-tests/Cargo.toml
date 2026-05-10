@@ -1,0 +1,9 @@
+[package]
+name = "mock-rpg-network-tests"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+afterglow-engine = { path = "../afterglow-engine" }
+serde.workspace = true
+serde_json.workspace = true

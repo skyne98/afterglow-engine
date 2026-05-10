@@ -2,7 +2,8 @@
 
 ## Workspace
 
-Two crates: `afterglow-engine` (library) and `agx` (binary CLI).
+Three crates: `afterglow-engine` (library), `agx` (binary CLI), and
+`mock-rpg-network-tests` (test-only mock RPG networking harness).
 
 ## Crate: `afterglow-engine`
 
@@ -15,6 +16,9 @@ afterglow-engine
 │   ├── identity.rs
 │   └── schedule.rs
 ├── input/
+│   ├── mod.rs
+│   └── tests.rs       (cfg(test))
+├── network/
 │   ├── mod.rs
 │   └── tests.rs       (cfg(test))
 ├── world/
@@ -46,6 +50,7 @@ afterglow-engine
 | `core::identity` | Stable entity IDs, chunk IDs, persistence/replication markers, and registry resources. |
 | `core::schedule` | Ordered engine system sets for input, command building, simulation, persistence prep, and debug/metrics. |
 | `input` | Generic per-game input axis/action bindings and per-tick `PlayerCommand` generation. |
+| `network` | Transport-independent peer, channel, packet, and fake transport primitives. |
 | `world` | Chunk/cell loading systems. Currently owns the built-in demo cell loader. |
 | `world::chunk` | Chunk IDs, demo-cell load state, and demo-cell loading system. |
 | `testing` | Test app builders. Available in unit tests and through the `test-support` feature. |
@@ -87,9 +92,10 @@ afterglow-engine
 |---|---|
 | `TraceData` | `{ accum: AccumMap }` |
 | `PlayerInputBindings` | Game-configured axis and key/mouse action bindings |
-| `LocalPlayer` | Stable ID used for locally generated player commands |
+| `LocalPlayers` | Local session player IDs controlled by this app instance |
 | `SimulationTick` | Monotonic command tick counter |
 | `PlayerCommandQueue` | Current-frame local player commands |
+| `NetworkProtocol` | Active engine network protocol version |
 | `StableIdAllocator` | Monotonic allocator for process-local stable IDs |
 | `StableEntityRegistry` | Runtime maps for stable ID ↔ entity and chunk → entities |
 | `DemoCellState` | Tracks the built-in demo cell chunk and whether it has been loaded |
@@ -157,7 +163,7 @@ afterglow-engine
 |---|---|---|
 | `AfterglowSet` | ReadInput, BuildCommands, Simulate, ApplyGameplay, PreparePersistence, DebugAndMetrics | Ordered engine system sets for deterministic feature layering. |
 | `InputAction` | String action ID | Game-defined action emitted from raw devices. The engine does not hardcode game actions. |
-| `PlayerCommand` | stable_player, tick, axes, actions, pointers | Deterministic command record for local-server simulation, prediction, replay, editor tools, and tests. Payload is game-defined; lobby/menu/no-camera scenes can emit no axes, actions, or pointers. |
+| `PlayerCommand` | player, tick, axes, actions, pointers | Deterministic command record for local-server simulation, prediction, replay, editor tools, and tests. Payload is game-defined; lobby/menu/no-camera scenes can emit no axes, actions, or pointers. |
 | `PlayerInputBindings` | axes, actions | Game-configured keyboard, mouse, gamepad, and touch action bindings. Defaults emit no game-specific input. |
 | `InputAxis` | String axis ID | Game-defined analog/digital axis name. |
 | `InputAxisValue` | axis, value | One command-time axis sample. |
@@ -168,9 +174,22 @@ afterglow-engine
 | `VirtualInputState` | axes, actions, pointers | Per-frame game/editor-fed inputs for touch virtual sticks, graphics tablet pens, custom devices, and UI tools. Cleared after command collection. |
 | `PointerInput` | device, id, position, delta, pressure, tilt, twist, primary | Generic pointer sample for touch, pen/tablet, mouse-derived editor tools, or custom pointing devices. |
 | `PointerDevice` | Mouse, Touch, Pen, Unknown | Pointer source classification. |
-| `LocalPlayer` | stable_id | Stable local player identity used for generated commands. |
+| `LocalPlayers` | peer, players | Local transport peer plus one or more local `NetworkPlayerId`s controlled by this app instance. Stable world-entity mapping lives outside input. |
 | `SimulationTick` | u32 | Monotonic command tick. |
 | `PlayerCommandQueue` | commands | Current-frame generated commands. |
+| `NetworkProtocol` | version | Resource exposing the current network protocol version. |
+| `ProtocolVersion` | major, minor, patch | Semver-style protocol version used in packet headers. |
+| `PeerId` | u64 | Transport-session peer identifier. |
+| `NetworkPlayerId` | u64 | Session-level player identity, separate from platform IDs and stable entity IDs. |
+| `NetChannel` | Control, Commands, Snapshots, Events, Bulk, Custom | Engine packet channel classification. |
+| `DeliveryMode` | Reliable, Unreliable, UnreliableSequenced | Delivery intent independent of any transport backend. |
+| `PacketHeader` | protocol, channel, delivery, sequence | Transport-independent packet metadata. |
+| `NetworkPacket` | from, to, header, payload | Transport-independent packet envelope. |
+| `DisconnectReason` | Local, Remote, Timeout, ProtocolMismatch, Transport | Generic disconnect reason. |
+| `TransportEvent` | Connected, Disconnected, Packet | Events emitted by transport backends. |
+| `NetworkTransport` | trait | Minimal transport interface for polling events, sending packets, and disconnecting peers. |
+| `MemoryTransport` | local_peer, protocol, queues, faults | Deterministic in-memory fake transport for unit tests and protocol development. |
+| `FaultConfig` | drop_every, duplicate_every, delay_ticks, reverse_delivery | Deterministic packet fault injection for fake transport tests. |
 | `testing::unit_app()` | — | Builds a minimal non-rendering app with `AfterglowCorePlugin`. |
 | `testing::asset_unit_app()` | — | Builds a minimal non-rendering app with assets and core systems. |
 | `testing::headless_render::app()` | — | `test-support` only. Builds a no-window render app using a real GPU adapter, or returns `None` if unavailable. |
@@ -203,6 +222,15 @@ afterglow-engine
 ## Crate: `agx` (binary)
 
 CLI entry point. Parses `--name` arg (unused), calls `afterglow_engine::run()`.
+
+## Crate: `mock-rpg-network-tests`
+
+Workspace test crate that exercises engine networking primitives against a mock
+first-person open-world RPG simulation. It uses `MemoryTransport` and JSON
+packet payloads to cover multi-client joins, 3D position/chunk math, snapshots,
+chunk interest, authority, duplicate ticks, rollback-style save/restore,
+malformed/spoofed/hacked client behavior, door use, item pickup conflicts,
+combat events, and many simultaneous NPC/world-state changes.
 
 ## Docs
 

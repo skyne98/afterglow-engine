@@ -1,6 +1,9 @@
 use bevy::{input::touch::ForceTouch, prelude::*};
 
-use crate::core::{identity::StableEntityId, schedule::AfterglowSet};
+use crate::{
+    core::schedule::AfterglowSet,
+    network::{NetworkPlayerId, PeerId},
+};
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Reflect)]
 pub struct InputAction(pub String);
@@ -9,15 +12,11 @@ impl InputAction {
     pub fn new(action: impl Into<String>) -> Self {
         Self(action.into())
     }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Reflect)]
 pub struct PlayerCommand {
-    pub stable_player: StableEntityId,
+    pub player: NetworkPlayerId,
     pub tick: u32,
     pub axes: Vec<InputAxisValue>,
     pub actions: Vec<InputAction>,
@@ -137,10 +136,6 @@ pub struct InputAxis(pub String);
 impl InputAxis {
     pub fn new(axis: impl Into<String>) -> Self {
         Self(axis.into())
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
     }
 }
 
@@ -264,16 +259,38 @@ impl Default for PlayerInputBindings {
     }
 }
 
-#[derive(Resource, Clone, Copy, Debug, Eq, PartialEq, Reflect)]
-pub struct LocalPlayer {
-    pub stable_id: StableEntityId,
+#[derive(Resource, Clone, Debug, Eq, PartialEq, Reflect)]
+pub struct LocalPlayers {
+    pub peer: Option<PeerId>,
+    players: Vec<NetworkPlayerId>,
 }
 
-impl Default for LocalPlayer {
-    fn default() -> Self {
+impl LocalPlayers {
+    pub fn single(player: NetworkPlayerId) -> Self {
         Self {
-            stable_id: StableEntityId::from_raw(1),
+            peer: None,
+            players: vec![player],
         }
+    }
+
+    pub fn players(&self) -> &[NetworkPlayerId] {
+        &self.players
+    }
+
+    pub fn add_player(&mut self, player: NetworkPlayerId) {
+        if !self.players.contains(&player) {
+            self.players.push(player);
+        }
+    }
+
+    pub fn remove_player(&mut self, player: NetworkPlayerId) {
+        self.players.retain(|existing| *existing != player);
+    }
+}
+
+impl Default for LocalPlayers {
+    fn default() -> Self {
+        Self::single(NetworkPlayerId(1))
     }
 }
 
@@ -301,7 +318,7 @@ impl Plugin for AfterglowInputPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PlayerInputBindings>()
             .init_resource::<VirtualInputState>()
-            .init_resource::<LocalPlayer>()
+            .init_resource::<LocalPlayers>()
             .init_resource::<SimulationTick>()
             .init_resource::<PlayerCommandQueue>()
             .init_resource::<ButtonInput<KeyCode>>()
@@ -321,22 +338,23 @@ pub fn collect_player_commands(
     gamepads: Query<&Gamepad>,
     bindings: Res<PlayerInputBindings>,
     mut virtual_input: ResMut<VirtualInputState>,
-    local_player: Res<LocalPlayer>,
+    local_players: Res<LocalPlayers>,
     mut tick: ResMut<SimulationTick>,
     mut commands: ResMut<PlayerCommandQueue>,
 ) {
-    let command = read_player_command(
-        &keyboard,
-        &mouse,
-        &touches,
-        gamepads.iter(),
-        &bindings,
-        &virtual_input,
-        local_player.stable_id,
-        tick.0,
-    );
     commands.commands.clear();
-    commands.commands.push(command);
+    for player in local_players.players() {
+        commands.commands.push(read_player_command(
+            &keyboard,
+            &mouse,
+            &touches,
+            gamepads.iter(),
+            &bindings,
+            &virtual_input,
+            *player,
+            tick.0,
+        ));
+    }
     virtual_input.clear();
     tick.0 = tick.0.saturating_add(1);
 }
@@ -348,7 +366,7 @@ pub fn read_player_command<'a>(
     gamepads: impl IntoIterator<Item = &'a Gamepad>,
     bindings: &PlayerInputBindings,
     virtual_input: &VirtualInputState,
-    stable_player: StableEntityId,
+    player: NetworkPlayerId,
     tick: u32,
 ) -> PlayerCommand {
     let gamepads: Vec<&Gamepad> = gamepads.into_iter().collect();
@@ -386,7 +404,7 @@ pub fn read_player_command<'a>(
     pointers.extend(virtual_input.pointers.iter().cloned());
 
     PlayerCommand {
-        stable_player,
+        player,
         tick,
         axes,
         actions,

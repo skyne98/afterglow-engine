@@ -38,10 +38,11 @@ pub enum InputAction {
 }
 
 pub struct PlayerCommand {
+    pub player: NetworkPlayerId,
     pub tick: u32,
-    pub movement: Vec3,
-    pub look_delta: Vec2,
+    pub axes: Vec<InputAxisValue>,
     pub actions: Vec<InputAction>,
+    pub pointers: Vec<PointerInput>,
 }
 ```
 

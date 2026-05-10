@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/afterglow-engine",
     "crates/agx",
+    "crates/mock-rpg-network-tests",
 ]
 
 [workspace.dependencies]

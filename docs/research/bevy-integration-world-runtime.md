@@ -174,11 +174,11 @@ Single-player should run as a local server. That means gameplay should already f
 
 ```rust
 pub struct PlayerCommand {
-    pub stable_player: StableEntityId,
+    pub player: NetworkPlayerId,
     pub tick: u32,
-    pub movement: Vec3,
-    pub look_delta: Vec2,
-    pub actions: SmallVec<[InputAction; 8]>,
+    pub axes: Vec<InputAxisValue>,
+    pub actions: Vec<InputAction>,
+    pub pointers: Vec<PointerInput>,
 }
 ```
 

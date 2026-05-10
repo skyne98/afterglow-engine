@@ -1,5 +1,6 @@
 pub mod core;
 pub mod input;
+pub mod network;
 mod perf_hud;
 mod setup;
 #[cfg(any(test, feature = "test-support"))]
@@ -9,6 +10,7 @@ pub mod world;
 use bevy::{app::PluginGroupBuilder, prelude::*, window::WindowPlugin};
 use core::{AfterglowCorePlugin, schedule::AfterglowSet};
 use input::AfterglowInputPlugin;
+use network::AfterglowNetworkPlugin;
 use perf_hud::{
     AccumMap, PerfHudPlugin, collect_frame, record_update_end, record_update_start, setup_tracing,
     sync_shared_metrics, trace_collector::reset_trace_data, update_hud,
@@ -26,6 +28,7 @@ impl Plugin for AfterglowEnginePlugin {
         })
         .add_plugins(AfterglowCorePlugin)
         .add_plugins(AfterglowInputPlugin)
+        .add_plugins(AfterglowNetworkPlugin)
         .add_plugins(AfterglowWorldPlugin)
         .add_systems(
             Update,
