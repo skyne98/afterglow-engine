@@ -1,4 +1,11 @@
-use afterglow_engine::{core::identity::StableEntityId, network::replication::ReplicationWorld};
+use afterglow_engine::{
+    core::identity::{ChunkId, StableEntityId},
+    network::{
+        NetworkPlayerId,
+        interest::InterestMap,
+        replication::{ReplicationWorld, WorldDelta},
+    },
+};
 use std::{
     hint::black_box,
     time::{Duration, Instant},
@@ -32,6 +39,8 @@ fn run_case(
     );
     let delta = changed_world.delta_since(&baseline, 2);
     let dirty_delta = changed_world.dirty_delta_since(&baseline, 2);
+    let interest = interest(entity_count);
+    let player = NetworkPlayerId(1);
     let mut baseline_client = ReplicationWorld::default();
     baseline_client.apply_snapshot(&baseline);
 
@@ -53,16 +62,28 @@ fn run_case(
         baseline_client.apply_delta(&dirty_delta);
         black_box(&baseline_client);
     });
+    let filter_snapshot_time = measure(iterations, || {
+        black_box(interest.filter_snapshot(player, &baseline));
+    });
+    let filter_dirty_delta_time = measure(iterations, || {
+        black_box(interest.filter_delta(player, &dirty_delta));
+    });
+    let visible_snapshot = interest.filter_snapshot(player, &baseline);
+    let visible_dirty_delta = interest.filter_delta(player, &dirty_delta);
 
     println!(
-        "replication entities={entity_count} fields={field_count} changed={} removed={} snapshot={} full_delta={} dirty_delta={} snapshot_apply={} dirty_apply={}",
+        "replication entities={entity_count} fields={field_count} changed={} removed={} visible_snapshot={} visible_dirty_delta={} snapshot={} full_delta={} dirty_delta={} snapshot_apply={} dirty_apply={} interest_snapshot={} interest_dirty_delta={}",
         dirty_delta.changes.len(),
         dirty_delta.removed.len(),
+        visible_snapshot.entities.len(),
+        delta_entity_count(&visible_dirty_delta),
         fmt(snapshot_time / iterations),
         fmt(delta_time / iterations),
         fmt(dirty_delta_time / iterations),
         fmt(snapshot_apply_time / iterations),
         fmt(dirty_apply_time / iterations),
+        fmt(filter_snapshot_time / iterations),
+        fmt(filter_dirty_delta_time / iterations),
     );
     black_box(delta);
 }
@@ -101,6 +122,20 @@ fn mutate_subset(
     for entity_index in (16..=entity_count).step_by(remove_step) {
         world.remove_entity(StableEntityId::from_raw(entity_index));
     }
+}
+
+fn interest(entity_count: u128) -> InterestMap {
+    let mut interest = InterestMap::default();
+    for entity_index in 1..=entity_count {
+        let chunk = ChunkId::from_raw(((entity_index - 1) / 1_000 + 1) as u64);
+        interest.set_entity_chunk(StableEntityId::from_raw(entity_index), chunk);
+    }
+    interest.set_player_chunks(NetworkPlayerId(1), (1_u64..=8).map(ChunkId::from_raw));
+    interest
+}
+
+fn delta_entity_count(delta: &WorldDelta) -> usize {
+    delta.changes.len() + delta.removed.len()
 }
 
 fn measure(iterations: u32, mut f: impl FnMut()) -> Duration {

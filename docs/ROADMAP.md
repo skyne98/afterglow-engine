@@ -60,7 +60,7 @@ Deep dive: [bevy-integration-world-runtime.md](research/bevy-integration-world-r
 - [x] Serialize `PlayerCommand` input by simulation tick
 - [x] Network player identity model: platform identity, session peer ID, player ID, and stable entity ID mapping
 - [x] Snapshot/delta replication for player state and interactable objects
-- [ ] Interest management tied to chunks, cells, visibility, and persistent state ownership
+- [x] Interest management tied to chunks, cells, visibility, and persistent state ownership
 - [ ] Client prediction for player movement and cheap core interactions
 - [ ] Reconciliation from authoritative snapshots and correction packets
 - [ ] Interpolation for remote entities

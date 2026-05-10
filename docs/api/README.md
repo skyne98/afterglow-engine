@@ -23,6 +23,9 @@ afterglow-engine
 │   ├── commands.rs
 │   ├── commands/
 │   │   └── tests.rs   (cfg(test))
+│   ├── interest.rs
+│   ├── interest/
+│   │   └── tests.rs   (cfg(test))
 │   ├── replication.rs
 │   ├── replication/
 │   │   └── tests.rs   (cfg(test))
@@ -61,6 +64,7 @@ afterglow-engine
 | `input` | Generic per-game input axis/action bindings and per-tick `PlayerCommand` generation. |
 | `network` | Transport-independent peer, channel, packet, and fake transport primitives. |
 | `network::commands` | Versioned wire envelope for serializing generic `PlayerCommand` batches. |
+| `network::interest` | Chunk-based interest map for filtering snapshots and deltas by player visibility. |
 | `network::replication` | Stable-ID keyed snapshot/delta state primitives. |
 | `network::session` | Session identity maps between peers, platform identities, players, and avatars. |
 | `world` | Chunk/cell loading systems. Currently owns the built-in demo cell loader. |
@@ -108,6 +112,7 @@ afterglow-engine
 | `SimulationTick` | Monotonic command tick counter |
 | `PlayerCommandQueue` | Current-frame local player commands |
 | `NetworkProtocol` | Active engine network protocol version |
+| `InterestMap` | Chunk visibility map for players and replicated entities |
 | `NetworkSession` | Runtime peer/player/platform/avatar identity map |
 | `StableIdAllocator` | Monotonic allocator for process-local stable IDs |
 | `StableEntityRegistry` | Runtime maps for stable ID ↔ entity and chunk → entities |
@@ -135,7 +140,7 @@ afterglow-engine
 
 | Command | Purpose |
 |---|---|
-| `cargo bench -p afterglow-engine --bench replication` | Measures replication snapshot, delta, and apply costs at multiple entity counts |
+| `cargo bench -p afterglow-engine --bench replication` | Measures replication snapshot, delta, apply, and interest-filter costs at multiple entity counts |
 
 ### Platform Notes
 
@@ -227,6 +232,7 @@ afterglow-engine
 | `EntitySnapshot` | entity, fields | Full entity state inside a snapshot. |
 | `EntityDelta` | entity, changed, removed | Per-entity changed and removed fields. |
 | `FieldValue` | name, value | One byte-valued replicated field. |
+| `InterestMap` | entity_chunks, player_chunks | Chunk-based visibility filter for replicated snapshots and deltas. |
 | `testing::unit_app()` | — | Builds a minimal non-rendering app with `AfterglowCorePlugin`. |
 | `testing::asset_unit_app()` | — | Builds a minimal non-rendering app with assets and core systems. |
 | `testing::headless_render::app()` | — | `test-support` only. Builds a no-window render app using a real GPU adapter, or returns `None` if unavailable. |
