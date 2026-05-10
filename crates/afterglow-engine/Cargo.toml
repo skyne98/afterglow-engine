@@ -24,6 +24,10 @@ workspace = true
 name = "replication"
 harness = false
 
+[[bench]]
+name = "authority"
+harness = false
+
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 bevy = { workspace = true, features = ["bevy_dev_tools", "trace"] }
 tiny_http.workspace = true

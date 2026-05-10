@@ -56,7 +56,7 @@ Deep dive: [bevy-integration-world-runtime.md](research/bevy-integration-world-r
 - [x] Transport-independent network protocol: peers, channels, packet headers, versions, disconnect reasons
 - [x] Loopback and deterministic fake transport with packet loss, duplication, reorder, latency, and disconnect injection
 - [x] Mock multi-client RPG networking harness for 3D interaction, rollback, security, and stress tests
-- [ ] Server-authoritative simulation path using the same local-server model as single-player
+- [x] Server-authoritative simulation path using the same local-server model as single-player
 - [x] Serialize `PlayerCommand` input by simulation tick
 - [x] Network player identity model: platform identity, session peer ID, player ID, and stable entity ID mapping
 - [x] Snapshot/delta replication for player state and interactable objects

@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 use std::collections::{BTreeSet, VecDeque};
 
+pub mod authority;
 pub mod commands;
 pub mod interest;
 pub mod replication;
@@ -107,8 +108,14 @@ pub struct AfterglowNetworkPlugin;
 impl Plugin for AfterglowNetworkPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<NetworkProtocol>()
+            .init_resource::<authority::ServerCommandBuffer>()
             .init_resource::<interest::InterestMap>()
-            .init_resource::<session::NetworkSession>();
+            .init_resource::<session::NetworkSession>()
+            .add_systems(
+                Update,
+                authority::clear_server_command_buffer
+                    .in_set(crate::core::schedule::AfterglowSet::BuildCommands),
+            );
     }
 }
 

@@ -1,8 +1,16 @@
-use afterglow_engine::network::{
-    DeliveryMode, MemoryTransport, NetChannel, NetworkTransport, PeerId, TransportEvent,
+use afterglow_engine::{
+    input::PlayerCommand,
+    network::{
+        DeliveryMode, MemoryTransport, NetChannel, NetworkTransport, PeerId, TransportEvent,
+        authority::{CommandAuthorityResult, ServerCommandBuffer},
+        session::{NetworkSession, PlatformIdentity},
+    },
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+
+mod rules;
+use rules::*;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct Player(pub u64);
@@ -98,11 +106,12 @@ pub struct PlayerState {
     pub position: Vec3i,
     pub hp: i32,
     pub inventory: BTreeSet<Entity>,
-    seen_ticks: BTreeSet<u32>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct WorldState {
+    session: NetworkSession,
+    commands: ServerCommandBuffer,
     players: BTreeMap<Player, PlayerState>,
     doors: BTreeMap<Entity, (Vec3i, bool)>,
     items: BTreeMap<Entity, Vec3i>,
@@ -122,6 +131,8 @@ pub struct MockClient {
 pub struct MockServer {
     pub peer: PeerId,
     pub transport: MemoryTransport,
+    session: NetworkSession,
+    commands: ServerCommandBuffer,
     pub players: BTreeMap<Player, PlayerState>,
     doors: BTreeMap<Entity, (Vec3i, bool)>,
     items: BTreeMap<Entity, Vec3i>,
@@ -169,6 +180,8 @@ impl MockServer {
         Self {
             peer,
             transport: MemoryTransport::new(peer),
+            session: NetworkSession::default(),
+            commands: ServerCommandBuffer::default(),
             players: BTreeMap::new(),
             doors: BTreeMap::from([(Entity(100), (Vec3i::new(4, 0, 4), false))]),
             items: BTreeMap::from([(Entity(200), Vec3i::new(5, 0, 5))]),
@@ -180,6 +193,12 @@ impl MockServer {
     pub fn connect(&mut self, client: &mut MockClient) {
         self.transport.connect_peer(client.peer);
         client.transport.connect_peer(self.peer);
+        self.session.connect_peer(
+            client.peer,
+            PlatformIdentity::Anonymous {
+                label: format!("peer-{}", client.peer.0),
+            },
+        );
     }
 
     pub fn add_npc(&mut self, entity: Entity, position: Vec3i, hp: i32) {
@@ -192,6 +211,8 @@ impl MockServer {
 
     pub fn save_state(&self) -> WorldState {
         WorldState {
+            session: self.session.clone(),
+            commands: self.commands.clone(),
             players: self.players.clone(),
             doors: self.doors.clone(),
             items: self.items.clone(),
@@ -201,6 +222,8 @@ impl MockServer {
     }
 
     pub fn restore_state(&mut self, state: WorldState) {
+        self.session = state.session;
+        self.commands = state.commands;
         self.players = state.players;
         self.doors = state.doors;
         self.items = state.items;
@@ -227,6 +250,7 @@ impl MockServer {
         }
         self.transport.receive_packets(server_incoming);
         self.transport.advance_tick();
+        self.commands.begin_frame();
         self.handle_events();
 
         let server_outgoing = self.transport.collect_outgoing();
@@ -264,10 +288,10 @@ impl MockServer {
                 tick,
                 position,
             } => {
-                if !self.owns_player(peer, player) {
-                    self.reject(peer, tick, "player-not-owned");
-                } else if self.accept_tick(player, tick) && valid_move(self.player(peer), position)
-                {
+                if !self.accept_command(peer, player, tick) {
+                    return;
+                }
+                if valid_move(self.player(peer).position, position) {
                     self.players.get_mut(&player).unwrap().position = position;
                     self.send_snapshot(peer);
                 } else {
@@ -279,9 +303,7 @@ impl MockServer {
                 tick,
                 entity,
             } => {
-                if !self.owns_player(peer, player) {
-                    self.reject(peer, tick, "player-not-owned");
-                } else if self.accept_tick(player, tick) {
+                if self.accept_command(peer, player, tick) {
                     self.use_entity(peer, player, tick, entity);
                 }
             }
@@ -290,9 +312,7 @@ impl MockServer {
                 tick,
                 entity,
             } => {
-                if !self.owns_player(peer, player) {
-                    self.reject(peer, tick, "player-not-owned");
-                } else if self.accept_tick(player, tick) {
+                if self.accept_command(peer, player, tick) {
                     self.attack_entity(peer, entity);
                 }
             }
@@ -313,8 +333,14 @@ impl MockServer {
             position: Vec3i::ZERO,
             hp: 100,
             inventory: BTreeSet::new(),
-            seen_ticks: BTreeSet::new(),
         });
+        if self.session.player(net_player(player)).is_none() {
+            let assigned = self.session.add_player(peer);
+            if assigned != Some(net_player(player)) {
+                self.reject(peer, 0, "player-id-mismatch");
+                return;
+            }
+        }
         self.send(
             peer,
             ServerMsg::Welcome {
@@ -373,16 +399,23 @@ impl MockServer {
         }
     }
 
-    fn owns_player(&self, peer: PeerId, player: Player) -> bool {
-        self.players
-            .get(&player)
-            .is_some_and(|state| state.peer == peer)
-    }
-
-    fn accept_tick(&mut self, player: Player, tick: u32) -> bool {
-        self.players
-            .get_mut(&player)
-            .is_some_and(|state| state.seen_ticks.insert(tick))
+    fn accept_command(&mut self, peer: PeerId, player: Player, tick: u32) -> bool {
+        let result = self.commands.submit(
+            peer,
+            PlayerCommand {
+                player: net_player(player),
+                tick,
+                ..Default::default()
+            },
+            &self.session,
+        );
+        match result {
+            CommandAuthorityResult::Accepted => true,
+            CommandAuthorityResult::Rejected(reason) => {
+                self.reject(peer, tick, reject_reason(reason));
+                false
+            }
+        }
     }
 
     fn send_snapshot(&mut self, peer: PeerId) {
@@ -457,16 +490,4 @@ impl MockServer {
             .find(|state| state.peer == peer)
             .unwrap()
     }
-}
-
-fn valid_move(player: &PlayerState, target: Vec3i) -> bool {
-    player.position.distance_squared(target) <= 160 * 160
-}
-
-fn in_reach(a: Vec3i, b: Vec3i) -> bool {
-    a.distance_squared(b) <= 8 * 8
-}
-
-fn near(a: Chunk, b: Chunk) -> bool {
-    (a.0 - b.0).abs() <= 1 && (a.1 - b.1).abs() <= 1 && (a.2 - b.2).abs() <= 1
 }

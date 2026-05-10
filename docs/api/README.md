@@ -20,6 +20,9 @@ afterglow-engine
 │   └── tests.rs       (cfg(test))
 ├── network/
 │   ├── mod.rs
+│   ├── authority.rs
+│   ├── authority/
+│   │   └── tests.rs   (cfg(test))
 │   ├── commands.rs
 │   ├── commands/
 │   │   └── tests.rs   (cfg(test))
@@ -63,6 +66,7 @@ afterglow-engine
 | `core::schedule` | Ordered engine system sets for input, command building, simulation, persistence prep, and debug/metrics. |
 | `input` | Generic per-game input axis/action bindings and per-tick `PlayerCommand` generation. |
 | `network` | Transport-independent peer, channel, packet, and fake transport primitives. |
+| `network::authority` | Server-side command validation for peer ownership and duplicate simulation ticks. |
 | `network::commands` | Versioned wire envelope for serializing generic `PlayerCommand` batches. |
 | `network::interest` | Chunk-based interest map for filtering snapshots and deltas by player visibility. |
 | `network::replication` | Stable-ID keyed snapshot/delta state primitives. |
@@ -89,6 +93,8 @@ afterglow-engine
 
 **Update / `ReadInput`:** `collect_player_commands`
 
+**Update / `BuildCommands`:** `clear_server_command_buffer`
+
 **Update / `DebugAndMetrics` (chained):**
 1. `record_update_start`
 2. `rotate_cubes`
@@ -112,6 +118,7 @@ afterglow-engine
 | `SimulationTick` | Monotonic command tick counter |
 | `PlayerCommandQueue` | Current-frame local player commands |
 | `NetworkProtocol` | Active engine network protocol version |
+| `ServerCommandBuffer` | Per-frame accepted/rejected server-authoritative command buffer plus tick dedupe state |
 | `InterestMap` | Chunk visibility map for players and replicated entities |
 | `NetworkSession` | Runtime peer/player/platform/avatar identity map |
 | `StableIdAllocator` | Monotonic allocator for process-local stable IDs |
@@ -141,6 +148,7 @@ afterglow-engine
 | Command | Purpose |
 |---|---|
 | `cargo bench -p afterglow-engine --bench replication` | Measures replication snapshot, delta, apply, and interest-filter costs at multiple entity counts |
+| `cargo bench -p afterglow-engine --bench authority` | Measures bulk server-authoritative command validation and duplicate tick rejection |
 
 ### Platform Notes
 
@@ -214,6 +222,11 @@ afterglow-engine
 | `NetworkTransport` | trait | Minimal transport interface for polling events, sending packets, and disconnecting peers. |
 | `MemoryTransport` | local_peer, protocol, queues, faults | Deterministic in-memory fake transport for unit tests and protocol development. |
 | `FaultConfig` | drop_every, duplicate_every, delay_ticks, reverse_delivery | Deterministic packet fault injection for fake transport tests. |
+| `ServerCommandBuffer` | accepted, rejected, seen_ticks | Server-authoritative command intake. Validates peer ownership through `NetworkSession`, rejects duplicate player ticks, and exposes accepted generic `PlayerCommand`s for simulation. |
+| `AuthoritativePlayerCommand` | peer, command | Accepted command tagged with the transport peer that submitted it. |
+| `RejectedPlayerCommand` | peer, player, tick, reason | Rejected command metadata for logging, metrics, disconnect policy, or client correction. |
+| `CommandRejectReason` | UnknownPlayer, PlayerNotOwned, DuplicateTick | Generic command authority rejection reason. |
+| `CommandAuthorityResult` | Accepted, Rejected | Result returned by `ServerCommandBuffer::submit`. |
 | `CommandEnvelope` | protocol, commands | Versioned wire payload for one batch of player commands. |
 | `WirePlayerCommand` | player, tick, axes, actions, pointers | Explicit transport DTO for `PlayerCommand`. |
 | `WireAxisValue` | axis, value | Explicit transport DTO for one named axis value. |

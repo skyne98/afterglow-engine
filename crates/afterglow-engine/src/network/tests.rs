@@ -10,6 +10,9 @@ fn network_plugin_registers_protocol_resource() {
         app.world().resource::<NetworkProtocol>().version,
         ProtocolVersion::CURRENT
     );
+    app.world().resource::<authority::ServerCommandBuffer>();
+    app.world().resource::<interest::InterestMap>();
+    app.world().resource::<session::NetworkSession>();
 }
 
 #[test]
