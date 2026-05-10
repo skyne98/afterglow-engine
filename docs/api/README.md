@@ -317,7 +317,10 @@ packet payloads to cover multi-client joins, 3D position/chunk math, snapshots,
 chunk interest, authority, duplicate ticks, rollback-style save/restore,
 malformed/spoofed/hacked client behavior, door use, item pickup conflicts,
 combat events, client prediction, reconciliation, remote interpolation,
-bounded extrapolation, and many simultaneous NPC/world-state changes.
+bounded extrapolation, moving spell projectiles with collider hits under
+delayed/reordered packets, projectile edge cases for duplicate/spoofed casts,
+packet loss, swept collision, rejected prediction cleanup, out-of-order samples,
+and many simultaneous NPC/world-state changes.
 
 ## Docs
 
