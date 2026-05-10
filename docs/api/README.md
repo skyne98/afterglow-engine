@@ -23,6 +23,9 @@ afterglow-engine
 │   ├── commands.rs
 │   ├── commands/
 │   │   └── tests.rs   (cfg(test))
+│   ├── session.rs
+│   ├── session/
+│   │   └── tests.rs   (cfg(test))
 │   └── tests.rs       (cfg(test))
 ├── world/
 │   ├── mod.rs
@@ -55,6 +58,7 @@ afterglow-engine
 | `input` | Generic per-game input axis/action bindings and per-tick `PlayerCommand` generation. |
 | `network` | Transport-independent peer, channel, packet, and fake transport primitives. |
 | `network::commands` | Versioned wire envelope for serializing generic `PlayerCommand` batches. |
+| `network::session` | Session identity maps between peers, platform identities, players, and avatars. |
 | `world` | Chunk/cell loading systems. Currently owns the built-in demo cell loader. |
 | `world::chunk` | Chunk IDs, demo-cell load state, and demo-cell loading system. |
 | `testing` | Test app builders. Available in unit tests and through the `test-support` feature. |
@@ -100,6 +104,7 @@ afterglow-engine
 | `SimulationTick` | Monotonic command tick counter |
 | `PlayerCommandQueue` | Current-frame local player commands |
 | `NetworkProtocol` | Active engine network protocol version |
+| `NetworkSession` | Runtime peer/player/platform/avatar identity map |
 | `StableIdAllocator` | Monotonic allocator for process-local stable IDs |
 | `StableEntityRegistry` | Runtime maps for stable ID ↔ entity and chunk → entities |
 | `DemoCellState` | Tracks the built-in demo cell chunk and whether it has been loaded |
@@ -201,6 +206,10 @@ afterglow-engine
 | `CommandDecodeError` | InvalidJson, ProtocolMismatch | Decode failure for malformed or incompatible command payloads. |
 | `encode_player_commands()` | — | Serializes `PlayerCommand` values into a versioned command envelope. |
 | `decode_player_commands()` | — | Deserializes and validates a versioned command envelope. |
+| `NetworkSession` | next_player, peers, players | Runtime map from transport peers to platform identities, network players, and optional avatar stable IDs. |
+| `PeerSession` | peer, platform, players | One connected transport peer and the local/splitscreen players it owns. |
+| `PlayerSession` | player, peer, avatar | One session player, its owning peer, and optional controlled stable world entity. |
+| `PlatformIdentity` | Local, Steam, Iroh, Anonymous | Backend-neutral authenticated identity descriptor. |
 | `testing::unit_app()` | — | Builds a minimal non-rendering app with `AfterglowCorePlugin`. |
 | `testing::asset_unit_app()` | — | Builds a minimal non-rendering app with assets and core systems. |
 | `testing::headless_render::app()` | — | `test-support` only. Builds a no-window render app using a real GPU adapter, or returns `None` if unavailable. |

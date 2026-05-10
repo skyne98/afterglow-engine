@@ -2,6 +2,7 @@ use bevy::prelude::*;
 use std::collections::{BTreeSet, VecDeque};
 
 pub mod commands;
+pub mod session;
 
 #[derive(Resource, Clone, Copy, Debug, Eq, PartialEq, Reflect)]
 pub struct NetworkProtocol {
@@ -103,7 +104,8 @@ pub struct AfterglowNetworkPlugin;
 
 impl Plugin for AfterglowNetworkPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<NetworkProtocol>();
+        app.init_resource::<NetworkProtocol>()
+            .init_resource::<session::NetworkSession>();
     }
 }
 
