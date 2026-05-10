@@ -51,14 +51,25 @@ Deep dive: [bevy-integration-gameplay-audio-ui.md](research/bevy-integration-gam
 
 ## Phase 5: Multiplayer-Ready Runtime
 
-Deep dive: [bevy-integration-world-runtime.md](research/bevy-integration-world-runtime.md).
+Deep dive: [bevy-integration-world-runtime.md](research/bevy-integration-world-runtime.md), [iroh-networking.md](research/iroh-networking.md), [bevy-ggrs-rollback.md](research/bevy-ggrs-rollback.md), [steam-multiplayer.md](research/steam-multiplayer.md).
 
-- [ ] Server-authoritative simulation path
-- [ ] Snapshot/delta replication
-- [ ] Interest management tied to chunks
-- [ ] Client prediction for player movement and core interactions
+- [ ] Transport-independent network protocol: peers, channels, packet headers, versions, disconnect reasons
+- [ ] Loopback and deterministic fake transport with packet loss, duplication, reorder, latency, and disconnect injection
+- [ ] Server-authoritative simulation path using the same local-server model as single-player
+- [ ] Serialize `PlayerCommand` input by simulation tick
+- [ ] Network player identity model: platform identity, session peer ID, player ID, and stable entity ID mapping
+- [ ] Snapshot/delta replication for player state and interactable objects
+- [ ] Interest management tied to chunks, cells, visibility, and persistent state ownership
+- [ ] Client prediction for player movement and cheap core interactions
+- [ ] Reconciliation from authoritative snapshots and correction packets
 - [ ] Interpolation for remote entities
-- [ ] Replication-compatible save/load data
+- [ ] Replication-compatible save/load data and reconnect baselines
+- [ ] Selective GGRS rollback prototype for small deterministic subsystems, not the whole streaming RPG world
+- [ ] Iroh transport backend for non-Steam NAT traversal and encrypted peer/dedicated-server transport
+- [ ] Optional Steam backend feature: Steam identity/auth, lobbies, invites, and SteamNetworkingSockets transport
+- [ ] Steam lobby create/join flow with protocol version, build hash, world/session metadata, and host/server handoff
+- [ ] Steam auth handshake mapping SteamID64 to engine `NetworkPlayerId`
+- [ ] Manual gated Steam integration tests that do not run in normal CI
 - [ ] Multiplayer test scene using the same systems as single-player
 
 ## Phase 6: Open-World RPG Layer

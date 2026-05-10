@@ -14,6 +14,9 @@ afterglow-engine
 │   ├── mod.rs
 │   ├── identity.rs
 │   └── schedule.rs
+├── input/
+│   ├── mod.rs
+│   └── tests.rs       (cfg(test))
 ├── world/
 │   ├── mod.rs
 │   └── chunk.rs
@@ -42,6 +45,7 @@ afterglow-engine
 | `core` | Engine foundation systems. Currently owns stable identity and chunk membership. |
 | `core::identity` | Stable entity IDs, chunk IDs, persistence/replication markers, and registry resources. |
 | `core::schedule` | Ordered engine system sets for input, command building, simulation, persistence prep, and debug/metrics. |
+| `input` | Generic per-game input axis/action bindings and per-tick `PlayerCommand` generation. |
 | `world` | Chunk/cell loading systems. Currently owns the built-in demo cell loader. |
 | `world::chunk` | Chunk IDs, demo-cell load state, and demo-cell loading system. |
 | `testing` | Test app builders. Available in unit tests and through the `test-support` feature. |
@@ -62,6 +66,8 @@ afterglow-engine
 
 **Update sets:** `ReadInput` → `BuildCommands` → `Simulate` → `ApplyGameplay` → `PreparePersistence` → `DebugAndMetrics`
 
+**Update / `ReadInput`:** `collect_player_commands`
+
 **Update / `DebugAndMetrics` (chained):**
 1. `record_update_start`
 2. `rotate_cubes`
@@ -80,6 +86,10 @@ afterglow-engine
 | Resource | Type |
 |---|---|
 | `TraceData` | `{ accum: AccumMap }` |
+| `PlayerInputBindings` | Game-configured axis and key/mouse action bindings |
+| `LocalPlayer` | Stable ID used for locally generated player commands |
+| `SimulationTick` | Monotonic command tick counter |
+| `PlayerCommandQueue` | Current-frame local player commands |
 | `StableIdAllocator` | Monotonic allocator for process-local stable IDs |
 | `StableEntityRegistry` | Runtime maps for stable ID ↔ entity and chunk → entities |
 | `DemoCellState` | Tracks the built-in demo cell chunk and whether it has been loaded |
@@ -146,6 +156,21 @@ afterglow-engine
 | Type | Fields | Description |
 |---|---|---|
 | `AfterglowSet` | ReadInput, BuildCommands, Simulate, ApplyGameplay, PreparePersistence, DebugAndMetrics | Ordered engine system sets for deterministic feature layering. |
+| `InputAction` | String action ID | Game-defined action emitted from raw devices. The engine does not hardcode game actions. |
+| `PlayerCommand` | stable_player, tick, axes, actions, pointers | Deterministic command record for local-server simulation, prediction, replay, editor tools, and tests. Payload is game-defined; lobby/menu/no-camera scenes can emit no axes, actions, or pointers. |
+| `PlayerInputBindings` | axes, actions | Game-configured keyboard, mouse, gamepad, and touch action bindings. Defaults emit no game-specific input. |
+| `InputAxis` | String axis ID | Game-defined analog/digital axis name. |
+| `InputAxisValue` | axis, value | One command-time axis sample. |
+| `AxisBinding` | axis, source | Maps an axis source to one named axis. |
+| `AxisSource` | KeyPair, GamepadAxis, GamepadButtonPair | Built-in axis sources. Touch, tablet, and custom editor controls can feed `VirtualInputState`. |
+| `ActionBinding` | input, action | Maps one key, mouse button, gamepad button, or touch press to one game-defined action. |
+| `ActionInput` | Key, Mouse, GamepadButton, TouchAny | Raw input source for an action binding. |
+| `VirtualInputState` | axes, actions, pointers | Per-frame game/editor-fed inputs for touch virtual sticks, graphics tablet pens, custom devices, and UI tools. Cleared after command collection. |
+| `PointerInput` | device, id, position, delta, pressure, tilt, twist, primary | Generic pointer sample for touch, pen/tablet, mouse-derived editor tools, or custom pointing devices. |
+| `PointerDevice` | Mouse, Touch, Pen, Unknown | Pointer source classification. |
+| `LocalPlayer` | stable_id | Stable local player identity used for generated commands. |
+| `SimulationTick` | u32 | Monotonic command tick. |
+| `PlayerCommandQueue` | commands | Current-frame generated commands. |
 | `testing::unit_app()` | — | Builds a minimal non-rendering app with `AfterglowCorePlugin`. |
 | `testing::asset_unit_app()` | — | Builds a minimal non-rendering app with assets and core systems. |
 | `testing::headless_render::app()` | — | `test-support` only. Builds a no-window render app using a real GPU adapter, or returns `None` if unavailable. |
