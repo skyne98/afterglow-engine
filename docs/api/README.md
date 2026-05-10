@@ -18,6 +18,7 @@ afterglow-engine
 │   ├── mod.rs
 │   └── chunk.rs
 ├── setup.rs           (private)
+├── testing.rs         (cfg(test) or feature = "test-support")
 └── perf_hud/
     ├── mod.rs
     ├── data.rs         (private)
@@ -43,6 +44,7 @@ afterglow-engine
 | `core::schedule` | Ordered engine system sets for input, command building, simulation, persistence prep, and debug/metrics. |
 | `world` | Chunk/cell loading systems. Currently owns the built-in demo cell loader. |
 | `world::chunk` | Chunk IDs, demo-cell load state, and demo-cell loading system. |
+| `testing` | Test app builders. Available in unit tests and through the `test-support` feature. |
 
 ### Re-exported from `perf_hud`
 
@@ -92,6 +94,14 @@ afterglow-engine
 | `AGX_METRICS_PORT` | `9877` | HTTP metrics server port |
 | `RUST_LOG` | `"info"` | Tracing filter |
 
+### Test Commands
+
+| Command | Purpose |
+|---|---|
+| `cargo test -p afterglow-engine` | Fast unit tests and renderless app tests |
+| `cargo test -p afterglow-engine --features test-support` | Unit tests plus real-adapter headless GPU render tests |
+| `bun run test` | Runs normal cargo tests, then the `test-support` headless-render test suite |
+
 ### Platform Notes
 
 - Native builds attach the custom trace collector through Bevy's `LogPlugin`,
@@ -136,6 +146,10 @@ afterglow-engine
 | Type | Fields | Description |
 |---|---|---|
 | `AfterglowSet` | ReadInput, BuildCommands, Simulate, ApplyGameplay, PreparePersistence, DebugAndMetrics | Ordered engine system sets for deterministic feature layering. |
+| `testing::unit_app()` | — | Builds a minimal non-rendering app with `AfterglowCorePlugin`. |
+| `testing::asset_unit_app()` | — | Builds a minimal non-rendering app with assets and core systems. |
+| `testing::headless_render::app()` | — | `test-support` only. Builds a no-window render app using a real GPU adapter, or returns `None` if unavailable. |
+| `testing::headless_render::offscreen_texture()` | — | `test-support` only. Creates an offscreen render target suitable for GPU readback tests. |
 | `StableIdAllocator` | next | Allocates nonzero `StableEntityId` values for persistent/replicated entities missing one. |
 | `StableEntityRegistry` | stable_to_entity, entity_to_stable, chunk_to_entities, duplicate_ids | Rebuilt after updates from entities with `StableEntityId` and optional `ChunkMembership`. |
 | `DemoCellState` | chunk, load_state | Resource used by the demo loader to spawn one stable-ID chunk once. |
@@ -153,6 +167,7 @@ afterglow-engine
 | bevy (workspace) | 0.18.1 | webgpu |
 | bevy (native engine) | 0.18.1 | bevy_dev_tools, trace |
 | bevy (native agx) | 0.18.1 | dynamic_linking, bevy_dev_tools, sysinfo_plugin, trace |
+| wgpu | 27 | optional, `test-support` only for real headless GPU tests |
 | serde | 1 | derive |
 | serde_json | 1 | — |
 | tracing | 0.1 | — |

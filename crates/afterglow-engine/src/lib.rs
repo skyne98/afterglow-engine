@@ -1,6 +1,8 @@
 pub mod core;
 mod perf_hud;
 mod setup;
+#[cfg(any(test, feature = "test-support"))]
+pub mod testing;
 pub mod world;
 
 use bevy::{app::PluginGroupBuilder, prelude::*, window::WindowPlugin};
