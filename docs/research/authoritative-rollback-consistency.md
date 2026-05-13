@@ -473,14 +473,14 @@ replay pure Rust test logic. It does not need Bevy world snapshotting on day one
 
 ### Test Requirements
 
-Extend `mock-rpg-network-tests` with:
+`mock-rpg-network-tests/tests/late_correction.rs` now covers the Bevy ECS path:
 
-- Two players fight with spell projectiles under delay/reorder/loss.
-- Player A sends a shield or dodge command late.
-- Server restores the domain, replays, and corrects "B died" into "B survived".
-- Client receives corrected snapshot and cue diff.
-- No duplicate final death, stale UI truth, stale projectile hit, or orphaned
-  long-lived effect remains in the authoritative model.
+- Two players exchange spell projectiles.
+- Player B sends a shield command late.
+- The server restores replicated ECS state, replays normal Bevy systems, and
+  corrects "B died" into "B survived".
+- No duplicate final death, stale combat log truth, stale projectile hit, or
+  orphaned death marker remains in the authoritative model.
 
 Add a sync-test style harness:
 

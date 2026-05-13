@@ -5,6 +5,11 @@
 Iroh is a modular peer-to-peer networking stack for Rust, developed by [n0, inc.](https://n0.computer).
 Instead of connecting to IP addresses, you connect to peers by their **public key** (`EndpointId`).
 
+For Afterglow, Iroh is the first real backend for itch/dev builds, but it is not
+the gameplay networking architecture. The shared backend boundary is documented
+in `docs/research/network-backend-abstraction.md`; Iroh should be a thin
+adapter that emits engine `TransportEvent`s and sends engine packets.
+
 - **GitHub**: https://github.com/n0-computer/iroh (8.5k ⭐)
 - **Docs**: https://docs.rs/iroh/latest/iroh/
 - **Current**: v0.98.2 (v1.0.0-rc.0 tagged May 2026)
@@ -100,6 +105,11 @@ Single `Endpoint` stored as a Bevy Resource
       ├─ Bidirectional streams for reliable game state
       └─ Datagrams for high-frequency position/input updates
 ```
+
+The adapter should map Iroh public keys/connections to engine `PeerId`s and use
+`PlatformIdentity::Iroh` for authenticated external identity. It should not own
+`NetworkPlayerId`, replicated components/resources, command validation,
+rollback, prediction, interpolation, chunk interest, or reconnect baselines.
 
 ## Async Runtime
 

@@ -9,14 +9,17 @@ lobbies, NAT traversal, encrypted packet transport, and Steam Datagram Relay
 authoritative simulation, prediction, snapshots, interest management, stable
 entity IDs, and save/load semantics.
 
+The shared backend boundary is documented in
+`docs/research/network-backend-abstraction.md`. Steam must reuse that layer
+rather than introducing a Steam-shaped protocol or duplicated session model.
+
 The practical path is:
 
 1. Keep a transport-agnostic networking layer in the engine.
 2. Build and test replication against loopback and fake transports first.
-3. Add Steam as an optional native feature/backend for lobby discovery,
+3. For an itch-first release, add Iroh as the first real native backend.
+4. Add Steam later as an optional native feature/backend for lobby discovery,
    platform identity, auth, and `ISteamNetworkingSockets` transport.
-4. Keep Iroh as a separate non-Steam transport option, because Steam is not a
-   universal runtime and the Steamworks API is tied to Steam platform setup.
 
 For the open-world immersive sim target, prefer authoritative server plus
 client prediction. Full rollback via GGRS is useful research and may fit small
@@ -329,18 +332,20 @@ exist, but they should not be the only tests for multiplayer correctness.
 
 ## Recommendation
 
-Add Steam only after the engine has a minimal transport-independent protocol:
+Add Steam only after the engine has a minimal transport-independent protocol and
+the shared backend boundary from `network-backend-abstraction.md`:
 
 1. Define `PeerId`, `NetworkPlayerId`, packet channels, and a transport trait.
 2. Implement loopback/fake transport with deterministic fault injection.
 3. Serialize current `PlayerCommand` into a command packet.
-4. Add authoritative host state for player spawn/despawn and snapshot baseline.
-5. Add optional `steam` feature with `bevy_steamworks` if version-compatible.
-6. Implement Steam lobby create/join metadata.
-7. Implement SteamNetworkingSockets transport adapter.
-8. Add Steam auth handshake and SteamID-to-player mapping.
-9. Add manual gated Steam integration tests.
-10. Revisit dedicated server Steam Game Server API and SDR after the basic
+4. Add backend-neutral control handshake and session lifecycle systems.
+5. Add Iroh as the first real backend for itch/dev builds.
+6. Add optional `steam` feature with `bevy_steamworks` if version-compatible.
+7. Implement Steam lobby create/join metadata.
+8. Implement SteamNetworkingSockets transport adapter.
+9. Add Steam auth handshake and SteamID-to-player mapping.
+10. Add manual gated Steam integration tests.
+11. Revisit dedicated server Steam Game Server API and SDR after the basic
     hosted/listen-server path works.
 
 ## References

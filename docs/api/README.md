@@ -101,7 +101,7 @@ afterglow-engine
 | `core::identity` | Stable entity IDs, chunk IDs, persistence/replication markers, and registry resources. |
 | `core::schedule` | Ordered engine system sets for input, command building, simulation, persistence prep, and debug/metrics. |
 | `input` | Generic per-game input axis/action bindings and per-tick `PlayerCommand` generation. |
-| `network` | Transport-independent peer, channel, packet, and fake transport primitives. |
+| `network` | Transport-independent peer, channel, packet, shared session, and fake transport primitives. Real network libraries are expected to be thin backend adapters below this layer. |
 | `network::authority` | Server-side command validation for peer ownership and duplicate simulation ticks. |
 | `network::baseline` | Replication-compatible save data and reconnect baseline helpers. |
 | `network::commands` | Versioned wire envelope for serializing generic `PlayerCommand` batches. |
@@ -274,7 +274,7 @@ afterglow-engine
 | `NetworkPacket` | from, to, header, payload | Transport-independent packet envelope. |
 | `DisconnectReason` | Local, Remote, Timeout, ProtocolMismatch, Transport | Generic disconnect reason. |
 | `TransportEvent` | Connected, Disconnected, Packet | Events emitted by transport backends. |
-| `NetworkTransport` | trait | Minimal transport interface for polling events, sending packets, and disconnecting peers. |
+| `NetworkTransport` | trait | Minimal backend boundary for polling connection/packet events, sending engine packets, and disconnecting peers. Iroh, Steam, memory, and future transports should adapt to this trait without owning replication, rollback, prediction, command validation, or interest logic. |
 | `MemoryTransport` | local_peer, protocol, queues, faults | Deterministic in-memory fake transport for unit tests and protocol development. |
 | `FaultConfig` | drop_every, duplicate_every, delay_ticks, reverse_delivery | Deterministic packet fault injection for fake transport tests. |
 | `ReplicationSaveData` | tick, snapshot | Serializable save payload built from a `ReplicationWorld` snapshot and restorable back into `ReplicationWorld`. |
@@ -324,7 +324,7 @@ afterglow-engine
 | `NetworkSession` | next_player, peers, players | Runtime map from transport peers to platform identities, network players, and optional avatar stable IDs. |
 | `PeerSession` | peer, platform, players | One connected transport peer and the local/splitscreen players it owns. |
 | `PlayerSession` | player, peer, avatar | One session player, its owning peer, and optional controlled stable world entity. |
-| `PlatformIdentity` | Local, Steam, Iroh, Anonymous | Backend-neutral authenticated identity descriptor. |
+| `PlatformIdentity` | Local, Steam, Iroh, Anonymous | Backend-neutral authenticated identity descriptor. External identities map to `PeerId`, then `NetworkPlayerId`, then optional avatar `StableEntityId`. |
 | `ReplicationWorld` | entities | Generic stable-ID keyed replicated state map used to build snapshots and deltas. |
 | `ReplicatedEntityState` | fields | Byte-valued field map for one replicated entity. |
 | `WorldSnapshot` | tick, entities | Full replication baseline. |
@@ -401,7 +401,8 @@ combat messages, client prediction, reconciliation, remote interpolation,
 bounded extrapolation, moving spell projectiles with collider hits under
 delayed/reordered packets, projectile edge cases for duplicate/spoofed casts,
 packet loss, swept collision, rejected prediction cleanup, out-of-order samples,
-and many simultaneous NPC/world-state changes.
+late shield correction that rewrites provisional death outcomes through
+replicated ECS replay, and many simultaneous NPC/world-state changes.
 
 ## Docs
 
