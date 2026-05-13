@@ -131,8 +131,15 @@ the optional native `iroh` feature.
   memory transport.
 - Local tests cover reliable packet delivery, reliable ordering, unreliable
   packet delivery, stale unreliable-sequenced rejection, remote disconnect
-  reporting, and the shared `service_control_handshake()` path over real local
-  Iroh endpoints.
+  reporting, disconnected-peer packet rejection, reconnect sequence-state
+  reset, and the shared `service_control_handshake()` path over real local Iroh
+  endpoints.
+- Regression tests also run gameplay-gating cases over Iroh: unauthorized
+  packets are dropped before handshake acceptance, protocol mismatches reject
+  peers without session entries, bad post-handshake packet headers evict the
+  peer, disconnects remove session state, two clients can concurrently feed
+  command streams to one server, and snapshot packets can drive the same client
+  reconciliation replay path used by memory transport tests.
 
 This is intentionally not a lobby, account, player, rollback, or replication
 system. It is only the first real transport adapter below the shared networking
