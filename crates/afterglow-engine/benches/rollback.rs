@@ -1,7 +1,7 @@
 use afterglow_engine::network::rollback::{
     CommittedRollbackDomain, DeterministicRollbackBuffer, RollbackCommand, RollbackDomainId,
-    RollbackDomainOutputs, RollbackEvent, RollbackEventId, RollbackEventStream, RollbackPolicy,
-    replay_bytes,
+    RollbackDomainOutputs, RollbackMessage, RollbackMessageId, RollbackMessageStream,
+    RollbackPolicy, replay_bytes,
 };
 use std::{
     hint::black_box,
@@ -15,10 +15,10 @@ fn main() {
     run_domain_case(128, 64, 8_192);
     run_domain_case(1_024, 128, 1_024);
     run_domain_case(8_192, 256, 128);
-    run_event_case(128, 128, 8_192);
-    run_event_case(1_024, 128, 1_024);
-    run_event_case(8_192, 128, 128);
-    run_event_case(100_000, 128, 8);
+    run_message_case(128, 128, 8_192);
+    run_message_case(1_024, 128, 1_024);
+    run_message_case(8_192, 128, 128);
+    run_message_case(100_000, 128, 8);
 }
 
 fn run_case(saved_ticks: u32, command_count: u32, iterations: u32) {
@@ -65,22 +65,22 @@ fn run_case(saved_ticks: u32, command_count: u32, iterations: u32) {
     );
 }
 
-fn run_event_case(event_count: u32, tick_span: u32, iterations: u32) {
-    let initial = events(event_count, tick_span, 0);
-    let corrected = events(event_count, tick_span, 1);
+fn run_message_case(message_count: u32, tick_span: u32, iterations: u32) {
+    let initial = messages(message_count, tick_span, 0);
+    let corrected = messages(message_count, tick_span, 1);
     let replace_time = measure(iterations, || {
-        let mut stream = RollbackEventStream::default();
+        let mut stream = RollbackMessageStream::default();
         stream.replace_provisional(initial.clone());
         black_box(stream.replace_provisional(corrected.clone()));
     });
     let commit_time = measure(iterations, || {
-        let mut stream = RollbackEventStream::default();
+        let mut stream = RollbackMessageStream::default();
         stream.replace_provisional(initial.clone());
         black_box(stream.commit_through(tick_span / 2));
     });
 
     println!(
-        "rollback_events events={event_count} ticks={tick_span} replace_provisional={} commit_half={}",
+        "rollback_messages messages={message_count} ticks={tick_span} replace_provisional={} commit_half={}",
         fmt(replace_time / iterations),
         fmt(commit_time / iterations),
     );
@@ -164,12 +164,12 @@ fn apply_domain_command(
     }
 }
 
-fn events(count: u32, tick_span: u32, variant: u8) -> Vec<RollbackEvent<u32>> {
+fn messages(count: u32, tick_span: u32, variant: u8) -> Vec<RollbackMessage<u32>> {
     (0..count)
         .map(|index| {
             let tick = (index as u64 * tick_span as u64 / count.max(1) as u64) as u32;
-            RollbackEvent::new(
-                RollbackEventId::new(RollbackDomainId(1), tick, index as u64),
+            RollbackMessage::new(
+                RollbackMessageId::new(RollbackDomainId(1), tick, index as u64),
                 ((variant as u32) << 24) | (index & 0x00ff_ffff),
             )
         })

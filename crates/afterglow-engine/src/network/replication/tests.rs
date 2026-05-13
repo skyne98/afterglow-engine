@@ -37,7 +37,7 @@ struct DamageApplied {
     amount: i32,
 }
 
-impl ReplicationEvent for DamageApplied {
+impl ReplicatedMessage for DamageApplied {
     fn tick(&self) -> u32 {
         10
     }
@@ -45,22 +45,22 @@ impl ReplicationEvent for DamageApplied {
 
 fn emit_timeline(
     mut commands: MessageWriter<OpenDoorCommand>,
-    mut events: MessageWriter<DamageApplied>,
+    mut messages: MessageWriter<DamageApplied>,
 ) {
     let entity = StableEntityId::from_raw(7);
     commands.write(OpenDoorCommand { entity });
-    events.write(DamageApplied { entity, amount: 25 });
+    messages.write(DamageApplied { entity, amount: 25 });
 }
 
 #[derive(Resource, Default)]
 struct SeenDamage(Vec<DamageApplied>);
 
-fn read_damage(mut events: MessageReader<DamageApplied>, mut seen: ResMut<SeenDamage>) {
-    seen.0.extend(events.read().cloned());
+fn read_damage(mut messages: MessageReader<DamageApplied>, mut seen: ResMut<SeenDamage>) {
+    seen.0.extend(messages.read().cloned());
 }
 
 #[test]
-fn app_replicate_registers_components_resources_commands_and_events() {
+fn app_replicate_registers_components_resources_commands_and_messages() {
     let mut app = App::new();
     app.add_plugins((
         MinimalPlugins,
@@ -74,8 +74,11 @@ fn app_replicate_registers_components_resources_commands_and_events() {
     app.replicate(component::<RepHealth>())
         .replicate(resource::<RepDungeonClock>())
         .replicate(command::<OpenDoorCommand>())
-        .replicate(event::<DamageApplied>())
-        .add_systems(Update, emit_timeline.before(ReplicationSet::CollectChanges));
+        .replicate(message::<DamageApplied>())
+        .add_systems(
+            Update,
+            emit_timeline.before(ReplicationSet::CollectMessages),
+        );
 
     app.update();
 
@@ -103,6 +106,16 @@ fn app_replicate_registers_components_resources_commands_and_events() {
     let registry = app.world().resource::<ReplicationRegistry>();
     assert!(registry.components.contains("tests::RepHealth"));
     assert!(registry.resources.contains("tests::RepDungeonClock"));
+    assert!(
+        registry
+            .commands
+            .contains(std::any::type_name::<OpenDoorCommand>())
+    );
+    assert!(
+        registry
+            .messages
+            .contains(std::any::type_name::<DamageApplied>())
+    );
 }
 
 #[test]
@@ -116,9 +129,12 @@ fn duplicate_timeline_registration_collects_messages_once() {
     let entity = StableEntityId::from_raw(7);
     app.replicate(command::<OpenDoorCommand>())
         .replicate(command::<OpenDoorCommand>())
-        .replicate(event::<DamageApplied>())
-        .replicate(event::<DamageApplied>())
-        .add_systems(Update, emit_timeline.before(ReplicationSet::CollectChanges));
+        .replicate(message::<DamageApplied>())
+        .replicate(message::<DamageApplied>())
+        .add_systems(
+            Update,
+            emit_timeline.before(ReplicationSet::CollectMessages),
+        );
 
     app.update();
 
@@ -384,7 +400,7 @@ fn rollback_replay_reissues_relevant_timeline_messages_to_bevy_readers() {
     ));
     let entity = StableEntityId::from_raw(7);
     app.init_resource::<SeenDamage>()
-        .replicate(event::<DamageApplied>())
+        .replicate(message::<DamageApplied>())
         .add_systems(
             Update,
             read_damage
@@ -430,7 +446,7 @@ fn replay_collection_does_not_drop_unread_real_messages() {
         crate::network::AfterglowNetworkPlugin,
     ));
     let entity = StableEntityId::from_raw(7);
-    app.replicate(event::<DamageApplied>());
+    app.replicate(message::<DamageApplied>());
 
     app.world_mut()
         .resource_mut::<Messages<DamageApplied>>()

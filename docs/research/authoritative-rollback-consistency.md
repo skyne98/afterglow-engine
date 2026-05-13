@@ -39,7 +39,7 @@ be the final game-facing API.
 bevy_ggrs snapshots registered components and resources, restores them on
 rollback, reconciles spawned/despawned entities through stable rollback IDs, and
 runs gameplay in a rollback schedule. Its pitfalls are directly relevant:
-events and `Local<T>` state are not snapshot-restored, raw Bevy `Entity` handles
+messages and `Local<T>` state are not snapshot-restored, raw Bevy `Entity` handles
 need remapping, and query order must be deterministic.
 
 Source: https://github.com/gschup/bevy_ggrs
@@ -108,7 +108,7 @@ back so saved and transient cues can be handled around re-simulation.
 Source: https://dev.epicgames.com/documentation/en-us/unreal-engine/API/Plugins/NetworkPrediction/TNetSimCueDispatcher
 
 The lesson is to make cues a first-class output of replay, not arbitrary Bevy
-events that may already have been consumed by UI, audio, or scripts.
+messages that may already have been consumed by UI, audio, or scripts.
 
 ### Gambetta Client Prediction
 
@@ -216,29 +216,29 @@ RepNpc { pos, hp, alert, animation_state, target }
 ```
 
 Server gameplay should mutate replicated components/resources through ordered
-commands and events. The developer-facing API is:
+commands and replicated messages. The developer-facing API is:
 
 ```text
 #[derive(Replicate)] or #[replicate] on replicated components/resources
 impl ReplicatedCommand for Bevy command Message types
-impl ReplicationEvent for Bevy event/fact Message types
+impl ReplicatedMessage for Bevy fact Message types
 app.replicate(component::<RepHealth>())
 app.replicate(resource::<RepWorldClock>())
 app.replicate(command::<OpenDoorCommand>())
-app.replicate(event::<DamageApplied>())
+app.replicate(message::<DamageApplied>())
 ```
 
-Game code reads commands/events with normal `MessageReader<T>` systems. During
+Game code reads commands/messages with normal `MessageReader<T>` systems. During
 rollback, the engine restores replicated component/resource state and reissues
-the relevant command/event messages so the same systems run again.
+the relevant command/fact messages so the same systems run again.
 
 This keeps important multiplayer code visually separate:
 
 ```text
 commands from clients
   -> validated server intent
-  -> replicated events
-  -> normal Bevy systems read events and mutate replicated components/resources
+  -> replicated messages
+  -> normal Bevy systems read messages and mutate replicated components/resources
   -> snapshots/deltas replicate the component truth
   -> clients derive normal Bevy state
 ```
@@ -271,7 +271,7 @@ When a valid late command arrives:
 6. Compare resulting authoritative state to the previous current state.
 7. Publish snapshot/delta corrections and cue corrections to clients.
 
-This removes per-event manual cleanup. A "B died" outcome that vanishes after
+This removes per-message manual cleanup. A "B died" outcome that vanishes after
 replay is not manually undone; the corrected snapshot says B is alive, and the
 current cue log no longer contains the final death cue.
 
@@ -324,19 +324,19 @@ Presentation systems consume cue diffs:
 For DX simplicity, game code should emit cues through one engine API. The engine
 handles rollback invalidation and cue diffing.
 
-### Gameplay Event Streams
+### Gameplay Message Streams
 
-Networked entity-to-entity interaction should be event/command sourced through a
-retained rollback stream, not Bevy's frame-local `Messages<T>`.
+Networked entity-to-entity interaction should be message/command sourced through
+a retained rollback stream, not Bevy's frame-local `Messages<T>`.
 
 After replay, the engine has:
 
-- **provisional events**: the current replay result after `committed_tick`; these
+- **provisional messages**: the current replay result after `committed_tick`; these
   can be replaced by later correction and produce added/removed diffs.
-- **committed events**: facts whose ticks passed the commit horizon; these are
+- **committed messages**: facts whose ticks passed the commit horizon; these are
   final and safe for durable business logic.
 
-Use provisional events for live feedback and correction-aware presentation:
+Use provisional messages for live feedback and correction-aware presentation:
 
 ```text
 DamageApplied provisional added -> show damage number
@@ -344,7 +344,7 @@ CharacterDied provisional removed ID -> cancel provisional death presentation
 ShieldBlocked provisional added -> show shield impact
 ```
 
-Use committed events for irreversible or durable work:
+Use committed messages for irreversible or durable work:
 
 ```text
 CharacterDied committed added -> persist kill, advance quest, award achievement
@@ -353,7 +353,7 @@ ItemPickedUp committed added -> finalize inventory ownership
 ```
 
 This keeps the DX close to Bevy systems while avoiding raw `MessageWriter` in
-rollback truth. Game systems can still be written as event transforms:
+rollback truth. Game systems can still be written as message transforms:
 
 ```text
 ProjectileHit -> DamageApplied -> CharacterDied -> LootDropped
@@ -362,9 +362,9 @@ ProjectileHit -> DamageApplied -> CharacterDied -> LootDropped
 The difference is that the stream is retained, tick-addressed, stable-ID based,
 and has provisional/committed views.
 
-For performance, removed provisional facts are reported by event ID rather than
-by cloning the old event payload. Presentation systems should track active
-effects by event ID.
+For performance, removed provisional facts are reported by message ID rather than
+by cloning the old message payload. Presentation systems should track active
+effects by message ID.
 
 ### Clients
 
@@ -423,21 +423,21 @@ This benchmark uses compact byte state and cue output. It is a baseline for the
 domain coordinator, not a substitute for later Bevy-world or gameplay-heavy
 benchmarks.
 
-The same benchmark now measures retained event-stream maintenance:
+The same benchmark now measures retained message-stream maintenance:
 
-| Events | Ticks | Replace provisional stream | Commit half |
+| Messages | Ticks | Replace provisional stream | Commit half |
 |---:|---:|---:|---:|
 | 128 | 128 | 8 us | 6 us |
 | 1024 | 128 | 28 us | 19 us |
 | 8192 | 128 | 422 us | 305 us |
 | 100000 | 128 | 7.295 ms | 3.397 ms |
 
-The stream uses sorted tick buckets and removed-event IDs instead of cloning old
+The stream uses sorted tick buckets and removed-message IDs instead of cloning old
 removed payloads. The 100k full-replacement case is still too expensive for a
 single frame. That is expected: it means the replay produced 100k changed facts,
 and the engine must hand 100k added facts to consumers. The design rule remains:
-keep rollback streams per active domain, use compact event payloads, and do not
-put particles or idle world entities in the retained gameplay event stream.
+keep rollback streams per active domain, use compact message payloads, and do not
+put particles or idle world entities in the retained gameplay message stream.
 
 ### Keep From Current Code
 
@@ -450,7 +450,7 @@ put particles or idle world entities in the retained gameplay event stream.
 
 ### Change Next
 
-Replace the idea of per-event commit delay with domain replay as the main safety
+Replace the idea of per-message commit delay with domain replay as the main safety
 mechanism. A global retained-history window is still required, but games should
 not tune "death delay" or "door delay" manually.
 
@@ -488,6 +488,6 @@ Add a sync-test style harness:
 
 Use authoritative domain snapshot + command replay as the universal consistency
 model. Do not build feature-specific undo hooks. Do not require game authors to
-manually classify every event as reversible or irreversible. The only hard rule
+manually classify every message as reversible or irreversible. The only hard rule
 for authors is simpler: gameplay truth must live in rollback/snapshot-managed
 state; presentation reads truth and cue diffs.

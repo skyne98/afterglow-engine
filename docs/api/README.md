@@ -53,8 +53,8 @@ afterglow-engine
 │   │   └── tests.rs   (cfg(test))
 │   ├── rollback.rs
 │   ├── rollback/
-│   │   ├── events.rs
-│   │   ├── events/
+│   │   ├── messages.rs
+│   │   ├── messages/
 │   │   │   └── tests.rs (cfg(test))
 │   │   └── tests.rs   (cfg(test))
 │   ├── session.rs
@@ -105,7 +105,7 @@ afterglow-engine
 | `network::interpolation` | Remote entity sample buffering, interpolation, and bounded extrapolation. |
 | `network::prediction` | Client-side command history and replay buffer for prediction after authoritative snapshots. |
 | `network::reconciliation` | Reconciles authoritative snapshot/delta/correction ticks with local prediction history. |
-| `network::replication` | Stable-ID keyed snapshot/delta primitives plus Bevy-facing replicated components, resources, and tick-addressed command/event timelines. |
+| `network::replication` | Stable-ID keyed snapshot/delta primitives plus Bevy-facing replicated components, resources, and tick-addressed command/message timelines. |
 | `network::rollback` | Small deterministic subsystem rollback history plus committed/provisional domain replay, lifecycle, and cue helpers. |
 | `network::session` | Session identity maps between peers, platform identities, players, and avatars. |
 | `world` | Chunk/cell loading systems. Currently owns the built-in demo cell loader. |
@@ -279,11 +279,11 @@ afterglow-engine
 | `DeterministicRollbackBuffer` | max_saved_ticks, states | Opaque byte-state history for small deterministic subsystems, such as combat bubbles or puzzle mechanisms. |
 | `CommittedRollbackDomain` | id, policy, committed/provisional state, commands, outputs | Authoritative rollback domain. Gameplay reads provisional state; committed state is the durable rollback anchor. |
 | `RollbackDomainId` | u64 | Stable identifier for a rollback domain, combat bubble, cell subsystem, or deterministic puzzle. |
-| `RollbackEventId` | domain, tick, sequence | Stable event identity for retained rollback event streams. |
-| `RollbackEvent<T>` | id, source_command_tick, entities, payload | Typed replay-generated gameplay fact. Use provisional events for live/visual correction and committed events for durable business logic. |
-| `RollbackEventStream<T>` | provisional, committed, committed_tick | Retained event log with a monotonic committed horizon. Replacing provisional events ignores already committed ticks; committing through a tick promotes final facts without allowing committed facts to be rewritten. |
-| `RollbackEventDiff<T>` | added, removed | Provisional event diff for presentation and correction-aware readers. `removed` carries event IDs so cancellation does not clone old payloads. |
-| `RollbackCommit<T>` | committed_tick, added | Events newly promoted into the final committed stream. |
+| `RollbackMessageId` | domain, tick, sequence | Stable message identity for retained rollback message streams. |
+| `RollbackMessage<T>` | id, source_command_tick, entities, payload | Typed replay-generated gameplay fact. Use provisional messages for live/visual correction and committed messages for durable business logic. |
+| `RollbackMessageStream<T>` | provisional, committed, committed_tick | Retained message log with a monotonic committed horizon. Replacing provisional messages ignores already committed ticks; committing through a tick promotes final facts without allowing committed facts to be rewritten. |
+| `RollbackMessageDiff<T>` | added, removed | Provisional message diff for presentation and correction-aware readers. `removed` carries message IDs so cancellation does not clone old payloads. |
+| `RollbackCommit<T>` | committed_tick, added | Messages newly promoted into the final committed stream. |
 | `RollbackCommand` | tick, source, sequence, payload | Opaque deterministic command payload for subsystem replay; `(tick, source, sequence)` is the stable replay ordering and duplicate key. |
 | `RollbackReplay` | from_tick, to_tick, initial_state, commands | Replay plan built from a saved authoritative state and commands after that tick. `build_replay()` returns `MissingState` when the anchor snapshot is absent and `DuplicateCommand` when the same `(tick, source, sequence)` has conflicting payloads. Late replay requires a saved state before the command tick, so tick-0 late replay currently returns `MissingState`. |
 | `RollbackPolicy` | max_rollback_ticks, commit_delay_ticks | Server/authority policy for accepting late commands and deriving the committed/provisional tick boundary. |
@@ -330,18 +330,18 @@ afterglow-engine
 | `FieldValue` | name, value | One byte-valued replicated field. |
 | `Replicate` | trait/macro | Marker for components/resources that are part of the replicated truth schema. Implement with `#[derive(Replicate)]` or `#[replicate]`. |
 | `ReplicatedCommand` | trait | Bevy `Message` command accepted into the replicated timeline; exposes its simulation tick. |
-| `ReplicationEvent` | trait | Bevy `Message` event/fact accepted into the replicated timeline; exposes its simulation tick. |
-| `ReplicationAppExt::replicate(...)` | app extension | Idempotently registers replicated components, resources, command messages, or event messages. |
+| `ReplicatedMessage` | trait | Bevy `Message` fact accepted into the replicated timeline; exposes its simulation tick. |
+| `ReplicationAppExt::replicate(...)` | app extension | Idempotently registers replicated components, resources, command messages, or timeline messages. |
 | `component::<T>()` | registration helper | Registers replicated component type `T: Component + Replicate + Clone`. |
 | `resource::<T>()` | registration helper | Registers replicated resource type `T: Resource + Replicate + Clone`. |
 | `command::<T>()` | registration helper | Registers replicated command message type `T: ReplicatedCommand`. |
-| `event::<T>()` | registration helper | Registers replicated event/fact message type `T: ReplicationEvent`. |
+| `message::<T>()` | registration helper | Registers replicated message/fact type `T: ReplicatedMessage`. |
 | `ReplicatedComponentState<T>` | resource | Latest collected replicated component values keyed by `StableEntityId`. |
 | `ReplicatedResourceState<T>` | resource | Latest collected replicated resource value. |
-| `ReplicatedTimeline<T>` | resource | Tick-addressed bounded command/event message timeline; rollback replay replaces and reissues retained messages while dropping stale out-of-order ticks. |
-| `ReplicationSet` | RestoreState, ReissueMessages, CollectEvents, CollectChanges | Ordered `Update` sets inside `AfterglowSet::ApplyGameplay`; replay reissues messages before gameplay collection snapshots changed replicated state. |
+| `ReplicatedTimeline<T>` | resource | Tick-addressed bounded command/message timeline; rollback replay replaces and reissues retained messages while dropping stale out-of-order ticks. |
+| `ReplicationSet` | RestoreState, ReissueMessages, CollectMessages, CollectChanges | Ordered `Update` sets inside `AfterglowSet::ApplyGameplay`; replay reissues messages before gameplay collection snapshots changed replicated state. |
 | `RollbackReplicationClock` | current_tick, policy | Drives the committed/provisional boundary for replay-aware replicated timelines. |
-| `ReplicatedRollbackEventStream<E>` | events, last diff/commit | Retained committed/provisional rollback event stream wrapper for replay-produced facts. |
+| `ReplicatedRollbackMessageStream<E>` | messages, last diff/commit | Retained committed/provisional rollback message stream wrapper for replay-produced facts. |
 | `InterestMap` | entity_chunks, player_chunks | Chunk-based visibility filter for replicated snapshots and deltas. |
 | `testing::unit_app()` | — | Builds a minimal non-rendering app with `AfterglowCorePlugin`. |
 | `testing::asset_unit_app()` | — | Builds a minimal non-rendering app with assets and core systems. |
@@ -388,7 +388,7 @@ first-person open-world RPG simulation. It uses `MemoryTransport` and JSON
 packet payloads to cover multi-client joins, 3D position/chunk math, snapshots,
 chunk interest, authority, duplicate ticks, rollback-style save/restore,
 malformed/spoofed/hacked client behavior, door use, item pickup conflicts,
-combat events, client prediction, reconciliation, remote interpolation,
+combat messages, client prediction, reconciliation, remote interpolation,
 bounded extrapolation, moving spell projectiles with collider hits under
 delayed/reordered packets, projectile edge cases for duplicate/spoofed casts,
 packet loss, swept collision, rejected prediction cleanup, out-of-order samples,

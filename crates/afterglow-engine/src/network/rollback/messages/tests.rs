@@ -9,14 +9,14 @@ enum GameFact {
     Block { target: StableEntityId },
 }
 
-fn event(tick: u32, sequence: u64, payload: GameFact) -> RollbackEvent<GameFact> {
+fn message(tick: u32, sequence: u64, payload: GameFact) -> RollbackMessage<GameFact> {
     let entities = match &payload {
         GameFact::Damage { target, .. }
         | GameFact::Death { target }
         | GameFact::Block { target } => [*target],
     };
-    RollbackEvent::new(
-        RollbackEventId::new(RollbackDomainId(1), tick, sequence),
+    RollbackMessage::new(
+        RollbackMessageId::new(RollbackDomainId(1), tick, sequence),
         payload,
     )
     .with_source_command_tick(tick)
@@ -26,10 +26,10 @@ fn event(tick: u32, sequence: u64, payload: GameFact) -> RollbackEvent<GameFact>
 #[test]
 fn provisional_diff_tracks_added_removed_and_changed_facts() {
     let player = StableEntityId::from_raw(10);
-    let mut stream = RollbackEventStream::default();
+    let mut stream = RollbackMessageStream::default();
 
     let first = stream.replace_provisional([
-        event(
+        message(
             100,
             1,
             GameFact::Damage {
@@ -37,21 +37,22 @@ fn provisional_diff_tracks_added_removed_and_changed_facts() {
                 amount: 25,
             },
         ),
-        event(100, 2, GameFact::Death { target: player }),
+        message(100, 2, GameFact::Death { target: player }),
     ]);
 
     assert_eq!(first.added.len(), 2);
     assert!(first.removed.is_empty());
 
-    let corrected = stream.replace_provisional([event(100, 1, GameFact::Block { target: player })]);
+    let corrected =
+        stream.replace_provisional([message(100, 1, GameFact::Block { target: player })]);
 
     assert_eq!(corrected.added.len(), 1);
     assert_eq!(corrected.removed.len(), 2);
     assert_eq!(
         corrected.removed,
         [
-            RollbackEventId::new(RollbackDomainId(1), 100, 1),
-            RollbackEventId::new(RollbackDomainId(1), 100, 2),
+            RollbackMessageId::new(RollbackDomainId(1), 100, 1),
+            RollbackMessageId::new(RollbackDomainId(1), 100, 2),
         ]
     );
     assert!(matches!(corrected.added[0].payload, GameFact::Block { .. }));
@@ -60,9 +61,9 @@ fn provisional_diff_tracks_added_removed_and_changed_facts() {
 #[test]
 fn committed_stream_promotes_only_final_ticks() {
     let player = StableEntityId::from_raw(20);
-    let mut stream = RollbackEventStream::default();
+    let mut stream = RollbackMessageStream::default();
     stream.replace_provisional([
-        event(
+        message(
             100,
             1,
             GameFact::Damage {
@@ -70,7 +71,7 @@ fn committed_stream_promotes_only_final_ticks() {
                 amount: 10,
             },
         ),
-        event(104, 1, GameFact::Death { target: player }),
+        message(104, 1, GameFact::Death { target: player }),
     ]);
 
     let commit = stream.commit_through(100);
@@ -88,9 +89,9 @@ fn committed_stream_promotes_only_final_ticks() {
 #[test]
 fn corrected_provisional_fact_is_committed_after_the_horizon() {
     let player = StableEntityId::from_raw(30);
-    let mut stream = RollbackEventStream::default();
-    stream.replace_provisional([event(100, 1, GameFact::Death { target: player })]);
-    stream.replace_provisional([event(100, 1, GameFact::Block { target: player })]);
+    let mut stream = RollbackMessageStream::default();
+    stream.replace_provisional([message(100, 1, GameFact::Death { target: player })]);
+    stream.replace_provisional([message(100, 1, GameFact::Block { target: player })]);
 
     let commit = stream.commit_through(100);
 
@@ -98,18 +99,18 @@ fn corrected_provisional_fact_is_committed_after_the_horizon() {
     assert!(matches!(commit.added[0].payload, GameFact::Block { .. }));
     assert!(
         stream
-            .committed_event(RollbackEventId::new(RollbackDomainId(1), 100, 1))
-            .is_some_and(|event| matches!(event.payload, GameFact::Block { .. }))
+            .committed_message(RollbackMessageId::new(RollbackDomainId(1), 100, 1))
+            .is_some_and(|message| matches!(message.payload, GameFact::Block { .. }))
     );
 }
 
 #[test]
-fn duplicate_event_ids_keep_last_replay_output() {
+fn duplicate_message_ids_keep_last_replay_output() {
     let player = StableEntityId::from_raw(40);
-    let mut stream = RollbackEventStream::default();
+    let mut stream = RollbackMessageStream::default();
 
     stream.replace_provisional([
-        event(
+        message(
             100,
             1,
             GameFact::Damage {
@@ -117,7 +118,7 @@ fn duplicate_event_ids_keep_last_replay_output() {
                 amount: 5,
             },
         ),
-        event(
+        message(
             100,
             1,
             GameFact::Damage {
@@ -127,21 +128,24 @@ fn duplicate_event_ids_keep_last_replay_output() {
         ),
     ]);
 
-    let event = stream
-        .provisional_event(RollbackEventId::new(RollbackDomainId(1), 100, 1))
+    let message = stream
+        .provisional_message(RollbackMessageId::new(RollbackDomainId(1), 100, 1))
         .unwrap();
-    assert!(matches!(event.payload, GameFact::Damage { amount: 9, .. }));
+    assert!(matches!(
+        message.payload,
+        GameFact::Damage { amount: 9, .. }
+    ));
     assert_eq!(stream.provisional().count(), 1);
 }
 
 #[test]
-fn unsorted_duplicate_event_ids_keep_last_input_and_produce_one_added_diff() {
+fn unsorted_duplicate_message_ids_keep_last_input_and_produce_one_added_diff() {
     let player = StableEntityId::from_raw(50);
-    let mut stream = RollbackEventStream::default();
+    let mut stream = RollbackMessageStream::default();
 
     let diff = stream.replace_provisional([
-        event(101, 1, GameFact::Block { target: player }),
-        event(
+        message(101, 1, GameFact::Block { target: player }),
+        message(
             100,
             1,
             GameFact::Damage {
@@ -149,7 +153,7 @@ fn unsorted_duplicate_event_ids_keep_last_input_and_produce_one_added_diff() {
                 amount: 5,
             },
         ),
-        event(
+        message(
             100,
             1,
             GameFact::Damage {
@@ -169,10 +173,10 @@ fn unsorted_duplicate_event_ids_keep_last_input_and_produce_one_added_diff() {
 }
 
 #[test]
-fn committed_stream_ignores_replayed_events_at_final_ticks() {
+fn committed_stream_ignores_replayed_messages_at_final_ticks() {
     let player = StableEntityId::from_raw(60);
-    let mut stream = RollbackEventStream::default();
-    stream.replace_provisional([event(
+    let mut stream = RollbackMessageStream::default();
+    stream.replace_provisional([message(
         100,
         1,
         GameFact::Damage {
@@ -182,7 +186,7 @@ fn committed_stream_ignores_replayed_events_at_final_ticks() {
     )]);
     stream.commit_through(100);
 
-    let diff = stream.replace_provisional([event(
+    let diff = stream.replace_provisional([message(
         100,
         1,
         GameFact::Damage {
@@ -196,18 +200,21 @@ fn committed_stream_ignores_replayed_events_at_final_ticks() {
     assert!(diff.removed.is_empty());
     assert!(commit.added.is_empty());
     assert_eq!(stream.committed_tick(), Some(100));
-    let event = stream
-        .committed_event(RollbackEventId::new(RollbackDomainId(1), 100, 1))
+    let message = stream
+        .committed_message(RollbackMessageId::new(RollbackDomainId(1), 100, 1))
         .unwrap();
-    assert!(matches!(event.payload, GameFact::Damage { amount: 5, .. }));
+    assert!(matches!(
+        message.payload,
+        GameFact::Damage { amount: 5, .. }
+    ));
 }
 
 #[test]
 fn committed_tick_is_monotonic() {
     let player = StableEntityId::from_raw(70);
-    let mut stream = RollbackEventStream::default();
+    let mut stream = RollbackMessageStream::default();
     stream.replace_provisional([
-        event(
+        message(
             100,
             1,
             GameFact::Damage {
@@ -215,7 +222,7 @@ fn committed_tick_is_monotonic() {
                 amount: 5,
             },
         ),
-        event(101, 1, GameFact::Block { target: player }),
+        message(101, 1, GameFact::Block { target: player }),
     ]);
 
     stream.commit_through(101);

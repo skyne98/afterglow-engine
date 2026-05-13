@@ -14,7 +14,7 @@ pub trait ReplicatedCommand: Message + Clone + PartialEq + Send + Sync + 'static
     fn tick(&self) -> u32;
 }
 
-pub trait ReplicationEvent: Message + Clone + PartialEq + Send + Sync + 'static {
+pub trait ReplicatedMessage: Message + Clone + PartialEq + Send + Sync + 'static {
     fn tick(&self) -> u32;
 }
 
@@ -23,7 +23,7 @@ pub struct ReplicationRegistry {
     pub components: HashSet<&'static str>,
     pub resources: HashSet<&'static str>,
     pub commands: HashSet<&'static str>,
-    pub events: HashSet<&'static str>,
+    pub messages: HashSet<&'static str>,
 }
 
 #[derive(Resource, Clone, Debug, PartialEq)]
@@ -91,7 +91,7 @@ impl<T> Default for ReplicatedTimeline<T> {
 pub struct ReplicatedComponent<T>(PhantomData<T>);
 pub struct ReplicatedResource<T>(PhantomData<T>);
 pub struct ReplicatedCommandType<T>(PhantomData<T>);
-pub struct ReplicatedEventType<T>(PhantomData<T>);
+pub struct ReplicatedMessageType<T>(PhantomData<T>);
 
 #[derive(Resource)]
 struct RegisteredReplication<T, K>(PhantomData<fn() -> (T, K)>);
@@ -99,7 +99,7 @@ struct RegisteredReplication<T, K>(PhantomData<fn() -> (T, K)>);
 struct ComponentRegistration;
 struct ResourceRegistration;
 struct CommandRegistration;
-struct EventRegistration;
+struct MessageRegistration;
 
 fn register_once<T, K>(app: &mut App) -> bool
 where
@@ -127,15 +127,15 @@ pub fn command<T>() -> ReplicatedCommandType<T> {
     ReplicatedCommandType(PhantomData)
 }
 
-pub fn event<T>() -> ReplicatedEventType<T> {
-    ReplicatedEventType(PhantomData)
+pub fn message<T>() -> ReplicatedMessageType<T> {
+    ReplicatedMessageType(PhantomData)
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, SystemSet)]
 pub enum ReplicationSet {
     RestoreState,
     ReissueMessages,
-    CollectEvents,
+    CollectMessages,
     CollectChanges,
 }
 
@@ -212,7 +212,7 @@ where
                 Update,
                 (
                     reissue_replicated_messages::<T>.in_set(ReplicationSet::ReissueMessages),
-                    collect_replicated_commands::<T>.in_set(ReplicationSet::CollectChanges),
+                    collect_replicated_commands::<T>.in_set(ReplicationSet::CollectMessages),
                 ),
             );
         app.world_mut()
@@ -222,12 +222,12 @@ where
     }
 }
 
-impl<T> ReplicationRegistration for ReplicatedEventType<T>
+impl<T> ReplicationRegistration for ReplicatedMessageType<T>
 where
-    T: ReplicationEvent,
+    T: ReplicatedMessage,
 {
     fn register(self, app: &mut App) {
-        if !register_once::<T, EventRegistration>(app) {
+        if !register_once::<T, MessageRegistration>(app) {
             return;
         }
         app.add_message::<T>()
@@ -237,12 +237,12 @@ where
                 Update,
                 (
                     reissue_replicated_messages::<T>.in_set(ReplicationSet::ReissueMessages),
-                    collect_replicated_events::<T>.in_set(ReplicationSet::CollectChanges),
+                    collect_replicated_messages::<T>.in_set(ReplicationSet::CollectMessages),
                 ),
             );
         app.world_mut()
             .resource_mut::<ReplicationRegistry>()
-            .events
+            .messages
             .insert(type_name::<T>());
     }
 }
@@ -460,11 +460,11 @@ fn collect_replicated_commands<T>(
     }
 }
 
-fn collect_replicated_events<T>(
+fn collect_replicated_messages<T>(
     mut messages: MessageReader<T>,
     mut timeline: ResMut<ReplicatedTimeline<T>>,
 ) where
-    T: ReplicationEvent,
+    T: ReplicatedMessage,
 {
     for message in messages.read().cloned() {
         if timeline.consume_reissued_message(message.tick(), &message) {
@@ -491,7 +491,7 @@ pub fn configure_replication_sets(app: &mut App) {
         (
             ReplicationSet::RestoreState,
             ReplicationSet::ReissueMessages,
-            ReplicationSet::CollectEvents,
+            ReplicationSet::CollectMessages,
             ReplicationSet::CollectChanges,
         )
             .chain()

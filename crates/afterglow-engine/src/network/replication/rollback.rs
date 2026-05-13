@@ -1,6 +1,6 @@
 use super::{ReplicationAppExt, ReplicationRegistration};
 use crate::network::rollback::{
-    RollbackCommit, RollbackEvent, RollbackEventDiff, RollbackEventStream, RollbackPolicy,
+    RollbackCommit, RollbackMessage, RollbackMessageDiff, RollbackMessageStream, RollbackPolicy,
 };
 use bevy::prelude::*;
 
@@ -11,9 +11,9 @@ pub struct RollbackReplicationClock {
 }
 
 #[derive(Resource, Clone, Debug, Eq, PartialEq, Reflect)]
-pub struct ReplicatedRollbackEventStream<E> {
-    events: RollbackEventStream<E>,
-    last_diff: RollbackEventDiff<E>,
+pub struct ReplicatedRollbackMessageStream<E> {
+    messages: RollbackMessageStream<E>,
+    last_diff: RollbackMessageDiff<E>,
     last_commit: RollbackCommit<E>,
 }
 
@@ -30,11 +30,11 @@ impl RollbackReplicationClock {
     }
 }
 
-impl<E> Default for ReplicatedRollbackEventStream<E> {
+impl<E> Default for ReplicatedRollbackMessageStream<E> {
     fn default() -> Self {
         Self {
-            events: RollbackEventStream::default(),
-            last_diff: RollbackEventDiff {
+            messages: RollbackMessageStream::default(),
+            last_diff: RollbackMessageDiff {
                 added: Vec::new(),
                 removed: Vec::new(),
             },
@@ -46,12 +46,12 @@ impl<E> Default for ReplicatedRollbackEventStream<E> {
     }
 }
 
-impl<E> ReplicatedRollbackEventStream<E> {
-    pub fn events(&self) -> &RollbackEventStream<E> {
-        &self.events
+impl<E> ReplicatedRollbackMessageStream<E> {
+    pub fn messages(&self) -> &RollbackMessageStream<E> {
+        &self.messages
     }
 
-    pub fn last_diff(&self) -> &RollbackEventDiff<E> {
+    pub fn last_diff(&self) -> &RollbackMessageDiff<E> {
         &self.last_diff
     }
 
@@ -60,20 +60,20 @@ impl<E> ReplicatedRollbackEventStream<E> {
     }
 }
 
-impl<E> ReplicatedRollbackEventStream<E>
+impl<E> ReplicatedRollbackMessageStream<E>
 where
     E: Clone + PartialEq,
 {
     pub fn replace_provisional(
         &mut self,
-        events: impl IntoIterator<Item = RollbackEvent<E>>,
-    ) -> &RollbackEventDiff<E> {
-        self.last_diff = self.events.replace_provisional(events);
+        messages: impl IntoIterator<Item = RollbackMessage<E>>,
+    ) -> &RollbackMessageDiff<E> {
+        self.last_diff = self.messages.replace_provisional(messages);
         &self.last_diff
     }
 
     pub fn commit_through(&mut self, committed_tick: u32) -> &RollbackCommit<E> {
-        self.last_commit = self.events.commit_through(committed_tick);
+        self.last_commit = self.messages.commit_through(committed_tick);
         &self.last_commit
     }
 }

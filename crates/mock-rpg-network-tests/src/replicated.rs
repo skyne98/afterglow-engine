@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ReplicatedEvent {
+pub enum ReplicatedMessage {
     PlayerJoined { player: Player, peer: PeerId },
     PlayerMoved { player: Player, position: Vec3i },
     DoorOpened { entity: Entity },
@@ -40,9 +40,9 @@ impl Default for ReplicatedWorld {
 }
 
 impl ReplicatedWorld {
-    pub fn apply_event(&mut self, event: ReplicatedEvent) {
-        match event {
-            ReplicatedEvent::PlayerJoined { player, peer } => {
+    pub fn apply_message(&mut self, message: ReplicatedMessage) {
+        match message {
+            ReplicatedMessage::PlayerJoined { player, peer } => {
                 self.players.entry(player).or_insert(PlayerState {
                     peer,
                     position: Vec3i::ZERO,
@@ -50,23 +50,23 @@ impl ReplicatedWorld {
                     inventory: BTreeSet::new(),
                 });
             }
-            ReplicatedEvent::PlayerMoved { player, position } => {
+            ReplicatedMessage::PlayerMoved { player, position } => {
                 if let Some(state) = self.players.get_mut(&player) {
                     state.position = position;
                 }
             }
-            ReplicatedEvent::DoorOpened { entity } => {
+            ReplicatedMessage::DoorOpened { entity } => {
                 if let Some((_, open)) = self.doors.get_mut(&entity) {
                     *open = true;
                 }
             }
-            ReplicatedEvent::ItemPickedUp { entity, by } => {
+            ReplicatedMessage::ItemPickedUp { entity, by } => {
                 self.items.remove(&entity);
                 if let Some(player) = self.players.get_mut(&by) {
                     player.inventory.insert(entity);
                 }
             }
-            ReplicatedEvent::NpcDamaged { entity, hp } => {
+            ReplicatedMessage::NpcDamaged { entity, hp } => {
                 if let Some((_, npc_hp)) = self.npcs.get_mut(&entity) {
                     *npc_hp = hp;
                 }

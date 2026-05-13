@@ -106,7 +106,7 @@ pub struct WorldState {
     session: NetworkSession,
     commands: ServerCommandBuffer,
     replicated: ReplicatedWorld,
-    replicated_events: Vec<ReplicatedEvent>,
+    replicated_messages: Vec<ReplicatedMessage>,
     tick: u32,
 }
 
@@ -125,7 +125,7 @@ pub struct MockServer {
     session: NetworkSession,
     commands: ServerCommandBuffer,
     pub replicated: ReplicatedWorld,
-    replicated_events: Vec<ReplicatedEvent>,
+    replicated_messages: Vec<ReplicatedMessage>,
     tick: u32,
 }
 
@@ -172,7 +172,7 @@ impl MockServer {
             session: NetworkSession::default(),
             commands: ServerCommandBuffer::default(),
             replicated: ReplicatedWorld::default(),
-            replicated_events: Vec::new(),
+            replicated_messages: Vec::new(),
             tick: 0,
         }
     }
@@ -201,7 +201,7 @@ impl MockServer {
             session: self.session.clone(),
             commands: self.commands.clone(),
             replicated: self.replicated.clone(),
-            replicated_events: self.replicated_events.clone(),
+            replicated_messages: self.replicated_messages.clone(),
             tick: self.tick,
         }
     }
@@ -210,7 +210,7 @@ impl MockServer {
         self.session = state.session;
         self.commands = state.commands;
         self.replicated = state.replicated;
-        self.replicated_events = state.replicated_events;
+        self.replicated_messages = state.replicated_messages;
         self.tick = state.tick;
     }
 
@@ -275,7 +275,7 @@ impl MockServer {
                     return;
                 }
                 if valid_move(self.player(peer).position, position) {
-                    self.emit_replicated(ReplicatedEvent::PlayerMoved { player, position });
+                    self.emit_replicated(ReplicatedMessage::PlayerMoved { player, position });
                     self.send_snapshot(peer);
                 } else {
                     self.reject(peer, tick, "invalid-move");
@@ -328,7 +328,7 @@ impl MockServer {
             self.session = session;
         }
         if !self.replicated.players.contains_key(&player) {
-            self.emit_replicated(ReplicatedEvent::PlayerJoined { player, peer });
+            self.emit_replicated(ReplicatedMessage::PlayerJoined { player, peer });
         }
         self.send(
             peer,
@@ -345,7 +345,7 @@ impl MockServer {
         if let Some((door_pos, open)) = self.replicated.doors.get(&entity).copied() {
             if in_reach(position, door_pos) {
                 if !open {
-                    self.emit_replicated(ReplicatedEvent::DoorOpened { entity });
+                    self.emit_replicated(ReplicatedMessage::DoorOpened { entity });
                 }
                 self.broadcast_near(
                     door_pos.chunk(),
@@ -358,7 +358,7 @@ impl MockServer {
         }
         if let Some(item_pos) = self.replicated.items.get(&entity).copied() {
             if in_reach(position, item_pos) {
-                self.emit_replicated(ReplicatedEvent::ItemPickedUp { entity, by: player });
+                self.emit_replicated(ReplicatedMessage::ItemPickedUp { entity, by: player });
                 self.broadcast_near(
                     item_pos.chunk(),
                     ServerMsg::Event(WorldEvent::ItemPickedUp { entity, by: player }),
@@ -377,7 +377,7 @@ impl MockServer {
             if in_reach(position, npc_pos) {
                 let chunk = npc_pos.chunk();
                 let hp = (old_hp - 3).max(0);
-                self.emit_replicated(ReplicatedEvent::NpcDamaged { entity, hp });
+                self.emit_replicated(ReplicatedMessage::NpcDamaged { entity, hp });
                 self.broadcast_near(
                     chunk,
                     ServerMsg::Event(WorldEvent::NpcDamaged { entity, hp }),
@@ -409,9 +409,9 @@ impl MockServer {
         }
     }
 
-    fn emit_replicated(&mut self, event: ReplicatedEvent) {
-        self.replicated_events.push(event.clone());
-        self.replicated.apply_event(event);
+    fn emit_replicated(&mut self, message: ReplicatedMessage) {
+        self.replicated_messages.push(message.clone());
+        self.replicated.apply_message(message);
     }
 
     fn send_snapshot(&mut self, peer: PeerId) {

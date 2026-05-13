@@ -3,8 +3,8 @@ use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 
-pub mod events;
-pub use events::*;
+pub mod messages;
+pub use messages::*;
 
 #[derive(Resource, Clone, Debug, Eq, PartialEq, Reflect)]
 pub struct DeterministicRollbackBuffer {

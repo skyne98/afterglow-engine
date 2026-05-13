@@ -9,7 +9,7 @@ struct TimelineDamage {
     tick: u32,
 }
 
-impl ReplicationEvent for TimelineDamage {
+impl ReplicatedMessage for TimelineDamage {
     fn tick(&self) -> u32 {
         self.tick
     }
@@ -19,10 +19,10 @@ impl ReplicationEvent for TimelineDamage {
 struct SeenTimelineDamage(Vec<TimelineDamage>);
 
 fn read_timeline_damage(
-    mut events: MessageReader<TimelineDamage>,
+    mut messages: MessageReader<TimelineDamage>,
     mut seen: ResMut<SeenTimelineDamage>,
 ) {
-    seen.0.extend(events.read().cloned());
+    seen.0.extend(messages.read().cloned());
 }
 
 #[test]
@@ -35,7 +35,7 @@ fn replay_reissue_skips_messages_older_than_retention_window() {
     ));
     let entity = StableEntityId::from_raw(7);
     app.init_resource::<SeenTimelineDamage>()
-        .replicate(event::<TimelineDamage>())
+        .replicate(message::<TimelineDamage>())
         .add_systems(
             Update,
             read_timeline_damage
