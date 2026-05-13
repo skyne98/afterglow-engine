@@ -6,6 +6,7 @@ edition = "2024"
 [features]
 default = []
 iroh = ["dep:bytes", "dep:iroh", "dep:tokio"]
+steam = ["dep:steamworks"]
 test-support = ["dep:wgpu"]
 
 [dependencies]
@@ -18,6 +19,7 @@ tracing-subscriber.workspace = true
 bevy.workspace = true
 bytes = { workspace = true, optional = true }
 iroh = { workspace = true, optional = true }
+steamworks = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
 wgpu = { version = "27", optional = true }
 afterglow-engine-macros = { path = "../afterglow-engine-macros", version = "0.1.0" }

@@ -114,6 +114,7 @@ afterglow-engine
 | `network::replication` | Stable-ID keyed snapshot/delta primitives plus Bevy-facing replicated components, resources, and tick-addressed command/message timelines. |
 | `network::rollback` | Small deterministic subsystem rollback history plus committed/provisional domain replay, lifecycle, and cue helpers. |
 | `network::session` | Session identity maps between peers, platform identities, players, and avatars. |
+| `network::steam` | Optional native Steam adapter behind the `steam` feature. Maps Steam identity, lobby metadata, and SteamNetworkingSockets P2P connections to the shared network boundary. |
 | `world` | Chunk/cell loading systems. Currently owns the built-in demo cell loader. |
 | `world::chunk` | Chunk IDs, demo-cell load state, and demo-cell loading system. |
 | `testing` | Test app builders. Available in unit tests and through the `test-support` feature. |
@@ -283,6 +284,9 @@ afterglow-engine
 | `IrohTransportConfig` | protocol, alpn, relay_mode, next_inbound_peer, max_packet_bytes | Iroh backend configuration. Defaults to n0 relay support for real builds; `local_only()` disables relays for deterministic local tests. |
 | `IrohRelayMode` | N0, Disabled | Relay configuration for the Iroh endpoint builder. |
 | `AFTERGLOW_IROH_ALPN` | bytes | Default ALPN used by Afterglow Iroh endpoints. |
+| `SteamTransport` | local peer, Steam client, P2P listen socket, connection map, packet sequence state | Optional native SteamNetworkingSockets transport adapter. Polls Steam callbacks, accepts P2P connections, maps Steam IDs to engine `PeerId`s, sends reliable/unreliable engine packets with Steam send flags, and emits backend-neutral `TransportEvent`s. Currently compile-tested and covered by no-client unit tests only; real Steam client/lobby/auth/relay integration remains untested. |
+| `SteamTransportConfig` | protocol, local_virtual_port, next_inbound_peer, max_messages_per_poll, listen, init_relay_access | Steam backend configuration for listen-server/P2P use. Relay access initialization is enabled by default. |
+| `SteamLobbyMetadata` | protocol, build_hash, content_hash, world_id, host_steam_id, host_virtual_port | Stable lobby metadata payload used by Steam discovery/invites to validate version/content and hand clients to the host transport. |
 | `NetworkHandshakeConfig` | protocol, build_hash, content_hash, backend, identity | Local control-handshake configuration shared by memory, Iroh, Steam, and future backends. |
 | `NetworkBackendKind` | Memory, Iroh, Steam, Custom | Backend label carried in the control hello for diagnostics and policy. |
 | `ControlMessage` | Hello, Accepted, Rejected | Reliable control-channel handshake payload. Gameplay packets are forwarded only after a peer's hello has been accepted into `NetworkSession`; accepted responses are valid only for already-admitted peers. |
@@ -395,6 +399,7 @@ afterglow-engine
 | wgpu | 27 | optional, `test-support` only for real headless GPU tests |
 | serde | 1 | derive |
 | serde_json | 1 | — |
+| steamworks | 0.13.1 | optional, native Steam backend |
 | syn | 2 | proc macro parsing, full |
 | tracing | 0.1 | — |
 | tracing-subscriber | 0.3 | env-filter |

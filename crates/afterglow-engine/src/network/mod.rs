@@ -15,6 +15,8 @@ pub mod reconciliation;
 pub mod replication;
 pub mod rollback;
 pub mod session;
+#[cfg(all(feature = "steam", not(target_arch = "wasm32")))]
+pub mod steam;
 
 #[derive(Resource, Clone, Copy, Debug, Eq, PartialEq, Reflect)]
 pub struct NetworkProtocol {
@@ -107,6 +109,13 @@ pub struct NetworkPacket {
     pub to: PeerId,
     pub header: PacketHeader,
     pub payload: Vec<u8>,
+}
+
+#[cfg(any(feature = "iroh", feature = "steam"))]
+#[derive(Clone, Serialize, Deserialize)]
+struct TransportWirePacket {
+    header: PacketHeader,
+    payload: Vec<u8>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Reflect)]
@@ -370,6 +379,31 @@ pub(super) fn accepts_unreliable_sequence(
     }
     delivered_sequences.insert(key, sequence);
     true
+}
+
+#[cfg(any(feature = "iroh", feature = "steam"))]
+pub(super) fn encode_transport_packet(
+    packet: &NetworkPacket,
+) -> Result<Vec<u8>, serde_json::Error> {
+    serde_json::to_vec(&TransportWirePacket {
+        header: packet.header.clone(),
+        payload: packet.payload.clone(),
+    })
+}
+
+#[cfg(any(feature = "iroh", feature = "steam"))]
+pub(super) fn decode_transport_packet(
+    from: PeerId,
+    to: PeerId,
+    bytes: &[u8],
+) -> Option<NetworkPacket> {
+    let wire = serde_json::from_slice::<TransportWirePacket>(bytes).ok()?;
+    Some(NetworkPacket {
+        from,
+        to,
+        header: wire.header,
+        payload: wire.payload,
+    })
 }
 
 #[cfg(test)]

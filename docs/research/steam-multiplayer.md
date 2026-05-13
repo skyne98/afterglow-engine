@@ -217,14 +217,49 @@ physics, skeletal animation, audio, and persistent authored state.
 
 ### Feature Gate
 
-Use a native-only Cargo feature:
+Afterglow now has a native-only Cargo feature:
 
 ```toml
 [features]
-steam = ["dep:bevy_steamworks"]
+steam = ["dep:steamworks"]
 ```
 
 Do not include Steam in default engine builds, wasm builds, or headless CI.
+The first implementation uses `steamworks` directly instead of
+`bevy_steamworks` so the backend can stay pinned to SteamNetworkingSockets
+without depending on Bevy plugin version compatibility.
+
+Current code lives in `crates/afterglow-engine/src/network/steam.rs`.
+
+Important status: this backend currently has compile-time and no-client unit
+coverage only. It has not been tested against a real Steam client, real Steam
+lobbies, Steam invites, Steam auth tickets, Steam Datagram Relay, or packaged
+Steamworks redistributable libraries.
+
+Implemented pieces:
+
+- `SteamTransportConfig` for protocol, virtual port, relay init, and inbound
+  peer allocation.
+- `SteamLobbyMetadata` for protocol/build/content/world/host metadata that can
+  be written into Steam lobbies.
+- `SteamTransport`, a native `NetworkTransport` adapter over
+  SteamNetworkingSockets P2P connections.
+- Steam ID to engine `PeerId` mapping for outbound and inbound P2P
+  connections.
+- Packet serialization through the shared engine `PacketHeader`, `NetChannel`,
+  and `DeliveryMode`.
+- Reliable packets map to Steam reliable send flags; unreliable and
+  unreliable-sequenced packets map to Steam unreliable send flags, with stale
+  sequenced rejection handled by the same engine filter used by memory/Iroh.
+- Unit tests cover lobby metadata, send flag mapping, and packet
+  serialization without requiring a running Steam client.
+
+Still pending:
+
+- Actual lobby create/join callback flow.
+- Steam auth ticket generation/validation in the control handshake.
+- Manual gated integration tests that require a logged-in Steam client and
+  Steamworks redistributable libraries.
 
 ### Plugin Shape
 

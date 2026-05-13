@@ -1,13 +1,13 @@
 use crate::network::{
     DeliveryMode, DisconnectReason, NetChannel, NetworkPacket, NetworkTransport, PacketHeader,
-    PeerId, ProtocolVersion, TransportEvent, accepts_unreliable_sequence,
+    PeerId, ProtocolVersion, TransportEvent, accepts_unreliable_sequence, decode_transport_packet,
+    encode_transport_packet,
 };
 use bytes::Bytes;
 use iroh::{
     Endpoint, EndpointAddr,
     endpoint::{Connection, presets},
 };
-use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     sync::mpsc::{Receiver, Sender, TryRecvError, channel},
@@ -84,12 +84,6 @@ enum IrohCommand {
         reason: DisconnectReason,
     },
     Shutdown,
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-struct IrohWirePacket {
-    header: PacketHeader,
-    payload: Vec<u8>,
 }
 
 impl IrohTransport {
@@ -326,7 +320,7 @@ impl WorkerState {
         else {
             return;
         };
-        let Ok(bytes) = encode_packet(&packet) else {
+        let Ok(bytes) = encode_transport_packet(&packet) else {
             return;
         };
         match packet.header.delivery {
@@ -442,7 +436,7 @@ fn spawn_connection_readers(peer: PeerId, state: WorkerState, connection: Connec
     let datagram_state = state.clone();
     tokio::spawn(async move {
         while let Ok(bytes) = datagram_conn.read_datagram().await {
-            if let Some(packet) = decode_packet(peer, datagram_state.local_peer, &bytes) {
+            if let Some(packet) = decode_transport_packet(peer, datagram_state.local_peer, &bytes) {
                 datagram_state
                     .emit_packet_if_current(peer, stable_id, packet)
                     .await;
@@ -458,7 +452,9 @@ fn spawn_connection_readers(peer: PeerId, state: WorkerState, connection: Connec
                 .await
             {
                 Ok(bytes) => {
-                    if let Some(packet) = decode_packet(peer, stream_state.local_peer, &bytes) {
+                    if let Some(packet) =
+                        decode_transport_packet(peer, stream_state.local_peer, &bytes)
+                    {
                         stream_state
                             .emit_packet_if_current(peer, stable_id, packet)
                             .await;
@@ -468,23 +464,6 @@ fn spawn_connection_readers(peer: PeerId, state: WorkerState, connection: Connec
             }
         }
     });
-}
-
-fn encode_packet(packet: &NetworkPacket) -> Result<Vec<u8>, serde_json::Error> {
-    serde_json::to_vec(&IrohWirePacket {
-        header: packet.header.clone(),
-        payload: packet.payload.clone(),
-    })
-}
-
-fn decode_packet(from: PeerId, to: PeerId, bytes: &[u8]) -> Option<NetworkPacket> {
-    let wire = serde_json::from_slice::<IrohWirePacket>(bytes).ok()?;
-    Some(NetworkPacket {
-        from,
-        to,
-        header: wire.header,
-        payload: wire.payload,
-    })
 }
 
 #[cfg(test)]
