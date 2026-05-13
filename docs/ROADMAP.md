@@ -71,7 +71,7 @@ Deep dive: [bevy-integration-world-runtime.md](research/bevy-integration-world-r
 - [x] Bevy/ECS integration for deterministic rollback domain schedules
 - [x] Mock RPG late-command correction where replay changes death/combat outcomes without manual event cleanup
 - [x] Backend-neutral transport/session handshake layer shared by Iroh, Steam, memory tests, and future dedicated servers
-- [ ] Iroh transport backend for non-Steam NAT traversal and encrypted peer/dedicated-server transport
+- [x] Iroh transport backend for non-Steam NAT traversal and encrypted peer/dedicated-server transport
 - [ ] Optional Steam backend feature: Steam identity/auth, lobbies, invites, and SteamNetworkingSockets transport
 - [ ] Steam lobby create/join flow with protocol version, build hash, world/session metadata, and host/server handoff
 - [ ] Steam auth handshake mapping SteamID64 to engine `NetworkPlayerId`

@@ -8,6 +8,8 @@ pub mod commands;
 pub mod handshake;
 pub mod interest;
 pub mod interpolation;
+#[cfg(all(feature = "iroh", not(target_arch = "wasm32")))]
+pub mod iroh;
 pub mod prediction;
 pub mod reconciliation;
 pub mod replication;
@@ -74,7 +76,7 @@ impl ProtocolVersion {
     };
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Reflect)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Reflect, Serialize, Deserialize)]
 pub enum NetChannel {
     Control,
     Commands,
@@ -84,14 +86,14 @@ pub enum NetChannel {
     Custom(u16),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Reflect)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Reflect, Serialize, Deserialize)]
 pub enum DeliveryMode {
     Reliable,
     Unreliable,
     UnreliableSequenced,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Reflect)]
+#[derive(Clone, Debug, Eq, PartialEq, Reflect, Serialize, Deserialize)]
 pub struct PacketHeader {
     pub protocol: ProtocolVersion,
     pub channel: NetChannel,
@@ -303,23 +305,6 @@ impl MemoryTransport {
         });
         self.incoming.extend(ready);
     }
-
-    fn accepts_sequence(&mut self, packet: &NetworkPacket) -> bool {
-        if packet.header.delivery != DeliveryMode::UnreliableSequenced {
-            return true;
-        }
-        let key = (packet.from, packet.header.channel);
-        let sequence = packet.header.sequence;
-        if self
-            .delivered_sequences
-            .get(&key)
-            .is_some_and(|delivered| sequence <= *delivered)
-        {
-            return false;
-        }
-        self.delivered_sequences.insert(key, sequence);
-        true
-    }
 }
 
 impl NetworkTransport for MemoryTransport {
@@ -331,7 +316,7 @@ impl NetworkTransport for MemoryTransport {
         let events = self.incoming.drain(..).collect::<Vec<_>>();
         for event in events {
             if let TransportEvent::Packet(packet) = &event
-                && !self.accepts_sequence(packet)
+                && !accepts_unreliable_sequence(&mut self.delivered_sequences, packet)
             {
                 continue;
             }
@@ -366,6 +351,25 @@ impl NetworkTransport for MemoryTransport {
                 .push_back(TransportEvent::Disconnected { peer, reason });
         }
     }
+}
+
+pub(super) fn accepts_unreliable_sequence(
+    delivered_sequences: &mut HashMap<(PeerId, NetChannel), u64>,
+    packet: &NetworkPacket,
+) -> bool {
+    if packet.header.delivery != DeliveryMode::UnreliableSequenced {
+        return true;
+    }
+    let key = (packet.from, packet.header.channel);
+    let sequence = packet.header.sequence;
+    if delivered_sequences
+        .get(&key)
+        .is_some_and(|delivered| sequence <= *delivered)
+    {
+        return false;
+    }
+    delivered_sequences.insert(key, sequence);
+    true
 }
 
 #[cfg(test)]

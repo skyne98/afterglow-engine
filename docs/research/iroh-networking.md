@@ -111,6 +111,33 @@ The adapter should map Iroh public keys/connections to engine `PeerId`s and use
 `NetworkPlayerId`, replicated components/resources, command validation,
 rollback, prediction, interpolation, chunk interest, or reconnect baselines.
 
+## Afterglow Implementation
+
+The first backend lives in `crates/afterglow-engine/src/network/iroh.rs` behind
+the optional native `iroh` feature.
+
+- `IrohTransport` implements the existing synchronous `NetworkTransport` trait.
+- A background Tokio worker owns the async Iroh `Endpoint` and `Connection`
+  objects.
+- `IrohTransport::bind()` creates an endpoint and exposes its `EndpointAddr`
+  for invite codes, dev connects, or future lobby metadata.
+- `IrohTransport::connect(peer, addr)` dials another endpoint and maps that
+  connection to an engine `PeerId`.
+- Inbound connections allocate session-local `PeerId`s starting at
+  `IrohTransportConfig::next_inbound_peer`.
+- Reliable engine packets are sent over one-shot QUIC unidirectional streams.
+- Unreliable and unreliable-sequenced engine packets are sent over QUIC
+  datagrams; stale sequenced rejection uses the same engine filter as the
+  memory transport.
+- Local tests cover reliable packet delivery, reliable ordering, unreliable
+  packet delivery, stale unreliable-sequenced rejection, remote disconnect
+  reporting, and the shared `service_control_handshake()` path over real local
+  Iroh endpoints.
+
+This is intentionally not a lobby, account, player, rollback, or replication
+system. It is only the first real transport adapter below the shared networking
+layer.
+
 ## Async Runtime
 
 - `iroh` requires **tokio** (v1.44+)

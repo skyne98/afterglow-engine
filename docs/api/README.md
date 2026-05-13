@@ -108,6 +108,7 @@ afterglow-engine
 | `network::handshake` | Backend-neutral reliable control handshake, compatibility validation, authenticated identity admission, and gameplay packet gating. |
 | `network::interest` | Chunk-based interest map for filtering snapshots and deltas by player visibility. |
 | `network::interpolation` | Remote entity sample buffering, interpolation, and bounded extrapolation. |
+| `network::iroh` | Optional native Iroh transport adapter behind the `iroh` feature. Maps Iroh endpoints/connections to `NetworkTransport` without owning gameplay protocol state. |
 | `network::prediction` | Client-side command history and replay buffer for prediction after authoritative snapshots. |
 | `network::reconciliation` | Reconciles authoritative snapshot/delta/correction ticks with local prediction history. |
 | `network::replication` | Stable-ID keyed snapshot/delta primitives plus Bevy-facing replicated components, resources, and tick-addressed command/message timelines. |
@@ -278,6 +279,10 @@ afterglow-engine
 | `NetworkTransport` | trait | Minimal backend boundary for polling connection/packet events, sending engine packets, and disconnecting peers. Iroh, Steam, memory, and future transports should adapt to this trait without owning replication, rollback, prediction, command validation, or interest logic. |
 | `MemoryTransport` | local_peer, protocol, queues, faults | Deterministic in-memory fake transport for unit tests and protocol development. Supports fault injection and protocol override for compatibility/rejection tests. |
 | `FaultConfig` | drop_every, duplicate_every, delay_ticks, reverse_delivery | Deterministic packet fault injection for fake transport tests. |
+| `IrohTransport` | local peer, endpoint address, worker, packet queues | Optional native transport adapter. Runs Iroh async endpoint work on a background Tokio worker, sends reliable packets over unidirectional QUIC streams, sends unreliable packets over QUIC datagrams, and emits backend-neutral `TransportEvent`s. |
+| `IrohTransportConfig` | protocol, alpn, relay_mode, next_inbound_peer, max_packet_bytes | Iroh backend configuration. Defaults to n0 relay support for real builds; `local_only()` disables relays for deterministic local tests. |
+| `IrohRelayMode` | N0, Disabled | Relay configuration for the Iroh endpoint builder. |
+| `AFTERGLOW_IROH_ALPN` | bytes | Default ALPN used by Afterglow Iroh endpoints. |
 | `NetworkHandshakeConfig` | protocol, build_hash, content_hash, backend, identity | Local control-handshake configuration shared by memory, Iroh, Steam, and future backends. |
 | `NetworkBackendKind` | Memory, Iroh, Steam, Custom | Backend label carried in the control hello for diagnostics and policy. |
 | `ControlMessage` | Hello, Accepted, Rejected | Reliable control-channel handshake payload. Gameplay packets are forwarded only after a peer's hello has been accepted into `NetworkSession`; accepted responses are valid only for already-admitted peers. |
@@ -381,7 +386,9 @@ afterglow-engine
 | bevy (workspace) | 0.18.1 | webgpu |
 | bevy (native engine) | 0.18.1 | bevy_dev_tools, trace |
 | bevy (native agx) | 0.18.1 | dynamic_linking, bevy_dev_tools, sysinfo_plugin, trace |
+| bytes | 1 | optional, `iroh` feature packet handoff |
 | ggrs | 0.12.0 | dev-only benchmark dependency |
+| iroh | 0.98.2 | optional, native Iroh transport backend |
 | proc-macro-crate | 3 | macro crate-name resolution for renamed dependencies |
 | proc-macro2 | 1 | proc macro support |
 | quote | 1 | proc macro support |
@@ -392,6 +399,7 @@ afterglow-engine
 | tracing | 0.1 | — |
 | tracing-subscriber | 0.3 | env-filter |
 | tiny_http | 0.12 | — |
+| tokio | 1 | optional, `iroh` feature background runtime |
 | web-time | 1 | wasm-compatible timing |
 
 ## Crate: `agx` (binary)
