@@ -62,9 +62,20 @@ impl NetworkSession {
     }
 
     pub fn add_player(&mut self, peer: PeerId) -> Option<NetworkPlayerId> {
-        let peer_session = self.peers.get_mut(&peer)?;
+        self.peers.get(&peer)?;
         self.next_player = self.next_player.saturating_add(1);
         let player = NetworkPlayerId(self.next_player);
+        self.add_player_with_id(peer, player).then_some(player)
+    }
+
+    pub fn add_player_with_id(&mut self, peer: PeerId, player: NetworkPlayerId) -> bool {
+        if self.players.contains_key(&player) {
+            return false;
+        }
+        let Some(peer_session) = self.peers.get_mut(&peer) else {
+            return false;
+        };
+        self.next_player = self.next_player.max(player.0);
         peer_session.players.push(player);
         self.players.insert(
             player,
@@ -74,7 +85,17 @@ impl NetworkSession {
                 avatar: None,
             },
         );
-        Some(player)
+        true
+    }
+
+    pub fn remove_player(&mut self, player: NetworkPlayerId) -> bool {
+        let Some(player_session) = self.players.remove(&player) else {
+            return false;
+        };
+        if let Some(peer_session) = self.peers.get_mut(&player_session.peer) {
+            peer_session.players.retain(|owned| *owned != player);
+        }
+        true
     }
 
     pub fn bind_avatar(

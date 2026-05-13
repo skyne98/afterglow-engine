@@ -10,6 +10,7 @@ pub mod interest;
 pub mod interpolation;
 #[cfg(all(feature = "iroh", not(target_arch = "wasm32")))]
 pub mod iroh;
+pub mod local_server;
 pub mod prediction;
 pub mod reconciliation;
 pub mod replication;
@@ -161,6 +162,8 @@ impl Plugin for AfterglowNetworkPlugin {
             .init_resource::<reconciliation::ClientReconciliationQueue>()
             .init_resource::<interpolation::RemoteInterpolationBuffer>()
             .init_resource::<interest::InterestMap>()
+            .init_resource::<local_server::LocalServerConfig>()
+            .init_resource::<local_server::LocalServerState>()
             .init_resource::<replication::RollbackReplicationClock>()
             .init_resource::<session::NetworkSession>()
             .add_systems(
@@ -172,6 +175,16 @@ impl Plugin for AfterglowNetworkPlugin {
                 Update,
                 reconciliation::clear_reconciliation_queue
                     .in_set(crate::core::schedule::AfterglowSet::BuildCommands),
+            )
+            .add_systems(
+                Update,
+                (
+                    local_server::sync_local_server_session,
+                    local_server::submit_local_player_commands,
+                )
+                    .chain()
+                    .in_set(crate::core::schedule::AfterglowSet::BuildCommands)
+                    .after(authority::clear_server_command_buffer),
             );
     }
 }

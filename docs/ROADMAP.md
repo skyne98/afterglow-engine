@@ -11,7 +11,7 @@ Deep dive: [bevy-integration-world-runtime.md](research/bevy-integration-world-r
 - [ ] Physics integration for player movement and interactable objects
 - [ ] Core interaction model: use, pickup, doors, containers, triggers
 - [ ] Basic scene/cell loading with stable entity identity
-- [ ] Local-server single-player simulation path
+- [x] Local-server single-player simulation path
 - [ ] Chunk/cell persistent state deltas
 - [ ] Save/load for one loaded cell
 

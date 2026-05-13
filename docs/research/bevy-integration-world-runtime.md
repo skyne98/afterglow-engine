@@ -6,9 +6,11 @@ This note maps the roadmap's foundation, streaming, persistence, and multiplayer
 
 Current local state:
 
-- [lib.rs](/home/fox/Project/afterglow-engine/crates/afterglow-engine/src/lib.rs:20) runs all current demo systems in a chained `Update` tuple.
-- [setup.rs](/home/fox/Project/afterglow-engine/crates/afterglow-engine/src/setup.rs:8) spawns demo entities directly.
-- There are no scene, chunk, save, identity, or replication modules yet.
+- [lib.rs](/home/fox/Project/afterglow-engine/crates/afterglow-engine/src/lib.rs:20) registers the core, input, network, world, and perf HUD plugins.
+- [core/identity.rs](/home/fox/Project/afterglow-engine/crates/afterglow-engine/src/core/identity.rs:1) owns stable IDs, chunk membership, persistence markers, replication markers, and runtime registries.
+- [world/chunk.rs](/home/fox/Project/afterglow-engine/crates/afterglow-engine/src/world/chunk.rs:1) owns the current built-in demo cell loader.
+- [network/local_server.rs](/home/fox/Project/afterglow-engine/crates/afterglow-engine/src/network/local_server.rs:1) provides an opt-in local-server path where single-player `LocalPlayers` are mirrored into `NetworkSession` and local `PlayerCommand`s are submitted through `ServerCommandBuffer`.
+- Snapshot/delta replication, rollback timelines, prediction, reconciliation, interpolation, reconnect baselines, and chunk interest now exist under `network/`.
 
 ## Hard Rule: Stable Identity First
 
@@ -231,6 +233,6 @@ src/network/
 4. Implement one-cell save/load by stable ID.
 5. Add chunk lifecycle resources and commands.
 6. Split CPU loaded, gameplay active, render extractable, GPU resident.
-7. Add local-server command path.
+7. Add local-server command path. Done: `LocalServerConfig::single_player()` mirrors local players into the authoritative session and submits local commands through normal server authority.
 8. Add snapshot/delta records using the same schema as save.
 9. Add chunk interest and replication tests.

@@ -36,6 +36,9 @@ afterglow-engine
 │   ├── interpolation.rs
 │   ├── interpolation/
 │   │   └── tests.rs   (cfg(test))
+│   ├── local_server.rs
+│   ├── local_server/
+│   │   └── tests.rs   (cfg(test))
 │   ├── prediction.rs
 │   ├── prediction/
 │   │   └── tests.rs   (cfg(test))
@@ -109,6 +112,7 @@ afterglow-engine
 | `network::interest` | Chunk-based interest map for filtering snapshots and deltas by player visibility. |
 | `network::interpolation` | Remote entity sample buffering, interpolation, and bounded extrapolation. |
 | `network::iroh` | Optional native Iroh transport adapter behind the `iroh` feature. Maps Iroh endpoints/connections to `NetworkTransport` without owning gameplay protocol state. |
+| `network::local_server` | Optional single-player/listen-host bridge that maps `LocalPlayers` into `NetworkSession` and submits local `PlayerCommand`s through the same server authority buffer used by multiplayer. |
 | `network::prediction` | Client-side command history and replay buffer for prediction after authoritative snapshots. |
 | `network::reconciliation` | Reconciles authoritative snapshot/delta/correction ticks with local prediction history. |
 | `network::replication` | Stable-ID keyed snapshot/delta primitives plus Bevy-facing replicated components, resources, and tick-addressed command/message timelines. |
@@ -141,6 +145,8 @@ afterglow-engine
 
 **Update / `BuildCommands`:** `clear_reconciliation_queue`
 
+**Update / `BuildCommands`:** `sync_local_server_session` → `submit_local_player_commands`
+
 **Update / `DebugAndMetrics` (chained):**
 1. `record_update_start`
 2. `rotate_cubes`
@@ -171,6 +177,8 @@ afterglow-engine
 | `ClientReconciliationQueue` | Per-frame reconciliation results created from authoritative updates |
 | `RemoteInterpolationBuffer` | Buffered remote entity samples for rendering remote entities smoothly behind server time |
 | `InterestMap` | Chunk visibility map for players and replicated entities |
+| `LocalServerConfig` | Enables/disables local-server mode and defines the local authoritative peer/platform identity |
+| `LocalServerState` | Tracks the peer currently owned by the local-server bridge so single-player/multiplayer mode transitions clean up only local-server-owned session state |
 | `RollbackReplicationClock` | Current rollback tick and committed/provisional policy |
 | `NetworkSession` | Runtime peer/player/platform/avatar identity map |
 | `StableIdAllocator` | Monotonic allocator for process-local stable IDs |
@@ -280,6 +288,8 @@ afterglow-engine
 | `NetworkTransport` | trait | Minimal backend boundary for polling connection/packet events, sending engine packets, and disconnecting peers. Iroh, Steam, memory, and future transports should adapt to this trait without owning replication, rollback, prediction, command validation, or interest logic. |
 | `MemoryTransport` | local_peer, protocol, queues, faults | Deterministic in-memory fake transport for unit tests and protocol development. Supports fault injection and protocol override for compatibility/rejection tests. |
 | `FaultConfig` | drop_every, duplicate_every, delay_ticks, reverse_delivery | Deterministic packet fault injection for fake transport tests. |
+| `LocalServerConfig` | enabled, peer, platform | Opt-in local-server mode. `single_player()` enables `PeerId(0)` with `PlatformIdentity::Local`, syncs `LocalPlayers` into `NetworkSession`, submits local commands to `ServerCommandBuffer`, and clears only local-server-owned session state when disabled or moved to another peer. |
+| `LocalServerState` | owned_peer | Internal state for robust single-player → multiplayer → single-player transitions in one process. |
 | `IrohTransport` | local peer, endpoint address, worker, packet queues | Optional native transport adapter. Runs Iroh async endpoint work on a background Tokio worker, sends reliable packets over unidirectional QUIC streams, sends unreliable packets over QUIC datagrams, and emits backend-neutral `TransportEvent`s. Local real-Iroh tests cover reliable/unreliable delivery, stale sequenced packet rejection, reconnect sequence reset, disconnected-peer packet rejection, disconnects, handshake rejection, unauthorized gameplay drops, multi-client command streams, and snapshot payloads feeding client reconciliation. |
 | `IrohTransportConfig` | protocol, alpn, relay_mode, next_inbound_peer, max_packet_bytes | Iroh backend configuration. Defaults to n0 relay support for real builds; `local_only()` disables relays for deterministic local tests. |
 | `IrohRelayMode` | N0, Disabled | Relay configuration for the Iroh endpoint builder. |
