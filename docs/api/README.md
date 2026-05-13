@@ -2,8 +2,9 @@
 
 ## Workspace
 
-Three crates: `afterglow-engine` (library), `agx` (binary CLI), and
-`mock-rpg-network-tests` (test-only mock RPG networking harness).
+Four crates: `afterglow-engine` (library), `afterglow-engine-macros`
+(proc macros), `agx` (binary CLI), and `mock-rpg-network-tests` (test-only mock
+RPG networking harness).
 
 ## Crate: `afterglow-engine`
 
@@ -43,6 +44,18 @@ afterglow-engine
 │   │   └── tests.rs   (cfg(test))
 │   ├── replication.rs
 │   ├── replication/
+│   │   ├── ecs.rs
+│   │   ├── ecs_edge_tests.rs (cfg(test))
+│   │   ├── rollback.rs
+│   │   ├── timeline_tests.rs (cfg(test))
+│   │   ├── world_state.rs
+│   │   ├── world_state_tests.rs (cfg(test))
+│   │   └── tests.rs   (cfg(test))
+│   ├── rollback.rs
+│   ├── rollback/
+│   │   ├── events.rs
+│   │   ├── events/
+│   │   │   └── tests.rs (cfg(test))
 │   │   └── tests.rs   (cfg(test))
 │   ├── session.rs
 │   ├── session/
@@ -60,6 +73,13 @@ afterglow-engine
     ├── ui.rs           (private)
     └── trace_collector.rs (pub submodule)
 ```
+
+### Crate: `afterglow-engine-macros`
+
+| Item | Kind | Description |
+|---|---|---|
+| `#[derive(Replicate)]` | derive macro | Implements `network::replication::Replicate` for replicated state-bearing components/resources. |
+| `#[replicate]` | attribute macro | Attribute form of the same marker implementation for replicated state-bearing components/resources. |
 
 ### Top-Level Exports
 
@@ -85,7 +105,8 @@ afterglow-engine
 | `network::interpolation` | Remote entity sample buffering, interpolation, and bounded extrapolation. |
 | `network::prediction` | Client-side command history and replay buffer for prediction after authoritative snapshots. |
 | `network::reconciliation` | Reconciles authoritative snapshot/delta/correction ticks with local prediction history. |
-| `network::replication` | Stable-ID keyed snapshot/delta state primitives. |
+| `network::replication` | Stable-ID keyed snapshot/delta primitives plus Bevy-facing replicated components, resources, and tick-addressed command/event timelines. |
+| `network::rollback` | Small deterministic subsystem rollback history plus committed/provisional domain replay, lifecycle, and cue helpers. |
 | `network::session` | Session identity maps between peers, platform identities, players, and avatars. |
 | `world` | Chunk/cell loading systems. Currently owns the built-in demo cell loader. |
 | `world::chunk` | Chunk IDs, demo-cell load state, and demo-cell loading system. |
@@ -137,11 +158,13 @@ afterglow-engine
 | `PlayerCommandQueue` | Current-frame local player commands |
 | `NetworkProtocol` | Active engine network protocol version |
 | `ReconnectBaselineStore` | Per-peer/player reconnect baselines built from replication snapshots |
+| `DeterministicRollbackBuffer` | Tick-indexed history for small deterministic subsystem rollback |
 | `ServerCommandBuffer` | Per-frame accepted/rejected server-authoritative command buffer plus tick dedupe state |
 | `ClientPredictionBuffer` | Local command history used to replay prediction after authoritative snapshots |
 | `ClientReconciliationQueue` | Per-frame reconciliation results created from authoritative updates |
 | `RemoteInterpolationBuffer` | Buffered remote entity samples for rendering remote entities smoothly behind server time |
 | `InterestMap` | Chunk visibility map for players and replicated entities |
+| `RollbackReplicationClock` | Current rollback tick and committed/provisional policy |
 | `NetworkSession` | Runtime peer/player/platform/avatar identity map |
 | `StableIdAllocator` | Monotonic allocator for process-local stable IDs |
 | `StableEntityRegistry` | Runtime maps for stable ID ↔ entity and chunk → entities |
@@ -175,6 +198,8 @@ afterglow-engine
 | `cargo bench -p afterglow-engine --bench reconciliation` | Measures authoritative correction reconciliation against local prediction history |
 | `cargo bench -p afterglow-engine --bench interpolation` | Measures remote entity interpolation and bounded extrapolation costs |
 | `cargo bench -p afterglow-engine --bench baseline` | Measures replication save serialization, restore, and interest-filtered reconnect baseline costs |
+| `cargo bench -p afterglow-engine --bench rollback` | Measures deterministic subsystem state history, policy, and replay costs |
+| `cargo bench -p afterglow-engine --bench ggrs` | Measures GGRS rollback-session coordinator cost plus synthetic full-state save/load/replay pressure |
 
 ### Platform Notes
 
@@ -240,7 +265,7 @@ afterglow-engine
 | `PeerId` | u64 | Transport-session peer identifier. |
 | `NetworkPlayerId` | u64 | Session-level player identity, separate from platform IDs and stable entity IDs. |
 | `NetChannel` | Control, Commands, Snapshots, Events, Bulk, Custom | Engine packet channel classification. |
-| `DeliveryMode` | Reliable, Unreliable, UnreliableSequenced | Delivery intent independent of any transport backend. |
+| `DeliveryMode` | Reliable, Unreliable, UnreliableSequenced | Delivery intent independent of any transport backend. `MemoryTransport` drops stale/duplicate `UnreliableSequenced` packets per peer/channel and resets that sequence state on reconnect. |
 | `PacketHeader` | protocol, channel, delivery, sequence | Transport-independent packet metadata. |
 | `NetworkPacket` | from, to, header, payload | Transport-independent packet envelope. |
 | `DisconnectReason` | Local, Remote, Timeout, ProtocolMismatch, Transport | Generic disconnect reason. |
@@ -251,6 +276,25 @@ afterglow-engine
 | `ReplicationSaveData` | tick, snapshot | Serializable save payload built from a `ReplicationWorld` snapshot and restorable back into `ReplicationWorld`. |
 | `ReconnectBaseline` | peer, player, snapshot | Full or interest-filtered authoritative snapshot used when a player reconnects. |
 | `ReconnectBaselineStore` | baselines | Runtime map of reconnect baselines keyed by `(PeerId, NetworkPlayerId)`. |
+| `DeterministicRollbackBuffer` | max_saved_ticks, states | Opaque byte-state history for small deterministic subsystems, such as combat bubbles or puzzle mechanisms. |
+| `CommittedRollbackDomain` | id, policy, committed/provisional state, commands, outputs | Authoritative rollback domain. Gameplay reads provisional state; committed state is the durable rollback anchor. |
+| `RollbackDomainId` | u64 | Stable identifier for a rollback domain, combat bubble, cell subsystem, or deterministic puzzle. |
+| `RollbackEventId` | domain, tick, sequence | Stable event identity for retained rollback event streams. |
+| `RollbackEvent<T>` | id, source_command_tick, entities, payload | Typed replay-generated gameplay fact. Use provisional events for live/visual correction and committed events for durable business logic. |
+| `RollbackEventStream<T>` | provisional, committed, committed_tick | Retained event log with a monotonic committed horizon. Replacing provisional events ignores already committed ticks; committing through a tick promotes final facts without allowing committed facts to be rewritten. |
+| `RollbackEventDiff<T>` | added, removed | Provisional event diff for presentation and correction-aware readers. `removed` carries event IDs so cancellation does not clone old payloads. |
+| `RollbackCommit<T>` | committed_tick, added | Events newly promoted into the final committed stream. |
+| `RollbackCommand` | tick, source, sequence, payload | Opaque deterministic command payload for subsystem replay; `(tick, source, sequence)` is the stable replay ordering and duplicate key. |
+| `RollbackReplay` | from_tick, to_tick, initial_state, commands | Replay plan built from a saved authoritative state and commands after that tick. `build_replay()` returns `MissingState` when the anchor snapshot is absent and `DuplicateCommand` when the same `(tick, source, sequence)` has conflicting payloads. Late replay requires a saved state before the command tick, so tick-0 late replay currently returns `MissingState`. |
+| `RollbackPolicy` | max_rollback_ticks, commit_delay_ticks | Server/authority policy for accepting late commands and deriving the committed/provisional tick boundary. |
+| `RollbackCommandDecision` | Replay, TooOld, FromFuture | Result of classifying a late deterministic command against current tick. |
+| `RollbackReplayError` | TooOld, FromFuture, MissingState, AlreadyCommitted, DuplicateCommand | Failure reason when building or inserting a policy-gated replay command. |
+| `RollbackCue` | tick, sequence, kind, payload | Replay-generated cue fact for UI/audio/VFX or other presentation layers. |
+| `RollbackCueDiff` | added, removed | Difference between previous replay cues and corrected replay cues. |
+| `RollbackDomainOutputs` | cues, lifecycles | Replay output produced from deterministic command application. |
+| `RollbackDomainReplay` | committed_tick, current_tick, previous_provisional_state, provisional_state, cue_diff, outputs | Result of rebuilding or promoting a committed/provisional domain. |
+| `RollbackEntityLifecycle` | entity, spawn_tick, despawn_tick, despawn_reason | Rollback-friendly stable entity lifetime record for provisional spawns/despawns. |
+| `replay_bytes()` | — | Helper that applies rollback commands to a byte-state clone. |
 | `ServerCommandBuffer` | accepted, rejected, seen_ticks | Server-authoritative command intake. Validates peer ownership through `NetworkSession`, rejects duplicate player ticks, and exposes accepted generic `PlayerCommand`s for simulation. |
 | `AuthoritativePlayerCommand` | peer, command | Accepted command tagged with the transport peer that submitted it. |
 | `RejectedPlayerCommand` | peer, player, tick, reason | Rejected command metadata for logging, metrics, disconnect policy, or client correction. |
@@ -284,6 +328,20 @@ afterglow-engine
 | `EntitySnapshot` | entity, fields | Full entity state inside a snapshot. |
 | `EntityDelta` | entity, changed, removed | Per-entity changed and removed fields. |
 | `FieldValue` | name, value | One byte-valued replicated field. |
+| `Replicate` | trait/macro | Marker for components/resources that are part of the replicated truth schema. Implement with `#[derive(Replicate)]` or `#[replicate]`. |
+| `ReplicatedCommand` | trait | Bevy `Message` command accepted into the replicated timeline; exposes its simulation tick. |
+| `ReplicationEvent` | trait | Bevy `Message` event/fact accepted into the replicated timeline; exposes its simulation tick. |
+| `ReplicationAppExt::replicate(...)` | app extension | Idempotently registers replicated components, resources, command messages, or event messages. |
+| `component::<T>()` | registration helper | Registers replicated component type `T: Component + Replicate + Clone`. |
+| `resource::<T>()` | registration helper | Registers replicated resource type `T: Resource + Replicate + Clone`. |
+| `command::<T>()` | registration helper | Registers replicated command message type `T: ReplicatedCommand`. |
+| `event::<T>()` | registration helper | Registers replicated event/fact message type `T: ReplicationEvent`. |
+| `ReplicatedComponentState<T>` | resource | Latest collected replicated component values keyed by `StableEntityId`. |
+| `ReplicatedResourceState<T>` | resource | Latest collected replicated resource value. |
+| `ReplicatedTimeline<T>` | resource | Tick-addressed bounded command/event message timeline; rollback replay replaces and reissues retained messages while dropping stale out-of-order ticks. |
+| `ReplicationSet` | RestoreState, ReissueMessages, CollectEvents, CollectChanges | Ordered `Update` sets inside `AfterglowSet::ApplyGameplay`; replay reissues messages before gameplay collection snapshots changed replicated state. |
+| `RollbackReplicationClock` | current_tick, policy | Drives the committed/provisional boundary for replay-aware replicated timelines. |
+| `ReplicatedRollbackEventStream<E>` | events, last diff/commit | Retained committed/provisional rollback event stream wrapper for replay-produced facts. |
 | `InterestMap` | entity_chunks, player_chunks | Chunk-based visibility filter for replicated snapshots and deltas. |
 | `testing::unit_app()` | — | Builds a minimal non-rendering app with `AfterglowCorePlugin`. |
 | `testing::asset_unit_app()` | — | Builds a minimal non-rendering app with assets and core systems. |
@@ -306,9 +364,14 @@ afterglow-engine
 | bevy (workspace) | 0.18.1 | webgpu |
 | bevy (native engine) | 0.18.1 | bevy_dev_tools, trace |
 | bevy (native agx) | 0.18.1 | dynamic_linking, bevy_dev_tools, sysinfo_plugin, trace |
+| ggrs | 0.12.0 | dev-only benchmark dependency |
+| proc-macro-crate | 3 | macro crate-name resolution for renamed dependencies |
+| proc-macro2 | 1 | proc macro support |
+| quote | 1 | proc macro support |
 | wgpu | 27 | optional, `test-support` only for real headless GPU tests |
 | serde | 1 | derive |
 | serde_json | 1 | — |
+| syn | 2 | proc macro parsing, full |
 | tracing | 0.1 | — |
 | tracing-subscriber | 0.3 | env-filter |
 | tiny_http | 0.12 | — |

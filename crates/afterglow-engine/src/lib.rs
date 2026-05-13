@@ -7,6 +7,9 @@ mod setup;
 pub mod testing;
 pub mod world;
 
+extern crate self as afterglow_engine;
+
+pub use afterglow_engine_macros::{Replicate, replicate};
 use bevy::{app::PluginGroupBuilder, prelude::*, window::WindowPlugin};
 use core::{AfterglowCorePlugin, schedule::AfterglowSet};
 use input::AfterglowInputPlugin;

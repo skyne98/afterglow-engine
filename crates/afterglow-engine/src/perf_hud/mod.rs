@@ -47,19 +47,10 @@ impl Plugin for PerfHudPlugin {
     }
 }
 
-#[derive(Resource)]
+#[derive(Resource, Default)]
 pub struct FrameProfiler {
     pub update_start: Option<Instant>,
     pub postupdate_start: Option<Instant>,
-}
-
-impl Default for FrameProfiler {
-    fn default() -> Self {
-        Self {
-            update_start: None,
-            postupdate_start: None,
-        }
-    }
 }
 
 pub fn record_update_start(mut profiler: ResMut<FrameProfiler>) {

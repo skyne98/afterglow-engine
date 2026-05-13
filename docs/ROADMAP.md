@@ -51,7 +51,7 @@ Deep dive: [bevy-integration-gameplay-audio-ui.md](research/bevy-integration-gam
 
 ## Phase 5: Multiplayer-Ready Runtime
 
-Deep dive: [bevy-integration-world-runtime.md](research/bevy-integration-world-runtime.md), [iroh-networking.md](research/iroh-networking.md), [bevy-ggrs-rollback.md](research/bevy-ggrs-rollback.md), [steam-multiplayer.md](research/steam-multiplayer.md).
+Deep dive: [bevy-integration-world-runtime.md](research/bevy-integration-world-runtime.md), [iroh-networking.md](research/iroh-networking.md), [bevy-ggrs-rollback.md](research/bevy-ggrs-rollback.md), [authoritative-rollback-consistency.md](research/authoritative-rollback-consistency.md), [steam-multiplayer.md](research/steam-multiplayer.md).
 
 - [x] Transport-independent network protocol: peers, channels, packet headers, versions, disconnect reasons
 - [x] Loopback and deterministic fake transport with packet loss, duplication, reorder, latency, and disconnect injection
@@ -65,7 +65,11 @@ Deep dive: [bevy-integration-world-runtime.md](research/bevy-integration-world-r
 - [x] Reconciliation from authoritative snapshots and correction packets
 - [x] Interpolation and bounded extrapolation for remote entities
 - [x] Replication-compatible save/load data and reconnect baselines
-- [ ] Selective GGRS rollback prototype for small deterministic subsystems, not the whole streaming RPG world
+- [x] Selective rollback prototype for small deterministic subsystems, not the whole streaming RPG world
+- [x] Minimal authoritative rollback domain API with committed/provisional state, command replay, lifecycle outputs, and replay-generated cue diffs
+- [x] `app.replicate(...)` API for replicated components/resources and normal Bevy command/event messages
+- [ ] Bevy/ECS integration for deterministic rollback domain schedules
+- [ ] Mock RPG late-command correction where replay changes death/combat outcomes without manual event cleanup
 - [ ] Iroh transport backend for non-Steam NAT traversal and encrypted peer/dedicated-server transport
 - [ ] Optional Steam backend feature: Steam identity/auth, lobbies, invites, and SteamNetworkingSockets transport
 - [ ] Steam lobby create/join flow with protocol version, build hash, world/session metadata, and host/server handoff

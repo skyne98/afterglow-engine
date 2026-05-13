@@ -7,9 +7,10 @@ use afterglow_engine::{
     },
 };
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
 
+mod replicated;
 mod rules;
+pub use replicated::*;
 use rules::*;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -35,10 +36,10 @@ impl Vec3i {
         Self { x, y, z }
     }
 
-    pub fn distance_squared(self, other: Self) -> i32 {
-        let dx = self.x - other.x;
-        let dy = self.y - other.y;
-        let dz = self.z - other.z;
+    pub fn distance_squared(self, other: Self) -> i64 {
+        let dx = i64::from(self.x) - i64::from(other.x);
+        let dy = i64::from(self.y) - i64::from(other.y);
+        let dz = i64::from(self.z) - i64::from(other.z);
         dx * dx + dy * dy + dz * dz
     }
 
@@ -100,22 +101,12 @@ pub enum WorldEvent {
     NpcDamaged { entity: Entity, hp: i32 },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PlayerState {
-    pub peer: PeerId,
-    pub position: Vec3i,
-    pub hp: i32,
-    pub inventory: BTreeSet<Entity>,
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct WorldState {
     session: NetworkSession,
     commands: ServerCommandBuffer,
-    players: BTreeMap<Player, PlayerState>,
-    doors: BTreeMap<Entity, (Vec3i, bool)>,
-    items: BTreeMap<Entity, Vec3i>,
-    npcs: BTreeMap<Entity, (Vec3i, i32)>,
+    replicated: ReplicatedWorld,
+    replicated_events: Vec<ReplicatedEvent>,
     tick: u32,
 }
 
@@ -133,10 +124,8 @@ pub struct MockServer {
     pub transport: MemoryTransport,
     session: NetworkSession,
     commands: ServerCommandBuffer,
-    pub players: BTreeMap<Player, PlayerState>,
-    doors: BTreeMap<Entity, (Vec3i, bool)>,
-    items: BTreeMap<Entity, Vec3i>,
-    npcs: BTreeMap<Entity, (Vec3i, i32)>,
+    pub replicated: ReplicatedWorld,
+    replicated_events: Vec<ReplicatedEvent>,
     tick: u32,
 }
 
@@ -182,10 +171,8 @@ impl MockServer {
             transport: MemoryTransport::new(peer),
             session: NetworkSession::default(),
             commands: ServerCommandBuffer::default(),
-            players: BTreeMap::new(),
-            doors: BTreeMap::from([(Entity(100), (Vec3i::new(4, 0, 4), false))]),
-            items: BTreeMap::from([(Entity(200), Vec3i::new(5, 0, 5))]),
-            npcs: BTreeMap::from([(Entity(300), (Vec3i::new(36, 0, 4), 10))]),
+            replicated: ReplicatedWorld::default(),
+            replicated_events: Vec::new(),
             tick: 0,
         }
     }
@@ -202,21 +189,19 @@ impl MockServer {
     }
 
     pub fn add_npc(&mut self, entity: Entity, position: Vec3i, hp: i32) {
-        self.npcs.insert(entity, (position, hp));
+        self.replicated.npcs.insert(entity, (position, hp));
     }
 
     pub fn add_item(&mut self, entity: Entity, position: Vec3i) {
-        self.items.insert(entity, position);
+        self.replicated.items.insert(entity, position);
     }
 
     pub fn save_state(&self) -> WorldState {
         WorldState {
             session: self.session.clone(),
             commands: self.commands.clone(),
-            players: self.players.clone(),
-            doors: self.doors.clone(),
-            items: self.items.clone(),
-            npcs: self.npcs.clone(),
+            replicated: self.replicated.clone(),
+            replicated_events: self.replicated_events.clone(),
             tick: self.tick,
         }
     }
@@ -224,23 +209,21 @@ impl MockServer {
     pub fn restore_state(&mut self, state: WorldState) {
         self.session = state.session;
         self.commands = state.commands;
-        self.players = state.players;
-        self.doors = state.doors;
-        self.items = state.items;
-        self.npcs = state.npcs;
+        self.replicated = state.replicated;
+        self.replicated_events = state.replicated_events;
         self.tick = state.tick;
     }
 
     pub fn npc_hp(&self, entity: Entity) -> Option<i32> {
-        self.npcs.get(&entity).map(|(_, hp)| *hp)
+        self.replicated.npcs.get(&entity).map(|(_, hp)| *hp)
     }
 
     pub fn door_open(&self, entity: Entity) -> Option<bool> {
-        self.doors.get(&entity).map(|(_, open)| *open)
+        self.replicated.doors.get(&entity).map(|(_, open)| *open)
     }
 
     pub fn item_exists(&self, entity: Entity) -> bool {
-        self.items.contains_key(&entity)
+        self.replicated.items.contains_key(&entity)
     }
 
     pub fn pump(&mut self, clients: &mut [&mut MockClient]) {
@@ -292,7 +275,7 @@ impl MockServer {
                     return;
                 }
                 if valid_move(self.player(peer).position, position) {
-                    self.players.get_mut(&player).unwrap().position = position;
+                    self.emit_replicated(ReplicatedEvent::PlayerMoved { player, position });
                     self.send_snapshot(peer);
                 } else {
                     self.reject(peer, tick, "invalid-move");
@@ -313,14 +296,16 @@ impl MockServer {
                 entity,
             } => {
                 if self.accept_command(peer, player, tick) {
-                    self.attack_entity(peer, entity);
+                    self.attack_entity(peer, tick, entity);
                 }
             }
         }
     }
 
     fn join(&mut self, peer: PeerId, player: Player) {
+        let network_player = net_player(player);
         if self
+            .replicated
             .players
             .get(&player)
             .is_some_and(|state| state.peer != peer)
@@ -328,18 +313,22 @@ impl MockServer {
             self.reject(peer, 0, "player-already-owned");
             return;
         }
-        self.players.entry(player).or_insert(PlayerState {
-            peer,
-            position: Vec3i::ZERO,
-            hp: 100,
-            inventory: BTreeSet::new(),
-        });
-        if self.session.player(net_player(player)).is_none() {
-            let assigned = self.session.add_player(peer);
-            if assigned != Some(net_player(player)) {
+        if let Some(session_player) = self.session.player(network_player) {
+            if session_player.peer != peer {
+                self.reject(peer, 0, "player-already-owned");
+                return;
+            }
+        } else {
+            let mut session = self.session.clone();
+            let assigned = session.add_player(peer);
+            if assigned != Some(network_player) {
                 self.reject(peer, 0, "player-id-mismatch");
                 return;
             }
+            self.session = session;
+        }
+        if !self.replicated.players.contains_key(&player) {
+            self.emit_replicated(ReplicatedEvent::PlayerJoined { player, peer });
         }
         self.send(
             peer,
@@ -353,30 +342,28 @@ impl MockServer {
 
     fn use_entity(&mut self, peer: PeerId, player: Player, tick: u32, entity: Entity) {
         let position = self.player(peer).position;
-        if let Some((door_pos, open)) = self.doors.get_mut(&entity) {
-            if in_reach(position, *door_pos) {
-                let door_pos = *door_pos;
-                *open = true;
+        if let Some((door_pos, open)) = self.replicated.doors.get(&entity).copied() {
+            if in_reach(position, door_pos) {
+                if !open {
+                    self.emit_replicated(ReplicatedEvent::DoorOpened { entity });
+                }
                 self.broadcast_near(
                     door_pos.chunk(),
                     ServerMsg::Event(WorldEvent::DoorOpened(entity)),
                 );
                 return;
             }
+            self.reject(peer, tick, "out-of-range");
+            return;
         }
-        if let Some(item_pos) = self.items.remove(&entity) {
+        if let Some(item_pos) = self.replicated.items.get(&entity).copied() {
             if in_reach(position, item_pos) {
-                self.players
-                    .get_mut(&player)
-                    .unwrap()
-                    .inventory
-                    .insert(entity);
+                self.emit_replicated(ReplicatedEvent::ItemPickedUp { entity, by: player });
                 self.broadcast_near(
                     item_pos.chunk(),
                     ServerMsg::Event(WorldEvent::ItemPickedUp { entity, by: player }),
                 );
             } else {
-                self.items.insert(entity, item_pos);
                 self.reject(peer, tick, "out-of-range");
             }
         } else {
@@ -384,18 +371,22 @@ impl MockServer {
         }
     }
 
-    fn attack_entity(&mut self, peer: PeerId, entity: Entity) {
+    fn attack_entity(&mut self, peer: PeerId, tick: u32, entity: Entity) {
         let position = self.player(peer).position;
-        if let Some((npc_pos, hp)) = self.npcs.get_mut(&entity) {
-            if in_reach(position, *npc_pos) {
+        if let Some((npc_pos, old_hp)) = self.replicated.npcs.get(&entity).copied() {
+            if in_reach(position, npc_pos) {
                 let chunk = npc_pos.chunk();
-                *hp = (*hp - 3).max(0);
-                let hp = *hp;
+                let hp = (old_hp - 3).max(0);
+                self.emit_replicated(ReplicatedEvent::NpcDamaged { entity, hp });
                 self.broadcast_near(
                     chunk,
                     ServerMsg::Event(WorldEvent::NpcDamaged { entity, hp }),
                 );
+            } else {
+                self.reject(peer, tick, "out-of-range");
             }
+        } else {
+            self.reject(peer, tick, "missing-entity");
         }
     }
 
@@ -418,6 +409,11 @@ impl MockServer {
         }
     }
 
+    fn emit_replicated(&mut self, event: ReplicatedEvent) {
+        self.replicated_events.push(event.clone());
+        self.replicated.apply_event(event);
+    }
+
     fn send_snapshot(&mut self, peer: PeerId) {
         let chunk = self.player(peer).position.chunk();
         self.send(peer, self.snapshot_for(chunk));
@@ -427,24 +423,28 @@ impl MockServer {
         ServerMsg::Snapshot {
             tick: self.tick,
             players: self
+                .replicated
                 .players
                 .iter()
                 .filter(|(_, state)| near(center, state.position.chunk()))
                 .map(|(player, state)| (*player, state.position, state.hp))
                 .collect(),
             doors: self
+                .replicated
                 .doors
                 .iter()
                 .filter(|(_, (position, _))| near(center, position.chunk()))
                 .map(|(entity, (_, open))| (*entity, *open))
                 .collect(),
             items: self
+                .replicated
                 .items
                 .iter()
                 .filter(|(_, position)| near(center, position.chunk()))
                 .map(|(entity, _)| *entity)
                 .collect(),
             npcs: self
+                .replicated
                 .npcs
                 .iter()
                 .filter(|(_, (position, _))| near(center, position.chunk()))
@@ -455,6 +455,7 @@ impl MockServer {
 
     fn broadcast_near(&mut self, chunk: Chunk, msg: ServerMsg) {
         let peers = self
+            .replicated
             .players
             .values()
             .filter(|state| near(chunk, state.position.chunk()))
@@ -485,7 +486,8 @@ impl MockServer {
     }
 
     fn player(&self, peer: PeerId) -> &PlayerState {
-        self.players
+        self.replicated
+            .players
             .values()
             .find(|state| state.peer == peer)
             .unwrap()

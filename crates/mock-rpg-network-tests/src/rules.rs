@@ -3,11 +3,11 @@ use afterglow_engine::network::{NetworkPlayerId, authority::CommandRejectReason}
 use crate::{Chunk, Player, Vec3i};
 
 pub(crate) fn valid_move(current: Vec3i, target: Vec3i) -> bool {
-    current.distance_squared(target) <= 160 * 160
+    current.distance_squared(target) <= 160_i64 * 160
 }
 
 pub(crate) fn in_reach(a: Vec3i, b: Vec3i) -> bool {
-    a.distance_squared(b) <= 8 * 8
+    a.distance_squared(b) <= 8_i64 * 8
 }
 
 pub(crate) fn near(a: Chunk, b: Chunk) -> bool {

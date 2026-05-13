@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 
 pub mod authority;
 pub mod baseline;
@@ -10,6 +10,7 @@ pub mod interpolation;
 pub mod prediction;
 pub mod reconciliation;
 pub mod replication;
+pub mod rollback;
 pub mod session;
 
 #[derive(Resource, Clone, Copy, Debug, Eq, PartialEq, Reflect)]
@@ -138,13 +139,16 @@ pub struct AfterglowNetworkPlugin;
 
 impl Plugin for AfterglowNetworkPlugin {
     fn build(&self, app: &mut App) {
+        replication::configure_replication_sets(app);
         app.init_resource::<NetworkProtocol>()
             .init_resource::<baseline::ReconnectBaselineStore>()
+            .init_resource::<rollback::DeterministicRollbackBuffer>()
             .init_resource::<authority::ServerCommandBuffer>()
             .init_resource::<prediction::ClientPredictionBuffer>()
             .init_resource::<reconciliation::ClientReconciliationQueue>()
             .init_resource::<interpolation::RemoteInterpolationBuffer>()
             .init_resource::<interest::InterestMap>()
+            .init_resource::<replication::RollbackReplicationClock>()
             .init_resource::<session::NetworkSession>()
             .add_systems(
                 Update,
@@ -175,6 +179,7 @@ pub struct MemoryTransport {
     incoming: VecDeque<TransportEvent>,
     outgoing: VecDeque<NetworkPacket>,
     delayed: Vec<ScheduledEvent>,
+    delivered_sequences: HashMap<(PeerId, NetChannel), u64>,
     next_sequence: u64,
     faults: FaultConfig,
 }
@@ -194,6 +199,7 @@ impl MemoryTransport {
             incoming: VecDeque::new(),
             outgoing: VecDeque::new(),
             delayed: Vec::new(),
+            delivered_sequences: HashMap::new(),
             next_sequence: 0,
             faults: FaultConfig::default(),
         }
@@ -214,6 +220,8 @@ impl MemoryTransport {
 
     pub fn connect_peer(&mut self, peer: PeerId) {
         if self.connected.insert(peer) {
+            self.delivered_sequences
+                .retain(|(from, _), _| *from != peer);
             self.incoming.push_back(TransportEvent::Connected(peer));
         }
     }
@@ -236,7 +244,7 @@ impl MemoryTransport {
             packets.reverse();
         }
         for packet in packets {
-            if packet.to != self.local_peer {
+            if packet.to != self.local_peer || !self.connected.contains(&packet.from) {
                 continue;
             }
             if self.should_drop(packet.header.sequence) {
@@ -253,13 +261,13 @@ impl MemoryTransport {
     fn should_drop(&self, sequence: u64) -> bool {
         self.faults
             .drop_every
-            .is_some_and(|every| every > 0 && (sequence + 1) % every == 0)
+            .is_some_and(|every| every > 0 && (sequence + 1).is_multiple_of(every))
     }
 
     fn should_duplicate(&self, sequence: u64) -> bool {
         self.faults
             .duplicate_every
-            .is_some_and(|every| every > 0 && (sequence + 1) % every == 0)
+            .is_some_and(|every| every > 0 && (sequence + 1).is_multiple_of(every))
     }
 
     fn schedule(&mut self, event: TransportEvent) {
@@ -288,6 +296,23 @@ impl MemoryTransport {
         });
         self.incoming.extend(ready);
     }
+
+    fn accepts_sequence(&mut self, packet: &NetworkPacket) -> bool {
+        if packet.header.delivery != DeliveryMode::UnreliableSequenced {
+            return true;
+        }
+        let key = (packet.from, packet.header.channel);
+        let sequence = packet.header.sequence;
+        if self
+            .delivered_sequences
+            .get(&key)
+            .is_some_and(|delivered| sequence <= *delivered)
+        {
+            return false;
+        }
+        self.delivered_sequences.insert(key, sequence);
+        true
+    }
 }
 
 impl NetworkTransport for MemoryTransport {
@@ -296,7 +321,15 @@ impl NetworkTransport for MemoryTransport {
     }
 
     fn poll_events(&mut self, out: &mut Vec<TransportEvent>) {
-        out.extend(self.incoming.drain(..));
+        let events = self.incoming.drain(..).collect::<Vec<_>>();
+        for event in events {
+            if let TransportEvent::Packet(packet) = &event
+                && !self.accepts_sequence(packet)
+            {
+                continue;
+            }
+            out.push(event);
+        }
     }
 
     fn send(&mut self, to: PeerId, channel: NetChannel, delivery: DeliveryMode, payload: Vec<u8>) {
@@ -320,6 +353,8 @@ impl NetworkTransport for MemoryTransport {
 
     fn disconnect(&mut self, peer: PeerId, reason: DisconnectReason) {
         if self.connected.remove(&peer) {
+            self.delivered_sequences
+                .retain(|(from, _), _| *from != peer);
             self.incoming
                 .push_back(TransportEvent::Disconnected { peer, reason });
         }

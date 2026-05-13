@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/afterglow-engine-macros",
     "crates/afterglow-engine",
     "crates/agx",
     "crates/mock-rpg-network-tests",
@@ -19,3 +20,7 @@ bevy = { version = "0.18.1", default-features = true, features = ["webgpu"] }
 wasm-bindgen = "=0.2.117"
 web-time = "1"
 tiny_http = "0.12"
+syn = { version = "2", features = ["full"] }
+quote = "1"
+proc-macro2 = "1"
+proc-macro-crate = "3"

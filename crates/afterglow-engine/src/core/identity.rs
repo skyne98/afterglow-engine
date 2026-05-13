@@ -200,14 +200,14 @@ pub fn maintain_stable_entity_registry(world: &mut World) {
 
         registry.entity_to_stable.insert(entity, stable_id);
 
-        if let Some(chunk) = chunk {
-            if chunk.chunk.is_valid() {
-                registry
-                    .chunk_to_entities
-                    .entry(chunk.chunk)
-                    .or_default()
-                    .push(entity);
-            }
+        if let Some(chunk) = chunk
+            && chunk.chunk.is_valid()
+        {
+            registry
+                .chunk_to_entities
+                .entry(chunk.chunk)
+                .or_default()
+                .push(entity);
         }
     }
 }

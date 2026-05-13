@@ -143,8 +143,16 @@ fn item_pickup_is_authoritative_and_conflict_safe() {
             |msg| matches!(msg, ServerMsg::Reject { reason, .. } if reason == "missing-entity")
         )
     );
-    assert!(server.players[&Player(1)].inventory.contains(&Entity(200)));
-    assert!(!server.players[&Player(2)].inventory.contains(&Entity(200)));
+    assert!(
+        server.replicated.players[&Player(1)]
+            .inventory
+            .contains(&Entity(200))
+    );
+    assert!(
+        !server.replicated.players[&Player(2)]
+            .inventory
+            .contains(&Entity(200))
+    );
 }
 
 #[test]

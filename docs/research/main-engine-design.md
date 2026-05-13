@@ -99,6 +99,8 @@ Required direction:
 - snapshot/delta replication
 - rollback-friendly input history where useful
 - deterministic gameplay commands for doors, inventory, weapons, spells, and use actions
+- replicated components as a visually separate truth layer; normal Bevy components derive runtime, animation, UI, audio, and editor state from that truth
+- replicated truth is mutated by ordered Bevy systems reading validated command/event messages, not by arbitrary systems writing networked fields directly
 - save-game format that is compatible with network replication data
 
 Single-player should run as a local server, not as a separate architecture.

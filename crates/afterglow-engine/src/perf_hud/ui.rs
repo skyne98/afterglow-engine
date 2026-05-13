@@ -219,6 +219,7 @@ pub fn spawn_hud(mut commands: Commands) {
         });
 }
 
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn update_hud(
     mut data: ResMut<PerfData>,
     trace_accum: Option<Res<super::trace_collector::TraceData>>,
@@ -288,11 +289,11 @@ pub fn update_hud(
 
     // Capture current trace accum as a snapshot for this frame
     let mut current_trace: Vec<(String, f64)> = Vec::new();
-    if let Some(td) = trace_accum {
-        if let Ok(acc) = td.accum.lock() {
-            for (name, (total, _count)) in acc.iter() {
-                current_trace.push((name.clone(), *total));
-            }
+    if let Some(td) = trace_accum
+        && let Ok(acc) = td.accum.lock()
+    {
+        for (name, (total, _count)) in acc.iter() {
+            current_trace.push((name.clone(), *total));
         }
     }
     current_trace.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());

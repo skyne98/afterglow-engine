@@ -23,7 +23,7 @@ pub struct PlayerCommand {
     pub pointers: Vec<PointerInput>,
 }
 
-#[derive(Resource, Clone, Debug, Reflect)]
+#[derive(Resource, Clone, Debug, Default, Reflect)]
 pub struct PlayerInputBindings {
     pub axes: Vec<AxisBinding>,
     pub actions: Vec<ActionBinding>,
@@ -250,15 +250,6 @@ pub enum ActionInput {
     TouchAny,
 }
 
-impl Default for PlayerInputBindings {
-    fn default() -> Self {
-        Self {
-            axes: Vec::new(),
-            actions: Vec::new(),
-        }
-    }
-}
-
 #[derive(Resource, Clone, Debug, Eq, PartialEq, Reflect)]
 pub struct LocalPlayers {
     pub peer: Option<PeerId>,
@@ -331,6 +322,7 @@ impl Plugin for AfterglowInputPlugin {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn collect_player_commands(
     keyboard: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
@@ -359,6 +351,7 @@ pub fn collect_player_commands(
     tick.0 = tick.0.saturating_add(1);
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn read_player_command<'a>(
     keyboard: &ButtonInput<KeyCode>,
     mouse: &ButtonInput<MouseButton>,
