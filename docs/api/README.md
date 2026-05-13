@@ -105,6 +105,7 @@ afterglow-engine
 | `network::authority` | Server-side command validation for peer ownership and duplicate simulation ticks. |
 | `network::baseline` | Replication-compatible save data and reconnect baseline helpers. |
 | `network::commands` | Versioned wire envelope for serializing generic `PlayerCommand` batches. |
+| `network::handshake` | Backend-neutral reliable control handshake, compatibility validation, authenticated identity admission, and gameplay packet gating. |
 | `network::interest` | Chunk-based interest map for filtering snapshots and deltas by player visibility. |
 | `network::interpolation` | Remote entity sample buffering, interpolation, and bounded extrapolation. |
 | `network::prediction` | Client-side command history and replay buffer for prediction after authoritative snapshots. |
@@ -275,8 +276,15 @@ afterglow-engine
 | `DisconnectReason` | Local, Remote, Timeout, ProtocolMismatch, Transport | Generic disconnect reason. |
 | `TransportEvent` | Connected, Disconnected, Packet | Events emitted by transport backends. |
 | `NetworkTransport` | trait | Minimal backend boundary for polling connection/packet events, sending engine packets, and disconnecting peers. Iroh, Steam, memory, and future transports should adapt to this trait without owning replication, rollback, prediction, command validation, or interest logic. |
-| `MemoryTransport` | local_peer, protocol, queues, faults | Deterministic in-memory fake transport for unit tests and protocol development. |
+| `MemoryTransport` | local_peer, protocol, queues, faults | Deterministic in-memory fake transport for unit tests and protocol development. Supports fault injection and protocol override for compatibility/rejection tests. |
 | `FaultConfig` | drop_every, duplicate_every, delay_ticks, reverse_delivery | Deterministic packet fault injection for fake transport tests. |
+| `NetworkHandshakeConfig` | protocol, build_hash, content_hash, backend, identity | Local control-handshake configuration shared by memory, Iroh, Steam, and future backends. |
+| `NetworkBackendKind` | Memory, Iroh, Steam, Custom | Backend label carried in the control hello for diagnostics and policy. |
+| `ControlMessage` | Hello, Accepted, Rejected | Reliable control-channel handshake payload. Gameplay packets are forwarded only after a peer's hello has been accepted into `NetworkSession`; accepted responses are valid only for already-admitted peers. |
+| `ControlHello` | protocol, build_hash, content_hash, backend, identity | Compatibility and identity claim sent immediately after a raw transport connection. |
+| `HandshakeRejectReason` | InvalidControlPayload, ProtocolMismatch, BuildMismatch, ContentMismatch, DuplicateIdentity, PeerIdentityChanged | Backend-neutral reason for refusing a peer before gameplay packets are accepted. Protocol mismatch is checked on control and gameplay packet headers plus control hello payloads. A connected peer cannot change platform identity by sending another hello. |
+| `HandshakeReport` | sent_hellos, accepted_peers, rejected_peers, disconnected_peers, dropped_unauthorized_packets | Per-service-call diagnostics returned by `service_control_handshake()`. |
+| `service_control_handshake()` | — | Polls a `NetworkTransport`, sends reliable hellos/rejects/accepts, updates `NetworkSession`, forwards authorized gameplay events, and drops pre-handshake gameplay packets. |
 | `ReplicationSaveData` | tick, snapshot | Serializable save payload built from a `ReplicationWorld` snapshot and restorable back into `ReplicationWorld`. |
 | `ReconnectBaseline` | peer, player, snapshot | Full or interest-filtered authoritative snapshot used when a player reconnects. |
 | `ReconnectBaselineStore` | baselines | Runtime map of reconnect baselines keyed by `(PeerId, NetworkPlayerId)`. |

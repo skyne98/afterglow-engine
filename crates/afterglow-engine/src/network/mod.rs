@@ -5,6 +5,7 @@ use std::collections::{BTreeSet, HashMap, VecDeque};
 pub mod authority;
 pub mod baseline;
 pub mod commands;
+pub mod handshake;
 pub mod interest;
 pub mod interpolation;
 pub mod prediction;
@@ -58,7 +59,7 @@ pub struct PeerId(pub u64);
 )]
 pub struct NetworkPlayerId(pub u64);
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Reflect)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Reflect, Serialize, Deserialize)]
 pub struct ProtocolVersion {
     pub major: u16,
     pub minor: u16,
@@ -142,6 +143,7 @@ impl Plugin for AfterglowNetworkPlugin {
         replication::configure_replication_sets(app);
         app.init_resource::<NetworkProtocol>()
             .init_resource::<baseline::ReconnectBaselineStore>()
+            .init_resource::<handshake::NetworkHandshakeConfig>()
             .init_resource::<rollback::DeterministicRollbackBuffer>()
             .init_resource::<authority::ServerCommandBuffer>()
             .init_resource::<prediction::ClientPredictionBuffer>()
@@ -207,6 +209,11 @@ impl MemoryTransport {
 
     pub fn with_faults(mut self, faults: FaultConfig) -> Self {
         self.faults = faults;
+        self
+    }
+
+    pub fn with_protocol(mut self, protocol: ProtocolVersion) -> Self {
+        self.protocol = protocol;
         self
     }
 

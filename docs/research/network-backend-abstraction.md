@@ -23,6 +23,8 @@ The existing code already has the correct core split:
 - `NetworkTransport`: backend-neutral packet interface.
 - `NetChannel` and `DeliveryMode`: engine-owned channel semantics.
 - `NetworkSession`: maps peers to platform identities, players, and avatars.
+- `network::handshake`: shared reliable control handshake for protocol/build/
+  content compatibility, external identity admission, and gameplay packet gating.
 - Replication, commands, rollback, prediction, reconciliation, interpolation,
   baselines, and interest management are already above the transport layer.
 
@@ -198,10 +200,16 @@ disconnects.
 
 1. Tighten the shared transport/session API around the current
    `NetworkTransport`, `TransportEvent`, `NetworkSession`, and `PlatformIdentity`
-   types.
-2. Add backend-neutral control handshake packets and tests.
+   types. Done: `network::handshake` provides the shared admission path.
+2. Add backend-neutral control handshake packets and tests. Done: hello,
+   accept, reject, malformed payloads, mismatch rejection, duplicate identity
+   rejection, repeated identity-change rejection, disconnect cleanup,
+   same-batch post-reject packet dropping, accepted-message ordering, and
+   pre-handshake gameplay packet gating are covered with `MemoryTransport`.
 3. Add backend-neutral session lifecycle systems that consume transport events
-   and update `NetworkSession`.
+   and update `NetworkSession`. Done at the helper boundary:
+   `service_control_handshake()` polls any `NetworkTransport`, updates
+   `NetworkSession`, and forwards only authorized gameplay events.
 4. Implement the Iroh backend as an optional native feature.
 5. Add Iroh smoke/integration tests behind a feature or environment gate.
 6. Implement Steam as an optional native feature using the same handshake,

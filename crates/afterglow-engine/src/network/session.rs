@@ -3,6 +3,7 @@ use crate::{
     network::{NetworkPlayerId, PeerId},
 };
 use bevy::prelude::*;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 #[derive(Resource, Clone, Debug, Default, Eq, PartialEq, Reflect)]
@@ -26,7 +27,7 @@ pub struct PlayerSession {
     pub avatar: Option<StableEntityId>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Reflect)]
+#[derive(Clone, Debug, Eq, PartialEq, Reflect, Serialize, Deserialize)]
 pub enum PlatformIdentity {
     Local,
     Steam { steam_id: u64 },
@@ -88,6 +89,13 @@ impl NetworkSession {
 
     pub fn peer(&self, peer: PeerId) -> Option<&PeerSession> {
         self.peers.get(&peer)
+    }
+
+    pub fn peer_for_platform(&self, platform: &PlatformIdentity) -> Option<PeerId> {
+        self.peers
+            .values()
+            .find(|session| &session.platform == platform)
+            .map(|session| session.peer)
     }
 
     pub fn player(&self, player: NetworkPlayerId) -> Option<&PlayerSession> {

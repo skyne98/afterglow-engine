@@ -10,6 +10,12 @@ fn network_plugin_registers_protocol_resource() {
         app.world().resource::<NetworkProtocol>().version,
         ProtocolVersion::CURRENT
     );
+    assert_eq!(
+        app.world()
+            .resource::<handshake::NetworkHandshakeConfig>()
+            .protocol,
+        ProtocolVersion::CURRENT
+    );
     app.world().resource::<baseline::ReconnectBaselineStore>();
     app.world()
         .resource::<rollback::DeterministicRollbackBuffer>();
