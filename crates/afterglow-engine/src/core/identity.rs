@@ -158,6 +158,13 @@ impl StableEntityRegistry {
 }
 
 pub fn maintain_stable_entity_registry(world: &mut World) {
+    if !world.contains_resource::<StableIdAllocator>() {
+        world.insert_resource(StableIdAllocator::default());
+    }
+    if !world.contains_resource::<StableEntityRegistry>() {
+        world.insert_resource(StableEntityRegistry::default());
+    }
+
     let missing = {
         let mut query = world.query_filtered::<Entity, (
             Or<(With<Persistent>, With<Replicated>)>,
@@ -166,8 +173,18 @@ pub fn maintain_stable_entity_registry(world: &mut World) {
         )>();
         query.iter(world).collect::<Vec<_>>()
     };
+    let invalid = {
+        let mut query = world.query_filtered::<(Entity, &StableEntityId), (
+            Or<(With<Persistent>, With<Replicated>)>,
+            Without<RuntimeOnly>,
+        )>();
+        query
+            .iter(world)
+            .filter_map(|(entity, stable_id)| (!stable_id.is_valid()).then_some(entity))
+            .collect::<Vec<_>>()
+    };
 
-    for entity in missing {
+    for entity in missing.into_iter().chain(invalid) {
         let id = world.resource_mut::<StableIdAllocator>().allocate();
         if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
             entity_mut.insert(id);
@@ -284,6 +301,37 @@ mod tests {
 
         let registry = app.world().resource::<StableEntityRegistry>();
         assert_eq!(registry.duplicate_ids(), &[duplicate]);
+    }
+
+    #[test]
+    fn maintain_registry_initializes_missing_identity_resources() {
+        let mut world = World::new();
+        let entity = world.spawn(Persistent).id();
+
+        maintain_stable_entity_registry(&mut world);
+
+        let stable_id = world.get::<StableEntityId>(entity).copied();
+        assert!(stable_id.is_some_and(StableEntityId::is_valid));
+        assert_eq!(
+            world.resource::<StableEntityRegistry>().stable_id(entity),
+            stable_id
+        );
+    }
+
+    #[test]
+    fn maintain_registry_replaces_invalid_stable_ids() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AfterglowCorePlugin));
+        let entity = app
+            .world_mut()
+            .spawn((StableEntityId::INVALID, Replicated))
+            .id();
+
+        app.update();
+
+        let stable_id = app.world().get::<StableEntityId>(entity).copied();
+        assert!(stable_id.is_some_and(StableEntityId::is_valid));
+        assert_ne!(stable_id, Some(StableEntityId::INVALID));
     }
 
     #[test]

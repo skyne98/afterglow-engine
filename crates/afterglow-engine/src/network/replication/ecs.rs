@@ -1,3 +1,6 @@
+use super::runtime::{
+    register_component_runtime, register_resource_runtime, register_timeline_runtime,
+};
 use crate::core::identity::{Replicated, StableEntityId};
 use bevy::{platform::collections::HashSet, prelude::*};
 use std::{
@@ -28,28 +31,28 @@ pub struct ReplicationRegistry {
 
 #[derive(Resource, Clone, Debug, PartialEq)]
 pub struct ReplicatedComponentState<T> {
-    values: BTreeMap<StableEntityId, T>,
-    removed: BTreeSet<StableEntityId>,
+    pub(crate) values: BTreeMap<StableEntityId, T>,
+    pub(crate) removed: BTreeSet<StableEntityId>,
 }
 
 #[derive(Resource, Clone, Debug, PartialEq)]
 pub struct ReplicatedComponentEntityMap<T> {
-    entities: BTreeMap<Entity, StableEntityId>,
+    pub(crate) entities: BTreeMap<Entity, StableEntityId>,
     marker: PhantomData<T>,
 }
 
 #[derive(Resource, Clone, Debug, PartialEq)]
 pub struct ReplicatedResourceState<T> {
-    value: Option<T>,
+    pub(crate) value: Option<T>,
 }
 
 #[derive(Resource, Clone, Debug, PartialEq)]
 pub struct ReplicatedTimeline<T> {
-    ticks: BTreeMap<u32, Vec<T>>,
-    reissue: Vec<T>,
-    reissued_pending_collection: BTreeMap<u32, Vec<T>>,
-    retained_ticks: u32,
-    latest_tick: Option<u32>,
+    pub(crate) ticks: BTreeMap<u32, Vec<T>>,
+    pub(crate) reissue: Vec<T>,
+    pub(crate) reissued_pending_collection: BTreeMap<u32, Vec<T>>,
+    pub(crate) retained_ticks: u32,
+    pub(crate) latest_tick: Option<u32>,
 }
 
 impl<T> Default for ReplicatedComponentState<T> {
@@ -173,6 +176,7 @@ where
             .resource_mut::<ReplicationRegistry>()
             .components
             .insert(T::REPLICATION_NAME);
+        register_component_runtime::<T>(app);
     }
 }
 
@@ -194,6 +198,7 @@ where
             .resource_mut::<ReplicationRegistry>()
             .resources
             .insert(T::REPLICATION_NAME);
+        register_resource_runtime::<T>(app);
     }
 }
 
@@ -219,6 +224,7 @@ where
             .resource_mut::<ReplicationRegistry>()
             .commands
             .insert(type_name::<T>());
+        register_timeline_runtime::<T>(app);
     }
 }
 
@@ -244,6 +250,7 @@ where
             .resource_mut::<ReplicationRegistry>()
             .messages
             .insert(type_name::<T>());
+        register_timeline_runtime::<T>(app);
     }
 }
 
@@ -375,7 +382,7 @@ fn collect_replicated_components<T>(
 
     for (_, previous, stable, _) in &changes {
         if let Some(previous) = previous
-            && previous != stable
+            && (!stable.is_valid() || previous != stable)
         {
             state.values.remove(previous);
             state.removed.insert(*previous);
@@ -383,6 +390,10 @@ fn collect_replicated_components<T>(
     }
 
     for (entity, _, stable, value) in changes {
+        if !stable.is_valid() {
+            entity_map.entities.remove(&entity);
+            continue;
+        }
         state.values.insert(stable, value);
         state.removed.remove(&stable);
         entity_map.entities.insert(entity, stable);
@@ -483,18 +494,4 @@ fn reissue_replicated_messages<T>(
     for message in timeline.drain_reissue() {
         messages.write(message);
     }
-}
-
-pub fn configure_replication_sets(app: &mut App) {
-    app.configure_sets(
-        Update,
-        (
-            ReplicationSet::RestoreState,
-            ReplicationSet::ReissueMessages,
-            ReplicationSet::CollectMessages,
-            ReplicationSet::CollectChanges,
-        )
-            .chain()
-            .in_set(crate::core::schedule::AfterglowSet::ApplyGameplay),
-    );
 }

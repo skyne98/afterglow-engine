@@ -67,8 +67,8 @@ Deep dive: [bevy-integration-world-runtime.md](research/bevy-integration-world-r
 - [x] Replication-compatible save/load data and reconnect baselines
 - [x] Selective rollback prototype for small deterministic subsystems, not the whole streaming RPG world
 - [x] Minimal authoritative rollback domain API with committed/provisional state, command replay, lifecycle outputs, and replay-generated cue diffs
-- [x] `app.replicate(...)` API for replicated components/resources and normal Bevy command/event messages
-- [ ] Bevy/ECS integration for deterministic rollback domain schedules
+- [x] `app.replicate(...)` API for replicated components/resources and normal Bevy command/message timelines
+- [x] Bevy/ECS integration for deterministic rollback domain schedules
 - [ ] Mock RPG late-command correction where replay changes death/combat outcomes without manual event cleanup
 - [ ] Iroh transport backend for non-Steam NAT traversal and encrypted peer/dedicated-server transport
 - [ ] Optional Steam backend feature: Steam identity/auth, lobbies, invites, and SteamNetworkingSockets transport

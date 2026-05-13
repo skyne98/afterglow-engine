@@ -226,22 +226,26 @@ app.replicate(component::<RepHealth>())
 app.replicate(resource::<RepWorldClock>())
 app.replicate(command::<OpenDoorCommand>())
 app.replicate(message::<DamageApplied>())
+app.add_systems(ReplicatedTick, apply_damage)
 ```
 
 Game code reads commands/messages with normal `MessageReader<T>` systems. During
 rollback, the engine restores replicated component/resource state and reissues
 the relevant command/fact messages so the same systems run again.
 
-This keeps important multiplayer code visually separate:
+This keeps important multiplayer code visually separate: client commands become
+validated server intent, then replicated messages, then normal Bevy systems
+mutate replicated components/resources, then snapshots/deltas replicate that
+truth to clients. The rollback driver is intentionally small and Bevy-shaped:
 
 ```text
-commands from clients
-  -> validated server intent
-  -> replicated messages
-  -> normal Bevy systems read messages and mutate replicated components/resources
-  -> snapshots/deltas replicate the component truth
-  -> clients derive normal Bevy state
+world.save_replicated_state(98)
+world.replay_replicated_ticks(98, 100)
 ```
+
+`replay_replicated_ticks(anchor, through)` restores the snapshot at `anchor`,
+then reissues registered timelines and runs `ReplicatedTick` for later ticks.
+Those systems use normal `Query`, `Res`, `MessageReader`, and component mutation.
 
 ### Commands
 

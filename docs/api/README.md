@@ -46,7 +46,11 @@ afterglow-engine
 │   ├── replication/
 │   │   ├── ecs.rs
 │   │   ├── ecs_edge_tests.rs (cfg(test))
+│   │   ├── history.rs
 │   │   ├── rollback.rs
+│   │   ├── rollback_ecs_tests.rs (cfg(test))
+│   │   ├── runtime.rs
+│   │   ├── schedule.rs
 │   │   ├── timeline_tests.rs (cfg(test))
 │   │   ├── world_state.rs
 │   │   ├── world_state_tests.rs (cfg(test))
@@ -338,7 +342,12 @@ afterglow-engine
 | `message::<T>()` | registration helper | Registers replicated message/fact type `T: ReplicatedMessage`. |
 | `ReplicatedComponentState<T>` | resource | Latest collected replicated component values keyed by `StableEntityId`. |
 | `ReplicatedResourceState<T>` | resource | Latest collected replicated resource value. |
+| `ReplicatedComponentHistory<T>` | resource | Full tick snapshots of registered replicated component values keyed by valid `StableEntityId`; save/restore canonicalizes duplicate IDs and uses these snapshots as rollback anchors. |
+| `ReplicatedResourceHistory<T>` | resource | Full tick snapshots of registered replicated resources, including absence. |
 | `ReplicatedTimeline<T>` | resource | Tick-addressed bounded command/message timeline; rollback replay replaces and reissues retained messages while dropping stale out-of-order ticks. |
+| `ReplicatedTick` | schedule | Dedicated schedule for replicated gameplay truth. Game code adds normal Bevy systems here; rollback can restore state, reissue messages, and run it repeatedly. |
+| `ReplicatedRollbackWorldExt` | world extension | Adds `save_replicated_state(tick)`, `restore_replicated_state(tick)`, `run_replicated_tick(tick)`, and `replay_replicated_ticks(anchor, through)`; save/restore maintains stable IDs before touching snapshots. |
+| `ReplicatedRollbackError` | InvalidRange, MissingSnapshot | Error returned by replicated ECS restore/replay helpers. |
 | `ReplicationSet` | RestoreState, ReissueMessages, CollectMessages, CollectChanges | Ordered `Update` sets inside `AfterglowSet::ApplyGameplay`; replay reissues messages before gameplay collection snapshots changed replicated state. |
 | `RollbackReplicationClock` | current_tick, policy | Drives the committed/provisional boundary for replay-aware replicated timelines. |
 | `ReplicatedRollbackMessageStream<E>` | messages, last diff/commit | Retained committed/provisional rollback message stream wrapper for replay-produced facts. |
