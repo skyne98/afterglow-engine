@@ -8,7 +8,7 @@ Current local state:
 
 - [lib.rs](/home/fox/Project/afterglow-engine/crates/afterglow-engine/src/lib.rs:20) registers the core, input, network, world, and perf HUD plugins.
 - [core/identity.rs](/home/fox/Project/afterglow-engine/crates/afterglow-engine/src/core/identity.rs:1) owns stable IDs, chunk membership, persistence markers, replication markers, and runtime registries.
-- [world/chunk.rs](/home/fox/Project/afterglow-engine/crates/afterglow-engine/src/world/chunk.rs:1) owns the current built-in demo cell loader.
+- [world/cell.rs](/home/fox/Project/afterglow-engine/crates/afterglow-engine/src/world/cell.rs:1) owns cell manifests, cell load requests, baseline spawning, and the built-in demo manifest.
 - [world/lifecycle.rs](/home/fox/Project/afterglow-engine/crates/afterglow-engine/src/world/lifecycle.rs:1) owns the generic chunk lifecycle state machine and automatic save/apply hooks.
 - [persistence/mod.rs](/home/fox/Project/afterglow-engine/crates/afterglow-engine/src/persistence/mod.rs:1) owns stable-ID keyed chunk deltas, one-loaded-cell save/load, registered serializable components, and deleted authored-object tombstones.
 - [network/local_server.rs](/home/fox/Project/afterglow-engine/crates/afterglow-engine/src/network/local_server.rs:1) provides an opt-in local-server path where single-player `LocalPlayers` are mirrored into `NetworkSession` and local `PlayerCommand`s are submitted through `ServerCommandBuffer`.
@@ -93,6 +93,14 @@ Cell load path:
 4. assign or resolve `StableEntityId`
 5. apply persistent deltas
 6. mark chunk active
+
+Current implementation: `CellManifestRegistry` stores chunk-keyed authored
+baselines, `CellLoadRequests` holds pending load requests, and
+`process_cell_load_requests()` drives lifecycle progress. The loader requests
+`ChunkLifecycleState::Loading`, spawns the manifest baseline exactly once for
+the load attempt, then requests `Spawned` so saved deltas apply through the
+lifecycle system. If saved-delta application fails, the load request remains
+pending and the baseline is not duplicated.
 
 Do not use `DynamicScene` dumps as the long-term save format because entity remapping and scene despawn semantics fight persistence.
 
@@ -227,7 +235,7 @@ src/core/
   schedule.rs
   commands.rs
 src/world/
-  chunk.rs
+  cell.rs
   manifest.rs
   lifecycle.rs
   residency.rs
@@ -244,7 +252,7 @@ src/network/
 ## Implementation Order
 
 1. Add `StableEntityId`, `ChunkId`, and chunk membership.
-2. Move demo spawning behind a cell/chunk loader.
+2. Move demo spawning behind a cell/chunk loader. Done: the demo cell is now a `CellManifest` loaded by `process_cell_load_requests()`, not a startup spawn system.
 3. Add explicit engine system sets.
 4. Implement one-cell save/load by stable ID. Done: `LoadedCellSave` captures versioned chunk deltas, merges recorded tombstones, roundtrips through JSON, retains loaded tombstones for later saves, and rejects unknown save versions before mutation.
 5. Add chunk lifecycle resources and commands. Done: `ChunkLifecycleRequests` and `process_chunk_lifecycle_requests()` provide generic load/spawn/activate/sleep/unload transitions with automatic persistence hooks.

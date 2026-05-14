@@ -10,7 +10,7 @@ Deep dive: [bevy-integration-world-runtime.md](research/bevy-integration-world-r
 - [ ] First-person controller for dense immersive-sim spaces
 - [ ] Physics integration for player movement and interactable objects
 - [ ] Core interaction model: use, pickup, doors, containers, triggers
-- [ ] Basic scene/cell loading with stable entity identity
+- [x] Basic scene/cell loading with stable entity identity
 - [x] Generic chunk/cell lifecycle state machine
 - [x] Local-server single-player simulation path
 - [x] Chunk/cell persistent state deltas

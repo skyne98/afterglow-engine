@@ -150,7 +150,7 @@ Afterglow already has the right foundations forming:
 - stable entity IDs in `core::identity`
 - command collection in the input layer
 - explicit schedule sets via `AfterglowSet`
-- world/chunk identity and streaming direction
+- world/cell identity and streaming direction
 - existing Iroh and GGRS research notes
 
 Steam should slot in below the engine protocol:
@@ -166,7 +166,7 @@ Afterglow network protocol
         |
 commands, snapshots, deltas, replication, interest management
         |
-authoritative world/chunk simulation
+authoritative world/cell simulation
 ```
 
 The engine API should look more like this:
