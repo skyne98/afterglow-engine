@@ -9,7 +9,7 @@ Current local state:
 - [lib.rs](/home/fox/Project/afterglow-engine/crates/afterglow-engine/src/lib.rs:20) registers the core, input, network, world, and perf HUD plugins.
 - [core/identity.rs](/home/fox/Project/afterglow-engine/crates/afterglow-engine/src/core/identity.rs:1) owns stable IDs, chunk membership, persistence markers, replication markers, and runtime registries.
 - [world/chunk.rs](/home/fox/Project/afterglow-engine/crates/afterglow-engine/src/world/chunk.rs:1) owns the current built-in demo cell loader.
-- [persistence/mod.rs](/home/fox/Project/afterglow-engine/crates/afterglow-engine/src/persistence/mod.rs:1) owns stable-ID keyed chunk deltas for registered serializable components and deleted authored-object tombstones.
+- [persistence/mod.rs](/home/fox/Project/afterglow-engine/crates/afterglow-engine/src/persistence/mod.rs:1) owns stable-ID keyed chunk deltas, one-loaded-cell save/load, registered serializable components, and deleted authored-object tombstones.
 - [network/local_server.rs](/home/fox/Project/afterglow-engine/crates/afterglow-engine/src/network/local_server.rs:1) provides an opt-in local-server path where single-player `LocalPlayers` are mirrored into `NetworkSession` and local `PlayerCommand`s are submitted through `ServerCommandBuffer`.
 - Snapshot/delta replication, rollback timelines, prediction, reconciliation, interpolation, reconnect baselines, and chunk interest now exist under `network/`.
 
@@ -235,7 +235,7 @@ src/network/
 1. Add `StableEntityId`, `ChunkId`, and chunk membership.
 2. Move demo spawning behind a cell/chunk loader.
 3. Add explicit engine system sets.
-4. Implement one-cell save/load by stable ID. In progress: chunk deltas now capture/apply stable-ID keyed registered component state and tombstones.
+4. Implement one-cell save/load by stable ID. Done: `LoadedCellSave` captures versioned chunk deltas, merges recorded tombstones, roundtrips through JSON, retains loaded tombstones for later saves, and rejects unknown save versions before mutation.
 5. Add chunk lifecycle resources and commands.
 6. Split CPU loaded, gameplay active, render extractable, GPU resident.
 7. Add local-server command path. Done: `LocalServerConfig::single_player()` mirrors local players into the authoritative session and submits local commands through normal server authority.

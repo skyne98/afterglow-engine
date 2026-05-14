@@ -11,6 +11,11 @@ use std::{
 
 mod apply;
 pub use apply::{apply_chunk_delta, apply_chunk_deltas};
+mod save;
+pub use save::{
+    LOADED_CELL_SAVE_FORMAT_VERSION, LoadedCellSave, delete_persistent_entity, load_saved_chunks,
+    save_loaded_chunks,
+};
 
 #[derive(Resource, Clone, Debug, Default, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PersistentWorldDeltas {
@@ -89,6 +94,8 @@ pub enum PersistenceError {
     DuplicateEntityDelta { entity: StableEntityId },
     #[error("entity {entity:?} is both restored and deleted in the same batch")]
     ConflictingEntityDelta { entity: StableEntityId },
+    #[error("loaded cell save version {version} is not supported")]
+    UnsupportedSaveVersion { version: u32 },
     #[error("failed to serialize component {type_name}: {message}")]
     Serialize {
         type_name: &'static str,
@@ -160,6 +167,33 @@ impl PersistentWorldDeltas {
 
     pub fn chunks(&self) -> &BTreeMap<ChunkId, ChunkPersistentDelta> {
         &self.chunks
+    }
+
+    pub fn record_deleted(
+        &mut self,
+        chunk: ChunkId,
+        entity: StableEntityId,
+    ) -> Result<(), PersistenceError> {
+        if !chunk.is_valid() {
+            return Err(PersistenceError::InvalidChunkId);
+        }
+        if !entity.is_valid() {
+            return Err(PersistenceError::InvalidEntityId);
+        }
+        let delta = self
+            .chunks
+            .entry(chunk)
+            .or_insert_with(|| ChunkPersistentDelta {
+                chunk,
+                entities: Vec::new(),
+                deleted: Vec::new(),
+            });
+        delta.entities.retain(|entry| entry.entity != entity);
+        if !delta.deleted.contains(&entity) {
+            delta.deleted.push(entity);
+            delta.deleted.sort();
+        }
+        Ok(())
     }
 
     pub fn to_json(&self) -> Result<Vec<u8>, serde_json::Error> {
@@ -339,5 +373,7 @@ where
 
 #[cfg(test)]
 mod edge_tests;
+#[cfg(test)]
+mod save_tests;
 #[cfg(test)]
 mod tests;

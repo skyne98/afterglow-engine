@@ -72,6 +72,8 @@ afterglow-engine
 │   ├── apply.rs
 │   ├── edge_tests.rs (cfg(test))
 │   ├── mod.rs
+│   ├── save.rs
+│   ├── save_tests.rs (cfg(test))
 │   └── tests.rs       (cfg(test))
 ├── world/
 │   ├── mod.rs
@@ -315,15 +317,20 @@ afterglow-engine
 | `PersistenceRegistry` | registered component callbacks | Runtime registry populated by `app.persist_component_as::<T>("stable.name.v1")` or `app.persist_component::<T>()`. Stores capture/apply/remove callbacks for serializable component types. |
 | `PersistenceAppExt::persist_component_as<T>()` | App extension | Registers a component type for persistence under an explicit stable save key. Preferred for durable game saves because Rust type names can change during refactors. `T` must be `Component + Serialize + DeserializeOwned`. |
 | `PersistenceAppExt::persist_component<T>()` | App extension | Convenience registration using Rust `type_name::<T>()` as the save key. Useful for tests/prototypes; prefer `persist_component_as` for authored content and compatibility. |
-| `PersistentWorldDeltas` | chunks | Resource storing one `ChunkPersistentDelta` per chunk. Supports replacement, removal, iteration, and `serde_json` byte roundtrips. |
+| `PersistentWorldDeltas` | chunks | Resource storing one `ChunkPersistentDelta` per chunk. Supports replacement, removal, low-level tombstone recording with `record_deleted()`, iteration, and `serde_json` byte roundtrips. Prefer `delete_persistent_entity()` when deleting a loaded entity because it records and despawns together. |
 | `ChunkPersistentDelta` | chunk, entities, deleted | Per-chunk persistent state override. Entity records are keyed by `StableEntityId`; `deleted` is a chunk-scoped tombstone list for authored objects removed by gameplay. |
 | `PersistentEntityDelta` | entity, components, removed_components | Persistent state for one stable entity. `components` stores registered component payloads; `removed_components` lets apply remove registered components absent from the save. |
 | `PersistentComponentValue` | type_name, payload | One serialized registered component payload. `type_name` is the stable persistence registration key; payloads are JSON bytes for that component type. |
-| `PersistenceError` | UnregisteredComponent, InvalidChunkId, InvalidEntityId, DuplicateEntityDelta, ConflictingEntityDelta, Serialize, Deserialize | Persistence capture/apply failure reason. Apply preflights chunk IDs, entity IDs, duplicate/conflicting entity records, registered component keys, and payload decoding before mutating the world. |
+| `LoadedCellSave` | format_version, chunks | Versioned one-loaded-cell save payload. Use `to_json()` / `from_json()` for the current JSON save-file foundation. |
+| `LOADED_CELL_SAVE_FORMAT_VERSION` | 1 | Current loaded-cell save schema version. `load_saved_chunks()` rejects unknown versions before mutating the world. |
+| `PersistenceError` | UnregisteredComponent, InvalidChunkId, InvalidEntityId, DuplicateEntityDelta, ConflictingEntityDelta, UnsupportedSaveVersion, Serialize, Deserialize | Persistence capture/apply/save failure reason. Apply preflights chunk IDs, entity IDs, duplicate/conflicting entity records, registered component keys, save versions, and payload decoding before mutating the world. |
 | `capture_chunk_delta()` | World, ChunkId | Captures registered components on persistent, non-runtime entities in one loaded chunk into a stable-ID keyed delta. Returns `Result`; emits removal records for persistent entities that have no registered components, and emits no entity records when no component types are registered. |
 | `capture_chunk_deltas()` | World, chunks | Batch capture path for streaming. Maintains stable IDs and scans the world once, then groups persistent component deltas by requested chunk. Prefer this when many chunks/cells unload in one tick. |
 | `apply_chunk_delta()` | World, ChunkPersistentDelta | Applies chunk-scoped tombstones, updates existing stable entities, spawns missing stable entities, restores registered components, and removes absent registered components. Returns `Result<ChunkDeltaApplyReport, PersistenceError>` with update/spawn/despawn/component counts. |
 | `apply_chunk_deltas()` | World, chunk deltas | Batch apply path for streaming. Preflights all component payloads, applies tombstones, then restores entities/components while maintaining stable IDs once per phase. Prefer this when many chunks/cells load in one tick. |
+| `save_loaded_chunks()` | World, chunks | Captures a versioned `LoadedCellSave` for currently loaded chunks and merges chunk tombstones from `PersistentWorldDeltas`. |
+| `load_saved_chunks()` | World, LoadedCellSave | Validates the save format version, applies saved chunk deltas with the same preflight guarantees as `apply_chunk_deltas()`, and retains loaded tombstones in `PersistentWorldDeltas` so later saves do not resurrect deleted authored objects. |
+| `delete_persistent_entity()` | World, StableEntityId | High-level loaded-cell deletion helper. Infers the loaded entity's chunk, records a chunk tombstone, and despawns the entity. Use `PersistentWorldDeltas::record_deleted()` only for manual/unloaded tombstones. |
 | `ReplicationSaveData` | tick, snapshot | Serializable save payload built from a `ReplicationWorld` snapshot and restorable back into `ReplicationWorld`. |
 | `ReconnectBaseline` | peer, player, snapshot | Full or interest-filtered authoritative snapshot used when a player reconnects. |
 | `ReconnectBaselineStore` | baselines | Runtime map of reconnect baselines keyed by `(PeerId, NetworkPlayerId)`. |
