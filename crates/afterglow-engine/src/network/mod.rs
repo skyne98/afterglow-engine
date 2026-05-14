@@ -74,7 +74,7 @@ pub struct ProtocolVersion {
 impl ProtocolVersion {
     pub const CURRENT: Self = Self {
         major: 0,
-        minor: 1,
+        minor: 2,
         patch: 0,
     };
 }

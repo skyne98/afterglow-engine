@@ -3,7 +3,7 @@ use bevy::{
     window::{Monitor, PrimaryMonitor},
 };
 
-use super::data::PerfData;
+use super::{data::PerfData, perf_hud_toggle_requested};
 
 #[derive(Component)]
 pub struct HudRoot;
@@ -226,7 +226,7 @@ pub fn update_hud(
     adapter_info: Option<Res<bevy::render::renderer::RenderAdapterInfo>>,
     monitor: Query<&Monitor, With<PrimaryMonitor>>,
     window: Query<&Window, With<bevy::window::PrimaryWindow>>,
-    keys: Res<ButtonInput<KeyCode>>,
+    player_commands: Option<Res<crate::input::PlayerCommandQueue>>,
     mut hud: Query<&mut Visibility, With<HudRoot>>,
     mut text_group: ParamSet<(
         Query<
@@ -266,9 +266,7 @@ pub fn update_hud(
         (With<TraceSeg>, Without<FrameBar>, Without<TraceHistBar>),
     >,
 ) {
-    if keys.just_pressed(KeyCode::Backquote)
-        && (keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight))
-    {
+    if perf_hud_toggle_requested(player_commands.as_deref()) {
         for mut v in &mut hud {
             *v = if *v == Visibility::Visible {
                 Visibility::Hidden

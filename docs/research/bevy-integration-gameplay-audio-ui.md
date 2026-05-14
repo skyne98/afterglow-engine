@@ -26,22 +26,11 @@ Useful Bevy sources:
 Do not let gameplay read raw device state directly. Convert it to deterministic commands:
 
 ```rust
-pub enum InputAction {
-    Use,
-    Jump,
-    Crouch,
-    LeanLeft,
-    LeanRight,
-    AttackPrimary,
-    AttackSecondary,
-    Inventory,
-}
-
 pub struct PlayerCommand {
     pub player: NetworkPlayerId,
     pub tick: u32,
     pub axes: Vec<InputAxisValue>,
-    pub actions: Vec<InputAction>,
+    pub actions: Vec<InputActionValue>, // string action + Pressed/Held/Released
     pub pointers: Vec<PointerInput>,
 }
 ```

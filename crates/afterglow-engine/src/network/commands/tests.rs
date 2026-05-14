@@ -9,7 +9,11 @@ fn player_commands_roundtrip_through_wire_envelope() {
             axis: InputAxis::new("move.x"),
             value: 0.5,
         }],
-        actions: vec![InputAction::new("use")],
+        actions: vec![
+            InputActionValue::pressed("use"),
+            InputActionValue::held("lean.left"),
+            InputActionValue::released("attack.primary"),
+        ],
         pointers: vec![PointerInput {
             device: PointerDevice::Pen,
             id: 9,

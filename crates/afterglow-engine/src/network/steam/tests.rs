@@ -14,7 +14,7 @@ fn steam_lobby_metadata_exports_stable_keys() {
     assert_eq!(
         metadata.entries(),
         [
-            ("protocol", "0.1.0".into()),
+            ("protocol", "0.2.0".into()),
             ("build_hash", "build".into()),
             ("content_hash", "content".into()),
             ("world_id", "cellar".into()),

@@ -1,6 +1,6 @@
 use afterglow_engine::{
     core::identity::StableEntityId,
-    input::{InputAction, PlayerCommand},
+    input::{InputActionValue, PlayerCommand},
     network::{
         DeliveryMode, FaultConfig, MemoryTransport, NetChannel, NetworkPlayerId, NetworkTransport,
         PeerId, TransportEvent,
@@ -156,7 +156,7 @@ fn rejected_spell_cast_drops_local_prediction_on_correction_tick() {
     prediction.record(PlayerCommand {
         player: ALICE,
         tick: 20,
-        actions: vec![InputAction::new("cast_spell")],
+        actions: vec![InputActionValue::pressed("cast_spell")],
         ..Default::default()
     });
 
@@ -207,7 +207,7 @@ fn submit_spell(
         PlayerCommand {
             player,
             tick,
-            actions: vec![InputAction::new("cast_spell")],
+            actions: vec![InputActionValue::pressed("cast_spell")],
             ..Default::default()
         },
         &session,

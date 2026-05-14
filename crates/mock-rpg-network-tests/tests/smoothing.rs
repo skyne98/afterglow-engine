@@ -1,6 +1,6 @@
 use afterglow_engine::{
     core::identity::StableEntityId,
-    input::{InputAction, InputAxis, InputAxisValue, PlayerCommand},
+    input::{InputActionValue, InputAxis, InputAxisValue, PlayerCommand},
     network::{
         NetworkPlayerId,
         interpolation::{RemoteEntitySample, RemoteInterpolationBuffer, SmoothingMode},
@@ -35,7 +35,7 @@ fn use_command(player: Player, tick: u32) -> PlayerCommand {
     PlayerCommand {
         player: player_id(player),
         tick,
-        actions: vec![InputAction::new("use")],
+        actions: vec![InputActionValue::pressed("use")],
         ..Default::default()
     }
 }
@@ -126,7 +126,10 @@ fn predicted_interaction_feedback_is_replayed_until_server_confirms_or_rejects_t
     };
     let replay =
         reconciliation.reconcile_snapshot(&mut prediction, player_id(alice), &authoritative_198);
-    assert_eq!(replay.replay_commands[0].actions, [InputAction::new("use")]);
+    assert_eq!(
+        replay.replay_commands[0].actions,
+        [InputActionValue::pressed("use")]
+    );
     assert_eq!(prediction.pending_len(player_id(alice)), 1);
 
     let authoritative_200 = WorldSnapshot {

@@ -214,7 +214,7 @@ pub struct PlayerCommand {
     pub player: NetworkPlayerId,
     pub tick: u32,
     pub axes: Vec<InputAxisValue>,
-    pub actions: Vec<InputAction>,
+    pub actions: Vec<InputActionValue>,
     pub pointers: Vec<PointerInput>,
 }
 ```

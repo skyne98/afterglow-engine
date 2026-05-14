@@ -1,5 +1,5 @@
 use super::*;
-use crate::input::{InputAction, InputAxis, InputAxisValue};
+use crate::input::{InputActionValue, InputAxis, InputAxisValue};
 
 fn command(player: NetworkPlayerId, tick: u32) -> PlayerCommand {
     PlayerCommand {
@@ -9,7 +9,7 @@ fn command(player: NetworkPlayerId, tick: u32) -> PlayerCommand {
             axis: InputAxis::new("move_x"),
             value: tick as f32,
         }],
-        actions: vec![InputAction::new("use")],
+        actions: vec![InputActionValue::pressed("use")],
         ..Default::default()
     }
 }
@@ -37,14 +37,14 @@ fn command_for_same_player_tick_replaces_previous_value() {
     let player = NetworkPlayerId(1);
     let mut buffer = ClientPredictionBuffer::default();
     let mut replacement = command(player, 2);
-    replacement.actions = vec![InputAction::new("jump")];
+    replacement.actions = vec![InputActionValue::pressed("jump")];
 
     assert!(buffer.record(command(player, 2)).is_none());
     assert_eq!(buffer.record(replacement), Some(command(player, 2)));
 
     assert_eq!(
         buffer.pending(player).next().unwrap().actions,
-        [InputAction::new("jump")]
+        [InputActionValue::pressed("jump")]
     );
 }
 

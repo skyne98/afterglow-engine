@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    input::{InputAction, PlayerCommand},
+    input::{InputActionValue, PlayerCommand},
     network::session::PlatformIdentity,
 };
 
@@ -15,7 +15,7 @@ fn command(player: NetworkPlayerId, tick: u32) -> PlayerCommand {
     PlayerCommand {
         player,
         tick,
-        actions: vec![InputAction::new("use")],
+        actions: vec![InputActionValue::pressed("use")],
         ..Default::default()
     }
 }

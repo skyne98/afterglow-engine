@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    input::{AfterglowInputPlugin, InputAction, VirtualInputState},
+    input::{AfterglowInputPlugin, InputActionValue, VirtualInputState},
     network::{AfterglowNetworkPlugin, NetworkPlayerId, authority::CommandRejectReason},
     testing::unit_app,
 };
@@ -130,7 +130,10 @@ fn local_server_registers_local_players_and_accepts_current_frame_commands() {
     assert_eq!(accepted[0].peer, PeerId(0));
     assert_eq!(accepted[0].command.player, NetworkPlayerId(1));
     assert_eq!(accepted[0].command.tick, 0);
-    assert_eq!(accepted[0].command.actions, [InputAction::new("use")]);
+    assert_eq!(
+        accepted[0].command.actions,
+        [InputActionValue::pressed("use")]
+    );
 }
 
 #[test]

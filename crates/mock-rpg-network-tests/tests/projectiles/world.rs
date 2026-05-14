@@ -1,7 +1,7 @@
 use super::math::{Vec3f, segment_distance_squared};
 use afterglow_engine::{
     core::identity::StableEntityId,
-    input::{InputAction, PlayerCommand},
+    input::{InputActionValue, PlayerCommand},
     network::{
         DeliveryMode, FaultConfig, MemoryTransport, NetChannel, NetworkPlayerId, NetworkTransport,
         PeerId, TransportEvent,
@@ -190,7 +190,7 @@ impl SpellServer {
             PlayerCommand {
                 player,
                 tick,
-                actions: vec![InputAction::new(action)],
+                actions: vec![InputActionValue::pressed(action)],
                 ..Default::default()
             },
             &self.session,
@@ -333,7 +333,7 @@ impl SpellClient {
         self.prediction.record(PlayerCommand {
             player: self.player,
             tick,
-            actions: vec![InputAction::new("cast_spell")],
+            actions: vec![InputActionValue::pressed("cast_spell")],
             ..Default::default()
         });
         self.send(ClientMsg::Shoot {

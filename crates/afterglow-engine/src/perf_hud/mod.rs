@@ -11,10 +11,14 @@ use bevy::{
 };
 use web_time::Instant;
 
+use crate::input::{PlayerCommandQueue, PlayerInputBindings};
+
 pub use data::PerfData;
 pub use server::SharedMetrics;
 pub use trace_collector::{AccumMap, setup_tracing};
 pub use ui::update_hud;
+
+pub const PERF_TOGGLE_ACTION: &str = "afterglow.perf.toggle";
 
 pub struct PerfHudPlugin {
     pub trace_accum: AccumMap,
@@ -39,11 +43,54 @@ impl Plugin for PerfHudPlugin {
         app.init_resource::<PerfData>()
             .init_resource::<FrameProfiler>()
             .insert_resource(SharedMetrics(shared))
-            .add_systems(Startup, ui::spawn_hud)
+            .add_systems(Startup, (ui::spawn_hud, install_perf_hud_input_bindings))
             .add_systems(
                 PostUpdate,
                 (record_postupdate_start, record_postupdate_end).chain(),
             );
+    }
+}
+
+pub fn install_perf_hud_input_bindings(mut bindings: ResMut<PlayerInputBindings>) {
+    let context = bindings.context_mut("afterglow.debug");
+    context.priority = 10;
+    context.consume = true;
+    context.add_key_chord_action(KeyCode::Backquote, [KeyCode::ShiftLeft], PERF_TOGGLE_ACTION);
+    context.add_key_chord_action(
+        KeyCode::Backquote,
+        [KeyCode::ShiftRight],
+        PERF_TOGGLE_ACTION,
+    );
+}
+
+pub fn perf_hud_toggle_requested(commands: Option<&PlayerCommandQueue>) -> bool {
+    commands.is_some_and(|commands| {
+        commands
+            .commands()
+            .iter()
+            .any(|command| command.action_pressed(PERF_TOGGLE_ACTION))
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        input::{InputActionValue, PlayerCommand},
+        network::NetworkPlayerId,
+    };
+
+    #[test]
+    fn perf_hud_toggle_reads_command_actions_not_raw_inputs() {
+        let mut commands = PlayerCommandQueue::default();
+        commands.replace(vec![PlayerCommand {
+            player: NetworkPlayerId(1),
+            actions: vec![InputActionValue::pressed(PERF_TOGGLE_ACTION)],
+            ..default()
+        }]);
+
+        assert!(perf_hud_toggle_requested(Some(&commands)));
+        assert!(!perf_hud_toggle_requested(None));
     }
 }
 

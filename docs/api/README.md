@@ -149,6 +149,7 @@ afterglow-engine
 ### Detailed API Notes
 
 - [plugins.md](plugins.md) documents runtime, engine, and demo plugin composition.
+- [input.md](input.md) documents context-aware, phased, device-routed input.
 - [physics.md](physics.md) documents Avian-backed physics integration.
 - [world.md](world.md) documents cell manifests, lifecycle resources, and world system behavior.
 
@@ -190,7 +191,7 @@ afterglow-engine
 | Resource | Type |
 |---|---|
 | `TraceData` | `{ accum: AccumMap }` |
-| `PlayerInputBindings` | Game-configured axis and key/mouse action bindings |
+| `PlayerInputBindings` | Context-aware game/editor input bindings |
 | `LocalPlayers` | Local session player IDs controlled by this app instance |
 | `SimulationTick` | Monotonic command tick counter |
 | `PlayerCommandQueue` | Current-frame local player commands |
@@ -295,18 +296,10 @@ afterglow-engine
 | Type | Fields | Description |
 |---|---|---|
 | `AfterglowSet` | ReadInput, BuildCommands, Simulate, ApplyGameplay, PreparePersistence, DebugAndMetrics | Ordered engine system sets for deterministic feature layering. |
-| `InputAction` | String action ID | Game-defined action emitted from raw devices. The engine does not hardcode game actions. |
-| `PlayerCommand` | player, tick, axes, actions, pointers | Deterministic command record for local-server simulation, prediction, replay, editor tools, and tests. Payload is game-defined; lobby/menu/no-camera scenes can emit no axes, actions, or pointers. |
-| `PlayerInputBindings` | axes, actions | Game-configured keyboard, mouse, gamepad, and touch action bindings. Defaults emit no game-specific input. |
-| `InputAxis` | String axis ID | Game-defined analog/digital axis name. |
-| `InputAxisValue` | axis, value | One command-time axis sample. |
-| `AxisBinding` | axis, source | Maps an axis source to one named axis. |
-| `AxisSource` | KeyPair, GamepadAxis, GamepadButtonPair | Built-in axis sources. Touch, tablet, and custom editor controls can feed `VirtualInputState`. |
-| `ActionBinding` | input, action | Maps one key, mouse button, gamepad button, or touch press to one game-defined action. |
-| `ActionInput` | Key, Mouse, GamepadButton, TouchAny | Raw input source for an action binding. |
-| `VirtualInputState` | axes, actions, pointers | Per-frame game/editor-fed inputs for touch virtual sticks, graphics tablet pens, custom devices, and UI tools. Cleared after command collection. |
-| `PointerInput` | device, id, position, delta, pressure, tilt, twist, primary | Generic pointer sample for touch, pen/tablet, mouse-derived editor tools, or custom pointing devices. |
-| `PointerDevice` | Mouse, Touch, Pen, Unknown | Pointer source classification. |
+| `PlayerCommand` | player, tick, axes, actions, pointers | Deterministic command record with string axes, phased string actions, and generic pointers. Empty commands are valid. See `input.md`. |
+| `PlayerInputBindings` | contexts | Context-aware bindings for keyboard, mouse motion/buttons, gamepads, touch, and virtual/editor input. See `input.md`. |
+| `InputAction*`, `InputAxis*`, `PointerInput`, `VirtualInputState` | — | Generic command payload and shared or per-player scripted input types; actions carry `Pressed`, `Held`, or `Released` phases. See `input.md`. |
+| `InputContext`, `AxisBinding`, `ActionBinding`, `LocalInputRoutes` | — | Input layers, binding sources, and optional per-player device routing. See `input.md`. |
 | `LocalPlayers` | peer, players | Local transport peer plus one or more local `NetworkPlayerId`s controlled by this app instance. Stable world-entity mapping lives outside input. |
 | `SimulationTick` | u32 | Monotonic command tick. |
 | `PlayerCommandQueue` | commands | Current-frame generated commands. |
@@ -396,6 +389,7 @@ afterglow-engine
 | `CommandEnvelope` | protocol, commands | Versioned wire payload for one batch of player commands. |
 | `WirePlayerCommand` | player, tick, axes, actions, pointers | Explicit transport DTO for `PlayerCommand`. |
 | `WireAxisValue` | axis, value | Explicit transport DTO for one named axis value. |
+| `WireActionValue` | action, phase | Explicit transport DTO for one phased action. |
 | `WirePointerInput` | device, id, position, delta, pressure, tilt, twist, primary | Explicit transport DTO for pointer input. |
 | `CommandDecodeError` | InvalidJson, ProtocolMismatch | Decode failure for malformed or incompatible command payloads. |
 | `encode_player_commands()` | — | Serializes `PlayerCommand` values into a versioned command envelope. |

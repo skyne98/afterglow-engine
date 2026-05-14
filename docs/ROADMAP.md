@@ -7,6 +7,7 @@ Ordered implementation path for `afterglow-engine`. This roadmap is dependency-b
 Deep dive: [bevy-integration-world-runtime.md](research/bevy-integration-world-runtime.md), [bevy-integration-gameplay-audio-ui.md](research/bevy-integration-gameplay-audio-ui.md).
 
 - [x] Core app/plugin structure for engine systems
+- [x] Context-aware input bindings with action phases and per-player device routing
 - [ ] First-person controller for dense immersive-sim spaces
 - [x] Physics integration for player movement and interactable objects
 - [ ] Core interaction model: use, pickup, doors, containers, triggers

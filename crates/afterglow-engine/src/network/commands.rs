@@ -1,5 +1,8 @@
 use crate::{
-    input::{InputAction, InputAxis, InputAxisValue, PlayerCommand, PointerDevice, PointerInput},
+    input::{
+        InputAction, InputActionPhase, InputActionValue, InputAxis, InputAxisValue, PlayerCommand,
+        PointerDevice, PointerInput,
+    },
     network::{NetworkPlayerId, ProtocolVersion},
 };
 use bevy::prelude::*;
@@ -32,7 +35,7 @@ pub struct WirePlayerCommand {
     pub player: u64,
     pub tick: u32,
     pub axes: Vec<WireAxisValue>,
-    pub actions: Vec<String>,
+    pub actions: Vec<WireActionValue>,
     pub pointers: Vec<WirePointerInput>,
 }
 
@@ -40,6 +43,19 @@ pub struct WirePlayerCommand {
 pub struct WireAxisValue {
     pub axis: String,
     pub value: f32,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct WireActionValue {
+    pub action: String,
+    pub phase: WireActionPhase,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum WireActionPhase {
+    Pressed,
+    Held,
+    Released,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -113,11 +129,7 @@ impl From<&PlayerCommand> for WirePlayerCommand {
             player: value.player.0,
             tick: value.tick,
             axes: value.axes.iter().map(WireAxisValue::from).collect(),
-            actions: value
-                .actions
-                .iter()
-                .map(|action| action.0.clone())
-                .collect(),
+            actions: value.actions.iter().map(WireActionValue::from).collect(),
             pointers: value.pointers.iter().map(WirePointerInput::from).collect(),
         }
     }
@@ -129,7 +141,11 @@ impl From<WirePlayerCommand> for PlayerCommand {
             player: NetworkPlayerId(value.player),
             tick: value.tick,
             axes: value.axes.into_iter().map(InputAxisValue::from).collect(),
-            actions: value.actions.into_iter().map(InputAction).collect(),
+            actions: value
+                .actions
+                .into_iter()
+                .map(InputActionValue::from)
+                .collect(),
             pointers: value.pointers.into_iter().map(PointerInput::from).collect(),
         }
     }
@@ -149,6 +165,44 @@ impl From<WireAxisValue> for InputAxisValue {
         Self {
             axis: InputAxis(value.axis),
             value: value.value,
+        }
+    }
+}
+
+impl From<&InputActionValue> for WireActionValue {
+    fn from(value: &InputActionValue) -> Self {
+        Self {
+            action: value.action.0.clone(),
+            phase: value.phase.into(),
+        }
+    }
+}
+
+impl From<WireActionValue> for InputActionValue {
+    fn from(value: WireActionValue) -> Self {
+        Self {
+            action: InputAction(value.action),
+            phase: value.phase.into(),
+        }
+    }
+}
+
+impl From<InputActionPhase> for WireActionPhase {
+    fn from(value: InputActionPhase) -> Self {
+        match value {
+            InputActionPhase::Pressed => Self::Pressed,
+            InputActionPhase::Held => Self::Held,
+            InputActionPhase::Released => Self::Released,
+        }
+    }
+}
+
+impl From<WireActionPhase> for InputActionPhase {
+    fn from(value: WireActionPhase) -> Self {
+        match value {
+            WireActionPhase::Pressed => Self::Pressed,
+            WireActionPhase::Held => Self::Held,
+            WireActionPhase::Released => Self::Released,
         }
     }
 }
