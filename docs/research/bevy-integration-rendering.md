@@ -6,8 +6,8 @@ This note maps the roadmap rendering features onto Bevy `0.18.1` and the current
 
 Current local state:
 
-- [lib.rs](/home/fox/Project/afterglow-engine/crates/afterglow-engine/src/lib.rs:14) registers `PerfHudPlugin`, demo setup, cube rotation, light animation, and HUD tracing.
-- [setup.rs](/home/fox/Project/afterglow-engine/crates/afterglow-engine/src/setup.rs:8) spawns one `StandardMaterial` cube, one `PointLight`, and one `Camera3d`.
+- [lib.rs](/home/fox/Project/afterglow-engine/crates/afterglow-engine/src/lib.rs:1) registers demo-free runtime plugins plus perf HUD/tracing.
+- [demo.rs](/home/fox/Project/afterglow-engine/crates/afterglow-engine/src/demo.rs:1) installs the opt-in demo cell and demo cube/light animation.
 - There is no engine render module yet. Rendering work should start as plugins under `src/rendering/` or narrower feature modules.
 
 ## Core Bevy Render Shape

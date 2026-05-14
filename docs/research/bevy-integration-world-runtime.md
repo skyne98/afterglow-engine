@@ -50,17 +50,28 @@ All save and replication records should be keyed by `StableEntityId`.
 
 ### App/Plugin Structure
 
-Replace direct demo registration with feature plugins:
+Current plugin shape:
 
 ```text
-AfterglowEnginePlugin
+AfterglowRuntimePlugins
   AfterglowCorePlugin
   AfterglowInputPlugin
-  AfterglowInteractionPlugin
-  AfterglowWorldPlugin
+  AfterglowNetworkPlugin
   AfterglowPersistencePlugin
-  AfterglowRenderingPlugin
+  AfterglowWorldPlugin
+
+AfterglowEnginePlugin
+  AfterglowRuntimePlugins
+  PerfHudPlugin
+
+AfterglowDemoPlugin
+  built-in demo cell manifest/load request
+  demo animation systems
 ```
+
+`AfterglowRuntimePlugins` is intentionally demo-free. The executable `run()`
+adds `AfterglowDemoPlugin` explicitly so engine users can start from a clean
+runtime by adding only `AfterglowEnginePlugin` or `AfterglowRuntimePlugins`.
 
 Use Bevy schedules, but define engine system sets:
 

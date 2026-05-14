@@ -1,9 +1,9 @@
 pub mod core;
+pub mod demo;
 pub mod input;
 pub mod network;
 mod perf_hud;
 pub mod persistence;
-mod setup;
 #[cfg(any(test, feature = "test-support"))]
 pub mod testing;
 pub mod world;
@@ -13,6 +13,7 @@ extern crate self as afterglow_engine;
 pub use afterglow_engine_macros::{Replicate, replicate};
 use bevy::{app::PluginGroupBuilder, prelude::*, window::WindowPlugin};
 use core::{AfterglowCorePlugin, schedule::AfterglowSet};
+use demo::AfterglowDemoPlugin;
 use input::AfterglowInputPlugin;
 use network::AfterglowNetworkPlugin;
 use perf_hud::{
@@ -22,40 +23,47 @@ use perf_hud::{
 use persistence::AfterglowPersistencePlugin;
 use world::AfterglowWorldPlugin;
 
+pub struct AfterglowRuntimePlugins;
+
 pub struct AfterglowEnginePlugin {
     trace_accum: AccumMap,
 }
 
+impl PluginGroup for AfterglowRuntimePlugins {
+    fn build(self) -> PluginGroupBuilder {
+        PluginGroupBuilder::start::<Self>()
+            .add(AfterglowCorePlugin)
+            .add(AfterglowInputPlugin)
+            .add(AfterglowNetworkPlugin)
+            .add(AfterglowPersistencePlugin)
+            .add(AfterglowWorldPlugin)
+    }
+}
+
 impl Plugin for AfterglowEnginePlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(PerfHudPlugin {
-            trace_accum: self.trace_accum.clone(),
-        })
-        .add_plugins(AfterglowCorePlugin)
-        .add_plugins(AfterglowInputPlugin)
-        .add_plugins(AfterglowNetworkPlugin)
-        .add_plugins(AfterglowPersistencePlugin)
-        .add_plugins(AfterglowWorldPlugin)
-        .add_systems(
-            Update,
-            (
-                record_update_start,
-                setup::rotate_cubes,
-                setup::update_light,
-                collect_frame,
-                update_hud,
-                record_update_end,
-                sync_shared_metrics,
+        app.add_plugins(AfterglowRuntimePlugins)
+            .add_plugins(PerfHudPlugin {
+                trace_accum: self.trace_accum.clone(),
+            })
+            .add_systems(
+                Update,
+                (
+                    record_update_start,
+                    collect_frame,
+                    update_hud,
+                    record_update_end,
+                    sync_shared_metrics,
+                )
+                    .chain()
+                    .in_set(AfterglowSet::DebugAndMetrics),
             )
-                .chain()
-                .in_set(AfterglowSet::DebugAndMetrics),
-        )
-        .add_systems(
-            Update,
-            reset_trace_data
-                .after(sync_shared_metrics)
-                .in_set(AfterglowSet::DebugAndMetrics),
-        );
+            .add_systems(
+                Update,
+                reset_trace_data
+                    .after(sync_shared_metrics)
+                    .in_set(AfterglowSet::DebugAndMetrics),
+            );
     }
 }
 
@@ -65,7 +73,11 @@ pub fn run() -> bevy::app::AppExit {
 
     App::new()
         .insert_resource(trace_data)
-        .add_plugins((default_plugins(), AfterglowEnginePlugin { trace_accum }))
+        .add_plugins((
+            default_plugins(),
+            AfterglowEnginePlugin { trace_accum },
+            AfterglowDemoPlugin,
+        ))
         .run()
 }
 
@@ -128,7 +140,7 @@ fn default_plugins() -> PluginGroupBuilder {
 
 #[cfg(test)]
 mod tests {
-    use crate::AfterglowEnginePlugin;
+    use crate::{AfterglowEnginePlugin, AfterglowRuntimePlugins};
     use bevy::app::App;
     use std::sync::{Arc, Mutex};
 
@@ -141,5 +153,25 @@ mod tests {
                 trace_accum: Arc::new(Mutex::new(std::collections::HashMap::new())),
             },
         ));
+    }
+
+    #[test]
+    fn runtime_plugins_register_without_demo_content() {
+        let mut app = App::new();
+        app.add_plugins((bevy::MinimalPlugins, AfterglowRuntimePlugins));
+
+        assert!(
+            app.world()
+                .resource::<crate::world::cell::CellManifestRegistry>()
+                .chunks()
+                .next()
+                .is_none()
+        );
+        assert!(
+            app.world()
+                .resource::<crate::world::cell::CellLoadRequests>()
+                .pending()
+                .is_empty()
+        );
     }
 }

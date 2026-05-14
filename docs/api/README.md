@@ -12,6 +12,7 @@ RPG networking harness).
 ```
 afterglow-engine
 ├── lib.rs
+├── demo.rs
 ├── core/
 │   ├── mod.rs
 │   ├── identity.rs
@@ -83,7 +84,6 @@ afterglow-engine
 │   ├── lifecycle/
 │   │   └── tests.rs   (cfg(test))
 │   └── mod.rs
-├── setup.rs           (private)
 ├── testing.rs         (cfg(test) or feature = "test-support")
 └── perf_hud/
     ├── mod.rs
@@ -105,8 +105,10 @@ afterglow-engine
 | Item | Kind | Description |
 |---|---|---|
 | `AfterglowEnginePlugin` | struct impl Plugin | Main engine plugin. Builds scene, registers HUD, tracing, metrics. |
+| `AfterglowRuntimePlugins` | PluginGroup | Core runtime group: core, input, network, persistence, and world. Contains no demo content. |
+| `demo::AfterglowDemoPlugin` | struct impl Plugin | Opt-in demo cell and demo animation systems used by `run()`. |
 | `AfterglowEnginePlugin::trace_accum` | field: AccumMap | Shared accumulator for tracing span data |
-| `run()` | fn → AppExit | Creates App with DefaultPlugins + AfterglowEnginePlugin, runs it |
+| `run()` | fn → AppExit | Creates App with DefaultPlugins + AfterglowEnginePlugin + AfterglowDemoPlugin, runs it |
 
 ### Re-exported Public Modules
 
@@ -115,6 +117,7 @@ afterglow-engine
 | `core` | Engine foundation systems. Currently owns stable identity and chunk membership. |
 | `core::identity` | Stable entity IDs, chunk IDs, persistence/replication markers, and registry resources. |
 | `core::schedule` | Ordered engine system sets for input, command building, simulation, persistence prep, and debug/metrics. |
+| `demo` | Opt-in demo content, demo manifest installation, and rotating/light animation systems. |
 | `input` | Generic per-game input axis/action bindings and per-tick `PlayerCommand` generation. |
 | `network` | Transport-independent peer, channel, packet, shared session, and fake transport primitives. Real network libraries are expected to be thin backend adapters below this layer. |
 | `network::authority` | Server-side command validation for peer ownership and duplicate simulation ticks. |
@@ -147,6 +150,11 @@ afterglow-engine
 | `AccumMap` | type alias | trace_collector.rs |
 | `update_hud()` | system fn | ui.rs |
 
+### Detailed API Notes
+
+- [plugins.md](plugins.md) documents runtime, engine, and demo plugin composition.
+- [world.md](world.md) documents cell manifests, lifecycle resources, and world system behavior.
+
 ### Systems Registered (execution order)
 
 **Startup:** `spawn_hud`
@@ -167,12 +175,12 @@ afterglow-engine
 
 **Update / `DebugAndMetrics` (chained):**
 1. `record_update_start`
-2. `rotate_cubes`
-3. `update_light`
-4. `collect_frame`
-5. `update_hud`
-6. `record_update_end`
-7. `sync_shared_metrics`
+2. `collect_frame`
+3. `update_hud`
+4. `record_update_end`
+5. `sync_shared_metrics`
+
+**Update / `DebugAndMetrics` with `AfterglowDemoPlugin`:** `rotate_cubes` → `update_light`
 
 **Update (after sync):** `reset_trace_data`
 
@@ -433,17 +441,7 @@ afterglow-engine
 | `testing::headless_render::offscreen_texture()` | — | `test-support` only. Creates an offscreen render target suitable for GPU readback tests. |
 | `StableIdAllocator` | next | Allocates nonzero `StableEntityId` values for persistent/replicated entities missing one. |
 | `StableEntityRegistry` | stable_to_entity, entity_to_stable, chunk_to_entities, duplicate_ids | Rebuilt after updates from entities with `StableEntityId` and optional `ChunkMembership`. |
-| `CellManifest` | chunk, entities | Authored cell baseline keyed by `ChunkId`. |
-| `CellEntityTemplate` | stable_id, name, persistent, transform, kind | One stable-ID entity to spawn when a cell baseline loads. |
-| `CellEntityKind` | Empty, RotatingCube, PointLight, Camera3d | Initial built-in template kinds; real game-specific data should live in registered components/resources. |
-| `CellManifestRegistry` | manifests | Validated chunk-to-manifest registry. `with_demo_cell()` installs the built-in demo manifest. |
-| `CellLoadRequests` | pending | Pending chunk loads. Requests stay pending while lifecycle moves through `Unloaded -> Loading -> Spawned`. |
-| `CellLoadReport` | requested_chunks, spawned_chunks, completed_chunks, missing_chunks, spawned_entities, errors | Last cell-loader pass report. |
-| `ChunkLifecycleState` | Unloaded, Loading, Spawned, GameplayActive, Sleeping, Unloading | Generic chunk lifecycle stage. Game/editor loaders watch `Loading`, spawn authored content, request `Spawned`, then optionally request `GameplayActive`. |
-| `ChunkLifecycle` | states | Stable chunk ID to lifecycle state map. Missing chunks read as `Unloaded`. |
-| `ChunkLifecycleConfig` | save_on_unload, apply_saved_delta_on_spawned | Automatic lifecycle persistence knobs. Defaults save chunk state before unload and apply stored deltas when a chunk is marked spawned. |
-| `ChunkLifecycleRequests` | load, spawned, activate, sleep, unload | Deduplicated per-frame lifecycle requests. Invalid chunk IDs are rejected by request methods. Unload wins conflicts in the same frame. |
-| `ChunkLifecycleReport` | transitions, saved_chunks, applied_saved_chunks, despawned_entities, errors | Last lifecycle pass report for tests, debugging, and editor UI. Persistence failures are reported here instead of panicking. |
+| `world::*` cell/lifecycle types | — | See [world.md](world.md). |
 | `FrameSample` | fps, frame_time_ms, systems | One frame's metrics |
 | `PerfData` | history, frame_systems, trace_snapshots, update_time_ms, extraction_time_ms, name_colors, next_color, smoothed_trace_max | Full performance data store |
 | `SystemStats` | name, avg, p95, p99 | Per-system timing stats |

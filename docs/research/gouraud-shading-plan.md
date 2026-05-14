@@ -123,4 +123,4 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 
 ## Registering
 
-Add `app.add_plugins(MaterialPlugin::<GouraudMaterial>::default())` and use `GouraudMaterial` in `setup.rs` instead of `StandardMaterial`.
+Add `app.add_plugins(MaterialPlugin::<GouraudMaterial>::default())` and use `GouraudMaterial` in the opt-in demo cell template instead of `StandardMaterial`.

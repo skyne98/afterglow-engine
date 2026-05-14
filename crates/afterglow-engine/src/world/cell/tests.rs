@@ -241,26 +241,28 @@ fn cell_load_reloads_manifest_after_lifecycle_unload() {
 }
 
 #[test]
-fn world_plugin_loads_built_in_demo_cell_through_manifest_path() {
+fn world_plugin_starts_without_demo_manifest_or_load_request() {
     let mut app = App::new();
     app.add_plugins((
         MinimalPlugins,
-        AssetPlugin::default(),
         AfterglowCorePlugin,
         AfterglowPersistencePlugin,
         AfterglowWorldPlugin,
-    ))
-    .init_resource::<Assets<Mesh>>()
-    .init_resource::<Assets<StandardMaterial>>();
+    ));
 
-    app.update();
-    app.update();
-
-    let registry = app.world().resource::<StableEntityRegistry>();
-    assert_eq!(registry.chunk_entities(DEMO_CELL_CHUNK).len(), 3);
-    assert!(registry.entity(DEMO_CUBE_ID).is_some());
-    assert!(registry.entity(DEMO_LIGHT_ID).is_some());
-    assert!(registry.entity(DEMO_CAMERA_ID).is_some());
+    assert!(
+        app.world()
+            .resource::<CellManifestRegistry>()
+            .chunks()
+            .next()
+            .is_none()
+    );
+    assert!(
+        app.world()
+            .resource::<CellLoadRequests>()
+            .pending()
+            .is_empty()
+    );
 }
 
 #[test]

@@ -6,7 +6,7 @@ This note maps roadmap gameplay systems onto Bevy `0.18.1` and the current local
 
 Current local state:
 
-- [setup.rs](/home/fox/Project/afterglow-engine/crates/afterglow-engine/src/setup.rs:35) has no player controller, only a camera.
+- [demo.rs](/home/fox/Project/afterglow-engine/crates/afterglow-engine/src/demo.rs:1) has no player controller, only opt-in demo animation and demo cell installation.
 - [perf_hud/ui.rs](/home/fox/Project/afterglow-engine/crates/afterglow-engine/src/perf_hud/ui.rs:59) is the main local UI example.
 - [perf_hud/ui.rs](/home/fox/Project/afterglow-engine/crates/afterglow-engine/src/perf_hud/ui.rs:222) already uses `ButtonInput<KeyCode>` for HUD toggling.
 - [lib.rs](/home/fox/Project/afterglow-engine/crates/afterglow-engine/src/lib.rs:96) disables Bevy audio on wasm.

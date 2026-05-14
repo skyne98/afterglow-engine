@@ -8,7 +8,7 @@ use crate::{
         ChunkId, ChunkMembership, Persistent, StableEntityId, StableEntityRegistry,
         maintain_stable_entity_registry,
     },
-    setup::Rotates,
+    demo::Rotates,
     world::lifecycle::{ChunkLifecycle, ChunkLifecycleRequests, ChunkLifecycleState},
 };
 
