@@ -12,6 +12,7 @@ test-support = ["dep:wgpu"]
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
+rayon.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
@@ -60,6 +61,10 @@ harness = false
 
 [[bench]]
 name = "ggrs"
+harness = false
+
+[[bench]]
+name = "persistence_streaming"
 harness = false
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

@@ -12,7 +12,7 @@ Deep dive: [bevy-integration-world-runtime.md](research/bevy-integration-world-r
 - [ ] Core interaction model: use, pickup, doors, containers, triggers
 - [ ] Basic scene/cell loading with stable entity identity
 - [x] Local-server single-player simulation path
-- [ ] Chunk/cell persistent state deltas
+- [x] Chunk/cell persistent state deltas
 - [ ] Save/load for one loaded cell
 
 ## Phase 2: Retro PBR Render Baseline

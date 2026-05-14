@@ -68,6 +68,11 @@ afterglow-engine
 │   ├── session/
 │   │   └── tests.rs   (cfg(test))
 │   └── tests.rs       (cfg(test))
+├── persistence/
+│   ├── apply.rs
+│   ├── edge_tests.rs (cfg(test))
+│   ├── mod.rs
+│   └── tests.rs       (cfg(test))
 ├── world/
 │   ├── mod.rs
 │   └── chunk.rs
@@ -119,6 +124,7 @@ afterglow-engine
 | `network::rollback` | Small deterministic subsystem rollback history plus committed/provisional domain replay, lifecycle, and cue helpers. |
 | `network::session` | Session identity maps between peers, platform identities, players, and avatars. |
 | `network::steam` | Optional native Steam adapter behind the `steam` feature. Maps Steam identity, lobby metadata, and SteamNetworkingSockets P2P connections to the shared network boundary. |
+| `persistence` | Stable-ID keyed chunk persistent deltas for registered serializable component types plus JSON roundtrip helpers for save/load foundations. |
 | `world` | Chunk/cell loading systems. Currently owns the built-in demo cell loader. |
 | `world::chunk` | Chunk IDs, demo-cell load state, and demo-cell loading system. |
 | `testing` | Test app builders. Available in unit tests and through the `test-support` feature. |
@@ -181,6 +187,7 @@ afterglow-engine
 | `LocalServerState` | Tracks the peer currently owned by the local-server bridge so single-player/multiplayer mode transitions clean up only local-server-owned session state |
 | `RollbackReplicationClock` | Current rollback tick and committed/provisional policy |
 | `NetworkSession` | Runtime peer/player/platform/avatar identity map |
+| `PersistentWorldDeltas` | Chunk-keyed persistent delta store for stable-ID registered component state, tombstones, and JSON save/load roundtrips |
 | `StableIdAllocator` | Monotonic allocator for process-local stable IDs |
 | `StableEntityRegistry` | Runtime maps for stable ID ↔ entity and chunk → entities |
 | `DemoCellState` | Tracks the built-in demo cell chunk and whether it has been loaded |
@@ -215,6 +222,7 @@ afterglow-engine
 | `cargo bench -p afterglow-engine --bench baseline` | Measures replication save serialization, restore, and interest-filtered reconnect baseline costs |
 | `cargo bench -p afterglow-engine --bench rollback` | Measures deterministic subsystem state history, policy, and replay costs |
 | `cargo bench -p afterglow-engine --bench ggrs` | Measures GGRS rollback-session coordinator cost plus synthetic full-state save/load/replay pressure |
+| `cargo bench -p afterglow-engine --bench persistence_streaming` | Measures 10k-player chunk-interest churn plus multi-chunk persistence capture/apply pressure |
 
 ### Platform Notes
 
@@ -304,6 +312,18 @@ afterglow-engine
 | `HandshakeRejectReason` | InvalidControlPayload, ProtocolMismatch, BuildMismatch, ContentMismatch, DuplicateIdentity, PeerIdentityChanged | Backend-neutral reason for refusing a peer before gameplay packets are accepted. Protocol mismatch is checked on control and gameplay packet headers plus control hello payloads. A connected peer cannot change platform identity by sending another hello. |
 | `HandshakeReport` | sent_hellos, accepted_peers, rejected_peers, disconnected_peers, dropped_unauthorized_packets | Per-service-call diagnostics returned by `service_control_handshake()`. |
 | `service_control_handshake()` | — | Polls a `NetworkTransport`, sends reliable hellos/rejects/accepts, updates `NetworkSession`, forwards authorized gameplay events, and drops pre-handshake gameplay packets. |
+| `PersistenceRegistry` | registered component callbacks | Runtime registry populated by `app.persist_component_as::<T>("stable.name.v1")` or `app.persist_component::<T>()`. Stores capture/apply/remove callbacks for serializable component types. |
+| `PersistenceAppExt::persist_component_as<T>()` | App extension | Registers a component type for persistence under an explicit stable save key. Preferred for durable game saves because Rust type names can change during refactors. `T` must be `Component + Serialize + DeserializeOwned`. |
+| `PersistenceAppExt::persist_component<T>()` | App extension | Convenience registration using Rust `type_name::<T>()` as the save key. Useful for tests/prototypes; prefer `persist_component_as` for authored content and compatibility. |
+| `PersistentWorldDeltas` | chunks | Resource storing one `ChunkPersistentDelta` per chunk. Supports replacement, removal, iteration, and `serde_json` byte roundtrips. |
+| `ChunkPersistentDelta` | chunk, entities, deleted | Per-chunk persistent state override. Entity records are keyed by `StableEntityId`; `deleted` is a chunk-scoped tombstone list for authored objects removed by gameplay. |
+| `PersistentEntityDelta` | entity, components, removed_components | Persistent state for one stable entity. `components` stores registered component payloads; `removed_components` lets apply remove registered components absent from the save. |
+| `PersistentComponentValue` | type_name, payload | One serialized registered component payload. `type_name` is the stable persistence registration key; payloads are JSON bytes for that component type. |
+| `PersistenceError` | UnregisteredComponent, InvalidChunkId, InvalidEntityId, DuplicateEntityDelta, ConflictingEntityDelta, Serialize, Deserialize | Persistence capture/apply failure reason. Apply preflights chunk IDs, entity IDs, duplicate/conflicting entity records, registered component keys, and payload decoding before mutating the world. |
+| `capture_chunk_delta()` | World, ChunkId | Captures registered components on persistent, non-runtime entities in one loaded chunk into a stable-ID keyed delta. Returns `Result`; emits removal records for persistent entities that have no registered components, and emits no entity records when no component types are registered. |
+| `capture_chunk_deltas()` | World, chunks | Batch capture path for streaming. Maintains stable IDs and scans the world once, then groups persistent component deltas by requested chunk. Prefer this when many chunks/cells unload in one tick. |
+| `apply_chunk_delta()` | World, ChunkPersistentDelta | Applies chunk-scoped tombstones, updates existing stable entities, spawns missing stable entities, restores registered components, and removes absent registered components. Returns `Result<ChunkDeltaApplyReport, PersistenceError>` with update/spawn/despawn/component counts. |
+| `apply_chunk_deltas()` | World, chunk deltas | Batch apply path for streaming. Preflights all component payloads, applies tombstones, then restores entities/components while maintaining stable IDs once per phase. Prefer this when many chunks/cells load in one tick. |
 | `ReplicationSaveData` | tick, snapshot | Serializable save payload built from a `ReplicationWorld` snapshot and restorable back into `ReplicationWorld`. |
 | `ReconnectBaseline` | peer, player, snapshot | Full or interest-filtered authoritative snapshot used when a player reconnects. |
 | `ReconnectBaselineStore` | baselines | Runtime map of reconnect baselines keyed by `(PeerId, NetworkPlayerId)`. |
@@ -378,7 +398,11 @@ afterglow-engine
 | `ReplicationSet` | RestoreState, ReissueMessages, CollectMessages, CollectChanges | Ordered `Update` sets inside `AfterglowSet::ApplyGameplay`; replay reissues messages before gameplay collection snapshots changed replicated state. |
 | `RollbackReplicationClock` | current_tick, policy | Drives the committed/provisional boundary for replay-aware replicated timelines. |
 | `ReplicatedRollbackMessageStream<E>` | messages, last diff/commit | Retained committed/provisional rollback message stream wrapper for replay-produced facts. |
-| `InterestMap` | entity_chunks, player_chunks | Chunk-based visibility filter for replicated snapshots and deltas. |
+| `InterestMap` | entity_chunks, removed_entity_chunks, player_chunks, cleanup_routed_removals | Chunk-based visibility filter for replicated snapshots and deltas. Removed entities keep their last-known chunk so despawn deltas still route after `remove_entity()`. Batch delta/fanout calls clear routed removals by default; disable with `set_cleanup_routed_removals(false)` if the server wants explicit ack-driven cleanup via `clear_removed_entities()`. Use `snapshot_chunk_ref_fanout()` / `delta_chunk_ref_fanout()` for server-scale packet routing so one chunk payload can be shared by many players without cloning per-player snapshots. `filter_snapshots()` / `filter_deltas()` remain available for owned per-player recovery/debug payloads. |
+| `ChunkSnapshotRefFanout<'a>` | tick, chunks, chunk_players | Borrowed chunk snapshot routing plan. `chunks` references snapshot entities by chunk; `chunk_players` maps each chunk payload to interested players. |
+| `ChunkDeltaRefFanout<'a>` | from_tick, to_tick, chunks, chunk_players | Borrowed chunk delta routing plan. Keeps changed entity deltas by reference and removed IDs by value. |
+| `ChunkSnapshotFanout` | tick, chunks, chunk_players | Owned chunk snapshot routing plan for tools or APIs that need cloned payloads. Prefer the borrowed form for server packet packing. |
+| `ChunkDeltaFanout` | from_tick, to_tick, chunks, chunk_players | Owned chunk delta routing plan for tools or APIs that need cloned payloads. Prefer the borrowed form for server packet packing. |
 | `testing::unit_app()` | — | Builds a minimal non-rendering app with `AfterglowCorePlugin`. |
 | `testing::asset_unit_app()` | — | Builds a minimal non-rendering app with assets and core systems. |
 | `testing::headless_render::app()` | — | `test-support` only. Builds a no-window render app using a real GPU adapter, or returns `None` if unavailable. |
@@ -406,6 +430,7 @@ afterglow-engine
 | proc-macro-crate | 3 | macro crate-name resolution for renamed dependencies |
 | proc-macro2 | 1 | proc macro support |
 | quote | 1 | proc macro support |
+| rayon | 1 | deterministic pure-data parallel fanout for very large server-side interest jobs |
 | wgpu | 27 | optional, `test-support` only for real headless GPU tests |
 | serde | 1 | derive |
 | serde_json | 1 | — |

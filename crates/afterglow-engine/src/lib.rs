@@ -2,6 +2,7 @@ pub mod core;
 pub mod input;
 pub mod network;
 mod perf_hud;
+pub mod persistence;
 mod setup;
 #[cfg(any(test, feature = "test-support"))]
 pub mod testing;
@@ -18,6 +19,7 @@ use perf_hud::{
     AccumMap, PerfHudPlugin, collect_frame, record_update_end, record_update_start, setup_tracing,
     sync_shared_metrics, trace_collector::reset_trace_data, update_hud,
 };
+use persistence::AfterglowPersistencePlugin;
 use world::AfterglowWorldPlugin;
 
 pub struct AfterglowEnginePlugin {
@@ -32,6 +34,7 @@ impl Plugin for AfterglowEnginePlugin {
         .add_plugins(AfterglowCorePlugin)
         .add_plugins(AfterglowInputPlugin)
         .add_plugins(AfterglowNetworkPlugin)
+        .add_plugins(AfterglowPersistencePlugin)
         .add_plugins(AfterglowWorldPlugin)
         .add_systems(
             Update,
