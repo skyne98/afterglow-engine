@@ -76,8 +76,11 @@ afterglow-engine
 │   ├── save_tests.rs (cfg(test))
 │   └── tests.rs       (cfg(test))
 ├── world/
-│   ├── mod.rs
-│   └── chunk.rs
+│   ├── chunk.rs
+│   ├── lifecycle.rs
+│   ├── lifecycle/
+│   │   └── tests.rs   (cfg(test))
+│   └── mod.rs
 ├── setup.rs           (private)
 ├── testing.rs         (cfg(test) or feature = "test-support")
 └── perf_hud/
@@ -127,8 +130,9 @@ afterglow-engine
 | `network::session` | Session identity maps between peers, platform identities, players, and avatars. |
 | `network::steam` | Optional native Steam adapter behind the `steam` feature. Maps Steam identity, lobby metadata, and SteamNetworkingSockets P2P connections to the shared network boundary. |
 | `persistence` | Stable-ID keyed chunk persistent deltas for registered serializable component types plus JSON roundtrip helpers for save/load foundations. |
-| `world` | Chunk/cell loading systems. Currently owns the built-in demo cell loader. |
-| `world::chunk` | Chunk IDs, demo-cell load state, and demo-cell loading system. |
+| `world` | Generic chunk lifecycle resources/systems plus the built-in demo cell loader. |
+| `world::chunk` | Demo-cell load state and demo-cell loading system. |
+| `world::lifecycle` | Generic chunk/cell lifecycle state machine with load/spawn/activate/sleep/unload requests, persistence-backed unload for spawned chunks, saved-delta apply on spawn, and per-frame reports. |
 | `testing` | Test app builders. Available in unit tests and through the `test-support` feature. |
 
 ### Re-exported from `perf_hud`
@@ -192,6 +196,10 @@ afterglow-engine
 | `PersistentWorldDeltas` | Chunk-keyed persistent delta store for stable-ID registered component state, tombstones, and JSON save/load roundtrips |
 | `StableIdAllocator` | Monotonic allocator for process-local stable IDs |
 | `StableEntityRegistry` | Runtime maps for stable ID ↔ entity and chunk → entities |
+| `ChunkLifecycle` | Runtime chunk lifecycle state map |
+| `ChunkLifecycleConfig` | Knobs for automatic save-on-unload of spawned chunks and saved-delta apply-on-spawn behavior |
+| `ChunkLifecycleRequests` | Per-frame load/spawned/activate/sleep/unload request queues |
+| `ChunkLifecycleReport` | Last lifecycle pass transitions, saved/applied chunks, despawn count, and non-panicking error reports |
 | `DemoCellState` | Tracks the built-in demo cell chunk and whether it has been loaded |
 | `PerfData` | History, frame systems, trace snapshots, timing, name colors |
 | `FrameProfiler` | `{ update_start: Option<Instant>, postupdate_start: Option<Instant> }` |
@@ -416,6 +424,11 @@ afterglow-engine
 | `testing::headless_render::offscreen_texture()` | — | `test-support` only. Creates an offscreen render target suitable for GPU readback tests. |
 | `StableIdAllocator` | next | Allocates nonzero `StableEntityId` values for persistent/replicated entities missing one. |
 | `StableEntityRegistry` | stable_to_entity, entity_to_stable, chunk_to_entities, duplicate_ids | Rebuilt after updates from entities with `StableEntityId` and optional `ChunkMembership`. |
+| `ChunkLifecycleState` | Unloaded, Loading, Spawned, GameplayActive, Sleeping, Unloading | Generic chunk lifecycle stage. Game/editor loaders watch `Loading`, spawn authored content, request `Spawned`, then optionally request `GameplayActive`. |
+| `ChunkLifecycle` | states | Stable chunk ID to lifecycle state map. Missing chunks read as `Unloaded`. |
+| `ChunkLifecycleConfig` | save_on_unload, apply_saved_delta_on_spawned | Automatic lifecycle persistence knobs. Defaults save chunk state before unload and apply stored deltas when a chunk is marked spawned. |
+| `ChunkLifecycleRequests` | load, spawned, activate, sleep, unload | Deduplicated per-frame lifecycle requests. Invalid chunk IDs are rejected by request methods. Unload wins conflicts in the same frame. |
+| `ChunkLifecycleReport` | transitions, saved_chunks, applied_saved_chunks, despawned_entities, errors | Last lifecycle pass report for tests, debugging, and editor UI. Persistence failures are reported here instead of panicking. |
 | `DemoCellState` | chunk, load_state | Resource used by the demo loader to spawn one stable-ID chunk once. |
 | `ChunkLoadState` | Unloaded, Loaded | Minimal chunk load state for the built-in demo cell. |
 | `FrameSample` | fps, frame_time_ms, systems | One frame's metrics |

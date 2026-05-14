@@ -9,6 +9,7 @@ Current local state:
 - [lib.rs](/home/fox/Project/afterglow-engine/crates/afterglow-engine/src/lib.rs:20) registers the core, input, network, world, and perf HUD plugins.
 - [core/identity.rs](/home/fox/Project/afterglow-engine/crates/afterglow-engine/src/core/identity.rs:1) owns stable IDs, chunk membership, persistence markers, replication markers, and runtime registries.
 - [world/chunk.rs](/home/fox/Project/afterglow-engine/crates/afterglow-engine/src/world/chunk.rs:1) owns the current built-in demo cell loader.
+- [world/lifecycle.rs](/home/fox/Project/afterglow-engine/crates/afterglow-engine/src/world/lifecycle.rs:1) owns the generic chunk lifecycle state machine and automatic save/apply hooks.
 - [persistence/mod.rs](/home/fox/Project/afterglow-engine/crates/afterglow-engine/src/persistence/mod.rs:1) owns stable-ID keyed chunk deltas, one-loaded-cell save/load, registered serializable components, and deleted authored-object tombstones.
 - [network/local_server.rs](/home/fox/Project/afterglow-engine/crates/afterglow-engine/src/network/local_server.rs:1) provides an opt-in local-server path where single-player `LocalPlayers` are mirrored into `NetworkSession` and local `PlayerCommand`s are submitted through `ServerCommandBuffer`.
 - Snapshot/delta replication, rollback timelines, prediction, reconciliation, interpolation, reconnect baselines, and chunk interest now exist under `network/`.
@@ -129,6 +130,16 @@ Sleeping
 Unloading
 ```
 
+The current engine lifecycle layer provides the first generic version of this:
+`ChunkLifecycleRequests` queues load/spawned/activate/sleep/unload requests,
+`ChunkLifecycle` stores stable chunk states, and `ChunkLifecycleReport` exposes
+transitions plus non-panicking persistence errors for tests/editor UI. Unload
+saves chunk deltas for spawned/gameplay/sleeping chunks and despawns loaded
+chunk entities by default. Unloading while still in `Loading` cleans partial
+spawns without saving an incomplete delta. Marking a chunk spawned applies
+stored persistent deltas by default. These defaults can be disabled through
+`ChunkLifecycleConfig` when tools need manual control.
+
 Use Bevy assets for authored data:
 
 - chunk manifest
@@ -236,7 +247,7 @@ src/network/
 2. Move demo spawning behind a cell/chunk loader.
 3. Add explicit engine system sets.
 4. Implement one-cell save/load by stable ID. Done: `LoadedCellSave` captures versioned chunk deltas, merges recorded tombstones, roundtrips through JSON, retains loaded tombstones for later saves, and rejects unknown save versions before mutation.
-5. Add chunk lifecycle resources and commands.
+5. Add chunk lifecycle resources and commands. Done: `ChunkLifecycleRequests` and `process_chunk_lifecycle_requests()` provide generic load/spawn/activate/sleep/unload transitions with automatic persistence hooks.
 6. Split CPU loaded, gameplay active, render extractable, GPU resident.
 7. Add local-server command path. Done: `LocalServerConfig::single_player()` mirrors local players into the authoritative session and submits local commands through normal server authority.
 8. Add snapshot/delta records using the same schema as save.
