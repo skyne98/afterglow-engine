@@ -4,7 +4,7 @@ Ordered implementation path for `afterglow-engine`. This roadmap is dependency-b
 
 ## Phase 1: Playable Cell Foundation
 
-Deep dive: [bevy-integration-world-runtime.md](research/bevy-integration-world-runtime.md), [bevy-integration-gameplay-audio-ui.md](research/bevy-integration-gameplay-audio-ui.md).
+Deep dive: [bevy-integration-world-runtime.md](research/bevy-integration-world-runtime.md), [bevy-integration-gameplay-audio-ui.md](research/bevy-integration-gameplay-audio-ui.md), [first-person-controller-feel.md](research/first-person-controller-feel.md).
 
 - [x] Core app/plugin structure for engine systems
 - [x] Context-aware input bindings with action phases and per-player device routing
