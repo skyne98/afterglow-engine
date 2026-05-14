@@ -4,7 +4,7 @@
 
 | Item | Purpose |
 |---|---|
-| `AfterglowRuntimePlugins` | Demo-free runtime group. Adds core, input, network, persistence, and world plugins in dependency order. |
+| `AfterglowRuntimePlugins` | Demo-free runtime group. Adds core, input, network, physics, persistence, and world plugins in dependency order. |
 | `AfterglowEnginePlugin` | App-level engine plugin. Adds `AfterglowRuntimePlugins`, the perf HUD, trace collection, and metrics systems. |
 | `demo::AfterglowDemoPlugin` | Optional demo content plugin. Installs the built-in demo cell manifest/load request plus demo animation systems. |
 | `run()` | Native/wasm entrypoint. Adds Bevy defaults, `AfterglowEnginePlugin`, and `AfterglowDemoPlugin`. |
@@ -23,6 +23,7 @@ AfterglowRuntimePlugins
   AfterglowCorePlugin
   AfterglowInputPlugin
   AfterglowNetworkPlugin
+  AfterglowPhysicsPlugin
   AfterglowPersistencePlugin
   AfterglowWorldPlugin
 

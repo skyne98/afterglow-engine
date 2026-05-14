@@ -69,6 +69,7 @@ afterglow-engine
 │   ├── session/
 │   │   └── tests.rs   (cfg(test))
 │   └── tests.rs       (cfg(test))
+├── physics.rs
 ├── persistence/
 │   ├── apply.rs
 │   ├── edge_tests.rs (cfg(test))
@@ -105,7 +106,7 @@ afterglow-engine
 | Item | Kind | Description |
 |---|---|---|
 | `AfterglowEnginePlugin` | struct impl Plugin | Main engine plugin. Builds scene, registers HUD, tracing, metrics. |
-| `AfterglowRuntimePlugins` | PluginGroup | Core runtime group: core, input, network, persistence, and world. Contains no demo content. |
+| `AfterglowRuntimePlugins` | PluginGroup | Core runtime group: core, input, network, physics, persistence, and world. Contains no demo content. |
 | `demo::AfterglowDemoPlugin` | struct impl Plugin | Opt-in demo cell and demo animation systems used by `run()`. |
 | `AfterglowEnginePlugin::trace_accum` | field: AccumMap | Shared accumulator for tracing span data |
 | `run()` | fn → AppExit | Creates App with DefaultPlugins + AfterglowEnginePlugin + AfterglowDemoPlugin, runs it |
@@ -134,6 +135,7 @@ afterglow-engine
 | `network::rollback` | Small deterministic subsystem rollback history plus committed/provisional domain replay, lifecycle, and cue helpers. |
 | `network::session` | Session identity maps between peers, platform identities, players, and avatars. |
 | `network::steam` | Optional native Steam adapter behind the `steam` feature. Maps Steam identity, lobby metadata, and SteamNetworkingSockets P2P connections to the shared network boundary. |
+| `physics` | Avian-backed 3D physics plugin, generic authoring components, config, and Avian prelude re-export. |
 | `persistence` | Stable-ID keyed chunk persistent deltas for registered serializable component types plus JSON roundtrip helpers for save/load foundations. |
 | `world` | Data-driven cell manifests/load requests plus generic chunk lifecycle resources/systems. |
 | `world::cell` | Cell manifests, manifest registry, load requests, baseline spawn tracking, and built-in demo manifest. |
@@ -142,17 +144,12 @@ afterglow-engine
 
 ### Re-exported from `perf_hud`
 
-| Item | Kind | Source |
-|---|---|---|
-| `PerfData` | Resource | data.rs |
-| `SharedMetrics` | Resource (Arc<Mutex<PerfData>>) | server.rs |
-| `setup_tracing()` | fn → TraceData | trace_collector.rs |
-| `AccumMap` | type alias | trace_collector.rs |
-| `update_hud()` | system fn | ui.rs |
+`PerfData`, `SharedMetrics`, `setup_tracing()`, `AccumMap`, and `update_hud()`.
 
 ### Detailed API Notes
 
 - [plugins.md](plugins.md) documents runtime, engine, and demo plugin composition.
+- [physics.md](physics.md) documents Avian-backed physics integration.
 - [world.md](world.md) documents cell manifests, lifecycle resources, and world system behavior.
 
 ### Systems Registered (execution order)
@@ -172,6 +169,8 @@ afterglow-engine
 **Update / `ApplyGameplay`:** `process_cell_load_requests`
 
 **Update / `PreparePersistence`:** `process_chunk_lifecycle_requests`
+
+**FixedPostUpdate:** Avian physics schedule through `AfterglowPhysicsPlugin`
 
 **Update / `DebugAndMetrics` (chained):**
 1. `record_update_start`
@@ -210,6 +209,7 @@ afterglow-engine
 | `PersistentWorldDeltas` | Chunk-keyed persistent delta store for stable-ID registered component state, tombstones, and JSON save/load roundtrips |
 | `StableIdAllocator` | Monotonic allocator for process-local stable IDs |
 | `StableEntityRegistry` | Runtime maps for stable ID ↔ entity and chunk → entities |
+| `AfterglowPhysicsConfig` | Gravity and future global physics tuning knobs |
 | `CellManifestRegistry` | Chunk-keyed authored cell manifests used by the generic cell loader |
 | `CellLoadRequests` | Persistent pending cell load requests; loaders complete them after lifecycle reaches spawned/active/sleeping |
 | `CellLoadTracker` | Tracks whether a requested chunk's authored baseline was spawned during the current load attempt |
@@ -452,6 +452,7 @@ afterglow-engine
 
 | Crate | Version | Feature |
 |---|---|---|
+| avian3d | 0.6.1 | 3d, f32, parry-f32, xpbd_joints, parallel |
 | bevy (workspace) | 0.18.1 | webgpu |
 | bevy (native engine) | 0.18.1 | bevy_dev_tools, trace |
 | bevy (native agx) | 0.18.1 | dynamic_linking, bevy_dev_tools, sysinfo_plugin, trace |

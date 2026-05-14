@@ -4,6 +4,7 @@ pub mod input;
 pub mod network;
 mod perf_hud;
 pub mod persistence;
+pub mod physics;
 #[cfg(any(test, feature = "test-support"))]
 pub mod testing;
 pub mod world;
@@ -21,6 +22,7 @@ use perf_hud::{
     sync_shared_metrics, trace_collector::reset_trace_data, update_hud,
 };
 use persistence::AfterglowPersistencePlugin;
+use physics::AfterglowPhysicsPlugin;
 use world::AfterglowWorldPlugin;
 
 pub struct AfterglowRuntimePlugins;
@@ -35,6 +37,7 @@ impl PluginGroup for AfterglowRuntimePlugins {
             .add(AfterglowCorePlugin)
             .add(AfterglowInputPlugin)
             .add(AfterglowNetworkPlugin)
+            .add(AfterglowPhysicsPlugin)
             .add(AfterglowPersistencePlugin)
             .add(AfterglowWorldPlugin)
     }

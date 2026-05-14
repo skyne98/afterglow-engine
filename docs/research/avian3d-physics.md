@@ -2,7 +2,7 @@
 
 ## Overview
 
-**Avian** (v0.6, Bevy 0.18) is an ECS-driven 2D/3D physics engine built *for* Bevy *with* Bevy.
+**Avian** (v0.6.1, Bevy 0.18) is an ECS-driven 2D/3D physics engine built *for* Bevy *with* Bevy.
 Created by Joona Aalto (jondolf). Repository: [github.com/avianphysics/avian](https://github.com/avianphysics/avian)
 
 Unlike `bevy_rapier3d` which wraps a separate physics world, **Avian stores all physics state as
@@ -227,6 +227,21 @@ with Bevy components.
 The main risk is maturity — at v0.6, there are more rough edges than Rapier. But the
 architecture is sound, development is active, and the design is clearly the right direction
 for Bevy-native physics.
+
+## Current Engine Integration
+
+Afterglow uses `avian3d = 0.6.1` with explicit minimal features:
+`3d`, `f32`, `parry-f32`, `xpbd_joints`, and `parallel`. The engine deliberately
+does not enable Avian's default debug-render, picking, scene, or mesh-collider
+features in the core dependency, because those pull in extra Bevy resources that
+make minimal/headless runtime tests less clean. Mesh-derived colliders can be
+added later as an explicit import/tooling path.
+
+The public engine layer lives in
+[physics.rs](/home/fox/Project/afterglow-engine/crates/afterglow-engine/src/physics.rs:1):
+`AfterglowPhysicsPlugin` adds Avian, mirrors `AfterglowPhysicsConfig.gravity`
+into Avian `Gravity`, and provides small authoring components for body kind,
+primitive colliders, and authored velocity.
 
 ## References
 - Repository: https://github.com/avianphysics/avian

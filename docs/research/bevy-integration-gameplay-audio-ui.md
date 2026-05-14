@@ -50,7 +50,10 @@ This keeps controller code compatible with local-server simulation, prediction, 
 
 ## Physics And Interaction
 
-There is no physics dependency yet. Pick one before implementing interaction deeply. Local research already points toward Avian for Bevy integration.
+The engine now integrates Avian through `AfterglowPhysicsPlugin`. Game-facing
+code can start from the generic `PhysicsBody`, `PhysicsCollider`, and
+`PhysicsVelocity` authoring components, or use
+`afterglow_engine::physics::avian::*` directly for backend-specific features.
 
 Interaction should use semantic commands:
 
@@ -198,8 +201,8 @@ Plan:
 
 1. Input action mapping.
 2. `PlayerCommand` generation.
-3. Physics dependency and first-person body.
-4. Interaction commands and use ray/query.
+3. First-person body on top of Avian-backed physics.
+4. Interaction commands and physics ray/query.
 5. Inventory/equipment/effects data model.
 6. Animation graph wrapper and gameplay animation state.
 7. Bone-attached skinned proxy extraction.

@@ -8,7 +8,7 @@ Deep dive: [bevy-integration-world-runtime.md](research/bevy-integration-world-r
 
 - [x] Core app/plugin structure for engine systems
 - [ ] First-person controller for dense immersive-sim spaces
-- [ ] Physics integration for player movement and interactable objects
+- [x] Physics integration for player movement and interactable objects
 - [ ] Core interaction model: use, pickup, doors, containers, triggers
 - [x] Basic scene/cell loading with stable entity identity
 - [x] Generic chunk/cell lifecycle state machine
