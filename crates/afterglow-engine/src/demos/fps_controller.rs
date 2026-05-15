@@ -19,7 +19,10 @@ use crate::{
 mod playground;
 #[cfg(test)]
 use playground::FpsDemoPlaygroundPiece;
-use playground::{spawn_crouch_playground, spawn_slopes, spawn_stairs};
+use playground::{
+    spawn_crouch_playground, spawn_hinged_door, spawn_slider_drawer, spawn_slopes, spawn_stairs,
+    spawn_grabbable_objects,
+};
 
 pub struct FpsControllerDemoPlugin;
 
@@ -143,7 +146,7 @@ fn spawn_scene(
     spawn_box(
         &mut commands,
         &mut meshes,
-        accent_material,
+        accent_material.clone(),
         Vec3::new(1.5, 0.5, 3.0),
         Vec3::new(2.5, 0.25, -2.0),
     );
@@ -155,6 +158,14 @@ fn spawn_scene(
     );
     spawn_slopes(&mut commands, &mut meshes, slope_material, barrier_material);
     spawn_crouch_playground(&mut commands, &mut meshes, crouch_material);
+    spawn_hinged_door(&mut commands, &mut meshes, &mut materials);
+    spawn_slider_drawer(&mut commands, &mut meshes, &mut materials);
+    spawn_grabbable_objects(
+        &mut commands,
+        &mut meshes,
+        &mut materials,
+        accent_material,
+    );
 
     let config = FirstPersonControllerConfig {
         look_sensitivity: Vec2::new(0.0025, 0.0025),
@@ -428,7 +439,14 @@ mod tests {
         let mut crouch = 0;
         let mut barriers = 0;
         for (piece, body, transform) in query.iter(world) {
-            assert_eq!(*body, PhysicsBody::static_body());
+            match piece {
+                FpsDemoPlaygroundPiece::HingedDoor | FpsDemoPlaygroundPiece::SliderDrawer => {
+                    continue; // dynamic bodies, checked in other tests
+                }
+                _ => {
+                    assert_eq!(*body, PhysicsBody::static_body());
+                }
+            }
             match piece {
                 FpsDemoPlaygroundPiece::Stair => {
                     stairs += 1;
@@ -439,6 +457,7 @@ mod tests {
                 FpsDemoPlaygroundPiece::Slope => slopes += 1,
                 FpsDemoPlaygroundPiece::Crouch => crouch += 1,
                 FpsDemoPlaygroundPiece::Barrier => barriers += 1,
+                _ => {}
             }
         }
 
@@ -446,7 +465,7 @@ mod tests {
         assert_eq!(forward_path_stairs, 5);
         assert_eq!(slopes, 3);
         assert_eq!(crouch, 4);
-        assert_eq!(barriers, 1);
+        assert_eq!(barriers, 2);
     }
 
     #[test]
