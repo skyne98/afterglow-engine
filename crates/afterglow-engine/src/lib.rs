@@ -5,6 +5,7 @@ pub mod demos;
 pub mod input;
 pub mod interaction;
 pub mod network;
+pub mod units;
 mod perf_hud;
 pub mod persistence;
 pub mod physics;

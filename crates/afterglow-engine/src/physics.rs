@@ -91,7 +91,38 @@ impl PhysicsBody {
             kind: PhysicsBodyKind::Kinematic,
         }
     }
+
+    /// Dynamic body with explicit mass in real-world kilograms.
+    ///
+    /// ```ignore
+    /// commands.spawn((
+    ///     PhysicsBody::with_mass(100.0),
+    ///     PhysicsCollider::cuboid(Vec3::splat(0.5)),
+    /// ));
+    /// ```
+    /// A 100 kg cube behaves like 100 kg: gravity pulls it with ~981 N,
+    /// collisions require proportional force to move.
+    pub fn with_mass(kg: f32) -> (Self, avian::Mass) {
+        (Self::dynamic(), avian::Mass(kg))
+    }
+
+    /// Dynamic body with a real-world density.
+    /// avian3d auto-computes mass from `ColliderDensity` + collider volume.
+    ///
+    /// ```ignore
+    /// commands.spawn((
+    ///     PhysicsBody::with_density(units::Density::STEEL),
+    ///     PhysicsCollider::cuboid(Vec3::splat(1.0)),
+    /// ));
+    /// ```
+    /// A 1 m³ steel cube gets `Mass(7800.0)` automatically.
+    pub fn with_density(density: crate::units::Density) -> (Self, avian::ColliderDensity) {
+        (Self::dynamic(), avian::ColliderDensity(density.0))
+    }
 }
+
+// Convenience — a 1m³ steel block has a believable 7800 kg.
+// A player-sized human-density capsule has ~70-80 kg.
 
 impl From<PhysicsBodyKind> for RigidBody {
     fn from(kind: PhysicsBodyKind) -> Self {
