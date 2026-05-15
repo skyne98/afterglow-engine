@@ -153,6 +153,9 @@ impl Plugin for AfterglowInteractionPlugin {
 }
 
 #[cfg(test)]
+mod integration_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
