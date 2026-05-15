@@ -31,7 +31,7 @@ const help = `
     bun build-system/build.ts serve-wasm
 `;
 
-const commands: Record<string, () => Promise<void>> = {
+const commands: Record<string, (args: string[]) => Promise<void>> = {
   native: runDev,
   "native-release": runRelease,
   "build-wasm": buildWasm,
@@ -71,7 +71,7 @@ async function main() {
     process.exit(1);
   }
 
-  await fn();
+  await fn(process.argv.slice(3));
 }
 
 main().catch((e) => {

@@ -18,3 +18,17 @@
 - KISS and YAGNI
 - No files above 500 LOC
 - Build system lives in build-system/ — use `bun run <command>` (e.g. `bun run native`, `bun run wasm`, `bun run check`)
+
+# opencode / codex usage
+
+- This agent may be invoked by either `opencode` or `codex` (legacy name). Both use the same binary — `opencode` is the canonical name going forward.
+- opencode has a **permission system** that prompts for approval before any non-read tool executes (write, edit, bash, etc.). To bypass all permission prompts (e.g. in CI, batch scripts, or when you fully trust the prompt), pass `--dangerously-skip-permissions`. In session/interactive mode you typically omit this and approve interactively.
+- The `--pure` flag disables all external plugins (no MCP servers, no custom tools). Use this for clean, reproducible research runs.
+
+## Delegation patterns (preserve context, avoid reading big files yourself)
+
+- Use the **`Task` tool** (available inside the agent session) to spawn a subagent for research, sweeping codebase scans, or multi-file questions. This preserves your own context window — you don't need to read huge files yourself.
+- The Task tool takes `subagent_type`: use `"explore"` for pure read-only questions about the codebase, `"general"` for write tasks or multi-step workflows. Be explicit: tell the subagent exactly which files to read, what question to answer, and what format to return the answer in. Keep the scope narrow.
+- Use task subagents for: scanning repos for patterns, cross-referencing types across crates, understanding unfamiliar subsystems, generating summaries of large modules (>200 lines), finding all callers of a function, etc.
+- The **`opencode run` CLI** (`opencode run -m <model> --pure --dir <path> "...prompt..."`) is the equivalent for running standalone prompts from a shell. Prefer the Task tool during an active session; use `opencode run` when outside a session or in a script.
+- When spawning research agents, keep them read-only by default, give them narrow prompts, ask for primary-source links, and merge the findings back into `docs/research/` yourself.

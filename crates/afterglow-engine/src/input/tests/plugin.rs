@@ -1,6 +1,6 @@
 use super::*;
 use crate::{core::AfterglowCorePlugin, testing::unit_app};
-use bevy::{ecs::message::Messages, input::mouse::MouseMotion};
+use bevy::input::mouse::AccumulatedMouseMotion;
 
 #[test]
 fn input_plugin_enqueues_one_command_per_local_player() {
@@ -107,15 +107,18 @@ fn input_plugin_collects_mouse_motion_messages() {
         .context_mut(InputContext::DEFAULT_GAMEPLAY)
         .add_mouse_motion_axis("look.x", AxisComponent::X, 0.1);
     app.world_mut()
-        .resource_mut::<Messages<MouseMotion>>()
-        .write(MouseMotion {
-            delta: Vec2::new(30.0, 4.0),
-        });
+        .resource_mut::<AccumulatedMouseMotion>()
+        .delta = Vec2::new(30.0, 4.0);
 
     app.update();
 
     let queue = app.world().resource::<PlayerCommandQueue>();
     assert_eq!(queue.commands()[0].axis("look.x"), 3.0);
+
+    app.update();
+
+    let queue = app.world().resource::<PlayerCommandQueue>();
+    assert_eq!(queue.commands()[0].axis("look.x"), 0.0);
 }
 
 #[test]

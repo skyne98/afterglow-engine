@@ -33,11 +33,13 @@ pub enum PhysicsBodyKind {
     Kinematic,
 }
 
-#[derive(Component, Clone, Copy, Debug, PartialEq, Reflect)]
+#[derive(Component, Clone, Debug, PartialEq, Reflect)]
 pub enum PhysicsCollider {
     Cuboid { size: Vec3 },
     Sphere { radius: f32 },
+    Cylinder { radius: f32, height: f32 },
     Capsule { radius: f32, length: f32 },
+    ConvexHull { points: Vec<Vec3> },
 }
 
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq, Reflect)]
@@ -110,15 +112,26 @@ impl PhysicsCollider {
         Self::Sphere { radius }
     }
 
+    pub const fn cylinder(radius: f32, height: f32) -> Self {
+        Self::Cylinder { radius, height }
+    }
+
     pub const fn capsule(radius: f32, length: f32) -> Self {
         Self::Capsule { radius, length }
     }
 
-    fn to_avian(self) -> Collider {
+    pub fn convex_hull(points: Vec<Vec3>) -> Self {
+        Self::ConvexHull { points }
+    }
+
+    fn to_avian(&self) -> Collider {
         match self {
             Self::Cuboid { size } => Collider::cuboid(size.x, size.y, size.z),
-            Self::Sphere { radius } => Collider::sphere(radius),
-            Self::Capsule { radius, length } => Collider::capsule(radius, length),
+            Self::Sphere { radius } => Collider::sphere(*radius),
+            Self::Cylinder { radius, height } => Collider::cylinder(*radius, *height),
+            Self::Capsule { radius, length } => Collider::capsule(*radius, *length),
+            Self::ConvexHull { points } => Collider::convex_hull(points.clone())
+                .expect("PhysicsCollider::ConvexHull requires at least one valid 3D hull"),
         }
     }
 }
@@ -287,16 +300,31 @@ mod tests {
             .spawn(PhysicsCollider::cuboid(Vec3::new(1.0, 2.0, 3.0)))
             .id();
         let sphere = app.world_mut().spawn(PhysicsCollider::sphere(0.5)).id();
+        let cylinder = app
+            .world_mut()
+            .spawn(PhysicsCollider::cylinder(0.25, 1.8))
+            .id();
         let capsule = app
             .world_mut()
             .spawn(PhysicsCollider::capsule(0.25, 1.5))
+            .id();
+        let hull = app
+            .world_mut()
+            .spawn(PhysicsCollider::convex_hull(vec![
+                Vec3::new(-0.5, 0.0, -0.5),
+                Vec3::new(0.5, 0.0, -0.5),
+                Vec3::new(0.0, 0.0, 0.5),
+                Vec3::new(0.0, 1.0, 0.0),
+            ]))
             .id();
 
         app.update();
 
         assert!(app.world().get::<Collider>(cuboid).is_some());
         assert!(app.world().get::<Collider>(sphere).is_some());
+        assert!(app.world().get::<Collider>(cylinder).is_some());
         assert!(app.world().get::<Collider>(capsule).is_some());
+        assert!(app.world().get::<Collider>(hull).is_some());
     }
 
     #[test]

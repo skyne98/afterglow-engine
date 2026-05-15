@@ -15,8 +15,10 @@ pub use command::{
 pub use evaluation::{GamepadInput, RawInputState, device_allowed, read_bound_inputs};
 
 use bevy::{
-    ecs::message::Messages,
-    input::{mouse::MouseMotion, touch::ForceTouch},
+    input::{
+        mouse::{AccumulatedMouseMotion, MouseMotion},
+        touch::ForceTouch,
+    },
     prelude::*,
 };
 
@@ -34,6 +36,7 @@ impl Plugin for AfterglowInputPlugin {
             .init_resource::<PlayerCommandQueue>()
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<ButtonInput<MouseButton>>()
+            .init_resource::<AccumulatedMouseMotion>()
             .init_resource::<Touches>()
             .add_message::<MouseMotion>()
             .add_systems(
@@ -49,7 +52,7 @@ pub fn collect_player_commands(
     mouse: Res<ButtonInput<MouseButton>>,
     touches: Res<Touches>,
     gamepads: Query<(Entity, &Gamepad)>,
-    mouse_motion: Res<Messages<MouseMotion>>,
+    mut mouse_motion: ResMut<AccumulatedMouseMotion>,
     bindings: Res<PlayerInputBindings>,
     mut virtual_input: ResMut<VirtualInputState>,
     local_players: Res<LocalPlayers>,
@@ -61,9 +64,8 @@ pub fn collect_player_commands(
         .iter()
         .map(|(entity, gamepad)| GamepadInput { entity, gamepad })
         .collect::<Vec<_>>();
-    let mouse_delta = mouse_motion
-        .iter_current_update_messages()
-        .fold(Vec2::ZERO, |delta, motion| delta + motion.delta);
+    let mouse_delta = mouse_motion.delta;
+    mouse_motion.delta = Vec2::ZERO;
     let mut next_commands = Vec::with_capacity(local_players.players().len());
     for player in local_players.players() {
         next_commands.push(read_player_command(

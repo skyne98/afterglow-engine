@@ -13,6 +13,18 @@ RPG networking harness).
 afterglow-engine
 ├── lib.rs
 ├── demo.rs
+├── demos.rs
+├── controller.rs
+├── controller/
+│   ├── body.rs
+│   ├── camera.rs
+│   ├── camera_motion.rs
+│   ├── commands.rs
+│   ├── physics.rs
+│   ├── source_move.rs
+│   ├── stairs.rs
+│   ├── trace.rs
+│   └── util.rs
 ├── core/
 │   ├── mod.rs
 │   ├── identity.rs
@@ -70,6 +82,10 @@ afterglow-engine
 │   │   └── tests.rs   (cfg(test))
 │   └── tests.rs       (cfg(test))
 ├── physics.rs
+├── demos/
+│   ├── fps_controller.rs
+│   └── fps_controller/
+│       └── playground.rs
 ├── persistence/
 │   ├── apply.rs
 │   ├── edge_tests.rs (cfg(test))
@@ -150,6 +166,7 @@ afterglow-engine
 
 - [plugins.md](plugins.md) documents runtime, engine, and demo plugin composition.
 - [input.md](input.md) documents context-aware, phased, device-routed input.
+- [controller.md](controller.md) documents the command-driven first-person controller.
 - [physics.md](physics.md) documents Avian-backed physics integration.
 - [world.md](world.md) documents cell manifests, lifecycle resources, and world system behavior.
 
@@ -300,6 +317,8 @@ afterglow-engine
 | `PlayerInputBindings` | contexts | Context-aware bindings for keyboard, mouse motion/buttons, gamepads, touch, and virtual/editor input. See `input.md`. |
 | `InputAction*`, `InputAxis*`, `PointerInput`, `VirtualInputState` | — | Generic command payload and shared or per-player scripted input types; actions carry `Pressed`, `Held`, or `Released` phases. See `input.md`. |
 | `InputContext`, `AxisBinding`, `ActionBinding`, `LocalInputRoutes` | — | Input layers, binding sources, and optional per-player device routing. See `input.md`. |
+| `FirstPersonController` | player, config | Command-driven HPL2/Source-style first-person cylinder controller. See `controller.md`. |
+| `FirstPersonMotorState` | velocity, grounded, stance, yaw, pitch, timers | Runtime state for the first-person motor. See `controller.md`. |
 | `LocalPlayers` | peer, players | Local transport peer plus one or more local `NetworkPlayerId`s controlled by this app instance. Stable world-entity mapping lives outside input. |
 | `SimulationTick` | u32 | Monotonic command tick. |
 | `PlayerCommandQueue` | commands | Current-frame generated commands. |

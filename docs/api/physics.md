@@ -24,7 +24,7 @@ advanced use.
 |---|---|---|
 | `PhysicsBody` | `kind: PhysicsBodyKind` | Engine-facing rigid body authoring component. Synced to Avian `RigidBody`. |
 | `PhysicsBodyKind` | `Dynamic`, `Static`, `Kinematic` | Generic body type. |
-| `PhysicsCollider` | `Cuboid { size }`, `Sphere { radius }`, `Capsule { radius, length }` | Engine-facing collider authoring component. Synced to Avian `Collider`. |
+| `PhysicsCollider` | `Cuboid { size }`, `Sphere { radius }`, `Cylinder { radius, height }`, `Capsule { radius, length }`, `ConvexHull { points }` | Engine-facing collider authoring component. Synced to Avian `Collider`. Use convex hulls for player-standable ramp/wedge collision instead of raw trimeshes. |
 | `PhysicsVelocity` | `linear`, `angular` | Initial or authored velocity. Synced to Avian `LinearVelocity` and `AngularVelocity`. |
 
 These components are intentionally small. Game code may use Avian components

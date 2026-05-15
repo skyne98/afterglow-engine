@@ -1,5 +1,7 @@
+pub mod controller;
 pub mod core;
 pub mod demo;
+pub mod demos;
 pub mod input;
 pub mod network;
 mod perf_hud;
@@ -13,6 +15,7 @@ extern crate self as afterglow_engine;
 
 pub use afterglow_engine_macros::{Replicate, replicate};
 use bevy::{app::PluginGroupBuilder, prelude::*, window::WindowPlugin};
+use controller::AfterglowFirstPersonControllerPlugin;
 use core::{AfterglowCorePlugin, schedule::AfterglowSet};
 use demo::AfterglowDemoPlugin;
 use input::AfterglowInputPlugin;
@@ -38,6 +41,7 @@ impl PluginGroup for AfterglowRuntimePlugins {
             .add(AfterglowInputPlugin)
             .add(AfterglowNetworkPlugin)
             .add(AfterglowPhysicsPlugin)
+            .add(AfterglowFirstPersonControllerPlugin)
             .add(AfterglowPersistencePlugin)
             .add(AfterglowWorldPlugin)
     }
@@ -71,6 +75,10 @@ impl Plugin for AfterglowEnginePlugin {
 }
 
 pub fn run() -> bevy::app::AppExit {
+    run_default_demo()
+}
+
+pub fn run_default_demo() -> bevy::app::AppExit {
     let trace_data = setup_tracing();
     let trace_accum = trace_data.accum.clone();
 
@@ -80,6 +88,20 @@ pub fn run() -> bevy::app::AppExit {
             default_plugins(),
             AfterglowEnginePlugin { trace_accum },
             AfterglowDemoPlugin,
+        ))
+        .run()
+}
+
+pub fn run_fps_controller_demo() -> bevy::app::AppExit {
+    let trace_data = setup_tracing();
+    let trace_accum = trace_data.accum.clone();
+
+    App::new()
+        .insert_resource(trace_data)
+        .add_plugins((
+            default_plugins(),
+            AfterglowEnginePlugin { trace_accum },
+            demos::fps_controller::FpsControllerDemoPlugin,
         ))
         .run()
 }
@@ -118,6 +140,10 @@ fn default_plugins() -> PluginGroupBuilder {
 
     let plugins = DefaultPlugins
         .set(bevy::log::LogPlugin {
+            filter: format!(
+                "wgpu_hal::vulkan::instance=off,{}",
+                bevy::log::DEFAULT_FILTER
+            ),
             custom_layer: perf_hud::trace_collector::bevy_trace_layer,
             ..default()
         })
