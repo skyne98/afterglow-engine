@@ -1,6 +1,7 @@
 use avian3d::{
     character_controller::{move_and_slide::DepenetrationConfig, prelude::MoveAndSlide},
     prelude::{Collider, SpatialQuery, SpatialQueryFilter},
+    spatial_query::ShapeCastConfig,
 };
 use bevy::prelude::*;
 
@@ -63,7 +64,7 @@ pub fn apply_horizontal_move(movement: CharacterMove) -> Vec3 {
         state,
         transform,
         collider,
-        move_and_slide,
+        move_and_slide: _,
         spatial_query,
         delta,
         ..
@@ -72,34 +73,39 @@ pub fn apply_horizontal_move(movement: CharacterMove) -> Vec3 {
         return Vec3::ZERO;
     }
 
-    let actual_delta = if state.grounded
-        && is_climbable_step_ahead(
+    let start = transform.translation;
+    let desired_horizontal = flat(delta);
+    let actual_delta = source_try_player_move(
+        entity,
+        config,
+        collider,
+        transform,
+        spatial_query,
+        desired_horizontal,
+    );
+    let blocked_by_step = state.grounded
+        && loses_forward_progress(actual_delta, desired_horizontal)
+        && is_climbable_step_ahead(entity, config, state, transform, spatial_query, delta);
+    let actual_delta = if blocked_by_step {
+        let blocked_position = transform.translation;
+        transform.translation = start;
+        if let Some(step_delta) = step_up_horizontal_move(
             entity,
             config,
-            state,
-            transform,
             collider,
+            transform,
             spatial_query,
-            delta,
+            desired_horizontal,
         ) {
-        hpl2_overlap_horizontal_move(
-            entity,
-            config,
-            state,
-            transform,
-            collider,
-            move_and_slide,
-            flat(delta),
-        )
+            state.climbing = true;
+            state.velocity.y = 0.0;
+            step_delta
+        } else {
+            transform.translation = blocked_position;
+            actual_delta
+        }
     } else {
-        source_try_player_move(
-            entity,
-            config,
-            collider,
-            transform,
-            spatial_query,
-            flat(delta),
-        )
+        actual_delta
     };
     let pushback = actual_delta - flat(delta);
     if !state.grounded && pushback.length_squared() > f32::EPSILON {
@@ -108,32 +114,11 @@ pub fn apply_horizontal_move(movement: CharacterMove) -> Vec3 {
     pushback
 }
 
-fn hpl2_overlap_horizontal_move(
-    entity: Entity,
-    config: &FirstPersonControllerConfig,
-    state: &FirstPersonMotorState,
-    transform: &mut Transform,
-    collider: &Collider,
-    move_and_slide: &MoveAndSlide,
-    delta: Vec3,
-) -> Vec3 {
-    let start = transform.translation;
-    transform.translation += delta;
-    let pushback = collision_pushback(entity, config, collider, transform, move_and_slide);
-    transform.translation += if state.grounded && pushback.y > 0.0 {
-        flat(pushback)
-    } else {
-        pushback
-    };
-    transform.translation - start
-}
-
 fn is_climbable_step_ahead(
     entity: Entity,
     config: &FirstPersonControllerConfig,
     state: &FirstPersonMotorState,
     transform: &Transform,
-    collider: &Collider,
     spatial_query: &SpatialQuery,
     delta: Vec3,
 ) -> bool {
@@ -154,16 +139,109 @@ fn is_climbable_step_ahead(
     if !is_step_height_allowed(step_height, config) {
         return false;
     }
-    let step_pos = transform.translation
-        + Vec3::Y * (step_height + config.step_climb_height_add)
-        + move_dir * desired_horizontal.length().max(0.05) * config.climb_forward_mul;
-    shape_fits(
+    true
+}
+
+fn step_up_horizontal_move(
+    entity: Entity,
+    config: &FirstPersonControllerConfig,
+    collider: &Collider,
+    transform: &mut Transform,
+    spatial_query: &SpatialQuery,
+    desired_horizontal: Vec3,
+) -> Option<Vec3> {
+    let start = transform.translation;
+    let desired_len = desired_horizontal.length();
+    let move_dir = desired_horizontal.try_normalize()?;
+    let lift = config.max_step_height + config.step_climb_height_add;
+    let lifted_start = start + Vec3::Y * lift;
+    if !shape_fits(
         entity,
         collider,
-        step_pos,
+        lifted_start,
         transform.rotation,
         spatial_query,
-    )
+    ) {
+        return None;
+    }
+
+    transform.translation = lifted_start;
+    let raised_delta = source_try_player_move(
+        entity,
+        config,
+        collider,
+        transform,
+        spatial_query,
+        desired_horizontal,
+    );
+    if flat(raised_delta).dot(move_dir) < desired_len * 0.5 {
+        transform.translation = start;
+        return None;
+    }
+
+    let raised_position = transform.translation;
+    let landing = step_down_landing(
+        entity,
+        config,
+        collider,
+        raised_position,
+        transform.rotation,
+        start.y,
+        spatial_query,
+    )?;
+    if !shape_fits(entity, collider, landing, transform.rotation, spatial_query) {
+        transform.translation = start;
+        return None;
+    }
+
+    transform.translation = landing;
+    Some(transform.translation - start)
+}
+
+fn step_down_landing(
+    entity: Entity,
+    config: &FirstPersonControllerConfig,
+    collider: &Collider,
+    raised_position: Vec3,
+    rotation: Quat,
+    start_y: f32,
+    spatial_query: &SpatialQuery,
+) -> Option<Vec3> {
+    let filter = SpatialQueryFilter::from_excluded_entities([entity]);
+    let cast_config = ShapeCastConfig {
+        ignore_origin_penetration: true,
+        ..ShapeCastConfig::from_max_distance(
+            config.max_step_height + config.step_climb_height_add + config.ground_probe_distance,
+        )
+    };
+    let mut hits = spatial_query.shape_hits(
+        collider,
+        raised_position,
+        rotation,
+        Dir3::NEG_Y,
+        8,
+        &cast_config,
+        &filter,
+    );
+    hits.sort_by(|a, b| a.distance.total_cmp(&b.distance));
+    hits.into_iter().find_map(|hit| {
+        if !is_walkable_normal(hit.normal1, config) {
+            return None;
+        }
+        let contact_center = raised_position - Vec3::Y * hit.distance;
+        let step_height = contact_center.y - start_y;
+        if !is_step_height_allowed(step_height, config) {
+            return None;
+        }
+        Some(contact_center + Vec3::Y * config.step_climb_height_add)
+    })
+}
+
+fn loses_forward_progress(actual_delta: Vec3, desired_delta: Vec3) -> bool {
+    let Some(move_dir) = desired_delta.try_normalize() else {
+        return false;
+    };
+    flat(actual_delta).dot(move_dir) < desired_delta.length() * 0.5
 }
 
 pub fn apply_vertical_force_collision(movement: CharacterMove) -> Vec3 {

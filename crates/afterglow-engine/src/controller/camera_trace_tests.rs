@@ -174,6 +174,99 @@ fn low_blocker_camera_trace_stays_still_when_body_is_blocked() {
 }
 
 #[test]
+fn stair_step_up_camera_trace_smooths_authoritative_landing_snap() {
+    let mut app = App::new();
+    app.add_plugins((
+        MinimalPlugins,
+        AfterglowCorePlugin,
+        AfterglowPhysicsPlugin,
+        AfterglowFirstPersonControllerPlugin,
+    ));
+    app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+        1.0 / 60.0,
+    )));
+    app.init_resource::<PlayerCommandQueue>();
+    app.finish();
+    app.cleanup();
+
+    let config = FirstPersonControllerConfig {
+        ground_accel: 100.0,
+        side_accel: 100.0,
+        step_check_interval: 0.0,
+        ..default()
+    };
+    let half_height = config.height(ControllerStance::Standing) * 0.5;
+    let player = app
+        .world_mut()
+        .spawn((
+            FirstPersonController {
+                player: NetworkPlayerId(1),
+                config: config.clone(),
+            },
+            Transform::from_xyz(0.0, half_height, 1.4),
+        ))
+        .id();
+    let camera_config = FirstPersonCameraConfig {
+        walk_bob_amplitude: Vec2::ZERO,
+        run_bob_amplitude: Vec2::ZERO,
+        crouch_bob_amplitude: Vec2::ZERO,
+        ..default()
+    };
+    let camera = app
+        .world_mut()
+        .spawn((
+            FirstPersonCameraRig {
+                target: player,
+                config: camera_config,
+            },
+            Transform::default(),
+        ))
+        .id();
+    app.world_mut().spawn((
+        PhysicsBody::static_body(),
+        PhysicsCollider::cuboid(Vec3::new(8.0, 0.2, 10.0)),
+        Transform::from_xyz(0.0, -0.1, 0.0),
+    ));
+    app.world_mut().spawn((
+        PhysicsBody::static_body(),
+        PhysicsCollider::cuboid(Vec3::new(2.0, 0.12, 0.55)),
+        Transform::from_xyz(0.0, 0.06, 0.2),
+    ));
+
+    let mut body_trace = Vec::with_capacity(90);
+    let mut camera_trace = Vec::with_capacity(90);
+    for tick in 0..90 {
+        app.world_mut()
+            .resource_mut::<PlayerCommandQueue>()
+            .replace(vec![PlayerCommand {
+                player: NetworkPlayerId(1),
+                tick,
+                axes: vec![InputAxisValue {
+                    axis: InputAxis::new("move.y"),
+                    value: 1.0,
+                }],
+                ..default()
+            }]);
+        app.update();
+        body_trace.push(app.world().get::<Transform>(player).unwrap().translation);
+        camera_trace.push(app.world().get::<Transform>(camera).unwrap().translation);
+    }
+
+    let body_snap = max_positive_y_delta(&body_trace);
+    let camera_snap = max_positive_y_delta(&camera_trace);
+    assert!(
+        body_snap > 0.08,
+        "test never observed body step-up: {body_trace:?}"
+    );
+    assert!(
+        camera_snap < body_snap * 0.75 && camera_snap < 0.08,
+        "camera did not smooth stair step-up\nbody_snap={body_snap:.6} camera_snap={camera_snap:.6}\nbody:\n{}\ncamera:\n{}",
+        ascii_graph(&body_trace, |position| position.y),
+        ascii_graph(&camera_trace, |position| position.y),
+    );
+}
+
+#[test]
 fn low_blocker_camera_trace_stays_still_after_sprint_reset() {
     let mut app = App::new();
     app.add_plugins((
@@ -305,6 +398,13 @@ fn derivative_sign_inversions(samples: &[Vec3], axis: impl Fn(Vec3) -> f32) -> u
         previous = sign;
     }
     inversions
+}
+
+fn max_positive_y_delta(samples: &[Vec3]) -> f32 {
+    samples
+        .windows(2)
+        .map(|pair| pair[1].y - pair[0].y)
+        .fold(0.0, f32::max)
 }
 
 fn periodic_derivative_score(

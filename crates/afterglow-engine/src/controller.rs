@@ -338,17 +338,25 @@ fn drive_first_person_controllers(
             delta: move_delta,
         });
         let after_horizontal_position = transform.translation;
-        let step = stairs::apply_step_attempt(stairs::StepAttempt {
-            entity,
-            config: &controller.config,
-            state: &mut state,
-            transform: &mut transform,
-            collider: &active_collider,
-            spatial_query: &spatial_query,
-            desired_delta: move_delta,
-            dt,
-            record_trace,
-        });
+        let horizontal_step_up = after_horizontal_position.y - after_stance_position.y
+            > controller.config.min_step_height;
+        let step = if horizontal_step_up {
+            state.climbing = true;
+            state.velocity.y = 0.0;
+            FirstPersonStepTrace::skipped(FirstPersonStepRejectReason::NotRun)
+        } else {
+            stairs::apply_step_attempt(stairs::StepAttempt {
+                entity,
+                config: &controller.config,
+                state: &mut state,
+                transform: &mut transform,
+                collider: &active_collider,
+                spatial_query: &spatial_query,
+                desired_delta: move_delta,
+                dt,
+                record_trace,
+            })
+        };
         let after_step_position = transform.translation;
         let actual = after_step_position - after_stance_position;
         write_flat_horizontal_velocity_from_delta(&mut state, flat(actual), dt);
@@ -438,6 +446,8 @@ mod integration_tests;
 mod jump_tests;
 #[cfg(test)]
 mod physics_tests;
+#[cfg(test)]
+mod stair_sweep_tests;
 #[cfg(test)]
 mod terrain_tests;
 #[cfg(test)]

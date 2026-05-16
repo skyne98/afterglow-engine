@@ -124,6 +124,97 @@ fn camera_tracks_grounded_vertical_body_motion_without_slope_lag() {
 }
 
 #[test]
+fn camera_smooths_vertical_body_motion_while_step_climbing() {
+    let config = FirstPersonCameraConfig {
+        position_smooth_speed: 1.0,
+        ..default()
+    };
+    let mut state = FirstPersonCameraState {
+        initialized: true,
+        smoothed_position: Vec3::new(1.0, 0.5, -1.0),
+        was_grounded: true,
+        ..default()
+    };
+    let motor = FirstPersonMotorState {
+        grounded: true,
+        climbing: true,
+        ..default()
+    };
+    let target_y = 1.2;
+
+    update_camera_state(
+        &config,
+        &mut state,
+        &Transform::from_xyz(
+            10.0,
+            center_for_camera_y(&controller(), ControllerStance::Standing, target_y),
+            -5.0,
+        ),
+        &controller(),
+        &motor,
+        Vec3::ZERO,
+        0.016,
+    );
+
+    assert_eq!(state.smoothed_position.x, 10.0);
+    assert_eq!(state.smoothed_position.z, -5.0);
+    assert!(state.smoothed_position.y > 0.5);
+    assert!(state.smoothed_position.y < target_y);
+    assert!(state.was_climbing);
+}
+
+#[test]
+fn camera_keeps_smoothing_after_step_climb_until_vertical_error_is_small() {
+    let config = FirstPersonCameraConfig {
+        position_smooth_speed: 1.0,
+        ..default()
+    };
+    let target_y = 1.2;
+    let target_transform = Transform::from_xyz(
+        0.0,
+        center_for_camera_y(&controller(), ControllerStance::Standing, target_y),
+        0.0,
+    );
+    let motor = FirstPersonMotorState {
+        grounded: true,
+        climbing: false,
+        ..default()
+    };
+    let mut state = FirstPersonCameraState {
+        initialized: true,
+        smoothed_position: Vec3::new(0.0, 1.0, 0.0),
+        was_grounded: true,
+        was_climbing: true,
+        ..default()
+    };
+
+    update_camera_state(
+        &config,
+        &mut state,
+        &target_transform,
+        &controller(),
+        &motor,
+        Vec3::ZERO,
+        0.016,
+    );
+    assert!(state.smoothed_position.y > 1.0);
+    assert!(state.smoothed_position.y < target_y);
+    assert!(state.was_climbing);
+
+    state.smoothed_position.y = target_y - 0.001;
+    update_camera_state(
+        &config,
+        &mut state,
+        &target_transform,
+        &controller(),
+        &motor,
+        Vec3::ZERO,
+        0.016,
+    );
+    assert!(!state.was_climbing);
+}
+
+#[test]
 fn camera_smooths_vertical_position_on_landing() {
     let config = FirstPersonCameraConfig {
         position_smooth_speed: 1.0,

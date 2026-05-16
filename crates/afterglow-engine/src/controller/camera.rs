@@ -59,6 +59,7 @@ pub struct FirstPersonCameraState {
     pub roll: f32,
     pub fov: f32,
     pub was_grounded: bool,
+    pub was_climbing: bool,
     pub last_vertical_velocity: f32,
     pub impulse_pitch: f32,
     pub impulse_yaw: f32,
@@ -151,6 +152,7 @@ impl Default for FirstPersonCameraState {
             roll: 0.0,
             fov: 70.0_f32.to_radians(),
             was_grounded: false,
+            was_climbing: false,
             last_vertical_velocity: 0.0,
             impulse_pitch: 0.0,
             impulse_yaw: 0.0,
@@ -369,10 +371,11 @@ fn update_camera_state(
     let target_position = target_transform.translation
         + Vec3::Y * (state.eye_height - body_half_height)
         + state.head_offset;
+    let smooth_stair_y = motor.climbing || state.was_climbing;
     state.smoothed_position = if !state.initialized {
         state.initialized = true;
         target_position
-    } else if motor.grounded && was_grounded {
+    } else if motor.grounded && was_grounded && !smooth_stair_y {
         target_position
     } else {
         let smoothed = smooth_vec3(
@@ -383,6 +386,8 @@ fn update_camera_state(
         );
         Vec3::new(target_position.x, smoothed.y, target_position.z)
     };
+    state.was_climbing =
+        smooth_stair_y && (state.smoothed_position.y - target_position.y).abs() > 0.002;
     footstep
 }
 
@@ -486,11 +491,9 @@ fn decay_impulses(state: &mut FirstPersonCameraState, decay: f32, dt: f32) {
 #[cfg(test)]
 #[path = "camera_crouch_tests.rs"]
 mod crouch_tests;
-
 #[cfg(test)]
 #[path = "camera_tests.rs"]
 mod tests;
-
 #[cfg(test)]
 #[path = "camera_trace_tests.rs"]
 mod trace_tests;

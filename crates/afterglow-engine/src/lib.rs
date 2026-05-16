@@ -4,12 +4,12 @@ pub mod demo;
 pub mod demos;
 pub mod input;
 pub mod network;
-pub mod units;
 mod perf_hud;
 pub mod persistence;
 pub mod physics;
 #[cfg(any(test, feature = "test-support"))]
 pub mod testing;
+pub mod units;
 pub mod world;
 
 extern crate self as afterglow_engine;

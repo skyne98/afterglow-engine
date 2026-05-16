@@ -276,11 +276,11 @@ Two details matter for Afterglow:
 - The extra forward/down test handles high frame rates where the first downward
   cast hits the side or edge of a stair and reports a too-steep normal.
 
-Afterglow now uses the exact HPL2 raycast algorithm: 1 or 3 rays (configurable
-via `accurate_climbing`) from chest height downward in the movement direction,
-a shape fit test at the raised position, and direct lift by `step_climb_speed *
-dt`. The reactive system re-detects the step every climbing frame, matching
-HPL2's `UpdateStepClimbing` → `CheckStepClimbing` loop without an accumulator.
+Afterglow now combines both references: normal horizontal movement runs first,
+blocked low-riser movement retries with a raised forward/down step sweep, and
+the HPL2 1-or-3-ray stair lift remains as a reactive fallback. Camera-only stair
+smoothing hides the authoritative landing snap without feeding back into
+collision, hit detection, or networking.
 
 Afterglow implications:
 
@@ -319,8 +319,9 @@ The implemented API is documented in `docs/api/controller.md`. In short:
 2. Match commands to controller entities by `NetworkPlayerId`.
 3. Update yaw/pitch from look axes.
 4. Update HPL2 local forward/side speed channels.
-5. Apply HPL2-style horizontal movement and pushback.
-6. Run stair validation after horizontal pushback.
+5. Apply Source-style horizontal movement and pushback.
+6. If low-riser contact blocks progress, retry with a raised step sweep; then run
+   HPL2 ray stair validation as fallback.
 7. Apply gravity/jump assist after stair handling.
 8. Resolve vertical collision and grounded hysteresis.
 9. Resolve stance clearance with HPL2 fit offsets.
@@ -409,8 +410,8 @@ The step and ground path is now tracked against
   immediate step checks, pins ground contact, then clears the latch.
 - [x] Skip grounded gravity/snap while climbing, matching HPL2's
   `mbGravityActive && mbClimbing == false` guard.
-- [x] Replace Jolt-style stair validation with exact HPL2 raycast algorithm
-  (1 or 3 rays from chest to feet, shape fit, direct lift, reactive per-frame).
+- [x] Use a raised forward/down sweep for low-riser contacts that block forward
+  progress, with the HPL2 raycast algorithm retained as the reactive fallback.
 - [x] Add `accurate_climbing` (3 rays) and `climb_forward_mul` config to match
   HPL2 fields.
 - [x] Remove `step_forward_distance`, `step_forward_test_distance`, and
@@ -421,9 +422,9 @@ The step and ground path is now tracked against
 - [x] Derive stair attempt direction from horizontal character movement only, not
   gravity or grounded snap velocity; HPL2 calls `CheckStepClimbing` before
   `UpdateForces`, so vertical gravity/snap must not tilt stair rays.
-- [x] Lift directly by `step_climb_speed * dt` when a step is detected; set
-  `climbing = true`, zero vertical velocity. Reactive re-detection handles
-  multi-frame climbs (same as HPL2).
+- [x] Lift fallback ray steps directly by `step_climb_speed * dt`; raised step
+  sweeps set the authoritative body on the landing and camera smoothing hides
+  the visual step.
 - [x] Use `maxStepHeight` only when firmly grounded or already climbing;
   otherwise use `maxStepHeightInAir`.
 - [x] Remove the old step-climb clamp helper, because HPL2 does not clamp the

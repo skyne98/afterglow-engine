@@ -20,7 +20,7 @@ network prediction therefore all drive the same movement path.
 | `FirstPersonMotorState` | Runtime motor state: velocity, grounded flag, ground normal, stance, yaw/pitch, coyote/jump-buffer windows, jump input latch, ground-contact hysteresis, Amnesia jump-assist timer, stair timer, and climbing latch. |
 | `FirstPersonCameraRig` | Attach to a camera entity. Points at a controller body and applies first-person presentation effects without feeding back into collision or gameplay state. |
 | `FirstPersonCameraConfig` | Tunable eye heights, position/crouch smoothing, Amnesia/HPL2 walk/run/crouch bob amplitude plus min/max bob speed, landing bounce, FOV kick, impulse decay, and head-offset smoothing. |
-| `FirstPersonCameraState` | Runtime camera-only state: initialized flag, smoothed eye height/position, bob phase, bobbing flag, current bob amplitude, landing bounce, roll, FOV, impulse offsets, smoothed head offset, and footstep count. |
+| `FirstPersonCameraState` | Runtime camera-only state: initialized flag, smoothed eye height/position, bob phase, bobbing flag, current bob amplitude, landing bounce, roll, FOV, grounded/stair smoothing latches, impulse offsets, smoothed head offset, and footstep count. |
 | `FirstPersonHeadOffset` | Optional child component on the controller body. Adds weighted procedural offsets for interaction, damage, scripted, horror, or crouch effects. |
 | `FirstPersonCameraImpulse` | Optional child component on the controller body. One-shot pitch/yaw/roll kick consumed by the camera rig and then despawned. |
 | `ControllerStance` | `Standing` or `Crouching`. |
@@ -103,15 +103,17 @@ The current motor implements:
 - horizontal sweeps ignore floor/slope contacts using the configured
   `max_slope_angle` threshold and use a tiny lifted cast origin so ground
   contact cannot masquerade as a wall
-- climbable HPL2 step candidates keep HPL2 overlap movement before the step-ray
-  lift, preserving Amnesia's reactive `step_climb_speed` vertical timing instead
-  of switching to Source's instant step-up
+- when normal horizontal movement loses forward progress against a climbable low
+  riser, the controller retries from a raised pose, sweeps horizontally over the
+  step, then casts down to a walkable landing within `max_step_height`; this
+  avoids the visible bump-then-climb pause at stair faces
 - HPL2-style slope-normal-aligned horizontal movement while grounded
-- after horizontal movement, raycast-based step detection checks for a
-  climbable obstacle using the HPL2 algorithm: 1 or 3 rays from chest to feet in
-  the movement direction
+- after horizontal movement, raycast-based step detection remains as a reactive
+  fallback using the HPL2 algorithm: 1 or 3 rays from chest to feet in the
+  movement direction
 - stair candidates are accepted only when the detected height is within the
-  configured step range and the full cylinder fits at the raised/forward pose
+  configured step range and the full cylinder fits at the raised/forward pose;
+  low-ceiling and over-height candidates stay blocked
 - jump takeoff preserves the current grounded local speed, so sprint jumps
   carry farther than walk jumps before normal air control limits apply
 - jump takeoff and coyote refresh require a walkable ground normal; ground
@@ -120,11 +122,11 @@ The current motor implements:
   HPL2's `AccurateClimbing` for wider lateral coverage
 - `climb_forward_mul` (default `1.0`) scales forward position in the fit test,
   matching HPL2's `ClimbForwardMul`
-- accepted step height is lifted directly by `step_climb_speed * dt` each
-  frame; the reactive system re-detects the step via raycast every climbing
-  frame (no accumulator), matching HPL2
+- reactive fallback steps are lifted by `step_climb_speed * dt` each frame;
+  raised step-up sweeps set the authoritative body on the landing immediately
+  and rely on camera-only stair smoothing for presentation
 - gravity is applied after the stair attempt and skipped on frames where step
-  climbing succeeds
+  climbing or a raised step-up succeeds
 - vertical force collision is resolved separately from horizontal movement, and
   vertical collision owns grounded state
 - vertical force collision applies only vertical depenetration in the vertical
@@ -167,7 +169,8 @@ integration and `controller/camera_motion.rs` for the HPL2 bob formula.
 - horizontal camera position follows the controller body directly to avoid input-lag jitter
 - bob, footstep speed, and sprint FOV use actual post-collision body velocity,
   not requested input speed, so pushing into a blocker does not animate motion
-- grounded vertical body movement follows directly so slopes do not feel delayed
+- grounded non-climbing vertical body movement follows directly so slopes do not feel delayed
+- stair-climb vertical body movement is camera-smoothed until the residual step offset is below 2 mm, hiding discrete risers without delaying horizontal aim or collision
 - crouch/stand eye height is feet-relative, not center-relative, so collision
   cylinder height changes do not double-apply the visible crouch animation
 - crouch/stand eye height eases using Amnesia's head-offset slowdown curve,

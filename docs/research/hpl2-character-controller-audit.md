@@ -76,11 +76,12 @@ Afterglow's controller now follows the same shape:
 - horizontal movement is applied before gravity. For normal non-step blockers,
   Afterglow now uses a Source/HL2-style shape sweep with plane clipping instead
   of applying Avian depenetration raw; this prevents tangent-axis solver
-  correction from becoming visible player motion. When the HPL2 step ray already
-  proves the obstacle is climbable, Afterglow keeps HPL2 target-pose overlap
-  movement so Amnesia's gradual `step_climb_speed` lift remains intact.
-- the stair attempt runs immediately after horizontal pushback.
-- gravity is applied after the stair attempt and skipped during accepted climb.
+  correction from becoming visible player motion. When a low riser blocks that
+  sweep, Afterglow now retries from a raised pose, sweeps across the step, and
+  casts down to a walkable landing to avoid the bump-then-climb pause.
+- the HPL2 raycast stair attempt remains as a fallback after horizontal movement.
+- gravity is applied after the stair attempt and skipped during accepted climb or
+  raised step-up frames.
 - vertical force collision is resolved separately and owns grounded state.
 - ground ray probing only refreshes normals while already grounded.
 
@@ -207,7 +208,7 @@ Key details:
 - accepted climb raises Y by `step_climb_speed * dt`
 - climbing refreshes grounded state and suppresses gravity that frame
 
-Afterglow now uses HPL2's exact raycast algorithm:
+Afterglow keeps HPL2's raycast algorithm as the reactive fallback:
 
 - rate-limited by the same `1/20` interval
 - 1 or 3 rays (``accurate_climbing`) from chest height down to feet
@@ -221,8 +222,10 @@ Afterglow now uses HPL2's exact raycast algorithm:
 - grounded state forced during climbing
 - `acurrate_climbing` defaults to `false` (single center ray)
 
-The earlier Jolt-style sweep validation was removed in favour of the exact HPL2
-algorithm for behavioural fidelity.
+The primary low-riser path now uses a Source/Jolt-style raised step sweep once
+normal horizontal movement loses forward progress. That path preserves forward
+motion through stair contact, validates the landing against the same step-height
+range, rejects low ceilings, and lets the camera smooth the visual vertical snap.
 
 ## Camera And Effects
 

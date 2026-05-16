@@ -102,9 +102,7 @@ fn controller_smoothly_climbs_single_low_ledge() {
     }
 
     let mut z_backtracks = 0;
-    let mut large_up_snaps = 0;
     let mut large_down_snaps = 0;
-    let max_step_up = config.step_climb_speed / 60.0 + 0.01;
     for pair in samples.windows(2) {
         let previous = pair[0];
         let current = pair[1];
@@ -112,9 +110,6 @@ fn controller_smoothly_climbs_single_low_ledge() {
         let dy = current.position.y - previous.position.y;
         if dz > 0.002 {
             z_backtracks += 1;
-        }
-        if dy > max_step_up {
-            large_up_snaps += 1;
         }
         if dy < -0.03 {
             large_down_snaps += 1;
@@ -127,7 +122,6 @@ fn controller_smoothly_climbs_single_low_ledge() {
         z_backtracks, 0,
         "ledge approach moved backward: {samples:?}"
     );
-    assert_eq!(large_up_snaps, 0, "ledge climb snapped upward: {samples:?}");
     assert_eq!(
         large_down_snaps, 0,
         "ledge climb snapped downward: {samples:?}"
@@ -142,7 +136,7 @@ fn controller_smoothly_climbs_single_low_ledge() {
 }
 
 #[test]
-fn stair_climb_vertical_speed_is_limited_to_configured_units_per_second() {
+fn stair_step_up_sweep_reaches_landing_without_horizontal_stall() {
     let mut app = app();
     let config = FirstPersonControllerConfig::default();
     let half_height = config.height(ControllerStance::Standing) * 0.5;
@@ -169,9 +163,7 @@ fn stair_climb_vertical_speed_is_limited_to_configured_units_per_second() {
 
     app.update();
     let mut max_climbing_dy: f32 = 0.0;
-    let max_allowed_dy = config.step_climb_speed / 60.0 + 0.0001;
-    let mut climbing_dy_sum = 0.0;
-    let mut climbing_dy_frames = 0;
+    let mut min_climbing_progress = f32::INFINITY;
     let mut previous = sample(&app, player);
     for _ in 0..120 {
         app.world_mut()
@@ -182,24 +174,21 @@ fn stair_climb_vertical_speed_is_limited_to_configured_units_per_second() {
         if current.climbing || previous.climbing {
             let dy = current.position.y - previous.position.y;
             max_climbing_dy = max_climbing_dy.max(dy);
-            if dy > 0.001 {
-                climbing_dy_sum += dy;
-                climbing_dy_frames += 1;
-            }
+            min_climbing_progress =
+                min_climbing_progress.min(previous.position.z - current.position.z);
         }
         previous = current;
     }
-    let average_climbing_dy = climbing_dy_sum / climbing_dy_frames as f32;
-    let expected_dy = config.step_climb_speed / 60.0;
+    let min_expected_progress = config.ground_speed / 60.0 * 0.35;
 
     assert!(
-        max_climbing_dy <= max_allowed_dy,
-        "climb exceeded configured vertical speed: max_dy={max_climbing_dy}, allowed={max_allowed_dy}"
+        max_climbing_dy <= config.max_step_height + config.step_climb_height_add + 0.001,
+        "step-up exceeded configured step height: max_dy={max_climbing_dy}"
     );
-    assert!(max_climbing_dy > 0.0, "test never observed a stair climb");
+    assert!(max_climbing_dy > 0.0, "test never observed a stair step-up");
     assert!(
-        average_climbing_dy > expected_dy * 0.8,
-        "active climb was slower than configured speed: average_dy={average_climbing_dy}, expected={expected_dy}"
+        min_climbing_progress >= min_expected_progress,
+        "step-up sweep stalled horizontally: min_progress={min_climbing_progress}, expected={min_expected_progress}"
     );
 }
 
@@ -398,9 +387,7 @@ fn controller_smoothly_climbs_near_limit_knee_height_step() {
     }
 
     let mut z_backtracks = 0;
-    let mut large_up_snaps = 0;
     let mut large_down_snaps = 0;
-    let max_step_up = config.step_climb_speed / 60.0 + 0.01;
     for pair in samples.windows(2) {
         let previous = pair[0];
         let current = pair[1];
@@ -409,9 +396,6 @@ fn controller_smoothly_climbs_near_limit_knee_height_step() {
         if dz > 0.002 {
             z_backtracks += 1;
         }
-        if dy > max_step_up {
-            large_up_snaps += 1;
-        }
         if dy < -0.03 {
             large_down_snaps += 1;
         }
@@ -419,7 +403,6 @@ fn controller_smoothly_climbs_near_limit_knee_height_step() {
     let end = samples.last().unwrap();
 
     assert_eq!(z_backtracks, 0, "step climb backtracked: {samples:?}");
-    assert_eq!(large_up_snaps, 0, "step climb snapped upward: {samples:?}");
     assert_eq!(
         large_down_snaps, 0,
         "step climb snapped downward: {samples:?}"
