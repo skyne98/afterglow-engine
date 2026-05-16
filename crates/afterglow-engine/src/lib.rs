@@ -3,7 +3,6 @@ pub mod core;
 pub mod demo;
 pub mod demos;
 pub mod input;
-pub mod interaction;
 pub mod network;
 pub mod units;
 mod perf_hud;
@@ -21,7 +20,6 @@ use controller::AfterglowFirstPersonControllerPlugin;
 use core::{AfterglowCorePlugin, schedule::AfterglowSet};
 use demo::AfterglowDemoPlugin;
 use input::AfterglowInputPlugin;
-use interaction::AfterglowInteractionPlugin;
 use network::AfterglowNetworkPlugin;
 use perf_hud::{
     AccumMap, PerfHudPlugin, collect_frame, record_update_end, record_update_start, setup_tracing,
@@ -45,7 +43,6 @@ impl PluginGroup for AfterglowRuntimePlugins {
             .add(AfterglowNetworkPlugin)
             .add(AfterglowPhysicsPlugin)
             .add(AfterglowFirstPersonControllerPlugin)
-            .add(AfterglowInteractionPlugin)
             .add(AfterglowPersistencePlugin)
             .add(AfterglowWorldPlugin)
     }

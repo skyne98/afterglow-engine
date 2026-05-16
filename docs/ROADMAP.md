@@ -10,7 +10,7 @@ Deep dive: [bevy-integration-world-runtime.md](research/bevy-integration-world-r
 - [x] Context-aware input bindings with action phases and per-player device routing
 - [x] First-person controller for dense immersive-sim spaces
 - [x] Physics integration for player movement and interactable objects
-- [x] Core interaction model: physics-based hinged doors, slider drawers, grab/pickup with dual PID force control
+- [ ] Core interaction model: use, pickup, doors, containers, triggers
 - [x] Basic scene/cell loading with stable entity identity
 - [x] Generic chunk/cell lifecycle state machine
 - [x] Local-server single-player simulation path

@@ -2,14 +2,7 @@ use bevy::{
     asset::RenderAssetUsages, mesh::Indices, prelude::*, render::render_resource::PrimitiveTopology,
 };
 
-use crate::{
-    interaction::{
-        FocusCrosshair, InteractionKind, InteractionTarget,
-        door::HingeJointConfig,
-        drawer::PrismaticJointConfig,
-    },
-    physics::{PhysicsBody, PhysicsCollider},
-};
+use crate::physics::{PhysicsBody, PhysicsCollider};
 
 #[derive(Component, Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum FpsDemoPlaygroundPiece {
@@ -17,8 +10,6 @@ pub(super) enum FpsDemoPlaygroundPiece {
     Slope,
     Crouch,
     Barrier,
-    HingedDoor,
-    SliderDrawer,
 }
 
 pub(super) fn spawn_stairs(
@@ -251,123 +242,4 @@ fn ramp_uvs() -> Vec<[f32; 2]> {
         [0.0, 1.0],
         [1.0, 1.0],
     ]
-}
-
-pub(super) fn spawn_hinged_door(
-    commands: &mut Commands,
-    meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
-) {
-    let door_mat = materials.add(Color::srgb(0.45, 0.28, 0.12));
-    let frame_mat = materials.add(Color::srgb(0.2, 0.18, 0.15));
-
-    let frame_size = Vec3::new(0.15, 2.4, 0.15);
-    let door_size = Vec3::new(0.9, 2.0, 0.05);
-    let hinge_pos = Vec3::new(4.0, 1.0, -6.0);
-
-    commands.spawn((
-        FpsDemoPlaygroundPiece::Barrier,
-        PhysicsBody::static_body(),
-        PhysicsCollider::cuboid(frame_size),
-        Mesh3d(meshes.add(Cuboid::from_size(frame_size))),
-        MeshMaterial3d(frame_mat.clone()),
-        Transform::from_translation(hinge_pos + Vec3::new(0.0, 0.0, 0.0)),
-    ));
-
-    let door_entity = commands
-        .spawn((
-            FpsDemoPlaygroundPiece::HingedDoor,
-            PhysicsBody::dynamic(),
-            PhysicsCollider::cuboid(door_size),
-            Mesh3d(meshes.add(Cuboid::from_size(door_size))),
-            MeshMaterial3d(door_mat),
-            Transform::from_translation(hinge_pos + Vec3::new(0.5, 0.0, 0.0)),
-            HingeJointConfig::new_door(Vec3::Y),
-            InteractionTarget {
-                kind: InteractionKind::default_hinged_door(),
-                max_focus_distance: 3.0,
-                focus_crosshair: FocusCrosshair::LevelDoor,
-            },
-        ))
-        .id();
-
-    let _body1 = commands
-        .spawn((
-            PhysicsBody::static_body(),
-            PhysicsCollider::cuboid(Vec3::new(0.2, 1.2, 0.2)),
-            Mesh3d(meshes.add(Cuboid::from_size(Vec3::new(0.2, 1.2, 0.2)))),
-            MeshMaterial3d(frame_mat),
-            Transform::from_translation(hinge_pos + Vec3::new(-0.1, 0.0, 0.0)),
-        ))
-        .id();
-    let _ = door_entity;
-}
-
-pub(super) fn spawn_slider_drawer(
-    commands: &mut Commands,
-    meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
-) {
-    let drawer_mat = materials.add(Color::srgb(0.3, 0.22, 0.13));
-    let cabinet_mat = materials.add(Color::srgb(0.2, 0.15, 0.1));
-
-    let cabinet_pos = Vec3::new(-5.0, 0.5, -4.0);
-
-    commands.spawn((
-        PhysicsBody::static_body(),
-        PhysicsCollider::cuboid(Vec3::new(1.2, 1.6, 0.6)),
-        Mesh3d(meshes.add(Cuboid::from_size(Vec3::new(1.2, 1.6, 0.6)))),
-        MeshMaterial3d(cabinet_mat),
-        Transform::from_translation(cabinet_pos),
-    ));
-
-    let drawer_size = Vec3::new(0.8, 0.3, 0.4);
-    commands.spawn((
-        FpsDemoPlaygroundPiece::SliderDrawer,
-        PhysicsBody::dynamic(),
-        PhysicsCollider::cuboid(drawer_size),
-        Mesh3d(meshes.add(Cuboid::from_size(drawer_size))),
-        MeshMaterial3d(drawer_mat),
-        Transform::from_translation(cabinet_pos + Vec3::new(0.0, 0.3, -0.5)),
-        PrismaticJointConfig::new_drawer(Vec3::Z, 0.4),
-        InteractionTarget {
-            kind: InteractionKind::default_slider_drawer(),
-            max_focus_distance: 3.0,
-            focus_crosshair: FocusCrosshair::Push,
-        },
-    ));
-}
-
-pub(super) fn spawn_grabbable_objects(
-    commands: &mut Commands,
-    meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
-    _accent_mat: Handle<StandardMaterial>,
-) {
-    let red_mat = materials.add(Color::srgb(0.7, 0.15, 0.1));
-    let blue_mat = materials.add(Color::srgb(0.1, 0.3, 0.7));
-    let green_mat = materials.add(Color::srgb(0.15, 0.6, 0.2));
-
-    for (i, (pos, mat)) in [
-        (Vec3::new(5.0, 0.3, 2.0), red_mat),
-        (Vec3::new(6.0, 0.3, 2.0), blue_mat),
-        (Vec3::new(5.5, 0.6, 1.0), green_mat),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let size = 0.2 + i as f32 * 0.1;
-        commands.spawn((
-            PhysicsBody::dynamic(),
-            PhysicsCollider::sphere(size),
-            Mesh3d(meshes.add(Sphere::new(size))),
-            MeshMaterial3d(mat),
-            Transform::from_translation(pos),
-            InteractionTarget {
-                kind: InteractionKind::default_grabbable(),
-                max_focus_distance: 5.0,
-                focus_crosshair: FocusCrosshair::Grab,
-            },
-        ));
-    }
 }

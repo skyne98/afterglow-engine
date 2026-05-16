@@ -25,24 +25,7 @@ afterglow-engine
 │   ├── stairs.rs
 │   ├── trace.rs
 │   └── util.rs
-├── interaction/
-│   ├── mod.rs
-│   ├── pid.rs
-│   ├── raycast.rs
-│   ├── door.rs
-│   ├── drawer.rs
-│   └── grab.rs
 ├── units.rs
-├── core/
-│   ├── body.rs
-│   ├── camera.rs
-│   ├── camera_motion.rs
-│   ├── commands.rs
-│   ├── physics.rs
-│   ├── source_move.rs
-│   ├── stairs.rs
-│   ├── trace.rs
-│   └── util.rs
 ├── core/
 │   ├── mod.rs
 │   ├── identity.rs
@@ -186,7 +169,6 @@ afterglow-engine
 - [plugins.md](plugins.md) documents runtime, engine, and demo plugin composition.
 - [input.md](input.md) documents context-aware, phased, device-routed input.
 - [controller.md](controller.md) documents the command-driven first-person controller.
-- [interaction.md](interaction.md) documents the HPL2-style physics-based interaction model (hinged doors, slider drawers, grab).
 - [physics.md](physics.md) documents Avian-backed physics integration.
 - [world.md](world.md) documents cell manifests, lifecycle resources, and world system behavior.
 
@@ -339,14 +321,6 @@ afterglow-engine
 | `InputContext`, `AxisBinding`, `ActionBinding`, `LocalInputRoutes` | — | Input layers, binding sources, and optional per-player device routing. See `input.md`. |
 | `FirstPersonController` | player, config | Command-driven HPL2/Source-style first-person cylinder controller. See `controller.md`. |
 | `FirstPersonMotorState` | velocity, grounded, stance, yaw, pitch, timers | Runtime state for the first-person motor. See `controller.md`. |
-| `InteractionTarget` | kind, max_focus_distance, focus_crosshair | Marks an entity as interactable. See `interaction.md`. |
-| `InteractionKind` | Grabbable, HingedDoor, SliderDrawer | Interaction type with per-type tuning parameters. See `interaction.md`. |
-| `PlayerInteractionState` | focus_entity, focus_distance, active_interaction | Current frame's focus target and active interaction. Resource. |
-| `HingeJointConfig` | axis, limits, feel parameters | Avian `RevoluteJoint` wrapper for doors/levers. |
-| `PrismaticJointConfig` | axis, limits, feel parameters | Avian `PrismaticJoint` wrapper for drawers. |
-| `Grabbed` | by, offset, depth, saved mass | Marks a body as currently grabbed. Component. |
-| `GrabConfig` | PID gains, max force/torque, deactivate distance | Global grab tuning resource. |
-| `PidController` | p, i, d, error window | Generic PID controller with rolling error window. |
 | `LocalPlayers` | peer, players | Local transport peer plus one or more local `NetworkPlayerId`s controlled by this app instance. Stable world-entity mapping lives outside input. |
 | `SimulationTick` | u32 | Monotonic command tick. |
 | `PlayerCommandQueue` | commands | Current-frame generated commands. |
