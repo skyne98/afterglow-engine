@@ -5,8 +5,8 @@ edition = "2024"
 
 [features]
 default = []
-iroh = ["dep:bytes", "dep:iroh", "dep:tokio"]
-steam = ["dep:steamworks"]
+multiplayer = ["lightyear"]
+lightyear = ["dep:lightyear", "dep:lightyear_inputs_leafwing", "lightyear/leafwing", "lightyear/crossbeam", "lightyear/udp", "lightyear_inputs_leafwing/client", "lightyear_inputs_leafwing/server"]
 test-support = ["dep:wgpu"]
 
 [dependencies]
@@ -19,50 +19,13 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 bevy.workspace = true
 avian3d.workspace = true
-bytes = { workspace = true, optional = true }
-iroh = { workspace = true, optional = true }
-steamworks = { workspace = true, optional = true }
-tokio = { workspace = true, optional = true }
+leafwing-input-manager.workspace = true
+lightyear = { workspace = true, optional = true }
+lightyear_inputs_leafwing = { workspace = true, optional = true }
 wgpu = { version = "27", optional = true }
-afterglow-engine-macros = { path = "../afterglow-engine-macros", version = "0.1.0" }
 
 [dependencies.web-time]
 workspace = true
-
-[dev-dependencies]
-ggrs = "0.12.0"
-
-[[bench]]
-name = "replication"
-harness = false
-
-[[bench]]
-name = "authority"
-harness = false
-
-[[bench]]
-name = "prediction"
-harness = false
-
-[[bench]]
-name = "reconciliation"
-harness = false
-
-[[bench]]
-name = "interpolation"
-harness = false
-
-[[bench]]
-name = "baseline"
-harness = false
-
-[[bench]]
-name = "rollback"
-harness = false
-
-[[bench]]
-name = "ggrs"
-harness = false
 
 [[bench]]
 name = "persistence_streaming"

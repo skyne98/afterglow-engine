@@ -1,6 +1,6 @@
 use bevy::{ecs::query::Or, prelude::*};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(
     Component,
@@ -22,6 +22,10 @@ pub struct StableEntityId(pub u128);
 
 impl StableEntityId {
     pub const INVALID: Self = Self(0);
+
+    pub const fn new(raw: u128) -> Self {
+        Self(raw)
+    }
 
     pub const fn from_raw(raw: u128) -> Self {
         Self(raw)
@@ -111,6 +115,15 @@ impl StableIdAllocator {
         self.next = self.next.saturating_add(1);
         id
     }
+
+    pub fn allocate_excluding(&mut self, reserved: &HashSet<StableEntityId>) -> StableEntityId {
+        loop {
+            let id = self.allocate();
+            if id.is_valid() && !reserved.contains(&id) {
+                return id;
+            }
+        }
+    }
 }
 
 #[derive(Resource, Debug, Default, Reflect)]
@@ -184,8 +197,20 @@ pub fn maintain_stable_entity_registry(world: &mut World) {
             .collect::<Vec<_>>()
     };
 
+    let mut reserved = {
+        let mut query = world.query::<&StableEntityId>();
+        query
+            .iter(world)
+            .copied()
+            .filter(|id| id.is_valid())
+            .collect::<HashSet<_>>()
+    };
+
     for entity in missing.into_iter().chain(invalid) {
-        let id = world.resource_mut::<StableIdAllocator>().allocate();
+        let id = world
+            .resource_mut::<StableIdAllocator>()
+            .allocate_excluding(&reserved);
+        reserved.insert(id);
         if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
             entity_mut.insert(id);
         }
@@ -332,6 +357,26 @@ mod tests {
         let stable_id = app.world().get::<StableEntityId>(entity).copied();
         assert!(stable_id.is_some_and(StableEntityId::is_valid));
         assert_ne!(stable_id, Some(StableEntityId::INVALID));
+    }
+
+    #[test]
+    fn allocator_skips_existing_stable_ids_when_assigning() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AfterglowCorePlugin));
+        app.world_mut()
+            .spawn((StableEntityId::from_raw(1), Replicated));
+        let auto = app.world_mut().spawn(Replicated).id();
+
+        app.update();
+
+        let assigned = app.world().get::<StableEntityId>(auto).copied();
+        assert_eq!(assigned, Some(StableEntityId::from_raw(2)));
+        assert!(
+            app.world()
+                .resource::<StableEntityRegistry>()
+                .duplicate_ids()
+                .is_empty()
+        );
     }
 
     #[test]

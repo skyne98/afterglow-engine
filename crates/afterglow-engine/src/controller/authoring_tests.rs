@@ -1,41 +1,30 @@
 use super::*;
 use crate::{
     core::AfterglowCorePlugin,
-    input::{InputActionValue, InputAxis, InputAxisValue, PlayerCommand, PlayerCommandQueue},
+    input::AfterglowAction,
     physics::{AfterglowPhysicsPlugin, PhysicsBody, PhysicsCollider},
 };
 use avian3d::prelude::{Collider, RigidBody};
+use leafwing_input_manager::action_state::ActionState;
 
-fn command(axes: &[(&str, f32)], actions: &[InputActionValue]) -> PlayerCommand {
-    PlayerCommand {
-        player: NetworkPlayerId(1),
-        axes: axes
-            .iter()
-            .map(|(axis, value)| InputAxisValue {
-                axis: InputAxis::new(*axis),
-                value: *value,
-            })
-            .collect(),
-        actions: actions.to_vec(),
-        ..default()
-    }
+fn command(axes: &[(&str, f32)], actions: &[AfterglowAction]) -> ActionState<AfterglowAction> {
+    test_input::command(axes, actions)
 }
 
 #[test]
 fn plugin_authors_kinematic_cylinder_for_controller() {
     let mut app = controller_app();
-    app.init_resource::<PlayerCommandQueue>();
     let entity = app
         .world_mut()
         .spawn((
-            FirstPersonController::new(NetworkPlayerId(1)),
+            FirstPersonController::new(),
             Transform::from_xyz(0.0, 1.0, 0.0),
         ))
         .id();
     let crouched = app
         .world_mut()
         .spawn((
-            FirstPersonController::new(NetworkPlayerId(2)),
+            FirstPersonController::new(),
             FirstPersonMotorState {
                 stance: ControllerStance::Crouching,
                 desired_stance: ControllerStance::Crouching,
@@ -44,13 +33,7 @@ fn plugin_authors_kinematic_cylinder_for_controller() {
             Transform::from_xyz(0.0, 1.0, 0.0),
         ))
         .id();
-    app.world_mut()
-        .resource_mut::<PlayerCommandQueue>()
-        .replace(vec![PlayerCommand {
-            player: NetworkPlayerId(2),
-            actions: vec![InputActionValue::held("crouch")],
-            ..default()
-        }]);
+    test_input::set_input(&mut app, crouched, command(&[], &[AfterglowAction::Crouch]));
 
     app.update();
 
@@ -88,13 +71,11 @@ fn plugin_authors_kinematic_cylinder_for_controller() {
 #[test]
 fn plugin_rejects_uncrouch_when_standing_body_does_not_fit() {
     let mut app = controller_app();
-    app.init_resource::<PlayerCommandQueue>();
     let config = FirstPersonControllerConfig::default();
     let player = app
         .world_mut()
         .spawn((
             FirstPersonController {
-                player: NetworkPlayerId(1),
                 config: config.clone(),
             },
             FirstPersonMotorState {
@@ -116,16 +97,9 @@ fn plugin_rejects_uncrouch_when_standing_body_does_not_fit() {
         Transform::from_xyz(0.0, -0.05, 0.0),
     ));
 
-    app.world_mut()
-        .resource_mut::<PlayerCommandQueue>()
-        .replace(vec![command(
-            &[],
-            &[InputActionValue::held(config.crouch_action.clone())],
-        )]);
+    test_input::set_input(&mut app, player, command(&[], &[AfterglowAction::Crouch]));
     app.update();
-    app.world_mut()
-        .resource_mut::<PlayerCommandQueue>()
-        .replace(vec![command(&[("move.y", 1.0)], &[])]);
+    test_input::set_input(&mut app, player, command(&[("move.y", 1.0)], &[]));
     app.update();
 
     let state = app.world().get::<FirstPersonMotorState>(player).unwrap();
@@ -137,13 +111,11 @@ fn plugin_rejects_uncrouch_when_standing_body_does_not_fit() {
 #[test]
 fn plugin_retries_uncrouch_after_leaving_low_ceiling_without_jump() {
     let mut app = controller_app();
-    app.init_resource::<PlayerCommandQueue>();
     let config = FirstPersonControllerConfig::default();
     let player = app
         .world_mut()
         .spawn((
             FirstPersonController {
-                player: NetworkPlayerId(1),
                 config: config.clone(),
             },
             FirstPersonMotorState {
@@ -161,9 +133,7 @@ fn plugin_retries_uncrouch_after_leaving_low_ceiling_without_jump() {
     ));
 
     app.update();
-    app.world_mut()
-        .resource_mut::<PlayerCommandQueue>()
-        .replace(vec![command(&[], &[])]);
+    test_input::clear_input(&mut app, player);
     app.update();
     assert_eq!(
         app.world()
@@ -178,9 +148,7 @@ fn plugin_retries_uncrouch_after_leaving_low_ceiling_without_jump() {
         .unwrap()
         .translation
         .x = 3.0;
-    app.world_mut()
-        .resource_mut::<PlayerCommandQueue>()
-        .replace(vec![command(&[], &[])]);
+    test_input::clear_input(&mut app, player);
     app.update();
 
     let state = app.world().get::<FirstPersonMotorState>(player).unwrap();
@@ -194,13 +162,11 @@ fn plugin_retries_uncrouch_after_leaving_low_ceiling_without_jump() {
 #[test]
 fn plugin_uncrouch_tries_hpl2_side_offsets() {
     let mut app = controller_app();
-    app.init_resource::<PlayerCommandQueue>();
     let config = FirstPersonControllerConfig::default();
     let player = app
         .world_mut()
         .spawn((
             FirstPersonController {
-                player: NetworkPlayerId(1),
                 config: config.clone(),
             },
             FirstPersonMotorState {
@@ -217,16 +183,9 @@ fn plugin_uncrouch_tries_hpl2_side_offsets() {
         Transform::from_xyz(-config.body_radius + 0.001, 1.45, 0.0),
     ));
 
-    app.world_mut()
-        .resource_mut::<PlayerCommandQueue>()
-        .replace(vec![command(
-            &[],
-            &[InputActionValue::held(config.crouch_action.clone())],
-        )]);
+    test_input::set_input(&mut app, player, command(&[], &[AfterglowAction::Crouch]));
     app.update();
-    app.world_mut()
-        .resource_mut::<PlayerCommandQueue>()
-        .replace(vec![command(&[], &[])]);
+    test_input::clear_input(&mut app, player);
     app.update();
 
     let state = app.world().get::<FirstPersonMotorState>(player).unwrap();
@@ -238,13 +197,11 @@ fn plugin_uncrouch_tries_hpl2_side_offsets() {
 #[test]
 fn plugin_keeps_feet_stable_when_entering_crouch() {
     let mut app = controller_app();
-    app.init_resource::<PlayerCommandQueue>();
     let config = FirstPersonControllerConfig::default();
     let player = app
         .world_mut()
         .spawn((
             FirstPersonController {
-                player: NetworkPlayerId(1),
                 config: config.clone(),
             },
             Transform::from_xyz(0.0, config.height(ControllerStance::Standing) * 0.5, 0.0),
@@ -260,12 +217,7 @@ fn plugin_keeps_feet_stable_when_entering_crouch() {
     let before_transform = *app.world().get::<Transform>(player).unwrap();
     let before_state = *app.world().get::<FirstPersonMotorState>(player).unwrap();
     let before_feet_y = before_transform.translation.y - config.height(before_state.stance) * 0.5;
-    app.world_mut()
-        .resource_mut::<PlayerCommandQueue>()
-        .replace(vec![command(
-            &[],
-            &[InputActionValue::pressed(config.crouch_action.clone())],
-        )]);
+    test_input::set_input(&mut app, player, command(&[], &[AfterglowAction::Crouch]));
     app.update();
 
     let transform = app.world().get::<Transform>(player).unwrap();

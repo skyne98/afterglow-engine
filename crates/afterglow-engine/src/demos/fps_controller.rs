@@ -11,8 +11,7 @@ use crate::{
         FirstPersonStepRejectReason,
     },
     core::schedule::AfterglowSet,
-    input::{AxisComponent, InputContext, PlayerInputBindings},
-    network::NetworkPlayerId,
+    input::default_gameplay_input_map,
     physics::{PhysicsBody, PhysicsCollider},
 };
 
@@ -59,12 +58,7 @@ impl Plugin for FpsControllerDemoPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Startup,
-            (
-                enable_controller_trace,
-                install_input_bindings,
-                spawn_scene,
-                capture_cursor,
-            ),
+            (enable_controller_trace, spawn_scene, capture_cursor),
         )
         .add_systems(
             Update,
@@ -79,18 +73,6 @@ fn enable_controller_trace(mut trace: ResMut<FirstPersonControllerTrace>) {
         target: "afterglow::fps_controller_trace",
         "enabled first-person controller trace frames={TRACE_FRAMES}; reproduce jitter and keep this terminal output"
     );
-}
-
-fn install_input_bindings(mut bindings: ResMut<PlayerInputBindings>) {
-    let context = bindings.context_mut(InputContext::DEFAULT_GAMEPLAY);
-    context.add_key_axis("move.x", KeyCode::KeyA, KeyCode::KeyD);
-    context.add_key_axis("move.y", KeyCode::KeyS, KeyCode::KeyW);
-    context.add_mouse_motion_axis("look.x", AxisComponent::X, 1.0);
-    context.add_mouse_motion_axis("look.y", AxisComponent::Y, 1.0);
-    context.add_key_action(KeyCode::Space, "jump");
-    context.add_key_action(KeyCode::ShiftLeft, "sprint");
-    context.add_key_action(KeyCode::ControlLeft, "crouch");
-    context.add_key_action(KeyCode::KeyC, "crouch");
 }
 
 fn spawn_scene(
@@ -164,9 +146,9 @@ fn spawn_scene(
         .spawn((
             FpsDemoPlayer,
             FirstPersonController {
-                player: NetworkPlayerId(1),
                 config: config.clone(),
             },
+            default_gameplay_input_map(),
             Transform::from_xyz(0.0, config.standing_height * 0.5 + 0.05, 4.0),
         ))
         .id();
@@ -378,7 +360,6 @@ mod tests {
             AfterglowFirstPersonControllerPlugin,
             FpsControllerDemoPlugin,
         ))
-        .init_resource::<PlayerInputBindings>()
         .init_resource::<Assets<Mesh>>()
         .init_resource::<Assets<StandardMaterial>>();
         app.finish();
@@ -407,6 +388,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins((
             MinimalPlugins,
+            bevy::input::InputPlugin,
             AfterglowCorePlugin,
             AfterglowInputPlugin,
             AfterglowPhysicsPlugin,

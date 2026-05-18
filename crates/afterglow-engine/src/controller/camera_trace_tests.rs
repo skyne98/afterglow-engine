@@ -1,9 +1,8 @@
 use super::*;
 use crate::{
-    controller::{AfterglowFirstPersonControllerPlugin, FirstPersonControllerConfig},
+    controller::{AfterglowFirstPersonControllerPlugin, FirstPersonControllerConfig, test_input},
     core::AfterglowCorePlugin,
-    input::{InputActionValue, InputAxis, InputAxisValue, PlayerCommand, PlayerCommandQueue},
-    network::NetworkPlayerId,
+    input::AfterglowAction,
     physics::{AfterglowPhysicsPlugin, PhysicsBody, PhysicsCollider},
 };
 use bevy::time::TimeUpdateStrategy;
@@ -21,7 +20,6 @@ fn flat_left_strafe_camera_trace_has_no_repeating_pattern_without_bob() {
     app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
         1.0 / 60.0,
     )));
-    app.init_resource::<PlayerCommandQueue>();
     app.finish();
     app.cleanup();
 
@@ -30,7 +28,6 @@ fn flat_left_strafe_camera_trace_has_no_repeating_pattern_without_bob() {
         .world_mut()
         .spawn((
             FirstPersonController {
-                player: NetworkPlayerId(1),
                 config: config.clone(),
             },
             Transform::from_xyz(0.0, config.height(ControllerStance::Standing) * 0.5, 0.0),
@@ -63,18 +60,12 @@ fn flat_left_strafe_camera_trace_has_no_repeating_pattern_without_bob() {
     }
 
     let mut trace = Vec::with_capacity(180);
-    for tick in 0..180 {
-        app.world_mut()
-            .resource_mut::<PlayerCommandQueue>()
-            .replace(vec![PlayerCommand {
-                player: NetworkPlayerId(1),
-                tick,
-                axes: vec![InputAxisValue {
-                    axis: InputAxis::new("move.x"),
-                    value: -1.0,
-                }],
-                ..default()
-            }]);
+    for _ in 0..180 {
+        test_input::set_input(
+            &mut app,
+            player,
+            test_input::command(&[("move.x", -1.0)], &[]),
+        );
         app.update();
         trace.push(app.world().get::<Transform>(camera).unwrap().translation);
     }
@@ -111,7 +102,6 @@ fn low_blocker_camera_trace_stays_still_when_body_is_blocked() {
     app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
         1.0 / 60.0,
     )));
-    app.init_resource::<PlayerCommandQueue>();
     app.finish();
     app.cleanup();
 
@@ -121,7 +111,6 @@ fn low_blocker_camera_trace_stays_still_when_body_is_blocked() {
         .world_mut()
         .spawn((
             FirstPersonController {
-                player: NetworkPlayerId(1),
                 config: config.clone(),
             },
             Transform::from_xyz(0.0, half_height, 1.2),
@@ -144,18 +133,12 @@ fn low_blocker_camera_trace_stays_still_when_body_is_blocked() {
     ));
 
     let mut trace = Vec::with_capacity(120);
-    for tick in 0..120 {
-        app.world_mut()
-            .resource_mut::<PlayerCommandQueue>()
-            .replace(vec![PlayerCommand {
-                player: NetworkPlayerId(1),
-                tick,
-                axes: vec![InputAxisValue {
-                    axis: InputAxis::new("move.y"),
-                    value: 1.0,
-                }],
-                ..default()
-            }]);
+    for _ in 0..120 {
+        test_input::set_input(
+            &mut app,
+            player,
+            test_input::command(&[("move.y", 1.0)], &[]),
+        );
         app.update();
         trace.push(app.world().get::<Transform>(camera).unwrap().translation);
     }
@@ -185,7 +168,6 @@ fn stair_step_up_camera_trace_smooths_authoritative_landing_snap() {
     app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
         1.0 / 60.0,
     )));
-    app.init_resource::<PlayerCommandQueue>();
     app.finish();
     app.cleanup();
 
@@ -200,7 +182,6 @@ fn stair_step_up_camera_trace_smooths_authoritative_landing_snap() {
         .world_mut()
         .spawn((
             FirstPersonController {
-                player: NetworkPlayerId(1),
                 config: config.clone(),
             },
             Transform::from_xyz(0.0, half_height, 1.4),
@@ -235,18 +216,12 @@ fn stair_step_up_camera_trace_smooths_authoritative_landing_snap() {
 
     let mut body_trace = Vec::with_capacity(90);
     let mut camera_trace = Vec::with_capacity(90);
-    for tick in 0..90 {
-        app.world_mut()
-            .resource_mut::<PlayerCommandQueue>()
-            .replace(vec![PlayerCommand {
-                player: NetworkPlayerId(1),
-                tick,
-                axes: vec![InputAxisValue {
-                    axis: InputAxis::new("move.y"),
-                    value: 1.0,
-                }],
-                ..default()
-            }]);
+    for _ in 0..90 {
+        test_input::set_input(
+            &mut app,
+            player,
+            test_input::command(&[("move.y", 1.0)], &[]),
+        );
         app.update();
         body_trace.push(app.world().get::<Transform>(player).unwrap().translation);
         camera_trace.push(app.world().get::<Transform>(camera).unwrap().translation);
@@ -278,7 +253,6 @@ fn low_blocker_camera_trace_stays_still_after_sprint_reset() {
     app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
         1.0 / 60.0,
     )));
-    app.init_resource::<PlayerCommandQueue>();
     app.finish();
     app.cleanup();
 
@@ -288,7 +262,6 @@ fn low_blocker_camera_trace_stays_still_after_sprint_reset() {
         .world_mut()
         .spawn((
             FirstPersonController {
-                player: NetworkPlayerId(1),
                 config: config.clone(),
             },
             Transform::from_xyz(0.0, half_height, 5.5),
@@ -310,28 +283,16 @@ fn low_blocker_camera_trace_stays_still_after_sprint_reset() {
         Transform::from_xyz(0.0, obstacle_height * 0.5, 0.2),
     ));
 
-    let mut tick = 0;
     for _ in 0..24 {
-        app.world_mut()
-            .resource_mut::<PlayerCommandQueue>()
-            .replace(vec![PlayerCommand {
-                player: NetworkPlayerId(1),
-                tick,
-                axes: vec![InputAxisValue {
-                    axis: InputAxis::new("move.y"),
-                    value: 1.0,
-                }],
-                actions: vec![InputActionValue::held("sprint")],
-                ..default()
-            }]);
-        tick += 1;
+        test_input::set_input(
+            &mut app,
+            player,
+            test_input::command(&[("move.y", 1.0)], &[AfterglowAction::Sprint]),
+        );
         app.update();
     }
     for _ in 0..60 {
-        app.world_mut()
-            .resource_mut::<PlayerCommandQueue>()
-            .replace(Vec::new());
-        tick += 1;
+        test_input::clear_input(&mut app, player);
         app.update();
     }
     let motor = app.world().get::<FirstPersonMotorState>(player).unwrap();
@@ -343,18 +304,11 @@ fn low_blocker_camera_trace_stays_still_after_sprint_reset() {
 
     let mut trace = Vec::with_capacity(120);
     for _ in 0..120 {
-        app.world_mut()
-            .resource_mut::<PlayerCommandQueue>()
-            .replace(vec![PlayerCommand {
-                player: NetworkPlayerId(1),
-                tick,
-                axes: vec![InputAxisValue {
-                    axis: InputAxis::new("move.y"),
-                    value: 1.0,
-                }],
-                ..default()
-            }]);
-        tick += 1;
+        test_input::set_input(
+            &mut app,
+            player,
+            test_input::command(&[("move.y", 1.0)], &[]),
+        );
         app.update();
         trace.push(app.world().get::<Transform>(camera).unwrap().translation);
     }

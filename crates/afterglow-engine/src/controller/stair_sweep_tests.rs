@@ -1,10 +1,10 @@
 use super::*;
 use crate::{
     core::AfterglowCorePlugin,
-    input::{InputAxis, InputAxisValue, PlayerCommand, PlayerCommandQueue},
     physics::{AfterglowPhysicsPlugin, PhysicsBody, PhysicsCollider},
 };
 use bevy::time::TimeUpdateStrategy;
+use leafwing_input_manager::action_state::ActionState;
 use std::time::Duration;
 
 #[derive(Clone, Copy, Debug)]
@@ -20,7 +20,6 @@ fn app() -> App {
         AfterglowPhysicsPlugin,
         AfterglowFirstPersonControllerPlugin,
     ));
-    app.init_resource::<PlayerCommandQueue>();
     app.finish();
     app.cleanup();
     *app.world_mut().resource_mut::<TimeUpdateStrategy>() =
@@ -28,15 +27,8 @@ fn app() -> App {
     app
 }
 
-fn move_forward_command() -> PlayerCommand {
-    PlayerCommand {
-        player: NetworkPlayerId(1),
-        axes: vec![InputAxisValue {
-            axis: InputAxis::new("move.y"),
-            value: 1.0,
-        }],
-        ..default()
-    }
+fn move_forward_command() -> ActionState<crate::input::AfterglowAction> {
+    test_input::command(&[("move.y", 1.0)], &[])
 }
 
 fn spawn_static_box(app: &mut App, size: Vec3, transform: Transform) {
@@ -68,7 +60,6 @@ fn controller_keeps_forward_progress_through_low_stair_contact() {
         .world_mut()
         .spawn((
             FirstPersonController {
-                player: NetworkPlayerId(1),
                 config: config.clone(),
             },
             Transform::from_xyz(0.0, half_height, 1.4),
@@ -89,9 +80,7 @@ fn controller_keeps_forward_progress_through_low_stair_contact() {
     let mut samples = Vec::with_capacity(61);
     samples.push(sample(&app, player));
     for _ in 0..60 {
-        app.world_mut()
-            .resource_mut::<PlayerCommandQueue>()
-            .replace(vec![move_forward_command()]);
+        test_input::set_input(&mut app, player, move_forward_command());
         app.update();
         samples.push(sample(&app, player));
     }

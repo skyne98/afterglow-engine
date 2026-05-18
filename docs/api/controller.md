@@ -1,22 +1,23 @@
 # First-Person Controller API
 
-Afterglow's first-person controller is command-driven. It consumes
-`PlayerCommand` values from `PlayerCommandQueue`, never raw keyboard, mouse, or
-gamepad state. Physical input, scripted cutscenes, AI possession, tests, and
-network prediction therefore all drive the same movement path.
+Afterglow's first-person controller is input-abstraction driven. The rewrite
+target is to consume `ActionState<AfterglowAction>` from Leafwing-controlled
+player entities, never raw keyboard, mouse, or gamepad state. Physical input,
+scripted cutscenes, AI possession, tests, and network prediction should all drive
+the same fixed-tick movement path.
 
 ## Plugin
 
 | Item | Description |
 |---|---|
-| `AfterglowFirstPersonControllerPlugin` | Registers controller reflection, initializes `FirstPersonControllerTrace`, and runs controller authoring plus movement in `AfterglowSet::Simulate`. Included in `AfterglowRuntimePlugins`. |
+| `AfterglowFirstPersonControllerPlugin` | Registers controller reflection, initializes `FirstPersonControllerTrace`, and runs controller authoring plus movement in the fixed gameplay schedule. Included in `AfterglowRuntimePlugins`. |
 
 ## Components
 
 | Type | Description |
 |---|---|
-| `FirstPersonController` | Attach to the player body. Stores the owning `NetworkPlayerId` and `FirstPersonControllerConfig`. |
-| `FirstPersonControllerConfig` | Tunable command names, jump enablement, HPL2 local speed channels, acceleration/deacceleration, gravity, jump/coyote/buffer windows, look sensitivity, slope limit, HPL2 raycast stair climbing, HPL2 ground hysteresis, stance dimensions, and Avian depenetration knobs. |
+| `FirstPersonController` | Attach to the player body. Stores `FirstPersonControllerConfig`. |
+| `FirstPersonControllerConfig` | Tunable jump enablement, crouch mode, HPL2 local speed channels, acceleration/deacceleration, gravity, jump/coyote/buffer windows, look sensitivity, slope limit, HPL2 raycast stair climbing, HPL2 ground hysteresis, stance dimensions, and Avian depenetration knobs. |
 | `FirstPersonMotorState` | Runtime motor state: velocity, grounded flag, ground normal, stance, yaw/pitch, coyote/jump-buffer windows, jump input latch, ground-contact hysteresis, Amnesia jump-assist timer, stair timer, and climbing latch. |
 | `FirstPersonCameraRig` | Attach to a camera entity. Points at a controller body and applies first-person presentation effects without feeding back into collision or gameplay state. |
 | `FirstPersonCameraConfig` | Tunable eye heights, position/crouch smoothing, Amnesia/HPL2 walk/run/crouch bob amplitude plus min/max bob speed, landing bounce, FOV kick, impulse decay, and head-offset smoothing. |
@@ -30,7 +31,7 @@ network prediction therefore all drive the same movement path.
 | Type | Description |
 |---|---|
 | `FirstPersonControllerTrace` | Disabled-by-default resource for diagnosing movement and camera jitter. Insert `FirstPersonControllerTrace::enabled(max_frames)` or set `enabled = true` to record a bounded ring of recent frames. |
-| `FirstPersonControllerTraceFrame` | One controller-body frame: command axes/actions, phase positions, intended horizontal delta, horizontal depenetration pushback, stair trace, gravity/vertical delta, vertical pushback, final grounding, local speed, and velocity. |
+| `FirstPersonControllerTraceFrame` | One controller-body frame: action axes/buttons, phase positions, intended horizontal delta, horizontal depenetration pushback, stair trace, gravity/vertical delta, vertical pushback, final grounding, local speed, and velocity. |
 | `FirstPersonStepTrace` | One HPL2 stair attempt: whether the check ran, whether it accepted, per-frame lift, ray count, forward length, max step, final rejection reason, and per-ray results. |
 | `FirstPersonStepRayTrace` | One stair ray result: ray start/end, hit distance, inferred step height, fit-test position, and reason (`NoRayHit`, `TooLow`, `TooHigh`, `ShapeBlocked`, or `Accepted`). Frame-level attempts can also report `RateLimited` or `NoHorizontalDelta`. |
 | `FirstPersonCameraTraceFrame` | One camera presentation frame: target body, smoothed base position, bob/landing offset, final camera position, bob phase/amplitude, landing bounce, and footstep emission. |
@@ -57,23 +58,22 @@ depend on direct game-authored Avian colliders. This matches HPL2's character
 body shape, where normal standing/crouching bodies are vertical cylinders and
 only sphere-like bodies use a sphere fallback.
 
-## Command Names
+## Actions
 
-The default config reads:
+The controller reads entity-scoped `ActionState<AfterglowAction>`:
 
-| Command | Default name |
+| Action | Target enum variant |
 |---|---|
-| Move X axis | `move.x` |
-| Move Y axis | `move.y` |
-| Look X axis | `look.x` |
-| Look Y axis | `look.y` |
-| Jump action | `jump` |
-| Crouch action | `crouch` |
-| Sprint action | `sprint` |
+| Move axis | `AfterglowAction::Move` dual axis |
+| Look axis | `AfterglowAction::Look` dual axis |
+| Jump action | `AfterglowAction::Jump` |
+| Crouch action | `AfterglowAction::Crouch` |
+| Sprint action | `AfterglowAction::Sprint` |
 
-Games can override every name on `FirstPersonControllerConfig`; the engine does
-not own bindings. The FPS demo installs WASD, mouse look, Space, Shift, Ctrl,
-and C bindings as one example.
+Games can override bindings through Leafwing `InputMap`; the controller reads the
+action state, not raw devices or string action names. The FPS demo installs WASD,
+mouse look, gamepad sticks, Space, Shift, Ctrl, and mouse/action bindings as one
+example.
 
 `crouch` is hold-to-crouch by default. Set
 `FirstPersonControllerConfig::toggle_crouch = true` for games that want a
@@ -81,7 +81,7 @@ toggle instead.
 
 `jump_enabled` defaults to `true`. Set it to `false` for grounded horror,
 inventory, ladder, cinematic, swimming, or game-specific movement modes where a
-`jump` command may still exist but must not create an impulse or variable-height
+jump action may still exist but must not create an impulse or variable-height
 jump relief.
 
 ## Movement Model
@@ -195,7 +195,7 @@ physics keep using the controller body and replicated gameplay state.
 Moving-platform attachment, dynamic-body pushing, and full true-first-person
 body animation remain deferred behind regression tests. The current motor keeps
 collision/body state separate from local camera feel state so those features can
-be added without changing command input.
+be added without changing the Leafwing action API.
 
 ## Demo
 

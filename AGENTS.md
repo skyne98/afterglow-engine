@@ -6,6 +6,7 @@
 - Keep docs/research/ for design notes, benchmarks, architectural investigations, and trade-off analyses
 - Keep docs/ROADMAP.md up to date with the current vision
 - Write extensive unit and regression tests; do not rely on memory, write tests for everything
+- For bug fixes, issue fixes, and review findings, use the regression loop by default: first write or extend a focused test that reproduces the issue, run it and confirm it fails for the expected reason, apply the smallest correct fix, then rerun the test and confirm it passes. If the issue cannot be reproduced with an automated test, document why and use the closest practical verification.
 - Before writing tests for an algorithm or system, explicitly identify its edge-case envelope and build tests that box it in: cover normal behavior, boundaries, invalid inputs, ordering/reordering, duplication, deletion/removal, stale state, empty/singleton/maximal cases, and adversarial/security cases where relevant. Do not only test the average path; aim to cover 100% of the edge cases implied by the algorithm.
 - Write and extend benchmarks for performance-critical systems, especially rendering, networking, replication, streaming, physics, culling, and persistence; keep benchmark commands documented in docs/api/
 - Keep crates/mock-rpg-network-tests as a living integration harness: whenever networking, input, identity, simulation, world streaming, persistence, rollback, or gameplay authority changes, update the mock RPG scenarios so they track the modern engine instead of becoming legacy examples

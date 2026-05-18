@@ -4,7 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-afterglow-engine = { path = "../afterglow-engine" }
+afterglow-engine = { path = "../afterglow-engine", features = ["multiplayer"] }
 bevy.workspace = true
+lightyear = { version = "0.26.4", default-features = false, features = ["std", "client", "server", "crossbeam", "replication", "prediction"] }
 serde.workspace = true
 serde_json.workspace = true

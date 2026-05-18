@@ -1,514 +1,127 @@
 # Afterglow Engine API Surface
 
-## Workspace
+## Status
 
-Four crates: `afterglow-engine` (library), `afterglow-engine-macros`
-(proc macros), `agx` (binary CLI), and `mock-rpg-network-tests` (test-only mock
-RPG networking harness).
+The public API has been simplified around Bevy, Lightyear, Leafwing Input
+Manager, and an Afterglow server rewind layer. The older custom networking stack
+has been deleted.
 
-## Crate: `afterglow-engine`
+## Workspace Crates
 
-### Module Hierarchy
-```
+| Crate | Target status |
+|---|---|
+| `afterglow-engine` | Main engine library |
+| `agx` | Binary launcher |
+| `mock-rpg-network-tests` | Living integration harness for latency, replay, and correction scenarios |
+
+## Target Module Shape
+
+```text
 afterglow-engine
-├── lib.rs
-├── demo.rs
-├── demos.rs
-├── controller.rs
-├── controller/
-│   ├── body.rs
-│   ├── camera.rs
-│   ├── camera_motion.rs
-│   ├── commands.rs
-│   ├── physics.rs
-│   ├── source_move.rs
-│   ├── stairs.rs
-│   ├── trace.rs
-│   └── util.rs
-├── units.rs
-├── core/
-│   ├── mod.rs
-│   ├── identity.rs
-│   └── schedule.rs
-├── input/
-│   ├── mod.rs
-│   └── tests.rs       (cfg(test))
+├── core/                 stable IDs, chunks, schedule sets
+├── input/                Leafwing wrapper and `AfterglowAction`
 ├── network/
-│   ├── mod.rs
-│   ├── authority.rs
-│   ├── authority/
-│   │   └── tests.rs   (cfg(test))
-│   ├── baseline.rs
-│   ├── baseline/
-│   │   └── tests.rs   (cfg(test))
-│   ├── commands.rs
-│   ├── commands/
-│   │   └── tests.rs   (cfg(test))
-│   ├── interest.rs
-│   ├── interest/
-│   │   └── tests.rs   (cfg(test))
-│   ├── interpolation.rs
-│   ├── interpolation/
-│   │   └── tests.rs   (cfg(test))
-│   ├── local_server.rs
-│   ├── local_server/
-│   │   └── tests.rs   (cfg(test))
-│   ├── prediction.rs
-│   ├── prediction/
-│   │   └── tests.rs   (cfg(test))
-│   ├── reconciliation.rs
-│   ├── reconciliation/
-│   │   └── tests.rs   (cfg(test))
-│   ├── replication.rs
-│   ├── replication/
-│   │   ├── ecs.rs
-│   │   ├── ecs_edge_tests.rs (cfg(test))
-│   │   ├── history.rs
-│   │   ├── rollback.rs
-│   │   ├── rollback_ecs_tests.rs (cfg(test))
-│   │   ├── runtime.rs
-│   │   ├── schedule.rs
-│   │   ├── timeline_tests.rs (cfg(test))
-│   │   ├── world_state.rs
-│   │   ├── world_state_tests.rs (cfg(test))
-│   │   └── tests.rs   (cfg(test))
-│   ├── rollback.rs
-│   ├── rollback/
-│   │   ├── messages.rs
-│   │   ├── messages/
-│   │   │   └── tests.rs (cfg(test))
-│   │   └── tests.rs   (cfg(test))
-│   ├── session.rs
-│   ├── session/
-│   │   └── tests.rs   (cfg(test))
-│   └── tests.rs       (cfg(test))
-├── physics.rs
-├── units.rs
-├── demos/
-│   ├── fps_controller.rs
-│   └── fps_controller/
-│       └── playground.rs
-├── persistence/
-│   ├── apply.rs
-│   ├── edge_tests.rs (cfg(test))
-│   ├── mod.rs
-│   ├── save.rs
-│   ├── save_tests.rs (cfg(test))
-│   └── tests.rs       (cfg(test))
-├── world/
-│   ├── cell.rs
-│   ├── cell/
-│   │   └── tests.rs   (cfg(test))
-│   ├── lifecycle.rs
-│   ├── lifecycle/
-│   │   └── tests.rs   (cfg(test))
-│   └── mod.rs
-├── testing.rs         (cfg(test) or feature = "test-support")
-└── perf_hud/
-    ├── mod.rs
-    ├── data.rs         (private)
-    ├── server.rs       (private)
-    ├── ui.rs           (private)
-    └── trace_collector.rs (pub submodule)
+│   ├── lightyear/        Lightyear plugin/config/protocol glue
+│   └── rewind/           authoritative server rewind history/replay/corrections
+├── controller/           first-person controller
+├── physics/              Avian-backed physics authoring
+├── persistence/          stable-ID chunk deltas and save/load
+├── world/                cell manifests and chunk lifecycle
+└── perf_hud/             diagnostics and metrics
 ```
 
-### Crate: `afterglow-engine-macros`
+The legacy `network::{commands, authority, session, handshake, iroh, steam,
+replication, prediction, reconciliation, interpolation, interest, baseline,
+local_server, rollback}` modules were removed and replaced by the target
+`network::lightyear` and `network::rewind` modules.
 
-| Item | Kind | Description |
-|---|---|---|
-| `#[derive(Replicate)]` | derive macro | Implements `network::replication::Replicate` for replicated state-bearing components/resources. |
-| `#[replicate]` | attribute macro | Attribute form of the same marker implementation for replicated state-bearing components/resources. |
+## Runtime Plugins
 
-### Top-Level Exports
-
-| Item | Kind | Description |
-|---|---|---|
-| `AfterglowEnginePlugin` | struct impl Plugin | Main engine plugin. Builds scene, registers HUD, tracing, metrics. |
-| `AfterglowRuntimePlugins` | PluginGroup | Core runtime group: core, input, network, physics, persistence, and world. Contains no demo content. |
-| `demo::AfterglowDemoPlugin` | struct impl Plugin | Opt-in demo cell and demo animation systems used by `run()`. |
-| `AfterglowEnginePlugin::trace_accum` | field: AccumMap | Shared accumulator for tracing span data |
-| `run()` | fn → AppExit | Creates App with DefaultPlugins + AfterglowEnginePlugin + AfterglowDemoPlugin, runs it |
-
-### Re-exported Public Modules
-
-| Module | Description |
+| Plugin | Purpose |
 |---|---|
-| `core` | Engine foundation systems. Currently owns stable identity and chunk membership. |
-| `core::identity` | Stable entity IDs, chunk IDs, persistence/replication markers, and registry resources. |
-| `core::schedule` | Ordered engine system sets for input, command building, simulation, persistence prep, and debug/metrics. |
-| `demo` | Opt-in demo content, demo manifest installation, and rotating/light animation systems. |
-| `input` | Generic per-game input axis/action bindings and per-tick `PlayerCommand` generation. |
-| `network` | Transport-independent peer, channel, packet, shared session, and fake transport primitives. Real network libraries are expected to be thin backend adapters below this layer. |
-| `network::authority` | Server-side command validation for peer ownership and duplicate simulation ticks. |
-| `network::baseline` | Replication-compatible save data and reconnect baseline helpers. |
-| `network::commands` | Versioned wire envelope for serializing generic `PlayerCommand` batches. |
-| `network::handshake` | Backend-neutral reliable control handshake, compatibility validation, authenticated identity admission, and gameplay packet gating. |
-| `network::interest` | Chunk-based interest map for filtering snapshots and deltas by player visibility. |
-| `network::interpolation` | Remote entity sample buffering, interpolation, and bounded extrapolation. |
-| `network::iroh` | Optional native Iroh transport adapter behind the `iroh` feature. Maps Iroh endpoints/connections to `NetworkTransport` without owning gameplay protocol state. |
-| `network::local_server` | Optional single-player/listen-host bridge that maps `LocalPlayers` into `NetworkSession` and submits local `PlayerCommand`s through the same server authority buffer used by multiplayer. |
-| `network::prediction` | Client-side command history and replay buffer for prediction after authoritative snapshots. |
-| `network::reconciliation` | Reconciles authoritative snapshot/delta/correction ticks with local prediction history. |
-| `network::replication` | Stable-ID keyed snapshot/delta primitives plus Bevy-facing replicated components, resources, and tick-addressed command/message timelines. |
-| `network::rollback` | Small deterministic subsystem rollback history plus committed/provisional domain replay, lifecycle, and cue helpers. |
-| `network::session` | Session identity maps between peers, platform identities, players, and avatars. |
-| `network::steam` | Optional native Steam adapter behind the `steam` feature. Maps Steam identity, lobby metadata, and SteamNetworkingSockets P2P connections to the shared network boundary. |
-| `physics` | Avian-backed 3D physics plugin, generic authoring components, config, and Avian prelude re-export. |
-| `persistence` | Stable-ID keyed chunk persistent deltas for registered serializable component types plus JSON roundtrip helpers for save/load foundations. |
-| `world` | Data-driven cell manifests/load requests plus generic chunk lifecycle resources/systems. |
-| `world::cell` | Cell manifests, manifest registry, load requests, baseline spawn tracking, and built-in demo manifest. |
-| `world::lifecycle` | Generic chunk/cell lifecycle state machine with load/spawn/activate/sleep/unload requests, persistence-backed unload for spawned chunks, saved-delta apply on spawn, and per-frame reports. |
-| `testing` | Test app builders. Available in unit tests and through the `test-support` feature. |
+| `AfterglowCorePlugin` | Stable entity IDs, chunk IDs, and core schedule resources |
+| `AfterglowInputPlugin` | Leafwing action mapping for `AfterglowAction` |
+| `AfterglowNetworkPlugin` | Lightyear boundary plus server rewind plugin |
+| `AfterglowLightyearPlugin` | Lightyear client/server setup when the `lightyear` feature is enabled |
+| `ServerRewindPlugin` | Authoritative server component history skeleton |
+| `AfterglowPhysicsPlugin` | Avian-backed physics authoring and runtime integration |
+| `AfterglowPersistencePlugin` | Stable-ID chunk deltas and save/load helpers |
+| `AfterglowWorldPlugin` | Cell manifest loading and chunk lifecycle |
+| `AfterglowEnginePlugin` | Runtime composition plus perf HUD, tracing, and metrics |
+| `demo::AfterglowDemoPlugin` | Optional demo content only |
 
-### Re-exported from `perf_hud`
+## Detailed API Notes
 
-`PerfData`, `SharedMetrics`, `setup_tracing()`, `AccumMap`, and `update_hud()`.
-
-### Detailed API Notes
-
-- [plugins.md](plugins.md) documents runtime, engine, and demo plugin composition.
-- [input.md](input.md) documents context-aware, phased, device-routed input.
-- [controller.md](controller.md) documents the command-driven first-person controller.
-- [physics.md](physics.md) documents Avian-backed physics integration.
-- [world.md](world.md) documents cell manifests, lifecycle resources, and world system behavior.
-
-### Systems Registered (execution order)
-
-**Startup:** `spawn_hud`
-
-**Update sets:** `ReadInput` → `BuildCommands` → `Simulate` → `ApplyGameplay` → `PreparePersistence` → `DebugAndMetrics`
-
-**Update / `ReadInput`:** `collect_player_commands`
-
-**Update / `BuildCommands`:** `clear_server_command_buffer`
-
-**Update / `BuildCommands`:** `clear_reconciliation_queue`
-
-**Update / `BuildCommands`:** `sync_local_server_session` → `submit_local_player_commands`
-
-**Update / `ApplyGameplay`:** `process_cell_load_requests`
-
-**Update / `PreparePersistence`:** `process_chunk_lifecycle_requests`
-
-**FixedPostUpdate:** Avian physics schedule through `AfterglowPhysicsPlugin`
-
-**Update / `DebugAndMetrics` (chained):**
-1. `record_update_start`
-2. `collect_frame`
-3. `update_hud`
-4. `record_update_end`
-5. `sync_shared_metrics`
-
-**Update / `DebugAndMetrics` with `AfterglowDemoPlugin`:** `rotate_cubes` → `update_light`
-
-**Update (after sync):** `reset_trace_data`
-
-**PostUpdate:** `maintain_stable_entity_registry`
-
-### Resources
-
-| Resource | Type |
+| File | Scope |
 |---|---|
-| `TraceData` | `{ accum: AccumMap }` |
-| `PlayerInputBindings` | Context-aware game/editor input bindings |
-| `LocalPlayers` | Local session player IDs controlled by this app instance |
-| `SimulationTick` | Monotonic command tick counter |
-| `PlayerCommandQueue` | Current-frame local player commands |
-| `NetworkProtocol` | Active engine network protocol version |
-| `ReconnectBaselineStore` | Per-peer/player reconnect baselines built from replication snapshots |
-| `DeterministicRollbackBuffer` | Tick-indexed history for small deterministic subsystem rollback |
-| `ServerCommandBuffer` | Per-frame accepted/rejected server-authoritative command buffer plus tick dedupe state |
-| `ClientPredictionBuffer` | Local command history used to replay prediction after authoritative snapshots |
-| `ClientReconciliationQueue` | Per-frame reconciliation results created from authoritative updates |
-| `RemoteInterpolationBuffer` | Buffered remote entity samples for rendering remote entities smoothly behind server time |
-| `InterestMap` | Chunk visibility map for players and replicated entities |
-| `LocalServerConfig` | Enables/disables local-server mode and defines the local authoritative peer/platform identity |
-| `LocalServerState` | Tracks the peer currently owned by the local-server bridge so single-player/multiplayer mode transitions clean up only local-server-owned session state |
-| `RollbackReplicationClock` | Current rollback tick and committed/provisional policy |
-| `NetworkSession` | Runtime peer/player/platform/avatar identity map |
-| `PersistentWorldDeltas` | Chunk-keyed persistent delta store for stable-ID registered component state, tombstones, and JSON save/load roundtrips |
-| `StableIdAllocator` | Monotonic allocator for process-local stable IDs |
-| `StableEntityRegistry` | Runtime maps for stable ID ↔ entity and chunk → entities |
-| `AfterglowPhysicsConfig` | Gravity and future global physics tuning knobs |
-| `CellManifestRegistry` | Chunk-keyed authored cell manifests used by the generic cell loader |
-| `CellLoadRequests` | Persistent pending cell load requests; loaders complete them after lifecycle reaches spawned/active/sleeping |
-| `CellLoadTracker` | Tracks whether a requested chunk's authored baseline was spawned during the current load attempt |
-| `CellLoadReport` | Last cell-loader pass requested/spawned/completed/missing chunks, spawned count, and errors |
-| `ChunkLifecycle` | Runtime chunk lifecycle state map |
-| `ChunkLifecycleConfig` | Knobs for automatic save-on-unload of spawned chunks and saved-delta apply-on-spawn behavior |
-| `ChunkLifecycleRequests` | Per-frame load/spawned/activate/sleep/unload request queues |
-| `ChunkLifecycleReport` | Last lifecycle pass transitions, saved/applied chunks, despawn count, and non-panicking error reports |
-| `PerfData` | History, frame systems, trace snapshots, timing, name colors |
-| `FrameProfiler` | `{ update_start: Option<Instant>, postupdate_start: Option<Instant> }` |
-| `SharedMetrics` | `Arc<Mutex<PerfData>>` for HTTP server |
+| `plugins.md` | Runtime plugin composition |
+| `input.md` | Leafwing/Lightyear input target API |
+| `network.md` | Lightyear + server rewind target API |
+| `controller.md` | First-person controller |
+| `physics.md` | Avian-backed physics |
+| `world.md` | Cell manifests and lifecycle |
 
-### Environment Variables
+## Core Public Concepts
 
-| Variable | Default | Purpose |
+| Item | Owner | Purpose |
 |---|---|---|
-| `AGX_METRICS_PORT` | `9877` | HTTP metrics server port |
-| `RUST_LOG` | `"info"` | Tracing filter |
+| `StableEntityId` | `core::identity` | Durable save/load, replication, and rewind identity |
+| `ChunkId` | `core::identity` | Stable chunk/cell identifier |
+| `ChunkMembership` | `core::identity` | Streaming, persistence, and optional replication filtering membership |
+| `Persistent` | `core::identity` | Entity participates in stable persistence |
+| `Replicated` | `core::identity` | Entity participates in networked gameplay truth |
+| `RuntimeOnly` | `core::identity` | Entity is excluded from automatic stable ID assignment |
+| `AfterglowAction` | `input` | Leafwing `Actionlike` enum for gameplay controls |
+| `RewindedEntity` | `network::rewind` | Stable server-rewind entity marker |
+| `RewindDomainId` | `network::rewind` | Authoritative replay domain, such as a combat bubble or cell subsystem |
+| `RewindHistoryBudget` | `network::rewind` | Retained tick/window budget for server rewind |
+| `AfterglowLightyearConfig` | `network::lightyear` | Tick duration, client/server role, and Lightyear protocol settings |
 
-### Test Commands
+## Target Schedules
+
+Lightyear owns the network-critical phase ordering. Afterglow systems should fit
+inside that model:
+
+| Phase | Target responsibility |
+|---|---|
+| `PreUpdate` | Lightyear packet/message receive and replicated state application |
+| `FixedPreUpdate` | Leafwing/Lightyear input restore and buffering |
+| `FixedUpdate` | Authoritative gameplay, prediction-safe movement/combat, physics-driving state |
+| `FixedPostUpdate` | Server rewind history capture and Lightyear prediction history |
+| `PostUpdate` | Lightyear message/replication send, correction/cue publication, cleanup |
+
+## Benchmark Commands
+
+Current networking benches are legacy and should be replaced. Target benchmark
+coverage:
 
 | Command | Purpose |
 |---|---|
-| `cargo test -p afterglow-engine` | Fast unit tests and renderless app tests |
-| `cargo test -p afterglow-engine --features test-support` | Unit tests plus real-adapter headless GPU render tests |
-| `bun run test` | Runs normal cargo tests, then the `test-support` headless-render test suite |
+| `cargo bench -p afterglow-engine --bench server_rewind` | Typed component history, restore, replay, and correction diff costs |
+| `cargo bench -p afterglow-engine --bench lightyear_integration` | Lightyear replication/input/prediction pressure under Afterglow schedules |
+| `cargo bench -p afterglow-engine --bench persistence_streaming` | Chunk streaming and persistence pressure |
 
-### Benchmark Commands
+## Test Commands
 
 | Command | Purpose |
 |---|---|
-| `cargo bench -p afterglow-engine --bench replication` | Measures replication snapshot, delta, apply, and interest-filter costs at multiple entity counts |
-| `cargo bench -p afterglow-engine --bench authority` | Measures bulk server-authoritative command validation and duplicate tick rejection |
-| `cargo bench -p afterglow-engine --bench prediction` | Measures client prediction command recording and replay/rebase costs |
-| `cargo bench -p afterglow-engine --bench reconciliation` | Measures authoritative correction reconciliation against local prediction history |
-| `cargo bench -p afterglow-engine --bench interpolation` | Measures remote entity interpolation and bounded extrapolation costs |
-| `cargo bench -p afterglow-engine --bench baseline` | Measures replication save serialization, restore, and interest-filtered reconnect baseline costs |
-| `cargo bench -p afterglow-engine --bench rollback` | Measures deterministic subsystem state history, policy, and replay costs |
-| `cargo bench -p afterglow-engine --bench ggrs` | Measures GGRS rollback-session coordinator cost plus synthetic full-state save/load/replay pressure |
-| `cargo bench -p afterglow-engine --bench persistence_streaming` | Measures 10k-player chunk-interest churn plus multi-chunk persistence capture/apply pressure |
+| `cargo test -p afterglow-engine` | Engine unit and renderless app tests |
+| `cargo test -p mock-rpg-network-tests` | Mock RPG network-boundary and correction harness |
+| `bun run test` | Build-system test wrapper |
 
-### Platform Notes
+## Dependencies
 
-- Native builds attach the custom trace collector through Bevy's `LogPlugin`,
-  keeping a single tracing subscriber for stderr logs and in-memory span metrics.
-- The engine no longer enables Bevy's `trace_chrome` output, so normal runs do
-  not emit `trace-*.json` files.
-- Wasm builds attach the same collector to Bevy's wasm logging stack.
-- Wasm builds disable Bevy's anti-alias plugin and omit camera TAA because the
-  Bevy 0.18 TAA pipeline fails WebGL validation in browser builds.
-- Wasm builds disable Bevy's audio plugin until the engine exposes an explicit
-  user-gesture driven audio startup flow.
-- The HTTP metrics server is native-only; wasm builds keep the shared metrics
-  resource but do not bind a socket.
+Target networking/input dependencies:
 
-### HTTP API
+| Crate | Purpose |
+|---|---|
+| `lightyear` | Multiplayer substrate: connection, channels, replication, prediction, interpolation |
+| `lightyear_inputs_leafwing` | Leafwing action networking and ticked input history |
+| `leafwing-input-manager` | Local input binding and `ActionState` model |
+| `bevy` | ECS, schedules, app/plugin model |
+| `avian3d` | Physics |
+| `serde` / `serde_json` | Persistence, protocol config, test payloads |
 
-- `GET /metrics` or `GET /` → JSON: FPS stats, frame time stats, top 15 trace spans
-- `GET /traces` → JSON: same but all trace spans (untruncated)
-
-### Components
-
-| Component | Module | Purpose |
-|---|---|---|
-| `StableEntityId(u128)` | core::identity | Durable ID for save/load and replication. Raw Bevy `Entity` must not be serialized or replicated. |
-| `ChunkId(u64)` | core::identity | Stable chunk identifier. |
-| `ChunkMembership { chunk }` | core::identity | Assigns an entity to a chunk for residency, save/load, and interest management. |
-| `Persistent` | core::identity | Entity should receive/keep a stable ID and participate in persistence. |
-| `Replicated` | core::identity | Entity should receive/keep a stable ID and participate in replication. |
-| `RuntimeOnly` | core::identity | Entity is excluded from automatic stable ID assignment. |
-| `Rotates { speed: f32 }` | setup | Marker + rotation speed |
-| `HudRoot` | ui | HUD container |
-| `FpsText` | ui | FPS text label |
-| `FrameTimeText` | ui | Frame time text label |
-| `FrameBar` | ui | Frame-time bar segment |
-| `TraceHistBar` | ui | Trace history bar container |
-| `TraceSeg` | ui | Trace bar segment |
-| `SysLegendItem` | ui | System name legend |
-| `BarLerp(f32)` | ui | Smoothing state for bar height |
-
-### Data Types
-
-| Type | Fields | Description |
-|---|---|---|
-| `AfterglowSet` | ReadInput, BuildCommands, Simulate, ApplyGameplay, PreparePersistence, DebugAndMetrics | Ordered engine system sets for deterministic feature layering. |
-| `PlayerCommand` | player, tick, axes, actions, pointers | Deterministic command record with string axes, phased string actions, and generic pointers. Empty commands are valid. See `input.md`. |
-| `PlayerInputBindings` | contexts | Context-aware bindings for keyboard, mouse motion/buttons, gamepads, touch, and virtual/editor input. See `input.md`. |
-| `InputAction*`, `InputAxis*`, `PointerInput`, `VirtualInputState` | — | Generic command payload and shared or per-player scripted input types; actions carry `Pressed`, `Held`, or `Released` phases. See `input.md`. |
-| `InputContext`, `AxisBinding`, `ActionBinding`, `LocalInputRoutes` | — | Input layers, binding sources, and optional per-player device routing. See `input.md`. |
-| `FirstPersonController` | player, config | Command-driven HPL2/Source-style first-person cylinder controller. See `controller.md`. |
-| `FirstPersonMotorState` | velocity, grounded, stance, yaw, pitch, timers | Runtime state for the first-person motor. See `controller.md`. |
-| `LocalPlayers` | peer, players | Local transport peer plus one or more local `NetworkPlayerId`s controlled by this app instance. Stable world-entity mapping lives outside input. |
-| `SimulationTick` | u32 | Monotonic command tick. |
-| `PlayerCommandQueue` | commands | Current-frame generated commands. |
-| `NetworkProtocol` | version | Resource exposing the current network protocol version. |
-| `ProtocolVersion` | major, minor, patch | Semver-style protocol version used in packet headers. |
-| `PeerId` | u64 | Transport-session peer identifier. |
-| `NetworkPlayerId` | u64 | Session-level player identity, separate from platform IDs and stable entity IDs. |
-| `NetChannel` | Control, Commands, Snapshots, Events, Bulk, Custom | Engine packet channel classification. |
-| `DeliveryMode` | Reliable, Unreliable, UnreliableSequenced | Delivery intent independent of any transport backend. `MemoryTransport` drops stale/duplicate `UnreliableSequenced` packets per peer/channel and resets that sequence state on reconnect. |
-| `PacketHeader` | protocol, channel, delivery, sequence | Transport-independent packet metadata. |
-| `NetworkPacket` | from, to, header, payload | Transport-independent packet envelope. |
-| `DisconnectReason` | Local, Remote, Timeout, ProtocolMismatch, Transport | Generic disconnect reason. |
-| `TransportEvent` | Connected, Disconnected, Packet | Events emitted by transport backends. |
-| `NetworkTransport` | trait | Minimal backend boundary for polling connection/packet events, sending engine packets, and disconnecting peers. Iroh, Steam, memory, and future transports should adapt to this trait without owning replication, rollback, prediction, command validation, or interest logic. |
-| `MemoryTransport` | local_peer, protocol, queues, faults | Deterministic in-memory fake transport for unit tests and protocol development. Supports fault injection and protocol override for compatibility/rejection tests. |
-| `FaultConfig` | drop_every, duplicate_every, delay_ticks, reverse_delivery | Deterministic packet fault injection for fake transport tests. |
-| `LocalServerConfig` | enabled, peer, platform | Opt-in local-server mode. `single_player()` enables `PeerId(0)` with `PlatformIdentity::Local`, syncs `LocalPlayers` into `NetworkSession`, submits local commands to `ServerCommandBuffer`, and clears only local-server-owned session state when disabled or moved to another peer. |
-| `LocalServerState` | owned_peer | Internal state for robust single-player → multiplayer → single-player transitions in one process. |
-| `IrohTransport` | local peer, endpoint address, worker, packet queues | Optional native transport adapter. Runs Iroh async endpoint work on a background Tokio worker, sends reliable packets over unidirectional QUIC streams, sends unreliable packets over QUIC datagrams, and emits backend-neutral `TransportEvent`s. Local real-Iroh tests cover reliable/unreliable delivery, stale sequenced packet rejection, reconnect sequence reset, disconnected-peer packet rejection, disconnects, handshake rejection, unauthorized gameplay drops, multi-client command streams, and snapshot payloads feeding client reconciliation. |
-| `IrohTransportConfig` | protocol, alpn, relay_mode, next_inbound_peer, max_packet_bytes | Iroh backend configuration. Defaults to n0 relay support for real builds; `local_only()` disables relays for deterministic local tests. |
-| `IrohRelayMode` | N0, Disabled | Relay configuration for the Iroh endpoint builder. |
-| `AFTERGLOW_IROH_ALPN` | bytes | Default ALPN used by Afterglow Iroh endpoints. |
-| `SteamTransport` | local peer, Steam client, P2P listen socket, connection map, packet sequence state | Optional native SteamNetworkingSockets transport adapter. Polls Steam callbacks, accepts P2P connections, maps Steam IDs to engine `PeerId`s, sends reliable/unreliable engine packets with Steam send flags, and emits backend-neutral `TransportEvent`s. Currently compile-tested and covered by no-client unit tests only; real Steam client/lobby/auth/relay integration remains untested. |
-| `SteamTransportConfig` | protocol, local_virtual_port, next_inbound_peer, max_messages_per_poll, listen, init_relay_access | Steam backend configuration for listen-server/P2P use. Relay access initialization is enabled by default. |
-| `SteamLobbyMetadata` | protocol, build_hash, content_hash, world_id, host_steam_id, host_virtual_port | Stable lobby metadata payload used by Steam discovery/invites to validate version/content and hand clients to the host transport. |
-| `NetworkHandshakeConfig` | protocol, build_hash, content_hash, backend, identity | Local control-handshake configuration shared by memory, Iroh, Steam, and future backends. |
-| `NetworkBackendKind` | Memory, Iroh, Steam, Custom | Backend label carried in the control hello for diagnostics and policy. |
-| `ControlMessage` | Hello, Accepted, Rejected | Reliable control-channel handshake payload. Gameplay packets are forwarded only after a peer's hello has been accepted into `NetworkSession`; accepted responses are valid only for already-admitted peers. |
-| `ControlHello` | protocol, build_hash, content_hash, backend, identity | Compatibility and identity claim sent immediately after a raw transport connection. |
-| `HandshakeRejectReason` | InvalidControlPayload, ProtocolMismatch, BuildMismatch, ContentMismatch, DuplicateIdentity, PeerIdentityChanged | Backend-neutral reason for refusing a peer before gameplay packets are accepted. Protocol mismatch is checked on control and gameplay packet headers plus control hello payloads. A connected peer cannot change platform identity by sending another hello. |
-| `HandshakeReport` | sent_hellos, accepted_peers, rejected_peers, disconnected_peers, dropped_unauthorized_packets | Per-service-call diagnostics returned by `service_control_handshake()`. |
-| `service_control_handshake()` | — | Polls a `NetworkTransport`, sends reliable hellos/rejects/accepts, updates `NetworkSession`, forwards authorized gameplay events, and drops pre-handshake gameplay packets. |
-| `PersistenceRegistry` | registered component callbacks | Runtime registry populated by `app.persist_component_as::<T>("stable.name.v1")` or `app.persist_component::<T>()`. Stores capture/apply/remove callbacks for serializable component types. |
-| `PersistenceAppExt::persist_component_as<T>()` | App extension | Registers a component type for persistence under an explicit stable save key. Preferred for durable game saves because Rust type names can change during refactors. `T` must be `Component + Serialize + DeserializeOwned`. |
-| `PersistenceAppExt::persist_component<T>()` | App extension | Convenience registration using Rust `type_name::<T>()` as the save key. Useful for tests/prototypes; prefer `persist_component_as` for authored content and compatibility. |
-| `PersistentWorldDeltas` | chunks | Resource storing one `ChunkPersistentDelta` per chunk. Supports replacement, removal, low-level tombstone recording with `record_deleted()`, iteration, and `serde_json` byte roundtrips. Prefer `delete_persistent_entity()` when deleting a loaded entity because it records and despawns together. |
-| `ChunkPersistentDelta` | chunk, entities, deleted | Per-chunk persistent state override. Entity records are keyed by `StableEntityId`; `deleted` is a chunk-scoped tombstone list for authored objects removed by gameplay. |
-| `PersistentEntityDelta` | entity, components, removed_components | Persistent state for one stable entity. `components` stores registered component payloads; `removed_components` lets apply remove registered components absent from the save. |
-| `PersistentComponentValue` | type_name, payload | One serialized registered component payload. `type_name` is the stable persistence registration key; payloads are JSON bytes for that component type. |
-| `LoadedCellSave` | format_version, chunks | Versioned one-loaded-cell save payload. Use `to_json()` / `from_json()` for the current JSON save-file foundation. |
-| `LOADED_CELL_SAVE_FORMAT_VERSION` | 1 | Current loaded-cell save schema version. `load_saved_chunks()` rejects unknown versions before mutating the world. |
-| `PersistenceError` | UnregisteredComponent, InvalidChunkId, InvalidEntityId, DuplicateEntityDelta, ConflictingEntityDelta, UnsupportedSaveVersion, Serialize, Deserialize | Persistence capture/apply/save failure reason. Apply preflights chunk IDs, entity IDs, duplicate/conflicting entity records, registered component keys, save versions, and payload decoding before mutating the world. |
-| `capture_chunk_delta()` | World, ChunkId | Captures registered components on persistent, non-runtime entities in one loaded chunk into a stable-ID keyed delta. Returns `Result`; emits removal records for persistent entities that have no registered components, and emits no entity records when no component types are registered. |
-| `capture_chunk_deltas()` | World, chunks | Batch capture path for streaming. Maintains stable IDs and scans the world once, then groups persistent component deltas by requested chunk. Prefer this when many chunks/cells unload in one tick. |
-| `apply_chunk_delta()` | World, ChunkPersistentDelta | Applies chunk-scoped tombstones, updates existing stable entities, spawns missing stable entities, restores registered components, and removes absent registered components. Returns `Result<ChunkDeltaApplyReport, PersistenceError>` with update/spawn/despawn/component counts. |
-| `apply_chunk_deltas()` | World, chunk deltas | Batch apply path for streaming. Preflights all component payloads, applies tombstones, then restores entities/components while maintaining stable IDs once per phase. Prefer this when many chunks/cells load in one tick. |
-| `save_loaded_chunks()` | World, chunks | Captures a versioned `LoadedCellSave` for currently loaded chunks and merges chunk tombstones from `PersistentWorldDeltas`. |
-| `load_saved_chunks()` | World, LoadedCellSave | Validates the save format version, applies saved chunk deltas with the same preflight guarantees as `apply_chunk_deltas()`, and retains loaded tombstones in `PersistentWorldDeltas` so later saves do not resurrect deleted authored objects. |
-| `delete_persistent_entity()` | World, StableEntityId | High-level loaded-cell deletion helper. Infers the loaded entity's chunk, records a chunk tombstone, and despawns the entity. Use `PersistentWorldDeltas::record_deleted()` only for manual/unloaded tombstones. |
-| `ReplicationSaveData` | tick, snapshot | Serializable save payload built from a `ReplicationWorld` snapshot and restorable back into `ReplicationWorld`. |
-| `ReconnectBaseline` | peer, player, snapshot | Full or interest-filtered authoritative snapshot used when a player reconnects. |
-| `ReconnectBaselineStore` | baselines | Runtime map of reconnect baselines keyed by `(PeerId, NetworkPlayerId)`. |
-| `DeterministicRollbackBuffer` | max_saved_ticks, states | Opaque byte-state history for small deterministic subsystems, such as combat bubbles or puzzle mechanisms. |
-| `CommittedRollbackDomain` | id, policy, committed/provisional state, commands, outputs | Authoritative rollback domain. Gameplay reads provisional state; committed state is the durable rollback anchor. |
-| `RollbackDomainId` | u64 | Stable identifier for a rollback domain, combat bubble, cell subsystem, or deterministic puzzle. |
-| `RollbackMessageId` | domain, tick, sequence | Stable message identity for retained rollback message streams. |
-| `RollbackMessage<T>` | id, source_command_tick, entities, payload | Typed replay-generated gameplay fact. Use provisional messages for live/visual correction and committed messages for durable business logic. |
-| `RollbackMessageStream<T>` | provisional, committed, committed_tick | Retained message log with a monotonic committed horizon. Replacing provisional messages ignores already committed ticks; committing through a tick promotes final facts without allowing committed facts to be rewritten. |
-| `RollbackMessageDiff<T>` | added, removed | Provisional message diff for presentation and correction-aware readers. `removed` carries message IDs so cancellation does not clone old payloads. |
-| `RollbackCommit<T>` | committed_tick, added | Messages newly promoted into the final committed stream. |
-| `RollbackCommand` | tick, source, sequence, payload | Opaque deterministic command payload for subsystem replay; `(tick, source, sequence)` is the stable replay ordering and duplicate key. |
-| `RollbackReplay` | from_tick, to_tick, initial_state, commands | Replay plan built from a saved authoritative state and commands after that tick. `build_replay()` returns `MissingState` when the anchor snapshot is absent and `DuplicateCommand` when the same `(tick, source, sequence)` has conflicting payloads. Late replay requires a saved state before the command tick, so tick-0 late replay currently returns `MissingState`. |
-| `RollbackPolicy` | max_rollback_ticks, commit_delay_ticks | Server/authority policy for accepting late commands and deriving the committed/provisional tick boundary. |
-| `RollbackCommandDecision` | Replay, TooOld, FromFuture | Result of classifying a late deterministic command against current tick. |
-| `RollbackReplayError` | TooOld, FromFuture, MissingState, AlreadyCommitted, DuplicateCommand | Failure reason when building or inserting a policy-gated replay command. |
-| `RollbackCue` | tick, sequence, kind, payload | Replay-generated cue fact for UI/audio/VFX or other presentation layers. |
-| `RollbackCueDiff` | added, removed | Difference between previous replay cues and corrected replay cues. |
-| `RollbackDomainOutputs` | cues, lifecycles | Replay output produced from deterministic command application. |
-| `RollbackDomainReplay` | committed_tick, current_tick, previous_provisional_state, provisional_state, cue_diff, outputs | Result of rebuilding or promoting a committed/provisional domain. |
-| `RollbackEntityLifecycle` | entity, spawn_tick, despawn_tick, despawn_reason | Rollback-friendly stable entity lifetime record for provisional spawns/despawns. |
-| `replay_bytes()` | — | Helper that applies rollback commands to a byte-state clone. |
-| `ServerCommandBuffer` | accepted, rejected, seen_ticks | Server-authoritative command intake. Validates peer ownership through `NetworkSession`, rejects duplicate player ticks, and exposes accepted generic `PlayerCommand`s for simulation. |
-| `AuthoritativePlayerCommand` | peer, command | Accepted command tagged with the transport peer that submitted it. |
-| `RejectedPlayerCommand` | peer, player, tick, reason | Rejected command metadata for logging, metrics, disconnect policy, or client correction. |
-| `CommandRejectReason` | UnknownPlayer, PlayerNotOwned, DuplicateTick | Generic command authority rejection reason. |
-| `CommandAuthorityResult` | Accepted, Rejected | Result returned by `ServerCommandBuffer::submit`. |
-| `ClientPredictionBuffer` | commands, acknowledged | Per-player local command history for client prediction. Games apply commands immediately, then call `replay_after` when an authoritative snapshot/correction arrives. |
-| `PredictionReplay` | player, authoritative_tick, commands | Ordered unacknowledged commands to replay on top of authoritative state. |
-| `ClientReconciliationQueue` | results | Per-frame results from reconciling authoritative updates against local prediction history. |
-| `AuthoritativeCorrection` | player, tick, source | Generic correction packet metadata. Carries the authoritative tick; game-specific state stays in snapshots/deltas or game packets. |
-| `AuthoritativeUpdateSource` | Snapshot, Delta, Correction | Source classification for reconciliation metrics and client policy. |
-| `ReconciliationResult` | player, authoritative_tick, source, replay_commands | Commands the game should replay after applying authoritative state. |
-| `RemoteInterpolationBuffer` | delay_ticks, max_extrapolation_ticks, samples | Per-entity remote sample buffer. Renders behind latest server tick for interpolation and extrapolates only within a configured tick limit. |
-| `RemoteEntitySample` | fields | Generic scalar sample fields such as `pos_x`, `pos_y`, `pos_z`, yaw, or animation blend values. |
-| `SmoothedEntitySample` | entity, tick, mode, fields | Result returned to game/render systems for a remote entity at render time. |
-| `SmoothingMode` | Exact, Interpolated, Extrapolated | Classifies how a remote sample was produced. |
-| `CommandEnvelope` | protocol, commands | Versioned wire payload for one batch of player commands. |
-| `WirePlayerCommand` | player, tick, axes, actions, pointers | Explicit transport DTO for `PlayerCommand`. |
-| `WireAxisValue` | axis, value | Explicit transport DTO for one named axis value. |
-| `WireActionValue` | action, phase | Explicit transport DTO for one phased action. |
-| `WirePointerInput` | device, id, position, delta, pressure, tilt, twist, primary | Explicit transport DTO for pointer input. |
-| `CommandDecodeError` | InvalidJson, ProtocolMismatch | Decode failure for malformed or incompatible command payloads. |
-| `encode_player_commands()` | — | Serializes `PlayerCommand` values into a versioned command envelope. |
-| `decode_player_commands()` | — | Deserializes and validates a versioned command envelope. |
-| `NetworkSession` | next_player, peers, players | Runtime map from transport peers to platform identities, network players, and optional avatar stable IDs. |
-| `PeerSession` | peer, platform, players | One connected transport peer and the local/splitscreen players it owns. |
-| `PlayerSession` | player, peer, avatar | One session player, its owning peer, and optional controlled stable world entity. |
-| `PlatformIdentity` | Local, Steam, Iroh, Anonymous | Backend-neutral authenticated identity descriptor. External identities map to `PeerId`, then `NetworkPlayerId`, then optional avatar `StableEntityId`. |
-| `ReplicationWorld` | entities | Generic stable-ID keyed replicated state map used to build snapshots and deltas. |
-| `ReplicatedEntityState` | fields | Byte-valued field map for one replicated entity. |
-| `WorldSnapshot` | tick, entities | Full replication baseline. |
-| `WorldDelta` | from_tick, to_tick, changes, removed | Delta from one snapshot to a later state. |
-| `EntitySnapshot` | entity, fields | Full entity state inside a snapshot. |
-| `EntityDelta` | entity, changed, removed | Per-entity changed and removed fields. |
-| `FieldValue` | name, value | One byte-valued replicated field. |
-| `Replicate` | trait/macro | Marker for components/resources that are part of the replicated truth schema. Implement with `#[derive(Replicate)]` or `#[replicate]`. |
-| `ReplicatedCommand` | trait | Bevy `Message` command accepted into the replicated timeline; exposes its simulation tick. |
-| `ReplicatedMessage` | trait | Bevy `Message` fact accepted into the replicated timeline; exposes its simulation tick. |
-| `ReplicationAppExt::replicate(...)` | app extension | Idempotently registers replicated components, resources, command messages, or timeline messages. |
-| `component::<T>()` | registration helper | Registers replicated component type `T: Component + Replicate + Clone`. |
-| `resource::<T>()` | registration helper | Registers replicated resource type `T: Resource + Replicate + Clone`. |
-| `command::<T>()` | registration helper | Registers replicated command message type `T: ReplicatedCommand`. |
-| `message::<T>()` | registration helper | Registers replicated message/fact type `T: ReplicatedMessage`. |
-| `ReplicatedComponentState<T>` | resource | Latest collected replicated component values keyed by `StableEntityId`. |
-| `ReplicatedResourceState<T>` | resource | Latest collected replicated resource value. |
-| `ReplicatedComponentHistory<T>` | resource | Full tick snapshots of registered replicated component values keyed by valid `StableEntityId`; save/restore canonicalizes duplicate IDs and uses these snapshots as rollback anchors. |
-| `ReplicatedResourceHistory<T>` | resource | Full tick snapshots of registered replicated resources, including absence. |
-| `ReplicatedTimeline<T>` | resource | Tick-addressed bounded command/message timeline; rollback replay replaces and reissues retained messages while dropping stale out-of-order ticks. |
-| `ReplicatedTick` | schedule | Dedicated schedule for replicated gameplay truth. Game code adds normal Bevy systems here; rollback can restore state, reissue messages, and run it repeatedly. |
-| `ReplicatedRollbackWorldExt` | world extension | Adds `save_replicated_state(tick)`, `restore_replicated_state(tick)`, `run_replicated_tick(tick)`, and `replay_replicated_ticks(anchor, through)`; save/restore maintains stable IDs before touching snapshots. |
-| `ReplicatedRollbackError` | InvalidRange, MissingSnapshot | Error returned by replicated ECS restore/replay helpers. |
-| `ReplicationSet` | RestoreState, ReissueMessages, CollectMessages, CollectChanges | Ordered `Update` sets inside `AfterglowSet::ApplyGameplay`; replay reissues messages before gameplay collection snapshots changed replicated state. |
-| `RollbackReplicationClock` | current_tick, policy | Drives the committed/provisional boundary for replay-aware replicated timelines. |
-| `ReplicatedRollbackMessageStream<E>` | messages, last diff/commit | Retained committed/provisional rollback message stream wrapper for replay-produced facts. |
-| `InterestMap` | entity_chunks, removed_entity_chunks, player_chunks, cleanup_routed_removals | Chunk-based visibility filter for replicated snapshots and deltas. Removed entities keep their last-known chunk so despawn deltas still route after `remove_entity()`. Batch delta/fanout calls clear routed removals by default; disable with `set_cleanup_routed_removals(false)` if the server wants explicit ack-driven cleanup via `clear_removed_entities()`. Use `snapshot_chunk_ref_fanout()` / `delta_chunk_ref_fanout()` for server-scale packet routing so one chunk payload can be shared by many players without cloning per-player snapshots. `filter_snapshots()` / `filter_deltas()` remain available for owned per-player recovery/debug payloads. |
-| `ChunkSnapshotRefFanout<'a>` | tick, chunks, chunk_players | Borrowed chunk snapshot routing plan. `chunks` references snapshot entities by chunk; `chunk_players` maps each chunk payload to interested players. |
-| `ChunkDeltaRefFanout<'a>` | from_tick, to_tick, chunks, chunk_players | Borrowed chunk delta routing plan. Keeps changed entity deltas by reference and removed IDs by value. |
-| `ChunkSnapshotFanout` | tick, chunks, chunk_players | Owned chunk snapshot routing plan for tools or APIs that need cloned payloads. Prefer the borrowed form for server packet packing. |
-| `ChunkDeltaFanout` | from_tick, to_tick, chunks, chunk_players | Owned chunk delta routing plan for tools or APIs that need cloned payloads. Prefer the borrowed form for server packet packing. |
-| `testing::unit_app()` | — | Builds a minimal non-rendering app with `AfterglowCorePlugin`. |
-| `testing::asset_unit_app()` | — | Builds a minimal non-rendering app with assets and core systems. |
-| `testing::headless_render::app()` | — | `test-support` only. Builds a no-window render app using a real GPU adapter, or returns `None` if unavailable. |
-| `testing::headless_render::offscreen_texture()` | — | `test-support` only. Creates an offscreen render target suitable for GPU readback tests. |
-| `StableIdAllocator` | next | Allocates nonzero `StableEntityId` values for persistent/replicated entities missing one. |
-| `StableEntityRegistry` | stable_to_entity, entity_to_stable, chunk_to_entities, duplicate_ids | Rebuilt after updates from entities with `StableEntityId` and optional `ChunkMembership`. |
-| `world::*` cell/lifecycle types | — | See [world.md](world.md). |
-| `FrameSample` | fps, frame_time_ms, systems | One frame's metrics |
-| `PerfData` | history, frame_systems, trace_snapshots, update_time_ms, extraction_time_ms, name_colors, next_color, smoothed_trace_max | Full performance data store |
-| `SystemStats` | name, avg, p95, p99 | Per-system timing stats |
-| `SpanSample` | name, duration_ms, count | Trace span measurement |
-| `SharedMetrics` | `Arc<Mutex<PerfData>>` | Thread-safe share for HTTP server |
-
-### Dependencies
-
-| Crate | Version | Feature |
-|---|---|---|
-| avian3d | 0.6.1 | 3d, f32, parry-f32, xpbd_joints, parallel |
-| bevy (workspace) | 0.18.1 | webgpu |
-| bevy (native engine) | 0.18.1 | bevy_dev_tools, trace |
-| bevy (native agx) | 0.18.1 | dynamic_linking, bevy_dev_tools, sysinfo_plugin, trace |
-| bytes | 1 | optional, `iroh` feature packet handoff |
-| ggrs | 0.12.0 | dev-only benchmark dependency |
-| iroh | 0.98.2 | optional, native Iroh transport backend |
-| proc-macro-crate | 3 | macro crate-name resolution for renamed dependencies |
-| proc-macro2 | 1 | proc macro support |
-| quote | 1 | proc macro support |
-| rayon | 1 | deterministic pure-data parallel fanout for very large server-side interest jobs |
-| wgpu | 27 | optional, `test-support` only for real headless GPU tests |
-| serde | 1 | derive |
-| serde_json | 1 | — |
-| steamworks | 0.13.1 | optional, native Steam backend |
-| syn | 2 | proc macro parsing, full |
-| tracing | 0.1 | — |
-| tracing-subscriber | 0.3 | env-filter |
-| tiny_http | 0.12 | — |
-| tokio | 1 | optional, `iroh` feature background runtime |
-| web-time | 1 | wasm-compatible timing |
-
-## Crate: `agx` (binary)
-
-CLI entry point. Parses `--name` arg (unused), calls `afterglow_engine::run()`.
-
-## Crate: `mock-rpg-network-tests`
-
-Workspace test crate that exercises engine networking primitives against a mock
-first-person open-world RPG simulation. It uses `MemoryTransport` and JSON
-packet payloads to cover multi-client joins, 3D position/chunk math, snapshots,
-chunk interest, authority, duplicate ticks, rollback-style save/restore,
-malformed/spoofed/hacked client behavior, door use, item pickup conflicts,
-combat messages, client prediction, reconciliation, remote interpolation,
-bounded extrapolation, moving spell projectiles with collider hits under
-delayed/reordered packets, projectile edge cases for duplicate/spoofed casts,
-packet loss, swept collision, rejected prediction cleanup, out-of-order samples,
-late shield correction that rewrites provisional death outcomes through
-replicated ECS replay, and many simultaneous NPC/world-state changes.
-
-## Docs
-
-- `docs/api/` — this file
-- `docs/research/` — design notes, benchmarks, investigations
-- `docs/ROADMAP.md` — project vision and milestones
+Legacy optional `iroh`, `steamworks`, `ggrs`, and custom macro dependencies were
+removed. `tokio` and `bytes` remain workspace dependencies only where still
+needed by active crates or transitive feature work.

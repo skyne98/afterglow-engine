@@ -1,18 +1,19 @@
 use bevy::prelude::*;
+use leafwing_input_manager::action_state::ActionState;
 
-use crate::input::PlayerCommand;
+use crate::input::AfterglowAction;
 
 use super::{
     ControllerStance, FirstPersonControllerConfig, FirstPersonMotorState, is_walkable_normal,
 };
 
 pub fn integrate_first_person_motor(
-    command: Option<&PlayerCommand>,
+    action_state: Option<&ActionState<AfterglowAction>>,
     config: &FirstPersonControllerConfig,
     state: &mut FirstPersonMotorState,
     dt: f32,
 ) {
-    let input = integrate_first_person_input(command, config, state, dt);
+    let input = integrate_first_person_input(action_state, config, state, dt);
     write_horizontal_velocity_from_local_speeds(state);
     if !input.jumped {
         apply_first_person_gravity(config, state, dt);
@@ -52,26 +53,20 @@ pub struct FirstPersonCommandState {
 }
 
 impl FirstPersonCommandState {
-    fn from_command(command: Option<&PlayerCommand>, config: &FirstPersonControllerConfig) -> Self {
-        let Some(command) = command else {
+    fn from_action_state(action_state: Option<&ActionState<AfterglowAction>>) -> Self {
+        let Some(action_state) = action_state else {
             return Self::default();
         };
         Self {
-            tick: command.tick,
-            move_axis: Vec2::new(
-                command.axis(&config.move_x_axis),
-                command.axis(&config.move_y_axis),
-            ),
-            look_axis: Vec2::new(
-                command.axis(&config.look_x_axis),
-                command.axis(&config.look_y_axis),
-            ),
-            jump_pressed: command.action_pressed(&config.jump_action),
-            jump_held: command.action_held(&config.jump_action),
-            crouch_pressed: command.action_pressed(&config.crouch_action),
-            crouch_held: command.action_held(&config.crouch_action),
-            sprint_pressed: command.action_pressed(&config.sprint_action),
-            sprint_held: command.action_held(&config.sprint_action),
+            tick: 0,
+            move_axis: action_state.clamped_axis_pair(&AfterglowAction::Move),
+            look_axis: action_state.axis_pair(&AfterglowAction::Look),
+            jump_pressed: action_state.just_pressed(&AfterglowAction::Jump),
+            jump_held: action_state.pressed(&AfterglowAction::Jump),
+            crouch_pressed: action_state.just_pressed(&AfterglowAction::Crouch),
+            crouch_held: action_state.pressed(&AfterglowAction::Crouch),
+            sprint_pressed: action_state.just_pressed(&AfterglowAction::Sprint),
+            sprint_held: action_state.pressed(&AfterglowAction::Sprint),
         }
     }
 
@@ -89,12 +84,12 @@ impl FirstPersonCommandState {
 }
 
 pub fn integrate_first_person_input(
-    command: Option<&PlayerCommand>,
+    action_state: Option<&ActionState<AfterglowAction>>,
     config: &FirstPersonControllerConfig,
     state: &mut FirstPersonMotorState,
     dt: f32,
 ) -> FirstPersonInputStep {
-    let command = FirstPersonCommandState::from_command(command, config);
+    let command = FirstPersonCommandState::from_action_state(action_state);
     state.yaw -= command.look_axis.x * config.look_sensitivity.x;
     state.pitch = (state.pitch - command.look_axis.y * config.look_sensitivity.y)
         .clamp(config.min_pitch, config.max_pitch);

@@ -2,13 +2,17 @@
 
 ## Overview
 
+Status: historical research. The current multiplayer target is Lightyear +
+Leafwing + Afterglow server rewind. Do not revive the old custom Iroh
+`NetworkTransport` adapter as production architecture. If Iroh is still desired
+later, integrate it as a Lightyear-compatible transport/link layer or separate
+platform admission path.
+
 Iroh is a modular peer-to-peer networking stack for Rust, developed by [n0, inc.](https://n0.computer).
 Instead of connecting to IP addresses, you connect to peers by their **public key** (`EndpointId`).
 
-For Afterglow, Iroh is the first real backend for itch/dev builds, but it is not
-the gameplay networking architecture. The shared backend boundary is documented
-in `docs/research/network-backend-abstraction.md`; Iroh should be a thin
-adapter that emits engine `TransportEvent`s and sends engine packets.
+For Afterglow, Iroh is now only future transport research. The active direction
+is documented in `docs/research/network-backend-abstraction.md`.
 
 - **GitHub**: https://github.com/n0-computer/iroh (8.5k ⭐)
 - **Docs**: https://docs.rs/iroh/latest/iroh/
@@ -111,10 +115,11 @@ The adapter should map Iroh public keys/connections to engine `PeerId`s and use
 `NetworkPlayerId`, replicated components/resources, command validation,
 rollback, prediction, interpolation, chunk interest, or reconnect baselines.
 
-## Afterglow Implementation
+## Legacy Afterglow Implementation
 
-The first backend lives in `crates/afterglow-engine/src/network/iroh.rs` behind
-the optional native `iroh` feature.
+The old backend lives in `crates/afterglow-engine/src/network/iroh.rs` behind the
+optional native `iroh` feature. This implementation is slated for deletion during
+the Lightyear rewrite.
 
 - `IrohTransport` implements the existing synchronous `NetworkTransport` trait.
 - A background Tokio worker owns the async Iroh `Endpoint` and `Connection`
@@ -142,8 +147,8 @@ the optional native `iroh` feature.
   reconciliation replay path used by memory transport tests.
 
 This is intentionally not a lobby, account, player, rollback, or replication
-system. It is only the first real transport adapter below the shared networking
-layer.
+system. In the new plan it should be replaced by Lightyear transport support or
+future Lightyear-compatible Iroh work.
 
 ## Async Runtime
 

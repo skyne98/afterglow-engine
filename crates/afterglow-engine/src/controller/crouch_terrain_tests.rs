@@ -1,10 +1,11 @@
 use super::*;
 use crate::{
     core::AfterglowCorePlugin,
-    input::{InputActionValue, InputAxis, InputAxisValue, PlayerCommand, PlayerCommandQueue},
+    input::AfterglowAction,
     physics::{AfterglowPhysicsPlugin, PhysicsBody, PhysicsCollider},
 };
 use bevy::time::TimeUpdateStrategy;
+use leafwing_input_manager::action_state::ActionState;
 use std::time::Duration;
 
 fn app() -> App {
@@ -15,7 +16,6 @@ fn app() -> App {
         AfterglowPhysicsPlugin,
         AfterglowFirstPersonControllerPlugin,
     ));
-    app.init_resource::<PlayerCommandQueue>();
     app.finish();
     app.cleanup();
     *app.world_mut().resource_mut::<TimeUpdateStrategy>() =
@@ -23,24 +23,16 @@ fn app() -> App {
     app
 }
 
-fn crouch_forward_command() -> PlayerCommand {
+fn crouch_forward_command() -> ActionState<AfterglowAction> {
     crouch_move_command("move.y", 1.0)
 }
 
-fn crouch_right_command() -> PlayerCommand {
+fn crouch_right_command() -> ActionState<AfterglowAction> {
     crouch_move_command("move.x", 1.0)
 }
 
-fn crouch_move_command(axis: &'static str, value: f32) -> PlayerCommand {
-    PlayerCommand {
-        player: NetworkPlayerId(1),
-        axes: vec![InputAxisValue {
-            axis: InputAxis::new(axis),
-            value,
-        }],
-        actions: vec![InputActionValue::held("crouch")],
-        ..default()
-    }
+fn crouch_move_command(axis: &'static str, value: f32) -> ActionState<AfterglowAction> {
+    test_input::command(&[(axis, value)], &[AfterglowAction::Crouch])
 }
 
 fn spawn_crouched_player(app: &mut App, config: &FirstPersonControllerConfig, pos: Vec3) -> Entity {
@@ -52,7 +44,6 @@ fn spawn_crouched_player(app: &mut App, config: &FirstPersonControllerConfig, po
     app.world_mut()
         .spawn((
             FirstPersonController {
-                player: NetworkPlayerId(1),
                 config: config.clone(),
             },
             Transform::from_translation(standing_center),
@@ -68,24 +59,22 @@ fn spawn_static_box(app: &mut App, size: Vec3, transform: Transform) {
     ));
 }
 
-fn hold_crouch(app: &mut App) {
-    app.world_mut()
-        .resource_mut::<PlayerCommandQueue>()
-        .replace(vec![PlayerCommand {
-            player: NetworkPlayerId(1),
-            actions: vec![InputActionValue::held("crouch")],
-            ..default()
-        }]);
+fn hold_crouch(app: &mut App, player: Entity) {
+    test_input::set_input(
+        app,
+        player,
+        test_input::command(&[], &[AfterglowAction::Crouch]),
+    );
 }
 
-fn update_holding_crouch(app: &mut App) {
-    hold_crouch(app);
+fn update_holding_crouch(app: &mut App, player: Entity) {
+    hold_crouch(app, player);
     app.update();
 }
 
-fn settle_crouch(app: &mut App) {
+fn settle_crouch(app: &mut App, player: Entity) {
     for _ in 0..90 {
-        update_holding_crouch(app);
+        update_holding_crouch(app, player);
     }
 }
 
@@ -106,12 +95,10 @@ fn crouched_controller_climbs_low_stair_fully() {
         Transform::from_xyz(0.0, 0.06, 0.6),
     );
 
-    settle_crouch(&mut app);
+    settle_crouch(&mut app, player);
     let mut max_y = start_y;
     for _ in 0..120 {
-        app.world_mut()
-            .resource_mut::<PlayerCommandQueue>()
-            .replace(vec![crouch_forward_command()]);
+        test_input::set_input(&mut app, player, crouch_forward_command());
         app.update();
         max_y = max_y.max(app.world().get::<Transform>(player).unwrap().translation.y);
     }
@@ -143,13 +130,11 @@ fn crouched_controller_climbs_low_stair_run_fully() {
         );
     }
 
-    settle_crouch(&mut app);
+    settle_crouch(&mut app, player);
     let mut max_y = start_y;
     let mut reached_top = false;
     for _ in 0..180 {
-        app.world_mut()
-            .resource_mut::<PlayerCommandQueue>()
-            .replace(vec![crouch_forward_command()]);
+        test_input::set_input(&mut app, player, crouch_forward_command());
         app.update();
         let transform = app.world().get::<Transform>(player).unwrap();
         max_y = max_y.max(transform.translation.y);
@@ -179,14 +164,12 @@ fn crouched_controller_finishes_step_when_horizontal_move_is_pinned() {
         Transform::from_xyz(0.0, 0.06, 2.725),
     );
 
-    settle_crouch(&mut app);
+    settle_crouch(&mut app, player);
     let target_y = start_y + 0.12;
     let mut reached_step_top = false;
     let mut crossed_riser = false;
     for _ in 0..90 {
-        app.world_mut()
-            .resource_mut::<PlayerCommandQueue>()
-            .replace(vec![crouch_forward_command()]);
+        test_input::set_input(&mut app, player, crouch_forward_command());
         app.update();
         let transform = app.world().get::<Transform>(player).unwrap();
         reached_step_top |= transform.translation.y >= target_y - 0.005;
@@ -212,7 +195,7 @@ fn crouched_climb_releasing_move_input_clears_climbing() {
         Transform::from_xyz(0.0, -0.1, 0.0),
     );
 
-    settle_crouch(&mut app);
+    settle_crouch(&mut app, player);
     {
         let mut state = app
             .world_mut()
@@ -223,7 +206,7 @@ fn crouched_climb_releasing_move_input_clears_climbing() {
         state.ground_contact_ticks = config.ground_sticky_ticks;
     }
 
-    update_holding_crouch(&mut app);
+    update_holding_crouch(&mut app, player);
 
     let state = app.world().get::<FirstPersonMotorState>(player).unwrap();
     assert!(
@@ -254,11 +237,9 @@ fn crouched_step_climbing_latches_grounding_like_hpl2() {
         Transform::from_xyz(0.0, 0.06, 0.2),
     );
 
-    settle_crouch(&mut app);
+    settle_crouch(&mut app, player);
     for _ in 0..12 {
-        app.world_mut()
-            .resource_mut::<PlayerCommandQueue>()
-            .replace(vec![crouch_forward_command()]);
+        test_input::set_input(&mut app, player, crouch_forward_command());
         app.update();
         if app
             .world()
@@ -301,7 +282,7 @@ fn crouched_stair_attempt_is_not_blocked_by_upward_force_velocity_like_hpl2() {
         Transform::from_xyz(0.0, 0.06, 0.2),
     );
 
-    settle_crouch(&mut app);
+    settle_crouch(&mut app, player);
     {
         let mut state = app
             .world_mut()
@@ -311,9 +292,7 @@ fn crouched_stair_attempt_is_not_blocked_by_upward_force_velocity_like_hpl2() {
         state.grounded = true;
         state.ground_contact_ticks = config.ground_sticky_ticks;
     }
-    app.world_mut()
-        .resource_mut::<PlayerCommandQueue>()
-        .replace(vec![crouch_forward_command()]);
+    test_input::set_input(&mut app, player, crouch_forward_command());
     app.update();
 
     let state = app.world().get::<FirstPersonMotorState>(player).unwrap();
@@ -345,10 +324,10 @@ fn crouched_stair_edge_idle_does_not_micro_jump() {
         Transform::from_xyz(0.0, 0.12, 0.0),
     );
 
-    settle_crouch(&mut app);
+    settle_crouch(&mut app, player);
     let start_y = app.world().get::<Transform>(player).unwrap().translation.y;
     for _ in 0..90 {
-        update_holding_crouch(&mut app);
+        update_holding_crouch(&mut app, player);
     }
 
     let transform = app.world().get::<Transform>(player).unwrap();
@@ -383,14 +362,12 @@ fn crouched_moving_along_stair_edge_does_not_repeatedly_pop_up() {
         Transform::from_xyz(0.0, 0.12, 0.0),
     );
 
-    settle_crouch(&mut app);
+    settle_crouch(&mut app, player);
     let start_y = app.world().get::<Transform>(player).unwrap().translation.y;
     let mut upward_pops = 0;
     let mut last_y = start_y;
     for _ in 0..90 {
-        app.world_mut()
-            .resource_mut::<PlayerCommandQueue>()
-            .replace(vec![crouch_right_command()]);
+        test_input::set_input(&mut app, player, crouch_right_command());
         app.update();
         let y = app.world().get::<Transform>(player).unwrap().translation.y;
         if y > last_y + 0.01 {
@@ -423,12 +400,10 @@ fn crouched_controller_descends_low_step_without_hanging() {
         Transform::from_xyz(0.0, 0.06, 0.8),
     );
 
-    settle_crouch(&mut app);
+    settle_crouch(&mut app, player);
     let mut lowest_y = f32::MAX;
     for _ in 0..120 {
-        app.world_mut()
-            .resource_mut::<PlayerCommandQueue>()
-            .replace(vec![crouch_forward_command()]);
+        test_input::set_input(&mut app, player, crouch_forward_command());
         app.update();
         lowest_y = lowest_y.min(app.world().get::<Transform>(player).unwrap().translation.y);
     }
@@ -458,12 +433,10 @@ fn crouched_controller_rejects_step_above_allowed_height() {
         Transform::from_xyz(0.0, obstacle_height * 0.5, 0.2),
     );
 
-    settle_crouch(&mut app);
+    settle_crouch(&mut app, player);
     let mut max_y = half_height;
     for _ in 0..90 {
-        app.world_mut()
-            .resource_mut::<PlayerCommandQueue>()
-            .replace(vec![crouch_forward_command()]);
+        test_input::set_input(&mut app, player, crouch_forward_command());
         app.update();
         max_y = max_y.max(app.world().get::<Transform>(player).unwrap().translation.y);
     }

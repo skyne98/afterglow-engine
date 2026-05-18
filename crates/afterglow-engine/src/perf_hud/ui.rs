@@ -226,7 +226,7 @@ pub fn update_hud(
     adapter_info: Option<Res<bevy::render::renderer::RenderAdapterInfo>>,
     monitor: Query<&Monitor, With<PrimaryMonitor>>,
     window: Query<&Window, With<bevy::window::PrimaryWindow>>,
-    player_commands: Option<Res<crate::input::PlayerCommandQueue>>,
+    keys: Res<ButtonInput<KeyCode>>,
     mut hud: Query<&mut Visibility, With<HudRoot>>,
     mut text_group: ParamSet<(
         Query<
@@ -266,7 +266,7 @@ pub fn update_hud(
         (With<TraceSeg>, Without<FrameBar>, Without<TraceHistBar>),
     >,
 ) {
-    if perf_hud_toggle_requested(player_commands.as_deref()) {
+    if perf_hud_toggle_requested(&keys) {
         for mut v in &mut hud {
             *v = if *v == Visibility::Visible {
                 Visibility::Hidden
@@ -294,7 +294,7 @@ pub fn update_hud(
             current_trace.push((name.clone(), *total));
         }
     }
-    current_trace.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+    current_trace.sort_by(|a, b| b.1.total_cmp(&a.1));
     current_trace.truncate(MAX_TRACE);
     // Assign stable colors to any new system names
     for (name, _) in &current_trace {
@@ -315,7 +315,7 @@ pub fn update_hud(
         let cur = data.history.last().map(|s| s.fps as u64).unwrap_or(0);
         let avg = fpss.iter().sum::<f64>() / fpss.len().max(1) as f64;
         let mut sfps = fpss.clone();
-        sfps.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
+        sfps.sort_unstable_by(|a, b| a.total_cmp(b));
         let p5 = sfps
             .get((sfps.len() as f64 * 0.05) as usize)
             .copied()
@@ -347,7 +347,7 @@ pub fn update_hud(
     for mut t in &mut text_group.p1() {
         let last = data.history.last();
         let mut sorted: Vec<f64> = data.history.iter().map(|s| s.frame_time_ms).collect();
-        sorted.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
+        sorted.sort_unstable_by(|a, b| a.total_cmp(b));
         let avg = sorted.iter().sum::<f64>() / sorted.len().max(1) as f64;
         let p95 = sorted
             .get((sorted.len() as f64 * 0.95) as usize)
@@ -400,7 +400,7 @@ pub fn update_hud(
     let bar_entities: Vec<Entity> = trace_bar_ents.iter().collect();
     for (snap, &bar_ent) in data.trace_snapshots.iter().rev().zip(bar_entities.iter()) {
         let mut sorted: Vec<(String, f64)> = snap.clone();
-        sorted.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+        sorted.sort_by(|a, b| b.1.total_cmp(&a.1));
 
         if let Ok(children) = children_q.get(bar_ent) {
             for (slot, child) in children.iter().enumerate() {
@@ -428,7 +428,7 @@ pub fn update_hud(
         }
     }
     let mut cum_sorted: Vec<(String, f64)> = cum.into_iter().collect();
-    cum_sorted.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+    cum_sorted.sort_by(|a, b| b.1.total_cmp(&a.1));
     for (i, (mut t, mut tc)) in text_group.p2().iter_mut().enumerate() {
         if let Some((name, ms)) = cum_sorted.get(i) {
             t.0 = format!("{}  {:.2}ms", name, ms);

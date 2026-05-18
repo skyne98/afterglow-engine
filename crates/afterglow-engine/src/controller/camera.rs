@@ -277,7 +277,7 @@ fn consume_impulses(
     }
 }
 
-fn update_camera_state(
+pub(super) fn update_camera_state(
     config: &FirstPersonCameraConfig,
     state: &mut FirstPersonCameraState,
     target_transform: &Transform,
@@ -391,7 +391,7 @@ fn update_camera_state(
     footstep
 }
 
-fn apply_camera_transform(
+pub(super) fn apply_camera_transform(
     state: &FirstPersonCameraState,
     motor: &FirstPersonMotorState,
     transform: &mut Transform,
@@ -439,7 +439,7 @@ fn bob_amplitude(
     }
 }
 
-fn bob_speed(
+pub(super) fn bob_speed(
     config: &FirstPersonCameraConfig,
     motor: &FirstPersonMotorState,
     controller: &FirstPersonController,
@@ -482,7 +482,7 @@ fn is_running(controller: &FirstPersonController, local_speed: Vec2) -> bool {
     local_speed.x > controller.config.ground_speed
 }
 
-fn decay_impulses(state: &mut FirstPersonCameraState, decay: f32, dt: f32) {
+pub(super) fn decay_impulses(state: &mut FirstPersonCameraState, decay: f32, dt: f32) {
     state.impulse_pitch = smooth(state.impulse_pitch, 0.0, decay, dt);
     state.impulse_yaw = smooth(state.impulse_yaw, 0.0, decay, dt);
     state.impulse_roll = smooth(state.impulse_roll, 0.0, decay, dt);

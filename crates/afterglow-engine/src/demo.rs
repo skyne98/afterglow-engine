@@ -4,7 +4,7 @@ use web_time::Instant;
 use crate::{
     core::schedule::AfterglowSet,
     perf_hud::{self, PerfData},
-    world::cell::{CellLoadRequests, CellManifestRegistry, DEMO_CELL_CHUNK, demo_cell_manifest},
+    world::cell::{CellLoadRequests, CellManifestRegistry},
 };
 
 pub struct AfterglowDemoPlugin;
@@ -27,16 +27,8 @@ impl Plugin for AfterglowDemoPlugin {
 }
 
 fn install_demo_cell(app: &mut App) {
-    app.init_resource::<CellManifestRegistry>()
-        .init_resource::<CellLoadRequests>();
-    app.world_mut()
-        .resource_mut::<CellManifestRegistry>()
-        .insert(demo_cell_manifest())
-        .expect("built-in demo cell manifest is valid");
-    app.world_mut()
-        .resource_mut::<CellLoadRequests>()
-        .request_load(DEMO_CELL_CHUNK)
-        .expect("built-in demo cell chunk is valid");
+    app.insert_resource(CellManifestRegistry::with_demo_cell())
+        .insert_resource(CellLoadRequests::with_demo_cell());
 }
 
 fn rotate_cubes(

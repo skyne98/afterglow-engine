@@ -1,21 +1,9 @@
 use super::*;
-use crate::input::{
-    InputActionValue, InputAxis, InputAxisValue, PlayerCommand, PlayerCommandQueue,
-};
+use crate::input::AfterglowAction;
+use leafwing_input_manager::action_state::ActionState;
 
-fn command(axes: &[(&str, f32)], actions: &[InputActionValue]) -> PlayerCommand {
-    PlayerCommand {
-        player: NetworkPlayerId(1),
-        axes: axes
-            .iter()
-            .map(|(axis, value)| InputAxisValue {
-                axis: InputAxis::new(*axis),
-                value: *value,
-            })
-            .collect(),
-        actions: actions.to_vec(),
-        ..default()
-    }
+fn command(axes: &[(&str, f32)], actions: &[AfterglowAction]) -> ActionState<AfterglowAction> {
+    test_input::command(axes, actions)
 }
 
 #[test]
@@ -140,7 +128,7 @@ fn jump_buffer_fires_while_grounded() {
         grounded: true,
         ..default()
     };
-    let command = command(&[], &[InputActionValue::pressed("jump")]);
+    let command = command(&[], &[AfterglowAction::Jump]);
 
     integrate_first_person_motor(Some(&command), &config, &mut state, 1.0 / 60.0);
 
@@ -190,7 +178,7 @@ fn coyote_jump_works_after_leaving_ground() {
 
     integrate_first_person_motor(None, &config, &mut state, 1.0 / 60.0);
     state.grounded = false;
-    let command = command(&[], &[InputActionValue::pressed("jump")]);
+    let command = command(&[], &[AfterglowAction::Jump]);
     integrate_first_person_motor(Some(&command), &config, &mut state, 1.0 / 60.0);
 
     assert_eq!(state.velocity.y, config.jump_speed);
@@ -270,10 +258,7 @@ fn crouch_action_lowers_target_speed() {
     };
     let mut crouching = standing;
     let move_command = command(&[("move.y", 1.0)], &[]);
-    let crouch_command = command(
-        &[("move.y", 1.0)],
-        &[InputActionValue::held(config.crouch_action.clone())],
-    );
+    let crouch_command = command(&[("move.y", 1.0)], &[AfterglowAction::Crouch]);
 
     for _ in 0..20 {
         integrate_first_person_motor(Some(&move_command), &config, &mut standing, 1.0 / 60.0);
@@ -295,7 +280,7 @@ fn default_crouch_is_hold_not_toggle() {
         grounded: true,
         ..default()
     };
-    let crouch = command(&[], &[InputActionValue::held(config.crouch_action.clone())]);
+    let crouch = command(&[], &[AfterglowAction::Crouch]);
 
     integrate_first_person_motor(Some(&crouch), &config, &mut state, 1.0 / 60.0);
     assert_eq!(state.desired_stance, ControllerStance::Crouching);
@@ -314,10 +299,7 @@ fn toggle_crouch_can_be_enabled_for_games_that_want_it() {
         grounded: true,
         ..default()
     };
-    let crouch_press = command(
-        &[],
-        &[InputActionValue::pressed(config.crouch_action.clone())],
-    );
+    let crouch_press = command(&[], &[AfterglowAction::Crouch]);
 
     integrate_first_person_motor(Some(&crouch_press), &config, &mut state, 1.0 / 60.0);
     assert_eq!(state.desired_stance, ControllerStance::Crouching);
@@ -338,10 +320,7 @@ fn sprinting_while_moving_auto_requests_stand_like_amnesia() {
         desired_stance: ControllerStance::Crouching,
         ..default()
     };
-    let command = command(
-        &[("move.y", 1.0)],
-        &[InputActionValue::held(config.sprint_action.clone())],
-    );
+    let command = command(&[("move.y", 1.0)], &[AfterglowAction::Sprint]);
 
     integrate_first_person_motor(Some(&command), &config, &mut state, 1.0 / 60.0);
 
@@ -388,27 +367,4 @@ fn step_height_uses_configured_min_and_max() {
         config.max_step_height * 1.5,
         &config
     ));
-}
-
-#[test]
-fn command_queue_routes_by_player_id() {
-    let mut queue = PlayerCommandQueue::default();
-    queue.replace(vec![
-        PlayerCommand {
-            player: NetworkPlayerId(1),
-            tick: 7,
-            ..default()
-        },
-        PlayerCommand {
-            player: NetworkPlayerId(2),
-            tick: 9,
-            ..default()
-        },
-    ]);
-    let lookup = commands::PlayerCommandLookup::new(&queue);
-
-    assert_eq!(
-        lookup.get(NetworkPlayerId(2)).map(|command| command.tick),
-        Some(9)
-    );
 }

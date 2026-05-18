@@ -3,11 +3,6 @@ use afterglow_engine::{
         AfterglowCorePlugin,
         identity::{ChunkId, ChunkMembership, Persistent, StableEntityId},
     },
-    network::{
-        NetworkPlayerId,
-        interest::InterestMap,
-        replication::{ReplicationWorld, WorldSnapshot},
-    },
     persistence::{
         AfterglowPersistencePlugin, ChunkPersistentDelta, PersistenceAppExt, apply_chunk_deltas,
         capture_chunk_deltas,
@@ -20,9 +15,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-const PLAYERS: u64 = 10_000;
 const CHUNKS: u64 = 1_024;
-const VISIBLE_CHUNKS_PER_PLAYER: u64 = 9;
 const ENTITIES_PER_CHUNK: u64 = 64;
 const STREAMING_CHUNKS_PER_STEP: u64 = 128;
 
@@ -34,59 +27,7 @@ struct BenchPersistedState {
 }
 
 fn main() {
-    run_interest_case();
     run_persistence_case();
-}
-
-fn run_interest_case() {
-    let entity_count = CHUNKS * ENTITIES_PER_CHUNK;
-    let mut interest = interest_map(entity_count);
-    let snapshot = snapshot(entity_count);
-
-    let update_time = measure(1, || {
-        move_players_to_next_chunk(&mut interest);
-    });
-    let chunk_ref_fanout_time = measure(1, || {
-        black_box(
-            interest
-                .snapshot_chunk_ref_fanout((1..=PLAYERS).map(NetworkPlayerId), &snapshot)
-                .chunks
-                .values()
-                .map(Vec::len)
-                .sum::<usize>(),
-        );
-    });
-    let chunk_owned_fanout_time = measure(1, || {
-        black_box(
-            interest
-                .snapshot_chunk_fanout((1..=PLAYERS).map(NetworkPlayerId), &snapshot)
-                .chunks
-                .values()
-                .map(Vec::len)
-                .sum::<usize>(),
-        );
-    });
-    let filter_batch_time = measure(1, || {
-        black_box(
-            interest
-                .filter_snapshots((1..=PLAYERS).map(NetworkPlayerId), &snapshot)
-                .values()
-                .map(|snapshot| snapshot.entities.len())
-                .sum::<usize>(),
-        );
-    });
-    let legacy_filter_100_players_time = measure(1, || {
-        black_box(filter_for_players(&interest, &snapshot, 100));
-    });
-
-    println!(
-        "streaming_interest players={PLAYERS} chunks={CHUNKS} entities={entity_count} visible_chunks={VISIBLE_CHUNKS_PER_PLAYER} player_chunk_update={} chunk_ref_fanout_snapshot={} chunk_owned_fanout_snapshot={} batch_filter_snapshot_for_all_players={} legacy_filter_snapshot_for_100_players={}",
-        fmt(update_time),
-        fmt(chunk_ref_fanout_time),
-        fmt(chunk_owned_fanout_time),
-        fmt(filter_batch_time),
-        fmt(legacy_filter_100_players_time),
-    );
 }
 
 fn run_persistence_case() {
@@ -154,62 +95,6 @@ fn capture_chunks(world: &mut World, chunks: &[ChunkId]) -> Vec<ChunkPersistentD
 
 fn apply_chunks(world: &mut World, deltas: &[ChunkPersistentDelta]) -> usize {
     apply_chunk_deltas(world, deltas).unwrap().spawned
-}
-
-fn snapshot(entity_count: u64) -> WorldSnapshot {
-    let mut world = ReplicationWorld::default();
-    for entity_index in 1..=entity_count {
-        let entity = StableEntityId::from_raw(entity_index as u128);
-        world.set_field(entity, "position", entity_index.to_le_bytes());
-    }
-    world.snapshot(1)
-}
-
-fn interest_map(entity_count: u64) -> InterestMap {
-    let mut interest = InterestMap::default();
-    for entity_index in 1..=entity_count {
-        let chunk = ChunkId::from_raw(((entity_index - 1) / ENTITIES_PER_CHUNK) + 1);
-        interest.set_entity_chunk(StableEntityId::from_raw(entity_index as u128), chunk);
-    }
-    for player_index in 1..=PLAYERS {
-        interest.set_player_chunks(
-            NetworkPlayerId(player_index),
-            visible_chunks_for_player(player_index, 0),
-        );
-    }
-    interest
-}
-
-fn move_players_to_next_chunk(interest: &mut InterestMap) {
-    for player_index in 1..=PLAYERS {
-        interest.set_player_chunks(
-            NetworkPlayerId(player_index),
-            visible_chunks_for_player(player_index, 1),
-        );
-    }
-}
-
-fn visible_chunks_for_player(player_index: u64, offset: u64) -> impl Iterator<Item = ChunkId> {
-    let center = ((player_index + offset) % CHUNKS) + 1;
-    (0..VISIBLE_CHUNKS_PER_PLAYER).map(move |visible_index| {
-        let chunk = ((center + visible_index + CHUNKS - 1) % CHUNKS) + 1;
-        ChunkId::from_raw(chunk)
-    })
-}
-
-fn filter_for_players(
-    interest: &InterestMap,
-    snapshot: &WorldSnapshot,
-    player_count: u64,
-) -> usize {
-    (1..=player_count)
-        .map(|player_index| {
-            interest
-                .filter_snapshot(NetworkPlayerId(player_index), snapshot)
-                .entities
-                .len()
-        })
-        .sum()
 }
 
 fn measure(iterations: u32, mut f: impl FnMut()) -> Duration {

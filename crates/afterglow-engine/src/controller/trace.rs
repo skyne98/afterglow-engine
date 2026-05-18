@@ -1,7 +1,5 @@
 use bevy::prelude::*;
 
-use crate::network::NetworkPlayerId;
-
 #[derive(Resource, Clone, Debug)]
 pub struct FirstPersonControllerTrace {
     pub enabled: bool,
@@ -13,7 +11,6 @@ pub struct FirstPersonControllerTrace {
 #[derive(Clone, Debug)]
 pub struct FirstPersonControllerTraceFrame {
     pub entity: Entity,
-    pub player: NetworkPlayerId,
     pub tick: u32,
     pub dt: f32,
     pub command_move: Vec2,

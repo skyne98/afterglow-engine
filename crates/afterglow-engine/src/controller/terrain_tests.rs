@@ -1,10 +1,10 @@
 use super::*;
 use crate::{
     core::AfterglowCorePlugin,
-    input::{InputAxis, InputAxisValue, PlayerCommand, PlayerCommandQueue},
     physics::{AfterglowPhysicsPlugin, PhysicsBody, PhysicsCollider},
 };
 use bevy::time::TimeUpdateStrategy;
+use leafwing_input_manager::action_state::ActionState;
 use std::time::Duration;
 
 fn app() -> App {
@@ -15,7 +15,6 @@ fn app() -> App {
         AfterglowPhysicsPlugin,
         AfterglowFirstPersonControllerPlugin,
     ));
-    app.init_resource::<PlayerCommandQueue>();
     app.finish();
     app.cleanup();
     *app.world_mut().resource_mut::<TimeUpdateStrategy>() =
@@ -23,33 +22,18 @@ fn app() -> App {
     app
 }
 
-fn move_forward_command() -> PlayerCommand {
-    PlayerCommand {
-        player: NetworkPlayerId(1),
-        axes: vec![InputAxisValue {
-            axis: InputAxis::new("move.y"),
-            value: 1.0,
-        }],
-        ..default()
-    }
+fn move_forward_command() -> ActionState<crate::input::AfterglowAction> {
+    test_input::command(&[("move.y", 1.0)], &[])
 }
 
-fn move_right_command() -> PlayerCommand {
-    PlayerCommand {
-        player: NetworkPlayerId(1),
-        axes: vec![InputAxisValue {
-            axis: InputAxis::new("move.x"),
-            value: 1.0,
-        }],
-        ..default()
-    }
+fn move_right_command() -> ActionState<crate::input::AfterglowAction> {
+    test_input::command(&[("move.x", 1.0)], &[])
 }
 
 fn spawn_player(app: &mut App, config: &FirstPersonControllerConfig, pos: Vec3) -> Entity {
     app.world_mut()
         .spawn((
             FirstPersonController {
-                player: NetworkPlayerId(1),
                 config: config.clone(),
             },
             Transform::from_translation(pos),
@@ -65,11 +49,9 @@ fn spawn_static_box(app: &mut App, size: Vec3, transform: Transform) {
     ));
 }
 
-fn run_forward(app: &mut App, frames: usize) {
+fn run_forward(app: &mut App, player: Entity, frames: usize) {
     for _ in 0..frames {
-        app.world_mut()
-            .resource_mut::<PlayerCommandQueue>()
-            .replace(vec![move_forward_command()]);
+        test_input::set_input(app, player, move_forward_command());
         app.update();
     }
 }
@@ -100,7 +82,7 @@ fn controller_climbs_amnesia_style_step_run() {
     }
 
     app.update();
-    run_forward(&mut app, 45);
+    run_forward(&mut app, player, 45);
 
     let transform = app.world().get::<Transform>(player).unwrap();
     assert!(
@@ -133,9 +115,7 @@ fn default_controller_climbs_low_stair_without_sprint() {
     app.update();
     let mut max_y = start_y;
     for _ in 0..60 {
-        app.world_mut()
-            .resource_mut::<PlayerCommandQueue>()
-            .replace(vec![move_forward_command()]);
+        test_input::set_input(&mut app, player, move_forward_command());
         app.update();
         max_y = max_y.max(app.world().get::<Transform>(player).unwrap().translation.y);
     }
@@ -170,9 +150,7 @@ fn default_controller_climbs_low_stair_run_without_sprint() {
     app.update();
     let mut max_y = start_y;
     for _ in 0..90 {
-        app.world_mut()
-            .resource_mut::<PlayerCommandQueue>()
-            .replace(vec![move_forward_command()]);
+        test_input::set_input(&mut app, player, move_forward_command());
         app.update();
         max_y = max_y.max(app.world().get::<Transform>(player).unwrap().translation.y);
     }
@@ -208,9 +186,7 @@ fn step_climbing_latches_grounding_like_hpl2() {
 
     app.update();
     for _ in 0..12 {
-        app.world_mut()
-            .resource_mut::<PlayerCommandQueue>()
-            .replace(vec![move_forward_command()]);
+        test_input::set_input(&mut app, player, move_forward_command());
         app.update();
         if app
             .world()
@@ -260,9 +236,7 @@ fn stair_attempt_is_not_blocked_by_upward_force_velocity_like_hpl2() {
         state.grounded = true;
         state.ground_contact_ticks = config.ground_sticky_ticks;
     }
-    app.world_mut()
-        .resource_mut::<PlayerCommandQueue>()
-        .replace(vec![move_forward_command()]);
+    test_input::set_input(&mut app, player, move_forward_command());
     app.update();
 
     let state = app.world().get::<FirstPersonMotorState>(player).unwrap();
@@ -309,9 +283,7 @@ fn controller_moves_smoothly_up_shallow_slope() {
     let mut last_z = app.world().get::<Transform>(player).unwrap().translation.z;
     let mut z_backtracks = 0;
     for _ in 0..90 {
-        app.world_mut()
-            .resource_mut::<PlayerCommandQueue>()
-            .replace(vec![move_forward_command()]);
+        test_input::set_input(&mut app, player, move_forward_command());
         app.update();
         let z = app.world().get::<Transform>(player).unwrap().translation.z;
         if z > last_z + 0.001 {
@@ -381,9 +353,7 @@ fn stair_edge_idle_does_not_micro_jump() {
     app.update();
     let start_y = app.world().get::<Transform>(player).unwrap().translation.y;
     for _ in 0..90 {
-        app.world_mut()
-            .resource_mut::<PlayerCommandQueue>()
-            .replace(Vec::new());
+        test_input::clear_input(&mut app, player);
         app.update();
     }
 
@@ -423,9 +393,7 @@ fn moving_along_stair_edge_does_not_repeatedly_pop_up() {
     let mut upward_pops = 0;
     let mut last_y = start_y;
     for _ in 0..90 {
-        app.world_mut()
-            .resource_mut::<PlayerCommandQueue>()
-            .replace(vec![move_right_command()]);
+        test_input::set_input(&mut app, player, move_right_command());
         app.update();
         let y = app.world().get::<Transform>(player).unwrap().translation.y;
         if y > last_y + 0.01 {

@@ -1,224 +1,105 @@
-# Network Backend Abstraction
+# Lightyear Networking Boundary
 
-## TLDR
+## Status
 
-Iroh and Steam should be thin platform/network adapters. The engine should own
-the stable gameplay protocol, session model, channels, command/snapshot
-serialization, prediction, reconciliation, rollback, interest management, and
-reconnect baselines.
-
-For the itch-first target, implement Iroh first because it works without Steam.
-For a later Steam release, add Steam lobbies, Steam identity/auth, and
-SteamNetworkingSockets behind the same backend boundary. Game code should not
-change when switching backends.
-
-## Current Engine Pieces
-
-The existing code already has the correct core split:
-
-- `PeerId`: short-lived transport-session endpoint inside one engine session.
-- `NetworkPlayerId`: session player identity, owned by a peer.
-- `PlatformIdentity`: authenticated external identity such as local, Iroh node,
-  Steam ID, or anonymous/dev identity.
-- `NetworkTransport`: backend-neutral packet interface.
-- `NetChannel` and `DeliveryMode`: engine-owned channel semantics.
-- `NetworkSession`: maps peers to platform identities, players, and avatars.
-- `network::handshake`: shared reliable control handshake for protocol/build/
-  content compatibility, external identity admission, and gameplay packet gating.
-- Replication, commands, rollback, prediction, reconciliation, interpolation,
-  baselines, and interest management are already above the transport layer.
-
-This means Iroh and Steam must not duplicate those systems. They should only
-turn external connection APIs into `TransportEvent`s and translate engine
-packets into backend sends.
-
-## Shared Layers
-
-The networking stack should be layered like this:
+This note supersedes the previous custom `NetworkTransport`/Iroh/Steam backend
+abstraction plan. Afterglow should remove the old in-house transport, session,
+handshake, replication, prediction, reconciliation, interpolation, baseline, and
+interest-management stack and rebuild multiplayer around:
 
 ```text
-Game Bevy systems
-  |
-Replicated components/resources, commands, messages
-  |
-Engine replication, rollback, prediction, reconciliation, interest
-  |
-Engine session and protocol layer
-  |
-NetworkTransport trait plus connection/session events
-  |
-Iroh adapter       Steam adapter       Memory/fake adapter
+Leafwing Input Manager
+  -> lightyear_inputs_leafwing
+  -> Lightyear input buffering, transport, replication, prediction, interpolation
+  -> Afterglow authoritative server rewind
+  -> Afterglow gameplay systems
 ```
 
-Only the bottom adapter changes per platform.
+The old custom network modules remain useful as migration reference only. They
+should not be preserved as parallel production paths.
 
-## Required Backend Boundary
+## New Boundary
 
-Keep this interface small:
+Afterglow should own only the pieces that are game-specific:
 
-```rust
-pub trait NetworkTransport {
-    fn local_peer(&self) -> PeerId;
-    fn poll_events(&mut self, out: &mut Vec<TransportEvent>);
-    fn send(
-        &mut self,
-        to: PeerId,
-        channel: NetChannel,
-        delivery: DeliveryMode,
-        payload: Vec<u8>,
-    );
-    fn disconnect(&mut self, peer: PeerId, reason: DisconnectReason);
-}
-```
+| Layer | Owner |
+|---|---|
+| Physical/raw input bindings | Leafwing Input Manager plus thin Afterglow action enum |
+| Networked input transport | `lightyear_inputs_leafwing` |
+| Connection, message channels, replication | Lightyear |
+| Client prediction and remote interpolation | Lightyear |
+| Gameplay authority rules | Afterglow systems |
+| Late-command server rewind | Afterglow `ServerRewindPlugin` |
+| Persistence and stable world IDs | Afterglow |
+| Presentation cues | Afterglow, derived from corrected gameplay facts |
 
-Add glue around it only when there is a real shared need:
+This is intentionally less code than the previous architecture. If Lightyear
+already owns a networking concern, Afterglow should not duplicate it.
 
-- backend connect/listen requests
-- backend diagnostics
-- external identity proof/auth results
-- out-of-band session tickets or lobby metadata
+## Removed Concepts
 
-Do not put gameplay packets, command parsing, snapshots, rollback, player spawn,
-or replicated ECS state into a backend crate.
+Delete or gut these old engine-level abstractions:
 
-## Peer And Identity Mapping
+| Old concept | Replacement |
+|---|---|
+| `NetworkTransport` trait | Lightyear transport/link entities |
+| `MemoryTransport` fake backend | Lightyear test transport/backend facilities |
+| `NetworkPacket`, `PacketHeader`, `NetChannel`, `DeliveryMode` | Lightyear channels/messages |
+| `NetworkSession`, `PeerId`, `NetworkPlayerId` session stack | Lightyear peer/client identity plus Afterglow stable avatar mapping |
+| `network::handshake` | Lightyear protocol/config plus optional platform admission layer |
+| Custom command wire DTOs | Leafwing action state through Lightyear input messages |
+| Custom replication snapshot/delta API | Lightyear component replication |
+| Custom client prediction/reconciliation/interpolation | Lightyear prediction/interpolation |
+| Custom interest map | Lightyear replication filtering or a later small Afterglow adapter only if needed |
+| Reconnect baselines | Lightyear replication/connect flow plus Afterglow persistence |
 
-Use one mapping path for all backends:
+## Kept Concepts
 
-```text
-External identity -> PeerId -> NetworkPlayerId -> StableEntityId
-```
+Keep these concepts, but re-home them above Lightyear:
 
-Examples:
+| Concept | New home |
+|---|---|
+| `StableEntityId` | Persistence, save/load, and server rewind identity |
+| Chunk/cell membership | Persistence, streaming, and optional Lightyear replication filtering |
+| Server-authoritative gameplay validation | Fixed-tick Bevy gameplay systems |
+| Late valid command correction | `network::rewind` / `ServerRewindPlugin` |
+| Provisional vs committed gameplay facts | Server rewind cue/message outputs |
+| Mock RPG scenarios | Rewritten on Lightyear clients/server plus server rewind |
 
-- Iroh: `EndpointId/PublicKey -> PeerId -> NetworkPlayerId -> avatar`
-- Steam: `SteamID64 -> PeerId -> NetworkPlayerId -> avatar`
-- Memory tests: `Local/Anonymous -> PeerId -> NetworkPlayerId -> avatar`
+## Transport Notes
 
-`PeerId` is not saved. `NetworkPlayerId` is session scoped. `StableEntityId` is
-the persistent replicated world identity.
+Do not rebuild Iroh and Steam as generic engine transports in version one of the
+rewrite. Use what Lightyear already offers first.
 
-## Channel Mapping
+Phase-one transport order:
 
-The engine owns channel meaning:
+1. Lightyear local/in-process transport for tests.
+2. Lightyear UDP/netcode for native dev multiplayer.
+3. Lightyear WebTransport/WebSocket only if browser multiplayer is needed.
+4. Lightyear Steam only after core gameplay networking works.
+5. No Iroh work unless a concrete Lightyear transport gap remains.
 
-| Engine channel | Delivery | Iroh mapping | Steam mapping |
-|---|---:|---|---|
-| Control | reliable | reliable stream | reliable message |
-| Commands | unreliable sequenced | datagram, or thin sequencer over stream if datagram is unavailable | unreliable message with engine sequence |
-| Snapshots | unreliable sequenced | datagram chunks or sequenced stream fallback | unreliable message with engine sequence |
-| Events | reliable | reliable stream | reliable message |
-| Bulk | reliable | dedicated reliable stream | reliable message/stream-like batching |
-
-The engine sequence in `PacketHeader` remains authoritative for stale
-unreliable-sequenced packet rejection. Backends may offer their own sequencing,
-but gameplay correctness should not depend on backend-specific behavior.
-
-## Iroh Adapter
-
-Iroh should own:
-
-- endpoint creation and shutdown
-- node ID/public key storage
-- relay mode and discovery/ticket configuration
-- async accept/connect tasks
-- QUIC stream/datagram polling
-- mapping Iroh connection IDs to `PeerId`
-- emitting `TransportEvent::Connected`, `Packet`, and `Disconnected`
-- optional diagnostics for direct vs relayed path and connection quality
-
-Iroh should not own:
-
-- player IDs
-- replicated ECS snapshots
-- command validation
-- rollback replay
-- save/load baselines
-- chunk interest
-
-For itch, this becomes the first real transport because it gives encrypted P2P
-connectivity with relay-assisted NAT traversal and no Steam dependency.
-
-## Steam Adapter
-
-Steam should own:
-
-- Steam initialization and callback pumping, either through `bevy_steamworks` or
-  direct `steamworks`
-- lobby create/join/list/invite flow
-- lobby metadata for protocol version, build hash, world/session info, and host
-  routing payload
-- Steam auth/session ticket validation
-- SteamNetworkingSockets connection lifecycle
-- mapping Steam connection handles and SteamID64 values to `PeerId`
-- emitting backend-neutral transport/session events
-
-Steam should not own the game protocol. A Steam lobby is discovery and handoff,
-not the simulation. Steam auth proves platform identity; it does not bypass
-server-authoritative command validation.
-
-## Shared Session Flow
-
-Every backend should feed the same engine flow:
-
-1. Backend reports a low-level connection candidate.
-2. Engine sends/receives a reliable `Control` hello with protocol version,
-   build hash, content hash, backend kind, and external identity proof.
-3. Engine validates compatibility and authentication.
-4. Engine assigns or restores `PeerId` and `NetworkPlayerId` ownership in
-   `NetworkSession`.
-5. Server sends a baseline snapshot filtered by interest.
-6. Normal command/snapshot/delta traffic begins.
-
-The same handshake packets should be used for Iroh, Steam, memory transport,
-and future dedicated-server adapters. Backend-specific auth bytes belong inside
-the control handshake payload, not in gameplay systems.
+Steam should use Lightyear's Steam support if it fits, while Steam lobbies,
+invites, identity proofs, and ownership checks remain a thin platform admission
+layer around Lightyear. Iroh is future research, not part of the migration plan.
+If it is needed later, implement it as a Lightyear-compatible IO/link layer
+rather than reviving the old engine `NetworkTransport` trait.
 
 ## Testing Strategy
 
-Keep most tests backend neutral:
+The replacement test harness should exercise gameplay behavior, not the old wire
+format:
 
-- protocol version and build/content mismatch
-- hello/auth accept and reject paths
-- peer reconnect and baseline restore
-- duplicate external identity rejection
-- channel delivery semantics
-- unreliable sequenced stale packet rejection
-- disconnect cleanup for session players and avatar ownership
-- command spam and hostile clients using `MemoryTransport`
+| Test area | Required coverage |
+|---|---|
+| Leafwing input | action press/hold/release, axes, local routes, scripted input |
+| Lightyear integration | client/server connect, replicated spawn/despawn, predicted local entity, interpolated remote entity |
+| Server rewind | late shield blocks arrow, canceled death, corpse removal, loot removal, stale command rejection |
+| Security | spoofed ownership, duplicate/reordered input, impossible commands, stale rewind window |
+| Stress | many clients/NPCs with packet loss/reorder/latency through Lightyear test transport |
 
-Backend-specific tests should be small:
+## Decision
 
-- Iroh: gated local integration test for two endpoints exchanging packets.
-- Steam: manual gated test for lobby, auth, and socket send/receive.
-
-The fake transport remains mandatory even after real backends exist because it
-deterministically creates packet loss, duplication, reorder, latency, and
-disconnects.
-
-## Implementation Order
-
-1. Tighten the shared transport/session API around the current
-   `NetworkTransport`, `TransportEvent`, `NetworkSession`, and `PlatformIdentity`
-   types. Done: `network::handshake` provides the shared admission path.
-2. Add backend-neutral control handshake packets and tests. Done: hello,
-   accept, reject, malformed payloads, mismatch rejection, duplicate identity
-   rejection, repeated identity-change rejection, disconnect cleanup,
-   same-batch post-reject packet dropping, accepted-message ordering, and
-   pre-handshake gameplay packet gating are covered with `MemoryTransport`.
-3. Add backend-neutral session lifecycle systems that consume transport events
-   and update `NetworkSession`. Done at the helper boundary:
-   `service_control_handshake()` polls any `NetworkTransport`, updates
-   `NetworkSession`, and forwards only authorized gameplay events.
-4. Implement the Iroh backend as an optional native feature.
-5. Add Iroh smoke/integration tests behind a feature or environment gate.
-6. Implement Steam as an optional native feature using the same handshake,
-   channel, session, and packet code.
-
-## References
-
-- Iroh docs: https://docs.rs/iroh/latest/iroh/
-- Steamworks Rust docs: https://docs.rs/steamworks/latest/steamworks/
-- bevy_steamworks docs: https://docs.rs/bevy-steamworks/latest/bevy_steamworks/
-- Steam research note: `docs/research/steam-multiplayer.md`
-- Iroh research note: `docs/research/iroh-networking.md`
+Use Lightyear as the multiplayer substrate. Use Leafwing as the input substrate.
+Build only the missing Afterglow-specific layer: authoritative server rewind with
+typed component history, stable entity lifetime, replay, and correction diffs.

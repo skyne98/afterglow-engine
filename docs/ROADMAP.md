@@ -51,35 +51,30 @@ Deep dive: [bevy-integration-gameplay-audio-ui.md](research/bevy-integration-gam
 - [ ] UI/HUD and diegetic interface framework
 - [ ] Inventory, equipment, conditions, and gameplay effects
 
-## Phase 5: Multiplayer-Ready Runtime
+## Phase 5: Lightyear Multiplayer Rewrite
 
-Deep dive: [bevy-integration-world-runtime.md](research/bevy-integration-world-runtime.md), [iroh-networking.md](research/iroh-networking.md), [bevy-ggrs-rollback.md](research/bevy-ggrs-rollback.md), [authoritative-rollback-consistency.md](research/authoritative-rollback-consistency.md), [steam-multiplayer.md](research/steam-multiplayer.md).
+Deep dive: [lightyear-migration-plan.md](research/lightyear-migration-plan.md), [lightyear-leafwing-input.md](research/lightyear-leafwing-input.md), [server-rewind-component-history-plan.md](research/server-rewind-component-history-plan.md), [lightyear-rewrite-simplification-plan.md](research/lightyear-rewrite-simplification-plan.md), [network-backend-abstraction.md](research/network-backend-abstraction.md).
 
-- [x] Transport-independent network protocol: peers, channels, packet headers, versions, disconnect reasons
-- [x] Loopback and deterministic fake transport with packet loss, duplication, reorder, latency, and disconnect injection
-- [x] Mock multi-client RPG networking harness for 3D interaction, rollback, security, and stress tests
-- [x] Server-authoritative simulation path using the same local-server model as single-player
-- [x] Serialize `PlayerCommand` input by simulation tick
-- [x] Network player identity model: platform identity, session peer ID, player ID, and stable entity ID mapping
-- [x] Snapshot/delta replication for player state and interactable objects
-- [x] Interest management tied to chunks, cells, visibility, and persistent state ownership
-- [x] Client prediction for player movement and cheap core interactions
-- [x] Reconciliation from authoritative snapshots and correction packets
-- [x] Interpolation and bounded extrapolation for remote entities
-- [x] Replication-compatible save/load data and reconnect baselines
-- [x] Selective rollback prototype for small deterministic subsystems, not the whole streaming RPG world
-- [x] Minimal authoritative rollback domain API with committed/provisional state, command replay, lifecycle outputs, and replay-generated cue diffs
-- [x] `app.replicate(...)` API for replicated components/resources and normal Bevy command/message timelines
-- [x] Bevy/ECS integration for deterministic rollback domain schedules
-- [x] Mock RPG late-command correction where replay changes death/combat outcomes without manual event cleanup
-- [x] Backend-neutral transport/session handshake layer shared by Iroh, Steam, memory tests, and future dedicated servers
-- [x] Iroh transport backend for non-Steam NAT traversal and encrypted peer/dedicated-server transport
-- [x] Optional Steam backend foundation: SteamNetworkingSockets transport adapter, Steam ID mapping, and stable lobby metadata
-- [ ] Steam identity/auth tickets, lobby lifecycle, invites, and SteamID-to-player handshake mapping
-- [ ] Steam lobby create/join flow with protocol version, build hash, world/session metadata, and host/server handoff
-- [ ] Steam auth handshake mapping SteamID64 to engine `NetworkPlayerId`
-- [ ] Manual gated Steam integration tests that do not run in normal CI
-- [ ] Multiplayer test scene using the same systems as single-player
+The previous custom networking stack is now legacy. Delete it instead of
+maintaining a parallel transport/session/replication/prediction path.
+
+- [x] Add semver-pinned `lightyear`, `lightyear_inputs_leafwing`, and `leafwing-input-manager` dependencies compatible with the current Bevy version
+- [x] Replace generic string-based `PlayerCommand` input with a Leafwing `AfterglowAction` enum and entity-scoped `ActionState`
+- [x] Add `AfterglowLightyearPlugin` boundary for client/server Lightyear setup and tick duration; concrete link entities and protocol registration remain follow-up work
+- [x] Use Lightyear built-in transports first; custom Iroh/Steam transports were deleted from phase one
+- [ ] Port one local/listen-server smoke scene to Lightyear client/server entities
+- [ ] Register core replicated components/messages through Lightyear instead of `#[derive(Replicate)]` and custom snapshot/delta code
+- [ ] Use Lightyear prediction for owned player entities and Lightyear interpolation for remote entities
+- [x] Implement `ServerRewindPlugin` typed component registration and fixed-post-update history capture
+- [ ] Extend server rewind with checkpoints, `StableEntityId` entity lifecycle events, replay, and correction diffs
+- [x] Port mock RPG late shield/death/corpse/loot/pickup/inventory correction to the current `AfterglowNetworkPlugin` + server rewind boundary
+- [x] Drive mock RPG late shield/death/pickup/inventory correction through real Lightyear client/server Crossbeam link entities and message registration
+- [x] Prove mock RPG Lightyear Crossbeam replication and prediction/confirmation state across the late shield/death/pickup/inventory correction
+- [ ] Drive the full mock RPG scenario suite through native Lightyear UDP/netcode client/server sockets
+- [ ] Rewrite security, projectile, smoothing, stress, and interaction scenarios against Lightyear clients/server
+- [x] Delete old custom network modules, old input module, old `afterglow-engine-macros`, old networking benches, and stale docs
+- [ ] Add new server rewind and Lightyear integration benchmarks for 1k, 10k, and 100k entity pressure
+- [ ] Re-evaluate Steam lobby/auth and Iroh only as Lightyear-compatible platform/admission layers after core multiplayer works
 
 ## Phase 6: Open-World RPG Layer
 
@@ -99,5 +94,5 @@ Deep dive: [bevy-integration-world-runtime.md](research/bevy-integration-world-r
 - [ ] `v0.1.0`: dense playable cell with movement, physics, interaction, local-server simulation, and save/load
 - [ ] `v0.2.0`: retro PBR, many lights, fog, SPOM, and AABB/Hi-Z visibility debug path
 - [ ] `v0.3.0`: chunk streaming, VT prototype, animation proxies, Steam Audio hooks, and UI
-- [ ] `v0.4.0`: multiplayer-ready simulation with replication, prediction, interpolation, and chunk interest
+- [ ] `v0.4.0`: Lightyear multiplayer with Leafwing input, client prediction, interpolation, and authoritative server rewind
 - [ ] `v1.0.0`: feature-complete foundation for a small horror immersive sim

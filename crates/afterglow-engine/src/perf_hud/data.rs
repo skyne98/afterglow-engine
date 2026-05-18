@@ -61,7 +61,7 @@ impl PerfData {
         let mut result: Vec<SystemStats> = acc
             .into_iter()
             .map(|(name, mut times)| {
-                times.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
+                times.sort_unstable_by(|a, b| a.total_cmp(b));
                 let avg = times.iter().sum::<f64>() / times.len() as f64;
                 let p95 = percentile(&times, 95.0);
                 let p99 = percentile(&times, 99.0);

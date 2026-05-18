@@ -2,24 +2,22 @@
 
 ## TLDR
 
-Steam should be treated as a platform backend, not as the engine's multiplayer
-architecture. It can provide Steam identity, ownership checks, friends/invites,
-lobbies, NAT traversal, encrypted packet transport, and Steam Datagram Relay
-(SDR). Afterglow should still own the gameplay protocol: player commands,
-authoritative simulation, prediction, snapshots, interest management, stable
-entity IDs, and save/load semantics.
+Status: historical research. The current multiplayer target is Lightyear +
+Leafwing + Afterglow server rewind. Steam should be treated as platform
+admission and release infrastructure, not as a replacement for Lightyear's
+gameplay networking path. Prefer Lightyear's Steam support if it fits; keep Steam
+lobbies, identity, auth, ownership checks, invites, and handoff metadata as thin
+platform glue.
 
-The shared backend boundary is documented in
-`docs/research/network-backend-abstraction.md`. Steam must reuse that layer
-rather than introducing a Steam-shaped protocol or duplicated session model.
+The updated networking direction is documented in
+`docs/research/network-backend-abstraction.md`.
 
 The practical path is:
 
-1. Keep a transport-agnostic networking layer in the engine.
-2. Build and test replication against loopback and fake transports first.
-3. For an itch-first release, add Iroh as the first real native backend.
-4. Add Steam later as an optional native feature/backend for lobby discovery,
-   platform identity, auth, and `ISteamNetworkingSockets` transport.
+1. Move gameplay networking to Lightyear.
+2. Keep Leafwing input and server rewind above Lightyear.
+3. Add Steam lobby/auth/identity only after the core Lightyear path works.
+4. Avoid reintroducing the old custom `NetworkTransport` abstraction.
 
 For the open-world immersive sim target, prefer authoritative server plus
 client prediction. Full rollback via GGRS is useful research and may fit small
@@ -229,7 +227,8 @@ The first implementation uses `steamworks` directly instead of
 `bevy_steamworks` so the backend can stay pinned to SteamNetworkingSockets
 without depending on Bevy plugin version compatibility.
 
-Current code lives in `crates/afterglow-engine/src/network/steam.rs`.
+Legacy code lives in `crates/afterglow-engine/src/network/steam.rs` and is slated
+for deletion during the Lightyear rewrite.
 
 Important status: this backend currently has compile-time and no-client unit
 coverage only. It has not been tested against a real Steam client, real Steam
@@ -242,8 +241,8 @@ Implemented pieces:
   peer allocation.
 - `SteamLobbyMetadata` for protocol/build/content/world/host metadata that can
   be written into Steam lobbies.
-- `SteamTransport`, a native `NetworkTransport` adapter over
-  SteamNetworkingSockets P2P connections.
+- `SteamTransport`, a native legacy adapter over SteamNetworkingSockets P2P
+  connections.
 - Steam ID to engine `PeerId` mapping for outbound and inbound P2P
   connections.
 - Packet serialization through the shared engine `PacketHeader`, `NetChannel`,
@@ -367,21 +366,15 @@ exist, but they should not be the only tests for multiplayer correctness.
 
 ## Recommendation
 
-Add Steam only after the engine has a minimal transport-independent protocol and
-the shared backend boundary from `network-backend-abstraction.md`:
+Add Steam only after the Lightyear path is working:
 
-1. Define `PeerId`, `NetworkPlayerId`, packet channels, and a transport trait.
-2. Implement loopback/fake transport with deterministic fault injection.
-3. Serialize current `PlayerCommand` into a command packet.
-4. Add backend-neutral control handshake and session lifecycle systems.
-5. Add Iroh as the first real backend for itch/dev builds.
-6. Add optional `steam` feature with `bevy_steamworks` if version-compatible.
-7. Implement Steam lobby create/join metadata.
-8. Implement SteamNetworkingSockets transport adapter.
-9. Add Steam auth handshake and SteamID-to-player mapping.
-10. Add manual gated Steam integration tests.
-11. Revisit dedicated server Steam Game Server API and SDR after the basic
-    hosted/listen-server path works.
+1. Use Lightyear for gameplay networking.
+2. Prefer Lightyear's Steam support if it satisfies the transport needs.
+3. Keep Steam lobbies, invites, identity, auth, and ownership checks as platform
+   admission glue around Lightyear.
+4. Add manual gated Steam integration tests.
+5. Revisit dedicated server Steam Game Server API and SDR after the hosted or
+   listen-server path works.
 
 ## References
 

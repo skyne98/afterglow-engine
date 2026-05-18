@@ -1,8 +1,7 @@
 use super::*;
-use crate::network::NetworkPlayerId;
 
 fn controller() -> FirstPersonController {
-    FirstPersonController::new(NetworkPlayerId(1))
+    FirstPersonController::new()
 }
 
 #[test]

@@ -1,25 +1,15 @@
 use super::*;
 use crate::{
     core::AfterglowCorePlugin,
-    input::{InputActionValue, InputAxis, InputAxisValue, PlayerCommand, PlayerCommandQueue},
+    input::AfterglowAction,
     physics::{AfterglowPhysicsPlugin, PhysicsBody, PhysicsCollider},
 };
 use bevy::time::TimeUpdateStrategy;
+use leafwing_input_manager::action_state::ActionState;
 use std::time::Duration;
 
-fn command(axes: &[(&str, f32)], actions: &[InputActionValue]) -> PlayerCommand {
-    PlayerCommand {
-        player: NetworkPlayerId(1),
-        axes: axes
-            .iter()
-            .map(|(axis, value)| InputAxisValue {
-                axis: InputAxis::new(*axis),
-                value: *value,
-            })
-            .collect(),
-        actions: actions.to_vec(),
-        ..default()
-    }
+fn command(axes: &[(&str, f32)], actions: &[AfterglowAction]) -> ActionState<AfterglowAction> {
+    test_input::command(axes, actions)
 }
 
 #[test]
@@ -32,7 +22,7 @@ fn disabled_jump_ignores_pressed_jump_action() {
         grounded: true,
         ..default()
     };
-    let command = command(&[], &[InputActionValue::pressed("jump")]);
+    let command = command(&[], &[AfterglowAction::Jump]);
 
     integrate_first_person_motor(Some(&command), &config, &mut state, 1.0 / 60.0);
 
@@ -48,7 +38,7 @@ fn first_observed_held_jump_still_buffers_once() {
         grounded: true,
         ..default()
     };
-    let command = command(&[], &[InputActionValue::held(config.jump_action.clone())]);
+    let command = command(&[], &[AfterglowAction::Jump]);
 
     integrate_first_person_motor(Some(&command), &config, &mut state, 1.0 / 60.0);
 
@@ -64,7 +54,7 @@ fn held_jump_does_not_repeat_without_release() {
         grounded: true,
         ..default()
     };
-    let command = command(&[], &[InputActionValue::held(config.jump_action.clone())]);
+    let command = command(&[], &[AfterglowAction::Jump]);
 
     integrate_first_person_motor(Some(&command), &config, &mut state, 1.0 / 60.0);
     state.grounded = true;
@@ -86,7 +76,7 @@ fn disabled_jump_ignores_held_jump_gravity_relief() {
         ..default()
     };
     let mut released = held;
-    let held_command = command(&[], &[InputActionValue::held(config.jump_action.clone())]);
+    let held_command = command(&[], &[AfterglowAction::Jump]);
 
     integrate_first_person_motor(Some(&held_command), &config, &mut held, 1.0 / 60.0);
     integrate_first_person_motor(None, &config, &mut released, 1.0 / 60.0);
@@ -105,10 +95,7 @@ fn steep_ground_cannot_start_or_refresh_jump() {
         coyote_ticks: config.coyote_ticks,
         ..default()
     };
-    let command = command(
-        &[],
-        &[InputActionValue::pressed(config.jump_action.clone())],
-    );
+    let command = command(&[], &[AfterglowAction::Jump]);
 
     integrate_first_person_motor(Some(&command), &config, &mut state, 1.0 / 60.0);
 
@@ -127,7 +114,6 @@ fn high_fps_jump_leaves_ground_probe_range_in_real_controller() {
         AfterglowPhysicsPlugin,
         AfterglowFirstPersonControllerPlugin,
     ));
-    app.init_resource::<PlayerCommandQueue>();
     app.finish();
     app.cleanup();
     *app.world_mut().resource_mut::<TimeUpdateStrategy>() =
@@ -138,7 +124,6 @@ fn high_fps_jump_leaves_ground_probe_range_in_real_controller() {
         .world_mut()
         .spawn((
             FirstPersonController {
-                player: NetworkPlayerId(1),
                 config: config.clone(),
             },
             Transform::from_xyz(0.0, config.height(ControllerStance::Standing) * 0.5, 0.0),
@@ -153,12 +138,7 @@ fn high_fps_jump_leaves_ground_probe_range_in_real_controller() {
     app.update();
     *app.world_mut().resource_mut::<TimeUpdateStrategy>() =
         TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(1.0 / 240.0));
-    app.world_mut()
-        .resource_mut::<PlayerCommandQueue>()
-        .replace(vec![command(
-            &[],
-            &[InputActionValue::pressed(config.jump_action.clone())],
-        )]);
+    test_input::set_input(&mut app, player, command(&[], &[AfterglowAction::Jump]));
 
     for _ in 0..8 {
         app.update();
@@ -195,7 +175,6 @@ fn jump_distance(sprint: bool) -> f32 {
         AfterglowPhysicsPlugin,
         AfterglowFirstPersonControllerPlugin,
     ));
-    app.init_resource::<PlayerCommandQueue>();
     app.finish();
     app.cleanup();
     *app.world_mut().resource_mut::<TimeUpdateStrategy>() =
@@ -206,7 +185,6 @@ fn jump_distance(sprint: bool) -> f32 {
         .world_mut()
         .spawn((
             FirstPersonController {
-                player: NetworkPlayerId(1),
                 config: config.clone(),
             },
             Transform::from_xyz(0.0, config.height(ControllerStance::Standing) * 0.5, 0.0),
@@ -220,21 +198,15 @@ fn jump_distance(sprint: bool) -> f32 {
     app.update();
 
     for _ in 0..45 {
-        app.world_mut()
-            .resource_mut::<PlayerCommandQueue>()
-            .replace(vec![move_command(&config, sprint, false)]);
+        test_input::set_input(&mut app, player, move_command(sprint, false));
         app.update();
     }
-    app.world_mut()
-        .resource_mut::<PlayerCommandQueue>()
-        .replace(vec![move_command(&config, sprint, true)]);
+    test_input::set_input(&mut app, player, move_command(sprint, true));
     app.update();
     let jump_start = app.world().get::<Transform>(player).unwrap().translation;
 
     for _ in 0..20 {
-        app.world_mut()
-            .resource_mut::<PlayerCommandQueue>()
-            .replace(vec![move_command(&config, sprint, false)]);
+        test_input::set_input(&mut app, player, move_command(sprint, false));
         app.update();
     }
 
@@ -242,13 +214,13 @@ fn jump_distance(sprint: bool) -> f32 {
     jump_start.z - end.z
 }
 
-fn move_command(config: &FirstPersonControllerConfig, sprint: bool, jump: bool) -> PlayerCommand {
+fn move_command(sprint: bool, jump: bool) -> ActionState<AfterglowAction> {
     let mut actions = Vec::new();
     if sprint {
-        actions.push(InputActionValue::held(config.sprint_action.clone()));
+        actions.push(AfterglowAction::Sprint);
     }
     if jump {
-        actions.push(InputActionValue::pressed(config.jump_action.clone()));
+        actions.push(AfterglowAction::Jump);
     }
     command(&[("move.y", 1.0)], &actions)
 }

@@ -88,7 +88,13 @@ fn spawn_metrics_server(port: u16, shared: Arc<Mutex<PerfData>>, trace_accum: Op
                 Ok(Some(request)) => {
                     let url = request.url().to_string();
                     if url == "/metrics" || url == "/" || url == "/traces" {
-                        let data = shared.lock().unwrap();
+                        let Ok(data) = shared.lock() else {
+                            let _ = request.respond(
+                                tiny_http::Response::from_string("metrics lock failed")
+                                    .with_status_code(503),
+                            );
+                            continue;
+                        };
                         let top_spans = trace_accum
                             .as_ref()
                             .and_then(|a| a.lock().ok())
@@ -103,9 +109,7 @@ fn spawn_metrics_server(port: u16, shared: Arc<Mutex<PerfData>>, trace_accum: Op
                                         }
                                     })
                                     .collect();
-                                spans.sort_by(|a, b| {
-                                    b.duration_ms.partial_cmp(&a.duration_ms).unwrap()
-                                });
+                                spans.sort_by(|a, b| b.duration_ms.total_cmp(&a.duration_ms));
                                 if url != "/traces" {
                                     spans.truncate(15);
                                 }
@@ -114,11 +118,17 @@ fn spawn_metrics_server(port: u16, shared: Arc<Mutex<PerfData>>, trace_accum: Op
                             .unwrap_or_default();
                         let resp = build_response(&data, &top_spans);
                         let json = serde_json::to_string(&resp).unwrap_or_default();
-                        let response = tiny_http::Response::from_string(json).with_header(
-                            "Content-Type: application/json"
-                                .parse::<tiny_http::Header>()
-                                .unwrap(),
-                        );
+                        let Ok(content_type) =
+                            "Content-Type: application/json".parse::<tiny_http::Header>()
+                        else {
+                            let _ = request.respond(
+                                tiny_http::Response::from_string("internal error")
+                                    .with_status_code(500),
+                            );
+                            continue;
+                        };
+                        let response =
+                            tiny_http::Response::from_string(json).with_header(content_type);
                         let _ = request.respond(response);
                     } else {
                         let response =
@@ -141,7 +151,7 @@ fn build_response(data: &PerfData, trace_spans: &[SpanSample]) -> MetricsRespons
     let avg_fps = fpss.iter().sum::<f64>() / fpss.len().max(1) as f64;
 
     let mut sfps = fpss.clone();
-    sfps.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
+    sfps.sort_unstable_by(|a, b| a.total_cmp(b));
     let p5 = sfps
         .get((sfps.len() as f64 * 0.05) as usize)
         .copied()
@@ -155,7 +165,7 @@ fn build_response(data: &PerfData, trace_spans: &[SpanSample]) -> MetricsRespons
     let cur_ft = data.history.last().map(|s| s.frame_time_ms).unwrap_or(0.0);
     let avg_ft = fts.iter().sum::<f64>() / fts.len().max(1) as f64;
     let mut sft = fts.clone();
-    sft.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
+    sft.sort_unstable_by(|a, b| a.total_cmp(b));
     let p95_ft = sft
         .get((sft.len() as f64 * 0.95) as usize)
         .copied()

@@ -415,6 +415,6 @@ fn stable_name<T>() -> &'static str {
     match type_name::<T>() {
         name if name == type_name::<SavedHealth>() => "test.health.v1",
         name if name == type_name::<SavedDoor>() => "test.door.v1",
-        name => panic!("missing test stable name for {name}"),
+        name => unreachable!("missing test stable name for {name}"),
     }
 }

@@ -1,10 +1,10 @@
 use super::*;
 use crate::{
     core::AfterglowCorePlugin,
-    input::{InputAxis, InputAxisValue, PlayerCommand, PlayerCommandQueue},
     physics::{AfterglowPhysicsPlugin, PhysicsBody, PhysicsCollider},
 };
 use bevy::time::TimeUpdateStrategy;
+use leafwing_input_manager::action_state::ActionState;
 use std::time::Duration;
 
 #[derive(Clone, Copy, Debug)]
@@ -24,7 +24,6 @@ fn app() -> App {
         AfterglowPhysicsPlugin,
         AfterglowFirstPersonControllerPlugin,
     ));
-    app.init_resource::<PlayerCommandQueue>();
     app.finish();
     app.cleanup();
     *app.world_mut().resource_mut::<TimeUpdateStrategy>() =
@@ -32,15 +31,8 @@ fn app() -> App {
     app
 }
 
-fn move_forward_command() -> PlayerCommand {
-    PlayerCommand {
-        player: NetworkPlayerId(1),
-        axes: vec![InputAxisValue {
-            axis: InputAxis::new("move.y"),
-            value: 1.0,
-        }],
-        ..default()
-    }
+fn move_forward_command() -> ActionState<crate::input::AfterglowAction> {
+    test_input::command(&[("move.y", 1.0)], &[])
 }
 
 fn spawn_static_box(app: &mut App, size: Vec3, transform: Transform) {
@@ -73,7 +65,6 @@ fn controller_smoothly_climbs_single_low_ledge() {
         .world_mut()
         .spawn((
             FirstPersonController {
-                player: NetworkPlayerId(1),
                 config: config.clone(),
             },
             Transform::from_xyz(0.0, half_height, 1.4),
@@ -94,9 +85,7 @@ fn controller_smoothly_climbs_single_low_ledge() {
     let mut samples = Vec::with_capacity(91);
     samples.push(sample(&app, player));
     for _ in 0..90 {
-        app.world_mut()
-            .resource_mut::<PlayerCommandQueue>()
-            .replace(vec![move_forward_command()]);
+        test_input::set_input(&mut app, player, move_forward_command());
         app.update();
         samples.push(sample(&app, player));
     }
@@ -144,7 +133,6 @@ fn stair_step_up_sweep_reaches_landing_without_horizontal_stall() {
         .world_mut()
         .spawn((
             FirstPersonController {
-                player: NetworkPlayerId(1),
                 config: config.clone(),
             },
             Transform::from_xyz(0.0, half_height, 1.4),
@@ -166,9 +154,7 @@ fn stair_step_up_sweep_reaches_landing_without_horizontal_stall() {
     let mut min_climbing_progress = f32::INFINITY;
     let mut previous = sample(&app, player);
     for _ in 0..120 {
-        app.world_mut()
-            .resource_mut::<PlayerCommandQueue>()
-            .replace(vec![move_forward_command()]);
+        test_input::set_input(&mut app, player, move_forward_command());
         app.update();
         let current = sample(&app, player);
         if current.climbing || previous.climbing {
@@ -201,7 +187,6 @@ fn controller_does_not_climb_ledge_above_step_height() {
         .world_mut()
         .spawn((
             FirstPersonController {
-                player: NetworkPlayerId(1),
                 config: config.clone(),
             },
             Transform::from_xyz(0.0, half_height, 1.2),
@@ -222,9 +207,7 @@ fn controller_does_not_climb_ledge_above_step_height() {
     let mut samples = Vec::with_capacity(91);
     samples.push(sample(&app, player));
     for _ in 0..90 {
-        app.world_mut()
-            .resource_mut::<PlayerCommandQueue>()
-            .replace(vec![move_forward_command()]);
+        test_input::set_input(&mut app, player, move_forward_command());
         app.update();
         samples.push(sample(&app, player));
     }
@@ -266,7 +249,6 @@ fn controller_does_not_jitter_against_knee_height_blocker() {
         .world_mut()
         .spawn((
             FirstPersonController {
-                player: NetworkPlayerId(1),
                 config: config.clone(),
             },
             Transform::from_xyz(0.0, half_height, 1.2),
@@ -286,9 +268,7 @@ fn controller_does_not_jitter_against_knee_height_blocker() {
     app.update();
     let mut samples = Vec::with_capacity(121);
     for _ in 0..120 {
-        app.world_mut()
-            .resource_mut::<PlayerCommandQueue>()
-            .replace(vec![move_forward_command()]);
+        test_input::set_input(&mut app, player, move_forward_command());
         app.update();
         samples.push(sample(&app, player));
     }
@@ -359,7 +339,6 @@ fn controller_smoothly_climbs_near_limit_knee_height_step() {
         .world_mut()
         .spawn((
             FirstPersonController {
-                player: NetworkPlayerId(1),
                 config: config.clone(),
             },
             Transform::from_xyz(0.0, half_height, 1.6),
@@ -379,9 +358,7 @@ fn controller_smoothly_climbs_near_limit_knee_height_step() {
     app.update();
     let mut samples = Vec::with_capacity(121);
     for _ in 0..120 {
-        app.world_mut()
-            .resource_mut::<PlayerCommandQueue>()
-            .replace(vec![move_forward_command()]);
+        test_input::set_input(&mut app, player, move_forward_command());
         app.update();
         samples.push(sample(&app, player));
     }
@@ -426,7 +403,6 @@ fn controller_step_up_sweep_respects_low_ceiling() {
         .world_mut()
         .spawn((
             FirstPersonController {
-                player: NetworkPlayerId(1),
                 config: config.clone(),
             },
             Transform::from_xyz(0.0, half_height, 1.2),
@@ -450,9 +426,7 @@ fn controller_step_up_sweep_respects_low_ceiling() {
 
     app.update();
     for _ in 0..90 {
-        app.world_mut()
-            .resource_mut::<PlayerCommandQueue>()
-            .replace(vec![move_forward_command()]);
+        test_input::set_input(&mut app, player, move_forward_command());
         app.update();
     }
 

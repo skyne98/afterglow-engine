@@ -23,19 +23,15 @@ Useful Bevy sources:
 - `bevy_input-0.18.1/src/gamepad.rs`
 - `bevy_window-0.18.1/src/cursor/*`
 
-Do not let gameplay read raw device state directly. Convert it to deterministic commands:
+Do not let gameplay read raw device state directly. Convert it to Leafwing action
+state on the controlled entity:
 
 ```rust
-pub struct PlayerCommand {
-    pub player: NetworkPlayerId,
-    pub tick: u32,
-    pub axes: Vec<InputAxisValue>,
-    pub actions: Vec<InputActionValue>, // string action + Pressed/Held/Released
-    pub pointers: Vec<PointerInput>,
-}
+Query<&ActionState<AfterglowAction>>
 ```
 
-This keeps controller code compatible with local-server simulation, prediction, replay, and tests.
+This keeps controller code compatible with local simulation, Lightyear prediction,
+server rewind replay, and tests.
 
 ## Physics And Interaction
 
@@ -188,8 +184,8 @@ Plan:
 
 ## Implementation Order
 
-1. Input action mapping.
-2. `PlayerCommand` generation.
+1. Leafwing input action mapping.
+2. Lightyear Leafwing input networking.
 3. First-person body on top of Avian-backed physics.
 4. Interaction commands and physics ray/query.
 5. Inventory/equipment/effects data model.

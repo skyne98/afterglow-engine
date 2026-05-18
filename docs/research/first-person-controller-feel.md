@@ -24,9 +24,9 @@ Additional implementation references found by research agent:
 Afterglow needs a first-person controller that is useful for Arx/Thief/System
 Shock-style immersive sim spaces first, then open-world RPG traversal later. The
 controller should feel grounded and readable, but it should not be a stiff
-floating camera. It must consume `PlayerCommand` values from the engine input
-system, so keyboard, gamepad, touch, AI possession, cutscene scripts, network
-prediction, and tests all drive the same path.
+floating camera. The rewrite target is Leafwing `ActionState<AfterglowAction>`
+on the controlled entity, so keyboard, gamepad, touch, AI possession, cutscene
+scripts, network prediction, and tests all drive the same fixed-tick path.
 
 The implementation target is not exact Quake, Source, or Mirror's Edge. The
 target is a conservative engine controller with knobs that can emulate pieces of
@@ -308,15 +308,15 @@ Afterglow implications:
 The implemented API is documented in `docs/api/controller.md`. In short:
 
 - attach `FirstPersonController { player, config }` to the player body
-- drive it only with `PlayerCommand` axes/actions, never raw input
+- drive it only with Leafwing `ActionState<AfterglowAction>`, never raw input
 - keep runtime state in `FirstPersonMotorState`
 - authoring automatically installs the Avian kinematic cylinder
 - camera feel is a separate `FirstPersonCameraRig`
 
 ### System Flow
 
-1. Read `PlayerCommandQueue`.
-2. Match commands to controller entities by `NetworkPlayerId`.
+1. Read `ActionState<AfterglowAction>` on controller entities.
+2. Match local/remote ownership through Lightyear entity control metadata.
 3. Update yaw/pitch from look axes.
 4. Update HPL2 local forward/side speed channels.
 5. Apply Source-style horizontal movement and pushback.
@@ -332,9 +332,9 @@ The implemented API is documented in `docs/api/controller.md`. In short:
 
 The controller is a good fit for current networking:
 
-- Input is already serialized as `PlayerCommand` by tick.
-- Server and local single-player can run the same command-to-motor system.
-- Client prediction records the same commands and can replay after correction.
+- Lightyear/Leafwing serializes input state by tick.
+- Server and local single-player can run the same action-to-motor system.
+- Lightyear client prediction records the same input state and can replay after correction.
 - Authoritative snapshots should replicate body transform, velocity, stance,
   grounded flag, and view yaw/pitch.
 - Presentation-only camera smoothing should not be replicated.

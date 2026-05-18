@@ -215,52 +215,48 @@ RepNpc { pos, hp, alert, animation_state, target }
   -> drives Transform, animation graph state, navigation caches, audio, UI
 ```
 
-Server gameplay should mutate replicated components/resources through ordered
-commands and replicated messages. The developer-facing API is:
+Server gameplay should mutate Lightyear-replicated components/resources through
+ordered fixed-tick systems. The developer-facing target API is:
 
 ```text
-#[derive(Replicate)] or #[replicate] on replicated components/resources
-impl ReplicatedCommand for Bevy command Message types
-impl ReplicatedMessage for Bevy fact Message types
-app.replicate(component::<RepHealth>())
-app.replicate(resource::<RepWorldClock>())
-app.replicate(command::<OpenDoorCommand>())
-app.replicate(message::<DamageApplied>())
-app.add_systems(ReplicatedTick, apply_damage)
+app.register_component::<RepHealth>()
+app.rewind_component::<RepHealth>()
+app.add_systems(FixedUpdate, apply_damage)
 ```
 
-Game code reads commands/messages with normal `MessageReader<T>` systems. During
-rollback, the engine restores replicated component/resource state and reissues
-the relevant command/fact messages so the same systems run again.
+Game code reads Leafwing action state and replay-safe retained fact streams.
+During server rewind, the engine restores registered component state and runs the
+same fixed systems again.
 
-This keeps important multiplayer code visually separate: client commands become
-validated server intent, then replicated messages, then normal Bevy systems
-mutate replicated components/resources, then snapshots/deltas replicate that
-truth to clients. The rollback driver is intentionally small and Bevy-shaped:
+This keeps important multiplayer code visually separate: client input becomes
+validated server intent, normal Bevy systems mutate Lightyear-replicated and
+rewindable truth, then Lightyear replicates corrections to clients. The rewind
+driver is intentionally small and Bevy-shaped:
 
 ```text
-world.save_replicated_state(98)
-world.replay_replicated_ticks(98, 100)
+server_rewind.restore_domain(98)
+server_rewind.replay_domain(98, 100)
 ```
 
-`replay_replicated_ticks(anchor, through)` restores the snapshot at `anchor`,
-then reissues registered timelines and runs `ReplicatedTick` for later ticks.
-Those systems use normal `Query`, `Res`, `MessageReader`, and component mutation.
+`replay_domain(anchor, through)` restores registered rewind components and entity
+lifetime to `anchor`, inserts accepted ticked input/facts, then runs the fixed
+gameplay schedule for later ticks. Those systems use normal `Query`, `Res`, and
+component mutation.
 
 ### Commands
 
-Commands are generic, player-owned, tick-stamped intent records. They should stay
-game-configurable and string/data driven at the engine boundary:
+Input is player-owned, tick-stamped intent. Leafwing action state should cover
+continuous controls and common buttons:
 
-- move axis
-- look axis
-- use stable entity
-- cast ability ID
-- equip item ID
-- start dialogue option ID
+- move/look axes
+- use/interact
+- attack/cast/shield
+- jump/crouch/sprint
 
-The engine validates ownership, tick window, sequence/duplicate rules, and
-domain routing. Game code validates game-specific legality during replay.
+Game-specific selected targets, item IDs, dialogue choices, or ability IDs can be
+retained replay facts/messages above Lightyear. The engine validates ownership,
+tick window, sequence/duplicate rules, and domain routing. Game code validates
+game-specific legality during replay.
 
 ### Replay
 
@@ -445,12 +441,11 @@ put particles or idle world entities in the retained gameplay message stream.
 
 ### Keep From Current Code
 
-- `StableEntityId` and chunk membership are the right foundation.
-- `PlayerCommand` being generic is the right engine API shape.
-- `ClientPredictionBuffer`, reconciliation, interpolation, reconnect baselines,
-  and `MemoryTransport` already cover major pieces.
-- `DeterministicRollbackBuffer` should remain as the storage primitive for small
-  byte snapshots.
+- `StableEntityId` and chunk membership remain the right identity foundation.
+- The old command, prediction, interpolation, baseline, and transport modules are
+  migration references only; Lightyear and Leafwing should replace them.
+- The new server rewind layer should use typed component history first. Byte
+  snapshots are optional for small deterministic subsystems only.
 
 ### Change Next
 
@@ -473,14 +468,17 @@ replay pure Rust test logic. It does not need Bevy world snapshotting on day one
 
 ### Test Requirements
 
-`mock-rpg-network-tests/tests/late_correction.rs` now covers the Bevy ECS path:
+`mock-rpg-network-tests/tests/network_e2e.rs` now covers the current Bevy ECS
+network boundary:
 
 - Two players exchange spell projectiles.
 - Player B sends a shield command late.
-- The server restores replicated ECS state, replays normal Bevy systems, and
-  corrects "B died" into "B survived".
-- No duplicate final death, stale combat log truth, stale projectile hit, or
-  orphaned death marker remains in the authoritative model.
+- The local packet simulator applies latency, duplication, reordering, drops,
+  and stale delivery around `AfterglowNetworkPlugin` and `RewindHistoryStore`.
+- The server restores ECS state, replays normal gameplay systems, and corrects
+  "B died" into "B survived".
+- No duplicate final death, stale combat log truth, stale projectile hit,
+  orphaned death marker, or orphaned loot remains in the authoritative model.
 
 Add a sync-test style harness:
 

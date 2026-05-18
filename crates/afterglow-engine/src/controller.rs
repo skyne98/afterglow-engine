@@ -3,18 +3,17 @@ use avian3d::{
     prelude::{CustomPositionIntegration, Position, Rotation, SpeculativeMargin},
 };
 use bevy::prelude::*;
+use leafwing_input_manager::action_state::ActionState;
 
 use crate::{
     core::schedule::AfterglowSet,
-    input::PlayerCommandQueue,
-    network::NetworkPlayerId,
+    input::AfterglowAction,
     physics::{PhysicsBody, PhysicsCollider},
 };
 
 mod body;
 mod camera;
 mod camera_motion;
-mod commands;
 mod physics;
 mod source_move;
 mod stairs;
@@ -39,20 +38,12 @@ use util::flat;
 
 #[derive(Component, Clone, Debug, PartialEq, Reflect)]
 pub struct FirstPersonController {
-    pub player: NetworkPlayerId,
     pub config: FirstPersonControllerConfig,
 }
 
 #[derive(Clone, Debug, PartialEq, Reflect)]
 pub struct FirstPersonControllerConfig {
-    pub move_x_axis: String,
-    pub move_y_axis: String,
-    pub look_x_axis: String,
-    pub look_y_axis: String,
-    pub jump_action: String,
-    pub crouch_action: String,
     pub toggle_crouch: bool,
-    pub sprint_action: String,
     pub jump_enabled: bool,
     pub ground_speed: f32,
     pub sprint_speed: f32,
@@ -167,14 +158,7 @@ impl Plugin for AfterglowFirstPersonControllerPlugin {
 impl Default for FirstPersonControllerConfig {
     fn default() -> Self {
         Self {
-            move_x_axis: "move.x".into(),
-            move_y_axis: "move.y".into(),
-            look_x_axis: "look.x".into(),
-            look_y_axis: "look.y".into(),
-            jump_action: "jump".into(),
-            crouch_action: "crouch".into(),
             toggle_crouch: false,
-            sprint_action: "sprint".into(),
             jump_enabled: true,
             ground_speed: 5.0,
             sprint_speed: 7.0,
@@ -221,9 +205,8 @@ impl Default for FirstPersonControllerConfig {
 }
 
 impl FirstPersonController {
-    pub fn new(player: NetworkPlayerId) -> Self {
+    pub fn new() -> Self {
         Self {
-            player,
             config: FirstPersonControllerConfig::default(),
         }
     }
@@ -285,10 +268,10 @@ fn sync_first_person_controller_authoring(
 fn drive_first_person_controllers(
     mut entity_commands: Commands,
     time: Res<Time>,
-    player_commands: Option<Res<PlayerCommandQueue>>,
     mut controllers: Query<(
         Entity,
         &FirstPersonController,
+        Option<&ActionState<AfterglowAction>>,
         &mut FirstPersonMotorState,
         &mut Transform,
     )>,
@@ -297,18 +280,12 @@ fn drive_first_person_controllers(
     mut trace: ResMut<FirstPersonControllerTrace>,
 ) {
     let dt = time.delta_secs();
-    let command_lookup = player_commands
-        .as_deref()
-        .map(commands::PlayerCommandLookup::new);
     let record_trace = trace.enabled;
-    for (entity, controller, mut state, mut transform) in &mut controllers {
+    for (entity, controller, action_state, mut state, mut transform) in &mut controllers {
         let start_position = transform.translation;
         physics::update_step_climbing(&controller.config, &mut state, dt);
         let after_step_latch_position = transform.translation;
-        let command = command_lookup
-            .as_ref()
-            .and_then(|lookup| lookup.get(controller.player));
-        let input = integrate_first_person_input(command, &controller.config, &mut state, dt);
+        let input = integrate_first_person_input(action_state, &controller.config, &mut state, dt);
         let after_input_position = transform.translation;
         let mut active_collider = physics::controller_collider(&controller.config, state.stance);
         if let Some((new_collider, new_authored_collider)) = physics::sync_body_stance(
@@ -386,7 +363,6 @@ fn drive_first_person_controllers(
         if record_trace {
             trace.push_controller(FirstPersonControllerTraceFrame {
                 entity,
-                player: controller.player,
                 tick: input.command.tick,
                 dt,
                 command_move: input.command.move_axis,
@@ -437,7 +413,15 @@ fn sync_physics_transform(entity: Entity, transform: &Transform, commands: &mut 
 #[cfg(test)]
 mod authoring_tests;
 #[cfg(test)]
+mod blocker_demo_tests;
+#[cfg(test)]
+mod blocker_side_tests;
+#[cfg(test)]
+mod blocker_test_support;
+#[cfg(test)]
 mod blocker_tests;
+#[cfg(test)]
+mod camera_effect_tests;
 #[cfg(test)]
 mod crouch_terrain_tests;
 #[cfg(test)]
@@ -450,6 +434,8 @@ mod physics_tests;
 mod stair_sweep_tests;
 #[cfg(test)]
 mod terrain_tests;
+#[cfg(test)]
+mod test_input;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

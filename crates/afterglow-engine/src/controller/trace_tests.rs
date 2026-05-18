@@ -1,10 +1,10 @@
 use super::*;
 use crate::{
     core::AfterglowCorePlugin,
-    input::{InputAxis, InputAxisValue, PlayerCommand, PlayerCommandQueue},
     physics::{AfterglowPhysicsPlugin, PhysicsBody, PhysicsCollider},
 };
 use bevy::time::TimeUpdateStrategy;
+use leafwing_input_manager::action_state::ActionState;
 use std::time::Duration;
 
 fn app_with_trace(max_frames: usize) -> App {
@@ -15,7 +15,6 @@ fn app_with_trace(max_frames: usize) -> App {
         AfterglowPhysicsPlugin,
         AfterglowFirstPersonControllerPlugin,
     ));
-    app.init_resource::<PlayerCommandQueue>();
     app.insert_resource(FirstPersonControllerTrace::enabled(max_frames));
     app.finish();
     app.cleanup();
@@ -24,25 +23,14 @@ fn app_with_trace(max_frames: usize) -> App {
     app
 }
 
-fn move_forward_command(tick: u32) -> PlayerCommand {
-    PlayerCommand {
-        player: NetworkPlayerId(1),
-        tick,
-        axes: vec![InputAxisValue {
-            axis: InputAxis::new("move.y"),
-            value: 1.0,
-        }],
-        ..default()
-    }
+fn move_forward_command() -> ActionState<crate::input::AfterglowAction> {
+    test_input::command(&[("move.y", 1.0)], &[])
 }
 
 fn spawn_player(app: &mut App, config: FirstPersonControllerConfig, position: Vec3) -> Entity {
     app.world_mut()
         .spawn((
-            FirstPersonController {
-                player: NetworkPlayerId(1),
-                config,
-            },
+            FirstPersonController { config },
             Transform::from_translation(position),
         ))
         .id()
@@ -62,10 +50,8 @@ fn spawn_static_box(app: &mut App, size: Vec3, translation: Vec3) {
     ));
 }
 
-fn push_command(app: &mut App, tick: u32) {
-    app.world_mut()
-        .resource_mut::<PlayerCommandQueue>()
-        .replace(vec![move_forward_command(tick)]);
+fn push_command(app: &mut App, player: Entity) {
+    test_input::set_input(app, player, move_forward_command());
 }
 
 #[test]
@@ -87,8 +73,8 @@ fn controller_trace_records_the_exact_collision_phase() {
     );
 
     app.update();
-    for tick in 1..90 {
-        push_command(&mut app, tick);
+    for _ in 1..90 {
+        push_command(&mut app, player);
         app.update();
     }
 
@@ -160,8 +146,8 @@ fn step_trace_records_successful_ray_climbs() {
     );
 
     app.update();
-    for tick in 1..120 {
-        push_command(&mut app, tick);
+    for _ in 1..120 {
+        push_command(&mut app, player);
         app.update();
     }
 
@@ -191,7 +177,7 @@ fn trace_resource_keeps_a_bounded_ring_of_recent_frames() {
     let mut app = app_with_trace(3);
     let config = FirstPersonControllerConfig::default();
     let half_height = config.height(ControllerStance::Standing) * 0.5;
-    spawn_player(&mut app, config, Vec3::new(0.0, half_height, 1.2));
+    let player = spawn_player(&mut app, config, Vec3::new(0.0, half_height, 1.2));
     spawn_static_box(
         &mut app,
         Vec3::new(8.0, 0.2, 8.0),
@@ -199,13 +185,13 @@ fn trace_resource_keeps_a_bounded_ring_of_recent_frames() {
     );
 
     app.update();
-    for tick in 1..8 {
-        push_command(&mut app, tick);
+    for _ in 1..8 {
+        push_command(&mut app, player);
         app.update();
     }
 
     let trace = app.world().resource::<FirstPersonControllerTrace>();
     assert_eq!(trace.controller_frames.len(), 3);
-    assert_eq!(trace.controller_frames.first().unwrap().tick, 5);
-    assert_eq!(trace.controller_frames.last().unwrap().tick, 7);
+    assert_eq!(trace.controller_frames.first().unwrap().tick, 0);
+    assert_eq!(trace.controller_frames.last().unwrap().tick, 0);
 }

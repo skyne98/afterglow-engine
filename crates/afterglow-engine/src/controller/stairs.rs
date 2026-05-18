@@ -85,13 +85,10 @@ pub fn apply_step_attempt(attempt: StepAttempt) -> FirstPersonStepTrace {
         }
         let ray_normalized = ray_dir / ray_distance;
 
-        let Some(hit) = spatial_query.cast_ray(
-            ray_start,
-            Dir3::new(ray_normalized).unwrap(),
-            ray_distance,
-            true,
-            &filter,
-        ) else {
+        let Ok(dir) = Dir3::new(ray_normalized) else {
+            continue;
+        };
+        let Some(hit) = spatial_query.cast_ray(ray_start, dir, ray_distance, true, &filter) else {
             if record_trace {
                 trace.rays.push(FirstPersonStepRayTrace {
                     index: i,
