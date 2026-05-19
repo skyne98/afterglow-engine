@@ -159,6 +159,18 @@ impl<T: serde::Serialize + serde::de::DeserializeOwned + Clone> DeltaHistory<T> 
         }
     }
 
+    /// Resolve a potentially negative index to a usize.
+    /// - `0..` = from start
+    /// - `-1` = last, `-2` = second-to-last, etc.
+    fn resolve(&self, index: isize) -> usize {
+        if index >= 0 {
+            index as usize
+        } else {
+            let from_end = (-index) as usize;
+            self.entries.len().saturating_sub(from_end)
+        }
+    }
+
     /// Record the initial value at frame 0. Must be called first.
     pub fn init(&mut self, value: &T) {
         self.entries.clear();
@@ -212,50 +224,57 @@ impl<T: serde::Serialize + serde::de::DeserializeOwned + Clone> DeltaHistory<T> 
         }
     }
 
-    /// Get the value at any valid index (0 = oldest stored).
-    pub fn at(&self, index: usize) -> T {
-        assert!(index < self.entries.len());
-        self.restore_at(index)
+    /// Get the value at any index. Negative = from end (-1 is last).
+    pub fn at(&self, index: isize) -> T {
+        let i = self.resolve(index);
+        assert!(i < self.entries.len());
+        self.restore_at(i)
     }
 
-    /// Get the raw bytes at any valid index (for export / network).
-    pub fn bytes_at(&self, index: usize) -> Vec<u8> {
-        assert!(index < self.entries.len());
-        self.restore_bytes_at(index)
+    /// Get the raw bytes at any index. Negative = from end.
+    pub fn bytes_at(&self, index: isize) -> Vec<u8> {
+        let i = self.resolve(index);
+        assert!(i < self.entries.len());
+        self.restore_bytes_at(i)
     }
 
-    /// Return the [`DeltaPatch`] between two indices (from → to).
-    pub fn patch(&self, from: usize, to: usize) -> DeltaPatch {
-        let old = self.restore_bytes_at(from);
-        let new = self.restore_bytes_at(to);
+    /// Return the [`DeltaPatch`] between two indices. Negative = from end.
+    pub fn patch(&self, from: isize, to: isize) -> DeltaPatch {
+        let f = self.resolve(from);
+        let t = self.resolve(to);
+        let old = self.restore_bytes_at(f);
+        let new = self.restore_bytes_at(t);
         DeltaPatch::diff_bytes(&old, &new)
     }
 
     // ── Immutable branching ───────────────────────────────────────────────
 
-    /// Immutable: produce a new history truncated to `index`.
+    /// Immutable: produce a new history truncated to `index`. Negative = from end.
     /// Original is unchanged.
-    pub fn truncated_at(&self, index: usize) -> Self {
-        assert!(index < self.entries.len());
+    pub fn truncated_at(&self, index: isize) -> Self {
+        let i = self.resolve(index);
+        assert!(i < self.entries.len());
         let mut h = Self::new(self.capacity, self.snapshot_interval);
-        h.entries = self.entries[..=index].to_vec();
-        h.cursor = index.min(h.entries.len().saturating_sub(1));
+        h.entries = self.entries[..=i].to_vec();
+        h.cursor = i.min(h.entries.len().saturating_sub(1));
         h
     }
 
     // ── Mutable operations ─────────────────────────────────────────────────
 
-    /// Truncate entries after `index`, discarding future history.
-    pub fn truncate(&mut self, index: usize) {
-        assert!(index < self.entries.len());
-        self.entries.truncate(index + 1);
-        self.cursor = self.cursor.min(index);
+    /// Truncate entries after `index`. Negative = from end.
+    pub fn truncate(&mut self, index: isize) {
+        let i = self.resolve(index);
+        assert!(i < self.entries.len());
+        self.entries.truncate(i + 1);
+        self.cursor = self.cursor.min(i);
     }
 
-    /// Move cursor to an absolute index.
-    pub fn move_to(&mut self, index: usize) {
-        assert!(index < self.entries.len());
-        self.cursor = index;
+    /// Move cursor to an absolute index. Negative = from end.
+    pub fn move_to(&mut self, index: isize) {
+        let i = self.resolve(index);
+        assert!(i < self.entries.len());
+        self.cursor = i;
     }
 
     /// Move cursor back by `n` frames, returning the value at that position.
@@ -508,7 +527,11 @@ mod tests {
         assert_eq!(h.at(0).tick, 10);
         assert_eq!(h.at(1).tick, 20);
         assert_eq!(h.at(2).tick, 30);
+        assert_eq!(h.at(-1).tick, 30);  // negative index
+        assert_eq!(h.at(-2).tick, 20);
+        assert_eq!(h.at(-3).tick, 10);
         assert_eq!(postcard::from_bytes::<Snapshot>(&h.bytes_at(2)).unwrap().tick, 30);
+        assert_eq!(postcard::from_bytes::<Snapshot>(&h.bytes_at(-1)).unwrap().tick, 30);
     }
 
     #[test]
@@ -523,6 +546,7 @@ mod tests {
         assert_eq!(h.len(), 4);    // original unchanged
         assert_eq!(h2.len(), 2);   // new has 2
         assert_eq!(h2.at(1).tick, 1);
+        assert_eq!(h2.at(-1).tick, 1);
     }
 
     #[test]
@@ -546,6 +570,8 @@ mod tests {
         assert!(h.is_at_oldest());
         assert!(!h.is_at_latest());
         h.move_to(2);
+        assert!(h.is_at_latest());
+        h.move_to(-1);
         assert!(h.is_at_latest());
     }
 
