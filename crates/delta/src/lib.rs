@@ -29,7 +29,7 @@
 //! let decoded: Snapshot = received.apply(&a);
 //!
 //! // ── Rolling history buffer with undo/redo ──────────────────────────────
-//! let mut hist: DeltaHistory<Snapshot> = DeltaHistory::new(240, 60);
+//! let mut hist: DeltaHistory<Snapshot> = DeltaHistory::with_capacity(240);
 //! hist.init(&a);
 //! hist.push(&b);                           // auto-diffs against previous
 //! assert_eq!(hist.at(0).tick, 0);          // oldest
@@ -210,6 +210,12 @@ pub struct DeltaHistory<T> {
 }
 
 impl<T: serde::Serialize + serde::de::DeserializeOwned + Clone> DeltaHistory<T> {
+    /// Create a new history buffer.
+    ///
+    /// `capacity` — max frames before the oldest is evicted.
+    /// `snapshot_interval` — a full snapshot every N frames (restores start from
+    ///   the nearest snapshot and chain-apply deltas forward).
+    ///   Use `capacity` for one snapshot per full buffer.
     pub fn new(capacity: usize, snapshot_interval: usize) -> Self {
         assert!(snapshot_interval >= 1);
         DeltaHistory {
@@ -219,6 +225,12 @@ impl<T: serde::Serialize + serde::de::DeserializeOwned + Clone> DeltaHistory<T> 
             snapshot_interval,
             _phantom: std::marker::PhantomData,
         }
+    }
+
+    /// Convenience: one full snapshot when the buffer wraps.
+    /// Equivalent to `DeltaHistory::new(capacity, capacity)`.
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self::new(capacity, capacity)
     }
 
     /// Resolve a potentially negative index to a usize.
