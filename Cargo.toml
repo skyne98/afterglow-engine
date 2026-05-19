@@ -3,10 +3,10 @@ resolver = "3"
 members = [
     "crates/afterglow-engine",
     "crates/agx",
+    "crates/diff",
     "crates/mock-rpg-network-tests",
     "crates/prototypes/prototype-physics-bench",
     "crates/prototypes/prototype-physics-serialize",
-    "crates/prototypes/prototype-delta-encoding",
 ]
 
 [workspace.dependencies]
