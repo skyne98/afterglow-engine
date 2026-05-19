@@ -332,24 +332,28 @@ impl<T: serde::Serialize + serde::de::DeserializeOwned + Clone> DeltaHistory<T> 
     // ── Immutable branching ───────────────────────────────────────────────
 
     /// Immutable: produce a new history truncated to `index`. Negative = from end.
-    /// Original is unchanged.
+    /// Original is unchanged. The resulting copy has its last entry promoted to Full.
     pub fn truncated_at(&self, index: isize) -> Self {
         let i = self.resolve(index);
         assert!(i < self.entries.len());
         let mut h = Self::new(self.capacity);
         h.entries = self.entries[..=i].to_vec();
         h.cursor = i.min(h.entries.len().saturating_sub(1));
+        h.promote_last_to_full();
         h
     }
 
     // ── Mutable operations ─────────────────────────────────────────────────
 
     /// Truncate entries after `index`. Negative = from end.
+    /// Ensures the new last entry is promoted to Full if needed.
     pub fn truncate(&mut self, index: isize) {
         let i = self.resolve(index);
         assert!(i < self.entries.len());
         self.entries.truncate(i + 1);
         self.cursor = self.cursor.min(i);
+        // Ensure the new last entry is Full
+        self.promote_last_to_full();
     }
 
     /// Move cursor to an absolute index. Negative = from end.
@@ -357,6 +361,17 @@ impl<T: serde::Serialize + serde::de::DeserializeOwned + Clone> DeltaHistory<T> 
         let i = self.resolve(index);
         assert!(i < self.entries.len());
         self.cursor = i;
+    }
+
+    /// Ensure entries[-1] is Full. If it's a Delta, reconstruct it.
+    fn promote_last_to_full(&mut self) {
+        if self.entries.is_empty() { return; }
+        let last = self.entries.len() - 1;
+        if last == 0 { return; } // index 0 is always Full
+        if let HistoryKind::Delta(_) = &self.entries[last].kind {
+            let bytes = self.restore_bytes_at(last);
+            self.entries[last].kind = HistoryKind::Full(bytes);
+        }
     }
 
     /// Move cursor back by `n` frames, returning the value at that position.
@@ -495,25 +510,125 @@ mod tests {
         assert_eq!(d.apply_bytes(&old), new);
     }
 
-    // ── DeltaHistory tests ──
+    // ── DeltaHistory tests ────────────────────────────────────────────
+    //
+    // Invariant: after every mutation:
+    //   I0: entries[0] is always Full
+    //   I1: entries[-1] is always Full
+    //   I2: all interior entries (1..len-1) are Delta
+    //   I3: all values round-trip through at(i) == original
+
+    fn assert_invariants(h: &DeltaHistory<Snapshot>) {
+        if h.is_empty() { return; }
+        let len = h.len();
+        // I0
+        assert!(matches!(h.entries[0].kind, HistoryKind::Full(_)),
+            "I0 failed: entries[0] must be Full, len={}", len);
+        // I1
+        assert!(matches!(h.entries[len-1].kind, HistoryKind::Full(_)),
+            "I1 failed: entries[-1] must be Full, len={}", len);
+        // I2
+        for i in 1..len.saturating_sub(1) {
+            assert!(matches!(h.entries[i].kind, HistoryKind::Delta(_)),
+                "I2 failed: entries[{}] must be Delta, len={}", i, len);
+        }
+        // I3: all stored values are recoverable and increase monotonically
+        for i in 0..len {
+            let s = h.at(i as isize);
+            assert_eq!(s.tick, h.at(-(len as isize - i as isize)).tick,
+                "I3 failed: at({}) != at(-{}))", i, len - i);
+        }
+    }
+
+    fn assert_values(h: &DeltaHistory<Snapshot>, expected: &[u32]) {
+        assert_eq!(h.len(), expected.len());
+        for (i, &tick) in expected.iter().enumerate() {
+            assert_eq!(h.at(i as isize).tick, tick,
+                "position {} expected tick {} but got {:?}", i, tick, h.at(i as isize).tick);
+        }
+    }
+
+    // ── Core operations ───────────────────────────────────────────────
 
     #[test]
-    fn history_undo_redo_simple() {
+    fn history_init_only() {
+        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(10);
+        h.init(&snap(42));
+        assert_eq!(h.len(), 1);
+        assert_eq!(h.at(0).tick, 42);
+        assert_eq!(h.at(-1).tick, 42);
+        assert!(h.is_at_oldest());
+        assert!(h.is_at_latest());
+        assert_invariants(&h);
+    }
+
+    #[test]
+    fn history_init_then_push() {
         let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(10);
         h.init(&snap(0));
+        h.push(&snap(1));
+        assert_eq!(h.len(), 2);
+        assert_values(&h, &[0, 1]);
+        assert_invariants(&h);
+    }
 
-        for t in 1..=5 {
-            h.push(&snap(t));
-        }
+    #[test]
+    fn history_three_values() {
+        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(10);
+        h.init(&snap(10));
+        h.push(&snap(20));
+        h.push(&snap(30));
+        assert_values(&h, &[10, 20, 30]);
+        assert_invariants(&h);
+    }
 
-        assert!(h.is_at_latest());
+    #[test]
+    fn history_negative_indices() {
+        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(10);
+        h.init(&snap(10));
+        h.push(&snap(20));
+        h.push(&snap(30));
+        assert_eq!(h.at(-1).tick, 30);
+        assert_eq!(h.at(-2).tick, 20);
+        assert_eq!(h.at(-3).tick, 10);
+    }
+
+    #[test]
+    fn history_bytes_at_round_trip() {
+        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(10);
+        h.init(&snap(5));
+        h.push(&snap(10));
+        let b: Snapshot = postcard::from_bytes(&h.bytes_at(0)).unwrap();
+        assert_eq!(b.tick, 5);
+        let b: Snapshot = postcard::from_bytes(&h.bytes_at(-1)).unwrap();
+        assert_eq!(b.tick, 10);
+    }
+
+    // ── Undo / Redo ───────────────────────────────────────────────────
+
+    #[test]
+    fn history_undo_redo_basic() {
+        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(10);
+        h.init(&snap(0));
+        for t in 1..=5 { h.push(&snap(t)); }
         assert_eq!(h.position(), 5);
 
-        let s = h.undo(3).unwrap();
-        assert_eq!(s.tick, 2);
+        assert_eq!(h.undo(3).unwrap().tick, 2);
+        assert_eq!(h.position(), 2);
 
-        let s = h.redo(1).unwrap();
-        assert_eq!(s.tick, 3);
+        assert_eq!(h.redo(1).unwrap().tick, 3);
+        assert_eq!(h.position(), 3);
+        assert_invariants(&h);
+    }
+
+    #[test]
+    fn history_undo_all_way_back() {
+        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(10);
+        h.init(&snap(0));
+        h.push(&snap(1));
+        h.push(&snap(2));
+        assert_eq!(h.undo(2).unwrap().tick, 0);
+        assert!(h.is_at_oldest());
     }
 
     #[test]
@@ -531,7 +646,7 @@ mod tests {
     }
 
     #[test]
-    fn history_undoredo_discard_new_timeline() {
+    fn history_undo_then_push_discards_future() {
         let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(10);
         h.init(&snap(0));
         h.push(&snap(1));
@@ -539,135 +654,435 @@ mod tests {
         h.push(&snap(3));
 
         h.undo(2); // back to frame 1
-        h.push(&snap(42)); // branch — should discard frames 2,3
+        h.push(&snap(42)); // branch — discards frames 2,3
 
-        assert_eq!(h.len(), 3); // frames 0,1,42 (frames 2,3 discarded)
+        assert_eq!(h.len(), 3);
+        assert_values(&h, &[0, 1, 42]);
         assert!(h.is_at_latest());
-
-        let s = h.at(2);
-        assert_eq!(s.tick, 42);
+        assert_invariants(&h);
     }
 
     #[test]
-    fn history_eviction_oldest_removed() {
+    fn history_undo_at_oldest_push_works() {
+        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(10);
+        h.init(&snap(0));
+        h.push(&snap(1));
+        h.undo(1);
+        assert!(h.is_at_oldest());
+        h.push(&snap(99));
+        assert_values(&h, &[0, 99]);
+        assert_invariants(&h);
+    }
+
+    #[test]
+    fn history_undo_twice_then_redo_twice() {
+        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(10);
+        h.init(&snap(0));
+        for t in 1..=5 { h.push(&snap(t)); }
+        h.undo(2); // at frame 3
+        h.undo(1); // at frame 2
+        assert_eq!(h.at(h.position() as isize).tick, 2);
+        h.redo(2); // at frame 4
+        assert_eq!(h.at(h.position() as isize).tick, 4);
+    }
+
+    // ── Eviction ──────────────────────────────────────────────────────
+
+    #[test]
+    fn history_no_eviction_below_capacity() {
+        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(5);
+        h.init(&snap(0));
+        for t in 1..=4 { h.push(&snap(t)); } // len=5, at capacity
+        assert_eq!(h.len(), 5);
+        assert_values(&h, &[0, 1, 2, 3, 4]);
+        assert_invariants(&h);
+    }
+
+    #[test]
+    fn history_first_eviction() {
         let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(3);
         h.init(&snap(0));
         h.push(&snap(1));
         h.push(&snap(2));
-        h.push(&snap(3));
-
-        assert_eq!(h.len(), 3); // frames 1,2,3 (frame 0 evicted)
+        h.push(&snap(3)); // capacity=3, len becomes 4 → evicts index 0
+        assert_eq!(h.len(), 3);
+        // Frame 0 evicted, frame 1 promoted to new anchor
+        assert_values(&h, &[1, 2, 3]);
+        assert_invariants(&h);
     }
 
     #[test]
-    fn history_restore_from_full_snapshot() {
-        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(10);
+    fn history_two_evictions() {
+        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(3);
         h.init(&snap(0));
         h.push(&snap(1));
         h.push(&snap(2));
-        // frame 3 is a snapshot (interval = 3)
-        h.push(&snap(3));
-        h.push(&snap(4));
-        h.push(&snap(5));
-
-        let s = h.at(5);
-        assert_eq!(s.tick, 5);
+        h.push(&snap(3)); // evict 0
+        h.push(&snap(4)); // evict 1
+        assert_eq!(h.len(), 3);
+        assert_values(&h, &[2, 3, 4]);
+        assert_invariants(&h);
     }
 
     #[test]
-    fn history_undo_after_eviction() {
+    fn history_many_evictions_ring_wraps_repeatedly() {
         let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(4);
         h.init(&snap(0));
-        h.push(&snap(1));
-        h.push(&snap(2));
-        h.push(&snap(3)); // snapshot (3%3==0), evicts frame 0
-        h.push(&snap(4)); // evicts frame 1
-
-        assert_eq!(h.len(), 4); // frames 1,2,3,4 (frame 0 evicted)
-
-        let s = h.undo(1).unwrap();
-        assert_eq!(s.tick, 3);
+        for t in 1..=100 { h.push(&snap(t)); }
+        // 101 pushes total (init + 100), capacity=4 → 97 evictions
+        assert_eq!(h.len(), 4);
+        assert_values(&h, &[97, 98, 99, 100]);
+        assert_invariants(&h);
     }
 
     #[test]
-    fn history_at_and_bytes_at() {
-        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(10);
+    fn history_eviction_anchor_promotion_correctness() {
+        // Verify that after eviction, the promoted entry at index 0
+        // has the correct data (not corrupted by delta merge)
+        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(3);
+        h.init(&snap(100));
+        h.push(&snap(200));
+        h.push(&snap(300));
+        h.push(&snap(400)); // evict 100, promote 200 from Delta to Full
+        assert_eq!(h.at(0).tick, 200); // was promoted from Delta(200)
+        assert_eq!(h.at(1).tick, 300);
+        assert_eq!(h.at(2).tick, 400);
+        assert_invariants(&h);
+    }
+
+    #[test]
+    fn history_eviction_multiple_anchor_promotions() {
+        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(3);
+        h.init(&snap(0));
+        for t in 1..=10 { h.push(&snap(t)); }
+        // capacity=3, 11 pushes → 8 evictions, each promoting a new anchor
+        assert_values(&h, &[8, 9, 10]);
+        assert_eq!(h.at(0).tick, 8); // promoted 8 times from Deltas
+        assert_invariants(&h);
+    }
+
+    // ── Capacity edge cases ─────────────────────────────────────────────
+
+    #[test]
+    fn history_capacity_1() {
+        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(1);
+        h.init(&snap(0));
+        assert_values(&h, &[0]);
+        h.push(&snap(1)); // evict 0, new anchor is Full(1) already
+        assert_values(&h, &[1]);
+        h.push(&snap(2));
+        assert_values(&h, &[2]);
+        assert_invariants(&h);
+    }
+
+    #[test]
+    fn history_capacity_2() {
+        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(2);
         h.init(&snap(10));
-        h.push(&snap(20));
-        h.push(&snap(30));
-        assert_eq!(h.at(0).tick, 10);
-        assert_eq!(h.at(1).tick, 20);
-        assert_eq!(h.at(2).tick, 30);
-        assert_eq!(h.at(-1).tick, 30);  // negative index
-        assert_eq!(h.at(-2).tick, 20);
-        assert_eq!(h.at(-3).tick, 10);
-        assert_eq!(postcard::from_bytes::<Snapshot>(&h.bytes_at(2)).unwrap().tick, 30);
-        assert_eq!(postcard::from_bytes::<Snapshot>(&h.bytes_at(-1)).unwrap().tick, 30);
+        h.push(&snap(20)); // [Full(10), Full(20)] — no Delta needed yet
+        assert_values(&h, &[10, 20]);
+        h.push(&snap(30)); // evict 10, [Full(20), Full(30)] — 20 was already Full
+        assert_values(&h, &[20, 30]);
+        h.push(&snap(40)); // evict 20, [Full(30), Full(40)]
+        assert_values(&h, &[30, 40]);
+        assert_invariants(&h);
     }
 
     #[test]
-    fn history_truncated_at_is_immutable() {
+    fn history_capacity_2_full_cycle() {
+        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(2);
+        h.init(&snap(0));
+        for t in 1..=10 { h.push(&snap(t)); }
+        assert_values(&h, &[9, 10]);
+        assert_invariants(&h);
+    }
+
+    // ── Invariant stress tests ─────────────────────────────────────────
+
+    #[test]
+    fn history_invariants_hold_after_every_push() {
+        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(5);
+        h.init(&snap(0));
+        assert_invariants(&h);
+        for t in 1..=50 {
+            h.push(&snap(t));
+            assert_invariants(&h);
+        }
+    }
+
+    #[test]
+    fn history_invariants_hold_across_undo_redo_cycle() {
         let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(10);
         h.init(&snap(0));
-        h.push(&snap(1));
-        h.push(&snap(2));
-        h.push(&snap(3));
-
-        let h2 = h.truncated_at(1); // keep only 0,1
-        assert_eq!(h.len(), 4);    // original unchanged
-        assert_eq!(h2.len(), 2);   // new has 2
-        assert_eq!(h2.at(1).tick, 1);
-        assert_eq!(h2.at(-1).tick, 1);
+        for t in 1..=10 { h.push(&snap(t)); }
+        assert_invariants(&h);
+        for _ in 0..5 { h.undo(1); assert_invariants(&h); }
+        for _ in 0..5 { h.redo(1); assert_invariants(&h); }
     }
 
     #[test]
-    fn history_truncate_discards_future() {
+    fn history_invariants_hold_after_truncate() {
         let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(10);
         h.init(&snap(0));
-        h.push(&snap(1));
-        h.push(&snap(2));
-        h.truncate(0); // discard everything after frame 0
-        assert_eq!(h.len(), 1);
-        assert_eq!(h.at(0).tick, 0);
+        for t in 1..=8 { h.push(&snap(t)); }
+        h.truncate(3);
+        assert_invariants(&h);
+        assert_values(&h, &[0, 1, 2, 3]);
     }
 
     #[test]
-    fn history_move_to_repositions_cursor() {
+    fn history_invariants_hold_for_truncated_branch() {
         let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(10);
         h.init(&snap(0));
-        h.push(&snap(1));
-        h.push(&snap(2));
-        h.move_to(0);
-        assert!(h.is_at_oldest());
-        assert!(!h.is_at_latest());
-        h.move_to(2);
-        assert!(h.is_at_latest());
-        h.move_to(-1);
-        assert!(h.is_at_latest());
+        for t in 1..=8 { h.push(&snap(t)); }
+        let h2 = h.truncated_at(4);
+        assert_invariants(&h);
+        assert_invariants(&h2);
+        assert_eq!(h.len(), 9);
+        assert_eq!(h2.len(), 5);
+    }
+
+    // ── Data integrity after mutations ─────────────────────────────────
+
+    #[test]
+    fn history_data_integrity_after_undo_redo() {
+        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(10);
+        h.init(&snap(0));
+        for t in 1..=10 { h.push(&snap(t)); }
+        // 11 total pushes, capacity=10 → 1 eviction. Entries = frames 1..10.
+        assert_eq!(h.len(), 10);
+        assert_eq!(h.at(0).tick, 1); // evicted frame 0, promoted frame 1
+        assert_eq!(h.at(-1).tick, 10);
+
+        // Undo step by step from latest to oldest
+        assert_eq!(h.undo(1).unwrap().tick, 9);
+        assert_eq!(h.undo(1).unwrap().tick, 8);
+        assert_eq!(h.undo(1).unwrap().tick, 7);
+        assert_eq!(h.undo(1).unwrap().tick, 6);
+        assert_eq!(h.undo(1).unwrap().tick, 5);
+        assert_eq!(h.undo(1).unwrap().tick, 4);
+        assert_eq!(h.undo(1).unwrap().tick, 3);
+        assert_eq!(h.undo(1).unwrap().tick, 2);
+        assert_eq!(h.undo(1).unwrap().tick, 1);
+        assert!(h.undo(1).is_none()); // at oldest (frame 1)
+
+        // Redo step by step back to latest
+        assert_eq!(h.redo(1).unwrap().tick, 2);
+        assert_eq!(h.redo(1).unwrap().tick, 3);
+        assert_eq!(h.redo(1).unwrap().tick, 4);
+        assert_eq!(h.redo(1).unwrap().tick, 5);
+        assert_eq!(h.redo(1).unwrap().tick, 6);
+        assert_eq!(h.redo(1).unwrap().tick, 7);
+        assert_eq!(h.redo(1).unwrap().tick, 8);
+        assert_eq!(h.redo(1).unwrap().tick, 9);
+        assert_eq!(h.redo(1).unwrap().tick, 10);
+        assert!(h.redo(1).is_none()); // at latest (frame 10)
     }
 
     #[test]
-    fn history_patch_between_frames() {
+    fn history_data_integrity_after_eviction_cycle() {
+        // Push 3 full buffer cycles, verify all accessible values still match
+        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(5);
+        h.init(&snap(0));
+        for t in 1..=15 { h.push(&snap(t)); }
+        // Only the last 5 frames survive
+        assert_values(&h, &[11, 12, 13, 14, 15]);
+        // Undo should still produce correct values
+        assert_eq!(h.undo(1).unwrap().tick, 14);
+        assert_eq!(h.undo(1).unwrap().tick, 13);
+        assert_eq!(h.redo(1).unwrap().tick, 14);
+        assert_eq!(h.redo(1).unwrap().tick, 15);
+    }
+
+    // ── Patch ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn history_patch_range() {
         let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(10);
         h.init(&snap(0));
         h.push(&snap(1));
         h.push(&snap(5));
         let patch = h.patch(0, 2);
         assert!(!patch.runs.is_empty());
-        let restored = patch.apply(&snap(0));
-        assert_eq!(restored.tick, 5);
+        assert_eq!(patch.apply(&snap(0)).tick, 5);
     }
 
     #[test]
-    fn history_combined_patch_collapses_range() {
-        // Keep all frames (capacity > total pushes) so full snapshots are preserved
+    fn history_combined_patch_identity() {
         let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(20);
         h.init(&snap(0));
         for t in 1..=10 { h.push(&snap(t)); }
-        assert!(h.len() >= 11);
-        let combined = h.combined_patch(0, -1); // from oldest to newest
-        let restored = combined.apply(&h.at(0));
-        assert_eq!(restored.tick, 10);
-        assert!(combined.runs.len() <= 4, "combined should be compact, got {} runs", combined.runs.len());
+        let combined = h.combined_patch(0, -1);
+        assert_eq!(combined.apply(&h.at(0)).tick, 10);
+    }
+
+    #[test]
+    fn history_combined_patch_after_eviction() {
+        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(4);
+        h.init(&snap(0));
+        for t in 1..=10 { h.push(&snap(t)); }
+        let combined = h.combined_patch(0, -1);
+        assert_eq!(combined.apply(&h.at(0)).tick, 10);
+    }
+
+    // ── move_to ────────────────────────────────────────────────────────
+
+    #[test]
+    fn history_move_to_beginning_and_end() {
+        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(10);
+        h.init(&snap(0));
+        for t in 1..=5 { h.push(&snap(t)); }
+        h.move_to(0);
+        assert!(h.is_at_oldest());
+        assert_eq!(h.at(h.position() as isize).tick, 0);
+        h.move_to(-1);
+        assert!(h.is_at_latest());
+        assert_eq!(h.at(h.position() as isize).tick, 5);
+    }
+
+    // ── trancate ───────────────────────────────────────────────────────
+
+    #[test]
+    fn history_truncate_to_single_entry() {
+        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(10);
+        h.init(&snap(10));
+        h.push(&snap(20));
+        h.push(&snap(30));
+        h.truncate(0);
+        assert_eq!(h.len(), 1);
+        assert_eq!(h.at(0).tick, 10);
+    }
+
+    #[test]
+    fn history_truncate_to_middle() {
+        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(10);
+        h.init(&snap(0));
+        for t in 1..=5 { h.push(&snap(t)); }
+        h.truncate(3); // keep indices 0-3 (frames 0-3)
+        assert_values(&h, &[0, 1, 2, 3]);
+        assert_invariants(&h);
+    }
+
+    // ── Misc edge cases ────────────────────────────────────────────────
+
+    #[test]
+    fn history_empty_is_empty() {
+        let h: DeltaHistory<Snapshot> = DeltaHistory::new(10);
+        assert!(h.is_empty());
+        assert_eq!(h.len(), 0);
+    }
+
+    #[test]
+    #[should_panic]
+    fn history_at_on_empty_panics() {
+        let h: DeltaHistory<Snapshot> = DeltaHistory::new(10);
+        h.at(0);
+    }
+
+    #[test]
+    fn history_large_capacity_sequential_access() {
+        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(1000);
+        h.init(&snap(0));
+        for t in 1..=500 { h.push(&snap(t)); }
+        assert_eq!(h.len(), 501); // no evictions
+        assert_eq!(h.at(0).tick, 0);
+        assert_eq!(h.at(250).tick, 250);
+        assert_eq!(h.at(500).tick, 500);
+        assert_eq!(h.at(-1).tick, 500);
+        assert_invariants(&h);
+    }
+
+    #[test]
+    fn history_exact_capacity_no_eviction() {
+        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(6);
+        h.init(&snap(0));
+        for t in 1..=5 { h.push(&snap(t)); } // total 6, at capacity
+        assert_eq!(h.len(), 6);
+        assert_values(&h, &[0, 1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn history_one_over_capacity_triggers_one_eviction() {
+        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(3);
+        h.init(&snap(10));
+        h.push(&snap(20));
+        h.push(&snap(30)); // len=3, at capacity
+        h.push(&snap(40)); // len=4, evicts one → len=3
+        assert_eq!(h.len(), 3);
+        assert_values(&h, &[20, 30, 40]);
+    }
+
+    #[test]
+    fn history_interleaved_undo_and_push() {
+        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(5);
+        h.init(&snap(0));
+        h.push(&snap(1));
+        h.push(&snap(2));
+        h.undo(1); // at frame 1
+        h.push(&snap(10));
+        h.undo(2); // at frame 0
+        h.push(&snap(99));
+        assert_values(&h, &[0, 99]);
+    }
+
+    #[test]
+    fn history_undo_on_evicted_buffer() {
+        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(3);
+        h.init(&snap(0));
+        for t in 1..=10 { h.push(&snap(t)); }
+        // Entries: [8, 9, 10]
+        assert_eq!(h.len(), 3);
+        assert_eq!(h.undo(1).unwrap().tick, 9);
+        assert_eq!(h.undo(1).unwrap().tick, 8);
+        assert!(h.undo(1).is_none()); // can't go past the evicted anchor
+    }
+
+    #[test]
+    fn history_redo_stays_within_bounds_after_eviction() {
+        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(3);
+        h.init(&snap(0));
+        for t in 1..=5 { h.push(&snap(t)); }
+        // Entries: [3, 4, 5]
+        h.undo(2);
+        assert_eq!(h.at(h.position() as isize).tick, 3);
+        assert!(h.redo(2).is_some()); // 3→4→5
+        assert!(h.redo(1).is_none()); // already at end
+    }
+
+    #[test]
+    fn history_entries_invariant_after_wrapping() {
+        // After multiple wraps, verify Full/Delta layout is correct
+        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(4);
+        h.init(&snap(0));
+        for t in 1..=20 { h.push(&snap(t)); }
+        // Check internals directly
+        assert!(matches!(h.entries[0].kind, HistoryKind::Full(_))); // anchor
+        assert!(matches!(h.entries[1].kind, HistoryKind::Delta(_))); // interior
+        assert!(matches!(h.entries[2].kind, HistoryKind::Delta(_))); // interior
+        assert!(matches!(h.entries[3].kind, HistoryKind::Full(_))); // latest
+        assert_eq!(h.entries.len(), 4);
+    }
+
+    #[test]
+    fn history_eviction_restores_correct_values_after_many_cycles() {
+        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(4);
+        for cycle in 0..5 {
+            if cycle == 0 {
+                h.init(&snap(cycle * 10));
+            } else {
+                h.push(&snap(cycle * 10));
+            }
+            for sub in 1..=10 {
+                h.push(&snap(cycle * 10 + sub));
+            }
+        }
+        // After 5 cycles × 11 pushes + init = 56 pushes, capacity=4 → 52 evictions
+        assert_eq!(h.len(), 4);
+        assert_invariants(&h);
+        // All accessible values should form a contiguous increasing sequence
+        let ticks: Vec<u32> = (0..4).map(|i| h.at(i as isize).tick).collect();
+        for w in ticks.windows(2) {
+            assert!(w[0] < w[1], "values must be increasing: {:?}", ticks);
+        }
     }
 }
