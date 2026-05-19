@@ -130,91 +130,132 @@ enum HistoryKind {
 /// [`DeltaPatch`]es. Restoring any frame finds the nearest full snapshot
 /// and chain-applies deltas forward — typically ~2 μs per delta.
 ///
+/// Generic over any `T: Serialize + DeserializeOwned + Clone`.
+/// All state is stored as compact serialized bytes internally.
+///
 /// # Undo/redo semantics
 ///
 /// - [`push`](Self::push) records a new state (auto-diffs against previous),
 ///   advancing the cursor. If you previously undid, future entries are discarded.
 /// - [`undo`](Self::undo) moves the cursor back. [`redo`](Self::redo) moves it
-///   forward. Both return the bytes at the new position.
-pub struct DeltaHistory {
+///   forward. Both return `T` at the new position.
+pub struct DeltaHistory<T> {
     entries: Vec<HistoryEntry>,
     cursor: usize,
     capacity: usize,
     snapshot_interval: usize,
+    _phantom: std::marker::PhantomData<T>,
 }
 
-impl DeltaHistory {
+impl<T: serde::Serialize + serde::de::DeserializeOwned + Clone> DeltaHistory<T> {
     pub fn new(capacity: usize, snapshot_interval: usize) -> Self {
         assert!(snapshot_interval >= 1);
-        DeltaHistory { entries: Vec::with_capacity(capacity), cursor: 0, capacity, snapshot_interval }
+        DeltaHistory {
+            entries: Vec::with_capacity(capacity),
+            cursor: 0,
+            capacity,
+            snapshot_interval,
+            _phantom: std::marker::PhantomData,
+        }
     }
 
-    /// Record the initial full snapshot at frame 0. Must be called first.
-    pub fn init(&mut self, bytes: Vec<u8>) {
+    /// Record the initial value at frame 0. Must be called first.
+    pub fn init(&mut self, value: &T) {
         self.entries.clear();
-        self.entries.push(HistoryEntry { frame: 0, kind: HistoryKind::Full(bytes) });
+        self.entries.push(HistoryEntry {
+            frame: 0,
+            kind: HistoryKind::Full(postcard::to_allocvec(value).unwrap()),
+        });
         self.cursor = 0;
     }
 
-    /// Record a new state. Computes the [`DeltaPatch`] from `previous_bytes`.
+    /// Record a new state. Auto-diffs against the previous state.
     /// Every `snapshot_interval` frames, stores a full snapshot instead.
-    pub fn push(&mut self, bytes: Vec<u8>, previous_bytes: &[u8]) {
+    pub fn push(&mut self, value: &T) {
+        let bytes = postcard::to_allocvec(value).unwrap();
+
         // Discard future entries if undid first (new timeline branch)
         if self.cursor < self.entries.len().saturating_sub(1) {
             self.entries.truncate(self.cursor + 1);
         }
 
-        let next_frame = if let Some(last) = self.entries.last() { last.frame + 1 } else { 0 };
+        let next_frame = if let Some(last) = self.entries.last() {
+            last.frame + 1
+        } else {
+            0
+        };
         let is_snapshot = next_frame % self.snapshot_interval == 0;
+        let previous_bytes = match self.entries.last() {
+            Some(entry) => match &entry.kind {
+                HistoryKind::Full(b) => b.clone(),
+                HistoryKind::Delta(_) => {
+                    // Need to reconstruct previous bytes to diff against
+                    self.restore_bytes_at(self.entries.len() - 1)
+                }
+            },
+            None => vec![],
+        };
 
-        let kind = if is_snapshot {
+        let kind = if is_snapshot || previous_bytes.is_empty() {
             HistoryKind::Full(bytes)
         } else {
-            let delta = DeltaPatch::diff_bytes(previous_bytes, &bytes);
+            let delta = DeltaPatch::diff_bytes(&previous_bytes, &bytes);
             HistoryKind::Delta(delta)
         };
 
         self.entries.push(HistoryEntry { frame: next_frame, kind });
         self.cursor = self.entries.len() - 1;
 
-        // Evict oldest when at capacity
         while self.entries.len() > self.capacity {
             self.entries.remove(0);
             self.cursor = self.cursor.saturating_sub(1);
         }
     }
 
-    /// Move cursor back by `n` frames, returning the state at that position.
-    pub fn undo(&mut self, n: usize) -> Option<Vec<u8>> {
-        if n > self.cursor { return None; }
+    /// Move cursor back by `n` frames, returning the value at that position.
+    pub fn undo(&mut self, n: usize) -> Option<T> {
+        if n > self.cursor {
+            return None;
+        }
         self.cursor -= n;
         Some(self.restore_at(self.cursor))
     }
 
-    /// Move cursor forward by `n` frames, returning the state at that position.
-    pub fn redo(&mut self, n: usize) -> Option<Vec<u8>> {
+    /// Move cursor forward by `n` frames, returning the value at that position.
+    pub fn redo(&mut self, n: usize) -> Option<T> {
         let target = self.cursor + n;
-        if target >= self.entries.len() { return None; }
+        if target >= self.entries.len() {
+            return None;
+        }
         self.cursor = target;
         Some(self.restore_at(self.cursor))
     }
 
-    /// Restore the state at any valid index (0 = oldest stored).
-    pub fn restore(&self, index: usize) -> Vec<u8> {
+    /// Restore the value at any valid index (0 = oldest stored).
+    pub fn restore(&self, index: usize) -> T {
         assert!(index < self.entries.len());
         self.restore_at(index)
     }
 
-    fn restore_at(&self, index: usize) -> Vec<u8> {
-        let target_frame = self.entries[index].frame;
-        let snapshot_frame = (target_frame / self.snapshot_interval) * self.snapshot_interval;
+    fn restore_at(&self, index: usize) -> T {
+        let bytes = self.restore_bytes_at(index);
+        postcard::from_bytes(&bytes).unwrap()
+    }
 
-        // Find the nearest full snapshot at or before the target
-        let snapshot_idx = (0..=index).rev()
-            .find(|&i| matches!(self.entries[i].kind, HistoryKind::Full(_)) && self.entries[i].frame >= snapshot_frame)
+    fn restore_bytes_at(&self, index: usize) -> Vec<u8> {
+        let target_frame = self.entries[index].frame;
+        let snapshot_frame =
+            (target_frame / self.snapshot_interval) * self.snapshot_interval;
+
+        let snapshot_idx = (0..=index)
+            .rev()
+            .find(|&i| {
+                matches!(self.entries[i].kind, HistoryKind::Full(_))
+                    && self.entries[i].frame >= snapshot_frame
+            })
             .unwrap_or_else(|| {
-                // Walk back further if the direct snapshot was evicted
-                (0..=index).rev()
+                (0..=index)
+                    .rev()
                     .find(|&i| matches!(self.entries[i].kind, HistoryKind::Full(_)))
                     .expect("DeltaHistory corrupted: no full snapshot found")
             });
@@ -233,11 +274,21 @@ impl DeltaHistory {
         bytes
     }
 
-    pub fn position(&self) -> usize { self.cursor }
-    pub fn len(&self) -> usize { self.entries.len() }
-    pub fn is_empty(&self) -> bool { self.entries.is_empty() }
-    pub fn is_at_latest(&self) -> bool { self.cursor + 1 >= self.entries.len() }
-    pub fn is_at_oldest(&self) -> bool { self.cursor == 0 }
+    pub fn position(&self) -> usize {
+        self.cursor
+    }
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+    pub fn is_at_latest(&self) -> bool {
+        self.cursor + 1 >= self.entries.len()
+    }
+    pub fn is_at_oldest(&self) -> bool {
+        self.cursor == 0
+    }
 }
 
 #[cfg(test)]
@@ -316,107 +367,97 @@ mod tests {
 
     // ── DeltaHistory tests ──
 
-    fn tick_to_bytes(tick: u32) -> Vec<u8> {
-        postcard::to_allocvec(&snap(tick)).unwrap()
-    }
-
     #[test]
     fn history_undo_redo_simple() {
-        let mut h = DeltaHistory::new(10, 5);
-        h.init(tick_to_bytes(0));
+        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(10, 5);
+        h.init(&snap(0));
 
         for t in 1..=5 {
-            let prev = tick_to_bytes(t - 1);
-            h.push(tick_to_bytes(t), &prev);
+            h.push(&snap(t));
         }
 
         assert!(h.is_at_latest());
         assert_eq!(h.position(), 5);
 
-        let state = h.undo(3).unwrap();
-        let s: Snapshot = postcard::from_bytes(&state).unwrap();
+        let s = h.undo(3).unwrap();
         assert_eq!(s.tick, 2);
 
-        let state = h.redo(1).unwrap();
-        let s: Snapshot = postcard::from_bytes(&state).unwrap();
+        let s = h.redo(1).unwrap();
         assert_eq!(s.tick, 3);
     }
 
     #[test]
     fn history_undo_past_start_returns_none() {
-        let mut h = DeltaHistory::new(10, 5);
-        h.init(tick_to_bytes(0));
+        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(10, 5);
+        h.init(&snap(0));
         assert!(h.undo(1).is_none());
     }
 
     #[test]
     fn history_redo_past_end_returns_none() {
-        let mut h = DeltaHistory::new(10, 5);
-        h.init(tick_to_bytes(0));
+        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(10, 5);
+        h.init(&snap(0));
         assert!(h.redo(1).is_none());
     }
 
     #[test]
     fn history_undoredo_discard_new_timeline() {
-        let mut h = DeltaHistory::new(10, 5);
-        h.init(tick_to_bytes(0));
-        h.push(tick_to_bytes(1), &tick_to_bytes(0));
-        h.push(tick_to_bytes(2), &tick_to_bytes(1));
-        h.push(tick_to_bytes(3), &tick_to_bytes(2));
+        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(10, 5);
+        h.init(&snap(0));
+        h.push(&snap(1));
+        h.push(&snap(2));
+        h.push(&snap(3));
 
         h.undo(2); // back to frame 1
-        h.push(tick_to_bytes(42), &tick_to_bytes(1)); // branch — should discard frames 2,3
+        h.push(&snap(42)); // branch — should discard frames 2,3
 
         assert_eq!(h.len(), 3); // frames 0,1,42 (frames 2,3 discarded)
         assert!(h.is_at_latest());
 
-        let restored = h.restore(2);
-        let s: Snapshot = postcard::from_bytes(&restored).unwrap();
+        let s = h.restore(2);
         assert_eq!(s.tick, 42);
     }
 
     #[test]
     fn history_eviction_oldest_removed() {
-        let mut h = DeltaHistory::new(3, 5);
-        h.init(tick_to_bytes(0));
-        h.push(tick_to_bytes(1), &tick_to_bytes(0));
-        h.push(tick_to_bytes(2), &tick_to_bytes(1));
-        h.push(tick_to_bytes(3), &tick_to_bytes(2));
+        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(3, 5);
+        h.init(&snap(0));
+        h.push(&snap(1));
+        h.push(&snap(2));
+        h.push(&snap(3));
 
         assert_eq!(h.len(), 3); // frames 1,2,3 (frame 0 evicted)
     }
 
     #[test]
     fn history_restore_from_full_snapshot() {
-        let mut h = DeltaHistory::new(10, 3);
-        h.init(tick_to_bytes(0));
-        h.push(tick_to_bytes(1), &tick_to_bytes(0));
-        h.push(tick_to_bytes(2), &tick_to_bytes(1));
+        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(10, 3);
+        h.init(&snap(0));
+        h.push(&snap(1));
+        h.push(&snap(2));
         // frame 3 is a snapshot (interval = 3)
-        h.push(tick_to_bytes(3), &tick_to_bytes(2));
-        h.push(tick_to_bytes(4), &tick_to_bytes(3));
-        h.push(tick_to_bytes(5), &tick_to_bytes(4));
+        h.push(&snap(3));
+        h.push(&snap(4));
+        h.push(&snap(5));
 
         // Frame 5 should be correctly restored by finding snapshot at 3 and applying 2 deltas
-        let restored = h.restore(5);
-        let s: Snapshot = postcard::from_bytes(&restored).unwrap();
+        let s = h.restore(5);
         assert_eq!(s.tick, 5);
     }
 
     #[test]
     fn history_undo_after_eviction() {
-        let mut h = DeltaHistory::new(4, 3);
-        h.init(tick_to_bytes(0));
-        h.push(tick_to_bytes(1), &tick_to_bytes(0));
-        h.push(tick_to_bytes(2), &tick_to_bytes(1));
-        h.push(tick_to_bytes(3), &tick_to_bytes(2)); // snapshot (3%3==0), evicts frame 0
-        h.push(tick_to_bytes(4), &tick_to_bytes(3)); // evicts frame 1
+        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(4, 3);
+        h.init(&snap(0));
+        h.push(&snap(1));
+        h.push(&snap(2));
+        h.push(&snap(3)); // snapshot (3%3==0), evicts frame 0
+        h.push(&snap(4)); // evicts frame 1
 
         assert_eq!(h.len(), 4); // frames 1,2,3,4 (frame 0 evicted)
 
         // Undo should work — snapshot at frame 3 serves as anchor
-        let state = h.undo(1).unwrap();
-        let s: Snapshot = postcard::from_bytes(&state).unwrap();
+        let s = h.undo(1).unwrap();
         assert_eq!(s.tick, 3);
     }
 }
