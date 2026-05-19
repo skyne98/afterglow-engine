@@ -1,8 +1,9 @@
 use prototype_delta_encoding::{ByteDelta, RunDelta, SparseVecDelta};
+use prototype_delta_encoding::tree::{self, to_node, apply_patch, patch_size};
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
 
-#[derive(Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 struct BodySnapshot {
     index: u32,
     rigidbody_type: u8,
@@ -12,20 +13,20 @@ struct BodySnapshot {
     angvel: [f32; 3],
 }
 
-#[derive(Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 struct JointSnapshot {
     body1_index: u32,
     body2_index: u32,
     kind: JointKindSnapshot,
 }
 
-#[derive(Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 enum JointKindSnapshot {
     Spherical { anchor1: [f32; 3], anchor2: [f32; 3], twist_axis: [f32; 3] },
     Fixed { anchor1: [f32; 3], anchor2: [f32; 3] },
 }
 
-#[derive(Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 struct PhysicsSnapshot {
     bodies: Vec<BodySnapshot>,
     joints: Vec<JointSnapshot>,
@@ -76,7 +77,7 @@ fn main() {
 
     println!("=== Delta Encoding: Size Comparison ===");
     println!("Comparing delta encoding formats for PhysicsSnapshot");
-    println!("No string keys — all deltas use positional integer encoding.");
+    println!("No string keys \u{2014} all deltas use positional integer encoding.");
     println!();
     println!(
         "{:>8} | {:>7} | {:>10} | {:>10} | {:>10} | {:>10} | {:>7}",
@@ -93,18 +94,14 @@ fn main() {
             mutate_translation(&mut modified, &changed);
             let mod_bytes = postcard::to_allocvec(&modified).unwrap();
 
-            // Full size
             let full = mod_bytes.len();
 
-            // RunDelta (variable-length runs, no padding)
             let rd = RunDelta::diff_bytes(&base_bytes, &mod_bytes);
             let rd_sz = rd.serialized_size();
 
-            // SparseVecDelta (element-level, for Vec<BodySnapshot>)
             let sv = SparseVecDelta::diff(&base.bodies, &modified.bodies);
             let sv_sz = postcard::to_allocvec(&sv).unwrap().len();
 
-            // ByteDelta with 64B chunks (old approach)
             let bd = ByteDelta::diff_bytes(&base_bytes, &mod_bytes, 6);
             let bd_delta = ByteDelta {
                 chunk_shift: 6,
@@ -137,7 +134,6 @@ fn main() {
         mutate_translation(&mut modified, &changed);
         let mod_bytes = postcard::to_allocvec(&modified).unwrap();
 
-        // Raw-byte RunDelta encode
         let s = Instant::now();
         let rd = RunDelta::diff_bytes(&base_bytes, &mod_bytes);
         let enc = s.elapsed().as_secs_f64() * 1_000_000.0;
@@ -147,7 +143,6 @@ fn main() {
         println!("{:>10} | {:>10} | {:>10.1} | {:>10.1} | {:>10.1}",
             "RunDelta", chg, enc, dec, enc + dec);
 
-        // Serde-based full serialize
         let s = Instant::now();
         let _full = postcard::to_allocvec(&modified).unwrap();
         let ser = s.elapsed().as_secs_f64() * 1_000_000.0;
@@ -157,4 +152,45 @@ fn main() {
         println!("{:>10} | {:>10} | {:>10.1} | {:>10.1} | {:>10.1}",
             "full_serde", chg, ser, deser, ser + deser);
     }
+
+    // ── Structural vs Byte-level delta ──
+    println!("\n=== Structural vs Byte-level Delta (10k bodies) ===");
+    println!("{:>12} | {:>10} | {:>10} | {:>10}",
+        "method", "changed", "delta_bytes", "encode_us");
+
+    let base = build_snapshot(10_000);
+    let base_bytes = postcard::to_allocvec(&base).unwrap();
+
+    for &chg in &[0, 1, 10, 100] {
+        let changed: Vec<usize> = (0..chg.min(10_000)).collect();
+        let mut modified = base.clone();
+        mutate_translation(&mut modified, &changed);
+        let mod_bytes = postcard::to_allocvec(&modified).unwrap();
+
+        let s = Instant::now();
+        let n_old = to_node(&base);
+        let n_new = to_node(&modified);
+        let patch = tree::diff(&n_old, &n_new);
+        let struct_us = s.elapsed().as_secs_f64() * 1_000_000.0;
+        let struct_sz = patch_size(&patch);
+
+        let s = Instant::now();
+        let rd = RunDelta::diff_bytes(&base_bytes, &mod_bytes);
+        let byte_us = s.elapsed().as_secs_f64() * 1_000_000.0;
+        let byte_sz = rd.serialized_size();
+
+        println!("{:>12} | {:>10} | {:>10} | {:>10.1}",
+            "structural", chg, struct_sz, struct_us);
+        println!("{:>12} | {:>10} | {:>10} | {:>10.1}",
+            "byte-level", chg, byte_sz, byte_us);
+    }
+
+    let mut modified = base.clone();
+    mutate_translation(&mut modified, &[0, 1, 5, 10, 100]);
+    let n_old = to_node(&base);
+    let n_new = to_node(&modified);
+    let patch = tree::diff(&n_old, &n_new);
+    let restored = apply_patch(&base, &patch);
+    assert_eq!(restored, modified);
+    println!("\nStructural delta correctness: verified");
 }

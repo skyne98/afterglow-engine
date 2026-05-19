@@ -1,3 +1,5 @@
+pub mod tree;
+
 use serde::{Deserialize, Serialize};
 use serde::de::DeserializeOwned;
 
