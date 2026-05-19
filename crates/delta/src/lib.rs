@@ -212,6 +212,52 @@ impl<T: serde::Serialize + serde::de::DeserializeOwned + Clone> DeltaHistory<T> 
         }
     }
 
+    /// Get the value at any valid index (0 = oldest stored).
+    pub fn at(&self, index: usize) -> T {
+        assert!(index < self.entries.len());
+        self.restore_at(index)
+    }
+
+    /// Get the raw bytes at any valid index (for export / network).
+    pub fn bytes_at(&self, index: usize) -> Vec<u8> {
+        assert!(index < self.entries.len());
+        self.restore_bytes_at(index)
+    }
+
+    /// Return the [`DeltaPatch`] between two indices (from → to).
+    pub fn patch(&self, from: usize, to: usize) -> DeltaPatch {
+        let old = self.restore_bytes_at(from);
+        let new = self.restore_bytes_at(to);
+        DeltaPatch::diff_bytes(&old, &new)
+    }
+
+    // ── Immutable branching ───────────────────────────────────────────────
+
+    /// Immutable: produce a new history truncated to `index`.
+    /// Original is unchanged.
+    pub fn truncated_at(&self, index: usize) -> Self {
+        assert!(index < self.entries.len());
+        let mut h = Self::new(self.capacity, self.snapshot_interval);
+        h.entries = self.entries[..=index].to_vec();
+        h.cursor = index.min(h.entries.len().saturating_sub(1));
+        h
+    }
+
+    // ── Mutable operations ─────────────────────────────────────────────────
+
+    /// Truncate entries after `index`, discarding future history.
+    pub fn truncate(&mut self, index: usize) {
+        assert!(index < self.entries.len());
+        self.entries.truncate(index + 1);
+        self.cursor = self.cursor.min(index);
+    }
+
+    /// Move cursor to an absolute index.
+    pub fn move_to(&mut self, index: usize) {
+        assert!(index < self.entries.len());
+        self.cursor = index;
+    }
+
     /// Move cursor back by `n` frames, returning the value at that position.
     pub fn undo(&mut self, n: usize) -> Option<T> {
         if n > self.cursor {
@@ -229,12 +275,6 @@ impl<T: serde::Serialize + serde::de::DeserializeOwned + Clone> DeltaHistory<T> 
         }
         self.cursor = target;
         Some(self.restore_at(self.cursor))
-    }
-
-    /// Restore the value at any valid index (0 = oldest stored).
-    pub fn restore(&self, index: usize) -> T {
-        assert!(index < self.entries.len());
-        self.restore_at(index)
     }
 
     fn restore_at(&self, index: usize) -> T {
@@ -414,7 +454,7 @@ mod tests {
         assert_eq!(h.len(), 3); // frames 0,1,42 (frames 2,3 discarded)
         assert!(h.is_at_latest());
 
-        let s = h.restore(2);
+        let s = h.at(2);
         assert_eq!(s.tick, 42);
     }
 
@@ -440,8 +480,7 @@ mod tests {
         h.push(&snap(4));
         h.push(&snap(5));
 
-        // Frame 5 should be correctly restored by finding snapshot at 3 and applying 2 deltas
-        let s = h.restore(5);
+        let s = h.at(5);
         assert_eq!(s.tick, 5);
     }
 
@@ -456,8 +495,69 @@ mod tests {
 
         assert_eq!(h.len(), 4); // frames 1,2,3,4 (frame 0 evicted)
 
-        // Undo should work — snapshot at frame 3 serves as anchor
         let s = h.undo(1).unwrap();
         assert_eq!(s.tick, 3);
+    }
+
+    #[test]
+    fn history_at_and_bytes_at() {
+        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(10, 3);
+        h.init(&snap(10));
+        h.push(&snap(20));
+        h.push(&snap(30));
+        assert_eq!(h.at(0).tick, 10);
+        assert_eq!(h.at(1).tick, 20);
+        assert_eq!(h.at(2).tick, 30);
+        assert_eq!(postcard::from_bytes::<Snapshot>(&h.bytes_at(2)).unwrap().tick, 30);
+    }
+
+    #[test]
+    fn history_truncated_at_is_immutable() {
+        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(10, 5);
+        h.init(&snap(0));
+        h.push(&snap(1));
+        h.push(&snap(2));
+        h.push(&snap(3));
+
+        let h2 = h.truncated_at(1); // keep only 0,1
+        assert_eq!(h.len(), 4);    // original unchanged
+        assert_eq!(h2.len(), 2);   // new has 2
+        assert_eq!(h2.at(1).tick, 1);
+    }
+
+    #[test]
+    fn history_truncate_discards_future() {
+        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(10, 5);
+        h.init(&snap(0));
+        h.push(&snap(1));
+        h.push(&snap(2));
+        h.truncate(0); // discard everything after frame 0
+        assert_eq!(h.len(), 1);
+        assert_eq!(h.at(0).tick, 0);
+    }
+
+    #[test]
+    fn history_move_to_repositions_cursor() {
+        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(10, 5);
+        h.init(&snap(0));
+        h.push(&snap(1));
+        h.push(&snap(2));
+        h.move_to(0);
+        assert!(h.is_at_oldest());
+        assert!(!h.is_at_latest());
+        h.move_to(2);
+        assert!(h.is_at_latest());
+    }
+
+    #[test]
+    fn history_patch_between_frames() {
+        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(10, 5);
+        h.init(&snap(0));
+        h.push(&snap(1));
+        h.push(&snap(5));
+        let patch = h.patch(0, 2);
+        assert!(!patch.runs.is_empty());
+        let restored = patch.apply(&snap(0));
+        assert_eq!(restored.tick, 5);
     }
 }
