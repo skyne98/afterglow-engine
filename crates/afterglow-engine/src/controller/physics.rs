@@ -10,7 +10,7 @@ use crate::physics::PhysicsCollider;
 use super::{
     ControllerStance, FirstPersonControllerConfig, FirstPersonMotorState, is_walkable_normal,
     source_move::source_try_player_move,
-    util::{flat, shape_fits},
+    util::{flat, local_basis, shape_fits},
 };
 
 const HPL2_STAND_FIT_Y_OFFSET: f32 = 0.001;
@@ -442,9 +442,7 @@ fn reflect_air_move_speed(state: &mut FirstPersonMotorState, pushback: Vec3) {
     if normal == Vec3::ZERO {
         return;
     }
-    let rotation = Quat::from_rotation_y(state.yaw);
-    let forward = rotation * Vec3::NEG_Z;
-    let right = rotation * Vec3::X;
+    let (forward, right) = local_basis(state.yaw);
     let forward_velocity = forward * state.forward_speed;
     let side_velocity = right * state.side_speed;
     state.forward_speed = reflected_axis_speed(state.forward_speed, forward_velocity, normal);

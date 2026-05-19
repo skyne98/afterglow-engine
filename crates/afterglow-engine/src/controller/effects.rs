@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-use super::FirstPersonControllerConfig;
+use super::{FirstPersonControllerConfig, util};
 
 #[derive(Component, Clone, Debug, Default, PartialEq, Reflect)]
 pub struct FirstPersonEffectStack {
@@ -143,5 +143,5 @@ fn weighted_multiplier(multiplier: f32, weight: f32) -> f32 {
 }
 
 fn smoothstep(t: f32) -> f32 {
-    t * t * (3.0 - 2.0 * t)
+    util::smoothstep(t)
 }

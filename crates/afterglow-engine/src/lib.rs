@@ -6,13 +6,10 @@ pub mod demos;
 pub mod input;
 pub mod network;
 mod perf_hud;
-pub mod persistence;
 pub mod physics;
 #[cfg(any(test, feature = "test-support"))]
 pub mod testing;
 pub mod units;
-pub mod world;
-
 extern crate self as afterglow_engine;
 
 use bevy::{app::PluginGroupBuilder, prelude::*, window::WindowPlugin, winit::WinitSettings};
@@ -26,9 +23,7 @@ use perf_hud::{
     AccumMap, PerfHudPlugin, collect_frame, record_update_end, record_update_start, setup_tracing,
     sync_shared_metrics, trace_collector::reset_trace_data, update_hud,
 };
-use persistence::AfterglowPersistencePlugin;
 use physics::AfterglowPhysicsPlugin;
-use world::AfterglowWorldPlugin;
 
 pub struct AfterglowRuntimePlugins;
 
@@ -45,8 +40,6 @@ impl PluginGroup for AfterglowRuntimePlugins {
             .add(AfterglowInputPlugin)
             .add(AfterglowPhysicsPlugin)
             .add(AfterglowFirstPersonControllerPlugin)
-            .add(AfterglowPersistencePlugin)
-            .add(AfterglowWorldPlugin)
     }
 }
 
@@ -177,9 +170,11 @@ fn default_plugins() -> PluginGroupBuilder {
 #[cfg(test)]
 mod tests {
     use crate::{
-        AfterglowEnginePlugin, AfterglowRuntimePlugins,
+        AfterglowEnginePlugin,
         keep_windowed_runtime_unthrottled_when_unfocused,
     };
+    #[cfg(feature = "lightyear")]
+    use crate::AfterglowRuntimePlugins;
     use bevy::{
         app::App,
         winit::{UpdateMode, WinitSettings},
@@ -195,26 +190,6 @@ mod tests {
                 trace_accum: Arc::new(Mutex::new(std::collections::HashMap::new())),
             },
         ));
-    }
-
-    #[test]
-    fn runtime_plugins_register_without_demo_content() {
-        let mut app = App::new();
-        app.add_plugins((bevy::MinimalPlugins, AfterglowRuntimePlugins));
-
-        assert!(
-            app.world()
-                .resource::<crate::world::cell::CellManifestRegistry>()
-                .chunks()
-                .next()
-                .is_none()
-        );
-        assert!(
-            app.world()
-                .resource::<crate::world::cell::CellLoadRequests>()
-                .pending()
-                .is_empty()
-        );
     }
 
     #[test]

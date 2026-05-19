@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-use super::FirstPersonMotorState;
+use super::{util, FirstPersonMotorState};
 
 #[derive(Component, Clone, Copy, Debug, PartialEq, Reflect)]
 pub struct FirstPersonImpulseBuffer {
@@ -45,8 +45,8 @@ pub(super) fn apply_first_person_linear_impulse(
         return;
     }
     let horizontal = Vec3::new(velocity_delta.x, 0.0, velocity_delta.z);
-    let rotation = Quat::from_rotation_y(state.yaw);
-    state.side_speed += horizontal.dot(rotation * Vec3::X);
-    state.forward_speed += horizontal.dot(rotation * Vec3::NEG_Z);
+    let (forward, right) = util::local_basis(state.yaw);
+    state.side_speed += horizontal.dot(right);
+    state.forward_speed += horizontal.dot(forward);
     state.velocity.y += velocity_delta.y;
 }

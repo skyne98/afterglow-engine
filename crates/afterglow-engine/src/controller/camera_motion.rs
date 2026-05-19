@@ -1,5 +1,7 @@
 use bevy::prelude::*;
 
+use super::util;
+
 const HPL2_BOB_REST_PHASE: f32 = std::f32::consts::FRAC_PI_2;
 
 pub fn hpl2_landing_bounce(phase: f32, size: f32) -> f32 {
@@ -94,8 +96,7 @@ pub fn move_scalar_toward_slowdown(
 }
 
 fn smooth_curve(t: f32) -> f32 {
-    let t = t.clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
+    util::smoothstep(t)
 }
 
 fn wrap_bob_phase_for_rest(phase: f32) -> f32 {

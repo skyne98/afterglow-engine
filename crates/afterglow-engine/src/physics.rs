@@ -227,22 +227,9 @@ fn sync_physics_velocity_authoring(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        core::{
-            AfterglowCorePlugin,
-            identity::{ChunkId, ChunkMembership, Persistent, StableEntityId},
-        },
-        persistence::AfterglowPersistencePlugin,
-        world::{
-            AfterglowWorldPlugin,
-            lifecycle::{ChunkLifecycle, ChunkLifecycleRequests, ChunkLifecycleState},
-        },
-    };
+    use crate::core::AfterglowCorePlugin;
     use bevy::time::TimeUpdateStrategy;
     use std::time::Duration;
-
-    const TEST_CHUNK: ChunkId = ChunkId::from_raw(77);
-    const TEST_BODY: StableEntityId = StableEntityId::from_raw(7_700);
 
     fn app() -> App {
         let mut app = App::new();
@@ -441,52 +428,4 @@ mod tests {
         assert!(app.world().contains_resource::<Gravity>());
     }
 
-    #[test]
-    fn chunk_unload_despawns_physics_entities() {
-        let mut app = App::new();
-        app.add_plugins((
-            MinimalPlugins,
-            AfterglowCorePlugin,
-            AfterglowPersistencePlugin,
-            AfterglowWorldPlugin,
-            AfterglowPhysicsPlugin,
-        ));
-        app.finish();
-        app.cleanup();
-        app.world_mut().spawn((
-            Persistent,
-            TEST_BODY,
-            ChunkMembership::new(TEST_CHUNK),
-            PhysicsBody::dynamic(),
-            PhysicsCollider::sphere(0.5),
-            Transform::from_xyz(0.0, 1.0, 0.0),
-        ));
-
-        app.world_mut()
-            .resource_mut::<ChunkLifecycleRequests>()
-            .request_load(TEST_CHUNK)
-            .unwrap();
-        app.update();
-        app.world_mut()
-            .resource_mut::<ChunkLifecycleRequests>()
-            .request_spawned(TEST_CHUNK)
-            .unwrap();
-        app.update();
-        app.world_mut()
-            .resource_mut::<ChunkLifecycleRequests>()
-            .request_unload(TEST_CHUNK)
-            .unwrap();
-        app.update();
-
-        assert_eq!(
-            app.world().resource::<ChunkLifecycle>().state(TEST_CHUNK),
-            ChunkLifecycleState::Unloaded
-        );
-        assert!(
-            app.world()
-                .resource::<crate::core::identity::StableEntityRegistry>()
-                .entity(TEST_BODY)
-                .is_none()
-        );
-    }
 }

@@ -4,7 +4,6 @@ use web_time::Instant;
 use crate::{
     core::schedule::AfterglowSet,
     perf_hud::{self, PerfData},
-    world::cell::{CellLoadRequests, CellManifestRegistry},
 };
 
 pub struct AfterglowDemoPlugin;
@@ -16,7 +15,6 @@ pub struct Rotates {
 
 impl Plugin for AfterglowDemoPlugin {
     fn build(&self, app: &mut App) {
-        install_demo_cell(app);
         app.add_systems(
             Update,
             (rotate_cubes, update_light)
@@ -24,11 +22,6 @@ impl Plugin for AfterglowDemoPlugin {
                 .in_set(AfterglowSet::DebugAndMetrics),
         );
     }
-}
-
-fn install_demo_cell(app: &mut App) {
-    app.insert_resource(CellManifestRegistry::with_demo_cell())
-        .insert_resource(CellLoadRequests::with_demo_cell());
 }
 
 fn rotate_cubes(
@@ -59,38 +52,5 @@ fn update_light(
 fn record_optional_system(data: Option<ResMut<PerfData>>, name: &str, start: Instant) {
     if let Some(mut data) = data {
         perf_hud::record_system(&mut data, name, start.elapsed().as_secs_f64() * 1000.0);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{
-        core::AfterglowCorePlugin,
-        persistence::AfterglowPersistencePlugin,
-        world::{AfterglowWorldPlugin, cell::DEMO_CUBE_ID},
-    };
-
-    #[test]
-    fn demo_plugin_installs_demo_cell_explicitly() {
-        let mut app = App::new();
-        app.add_plugins((
-            MinimalPlugins,
-            AssetPlugin::default(),
-            AfterglowCorePlugin,
-            AfterglowPersistencePlugin,
-            AfterglowWorldPlugin,
-            AfterglowDemoPlugin,
-        ))
-        .init_resource::<Assets<Mesh>>()
-        .init_resource::<Assets<StandardMaterial>>();
-
-        app.update();
-        app.update();
-
-        let registry = app
-            .world()
-            .resource::<crate::core::identity::StableEntityRegistry>();
-        assert!(registry.entity(DEMO_CUBE_ID).is_some());
     }
 }

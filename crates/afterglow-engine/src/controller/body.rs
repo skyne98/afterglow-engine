@@ -4,7 +4,8 @@ use leafwing_input_manager::action_state::ActionState;
 use crate::input::AfterglowAction;
 
 use super::{
-    ControllerStance, FirstPersonControllerConfig, FirstPersonMotorState, is_walkable_normal,
+    util, ControllerStance, FirstPersonControllerConfig, FirstPersonMotorState,
+    is_walkable_normal,
 };
 
 pub fn integrate_first_person_motor(
@@ -342,18 +343,14 @@ fn target_forward_speed(
 }
 
 fn write_horizontal_velocity_from_local_speeds(state: &mut FirstPersonMotorState) {
-    let rotation = Quat::from_rotation_y(state.yaw);
-    let forward = rotation * Vec3::NEG_Z;
-    let right = rotation * Vec3::X;
+    let (forward, right) = util::local_basis(state.yaw);
     let horizontal = forward * state.forward_speed + right * state.side_speed;
     state.velocity.x = horizontal.x;
     state.velocity.z = horizontal.z;
 }
 
 pub fn local_move_delta_from_speeds(state: &FirstPersonMotorState, dt: f32) -> Vec3 {
-    let rotation = Quat::from_rotation_y(state.yaw);
-    let forward = rotation * Vec3::NEG_Z;
-    let right = rotation * Vec3::X;
+    let (forward, right) = util::local_basis(state.yaw);
     let delta = (forward * state.forward_speed + right * state.side_speed) * dt;
     if state.grounded && state.velocity.y <= 0.0 && delta.length_squared() > 0.0 {
         project_move_on_ground(delta.normalize(), state.ground_normal) * delta.length()
@@ -386,9 +383,7 @@ pub fn sync_local_speeds_from_velocity(state: &mut FirstPersonMotorState) {
 pub struct ReplayCommand(pub FirstPersonCommandState);
 
 pub fn local_speeds_from_velocity(state: &FirstPersonMotorState) -> Vec2 {
-    let rotation = Quat::from_rotation_y(state.yaw);
-    let forward = rotation * Vec3::NEG_Z;
-    let right = rotation * Vec3::X;
+    let (forward, right) = util::local_basis(state.yaw);
     let horizontal = Vec3::new(state.velocity.x, 0.0, state.velocity.z);
     Vec2::new(horizontal.dot(forward), horizontal.dot(right))
 }
