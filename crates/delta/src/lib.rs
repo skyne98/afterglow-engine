@@ -12,15 +12,15 @@ pub struct Run {
 /// Stores only the runs of bytes that differ between `old` and `new`,
 /// encoded as `(offset, data)` pairs. No string keys, no chunk padding.
 ///
-/// Use [`diff_bytes`](RunDelta::diff_bytes) when you have cached byte buffers
-/// (avoids serde overhead). Use [`diff`](RunDelta::diff) for convenience.
+/// Use [`diff_bytes`](DeltaPatch::diff_bytes) when you have cached byte buffers
+/// (avoids serde overhead). Use [`diff`](DeltaPatch::diff) for convenience.
 #[derive(Serialize, Deserialize, Debug)]
-pub struct RunDelta {
+pub struct DeltaPatch {
     pub total_len: u32,
     pub runs: Vec<Run>,
 }
 
-impl RunDelta {
+impl DeltaPatch {
     /// Compute a delta from two serde-serializable values.
     pub fn diff<T: Serialize>(old: &T, new: &T) -> Self {
         Self::diff_bytes(
@@ -70,7 +70,7 @@ impl RunDelta {
             runs = merged;
         }
 
-        RunDelta { total_len: new.len() as u32, runs }
+        DeltaPatch { total_len: new.len() as u32, runs }
     }
 
     /// Reconstruct the new value from `old` via serde round-trip.
@@ -123,7 +123,7 @@ mod tests {
     #[test]
     fn identical() {
         let a = Snapshot { tick: 100, bodies: vec![] };
-        assert!(RunDelta::diff(&a, &a).runs.is_empty());
+        assert!(DeltaPatch::diff(&a, &a).runs.is_empty());
     }
 
     #[test]
@@ -131,7 +131,7 @@ mod tests {
         let a = Snapshot { tick: 100, bodies: vec![] };
         let mut b = a.clone();
         b.tick = 101;
-        let restored: Snapshot = RunDelta::diff(&a, &b).apply(&a);
+        let restored: Snapshot = DeltaPatch::diff(&a, &b).apply(&a);
         assert_eq!(restored.tick, 101);
     }
 
@@ -149,7 +149,7 @@ mod tests {
                 Body { id: 2, pos: [8.0; 3], vel: [1.0; 3], active: false },
             ],
         };
-        assert_eq!(RunDelta::diff(&a, &b).apply(&a), b);
+        assert_eq!(DeltaPatch::diff(&a, &b).apply(&a), b);
     }
 
     #[test]
@@ -159,7 +159,7 @@ mod tests {
             Body { id: 1, pos: [0.0; 3], vel: [0.0; 3], active: true },
             Body { id: 2, pos: [5.0; 3], vel: [0.0; 3], active: false },
         ]};
-        assert_eq!(RunDelta::diff(&a, &b).apply(&a), b);
+        assert_eq!(DeltaPatch::diff(&a, &b).apply(&a), b);
     }
 
     #[test]
@@ -168,7 +168,7 @@ mod tests {
         let mut new = old.clone();
         new[42] = 99;
         new[43] = 88;
-        let d = RunDelta::diff_bytes(&old, &new);
+        let d = DeltaPatch::diff_bytes(&old, &new);
         assert_eq!(d.runs.len(), 1);
         assert_eq!(d.runs[0].offset, 42);
         assert_eq!(d.runs[0].data, vec![99, 88]);
@@ -179,7 +179,7 @@ mod tests {
         let old = vec![1u8, 2, 3, 4, 5, 6, 7, 8];
         let mut new = old.clone();
         new[2..6].copy_from_slice(&[99, 99, 99, 99]);
-        let d = RunDelta::diff_bytes(&old, &new);
+        let d = DeltaPatch::diff_bytes(&old, &new);
         let restored = d.apply_bytes(&old);
         assert_eq!(restored, new);
     }
