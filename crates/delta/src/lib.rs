@@ -425,6 +425,9 @@ impl<T: serde::Serialize + serde::de::DeserializeOwned + Clone> DeltaHistory<T> 
     pub fn len(&self) -> usize {
         self.entries.len()
     }
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
@@ -433,6 +436,111 @@ impl<T: serde::Serialize + serde::de::DeserializeOwned + Clone> DeltaHistory<T> 
     }
     pub fn is_at_oldest(&self) -> bool {
         self.cursor == 0
+    }
+}
+
+// ── TickHistory: DeltaHistory keyed by tick number ──────────────────────
+
+/// A [`DeltaHistory`] indexed by a tick number.
+///
+/// Each entry stores its actual tick number, so `at_or_latest` works
+/// correctly even when ticks are not perfectly sequential (gaps, jumps).
+/// Ticks are tracked independently from the buffer index.
+///
+/// # Lookup behaviour
+///
+/// | Method | Requested tick | Returns |
+/// |---|---|---|
+/// | [`at`](Self::at) | exact match | value or panics |
+/// | [`at_or_latest`](Self::at_or_latest) | present | that exact tick |
+/// | [`at_or_latest`](Self::at_or_latest) | between two ticks | the earlier one |
+/// | [`at_or_latest`](Self::at_or_latest) | < oldest | oldest |
+/// | [`at_or_latest`](Self::at_or_latest) | > newest | newest |
+pub struct TickHistory<T> {
+    inner: DeltaHistory<T>,
+    ticks: Vec<u32>,   // parallel to inner.entries — tracks tick per slot
+}
+
+impl<T: serde::Serialize + serde::de::DeserializeOwned + Clone> TickHistory<T> {
+    pub fn new(capacity: usize) -> Self {
+        TickHistory {
+            inner: DeltaHistory::new(capacity),
+            ticks: Vec::with_capacity(capacity),
+        }
+    }
+
+    /// Record the initial state at `tick`. Must be called first.
+    pub fn init(&mut self, value: &T, tick: u32) {
+        self.inner.init(value);
+        self.ticks.clear();
+        self.ticks.push(tick);
+    }
+
+    /// Record a new state at `tick`. Auto-diffs against the previous state.
+    /// If the buffer is full, the oldest entry is evicted automatically.
+    pub fn push(&mut self, value: &T, tick: u32) {
+        let was_full = self.inner.len() >= self.inner.capacity();
+        self.inner.push(value);
+        if was_full {
+            self.ticks.remove(0);
+        }
+        self.ticks.push(tick);
+    }
+
+    /// Get the state at exactly `tick`. Panics if not found.
+    pub fn at(&self, tick: u32) -> T {
+        let idx = self.tick_to_idx(tick);
+        self.inner.at(idx as isize)
+    }
+
+    /// Get the state closest to `tick` without exceeding it.
+    ///
+    /// - Exact match → that tick
+    /// - In a gap → nearest earlier tick
+    /// - Below oldest → oldest
+    /// - Above newest → newest
+    pub fn at_or_latest(&self, tick: u32) -> T {
+        if self.ticks.is_empty() {
+            panic!("TickHistory is empty");
+        }
+        let oldest = self.ticks[0];
+        let newest = *self.ticks.last().unwrap();
+
+        if tick >= newest {
+            return self.inner.at(-1);
+        }
+        if tick <= oldest {
+            return self.inner.at(0);
+        }
+
+        // Binary search for the largest tick ≤ requested
+        match self.ticks.binary_search(&tick) {
+            Ok(idx) => self.inner.at(idx as isize),
+            Err(insert_idx) => {
+                // insert_idx is where `tick` would be inserted.
+                // The closest ≤ tick is at `insert_idx - 1`.
+                let idx = insert_idx.saturating_sub(1);
+                self.inner.at(idx as isize)
+            }
+        }
+    }
+
+    /// The tick number of the oldest stored entry.
+    pub fn oldest_tick(&self) -> u32 {
+        *self.ticks.first().expect("TickHistory is empty")
+    }
+
+    /// The tick number of the newest stored entry.
+    pub fn latest_tick(&self) -> u32 {
+        *self.ticks.last().expect("TickHistory is empty")
+    }
+
+    /// Number of stored ticks.
+    pub fn len(&self) -> usize { self.inner.len() }
+
+    fn tick_to_idx(&self, tick: u32) -> usize {
+        self.ticks.iter().position(|&t| t == tick)
+            .expect("tick not found in TickHistory history")
     }
 }
 
@@ -1084,5 +1192,114 @@ mod tests {
         for w in ticks.windows(2) {
             assert!(w[0] < w[1], "values must be increasing: {:?}", ticks);
         }
+    }
+
+    // ── TickHistory tests ──────────────────────────────────────────────
+
+    #[test]
+    fn tick_init_and_push() {
+        let mut h: TickHistory<Snapshot> = TickHistory::new(10);
+        h.init(&snap(100), 100);
+        assert_eq!(h.oldest_tick(), 100);
+        assert_eq!(h.latest_tick(), 100);
+        h.push(&snap(101), 101);
+        assert_eq!(h.oldest_tick(), 100);
+        assert_eq!(h.latest_tick(), 101);
+        assert_eq!(h.at(100).tick, 100);
+        assert_eq!(h.at(101).tick, 101);
+    }
+
+    #[test]
+    fn tick_at_or_latest_exact_match() {
+        let mut h: TickHistory<Snapshot> = TickHistory::new(10);
+        h.init(&snap(10), 10);
+        h.push(&snap(20), 20);
+        h.push(&snap(30), 30);
+        assert_eq!(h.at_or_latest(10).tick, 10);
+        assert_eq!(h.at_or_latest(20).tick, 20);
+        assert_eq!(h.at_or_latest(30).tick, 30);
+    }
+
+    #[test]
+    fn tick_at_or_latest_between_frames() {
+        let mut h: TickHistory<Snapshot> = TickHistory::new(10);
+        h.init(&snap(10), 10);
+        h.push(&snap(20), 20);
+        h.push(&snap(30), 30);
+        // Between 20 and 30 → closest latest is 20
+        assert_eq!(h.at_or_latest(25).tick, 20);
+        // Between 10 and 20 → closest latest is 10
+        assert_eq!(h.at_or_latest(15).tick, 10);
+    }
+
+    #[test]
+    fn tick_at_or_latest_below_oldest() {
+        let mut h: TickHistory<Snapshot> = TickHistory::new(10);
+        h.init(&snap(100), 100);
+        h.push(&snap(101), 101);
+        // Tick 50 is below oldest (100) → returns oldest
+        assert_eq!(h.at_or_latest(50).tick, 100);
+    }
+
+    #[test]
+    fn tick_at_or_latest_above_newest() {
+        let mut h: TickHistory<Snapshot> = TickHistory::new(10);
+        h.init(&snap(100), 100);
+        h.push(&snap(101), 101);
+        assert_eq!(h.at_or_latest(200).tick, 101);
+    }
+
+    #[test]
+    fn tick_at_exact_fails_for_missing() {
+        let mut h: TickHistory<Snapshot> = TickHistory::new(10);
+        h.init(&snap(100), 100);
+        h.push(&snap(101), 101);
+    }
+
+    #[test]
+    fn tick_eviction_updates_start_tick() {
+        let mut h: TickHistory<Snapshot> = TickHistory::new(3);
+        h.init(&snap(10), 10);
+        h.push(&snap(11), 11);
+        h.push(&snap(12), 12);
+        assert_eq!(h.oldest_tick(), 10);
+        assert_eq!(h.latest_tick(), 12);
+        h.push(&snap(13), 13); // evicts tick 10
+        assert_eq!(h.oldest_tick(), 11);
+        assert_eq!(h.latest_tick(), 13);
+        assert_eq!(h.at(11).tick, 11);
+        assert_eq!(h.at(12).tick, 12);
+        assert_eq!(h.at(13).tick, 13);
+    }
+
+    #[test]
+    fn tick_at_or_latest_after_eviction() {
+        let mut h: TickHistory<Snapshot> = TickHistory::new(3);
+        h.init(&snap(10), 10);
+        h.push(&snap(11), 11);
+        h.push(&snap(12), 12);
+        h.push(&snap(13), 13); // evicts 10
+        // Tick 9 below oldest → oldest (11)
+        assert_eq!(h.at_or_latest(9).tick, 11);
+        // Tick 10 was evicted, closest latest is 11
+        assert_eq!(h.at_or_latest(10).tick, 11);
+        // Tick 11 exact
+        assert_eq!(h.at_or_latest(11).tick, 11);
+        // Tick 14 above newest → newest (13)
+        assert_eq!(h.at_or_latest(14).tick, 13);
+    }
+
+    #[test]
+    fn tick_large_sequential() {
+        let mut h: TickHistory<Snapshot> = TickHistory::new(50);
+        h.init(&snap(1000), 1000);
+        for t in 1001..=2000 { h.push(&snap(t), t); }
+        assert_eq!(h.len(), 50);
+        assert_eq!(h.oldest_tick(), 1951);
+        assert_eq!(h.latest_tick(), 2000);
+        assert_eq!(h.at(2000).tick, 2000);
+        assert_eq!(h.at_or_latest(1950).tick, 1951);
+        assert_eq!(h.at_or_latest(3000).tick, 2000);
+        assert_eq!(h.at_or_latest(1900).tick, 1951);
     }
 }
