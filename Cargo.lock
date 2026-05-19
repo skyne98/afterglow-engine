@@ -211,14 +211,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "agdx"
-version = "0.1.0"
-dependencies = [
- "postcard",
- "serde",
-]
-
-[[package]]
 name = "agx"
 version = "0.1.0"
 dependencies = [
@@ -2910,6 +2902,14 @@ name = "data-encoding"
 version = "2.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a4ae5f15dda3c708c0ade84bfee31ccab44a3da4f88015ed22f63732abe300c8"
+
+[[package]]
+name = "delta"
+version = "0.1.0"
+dependencies = [
+ "postcard",
+ "serde",
+]
 
 [[package]]
 name = "der"
