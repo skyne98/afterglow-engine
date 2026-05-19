@@ -70,56 +70,81 @@ fn mutate_translation(snapshot: &mut PhysicsSnapshot, indices: &[usize]) {
 }
 
 fn main() {
-    let body_counts = [1000, 10_000, 100_000];
+    let n = 10_000u32;
 
-    println!("=== RunDelta: Size ===");
-    println!("{:>8} | {:>7} | {:>10} | {:>10} | {:>7}",
-        "bodies", "changed", "full_bytes", "delta_bytes", "ratio");
+    println!("=== Full Pipeline: RunDelta vs Baseline (10k bodies) ===");
+    println!();
+    println!("ENCODE (sender): what it costs to produce the delta");
+    println!("  baseline: ser(new) → send full bytes");
+    println!("  cold:     ser(old) + ser(new) + diff → send delta");
+    println!("  warm:     ser(new) + diff             → send delta (old bytes cached)");
+    println!();
+    println!("DECODE (receiver): what it costs to recover the snapshot");
+    println!("  baseline: deser(bytes) → snapshot");
+    println!("  delta:   apply + deser               → snapshot");
+    println!();
 
-    for &n in &body_counts {
-        let base = build_snapshot(n);
-        let base_bytes = postcard::to_allocvec(&base).unwrap();
-
-        for &chg in &[0, 1, 10, 100] {
-            let changed: Vec<usize> = (0..chg.min(n as usize)).map(|i| i as usize).collect();
-            let mut modified = base.clone();
-            mutate_translation(&mut modified, &changed);
-            let mod_bytes = postcard::to_allocvec(&modified).unwrap();
-
-            let rd = RunDelta::diff_bytes(&base_bytes, &mod_bytes);
-            let rd_sz = rd.serialized_size();
-            let ratio = rd_sz as f64 / mod_bytes.len() as f64;
-
-            println!("{:>8} | {:>7} | {:>10} | {:>10} | {:>6.4}",
-                n, chg, mod_bytes.len(), rd_sz, ratio);
-        }
-    }
-
-    println!("\n=== RunDelta: Speed (10k bodies) ===");
-    println!("{:>10} | {:>10} | {:>10} | {:>10}",
-        "method", "changed", "encode_us", "total_us");
-
-    let base = build_snapshot(10_000);
+    let base = build_snapshot(n);
     let base_bytes = postcard::to_allocvec(&base).unwrap();
+    let mut results = Vec::new();
 
-    for &chg in &[0, 1, 10, 100] {
-        let changed: Vec<usize> = (0..chg.min(10_000)).collect();
+    for &chg in &[0, 1, 10, 100, 1000] {
+        let changed: Vec<usize> = (0..chg.min(n)).map(|i| i as usize).collect();
         let mut modified = base.clone();
         mutate_translation(&mut modified, &changed);
         let mod_bytes = postcard::to_allocvec(&modified).unwrap();
 
-        let s = Instant::now();
-        let rd = RunDelta::diff_bytes(&base_bytes, &mod_bytes);
-        let enc = s.elapsed().as_secs_f64() * 1_000_000.0;
-        let _out = rd.apply_bytes(&base_bytes);
+        // ── Encode costs ──
 
+        // Baseline: just ser(new)
         let s = Instant::now();
-        let _full = postcard::to_allocvec(&modified).unwrap();
-        let ser = s.elapsed().as_secs_f64() * 1_000_000.0;
+        let _base_enc = postcard::to_allocvec(&modified).unwrap();
+        let base_enc_us = s.elapsed().as_secs_f64() * 1_000_000.0;
 
-        println!("{:>10} | {:>10} | {:>10.1} | {:>10.1}",
-            "RunDelta", chg, enc, enc);
-        println!("{:>10} | {:>10} | {:>10.1} | {:>10.1}",
-            "full_serde", chg, ser, ser);
+        // Cold: ser(old) + ser(new) + diff
+        let s = Instant::now();
+        let old_b = postcard::to_allocvec(&base).unwrap();
+        let new_b = postcard::to_allocvec(&modified).unwrap();
+        let rd = RunDelta::diff_bytes(&old_b, &new_b);
+        let cold_enc_us = s.elapsed().as_secs_f64() * 1_000_000.0;
+
+        // Warm: ser(new) + diff (old bytes cached)
+        let s = Instant::now();
+        let new_b2 = postcard::to_allocvec(&modified).unwrap();
+        let _rd2 = RunDelta::diff_bytes(&base_bytes, &new_b2);
+        let warm_enc_us = s.elapsed().as_secs_f64() * 1_000_000.0;
+
+        // ── Decode costs ──
+
+        // Baseline: just deser(bytes)
+        let s = Instant::now();
+        let _val: PhysicsSnapshot = postcard::from_bytes(&mod_bytes).unwrap();
+        let base_dec_us = s.elapsed().as_secs_f64() * 1_000_000.0;
+
+        // Delta: apply + deser
+        let s = Instant::now();
+        let restored = rd.apply_bytes(&base_bytes);
+        let _val2: PhysicsSnapshot = postcard::from_bytes(&restored).unwrap();
+        let delta_dec_us = s.elapsed().as_secs_f64() * 1_000_000.0;
+
+        results.push((chg, base_enc_us, cold_enc_us, warm_enc_us, base_dec_us, delta_dec_us, rd.serialized_size(), new_b.len()));
     }
+
+    // Table
+    println!("{:>7} | {:>10} {:>10} {:>10} | {:>10} {:>10} | {:>10} {:>8}",
+        "changed", "enc_base", "enc_cold", "enc_warm", "dec_base", "dec_delta",
+        "delta_B", "ratio");
+
+    for (chg, base_enc, cold_enc, warm_enc, base_dec, delta_dec, sz, full) in &results {
+        println!("{:>7} | {:>10.1} {:>10.1} {:>10.1} | {:>10.1} {:>10.1} | {:>10} {:>7.4}",
+            chg, base_enc, cold_enc, warm_enc, base_dec, delta_dec, sz, *sz as f64 / *full as f64);
+    }
+
+    // Summary
+    println!();
+    println!("=== Takeaways ===");
+    println!("Baseline encode+decode: {:.1} μs", results[0].1 + results[0].4);
+    println!("Warm delta encode+decode (10 changed): {:.1} μs", results[3].3 + results[3].5);
+    println!("Delta bandwidth (10 changed): {} bytes vs {} full ({:.4})",
+        results[3].6, results[3].7, results[3].6 as f64 / results[3].7 as f64);
 }
