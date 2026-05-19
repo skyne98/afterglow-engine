@@ -1,3 +1,65 @@
+//! Byte-level delta encoding for serde types, with a rolling history buffer.
+//!
+//! # Quick start
+//!
+//! ```
+//! # use delta::{DeltaPatch, DeltaHistory};
+//! # use serde::{Serialize, Deserialize};
+//! # #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+//! # struct Snapshot { tick: u32 }
+//! // ── DeltaPatch: diff two values ────────────────────────────────────────
+//! let a = Snapshot { tick: 0 };
+//! let b = Snapshot { tick: 42 };
+//!
+//! let patch = DeltaPatch::diff(&a, &b);        // compute (uses postcard internally)
+//! let restored: Snapshot = patch.apply(&a);    // reconstruct
+//! assert_eq!(restored.tick, 42);
+//!
+//! // ── Raw byte path (fastest: no serde round-trip) ──────────────────────
+//! let bytes_a = postcard::to_allocvec(&a).unwrap();
+//! let bytes_b = postcard::to_allocvec(&b).unwrap();
+//! let patch = DeltaPatch::diff_bytes(&bytes_a, &bytes_b);
+//! let restored_bytes = patch.apply_bytes(&bytes_a);
+//! assert_eq!(restored_bytes, bytes_b);
+//!
+//! // ── Send over network ─────────────────────────────────────────────────
+//! let wire = postcard::to_allocvec(&patch).unwrap();   // ~10 bytes
+//! // ... send wire ...
+//! let received: DeltaPatch = postcard::from_bytes(&wire).unwrap();
+//! let decoded: Snapshot = received.apply(&a);
+//!
+//! // ── Rolling history buffer with undo/redo ──────────────────────────────
+//! let mut hist: DeltaHistory<Snapshot> = DeltaHistory::new(240, 60);
+//! hist.init(&a);
+//! hist.push(&b);                           // auto-diffs against previous
+//! assert_eq!(hist.at(0).tick, 0);          // oldest
+//! assert_eq!(hist.at(-1).tick, 42);        // newest
+//!
+//! let rewind = hist.undo(1).unwrap();      // go back 1 frame
+//! assert_eq!(rewind.tick, 0);
+//!
+//! let forward = hist.redo(1).unwrap();     // go forward
+//! assert_eq!(forward.tick, 42);
+//!
+//! // ── Collapse a range into one patch ───────────────────────────────────
+//! let big_patch = hist.combined_patch(0, -1);  // one patch covering all history
+//! // ... useful for sending a "catch up" delta to a late joiner
+//! ```
+//!
+//! # Real usage: deterministic physics rollback
+//!
+//! ```ignore
+//! // Each tick: snapshot physics state → diff → store in ring buffer
+//! let prev_bytes = postcard::to_allocvec(&prev_state).unwrap();
+//! let curr_bytes = postcard::to_allocvec(&curr_state).unwrap();
+//! let patch = DeltaPatch::diff_bytes(&prev_bytes, &curr_bytes);
+//! history.push(&curr_state, &prev_bytes);  // or use DeltaHistory::push
+//!
+//! // On rollback (e.g. frame lag, late join, prediction correction):
+//! let restored: GameState = history.at(target_frame);
+//! // Write GameState back into ECS components, then resim
+//! ```
+
 use serde::{Deserialize, Serialize};
 
 /// A single contiguous run of changed bytes.
