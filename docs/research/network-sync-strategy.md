@@ -8,9 +8,9 @@ person feel and avoiding one-size-fits-all smoothing.
 
 | Strategy | Entity class | Authority | Client presentation | Current status |
 |---|---|---|---|---|
-| Owned predicted avatar | Locally controlled player bodies | Server validates authoritative body state | Local fixed controller predicts; server snapshots acknowledge commands and correct large divergence | Implemented for the FPS demo |
-| Remote avatar snapshot | Debug mirrors and non-critical one-off state | Server | Direct replicated transform mirroring | Available as a fallback; FPS avatars now use buffered interpolation |
-| Buffered interpolation | Replicated physics props, projectiles, breakables, remote avatars that need smooth motion | Server/master | Render samples from a delayed snapshot buffer | Implemented as a generic transform buffer and used by FPS remote avatars |
+| Owned predicted avatar | Locally controlled player bodies | Server validates authoritative body state | Local fixed controller predicts; server snapshots acknowledge commands and correct large divergence | Strategy documented; needs a non-demo implementation |
+| Remote avatar snapshot | Debug mirrors and non-critical one-off state | Server | Direct replicated transform mirroring | Available as a fallback |
+| Buffered interpolation | Replicated physics props, projectiles, breakables, remote avatars that need smooth motion | Server/master | Render samples from a delayed snapshot buffer | Implemented as a generic transform buffer |
 | Chunk interest filter | Replication routing by chunk/area | Server | Peers receive entities in interested chunks | Implemented as `ChunkInterestPeer` + `PeerChunkInterest`; Lightyear target consumption is a later routing slice |
 | Rewind tracked gameplay | Combat truth: health, shields, inventories, projectiles, hit facts | Server rewind domain | Client receives correction facts after replay | History capture and mock RPG correction path implemented; lifecycle/correction publication still expanding |
 | Local only | Cameras, UI, debug helpers, non-network presentation children | Local world | Not replicated | Implemented by absence of network markers |
@@ -29,11 +29,9 @@ person feel and avoiding one-size-fits-all smoothing.
 
 | Entity/data | Strategy | Notes |
 |---|---|---|
-| `FpsDemoPlayer` body | Owned predicted avatar | Local fixed controller remains the prediction path. `FpsDemoPredictionBuffer` stores unacknowledged `FpsDemoInputCommand`s. `FpsDemoPlayerState::authoritative_tick` acknowledges inputs. Corrections apply only when replayed server state is more than 25 cm from the local body. |
+| `FpsDemoPlayer` body | Local only | Local fixed controller remains the only movement path. The demo no longer attaches replicated avatar state, prediction buffers, input command messages, or network correction snapshots. |
 | `FirstPersonCameraRig` | Local only | Render-rate look, eye-height smoothing, bob, FOV, and overstep presentation read the local motor/body and never materialize network avatars. |
-| `FpsDemoRemoteAvatar` | Buffered interpolation | `network_visuals` stores replicated `FpsDemoPlayerState` samples in `NetworkTransformInterpolationBuffer` and renders delayed transforms for non-local avatars. |
 | `PhysicsKinematicRemote` objects | Buffered interpolation | Fixed interaction ticks write authoritative transform samples into `NetworkTransformInterpolationBuffer` for server/master-driven objects. |
-| Native client-owned avatar snapshot | Owned correction snapshot | Native servers replicate the client-owned avatar back to that owner for correction, while visual sync shields it from becoming a duplicate avatar. |
 | Mock RPG combat entities | Rewind tracked gameplay | The mock harness drives late shield/death/pickup/inventory correction through Lightyear messages and server rewind history. |
 
 ## Buffered Interpolation Design
@@ -56,15 +54,15 @@ Covered regression envelope:
 - missing samples hold or interpolate over gaps deterministically
 - stale/duplicate samples do not reorder the ring incorrectly
 - teleport threshold clears the buffer and resumes from the new sample
-- FPS remote avatar scene mirrors carry interpolation buffers instead of direct-only transforms
+- transform interpolation buffers cover generic remote presentation; the FPS demo no longer owns remote avatar mirrors
 
 ## Lightyear Mapping
 
 Afterglow should keep using Lightyear for connection, channels, replication,
 prediction metadata, and interpolation hooks where they fit. The current FPS demo
-uses a small custom prediction buffer because it is also a controller regression
-harness; general-purpose entities should prefer Lightyear prediction or
-interpolation components once their strategy assignment is explicit.
+is now local-only because it is a controller regression harness; general-purpose
+entities should prefer Lightyear prediction or interpolation components once
+their strategy assignment is explicit.
 
 `Replicate`/registered components move state. `StableEntityId` identifies the
 entity. Strategy-specific Afterglow systems decide whether received state is

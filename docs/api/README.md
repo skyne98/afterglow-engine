@@ -52,7 +52,6 @@ chunk-interest adapter instead of reviving the old per-entity interest map.
 | `AfterglowWorldPlugin` | Cell manifest loading and chunk lifecycle |
 | `AfterglowEnginePlugin` | Runtime composition plus perf HUD, tracing, and metrics |
 | `demo::AfterglowDemoPlugin` | Optional demo content only |
-| `demos::fps_controller::FpsDemoNetworkPlugin` | FPS demo local, remote-client, and host-server network launch state plus console request consumer |
 
 ## Detailed API Notes
 
@@ -86,7 +85,6 @@ chunk-interest adapter instead of reviving the old per-entity interest map.
 | `ChunkInterestPeer` / `PeerChunkInterest` | `network::interest` | Per-peer chunk/area interest fanout for replication routing |
 | `NetworkTransformInterpolationBuffer` | `network` | Bounded delayed transform interpolation for remote avatars and replicated physics presentation |
 | `PhysicsBreakable` / `PhysicsGrabbedState` / `PhysicsGrabSpringConfig` | `physics` | Server/master-authoritative physics interaction state for impact/break and damped grab/link/release flows |
-| `FpsDemoNetworkStatus` | `demos::fps_controller` | FPS demo connection mode, local server state, Lightyear link state, replicated avatar counts, and scene mirror status |
 
 ## Target Schedules
 

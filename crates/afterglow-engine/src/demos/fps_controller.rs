@@ -15,16 +15,10 @@ use crate::{
     physics::{PhysicsBody, PhysicsCollider},
 };
 
-mod network;
 mod playground;
 #[cfg(test)]
 use playground::FpsDemoPlaygroundPiece;
 use playground::{spawn_crouch_playground, spawn_slopes, spawn_stairs};
-
-pub use network::{
-    FpsDemoConnectionState, FpsDemoLaunchMode, FpsDemoNetworkConfig, FpsDemoNetworkPlugin,
-    FpsDemoNetworkStatus,
-};
 
 pub struct FpsControllerDemoPlugin;
 
@@ -62,7 +56,6 @@ struct LastCameraFrame {
 
 impl Plugin for FpsControllerDemoPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(FpsDemoNetworkPlugin);
         app.add_systems(
             Startup,
             (enable_controller_trace, spawn_scene, capture_cursor),
@@ -153,7 +146,6 @@ fn spawn_scene(
     let player = commands
         .spawn((
             FpsDemoPlayer,
-            network::fps_demo_player_network_components(player_transform.translation),
             FirstPersonController {
                 config: config.clone(),
             },

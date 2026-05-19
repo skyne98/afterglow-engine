@@ -17,11 +17,9 @@ matters.
 - [x] Add a gameplay effect override stack with smooth timer-based blend-in/out
       for speed, gravity, look sensitivity, jump, stun/root/slow/haste, and
       combat-specific modifiers.
-- [x] Move FPS demo authoritative input integration onto shared deterministic
-      controller movement state instead of the current simple replicated-state
-      accumulator.
-- [x] Add owned-player prediction and server correction for FPS movement while
-      preserving render-rate local look/camera feel.
+- [x] Keep the FPS demo as a local controller playground; multiplayer work now
+      belongs in reusable Lightyear systems and the mock RPG harness instead of
+      demo-specific networking code.
 - [x] Formalize per-entity network sync strategy: physics-driven avatars,
       visual-rate camera/presentation smoothing, and buffered interpolation for
       arbitrary physics objects.
@@ -94,7 +92,8 @@ maintaining a parallel transport/session/replication/prediction path.
 - [x] Replace generic string-based `PlayerCommand` input with a Leafwing `AfterglowAction` enum and entity-scoped `ActionState`
 - [x] Add `AfterglowLightyearPlugin` boundary for client/server Lightyear setup and tick duration; concrete link entities and protocol registration remain follow-up work
 - [x] Use Lightyear built-in transports first; custom Iroh/Steam transports were deleted from phase one
-- [x] Port one local/host-server FPS scene slice to Lightyear client/server entities
+- [x] Remove FPS demo-specific multiplayer code after the experiment; keep the
+      demo focused on local first-person controller regression coverage
 - [ ] Register core replicated components/messages through Lightyear instead of `#[derive(Replicate)]` and custom snapshot/delta code
 - [ ] Use Lightyear prediction for owned player entities and Lightyear interpolation for remote entities
 - [x] Implement `ServerRewindPlugin` typed component registration and fixed-post-update history capture
@@ -102,16 +101,14 @@ maintaining a parallel transport/session/replication/prediction path.
 - [x] Port mock RPG late shield/death/corpse/loot/pickup/inventory correction to the current `AfterglowNetworkPlugin` + server rewind boundary
 - [x] Drive mock RPG late shield/death/pickup/inventory correction through real Lightyear client/server Crossbeam link entities and message registration
 - [x] Prove mock RPG Lightyear Crossbeam replication and prediction/confirmation state across the late shield/death/pickup/inventory correction
-- [x] Make the FPS controller demo always networked: default launch starts a local Lightyear server/client loop; `--connect` starts a native UDP/netcode client for a supplied server address; `--host` binds a native UDP/netcode server
-- [ ] Split FPS demo setup into shared scene authoring, authoritative server simulation, and client presentation/prediction so there is no direct single-world gameplay path outside focused tests
+- [x] Keep the FPS controller demo local-only; remove its local Lightyear runner, native `--connect` client launch, and native `--host` server launch
 - [ ] Add reusable Lightyear local-server runner for demos/tests: headless server app, Crossbeam or localhost transport setup, clean shutdown, and deterministic fixed-tick stepping
-- [x] Replicate FPS demo player identity/state through Lightyear first (`StableEntityId`, transform/controller state)
-- [x] Add owned-player prediction and server correction for FPS controller movement
+- [ ] Add reusable replicated player identity/state, owned prediction, and correction outside the FPS demo
 - [x] Add a testable in-engine development console core backed by `clap` subcommands, command history/scrollback resources, typed network requests, cvars, and unit-test execution helpers
 - [x] Implement console tab autocomplete core: command/subcommand completion, cvar names and typed values, network endpoints, option names, descriptions, deterministic ordering, and completion tests for partial tokens/trailing spaces/unknown commands
 - [x] Add Source-style console overlay UI on top of the existing console core: backtick toggle, text entry, command history navigation, scrollback, tab completion selection, and autocomplete descriptions
-- [x] Add FPS demo console request consumer and a Lightyear Crossbeam local multiplayer loop: visible player inputs cross client/server, authoritative avatar state replicates back, and non-local avatars mirror into the scene
-- [ ] Finish FPS console networking beyond the local Crossbeam multiplayer runner: console bind-address server start/stop/status semantics, live network stats, and latency simulation applied to real links
+- [x] Remove the FPS demo console request consumer; console networking remains covered by the mock RPG harness
+- [ ] Finish shared console networking beyond the Crossbeam harness: server start/stop/status semantics, live network stats, and latency simulation applied to real links
 - [ ] Drive the full mock RPG scenario suite through native Lightyear UDP/netcode client/server sockets
 - [ ] Rewrite security, projectile, smoothing, stress, and interaction scenarios against Lightyear clients/server
 - [x] Delete old custom network modules, old input module, old `afterglow-engine-macros`, old networking benches, and stale docs

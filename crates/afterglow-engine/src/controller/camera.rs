@@ -6,8 +6,7 @@ use super::{
     body::local_speeds_from_velocity,
     camera_motion::{
         advance_hpl2_bob_phase_to_rest, hpl2_bob_reached_rest, hpl2_bob_step_crossed,
-        hpl2_head_bob, hpl2_landing_bounce, move_scalar_toward_slowdown, move_vec2_toward, smooth,
-        smooth_vec3,
+        hpl2_landing_bounce, move_scalar_toward_slowdown, move_vec2_toward, smooth, smooth_vec3,
     },
 };
 

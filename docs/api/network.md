@@ -66,9 +66,9 @@ for the taxonomy and assignment rules.
 
 | Strategy | Purpose | Current API surface |
 |---|---|---|
-| Owned predicted avatar | Locally controlled player body predicts immediately through the collision-aware controller and corrects by replaying unacknowledged commands through the same collision-aware path on server snapshots. | FPS demo `FpsMovementHistory`, `FpsPendingReplay`, `ReplayCommand`, `FpsDemoPredictionBuffer`, `FpsDemoInputCommand`, `FpsDemoPlayerState::authoritative_tick`, and owned snapshot handling. |
+| Owned predicted avatar | Locally controlled player body predicts immediately through the collision-aware controller and corrects by replaying unacknowledged commands through the same collision-aware path on server snapshots. | Strategy documented; no FPS demo implementation remains. |
 | Remote avatar snapshot | Non-local avatar mirrors latest replicated state directly. | Available as a simple fallback for non-critical debug mirrors. |
-| Buffered interpolation | Remote physics/presentation objects render from delayed snapshot buffers. | `NetworkTransformSample` and `NetworkTransformInterpolationBuffer`; FPS remote avatars use the buffer for delayed transform presentation. |
+| Buffered interpolation | Remote physics/presentation objects render from delayed snapshot buffers. | `NetworkTransformSample` and `NetworkTransformInterpolationBuffer`. |
 | Kinematic remote observer | Server/master-driven physics object writes authoritative transform samples for remote presentation. | `PhysicsKinematicRemote` plus `NetworkTransformInterpolationBuffer`. |
 | Chunk interest filter | Replication routing by chunk/area before large-player fanout. | `ChunkInterestPeer` and `PeerChunkInterest`, backed by `ChunkMembership` and `StableEntityRegistry`. |
 | Rewind tracked gameplay | Server captures authoritative component history for late-input replay/correction. | `RewindedEntity`, `RewindDomainId`, `RewindHistoryStore`, registered rewind components. |
@@ -191,63 +191,7 @@ neighborhood producer later without changing consumers of `PeerChunkInterest`.
 
 ## FPS Demo Networking
 
-The FPS controller demo installs `FpsDemoNetworkPlugin` through
-`FpsControllerDemoPlugin`. The demo defaults to `FpsDemoNetworkConfig::local()`;
-native `agx --name fps-controller --connect <addr>` uses
-`FpsDemoNetworkConfig::remote(addr)`, and
-`agx --name fps-controller --host <addr>` uses
-`FpsDemoNetworkConfig::server(addr)`.
-
-Current FPS demo network API:
-
-| Item | Purpose |
-|---|---|
-| `FpsDemoNetworkConfig` | Launch intent: local in-process server/client, remote client address, or native UDP/netcode server bind address. |
-| `FpsDemoNetworkStatus` | Testable status for connection mode, local server running state, Lightyear links, replicated avatar state, latency, and tick count. |
-| `FpsDemoNetworkPlugin` | Consumes `ConsoleNetworkRequest`, starts/stops the FPS local Lightyear runner, spawns native UDP/netcode client/server links when Lightyear runtime plugins are installed, syncs visible player state into the network runner, and mirrors replicated remote avatars into the scene. |
-| `FpsDemoPlayerState` | Replicated FPS avatar state paired with `StableEntityId`: millimeter position, milliradian yaw/pitch, and the authoritative input tick that produced the snapshot. |
-| `FpsDemoRemoteAvatar` | Visible scene-side avatar entity created from replicated non-local FPS player state. |
-| `NetworkTransformSample` | One ticked replicated transform sample for interpolation buffers. |
-| `NetworkTransformInterpolationBuffer` | Bounded delayed transform interpolation buffer for remote avatars and arbitrary replicated physics objects. |
-
-With the `multiplayer` feature, local FPS launch creates an actual Lightyear
-Crossbeam server with two local clients. The visible FPS player sends raw-input
-`FpsDemoInputCommand` messages over a Lightyear client-to-server channel; those
-commands no longer carry a client-authored state snapshot. The client keeps a
-small pending-command prediction buffer keyed by command tick. The server keeps
-its own `FirstPersonMotorState`, integrates command samples through the shared
-first-person controller motor math, writes the resulting `FpsDemoPlayerState`
-avatar component with the producing authoritative tick, and Lightyear replicates
-that avatar state back to clients. The controlled local player predicts via
-the normal fixed collision-aware controller path. When an owned authoritative
-snapshot arrives, the FPS network layer drops acknowledged commands, replays
-unacknowledged commands from the input buffer (collision-free), and applies a
-correction: direct snap if error > 2m, exponential smoothing (10% per frame) if
-0.25m < error ≤ 2m, and no correction if error ≤ 0.25m. This matches the
-standard server-authoritative model used by Source, Quake, and Overwatch.
-Render-rate look and camera presentation remain local and are not driven by
-network avatar materialization.
-Non-local FPS avatars store received snapshots in
-`NetworkTransformInterpolationBuffer` and render delayed interpolated transforms
-instead of snapping directly to every replicated tick. The native remote path
-creates a Lightyear `NetcodeClient` over `UdpIo` and sends the same raw-input
-`FpsDemoInputCommand` messages once connected. For presentation
-correctness, the native server keys each integrated authoritative avatar state by
-the authenticated netcode client ID in the `StableEntityId` native-player
-namespace instead of trusting a client-supplied player ID or transform. The host
-process does not put Lightyear replication on the actual physics-controlled host
-player; it mirrors that player into a separate non-physics host avatar proxy with
-a dedicated native-host stable ID namespace and replicates the proxy instead.
-Native server avatars are targeted through explicit connected Lightyear link
-entities: the host proxy goes to every connected client, and client-owned avatars
-are also returned to their owner as correction snapshots. The demo mirrors
-replicated non-local avatar state into the Bevy scene as buffered
-`FpsDemoRemoteAvatar` entities with simple renderable meshes when render assets
-are present; native clients shield the owned correction snapshot and any
-replicated state whose `StableEntityId` is already owned by a local controlled
-`FpsDemoPlayer`, so local presentation stays controller-owned instead of spawning
-duplicate avatars. Full server-side collision/physics authority remains a later
-slice.
-
-Windowed native hosts use the engine run helper's `WinitSettings::continuous()`
-configuration, so the server keeps ticking when its window loses focus.
+The FPS controller demo is local-only. It no longer exposes
+`FpsDemoNetworkPlugin`, FPS-specific replicated avatar state, remote avatar
+visualization, local Lightyear runners, or native `--connect`/`--host` launch
+modes.

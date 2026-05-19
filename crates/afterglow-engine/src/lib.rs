@@ -21,7 +21,7 @@ use controller::AfterglowFirstPersonControllerPlugin;
 use core::{AfterglowCorePlugin, schedule::AfterglowSet};
 use demo::AfterglowDemoPlugin;
 use input::AfterglowInputPlugin;
-use network::{AfterglowLightyearConfig, AfterglowNetworkPlugin, LightyearRole};
+use network::AfterglowNetworkPlugin;
 use perf_hud::{
     AccumMap, PerfHudPlugin, collect_frame, record_update_end, record_update_start, setup_tracing,
     sync_shared_metrics, trace_collector::reset_trace_data, update_hud,
@@ -96,61 +96,21 @@ pub fn run_default_demo() -> bevy::app::AppExit {
 }
 
 pub fn run_fps_controller_demo() -> bevy::app::AppExit {
-    run_fps_controller_demo_with_network(demos::fps_controller::FpsDemoNetworkConfig::local())
-}
-
-pub fn run_fps_controller_demo_remote(remote_addr: impl Into<String>) -> bevy::app::AppExit {
-    run_fps_controller_demo_with_network(demos::fps_controller::FpsDemoNetworkConfig::remote(
-        remote_addr,
-    ))
-}
-
-pub fn run_fps_controller_demo_server(host_addr: impl Into<String>) -> bevy::app::AppExit {
-    run_fps_controller_demo_with_network(demos::fps_controller::FpsDemoNetworkConfig::server(
-        host_addr,
-    ))
-}
-
-pub fn run_fps_controller_demo_with_network(
-    network_config: demos::fps_controller::FpsDemoNetworkConfig,
-) -> bevy::app::AppExit {
     let trace_data = setup_tracing();
     let trace_accum = trace_data.accum.clone();
-    let lightyear_config = fps_demo_lightyear_config(&network_config);
 
     let mut app = App::new();
     keep_windowed_runtime_unthrottled_when_unfocused(&mut app);
-    app.insert_resource(lightyear_config)
-        .insert_resource(network_config)
-        .insert_resource(trace_data)
-        .add_plugins((
-            default_plugins(),
-            AfterglowEnginePlugin { trace_accum },
-            demos::fps_controller::FpsControllerDemoPlugin,
-        ));
+    app.insert_resource(trace_data).add_plugins((
+        default_plugins(),
+        AfterglowEnginePlugin { trace_accum },
+        demos::fps_controller::FpsControllerDemoPlugin,
+    ));
     app.run()
 }
 
 fn keep_windowed_runtime_unthrottled_when_unfocused(app: &mut App) {
     app.insert_resource(WinitSettings::continuous());
-}
-
-fn fps_demo_lightyear_config(
-    network_config: &demos::fps_controller::FpsDemoNetworkConfig,
-) -> AfterglowLightyearConfig {
-    match &network_config.launch {
-        demos::fps_controller::FpsDemoLaunchMode::Local => default(),
-        demos::fps_controller::FpsDemoLaunchMode::Remote(addr) => AfterglowLightyearConfig {
-            role: LightyearRole::Client,
-            remote_addr: addr.clone(),
-            ..default()
-        },
-        demos::fps_controller::FpsDemoLaunchMode::Server(addr) => AfterglowLightyearConfig {
-            role: LightyearRole::Server,
-            server_addr: addr.clone(),
-            ..default()
-        },
-    }
 }
 
 fn default_plugins() -> PluginGroupBuilder {

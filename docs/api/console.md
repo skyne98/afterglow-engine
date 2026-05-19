@@ -102,16 +102,7 @@ connected client, advances the server, and reads live packet counters through
 
 ## Remaining Wiring
 
-The FPS controller demo now consumes `ConsoleNetworkRequest`: `connect local`
-starts/keeps a local Lightyear Crossbeam server with local clients, `disconnect`
-and `server stop` tear it down, `connect <addr>` records remote Lightyear client
-intent and spawns a native UDP/netcode client link when the Lightyear runtime is
-installed, and `net latency --ms` updates the Lightyear link-conditioner config.
-The local path sends visible FPS input commands through Lightyear, integrates
-them on the authoritative server, replicates avatar state back, and mirrors
-non-local avatars into the scene. The controlled local player is not snapped to
-stale round-trip state; it remains controller-owned until owned prediction and
-correction are implemented. Native FPS host launch is exposed by
-`agx --name fps-controller --host <addr>`, while native client launch uses
-`agx --name fps-controller --connect <addr>`; live socket stats and console
-server bind-address control remain follow-up work.
+The FPS controller demo no longer consumes `ConsoleNetworkRequest` and no longer
+offers `--connect` or `--host` launch modes. Console networking remains exercised
+by `crates/mock-rpg-network-tests`; native socket stats and server bind-address
+control remain follow-up work for the shared network layer.
