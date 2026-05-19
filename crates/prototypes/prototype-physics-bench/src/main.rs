@@ -4,15 +4,31 @@ use bevy::prelude::*;
 use core::time::Duration;
 
 fn main() {
-    let steps: u32 = std::env::args()
+    let total: u32 = std::env::args()
         .nth(1)
         .and_then(|s| s.parse().ok())
-        .unwrap_or(500);
-    let total: u32 = std::env::args()
+        .unwrap_or(10_000);
+    let steps: u32 = std::env::args()
         .nth(2)
         .and_then(|s| s.parse().ok())
-        .unwrap_or(10_000);
+        .unwrap_or(300);
 
+    // Run simulation twice from seed
+    let hash_a = simulate(total, steps);
+    let hash_b = simulate(total, steps);
+
+    eprintln!("run 1 hash: {hash_a:016x}");
+    eprintln!("run 2 hash: {hash_b:016x}");
+
+    if hash_a == hash_b {
+        eprintln!("DETERMINISM: CONFIRMED — bit-identical across two runs");
+    } else {
+        eprintln!("DETERMINISM: FAILED — hashes differ");
+        std::process::exit(1);
+    }
+}
+
+fn simulate(total: u32, steps: u32) -> u64 {
     let mut app = App::new();
 
     app.add_plugins(MinimalPlugins.set(ScheduleRunnerPlugin::run_once()));
@@ -28,8 +44,6 @@ fn main() {
     let _ = app.world_mut().run_schedule(FixedUpdate);
 
     let dt = Duration::from_secs_f64(1.0 / 60.0);
-    let start = std::time::Instant::now();
-
     for _ in 0..steps {
         app.world_mut()
             .resource_mut::<Time<Physics>>()
@@ -37,22 +51,24 @@ fn main() {
         let _ = app.world_mut().run_schedule(FixedUpdate);
     }
 
-    let elapsed = start.elapsed();
-    let avg = elapsed.as_secs_f64() / steps as f64;
-    let hz = 1.0 / avg;
-
-    eprintln!(
-        "{total} bodies + joints | {steps} steps | {:.3}s total | {:.6}s/step | {hz:.1} Hz",
-        elapsed.as_secs_f64(),
-        avg,
-    );
+    // Hash final transforms of all dynamic bodies via raw bytes
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let world = app.world_mut();
+    let mut query = world.query::<(&RigidBody, &Transform)>();
+    for (_, tf) in query.iter(world) {
+        let t = tf.translation;
+        let r = tf.rotation;
+        (t.x.to_bits(), t.y.to_bits(), t.z.to_bits()).hash(&mut hasher);
+        (r.x.to_bits(), r.y.to_bits(), r.z.to_bits(), r.w.to_bits()).hash(&mut hasher);
+    }
+    hasher.finish()
 }
 
 #[derive(Resource)]
 struct BodyCount(u32);
 
 fn spawn_scene(mut commands: Commands, count: Res<BodyCount>) {
-    // Ground
     commands.spawn((
         Collider::cuboid(500.0, 1.0, 500.0),
         Transform::from_xyz(0.0, -0.5, 0.0),
@@ -62,10 +78,8 @@ fn spawn_scene(mut commands: Commands, count: Res<BodyCount>) {
     let chain_count = (total / 10).max(1).min(2000);
     let chains = chain_count;
     let links = 10;
-    let jointed = chains * links;
-    let extra = total.saturating_sub(jointed);
+    let extra = total.saturating_sub(chains * links);
 
-    // ── Jointed structures: chains of 10 boxes connected by SphericalJoints ──
     for ci in 0..chains {
         let base_x = (ci as f32 - chains as f32 / 2.0) * 3.0;
         let mut prev: Option<Entity> = None;
@@ -87,7 +101,6 @@ fn spawn_scene(mut commands: Commands, count: Res<BodyCount>) {
         }
     }
 
-    // ── Remaining as individual dynamic boxes ──
     if extra > 0 {
         let grid = (extra as f32).sqrt().ceil() as i32;
         let spacing = 2.5;

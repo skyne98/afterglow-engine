@@ -37,8 +37,14 @@
 - Without `enhanced-determinism` + `simd` feature enabled, performance would be higher (Parry SIMD via `wide` crate: 4-wide f32 SIMD).
 - `target-cpu=native` had negligible impact (~1%) because glam already auto-detects SSE2+ and Parry is scalar anyway.
 
+## Determinism Verification
+
+The benchmark self-verifies determinism by running the full simulation twice and comparing a hash of all final `Transform` positions and rotations (raw IEEE-754 bit patterns via `f32::to_bits()`). The hash uses `DefaultHasher` (SipHash-2-4).
+
+**Result:** Bit-identical across repeated runs at 10k and 100k bodies, 500 steps each. Confirmed.
+
 ## Reproduce
 
 ```sh
-RUSTFLAGS="-C target-cpu=native" cargo run --release --package prototype-physics-bench <steps> <body_count>
+RUSTFLAGS="-C target-cpu=native" cargo run --release --package prototype-physics-bench <body_count> <steps>
 ```
