@@ -195,6 +195,7 @@ dependencies = [
  "anyhow",
  "avian3d 0.6.1",
  "bevy",
+ "clap",
  "leafwing-input-manager",
  "lightyear",
  "lightyear_inputs_leafwing",
@@ -647,6 +648,7 @@ dependencies = [
  "disqualified",
  "glam_matrix_extras",
  "itertools 0.14.0",
+ "libm",
  "obvhs",
  "parry3d",
  "parry3d-f64",
@@ -3578,6 +3580,7 @@ checksum = "c4664468a60479272b880a8bfc00ad2915229b93d2b2d585556fb33f9ba80e72"
 dependencies = [
  "bevy_reflect",
  "glam",
+ "libm",
 ]
 
 [[package]]
@@ -5890,6 +5893,7 @@ dependencies = [
  "foldhash 0.2.0",
  "glamx",
  "hashbrown 0.16.1",
+ "indexmap",
  "log",
  "num-derive",
  "num-traits",
@@ -5919,6 +5923,7 @@ dependencies = [
  "foldhash 0.2.0",
  "glamx",
  "hashbrown 0.16.1",
+ "indexmap",
  "log",
  "num-derive",
  "num-traits",
@@ -6225,6 +6230,14 @@ checksum = "4488a4a36b9a4ba6b9334a32a39971f77c1436ec82c38707bce707699cc3bbcb"
 dependencies = [
  "quote",
  "syn",
+]
+
+[[package]]
+name = "prototype-physics-bench"
+version = "0.1.0"
+dependencies = [
+ "avian3d 0.6.1",
+ "bevy",
 ]
 
 [[package]]
@@ -6971,6 +6984,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c99284beb21666094ba2b75bbceda012e610f5479dfcc2d6e2426f53197ffd95"
 dependencies = [
  "approx",
+ "libm",
  "num-complex",
  "num-traits",
  "paste",

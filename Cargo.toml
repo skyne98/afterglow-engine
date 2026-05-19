@@ -4,6 +4,7 @@ members = [
     "crates/afterglow-engine",
     "crates/agx",
     "crates/mock-rpg-network-tests",
+    "crates/prototypes/prototype-physics-bench",
 ]
 
 [workspace.dependencies]
