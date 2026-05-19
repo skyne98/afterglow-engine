@@ -246,7 +246,9 @@ impl<T: serde::Serialize + serde::de::DeserializeOwned + Clone> DeltaHistory<T> 
 
     /// Record a new state. Always stored as a full snapshot at the end.
     /// The previous entry is immediately converted to a delta.
-    /// Index 0 is always kept as a full snapshot anchor.
+    /// Index 0 is always kept as a full snapshot anchor — when the buffer
+    /// wraps, the evicted Full anchor is used to promote the next entry
+    /// from Delta to Full.
     pub fn push(&mut self, value: &T) {
         let bytes = postcard::to_allocvec(value).unwrap();
 
@@ -277,15 +279,22 @@ impl<T: serde::Serialize + serde::de::DeserializeOwned + Clone> DeltaHistory<T> 
             }
         }
 
-        // Evict from index 1 when over capacity (keeps index 0 as permanent anchor)
+        // Evict oldest from index 0 when over capacity.
+        // The evicted Full's bytes are used to promote the new entry at index 0
+        // from Delta to Full by applying the delta to the old anchor.
         while self.entries.len() > self.capacity {
-            self.entries.remove(1);
+            let removed = self.entries.remove(0);
+            let old_anchor = match removed.kind {
+                HistoryKind::Full(b) => b,
+                _ => unreachable!("index 0 should always be Full"),
+            };
             self.cursor = self.cursor.saturating_sub(1);
-            if self.cursor < 1 { self.cursor = 0; }
-            // Promote the new entry at index 1 to Full (anchor for the evicted range)
-            if self.entries.len() >= 2 {
-                let restored = self.restore_bytes_at(1);
-                self.entries[1].kind = HistoryKind::Full(restored);
+            // If the new entry at index 0 is a Delta, apply the old anchor to promote it to Full
+            if !self.entries.is_empty() {
+                if let HistoryKind::Delta(d) = &self.entries[0].kind {
+                    let new_bytes = d.apply_bytes(&old_anchor);
+                    self.entries[0].kind = HistoryKind::Full(new_bytes);
+                }
             }
         }
     }
