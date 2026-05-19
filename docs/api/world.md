@@ -41,3 +41,7 @@ system.
 Unload saves spawned/gameplay/sleeping chunks by default, skips saving partial
 `Loading` chunks, despawns all stable entities in the chunk, and returns to
 `Unloaded`.
+
+Chunk membership also feeds network interest. Entities with `ChunkMembership`
+are indexed by `StableEntityRegistry::chunk_entities`, and `PeerChunkInterest`
+uses that index to fan out chunk-visible entities for connected peers.

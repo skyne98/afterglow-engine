@@ -109,7 +109,7 @@ APIs can use SDR automatically for Steam users. Dedicated servers can also use
 SDR, but the more robust hosted-server/ticket flow needs game coordinator style
 backend work.
 
-Engine implication: for a first Steam backend, P2P/listen-server Steam sockets
+Engine implication: for a first Steam backend, P2P host-server Steam sockets
 are simpler than dedicated server SDR. Dedicated servers should be designed, but
 not implemented as the first milestone unless we also build the backend service
 that issues and validates server access.
@@ -374,7 +374,7 @@ Add Steam only after the Lightyear path is working:
    admission glue around Lightyear.
 4. Add manual gated Steam integration tests.
 5. Revisit dedicated server Steam Game Server API and SDR after the hosted or
-   listen-server path works.
+   host-server path works.
 
 ## References
 

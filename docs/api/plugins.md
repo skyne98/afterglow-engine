@@ -4,10 +4,10 @@
 
 | Item | Purpose |
 |---|---|
-| `AfterglowRuntimePlugins` | Demo-free runtime group: core, Leafwing input, Lightyear/rewind networking, physics, first-person controller, persistence, and world plugins. |
+| `AfterglowRuntimePlugins` | Demo-free runtime group: core, dev console overlay/core, Leafwing input, Lightyear/rewind networking, physics, first-person controller, persistence, and world plugins. |
 | `AfterglowEnginePlugin` | App-level engine plugin. Adds `AfterglowRuntimePlugins`, the perf HUD, trace collection, and metrics systems. |
 | `demo::AfterglowDemoPlugin` | Optional demo content plugin. Installs the built-in demo cell manifest/load request plus demo animation systems. |
-| `run()` | Native/wasm entrypoint. Adds Bevy defaults, `AfterglowEnginePlugin`, and `AfterglowDemoPlugin`. |
+| `run()` | Native/wasm entrypoint. Adds Bevy defaults, unthrottled window update settings, `AfterglowEnginePlugin`, and `AfterglowDemoPlugin`. |
 
 ## Design Rules
 
@@ -21,8 +21,9 @@
 ```text
 AfterglowRuntimePlugins
   AfterglowCorePlugin
-  AfterglowInputPlugin
+  DevConsolePlugin
   AfterglowNetworkPlugin
+  AfterglowInputPlugin
   AfterglowPhysicsPlugin
   AfterglowFirstPersonControllerPlugin
   AfterglowPersistencePlugin
@@ -34,13 +35,20 @@ AfterglowEnginePlugin
   metrics/trace update systems
 
 run()
+  WinitSettings::continuous()
   DefaultPlugins
   AfterglowEnginePlugin
   AfterglowDemoPlugin
 ```
 
-New networked gameplay should be written against Leafwing action state, Lightyear
-replication/prediction/interpolation, and the custom server rewind plugin.
+The native/wasm run helpers insert `WinitSettings::continuous()` before
+`DefaultPlugins`, so focused and unfocused windows both keep ticking. Windowed
+FPS hosts therefore do not drop into Bevy's default low-power unfocused mode when
+the server window loses focus.
+
+New networked gameplay should be written against Leafwing action state,
+Lightyear replication/prediction/interpolation, console-emitted network requests,
+chunk-interest fanout, and the custom server rewind plugin.
 
 ## Demo Plugin
 
@@ -49,3 +57,15 @@ replication/prediction/interpolation, and the custom server rewind plugin.
 and runs `rotate_cubes`/`update_light` in `AfterglowSet::DebugAndMetrics`.
 Those systems record perf data when `PerfData` exists, but still run without the
 perf HUD in small tests.
+
+## FPS Demo Plugin
+
+`FpsControllerDemoPlugin` installs `FpsDemoNetworkPlugin` before spawning the
+visual controller playground. The network plugin defaults to local FPS networking,
+consumes console network requests, and exposes `FpsDemoNetworkStatus` for tests
+and diagnostics. With the `multiplayer` feature, local launch uses a real
+Lightyear Crossbeam server with local clients: visible player input commands
+cross the client/server boundary, authoritative avatar state is replicated back,
+and non-local avatars are mirrored into the scene. `--connect` launch creates a
+native UDP/netcode Lightyear client, while `--host` launch binds a native
+UDP/netcode Lightyear server.

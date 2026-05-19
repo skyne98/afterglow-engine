@@ -5,7 +5,9 @@ use crate::{
     physics::{AfterglowPhysicsPlugin, PhysicsBody, PhysicsCollider},
 };
 use avian3d::prelude::{Collider, RigidBody};
+use bevy::time::TimeUpdateStrategy;
 use leafwing_input_manager::action_state::ActionState;
+use std::time::Duration;
 
 fn command(axes: &[(&str, f32)], actions: &[AfterglowAction]) -> ActionState<AfterglowAction> {
     test_input::command(axes, actions)
@@ -131,6 +133,11 @@ fn plugin_retries_uncrouch_after_leaving_low_ceiling_without_jump() {
         Collider::cuboid(2.0, 0.2, 2.0),
         Transform::from_xyz(0.0, 1.45, 0.0),
     ));
+    app.world_mut().spawn((
+        RigidBody::Static,
+        Collider::cuboid(8.0, 0.1, 8.0),
+        Transform::from_xyz(0.0, -0.05, 0.0),
+    ));
 
     app.update();
     test_input::clear_input(&mut app, player);
@@ -237,5 +244,7 @@ fn controller_app() -> App {
     ));
     app.finish();
     app.cleanup();
+    *app.world_mut().resource_mut::<TimeUpdateStrategy>() =
+        TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(1.0 / 60.0));
     app
 }

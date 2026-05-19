@@ -10,7 +10,7 @@ the same fixed-tick movement path.
 
 | Item | Description |
 |---|---|
-| `AfterglowFirstPersonControllerPlugin` | Registers controller reflection, initializes `FirstPersonControllerTrace`, and runs controller authoring plus movement in the fixed gameplay schedule. Included in `AfterglowRuntimePlugins`. |
+| `AfterglowFirstPersonControllerPlugin` | Registers controller reflection, initializes `FirstPersonControllerTrace`, authors default motor, impulse-buffer, and effect-stack components, runs collision-driving movement in the fixed gameplay schedule, and runs look/camera presentation in `Update`. Included in `AfterglowRuntimePlugins`. |
 
 ## Components
 
@@ -19,6 +19,10 @@ the same fixed-tick movement path.
 | `FirstPersonController` | Attach to the player body. Stores `FirstPersonControllerConfig`. |
 | `FirstPersonControllerConfig` | Tunable jump enablement, crouch mode, HPL2 local speed channels, acceleration/deacceleration, gravity, jump/coyote/buffer windows, look sensitivity, slope limit, HPL2 raycast stair climbing, HPL2 ground hysteresis, stance dimensions, and Avian depenetration knobs. |
 | `FirstPersonMotorState` | Runtime motor state: velocity, grounded flag, ground normal, stance, yaw/pitch, coyote/jump-buffer windows, jump input latch, ground-contact hysteresis, Amnesia jump-assist timer, stair timer, and climbing latch. |
+| `ReplayCommand` | Network replay override: when present, `drive_first_person_controllers` uses its `FirstPersonCommandState` directly instead of converting from `ActionState`. Used by the collision-aware correction replay to replay past input commands through the full fixed-step controller. |
+| `FirstPersonImpulseBuffer` | Frame-batched linear velocity impulse accumulator. Gameplay systems add knockback/explosion/spell/hit impulses in any order; the controller drains, clamps, applies, and clears the total during the next fixed movement tick. |
+| `FirstPersonEffectStack` | Timer-based stack of gameplay modifiers. Effects blend speed, gravity, look sensitivity, and jump multipliers into the controller config without special-case movement code. |
+| `FirstPersonEffect` | One timed controller modifier with remaining/elapsed fixed ticks, optional blend-in/out ticks, and speed/gravity/look/jump multipliers. Invalid multipliers are ignored; negative multipliers clamp to zero. |
 | `FirstPersonCameraRig` | Attach to a camera entity. Points at a controller body and applies first-person presentation effects without feeding back into collision or gameplay state. |
 | `FirstPersonCameraConfig` | Tunable eye heights, position/crouch smoothing, Amnesia/HPL2 walk/run/crouch bob amplitude plus min/max bob speed, landing bounce, FOV kick, impulse decay, and head-offset smoothing. |
 | `FirstPersonCameraState` | Runtime camera-only state: initialized flag, smoothed eye height/position, bob phase, bobbing flag, current bob amplitude, landing bounce, roll, FOV, grounded/stair smoothing latches, impulse offsets, smoothed head offset, and footstep count. |
@@ -74,6 +78,13 @@ Games can override bindings through Leafwing `InputMap`; the controller reads th
 action state, not raw devices or string action names. The FPS demo installs WASD,
 mouse look, gamepad sticks, Space, Shift, Ctrl, and mouse/action bindings as one
 example.
+
+Networked or scripted systems that already have an input sample can use
+`FirstPersonCommandState` plus `integrate_first_person_command_look` and
+`integrate_first_person_command` to drive the same deterministic motor math
+without constructing a Leafwing `ActionState`. Collision, depenetration, stairs,
+and ground probing still belong to the fixed controller systems that run in a
+world with physics queries.
 
 `crouch` is hold-to-crouch by default. Set
 `FirstPersonControllerConfig::toggle_crouch = true` for games that want a
@@ -154,6 +165,13 @@ The current motor implements:
 - Amnesia-style timed jump gravity relief; release does not cancel the assist
 - coyote time and jump buffering
 - crouch/sprint target-speed changes
+- frame-batched external velocity impulses: horizontal impulses are converted into
+  yaw-local forward/side speed channels before the fixed movement pass, vertical
+  impulses add to motor velocity, and the accumulator clears after one drain
+- timer-based gameplay effects: speed/root/haste multipliers affect max speeds
+  and acceleration, gravity multipliers affect fixed-step vertical integration,
+  jump multipliers affect takeoff speed, and look multipliers affect render-rate
+  local aim integration
 - Avian depenetration is used only as the HPL2-style pushback primitive; the
   controller no longer feeds horizontal movement, gravity, and stair climbing
   through one combined slide call
@@ -188,9 +206,21 @@ integration and `controller/camera_motion.rs` for the HPL2 bob formula.
 - child `FirstPersonHeadOffset` components layer interaction, damage, scripted,
   and horror offsets
 - child `FirstPersonCameraImpulse` components apply one-shot camera kicks
+- mouse/gamepad look is integrated during `Update` so local aim feels render-rate
+  responsive, while movement and collision remain fixed-timestep
+- camera target position applies fixed-time overstep prediction from the latest
+  controller velocity so walking presentation advances between 60 Hz physics
+  ticks on higher-refresh displays
 
 These are presentation effects only. Hit detection, networking, prediction, and
 physics keep using the controller body and replicated gameplay state.
+
+The FPS networking demo uses the same split: fixed controller movement remains
+the local prediction path, authoritative snapshots may correct the body when it
+diverges beyond the network threshold, and render-rate look/camera presentation
+continues from the controller motor instead of from replicated avatar entities.
+The per-entity rules are tracked in
+[`network-sync-strategy.md`](../research/network-sync-strategy.md).
 
 Moving-platform attachment, dynamic-body pushing, and full true-first-person
 body animation remain deferred behind regression tests. The current motor keeps

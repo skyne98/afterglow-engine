@@ -13,11 +13,31 @@ pub fn integrate_first_person_motor(
     state: &mut FirstPersonMotorState,
     dt: f32,
 ) {
+    integrate_first_person_look(action_state, config, state);
     let input = integrate_first_person_input(action_state, config, state, dt);
     write_horizontal_velocity_from_local_speeds(state);
     if !input.jumped {
         apply_first_person_gravity(config, state, dt);
     }
+}
+
+pub fn integrate_first_person_look(
+    action_state: Option<&ActionState<AfterglowAction>>,
+    config: &FirstPersonControllerConfig,
+    state: &mut FirstPersonMotorState,
+) {
+    let command = FirstPersonCommandState::from_action_state(action_state);
+    integrate_first_person_command_look(&command, config, state);
+}
+
+pub fn integrate_first_person_command_look(
+    command: &FirstPersonCommandState,
+    config: &FirstPersonControllerConfig,
+    state: &mut FirstPersonMotorState,
+) {
+    state.yaw -= command.look_axis.x * config.look_sensitivity.x;
+    state.pitch = (state.pitch - command.look_axis.y * config.look_sensitivity.y)
+        .clamp(config.min_pitch, config.max_pitch);
 }
 
 pub fn clamp_local_speeds_to_actual_stance(
@@ -90,10 +110,15 @@ pub fn integrate_first_person_input(
     dt: f32,
 ) -> FirstPersonInputStep {
     let command = FirstPersonCommandState::from_action_state(action_state);
-    state.yaw -= command.look_axis.x * config.look_sensitivity.x;
-    state.pitch = (state.pitch - command.look_axis.y * config.look_sensitivity.y)
-        .clamp(config.min_pitch, config.max_pitch);
+    integrate_first_person_command(&command, config, state, dt)
+}
 
+pub fn integrate_first_person_command(
+    command: &FirstPersonCommandState,
+    config: &FirstPersonControllerConfig,
+    state: &mut FirstPersonMotorState,
+    dt: f32,
+) -> FirstPersonInputStep {
     if config.toggle_crouch {
         if command.crouch_pressed {
             state.desired_stance = if state.desired_stance == ControllerStance::Crouching {
@@ -136,7 +161,10 @@ pub fn integrate_first_person_input(
         state.jump_buffer_ticks = 0;
         state.jump_hold_ticks = config.jump_hold_ticks;
     }
-    FirstPersonInputStep { command, jumped }
+    FirstPersonInputStep {
+        command: *command,
+        jumped,
+    }
 }
 
 fn update_local_move_speeds(
@@ -353,6 +381,9 @@ pub fn sync_local_speeds_from_velocity(state: &mut FirstPersonMotorState) {
     state.forward_speed = local_speed.x;
     state.side_speed = local_speed.y;
 }
+
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
+pub struct ReplayCommand(pub FirstPersonCommandState);
 
 pub fn local_speeds_from_velocity(state: &FirstPersonMotorState) -> Vec2 {
     let rotation = Quat::from_rotation_y(state.yaw);

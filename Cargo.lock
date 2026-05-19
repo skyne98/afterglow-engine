@@ -6308,6 +6308,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "prototype-delta-encoding"
+version = "0.1.0"
+dependencies = [
+ "postcard",
+ "serde",
+]
+
+[[package]]
 name = "prototype-physics-bench"
 version = "0.1.0"
 dependencies = [

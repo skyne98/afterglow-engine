@@ -1,3 +1,4 @@
+mod console;
 mod diff;
 pub mod harness;
 pub mod lightyear;
@@ -5,6 +6,7 @@ pub mod model;
 mod net;
 mod world;
 
+pub use console::ConsoleNetworkedRpg;
 pub use harness::NetworkedRpg;
 pub use lightyear::LightyearNetworkedRpg;
 pub use model::{

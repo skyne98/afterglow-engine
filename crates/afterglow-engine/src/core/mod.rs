@@ -1,7 +1,7 @@
 pub mod identity;
 pub mod schedule;
 
-use bevy::prelude::*;
+use bevy::{prelude::*, time::Fixed};
 use identity::{
     ChunkId, ChunkMembership, Persistent, Replicated, RuntimeOnly, StableEntityId,
     StableEntityRegistry, StableIdAllocator, maintain_stable_entity_registry,
@@ -13,7 +13,8 @@ pub struct AfterglowCorePlugin;
 impl Plugin for AfterglowCorePlugin {
     fn build(&self, app: &mut App) {
         configure_engine_sets(app);
-        app.init_resource::<StableIdAllocator>()
+        app.insert_resource(Time::<Fixed>::from_hz(60.0))
+            .init_resource::<StableIdAllocator>()
             .init_resource::<StableEntityRegistry>()
             .register_type::<StableEntityId>()
             .register_type::<ChunkId>()

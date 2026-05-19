@@ -15,10 +15,16 @@ use crate::{
     physics::{PhysicsBody, PhysicsCollider},
 };
 
+mod network;
 mod playground;
 #[cfg(test)]
 use playground::FpsDemoPlaygroundPiece;
 use playground::{spawn_crouch_playground, spawn_slopes, spawn_stairs};
+
+pub use network::{
+    FpsDemoConnectionState, FpsDemoLaunchMode, FpsDemoNetworkConfig, FpsDemoNetworkPlugin,
+    FpsDemoNetworkStatus,
+};
 
 pub struct FpsControllerDemoPlugin;
 
@@ -27,7 +33,7 @@ const COLLISION_PUSHBACK_EPSILON: f32 = 0.0005;
 const CAMERA_OFFSET_JITTER_EPSILON: f32 = 0.006;
 
 #[derive(Component)]
-struct FpsDemoPlayer;
+pub(super) struct FpsDemoPlayer;
 
 #[derive(Component)]
 struct FpsDemoCamera;
@@ -56,6 +62,7 @@ struct LastCameraFrame {
 
 impl Plugin for FpsControllerDemoPlugin {
     fn build(&self, app: &mut App) {
+        app.add_plugins(FpsDemoNetworkPlugin);
         app.add_systems(
             Startup,
             (enable_controller_trace, spawn_scene, capture_cursor),
@@ -142,14 +149,16 @@ fn spawn_scene(
         look_sensitivity: Vec2::new(0.0025, 0.0025),
         ..default()
     };
+    let player_transform = Transform::from_xyz(0.0, config.standing_height * 0.5 + 0.05, 4.0);
     let player = commands
         .spawn((
             FpsDemoPlayer,
+            network::fps_demo_player_network_components(player_transform.translation),
             FirstPersonController {
                 config: config.clone(),
             },
             default_gameplay_input_map(),
-            Transform::from_xyz(0.0, config.standing_height * 0.5 + 0.05, 4.0),
+            player_transform,
         ))
         .id();
 

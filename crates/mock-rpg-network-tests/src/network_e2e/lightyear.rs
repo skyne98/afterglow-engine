@@ -1,6 +1,6 @@
 use afterglow_engine::{
     core::identity::StableEntityId,
-    network::{AfterglowLightyearConfig, AfterglowLightyearPlugin, LightyearRole},
+    network::{AfterglowLightyearConfig, LightyearRole},
 };
 use bevy::{
     app::{FixedPostUpdate, PostUpdate, PreUpdate},
@@ -394,12 +394,36 @@ fn lightyear_app(client: bool) -> App {
         LightyearRole::Server
     };
     app.insert_resource(AfterglowLightyearConfig { role, ..default() });
-    app.add_plugins(AfterglowLightyearPlugin);
+    add_crossbeam_lightyear_plugins(&mut app, role);
     app.init_resource::<PeerMetadata>();
     register_protocol(&mut app);
     app.finish();
     app.cleanup();
     app
+}
+
+fn add_crossbeam_lightyear_plugins(app: &mut App, role: LightyearRole) {
+    let tick_duration = Duration::from_secs_f64(1.0 / 60.0);
+    match role {
+        LightyearRole::Client => app.add_plugins(
+            lightyear::prelude::client::ClientPlugins { tick_duration }
+                .build()
+                .disable::<lightyear::prelude::client::NetcodeClientPlugin>(),
+        ),
+        LightyearRole::Server => app.add_plugins(
+            lightyear::prelude::server::ServerPlugins { tick_duration }
+                .build()
+                .disable::<lightyear::prelude::server::NetcodeServerPlugin>(),
+        ),
+        LightyearRole::Host => app.add_plugins((
+            lightyear::prelude::server::ServerPlugins { tick_duration }
+                .build()
+                .disable::<lightyear::prelude::server::NetcodeServerPlugin>(),
+            lightyear::prelude::client::ClientPlugins { tick_duration }
+                .build()
+                .disable::<lightyear::prelude::client::NetcodeClientPlugin>(),
+        )),
+    };
 }
 
 fn register_protocol(app: &mut App) {
@@ -431,8 +455,6 @@ fn transport(app: &App, send: bool, receive: bool) -> Transport {
     }
     transport.add_sender_from_registry::<MetadataChannel>(registry);
     transport.add_receiver_from_registry::<MetadataChannel>(registry);
-    transport.add_sender_from_registry::<ActionsChannel>(registry);
-    transport.add_receiver_from_registry::<ActionsChannel>(registry);
     transport.add_sender_from_registry::<UpdatesChannel>(registry);
     transport.add_receiver_from_registry::<UpdatesChannel>(registry);
     transport

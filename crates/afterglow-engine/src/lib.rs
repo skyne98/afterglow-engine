@@ -1,3 +1,4 @@
+pub mod console;
 pub mod controller;
 pub mod core;
 pub mod demo;
@@ -14,12 +15,13 @@ pub mod world;
 
 extern crate self as afterglow_engine;
 
-use bevy::{app::PluginGroupBuilder, prelude::*, window::WindowPlugin};
+use bevy::{app::PluginGroupBuilder, prelude::*, window::WindowPlugin, winit::WinitSettings};
+use console::DevConsolePlugin;
 use controller::AfterglowFirstPersonControllerPlugin;
 use core::{AfterglowCorePlugin, schedule::AfterglowSet};
 use demo::AfterglowDemoPlugin;
 use input::AfterglowInputPlugin;
-use network::AfterglowNetworkPlugin;
+use network::{AfterglowLightyearConfig, AfterglowNetworkPlugin, LightyearRole};
 use perf_hud::{
     AccumMap, PerfHudPlugin, collect_frame, record_update_end, record_update_start, setup_tracing,
     sync_shared_metrics, trace_collector::reset_trace_data, update_hud,
@@ -38,8 +40,9 @@ impl PluginGroup for AfterglowRuntimePlugins {
     fn build(self) -> PluginGroupBuilder {
         PluginGroupBuilder::start::<Self>()
             .add(AfterglowCorePlugin)
-            .add(AfterglowInputPlugin)
+            .add(DevConsolePlugin)
             .add(AfterglowNetworkPlugin)
+            .add(AfterglowInputPlugin)
             .add(AfterglowPhysicsPlugin)
             .add(AfterglowFirstPersonControllerPlugin)
             .add(AfterglowPersistencePlugin)
@@ -82,28 +85,72 @@ pub fn run_default_demo() -> bevy::app::AppExit {
     let trace_data = setup_tracing();
     let trace_accum = trace_data.accum.clone();
 
-    App::new()
-        .insert_resource(trace_data)
-        .add_plugins((
-            default_plugins(),
-            AfterglowEnginePlugin { trace_accum },
-            AfterglowDemoPlugin,
-        ))
-        .run()
+    let mut app = App::new();
+    keep_windowed_runtime_unthrottled_when_unfocused(&mut app);
+    app.insert_resource(trace_data).add_plugins((
+        default_plugins(),
+        AfterglowEnginePlugin { trace_accum },
+        AfterglowDemoPlugin,
+    ));
+    app.run()
 }
 
 pub fn run_fps_controller_demo() -> bevy::app::AppExit {
+    run_fps_controller_demo_with_network(demos::fps_controller::FpsDemoNetworkConfig::local())
+}
+
+pub fn run_fps_controller_demo_remote(remote_addr: impl Into<String>) -> bevy::app::AppExit {
+    run_fps_controller_demo_with_network(demos::fps_controller::FpsDemoNetworkConfig::remote(
+        remote_addr,
+    ))
+}
+
+pub fn run_fps_controller_demo_server(host_addr: impl Into<String>) -> bevy::app::AppExit {
+    run_fps_controller_demo_with_network(demos::fps_controller::FpsDemoNetworkConfig::server(
+        host_addr,
+    ))
+}
+
+pub fn run_fps_controller_demo_with_network(
+    network_config: demos::fps_controller::FpsDemoNetworkConfig,
+) -> bevy::app::AppExit {
     let trace_data = setup_tracing();
     let trace_accum = trace_data.accum.clone();
+    let lightyear_config = fps_demo_lightyear_config(&network_config);
 
-    App::new()
+    let mut app = App::new();
+    keep_windowed_runtime_unthrottled_when_unfocused(&mut app);
+    app.insert_resource(lightyear_config)
+        .insert_resource(network_config)
         .insert_resource(trace_data)
         .add_plugins((
             default_plugins(),
             AfterglowEnginePlugin { trace_accum },
             demos::fps_controller::FpsControllerDemoPlugin,
-        ))
-        .run()
+        ));
+    app.run()
+}
+
+fn keep_windowed_runtime_unthrottled_when_unfocused(app: &mut App) {
+    app.insert_resource(WinitSettings::continuous());
+}
+
+fn fps_demo_lightyear_config(
+    network_config: &demos::fps_controller::FpsDemoNetworkConfig,
+) -> AfterglowLightyearConfig {
+    match &network_config.launch {
+        demos::fps_controller::FpsDemoLaunchMode::Local => default(),
+        demos::fps_controller::FpsDemoLaunchMode::Remote(addr) => AfterglowLightyearConfig {
+            role: LightyearRole::Client,
+            remote_addr: addr.clone(),
+            ..default()
+        },
+        demos::fps_controller::FpsDemoLaunchMode::Server(addr) => AfterglowLightyearConfig {
+            role: LightyearRole::Server,
+            server_addr: addr.clone(),
+            ..default()
+        },
+    }
 }
 
 fn default_plugins() -> PluginGroupBuilder {
@@ -169,8 +216,14 @@ fn default_plugins() -> PluginGroupBuilder {
 
 #[cfg(test)]
 mod tests {
-    use crate::{AfterglowEnginePlugin, AfterglowRuntimePlugins};
-    use bevy::app::App;
+    use crate::{
+        AfterglowEnginePlugin, AfterglowRuntimePlugins,
+        keep_windowed_runtime_unthrottled_when_unfocused,
+    };
+    use bevy::{
+        app::App,
+        winit::{UpdateMode, WinitSettings},
+    };
     use std::sync::{Arc, Mutex};
 
     #[test]
@@ -202,5 +255,28 @@ mod tests {
                 .pending()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn windowed_runtime_does_not_throttle_when_unfocused() {
+        let mut app = App::new();
+        keep_windowed_runtime_unthrottled_when_unfocused(&mut app);
+
+        let settings = app.world().resource::<WinitSettings>();
+        assert_eq!(settings.focused_mode, UpdateMode::Continuous);
+        assert_eq!(settings.unfocused_mode, UpdateMode::Continuous);
+    }
+
+    #[cfg(feature = "lightyear")]
+    #[test]
+    fn runtime_plugins_do_not_double_install_leafwing_with_bevy_input() {
+        let mut app = App::new();
+        app.add_plugins((
+            bevy::MinimalPlugins,
+            bevy::input::InputPlugin,
+            AfterglowRuntimePlugins,
+        ));
+
+        app.update();
     }
 }

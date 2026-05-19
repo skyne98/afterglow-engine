@@ -19,9 +19,11 @@ has been deleted.
 ```text
 afterglow-engine
 ├── core/                 stable IDs, chunks, schedule sets
+├── console/              clap-backed dev console overlay/commands/autocomplete
 ├── input/                Leafwing wrapper and `AfterglowAction`
 ├── network/
 │   ├── lightyear/        Lightyear plugin/config/protocol glue
+│   ├── interest/         chunk/area peer interest fanout
 │   └── rewind/           authoritative server rewind history/replay/corrections
 ├── controller/           first-person controller
 ├── physics/              Avian-backed physics authoring
@@ -31,30 +33,33 @@ afterglow-engine
 ```
 
 The legacy `network::{commands, authority, session, handshake, iroh, steam,
-replication, prediction, reconciliation, interpolation, interest, baseline,
-local_server, rollback}` modules were removed and replaced by the target
-`network::lightyear` and `network::rewind` modules.
+replication, prediction, reconciliation, interpolation, baseline, local_server,
+rollback}` modules were removed. `network::interest` was rebuilt as a tiny
+chunk-interest adapter instead of reviving the old per-entity interest map.
 
 ## Runtime Plugins
 
 | Plugin | Purpose |
 |---|---|
 | `AfterglowCorePlugin` | Stable entity IDs, chunk IDs, and core schedule resources |
-| `AfterglowInputPlugin` | Leafwing action mapping for `AfterglowAction` |
-| `AfterglowNetworkPlugin` | Lightyear boundary plus server rewind plugin |
+| `DevConsolePlugin` | Source-style console overlay plus clap-backed parser/executor, cvars, command queue, network requests, and autocomplete support |
+| `AfterglowNetworkPlugin` | Lightyear boundary plus server rewind and chunk-interest plugins |
 | `AfterglowLightyearPlugin` | Lightyear client/server setup when the `lightyear` feature is enabled |
+| `AfterglowInputPlugin` | Leafwing action mapping for `AfterglowAction`; idempotent when Lightyear already installed the same input manager |
 | `ServerRewindPlugin` | Authoritative server component history skeleton |
 | `AfterglowPhysicsPlugin` | Avian-backed physics authoring and runtime integration |
 | `AfterglowPersistencePlugin` | Stable-ID chunk deltas and save/load helpers |
 | `AfterglowWorldPlugin` | Cell manifest loading and chunk lifecycle |
 | `AfterglowEnginePlugin` | Runtime composition plus perf HUD, tracing, and metrics |
 | `demo::AfterglowDemoPlugin` | Optional demo content only |
+| `demos::fps_controller::FpsDemoNetworkPlugin` | FPS demo local, remote-client, and host-server network launch state plus console request consumer |
 
 ## Detailed API Notes
 
 | File | Scope |
 |---|---|
 | `plugins.md` | Runtime plugin composition |
+| `console.md` | Source-style dev console overlay, parser, executor, cvars, and autocomplete |
 | `input.md` | Leafwing/Lightyear input target API |
 | `network.md` | Lightyear + server rewind target API |
 | `controller.md` | First-person controller |
@@ -67,15 +72,21 @@ local_server, rollback}` modules were removed and replaced by the target
 |---|---|---|
 | `StableEntityId` | `core::identity` | Durable save/load, replication, and rewind identity |
 | `ChunkId` | `core::identity` | Stable chunk/cell identifier |
-| `ChunkMembership` | `core::identity` | Streaming, persistence, and optional replication filtering membership |
+| `ChunkMembership` | `core::identity` | Streaming, persistence, and chunk-interest filtering membership |
 | `Persistent` | `core::identity` | Entity participates in stable persistence |
 | `Replicated` | `core::identity` | Entity participates in networked gameplay truth |
 | `RuntimeOnly` | `core::identity` | Entity is excluded from automatic stable ID assignment |
+| `DevConsoleState` | `console` | Console open state, input buffer, history, and scrollback |
+| `ConsoleNetworkRequest` | `console` | Typed console request for connect/disconnect/server/network debug operations |
 | `AfterglowAction` | `input` | Leafwing `Actionlike` enum for gameplay controls |
 | `RewindedEntity` | `network::rewind` | Stable server-rewind entity marker |
 | `RewindDomainId` | `network::rewind` | Authoritative replay domain, such as a combat bubble or cell subsystem |
 | `RewindHistoryBudget` | `network::rewind` | Retained tick/window budget for server rewind |
 | `AfterglowLightyearConfig` | `network::lightyear` | Tick duration, client/server role, and Lightyear protocol settings |
+| `ChunkInterestPeer` / `PeerChunkInterest` | `network::interest` | Per-peer chunk/area interest fanout for replication routing |
+| `NetworkTransformInterpolationBuffer` | `network` | Bounded delayed transform interpolation for remote avatars and replicated physics presentation |
+| `PhysicsBreakable` / `PhysicsGrabbedState` / `PhysicsGrabSpringConfig` | `physics` | Server/master-authoritative physics interaction state for impact/break and damped grab/link/release flows |
+| `FpsDemoNetworkStatus` | `demos::fps_controller` | FPS demo connection mode, local server state, Lightyear link state, replicated avatar counts, and scene mirror status |
 
 ## Target Schedules
 
@@ -121,6 +132,7 @@ Target networking/input dependencies:
 | `bevy` | ECS, schedules, app/plugin model |
 | `avian3d` | Physics |
 | `serde` / `serde_json` | Persistence, protocol config, test payloads |
+| `clap` | In-engine dev console command parsing and testable command API |
 
 Legacy optional `iroh`, `steamworks`, `ggrs`, and custom macro dependencies were
 removed. `tokio` and `bytes` remain workspace dependencies only where still

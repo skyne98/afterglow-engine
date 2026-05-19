@@ -43,6 +43,46 @@ fn spawn_static_box(app: &mut App, size: Vec3, transform: Transform) {
     ));
 }
 
+fn set_frame_dt(app: &mut App, seconds: f64) {
+    *app.world_mut().resource_mut::<TimeUpdateStrategy>() =
+        TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(seconds));
+}
+
+#[test]
+fn grounded_controller_survives_large_frame_time_spike() {
+    let mut app = app();
+    let config = FirstPersonControllerConfig::default();
+    let half_height = config.height(ControllerStance::Standing) * 0.5;
+    let player = app
+        .world_mut()
+        .spawn((
+            FirstPersonController {
+                config: config.clone(),
+            },
+            Transform::from_xyz(0.0, half_height, 0.0),
+        ))
+        .id();
+    spawn_static_box(
+        &mut app,
+        Vec3::new(8.0, 0.2, 8.0),
+        Transform::from_xyz(0.0, -0.1, 0.0),
+    );
+
+    app.update();
+    set_frame_dt(&mut app, 1.0);
+    app.update();
+
+    let sample = sample(&app, player);
+    assert!(
+        sample.grounded,
+        "player lost ground after spike: {sample:?}"
+    );
+    assert!(
+        sample.position.y >= half_height - 0.01,
+        "large frame spike pushed player through floor: {sample:?}"
+    );
+}
+
 fn sample(app: &App, player: Entity) -> ControllerSample {
     let position = app.world().get::<Transform>(player).unwrap().translation;
     let state = app.world().get::<FirstPersonMotorState>(player).unwrap();

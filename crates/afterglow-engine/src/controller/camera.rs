@@ -1,8 +1,8 @@
-use bevy::prelude::*;
+use bevy::{prelude::*, time::Fixed};
 
 use super::{
     ControllerStance, FirstPersonCameraTraceFrame, FirstPersonController,
-    FirstPersonControllerTrace, FirstPersonMotorState,
+    FirstPersonControllerTrace, FirstPersonMotorState, PredictionErrorSmoothing,
     body::local_speeds_from_velocity,
     camera_motion::{
         advance_hpl2_bob_phase_to_rest, hpl2_bob_reached_rest, hpl2_bob_step_crossed,
@@ -10,6 +10,11 @@ use super::{
         smooth_vec3,
     },
 };
+
+#[path = "camera_presentation.rs"]
+mod presentation;
+pub(super) use presentation::apply_camera_transform;
+use presentation::{apply_camera_fov, fixed_presentation_offset};
 
 #[derive(Component, Clone, Debug, PartialEq, Reflect)]
 pub struct FirstPersonCameraRig {
@@ -165,8 +170,14 @@ impl Default for FirstPersonCameraState {
 
 pub fn update_first_person_camera_rigs(
     time: Res<Time>,
+    fixed_time: Res<Time<Fixed>>,
     targets: Query<
-        (&Transform, &FirstPersonController, &FirstPersonMotorState),
+        (
+            &Transform,
+            &FirstPersonController,
+            &FirstPersonMotorState,
+            Option<&PredictionErrorSmoothing>,
+        ),
         Without<FirstPersonCameraRig>,
     >,
     offsets: Query<(&ChildOf, &FirstPersonHeadOffset)>,
@@ -186,17 +197,31 @@ pub fn update_first_person_camera_rigs(
     >,
 ) {
     let dt = time.delta_secs();
+    let now = time.elapsed_secs_f64() as f32;
     let record_trace = trace.enabled;
     for (camera, rig, mut state, mut transform, projection) in &mut cameras {
-        let Ok((target_transform, controller, motor)) = targets.get(rig.target) else {
+        let Ok((target_transform, controller, motor, prediction_error)) = targets.get(rig.target)
+        else {
             continue;
         };
+        let mut presented_target_transform = *target_transform;
+        if let Some(smoothing) = prediction_error {
+            let elapsed = now - smoothing.decay_start;
+            let decay = (1.0 - elapsed / 0.1).clamp(0.0, 1.0);
+            presented_target_transform.translation += smoothing.error * decay;
+            if decay <= 0.0 {
+                commands
+                    .entity(rig.target)
+                    .remove::<PredictionErrorSmoothing>();
+            }
+        }
+        presented_target_transform.translation += fixed_presentation_offset(motor, &fixed_time);
         let offset = summed_head_offset(rig.target, &offsets);
         consume_impulses(rig.target, &mut state, &mut impulses, &mut commands);
         let footstep_emitted = update_camera_state(
             &rig.config,
             &mut state,
-            target_transform,
+            &presented_target_transform,
             controller,
             motor,
             offset,
@@ -389,32 +414,6 @@ pub(super) fn update_camera_state(
     state.was_climbing =
         smooth_stair_y && (state.smoothed_position.y - target_position.y).abs() > 0.002;
     footstep
-}
-
-pub(super) fn apply_camera_transform(
-    state: &FirstPersonCameraState,
-    motor: &FirstPersonMotorState,
-    transform: &mut Transform,
-) -> Vec3 {
-    let bob = hpl2_head_bob(
-        state.bobbing,
-        state.bob_phase,
-        state.current_bob_amplitude,
-        state.landing_bounce,
-    );
-    let rotation = Quat::from_rotation_y(motor.yaw + state.impulse_yaw)
-        * Quat::from_rotation_x(motor.pitch + state.impulse_pitch)
-        * Quat::from_rotation_z(state.roll + state.impulse_roll);
-    let bob_offset = rotation * bob;
-    transform.translation = state.smoothed_position + bob_offset;
-    transform.rotation = rotation;
-    bob_offset
-}
-
-fn apply_camera_fov(state: &FirstPersonCameraState, mut projection: Mut<Projection>) {
-    if let Projection::Perspective(perspective) = projection.as_mut() {
-        perspective.fov = state.fov;
-    }
 }
 
 fn eye_height(config: &FirstPersonCameraConfig, stance: ControllerStance) -> f32 {

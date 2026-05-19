@@ -10,6 +10,8 @@ pub type AfterglowLeafwingPlugin = AfterglowInputPlugin;
 
 impl Plugin for AfterglowInputPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(InputManagerPlugin::<AfterglowAction>::default());
+        if !app.is_plugin_added::<InputManagerPlugin<AfterglowAction>>() {
+            app.add_plugins(InputManagerPlugin::<AfterglowAction>::default());
+        }
     }
 }

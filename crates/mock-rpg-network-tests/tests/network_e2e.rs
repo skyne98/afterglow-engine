@@ -2,6 +2,106 @@ use afterglow_engine::{core::identity::StableEntityId, network::LightyearRole};
 use mock_rpg_network_tests::{Vec3i, network_e2e::*};
 
 #[test]
+fn console_connect_local_starts_actual_lightyear_mock_rpg_client_and_server() {
+    let mut rpg = ConsoleNetworkedRpg::new(16);
+    rpg.register_mock_player("alice", ALICE);
+    rpg.register_mock_player("bob", BOB);
+
+    let output = rpg.command("connect local");
+
+    assert!(output.success);
+    assert!(rpg.is_connected());
+    assert!(rpg.has_lightyear_links());
+    assert_eq!(rpg.mock_player("alice"), Some(ALICE));
+    assert_eq!(rpg.mock_player_count(), 2);
+    assert_eq!(
+        rpg.rpg()
+            .and_then(|rpg| rpg.client_afterglow_lightyear_role()),
+        Some(LightyearRole::Client)
+    );
+    assert_eq!(
+        rpg.rpg()
+            .and_then(|rpg| rpg.server_afterglow_lightyear_role()),
+        Some(LightyearRole::Server)
+    );
+    let status = rpg.command("net status").text();
+    assert!(status.contains("connection=connecting-local"));
+    assert!(status.contains("local_server=true"));
+}
+
+#[test]
+fn console_commands_drive_mock_players_through_actual_lightyear_connection() {
+    let mut rpg = ConsoleNetworkedRpg::new(16);
+    let bob_loot = StableEntityId::from_raw(30_002);
+    rpg.register_mock_player("alice", ALICE);
+    rpg.register_mock_player("bob", BOB);
+
+    assert!(rpg.command("connect local").success);
+    assert!(rpg.command("net latency --ms 0").success);
+    rpg.send(attack(1, 1, ALICE, BOB, 120));
+    rpg.send(pick_up_food(2, 3, ALICE, bob_loot));
+    assert!(rpg.command("net latency --ms 64").success);
+    rpg.send(raise_shield(1, 1, BOB));
+
+    rpg.advance_to(4);
+    {
+        let rpg = rpg.rpg_mut().expect("console should have connected");
+        assert_eq!(rpg.hp(BOB), 0);
+        assert_eq!(rpg.inventory_food(ALICE), 1);
+        assert_eq!(rpg.received_lightyear_inputs(), 2);
+    }
+
+    rpg.advance_to(5);
+
+    let rpg_state = rpg.rpg_mut().expect("console should have connected");
+    assert_eq!(rpg_state.received_lightyear_inputs(), 3);
+    assert_eq!(rpg_state.hp(BOB), 100);
+    assert_eq!(rpg_state.inventory_food(ALICE), 0);
+    assert!(rpg_state.facts().contains(&CombatFact::SpellBlocked {
+        tick: 2,
+        target: BOB,
+    }));
+    assert!(!rpg_state.facts().contains(&CombatFact::FoodPickedUp {
+        tick: 3,
+        player: ALICE,
+        from: bob_loot,
+    }));
+
+    let stats = rpg.command("net stats").text();
+    assert!(stats.contains("sent_packets=3"));
+    assert!(stats.contains("received_packets=3"));
+    assert!(stats.contains("latency_ms=64"));
+}
+
+#[test]
+fn console_disconnect_tears_down_actual_mock_rpg_connection() {
+    let mut rpg = ConsoleNetworkedRpg::new(16);
+    assert!(rpg.command("connect local").success);
+    assert!(rpg.is_connected());
+
+    let output = rpg.command("disconnect");
+
+    assert!(output.success);
+    assert!(!rpg.is_connected());
+    let status = rpg.command("net status").text();
+    assert!(status.contains("connection=disconnected"));
+    assert!(status.contains("local_server=false"));
+}
+
+#[test]
+fn console_remote_connect_records_external_target_without_local_server() {
+    let mut rpg = ConsoleNetworkedRpg::new(16);
+
+    let output = rpg.command("connect 127.0.0.1:8820");
+
+    assert!(output.success);
+    assert!(!rpg.is_connected());
+    let status = rpg.command("net status").text();
+    assert!(status.contains("connection=connecting-remote:127.0.0.1:8820"));
+    assert!(status.contains("local_server=false"));
+}
+
+#[test]
 fn late_shield_rolls_back_death_pickup_and_inventory_through_lightyear() {
     let mut rpg = LightyearNetworkedRpg::new(16);
     let bob_corpse = StableEntityId::from_raw(25_002);

@@ -7,6 +7,14 @@ use avian3d::prelude::{
 };
 use bevy::prelude::*;
 
+#[path = "physics_grabbing_spring.rs"]
+mod physics_grabbing_spring;
+pub use physics_grabbing_spring::*;
+
+#[path = "physics_interactions.rs"]
+mod physics_interactions;
+pub use physics_interactions::*;
+
 #[derive(Resource, Clone, Copy, Debug, PartialEq, Reflect)]
 pub struct AfterglowPhysicsConfig {
     pub gravity: Vec3,
@@ -70,6 +78,8 @@ impl Plugin for AfterglowPhysicsPlugin {
                 )
                     .in_set(crate::core::schedule::AfterglowSet::Simulate),
             );
+        physics_grabbing_spring::register_physics_grabbing_spring_api(app);
+        physics_interactions::register_physics_interaction_api(app);
     }
 }
 

@@ -7,6 +7,8 @@ use std::time::Duration;
 
 #[cfg(feature = "lightyear")]
 use crate::input::AfterglowAction;
+#[cfg(feature = "lightyear")]
+use leafwing_input_manager::plugin::InputManagerPlugin;
 
 /// Runtime role used by [`AfterglowLightyearConfig`].
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -86,9 +88,11 @@ impl Plugin for AfterglowLightyearPlugin {
                 }
             }
 
-            app.add_plugins(lightyear_inputs_leafwing::prelude::InputPlugin::<
-                AfterglowAction,
-            >::default());
+            if !app.is_plugin_added::<InputManagerPlugin<AfterglowAction>>() {
+                app.add_plugins(lightyear_inputs_leafwing::prelude::InputPlugin::<
+                    AfterglowAction,
+                >::default());
+            }
         }
     }
 }
