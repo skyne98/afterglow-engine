@@ -29,7 +29,7 @@
 //! let decoded: Snapshot = received.apply(&a);
 //!
 //! // ── Rolling history buffer with undo/redo ──────────────────────────────
-//! let mut hist: DeltaHistory<Snapshot> = DeltaHistory::with_capacity(240);
+//! let mut hist: DeltaHistory<Snapshot> = DeltaHistory::new(240);
 //! hist.init(&a);
 //! hist.push(&b);                           // auto-diffs against previous
 //! assert_eq!(hist.at(0).tick, 0);          // oldest
@@ -176,7 +176,6 @@ impl DeltaPatch {
 
 #[derive(Clone)]
 struct HistoryEntry {
-    frame: usize,
     kind: HistoryKind,
 }
 
@@ -188,8 +187,9 @@ enum HistoryKind {
 
 /// A ring buffer of full snapshots and deltas with cursor-based undo/redo.
 ///
-/// Stores one full snapshot every `snapshot_interval` entries; the rest are
-/// [`DeltaPatch`]es. Restoring any frame finds the nearest full snapshot
+/// of full snapshots at both ends — index 0 is always a full snapshot anchor,
+/// index -1 is always the latest full snapshot. Everything between is compact
+/// delta patches. Restoring any frame finds the preceding full entry
 /// and chain-applies deltas forward — typically ~2 μs per delta.
 ///
 /// Generic over any `T: Serialize + DeserializeOwned + Clone`.
@@ -205,32 +205,22 @@ pub struct DeltaHistory<T> {
     entries: Vec<HistoryEntry>,
     cursor: usize,
     capacity: usize,
-    snapshot_interval: usize,
     _phantom: std::marker::PhantomData<T>,
 }
 
 impl<T: serde::Serialize + serde::de::DeserializeOwned + Clone> DeltaHistory<T> {
     /// Create a new history buffer.
     ///
-    /// `capacity` — max frames before the oldest is evicted.
-    /// `snapshot_interval` — a full snapshot every N frames (restores start from
-    ///   the nearest snapshot and chain-apply deltas forward).
-    ///   Use `capacity` for one snapshot per full buffer.
-    pub fn new(capacity: usize, snapshot_interval: usize) -> Self {
-        assert!(snapshot_interval >= 1);
+    /// `capacity` — max frames before the oldest interior entry is evicted.
+    ///   Index 0 is always kept as a full snapshot anchor. Index -1 is always the
+    ///   latest full snapshot. Everything between is compact delta patches.
+    pub fn new(capacity: usize) -> Self {
         DeltaHistory {
             entries: Vec::with_capacity(capacity),
             cursor: 0,
             capacity,
-            snapshot_interval,
             _phantom: std::marker::PhantomData,
         }
-    }
-
-    /// Convenience: one full snapshot when the buffer wraps.
-    /// Equivalent to `DeltaHistory::new(capacity, capacity)`.
-    pub fn with_capacity(capacity: usize) -> Self {
-        Self::new(capacity, capacity)
     }
 
     /// Resolve a potentially negative index to a usize.
@@ -245,18 +235,18 @@ impl<T: serde::Serialize + serde::de::DeserializeOwned + Clone> DeltaHistory<T> 
         }
     }
 
-    /// Record the initial value at frame 0. Must be called first.
+    /// Record the initial value. Must be called first.
     pub fn init(&mut self, value: &T) {
         self.entries.clear();
         self.entries.push(HistoryEntry {
-            frame: 0,
             kind: HistoryKind::Full(postcard::to_allocvec(value).unwrap()),
         });
         self.cursor = 0;
     }
 
-    /// Record a new state. Auto-diffs against the previous state.
-    /// Every `snapshot_interval` frames, stores a full snapshot instead.
+    /// Record a new state. Always stored as a full snapshot at the end.
+    /// The previous entry is immediately converted to a delta.
+    /// Index 0 is always kept as a full snapshot anchor.
     pub fn push(&mut self, value: &T) {
         let bytes = postcard::to_allocvec(value).unwrap();
 
@@ -265,36 +255,38 @@ impl<T: serde::Serialize + serde::de::DeserializeOwned + Clone> DeltaHistory<T> 
             self.entries.truncate(self.cursor + 1);
         }
 
-        let next_frame = if let Some(last) = self.entries.last() {
-            last.frame + 1
-        } else {
-            0
-        };
-        let is_snapshot = next_frame % self.snapshot_interval == 0;
-        let previous_bytes = match self.entries.last() {
-            Some(entry) => match &entry.kind {
-                HistoryKind::Full(b) => b.clone(),
-                HistoryKind::Delta(_) => {
-                    // Need to reconstruct previous bytes to diff against
-                    self.restore_bytes_at(self.entries.len() - 1)
-                }
-            },
-            None => vec![],
-        };
-
-        let kind = if is_snapshot || previous_bytes.is_empty() {
-            HistoryKind::Full(bytes)
-        } else {
-            let delta = DeltaPatch::diff_bytes(&previous_bytes, &bytes);
-            HistoryKind::Delta(delta)
-        };
-
-        self.entries.push(HistoryEntry { frame: next_frame, kind });
+        // Always store the new entry as a full snapshot
+        self.entries.push(HistoryEntry {
+            kind: HistoryKind::Full(bytes),
+        });
         self.cursor = self.entries.len() - 1;
 
+        // Convert the previous entry (if any, not index 0) from Full to Delta
+        if self.entries.len() >= 3 {
+            let prev_idx = self.entries.len() - 2;
+            if prev_idx > 0 {
+                if let HistoryKind::Full(_) = &self.entries[prev_idx].kind {
+                    let predecessor = self.restore_bytes_at(prev_idx - 1);
+                    let prev_full = match &self.entries[prev_idx].kind {
+                        HistoryKind::Full(b) => b.clone(),
+                        _ => unreachable!(),
+                    };
+                    let delta = DeltaPatch::diff_bytes(&predecessor, &prev_full);
+                    self.entries[prev_idx].kind = HistoryKind::Delta(delta);
+                }
+            }
+        }
+
+        // Evict from index 1 when over capacity (keeps index 0 as permanent anchor)
         while self.entries.len() > self.capacity {
-            self.entries.remove(0);
+            self.entries.remove(1);
             self.cursor = self.cursor.saturating_sub(1);
+            if self.cursor < 1 { self.cursor = 0; }
+            // Promote the new entry at index 1 to Full (anchor for the evicted range)
+            if self.entries.len() >= 2 {
+                let restored = self.restore_bytes_at(1);
+                self.entries[1].kind = HistoryKind::Full(restored);
+            }
         }
     }
 
@@ -335,7 +327,7 @@ impl<T: serde::Serialize + serde::de::DeserializeOwned + Clone> DeltaHistory<T> 
     pub fn truncated_at(&self, index: isize) -> Self {
         let i = self.resolve(index);
         assert!(i < self.entries.len());
-        let mut h = Self::new(self.capacity, self.snapshot_interval);
+        let mut h = Self::new(self.capacity);
         h.entries = self.entries[..=i].to_vec();
         h.cursor = i.min(h.entries.len().saturating_sub(1));
         h
@@ -383,22 +375,11 @@ impl<T: serde::Serialize + serde::de::DeserializeOwned + Clone> DeltaHistory<T> 
     }
 
     fn restore_bytes_at(&self, index: usize) -> Vec<u8> {
-        let target_frame = self.entries[index].frame;
-        let snapshot_frame =
-            (target_frame / self.snapshot_interval) * self.snapshot_interval;
-
+        // Find the nearest full entry at or before `index` (index 0 is always Full)
         let snapshot_idx = (0..=index)
             .rev()
-            .find(|&i| {
-                matches!(self.entries[i].kind, HistoryKind::Full(_))
-                    && self.entries[i].frame >= snapshot_frame
-            })
-            .unwrap_or_else(|| {
-                (0..=index)
-                    .rev()
-                    .find(|&i| matches!(self.entries[i].kind, HistoryKind::Full(_)))
-                    .expect("DeltaHistory corrupted: no full snapshot found")
-            });
+            .find(|&i| matches!(self.entries[i].kind, HistoryKind::Full(_)))
+            .expect("DeltaHistory corrupted: no full entry found (index 0 should always be Full)");
 
         let bytes = match &self.entries[snapshot_idx].kind {
             HistoryKind::Full(b) => b.clone(),
@@ -509,7 +490,7 @@ mod tests {
 
     #[test]
     fn history_undo_redo_simple() {
-        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(10, 5);
+        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(10);
         h.init(&snap(0));
 
         for t in 1..=5 {
@@ -528,21 +509,21 @@ mod tests {
 
     #[test]
     fn history_undo_past_start_returns_none() {
-        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(10, 5);
+        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(10);
         h.init(&snap(0));
         assert!(h.undo(1).is_none());
     }
 
     #[test]
     fn history_redo_past_end_returns_none() {
-        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(10, 5);
+        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(10);
         h.init(&snap(0));
         assert!(h.redo(1).is_none());
     }
 
     #[test]
     fn history_undoredo_discard_new_timeline() {
-        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(10, 5);
+        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(10);
         h.init(&snap(0));
         h.push(&snap(1));
         h.push(&snap(2));
@@ -560,7 +541,7 @@ mod tests {
 
     #[test]
     fn history_eviction_oldest_removed() {
-        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(3, 5);
+        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(3);
         h.init(&snap(0));
         h.push(&snap(1));
         h.push(&snap(2));
@@ -571,7 +552,7 @@ mod tests {
 
     #[test]
     fn history_restore_from_full_snapshot() {
-        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(10, 3);
+        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(10);
         h.init(&snap(0));
         h.push(&snap(1));
         h.push(&snap(2));
@@ -586,7 +567,7 @@ mod tests {
 
     #[test]
     fn history_undo_after_eviction() {
-        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(4, 3);
+        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(4);
         h.init(&snap(0));
         h.push(&snap(1));
         h.push(&snap(2));
@@ -601,7 +582,7 @@ mod tests {
 
     #[test]
     fn history_at_and_bytes_at() {
-        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(10, 3);
+        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(10);
         h.init(&snap(10));
         h.push(&snap(20));
         h.push(&snap(30));
@@ -617,7 +598,7 @@ mod tests {
 
     #[test]
     fn history_truncated_at_is_immutable() {
-        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(10, 5);
+        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(10);
         h.init(&snap(0));
         h.push(&snap(1));
         h.push(&snap(2));
@@ -632,7 +613,7 @@ mod tests {
 
     #[test]
     fn history_truncate_discards_future() {
-        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(10, 5);
+        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(10);
         h.init(&snap(0));
         h.push(&snap(1));
         h.push(&snap(2));
@@ -643,7 +624,7 @@ mod tests {
 
     #[test]
     fn history_move_to_repositions_cursor() {
-        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(10, 5);
+        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(10);
         h.init(&snap(0));
         h.push(&snap(1));
         h.push(&snap(2));
@@ -658,7 +639,7 @@ mod tests {
 
     #[test]
     fn history_patch_between_frames() {
-        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(10, 5);
+        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(10);
         h.init(&snap(0));
         h.push(&snap(1));
         h.push(&snap(5));
@@ -671,7 +652,7 @@ mod tests {
     #[test]
     fn history_combined_patch_collapses_range() {
         // Keep all frames (capacity > total pushes) so full snapshots are preserved
-        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(20, 5);
+        let mut h: DeltaHistory<Snapshot> = DeltaHistory::new(20);
         h.init(&snap(0));
         for t in 1..=10 { h.push(&snap(t)); }
         assert!(h.len() >= 11);
