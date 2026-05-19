@@ -108,25 +108,6 @@ impl DeltaPatch {
     pub fn serialized_size(&self) -> usize {
         postcard::to_allocvec(self).unwrap().len()
     }
-
-    // ── Patch composition ───────────────────────────────────────────────
-
-    /// Combine two sequential patches into one.
-    ///
-    /// `self` is the diff from `base → mid`, `next` is `mid → end`.
-    /// Returns the single patch `base → end`. This is O(n) in the
-    /// intermediate byte size (serializes mid, diffs back to base).
-    pub fn combine(&self, next: &DeltaPatch, base: &[u8]) -> DeltaPatch {
-        let mid = self.apply_bytes(base);
-        let end = next.apply_bytes(&mid);
-        DeltaPatch::diff_bytes(base, &end)
-    }
-
-    /// Invert this patch. The result patches `new → old` instead of `old → new`.
-    pub fn invert(&self, base: &[u8]) -> DeltaPatch {
-        let end = self.apply_bytes(base);
-        DeltaPatch::diff_bytes(&end, base)
-    }
 }
 
 // ── DeltaHistory: ring buffer with undo/redo ────────────────────────────
@@ -611,27 +592,6 @@ mod tests {
         assert!(!patch.runs.is_empty());
         let restored = patch.apply(&snap(0));
         assert_eq!(restored.tick, 5);
-    }
-
-    #[test]
-    fn patch_combine_two_into_one() {
-        let a = vec![0u8; 100];
-        let b = { let mut v = a.clone(); v[10] = 1; v };
-        let c = { let mut v = b.clone(); v[20] = 2; v };
-        let p1 = DeltaPatch::diff_bytes(&a, &b);
-        let p2 = DeltaPatch::diff_bytes(&b, &c);
-        let combined = p1.combine(&p2, &a);
-        assert_eq!(combined.apply_bytes(&a), c);
-        assert!(combined.runs.len() <= p1.runs.len() + p2.runs.len());
-    }
-
-    #[test]
-    fn patch_invert_round_trip() {
-        let a = vec![0u8; 50];
-        let b = { let mut v = a.clone(); v[5..15].copy_from_slice(&[99;10]); v };
-        let fwd = DeltaPatch::diff_bytes(&a, &b);
-        let rev = fwd.invert(&a);
-        assert_eq!(rev.apply_bytes(&b), a);
     }
 
     #[test]
