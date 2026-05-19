@@ -1,48 +1,4 @@
-pub mod tree;
-
 use serde::{Deserialize, Serialize};
-use serde::de::DeserializeOwned;
-
-// ── ChunkChange (reusable, used by ByteDelta) ────────────────────────────
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct ChunkChange {
-    pub idx: u32,
-    pub data: Vec<u8>,
-}
-
-// ── ByteDelta: fixed-chunk comparison (used in benchmarks) ───────────────
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct ByteDelta {
-    pub chunk_shift: u8,
-    pub total_len: u32,
-    pub changes: Vec<ChunkChange>,
-}
-
-impl ByteDelta {
-    pub fn diff_bytes(old: &[u8], new: &[u8], chunk_shift: u8) -> Vec<ChunkChange> {
-        let chunk_size = 1usize << chunk_shift;
-        let len = old.len().max(new.len());
-        let n_chunks = len.div_ceil(chunk_size);
-        let mut changes = Vec::new();
-        for ci in 0..n_chunks {
-            let start = ci * chunk_size;
-            let end = (start + chunk_size).min(len);
-            if old.get(start..end).unwrap_or(&[]) != new.get(start..end).unwrap_or(&[]) {
-                changes.push(ChunkChange {
-                    idx: ci as u32,
-                    data: new[start..end].to_vec(),
-                });
-            }
-        }
-        changes
-    }
-
-    pub fn serialized_size(&self) -> usize {
-        postcard::to_allocvec(self).unwrap().len()
-    }
-}
 
 // ── RunDelta: variable-length runs of changed bytes ─────────────────────
 //
@@ -84,12 +40,9 @@ impl RunDelta {
                     if ob == nb { break; }
                     i += 1;
                 }
-                // Try to extend run backwards into the previous byte if it helps
-                let run_start = start.saturating_sub(if start > 0 && start < old.len().min(new.len()) && old[start-1] == new[start-1] { 0 } else { 0 });
-                // Extend to cover matching bytes at boundaries to reduce run count (tiny cost)
-                let data = new[run_start..i].to_vec();
+                let data = new[start..i].to_vec();
                 if !data.is_empty() {
-                    runs.push(Run { offset: run_start as u32, data });
+                    runs.push(Run { offset: start as u32, data });
                 }
             } else {
                 i += 1;
@@ -119,7 +72,7 @@ impl RunDelta {
         }
     }
 
-    pub fn apply<T: DeserializeOwned + Serialize>(&self, old: &T) -> T {
+    pub fn apply<T: serde::de::DeserializeOwned + Serialize>(&self, old: &T) -> T {
         let mut bytes = postcard::to_allocvec(old).unwrap();
         self.apply_in_place(&mut bytes);
         if (bytes.len() as u32) < self.total_len {
@@ -153,53 +106,15 @@ impl RunDelta {
     }
 }
 
-// ── SparseVecDelta: for Vec<T> where few elements change ─────────────────
-//
-// Compact: stores (element_index, element_bytes) for changed elements only.
-// No field names, no string keys, no chunk padding.
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct SparseVecDelta<T> {
-    pub entries: Vec<(u32, T)>,
-}
-
-impl<T: PartialEq + Clone + Serialize> SparseVecDelta<T> {
-    pub fn diff(old: &[T], new: &[T]) -> Self {
-        let max = old.len().max(new.len());
-        let mut entries = Vec::new();
-        for i in 0..max {
-            let a = old.get(i);
-            let b = new.get(i);
-            if a != b {
-                if let Some(val) = b {
-                    entries.push((i as u32, val.clone()));
-                }
-            }
-        }
-        SparseVecDelta { entries }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde::{Deserialize, Serialize};
 
     #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
-    struct Body {
-        id: u32,
-        pos: [f32; 3],
-        vel: [f32; 3],
-        active: bool,
-    }
+    struct Body { id: u32, pos: [f32; 3], vel: [f32; 3], active: bool }
 
     #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
-    struct Snapshot {
-        tick: u32,
-        bodies: Vec<Body>,
-    }
-
-    // ── RunDelta tests ──
+    struct Snapshot { tick: u32, bodies: Vec<Body> }
 
     #[test]
     fn run_identical() {
@@ -209,7 +124,7 @@ mod tests {
     }
 
     #[test]
-    fn run_single_byte_change() {
+    fn run_single_field_change() {
         let a = Snapshot { tick: 100, bodies: vec![] };
         let mut b = a.clone();
         b.tick = 101;
@@ -221,20 +136,14 @@ mod tests {
 
     #[test]
     fn run_multiple_changes() {
-        let a = Snapshot {
-            tick: 0,
-            bodies: vec![
-                Body { id: 1, pos: [0.0; 3], vel: [0.0; 3], active: true },
-                Body { id: 2, pos: [1.0; 3], vel: [0.0; 3], active: false },
-            ],
-        };
-        let b = Snapshot {
-            tick: 0,
-            bodies: vec![
-                Body { id: 1, pos: [9.0; 3], vel: [0.0; 3], active: true },
-                Body { id: 2, pos: [8.0; 3], vel: [1.0; 3], active: false },
-            ],
-        };
+        let a = Snapshot { tick: 0, bodies: vec![
+            Body { id: 1, pos: [0.0; 3], vel: [0.0; 3], active: true },
+            Body { id: 2, pos: [1.0; 3], vel: [0.0; 3], active: false },
+        ]};
+        let b = Snapshot { tick: 0, bodies: vec![
+            Body { id: 1, pos: [9.0; 3], vel: [0.0; 3], active: true },
+            Body { id: 2, pos: [8.0; 3], vel: [1.0; 3], active: false },
+        ]};
         let d = RunDelta::diff(&a, &b);
         let restored: Snapshot = d.apply(&a);
         assert_eq!(restored, b);
@@ -264,42 +173,5 @@ mod tests {
         assert_eq!(d.runs.len(), 1);
         assert_eq!(d.runs[0].offset, 42);
         assert_eq!(d.runs[0].data, vec![99, 88]);
-    }
-
-    // ── SparseVecDelta tests ──
-
-    #[test]
-    fn sparse_identical() {
-        let v = vec![Body { id: 1, pos: [0.0; 3], vel: [0.0; 3], active: true }];
-        let d = SparseVecDelta::diff(&v, &v);
-        assert!(d.entries.is_empty());
-    }
-
-    #[test]
-    fn sparse_one_changed() {
-        let old = vec![
-            Body { id: 1, pos: [0.0; 3], vel: [0.0; 3], active: true },
-            Body { id: 2, pos: [5.0; 3], vel: [0.0; 3], active: false },
-        ];
-        let new = vec![
-            Body { id: 1, pos: [0.0; 3], vel: [0.0; 3], active: true },
-            Body { id: 2, pos: [9.0; 3], vel: [0.0; 3], active: false },
-        ];
-        let d = SparseVecDelta::diff(&old, &new);
-        assert_eq!(d.entries.len(), 1);
-        assert_eq!(d.entries[0].0, 1);
-        assert_eq!(d.entries[0].1.pos[0], 9.0);
-    }
-
-    #[test]
-    fn sparse_element_appended() {
-        let old = vec![Body { id: 1, pos: [0.0; 3], vel: [0.0; 3], active: true }];
-        let new = vec![
-            Body { id: 1, pos: [0.0; 3], vel: [0.0; 3], active: true },
-            Body { id: 2, pos: [5.0; 3], vel: [0.0; 3], active: false },
-        ];
-        let d = SparseVecDelta::diff(&old, &new);
-        assert_eq!(d.entries.len(), 1);
-        assert_eq!(d.entries[0].0, 1);
     }
 }
