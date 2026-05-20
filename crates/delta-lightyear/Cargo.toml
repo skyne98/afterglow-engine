@@ -1,0 +1,11 @@
+[package]
+name = "delta-lightyear"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bevy = { version = "0.18.1", default-features = false }
+lightyear = "0.26.4"
+delta = { path = "../delta" }
+postcard = { version = "1", features = ["alloc"] }
+serde = { version = "1", features = ["derive"] }

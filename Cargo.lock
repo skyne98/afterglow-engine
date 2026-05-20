@@ -2912,6 +2912,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "delta-lightyear"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "delta",
+ "lightyear",
+ "postcard",
+ "serde",
+]
+
+[[package]]
 name = "der"
 version = "0.7.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
