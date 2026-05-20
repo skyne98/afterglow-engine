@@ -1,0 +1,12 @@
+[package]
+name = "prototype-physics-lightyear"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bevy = { version = "0.18.1", default-features = false, features = ["bevy_core_pipeline", "bevy_pbr", "x11"] }
+avian3d = { version = "0.6.1", default-features = false, features = ["3d", "f32", "parry-f32", "serialize"] }
+lightyear = { version = "0.26.4", default-features = false, features = ["std", "client", "server", "crossbeam", "replication", "prediction", "netcode"] }
+lightyear_avian3d = { version = "0.26.4", features = ["3d", "lag_compensation"] }
+serde = { version = "1", features = ["derive"] }
+crossbeam-channel = "0.5"

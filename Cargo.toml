@@ -7,6 +7,7 @@ members = [
     "crates/delta-lightyear",
     "crates/mock-rpg-network-tests",
     "crates/prototypes/prototype-physics-bench",
+    "crates/prototypes/prototype-physics-lightyear",
     "crates/prototypes/prototype-physics-serialize",
 ]
 
