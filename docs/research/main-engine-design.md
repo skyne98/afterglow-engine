@@ -83,7 +83,7 @@ The engine should assume heavy background work:
 - network replication packing
 - save/load serialization
 
-Main-thread-only systems should be treated as temporary. Game simulation must remain deterministic enough to support replay, rollback experiments, and authoritative multiplayer.
+Main-thread-only systems should be treated as temporary. Game simulation must remain deterministic enough to support fixed-input-delay multiplayer and future rollback experiments if they are ever reopened.
 
 ### 5. Multiplayer First And Ready
 
@@ -97,10 +97,10 @@ Required direction:
 - interpolation for remote entities
 - interest management tied to world chunks
 - snapshot/delta replication
-- rollback-friendly input history where useful
+- fixed-delay input history for networked gameplay; rollback-friendly history only where future research proves it useful
 - deterministic gameplay commands for doors, inventory, weapons, spells, and use actions
 - replicated components as a visually separate truth layer; normal Bevy components derive runtime, animation, UI, audio, and editor state from that truth
-- replicated truth is mutated by ordered Bevy systems reading validated command/event messages, not by arbitrary systems writing networked fields directly
+- replicated truth is mutated by ordered Bevy systems reading validated command/messages; correction-sensitive presentation uses entity-backed cues
 - save-game format that is compatible with network replication data
 
 Single-player should run as a local server, not as a separate architecture.

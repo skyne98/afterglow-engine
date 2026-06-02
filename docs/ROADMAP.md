@@ -83,7 +83,7 @@ Deep dive: [bevy-integration-gameplay-audio-ui.md](research/bevy-integration-gam
 
 ## Phase 5: Lightyear Multiplayer Rewrite
 
-Deep dive: [lightyear-migration-plan.md](research/lightyear-migration-plan.md), [lightyear-leafwing-input.md](research/lightyear-leafwing-input.md), [server-rewind-component-history-plan.md](research/server-rewind-component-history-plan.md), [lightyear-rewrite-simplification-plan.md](research/lightyear-rewrite-simplification-plan.md), [network-backend-abstraction.md](research/network-backend-abstraction.md).
+Deep dive: [lightyear-migration-plan.md](research/lightyear-migration-plan.md), [lightyear-leafwing-input.md](research/lightyear-leafwing-input.md), [mock-rpg-standin-plan.md](research/mock-rpg-standin-plan.md), [engine-rpg-harness.md](research/engine-rpg-harness.md), [lightyear-rewrite-simplification-plan.md](research/lightyear-rewrite-simplification-plan.md), [network-backend-abstraction.md](research/network-backend-abstraction.md). Historical rewind research remains in [server-rewind-component-history-plan.md](research/server-rewind-component-history-plan.md).
 
 The previous custom networking stack is now legacy. Delete it instead of
 maintaining a parallel transport/session/replication/prediction path.
@@ -96,9 +96,11 @@ maintaining a parallel transport/session/replication/prediction path.
       demo focused on local first-person controller regression coverage
 - [ ] Register core replicated components/messages through Lightyear instead of `#[derive(Replicate)]` and custom snapshot/delta code
 - [ ] Use Lightyear prediction for owned player entities and Lightyear interpolation for remote entities
-- [x] Implement `ServerRewindPlugin` typed component registration and fixed-post-update history capture
-- [ ] Extend server rewind with checkpoints, `StableEntityId` entity lifecycle events, replay, and correction diffs
-- [x] Port mock RPG late shield/death/corpse/loot/pickup/inventory correction to the current `AfterglowNetworkPlugin` + server rewind boundary
+- [x] Prove Lightyear `PreSpawned` reconciliation for transient predicted interaction entities in `engine-rpg-harness`
+- [x] Prove Lightyear Avian lag-compensated historical collider queries in a focused prototype; keep it optional research, not the main engine path
+- [x] Replace server rewind as the baseline with fixed server input delay, deterministic simulation, client prediction, and Lightyear reconciliation
+- [x] Remove `ServerRewindPlugin` and the unused typed history-capture API from the engine surface
+- [x] Port the late shield/death/corpse/loot/pickup/inventory correction oracle to the current `AfterglowNetworkPlugin` without engine rewind-history dependencies
 - [x] Drive mock RPG late shield/death/pickup/inventory correction through real Lightyear client/server Crossbeam link entities and message registration
 - [x] Prove mock RPG Lightyear Crossbeam replication and prediction/confirmation state across the late shield/death/pickup/inventory correction
 - [x] Keep the FPS controller demo local-only; remove its local Lightyear runner, native `--connect` client launch, and native `--host` server launch
@@ -109,10 +111,10 @@ maintaining a parallel transport/session/replication/prediction path.
 - [x] Add Source-style console overlay UI on top of the existing console core: backtick toggle, text entry, command history navigation, scrollback, tab completion selection, and autocomplete descriptions
 - [x] Remove the FPS demo console request consumer; console networking remains covered by the mock RPG harness
 - [ ] Finish shared console networking beyond the Crossbeam harness: server start/stop/status semantics, live network stats, and latency simulation applied to real links
-- [ ] Drive the full mock RPG scenario suite through native Lightyear UDP/netcode client/server sockets
+- [x] Drive the full mock RPG scenario suite through native Lightyear UDP/netcode client/server sockets
 - [ ] Rewrite security, projectile, smoothing, stress, and interaction scenarios against Lightyear clients/server
 - [x] Delete old custom network modules, old input module, old `afterglow-engine-macros`, old networking benches, and stale docs
-- [ ] Add new server rewind and Lightyear integration benchmarks for 1k, 10k, and 100k entity pressure
+- [ ] Add new Lightyear integration and fixed-delay harness benchmarks for 1k, 10k, and 100k entity pressure
 - [ ] Re-evaluate Steam lobby/auth and Iroh only as Lightyear-compatible platform/admission layers after core multiplayer works
 
 ## Phase 6: Open-World RPG Layer
@@ -133,5 +135,5 @@ Deep dive: [bevy-integration-world-runtime.md](research/bevy-integration-world-r
 - [ ] `v0.1.0`: dense playable cell with movement, physics, interaction, local-server simulation, and save/load
 - [ ] `v0.2.0`: retro PBR, many lights, fog, SPOM, and AABB/Hi-Z visibility debug path
 - [ ] `v0.3.0`: chunk streaming, VT prototype, animation proxies, Steam Audio hooks, and UI
-- [ ] `v0.4.0`: Lightyear multiplayer with Leafwing input, client prediction, interpolation, and authoritative server rewind
+- [ ] `v0.4.0`: Lightyear multiplayer with Leafwing input, client prediction, interpolation, fixed server input delay, and deterministic authoritative simulation
 - [ ] `v1.0.0`: feature-complete foundation for a small horror immersive sim

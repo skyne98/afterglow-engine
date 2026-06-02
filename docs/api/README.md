@@ -3,8 +3,9 @@
 ## Status
 
 The public API has been simplified around Bevy, Lightyear, Leafwing Input
-Manager, and an Afterglow server rewind layer. The older custom networking stack
-has been deleted.
+Manager, deterministic fixed-tick simulation, and fixed server input delay. The
+older custom networking stack and the experimental server-rewind history layer
+have been deleted.
 
 ## Workspace Crates
 
@@ -12,7 +13,8 @@ has been deleted.
 |---|---|
 | `afterglow-engine` | Main engine library |
 | `agx` | Binary launcher |
-| `mock-rpg-network-tests` | Living integration harness for latency, replay, and correction scenarios |
+| `engine-rpg-harness` | Primary Lightyear RPG integration harness for fixed delay, prediction, combat, physics, PreSpawned, and transport scenarios |
+| `mock-rpg-network-tests` | Legacy/frozen regression oracle for older rollback-style scenarios |
 
 ## Target Module Shape
 
@@ -23,19 +25,15 @@ afterglow-engine
 ├── input/                Leafwing wrapper and `AfterglowAction`
 ├── network/
 │   ├── lightyear/        Lightyear plugin/config/protocol glue
-│   ├── interest/         chunk/area peer interest fanout
-│   └── rewind/           authoritative server rewind history/replay/corrections
+│   └── interpolation.rs  small transform interpolation buffer
 ├── controller/           first-person controller
 ├── physics/              Avian-backed physics authoring
-├── persistence/          stable-ID chunk deltas and save/load
-├── world/                cell manifests and chunk lifecycle
 └── perf_hud/             diagnostics and metrics
 ```
 
 The legacy `network::{commands, authority, session, handshake, iroh, steam,
-replication, prediction, reconciliation, interpolation, baseline, local_server,
-rollback}` modules were removed. `network::interest` was rebuilt as a tiny
-chunk-interest adapter instead of reviving the old per-entity interest map.
+replication, prediction, reconciliation, baseline, local_server, rollback,
+rewind, interest}` modules were removed.
 
 ## Runtime Plugins
 
@@ -43,13 +41,10 @@ chunk-interest adapter instead of reviving the old per-entity interest map.
 |---|---|
 | `AfterglowCorePlugin` | Stable entity IDs, chunk IDs, and core schedule resources |
 | `DevConsolePlugin` | Source-style console overlay plus clap-backed parser/executor, cvars, command queue, network requests, and autocomplete support |
-| `AfterglowNetworkPlugin` | Lightyear boundary plus server rewind and chunk-interest plugins |
+| `AfterglowNetworkPlugin` | Lightyear boundary plugin |
 | `AfterglowLightyearPlugin` | Lightyear client/server setup when the `lightyear` feature is enabled |
 | `AfterglowInputPlugin` | Leafwing action mapping for `AfterglowAction`; idempotent when Lightyear already installed the same input manager |
-| `ServerRewindPlugin` | Authoritative server component history skeleton |
 | `AfterglowPhysicsPlugin` | Avian-backed physics authoring and runtime integration |
-| `AfterglowPersistencePlugin` | Stable-ID chunk deltas and save/load helpers |
-| `AfterglowWorldPlugin` | Cell manifest loading and chunk lifecycle |
 | `AfterglowEnginePlugin` | Runtime composition plus perf HUD, tracing, and metrics |
 | `demo::AfterglowDemoPlugin` | Optional demo content only |
 
@@ -60,29 +55,23 @@ chunk-interest adapter instead of reviving the old per-entity interest map.
 | `plugins.md` | Runtime plugin composition |
 | `console.md` | Source-style dev console overlay, parser, executor, cvars, and autocomplete |
 | `input.md` | Leafwing/Lightyear input target API |
-| `network.md` | Lightyear + server rewind target API |
+| `network.md` | Lightyear, fixed input delay, prediction, interpolation, and PreSpawned API |
 | `controller.md` | First-person controller |
 | `physics.md` | Avian-backed physics |
-| `world.md` | Cell manifests and lifecycle |
+| `world.md` | Current world-adjacent core IDs plus planned cell/lifecycle API status |
 
 ## Core Public Concepts
 
 | Item | Owner | Purpose |
 |---|---|---|
-| `StableEntityId` | `core::identity` | Durable save/load, replication, and rewind identity |
-| `ChunkId` | `core::identity` | Stable chunk/cell identifier |
-| `ChunkMembership` | `core::identity` | Streaming, persistence, and chunk-interest filtering membership |
-| `Persistent` | `core::identity` | Entity participates in stable persistence |
-| `Replicated` | `core::identity` | Entity participates in networked gameplay truth |
+| `StableEntityId` | `core::identity` | Durable save/load, replication, and gameplay identity |
+| `StableIdAllocator` | `core::identity` | Allocates stable IDs while avoiding authored/reserved IDs |
 | `RuntimeOnly` | `core::identity` | Entity is excluded from automatic stable ID assignment |
 | `DevConsoleState` | `console` | Console open state, input buffer, history, and scrollback |
 | `ConsoleNetworkRequest` | `console` | Typed console request for connect/disconnect/server/network debug operations |
 | `AfterglowAction` | `input` | Leafwing `Actionlike` enum for gameplay controls |
-| `RewindedEntity` | `network::rewind` | Stable server-rewind entity marker |
-| `RewindDomainId` | `network::rewind` | Authoritative replay domain, such as a combat bubble or cell subsystem |
-| `RewindHistoryBudget` | `network::rewind` | Retained tick/window budget for server rewind |
+| `HistoryTick` | `network` | Plain fixed-step tick counter for deterministic scenario systems |
 | `AfterglowLightyearConfig` | `network::lightyear` | Tick duration, client/server role, and Lightyear protocol settings |
-| `ChunkInterestPeer` / `PeerChunkInterest` | `network::interest` | Per-peer chunk/area interest fanout for replication routing |
 | `NetworkTransformInterpolationBuffer` | `network` | Bounded delayed transform interpolation for remote avatars and replicated physics presentation |
 | `PhysicsBreakable` / `PhysicsGrabbedState` / `PhysicsGrabSpringConfig` | `physics` | Server/master-authoritative physics interaction state for impact/break and damped grab/link/release flows |
 
@@ -96,8 +85,8 @@ inside that model:
 | `PreUpdate` | Lightyear packet/message receive and replicated state application |
 | `FixedPreUpdate` | Leafwing/Lightyear input restore and buffering |
 | `FixedUpdate` | Authoritative gameplay, prediction-safe movement/combat, physics-driving state |
-| `FixedPostUpdate` | Server rewind history capture and Lightyear prediction history |
-| `PostUpdate` | Lightyear message/replication send, correction/cue publication, cleanup |
+| `FixedPostUpdate` | Lightyear prediction history and post-simulation reconciliation hooks |
+| `PostUpdate` | Lightyear message/replication send, predicted cue confirmation, and cleanup |
 
 ## Benchmark Commands
 
@@ -106,8 +95,8 @@ coverage:
 
 | Command | Purpose |
 |---|---|
-| `cargo bench -p afterglow-engine --bench server_rewind` | Typed component history, restore, replay, and correction diff costs |
 | `cargo bench -p afterglow-engine --bench lightyear_integration` | Lightyear replication/input/prediction pressure under Afterglow schedules |
+| `cargo bench -p engine-rpg-harness --bench fixed_delay` | Fixed-input-delay scenario pressure, if/when a harness bench is added |
 | `cargo bench -p afterglow-engine --bench persistence_streaming` | Chunk streaming and persistence pressure |
 
 ## Test Commands
@@ -115,7 +104,9 @@ coverage:
 | Command | Purpose |
 |---|---|
 | `cargo test -p afterglow-engine` | Engine unit and renderless app tests |
-| `cargo test -p mock-rpg-network-tests` | Mock RPG network-boundary and correction harness |
+| `cargo test -p engine-rpg-harness` | Primary Lightyear RPG integration harness |
+| `cargo test -p mock-rpg-network-tests` | Legacy/frozen mock RPG oracle |
+| `cargo test -p prototype-physics-lightyear` | Prototype-only Lightyear physics prediction and lag-compensation tests |
 | `bun run test` | Build-system test wrapper |
 
 ## Dependencies

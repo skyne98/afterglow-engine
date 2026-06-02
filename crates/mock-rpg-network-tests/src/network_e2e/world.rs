@@ -1,8 +1,8 @@
-use afterglow_engine::{core::identity::StableEntityId, network::RewindedEntity};
+use afterglow_engine::core::identity::StableEntityId;
 use bevy::prelude::*;
 
 use super::model::{
-    CombatLog, CombatSnapshot, Combatant, Corpse, DOMAIN, DeathMarker, Inventory, Loot, Projectile,
+    CombatLog, CombatSnapshot, Combatant, Corpse, DeathMarker, Inventory, Loot, Projectile,
 };
 
 pub(super) fn capture_snapshot(app: &mut App) -> CombatSnapshot {
@@ -39,20 +39,19 @@ pub(super) fn restore_snapshot(app: &mut App, snapshot: CombatSnapshot) {
             .iter()
             .find_map(|(id, inventory)| (*id == stable).then_some(inventory.clone()))
             .unwrap_or_default();
-        app.world_mut()
-            .spawn((stable, rewinded(), combatant, inventory));
+        app.world_mut().spawn((stable, combatant, inventory));
     }
     for (stable, projectile) in projectiles {
-        app.world_mut().spawn((stable, rewinded(), projectile));
+        app.world_mut().spawn((stable, projectile));
     }
     for (stable, marker) in death_markers {
-        app.world_mut().spawn((stable, rewinded(), marker));
+        app.world_mut().spawn((stable, marker));
     }
     for (stable, corpse) in corpses {
-        app.world_mut().spawn((stable, rewinded(), corpse));
+        app.world_mut().spawn((stable, corpse));
     }
     for (stable, loot) in loot {
-        app.world_mut().spawn((stable, rewinded(), loot));
+        app.world_mut().spawn((stable, loot));
     }
 }
 
@@ -74,13 +73,6 @@ pub(super) fn despawn_all<T: Component>(world: &mut World) {
     let entities = query.iter(world).collect::<Vec<_>>();
     for entity in entities {
         world.entity_mut(entity).despawn();
-    }
-}
-
-pub(super) fn rewinded() -> RewindedEntity {
-    RewindedEntity {
-        domain: DOMAIN,
-        budget_override: None,
     }
 }
 

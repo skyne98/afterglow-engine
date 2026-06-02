@@ -155,10 +155,6 @@ impl LightyearNetworkedRpg {
         self.server.rejected()
     }
 
-    pub fn history_len<T: Component + 'static>(&self, stable_id: StableEntityId) -> usize {
-        self.server.history_len::<T>(stable_id)
-    }
-
     pub fn has_afterglow_network_resources(&self) -> bool {
         self.server.has_afterglow_network_resources()
     }

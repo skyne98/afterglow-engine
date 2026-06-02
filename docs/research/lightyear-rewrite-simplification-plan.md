@@ -3,12 +3,14 @@
 ## Goal
 
 Fully remove the previous custom networking/input stack and replace it with
-Lightyear, Leafwing Input Manager, `lightyear_inputs_leafwing`, and the custom
-Afterglow server rewind layer described in
-`server-rewind-component-history-plan.md`.
+Lightyear, Leafwing Input Manager, `lightyear_inputs_leafwing`, deterministic
+fixed-tick gameplay, and fixed server input delay. The earlier custom Afterglow
+server rewind layer described in `server-rewind-component-history-plan.md` is now
+historical research, not the baseline.
 
-The desired game-facing result is normal Bevy gameplay code with declarative
-network/rewind registration, not hand-written transport/session/packet plumbing.
+The desired game-facing result is normal Bevy gameplay code with Lightyear
+component/input registration, not hand-written transport/session/packet plumbing
+or engine-owned rewind history.
 The detailed step-by-step migration plan lives in
 `docs/research/lightyear-migration-plan.md`.
 
@@ -48,7 +50,7 @@ with local `rg --files | wc -l` counts.
 | `src/network/interest` | Delete | Lightyear replication filtering or later tiny adapter |
 | `src/network/baseline` | Delete | Lightyear connect/replication plus Afterglow persistence |
 | `src/network/local_server` | Delete | Lightyear host/client/server setup |
-| `src/network/rollback` | Replace | New typed `network::rewind`; salvage only concepts/tests worth porting |
+| `src/network/rollback` | Delete | Fixed input delay plus Lightyear reconciliation replaces the old rollback path |
 | `src/input` | Delete | Leafwing Input Manager plus thin Afterglow action enum |
 | `crates/afterglow-engine-macros` | Delete | Use Lightyear registration/derive patterns directly |
 
@@ -57,10 +59,10 @@ with local `rg --files | wc -l` counts.
 | Path | Estimate | Purpose |
 |---|---:|---|
 | `src/network/lightyear` | 300-450 LOC | `AfterglowLightyearPlugin`, tick config, protocol registration helpers, schedule integration |
-| `src/network/rewind` | 900-1,300 LOC | typed component history, checkpoints, entity lifecycle, replay, correction diffing |
+| `src/network/rewind` | 0 LOC | Removed; not needed for the fixed input-delay baseline |
 | `src/input_leafwing` or rewritten `src/input` | 200-350 LOC | `AfterglowAction`, Leafwing plugin wrapper, test/script input helpers |
 | rewritten mock RPG harness | 1,000-1,500 LOC | current network-boundary tests now; Lightyear client/server scenarios later |
-| new benches | 300-500 LOC | `server_rewind`, component history, Lightyear integration pressure |
+| new benches | 300-500 LOC | Lightyear integration and fixed-delay harness pressure |
 
 ## Net LOC Estimate
 
@@ -85,14 +87,14 @@ Round this down for unknown glue and compatibility work: expect roughly **10k to
    one message, and one Leafwing input type.
 4. Port the mock RPG smoke path to the current network boundary and delete the
    custom transport/session/handshake modules.
-5. Implement `network::rewind` with typed component checkpoints/deltas and entity
-   lifetime events.
-6. Port the late shield/death/corpse/loot regression test to server rewind, then
-   drive it through real Lightyear client/server once link setup lands.
+5. Use fixed server input delay for late-command ordering instead of
+   `network::rewind`.
+6. Port the late shield/death/corpse/loot regression oracle to the fixed-delay
+   model, then drive it through real Lightyear client/server once link setup lands.
 7. Delete custom replication, prediction, reconciliation, interpolation, interest,
    baseline, old rollback, macros, old benches, and stale docs.
-8. Add focused benchmarks for Lightyear integration and server rewind component
-   history at 1k, 10k, and 100k entities.
+8. Add focused benchmarks for Lightyear integration and fixed-delay harness
+   pressure at 1k, 10k, and 100k entities.
 
 ## Regression Gate
 
@@ -101,9 +103,9 @@ The rewrite is not complete until this passes on the new stack:
 ```text
 T100: A raises shield.
 T108: B arrow appears to kill A; corpse and loot spawn provisionally.
-T111: A's late-but-valid shield input arrives.
-Replay: shield blocks arrow.
-Correction: A lives; corpse, loot, death cue, and stale projectile hit vanish.
+T100+delay: Server processes A's shield before later attack resolution.
+Delayed deterministic order: shield blocks arrow.
+Correction/reconciliation: A lives; no durable corpse, loot, death cue, or stale hit remains.
 ```
 
 ## Risks
@@ -112,6 +114,6 @@ Correction: A lives; corpse, loot, death cue, and stale projectile hit vanish.
 |---|---|
 | Lightyear/Bevy version mismatch | Pin Lightyear 0.26.x if staying on Bevy 0.18, or upgrade Bevy deliberately |
 | Leafwing entity-scoped input only | Put networked controls on avatar/control entities; keep UI/global input separate |
-| Full server rewind complexity | Rewind only authoritative gameplay domains, not the open world or presentation |
+| Full server rewind complexity | Avoid it in the baseline; use fixed input delay, prediction, determinism, and Lightyear reconciliation |
 | Lost old transport features | Use Lightyear built-in transports first; reintroduce custom transport only after a proven gap |
 | Big-bang compile breakage | Migrate in feature-gated phases, but delete legacy paths once replacement tests pass |

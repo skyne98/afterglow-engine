@@ -4,8 +4,7 @@ use leafwing_input_manager::action_state::ActionState;
 use crate::input::AfterglowAction;
 
 use super::{
-    util, ControllerStance, FirstPersonControllerConfig, FirstPersonMotorState,
-    is_walkable_normal,
+    ControllerStance, FirstPersonControllerConfig, FirstPersonMotorState, is_walkable_normal, util,
 };
 
 pub fn integrate_first_person_motor(

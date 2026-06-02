@@ -4,6 +4,8 @@
 - Use semantic commits (feat, fix, chore, refactor, docs, test, etc.)
 - Agent must always maintain a docs/api/ directory with notes describing the fully up-to-date engine API surface per system
 - Keep docs/research/ for design notes, benchmarks, architectural investigations, and trade-off analyses
+- Keep docs/subject/ for stable, comprehensive reference notes on key dependencies and subjects: feature catalogs, module maps, full API reference tables, test-backed usage, and gotchas. These are authoritative references, not design investigations.
+  Example subject notes: Lightyear API reference, Avian3d API reference, lightyear_avian3d API reference.
 - Keep docs/ROADMAP.md up to date with the current vision
 - Write extensive unit and regression tests; do not rely on memory, write tests for everything
 - For bug fixes, issue fixes, and review findings, use the regression loop by default: first write or extend a focused test that reproduces the issue, run it and confirm it fails for the expected reason, apply the smallest correct fix, then rerun the test and confirm it passes. If the issue cannot be reproduced with an automated test, document why and use the closest practical verification.
@@ -21,16 +23,77 @@
 - No files above 500 LOC
 - Build system lives in build-system/ — use `bun run <command>` (e.g. `bun run native`, `bun run wasm`, `bun run check`)
 
-# opencode / codex usage
+# Agent Role: Manager, Integrator, Verifier
 
-- This agent may be invoked by either `opencode` or `codex` (legacy name). Both use the same binary — `opencode` is the canonical name going forward.
-- opencode has a **permission system** that prompts for approval before any non-read tool executes (write, edit, bash, etc.). To bypass all permission prompts (e.g. in CI, batch scripts, or when you fully trust the prompt), pass `--dangerously-skip-permissions`. In session/interactive mode you typically omit this and approve interactively.
-- The `--pure` flag disables all external plugins (no MCP servers, no custom tools). Use this for clean, reproducible research runs.
+The top-level agent acts as a **manager, integrator, and verifier**. It does not do grunt work directly. Instead it:
 
-## Delegation patterns (preserve context, avoid reading big files yourself)
+- **Spawns subagents** for every substantial piece of work: implementation, research, documentation, testing, review. Spawn multiple subagents in parallel when the work is independent.
+- **Verifies output** — reads what subagents produced, checks for correctness, completeness, laziness, shortcuts, and sneaky omissions. If a subagent slacked or did not follow instructions, respawn a new agent to fix the gaps or do it yourself. Do not trust subagents blindly; sample their output and cross-check against requirements.
+- **Integrates results** — merges subagent output back into the project, resolves conflicts, updates cross-references, runs the final verification suite (lint, test, build), and commits if asked.
+- **Keeps the big picture** — the manager holds the overall architecture, constraints, and roadmap. Subagents get narrow, well-scoped prompts and should not be making cross-cutting design decisions.
+- **Dispatches agents for implementation** — for any substantial feature change (new system, refactor, bug fix across multiple files), the manager does NOT write the code directly. Instead it writes the plan/spec, spawns implementation subagents with precise instructions, then verifies and integrates their output. The manager does grunt work only for trivial single-line changes; everything else is delegated.
+- **Reviews agent output critically** — agents will take shortcuts, leave TODOs, ignore edge cases, skip tests, or produce "looks correct" code that doesn't compile. The manager samples output, cross-checks against requirements, runs tests, and respawns agents to fix gaps. Do not trust subagents blindly.
 
-- Use the **`Task` tool** (available inside the agent session) to spawn a subagent for research, sweeping codebase scans, or multi-file questions. This preserves your own context window — you don't need to read huge files yourself.
-- The Task tool takes `subagent_type`: use `"explore"` for pure read-only questions about the codebase, `"general"` for write tasks or multi-step workflows. Be explicit: tell the subagent exactly which files to read, what question to answer, and what format to return the answer in. Keep the scope narrow.
-- Use task subagents for: scanning repos for patterns, cross-referencing types across crates, understanding unfamiliar subsystems, generating summaries of large modules (>200 lines), finding all callers of a function, etc.
-- The **`opencode run` CLI** (`opencode run -m <model> --pure --dir <path> "...prompt..."`) is the equivalent for running standalone prompts from a shell. Prefer the Task tool during an active session; use `opencode run` when outside a session or in a script.
-- When spawning research agents, keep them read-only by default, give them narrow prompts, ask for primary-source links, and merge the findings back into `docs/research/` yourself.
+## Subagent & Delegation Mechanisms
+
+Use only the **`Task` tool** for subagent delegation. Pi subagent and `opencode run` CLI are available but not used currently.
+
+The **`Task` tool** spawns a subagent from within the session.
+
+**Subagent types:**
+- `"explore"` — read-only tools only (Read, Grep, Glob, WebFetch, etc.). Safe for research where you want guarantees no files are modified.
+- `"general"` — full tool access including Write, Edit, Bash. Use for implementation, documentation generation, testing, and any task that needs to produce output.
+
+**Lifecycle:**
+- Each spawn gets a **fresh context** (no prior messages) unless you pass a `task_id`.
+- Pass a prior `task_id` to resume the same subagent session with its full message history preserved.
+- Subagents return a single final message. The output is not visible to the user — you must relay it.
+- Option `background: true` spawns asynchronously; poll with `task_status(task_id, wait=false)`.
+- Timeout control via `description` (short, human-readable name) — the subagent runs until it finishes or hits its own token/tool limits.
+
+**Typical prompt structure:**
+```
+Task(
+  description="Implement XYZ",
+  subagent_type="general",
+  prompt="You are doing XYZ. Read files A, B. Implement C. Verify with D. Return summary."
+)
+```
+
+Be explicit about: which files to read, what to produce, what format to return, and how to verify. Keep scope narrow.
+
+**IMPORTANT: Always set maximum reasoning effort on subagents.** Every `Task` spawn must include a prompt instruction like "Think carefully and exhaustively about this. Use maximum reasoning effort. Consider all edge cases, cross-cutting concerns, and subtle interactions before responding." This ensures subagents produce thorough, high-quality output rather than superficial first-pass answers.
+
+## Delegation Guidelines
+
+- **Parallelise aggressively** — spawn independent subagents concurrently. Reading three different crate sources? Three subagents.
+- **Keep prompts narrow** — one subagent = one concern. Do not ask a single subagent to research Lightyear AND write code AND run tests. Split.
+- **Specify output format** — tell the subagent exactly what to return (e.g. "Write the file to path X", "Return a summary of key findings in bullet points").
+- **Verify everything** — re-read files written by subagents. Run tests they claim pass. Check they did not take shortcuts, leave TODOs, ignore edge cases, or make unwarranted assumptions.
+- **Fix gaps** — if a subagent produced incomplete work, spawn a new agent with specific instructions to fix the gaps, or do the fix yourself.
+- **Clean up** — subagents may leave temporary files, incomplete stubs, or debugging artifacts. Remove them.
+- **Context preservation** — use `task_id` to follow up on prior subagent work when the task requires multiple rounds. Otherwise spawn fresh for independence.
+
+## Development Regiment: Plan → Verify → Iterate
+
+For every plan step or substantial feature change, follow this loop until zero issues remain:
+
+1. **Implement** — do the work (directly or via spawned agents).
+   - The manager NEVER writes feature code directly. Subagents do the implementation.
+   - The manager writes the spec, spawns narrow implementation subagents, then verifies.
+   - Trivial single-line fixes are the only exception (and even those should be reviewed).
+2. **Spawn 4 review agents** — dispatch 4 subagents with the same source files and plan, each with a distinct focus:
+   - Architecture reviewer — checks design, extensibility, separation of concerns
+   - Implementation reviewer — checks correctness, completeness, code quality
+   - Plan alignment reviewer — checks that the implementation matches the spec
+   - Edge-case reviewer — checks for missed edge cases, future-proofing
+3. **Evaluate and fix** — read all reviews, categorize issues by severity, fix the blocking and medium ones.
+4. **Ask** — present the status and check if another round is needed.
+5. **Iterate** — repeat steps 2-4 until all reviewers report SATISFACTORY with zero new issues.
+6. **Proceed** — move to the next step in the plan.
+
+Key rules:
+- Reviewers must return specific line numbers, not vague criticism.
+- "No new issues" means exactly that — reviewers should be instructed to be critical and look for anything; SATISFACTORY means they found nothing actionable.
+- Cosmetic preferences are not blocking issues. Real bugs and plan gaps are.
+- The manager integrates the fixes and runs the final verification (compile, test).

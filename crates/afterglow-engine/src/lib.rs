@@ -169,12 +169,9 @@ fn default_plugins() -> PluginGroupBuilder {
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        AfterglowEnginePlugin,
-        keep_windowed_runtime_unthrottled_when_unfocused,
-    };
     #[cfg(feature = "lightyear")]
     use crate::AfterglowRuntimePlugins;
+    use crate::{AfterglowEnginePlugin, keep_windowed_runtime_unthrottled_when_unfocused};
     use bevy::{
         app::App,
         winit::{UpdateMode, WinitSettings},

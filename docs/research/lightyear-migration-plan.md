@@ -2,6 +2,10 @@
 
 ## Decision
 
+**Current status:** The migration baseline is Lightyear + Leafwing input + fixed
+server input delay. The planned Afterglow server-rewind layer was removed; it is
+kept only as historical research in `server-rewind-component-history-plan.md`.
+
 Use Lightyear's built-in transport stack for the rewrite. Do not build a custom
 Iroh, Steam, memory, or generic `NetworkTransport` adapter in phase one.
 
@@ -10,7 +14,7 @@ transport choice. Transport choice moves below Lightyear:
 
 ```text
 Afterglow gameplay systems
-  -> Afterglow server rewind
+  -> Afterglow fixed-input-delay authoritative simulation
   -> Lightyear replication, messages, input, prediction, interpolation
   -> Lightyear-supported transports
 ```
@@ -40,7 +44,7 @@ lightyear_inputs_leafwing
   - input snapshots by tick
   - input delay
   - redundant input sending
-  - rollback input restore
+  - prediction input restore
 
 Lightyear
   - client/server/link entities
@@ -50,12 +54,12 @@ Lightyear
   - remote interpolation
   - built-in transports
 
-Afterglow server rewind
-  - StableEntityId and RewindedEntity
-  - typed component checkpoints/deltas
-  - spawn/despawn lifecycle history
-  - replay fixed gameplay for late valid input
-  - emit component/entity/cue corrections
+Afterglow fixed input delay
+  - StableEntityId for durable gameplay identity
+  - process input tick T at T + delay
+  - deterministic fixed gameplay for authoritative ordering
+  - Lightyear replication/reconciliation for corrections
+  - PreSpawned entity matching for predicted interactions and cues
 
 Afterglow gameplay
   - normal Bevy fixed-tick systems
@@ -89,9 +93,9 @@ Actions:
 
 Exit criteria:
 
-1. Docs and roadmap name Lightyear + Leafwing + server rewind as the only target.
+1. Docs and roadmap name Lightyear + Leafwing + fixed input delay as the only baseline target.
 2. New multiplayer work has a clear place in `network::lightyear`,
-   `network::rewind`, or Leafwing input.
+   Lightyear protocol registration, or Leafwing input.
 
 ## Phase 1: Dependencies And Features
 
@@ -191,7 +195,7 @@ Add:
 
 | Path | Purpose |
 |---|---|
-| `src/network/mod.rs` | Thin re-export of `lightyear` and `rewind` modules |
+| `src/network/mod.rs` | Thin re-export of Lightyear integration and interpolation helpers |
 | `src/network/lightyear/mod.rs` | Public Lightyear integration module |
 | `src/network/lightyear/config.rs` | `AfterglowLightyearConfig` |
 | `src/network/lightyear/plugin.rs` | `AfterglowLightyearPlugin` |
@@ -229,7 +233,7 @@ With Lightyear protocol registration:
 ```rust
 app.register_component::<Health>();
 app.register_component::<CombatTransform>();
-app.register_message::<DamageCue>();
+app.register_component::<DamageNumberCue>().add_prediction();
 ```
 
 Keep the exact Lightyear APIs version-specific and verified against docs.rs.
@@ -240,7 +244,7 @@ First replicated components:
 |---|---|
 | `CombatTransform` or equivalent gameplay transform | Movement and hit validation |
 | `Health` | Death/correction tests |
-| `ShieldState` | Late shield rewind test |
+| `ShieldState` | Fixed-delay shield ordering test |
 | `Hurtbox` | Combat validation |
 | `ProjectileState` | Projectile lifetime and hit tests |
 
@@ -249,7 +253,6 @@ Spawn pattern target:
 ```rust
 commands.spawn((
     StableEntityId::new(...),
-    RewindedEntity::new(...),
     Health::new(100),
     ShieldState::default(),
     Replicate::to_clients(NetworkTarget::All),
@@ -294,47 +297,29 @@ Tests:
 3. Remote entity moves smoothly with interpolation.
 4. Presentation-only camera state is not replicated.
 
-## Phase 6: Server Rewind Skeleton
+## Phase 6: Fixed Input Delay Baseline
 
-Goal: add the Afterglow-specific layer Lightyear does not provide.
+Goal: add the Afterglow-specific ordering layer Lightyear does not provide.
 
 Add:
 
-| Path | Purpose |
-|---|---|
-| `src/network/rewind/mod.rs` | Plugin and public API |
-| `src/network/rewind/component.rs` | component snapshot descriptors and app extensions |
-| `src/network/rewind/history.rs` | typed checkpoints and per-tick changes |
-| `src/network/rewind/entity.rs` | `StableEntityId`, `RewindedEntity`, lifecycle events |
-| `src/network/rewind/replay.rs` | restore and replay driver |
-| `src/network/rewind/correction.rs` | correction diff output |
+Implemented shape:
 
-Registration API:
-
-```rust
-app.rewind_component::<Health>();
-app.rewind_component::<ShieldState>();
-app.rewind_component_with::<AiState, AiTruthSnapshot>(snapshot_ai, restore_ai);
-```
-
-Storage model:
-
-1. Checkpoints provide full state anchors.
-2. Per-tick component changes use Bevy `Added<T>`, `Changed<T>`, and
-   `RemovedComponents<T>`.
-3. Entity spawn/despawn lifecycle is tracked by `StableEntityId`.
-4. History is bounded by ticks or duration.
+1. Clients send ticked `ActionState<AfterglowAction>`.
+2. The server queues input for `delay_ticks` before processing.
+3. Fixed gameplay systems process delayed inputs in deterministic tick order.
+4. Lightyear replication and prediction reconciliation publish the authoritative result.
+5. `HistoryTick` is only a shared tick counter for tests and scenario ordering.
 
 Tests:
 
-1. Record changed component by tick.
-2. Restore checkpoint plus deltas to an old tick.
-3. Restore removed component.
-4. Restore spawned entity absence before spawn.
-5. Restore despawned entity presence before despawn.
-6. Reject restore outside retained history.
+1. Input delay defers delivery by the configured tick count.
+2. Duplicate and reordered inputs produce deterministic results.
+3. Stale inputs outside the retention window are rejected.
+4. Same-tick shield/attack ordering is stable.
+5. Server state remains authoritative after client prediction.
 
-## Phase 7: Late Shield Regression
+## Phase 7: Late Shield Regression Without Rewind
 
 Goal: prove the rewrite solves the motivating fairness case.
 
@@ -342,11 +327,11 @@ Scenario:
 
 ```text
 T100: A raises shield.
-T108: server, missing A input, simulates B arrow killing A.
-T108: death spawns corpse and loot as rewinded entities.
-T111: A's valid shield input for T100 arrives.
-Replay: shield blocks arrow.
-Correction: A lives; corpse, loot, death cue, and projectile-hit cue vanish.
+T100: A raises shield.
+T101: B attacks A.
+T100+delay: server processes A's shield before B's later attack.
+Deterministic order: shield blocks arrow.
+Reconciliation: A lives and no durable corpse, loot, death cue entity, or stale hit remains.
 ```
 
 Assertions:
@@ -354,9 +339,9 @@ Assertions:
 1. A has nonzero health and alive state after correction.
 2. Corpse entity is absent on server and client.
 3. Loot entity is absent on server and client.
-4. Death cue is removed or canceled by ID.
-5. No duplicate shield/block/damage cues are committed.
-6. A stale late shield older than history is rejected.
+4. Death cue entity is despawned or never confirmed.
+5. No duplicate shield/block/damage cue entities are committed.
+6. A stale shield outside the input retention window is rejected.
 
 This is the merge gate before deleting the old rollback/replication tests.
 
@@ -397,7 +382,7 @@ Delete in this order to reduce compile churn:
 11. `network/reconciliation`
 12. `network/interpolation`
 13. `network/replication`
-14. legacy `network/rollback` once `network::rewind` owns the replacement tests
+14. legacy `network/rollback`; fixed input delay and Lightyear own the replacement tests
 15. `afterglow-engine-macros`
 16. old networking benches
 
@@ -419,7 +404,7 @@ Order:
 Tests:
 
 1. Two native clients connect to native server over chosen Lightyear transport.
-2. Packet loss/reorder simulation still passes server rewind tests.
+2. Packet loss/reorder simulation still passes fixed-input-delay tests.
 3. Disconnect and reconnect do not resurrect deleted persistent entities.
 4. Steam/lobby tests remain manual-gated until real Steam environment exists.
 
@@ -430,7 +415,7 @@ Delete old networking benches that measure removed code:
 | Old bench | Replacement |
 |---|---|
 | `replication` | Lightyear replication integration pressure |
-| `authority` | server gameplay validation and rewind intake |
+| `authority` | server gameplay validation and delayed input intake |
 | `prediction` | Lightyear prediction integration smoke/pressure |
 | `reconciliation` | Lightyear correction integration smoke/pressure |
 | `interpolation` | Lightyear interpolation integration smoke/pressure |
@@ -441,7 +426,7 @@ Add:
 
 | New bench | Cases |
 |---|---|
-| `server_rewind` | 1k/10k/100k entities, sparse and dense changes, restore/replay/diff |
+| `fixed_delay_harness` | 1k/10k/100k entities, delayed inputs, duplication, reordering, and replication pressure |
 | `lightyear_integration` | replicated spawn/update/despawn, predicted local movement, remote interpolation |
 | `persistence_streaming` | keep existing streaming/persistence pressure |
 
@@ -451,7 +436,7 @@ Required doc updates after code migration:
 
 1. `docs/api/README.md` reflects actual module tree.
 2. `docs/api/input.md` documents only Leafwing input.
-3. `docs/api/network.md` documents only Lightyear + server rewind.
+3. `docs/api/network.md` documents only Lightyear + fixed input delay.
 4. `docs/ROADMAP.md` marks completed migration tasks.
 5. Research notes for Iroh/Steam stay historical and clearly say not phase-one
    architecture.
@@ -463,12 +448,12 @@ Required doc updates after code migration:
 The migration is complete when:
 
 1. `cargo test -p afterglow-engine` passes without old network/input modules.
-2. `cargo test -p mock-rpg-network-tests` passes on Lightyear + server rewind.
-3. Late shield/canceled death/corpse/loot regression passes.
+2. `cargo test -p engine-rpg-harness` passes on Lightyear + fixed input delay.
+3. Late shield/canceled death/corpse/loot regression remains covered by the legacy oracle until deleted.
 4. The old `afterglow-engine-macros` crate is removed from the workspace.
 5. Old optional `iroh`, `steamworks`, `tokio`, `bytes`, and `ggrs` dependencies
    are gone unless reintroduced for non-network reasons.
-6. New benchmarks exist for server rewind and Lightyear integration.
+6. New benchmarks exist for fixed-delay harness pressure and Lightyear integration.
 7. Docs describe the actual Lightyear architecture and no longer present the old
    custom stack as current API.
 
@@ -490,7 +475,7 @@ Expected replacement code:
 |---|---:|
 | Lightyear integration | 300-450 |
 | Leafwing input wrapper | 200-350 |
-| server rewind | 900-1,300 |
+| fixed delay + harness glue | 300-700 |
 | rewritten mock RPG harness | 2,000-2,800 |
 | new benchmarks | 300-500 |
 

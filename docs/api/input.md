@@ -33,8 +33,8 @@ fn player_combat(
 }
 ```
 
-Systems that affect replicated or rewindable gameplay state must run in
-`FixedUpdate` or the Lightyear-compatible fixed gameplay schedule.
+Systems that affect replicated gameplay state must run in `FixedUpdate` or the
+Lightyear-compatible fixed gameplay schedule.
 
 ## Default Gameplay Bindings
 

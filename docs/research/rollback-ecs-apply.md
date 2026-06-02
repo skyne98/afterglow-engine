@@ -1,6 +1,10 @@
 # Applying RunDelta to Bevy ECS Components
 
 **Date:** 2026-05-19
+**Status:** Historical physics-snapshot research only. The current networking
+baseline does not apply `RunDelta` snapshots to ECS for rollback. It uses fixed
+server input delay, deterministic fixed-tick simulation, and Lightyear
+reconciliation.
 
 ## Problem
 

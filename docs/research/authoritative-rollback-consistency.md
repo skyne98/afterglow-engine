@@ -1,5 +1,12 @@
 # Authoritative Rollback Consistency
 
+**Status: Historical research, superseded for the baseline.** This document
+captures rollback/replay design investigation. The current engine path does not
+use rollback domains, server rewind, replay drivers, or correction diffs. The
+baseline uses fixed server input delay, deterministic fixed-tick gameplay,
+Lightyear client prediction, and Lightyear reconciliation. Keep this document as
+research material only.
+
 ## TLDR
 
 Afterglow should not try to manually mark every possible irreversible gameplay
@@ -269,11 +276,11 @@ When a valid late command arrives:
 5. Replay all accepted commands in deterministic order through the fixed gameplay
    schedule until the current server tick.
 6. Compare resulting authoritative state to the previous current state.
-7. Publish snapshot/delta corrections and cue corrections to clients.
+7. Publish snapshot/delta and entity lifecycle corrections to clients.
 
 This removes per-message manual cleanup. A "B died" outcome that vanishes after
 replay is not manually undone; the corrected snapshot says B is alive, and the
-current cue log no longer contains the final death cue.
+death cue entity is absent or unconfirmed.
 
 Fast-moving projectiles and player body-blocking use the same rule. Collision is
 evaluated against provisional transforms and swept colliders during replay. If a
@@ -304,25 +311,16 @@ Ammo, cooldown, projectile hit, damage, and cues follow from the replayed state.
 
 ### Cues
 
-Cues are deterministic gameplay outputs, not Bevy `MessageWriter` side effects.
-They are stored with:
+Cues are deterministic presentation outputs, not Bevy `MessageWriter` side
+effects. Near term, correction-sensitive cues should be small Lightyear-predicted
+entities: hit markers, damage numbers, decals, beams, or fadeable audio emitters.
+The client predicts them with `PreSpawned`; the server confirms them with the same
+hash or lets Lightyear expire the unmatched entity.
 
-- domain ID
-- tick
-- stable sequence number
-- involved stable entity IDs
-- cue kind
-- compact payload
-- final/current generation marker
-
-Presentation systems consume cue diffs:
-
-- new cue: play sound, spawn effect, show UI toast
-- cue removed by correction: stop/fade if long-lived, ignore if short-lived
-- cue changed: update UI state from corrected truth
-
-For DX simplicity, game code should emit cues through one engine API. The engine
-handles rollback invalidation and cue diffing.
+Presentation systems should key reversible effects to the cue entity. Entity
+despawn means cancellation or fade. One-shot effects that cannot be stopped should
+wait for confirmation or be harmless local feedback. A retained cue log can be
+added later if replay auditability needs more than entity lifetime.
 
 ### Gameplay Message Streams
 
@@ -376,7 +374,7 @@ Clients use three layers:
 
 The client does not need a manual rollback cleanup API. On correction, it applies
 the server snapshot, replays still-unacknowledged local commands, and lets
-presentation derive from corrected truth and cue diffs.
+presentation derive from corrected truth and cue entity lifetime.
 
 ## Implementation Direction
 
@@ -444,14 +442,14 @@ put particles or idle world entities in the retained gameplay message stream.
 - `StableEntityId` and chunk membership remain the right identity foundation.
 - The old command, prediction, interpolation, baseline, and transport modules are
   migration references only; Lightyear and Leafwing should replace them.
-- The new server rewind layer should use typed component history first. Byte
-  snapshots are optional for small deterministic subsystems only.
+- The removed server-rewind layer is historical research only. Byte snapshots are
+  optional for small deterministic subsystems only if that research is reopened.
 
 ### Change Next
 
-Replace the idea of per-message commit delay with domain replay as the main safety
-mechanism. A global retained-history window is still required, but games should
-not tune "death delay" or "door delay" manually.
+Historical proposal: replace per-message commit delay with domain replay as the
+main safety mechanism. Current baseline decision: do not do this; use fixed input
+delay instead.
 
 Add a higher-level API on top of `DeterministicRollbackBuffer`:
 
@@ -468,15 +466,15 @@ replay pure Rust test logic. It does not need Bevy world snapshotting on day one
 
 ### Test Requirements
 
-`mock-rpg-network-tests/tests/network_e2e.rs` now covers the current Bevy ECS
-network boundary:
+`mock-rpg-network-tests/tests/network_e2e.rs` is now a legacy/frozen oracle for
+older rollback-style scenarios:
 
 - Two players exchange spell projectiles.
 - Player B sends a shield command late.
 - The local packet simulator applies latency, duplication, reordering, drops,
-  and stale delivery around `AfterglowNetworkPlugin` and `RewindHistoryStore`.
-- The server restores ECS state, replays normal gameplay systems, and corrects
-  "B died" into "B survived".
+  and stale delivery around `AfterglowNetworkPlugin`.
+- The legacy harness owns its own local snapshot/replay logic and corrects "B
+  died" into "B survived" without engine rewind-history APIs.
 - No duplicate final death, stale combat log truth, stale projectile hit,
   orphaned death marker, or orphaned loot remains in the authoritative model.
 
@@ -488,8 +486,8 @@ Add a sync-test style harness:
 
 ## Decision
 
-Use authoritative domain snapshot + command replay as the universal consistency
-model. Do not build feature-specific undo hooks. Do not require game authors to
-manually classify every message as reversible or irreversible. The only hard rule
-for authors is simpler: gameplay truth must live in rollback/snapshot-managed
-state; presentation reads truth and cue diffs.
+For the current baseline, use fixed server input delay as the universal
+consistency model. Do not build feature-specific undo hooks and do not add a
+server rewind layer unless a future feature proves fixed delay plus Lightyear
+reconciliation is insufficient. Gameplay truth still belongs in deterministic
+fixed-tick state; presentation reads replicated truth and cue entity lifetime.

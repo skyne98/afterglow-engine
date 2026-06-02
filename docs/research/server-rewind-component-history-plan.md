@@ -1,5 +1,12 @@
 # Server Rewind Component History Plan
 
+**Status: Historical research, not current architecture.** The engine no longer
+ships `ServerRewindPlugin`, `RewindHistoryStore`, `RewindedEntity`, component
+history registration, restore/replay, or correction-diff APIs. The current
+networking baseline uses client prediction, deterministic fixed-tick simulation,
+fixed server input delay, and Lightyear reconciliation. Keep this note only as a
+reference if a future feature explicitly reopens server rewind research.
+
 ## Goal
 
 Build an authoritative server rewind layer that lets game code stay close to
@@ -194,7 +201,7 @@ When a late command for tick `T` arrives:
 3. Insert the command into the domain command log.
 4. Replay fixed gameplay from T through current server tick.
 5. Diff the previous live authoritative result against the replay result.
-6. Replicate component, spawn, despawn, and cue corrections.
+6. Replicate component changes plus entity spawn/despawn corrections, including cue entities.
 ```
 
 ## Change Detection
@@ -265,7 +272,7 @@ state, UI state, or large AI caches are blindly snapshotted.
 6. Add replay driver that runs the authoritative fixed gameplay schedule from a
    restored tick to the current tick.
 7. Add correction diff output for component updates, entity spawns, entity
-   despawns, and gameplay cue add/remove IDs.
+   despawns, and entity-backed gameplay cues.
 8. Add benchmarks for 1k, 10k, and 100k entities with sparse and dense changes.
 9. Add mock RPG regression tests for late shield, canceled death, corpse removal,
    loot removal, projectile lifetime, duplicate packets, reordered packets, and

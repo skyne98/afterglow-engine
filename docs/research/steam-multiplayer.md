@@ -3,7 +3,7 @@
 ## TLDR
 
 Status: historical research. The current multiplayer target is Lightyear +
-Leafwing + Afterglow server rewind. Steam should be treated as platform
+Leafwing + fixed server input delay. Steam should be treated as platform
 admission and release infrastructure, not as a replacement for Lightyear's
 gameplay networking path. Prefer Lightyear's Steam support if it fits; keep Steam
 lobbies, identity, auth, ownership checks, invites, and handoff metadata as thin
@@ -15,7 +15,7 @@ The updated networking direction is documented in
 The practical path is:
 
 1. Move gameplay networking to Lightyear.
-2. Keep Leafwing input and server rewind above Lightyear.
+2. Keep Leafwing input and fixed-delay authoritative simulation above Lightyear.
 3. Add Steam lobby/auth/identity only after the core Lightyear path works.
 4. Avoid reintroducing the old custom `NetworkTransport` abstraction.
 

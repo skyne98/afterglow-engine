@@ -6,13 +6,11 @@ This note maps the roadmap's foundation, streaming, persistence, and multiplayer
 
 Current local state, with multiplayer caveat:
 
-- [lib.rs](/home/fox/Project/afterglow-engine/crates/afterglow-engine/src/lib.rs:20) registers the core, input, network, world, and perf HUD plugins.
+- [lib.rs](/home/fox/Project/afterglow-engine/crates/afterglow-engine/src/lib.rs:20) registers core, console, input, network, physics, first-person controller, and perf HUD plugins.
 - [core/identity.rs](/home/fox/Project/afterglow-engine/crates/afterglow-engine/src/core/identity.rs:1) owns stable IDs, chunk membership, persistence markers, replication markers, and runtime registries.
-- [world/cell.rs](/home/fox/Project/afterglow-engine/crates/afterglow-engine/src/world/cell.rs:1) owns cell manifests, cell load requests, baseline spawning, and the built-in demo manifest.
-- [world/lifecycle.rs](/home/fox/Project/afterglow-engine/crates/afterglow-engine/src/world/lifecycle.rs:1) owns the generic chunk lifecycle state machine and automatic save/apply hooks.
-- [persistence/mod.rs](/home/fox/Project/afterglow-engine/crates/afterglow-engine/src/persistence/mod.rs:1) owns stable-ID keyed chunk deltas, one-loaded-cell save/load, registered serializable components, and deleted authored-object tombstones.
-- The existing custom multiplayer modules under `network/` are legacy and should
-  be replaced by Lightyear + Leafwing + server rewind.
+- `world/` and `persistence/` modules are planned but not currently present in the engine source tree.
+- The existing custom multiplayer modules under `network/` are legacy and have
+  been replaced by Lightyear + Leafwing input plus fixed server input delay.
 
 ## Hard Rule: Stable Identity First
 
@@ -50,14 +48,18 @@ All save and replication records should be keyed by `StableEntityId`.
 
 ### App/Plugin Structure
 
-Current plugin shape:
+Planned plugin shape once world/persistence modules exist:
 
 ```text
-AfterglowRuntimePlugins
+AfterglowRuntimePlugins (current)
   AfterglowCorePlugin
-  AfterglowLeafwingPlugin
-  AfterglowLightyearPlugin
-  ServerRewindPlugin
+  DevConsolePlugin
+  AfterglowNetworkPlugin
+  AfterglowInputPlugin
+  AfterglowPhysicsPlugin
+  AfterglowFirstPersonControllerPlugin
+
+Planned world/persistence additions
   AfterglowPersistencePlugin
   AfterglowWorldPlugin
 
@@ -106,13 +108,13 @@ Cell load path:
 5. apply persistent deltas
 6. mark chunk active
 
-Current implementation: `CellManifestRegistry` stores chunk-keyed authored
-baselines, `CellLoadRequests` holds pending load requests, and
-`process_cell_load_requests()` drives lifecycle progress. The loader requests
-`ChunkLifecycleState::Loading`, spawns the manifest baseline exactly once for
-the load attempt, then requests `Spawned` so saved deltas apply through the
-lifecycle system. If saved-delta application fails, the load request remains
-pending and the baseline is not duplicated.
+Planned implementation: `CellManifestRegistry` should store chunk-keyed authored
+baselines, `CellLoadRequests` should hold pending load requests, and
+`process_cell_load_requests()` should drive lifecycle progress. The loader should
+request `ChunkLifecycleState::Loading`, spawn the manifest baseline exactly once
+for the load attempt, then request `Spawned` so saved deltas apply through the
+lifecycle system. If saved-delta application fails, the load request should
+remain pending and the baseline should not be duplicated.
 
 Do not use `DynamicScene` dumps as the long-term save format because entity remapping and scene despawn semantics fight persistence.
 
@@ -150,15 +152,15 @@ Sleeping
 Unloading
 ```
 
-The current engine lifecycle layer provides the first generic version of this:
-`ChunkLifecycleRequests` queues load/spawned/activate/sleep/unload requests,
+The planned engine lifecycle layer should provide the first generic version of
+this: `ChunkLifecycleRequests` queue load/spawned/activate/sleep/unload requests,
 `ChunkLifecycle` stores stable chunk states, and `ChunkLifecycleReport` exposes
 transitions plus non-panicking persistence errors for tests/editor UI. Unload
-saves chunk deltas for spawned/gameplay/sleeping chunks and despawns loaded
-chunk entities by default. Unloading while still in `Loading` cleans partial
-spawns without saving an incomplete delta. Marking a chunk spawned applies
-stored persistent deltas by default. These defaults can be disabled through
-`ChunkLifecycleConfig` when tools need manual control.
+should save chunk deltas for spawned/gameplay/sleeping chunks and despawn loaded
+chunk entities by default. Unloading while still in `Loading` should clean
+partial spawns without saving an incomplete delta. Marking a chunk spawned should
+apply stored persistent deltas by default. These defaults should be configurable
+through `ChunkLifecycleConfig` when tools need manual control.
 
 Use Bevy assets for authored data:
 
@@ -260,11 +262,11 @@ src/network/
 ## Implementation Order
 
 1. Add `StableEntityId`, `ChunkId`, and chunk membership.
-2. Move demo spawning behind a cell/chunk loader. Done: the demo cell is now a `CellManifest` loaded by `process_cell_load_requests()`, not a startup spawn system.
+2. Move demo spawning behind a cell/chunk loader. Planned: the engine does not currently expose `CellManifest` or `process_cell_load_requests()`.
 3. Add explicit engine system sets.
-4. Implement one-cell save/load by stable ID. Done: `LoadedCellSave` captures versioned chunk deltas, merges recorded tombstones, roundtrips through JSON, retains loaded tombstones for later saves, and rejects unknown save versions before mutation.
-5. Add chunk lifecycle resources and commands. Done: `ChunkLifecycleRequests` and `process_chunk_lifecycle_requests()` provide generic load/spawn/activate/sleep/unload transitions with automatic persistence hooks.
+4. Implement one-cell save/load by stable ID. Planned: `LoadedCellSave` and chunk delta persistence are not current engine API.
+5. Add chunk lifecycle resources and commands. Planned: `ChunkLifecycleRequests` and `process_chunk_lifecycle_requests()` are not current engine API.
 6. Split CPU loaded, gameplay active, render extractable, GPU resident.
-7. Add local-server command path. Done: `LocalServerConfig::single_player()` mirrors local players into the authoritative session and submits local commands through normal server authority.
+7. Add local-server command path. Planned: `LocalServerConfig::single_player()` is not current engine API.
 8. Add snapshot/delta records using the same schema as save.
 9. Add chunk interest and replication tests.

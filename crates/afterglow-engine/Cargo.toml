@@ -6,7 +6,7 @@ edition = "2024"
 [features]
 default = []
 multiplayer = ["lightyear"]
-lightyear = ["dep:lightyear", "dep:lightyear_inputs_leafwing", "lightyear/leafwing", "lightyear/crossbeam", "lightyear/udp", "lightyear/netcode", "lightyear_inputs_leafwing/client", "lightyear_inputs_leafwing/server"]
+lightyear = ["dep:lightyear", "dep:lightyear_inputs_leafwing", "lightyear/std", "lightyear/client", "lightyear/server", "lightyear/replication", "lightyear/prediction", "lightyear/interpolation", "lightyear/leafwing", "lightyear/crossbeam", "lightyear/udp", "lightyear/netcode", "lightyear_inputs_leafwing/client", "lightyear_inputs_leafwing/server"]
 test-support = ["dep:wgpu"]
 
 [dependencies]
@@ -23,7 +23,7 @@ avian3d.workspace = true
 leafwing-input-manager.workspace = true
 lightyear = { workspace = true, optional = true }
 lightyear_inputs_leafwing = { workspace = true, optional = true }
-wgpu = { version = "27", optional = true }
+wgpu = { workspace = true, optional = true }
 
 [dependencies.web-time]
 workspace = true

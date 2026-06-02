@@ -179,7 +179,6 @@ fn late_shield_rolls_back_death_pickup_and_inventory_through_lightyear() {
         stable_id: ALICE,
         component: "Inventory",
     }));
-    assert!(rpg.history_len::<Inventory>(ALICE) > 0);
 }
 
 #[test]
@@ -252,8 +251,6 @@ fn late_shield_input_rolls_back_death_loot_pickup_and_inventory() {
                 from: bob_loot,
             }))
     );
-    assert!(rpg.history_len::<Combatant>(BOB) > 0);
-    assert!(rpg.history_len::<Inventory>(ALICE) > 0);
 }
 
 #[test]
@@ -281,7 +278,7 @@ fn duplicated_and_reordered_packets_are_deduped_before_simulation() {
 }
 
 #[test]
-fn dropped_then_resent_input_inside_rewind_window_still_corrects_state() {
+fn dropped_then_resent_input_inside_retention_window_still_corrects_state() {
     let mut rpg = NetworkedRpg::new(8);
     rpg.send(attack(1, 1, ALICE, BOB, 120), 0);
     rpg.drop_input(raise_shield(2, 1, BOB));
@@ -340,7 +337,7 @@ fn late_same_tick_inputs_are_sorted_before_each_replay() {
 }
 
 #[test]
-fn stale_late_input_outside_rewind_window_is_rejected_without_replay() {
+fn stale_late_input_outside_retention_window_is_rejected_without_replay() {
     let mut rpg = NetworkedRpg::new(3);
     rpg.send(attack(1, 1, ALICE, BOB, 120), 0);
     rpg.send(raise_shield(2, 1, BOB), 8);

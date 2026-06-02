@@ -94,7 +94,8 @@ app.world_mut()
 app.update();
 ```
 
-`crates/mock-rpg-network-tests` uses this path through `ConsoleNetworkedRpg`:
+The legacy `crates/mock-rpg-network-tests` oracle still uses this path through
+`ConsoleNetworkedRpg`:
 `connect local` consumes real `ConsoleNetworkRequest`s, starts the actual
 Lightyear Crossbeam client/server harness, sends mock player inputs through the
 connected client, advances the server, and reads live packet counters through
@@ -105,4 +106,5 @@ connected client, advances the server, and reads live packet counters through
 The FPS controller demo no longer consumes `ConsoleNetworkRequest` and no longer
 offers `--connect` or `--host` launch modes. Console networking remains exercised
 by `crates/mock-rpg-network-tests`; native socket stats and server bind-address
-control remain follow-up work for the shared network layer.
+control remain follow-up work for the shared network layer. The primary gameplay
+networking coverage now lives in `crates/engine-rpg-harness`.

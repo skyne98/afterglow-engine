@@ -1,6 +1,5 @@
 use avian3d::prelude::*;
-use bevy::app::ScheduleRunnerPlugin;
-use bevy::prelude::*;
+use bevy::{app::ScheduleRunnerPlugin, prelude::*};
 use core::time::Duration;
 use serde::{Deserialize, Serialize};
 
@@ -32,18 +31,9 @@ enum RigidBodyTypeSnapshot {
 
 #[derive(Serialize, Deserialize)]
 enum ColliderSnapshot {
-    Cuboid {
-        hx: f32,
-        hy: f32,
-        hz: f32,
-    },
-    Sphere {
-        radius: f32,
-    },
-    Capsule {
-        radius: f32,
-        half_height: f32,
-    },
+    Cuboid { hx: f32, hy: f32, hz: f32 },
+    Sphere { radius: f32 },
+    Capsule { radius: f32, half_height: f32 },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -193,9 +183,7 @@ fn try_snapshot_collider(collider: &Collider) -> Option<ColliderSnapshot> {
         });
     }
     if let Some(sph) = shape.as_ball() {
-        return Some(ColliderSnapshot::Sphere {
-            radius: sph.radius,
-        });
+        return Some(ColliderSnapshot::Sphere { radius: sph.radius });
     }
     if let Some(cap) = shape.as_capsule() {
         let half_height = cap.segment.a.y.abs().max(cap.segment.b.y.abs());
@@ -234,11 +222,7 @@ fn apply_snapshot(snapshot: &PhysicsSnapshot, commands: &mut Commands) {
                 body.rotation[3],
             )),
             LinearVelocity(Vec3::new(body.linvel[0], body.linvel[1], body.linvel[2])),
-            AngularVelocity(Vec3::new(
-                body.angvel[0],
-                body.angvel[1],
-                body.angvel[2],
-            )),
+            AngularVelocity(Vec3::new(body.angvel[0], body.angvel[1], body.angvel[2])),
         ));
 
         if let Some(ref collider) = body.collider {
@@ -247,9 +231,10 @@ fn apply_snapshot(snapshot: &PhysicsSnapshot, commands: &mut Commands) {
                     Collider::cuboid(hx * 2.0, hy * 2.0, hz * 2.0)
                 }
                 ColliderSnapshot::Sphere { radius } => Collider::sphere(*radius),
-                ColliderSnapshot::Capsule { radius, half_height } => {
-                    Collider::capsule(*radius, half_height * 2.0)
-                }
+                ColliderSnapshot::Capsule {
+                    radius,
+                    half_height,
+                } => Collider::capsule(*radius, half_height * 2.0),
             };
             cmd.insert(col);
         }
@@ -356,7 +341,10 @@ fn main() {
 
     run_n_steps(&mut app_a, post_steps);
     let hash_a = hash_world(app_a.world_mut());
-    eprintln!("reference hash after {} extra steps: {hash_a:016x}", post_steps);
+    eprintln!(
+        "reference hash after {} extra steps: {hash_a:016x}",
+        post_steps
+    );
 
     // ── Phase 2: restore from snapshot, run same steps, compare hash ──
     let mut app_b = App::new();
@@ -378,7 +366,10 @@ fn main() {
 
     run_n_steps(&mut app_b, post_steps);
     let hash_b = hash_world(app_b.world_mut());
-    eprintln!("restored  hash after {} extra steps: {hash_b:016x}", post_steps);
+    eprintln!(
+        "restored  hash after {} extra steps: {hash_b:016x}",
+        post_steps
+    );
 
     // ── Result ──
     if hash_a == hash_b {

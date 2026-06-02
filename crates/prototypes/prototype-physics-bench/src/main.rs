@@ -1,6 +1,5 @@
 use avian3d::prelude::*;
-use bevy::app::ScheduleRunnerPlugin;
-use bevy::prelude::*;
+use bevy::{app::ScheduleRunnerPlugin, prelude::*};
 use core::time::Duration;
 
 fn main() {
@@ -93,9 +92,11 @@ fn spawn_scene(mut commands: Commands, count: Res<BodyCount>) {
                 ))
                 .id();
             if let Some(prev) = prev {
-                commands.spawn(SphericalJoint::new(prev, e)
-                    .with_local_anchor1(Vec3::new(0.0, 0.5, 0.0))
-                    .with_local_anchor2(Vec3::new(0.0, -0.5, 0.0)));
+                commands.spawn(
+                    SphericalJoint::new(prev, e)
+                        .with_local_anchor1(Vec3::new(0.0, 0.5, 0.0))
+                        .with_local_anchor2(Vec3::new(0.0, -0.5, 0.0)),
+                );
             }
             prev = Some(e);
         }

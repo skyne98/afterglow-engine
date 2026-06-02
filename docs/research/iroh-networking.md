@@ -3,7 +3,7 @@
 ## Overview
 
 Status: historical research. The current multiplayer target is Lightyear +
-Leafwing + Afterglow server rewind. Do not revive the old custom Iroh
+Leafwing + fixed server input delay. Do not revive the old custom Iroh
 `NetworkTransport` adapter as production architecture. If Iroh is still desired
 later, integrate it as a Lightyear-compatible transport/link layer or separate
 platform admission path.

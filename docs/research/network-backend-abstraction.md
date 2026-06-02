@@ -11,7 +11,7 @@ interest-management stack and rebuild multiplayer around:
 Leafwing Input Manager
   -> lightyear_inputs_leafwing
   -> Lightyear input buffering, transport, replication, prediction, interpolation
-  -> Afterglow authoritative server rewind
+  -> Afterglow fixed-input-delay authoritative simulation
   -> Afterglow gameplay systems
 ```
 
@@ -29,9 +29,9 @@ Afterglow should own only the pieces that are game-specific:
 | Connection, message channels, replication | Lightyear |
 | Client prediction and remote interpolation | Lightyear |
 | Gameplay authority rules | Afterglow systems |
-| Late-command server rewind | Afterglow `ServerRewindPlugin` |
+| Fixed input-delay command processing | Afterglow gameplay harness/systems |
 | Persistence and stable world IDs | Afterglow |
-| Presentation cues | Afterglow, derived from corrected gameplay facts |
+| Presentation cues | Afterglow cue entities, derived from corrected gameplay facts |
 
 This is intentionally less code than the previous architecture. If Lightyear
 already owns a networking concern, Afterglow should not duplicate it.
@@ -59,12 +59,12 @@ Keep these concepts, but re-home them above Lightyear:
 
 | Concept | New home |
 |---|---|
-| `StableEntityId` | Persistence, save/load, and server rewind identity |
+| `StableEntityId` | Persistence, save/load, and network gameplay identity |
 | Chunk/cell membership | Persistence, streaming, and optional Lightyear replication filtering |
 | Server-authoritative gameplay validation | Fixed-tick Bevy gameplay systems |
-| Late valid command correction | `network::rewind` / `ServerRewindPlugin` |
-| Provisional vs committed gameplay facts | Server rewind cue/message outputs |
-| Mock RPG scenarios | Rewritten on Lightyear clients/server plus server rewind |
+| Late valid command handling | Fixed input delay; process tick `T` at `T + delay` |
+| Correction-sensitive presentation | Lightyear reconciliation and entity-backed `PreSpawned` cue outputs |
+| RPG scenarios | `engine-rpg-harness` on Lightyear clients/server plus fixed input delay |
 
 ## Transport Notes
 
@@ -94,12 +94,14 @@ format:
 |---|---|
 | Leafwing input | action press/hold/release, axes, local routes, scripted input |
 | Lightyear integration | client/server connect, replicated spawn/despawn, predicted local entity, interpolated remote entity |
-| Server rewind | late shield blocks arrow, canceled death, corpse removal, loot removal, stale command rejection |
-| Security | spoofed ownership, duplicate/reordered input, impossible commands, stale rewind window |
+| Fixed input delay | late shield blocks arrow, deterministic ordering, stale command rejection |
+| Security | spoofed ownership, duplicate/reordered input, impossible commands, stale input window |
 | Stress | many clients/NPCs with packet loss/reorder/latency through Lightyear test transport |
 
 ## Decision
 
 Use Lightyear as the multiplayer substrate. Use Leafwing as the input substrate.
-Build only the missing Afterglow-specific layer: authoritative server rewind with
-typed component history, stable entity lifetime, replay, and correction diffs.
+Build only the missing Afterglow-specific layer: deterministic fixed-tick gameplay
+that processes client input after a configured server delay. Do not revive the
+old server-rewind history, replay, or correction-diff layer unless a future
+feature proves it is necessary.

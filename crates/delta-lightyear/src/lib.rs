@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use delta::TickHistory;
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 use std::marker::PhantomData;
 
 // ── Snapshot trait ──────────────────────────────────────────────────────
@@ -85,7 +85,10 @@ pub struct RollbackPlugin<T: Snapshot> {
 
 impl<T: Snapshot> RollbackPlugin<T> {
     pub fn new(capacity: usize) -> Self {
-        Self { capacity, _marker: PhantomData }
+        Self {
+            capacity,
+            _marker: PhantomData,
+        }
     }
 }
 

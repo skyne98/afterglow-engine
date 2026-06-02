@@ -1,0 +1,11 @@
+[package]
+name = "engine-rpg-harness"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+afterglow-engine = { path = "../afterglow-engine", features = ["multiplayer"] }
+bevy.workspace = true
+lightyear = { workspace = true, default-features = false, features = ["std", "client", "server", "crossbeam", "udp", "netcode", "replication", "prediction", "interpolation", "leafwing"] }
+leafwing-input-manager.workspace = true
+serde.workspace = true

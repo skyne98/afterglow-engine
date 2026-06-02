@@ -4,7 +4,7 @@
 
 | Item | Purpose |
 |---|---|
-| `AfterglowRuntimePlugins` | Demo-free runtime group: core, dev console overlay/core, Leafwing input, Lightyear/rewind networking, physics, first-person controller, persistence, and world plugins. |
+| `AfterglowRuntimePlugins` | Demo-free runtime group: core, dev console overlay/core, Lightyear networking, Leafwing input, physics, and first-person controller. |
 | `AfterglowEnginePlugin` | App-level engine plugin. Adds `AfterglowRuntimePlugins`, the perf HUD, trace collection, and metrics systems. |
 | `demo::AfterglowDemoPlugin` | Optional demo content plugin. Installs the built-in demo cell manifest/load request plus demo animation systems. |
 | `run()` | Native/wasm entrypoint. Adds Bevy defaults, unthrottled window update settings, `AfterglowEnginePlugin`, and `AfterglowDemoPlugin`. |
@@ -26,8 +26,6 @@ AfterglowRuntimePlugins
   AfterglowInputPlugin
   AfterglowPhysicsPlugin
   AfterglowFirstPersonControllerPlugin
-  AfterglowPersistencePlugin
-  AfterglowWorldPlugin
 
 AfterglowEnginePlugin
   AfterglowRuntimePlugins
@@ -46,15 +44,15 @@ The native/wasm run helpers insert `WinitSettings::continuous()` before
 
 New networked gameplay should be written against Leafwing action state,
 Lightyear replication/prediction/interpolation, console-emitted network requests,
-chunk-interest fanout, and the custom server rewind plugin.
+fixed server input delay, deterministic fixed-tick simulation, and `PreSpawned`
+predicted interaction entities.
 
 ## Demo Plugin
 
-`AfterglowDemoPlugin` inserts the built-in demo manifest into
-`CellManifestRegistry`, requests `DEMO_CELL_CHUNK` through `CellLoadRequests`,
-and runs `rotate_cubes`/`update_light` in `AfterglowSet::DebugAndMetrics`.
-Those systems record perf data when `PerfData` exists, but still run without the
-perf HUD in small tests.
+`AfterglowDemoPlugin` currently installs only the built-in demo animation systems
+`rotate_cubes` and `update_light` in `AfterglowSet::DebugAndMetrics`. Those
+systems record perf data when `PerfData` exists, but still run without the perf
+HUD in small tests. It does not install world-streaming or persistence APIs.
 
 ## FPS Demo Plugin
 

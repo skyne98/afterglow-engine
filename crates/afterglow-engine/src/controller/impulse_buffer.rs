@@ -1,8 +1,9 @@
 use bevy::prelude::*;
+use serde::{Deserialize, Serialize};
 
-use super::{util, FirstPersonMotorState};
+use super::{FirstPersonMotorState, util};
 
-#[derive(Component, Clone, Copy, Debug, PartialEq, Reflect)]
+#[derive(Component, Clone, Copy, Debug, PartialEq, Serialize, Deserialize, Reflect)]
 pub struct FirstPersonImpulseBuffer {
     pub linear_velocity_delta: Vec3,
     pub max_linear_velocity_delta: f32,

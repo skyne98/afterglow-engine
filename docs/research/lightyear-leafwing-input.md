@@ -10,9 +10,10 @@ network work into Bevy schedules, orders correctness-sensitive systems with
 systems in parallel.
 
 For Afterglow, this is now the target multiplayer substrate, not just reference
-material. The old custom networking/input stack should be deleted and replaced
-with Lightyear, Leafwing, `lightyear_inputs_leafwing`, and the custom server
-rewind layer. Input buffering, snapshot receive, prediction, rollback,
+material. The old custom networking/input stack was deleted and replaced with
+Lightyear, Leafwing, and `lightyear_inputs_leafwing`. Fixed server input delay
+replaces the old server rewind approach. Input buffering, snapshot receive,
+prediction, rollback,
 fixed-step simulation, and packet send must each have explicit ordering points.
 
 ## Sources
@@ -143,24 +144,23 @@ Lightyear has restored a delayed or rollback tick.
 
 ## Implications For Afterglow
 
-Afterglow should copy the scheduling discipline, not necessarily the whole
-Lightyear stack.
+Afterglow now uses the full Lightyear stack as its multiplayer substrate,
+following the scheduling discipline documented above.
 
-| Area | Recommendation |
+| Area | Approach |
 |---|---|
 | Packet receive | Drain transport events in `PreUpdate` before replicated state is consumed. |
 | Input capture | Capture raw/player input before fixed simulation and store it by simulation tick. |
 | Gameplay simulation | Keep network-authoritative simulation in fixed schedules only. |
 | Prediction | Record post-fixed-step history by tick, not by render frame. |
-| Rollback | Re-run only deterministic fixed-schedule gameplay systems. |
+| Reconciliation | Re-run only deterministic fixed-schedule gameplay systems when Lightyear prediction requires it. |
 | Packet send | Serialize outbound commands/snapshots after fixed simulation and reconciliation. |
 | Parallelism | Use system ordering for correctness, then let Bevy parallelize compatible systems. |
 
-If Afterglow adopts Leafwing Input Manager, prefer per-avatar `ActionState`
-components over global action resources for networked controls. The engine can
-map Leafwing actions into its own command/input packet layer, but the ticked
-buffer should remain engine-owned so rollback, input delay, packet redundancy,
-and remote prediction all share one source of truth.
+Afterglow uses Leafwing Input Manager with per-avatar `ActionState` components
+for networked controls. Leafwing actions flow through Lightyear's input
+networking layer (`lightyear_inputs_leafwing`), so fixed input delay, packet
+redundancy, and remote prediction share one source of truth.
 
 ## Risks And Open Questions
 

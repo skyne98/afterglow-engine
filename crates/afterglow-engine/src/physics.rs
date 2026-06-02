@@ -427,5 +427,4 @@ mod tests {
         assert!(app.world().contains_resource::<AfterglowPhysicsConfig>());
         assert!(app.world().contains_resource::<Gravity>());
     }
-
 }

@@ -2,37 +2,42 @@
 
 ## Status
 
-The network API is now narrowed to a Lightyear integration boundary plus a small
-Afterglow server rewind layer. The previous custom transport/session/command/
-replication/prediction/interpolation stack has been deleted.
+The network API is now a Lightyear integration boundary plus small Afterglow
+helpers. The old custom transport/session/command/replication/prediction stack
+has been deleted. The old server-rewind history layer has also been removed.
+
+The current authoritative multiplayer baseline is:
+
+```text
+client predicts ActionState immediately
+server processes the same tick after a fixed input delay
+server derives gameplay results from deterministic fixed-tick simulation
+Lightyear replicates authoritative state and reconciles client prediction
+```
+
+There is no main-path server restore/replay/correction-diff system and no main-
+path physics lag compensation.
 
 ## Plugin Surface
 
 | Item | Purpose |
 |---|---|
-| `AfterglowNetworkPlugin` | Adds `AfterglowLightyearPlugin`, `ServerRewindPlugin`, and `ChunkInterestPlugin`. |
-| `AfterglowLightyearPlugin` | Initializes `AfterglowLightyearConfig`; with the `lightyear` feature, adds Lightyear client/server plugin groups and Leafwing input networking. Concrete link/transport entity setup is deferred. |
-| `ChunkInterestPlugin` | Recomputes per-peer chunk interest from `ChunkInterestPeer` plus `ChunkMembership`. |
-| `ChunkInterestPeer` | Marks a connected player/avatar entity as an interest source and configures a raw chunk-ID radius. |
-| `PeerChunkInterest` | Runtime resource mapping peer `StableEntityId`s to interested `ChunkId`s and fanout entities. |
+| `AfterglowNetworkPlugin` | Adds `AfterglowLightyearPlugin`. |
+| `AfterglowLightyearPlugin` | Initializes `AfterglowLightyearConfig`; with the `lightyear` feature, adds Lightyear client/server plugin groups and Leafwing input networking. Concrete link/transport entity setup is still test/demo-owned. |
 | `AfterglowLightyearConfig` | Engine-facing Lightyear config: role, server/remote addresses, tick rate, prediction window, protocol id, optional connect token, and link-conditioner settings. |
-| `ServerRewindPlugin` | Registers rewind identity/history types, budget resources, typed component registration, and fixed-post-update history capture. Replay systems remain the next slice. |
-| `ComponentHistory` / `HistoryEntry` | Opaque per-component tick history ring used by server rewind and the mock RPG harness. |
-| `RewindComponentRegistry` | Domain-scoped list of registered rewind component serializers. |
-| `RewindHistoryStore` | Runtime resource keyed by `(StableEntityId, type_key)` that stores captured `ComponentHistory` rings. |
-| `RewindHistoryBudget` / `RewindTick` | Retained history budget and current authoritative rewind tick. |
+| `HistoryTick` | Plain `u32` resource used by deterministic fixed-step tests and scenario systems. It is not rewind history. |
 
 ## Universal Identity
 
 `StableEntityId` is the only engine-level entity ID source. It is used for
-persistence, Lightyear replication identity, and server rewind history. Raw Bevy
-`Entity` values are local handles only and must not appear in network payloads,
-rewind correction payloads, save data, or cross-peer gameplay references.
+persistence, Lightyear replication identity, and cross-peer gameplay references.
+Raw Bevy `Entity` values are local handles only and must not appear in network
+payloads, save data, or cross-peer gameplay references.
 
-Entities that are `Persistent`, `Replicated`, or `RewindedEntity` receive a
-`StableEntityId` automatically unless they are marked `RuntimeOnly`. The
-allocator skips IDs already authored in the world, so auto-generated IDs do not
-collide with scene/persistence/network IDs.
+Systems that need durable identity should require or insert `StableEntityId`.
+Entities marked `RuntimeOnly` are excluded from automatic stable-ID assignment in
+helpers that perform that pass. The allocator skips IDs already authored in the
+world, so generated IDs do not collide with scene, persistence, or network IDs.
 
 ## Replication Pattern
 
@@ -44,13 +49,11 @@ app.register_component::<CombatTransform>();
 app.register_component::<ShieldState>();
 ```
 
-Spawn replicated entities with Lightyear replication markers plus the Afterglow
-stable identity and optional rewind markers:
+Spawn replicated entities with Lightyear replication markers plus stable identity:
 
 ```rust
 commands.spawn((
     StableEntityId::new(...),
-    RewindedEntity { domain, budget_override: None },
     Health::new(100),
     ShieldState::default(),
     Replicate::to_clients(NetworkTarget::All),
@@ -66,13 +69,14 @@ for the taxonomy and assignment rules.
 
 | Strategy | Purpose | Current API surface |
 |---|---|---|
-| Owned predicted avatar | Locally controlled player body predicts immediately through the collision-aware controller and corrects by replaying unacknowledged commands through the same collision-aware path on server snapshots. | Strategy documented; no FPS demo implementation remains. |
+| Owned predicted avatar | Locally controlled player body predicts immediately and reconciles to server state. | Strategy documented; reusable non-demo implementation remains future work. |
 | Remote avatar snapshot | Non-local avatar mirrors latest replicated state directly. | Available as a simple fallback for non-critical debug mirrors. |
 | Buffered interpolation | Remote physics/presentation objects render from delayed snapshot buffers. | `NetworkTransformSample` and `NetworkTransformInterpolationBuffer`. |
 | Kinematic remote observer | Server/master-driven physics object writes authoritative transform samples for remote presentation. | `PhysicsKinematicRemote` plus `NetworkTransformInterpolationBuffer`. |
-| Chunk interest filter | Replication routing by chunk/area before large-player fanout. | `ChunkInterestPeer` and `PeerChunkInterest`, backed by `ChunkMembership` and `StableEntityRegistry`. |
-| Rewind tracked gameplay | Server captures authoritative component history for late-input replay/correction. | `RewindedEntity`, `RewindDomainId`, `RewindHistoryStore`, registered rewind components. |
-| Local only | Cameras, UI, debug helpers, and local presentation children stay off the network. | Absence of `Replicated`/Lightyear replication/rewind markers. |
+| Pre-spawned predicted interaction | Locally predicted interaction/cue entities spawn immediately, then match or expire against server-spawned Lightyear entities. | Lightyear `PreSpawned`, `Replicate`, `PredictionTarget`, and `Confirmed<T>`; covered by `engine-rpg-harness` scenarios. |
+| Input-delayed gameplay truth | Combat, doors, projectiles, cooldowns, status effects, and inventory decisions are derived by the server after fixed input delay. | `ActionState<AfterglowAction>`, deterministic fixed systems, and Lightyear replication/reconciliation. |
+| Chunk interest filter | Replication routing by chunk/area before large-player fanout. | Planned; no current public API. |
+| Local only | Cameras, UI, debug helpers, and local presentation children stay off the network. | Absence of Lightyear replication markers. |
 
 Lightyear remains the substrate for transport, replication, prediction metadata,
 and interpolation hooks. Afterglow's layer decides which strategy consumes a
@@ -89,22 +93,72 @@ app.add_plugins(lightyear_inputs_leafwing::InputPlugin::<AfterglowAction>::defau
 Gameplay reads `ActionState<AfterglowAction>` in fixed schedules. Afterglow no
 longer serializes custom command DTOs for movement/combat input.
 
-## Server Rewind Pattern
+The server should process inputs after a fixed delay sized to the expected
+latency budget. This keeps authoritative simulation deterministic without
+rewinding the world for late commands.
 
-Register only gameplay truth that can affect late-command correction:
+Two test paths exercise UDP input delivery:
+
+- **Native Leafwing path** (`udp_scenarios/native_input.rs`): Installs
+  `InputPlugin::<AfterglowAction>` and `InputPlugin` (Bevy). Writes desired
+  input in `FixedPreUpdate` via `InputSystems::WriteClientInputs`. Inserts
+  `default_gameplay_input_map()` on controlled client entities. Configures
+  `InputTimelineConfig::default().with_input_delay(InputDelayConfig::fixed_input_delay(2))`
+  on each client link after UDP connect, then waits for
+  `IsSynced<InputTimeline>`. Verifies movement, combat, shield, and edge
+  semantics (just-pressed/just-released) over real UDP — no manual
+  `MessageSender<ActionState<AfterglowAction>>`.
+
+- **Manual message path** (`udp_scenarios/full_stack.rs`): Older comparison
+  path that sends `ActionState<AfterglowAction>` over a manual Lightyear
+  `MessageSender`/`MessageReceiver`. Retained as a regression baseline against
+  the native input route.
+
+## Predicted Interaction Pattern
+
+Use Lightyear `PreSpawned` for local interaction entities that need instant
+feedback and server confirmation:
 
 ```rust
-app.register_rewind_component::<CombatTransform>(domain);
-app.register_rewind_component::<Health>(domain);
-app.register_rewind_component::<ShieldState>(domain);
-app.register_rewind_component::<Hurtbox>(domain);
+commands.spawn((
+    DoorGrab { player, door },
+    PreSpawned::new(door_grab_hash(player, door)).for_receiver(client_link),
+));
 ```
 
-The current rewind layer stores opaque `ComponentHistory` checkpoints under
-`StableEntityId`, registers component serializers through the app extension, and
-captures matching `RewindedEntity` components into `RewindHistoryStore` during
-`FixedPostUpdate`. Entity lifecycle recording, replay, and correction diff
-publication remain the next implementation slice.
+The server computes the same deterministic hash only when it accepts the
+interaction. Matching server replication confirms the predicted entity; no match
+means Lightyear expires the local entity. Use this for grab links, projectiles,
+door-use cues, hit markers, damage numbers, beams, decals, and other reversible
+presentation when they need prediction.
+
+## Regression Harness
+
+`crates/engine-rpg-harness` is the current primary integration harness. It covers
+Crossbeam and UDP transport (including full entity replication over real
+sockets), UDP client-to-server `ActionState<AfterglowAction>` delivery into
+authoritative gameplay systems, fixed input delay, retention windows,
+PreSpawned confirmation/expiration, controller/physics behavior, combat, RPG
+status effects, doors, adversarial input, and replication stress. The harness
+now includes **28 UDP scenario variants** (lockstep, adversarial, RPG,
+PreSpawned, combat, doors, stress, full-stack manual input, and native Leafwing
+input) in `scenarios/udp_scenarios/` and native Leafwing input over Crossbeam
+in `scenarios/native_input.rs`, bringing the total test count to **80
+tests** across both transport backends.  Two additional infrastructure tests
+in `scenarios/native_input.rs` verify that the native input pipeline (timeline
+sync, LeafwingBuffer creation, `WriteClientInputs` ordering) initializes
+correctly over Crossbeam transport, even though full end-to-end input delivery
+requires the UDP/Netcode connection lifecycle.
+
+For UDP server links, the harness lets Lightyear/netcode create and own the link
+entity, `Transport`, and `MessageManager`. The harness decorates server-side
+`LinkOf` entities with only `ReplicationSender`; a regression test verifies that
+UDP entity replication works and repeated `connect()` calls do not replace
+Lightyear-owned link components.
+
+The legacy `crates/mock-rpg-network-tests` crate still exists as a frozen oracle
+for older rollback-style scenarios. It now owns its own local snapshot/replay
+logic and no longer depends on engine rewind-history APIs.
 
 ## Legacy Removals
 
@@ -118,76 +172,26 @@ Removed old public APIs:
 | `ReplicationWorld`, `WorldSnapshot`, `WorldDelta`, `Replicate` macro | Lightyear component replication |
 | `ClientPredictionBuffer`, `ClientReconciliationQueue` | Lightyear prediction/reconciliation |
 | `RemoteInterpolationBuffer` | `NetworkTransformInterpolationBuffer` for small transform presentation buffers, or Lightyear interpolation for full replicated entity streams |
-| `InterestMap` | `ChunkInterestPeer` + `PeerChunkInterest`; Lightyear target filtering will consume this adapter in later replication-routing slices |
+| `ServerRewindPlugin`, `RewindHistoryStore`, `RewindedEntity` | Fixed input delay plus deterministic simulation; `HistoryTick` remains as a plain tick counter |
+| `InterestMap` | Planned Lightyear replication filtering or a small future Afterglow adapter |
 | `ReconnectBaselineStore` | Lightyear connect/replication plus Afterglow persistence |
 
 The old `afterglow-engine-macros` crate and networking benches were also removed.
 
-## Required Regression
+## Lag Compensation
 
-The key server rewind scenario:
-
-```text
-T100: A raises shield.
-T108: B arrow appears to kill A; corpse and food loot spawn provisionally.
-T109: B picks up the food; inventory changes provisionally.
-T111: A's late-but-valid shield input arrives.
-Replay: shield blocks arrow.
-Correction: A lives; corpse, loot, pickup, inventory delta, death cue, and stale projectile hit vanish.
-```
-
-`crates/mock-rpg-network-tests` now runs this through an actual Lightyear
-client/server Crossbeam boundary for the core late-input correction path:
-`AfterglowLightyearPlugin`, `ClientPlugins`, `ServerPlugins`, `CrossbeamIo`, a
-registered reliable channel, `ClientInput` message registration,
-`MessageSender` / `MessageReceiver`, Lightyear component replication, and
-Lightyear prediction/confirmation state.
-Those Lightyear-delivered inputs feed the authoritative Afterglow server rewind
-simulation, which proves `StableEntityId`, `RewindHistoryStore` capture,
-deterministic replay, correction outputs, corpse and loot despawns, pickup fact
-removal, inventory rollback, replicated entity removal, and confirmed
-authoritative correction after a real Lightyear message and replication transfer.
-The same harness is also driven through real console commands by
-`ConsoleNetworkedRpg`: `connect local` creates the connected Lightyear
-client/server pair, `net latency --ms` controls input delay, `disconnect` tears
-down the connection, and `net stats` reads live sent/received counters from mock
-player traffic.
-
-The local packet simulator remains for broader packet behavior coverage:
-delayed, reordered, duplicated, dropped, and stale inputs plus adversarial
-movement that tries to expand spell reach under latency. The remaining mock RPG
-network proof gap is the native UDP/netcode socket path.
-
-The physics interaction regression target is now:
-
-```text
-T100: Server declares a PhysicsBreakable barrel at position P.
-T105: Player A or a projectile produces a server-side PhysicsImpactEvent.
-T106: Relative speed exceeds the barrel threshold; server decrements health.
-T108: Health reaches zero; server emits PhysicsBreakEvent and gameplay decides
-      whether to despawn, swap, loot, or replicate destruction.
-```
-
-Grab/link/release uses `PhysicsGrabCommand` and `PhysicsReleaseCommand` keyed by
-`StableEntityId`. The server/master validates range and writes
-`PhysicsGrabbedState` with an authoritative tick; remote presentation should use
-kinematic samples plus interpolation rather than client-authored transforms.
+Physics lag compensation is not part of the current engine path. The focused
+prototype in `crates/prototypes/prototype-physics-lightyear` proves that
+`lightyear_avian3d::LagCompensationPlugin` can query historical Avian colliders,
+but the production baseline does not use historical collider queries for spells,
+projectiles, or melee. Revisit this only if a future FPS/twitch fairness
+requirement needs client-view hit validation.
 
 ## Chunk Interest
 
-`ChunkInterestPlugin` is the small replacement for the deleted legacy
-`InterestMap`. It does not own replication transport. Instead, it computes a
-deterministic peer-to-chunk fanout that Lightyear target filtering or demo/server
-replication code can consume.
-
-| Item | Purpose |
-|---|---|
-| `ChunkInterestPeer` | Attach to the player/avatar entity representing a connected peer. Its `radius` expands interest around the entity's current `ChunkMembership`. |
-| `PeerChunkInterest` | Resource queried by server replication code: `is_interested(peer, chunk)`, `peer_chunks(peer)`, `interested_peers(chunk)`, and `interested_entities(peer, registry)`. |
-
-The MVP neighborhood uses contiguous raw `ChunkId` values clamped away from
-`ChunkId::INVALID`. World-specific 2D/3D chunk graph expansion can replace the
-neighborhood producer later without changing consumers of `PeerChunkInterest`.
+The old legacy `InterestMap` was deleted and no replacement chunk-interest API is
+currently exposed from `network`. Replication filtering by chunk/area remains a
+future Lightyear routing slice.
 
 ## FPS Demo Networking
 

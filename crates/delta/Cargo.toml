@@ -5,5 +5,5 @@ resolver = "3"
 edition = "2024"
 
 [dependencies]
-postcard = { version = "1", features = ["alloc"] }
-serde = { version = "1", features = ["derive"] }
+postcard.workspace = true
+serde.workspace = true

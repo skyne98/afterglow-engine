@@ -31,7 +31,7 @@ Query<&ActionState<AfterglowAction>>
 ```
 
 This keeps controller code compatible with local simulation, Lightyear prediction,
-server rewind replay, and tests.
+fixed server input delay, and tests.
 
 ## Physics And Interaction
 

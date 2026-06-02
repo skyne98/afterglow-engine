@@ -11,8 +11,9 @@ person feel and avoiding one-size-fits-all smoothing.
 | Owned predicted avatar | Locally controlled player bodies | Server validates authoritative body state | Local fixed controller predicts; server snapshots acknowledge commands and correct large divergence | Strategy documented; needs a non-demo implementation |
 | Remote avatar snapshot | Debug mirrors and non-critical one-off state | Server | Direct replicated transform mirroring | Available as a fallback |
 | Buffered interpolation | Replicated physics props, projectiles, breakables, remote avatars that need smooth motion | Server/master | Render samples from a delayed snapshot buffer | Implemented as a generic transform buffer |
-| Chunk interest filter | Replication routing by chunk/area | Server | Peers receive entities in interested chunks | Implemented as `ChunkInterestPeer` + `PeerChunkInterest`; Lightyear target consumption is a later routing slice |
-| Rewind tracked gameplay | Combat truth: health, shields, inventories, projectiles, hit facts | Server rewind domain | Client receives correction facts after replay | History capture and mock RPG correction path implemented; lifecycle/correction publication still expanding |
+| Pre-spawned predicted interaction | Client-owned transient interaction/cue entities such as grab constraints, hit markers, beams, and damage numbers | Server confirms or rejects | Local client spawns immediately with `PreSpawned`; matching server entity reconciles through Lightyear prediction, rejected entities expire | Proven in `engine-rpg-harness`; cue entities use the same pattern |
+| Chunk interest filter | Replication routing by chunk/area | Server | Peers receive entities in interested chunks | Planned; no current public API after legacy `InterestMap` removal |
+| Input-delayed gameplay truth | Combat truth: health, shields, inventories, projectiles, hit facts | Server fixed-tick simulation after input delay | Client predicts locally, then reconciles from replicated authoritative state | Current baseline in `engine-rpg-harness` |
 | Local only | Cameras, UI, debug helpers, non-network presentation children | Local world | Not replicated | Implemented by absence of network markers |
 
 ## Assignment Rules
@@ -22,7 +23,8 @@ person feel and avoiding one-size-fits-all smoothing.
 - The camera attached to a local player is local-only presentation, even when the body is networked.
 - Non-local avatars may start as direct snapshots, but twitch/gameplay-facing motion should move to buffered interpolation before real latency tests.
 - Arbitrary physics objects should use buffered interpolation unless the local client owns an explicit interaction mode such as grab/link/release.
-- Rewind-tracked entities opt into `RewindedEntity` and component history when late input can change combat truth.
+- Local grab/link/cue prediction should spawn transient entities with Lightyear `PreSpawned` so server authority can match, correct, or reject them without custom entity-remap code.
+- Combat truth should be derived on the server after fixed input delay rather than from late-input rewind.
 - Debug/UI/console/camera entities stay local-only unless a gameplay feature explicitly needs replication.
 
 ## Current FPS Demo Mapping
@@ -32,7 +34,8 @@ person feel and avoiding one-size-fits-all smoothing.
 | `FpsDemoPlayer` body | Local only | Local fixed controller remains the only movement path. The demo no longer attaches replicated avatar state, prediction buffers, input command messages, or network correction snapshots. |
 | `FirstPersonCameraRig` | Local only | Render-rate look, eye-height smoothing, bob, FOV, and overstep presentation read the local motor/body and never materialize network avatars. |
 | `PhysicsKinematicRemote` objects | Buffered interpolation | Fixed interaction ticks write authoritative transform samples into `NetworkTransformInterpolationBuffer` for server/master-driven objects. |
-| Mock RPG combat entities | Rewind tracked gameplay | The mock harness drives late shield/death/pickup/inventory correction through Lightyear messages and server rewind history. |
+| Engine RPG combat entities | Input-delayed gameplay truth | `engine-rpg-harness` drives shields, attacks, death, pickups, cooldowns, status effects, doors, and stress replication through fixed input delay and Lightyear replication/reconciliation. |
+| Engine RPG interaction cues | Pre-spawned predicted interaction | The harness proves locally spawned Lightyear `PreSpawned` entities can be confirmed, corrected, or expire when server authority rejects them. Hit markers and other cue entities should follow the same pattern if needed. |
 
 ## Buffered Interpolation Design
 
@@ -66,5 +69,14 @@ their strategy assignment is explicit.
 
 `Replicate`/registered components move state. `StableEntityId` identifies the
 entity. Strategy-specific Afterglow systems decide whether received state is
-applied directly, replayed as correction, stored in an interpolation buffer, or
-captured in server rewind history.
+applied directly, reconciled through Lightyear prediction, or stored in an
+interpolation buffer.
+
+For transient predicted entity spawns, prefer Lightyear `PreSpawned` instead of a
+custom local/server entity table. The client chooses a deterministic hash for the
+predicted entity and marks it for the local receiver. The server uses the same
+hash when the command is accepted. Matching confirmation keeps the predicted
+entity alive and applies `Confirmed<T>` data; no matching confirmation means the
+client-side entity is temporary and will be cleaned up by Lightyear. This covers
+small presentation cues too, as long as reversible visuals are owned by or keyed
+to the cue entity.

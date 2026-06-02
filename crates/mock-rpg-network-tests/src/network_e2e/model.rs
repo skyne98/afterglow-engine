@@ -1,12 +1,9 @@
-use afterglow_engine::{
-    core::identity::StableEntityId, input::AfterglowAction, network::RewindDomainId,
-};
+use afterglow_engine::{core::identity::StableEntityId, input::AfterglowAction};
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::Vec3i;
 
-pub const DOMAIN: RewindDomainId = RewindDomainId(1);
 pub const ALICE: StableEntityId = StableEntityId::from_raw(1);
 pub const BOB: StableEntityId = StableEntityId::from_raw(2);
 pub const CAROL: StableEntityId = StableEntityId::from_raw(3);

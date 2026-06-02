@@ -1,13 +1,14 @@
 use bevy::prelude::*;
+use serde::{Deserialize, Serialize};
 
 use super::{FirstPersonControllerConfig, util};
 
-#[derive(Component, Clone, Debug, Default, PartialEq, Reflect)]
+#[derive(Component, Clone, Debug, Default, PartialEq, Serialize, Deserialize, Reflect)]
 pub struct FirstPersonEffectStack {
     pub effects: Vec<FirstPersonEffect>,
 }
 
-#[derive(Clone, Debug, PartialEq, Reflect)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Reflect)]
 pub struct FirstPersonEffect {
     pub remaining_ticks: u16,
     pub elapsed_ticks: u16,

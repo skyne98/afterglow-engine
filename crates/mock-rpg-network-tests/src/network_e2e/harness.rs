@@ -1,11 +1,8 @@
 use afterglow_engine::{
     core::{AfterglowCorePlugin, identity::StableEntityId},
-    network::{
-        AfterglowNetworkPlugin, RewindAppExt, RewindHistoryBudget, RewindHistoryStore, RewindTick,
-        rewind_type_key,
-    },
+    network::{AfterglowLightyearConfig, AfterglowNetworkPlugin, HistoryTick},
 };
-use bevy::{app::FixedPostUpdate, prelude::*};
+use bevy::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{diff::diff_snapshots, model::*, net::MockNetwork, world::*};
@@ -28,13 +25,7 @@ impl NetworkedRpg {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AfterglowCorePlugin, AfterglowNetworkPlugin));
         app.insert_resource(CombatLog::default());
-        app.set_rewind_budget(retention_ticks as usize)
-            .register_rewind_component::<Combatant>(DOMAIN)
-            .register_rewind_component::<Inventory>(DOMAIN)
-            .register_rewind_component::<Projectile>(DOMAIN)
-            .register_rewind_component::<DeathMarker>(DOMAIN)
-            .register_rewind_component::<Corpse>(DOMAIN)
-            .register_rewind_component::<Loot>(DOMAIN);
+        app.init_resource::<HistoryTick>();
 
         let mut rpg = Self {
             app,
@@ -51,7 +42,7 @@ impl NetworkedRpg {
         rpg.spawn_combatant(BOB, 100, Vec3i::new(4, 0, 0));
         rpg.spawn_combatant(CAROL, 100, Vec3i::new(20, 0, 0));
         rpg.save_snapshot(0);
-        rpg.capture_engine_rewind_history(0);
+        rpg.set_history_tick(0);
         rpg
     }
 
@@ -81,7 +72,7 @@ impl NetworkedRpg {
             self.simulate_tick(tick);
             self.current_tick = tick;
             self.save_snapshot(tick);
-            self.capture_engine_rewind_history(tick);
+            self.set_history_tick(tick);
             self.prune_snapshots();
         }
     }
@@ -142,17 +133,11 @@ impl NetworkedRpg {
         sorted_components::<Projectile>(&mut self.app).len()
     }
 
-    pub fn history_len<T: Component + 'static>(&self, stable_id: StableEntityId) -> usize {
+    pub fn has_afterglow_network_resources(&self) -> bool {
         self.app
             .world()
-            .resource::<RewindHistoryStore>()
-            .history(stable_id, rewind_type_key::<T>())
-            .map_or(0, |history| history.len())
-    }
-
-    pub fn has_afterglow_network_resources(&self) -> bool {
-        self.app.world().contains_resource::<RewindHistoryStore>()
-            && self.app.world().contains_resource::<RewindHistoryBudget>()
+            .contains_resource::<AfterglowLightyearConfig>()
+            && self.app.world().contains_resource::<HistoryTick>()
     }
 
     fn deliver_inputs(&mut self, server_tick: u32) -> Option<u32> {
@@ -211,7 +196,7 @@ impl NetworkedRpg {
         for replay_tick in anchor.saturating_add(1)..=self.current_tick {
             self.simulate_tick(replay_tick);
             self.save_snapshot(replay_tick);
-            self.capture_engine_rewind_history(replay_tick);
+            self.set_history_tick(replay_tick);
         }
         let after = capture_snapshot(&mut self.app);
         self.corrections.extend(diff_snapshots(&before, &after));
@@ -421,13 +406,12 @@ impl NetworkedRpg {
     fn spawn_death_outputs(&mut self, tick: u32, victim: StableEntityId) {
         self.app
             .world_mut()
-            .spawn((death_marker_id(victim), rewinded(), DeathMarker { victim }));
+            .spawn((death_marker_id(victim), DeathMarker { victim }));
         self.app
             .world_mut()
-            .spawn((corpse_id(victim), rewinded(), Corpse { victim }));
+            .spawn((corpse_id(victim), Corpse { victim }));
         self.app.world_mut().spawn((
             loot_id(victim),
-            rewinded(),
             Loot {
                 owner: victim,
                 item: Item::Food,
@@ -445,16 +429,13 @@ impl NetworkedRpg {
     }
 
     fn spawn_combatant(&mut self, stable: StableEntityId, hp: i32, position: Vec3i) {
-        self.app.world_mut().spawn((
-            stable,
-            rewinded(),
-            Combatant::new(hp, position),
-            Inventory::default(),
-        ));
+        self.app
+            .world_mut()
+            .spawn((stable, Combatant::new(hp, position), Inventory::default()));
     }
 
     fn spawn_projectile(&mut self, stable: StableEntityId, projectile: Projectile) {
-        self.app.world_mut().spawn((stable, rewinded(), projectile));
+        self.app.world_mut().spawn((stable, projectile));
     }
 
     fn save_snapshot(&mut self, tick: u32) {
@@ -467,9 +448,8 @@ impl NetworkedRpg {
         self.snapshots.retain(|tick, _| *tick >= floor);
     }
 
-    fn capture_engine_rewind_history(&mut self, tick: u32) {
-        self.app.world_mut().resource_mut::<RewindTick>().0 = tick;
-        self.app.world_mut().run_schedule(FixedPostUpdate);
+    fn set_history_tick(&mut self, tick: u32) {
+        self.app.world_mut().resource_mut::<HistoryTick>().0 = tick;
     }
 
     fn combatant(&mut self, stable: StableEntityId) -> Combatant {

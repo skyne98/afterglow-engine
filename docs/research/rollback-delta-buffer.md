@@ -1,6 +1,10 @@
 # Rollback Buffer Design: RunDelta Chain
 
 **Date:** 2026-05-19
+**Status:** Historical physics-snapshot research only. The current networking
+baseline does not use rollback buffers, `RunDelta` chains, server rewind, or
+physics resimulation from historical snapshots. It uses fixed server input delay,
+deterministic fixed-tick simulation, and Lightyear reconciliation.
 **Relevant prototypes:**
 - `prototype-physics-bench` — Avian determinism benchmark
 - `prototype-physics-serialize` — PhysicsSnapshot format + round-trip
