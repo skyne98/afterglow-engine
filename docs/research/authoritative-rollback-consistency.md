@@ -466,7 +466,7 @@ replay pure Rust test logic. It does not need Bevy world snapshotting on day one
 
 ### Test Requirements
 
-`mock-rpg-network-tests/tests/network_e2e.rs` is now a legacy/frozen oracle for
+`mock-rpg-network-tests/tests/network_e2e.rs` is now a legacy regression oracle for
 older rollback-style scenarios:
 
 - Two players exchange spell projectiles.

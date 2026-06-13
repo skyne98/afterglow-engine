@@ -1,6 +1,9 @@
 use super::components::*;
 use crate::rig::LightyearTestRig;
-use afterglow_engine::{core::identity::StableEntityId, network::LightyearRole};
+use afterglow_engine::{
+    core::identity::StableEntityId,
+    network::{LightyearRole, register_afterglow_lightyear_protocol},
+};
 use bevy::prelude::*;
 use lightyear::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -11,7 +14,7 @@ struct TestCue {
 }
 
 fn register_test_protocol(app: &mut App, _role: LightyearRole) {
-    app.register_component::<StableEntityId>();
+    register_afterglow_lightyear_protocol(app);
     app.register_component::<TestCue>().add_prediction();
 }
 
@@ -24,7 +27,7 @@ fn reconcile_client_health(mut query: Query<(&mut Health, &Confirmed<Health>), W
 }
 
 fn register_drift_protocol(app: &mut App, _role: LightyearRole) {
-    app.register_component::<StableEntityId>();
+    register_afterglow_lightyear_protocol(app);
     app.register_component::<Health>().add_prediction();
     app.add_systems(
         PreUpdate,

@@ -105,3 +105,9 @@ Build only the missing Afterglow-specific layer: deterministic fixed-tick gamepl
 that processes client input after a configured server delay. Do not revive the
 old server-rewind history, replay, or correction-diff layer unless a future
 feature proves it is necessary.
+
+Player identity and authentication are intentionally out of scope for the
+networking boundary itself. They should be handled as a platform/admission layer
+above Lightyear, analogous to how Steam IDs and tickets sit above the transport.
+See `docs/research/player-identity-authentication.md` for conventions and a
+proposed `PlayerIdentity` design.

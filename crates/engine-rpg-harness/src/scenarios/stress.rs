@@ -1,13 +1,16 @@
 use super::components::*;
 use crate::rig::LightyearTestRig;
-use afterglow_engine::{core::identity::StableEntityId, network::LightyearRole};
+use afterglow_engine::{
+    core::identity::StableEntityId,
+    network::{LightyearRole, register_afterglow_lightyear_protocol},
+};
 use bevy::prelude::*;
 use lightyear::prelude::*;
 
 const ENTITY_COUNT: usize = 50;
 
 fn register_stress(app: &mut App, _role: LightyearRole) {
-    app.register_component::<StableEntityId>();
+    register_afterglow_lightyear_protocol(app);
     app.register_component::<Health>().add_prediction();
     app.register_component::<CombatState>().add_prediction();
 }

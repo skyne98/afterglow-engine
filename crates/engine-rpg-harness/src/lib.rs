@@ -201,7 +201,7 @@ mod tests {
             1,
             |_app| {},
             |app, _role| {
-                app.register_component::<StableEntityId>();
+                afterglow_engine::network::register_afterglow_lightyear_protocol(app);
             },
             crate::TransportConfig::Udp { server_port: 0 },
         );

@@ -3,7 +3,7 @@ use crate::rig::LightyearTestRig;
 use afterglow_engine::{
     core::identity::StableEntityId,
     input::AfterglowAction,
-    network::{HistoryTick, LightyearRole},
+    network::{LightyearRole, register_afterglow_lightyear_protocol},
     physics::{
         AfterglowPhysicsPlugin,
         avian::{Collider, Gravity, RigidBody},
@@ -39,8 +39,7 @@ fn door_bundle(pos: Vec3, open: bool, locked: bool) -> impl Bundle {
 }
 
 fn register_doors(app: &mut App, _role: LightyearRole) {
-    app.init_resource::<HistoryTick>();
-    app.register_component::<StableEntityId>();
+    register_afterglow_lightyear_protocol(app);
     app.register_component::<Health>().add_prediction();
     app.register_component::<DoorState>().add_prediction();
     app.register_component::<DoorGrab>().add_prediction();

@@ -1,5 +1,13 @@
 # Steam Multiplayer Research
 
+> **Supersession note (2026-06-08)**: The current plan replaces item 3 below with
+> a platform-neutral session API (`network::session`) backed by an in-memory
+> non-Steam provider by default. A future Steam lobby backend will implement the
+> same `SessionRequest` / `SessionEvent` protocol, mapping `SessionId` → Steam
+> `LobbyId`, `SessionMemberId` → Steam `SteamId`, and `SessionVisibility` →
+> Steam lobby type. This file remains as reference for the Steam API surface but
+> no longer represents the active integration path.
+
 ## TLDR
 
 Status: historical research. The current multiplayer target is Lightyear +

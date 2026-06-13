@@ -1,5 +1,18 @@
 //! Lightyear integration boundary.
 
+#[cfg(feature = "lightyear")]
+pub mod link;
+
+pub mod protocol;
+
+#[cfg(feature = "lightyear")]
+pub use link::{
+    AfterglowSessionLightyearBridgePlugin, NetcodeClientParams, NetcodeServerParams,
+    PendingNetcodeStartup, SessionLightyearLinks,
+};
+
+pub use protocol::register_afterglow_lightyear_protocol;
+
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "lightyear")]
@@ -30,6 +43,7 @@ pub struct AfterglowLightyearConfig {
     pub link_conditioner: Option<LightyearLinkConditioner>,
     pub connect_token: Option<Vec<u8>>,
     pub protocol_id: u64,
+    pub netcode_private_key: [u8; 32],
 }
 
 impl Default for AfterglowLightyearConfig {
@@ -43,6 +57,7 @@ impl Default for AfterglowLightyearConfig {
             link_conditioner: None,
             connect_token: None,
             protocol_id: 0,
+            netcode_private_key: [0u8; 32],
         }
     }
 }
@@ -126,5 +141,18 @@ mod tests {
         let mut cfg = AfterglowLightyearConfig::default();
         cfg.tick_rate = 0;
         assert_eq!(cfg.tick_rate.max(1), 1);
+    }
+
+    #[cfg(feature = "lightyear")]
+    #[test]
+    fn host_role_adds_lightyear_plugins_without_panicking() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(AfterglowLightyearConfig {
+                role: LightyearRole::Host,
+                ..Default::default()
+            });
+
+        app.add_plugins(AfterglowLightyearPlugin);
     }
 }

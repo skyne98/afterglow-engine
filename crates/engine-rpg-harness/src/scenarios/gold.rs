@@ -7,7 +7,7 @@ use afterglow_engine::{
     },
     core::identity::StableEntityId,
     input::AfterglowAction,
-    network::{HistoryTick, LightyearRole},
+    network::{LightyearRole, register_afterglow_lightyear_protocol},
     physics::AfterglowPhysicsPlugin,
 };
 use bevy::prelude::*;
@@ -46,8 +46,7 @@ fn reconcile_controller_components(
 }
 
 fn register_gold(app: &mut App, _role: LightyearRole) {
-    app.init_resource::<HistoryTick>();
-    app.register_component::<StableEntityId>();
+    register_afterglow_lightyear_protocol(app);
     app.register_component::<Health>().add_prediction();
     app.register_component::<CombatState>().add_prediction();
     app.register_component::<FirstPersonEffectStack>()

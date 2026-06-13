@@ -3,7 +3,7 @@ use crate::rig::LightyearTestRig;
 use afterglow_engine::{
     core::identity::StableEntityId,
     input::AfterglowAction,
-    network::{HistoryTick, LightyearRole},
+    network::{LightyearRole, register_afterglow_lightyear_protocol},
 };
 use bevy::prelude::*;
 use leafwing_input_manager::action_state::ActionState;
@@ -32,8 +32,7 @@ fn player_bundle(pos: Vec3) -> impl Bundle {
 }
 
 fn register_rpg(app: &mut App, _role: LightyearRole) {
-    app.init_resource::<HistoryTick>();
-    app.register_component::<StableEntityId>();
+    register_afterglow_lightyear_protocol(app);
     app.register_component::<Health>().add_prediction();
     app.register_component::<ManaPool>().add_prediction();
     app.register_component::<CombatState>().add_prediction();

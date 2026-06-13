@@ -22,15 +22,20 @@ path physics lag compensation.
 
 | Item | Purpose |
 |---|---|
-| `AfterglowNetworkPlugin` | Adds `AfterglowLightyearPlugin`. |
+| `AfterglowNetworkPlugin` | Adds `AfterglowLightyearPlugin` and `AfterglowSessionPlugin`. |
 | `AfterglowLightyearPlugin` | Initializes `AfterglowLightyearConfig`; with the `lightyear` feature, adds Lightyear client/server plugin groups and Leafwing input networking. Concrete link/transport entity setup is still test/demo-owned. |
-| `AfterglowLightyearConfig` | Engine-facing Lightyear config: role, server/remote addresses, tick rate, prediction window, protocol id, optional connect token, and link-conditioner settings. |
+| `AfterglowLightyearConfig` | Engine-facing Lightyear config: role, server/remote addresses, tick rate, prediction window, protocol id, optional connect token, link-conditioner settings, and `netcode_private_key`. The private key defaults to `[0u8; 32]` — a development placeholder that **must** be replaced before any real network deployment. |
+| `register_afterglow_lightyear_protocol` | Opt-in helper that initializes `HistoryTick`, registers reflection for `HistoryTick` and `StableEntityId`, and — under the `lightyear` feature — registers `StableEntityId` as a replicated Lightyear component. Call it after Lightyear client/server plugins are present. |
 | `HistoryTick` | Plain `u32` resource used by deterministic fixed-step tests and scenario systems. It is not rewind history. |
+| `AfterglowSessionPlugin` | Platform-neutral session/matchmaking API layer. Registers `AfterglowSessionState`, `NonSteamSessionCatalog`, `SessionRequest` and `SessionEvent` Bevy `Message` types, and a system that processes session requests against the in-memory non-Steam provider. Future Steam lobby support will be added as an alternative backend. |
+| `AfterglowSessionState` | Resource tracking the local `SessionMemberId`, current `SessionId`, and current `SessionBackend` (if any). |
 
 ## Universal Identity
 
-`StableEntityId` is the only engine-level entity ID source. It is used for
-persistence, Lightyear replication identity, and cross-peer gameplay references.
+`StableEntityId` is the only engine-level durable entity ID source. It is used
+for persistence, durable identity on replicated entities, and cross-peer gameplay
+references. Lightyear still owns live network entity remapping for the current
+session.
 Raw Bevy `Entity` values are local handles only and must not appear in network
 payloads, save data, or cross-peer gameplay references.
 
@@ -39,11 +44,18 @@ Entities marked `RuntimeOnly` are excluded from automatic stable-ID assignment i
 helpers that perform that pass. The allocator skips IDs already authored in the
 world, so generated IDs do not collide with scene, persistence, or network IDs.
 
+When `register_afterglow_lightyear_protocol(app)` is called with the `lightyear`
+feature enabled, `StableEntityId` is registered through Lightyear's component
+registry. Any replicated entity that carries `StableEntityId` will replicate that
+component like other registered Lightyear components.
+
 ## Replication Pattern
 
-Register networked components through Lightyear, not the old `Replicate` macro:
+Register the engine protocol helper first, then register gameplay components
+through Lightyear:
 
 ```rust
+register_afterglow_lightyear_protocol(app);
 app.register_component::<Health>();
 app.register_component::<CombatTransform>();
 app.register_component::<ShieldState>();
@@ -73,7 +85,7 @@ for the taxonomy and assignment rules.
 | Remote avatar snapshot | Non-local avatar mirrors latest replicated state directly. | Available as a simple fallback for non-critical debug mirrors. |
 | Buffered interpolation | Remote physics/presentation objects render from delayed snapshot buffers. | `NetworkTransformSample` and `NetworkTransformInterpolationBuffer`. |
 | Kinematic remote observer | Server/master-driven physics object writes authoritative transform samples for remote presentation. | `PhysicsKinematicRemote` plus `NetworkTransformInterpolationBuffer`. |
-| Pre-spawned predicted interaction | Locally predicted interaction/cue entities spawn immediately, then match or expire against server-spawned Lightyear entities. | Lightyear `PreSpawned`, `Replicate`, `PredictionTarget`, and `Confirmed<T>`; covered by `engine-rpg-harness` scenarios. |
+| Pre-spawned predicted interaction | Locally predicted interaction/cue entities spawn immediately, then match or expire against server-spawned Lightyear entities. The client does not request authoritative spawns; the server may spawn matching entities only as a result of server-side input/gameplay logic. | Lightyear `PreSpawned`, `Replicate`, `PredictionTarget`, and `Confirmed<T>`; covered by `engine-rpg-harness` scenarios. |
 | Input-delayed gameplay truth | Combat, doors, projectiles, cooldowns, status effects, and inventory decisions are derived by the server after fixed input delay. | `ActionState<AfterglowAction>`, deterministic fixed systems, and Lightyear replication/reconciliation. |
 | Chunk interest filter | Replication routing by chunk/area before large-player fanout. | Planned; no current public API. |
 | Local only | Cameras, UI, debug helpers, and local presentation children stay off the network. | Absence of Lightyear replication markers. |
@@ -81,6 +93,16 @@ for the taxonomy and assignment rules.
 Lightyear remains the substrate for transport, replication, prediction metadata,
 and interpolation hooks. Afterglow's layer decides which strategy consumes a
 replicated update for a given entity class.
+
+Use Lightyear's existing `ControlledBy` / `Controlled` relationship to bind an
+entity to the link that controls it, and Leafwing `InputMap<AfterglowAction>` /
+`ActionState<AfterglowAction>` on the controlled entity for gameplay input.
+Afterglow does not add a separate player/avatar taxonomy.
+
+The missing reusable layer is controlled-entity lifecycle orchestration: assign,
+revoke, and rebind controlled entities for join, disconnect, respawn,
+possession, and reconnect. It is not a custom action transport or entity-routing
+protocol.
 
 ## Input Pattern
 
@@ -92,6 +114,11 @@ app.add_plugins(lightyear_inputs_leafwing::InputPlugin::<AfterglowAction>::defau
 
 Gameplay reads `ActionState<AfterglowAction>` in fixed schedules. Afterglow no
 longer serializes custom command DTOs for movement/combat input.
+
+Clients send input only. They do not send authoritative spawn, despawn,
+interaction-result, hit, loot, health, or door-state requests. Server gameplay
+systems decide those outcomes from the delayed input stream and replicated world
+state.
 
 The server should process inputs after a fixed delay sized to the expected
 latency budget. This keeps authoritative simulation deterministic without
@@ -159,6 +186,145 @@ Lightyear-owned link components.
 The legacy `crates/mock-rpg-network-tests` crate still exists as a frozen oracle
 for older rollback-style scenarios. It now owns its own local snapshot/replay
 logic and no longer depends on engine rewind-history APIs.
+
+## Session / Matchmaking API
+
+The session layer is a platform-neutral wrapper for matchmaking operations
+(create, search, join, leave) backed at runtime by a chosen provider. Both
+`SessionRequest` and `SessionEvent` are Bevy `Message` types (not Lightyear
+messages).
+
+| Type | Purpose |
+|---|---|
+| `SessionId` / `SessionMemberId` | `u128` wrapper IDs with `INVALID`/`new`/`from_raw`/`as_raw`/`is_valid`, following the `StableEntityId` pattern. `SessionId` is internal/durable; players do not type it. |
+| `SessionCode` | Player-facing short join token (e.g., `XFQ-KRB`). Six uppercase characters in two hyphenated groups, excluding I/L/O. Generated by the non-Steam provider and unique among active sessions. |
+| `PlayerIdentity` | Durable anti-spoofing identity: `Native(NativeIdentityProof)` with Ed25519 public key + signature, or `Steam { steam_id, ticket }` for Steam ticket passthrough. |
+| `NativeIdentityProof` | Ed25519 public key and signature over a canonical challenge (`"afterglow-session:" + backend + target + nonce`). The client holds the private key locally; the server never sees it. |
+| `SessionIdentityNonce` | Server-side nonce resource used when verifying native proofs. Initialized from the OS CSPRNG. |
+| `IdentityError` | `InvalidPublicKey`, `InvalidSignature`, `UnsupportedBackend`. |
+| `SessionBackend` | `NonSteam` or `Steam` — identifies which provider the session came from. |
+| `SessionVisibility` | `Private` / `FriendsOnly` / `Public` / `Invisible` — maps to Steam lobby visibility. |
+| `SessionTransport` | `Local` or `DirectUdp { host }` — describes the expected transport without owning a Lightyear link. |
+| `SessionConfig` | Name, `backend`, capacity, visibility, metadata (key/value), and transport preference. `SessionConfig::default()` targets `NonSteam`. |
+| `SessionSearch` | `backend`, metadata filter (exact AND semantics), `require_open_slot`, and `max_results` bound (0 returns empty). |
+| `SessionInfo` | Full read-only snapshot: id, code, backend, name, owner, owner identity, member count/capacity, visibility, metadata, transport. |
+| `SessionRequest` | Bevy `Message` enum: `Create(SessionConfig, PlayerIdentity)`, `Search(SessionSearch)`, `Join { backend, session, identity }`, `JoinByCode { backend, code, identity }`, `Leave`. |
+| `SessionEvent` | Bevy `Message` enum carrying session lifecycle outcomes: `Created`, `SearchResults`, `Joined`, `Left`, `MemberJoined`, `MemberLeft`, `SessionEnded`, `Error`. |
+| `SessionError` | `AlreadyInSession`, `NotInSession`, `SessionNotFound`, `SessionFull`, `InvalidConfig`, `PermissionDenied`, `BackendUnavailable`. |
+| `SessionLeaveReason` | `Left`, `Disconnected`, `Kicked`, `Banned`, `HostEnded`. |
+| `AfterglowSessionState` | Resource with `local_member_id`, `identity`, `current_session`, `current_backend`. `local_member_id` defaults to `INVALID` and is lazily allocated by the catalog on first use. |
+
+Each `SessionRequest` carries a `backend` field (directly in `SessionConfig.backend`,
+`SessionSearch.backend`, or `Join.backend`). The non-Steam provider processes
+only `NonSteam` requests; `Steam` requests emit `BackendUnavailable`. This
+design avoids duplicate provider state — a future Steam provider will handle
+Steam-targeted requests without shadowing the non-Steam catalog.
+
+The **non-Steam provider** (`NonSteamSessionCatalog` + `process_non_steam_session_requests`) is the
+default in-memory implementation. It validates all operations, enforces capacity
+and ownership, generates a unique [`SessionCode`] for each created session, and
+emits the outcome protocol locally. It does not create Lightyear
+transport links, Netcode connections, or lobby network traffic.
+
+### Joining by Code
+
+To join a friend's session, use the player-facing code emitted in
+[`SessionEvent::Created`] / [`SessionEvent::Joined`]:
+
+```rust
+app.world_mut().write_message(SessionRequest::JoinByCode {
+    backend: SessionBackend::NonSteam,
+    code: SessionCode::new("XFQ-KRB"),
+});
+```
+
+Joining by internal [`SessionId`] remains available via
+`SessionRequest::Join { backend, session, identity }` for systems that already
+track the durable ID.
+
+### Player Identity
+
+Every create/join request must carry a [`PlayerIdentity`]:
+
+```rust
+let identity = PlayerIdentity::Native(NativeIdentityProof {
+    public_key: my_public_key.to_vec(),
+    signature: my_signing_key.sign(&NativeIdentityProof::challenge(
+        SessionBackend::NonSteam,
+        "create",
+        &nonce.0,
+    )).to_vec(),
+});
+
+app.world_mut().write_message(SessionRequest::Create(
+    SessionConfig::default(),
+    identity,
+));
+```
+
+The non-Steam provider:
+
+- verifies the Ed25519 signature against the canonical challenge for the
+  request target (`"create"`, the session id for `Join`, or the session code for
+  `JoinByCode`);
+- rejects requests that fail verification with `SessionError::PermissionDenied`;
+- binds the public key to a `SessionMemberId` so the same native key rejoining a
+  session gets the same member slot;
+- accepts `PlayerIdentity::Steam` as a passthrough; the future Steam backend will
+  validate the Steam ticket.
+
+`SessionMemberId` remains a per-session handle. `PlayerIdentity` is the trusted
+anti-spoofing/persistence boundary.
+
+**Future Steam mapping**: `SessionId` / `SessionMemberId` will wrap
+`steamworks::LobbyId` / `steamworks::SteamId`. `SessionRequest` messages
+will map to `ISteamMatchmaking` calls, and `SessionEvent` messages will deliver their
+completion callbacks. `SessionVisibility` maps directly to Steam lobby type.
+Metadata parity with Steam key/value lobby data is already present.
+
+The session layer does **not** own Lightyear transport, link spawning, or
+`StableEntityId` gameplay identity. Session member IDs are platform/session
+identity only. Clients send input through Leafwing/Lightyear regardless of
+session membership.
+
+## Session-to-Lightyear Bridge
+
+[`AfterglowSessionLightyearBridgePlugin`] maps [`SessionEvent`] lifecycle
+events to Lightyear link management. It is opt-in and not included in
+[`AfterglowNetworkPlugin`]. Add it explicitly after Lightyear plugins and the
+session plugin:
+
+```rust
+app.add_plugins((
+    AfterglowLightyearPlugin,
+    AfterglowSessionPlugin,
+    AfterglowSessionLightyearBridgePlugin, // opt-in
+));
+```
+
+| Plugin / Type | Purpose |
+|---|---|
+| `AfterglowSessionLightyearBridgePlugin` | Initializes `SessionLightyearLinks` and `PendingNetcodeStartup` resources; runs its private bridge system in [`AfterglowSessionSet::ApplyEffects`]. Lightyear may observe newly spawned link entities on the following frame depending on its own internal `PreUpdate` ordering. |
+| `SessionLightyearLinks` | Resource tracking the client link, server link, and server entity spawned for a local session. Cleared on leave/session-end. |
+| `PendingNetcodeStartup` | Resource carrying optional `NetcodeClientParams` and `NetcodeServerParams` produced by `DirectUdp` session events. Consumers drain this to establish real UDP links. |
+| `NetcodeClientParams` | Parameters for starting a Netcode client connection: `server_addr`, `client_id`, `protocol_id`, `private_key`. The `private_key` is populated from `AfterglowLightyearConfig.netcode_private_key`. |
+| `NetcodeServerParams` | Parameters for starting a Netcode server: `bind_addr`, `protocol_id`, `private_key`. The `private_key` is populated from `AfterglowLightyearConfig.netcode_private_key`. |
+
+### Transport Behaviour
+
+| `SessionTransport` | Bridge Action |
+|---|---|
+| `Local` | Despawns any previously tracked entities, then spawns a server entity (`Server::default()`, `Started`), a client link entity with Crossbeam transport, and a server link entity with Crossbeam transport. The client link carries `Client`, `LocalId`, `RemoteId(PeerId::Server)`, `Connected`, `Link`, `Linked`, `CrossbeamIo`, `Transport`, `MessageManager`, `ReplicationReceiver`, and `PredictionManager`. The server link carries `LinkOf { server }`, `ClientOf`, `LocalId(PeerId::Server)`, `RemoteId`, `Connected`, `Link`, `Linked`, `CrossbeamIo`, `Transport`, `MessageManager`, and `ReplicationSender::new(Duration::ZERO, SendUpdatesMode::SinceLastAck, false)`. |
+| `DirectUdp { host }` | Parses `host` as a `SocketAddr`. Writes `NetcodeClientParams` to `PendingNetcodeStartup` when the local `SessionMemberId` is a valid nonzero `u64`. If `AfterglowLightyearConfig.role` is `Host` or `Server`, also writes `NetcodeServerParams`. The `private_key` field in both param structs is populated from `AfterglowLightyearConfig.netcode_private_key` (default `[0u8; 32]` — a development placeholder that must be replaced before any real network deployment). If the host string is invalid, pending state is cleared and no panic occurs. No link entities are spawned — a separate consumer should drain `PendingNetcodeStartup`. |
+
+### Session Event Handling
+
+| Event | Action |
+|---|---|
+| `Created` / `Joined` (Local) | Spawn tracked Crossbeam link entities (idempotent). |
+| `Created` / `Joined` (DirectUdp) | Write pending netcode startup parameters. |
+| `Left` / `SessionEnded` | Despawn tracked entities, clear pending startup. |
+| `SearchResults`, `MemberJoined`, `MemberLeft`, `Error` | Ignored. |
 
 ## Legacy Removals
 

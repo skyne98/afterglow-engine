@@ -63,7 +63,9 @@ Lightyear-compatible fixed gameplay schedule.
 ## Scripted And UI Input
 
 Leafwing's Lightyear adapter is entity-scoped. Gameplay input should live on the
-controlled avatar/control entity. UI, editor, and non-gameplay global input may
-use separate Leafwing action sets or ordinary Bevy events, but those paths must
-not become authoritative combat/network input unless they are mapped onto an
-entity `ActionState<AfterglowAction>`.
+entity controlled by Lightyear's `ControlledBy` / `Controlled` relationship and
+Leafwing's `InputMap<AfterglowAction>` / `ActionState<AfterglowAction>`. UI,
+editor, and non-gameplay global input may use separate Leafwing action sets or
+ordinary Bevy events, but those paths must not become authoritative
+combat/network input unless they are mapped onto an entity
+`ActionState<AfterglowAction>`.

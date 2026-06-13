@@ -127,14 +127,16 @@ Each scenario defines a registration function called on every app (server + clie
 
 ```rust
 fn register_foo(app: &mut App, role: LightyearRole) {
-    app.init_resource::<HistoryTick>();
-    app.register_component::<StableEntityId>();
+    register_afterglow_lightyear_protocol(app);
     app.register_component::<Health>().add_prediction();
     app.add_systems(FixedUpdate, (system_a, system_b).chain());
 }
 ```
 
-`LightyearRole` distinguishes Server/Client/Host. Systems that should only run on the server check `AfterglowLightyearConfig::role`.
+`register_afterglow_lightyear_protocol` installs the shared harness protocol
+state (`HistoryTick` plus `StableEntityId`). `LightyearRole` distinguishes
+Server/Client/Host. Systems that should only run on the server check
+`AfterglowLightyearConfig::role`.
 
 ## Test Coverage Map
 
@@ -198,11 +200,11 @@ fn register_foo(app: &mut App, role: LightyearRole) {
 
 | Test | Transport | What it proves |
 |---|---|---|
-| `prespawned_cue_is_preserved_when_server_confirms` | Crossbeam | Client predicts `PreSpawned` entity → server spawns matching → entity preserved after confirmation |
-| `prespawned_cue_expires_when_server_does_not_confirm` | Crossbeam | Client predicts `PreSpawned` entity → server never spawns → entity despawned after timeout (80 ticks) |
+| `prespawned_cue_is_preserved_when_server_confirms` | Crossbeam | Client predicts local `PreSpawned` entity → server gameplay independently spawns matching authoritative entity → local entity preserved after confirmation |
+| `prespawned_cue_expires_when_server_does_not_confirm` | Crossbeam | Client predicts local `PreSpawned` entity → server gameplay spawns nothing → local entity despawned after timeout (80 ticks) |
 | `client_prediction_drift_corrected_by_server` | Crossbeam | Client changes HP to 100, server has 90 → replication corrects client back to 90 |
 | `udp_prespawned_cue_is_preserved_when_server_confirms` | UDP | PreSpawned entity preserved after server confirmation over UDP |
-| `udp_prespawned_cue_expires_when_server_does_not_confirm` | UDP | PreSpawned entity expires when server never spawns over UDP |
+| `udp_prespawned_cue_expires_when_server_does_not_confirm` | UDP | Local PreSpawned entity expires when server gameplay spawns nothing over UDP |
 | `udp_client_prediction_drift_corrected_by_server` | UDP | Prediction drift correction via replication over UDP |
 
 ### RPG Scenarios (`crates/engine-rpg-harness/src/scenarios/rpg.rs`)
@@ -244,8 +246,8 @@ fn register_foo(app: &mut App, role: LightyearRole) {
 
 | Test | Transport | What it proves |
 |---|---|---|
-| `door_opens_on_grab` | Crossbeam | Use action on door → server spawns DoorGrab → door opens, player pulled toward it; PreSpawned DoorGrab persists on client |
-| `locked_door_rejects_grab_and_cleans_up` | Crossbeam | Locked door → no DoorGrab spawned → PreSpawned entity despawns after timeout; door remains locked+closed |
+| `door_opens_on_grab` | Crossbeam | Use input on door → server gameplay spawns DoorGrab → door opens, player pulled toward it; local PreSpawned DoorGrab persists on client |
+| `locked_door_rejects_grab_and_cleans_up` | Crossbeam | Locked door → server gameplay spawns no DoorGrab → local PreSpawned entity despawns after timeout; door remains locked+closed |
 | `udp_door_opens_on_grab` | UDP | Door opens on grab interaction over UDP |
 
 ### Adversarial (`crates/engine-rpg-harness/src/scenarios/adversarial.rs`)

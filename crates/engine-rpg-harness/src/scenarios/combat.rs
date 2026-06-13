@@ -7,7 +7,7 @@ use afterglow_engine::{
     },
     core::identity::StableEntityId,
     input::AfterglowAction,
-    network::{HistoryTick, LightyearRole},
+    network::{LightyearRole, register_afterglow_lightyear_protocol},
     physics::AfterglowPhysicsPlugin,
 };
 use bevy::prelude::*;
@@ -52,9 +52,8 @@ fn reconcile_controller_components(
 }
 
 fn register_combat(app: &mut App, _role: LightyearRole) {
-    app.init_resource::<HistoryTick>();
+    register_afterglow_lightyear_protocol(app);
     app.init_resource::<AttackCooldown>();
-    app.register_component::<StableEntityId>();
     app.register_component::<Health>().add_prediction();
     app.register_component::<CombatState>().add_prediction();
     app.register_component::<FirstPersonEffectStack>()

@@ -11,7 +11,7 @@ person feel and avoiding one-size-fits-all smoothing.
 | Owned predicted avatar | Locally controlled player bodies | Server validates authoritative body state | Local fixed controller predicts; server snapshots acknowledge commands and correct large divergence | Strategy documented; needs a non-demo implementation |
 | Remote avatar snapshot | Debug mirrors and non-critical one-off state | Server | Direct replicated transform mirroring | Available as a fallback |
 | Buffered interpolation | Replicated physics props, projectiles, breakables, remote avatars that need smooth motion | Server/master | Render samples from a delayed snapshot buffer | Implemented as a generic transform buffer |
-| Pre-spawned predicted interaction | Client-owned transient interaction/cue entities such as grab constraints, hit markers, beams, and damage numbers | Server confirms or rejects | Local client spawns immediately with `PreSpawned`; matching server entity reconciles through Lightyear prediction, rejected entities expire | Proven in `engine-rpg-harness`; cue entities use the same pattern |
+| Pre-spawned predicted interaction | Client-local transient interaction/cue entities such as grab constraints, hit markers, beams, and damage numbers | Server confirms or rejects by normal input/gameplay simulation | Local client spawns immediately with `PreSpawned`; if server gameplay independently spawns a matching authoritative entity, Lightyear reconciles it; otherwise the local cue expires | Proven in `engine-rpg-harness`; cue entities use the same pattern |
 | Chunk interest filter | Replication routing by chunk/area | Server | Peers receive entities in interested chunks | Planned; no current public API after legacy `InterestMap` removal |
 | Input-delayed gameplay truth | Combat truth: health, shields, inventories, projectiles, hit facts | Server fixed-tick simulation after input delay | Client predicts locally, then reconciles from replicated authoritative state | Current baseline in `engine-rpg-harness` |
 | Local only | Cameras, UI, debug helpers, non-network presentation children | Local world | Not replicated | Implemented by absence of network markers |
@@ -19,11 +19,20 @@ person feel and avoiding one-size-fits-all smoothing.
 ## Assignment Rules
 
 - Gameplay truth uses `StableEntityId`; raw Bevy `Entity` values never cross the network.
-- A locally controlled player body uses owned prediction plus authoritative correction.
+- A locally controlled player body uses Lightyear `ControlledBy` / `Controlled`
+  plus Leafwing `InputMap<AfterglowAction>` / `ActionState<AfterglowAction>` for
+  input ownership; no custom player/avatar marker component is required.
+- Control assignment means lifecycle orchestration around those upstream
+  primitives: assign, revoke, and rebind controlled entities. It does not mean
+  adding custom action transport or entity-routing messages.
+- A locally controlled body uses owned prediction plus authoritative correction.
 - The camera attached to a local player is local-only presentation, even when the body is networked.
 - Non-local avatars may start as direct snapshots, but twitch/gameplay-facing motion should move to buffered interpolation before real latency tests.
 - Arbitrary physics objects should use buffered interpolation unless the local client owns an explicit interaction mode such as grab/link/release.
-- Local grab/link/cue prediction should spawn transient entities with Lightyear `PreSpawned` so server authority can match, correct, or reject them without custom entity-remap code.
+- Local grab/link/cue prediction should spawn transient entities with Lightyear
+  `PreSpawned` so server authority can match, correct, or reject them without
+  custom entity-remap code. This is local prediction only: clients do not send
+  authoritative spawn/despawn/interact requests.
 - Combat truth should be derived on the server after fixed input delay rather than from late-input rewind.
 - Debug/UI/console/camera entities stay local-only unless a gameplay feature explicitly needs replication.
 

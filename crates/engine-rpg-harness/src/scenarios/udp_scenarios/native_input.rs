@@ -19,8 +19,7 @@ pub(crate) struct InputEdgeProbe {
 }
 
 pub(crate) fn register_native_input(app: &mut App, role: LightyearRole) {
-    app.init_resource::<HistoryTick>();
-    app.register_component::<StableEntityId>();
+    register_afterglow_lightyear_protocol(app);
     app.register_component::<Health>().add_prediction();
     app.register_component::<CombatState>().add_prediction();
     app.register_component::<Transform>().add_prediction();

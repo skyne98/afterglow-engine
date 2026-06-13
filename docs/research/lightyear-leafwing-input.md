@@ -157,10 +157,13 @@ following the scheduling discipline documented above.
 | Packet send | Serialize outbound commands/snapshots after fixed simulation and reconciliation. |
 | Parallelism | Use system ordering for correctness, then let Bevy parallelize compatible systems. |
 
-Afterglow uses Leafwing Input Manager with per-avatar `ActionState` components
-for networked controls. Leafwing actions flow through Lightyear's input
-networking layer (`lightyear_inputs_leafwing`), so fixed input delay, packet
-redundancy, and remote prediction share one source of truth.
+Afterglow uses Leafwing Input Manager with per-controlled-entity `ActionState`
+components for networked controls. The ownership/control source is Lightyear's
+existing `ControlledBy` / `Controlled` relationship plus a Leafwing
+`InputMap<AfterglowAction>` on the controlled entity. Leafwing actions flow
+through Lightyear's input networking layer (`lightyear_inputs_leafwing`), so
+fixed input delay, packet redundancy, and remote prediction share one source of
+truth. Afterglow does not add custom player/avatar marker components for this.
 
 ## Risks And Open Questions
 

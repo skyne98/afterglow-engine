@@ -215,11 +215,12 @@ integration and `controller/camera_motion.rs` for the HPL2 bob formula.
 These are presentation effects only. Hit detection, networking, prediction, and
 physics keep using the controller body and replicated gameplay state.
 
-The FPS networking demo uses the same split: fixed controller movement remains
-the local prediction path, authoritative snapshots may correct the body when it
-diverges beyond the network threshold, and render-rate look/camera presentation
-continues from the controller motor instead of from replicated avatar entities.
-The per-entity rules are tracked in
+When reusable networked-player prediction lands, fixed controller movement
+should remain the local prediction path, authoritative snapshots may correct the
+body when it diverges beyond the network threshold, and render-rate look/camera
+presentation should continue from the controller motor instead of from replicated
+avatar entities. No networked FPS demo exists today; the per-entity rules are
+tracked in
 [`network-sync-strategy.md`](../research/network-sync-strategy.md).
 
 Moving-platform attachment, dynamic-body pushing, and full true-first-person

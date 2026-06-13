@@ -159,8 +159,8 @@ impl LightyearTestRig {
     }
 
     /// Find a client-world entity by its StableEntityId.
-    /// Requires `StableEntityId` to be registered for replication
-    /// (`register_component::<StableEntityId>()`).
+    /// Requires the engine Lightyear protocol helper to register
+    /// `StableEntityId` for replication.
     pub fn find_client_entity(&mut self, client_id: usize, sid: StableEntityId) -> Option<Entity> {
         let mut query = self.client_apps[client_id]
             .world_mut()

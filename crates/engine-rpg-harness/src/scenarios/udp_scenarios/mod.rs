@@ -12,7 +12,7 @@ use crate::{TransportConfig, rig::LightyearTestRig};
 use afterglow_engine::{
     core::identity::StableEntityId,
     input::AfterglowAction,
-    network::{HistoryTick, LightyearRole},
+    network::{HistoryTick, LightyearRole, register_afterglow_lightyear_protocol},
     physics::{
         AfterglowPhysicsPlugin,
         avian::{Collider, Gravity, RigidBody},
@@ -42,8 +42,7 @@ struct TestCue {
 }
 
 fn register_lockstep(app: &mut App, _role: LightyearRole) {
-    app.init_resource::<HistoryTick>();
-    app.register_component::<StableEntityId>();
+    register_afterglow_lightyear_protocol(app);
     app.register_component::<Health>().add_prediction();
     app.register_component::<CombatState>().add_prediction();
     app.add_systems(
@@ -53,8 +52,7 @@ fn register_lockstep(app: &mut App, _role: LightyearRole) {
 }
 
 fn register_adversarial(app: &mut App, _role: LightyearRole) {
-    app.init_resource::<HistoryTick>();
-    app.register_component::<StableEntityId>();
+    register_afterglow_lightyear_protocol(app);
     app.register_component::<Health>().add_prediction();
     app.register_component::<CombatState>().add_prediction();
     app.add_systems(
@@ -64,8 +62,7 @@ fn register_adversarial(app: &mut App, _role: LightyearRole) {
 }
 
 fn register_rpg(app: &mut App, _role: LightyearRole) {
-    app.init_resource::<HistoryTick>();
-    app.register_component::<StableEntityId>();
+    register_afterglow_lightyear_protocol(app);
     app.register_component::<Health>().add_prediction();
     app.register_component::<ManaPool>().add_prediction();
     app.register_component::<CombatState>().add_prediction();
@@ -95,18 +92,18 @@ fn register_rpg(app: &mut App, _role: LightyearRole) {
 }
 
 fn register_stress(app: &mut App, _role: LightyearRole) {
-    app.register_component::<StableEntityId>();
+    register_afterglow_lightyear_protocol(app);
     app.register_component::<Health>().add_prediction();
     app.register_component::<CombatState>().add_prediction();
 }
 
 fn register_test_protocol(app: &mut App, _role: LightyearRole) {
-    app.register_component::<StableEntityId>();
+    register_afterglow_lightyear_protocol(app);
     app.register_component::<TestCue>().add_prediction();
 }
 
 fn register_drift_protocol(app: &mut App, _role: LightyearRole) {
-    app.register_component::<StableEntityId>();
+    register_afterglow_lightyear_protocol(app);
     app.register_component::<Health>().add_prediction();
     app.add_systems(
         PreUpdate,
@@ -115,8 +112,7 @@ fn register_drift_protocol(app: &mut App, _role: LightyearRole) {
 }
 
 fn register_doors(app: &mut App, _role: LightyearRole) {
-    app.init_resource::<HistoryTick>();
-    app.register_component::<StableEntityId>();
+    register_afterglow_lightyear_protocol(app);
     app.register_component::<Health>().add_prediction();
     app.register_component::<DoorState>().add_prediction();
     app.register_component::<DoorGrab>().add_prediction();
@@ -127,8 +123,7 @@ fn register_doors(app: &mut App, _role: LightyearRole) {
 }
 
 fn register_combat(app: &mut App, _role: LightyearRole) {
-    app.init_resource::<HistoryTick>();
-    app.register_component::<StableEntityId>();
+    register_afterglow_lightyear_protocol(app);
     app.register_component::<Health>().add_prediction();
     app.register_component::<CombatState>().add_prediction();
     app.register_component::<Corpse>();
