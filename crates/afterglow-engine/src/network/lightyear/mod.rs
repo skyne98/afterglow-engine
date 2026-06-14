@@ -7,8 +7,8 @@ pub mod protocol;
 
 #[cfg(feature = "lightyear")]
 pub use link::{
-    AfterglowSessionLightyearBridgePlugin, NetcodeClientParams, NetcodeServerParams,
-    PendingNetcodeStartup, SessionLightyearLinks,
+    AfterglowNetcodeConsumerPlugin, AfterglowSessionLightyearBridgePlugin, NetcodeClientParams,
+    NetcodeServerParams, PendingNetcodeStartup, SessionLightyearLinks,
 };
 
 pub use protocol::register_afterglow_lightyear_protocol;

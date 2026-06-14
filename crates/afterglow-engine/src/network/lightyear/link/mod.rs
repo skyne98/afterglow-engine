@@ -21,10 +21,20 @@
 use std::{net::SocketAddr, time::Duration};
 
 use bevy::prelude::*;
+use bevy::ecs::event::EntityTrigger;
 use lightyear::{
     crossbeam::CrossbeamIo,
     prelude::{server::*, *},
 };
+
+#[cfg(feature = "lightyear")]
+use lightyear::prelude::{
+    Authentication as NetcodeAuthentication, LocalAddr, PeerAddr, UdpIo,
+};
+#[cfg(feature = "lightyear")]
+use lightyear::prelude::client::{Connect, NetcodeClient, NetcodeConfig as ClientNetcodeConfig};
+#[cfg(feature = "lightyear")]
+use lightyear::prelude::server::{NetcodeConfig as ServerNetcodeConfig, NetcodeServer, Start};
 
 use crate::network::{
     lightyear::{AfterglowLightyearConfig, LightyearRole},
@@ -268,6 +278,92 @@ fn handle_session_lightyear_links(
             // Ignored: SearchResults, MemberJoined, MemberLeft, Error
             _ => {}
         }
+    }
+}
+
+/// Opt-in plugin that drains [`PendingNetcodeStartup`] and spawns real
+/// Lightyear netcode link entities with UDP transport.
+///
+/// Add this after `AfterglowSessionLightyearBridgePlugin` (and after Lightyear
+/// client/server plugins) when you want netcode sessions to automatically open
+/// UDP sockets. The bridge itself only writes pending params; this consumer is
+/// responsible for acting on them.
+#[derive(Default)]
+pub struct AfterglowNetcodeConsumerPlugin;
+
+impl Plugin for AfterglowNetcodeConsumerPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(
+            PreUpdate,
+            consume_pending_netcode_startup
+                .in_set(AfterglowSessionSet::ApplyEffects)
+                .after(handle_session_lightyear_links),
+        );
+    }
+}
+
+/// Drains [`PendingNetcodeStartup`] and spawns real Lightyear netcode link
+/// entities with UDP transport.
+fn consume_pending_netcode_startup(
+    mut commands: Commands,
+    mut pending: ResMut<PendingNetcodeStartup>,
+    mut links: ResMut<SessionLightyearLinks>,
+) {
+    if pending.client.is_none() && pending.server.is_none() {
+        return;
+    }
+
+    let any_local_client = pending.client.take();
+    let any_local_server = pending.server.take();
+
+    if let Some(params) = any_local_client {
+        if let Some(entity) = links.client_link.take() {
+            commands.entity(entity).despawn();
+        }
+
+        let local_addr = SocketAddr::from(([0, 0, 0, 0], 0));
+        let auth = NetcodeAuthentication::Manual {
+            server_addr: params.server_addr,
+            client_id: params.client_id,
+            private_key: params.private_key,
+            protocol_id: params.protocol_id,
+        };
+
+        match NetcodeClient::new(auth, ClientNetcodeConfig::default()) {
+            Ok(client) => {
+                let entity = commands
+                    .spawn((
+                        client,
+                        UdpIo::default(),
+                        LocalAddr(local_addr),
+                        PeerAddr(params.server_addr),
+                    ))
+                    .id();
+                commands.trigger_with(Connect { entity }, EntityTrigger);
+                links.client_link = Some(entity);
+            }
+            Err(e) => {
+                bevy::log::warn!("failed to create NetcodeClient: {:?}", e);
+            }
+        }
+    }
+
+    if let Some(params) = any_local_server {
+        if let Some(entity) = links.server_link.take() {
+            commands.entity(entity).despawn();
+        }
+
+        let config = ServerNetcodeConfig {
+            protocol_id: params.protocol_id,
+            private_key: params.private_key,
+            ..Default::default()
+        };
+        let server = NetcodeServer::new(config);
+        let entity = commands
+            .spawn((server, UdpIo::default(), LocalAddr(params.bind_addr)))
+            .id();
+        commands.trigger_with(Start { entity }, EntityTrigger);
+        links.server_link = Some(entity);
     }
 }
 

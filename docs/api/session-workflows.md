@@ -283,13 +283,16 @@ Implemented today:
   `SessionRequest::Join`, `SessionRequest::JoinByCode`, and `SessionSearch`.
 - `NonSteamSessionProvider` TCP listener + `NonSteamSessionClient` remote request sender.
 - `Local` Crossbeam bridge via `AfterglowSessionLightyearBridgePlugin`.
-- `PendingNetcodeStartup` written for `SessionTransport::Netcode`.
+- `PendingNetcodeStartup` written for `SessionTransport::DirectUdp`.
+- `AfterglowNetcodeConsumerPlugin` drains pending params and spawns real
+  Lightyear netcode link entities.
+- High-level `AfterglowSessionExt` API (`app.session().host(...)`,
+  `join_non_steam(...)`, etc.).
 
 Not yet implemented:
 
-- Engine consumer that drains `PendingNetcodeStartup` and spawns netcode links.
-- Member join/leave broadcasts from the networked provider to other session members.
 - `Steam` session backend.
+- Automatic gameplay-address exchange independent of `DirectUdp { host }`.
 
 See also:
 

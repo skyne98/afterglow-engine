@@ -326,6 +326,52 @@ fn search_results_does_not_create_links() {
 }
 
 #[test]
+fn consumer_spawns_netcode_link_entities_for_host() {
+    let mut app = test_app(LightyearRole::Host);
+    app.add_plugins(AfterglowNetcodeConsumerPlugin);
+
+    app.world_mut().write_message(SessionRequest::Create(
+        SessionConfig {
+            transport: SessionTransport::DirectUdp {
+                host: "127.0.0.1:8824".into(),
+            },
+            ..Default::default()
+        },
+        identity_fixture(),
+    ));
+    app.update();
+
+    let pending = app.world().resource::<PendingNetcodeStartup>();
+    assert!(pending.client.is_none());
+    assert!(pending.server.is_none());
+
+    let links = app.world().resource::<SessionLightyearLinks>();
+    assert!(links.client_link.is_some(), "client link should be spawned");
+    assert!(links.server_link.is_some(), "server link should be spawned");
+}
+
+#[test]
+fn consumer_spawns_client_only_for_client_role() {
+    let mut app = test_app(LightyearRole::Client);
+    app.add_plugins(AfterglowNetcodeConsumerPlugin);
+
+    app.world_mut().write_message(SessionRequest::Create(
+        SessionConfig {
+            transport: SessionTransport::DirectUdp {
+                host: "127.0.0.1:8825".into(),
+            },
+            ..Default::default()
+        },
+        identity_fixture(),
+    ));
+    app.update();
+
+    let links = app.world().resource::<SessionLightyearLinks>();
+    assert!(links.client_link.is_some());
+    assert!(links.server_link.is_none());
+}
+
+#[test]
 fn local_joined_without_lightyear_plugins_does_not_spawn() {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);

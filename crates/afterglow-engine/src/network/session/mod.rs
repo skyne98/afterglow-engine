@@ -2,6 +2,7 @@ use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+pub mod api;
 pub mod code;
 pub(crate) mod entry;
 pub mod identity;
@@ -9,6 +10,18 @@ pub mod net;
 pub mod provider;
 pub mod status;
 
+pub mod prelude {
+    //! Convenient re-exports for the session API.
+    pub use super::{
+        AfterglowSessionExt, AfterglowSessionState, NativeIdentityProof, NonSteamSessionClient,
+        NonSteamSessionProvider, PlayerIdentity, ProviderEndpoint, SessionBackend, SessionCode,
+        SessionConfig, SessionConnectionState, SessionError, SessionEvent, SessionHandle,
+        SessionIdentityNonce, SessionInfo, SessionLeaveReason, SessionMemberId, SessionRequest,
+        SessionSearch, SessionStatus, SessionTransport, SessionVisibility,
+    };
+}
+
+pub use api::{AfterglowSessionExt, SessionHandle};
 pub use code::{
     SESSION_CODE_ALPHABET, SESSION_CODE_CHAR_LEN, SESSION_CODE_GROUP_LEN, SESSION_CODE_GROUPS,
     SessionCode,

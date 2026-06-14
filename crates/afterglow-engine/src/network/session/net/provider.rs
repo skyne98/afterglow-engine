@@ -125,38 +125,55 @@ pub(crate) fn run_non_steam_provider(
     let (catalog, clients) = (&mut provider.catalog, &mut provider.clients);
 
     for i in (0..clients.len()).rev() {
-        let client = &mut clients[i];
+        let events = {
+            let client = &mut clients[i];
 
-        if let Err(e) = client.flush_write()
-            && e.kind() != io::ErrorKind::WouldBlock
-        {
-            clients.remove(i);
-            continue;
-        }
-
-        match client.try_read_request() {
-            Ok(Some(request)) => {
-                let mut events = Vec::new();
-                handle_remote_request(catalog, client, &request, &nonce.0, &mut events);
-                for event in &events {
-                    if let Err(e) = client.queue_event(event) {
-                        bevy::log::warn!("failed to queue event for remote client: {:?}", e);
-                    }
-                }
-            }
-            Ok(None) => {}
-            Err(_) => {
+            if let Err(e) = client.flush_write()
+                && e.kind() != io::ErrorKind::WouldBlock
+            {
                 clients.remove(i);
                 continue;
             }
+
+            match client.try_read_request() {
+                Ok(Some(request)) => {
+                    Some(handle_client_request(catalog, client, &request, &nonce.0))
+                }
+                Ok(None) => None,
+                Err(_) => {
+                    clients.remove(i);
+                    continue;
+                }
+            }
+        };
+
+        if let Some(events) = events {
+            broadcast_provider_events(i, clients, &events);
         }
 
+        let client = &mut clients[i];
         if let Err(e) = client.flush_write()
             && e.kind() != io::ErrorKind::WouldBlock
         {
             clients.remove(i);
         }
     }
+}
+
+fn handle_client_request(
+    catalog: &mut NonSteamSessionCatalog,
+    client: &mut ProviderClient,
+    request: &SessionRequest,
+    nonce: &[u8; 32],
+) -> Vec<SessionEvent> {
+    let mut events = Vec::new();
+    handle_remote_request(catalog, client, request, nonce, &mut events);
+    for event in &events {
+        if let Err(e) = client.queue_event(event) {
+            bevy::log::warn!("failed to queue event for remote client: {:?}", e);
+        }
+    }
+    events
 }
 
 fn accept_new_clients(provider: &mut NonSteamSessionProvider) {
@@ -248,6 +265,37 @@ fn handle_remote_request(
         // Leave / SessionEnded cleared state.
         client.session_id = None;
         client.member_id = None;
+    }
+}
+
+/// Broadcasts `MemberJoined`, `MemberLeft`, and `SessionEnded` events to all
+/// provider clients in the affected session except the requester itself
+/// (identified by `requester_index`).
+pub(crate) fn broadcast_provider_events(
+    requester_index: usize,
+    clients: &mut [ProviderClient],
+    events: &[SessionEvent],
+) {
+    for event in events {
+        let session_id = match event {
+            SessionEvent::MemberJoined { session, .. } => Some(*session),
+            SessionEvent::MemberLeft { session, .. } => Some(*session),
+            SessionEvent::SessionEnded(session) => Some(*session),
+            _ => continue,
+        };
+
+        let (before, after) = clients.split_at_mut(requester_index);
+        let (_requester, after) = after
+            .split_first_mut()
+            .expect("requester index must be valid");
+
+        for client in before.iter_mut().chain(after.iter_mut()) {
+            if client.session_id == session_id
+                && let Err(e) = client.queue_event(event)
+            {
+                bevy::log::warn!("failed to broadcast event to remote client: {:?}", e);
+            }
+        }
     }
 }
 

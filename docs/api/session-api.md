@@ -78,8 +78,9 @@ The `app.session().status()` helper is the remaining convenience layer.
 
 ## Trait / resource shape
 
-The API can be implemented as a Bevy `App` extension trait and a thin helper
-resource:
+The API is implemented in
+`crates/afterglow-engine/src/network/session/api.rs` as a Bevy `App` extension
+trait and a thin helper handle:
 
 ```rust
 pub trait AfterglowSessionExt {
@@ -97,96 +98,61 @@ pub struct SessionHandle<'a> {
 }
 
 impl SessionHandle<'_> {
-    pub fn host(
-        &mut self,
-        config: SessionConfig,
-        identity: PlayerIdentity,
-    ) {
-        self.app.world_mut().write_message(
-            SessionRequest::Create(config, identity)
-        );
-    }
-
-    /// Start a listen-server by inserting a `NonSteamSessionProvider` and
-    /// creating a session. The provider address is for the control plane (TCP);
-    /// the gameplay transport is configured separately in `SessionConfig`.
+    pub fn host(&mut self, config: SessionConfig, identity: PlayerIdentity);
     pub fn host_with_endpoint(
         &mut self,
         config: SessionConfig,
         identity: PlayerIdentity,
         provider: SocketAddr,
-    ) {
-        self.app
-            .world_mut()
-            .insert_resource(NonSteamSessionProvider::new(provider).unwrap());
-        self.host(config, identity);
-    }
-
+    ) -> Result<(), std::io::Error>;
     pub fn join_non_steam(
         &mut self,
         code: SessionCode,
         provider: SocketAddr,
         identity: PlayerIdentity,
-    ) {
-        self.app.world_mut().write_message(SessionRequest::JoinByCode {
-            backend: SessionBackend::NonSteam,
-            provider: ProviderEndpoint::Udp(provider),
-            code,
-            identity,
-        });
-    }
-
-    pub fn join_steam(
+    );
+    pub fn join_steam(&mut self, code: SessionCode, identity: PlayerIdentity);
+    pub fn join_local(&mut self, code: SessionCode, identity: PlayerIdentity);
+    pub fn search_non_steam(
         &mut self,
-        code: SessionCode,
-        identity: PlayerIdentity,
-    ) {
-        self.app.world_mut().write_message(SessionRequest::JoinByCode {
-            backend: SessionBackend::Steam,
-            provider: ProviderEndpoint::Steam,
-            code,
-            identity,
-        });
-    }
-
-    pub fn join_local(
-        &mut self,
-        code: SessionCode,
-        identity: PlayerIdentity,
-    ) {
-        self.app.world_mut().write_message(SessionRequest::JoinByCode {
-            backend: SessionBackend::NonSteam,
-            provider: ProviderEndpoint::InProcess,
-            code,
-            identity,
-        });
-    }
-
-    pub fn leave(&mut self) {
-        self.app.world_mut().write_message(SessionRequest::Leave);
-    }
-
-    pub fn status(&self) -> &SessionStatus {
-        self.app.world().resource::<SessionStatus>()
-    }
-
-    pub fn is_in_session(&self) -> bool {
-        self.app.world().resource::<SessionStatus>().is_in_session()
-    }
+        provider: SocketAddr,
+        metadata: HashMap<String, String>,
+    );
+    pub fn leave(&mut self);
+    pub fn status(&self) -> &SessionStatus;
+    pub fn is_in_session(&self) -> bool;
+    pub fn state(&self) -> &AfterglowSessionState;
 }
+```
+
+## Netcode link consumer
+
+For `SessionTransport::DirectUdp` sessions to open real UDP sockets, also add
+[`AfterglowNetcodeConsumerPlugin`](network.md) to the app. It is separate so
+unit tests can inspect `PendingNetcodeStartup` without binding sockets, and so
+games can override transport establishment if needed.
+
+```rust
+app.add_plugins((
+    AfterglowLightyearPlugin,
+    AfterglowSessionPlugin,
+    AfterglowSessionLightyearBridgePlugin,
+    AfterglowNetcodeConsumerPlugin,
+));
 ```
 
 ## Why this hides the message protocol
 
-Most games only need seven operations:
+Most games only need eight operations:
 
 1. Host a game.
 2. Host on a specific address.
 3. Join by code + provider (NonSteam friend).
 4. Join by code (Steam).
 5. Join a local session.
-6. Leave.
-7. Query status.
+6. Search a provider.
+7. Leave.
+8. Query status.
 
 The helpers produce the same `SessionRequest`s and consume the same
 `SessionEvent`s, so the engine keeps the flexible message protocol while games
@@ -254,9 +220,11 @@ engine tears down links, emits SessionEnded
 | `join_non_steam` | `SessionRequest::JoinByCode(Udp(addr))` |
 | `join_steam` | `SessionRequest::JoinByCode(Steam)` |
 | `join_local` | `SessionRequest::JoinByCode(InProcess)` |
+| `search_non_steam` | `SessionRequest::Search(Udp(addr))` |
 | `leave` | `SessionRequest::Leave` |
 | `status` | read `SessionStatus` resource |
 | `is_in_session` | `SessionStatus::is_in_session()` |
+| `state` | read `AfterglowSessionState` resource |
 
 ## See Also
 

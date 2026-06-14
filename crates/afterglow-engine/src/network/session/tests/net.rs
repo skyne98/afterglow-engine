@@ -3,7 +3,7 @@ use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::time::Duration;
 
 use super::{
-    native_identity_for_create, native_identity_for_join_by_code, test_app, test_nonce,
+    native_identity_for_create, native_identity_for_join_by_code_with_seed, test_app, test_nonce,
     AfterglowSessionState, NonSteamSessionClient, NonSteamSessionProvider, ProviderEndpoint,
     SessionBackend, SessionConfig, SessionEvent, SessionRequest, SessionSearch,
     SessionIdentityNonce,
@@ -122,8 +122,8 @@ fn provider_search_by_ip_lists_sessions_and_join_by_code_works() {
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].code, code);
 
-    // Client joins by code.
-    let identity = native_identity_for_join_by_code(&code);
+    // Client joins by code. Use a different seed so it is a distinct member.
+    let identity = native_identity_for_join_by_code_with_seed(&code, 1);
     send_raw_request(
         &mut joiner,
         &SessionRequest::JoinByCode {
@@ -143,10 +143,15 @@ fn provider_search_by_ip_lists_sessions_and_join_by_code_works() {
         joined
     );
 
-    // The host does not receive MemberJoined over this minimal control
-    // channel yet: the provider does not broadcast to other clients of the
-    // session, only back to the requester. Documenting the limitation here
-    // so it is tracked.
+    // Drain the host's own Create/Joined events first.
+    read_raw_event(&mut host);
+
+    let member_joined = read_raw_event(&mut host);
+    assert!(
+        matches!(member_joined, Some(SessionEvent::MemberJoined { .. })),
+        "host should receive MemberJoined, got {:?}",
+        member_joined
+    );
 }
 
 #[test]

@@ -31,6 +31,9 @@ path physics lag compensation.
 | `AfterglowSessionState` | Resource tracking the local `SessionMemberId`, current `SessionId`, and current `SessionBackend` (if any). |
 | `SessionStatus` | Game-friendly snapshot derived from `SessionEvent`s: current `SessionInfo`, observed member list, and coarse connection state. |
 | `SessionConnectionState` | `Idle`, `Joining`, `Connected`, `Error(SessionError)`. |
+| `AfterglowSessionExt` | Fluent extension trait on `App` (`app.session()`) providing the high-level API in [`session-api.md`](session-api.md). |
+| `AfterglowSessionLightyearBridgePlugin` | Opt-in bridge that maps `SessionEvent`s to Lightyear link lifecycle. |
+| `AfterglowNetcodeConsumerPlugin` | Opt-in consumer that drains `PendingNetcodeStartup` and spawns real UDP/netcode link entities. |
 
 ## Universal Identity
 
@@ -356,9 +359,29 @@ app.add_plugins((
 |---|---|
 | `AfterglowSessionLightyearBridgePlugin` | Initializes `SessionLightyearLinks` and `PendingNetcodeStartup` resources; runs its private bridge system in [`AfterglowSessionSet::ApplyEffects`]. Lightyear may observe newly spawned link entities on the following frame depending on its own internal `PreUpdate` ordering. |
 | `SessionLightyearLinks` | Resource tracking the client link, server link, and server entity spawned for a local session. Cleared on leave/session-end. |
-| `PendingNetcodeStartup` | Resource carrying optional `NetcodeClientParams` and `NetcodeServerParams` produced by `DirectUdp` session events. Consumers drain this to establish real UDP links. |
+| `PendingNetcodeStartup` | Resource carrying optional `NetcodeClientParams` and `NetcodeServerParams` produced by `DirectUdp` session events. [`AfterglowNetcodeConsumerPlugin`] drains this and spawns real UDP/netcode link entities. |
 | `NetcodeClientParams` | Parameters for starting a Netcode client connection: `server_addr`, `client_id`, `protocol_id`, `private_key`. The `private_key` is populated from `AfterglowLightyearConfig.netcode_private_key`. |
 | `NetcodeServerParams` | Parameters for starting a Netcode server: `bind_addr`, `protocol_id`, `private_key`. The `private_key` is populated from `AfterglowLightyearConfig.netcode_private_key`. |
+
+### Netcode Link Consumer
+
+`AfterglowNetcodeConsumerPlugin` is an opt-in plugin that drains
+`PendingNetcodeStartup` each frame and spawns Lightyear `NetcodeClient` /
+`NetcodeServer` link entities with UDP transport. Add it when you want
+`SessionTransport::DirectUdp` sessions to open real sockets:
+
+```rust
+app.add_plugins((
+    AfterglowLightyearPlugin,
+    AfterglowSessionPlugin,
+    AfterglowSessionLightyearBridgePlugin,
+    AfterglowNetcodeConsumerPlugin,
+));
+```
+
+The consumer is separate so tests and headless scenarios can inspect
+`PendingNetcodeStartup` without opening sockets, and so games can replace it
+with custom transport logic if needed.
 
 ### Transport Behaviour
 
