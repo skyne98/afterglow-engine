@@ -58,6 +58,7 @@ rewind, interest}` modules were removed.
 | `console.md` | Source-style dev console overlay, parser, executor, cvars, and autocomplete |
 | `input.md` | Leafwing/Lightyear input target API |
 | `network.md` | Lightyear, fixed input delay, prediction, interpolation, and PreSpawned API |
+| `session-workflows.md` | End-to-end Steam, NonSteam listen-server, matchmaker, and Local multiplayer workflows |
 | `controller.md` | First-person controller |
 | `physics.md` | Avian-backed physics |
 | `world.md` | Current world-adjacent core IDs plus planned cell/lifecycle API status |
