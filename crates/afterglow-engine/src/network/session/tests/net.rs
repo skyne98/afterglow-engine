@@ -6,7 +6,7 @@ use super::{
     native_identity_for_create, native_identity_for_join_by_code_with_seed, test_app, test_nonce,
     AfterglowSessionState, NonSteamSessionClient, NonSteamSessionProvider, ProviderEndpoint,
     SessionBackend, SessionConfig, SessionEvent, SessionRequest, SessionSearch,
-    SessionIdentityNonce,
+    SessionIdentityNonce, SessionLeaveReason,
 };
 
 fn find_test_addr() -> SocketAddr {
@@ -34,6 +34,10 @@ fn read_raw_event(stream: &mut TcpStream) -> Option<SessionEvent> {
     let mut payload = vec![0u8; len];
     stream.read_exact(&mut payload).ok()?;
     postcard::from_bytes(&payload).ok()
+}
+
+fn drain_raw_events(stream: &mut TcpStream) -> Vec<SessionEvent> {
+    std::iter::from_fn(|| read_raw_event(stream)).collect()
 }
 
 fn drive_app(app: &mut bevy::app::App, frames: usize) {
@@ -204,4 +208,209 @@ fn bevy_client_sends_request_and_receives_event() {
             .is_some(),
         "client should be in a session"
     );
+}
+
+#[test]
+fn provider_owner_leave_broadcasts_session_ended_to_members() {
+    let mut app = test_app();
+    let addr = find_test_addr();
+    app.world_mut().insert_resource(NonSteamSessionProvider::new(addr).unwrap());
+    drive_app(&mut app, 3);
+
+    // Host creates a session.
+    let mut host = TcpStream::connect(addr).unwrap();
+    send_raw_request(
+        &mut host,
+        &SessionRequest::Create(
+            SessionConfig {
+                name: "leave-test".into(),
+                ..Default::default()
+            },
+            native_identity_for_create(),
+        ),
+    );
+    drive_app(&mut app, 5);
+    let mut code = None;
+    while let Some(event) = read_raw_event(&mut host) {
+        if let SessionEvent::Created(info) = &event {
+            code = Some(info.code.clone());
+        }
+        if code.is_some() {
+            break;
+        }
+    }
+    let code = code.unwrap();
+
+    // Joiner connects.
+    let mut joiner = TcpStream::connect(addr).unwrap();
+    send_raw_request(
+        &mut joiner,
+        &SessionRequest::JoinByCode {
+            backend: SessionBackend::NonSteam,
+            provider: ProviderEndpoint::Udp(addr),
+            code: code.clone(),
+            identity: native_identity_for_join_by_code_with_seed(&code, 1),
+        },
+    );
+    drive_app(&mut app, 20);
+    let joiner_events = drain_raw_events(&mut joiner);
+    assert!(
+        joiner_events.iter().any(|e| matches!(e, SessionEvent::Joined(_))),
+        "joiner should receive Joined, got {:?}",
+        joiner_events
+    );
+    drain_raw_events(&mut host); // drain host's own Created/Joined + MemberJoined
+
+    std::thread::sleep(Duration::from_millis(50));
+
+    // Host leaves.
+    send_raw_request(&mut host, &SessionRequest::Leave);
+    drive_app(&mut app, 20);
+
+    let joiner_events = drain_raw_events(&mut joiner);
+    let joiner_event = joiner_events.iter().find(|e| {
+        matches!(
+            e,
+            SessionEvent::MemberLeft { .. } | SessionEvent::SessionEnded(_)
+        )
+    });
+    assert!(
+        joiner_event.is_some(),
+        "joiner should receive MemberLeft or SessionEnded, got {:?}",
+        joiner_events
+    );
+}
+
+#[test]
+fn provider_non_owner_leave_broadcasts_member_left_to_host() {
+    let mut app = test_app();
+    let addr = find_test_addr();
+    app.world_mut().insert_resource(NonSteamSessionProvider::new(addr).unwrap());
+    drive_app(&mut app, 3);
+
+    let mut host = TcpStream::connect(addr).unwrap();
+    send_raw_request(
+        &mut host,
+        &SessionRequest::Create(
+            SessionConfig {
+                name: "leave-test".into(),
+                ..Default::default()
+            },
+            native_identity_for_create(),
+        ),
+    );
+    drive_app(&mut app, 5);
+    let mut code = None;
+    while let Some(event) = read_raw_event(&mut host) {
+        if let SessionEvent::Created(info) = &event {
+            code = Some(info.code.clone());
+        }
+        if code.is_some() {
+            break;
+        }
+    }
+    let code = code.unwrap();
+
+    let mut joiner = TcpStream::connect(addr).unwrap();
+    let joiner_identity = native_identity_for_join_by_code_with_seed(&code, 1);
+    send_raw_request(
+        &mut joiner,
+        &SessionRequest::JoinByCode {
+            backend: SessionBackend::NonSteam,
+            provider: ProviderEndpoint::Udp(addr),
+            code: code.clone(),
+            identity: joiner_identity,
+        },
+    );
+    drive_app(&mut app, 20);
+    drain_raw_events(&mut joiner);
+    drain_raw_events(&mut host);
+
+    std::thread::sleep(Duration::from_millis(50));
+
+    // Joiner leaves.
+    send_raw_request(&mut joiner, &SessionRequest::Leave);
+    drive_app(&mut app, 20);
+
+    let host_events = drain_raw_events(&mut host);
+    let host_event = host_events.iter().find(|e| {
+        matches!(
+            e,
+            SessionEvent::MemberLeft {
+                reason: SessionLeaveReason::Left,
+                ..
+            }
+        )
+    });
+    assert!(
+        host_event.is_some(),
+        "host should receive MemberLeft(Left), got {:?}",
+        host_events
+    );
+}
+
+#[test]
+fn provider_rejoin_with_same_identity_returns_same_member_id() {
+    let mut app = test_app();
+    let addr = find_test_addr();
+    app.world_mut().insert_resource(NonSteamSessionProvider::new(addr).unwrap());
+    drive_app(&mut app, 3);
+
+    let mut host = TcpStream::connect(addr).unwrap();
+    send_raw_request(
+        &mut host,
+        &SessionRequest::Create(SessionConfig::default(), native_identity_for_create()),
+    );
+    drive_app(&mut app, 5);
+    let mut code = None;
+    while let Some(event) = read_raw_event(&mut host) {
+        if let SessionEvent::Created(info) = &event {
+            code = Some(info.code.clone());
+        }
+        if code.is_some() {
+            break;
+        }
+    }
+    let code = code.unwrap();
+
+    // First join.
+    let identity = native_identity_for_join_by_code_with_seed(&code, 7);
+    let mut joiner = TcpStream::connect(addr).unwrap();
+    send_raw_request(
+        &mut joiner,
+        &SessionRequest::JoinByCode {
+            backend: SessionBackend::NonSteam,
+            provider: ProviderEndpoint::Udp(addr),
+            code: code.clone(),
+            identity: identity.clone(),
+        },
+    );
+    drive_app(&mut app, 10);
+    let first_member_id = match read_raw_event(&mut joiner) {
+        Some(SessionEvent::Joined(info)) => info.owner,
+        other => panic!("expected Joined, got {:?}", other),
+    };
+
+    // Leave.
+    send_raw_request(&mut joiner, &SessionRequest::Leave);
+    drive_app(&mut app, 5);
+
+    // Rejoin with same identity.
+    let mut joiner2 = TcpStream::connect(addr).unwrap();
+    send_raw_request(
+        &mut joiner2,
+        &SessionRequest::JoinByCode {
+            backend: SessionBackend::NonSteam,
+            provider: ProviderEndpoint::Udp(addr),
+            code: code.clone(),
+            identity,
+        },
+    );
+    drive_app(&mut app, 10);
+    let second_member_id = match read_raw_event(&mut joiner2) {
+        Some(SessionEvent::Joined(info)) => info.owner,
+        other => panic!("expected Joined on rejoin, got {:?}", other),
+    };
+
+    assert_eq!(first_member_id, second_member_id);
 }

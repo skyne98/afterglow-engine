@@ -1,6 +1,6 @@
 use super::{
     AfterglowSessionState, SessionConfig, SessionConnectionState, SessionError, SessionEvent,
-    SessionRequest, SessionStatus, native_identity_for_create, test_app,
+    SessionInfo, SessionRequest, SessionStatus, native_identity_for_create, test_app,
 };
 
 #[test]
@@ -146,4 +146,29 @@ fn state_helper_is_in_session_matches_status() {
 
     let state = app.world().resource::<AfterglowSessionState>();
     assert!(!state.is_in_session());
+}
+
+#[test]
+fn search_results_update_last_search_results() {
+    let mut app = test_app();
+    let info = SessionInfo {
+        id: super::SessionId::new(42),
+        code: super::SessionCode::new("ABC-DEF"),
+        backend: super::SessionBackend::NonSteam,
+        name: "listed".into(),
+        owner: super::SessionMemberId::new(1),
+        owner_identity: native_identity_for_create(),
+        member_count: 1,
+        max_members: 4,
+        visibility: super::SessionVisibility::Public,
+        metadata: Default::default(),
+        transport: super::SessionTransport::Local,
+    };
+    app.world_mut()
+        .write_message(SessionEvent::SearchResults(vec![info.clone()]));
+    app.update();
+
+    let status = app.world().resource::<SessionStatus>();
+    assert_eq!(status.last_search_results.len(), 1);
+    assert_eq!(status.last_search_results[0].code, info.code);
 }

@@ -372,6 +372,32 @@ fn consumer_spawns_client_only_for_client_role() {
 }
 
 #[test]
+fn consumer_clears_links_on_leave() {
+    let mut app = test_app(LightyearRole::Host);
+    app.add_plugins(AfterglowNetcodeConsumerPlugin);
+
+    app.world_mut().write_message(SessionRequest::Create(
+        SessionConfig {
+            transport: SessionTransport::DirectUdp {
+                host: "127.0.0.1:8826".into(),
+            },
+            ..Default::default()
+        },
+        identity_fixture(),
+    ));
+    app.update();
+
+    assert!(app.world().resource::<SessionLightyearLinks>().client_link.is_some());
+
+    app.world_mut().write_message(SessionRequest::Leave);
+    app.update();
+
+    let links = app.world().resource::<SessionLightyearLinks>();
+    assert!(links.client_link.is_none());
+    assert!(links.server_link.is_none());
+}
+
+#[test]
 fn local_joined_without_lightyear_plugins_does_not_spawn() {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);

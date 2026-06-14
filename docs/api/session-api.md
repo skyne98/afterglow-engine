@@ -80,7 +80,10 @@ The `app.session().status()` helper is the remaining convenience layer.
 
 The API is implemented in
 `crates/afterglow-engine/src/network/session/api.rs` as a Bevy `App` extension
-trait and a thin helper handle:
+trait and a thin helper handle. Remote operations (`join_non_steam`,
+`search_non_steam`) are sent through `NonSteamSessionClient` so they reach the
+networked provider; `host`, `host_with_endpoint`, and `join_local` use the
+in-process path.
 
 ```rust
 pub trait AfterglowSessionExt {

@@ -14,6 +14,8 @@ pub struct SessionStatus {
     pub info: Option<SessionInfo>,
     /// Current member ids observed from `MemberJoined` / `MemberLeft`.
     pub members: Vec<SessionMemberId>,
+    /// Last search results observed from `SessionEvent::SearchResults`.
+    pub last_search_results: Vec<SessionInfo>,
     /// Current connection state.
     pub state: SessionConnectionState,
 }
@@ -93,7 +95,9 @@ pub(crate) fn update_session_status(
                 status.state = SessionConnectionState::Error(*err);
             }
             // Search results do not change local session status.
-            SessionEvent::SearchResults(_) => {}
+            SessionEvent::SearchResults(results) => {
+                status.last_search_results = results.clone();
+            }
         }
     }
 }

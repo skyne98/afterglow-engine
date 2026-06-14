@@ -232,18 +232,19 @@ and ownership, generates a unique [`SessionCode`] for each created session, and
 emits the outcome protocol locally.
 
 The **networked non-Steam provider** (`NonSteamSessionProvider` + `NonSteamSessionClient`) lets a
-remote host listen on a TCP address and exposes the same catalog operations to
-clients over a length-prefixed postcard protocol. The client's requests are
-routed to the provider, and the resulting `SessionEvent`s are sent back over the
-TCP control channel. Current limitations:
+host listen on a TCP address and exposes the same catalog operations to remote
+clients over a length-prefixed postcard protocol. The provider shares the
+`NonSteamSessionCatalog` resource with the in-process system: a listen-server
+host can create a session via the normal in-process path and remote clients
+querying the provider will see it. Provider responses are sent back to the
+requester over TCP, and `MemberJoined`/`MemberLeft`/`SessionEnded` events are
+also emitted locally so the hosting app observes membership changes.
 
-- Provider events are sent to the requesting client only; member join/leave broadcasts to other session members are not implemented yet.
-- The provider runs its own `NonSteamSessionCatalog` instance and is suitable for listen-server friend invitations, not a central matchmaker.
-
-Games usually send `Create`/`Search`/`JoinByCode` requests through the client
-resource and then read `SessionStatus` or `AfterglowSessionState` for the result.
-Neither provider creates Lightyear transport links, Netcode connections, or
-lobby network traffic by itself.
+Games usually send remote `Search`/`JoinByCode` requests through the
+`NonSteamSessionClient` resource (or via the [`AfterglowSessionExt`](session-api.md)
+high-level API), and then read `SessionStatus` or `AfterglowSessionState` for the
+result. Neither provider creates Lightyear transport links, Netcode connections,
+or lobby network traffic by itself.
 
 ### Joining by Code
 

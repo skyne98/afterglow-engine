@@ -17,14 +17,16 @@ use super::protocol;
 /// In-memory NonSteam session provider that listens for control-plane requests
 /// over TCP.
 ///
-/// Each accepted connection is treated as a remote client. The provider hosts
-/// its own `NonSteamSessionCatalog`, validates identity proofs with the global
-/// `SessionIdentityNonce`, and replies with `SessionEvent`s.
+/// Each accepted connection is treated as a remote client. The provider uses
+/// the shared `NonSteamSessionCatalog` resource, validates identity proofs with
+/// the global `SessionIdentityNonce`, and replies with `SessionEvent`s. Sharing
+/// the catalog means a listen-server host can create sessions in-process via
+/// the normal `SessionRequest::Create` path and remote clients querying the
+/// same provider will see them.
 #[derive(Resource, Debug)]
 pub struct NonSteamSessionProvider {
     pub listen_addr: SocketAddr,
     pub(crate) listener: Option<TcpListener>,
-    pub(crate) catalog: NonSteamSessionCatalog,
     pub(crate) clients: Vec<ProviderClient>,
 }
 
@@ -36,7 +38,6 @@ impl NonSteamSessionProvider {
         Ok(Self {
             listen_addr,
             listener: Some(listener),
-            catalog: NonSteamSessionCatalog::default(),
             clients: Vec::new(),
         })
     }
@@ -47,7 +48,6 @@ impl Default for NonSteamSessionProvider {
         Self {
             listen_addr: SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), 0),
             listener: None,
-            catalog: NonSteamSessionCatalog::default(),
             clients: Vec::new(),
         }
     }
@@ -117,12 +117,13 @@ impl ProviderClient {
 /// Bevy system that drives the provider listener and client sockets.
 pub(crate) fn run_non_steam_provider(
     mut provider: ResMut<NonSteamSessionProvider>,
+    mut catalog: ResMut<NonSteamSessionCatalog>,
     nonce: Res<SessionIdentityNonce>,
+    mut local_messages: MessageWriter<SessionEvent>,
 ) {
     accept_new_clients(&mut provider);
 
-    let provider = &mut *provider;
-    let (catalog, clients) = (&mut provider.catalog, &mut provider.clients);
+    let clients = &mut provider.clients;
 
     for i in (0..clients.len()).rev() {
         let events = {
@@ -136,9 +137,12 @@ pub(crate) fn run_non_steam_provider(
             }
 
             match client.try_read_request() {
-                Ok(Some(request)) => {
-                    Some(handle_client_request(catalog, client, &request, &nonce.0))
-                }
+                Ok(Some(request)) => Some(handle_client_request(
+                    &mut catalog,
+                    client,
+                    &request,
+                    &nonce.0,
+                )),
                 Ok(None) => None,
                 Err(_) => {
                     clients.remove(i);
@@ -149,6 +153,19 @@ pub(crate) fn run_non_steam_provider(
 
         if let Some(events) = events {
             broadcast_provider_events(i, clients, &events);
+            // Also emit membership/lifecycle events locally so a listen-server
+            // host observing the shared catalog via SessionStatus sees remote
+            // join/leave/end activity.
+            for event in &events {
+                if matches!(
+                    event,
+                    SessionEvent::MemberJoined { .. }
+                        | SessionEvent::MemberLeft { .. }
+                        | SessionEvent::SessionEnded(_)
+                ) {
+                    local_messages.write(event.clone());
+                }
+            }
         }
 
         let client = &mut clients[i];
