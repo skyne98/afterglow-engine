@@ -143,83 +143,7 @@ provider returns SessionInfo with the SAME SessionMemberId
 client joins data plane; server can remap the member to a new Lightyear client id
 ```
 
-## 2. NonSteam: Matchmaker + Dedicated Server
-
-Use this for internet play without exposing a host's home IP. A matchmaking
-service owns the control plane and may also allocate a dedicated game server.
-
-### Preconditions
-
-- A matchmaker service runs at `https://matchmaker.example.com`.
-- The matchmaker can spin up dedicated game servers (or uses a long-lived pool).
-- Client and server trust the matchmaker to issue Lightyear `ConnectToken`s.
-
-### Sequence
-
-```text
-host_app (or headless server)
-    | HTTP POST /create {
-    |     config: SessionConfig,
-    |     identity: PlayerIdentity::Native(...)
-    | }
-    v
-matchmaker creates session record, allocates SessionCode XFQ-KRB
-    - may deploy a dedicated server to gameplay_addr
-    - generates a Lightyear ConnectToken bound to gameplay_addr
-    |
-matchmaker returns { code: "XFQ-KRB", gameplay_token, gameplay_addr }
-    |
-host shares "XFQ-KRB" publicly or privately
-    |
-client_app
-    | lists public lobbies:
-    |     SessionRequest::Search(
-    |         backend: NonSteam,
-    |         provider: ProviderEndpoint::Http("https://matchmaker.example.com"),
-    |         ...
-    |     )
-    |   OR receives code from friend
-    |
-client_app
-    | HTTP POST /join { code, identity }
-    v
-matchmaker validates identity proof, checks capacity/already joined
-    |
-matchmaker returns SessionInfo {
-    code: "XFQ-KRB",
-    connection: SessionConnection {
-        transport: Netcode,
-        target: NetcodeToken(gameplay_token)
-    }
-}
-    |
-    v
-client_app receives SessionEvent::Joined(SessionInfo)
-    |
-    v
-bridge writes PendingNetcodeStartup {
-    client: Some(NetcodeClientParams {
-        connect_token: gameplay_token,
-        ...
-    })
-}
-    |
-    v
-start_session_transport spawns NetcodeClient using the token
-    |
-    v
-client connects to gameplay_addr (which may be hidden from the player)
-```
-
-### Why this hides the IP
-
-- The client never sees a direct gameplay address if `NetcodeToken` is used.
-- The matchmaker can rotate servers, move sessions, or use a relay without
-  changing the join code.
-- Host migration is free: the matchmaker can point a code at a new server and
-  return a new token.
-
-## 3. Steam: Lobby + Steam Datagram Relay
+## 2. Steam: Lobby + Steam Datagram Relay
 
 Use this for Steam players. Steamworks provides identity, lobbies, invites, and
 relay networking.
@@ -290,7 +214,7 @@ Gameplay begins
 - Rejoin with the same SteamID returns the same `SessionMemberId`.
 - The client's home IP is never exposed to peers.
 
-## 4. Local / In-Process
+## 3. Local / In-Process
 
 Use this for single-player-as-multiplayer tests, split-screen simulation, or
 unit tests.

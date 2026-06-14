@@ -368,6 +368,7 @@ modes.
 
 ## See Also
 
+- [`session-api.md`](session-api.md) — proposed simple public API for hosting
+  and joining sessions (Local, NonSteam listen-server, Steam).
 - [`session-workflows.md`](session-workflows.md) — end-to-end Steam, NonSteam
-  listen-server, NonSteam matchmaker, and Local session workflows, plus identity
-  and rejoin behavior.
+  listen-server, and Local session workflows, plus identity and rejoin behavior.
