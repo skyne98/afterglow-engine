@@ -228,15 +228,15 @@ fn handle_session_lightyear_links(
                                 })
                                 .filter(|&id| id != 0);
 
-                            if matches!(cfg.role, LightyearRole::Host | LightyearRole::Client) {
-                                if let Some(cid) = client_id {
-                                    pending.client = Some(NetcodeClientParams {
-                                        server_addr,
-                                        client_id: cid,
-                                        protocol_id,
-                                        private_key,
-                                    });
-                                }
+                            if matches!(cfg.role, LightyearRole::Host | LightyearRole::Client)
+                                && let Some(cid) = client_id
+                            {
+                                pending.client = Some(NetcodeClientParams {
+                                    server_addr,
+                                    client_id: cid,
+                                    protocol_id,
+                                    private_key,
+                                });
                             }
 
                             if matches!(cfg.role, LightyearRole::Host | LightyearRole::Server) {

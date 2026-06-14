@@ -5,6 +5,8 @@ use std::collections::HashMap;
 pub mod code;
 pub(crate) mod entry;
 pub mod identity;
+pub mod net;
+pub mod provider;
 pub mod status;
 
 pub use code::{
@@ -12,6 +14,8 @@ pub use code::{
     SessionCode,
 };
 pub use identity::{IdentityError, NativeIdentityProof, PlayerIdentity, SessionIdentityNonce};
+pub use net::{NonSteamSessionClient, NonSteamSessionProvider};
+pub use provider::ProviderEndpoint;
 pub use status::{SessionConnectionState, SessionStatus};
 
 pub(crate) mod non_steam;
@@ -171,6 +175,7 @@ impl Default for SessionConfig {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SessionSearch {
     pub backend: SessionBackend,
+    pub provider: ProviderEndpoint,
     pub metadata: HashMap<String, String>,
     pub require_open_slot: bool,
     pub max_results: u32,
@@ -180,6 +185,7 @@ impl Default for SessionSearch {
     fn default() -> Self {
         Self {
             backend: SessionBackend::NonSteam,
+            provider: ProviderEndpoint::InProcess,
             metadata: HashMap::new(),
             require_open_slot: false,
             max_results: 16,
@@ -224,13 +230,14 @@ pub enum AfterglowSessionSet {
 /// - `Create(SessionConfig, PlayerIdentity)` — create a new session, proving
 ///   player identity.
 /// - `Search(SessionSearch)` — search for existing sessions matching filters.
-///   Search does not require identity.
-/// - `Join { backend, session, identity }` — join a specific session on the
-///   given backend by its internal [`SessionId`].
-/// - `JoinByCode { backend, code, identity }` — join a session by its
-///   player-facing [`SessionCode`].
+///   The search endpoint is in `search.provider`. Search does not require
+///   identity.
+/// - `Join { backend, session, identity, provider }` — join a specific session
+///   on the given backend by its internal [`SessionId`].
+/// - `JoinByCode { backend, code, identity, provider }` — join a session by its
+///   player-facing [`SessionCode`]. `provider` is where to send the request.
 /// - `Leave` — leave the current session.
-#[derive(Message, Clone, Debug, PartialEq)]
+#[derive(Message, Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum SessionRequest {
     Create(SessionConfig, PlayerIdentity),
     Search(SessionSearch),
@@ -238,11 +245,13 @@ pub enum SessionRequest {
         backend: SessionBackend,
         session: SessionId,
         identity: PlayerIdentity,
+        provider: ProviderEndpoint,
     },
     JoinByCode {
         backend: SessionBackend,
         code: SessionCode,
         identity: PlayerIdentity,
+        provider: ProviderEndpoint,
     },
     Leave,
 }
@@ -250,7 +259,7 @@ pub enum SessionRequest {
 /// Carries session lifecycle outcomes. This is a Bevy `Message`.
 ///
 /// Emitted by the session layer after processing a [`SessionRequest`].
-#[derive(Message, Clone, Debug, PartialEq)]
+#[derive(Message, Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum SessionEvent {
     Created(SessionInfo),
     SearchResults(Vec<SessionInfo>),
@@ -317,6 +326,8 @@ impl Plugin for AfterglowSessionPlugin {
         app.init_resource::<AfterglowSessionState>()
             .init_resource::<status::SessionStatus>()
             .init_resource::<non_steam::NonSteamSessionCatalog>()
+            .init_resource::<net::provider::NonSteamSessionProvider>()
+            .init_resource::<net::client::NonSteamSessionClient>()
             .init_resource::<SessionIdentityNonce>()
             .add_message::<SessionRequest>()
             .add_message::<SessionEvent>()
@@ -336,6 +347,14 @@ impl Plugin for AfterglowSessionPlugin {
             .add_systems(
                 PreUpdate,
                 status::update_session_status.in_set(AfterglowSessionSet::ApplyEffects),
+            )
+            .add_systems(
+                PreUpdate,
+                net::provider::run_non_steam_provider.in_set(AfterglowSessionSet::ApplyEffects),
+            )
+            .add_systems(
+                PreUpdate,
+                net::client::poll_non_steam_client.in_set(AfterglowSessionSet::ApplyEffects),
             );
     }
 }

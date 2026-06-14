@@ -43,6 +43,13 @@ as architectural gaps.
       verified by the non-Steam provider, and bound to `SessionMemberId` for
       rejoin detection. Private keys stay on the client; the server only sees
       the public key.
+- [x] Add networked NonSteam session provider: `ProviderEndpoint` in
+      `Join`/`JoinByCode`/`Search`, `NonSteamSessionProvider` TCP listener,
+      and `NonSteamSessionClient` remote request sender. Remote clients can
+      now query and join a NonSteam listen-server by code + address.
+- [ ] Engine consumer that drains `PendingNetcodeStartup` and spawns real
+      Lightyear netcode links (currently only Local/Crossbeam links are
+      actually instantiated; DirectUdp just writes pending params).
 - [ ] Add reusable controlled-entity lifecycle outside scenario-only harness
       code: assign, revoke, and rebind Lightyear `ControlledBy` / `Controlled`
       entities on join, disconnect, respawn, possession, and reconnect. This is

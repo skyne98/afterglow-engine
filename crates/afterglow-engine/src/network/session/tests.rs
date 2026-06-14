@@ -3,7 +3,12 @@ use super::{non_steam::NonSteamSessionCatalog, *};
 pub(crate) mod code;
 pub(crate) mod edge_cases;
 pub(crate) mod identity;
+pub(crate) mod net;
 pub(crate) mod status;
+
+pub(super) fn in_process_provider() -> ProviderEndpoint {
+    ProviderEndpoint::InProcess
+}
 
 pub(super) fn test_app() -> App {
     let mut app = App::new();
@@ -155,6 +160,7 @@ fn search_filters_by_metadata_and_open_slots() {
     app.world_mut()
         .write_message(SessionRequest::Search(SessionSearch {
             backend: SessionBackend::NonSteam,
+            provider: in_process_provider(),
             metadata: [("mode".into(), "coop".into())].into(),
             require_open_slot: true,
             max_results: 10,
@@ -214,6 +220,7 @@ fn join_full_session_fails() {
     let identity = native_identity_for_join_with_seed(session_id, 1);
     app.world_mut().write_message(SessionRequest::Join {
         backend: SessionBackend::NonSteam,
+        provider: in_process_provider(),
         session: session_id,
         identity,
     });
@@ -306,6 +313,7 @@ fn duplicate_join_while_in_session_rejected() {
     let identity = native_identity_for_join(session_id);
     app.world_mut().write_message(SessionRequest::Join {
         backend: SessionBackend::NonSteam,
+        provider: in_process_provider(),
         session: session_id,
         identity,
     });

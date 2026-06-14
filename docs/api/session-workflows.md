@@ -279,15 +279,16 @@ Implemented today:
   verification.
 - Native Ed25519 proof verification via `ed25519-dalek`.
 - `SessionMemberId` reuse on native rejoin.
+- `ProviderEndpoint` (`InProcess`, `Udp(SocketAddr)`, `Steam`) added to
+  `SessionRequest::Join`, `SessionRequest::JoinByCode`, and `SessionSearch`.
+- `NonSteamSessionProvider` TCP listener + `NonSteamSessionClient` remote request sender.
 - `Local` Crossbeam bridge via `AfterglowSessionLightyearBridgePlugin`.
-- `PendingNetcodeStartup` written for `DirectUdp { host }`.
+- `PendingNetcodeStartup` written for `SessionTransport::Netcode`.
 
 Not yet implemented:
 
-- `ProviderEndpoint` in `Join`/`JoinByCode`/`Search`.
-- Networked `NonSteamSessionProvider` / `NonSteamSessionClient`.
 - Engine consumer that drains `PendingNetcodeStartup` and spawns netcode links.
-- `SessionConnection` / `SessionConnectionTarget` replacing `DirectUdp { host }`.
+- Member join/leave broadcasts from the networked provider to other session members.
 - `Steam` session backend.
 
 See also:

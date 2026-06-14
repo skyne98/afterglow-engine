@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-use super::{SessionError, SessionEvent, SessionInfo, SessionMemberId};
+use super::{AfterglowSessionState, SessionError, SessionEvent, SessionInfo, SessionMemberId};
 
 /// High-level snapshot of the local player's session membership.
 ///
@@ -52,9 +52,15 @@ pub enum SessionConnectionState {
     Error(SessionError),
 }
 
-/// Reads [`SessionEvent`]s and keeps [`SessionStatus`] up to date.
+/// Reads [`SessionEvent`]s and keeps [`SessionStatus`] and
+/// [`AfterglowSessionState`] up to date.
+///
+/// Games can read either resource; `SessionStatus` is the recommended,
+/// game-friendly view. `AfterglowSessionState` is the lower-level state used
+/// by other systems (e.g. transport linking).
 pub(crate) fn update_session_status(
     mut status: ResMut<SessionStatus>,
+    mut state: ResMut<AfterglowSessionState>,
     mut events: MessageReader<SessionEvent>,
 ) {
     for event in events.read() {
@@ -62,6 +68,8 @@ pub(crate) fn update_session_status(
             SessionEvent::Created(info) | SessionEvent::Joined(info) => {
                 status.info = Some(info.clone());
                 status.state = SessionConnectionState::Joining;
+                state.current_session = Some(info.id);
+                state.local_member_id = info.owner;
                 // The owner is already a member but is not delivered via a
                 // separate MemberJoined event, so seed the list here.
                 if !status.members.contains(&info.owner) {
@@ -78,6 +86,8 @@ pub(crate) fn update_session_status(
             }
             SessionEvent::Left { .. } | SessionEvent::SessionEnded(_) => {
                 *status = SessionStatus::default();
+                state.current_session = None;
+                state.local_member_id = SessionMemberId::INVALID;
             }
             SessionEvent::Error(err) => {
                 status.state = SessionConnectionState::Error(*err);

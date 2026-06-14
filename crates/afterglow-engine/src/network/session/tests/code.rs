@@ -1,7 +1,7 @@
 use super::{
     AfterglowSessionState, NonSteamSessionCatalog, SESSION_CODE_ALPHABET, SESSION_CODE_CHAR_LEN,
     SESSION_CODE_GROUPS, SessionCode, SessionConfig, SessionEvent, SessionMemberId, SessionRequest,
-    native_identity_for_create, native_identity_for_join_by_code,
+    in_process_provider, native_identity_for_create, native_identity_for_join_by_code,
     native_identity_for_join_by_code_with_seed, test_app,
 };
 
@@ -89,6 +89,7 @@ fn join_by_code_succeeds_and_sets_state() {
     let identity = native_identity_for_join_by_code_with_seed(&code, 1);
     app.world_mut().write_message(SessionRequest::JoinByCode {
         backend: super::SessionBackend::NonSteam,
+        provider: in_process_provider(),
         code,
         identity,
     });
@@ -121,6 +122,7 @@ fn join_by_missing_code_returns_not_found() {
     let identity = native_identity_for_join_by_code(&code);
     app.world_mut().write_message(SessionRequest::JoinByCode {
         backend: super::SessionBackend::NonSteam,
+        provider: in_process_provider(),
         code,
         identity,
     });
@@ -304,6 +306,7 @@ fn join_by_code_while_already_in_session_rejected() {
     let identity = native_identity_for_join_by_code(&code);
     app.world_mut().write_message(SessionRequest::JoinByCode {
         backend: super::SessionBackend::NonSteam,
+        provider: in_process_provider(),
         code,
         identity,
     });
@@ -337,6 +340,7 @@ fn join_by_code_full_session_rejected() {
     let identity = native_identity_for_join_by_code_with_seed(&code, 1);
     app.world_mut().write_message(SessionRequest::JoinByCode {
         backend: super::SessionBackend::NonSteam,
+        provider: in_process_provider(),
         code,
         identity,
     });

@@ -1,7 +1,7 @@
 use super::{
     AfterglowSessionState, NativeIdentityProof, PlayerIdentity, SessionBackend, SessionConfig,
-    SessionEvent, SessionRequest, native_identity_for_create, native_identity_for_join,
-    steam_identity_for_passthrough, test_app,
+    SessionEvent, SessionRequest, in_process_provider, native_identity_for_create,
+    native_identity_for_join, steam_identity_for_passthrough, test_app,
 };
 
 #[test]
@@ -45,6 +45,7 @@ fn native_identity_rejoin_returns_same_member_id() {
     let identity = native_identity_for_join(session_id);
     app.world_mut().write_message(SessionRequest::Join {
         backend: SessionBackend::NonSteam,
+        provider: in_process_provider(),
         session: session_id,
         identity,
     });

@@ -31,15 +31,19 @@ app.session().host(
     my_identity(),
 );
 
-// Host a listen-server session.
-app.session().host_with_endpoint(
+// Host a listen-server session. Start the provider listener first, then
+// create the session; the Lightyear transport is separate from the control
+// plane.
+app.world_mut().insert_resource(
+    NonSteamSessionProvider::new("0.0.0.0:7777".parse().unwrap()).unwrap(),
+);
+app.session().host(
     SessionConfig {
         backend: SessionBackend::NonSteam,
         transport: SessionTransport::Netcode,
         ..Default::default()
     },
     my_identity(),
-    "0.0.0.0:7777".parse::<SocketAddr>().unwrap(),
 );
 
 // Join a Steam lobby by code.
@@ -103,20 +107,19 @@ impl SessionHandle<'_> {
         );
     }
 
+    /// Start a listen-server by inserting a `NonSteamSessionProvider` and
+    /// creating a session. The provider address is for the control plane (TCP);
+    /// the gameplay transport is configured separately in `SessionConfig`.
     pub fn host_with_endpoint(
         &mut self,
         config: SessionConfig,
         identity: PlayerIdentity,
         provider: SocketAddr,
     ) {
-        // In the full engine, this also starts the provider listener on the given address.
-        // The Create request itself remains the same; the provider address is stored
-        // or registered by the engine-side listener plugin.
-        self.host(config, identity);
         self.app
             .world_mut()
-            .resource_mut::<SessionProviderConfig>()
-            .listen_addr = Some(provider);
+            .insert_resource(NonSteamSessionProvider::new(provider).unwrap());
+        self.host(config, identity);
     }
 
     pub fn join_non_steam(
@@ -247,7 +250,7 @@ engine tears down links, emits SessionEnded
 | Helper | Writes |
 |---|---|
 | `host` | `SessionRequest::Create` |
-| `host_with_endpoint` | `SessionRequest::Create` + records listener address |
+| `host_with_endpoint` | insert `NonSteamSessionProvider`, then `SessionRequest::Create` |
 | `join_non_steam` | `SessionRequest::JoinByCode(Udp(addr))` |
 | `join_steam` | `SessionRequest::JoinByCode(Steam)` |
 | `join_local` | `SessionRequest::JoinByCode(InProcess)` |

@@ -114,9 +114,13 @@ pub(crate) fn process_non_steam_session_requests(
     mut messages: MessageWriter<SessionEvent>,
 ) {
     for request in requests.read() {
+        let mut events = Vec::new();
         match request {
             SessionRequest::Create(config, identity) => {
-                if !is_non_steam_backend(&config.backend, &mut messages) {
+                if !is_non_steam_backend(&config.backend, &mut events) {
+                    for event in events {
+                        messages.write(event);
+                    }
                     continue;
                 }
                 handle_create(
@@ -125,21 +129,28 @@ pub(crate) fn process_non_steam_session_requests(
                     &nonce.0,
                     &mut catalog,
                     &mut state,
-                    &mut messages,
+                    &mut events,
                 );
             }
             SessionRequest::Search(search) => {
-                if !is_non_steam_backend(&search.backend, &mut messages) {
+                if !is_non_steam_backend(&search.backend, &mut events) {
+                    for event in events {
+                        messages.write(event);
+                    }
                     continue;
                 }
-                handle_search(search, &catalog, &mut messages);
+                handle_search(search, &catalog, &mut events);
             }
             SessionRequest::Join {
                 backend,
                 session,
                 identity,
+                ..
             } => {
-                if !is_non_steam_backend(backend, &mut messages) {
+                if !is_non_steam_backend(backend, &mut events) {
+                    for event in events {
+                        messages.write(event);
+                    }
                     continue;
                 }
                 let target = session.as_raw().to_string();
@@ -150,15 +161,19 @@ pub(crate) fn process_non_steam_session_requests(
                     &nonce.0,
                     &mut catalog,
                     &mut state,
-                    &mut messages,
+                    &mut events,
                 );
             }
             SessionRequest::JoinByCode {
                 backend,
                 code,
                 identity,
+                ..
             } => {
-                if !is_non_steam_backend(backend, &mut messages) {
+                if !is_non_steam_backend(backend, &mut events) {
+                    for event in events {
+                        messages.write(event);
+                    }
                     continue;
                 }
                 handle_join_by_code(
@@ -167,29 +182,29 @@ pub(crate) fn process_non_steam_session_requests(
                     &nonce.0,
                     &mut catalog,
                     &mut state,
-                    &mut messages,
+                    &mut events,
                 );
             }
             SessionRequest::Leave => match state.current_backend {
                 Some(SessionBackend::Steam) => {
-                    messages.write(SessionEvent::Error(SessionError::BackendUnavailable));
+                    events.push(SessionEvent::Error(SessionError::BackendUnavailable));
                 }
                 Some(SessionBackend::NonSteam) | None => {
-                    handle_leave(&mut catalog, &mut state, &mut messages);
+                    handle_leave(&mut catalog, &mut state, &mut events);
                 }
             },
+        }
+        for event in events {
+            messages.write(event);
         }
     }
 }
 
-fn is_non_steam_backend(
-    backend: &SessionBackend,
-    messages: &mut MessageWriter<SessionEvent>,
-) -> bool {
+fn is_non_steam_backend(backend: &SessionBackend, events: &mut Vec<SessionEvent>) -> bool {
     match backend {
         SessionBackend::NonSteam => true,
         SessionBackend::Steam => {
-            messages.write(SessionEvent::Error(SessionError::BackendUnavailable));
+            events.push(SessionEvent::Error(SessionError::BackendUnavailable));
             false
         }
     }
@@ -200,7 +215,7 @@ fn is_non_steam_backend(
 /// Native Ed25519 proofs are verified against the canonical challenge message.
 /// Steam proofs are accepted as passthrough — the Steam provider will validate
 /// the ticket when `SessionBackend::Steam` is selected.
-fn validate_identity_for_non_steam(
+pub(crate) fn validate_identity_for_non_steam(
     identity: &PlayerIdentity,
     backend: SessionBackend,
     target: &str,
@@ -212,25 +227,25 @@ fn validate_identity_for_non_steam(
     }
 }
 
-fn handle_create(
+pub(crate) fn handle_create(
     config: &SessionConfig,
     identity: &PlayerIdentity,
     nonce: &[u8; 32],
     catalog: &mut NonSteamSessionCatalog,
     state: &mut AfterglowSessionState,
-    messages: &mut MessageWriter<SessionEvent>,
+    events: &mut Vec<SessionEvent>,
 ) {
     if state.current_session.is_some() {
-        messages.write(SessionEvent::Error(SessionError::AlreadyInSession));
+        events.push(SessionEvent::Error(SessionError::AlreadyInSession));
         return;
     }
     if config.max_members == 0 {
-        messages.write(SessionEvent::Error(SessionError::InvalidConfig));
+        events.push(SessionEvent::Error(SessionError::InvalidConfig));
         return;
     }
 
     if validate_identity_for_non_steam(identity, config.backend, "create", nonce).is_err() {
-        messages.write(SessionEvent::Error(SessionError::PermissionDenied));
+        events.push(SessionEvent::Error(SessionError::PermissionDenied));
         return;
     }
 
@@ -257,14 +272,14 @@ fn handle_create(
     state.identity = Some(identity.clone());
 
     let info = catalog.sessions[&id].to_info(id);
-    messages.write(SessionEvent::Created(info.clone()));
-    messages.write(SessionEvent::Joined(info));
+    events.push(SessionEvent::Created(info.clone()));
+    events.push(SessionEvent::Joined(info));
 }
 
-fn handle_search(
+pub(crate) fn handle_search(
     search: &SessionSearch,
     catalog: &NonSteamSessionCatalog,
-    messages: &mut MessageWriter<SessionEvent>,
+    events: &mut Vec<SessionEvent>,
 ) {
     let results: Vec<SessionInfo> = catalog
         .sessions
@@ -286,16 +301,16 @@ fn handle_search(
         .map(|(id, entry)| entry.to_info(*id))
         .collect();
 
-    messages.write(SessionEvent::SearchResults(results));
+    events.push(SessionEvent::SearchResults(results));
 }
 
-fn handle_join_by_code(
+pub(crate) fn handle_join_by_code(
     code: SessionCode,
     identity: &PlayerIdentity,
     nonce: &[u8; 32],
     catalog: &mut NonSteamSessionCatalog,
     state: &mut AfterglowSessionState,
-    messages: &mut MessageWriter<SessionEvent>,
+    events: &mut Vec<SessionEvent>,
 ) {
     let session_id = catalog
         .sessions
@@ -304,30 +319,30 @@ fn handle_join_by_code(
         .map(|(id, _)| *id);
 
     match session_id {
-        Some(id) => handle_join(id, code.as_str(), identity, nonce, catalog, state, messages),
+        Some(id) => handle_join(id, code.as_str(), identity, nonce, catalog, state, events),
         None => {
-            messages.write(SessionEvent::Error(SessionError::SessionNotFound));
+            events.push(SessionEvent::Error(SessionError::SessionNotFound));
         }
     }
 }
 
-fn handle_join(
+pub(crate) fn handle_join(
     session_id: SessionId,
     target: &str,
     identity: &PlayerIdentity,
     nonce: &[u8; 32],
     catalog: &mut NonSteamSessionCatalog,
     state: &mut AfterglowSessionState,
-    messages: &mut MessageWriter<SessionEvent>,
+    events: &mut Vec<SessionEvent>,
 ) {
     if state.current_session.is_some() {
-        messages.write(SessionEvent::Error(SessionError::AlreadyInSession));
+        events.push(SessionEvent::Error(SessionError::AlreadyInSession));
         return;
     }
 
     let backend = SessionBackend::NonSteam;
     if validate_identity_for_non_steam(identity, backend, target, nonce).is_err() {
-        messages.write(SessionEvent::Error(SessionError::PermissionDenied));
+        events.push(SessionEvent::Error(SessionError::PermissionDenied));
         return;
     }
 
@@ -339,7 +354,7 @@ fn handle_join(
                 let key: [u8; 32] = match proof.public_key.as_slice().try_into() {
                     Ok(k) => k,
                     Err(_) => {
-                        messages.write(SessionEvent::Error(SessionError::PermissionDenied));
+                        events.push(SessionEvent::Error(SessionError::PermissionDenied));
                         return;
                     }
                 };
@@ -354,7 +369,7 @@ fn handle_join(
                 .map(|(mid, _)| *mid),
         },
         None => {
-            messages.write(SessionEvent::Error(SessionError::SessionNotFound));
+            events.push(SessionEvent::Error(SessionError::SessionNotFound));
             return;
         }
     };
@@ -368,7 +383,7 @@ fn handle_join(
                 .map(|e| e.members.len() >= e.config.max_members as usize)
                 .unwrap_or(true);
             if is_full {
-                messages.write(SessionEvent::Error(SessionError::SessionFull));
+                events.push(SessionEvent::Error(SessionError::SessionFull));
                 return;
             }
             let mid = ensure_local_member_id(catalog, state);
@@ -393,16 +408,16 @@ fn handle_join(
         .get(&session_id)
         .expect("session must exist after join validation")
         .to_info(session_id);
-    messages.write(SessionEvent::Joined(info.clone()));
+    events.push(SessionEvent::Joined(info.clone()));
     if !already_member {
-        messages.write(SessionEvent::MemberJoined {
+        events.push(SessionEvent::MemberJoined {
             session: session_id,
             member: member_id,
         });
     }
 }
 
-fn ensure_local_member_id(
+pub(crate) fn ensure_local_member_id(
     catalog: &mut NonSteamSessionCatalog,
     state: &mut AfterglowSessionState,
 ) -> SessionMemberId {
@@ -412,15 +427,15 @@ fn ensure_local_member_id(
     state.local_member_id
 }
 
-fn handle_leave(
+pub(crate) fn handle_leave(
     catalog: &mut NonSteamSessionCatalog,
     state: &mut AfterglowSessionState,
-    messages: &mut MessageWriter<SessionEvent>,
+    events: &mut Vec<SessionEvent>,
 ) {
     let session_id = match state.current_session {
         Some(id) => id,
         None => {
-            messages.write(SessionEvent::Error(SessionError::NotInSession));
+            events.push(SessionEvent::Error(SessionError::NotInSession));
             return;
         }
     };
@@ -431,11 +446,11 @@ fn handle_leave(
             state.current_session = None;
             state.current_backend = None;
             state.identity = None;
-            messages.write(SessionEvent::Left {
+            events.push(SessionEvent::Left {
                 session: session_id,
                 reason: SessionLeaveReason::HostEnded,
             });
-            messages.write(SessionEvent::SessionEnded(session_id));
+            events.push(SessionEvent::SessionEnded(session_id));
             return;
         }
     };
@@ -452,7 +467,7 @@ fn handle_leave(
             .collect();
 
         for m in &non_owner_members {
-            messages.write(SessionEvent::MemberLeft {
+            events.push(SessionEvent::MemberLeft {
                 session: session_id,
                 member: *m,
                 reason: SessionLeaveReason::HostEnded,
@@ -464,11 +479,11 @@ fn handle_leave(
         state.current_session = None;
         state.current_backend = None;
         state.identity = None;
-        messages.write(SessionEvent::Left {
+        events.push(SessionEvent::Left {
             session: session_id,
             reason: SessionLeaveReason::Left,
         });
-        messages.write(SessionEvent::SessionEnded(session_id));
+        events.push(SessionEvent::SessionEnded(session_id));
     } else {
         let member_id = state.local_member_id;
         if let Some(entry) = catalog.sessions.get_mut(&session_id) {
@@ -480,11 +495,11 @@ fn handle_leave(
         state.current_session = None;
         state.current_backend = None;
         state.identity = None;
-        messages.write(SessionEvent::Left {
+        events.push(SessionEvent::Left {
             session: session_id,
             reason: SessionLeaveReason::Left,
         });
-        messages.write(SessionEvent::MemberLeft {
+        events.push(SessionEvent::MemberLeft {
             session: session_id,
             member: member_id,
             reason: SessionLeaveReason::Left,

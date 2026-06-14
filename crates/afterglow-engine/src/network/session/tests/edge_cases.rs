@@ -7,6 +7,7 @@ fn join_nonexistent_session_returns_error() {
 
     app.world_mut().write_message(SessionRequest::Join {
         backend: SessionBackend::NonSteam,
+        provider: in_process_provider(),
         session: SessionId::new(999),
         identity,
     });
@@ -69,6 +70,7 @@ fn steam_backend_unavailable() {
 
     app.world_mut().write_message(SessionRequest::Join {
         backend: SessionBackend::Steam,
+        provider: ProviderEndpoint::Steam,
         session: SessionId::new(1),
         identity: steam_identity_for_passthrough(1),
     });
@@ -141,9 +143,10 @@ fn duplicate_member_join_does_not_duplicate() {
     };
 
     app.world_mut().write_message(SessionRequest::Join {
-        backend: SessionBackend::NonSteam,
+        backend: super::SessionBackend::NonSteam,
         session: session_id.0,
         identity: session_id.1,
+        provider: in_process_provider(),
     });
     app.update();
     let batch = drain_messages(&mut app);

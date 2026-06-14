@@ -200,6 +200,7 @@ dependencies = [
  "leafwing-input-manager",
  "lightyear",
  "lightyear_inputs_leafwing",
+ "postcard",
  "rand_core 0.6.4",
  "rayon",
  "serde",

@@ -206,11 +206,12 @@ messages).
 | `IdentityError` | `InvalidPublicKey`, `InvalidSignature`, `UnsupportedBackend`. |
 | `SessionBackend` | `NonSteam` or `Steam` — identifies which provider the session came from. |
 | `SessionVisibility` | `Private` / `FriendsOnly` / `Public` / `Invisible` — maps to Steam lobby visibility. |
-| `SessionTransport` | `Local` or `DirectUdp { host }` — describes the expected transport without owning a Lightyear link. |
+| `SessionTransport` | `Local` or `Netcode` — describes the expected transport without owning a Lightyear link. `DirectUdp` was removed in favor of `Netcode` plus an explicit provider endpoint. |
+| `ProviderEndpoint` | `InProcess`, `Udp(SocketAddr)`, or `Steam`. A remote client must supply a `Udp` endpoint to find/join a NonSteam listen-server because there is no central registry. `Steam` resolves through Steamworks. `InProcess` routes requests through the in-process catalog for local co-op/tests. |
 | `SessionConfig` | Name, `backend`, capacity, visibility, metadata (key/value), and transport preference. `SessionConfig::default()` targets `NonSteam`. |
-| `SessionSearch` | `backend`, metadata filter (exact AND semantics), `require_open_slot`, and `max_results` bound (0 returns empty). |
+| `SessionSearch` | `backend`, `provider`, metadata filter (exact AND semantics), `require_open_slot`, and `max_results` bound (0 returns empty). |
 | `SessionInfo` | Full read-only snapshot: id, code, backend, name, owner, owner identity, member count/capacity, visibility, metadata, transport. |
-| `SessionRequest` | Bevy `Message` enum: `Create(SessionConfig, PlayerIdentity)`, `Search(SessionSearch)`, `Join { backend, session, identity }`, `JoinByCode { backend, code, identity }`, `Leave`. |
+| `SessionRequest` | Bevy `Message` enum: `Create(SessionConfig, PlayerIdentity)`, `Search(SessionSearch)`, `Join { backend, session, identity, provider }`, `JoinByCode { backend, provider, code, identity }`, `Leave`. `Join` and `JoinByCode` carry a `provider` so remote joiners can reach the host. `Search` carries a `provider` for the same reason. |
 | `SessionEvent` | Bevy `Message` enum carrying session lifecycle outcomes: `Created`, `SearchResults`, `Joined`, `Left`, `MemberJoined`, `MemberLeft`, `SessionEnded`, `Error`. |
 | `SessionError` | `AlreadyInSession`, `NotInSession`, `SessionNotFound`, `SessionFull`, `InvalidConfig`, `PermissionDenied`, `BackendUnavailable`. |
 | `SessionLeaveReason` | `Left`, `Disconnected`, `Kicked`, `Banned`, `HostEnded`. |
@@ -222,11 +223,24 @@ only `NonSteam` requests; `Steam` requests emit `BackendUnavailable`. This
 design avoids duplicate provider state — a future Steam provider will handle
 Steam-targeted requests without shadowing the non-Steam catalog.
 
-The **non-Steam provider** (`NonSteamSessionCatalog` + `process_non_steam_session_requests`) is the
+The **in-process non-Steam provider** (`NonSteamSessionCatalog` + `process_non_steam_session_requests`) is the
 default in-memory implementation. It validates all operations, enforces capacity
 and ownership, generates a unique [`SessionCode`] for each created session, and
-emits the outcome protocol locally. It does not create Lightyear
-transport links, Netcode connections, or lobby network traffic.
+emits the outcome protocol locally.
+
+The **networked non-Steam provider** (`NonSteamSessionProvider` + `NonSteamSessionClient`) lets a
+remote host listen on a TCP address and exposes the same catalog operations to
+clients over a length-prefixed postcard protocol. The client's requests are
+routed to the provider, and the resulting `SessionEvent`s are sent back over the
+TCP control channel. Current limitations:
+
+- Provider events are sent to the requesting client only; member join/leave broadcasts to other session members are not implemented yet.
+- The provider runs its own `NonSteamSessionCatalog` instance and is suitable for listen-server friend invitations, not a central matchmaker.
+
+Games usually send `Create`/`Search`/`JoinByCode` requests through the client
+resource and then read `SessionStatus` or `AfterglowSessionState` for the result.
+Neither provider creates Lightyear transport links, Netcode connections, or
+lobby network traffic by itself.
 
 ### Joining by Code
 
@@ -236,7 +250,9 @@ To join a friend's session, use the player-facing code emitted in
 ```rust
 app.world_mut().write_message(SessionRequest::JoinByCode {
     backend: SessionBackend::NonSteam,
+    provider: ProviderEndpoint::Udp("203.0.113.42:7777".parse().unwrap()),
     code: SessionCode::new("XFQ-KRB"),
+    identity: my_identity(),
 });
 ```
 
@@ -288,6 +304,14 @@ The session layer does **not** own Lightyear transport, link spawning, or
 `StableEntityId` gameplay identity. Session member IDs are platform/session
 identity only. Clients send input through Leafwing/Lightyear regardless of
 session membership.
+
+### Provider Types in the Plugin
+
+| Type | Purpose |
+|---|---|
+| `NonSteamSessionProvider` | Optional resource. When inserted with a TCP listen address, it accepts remote clients and runs `NonSteamSessionCatalog` operations on their behalf. Defaults disabled. |
+| `NonSteamSessionClient` | Always-registered resource. Used by games to send `SessionRequest`s to a remote `ProviderEndpoint::Udp(addr)`. Manages a single outbound TCP connection at a time and writes remote responses as local `SessionEvent` messages. |
+| `RemoteClient` | Internal per-connection state stored in `NonSteamSessionProvider::clients`. |
 
 ## Querying Session Status
 
@@ -341,14 +365,14 @@ app.add_plugins((
 | `SessionTransport` | Bridge Action |
 |---|---|
 | `Local` | Despawns any previously tracked entities, then spawns a server entity (`Server::default()`, `Started`), a client link entity with Crossbeam transport, and a server link entity with Crossbeam transport. The client link carries `Client`, `LocalId`, `RemoteId(PeerId::Server)`, `Connected`, `Link`, `Linked`, `CrossbeamIo`, `Transport`, `MessageManager`, `ReplicationReceiver`, and `PredictionManager`. The server link carries `LinkOf { server }`, `ClientOf`, `LocalId(PeerId::Server)`, `RemoteId`, `Connected`, `Link`, `Linked`, `CrossbeamIo`, `Transport`, `MessageManager`, and `ReplicationSender::new(Duration::ZERO, SendUpdatesMode::SinceLastAck, false)`. |
-| `DirectUdp { host }` | Parses `host` as a `SocketAddr`. Writes `NetcodeClientParams` to `PendingNetcodeStartup` when the local `SessionMemberId` is a valid nonzero `u64`. If `AfterglowLightyearConfig.role` is `Host` or `Server`, also writes `NetcodeServerParams`. The `private_key` field in both param structs is populated from `AfterglowLightyearConfig.netcode_private_key` (default `[0u8; 32]` — a development placeholder that must be replaced before any real network deployment). If the host string is invalid, pending state is cleared and no panic occurs. No link entities are spawned — a separate consumer should drain `PendingNetcodeStartup`. |
+| `Netcode` | Looks up the remote provider endpoint from `SessionInfo` (currently encoded in metadata). Writes `NetcodeClientParams` to `PendingNetcodeStartup` when the local `SessionMemberId` is a valid nonzero `u64`. If `AfterglowLightyearConfig.role` is `Host` or `Server`, also writes `NetcodeServerParams`. The `private_key` field in both param structs is populated from `AfterglowLightyearConfig.netcode_private_key` (default `[0u8; 32]` — a development placeholder that must be replaced before any real network deployment). If the provider endpoint cannot be resolved, pending state is cleared and no panic occurs. No link entities are spawned — a separate consumer should drain `PendingNetcodeStartup`. |
 
 ### Session Event Handling
 
 | Event | Action |
 |---|---|
 | `Created` / `Joined` (Local) | Spawn tracked Crossbeam link entities (idempotent). |
-| `Created` / `Joined` (DirectUdp) | Write pending netcode startup parameters. |
+| `Created` / `Joined` (Netcode) | Write pending netcode startup parameters. |
 | `Left` / `SessionEnded` | Despawn tracked entities, clear pending startup. |
 | `SearchResults`, `MemberJoined`, `MemberLeft`, `Error` | Ignored. |
 
