@@ -123,40 +123,129 @@ Sources:
 
 ## Proposed Design
 
-### Split session transport from resolved address
+### Two planes: control vs data
 
-Replace `SessionTransport::DirectUdp { host: String }` with a transport
-preference enum and a separate connection-resolution type:
+Matchmaking and actual gameplay traffic should be separated into two planes:
+
+| Plane | Purpose | Examples |
+|---|---|---|
+| **Control plane** | Create, search, join, leave sessions | `SessionRequest` / `SessionEvent` |
+| **Data plane** | Gameplay replication, input, messages | Lightyear links |
+
+For Steam, the control plane is Steamworks lobbies / messages.
+For NonSteam, the control plane is a **session provider** — a listener exposed by
+the host or a matchmaker that accepts `SessionRequest`-like messages and replies
+with `SessionEvent`s.
+
+### Session provider endpoint
+
+For NonSteam, the client must know **where** to send session requests. The
+provider address is part of the request, not hidden inside the session config:
 
 ```rust
-/// What kind of transport the session prefers.
+/// Where to send session control-plane requests for a given backend.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum ProviderEndpoint {
+    /// In-process catalog (tests / title screen).
+    InProcess,
+    /// NonSteam UDP/netcode session listener, e.g. the host's address.
+    Udp(SocketAddr),
+    /// HTTP/WebSocket lobby / matchmaker service.
+    Http(String),
+    /// Steamworks resolves the endpoint implicitly via Steam lobbies.
+    Steam,
+}
+```
+
+`JoinByCode` and `Search` carry the provider the client wants to talk to:
+
+```rust
+pub enum SessionRequest {
+    Create(SessionConfig, PlayerIdentity),
+    Search(SessionSearch),
+    Join {
+        backend: SessionBackend,
+        session: SessionId,
+        identity: PlayerIdentity,
+        provider: ProviderEndpoint, // NEW
+    },
+    JoinByCode {
+        backend: SessionBackend,
+        code: SessionCode,
+        identity: PlayerIdentity,
+        provider: ProviderEndpoint, // NEW: where to send the join request
+    },
+    Leave,
+}
+
+pub struct SessionSearch {
+    pub backend: SessionBackend,
+    pub provider: ProviderEndpoint, // NEW: where to list sessions
+    pub metadata: HashMap<String, String>,
+    pub require_open_slot: bool,
+    pub max_results: u32,
+}
+```
+
+This matches the user's mental model:
+
+- A public matchmaker exposes an endpoint; `Search` lists lobbies from it.
+- A friend shares a code **plus** the host/provider address over Discord; the
+  join message includes both.
+- Steam does not need an explicit provider because Steamworks is the provider.
+
+### NonSteam session provider / listener
+
+The current `NonSteamSessionCatalog` is an in-process state machine. A real
+NonSteam backend needs two pieces:
+
+1. **`NonSteamSessionProvider`** — the engine/server side that hosts the catalog
+   and listens for control-plane messages on a socket or HTTP port.
+2. **`NonSteamSessionClient`** — the engine/client side that serializes
+   `SessionRequest`s and sends them to a `ProviderEndpoint`, then receives
+   `SessionEvent`s.
+
+On the host, creating a session also starts the provider listener (or registers
+with an external matchmaker). On the client, joining a session contacts that
+provider.
+
+The provider listener and the gameplay server may run on the same address and
+even the same process, but they are logically separate:
+
+- Control: "here is my join code, can I join?"
+- Data: Lightyear replication + input.
+
+### Split gameplay transport from resolved address
+
+Once the control-plane join succeeds, `SessionInfo` carries the data-plane
+target:
+
+```rust
+/// What kind of transport the session prefers for gameplay.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum SessionTransport {
-    /// In-process Crossbeam links for local tests or split-screen logic.
+    /// In-process Crossbeam links for local tests.
     Local,
     /// Native UDP + netcode.io (or WebTransport/WebSocket for wasm).
-    /// The actual address comes from the session backend.
     Netcode,
     /// Steam networking / Steam Datagram Relay.
     SteamSdr,
 }
 
-/// How to reach the session once it has been accepted.
-/// Populated by the backend and consumed by the transport startup system.
+/// How to reach the gameplay session once accepted.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum SessionConnectionTarget {
-    /// Direct socket address (for LAN or dedicated server with known IP).
+    /// Direct socket address (LAN or dedicated server with known IP).
     Direct(SocketAddr),
     /// Lightyear netcode connect token issued by a matchmaker.
     /// Hides the real server address from the client.
     NetcodeToken(Vec<u8>),
     /// Steam networking identity (SteamID + virtual port).
-    SteamPeer(u64), // or a real SteamNetworkingIdentity wrapper
-    /// No resolved target yet; waiting for matchmaker / discovery.
+    SteamPeer(u64),
+    /// Not resolved yet.
     Resolving,
 }
 
-/// Connection metadata attached to a session.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SessionConnection {
     pub transport: SessionTransport,
@@ -164,7 +253,7 @@ pub struct SessionConnection {
 }
 ```
 
-`SessionConfig` would then look like:
+`SessionConfig` keeps only the transport preference:
 
 ```rust
 pub struct SessionConfig {
@@ -173,79 +262,64 @@ pub struct SessionConfig {
     pub max_members: u32,
     pub visibility: SessionVisibility,
     pub metadata: HashMap<String, String>,
-    pub transport: SessionTransport, // preference only
-}
-```
-
-And `SessionInfo` would expose:
-
-```rust
-pub struct SessionInfo {
-    pub id: SessionId,
-    pub code: SessionCode,
-    pub backend: SessionBackend,
-    pub name: String,
-    pub owner: SessionMemberId,
-    pub owner_identity: PlayerIdentity,
-    pub member_count: u32,
-    pub max_members: u32,
-    pub visibility: SessionVisibility,
-    pub metadata: HashMap<String, String>,
     pub transport: SessionTransport,
-    pub connection: SessionConnection, // only meaningful fields populated by backend
 }
 ```
 
-### Per-backend resolution
+### Per-backend control + data flow
 
-#### NonSteam backend
+#### NonSteam listen-server / direct-IP model
 
-Support at least two modes:
+1. Host creates session. Its `NonSteamSessionProvider` starts listening on a
+   UDP/netcode or HTTP control socket at `provider_addr`.
+2. Host shares code + `provider_addr` with friends.
+3. Client sends `JoinByCode { provider: Udp(provider_addr), code, ... }`.
+4. Provider accepts, returns `SessionInfo` with
+   `connection: Netcode, target: Direct(gameplay_addr)`.
+5. Engine transport consumer spawns Lightyear netcode links to
+   `gameplay_addr`.
 
-1. **Direct LAN / direct IP** — for local play or debug.
-   - Host picks a port; session carries `SessionConnectionTarget::Direct(addr)`.
-   - This exposes the IP, but only because the user explicitly chose direct IP.
-2. **Matchmaker + dedicated server / relay** — for internet play.
-   - Create session → backend contacts a matchmaker service.
-   - Matchmaker returns a session handle and a future `ConnectToken`.
-   - Session code maps to the matchmaker session handle.
-   - Join by code → client asks matchmaker for the `ConnectToken` (and server
-     address if not token-based).
-   - `SessionConnectionTarget` becomes `NetcodeToken(token)` or `Direct(server_addr)`.
+`provider_addr` and `gameplay_addr` are often the same address in the simplest
+host-as-server case.
 
-The current `DirectUdp { host }` becomes the **direct IP debug path** only.
+#### NonSteam matchmaker model
+
+1. Host creates session via `Create` sent to `ProviderEndpoint::Http(matchmaker)`.
+2. Matchmaker returns code and (later) a `NetcodeToken`.
+3. Client lists sessions via `Search { provider: Http(matchmaker), ... }` or gets
+   code from friend + matchmaker URL.
+4. Client sends `JoinByCode { provider: Http(matchmaker), code, ... }`.
+5. Matchmaker returns `SessionInfo` with `target: NetcodeToken(token)`.
+6. Engine consumer uses the token to authenticate the Lightyear netcode link.
 
 #### Steam backend
 
-- Use Steam lobbies as the matchmaking layer.
-- The Steam session provider creates a Steam lobby and maps `SessionCode` to the
-  lobby ID internally.
-- Join by code → resolve to Steam lobby → invite/join via Steamworks API.
-- `SessionConnectionTarget::SteamPeer(steam_id)` feeds Lightyear's Steam
-  transport.
+1. Host creates a Steam lobby.
+2. Steam session provider maps `SessionCode` to the Steam lobby ID.
+3. Client joins via Steamworks lobby invite or `JoinByCode { provider: Steam, ... }`.
+4. Steam SDR resolves the data-plane path; `SessionConnectionTarget::SteamPeer`
+   drives Lightyear's Steam transport.
 
-### Consumer system
+### Transport consumer system
 
 Introduce an engine system `start_session_transport` that runs in
-`AfterglowSessionSet::ApplyEffects` after the bridge:
+`AfterglowSessionSet::ApplyEffects` after the control-plane join has produced a
+`SessionInfo`:
 
 ```rust
 fn start_session_transport(
     mut commands: Commands,
     mut pending: ResMut<PendingNetcodeStartup>,
-    mut intents: EventReader<SessionTransportIntent>,
     // Lightyear registry/config resources
 ) {
-    // For DirectUdp pending params: spawn NetcodeClient/NetcodeServer entities.
-    // For Steam peer identity: spawn Lightyear Steam link entities.
+    // Drain pending params and spawn NetcodeClient / NetcodeServer entities.
+    // For Steam: spawn Lightyear Steam link entities.
     // For Local: already handled by the bridge itself.
 }
 ```
 
-`PendingNetcodeStartup` is general enough to keep, but its data should come from
-`SessionConnectionTarget`, not from a `host` string baked into session config.
-Alternatively, rename `PendingNetcodeStartup` to `PendingSessionTransportStartup`
-and make it backend-aware.
+`PendingNetcodeStartup` now derives from `SessionConnectionTarget` and the local
+`SessionMemberId`, not from a `host` string baked into session config.
 
 ### Host migration
 
@@ -259,18 +333,24 @@ and make it backend-aware.
 ### Join-by-code flow
 
 ```
-host:
+host (NonSteam listen-server):
   CreateSession(NonSteam, transport=Netcode)
     -> NonSteamSessionCatalog allocates code
-    -> (future) matchmaker creates server / returns token
-    -> SessionInfo contains transport=Netcode, target=NetcodeToken(...) or Direct(...)
+    -> NonSteamSessionProvider starts listening
+
+friend (Discord):
+  "code is XFQ-KRB, provider is 203.0.113.42:7777"
 
 client:
-  JoinByCode(NonSteam, code)
-    -> backend resolves code -> session
-    -> backend fetches connection target (token / address)
+  JoinByCode {
+    backend: NonSteam,
+    provider: Udp(203.0.113.42:7777),
+    code: SessionCode::new("XFQ-KRB"),
+    identity: my_identity,
+  }
+    -> provider validates, returns SessionInfo
     -> SessionEvent::Joined(info) triggers bridge
-    -> bridge produces PendingNetcodeStartup
+    -> bridge produces PendingNetcodeStartup from info.connection
     -> start_session_transport spawns UDP/netcode links
     -> gameplay begins
 ```
@@ -286,16 +366,23 @@ client:
 
 ## Recommended Next Slice
 
-1. Remove `DirectUdp { host: String }` from `SessionTransport`.
-2. Add `SessionTransport::Netcode` and `SessionConnectionTarget`.
-3. Keep the existing bridge for `Local`, and extend it to consume
+1. Add `ProviderEndpoint` and update:
+   - `SessionRequest::Join { provider }`
+   - `SessionRequest::JoinByCode { provider }`
+   - `SessionSearch { provider }`
+2. Introduce `NonSteamSessionProvider` (server/listener) and
+   `NonSteamSessionClient` (networked request sender) abstractions.
+3. Remove `DirectUdp { host: String }` from `SessionTransport`.
+4. Add `SessionTransport::Netcode` and `SessionConnectionTarget`.
+5. Keep the existing bridge for `Local`, and extend it to consume
    `SessionConnectionTarget` instead of parsing `host`.
-4. Add an engine consumer system that drains `PendingNetcodeStartup` and spawns
+6. Add an engine consumer system that drains `PendingNetcodeStartup` and spawns
    Lightyear `NetcodeClient`/`NetcodeServer` entities for the direct-IP case.
-5. Add a minimal LAN / direct-IP test proving a host and a join-by-code client
-   establish real UDP links.
-6. Defer full matchmaker integration to a follow-up slice; document the
-   `NetcodeToken` target as the intended hook.
+7. Add a minimal LAN / direct-IP test proving a host and a join-by-code client
+   can find the provider, exchange session messages, and establish real UDP
+   links.
+8. Defer full matchmaker integration to a follow-up slice; document the
+   `NetcodeToken` target and `Http` provider as the intended hooks.
 
 ## References
 
