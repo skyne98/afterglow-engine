@@ -5,12 +5,14 @@ use std::collections::HashMap;
 pub mod code;
 pub(crate) mod entry;
 pub mod identity;
+pub mod status;
 
 pub use code::{
     SESSION_CODE_ALPHABET, SESSION_CODE_CHAR_LEN, SESSION_CODE_GROUP_LEN, SESSION_CODE_GROUPS,
     SessionCode,
 };
 pub use identity::{IdentityError, NativeIdentityProof, PlayerIdentity, SessionIdentityNonce};
+pub use status::{SessionConnectionState, SessionStatus};
 
 pub(crate) mod non_steam;
 
@@ -114,7 +116,9 @@ pub enum SessionVisibility {
 pub enum SessionTransport {
     #[default]
     Local,
-    DirectUdp { host: String },
+    DirectUdp {
+        host: String,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -126,7 +130,7 @@ pub enum SessionLeaveReason {
     HostEnded,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum SessionError {
     AlreadyInSession,
     NotInSession,
@@ -277,6 +281,13 @@ pub struct AfterglowSessionState {
     pub current_backend: Option<SessionBackend>,
 }
 
+impl AfterglowSessionState {
+    /// Whether the local player is currently in a session.
+    pub fn is_in_session(&self) -> bool {
+        self.current_session.is_some()
+    }
+}
+
 impl Default for AfterglowSessionState {
     fn default() -> Self {
         Self {
@@ -304,6 +315,7 @@ pub struct AfterglowSessionPlugin;
 impl Plugin for AfterglowSessionPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<AfterglowSessionState>()
+            .init_resource::<status::SessionStatus>()
             .init_resource::<non_steam::NonSteamSessionCatalog>()
             .init_resource::<SessionIdentityNonce>()
             .add_message::<SessionRequest>()
@@ -320,6 +332,10 @@ impl Plugin for AfterglowSessionPlugin {
                 PreUpdate,
                 non_steam::process_non_steam_session_requests
                     .in_set(AfterglowSessionSet::ProcessRequests),
+            )
+            .add_systems(
+                PreUpdate,
+                status::update_session_status.in_set(AfterglowSessionSet::ApplyEffects),
             );
     }
 }

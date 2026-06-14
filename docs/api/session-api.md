@@ -58,10 +58,19 @@ app.session().join_local(code, my_identity());
 // Leave the current session.
 app.session().leave();
 
-// Read state.
-let state = app.world().resource::<AfterglowSessionState>();
-assert!(state.current_session.is_some());
+// Query status.
+let status = app.session().status();
+assert!(status.is_in_session());
+println!("members: {}", status.member_count());
 ```
+
+The underlying status data is already implemented:
+
+- `AfterglowSessionState::is_in_session()`
+- `SessionStatus` resource with `info`, `members`, `state`,
+  `is_in_session()`, `member_count()`, `is_error()`
+
+The `app.session().status()` helper is the remaining convenience layer.
 
 ## Trait / resource shape
 
@@ -153,18 +162,28 @@ impl SessionHandle<'_> {
     pub fn leave(&mut self) {
         self.app.world_mut().write_message(SessionRequest::Leave);
     }
+
+    pub fn status(&self) -> &SessionStatus {
+        self.app.world().resource::<SessionStatus>()
+    }
+
+    pub fn is_in_session(&self) -> bool {
+        self.app.world().resource::<SessionStatus>().is_in_session()
+    }
 }
 ```
 
 ## Why this hides the message protocol
 
-Most games only need five operations:
+Most games only need seven operations:
 
 1. Host a game.
 2. Host on a specific address.
 3. Join by code + provider (NonSteam friend).
 4. Join by code (Steam).
-5. Leave.
+5. Join a local session.
+6. Leave.
+7. Query status.
 
 The helpers produce the same `SessionRequest`s and consume the same
 `SessionEvent`s, so the engine keeps the flexible message protocol while games
@@ -233,6 +252,8 @@ engine tears down links, emits SessionEnded
 | `join_steam` | `SessionRequest::JoinByCode(Steam)` |
 | `join_local` | `SessionRequest::JoinByCode(InProcess)` |
 | `leave` | `SessionRequest::Leave` |
+| `status` | read `SessionStatus` resource |
+| `is_in_session` | `SessionStatus::is_in_session()` |
 
 ## See Also
 

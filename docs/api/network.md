@@ -27,8 +27,10 @@ path physics lag compensation.
 | `AfterglowLightyearConfig` | Engine-facing Lightyear config: role, server/remote addresses, tick rate, prediction window, protocol id, optional connect token, link-conditioner settings, and `netcode_private_key`. The private key defaults to `[0u8; 32]` — a development placeholder that **must** be replaced before any real network deployment. |
 | `register_afterglow_lightyear_protocol` | Opt-in helper that initializes `HistoryTick`, registers reflection for `HistoryTick` and `StableEntityId`, and — under the `lightyear` feature — registers `StableEntityId` as a replicated Lightyear component. Call it after Lightyear client/server plugins are present. |
 | `HistoryTick` | Plain `u32` resource used by deterministic fixed-step tests and scenario systems. It is not rewind history. |
-| `AfterglowSessionPlugin` | Platform-neutral session/matchmaking API layer. Registers `AfterglowSessionState`, `NonSteamSessionCatalog`, `SessionRequest` and `SessionEvent` Bevy `Message` types, and a system that processes session requests against the in-memory non-Steam provider. Future Steam lobby support will be added as an alternative backend. |
+| `AfterglowSessionPlugin` | Platform-neutral session/matchmaking API layer. Registers `AfterglowSessionState`, `SessionStatus`, `NonSteamSessionCatalog`, `SessionRequest` and `SessionEvent` Bevy `Message` types, and systems that process session requests and maintain a session status snapshot. Future Steam lobby support will be added as an alternative backend. |
 | `AfterglowSessionState` | Resource tracking the local `SessionMemberId`, current `SessionId`, and current `SessionBackend` (if any). |
+| `SessionStatus` | Game-friendly snapshot derived from `SessionEvent`s: current `SessionInfo`, observed member list, and coarse connection state. |
+| `SessionConnectionState` | `Idle`, `Joining`, `Connected`, `Error(SessionError)`. |
 
 ## Universal Identity
 
@@ -286,6 +288,30 @@ The session layer does **not** own Lightyear transport, link spawning, or
 `StableEntityId` gameplay identity. Session member IDs are platform/session
 identity only. Clients send input through Leafwing/Lightyear regardless of
 session membership.
+
+## Querying Session Status
+
+`AfterglowSessionPlugin` registers a [`SessionStatus`] resource that is kept in
+sync with session events. Query it instead of draining [`SessionEvent`]
+messages when you only need the current snapshot:
+
+```rust
+let state = app.world().resource::<AfterglowSessionState>();
+if state.is_in_session() {
+    let status = app.world().resource::<SessionStatus>();
+    println!("session: {:?}", status.info);
+    println!("members: {}", status.member_count());
+    match status.state {
+        SessionConnectionState::Idle => {}
+        SessionConnectionState::Joining => {}
+        SessionConnectionState::Connected => {}
+        SessionConnectionState::Error(err) => eprintln!("session error: {:?}", err),
+    }
+}
+```
+
+`SessionStatus` is also the natural hook for higher-level helpers such as the
+API proposed in [`session-api.md`](session-api.md) (e.g. `app.session().status()`).
 
 ## Session-to-Lightyear Bridge
 

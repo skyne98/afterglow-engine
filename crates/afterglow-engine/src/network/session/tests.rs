@@ -3,6 +3,7 @@ use super::{non_steam::NonSteamSessionCatalog, *};
 pub(crate) mod code;
 pub(crate) mod edge_cases;
 pub(crate) mod identity;
+pub(crate) mod status;
 
 pub(super) fn test_app() -> App {
     let mut app = App::new();
