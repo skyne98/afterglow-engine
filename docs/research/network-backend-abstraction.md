@@ -111,3 +111,10 @@ networking boundary itself. They should be handled as a platform/admission layer
 above Lightyear, analogous to how Steam IDs and tickets sit above the transport.
 See `docs/research/player-identity-authentication.md` for conventions and a
 proposed `PlayerIdentity` design.
+
+Session matchmaking and transport setup are also separate from the networking
+substrate. A session decides *which game* to join and *who* is allowed; a
+backend-aware transport consumer decides *how* to reach it. See
+`docs/research/session-transport-connection-design.md` for the proposed
+resolution model (direct LAN, matchmaker + dedicated server, and Steam lobbies +
+SDR).
