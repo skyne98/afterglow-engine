@@ -102,6 +102,86 @@ pub fn run_fps_controller_demo() -> bevy::app::AppExit {
     app.run()
 }
 
+pub fn run_multiplayer_boxes_demo(
+    config: demos::multiplayer_boxes::MultiplayerBoxesDemoConfig,
+) -> bevy::app::AppExit {
+    use std::net::SocketAddr;
+    use network::session::*;
+    use network::lightyear::*;
+    use demos::multiplayer_boxes::{ServerAddr, LocalIdentity};
+
+    let trace_data = setup_tracing();
+    let _trace_accum = trace_data.accum.clone();
+
+    let mut app = App::new();
+    keep_windowed_runtime_unthrottled_when_unfocused(&mut app);
+
+    let role = if config.host {
+        LightyearRole::Host
+    } else {
+        LightyearRole::Client
+    };
+
+    let nonce = [42u8; 32];
+
+    app.insert_resource(trace_data)
+        .insert_resource(AfterglowLightyearConfig {
+            role,
+            protocol_id: 42,
+            netcode_private_key: [42u8; 32],
+            tick_rate: 60,
+            predicted_ticks: 12,
+            ..Default::default()
+        })
+        .insert_resource(SessionIdentityNonce(nonce));
+
+    app.add_plugins((
+        default_plugins(),
+        AfterglowLightyearPlugin,
+        AfterglowSessionPlugin,
+        AfterglowSessionLightyearBridgePlugin,
+        AfterglowNetcodeConsumerPlugin,
+        demos::multiplayer_boxes::MultiplayerBoxesPlugin,
+    ));
+
+    app.world_mut()
+        .resource_mut::<demos::multiplayer_boxes::scene::PlayerName>()
+        .0 = config.player_name.clone();
+
+    if config.host {
+        let listen_addr: SocketAddr = config
+            .listen
+            .parse()
+            .expect("invalid --listen address");
+        let identity = PlayerIdentity::demo(&nonce, "create", 0);
+        app.session()
+            .host_with_endpoint(
+                SessionConfig {
+                    backend: SessionBackend::NonSteam,
+                    transport: SessionTransport::DirectUdp {
+                        host: listen_addr.to_string(),
+                    },
+                    name: "multiplayer-boxes".into(),
+                    metadata: [("name".into(), "multiplayer-boxes".into())].into(),
+                    ..Default::default()
+                },
+                identity,
+                listen_addr,
+            )
+            .expect("failed to host session");
+    } else {
+        let server_addr: SocketAddr = config
+            .connect
+            .parse()
+            .expect("invalid --connect address");
+        app.insert_resource(ServerAddr(server_addr));
+        // LocalIdentity will be created by client_join_flow after search
+        app.insert_resource(LocalIdentity(PlayerIdentity::demo(&nonce, "", 1)));
+    }
+
+    app.run()
+}
+
 fn keep_windowed_runtime_unthrottled_when_unfocused(app: &mut App) {
     app.insert_resource(WinitSettings::continuous());
 }

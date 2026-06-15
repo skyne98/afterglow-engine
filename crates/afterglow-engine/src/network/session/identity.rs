@@ -20,6 +20,30 @@ pub enum PlayerIdentity {
 }
 
 impl PlayerIdentity {
+    /// Build a native proof for demos using a deterministic key.
+    ///
+    /// `key_seed` produces distinct Ed25519 keys so demos can simulate multiple
+    /// players. The caller provides the server `nonce` and the `target` string
+    /// (e.g. `"create"` for session creation, or a session code for joins).
+    pub fn demo(nonce: &[u8; 32], target: &str, key_seed: u8) -> Self {
+        use ed25519_dalek::{Signer, SigningKey};
+        let mut secret = [0u8; 32];
+        for i in 0..32 {
+            secret[i] = key_seed.wrapping_add(i as u8).wrapping_mul(7);
+        }
+        let signing_key = SigningKey::from_bytes(&secret);
+        let challenge = NativeIdentityProof::challenge(
+            SessionBackend::NonSteam,
+            target,
+            nonce,
+        );
+        let signature = signing_key.sign(&challenge);
+        Self::Native(NativeIdentityProof {
+            public_key: signing_key.verifying_key().to_bytes().to_vec(),
+            signature: signature.to_bytes().to_vec(),
+        })
+    }
+
     /// Build a native proof for tests by signing the canonical challenge with a
     /// deterministic key.
     ///
