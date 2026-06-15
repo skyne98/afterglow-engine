@@ -98,21 +98,18 @@ impl Plugin for MultiplayerBoxesPlugin {
         );
         app.add_systems(
             Update,
-            scene::smooth_local_player_visuals.after(scene::attach_replicated_player_visuals),
-        );
-        app.add_systems(
-            Update,
             (
                 camera::setup_camera
                     .run_if(|cam: Query<&camera::DemoCamera>| cam.is_empty())
-                    .after(scene::smooth_local_player_visuals),
-                camera::follow_camera_system.after(scene::smooth_local_player_visuals),
+                    .after(scene::attach_replicated_player_visuals),
+                camera::follow_camera_system.after(scene::attach_replicated_player_visuals),
             ),
         );
         app.add_systems(
             Update,
             (
                 scene::spawn_player_on_member_joined,
+                scene::attach_controlled_by_to_player_boxes,
                 scene::despawn_player_on_member_left,
             )
                 .run_if(|config: Res<AfterglowLightyearConfig>| {

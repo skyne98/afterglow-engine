@@ -1,6 +1,5 @@
 #[cfg(feature = "lightyear")]
 pub mod net;
-mod presentation;
 
 use bevy::prelude::*;
 use lightyear::prelude::Predicted;
@@ -178,9 +177,10 @@ fn replicated_boxes_get_client_visuals() {
         .world_mut()
         .spawn((
             PlayerBox {
-                owner: "2".to_string(),
+                owner: "alice".to_string(),
             },
             Transform::from_xyz(1.0, 0.4, 0.0),
+            lightyear::prelude::Interpolated,
         ))
         .id();
     let box_entity = app
@@ -191,6 +191,7 @@ fn replicated_boxes_get_client_visuals() {
                 initial_pos: Vec3::new(2.0, 0.5, 0.0),
             },
             Transform::from_xyz(2.0, 0.5, 0.0),
+            lightyear::prelude::Interpolated,
         ))
         .id();
 
@@ -211,8 +212,15 @@ fn replicated_boxes_get_client_visuals() {
 }
 
 #[test]
-fn late_local_member_context_converts_root_mesh_to_smooth_child() {
+fn confirmed_local_box_is_not_rendered_before_predicted_copy_exists() {
     let mut app = test_app();
+    app.insert_resource(crate::network::AfterglowNetworkContext::from_status(
+        crate::network::AfterglowConnectionStatus {
+            role: crate::network::LightyearRole::Client,
+            local_member_id: crate::network::SessionMemberId::new(2),
+            ..Default::default()
+        },
+    ));
     app.add_systems(Update, attach_replicated_player_visuals);
 
     let entity = app
@@ -226,25 +234,8 @@ fn late_local_member_context_converts_root_mesh_to_smooth_child() {
         .id();
 
     app.update();
-    assert!(app.world().get::<Mesh3d>(entity).is_some());
-
-    app.insert_resource(crate::network::AfterglowNetworkContext::from_status(
-        crate::network::AfterglowConnectionStatus {
-            role: crate::network::LightyearRole::Client,
-            local_member_id: crate::network::SessionMemberId::new(2),
-            ..Default::default()
-        },
-    ));
-    app.update();
 
     assert!(app.world().get::<Mesh3d>(entity).is_none());
-    assert!(app.world().get::<LocalPlayerPresentation>(entity).is_some());
-    let visual_count = app
-        .world_mut()
-        .query_filtered::<Entity, With<PlayerVisual>>()
-        .iter(app.world())
-        .count();
-    assert_eq!(visual_count, 1);
 }
 
 #[test]
@@ -266,12 +257,13 @@ fn local_replicated_box_gets_prediction_physics_components() {
                 owner: "2".to_string(),
             },
             Transform::from_xyz(1.0, PLAYER_SIZE, 0.0),
+            Predicted,
         ))
         .id();
 
     app.update();
 
-    assert!(app.world().get::<LocalPlayerPresentation>(entity).is_some());
+    assert!(app.world().get::<Mesh3d>(entity).is_some());
     assert!(
         app.world()
             .get::<avian3d::prelude::RigidBody>(entity)
@@ -283,37 +275,6 @@ fn local_replicated_box_gets_prediction_physics_components() {
             .is_some(),
         "local predicted box should have velocity for same movement system"
     );
-    let visual_count = app
-        .world_mut()
-        .query_filtered::<Entity, With<PlayerVisual>>()
-        .iter(app.world())
-        .count();
-    assert_eq!(visual_count, 1, "local visuals should be a smooth child");
-}
-
-#[test]
-fn local_visual_correction_is_smoothed_not_snapped() {
-    let current = Vec3::ZERO;
-    let root_after_correction = Vec3::new(1.0, 0.0, 0.0);
-
-    let next =
-        advance_local_visual_translation(current, root_after_correction, Vec3::ZERO, 1.0 / 60.0);
-
-    assert!(next.x > 0.0, "visual should start correcting toward server");
-    assert!(
-        next.x < root_after_correction.x,
-        "small server corrections should be absorbed over multiple frames"
-    );
-}
-
-#[test]
-fn local_visual_teleport_correction_snaps() {
-    let root_after_teleport = Vec3::new(10.0, 0.0, 0.0);
-
-    let next =
-        advance_local_visual_translation(Vec3::ZERO, root_after_teleport, Vec3::ZERO, 1.0 / 60.0);
-
-    assert_eq!(next, root_after_teleport);
 }
 
 #[test]

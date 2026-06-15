@@ -99,22 +99,24 @@ Shared movement system in `FixedUpdate`:
   deterministic baseline.
 
 Client-side prediction:
-- The client now moves its locally owned replicated `PlayerBox` immediately using
-  the same movement system and local Avian velocity components when present.
-- Local player rendering is separated from the replicated root. The root remains
-  the gameplay/network entity, while the local owner gets a child
-  `PlayerVisual` driven by `LocalPlayerPresentation`. Small authoritative
-  correction deltas are absorbed over multiple frames with velocity feed-forward;
-  only teleport-sized corrections snap.
-- The camera follows `LocalPlayerPresentation` when present, so server correction
-  replay is not directly visible in the player-facing camera path.
-- Server snapshots still provide authority/correction. This is a transparent
-  stepping stone toward replacing demo-local `MoveInputMsg` with the documented
-  Lightyear/Leafwing native input path and full Lightyear prediction metadata.
+- Session-member player boxes now use Lightyear-native prediction targets:
+  `PredictionTarget::Single(PeerId::Netcode(member_id))` for the owner and
+  `InterpolationTarget::AllExceptSingle(...)` for everyone else. The host also
+  binds numeric-owner `PlayerBox` entities to the matching server-side client
+  link with `ControlledBy` once that link exists.
+- `Transform` is registered for Lightyear prediction history and visual
+  correction (`Isometry3d` correction delta) plus transform interpolation.
+- The client renders and simulates the Lightyear `Predicted` copy for its local
+  player. Remote players/physics boxes render through Lightyear `Interpolated`
+  copies. Confirmed roots are not rendered as gameplay presentation.
+- Server snapshots still provide authority/correction through Lightyear's
+  rollback/reconciliation machinery. The remaining demo-local bridge is only the
+  explicit `MoveInputMsg`; the next step is replacing it with the documented
+  Lightyear/Leafwing native input path.
 - The runnable test verifies that the remote client receives replicated
   `PlayerBox` entities over real UDP/netcode, gains client-side presentation and
-  local physics components, and that client input moves the authoritative server
-  entity.
+  local physics components on the predicted copy, and that client input moves the
+  authoritative server entity.
 
 ## Camera
 
@@ -209,10 +211,9 @@ honest and pass:
    Fabric-like global resource for querying whether a world runs authority,
    client prediction, host mode, and which `SessionMemberId` belongs to the
    local player.
-6. Client replay/correction should be invisible to presentation. Do not render
-   the locally owned replicated root directly once prediction is active; render a
-   local presentation child and smooth small authoritative correction deltas
-   toward the root.
+6. Client replay/correction should be handled by Lightyear, not an engine-local
+   smoothing shim. Render the local `Predicted` copy and remote `Interpolated`
+   copies; avoid rendering confirmed roots directly as gameplay presentation.
 
 ## Out of scope for v1
 

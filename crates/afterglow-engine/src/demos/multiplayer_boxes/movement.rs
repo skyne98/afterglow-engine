@@ -53,6 +53,7 @@ pub fn apply_movement(
         Option<&mut LinearVelocity>,
         Option<&mut Transform>,
         &PlayerBox,
+        Has<Predicted>,
     )>,
 ) {
     let status = context.as_deref().map(|ctx| ctx.get_connection_status());
@@ -62,7 +63,11 @@ pub fn apply_movement(
 
     let local_member = status.and_then(|status| status.local_member_owner());
     let vel = Vec3::new(input.0.x, 0.0, input.0.y) * PLAYER_SPEED;
-    for (linear_vel, transform, player_box) in players.iter_mut() {
+    let client_only = status.is_some_and(|status| status.is_client_only());
+    for (linear_vel, transform, player_box, predicted) in players.iter_mut() {
+        if client_only && !predicted {
+            continue;
+        }
         if !is_local_player(player_box, &player_name, local_member.as_deref()) {
             continue;
         }
@@ -156,7 +161,7 @@ pub fn client_send_input(
 
 pub fn server_receive_input(
     mut receivers: Query<&mut MessageReceiver<MoveInputMsg>>,
-    mut players: Query<(&mut LinearVelocity, &PlayerBox)>,
+    mut players: Query<(&mut LinearVelocity, &PlayerBox), Without<Predicted>>,
 ) {
     for mut receiver in receivers.iter_mut() {
         for msg in receiver.receive() {

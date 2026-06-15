@@ -9,10 +9,15 @@ pub fn register_demo_protocol(app: &mut App) {
     app.register_component::<KinematicBox>();
     app.register_component::<MoveInput>();
 
-    // Register Transform for replication so server-side Avian physics positions
-    // are sent to clients. The client-side PhysicsTransformPlugin syncs
-    // Transform → Position/Rotation for Avian simulation.
-    app.register_component::<Transform>();
+    // Register Transform for replication, Lightyear prediction history, and
+    // visual correction. The demo predicts client-owned player transforms and
+    // interpolates remote/server-owned transforms.
+    app.register_component::<Transform>()
+        .add_prediction()
+        .add_linear_correction_fn::<Isometry3d>();
+    app.world_mut()
+        .resource_mut::<InterpolationRegistry>()
+        .set_interpolation::<Transform>(TransformLinearInterpolation::lerp);
 
     app.add_channel::<MoveInputChannel>(ChannelSettings {
         mode: ChannelMode::UnorderedReliable(ReliableSettings::default()),

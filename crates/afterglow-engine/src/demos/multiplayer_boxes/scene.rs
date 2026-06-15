@@ -1,6 +1,6 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
-use lightyear::prelude::*;
+use lightyear::prelude::{server::ClientOf, *};
 use std::collections::HashMap;
 
 use super::protocol::*;
@@ -15,17 +15,6 @@ pub struct PlayerName(pub String);
 
 #[derive(Resource, Default)]
 pub struct MemberToPlayer(pub HashMap<SessionMemberId, Entity>);
-
-const LOCAL_VISUAL_CORRECTION_RATE: f32 = 24.0;
-const LOCAL_VISUAL_TELEPORT_DISTANCE: f32 = 3.0;
-
-#[derive(Component, Clone, Debug, PartialEq)]
-pub struct LocalPlayerPresentation {
-    pub visual_translation: Vec3,
-}
-
-#[derive(Component)]
-pub struct PlayerVisual;
 
 #[derive(Component)]
 pub struct PlayerVisualAttached;
@@ -124,6 +113,7 @@ pub fn spawn_arena(
             Rotation::default(),
             Transform::from_translation(*pos),
             Replicate::to_clients(NetworkTarget::All),
+            InterpolationTarget::to_clients(NetworkTarget::All),
         ));
     }
 }
@@ -172,8 +162,28 @@ pub fn spawn_player_box(
                 direction: Vec2::ZERO,
             },
             Replicate::to_clients(NetworkTarget::All),
+            player_prediction_target(owner),
+            player_interpolation_target(owner),
         ))
         .id()
+}
+
+fn player_peer(owner: &str) -> Option<PeerId> {
+    owner.parse::<u64>().ok().map(PeerId::Netcode)
+}
+
+fn player_prediction_target(owner: &str) -> PredictionTarget {
+    match player_peer(owner) {
+        Some(peer) => PredictionTarget::to_clients(NetworkTarget::Single(peer)),
+        None => PredictionTarget::manual(vec![]),
+    }
+}
+
+fn player_interpolation_target(owner: &str) -> InterpolationTarget {
+    match player_peer(owner) {
+        Some(peer) => InterpolationTarget::to_clients(NetworkTarget::AllExceptSingle(peer)),
+        None => InterpolationTarget::to_clients(NetworkTarget::All),
+    }
 }
 
 pub fn spawn_client_arena_visuals(
@@ -231,16 +241,20 @@ pub fn attach_replicated_player_visuals(
         Entity,
         &PlayerBox,
         Option<&Transform>,
+        Has<Predicted>,
+        Has<Interpolated>,
         Option<&PlayerVisualAttached>,
-        Option<&LocalPlayerPresentation>,
     )>,
 ) {
     let local_owner = context
         .as_deref()
         .and_then(|ctx| ctx.get_connection_status().local_member_owner());
-    for (entity, player, transform, attached, local_presentation) in &players {
+    for (entity, player, transform, predicted, interpolated, attached) in &players {
+        if attached.is_some() {
+            continue;
+        }
         let is_local_owner = local_owner.as_deref() == Some(player.owner.as_str());
-        if local_presentation.is_some() || (!is_local_owner && attached.is_some()) {
+        if (is_local_owner && !predicted) || (!is_local_owner && !interpolated) {
             continue;
         }
 
@@ -253,83 +267,24 @@ pub fn attach_replicated_player_visuals(
         let material = MeshMaterial3d(materials.add(Color::hsla(hue, 0.8, 0.5, 1.0)));
         let pos = transform.map_or(Vec3::ZERO, |transform| transform.translation);
         let mut entity_commands = commands.entity(entity);
-        entity_commands.insert(PlayerVisualAttached);
+        entity_commands.insert((PlayerVisualAttached, mesh, material));
         if is_local_owner {
-            entity_commands
-                .remove::<(Mesh3d, MeshMaterial3d<StandardMaterial>)>()
-                .insert((
-                    LocalPlayerPresentation {
-                        visual_translation: pos,
-                    },
-                    RigidBody::Dynamic,
-                    Collider::cuboid(PLAYER_SIZE * 2.0, PLAYER_SIZE * 2.0, PLAYER_SIZE * 2.0),
-                    Position::from(pos),
-                    Rotation::default(),
-                    LinearVelocity::ZERO,
-                ));
-            entity_commands.with_children(|children| {
-                children.spawn((PlayerVisual, mesh, material, Transform::default()));
-            });
-        } else {
-            entity_commands.insert((mesh, material));
+            entity_commands.insert((
+                RigidBody::Dynamic,
+                Collider::cuboid(PLAYER_SIZE * 2.0, PLAYER_SIZE * 2.0, PLAYER_SIZE * 2.0),
+                Position::from(pos),
+                Rotation::default(),
+                LinearVelocity::ZERO,
+            ));
         }
     }
-}
-
-pub fn smooth_local_player_visuals(
-    time: Res<Time>,
-    mut players: Query<
-        (
-            &Transform,
-            Option<&LinearVelocity>,
-            &mut LocalPlayerPresentation,
-            &Children,
-        ),
-        Without<PlayerVisual>,
-    >,
-    mut visuals: Query<&mut Transform, With<PlayerVisual>>,
-) {
-    let dt = time.delta_secs();
-    for (root_transform, velocity, mut presentation, children) in &mut players {
-        let velocity = velocity.map_or(Vec3::ZERO, |velocity| velocity.0);
-        presentation.visual_translation = advance_local_visual_translation(
-            presentation.visual_translation,
-            root_transform.translation,
-            velocity,
-            dt,
-        );
-        let local_offset = presentation.visual_translation - root_transform.translation;
-        for child in children.iter() {
-            if let Ok(mut transform) = visuals.get_mut(child) {
-                transform.translation = local_offset;
-            }
-        }
-    }
-}
-
-pub fn advance_local_visual_translation(
-    current_visual: Vec3,
-    authoritative_root: Vec3,
-    velocity: Vec3,
-    dt: f32,
-) -> Vec3 {
-    if dt <= 0.0 {
-        return current_visual;
-    }
-    let predicted_visual = current_visual + velocity * dt;
-    let correction = authoritative_root - predicted_visual;
-    if correction.length() >= LOCAL_VISUAL_TELEPORT_DISTANCE {
-        return authoritative_root;
-    }
-    let alpha = 1.0 - (-LOCAL_VISUAL_CORRECTION_RATE * dt).exp();
-    predicted_visual + correction * alpha
 }
 
 pub fn attach_replicated_kinematic_visuals(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    boxes: Query<(Entity, &KinematicBox), Without<Mesh3d>>,
+    boxes: Query<(Entity, &KinematicBox), (With<Interpolated>, Without<Mesh3d>)>,
 ) {
     for (entity, box_) in &boxes {
         let hue = (box_.id as f32) * 45.0;
@@ -408,6 +363,25 @@ pub fn spawn_player_on_member_joined(
         let pos = Vec3::new(5.0 + idx * 2.0, PLAYER_SIZE, 0.0);
         let entity = spawn_player_box(&mut commands, &mut meshes, &mut materials, &owner, pos);
         map.0.insert(member, entity);
+    }
+}
+
+pub fn attach_controlled_by_to_player_boxes(
+    mut commands: Commands,
+    players: Query<(Entity, &PlayerBox), (With<Replicate>, Without<ControlledBy>)>,
+    links: Query<(Entity, &RemoteId), With<ClientOf>>,
+) {
+    for (player_entity, player) in &players {
+        let Some(peer) = player_peer(&player.owner) else {
+            continue;
+        };
+        let Some((link_entity, _)) = links.iter().find(|(_, remote)| remote.0 == peer) else {
+            continue;
+        };
+        commands.entity(player_entity).insert(ControlledBy {
+            owner: link_entity,
+            lifetime: Default::default(),
+        });
     }
 }
 

@@ -111,10 +111,10 @@ Simulation systems should be shared where possible. Branch on the global
 facts (`runs_authority`, `runs_client_prediction`, `local_member_owner`) instead
 of maintaining separate opaque client/server gameplay implementations.
 
-For locally predicted entities, keep presentation separate from the replicated
-root so correction replay is not visible. The multiplayer boxes demo renders the
-local owner through a smoothed child visual/camera target while the root remains
-the gameplay/network entity.
+For locally predicted entities, render Lightyear's `Predicted` copy and let
+Lightyear handle rollback/reconciliation and visual correction. Remote actors
+should render through `Interpolated` copies where available; confirmed roots are
+state anchors, not player-facing presentation.
 
 Use Lightyear's existing `ControlledBy` / `Controlled` relationship to bind an
 entity to the link that controls it, and Leafwing `InputMap<AfterglowAction>` /
