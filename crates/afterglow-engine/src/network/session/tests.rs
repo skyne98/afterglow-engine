@@ -4,6 +4,7 @@ pub(crate) mod code;
 pub(crate) mod edge_cases;
 pub(crate) mod identity;
 pub(crate) mod net;
+pub(crate) mod netcode;
 pub(crate) mod status;
 
 pub(super) fn in_process_provider() -> ProviderEndpoint {

@@ -21,7 +21,6 @@
 use std::{net::SocketAddr, time::Duration};
 
 use bevy::prelude::*;
-use bevy::ecs::event::EntityTrigger;
 use lightyear::{
     crossbeam::CrossbeamIo,
     prelude::{server::*, *},
@@ -129,7 +128,9 @@ impl Plugin for AfterglowSessionLightyearBridgePlugin {
             .init_resource::<PendingNetcodeStartup>()
             .add_systems(
                 PreUpdate,
-                handle_session_lightyear_links.in_set(AfterglowSessionSet::ApplyEffects),
+                handle_session_lightyear_links
+                    .in_set(AfterglowSessionSet::ApplyEffects)
+                    .after(crate::network::session::status::update_session_status),
             );
     }
 }
@@ -339,7 +340,7 @@ fn consume_pending_netcode_startup(
                         PeerAddr(params.server_addr),
                     ))
                     .id();
-                commands.trigger_with(Connect { entity }, EntityTrigger);
+                commands.entity(entity).trigger(|e| Connect { entity: e });
                 links.client_link = Some(entity);
             }
             Err(e) => {
@@ -362,7 +363,7 @@ fn consume_pending_netcode_startup(
         let entity = commands
             .spawn((server, UdpIo::default(), LocalAddr(params.bind_addr)))
             .id();
-        commands.trigger_with(Start { entity }, EntityTrigger);
+        commands.entity(entity).trigger(|e| Start { entity: e });
         links.server_link = Some(entity);
     }
 }

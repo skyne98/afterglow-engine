@@ -67,7 +67,7 @@ pub(crate) fn update_session_status(
 ) {
     for event in events.read() {
         match event {
-            SessionEvent::Created(info) | SessionEvent::Joined(info) => {
+            SessionEvent::Created(info) => {
                 status.info = Some(info.clone());
                 status.state = SessionConnectionState::Joining;
                 state.current_session = Some(info.id);
@@ -78,9 +78,28 @@ pub(crate) fn update_session_status(
                     status.members.push(info.owner);
                 }
             }
-            SessionEvent::MemberJoined { member, .. } => {
+            SessionEvent::Joined(info) => {
+                status.info = Some(info.clone());
+                status.state = SessionConnectionState::Joining;
+                state.current_session = Some(info.id);
+                // Do not set local_member_id from info.owner: for a joining
+                // player info.owner is the session owner, not the local player.
+                // The local member id comes from MemberJoined or from the
+                // in-process handler that already wrote state.
+                if !status.members.contains(&info.owner) {
+                    status.members.push(info.owner);
+                }
+            }
+            SessionEvent::MemberJoined { session, member } => {
+
                 if !status.members.contains(member) {
                     status.members.push(*member);
+                }
+                // Remote joins learn their own member id from this event.
+                if state.current_session == Some(*session)
+                    && !state.local_member_id.is_valid()
+                {
+                    state.local_member_id = *member;
                 }
             }
             SessionEvent::MemberLeft { member, .. } => {
