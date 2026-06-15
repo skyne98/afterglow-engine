@@ -1,11 +1,19 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
 use lightyear::prelude::*;
+use std::collections::HashMap;
 
 use super::protocol::*;
 
+use crate::network::session::{
+    SessionEvent, SessionMemberId, SessionLeaveReason,
+};
+
 #[derive(Resource, Default)]
 pub struct PlayerName(pub String);
+
+#[derive(Resource, Default)]
+pub struct MemberToPlayer(pub HashMap<SessionMemberId, Entity>);
 
 pub fn configure_physics(app: &mut App) {
     // Use standard Avian PhysicsPlugins. LightyearAvianPlugin is not available
@@ -147,7 +155,6 @@ pub fn spawn_player_box(
                 direction: Vec2::ZERO,
             },
             Replicate::to_clients(NetworkTarget::All),
-            PredictionTarget::to_clients(NetworkTarget::All),
         ))
         .id()
 }
@@ -184,4 +191,51 @@ pub fn spawn_host_player(
         &player_name.0,
         Vec3::new(-5.0, PLAYER_SIZE, 0.0),
     );
+}
+
+pub fn spawn_player_on_member_joined(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut map: ResMut<MemberToPlayer>,
+    mut events: MessageReader<SessionEvent>,
+) {
+    for event in events.read() {
+        let member = match event {
+            SessionEvent::MemberJoined { member, .. } => *member,
+            _ => continue,
+        };
+        if map.0.contains_key(&member) {
+            continue;
+        }
+        let owner = member.as_raw().to_string();
+        let idx = map.0.len() as f32;
+        let pos = Vec3::new(5.0 + idx * 2.0, PLAYER_SIZE, 0.0);
+        let entity = spawn_player_box(
+            &mut commands,
+            &mut meshes,
+            &mut materials,
+            &owner,
+            pos,
+        );
+        map.0.insert(member, entity);
+    }
+}
+
+pub fn despawn_player_on_member_left(
+    mut commands: Commands,
+    mut map: ResMut<MemberToPlayer>,
+    mut events: MessageReader<SessionEvent>,
+) {
+    for event in events.read() {
+        let (member, reason) = match event {
+            SessionEvent::MemberLeft { member, reason, .. } => (*member, reason.clone()),
+            _ => continue,
+        };
+        if reason == SessionLeaveReason::Disconnected || reason == SessionLeaveReason::Left {
+            if let Some((_, entity)) = map.0.remove_entry(&member) {
+                commands.entity(entity).despawn();
+            }
+        }
+    }
 }

@@ -28,7 +28,7 @@ use lightyear::{
 
 #[cfg(feature = "lightyear")]
 use lightyear::prelude::{
-    Authentication as NetcodeAuthentication, LocalAddr, PeerAddr, UdpIo,
+    Authentication as NetcodeAuthentication, LocalAddr, UdpIo,
 };
 #[cfg(feature = "lightyear")]
 use lightyear::prelude::client::{Connect, NetcodeClient, NetcodeConfig as ClientNetcodeConfig};
@@ -309,6 +309,7 @@ fn consume_pending_netcode_startup(
     mut commands: Commands,
     mut pending: ResMut<PendingNetcodeStartup>,
     mut links: ResMut<SessionLightyearLinks>,
+    registry: Option<Res<ChannelRegistry>>,
 ) {
     if pending.client.is_none() && pending.server.is_none() {
         return;
@@ -332,12 +333,23 @@ fn consume_pending_netcode_startup(
 
         match NetcodeClient::new(auth, ClientNetcodeConfig::default()) {
             Ok(client) => {
+                let registry = registry.as_deref().cloned().unwrap_or_default();
+                let mut transport = Transport::default();
+                transport.add_sender_from_registry::<MetadataChannel>(&registry);
+                transport.add_receiver_from_registry::<MetadataChannel>(&registry);
+                transport.add_sender_from_registry::<UpdatesChannel>(&registry);
+                transport.add_receiver_from_registry::<UpdatesChannel>(&registry);
+
                 let entity = commands
                     .spawn((
+                        Client::default(),
                         client,
                         UdpIo::default(),
                         LocalAddr(local_addr),
-                        PeerAddr(params.server_addr),
+                        MessageManager::default(),
+                        ReplicationReceiver::default(),
+                        PredictionManager::default(),
+                        transport,
                     ))
                     .id();
                 commands.entity(entity).trigger(|e| Connect { entity: e });
@@ -361,7 +373,11 @@ fn consume_pending_netcode_startup(
         };
         let server = NetcodeServer::new(config);
         let entity = commands
-            .spawn((server, UdpIo::default(), LocalAddr(params.bind_addr)))
+            .spawn((
+                server,
+                lightyear::prelude::server::ServerUdpIo::default(),
+                LocalAddr(params.bind_addr),
+            ))
             .id();
         commands.entity(entity).trigger(|e| Start { entity: e });
         links.server_link = Some(entity);

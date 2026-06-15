@@ -17,7 +17,7 @@ use crate::network::session::{
 };
 use movement::DemoInput;
 use network::register_demo_protocol;
-use scene::PlayerName;
+use scene::{MemberToPlayer, PlayerName};
 
 #[derive(Clone)]
 pub struct MultiplayerBoxesDemoConfig {
@@ -52,7 +52,8 @@ impl Plugin for MultiplayerBoxesPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PlayerName>()
             .init_resource::<DemoInput>()
-            .init_resource::<ClientJoinState>();
+            .init_resource::<ClientJoinState>()
+            .init_resource::<MemberToPlayer>();
 
         register_demo_protocol(app);
         scene::configure_physics(app);
@@ -81,12 +82,38 @@ impl Plugin for MultiplayerBoxesPlugin {
                 client_join_flow.run_if(|config: Res<AfterglowLightyearConfig>| {
                     matches!(config.role, LightyearRole::Client)
                 }),
+                (scene::spawn_player_on_member_joined, scene::despawn_player_on_member_left)
+                    .run_if(|config: Res<AfterglowLightyearConfig>| {
+                        matches!(config.role, LightyearRole::Host)
+                    }),
             ),
         );
 
         app.add_systems(
             FixedUpdate,
-            movement::apply_movement.run_if(|config: Res<AfterglowLightyearConfig>| {
+            (
+                movement::apply_movement,
+                movement::server_receive_input,
+            )
+                .run_if(|config: Res<AfterglowLightyearConfig>| {
+                    matches!(config.role, LightyearRole::Host)
+                }),
+        );
+
+        app.add_systems(
+            FixedUpdate,
+            (
+                movement::ensure_message_sender,
+                movement::client_send_input,
+            )
+                .run_if(|config: Res<AfterglowLightyearConfig>| {
+                    matches!(config.role, LightyearRole::Client)
+                }),
+        );
+
+        app.add_systems(
+            FixedUpdate,
+            movement::ensure_message_receivers.run_if(|config: Res<AfterglowLightyearConfig>| {
                 matches!(config.role, LightyearRole::Host)
             }),
         );

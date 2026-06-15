@@ -1,4 +1,6 @@
 use bevy::prelude::*;
+#[allow(unused_imports)]
+use lightyear::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -16,6 +18,14 @@ pub struct KinematicBox {
 pub struct MoveInput {
     pub direction: Vec2,
 }
+
+#[derive(Message, Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct MoveInputMsg {
+    pub owner: String,
+    pub direction: Vec2,
+}
+
+pub struct MoveInputChannel;
 
 pub const PLAYER_SPEED: f32 = 5.0;
 pub const PLAYER_SIZE: f32 = 0.4;

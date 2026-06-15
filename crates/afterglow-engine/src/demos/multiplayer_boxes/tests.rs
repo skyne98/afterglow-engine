@@ -1,7 +1,11 @@
+#[cfg(feature = "lightyear")]
+pub mod net;
+
 use bevy::prelude::*;
+use lightyear::prelude::Predicted;
 
 use super::camera::*;
-use super::movement::DemoInput;
+use super::movement::*;
 use super::protocol::*;
 use super::scene::*;
 
@@ -24,7 +28,6 @@ fn test_app() -> App {
 fn plugin_builds_and_registers_types() {
     let mut app = test_app();
 
-    // Verify types exist and can be spawned
     let entity = app
         .world_mut()
         .spawn((
@@ -50,7 +53,6 @@ fn plugin_builds_and_registers_types() {
 fn scene_entity_counts_are_correct() {
     let mut app = test_app();
     app.add_systems(Startup, spawn_lights);
-    // Manually spawn KinematicBoxes to avoid Replicate dependency
     app.add_systems(
         Startup,
         |mut commands: Commands| {
@@ -183,9 +185,8 @@ fn input_mapping_wasd_is_not_inverted() {
     }
 
     fn released_dir(app: &mut App) -> Vec2 {
-        // Reset, press the target key, run collect_input, read resource.
         let target = match app.world().resource::<DemoInput>().0 {
-            _ => app.world().resource::<DemoInput>().0, // for type inference
+            _ => app.world().resource::<DemoInput>().0,
         };
         let _ = target;
         app.world().resource::<DemoInput>().0
@@ -196,14 +197,10 @@ fn input_mapping_wasd_is_not_inverted() {
         app.update();
     }
 
-    // Each test starts with a fresh app so state doesn't leak.
     for (key, expected, label) in [
         (KeyCode::KeyW, Vec2::new(0.0, 1.0), "W should move forward (+Y in Vec2 -> +Z in Vec3)"),
         (KeyCode::ArrowUp, Vec2::new(0.0, 1.0), "ArrowUp should move forward"),
         (KeyCode::KeyS, Vec2::new(0.0, -1.0), "S should move backward"),
-        // Camera's right axis points in -X world (camera sits at player +Z<0,
-        // looking down). A/D are intentionally flipped so the on-screen
-        // motion matches the key label.
         (KeyCode::KeyA, Vec2::new(1.0, 0.0), "A should move left on screen"),
         (KeyCode::KeyD, Vec2::new(-1.0, 0.0), "D should move right on screen"),
     ] {
@@ -214,4 +211,30 @@ fn input_mapping_wasd_is_not_inverted() {
         let got = released_dir(&mut app);
         assert_eq!(got, expected, "{label}: expected {expected:?}, got {got:?}");
     }
+}
+
+#[test]
+fn apply_velocity_to_player_writes_linear_velocity() {
+    use avian3d::prelude::*;
+    use bevy::ecs::system::SystemState;
+
+    let mut app = test_app();
+
+    let entity = app.world_mut().spawn((
+        PlayerBox {
+            owner: "velocity-test".to_string(),
+        },
+        avian3d::prelude::RigidBody::Dynamic,
+        avian3d::prelude::LinearVelocity::ZERO,
+    )).id();
+
+    let vel = Vec3::new(3.0, 0.0, 4.0);
+
+    let mut system_state: SystemState<Query<&mut LinearVelocity, (With<PlayerBox>, Without<Predicted>)>> =
+        SystemState::new(app.world_mut());
+    let mut query = system_state.get_mut(app.world_mut());
+    apply_velocity_to_player(vel, &mut query);
+
+    let result = app.world().get::<LinearVelocity>(entity).unwrap();
+    assert_eq!(result.0, vel, "apply_velocity_to_player should write the correct velocity vector");
 }
