@@ -108,8 +108,43 @@ impl Plugin for AfterglowLightyearPlugin {
                     AfterglowAction,
                 >::default());
             }
+
+            // Lightyear doesn't auto-add a ReplicationSender to entities that
+            // gain a LinkOf component (see `handle_new_client` in the
+            // `lightyear` crate's lib.rs doctest). Server-side replication
+            // would then silently skip them. Register the observer here so
+            // every incoming remote-client connection gets a sender.
+            app.add_observer(add_replication_sender_on_link_of);
         }
     }
+}
+
+/// Adds a [`ReplicationSender`] to any entity that gains a [`LinkOf`]
+/// component, so the server-side replication stream can route to it.
+///
+/// Only adds the sender to entities that don't already have one. The
+/// host's own loopback client is intentionally skipped because the
+/// consumer plugin already attaches a sender to it.
+#[cfg(feature = "lightyear")]
+fn add_replication_sender_on_link_of(
+    trigger: bevy::prelude::On<bevy::prelude::Add, lightyear::prelude::LinkOf>,
+    mut commands: bevy::prelude::Commands,
+    existing_senders: bevy::prelude::Query<
+        (),
+        bevy::prelude::With<lightyear::prelude::ReplicationSender>,
+    >,
+) {
+    use bevy::prelude::*;
+    use lightyear::prelude::*;
+    use std::time::Duration;
+
+    if existing_senders.get(trigger.entity).is_ok() {
+        return;
+    }
+    commands.entity(trigger.entity).insert((
+        ReplicationSender::new(Duration::from_millis(100), SendUpdatesMode::SinceLastAck, false),
+        Name::from("RemoteClient"),
+    ));
 }
 
 // --------------------------------------------------------------------------

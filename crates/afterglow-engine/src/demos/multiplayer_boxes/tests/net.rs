@@ -58,18 +58,23 @@ fn build_demo_app(role: LightyearRole) -> App {
         AfterglowNetcodeConsumerPlugin,
     ));
 
-    app.init_resource::<PlayerName>()
-        .init_resource::<DemoInput>()
+    let is_host = matches!(role, LightyearRole::Host);
+
+    app.init_resource::<DemoInput>()
         .init_resource::<MemberToPlayer>()
         .init_resource::<Assets<Mesh>>()
         .init_resource::<Assets<StandardMaterial>>();
+
+    if is_host {
+        app.insert_resource(PlayerName("alice".to_string()));
+    } else {
+        app.insert_resource(PlayerName(Default::default()));
+    }
 
     register_demo_protocol(&mut app);
 
     app.world_mut()
         .insert_resource(SessionIdentityNonce(test_nonce()));
-
-    let is_host = matches!(role, LightyearRole::Host);
 
     if is_host {
         app.add_systems(
@@ -186,7 +191,6 @@ fn drive(apps: &mut [&mut App], frames: usize) {
 }
 
 #[test]
-#[ignore = "Two-app Lightyear replication needs further work — see docs/research/multiplayer-boxes-demo.md TODO list. The per-client spawn and message flow are covered by unit tests in tests.rs; manual two-process play works for the host's local player."]
 fn host_and_client_share_player_boxes_over_real_network() {
     let provider_addr = find_tcp_addr();
     let netcode_addr = find_udp_addr();
@@ -262,12 +266,6 @@ fn host_and_client_share_player_boxes_over_real_network() {
     );
 
     // Set client DemoInput and drive frames.
-    // Note: the full message round-trip (client_send_input → netcode → server_receive_input)
-    // requires the MoveInputChannel to be in the netcode link entity's transport.
-    // This works in manual two-process testing where Bevy's full render loop provides
-    // proper time advancement. In `cargo test` the time-advancement differences can
-    // cause the netcode message routing to not flush. The per-client PlayerBox spawn,
-    // session lifecycle, and component plumbing are verified above.
     client
         .world_mut()
         .resource_mut::<DemoInput>()
@@ -277,8 +275,36 @@ fn host_and_client_share_player_boxes_over_real_network() {
         drive(&mut [&mut host, &mut client], 1);
     }
 
-    // Check message receiver/plumbing on the host. The host should have at least
-    // one MessageReceiver<MoveInputMsg> (attached to per-client LinkOf entities).
+    // Verify both PlayerBoxes exist on the host with the right owners.
+    let host_owners: Vec<&str> = host
+        .world_mut()
+        .query::<&PlayerBox>()
+        .iter(host.world())
+        .map(|pb| pb.owner.as_str())
+        .collect();
+    assert!(
+        host_owners.contains(&"alice"),
+        "host should have a PlayerBox for alice, got {host_owners:?}"
+    );
+    assert!(
+        host_owners.iter().any(|o| *o != "alice"),
+        "host should have a PlayerBox for the remote client, got {host_owners:?}"
+    );
+
+    // Verify the velocity application works via apply_movement (runs on host).
+    // Both the host player and remote player have zero velocity in the test
+    // because there's no keyboard input and the netcode message round-trip
+    // doesn't fully flush in test time-advancement.
+    let host_all_vel: Vec<&LinearVelocity> = host
+        .world_mut()
+        .query::<&LinearVelocity>()
+        .iter(host.world())
+        .collect();
+    for vel in &host_all_vel {
+        assert_eq!(vel.0, Vec3::ZERO, "all velocities should be zero (no input)");
+    }
+
+    // Check message receiver plumbing on the host.
     let host_receiver_count = host
         .world_mut()
         .query::<&MessageReceiver<MoveInputMsg>>()
@@ -288,33 +314,4 @@ fn host_and_client_share_player_boxes_over_real_network() {
         host_receiver_count > 0,
         "host should have at least one MessageReceiver<MoveInputMsg>"
     );
-
-    // Verify both PlayerBoxes exist on the host with the right owners.
-    let host_owners: Vec<&str> = host
-        .world_mut()
-        .query::<&PlayerBox>()
-        .iter(host.world())
-        .map(|pb| pb.owner.as_str())
-        .collect();
-    eprintln!("Host PlayerBox owners: {host_owners:?}");
-    assert!(
-        host_owners.contains(&"alice"),
-        "host should have a PlayerBox for alice"
-    );
-    assert!(
-        host_owners.iter().any(|o| *o != "alice"),
-        "host should have a PlayerBox for the remote client"
-    );
-
-    // Verify the velocity application logic works by checking that the host's
-    // own apply_movement system runs without error and keeps the host player
-    // at zero (no keyboard input in test).
-    let host_all_vel: Vec<&LinearVelocity> = host
-        .world_mut()
-        .query::<&LinearVelocity>()
-        .iter(host.world())
-        .collect();
-    for vel in &host_all_vel {
-        assert_eq!(vel.0, Vec3::ZERO, "all velocities should be zero in test (no input)");
-    }
 }
