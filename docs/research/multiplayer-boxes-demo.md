@@ -56,7 +56,11 @@ pub struct MoveInputMsg {
 
 - `PlayerBox`, `KinematicBox`, `MoveInput`, and `Transform` are registered
   in the Lightyear component protocol.
-- Server-spawned player and arena entities use `Replicate::to_clients(All)`.
+- Server-spawned player and dynamic box entities use `Replicate::to_clients(All)`.
+- Server entities explicitly carry `Transform` so Lightyear replicates pose.
+- Bevy mesh/material handles are not replicated. Clients attach local
+  `Mesh3d`/`MeshMaterial3d` presentation components to replicated `PlayerBox`
+  and `KinematicBox` entities, and spawn local arena floor/wall visuals.
 - Client-to-server movement currently uses explicit Lightyear messages on
   `MoveInputChannel`, not shared resources or Leafwing input replication.
 
@@ -89,6 +93,10 @@ Top-down (3/4):
 - Position: above-and-behind player, fixed offset (e.g. (0, 8, -6))
 - Look-at: player + small forward look-ahead
 - Smooth follow with damping
+- Uses replicated `Transform` as the target pose. The server names remote
+  player boxes by `SessionMemberId`, so pure clients fall back from
+  `PlayerName` to their local session member id (for example `"2"`) when
+  choosing the local camera target.
 
 No mouse-look in v1 — keep it simple. Static offset relative to player yaw
 (which defaults to facing +Z). Or: arrow keys for movement, no rotation.
@@ -136,11 +144,12 @@ Modified:
 5. CLI validation: invalid combinations rejected
 6. Integration: two MinimalPlugin apps, host creates session, client joins,
    Lightyear UDP/netcode links connect, replicated `PlayerBox` entities arrive
-   on the client, and client input moves the authoritative server entity.
+   on the client, client-side mesh/material presentation is attached, and
+   client input moves the authoritative server entity.
 
 Current regression result: `cargo test -p afterglow-engine --lib --features
 multiplayer demos::multiplayer_boxes::tests::net::host_and_client_share` passes.
-The full afterglow-engine lib suite reports 315 passed, 0 ignored.
+The full afterglow-engine lib suite reports 317 passed, 0 ignored.
 
 ## Debugging Notes
 
@@ -156,6 +165,12 @@ honest and pass:
    `Joined` carries the transport while `MemberJoined` may be the event that
    makes the local `SessionMemberId` valid. The bridge now reconciles DirectUdp
    startup from `SessionStatus` + `AfterglowSessionState` each frame.
+3. A logical replicated entity is not automatically renderable. The runtime
+   client grey screen happened after networking was fixed because the client
+   received protocol components but no mesh/material presentation and the
+   camera queried Avian `Position`, which was not replicated. The fix is to
+   replicate `Transform`, target the camera by `Transform`, and attach local
+   visual prefabs to replicated logical entities.
 
 ## Out of scope for v1
 

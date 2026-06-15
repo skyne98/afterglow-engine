@@ -10,10 +10,12 @@ pub mod tests;
 use bevy::prelude::*;
 use std::net::SocketAddr;
 
-use crate::network::lightyear::{AfterglowLightyearConfig, LightyearRole};
-use crate::network::session::{
-    AfterglowSessionState, NonSteamSessionClient, PlayerIdentity, ProviderEndpoint, SessionBackend,
-    SessionCode, SessionRequest, SessionSearch, SessionStatus,
+use crate::network::{
+    lightyear::{AfterglowLightyearConfig, LightyearRole},
+    session::{
+        AfterglowSessionState, NonSteamSessionClient, PlayerIdentity, ProviderEndpoint,
+        SessionBackend, SessionCode, SessionRequest, SessionSearch, SessionStatus,
+    },
 };
 use movement::DemoInput;
 use network::register_demo_protocol;
@@ -60,7 +62,11 @@ impl Plugin for MultiplayerBoxesPlugin {
 
         app.add_systems(
             Startup,
-            (scene::spawn_arena, scene::spawn_host_player, scene::spawn_lights)
+            (
+                scene::spawn_arena,
+                scene::spawn_host_player,
+                scene::spawn_lights,
+            )
                 .run_if(|config: Res<AfterglowLightyearConfig>| {
                     matches!(config.role, LightyearRole::Host)
                 }),
@@ -68,9 +74,14 @@ impl Plugin for MultiplayerBoxesPlugin {
 
         app.add_systems(
             Startup,
-            (scene::spawn_lights, client_start_search).run_if(
-                |config: Res<AfterglowLightyearConfig>| matches!(config.role, LightyearRole::Client),
-            ),
+            (
+                scene::spawn_client_arena_visuals,
+                scene::spawn_lights,
+                client_start_search,
+            )
+                .run_if(|config: Res<AfterglowLightyearConfig>| {
+                    matches!(config.role, LightyearRole::Client)
+                }),
         );
 
         app.add_systems(
@@ -79,10 +90,18 @@ impl Plugin for MultiplayerBoxesPlugin {
                 camera::setup_camera.run_if(|cam: Query<&camera::DemoCamera>| cam.is_empty()),
                 camera::follow_camera_system,
                 movement::collect_input,
-                client_join_flow.run_if(|config: Res<AfterglowLightyearConfig>| {
-                    matches!(config.role, LightyearRole::Client)
-                }),
-                (scene::spawn_player_on_member_joined, scene::despawn_player_on_member_left)
+                (
+                    client_join_flow,
+                    scene::attach_replicated_player_visuals,
+                    scene::attach_replicated_kinematic_visuals,
+                )
+                    .run_if(|config: Res<AfterglowLightyearConfig>| {
+                        matches!(config.role, LightyearRole::Client)
+                    }),
+                (
+                    scene::spawn_player_on_member_joined,
+                    scene::despawn_player_on_member_left,
+                )
                     .run_if(|config: Res<AfterglowLightyearConfig>| {
                         matches!(config.role, LightyearRole::Host)
                     }),
@@ -91,24 +110,18 @@ impl Plugin for MultiplayerBoxesPlugin {
 
         app.add_systems(
             FixedUpdate,
-            (
-                movement::apply_movement,
-                movement::server_receive_input,
-            )
-                .run_if(|config: Res<AfterglowLightyearConfig>| {
-                    matches!(config.role, LightyearRole::Host)
-                }),
+            (movement::apply_movement, movement::server_receive_input).run_if(
+                |config: Res<AfterglowLightyearConfig>| matches!(config.role, LightyearRole::Host),
+            ),
         );
 
         app.add_systems(
             FixedUpdate,
-            (
-                movement::ensure_message_sender,
-                movement::client_send_input,
-            )
-                .run_if(|config: Res<AfterglowLightyearConfig>| {
+            (movement::ensure_message_sender, movement::client_send_input).run_if(
+                |config: Res<AfterglowLightyearConfig>| {
                     matches!(config.role, LightyearRole::Client)
-                }),
+                },
+            ),
         );
 
         app.add_systems(

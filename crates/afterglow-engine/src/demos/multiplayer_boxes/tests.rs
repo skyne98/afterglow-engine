@@ -4,17 +4,11 @@ pub mod net;
 use bevy::prelude::*;
 use lightyear::prelude::Predicted;
 
-use super::camera::*;
-use super::movement::*;
-use super::protocol::*;
-use super::scene::*;
+use super::{camera::*, movement::*, protocol::*, scene::*};
 
 fn test_app() -> App {
     let mut app = App::new();
-    app.add_plugins((
-        MinimalPlugins,
-        avian3d::prelude::PhysicsPlugins::default(),
-    ));
+    app.add_plugins((MinimalPlugins, avian3d::prelude::PhysicsPlugins::default()));
 
     app.init_resource::<PlayerName>()
         .init_resource::<DemoInput>()
@@ -53,27 +47,24 @@ fn plugin_builds_and_registers_types() {
 fn scene_entity_counts_are_correct() {
     let mut app = test_app();
     app.add_systems(Startup, spawn_lights);
-    app.add_systems(
-        Startup,
-        |mut commands: Commands| {
-            let positions = [
-                Vec3::new(-4.0, 0.5, -4.0),
-                Vec3::new(4.0, 0.5, -4.0),
-                Vec3::new(-4.0, 0.5, 4.0),
-                Vec3::new(4.0, 0.5, 4.0),
-                Vec3::new(-2.0, 0.5, 0.0),
-                Vec3::new(2.0, 0.5, 0.0),
-                Vec3::new(0.0, 0.5, -2.0),
-                Vec3::new(0.0, 0.5, 2.0),
-            ];
-            for (i, pos) in positions.iter().enumerate() {
-                commands.spawn(KinematicBox {
-                    id: i as u32,
-                    initial_pos: *pos,
-                });
-            }
-        },
-    );
+    app.add_systems(Startup, |mut commands: Commands| {
+        let positions = [
+            Vec3::new(-4.0, 0.5, -4.0),
+            Vec3::new(4.0, 0.5, -4.0),
+            Vec3::new(-4.0, 0.5, 4.0),
+            Vec3::new(4.0, 0.5, 4.0),
+            Vec3::new(-2.0, 0.5, 0.0),
+            Vec3::new(2.0, 0.5, 0.0),
+            Vec3::new(0.0, 0.5, -2.0),
+            Vec3::new(0.0, 0.5, 2.0),
+        ];
+        for (i, pos) in positions.iter().enumerate() {
+            commands.spawn(KinematicBox {
+                id: i as u32,
+                initial_pos: *pos,
+            });
+        }
+    });
 
     app.finish();
     app.cleanup();
@@ -101,10 +92,7 @@ fn scene_entity_counts_are_correct() {
 #[test]
 fn camera_setup_follows_player() {
     let mut app = test_app();
-    let _ = app
-        .world_mut()
-        .resource_mut::<PlayerName>()
-        .0 = "test_player".to_string();
+    let _ = app.world_mut().resource_mut::<PlayerName>().0 = "test_player".to_string();
 
     let _player = app
         .world_mut()
@@ -133,6 +121,92 @@ fn camera_setup_follows_player() {
         .next()
         .is_some();
     assert!(camera_exists, "camera should be spawned");
+}
+
+#[test]
+fn camera_follows_session_member_owner_when_player_name_differs() {
+    let mut app = test_app();
+    app.world_mut().resource_mut::<PlayerName>().0 = "bob".to_string();
+    app.world_mut()
+        .insert_resource(crate::network::session::AfterglowSessionState {
+            local_member_id: crate::network::session::SessionMemberId::new(2),
+            current_session: Some(crate::network::session::SessionId::new(1)),
+            ..Default::default()
+        });
+
+    app.world_mut().spawn((
+        PlayerBox {
+            owner: "2".to_string(),
+        },
+        Transform::from_xyz(3.0, 0.5, 4.0),
+    ));
+
+    app.add_systems(
+        Update,
+        (
+            setup_camera.run_if(|cam: Query<&DemoCamera>| cam.is_empty()),
+            follow_camera_system,
+        ),
+    );
+    app.update();
+
+    let camera_translation = app
+        .world_mut()
+        .query_filtered::<&Transform, With<DemoCamera>>()
+        .single(app.world())
+        .expect("camera should exist")
+        .translation;
+    assert_eq!(
+        camera_translation,
+        Vec3::new(3.0, 0.5, 4.0) + Vec3::new(0.0, 8.0, -6.0)
+    );
+}
+
+#[test]
+fn replicated_boxes_get_client_visuals() {
+    let mut app = test_app();
+    app.add_systems(
+        Update,
+        (
+            attach_replicated_player_visuals,
+            attach_replicated_kinematic_visuals,
+        ),
+    );
+
+    let player = app
+        .world_mut()
+        .spawn((
+            PlayerBox {
+                owner: "2".to_string(),
+            },
+            Transform::from_xyz(1.0, 0.4, 0.0),
+        ))
+        .id();
+    let box_entity = app
+        .world_mut()
+        .spawn((
+            KinematicBox {
+                id: 3,
+                initial_pos: Vec3::new(2.0, 0.5, 0.0),
+            },
+            Transform::from_xyz(2.0, 0.5, 0.0),
+        ))
+        .id();
+
+    app.update();
+
+    for entity in [player, box_entity] {
+        assert!(
+            app.world().get::<Mesh3d>(entity).is_some(),
+            "entity {entity:?} should get a mesh"
+        );
+        assert!(
+            app.world()
+                .get::<MeshMaterial3d<StandardMaterial>>(entity)
+                .is_some(),
+            "entity {entity:?} should get a material"
+        );
+    }
 }
 
 #[test]
@@ -175,8 +249,7 @@ fn movement_sets_velocity() {
 
 #[test]
 fn input_mapping_wasd_is_not_inverted() {
-    use bevy::input::ButtonInput;
-    use bevy::prelude::KeyCode;
+    use bevy::{input::ButtonInput, prelude::KeyCode};
 
     fn press(app: &mut App, key: KeyCode) {
         app.world_mut()
@@ -198,11 +271,31 @@ fn input_mapping_wasd_is_not_inverted() {
     }
 
     for (key, expected, label) in [
-        (KeyCode::KeyW, Vec2::new(0.0, 1.0), "W should move forward (+Y in Vec2 -> +Z in Vec3)"),
-        (KeyCode::ArrowUp, Vec2::new(0.0, 1.0), "ArrowUp should move forward"),
-        (KeyCode::KeyS, Vec2::new(0.0, -1.0), "S should move backward"),
-        (KeyCode::KeyA, Vec2::new(1.0, 0.0), "A should move left on screen"),
-        (KeyCode::KeyD, Vec2::new(-1.0, 0.0), "D should move right on screen"),
+        (
+            KeyCode::KeyW,
+            Vec2::new(0.0, 1.0),
+            "W should move forward (+Y in Vec2 -> +Z in Vec3)",
+        ),
+        (
+            KeyCode::ArrowUp,
+            Vec2::new(0.0, 1.0),
+            "ArrowUp should move forward",
+        ),
+        (
+            KeyCode::KeyS,
+            Vec2::new(0.0, -1.0),
+            "S should move backward",
+        ),
+        (
+            KeyCode::KeyA,
+            Vec2::new(1.0, 0.0),
+            "A should move left on screen",
+        ),
+        (
+            KeyCode::KeyD,
+            Vec2::new(-1.0, 0.0),
+            "D should move right on screen",
+        ),
     ] {
         let mut app = test_app();
         app.init_resource::<ButtonInput<KeyCode>>();
@@ -220,21 +313,28 @@ fn apply_velocity_to_player_writes_linear_velocity() {
 
     let mut app = test_app();
 
-    let entity = app.world_mut().spawn((
-        PlayerBox {
-            owner: "velocity-test".to_string(),
-        },
-        avian3d::prelude::RigidBody::Dynamic,
-        avian3d::prelude::LinearVelocity::ZERO,
-    )).id();
+    let entity = app
+        .world_mut()
+        .spawn((
+            PlayerBox {
+                owner: "velocity-test".to_string(),
+            },
+            avian3d::prelude::RigidBody::Dynamic,
+            avian3d::prelude::LinearVelocity::ZERO,
+        ))
+        .id();
 
     let vel = Vec3::new(3.0, 0.0, 4.0);
 
-    let mut system_state: SystemState<Query<&mut LinearVelocity, (With<PlayerBox>, Without<Predicted>)>> =
-        SystemState::new(app.world_mut());
+    let mut system_state: SystemState<
+        Query<&mut LinearVelocity, (With<PlayerBox>, Without<Predicted>)>,
+    > = SystemState::new(app.world_mut());
     let mut query = system_state.get_mut(app.world_mut());
     apply_velocity_to_player(vel, &mut query);
 
     let result = app.world().get::<LinearVelocity>(entity).unwrap();
-    assert_eq!(result.0, vel, "apply_velocity_to_player should write the correct velocity vector");
+    assert_eq!(
+        result.0, vel,
+        "apply_velocity_to_player should write the correct velocity vector"
+    );
 }

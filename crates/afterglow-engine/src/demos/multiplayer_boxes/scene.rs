@@ -5,9 +5,7 @@ use std::collections::HashMap;
 
 use super::protocol::*;
 
-use crate::network::session::{
-    SessionEvent, SessionMemberId, SessionLeaveReason,
-};
+use crate::network::session::{SessionEvent, SessionLeaveReason, SessionMemberId};
 
 #[derive(Resource, Default)]
 pub struct PlayerName(pub String);
@@ -42,6 +40,7 @@ pub fn spawn_arena(
         RigidBody::Static,
         Collider::cuboid(floor_half * 2.0, 0.4, floor_half * 2.0),
         Position::from(Vec3::new(0.0, -0.2, 0.0)),
+        Transform::from_xyz(0.0, -0.2, 0.0),
         Replicate::to_clients(NetworkTarget::All),
     ));
 
@@ -96,9 +95,7 @@ pub fn spawn_arena(
                 id: i as u32,
                 initial_pos: *pos,
             },
-            Mesh3d(meshes.add(Cuboid::from_size(Vec3::splat(
-                KINEMATIC_BOX_SIZE * 2.0,
-            )))),
+            Mesh3d(meshes.add(Cuboid::from_size(Vec3::splat(KINEMATIC_BOX_SIZE * 2.0)))),
             MeshMaterial3d(mat),
             RigidBody::Dynamic,
             Collider::cuboid(
@@ -108,6 +105,7 @@ pub fn spawn_arena(
             ),
             Position::from(*pos),
             Rotation::default(),
+            Transform::from_translation(*pos),
             Replicate::to_clients(NetworkTarget::All),
         ));
     }
@@ -126,6 +124,7 @@ fn spawn_wall(
         RigidBody::Static,
         Collider::cuboid(size.x, size.y, size.z),
         Position::from(translation),
+        Transform::from_translation(translation),
         Replicate::to_clients(NetworkTarget::All),
     ));
 }
@@ -151,12 +150,107 @@ pub fn spawn_player_box(
             Collider::cuboid(PLAYER_SIZE * 2.0, PLAYER_SIZE * 2.0, PLAYER_SIZE * 2.0),
             Position::from(pos),
             Rotation::default(),
+            Transform::from_translation(pos),
             MoveInput {
                 direction: Vec2::ZERO,
             },
             Replicate::to_clients(NetworkTarget::All),
         ))
         .id()
+}
+
+pub fn spawn_client_arena_visuals(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    let floor_material = materials.add(Color::srgb(0.18, 0.2, 0.19));
+    let wall_material = materials.add(Color::srgb(0.24, 0.23, 0.2));
+    let floor_half = ARENA_HALF + WALL_THICKNESS;
+    spawn_visual_cuboid(
+        &mut commands,
+        &mut meshes,
+        floor_material,
+        Vec3::new(floor_half * 2.0, 0.4, floor_half * 2.0),
+        Vec3::new(0.0, -0.2, 0.0),
+    );
+
+    let wall_up = WALL_HEIGHT * 0.5;
+    let half_extent = ARENA_HALF + WALL_THICKNESS * 0.5;
+    for (size, translation) in [
+        (
+            Vec3::new(half_extent * 2.0, WALL_HEIGHT, WALL_THICKNESS),
+            Vec3::new(0.0, wall_up, -ARENA_HALF - WALL_THICKNESS * 0.5),
+        ),
+        (
+            Vec3::new(half_extent * 2.0, WALL_HEIGHT, WALL_THICKNESS),
+            Vec3::new(0.0, wall_up, ARENA_HALF + WALL_THICKNESS * 0.5),
+        ),
+        (
+            Vec3::new(WALL_THICKNESS, WALL_HEIGHT, half_extent * 2.0),
+            Vec3::new(-ARENA_HALF - WALL_THICKNESS * 0.5, wall_up, 0.0),
+        ),
+        (
+            Vec3::new(WALL_THICKNESS, WALL_HEIGHT, half_extent * 2.0),
+            Vec3::new(ARENA_HALF + WALL_THICKNESS * 0.5, wall_up, 0.0),
+        ),
+    ] {
+        spawn_visual_cuboid(
+            &mut commands,
+            &mut meshes,
+            wall_material.clone(),
+            size,
+            translation,
+        );
+    }
+}
+
+pub fn attach_replicated_player_visuals(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    players: Query<(Entity, &PlayerBox), Without<Mesh3d>>,
+) {
+    for (entity, player) in &players {
+        let hue = if player.owner == "alice" {
+            200.0
+        } else {
+            330.0
+        };
+        commands.entity(entity).insert((
+            Mesh3d(meshes.add(Cuboid::from_size(Vec3::splat(PLAYER_SIZE * 2.0)))),
+            MeshMaterial3d(materials.add(Color::hsla(hue, 0.8, 0.5, 1.0))),
+        ));
+    }
+}
+
+pub fn attach_replicated_kinematic_visuals(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    boxes: Query<(Entity, &KinematicBox), Without<Mesh3d>>,
+) {
+    for (entity, box_) in &boxes {
+        let hue = (box_.id as f32) * 45.0;
+        commands.entity(entity).insert((
+            Mesh3d(meshes.add(Cuboid::from_size(Vec3::splat(KINEMATIC_BOX_SIZE * 2.0)))),
+            MeshMaterial3d(materials.add(Color::hsla(hue, 0.7, 0.5, 1.0))),
+        ));
+    }
+}
+
+fn spawn_visual_cuboid(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    material: Handle<StandardMaterial>,
+    size: Vec3,
+    translation: Vec3,
+) {
+    commands.spawn((
+        Mesh3d(meshes.add(Cuboid::from_size(size))),
+        MeshMaterial3d(material),
+        Transform::from_translation(translation),
+    ));
 }
 
 pub fn spawn_lights(mut commands: Commands) {
@@ -211,13 +305,7 @@ pub fn spawn_player_on_member_joined(
         let owner = member.as_raw().to_string();
         let idx = map.0.len() as f32;
         let pos = Vec3::new(5.0 + idx * 2.0, PLAYER_SIZE, 0.0);
-        let entity = spawn_player_box(
-            &mut commands,
-            &mut meshes,
-            &mut materials,
-            &owner,
-            pos,
-        );
+        let entity = spawn_player_box(&mut commands, &mut meshes, &mut materials, &owner, pos);
         map.0.insert(member, entity);
     }
 }

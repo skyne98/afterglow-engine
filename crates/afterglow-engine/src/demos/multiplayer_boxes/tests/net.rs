@@ -15,7 +15,10 @@ use crate::{
         },
         network::register_demo_protocol,
         protocol::{MoveInput, MoveInputMsg, PLAYER_SIZE, PlayerBox},
-        scene::{MemberToPlayer, PlayerName},
+        scene::{
+            MemberToPlayer, PlayerName, attach_replicated_kinematic_visuals,
+            attach_replicated_player_visuals,
+        },
     },
     network::{
         lightyear::{
@@ -106,7 +109,14 @@ fn build_demo_app(role: LightyearRole) -> App {
             ),
         );
     } else {
-        app.add_systems(Update, (collect_input,));
+        app.add_systems(
+            Update,
+            (
+                collect_input,
+                attach_replicated_player_visuals,
+                attach_replicated_kinematic_visuals,
+            ),
+        );
         app.add_systems(FixedUpdate, (ensure_message_sender, client_send_input));
     }
 
@@ -319,6 +329,16 @@ fn host_and_client_share_player_boxes_over_real_network() {
         client_player_count > 0,
         "client should observe at least one replicated PlayerBox within 600 frames; \
          replication is not flowing"
+    );
+
+    let client_visual_player_count = client
+        .world_mut()
+        .query_filtered::<Entity, (With<PlayerBox>, With<Mesh3d>)>()
+        .iter(client.world())
+        .count();
+    assert!(
+        client_visual_player_count > 0,
+        "replicated PlayerBox should get client-side Mesh3d presentation"
     );
 
     // Set client DemoInput and drive frames.

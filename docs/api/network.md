@@ -99,6 +99,12 @@ Lightyear remains the substrate for transport, replication, prediction metadata,
 and interpolation hooks. Afterglow's layer decides which strategy consumes a
 replicated update for a given entity class.
 
+Do not treat Bevy render assets as network state. Replicate stable logical
+components and pose (`Transform`, game ids, gameplay state), then attach
+client-local presentation components such as `Mesh3d`, `MeshMaterial3d`, UI,
+cameras, and debug helpers from local prefab systems. The multiplayer boxes demo
+uses this pattern for replicated `PlayerBox` / `KinematicBox` entities.
+
 Use Lightyear's existing `ControlledBy` / `Controlled` relationship to bind an
 entity to the link that controls it, and Leafwing `InputMap<AfterglowAction>` /
 `ActionState<AfterglowAction>` on the controlled entity for gameplay input.
