@@ -108,6 +108,8 @@ pub(crate) fn update_session_status(
             SessionEvent::Left { .. } | SessionEvent::SessionEnded(_) => {
                 *status = SessionStatus::default();
                 state.current_session = None;
+                state.current_backend = None;
+                state.identity = None;
                 state.local_member_id = SessionMemberId::INVALID;
             }
             SessionEvent::Error(err) => {

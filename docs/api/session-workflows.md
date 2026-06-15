@@ -52,7 +52,11 @@ and the gameplay server.
 ```text
 host_app
     | world.write_message(SessionRequest::Create(
-    |     SessionConfig { backend: NonSteam, transport: Netcode, ... },
+    |     SessionConfig {
+    |         backend: NonSteam,
+    |         transport: DirectUdp { host: "0.0.0.0:5000" },
+    |         ...
+    |     },
     |     PlayerIdentity::Native(...)))
     v
 NonSteamSessionProvider starts listening for control messages on host_addr
@@ -71,19 +75,19 @@ NonSteamSessionClient serializes the request and sends it to host_addr
     |
     v
 NonSteamSessionProvider receives JoinByCode request
-    - validates identity proof (Ed25519 signature over nonce + "XFQ-KRB")
+    - validates identity proof (Ed25519 signature over backend + "XFQ-KRB" + nonce)
     - looks up code -> SessionId
     - checks capacity / already joined
     - allocates a SessionMemberId
     - stores (public_key -> member_id) for rejoin detection
-    - emits SessionInfo { id, code, owner, owner_identity, connection, ... }
+    - emits SessionEvent::Joined(SessionInfo { id, code, owner, members, ... })
     |
     v
 client_app receives SessionEvent::Joined(SessionInfo)
     |
     v
-AfterglowSessionLightyearBridge reads SessionInfo.connection
-    - SessionConnection { transport: Netcode, target: Direct(gameplay_addr) }
+AfterglowSessionLightyearBridge reads SessionInfo (transport: DirectUdp { host })
+    - parses host into SocketAddr
     - writes PendingNetcodeStartup {
           client: Some(NetcodeClientParams {
               server_addr: gameplay_addr,
@@ -93,9 +97,10 @@ AfterglowSessionLightyearBridge reads SessionInfo.connection
       }
     |
     v
-start_session_transport system drains PendingNetcodeStartup
+AfterglowNetcodeConsumerPlugin drains PendingNetcodeStartup
     - spawns Lightyear NetcodeClient + UdpIo entity
-    - Lightyear opens the UDP socket and completes the netcode handshake
+    - triggers Connect
+    - Lightyear opens the UDP socket and starts the netcode handshake
     |
     v
 Gameplay begins: client input -> Leafwing -> Lightyear -> server simulation
@@ -152,6 +157,10 @@ relay networking.
 
 - Game is published on Steam; client and server both initialize Steamworks.
 - Steam SDR is enabled.
+
+> **Status:** Steam backend is deferred. The sequence below is the intended
+> shape; it does not match the current code. Use the NonSteam listen-server
+> workflow above for now.
 
 ### Sequence
 

@@ -1,4 +1,4 @@
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::net::TcpStream;
 
 use bevy::prelude::*;
@@ -19,7 +19,7 @@ impl NonSteamSessionClient {
     /// Send a request to the provider at the given endpoint.
     ///
     /// If no connection exists, one is opened. The request is serialized and
-    /// written; responses appear as `SessionEvent` Bevy messages on subsequent
+    /// queued; responses appear as `SessionEvent` Bevy messages on subsequent
     /// frames.
     pub fn send_request(
         &mut self,
@@ -36,20 +36,34 @@ impl NonSteamSessionClient {
             }
         };
 
-        if self.connection.is_none() {
+        let needs_reconnect = match &self.connection {
+            Some(conn) => conn.peer != addr,
+            None => true,
+        };
+        if needs_reconnect {
             let stream = TcpStream::connect(addr)?;
             stream.set_nonblocking(true)?;
             self.connection = Some(ClientConnection {
                 socket: stream,
                 read_buf: Vec::new(),
+                write_buf: Vec::new(),
+                peer: addr,
             });
         }
 
+        let bytes = protocol::encode_request(request)?;
         if let Some(conn) = &mut self.connection {
-            protocol::write_request(&mut conn.socket, request)?;
+            // Buffer the request; the non-blocking socket may not accept the
+            // full payload in one write. The poll system flushes any pending
+            // data each frame.
+            conn.write_buf.extend_from_slice(&bytes);
         }
-
         Ok(())
+    }
+
+    /// Close the active connection, if any. Safe to call at any time.
+    pub fn disconnect(&mut self) {
+        self.connection = None;
     }
 }
 
@@ -57,6 +71,8 @@ impl NonSteamSessionClient {
 pub(crate) struct ClientConnection {
     pub(crate) socket: TcpStream,
     pub(crate) read_buf: Vec<u8>,
+    pub(crate) write_buf: Vec<u8>,
+    pub(crate) peer: std::net::SocketAddr,
 }
 
 /// Bevy system that polls the client socket and writes received events into
@@ -69,6 +85,24 @@ pub(crate) fn poll_non_steam_client(
         Some(c) => c,
         None => return,
     };
+
+    // Flush any pending write data first.
+    if !conn.write_buf.is_empty() {
+        match conn.socket.write(&conn.write_buf) {
+            Ok(0) => {
+                client.connection = None;
+                return;
+            }
+            Ok(n) => {
+                conn.write_buf.drain(..n);
+            }
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
+            Err(_) => {
+                client.connection = None;
+                return;
+            }
+        }
+    }
 
     let mut tmp = [0u8; 1024];
     match conn.socket.read(&mut tmp) {

@@ -31,19 +31,23 @@ app.session().host(
     my_identity(),
 );
 
-// Host a listen-server session. Start the provider listener first, then
+// Host a listen-server session that announces a real UDP/netcode address
+// for remote clients to connect to. Start the provider listener first, then
 // create the session; the Lightyear transport is separate from the control
 // plane.
 app.world_mut().insert_resource(
     NonSteamSessionProvider::new("0.0.0.0:7777".parse().unwrap()).unwrap(),
 );
-app.session().host(
+app.session().host_with_endpoint(
     SessionConfig {
         backend: SessionBackend::NonSteam,
-        transport: SessionTransport::Netcode,
+        transport: SessionTransport::DirectUdp {
+            host: "0.0.0.0:5000".to_string(),
+        },
         ..Default::default()
     },
     my_identity(),
+    "0.0.0.0:7777".parse().unwrap(),
 );
 
 // Join a Steam lobby by code.

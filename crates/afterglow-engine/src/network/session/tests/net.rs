@@ -386,9 +386,14 @@ fn provider_rejoin_with_same_identity_returns_same_member_id() {
         },
     );
     drive_app(&mut app, 10);
-    let first_member_id = match read_raw_event(&mut joiner) {
-        Some(SessionEvent::Joined(info)) => info.owner,
-        other => panic!("expected Joined, got {:?}", other),
+    let first_member_id = {
+        let mut member_id = None;
+        while let Some(event) = read_raw_event(&mut joiner) {
+            if let SessionEvent::MemberJoined { member, .. } = &event {
+                member_id = Some(*member);
+            }
+        }
+        member_id.expect("joiner should receive MemberJoined with own member id")
     };
 
     // Leave.
@@ -407,9 +412,19 @@ fn provider_rejoin_with_same_identity_returns_same_member_id() {
         },
     );
     drive_app(&mut app, 10);
-    let second_member_id = match read_raw_event(&mut joiner2) {
-        Some(SessionEvent::Joined(info)) => info.owner,
-        other => panic!("expected Joined on rejoin, got {:?}", other),
+    let second_member_id = {
+        let mut member_id = None;
+        while let Some(event) = read_raw_event(&mut joiner2) {
+            if let SessionEvent::Joined(_) = &event {
+                // Joined precedes MemberJoined in the event stream; once we
+                // see it, the next event should be MemberJoined with the
+                // rejoiner's actual member id.
+            }
+            if let SessionEvent::MemberJoined { member, .. } = &event {
+                member_id = Some(*member);
+            }
+        }
+        member_id.expect("rejoiner should receive MemberJoined with own member id")
     };
 
     assert_eq!(first_member_id, second_member_id);

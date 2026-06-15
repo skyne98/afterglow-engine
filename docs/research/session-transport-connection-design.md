@@ -384,8 +384,10 @@ client:
    `app.session().host_with_endpoint`, `app.session().join_non_steam`).
 3. Introduce `NonSteamSessionProvider` (server/listener) and
    `NonSteamSessionClient` (networked request sender) abstractions.
-4. Remove `DirectUdp { host: String }` from `SessionTransport`.
-5. Add `SessionTransport::Netcode` and `SessionConnectionTarget`.
+4. **Decision:** keep `DirectUdp { host: String }` on `SessionTransport`. The
+   game shares its gameplay address out-of-band (e.g. Discord) and the client
+   passes it explicitly to `join_non_steam`. Automatic address exchange was
+   deferred per product call.
 6. Keep the existing bridge for `Local`, and extend it to consume
    `SessionConnectionTarget` instead of parsing `host`.
 7. Add an engine consumer system that drains `PendingNetcodeStartup` and spawns

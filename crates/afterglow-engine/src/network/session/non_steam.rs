@@ -374,8 +374,13 @@ pub(crate) fn handle_join(
         }
     };
 
-    let (member_id, already_member) = match existing_member {
-        Some(mid) => (mid, true),
+    let (member_id, _already_member) = match existing_member {
+        Some(mid) => {
+            // Rejoin: restore the local member id so the rest of the flow can
+            // correctly attribute events and later leave/cleanup to this player.
+            state.local_member_id = mid;
+            (mid, true)
+        }
         None => {
             let is_full = catalog
                 .sessions
@@ -409,12 +414,13 @@ pub(crate) fn handle_join(
         .expect("session must exist after join validation")
         .to_info(session_id);
     events.push(SessionEvent::Joined(info.clone()));
-    if !already_member {
-        events.push(SessionEvent::MemberJoined {
-            session: session_id,
-            member: member_id,
-        });
-    }
+    // Always emit MemberJoined so a remote rejoiner re-learns their own
+    // member id after a Leave cleared it locally. Status updates and the
+    // SessionStatus.members list deduplicate against already-present ids.
+    events.push(SessionEvent::MemberJoined {
+        session: session_id,
+        member: member_id,
+    });
 }
 
 pub(crate) fn ensure_local_member_id(
@@ -456,7 +462,7 @@ pub(crate) fn handle_leave(
     };
 
     let is_owner = entry.owner == state.local_member_id;
-    let code = entry.code.clone();
+    let _code = entry.code.clone();
 
     if is_owner {
         let non_owner_members: Vec<SessionMemberId> = entry
@@ -474,11 +480,17 @@ pub(crate) fn handle_leave(
             });
         }
 
-        catalog.used_codes.remove(&code);
+        // Do not free the session code on leave: codes are derived from a
+        // monotonic counter and freed codes could be re-allocated to a later
+        // session, enabling replay of an old identity proof signed against
+        // the same target string. The u64 counter space is large enough that
+        // we never need to recycle.
+        // catalog.used_codes.remove(&code);
         catalog.sessions.remove(&session_id);
         state.current_session = None;
         state.current_backend = None;
         state.identity = None;
+        state.local_member_id = SessionMemberId::INVALID;
         events.push(SessionEvent::Left {
             session: session_id,
             reason: SessionLeaveReason::Left,
@@ -495,6 +507,7 @@ pub(crate) fn handle_leave(
         state.current_session = None;
         state.current_backend = None;
         state.identity = None;
+        state.local_member_id = SessionMemberId::INVALID;
         events.push(SessionEvent::Left {
             session: session_id,
             reason: SessionLeaveReason::Left,

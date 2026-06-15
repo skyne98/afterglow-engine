@@ -1,6 +1,6 @@
 use super::{
     AfterglowSessionState, NativeIdentityProof, PlayerIdentity, SessionBackend, SessionConfig,
-    SessionEvent, SessionRequest, in_process_provider, native_identity_for_create,
+    SessionEvent, SessionMemberId, SessionRequest, in_process_provider, native_identity_for_create,
     native_identity_for_join, steam_identity_for_passthrough, test_app,
 };
 
@@ -38,9 +38,16 @@ fn native_identity_rejoin_returns_same_member_id() {
         .local_member_id;
     super::drain_messages(&mut app);
 
-    app.world_mut()
-        .resource_mut::<AfterglowSessionState>()
-        .current_session = None;
+    // Simulate a full Leave: clear both current_session and local_member_id,
+    // matching what `handle_leave` and `update_session_status` do in
+    // production.
+    {
+        let mut state = app
+            .world_mut()
+            .resource_mut::<AfterglowSessionState>();
+        state.current_session = None;
+        state.local_member_id = SessionMemberId::INVALID;
+    }
 
     let identity = native_identity_for_join(session_id);
     app.world_mut().write_message(SessionRequest::Join {
@@ -64,10 +71,11 @@ fn native_identity_rejoin_returns_same_member_id() {
         "rejoin should emit Joined"
     );
     assert!(
-        !batch
-            .iter()
-            .any(|e| matches!(e, SessionEvent::MemberJoined { .. })),
-        "rejoin should not emit MemberJoined"
+        batch.iter().any(|e| matches!(
+            e,
+            SessionEvent::MemberJoined { member, .. } if *member == first_member_id
+        )),
+        "rejoin should emit MemberJoined carrying the rejoiner's existing member id"
     );
 }
 

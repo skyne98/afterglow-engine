@@ -152,12 +152,20 @@ fn duplicate_member_join_does_not_duplicate() {
     let batch = drain_messages(&mut app);
 
     assert!(batch.iter().any(|e| matches!(e, SessionEvent::Joined(_))));
+
+    // MemberJoined is now emitted on every join (including rejoin) so the
+    // remote player can re-learn their own member id after a Leave cleared
+    // it locally. Dedup is verified at the catalog level, not via the event
+    // stream.
+    let catalog = app.world().resource::<NonSteamSessionCatalog>();
+    let entry = catalog
+        .sessions
+        .get(&session_id.0)
+        .expect("session still exists");
     assert_eq!(
-        batch
-            .iter()
-            .filter(|e| matches!(e, SessionEvent::MemberJoined { .. }))
-            .count(),
-        0
+        entry.members.iter().filter(|m| **m == member_id).count(),
+        1,
+        "rejoin must not duplicate the member in the catalog"
     );
 }
 

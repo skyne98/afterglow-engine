@@ -235,7 +235,7 @@ fn code_only_uses_allowed_characters() {
 }
 
 #[test]
-fn code_freed_after_owner_leave() {
+fn code_remains_allocated_after_owner_leave_to_prevent_replay() {
     let mut app = test_app();
     let identity = native_identity_for_create();
     app.world_mut()
@@ -255,9 +255,12 @@ fn code_freed_after_owner_leave() {
     super::drain_messages(&mut app);
 
     let catalog = app.world().resource::<NonSteamSessionCatalog>();
+    // Codes are never freed: a freed code could be reassigned to a later
+    // session, allowing replay of an old identity proof signed against the
+    // same target string. See security note in `handle_leave`.
     assert!(
-        !catalog.used_codes.contains(&first_code),
-        "old session code should be freed after owner leaves"
+        catalog.used_codes.contains(&first_code),
+        "old session code should remain allocated after owner leaves"
     );
     assert!(
         catalog.sessions.is_empty(),
