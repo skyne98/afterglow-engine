@@ -282,6 +282,65 @@ fn host_and_client_share_player_boxes_over_real_network() {
         }
         count
     };
+
+    // Diagnostic
+    if client_player_count == 0 {
+        let mut world = client.world_mut();
+        let total = world.entities().len();
+        let players = world
+            .query_filtered::<Entity, With<PlayerBox>>()
+            .iter(&world)
+            .count();
+        let replicated = world
+            .query_filtered::<Entity, With<Replicate>>()
+            .iter(&world)
+            .count();
+        let link = world.resource::<crate::network::lightyear::SessionLightyearLinks>();
+        let client_link = link.client_link;
+        let lc = client_link.map(|e| {
+            (
+                world.get::<lightyear::prelude::ReplicationReceiver>(e).is_some(),
+                world.get::<lightyear::prelude::MessageManager>(e).is_some(),
+                world.get::<lightyear::prelude::Connecting>(e).is_some(),
+                world.get::<lightyear::prelude::Disconnected>(e).is_some(),
+                world.get::<lightyear::prelude::Connected>(e).is_some(),
+                world.get::<RemoteId>(e).map(|r| r.0),
+                world.get::<LocalId>(e).map(|l| l.0),
+                world.get::<Link>(e).is_some(),
+                world.get::<Linked>(e).is_some(),
+                world.get::<Client>(e).is_some(),
+                world.get::<Transport>(e).is_some(),
+            )
+        });
+        let host_diag = {
+            let mut w = host.world_mut();
+            let total = w.entities().len();
+            let players = w
+                .query_filtered::<Entity, With<PlayerBox>>()
+                .iter(&w)
+                .count();
+            let netcode_servers = w
+                .query_filtered::<Entity, With<lightyear::prelude::server::NetcodeServer>>()
+                .iter(&w)
+                .count();
+            let link_of = w
+                .query_filtered::<Entity, With<lightyear::prelude::LinkOf>>()
+                .iter(&w)
+                .count();
+            let server_starts = w
+                .query_filtered::<Entity, With<lightyear::prelude::server::Started>>()
+                .iter(&w)
+                .count();
+            (total, players, netcode_servers, link_of, server_starts)
+        };
+        panic!(
+            "client should observe at least one replicated PlayerBox within 600 frames; replication is not flowing. \nClient: total={} playerboxes={} replicated={} client_link={:?} lc={:?}\n\
+             Host: total={} playerboxes={} netcode_servers={} link_of={} server_starts={}",
+            total, players, replicated, client_link, lc,
+            host_diag.0, host_diag.1, host_diag.2, host_diag.3, host_diag.4
+        );
+    }
+
     assert!(
         client_player_count > 0,
         "client should observe at least one replicated PlayerBox within 600 frames; \

@@ -343,9 +343,18 @@ fn consume_pending_netcode_startup(
                 transport.add_sender_from_registry::<ActionsChannel>(registry);
                 transport.add_receiver_from_registry::<ActionsChannel>(registry);
 
+                // Per `docs/subject/lightyear.md` § 4.2:
+                //   Client entity requires Client, LocalId, RemoteId,
+                //   Link, Linked, Transport, MessageManager,
+                //   ReplicationReceiver, PredictionManager.
+                // `Connected` is added by the NetcodeClientPlugin's
+                // observer when the handshake completes.
                 let entity = commands
                     .spawn((
                         Client::default(),
+                        LocalId(PeerId::Local(1)),
+                        RemoteId(PeerId::Server),
+                        Link::default(),
                         client,
                         UdpIo::default(),
                         LocalAddr(local_addr),
@@ -375,11 +384,18 @@ fn consume_pending_netcode_startup(
             ..Default::default()
         };
         let server = NetcodeServer::new(config);
+        // Per `docs/subject/lightyear.md` § 4.2:
+        //   Server entity requires Server, Link, Transport, MessageManager.
+        // `Started` is added by the NetcodeServerPlugin's observer when the
+        // server finishes binding.
         let entity = commands
             .spawn((
+                Server::default(),
                 server,
                 lightyear::prelude::server::ServerUdpIo::default(),
                 LocalAddr(params.bind_addr),
+                Link::default(),
+                MessageManager::default(),
             ))
             .id();
         commands.entity(entity).trigger(|e| Start { entity: e });
