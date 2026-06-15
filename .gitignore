@@ -9,3 +9,4 @@
 *.code-workspace
 trace-*.json
 *.trace
+.work-out/
