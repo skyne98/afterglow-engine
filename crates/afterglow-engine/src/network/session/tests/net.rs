@@ -5,8 +5,8 @@ use std::time::Duration;
 use super::{
     native_identity_for_create, native_identity_for_join_by_code_with_seed, test_app, test_nonce,
     AfterglowSessionState, NonSteamSessionClient, NonSteamSessionProvider, ProviderEndpoint,
-    SessionBackend, SessionConfig, SessionEvent, SessionRequest, SessionSearch,
-    SessionIdentityNonce, SessionLeaveReason,
+    SessionBackend, SessionConfig, SessionEvent, SessionMemberId, SessionRequest, SessionSearch,
+    SessionIdentityNonce, SessionLeaveReason, non_steam::NonSteamSessionCatalog,
 };
 
 fn find_test_addr() -> SocketAddr {
@@ -428,4 +428,76 @@ fn provider_rejoin_with_same_identity_returns_same_member_id() {
     };
 
     assert_eq!(first_member_id, second_member_id);
+}
+
+#[test]
+fn provider_cleans_up_membership_on_remote_client_disconnect() {
+    let mut app = test_app();
+    let addr = find_test_addr();
+    app.world_mut().insert_resource(NonSteamSessionProvider::new(addr).unwrap());
+    drive_app(&mut app, 3);
+
+    let mut host = TcpStream::connect(addr).unwrap();
+    send_raw_request(
+        &mut host,
+        &SessionRequest::Create(SessionConfig::default(), native_identity_for_create()),
+    );
+    drive_app(&mut app, 5);
+    let mut code = None;
+    while let Some(event) = read_raw_event(&mut host) {
+        if let SessionEvent::Created(info) = &event {
+            code = Some(info.code.clone());
+        }
+        if code.is_some() {
+            break;
+        }
+    }
+    let code = code.unwrap();
+
+    let mut joiner = TcpStream::connect(addr).unwrap();
+    let joiner_identity = native_identity_for_join_by_code_with_seed(&code, 1);
+    send_raw_request(
+        &mut joiner,
+        &SessionRequest::JoinByCode {
+            backend: SessionBackend::NonSteam,
+            provider: ProviderEndpoint::Udp(addr),
+            code: code.clone(),
+            identity: joiner_identity,
+        },
+    );
+    drive_app(&mut app, 20);
+    drain_raw_events(&mut joiner);
+    drain_raw_events(&mut host);
+
+    // Simulate the joiner dropping its TCP connection without sending Leave.
+    drop(joiner);
+    drive_app(&mut app, 30);
+
+    // Host should observe the disconnected member leaving and the catalog
+    // should no longer list them.
+    let host_events = drain_raw_events(&mut host);
+    let saw_disconnect = host_events.iter().any(|e| matches!(
+        e,
+        SessionEvent::MemberLeft {
+            reason: SessionLeaveReason::Disconnected,
+            ..
+        }
+    ));
+    assert!(
+        saw_disconnect,
+        "host should receive MemberLeft(Disconnected) on remote drop, got {:?}",
+        host_events
+    );
+
+    let catalog = app.world().resource::<NonSteamSessionCatalog>();
+    let entry = catalog
+        .sessions
+        .values()
+        .find(|e| e.code == code)
+        .expect("session still exists after disconnect");
+    assert!(
+        entry.members.iter().all(|m| *m != SessionMemberId::new(2)),
+        "disconnected member must be removed from the catalog, got {:?}",
+        entry.members
+    );
 }

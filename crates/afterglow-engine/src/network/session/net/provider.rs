@@ -4,12 +4,13 @@ use std::net::{SocketAddr, TcpListener, TcpStream};
 use bevy::prelude::*;
 
 use crate::network::session::{
+    entry::remove_native_key,
     non_steam::{
         handle_create, handle_join, handle_join_by_code, handle_leave, handle_search,
         NonSteamSessionCatalog,
     },
     AfterglowSessionState, SessionBackend, SessionError, SessionEvent, SessionIdentityNonce,
-    SessionMemberId, SessionRequest, SessionId,
+    SessionLeaveReason, SessionMemberId, SessionRequest, SessionId,
 };
 
 use super::protocol;
@@ -132,7 +133,7 @@ pub(crate) fn run_non_steam_provider(
             if let Err(e) = client.flush_write()
                 && e.kind() != io::ErrorKind::WouldBlock
             {
-                clients.remove(i);
+                cleanup_disconnected_client(&mut catalog, clients, i, &mut local_messages);
                 continue;
             }
 
@@ -145,7 +146,7 @@ pub(crate) fn run_non_steam_provider(
                 )),
                 Ok(None) => None,
                 Err(_) => {
-                    clients.remove(i);
+                    cleanup_disconnected_client(&mut catalog, clients, i, &mut local_messages);
                     continue;
                 }
             }
@@ -172,7 +173,83 @@ pub(crate) fn run_non_steam_provider(
         if let Err(e) = client.flush_write()
             && e.kind() != io::ErrorKind::WouldBlock
         {
-            clients.remove(i);
+            cleanup_disconnected_client(&mut catalog, clients, i, &mut local_messages);
+        }
+    }
+}
+
+/// Remove a disconnected client from the provider's client list, and if it
+/// belonged to a session, clean up the catalog membership and emit
+/// `MemberLeft` / `SessionEnded` so the host and remaining clients see the
+/// departure.
+fn cleanup_disconnected_client(
+    catalog: &mut NonSteamSessionCatalog,
+    clients: &mut Vec<ProviderClient>,
+    index: usize,
+    local_messages: &mut MessageWriter<SessionEvent>,
+) {
+    let (session_id, member_id) = match clients.get(index) {
+        Some(c) => (c.session_id, c.member_id),
+        None => return,
+    };
+    let removed = clients.remove(index);
+    let _ = removed; // dropped with the Vec
+
+    let (session_id, member_id) = match (session_id, member_id) {
+        (Some(s), Some(m)) => (s, m),
+        _ => return,
+    };
+
+    let ended_session = if let Some(entry) = catalog.sessions.get_mut(&session_id) {
+        entry.members.retain(|m| *m != member_id);
+        // Best-effort identity cleanup; if the identity has already been
+        // removed (e.g. by a prior Leave), this is a no-op.
+        if let Some(identity) = entry.member_identities.remove(&member_id) {
+            remove_native_key(entry, &identity);
+        }
+        entry.members.is_empty()
+    } else {
+        false
+    };
+
+    let event = SessionEvent::MemberLeft {
+        session: session_id,
+        member: member_id,
+        reason: SessionLeaveReason::Disconnected,
+    };
+    local_messages.write(event.clone());
+    // Best-effort broadcast to remaining clients in the same session.
+    let snapshot = vec![event];
+    broadcast_provider_events_ignoring_index(clients, &snapshot);
+
+    if ended_session {
+        catalog.sessions.remove(&session_id);
+        let ended = SessionEvent::SessionEnded(session_id);
+        local_messages.write(ended.clone());
+        let snapshot = vec![ended];
+        broadcast_provider_events_ignoring_index(clients, &snapshot);
+    }
+}
+
+/// Broadcast helper that does not skip a requester by index (used during
+/// disconnect cleanup, where there is no live requester anymore).
+fn broadcast_provider_events_ignoring_index(
+    clients: &mut [ProviderClient],
+    events: &[SessionEvent],
+) {
+    for event in events {
+        let session_id = match event {
+            SessionEvent::MemberJoined { session, .. } => Some(*session),
+            SessionEvent::MemberLeft { session, .. } => Some(*session),
+            SessionEvent::SessionEnded(session) => Some(*session),
+            _ => continue,
+        };
+        for client in clients.iter_mut() {
+            if client.session_id == session_id
+                && let Err(e) = client.queue_event(event)
+            {
+                bevy::log::warn!("failed to broadcast event to remote client: {:?}", e);
+            }
         }
     }
 }
