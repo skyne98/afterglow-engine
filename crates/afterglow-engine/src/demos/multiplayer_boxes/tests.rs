@@ -210,6 +210,44 @@ fn replicated_boxes_get_client_visuals() {
 }
 
 #[test]
+fn local_replicated_box_gets_prediction_physics_components() {
+    let mut app = test_app();
+    app.insert_resource(crate::network::AfterglowNetworkContext::from_status(
+        crate::network::AfterglowConnectionStatus {
+            role: crate::network::LightyearRole::Client,
+            local_member_id: crate::network::SessionMemberId::new(2),
+            ..Default::default()
+        },
+    ));
+    app.add_systems(Update, attach_replicated_player_visuals);
+
+    let entity = app
+        .world_mut()
+        .spawn((
+            PlayerBox {
+                owner: "2".to_string(),
+            },
+            Transform::from_xyz(1.0, PLAYER_SIZE, 0.0),
+        ))
+        .id();
+
+    app.update();
+
+    assert!(app.world().get::<Mesh3d>(entity).is_some());
+    assert!(
+        app.world()
+            .get::<avian3d::prelude::RigidBody>(entity)
+            .is_some()
+    );
+    assert!(
+        app.world()
+            .get::<avian3d::prelude::LinearVelocity>(entity)
+            .is_some(),
+        "local predicted box should have velocity for same movement system"
+    );
+}
+
+#[test]
 fn movement_sets_velocity() {
     let mut app = test_app();
     app.world_mut().resource_mut::<PlayerName>().0 = "mover".to_string();
@@ -277,11 +315,17 @@ fn apply_movement_only_moves_local_player() {
     app.update();
 
     assert_eq!(
-        app.world().get::<avian3d::prelude::LinearVelocity>(alice).unwrap().0,
+        app.world()
+            .get::<avian3d::prelude::LinearVelocity>(alice)
+            .unwrap()
+            .0,
         Vec3::new(0.0, 0.0, PLAYER_SPEED)
     );
     assert_eq!(
-        app.world().get::<avian3d::prelude::LinearVelocity>(bob).unwrap().0,
+        app.world()
+            .get::<avian3d::prelude::LinearVelocity>(bob)
+            .unwrap()
+            .0,
         Vec3::ZERO,
         "host input must not move the remote player's box"
     );

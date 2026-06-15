@@ -62,11 +62,16 @@ pub struct MoveInputMsg {
   `Mesh3d`/`MeshMaterial3d` presentation components to replicated `PlayerBox`
   and `KinematicBox` entities, and spawn local arena floor/wall visuals.
 - Client-to-server movement currently uses explicit Lightyear messages on
-  `MoveInputChannel`, not shared resources or Leafwing input replication.
+  `MoveInputChannel`, not shared resources or Leafwing input replication. This
+  remains a demo-local bridge; the documented long-term path is Lightyear's
+  native Leafwing input buffering.
 - `MoveInputChannel` must be added to the client link transport as a sender
   and to each server-side `LinkOf` transport as a receiver. The helper systems
   extend the existing Lightyear `Transport` instead of replacing it, preserving
   replication channels.
+- Shared movement systems query `AfterglowNetworkContext::get_connection_status()`
+  for side/session facts instead of hiding logic in separate client/server
+  implementations.
 
 ## Physics setup
 
@@ -80,19 +85,29 @@ pub struct MoveInputMsg {
 
 ## Movement
 
-Server-side system in `FixedUpdate`:
+Shared movement system in `FixedUpdate`:
 - Host-local keyboard input applies only to the host player's box, selected by
   `PlayerName`.
-- Remote client input arrives as `MoveInputMsg { owner, direction }`; the
-  server applies velocity only to the `PlayerBox` whose `owner` matches the
-  sender's `SessionMemberId` string.
-- Avian handles collision response (pushing kinematic boxes).
+- Remote clients use the same movement system locally: when
+  `AfterglowNetworkContext` says this world runs client prediction, the system
+  matches the local `SessionMemberId` string (for example `"2"`) to the
+  replicated `PlayerBox.owner` and applies immediate velocity.
+- The authoritative server still receives `MoveInputMsg { owner, direction }`
+  and applies velocity only to the matching `PlayerBox`.
+- Avian handles collision response (pushing kinematic boxes). The workspace now
+  builds Avian without `parallel` and with `enhanced-determinism` for a simpler
+  deterministic baseline.
 
 Client-side prediction:
-- v1 focuses on proving transport, replication, and client→server input.
+- The client now moves its locally owned replicated `PlayerBox` immediately using
+  the same movement system and local Avian velocity components when present.
+- Server snapshots still provide authority/correction. This is a transparent
+  stepping stone toward replacing demo-local `MoveInputMsg` with the documented
+  Lightyear/Leafwing native input path and full Lightyear prediction metadata.
 - The runnable test verifies that the remote client receives replicated
-  `PlayerBox` entities over real UDP/netcode and that client input moves the
-  authoritative server entity.
+  `PlayerBox` entities over real UDP/netcode, gains client-side presentation and
+  local physics components, and that client input moves the authoritative server
+  entity.
 
 ## Camera
 
@@ -156,7 +171,7 @@ Modified:
 
 Current regression result: `cargo test -p afterglow-engine --lib --features
 multiplayer demos::multiplayer_boxes::tests::net::host_and_client_share` passes.
-The full afterglow-engine lib suite reports 318 passed, 0 ignored.
+The full afterglow-engine lib suite reports 321 passed, 0 ignored.
 
 ## Debugging Notes
 
@@ -183,6 +198,10 @@ honest and pass:
    Alice moved Bob. Remote input also needs explicit `MoveInputChannel`
    receiver wiring on server-side `LinkOf` transports; adding a
    `MessageReceiver` component alone is not enough.
+5. Side checks should stay explicit and simple. `AfterglowNetworkContext` is the
+   Fabric-like global resource for querying whether a world runs authority,
+   client prediction, host mode, and which `SessionMemberId` belongs to the
+   local player.
 
 ## Out of scope for v1
 

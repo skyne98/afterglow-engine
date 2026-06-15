@@ -27,7 +27,7 @@ clap = { version = "4", features = ["derive"] }
 ed25519-dalek = "2"
 rand_core = "0.6"
 bevy = { version = "0.18.1", default-features = true, features = ["webgpu", "jpeg", "png"] }
-avian3d = { version = "0.6.1", default-features = false, features = ["3d", "f32", "parry-f32", "xpbd_joints", "parallel"] }
+avian3d = { version = "0.6.1", default-features = false, features = ["3d", "f32", "parry-f32", "xpbd_joints", "enhanced-determinism"] }
 leafwing-input-manager = "0.20.0"
 lightyear = { version = "0.26.4", default-features = false }
 lightyear_inputs_leafwing = "0.26.4"

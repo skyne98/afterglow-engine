@@ -230,12 +230,14 @@ for Bevy-native physics.
 
 ## Current Engine Integration
 
-Afterglow uses `avian3d = 0.6.1` with explicit minimal features:
-`3d`, `f32`, `parry-f32`, `xpbd_joints`, and `parallel`. The engine deliberately
-does not enable Avian's default debug-render, picking, scene, or mesh-collider
-features in the core dependency, because those pull in extra Bevy resources that
-make minimal/headless runtime tests less clean. Mesh-derived colliders can be
-added later as an explicit import/tooling path.
+Afterglow uses `avian3d = 0.6.1` with explicit minimal deterministic-friendly
+features: `3d`, `f32`, `parry-f32`, `xpbd_joints`, and
+`enhanced-determinism`. The engine deliberately does **not** enable Avian's
+`parallel` feature in the core dependency, so prediction-sensitive physics is not
+subject to extra threaded solver nondeterminism. It also does not enable Avian's
+default debug-render, picking, scene, or mesh-collider features, because those
+pull in extra Bevy resources that make minimal/headless runtime tests less clean.
+Mesh-derived colliders can be added later as an explicit import/tooling path.
 
 The public engine layer lives in
 [physics.rs](/home/fox/Project/afterglow-engine/crates/afterglow-engine/src/physics.rs:1):

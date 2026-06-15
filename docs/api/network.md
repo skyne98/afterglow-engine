@@ -25,6 +25,7 @@ path physics lag compensation.
 | `AfterglowNetworkPlugin` | Adds `AfterglowLightyearPlugin` and `AfterglowSessionPlugin`. |
 | `AfterglowLightyearPlugin` | Initializes `AfterglowLightyearConfig`; with the `lightyear` feature, adds Lightyear client/server plugin groups and Leafwing input networking. Concrete link/transport entity setup is still test/demo-owned. |
 | `AfterglowLightyearConfig` | Engine-facing Lightyear config: role, server/remote addresses, tick rate, prediction window, protocol id, optional connect token, link-conditioner settings, and `netcode_private_key`. The private key defaults to `[0u8; 32]` — a development placeholder that **must** be replaced before any real network deployment. |
+| `AfterglowNetworkContext` | Global side/session context resource. Call `get_connection_status()` to query whether this world runs authority, client prediction, host mode, the current session id, and the local `SessionMemberId`. Gameplay systems should prefer this explicit context over hard-coded role-specific duplicate systems. |
 | `register_afterglow_lightyear_protocol` | Opt-in helper that initializes `HistoryTick`, registers reflection for `HistoryTick` and `StableEntityId`, and — under the `lightyear` feature — registers `StableEntityId` as a replicated Lightyear component. Call it after Lightyear client/server plugins are present. |
 | `HistoryTick` | Plain `u32` resource used by deterministic fixed-step tests and scenario systems. It is not rewind history. |
 | `AfterglowSessionPlugin` | Platform-neutral session/matchmaking API layer. Registers `AfterglowSessionState`, `SessionStatus`, `NonSteamSessionCatalog`, `SessionRequest` and `SessionEvent` Bevy `Message` types, and systems that process session requests and maintain a session status snapshot. Future Steam lobby support will be added as an alternative backend. |
@@ -104,6 +105,11 @@ components and pose (`Transform`, game ids, gameplay state), then attach
 client-local presentation components such as `Mesh3d`, `MeshMaterial3d`, UI,
 cameras, and debug helpers from local prefab systems. The multiplayer boxes demo
 uses this pattern for replicated `PlayerBox` / `KinematicBox` entities.
+
+Simulation systems should be shared where possible. Branch on the global
+`AfterglowNetworkContext::get_connection_status()` result for side-specific
+facts (`runs_authority`, `runs_client_prediction`, `local_member_owner`) instead
+of maintaining separate opaque client/server gameplay implementations.
 
 Use Lightyear's existing `ControlledBy` / `Controlled` relationship to bind an
 entity to the link that controls it, and Leafwing `InputMap<AfterglowAction>` /

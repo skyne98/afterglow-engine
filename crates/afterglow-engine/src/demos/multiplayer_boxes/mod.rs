@@ -117,11 +117,14 @@ impl Plugin for MultiplayerBoxesPlugin {
 
         app.add_systems(
             FixedUpdate,
-            (movement::ensure_message_sender, movement::client_send_input).run_if(
-                |config: Res<AfterglowLightyearConfig>| {
+            (
+                movement::apply_movement,
+                movement::ensure_message_sender,
+                movement::client_send_input,
+            )
+                .run_if(|config: Res<AfterglowLightyearConfig>| {
                     matches!(config.role, LightyearRole::Client)
-                },
-            ),
+                }),
         );
 
         app.add_systems(

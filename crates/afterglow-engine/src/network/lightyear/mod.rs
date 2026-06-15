@@ -157,7 +157,11 @@ fn add_replication_sender_on_link_of(
     transport.add_receiver_from_registry::<ActionsChannel>(&registry);
     commands.entity(trigger.entity).insert((
         transport,
-        ReplicationSender::new(Duration::from_millis(100), SendUpdatesMode::SinceLastAck, false),
+        ReplicationSender::new(
+            Duration::from_millis(16),
+            SendUpdatesMode::SinceLastAck,
+            false,
+        ),
         Name::from("RemoteClient"),
     ));
 }

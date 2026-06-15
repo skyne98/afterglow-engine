@@ -5,7 +5,10 @@ use std::collections::HashMap;
 
 use super::protocol::*;
 
-use crate::network::session::{SessionEvent, SessionLeaveReason, SessionMemberId};
+use crate::network::{
+    AfterglowNetworkContext,
+    session::{SessionEvent, SessionLeaveReason, SessionMemberId},
+};
 
 #[derive(Resource, Default)]
 pub struct PlayerName(pub String);
@@ -209,18 +212,33 @@ pub fn attach_replicated_player_visuals(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    players: Query<(Entity, &PlayerBox), Without<Mesh3d>>,
+    context: Option<Res<AfterglowNetworkContext>>,
+    players: Query<(Entity, &PlayerBox, Option<&Transform>), Without<Mesh3d>>,
 ) {
-    for (entity, player) in &players {
+    let local_owner = context
+        .as_deref()
+        .and_then(|ctx| ctx.get_connection_status().local_member_owner());
+    for (entity, player, transform) in &players {
         let hue = if player.owner == "alice" {
             200.0
         } else {
             330.0
         };
-        commands.entity(entity).insert((
+        let mut entity_commands = commands.entity(entity);
+        entity_commands.insert((
             Mesh3d(meshes.add(Cuboid::from_size(Vec3::splat(PLAYER_SIZE * 2.0)))),
             MeshMaterial3d(materials.add(Color::hsla(hue, 0.8, 0.5, 1.0))),
         ));
+        if local_owner.as_deref() == Some(player.owner.as_str()) {
+            let pos = transform.map_or(Vec3::ZERO, |transform| transform.translation);
+            entity_commands.insert((
+                RigidBody::Dynamic,
+                Collider::cuboid(PLAYER_SIZE * 2.0, PLAYER_SIZE * 2.0, PLAYER_SIZE * 2.0),
+                Position::from(pos),
+                Rotation::default(),
+                LinearVelocity::ZERO,
+            ));
+        }
     }
 }
 

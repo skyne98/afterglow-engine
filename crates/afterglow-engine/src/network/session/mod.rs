@@ -338,6 +338,7 @@ impl Plugin for AfterglowSessionPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<AfterglowSessionState>()
             .init_resource::<status::SessionStatus>()
+            .init_resource::<crate::network::context::AfterglowNetworkContext>()
             .init_resource::<non_steam::NonSteamSessionCatalog>()
             .init_resource::<net::provider::NonSteamSessionProvider>()
             .init_resource::<net::client::NonSteamSessionClient>()
@@ -363,11 +364,21 @@ impl Plugin for AfterglowSessionPlugin {
             )
             .add_systems(
                 PreUpdate,
-                net::provider::run_non_steam_provider.in_set(AfterglowSessionSet::ApplyEffects),
+                crate::network::context::update_network_context
+                    .in_set(AfterglowSessionSet::ApplyEffects)
+                    .after(status::update_session_status),
             )
             .add_systems(
                 PreUpdate,
-                net::client::poll_non_steam_client.in_set(AfterglowSessionSet::ApplyEffects),
+                net::provider::run_non_steam_provider
+                    .in_set(AfterglowSessionSet::ApplyEffects)
+                    .before(status::update_session_status),
+            )
+            .add_systems(
+                PreUpdate,
+                net::client::poll_non_steam_client
+                    .in_set(AfterglowSessionSet::ApplyEffects)
+                    .before(status::update_session_status),
             );
     }
 }
