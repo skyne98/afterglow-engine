@@ -1,5 +1,6 @@
 #[cfg(feature = "lightyear")]
 pub mod net;
+mod presentation;
 
 use bevy::prelude::*;
 use lightyear::prelude::Predicted;

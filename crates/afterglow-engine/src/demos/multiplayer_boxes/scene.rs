@@ -278,12 +278,15 @@ pub fn attach_replicated_player_visuals(
 
 pub fn smooth_local_player_visuals(
     time: Res<Time>,
-    mut players: Query<(
-        &Transform,
-        Option<&LinearVelocity>,
-        &mut LocalPlayerPresentation,
-        &Children,
-    )>,
+    mut players: Query<
+        (
+            &Transform,
+            Option<&LinearVelocity>,
+            &mut LocalPlayerPresentation,
+            &Children,
+        ),
+        Without<PlayerVisual>,
+    >,
     mut visuals: Query<&mut Transform, With<PlayerVisual>>,
 ) {
     let dt = time.delta_secs();
