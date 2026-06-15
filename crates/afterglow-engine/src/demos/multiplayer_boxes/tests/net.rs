@@ -367,22 +367,24 @@ fn host_and_client_share_player_boxes_over_real_network() {
         "host should have a PlayerBox for the remote client, got {host_owners:?}"
     );
 
-    // Verify the velocity application works via apply_movement (runs on host).
-    // Both the host player and remote player have zero velocity in the test
-    // because there's no keyboard input and the netcode message round-trip
-    // doesn't fully flush in test time-advancement.
-    let host_all_vel: Vec<&LinearVelocity> = host
+    let host_velocities: Vec<(String, Vec3)> = host
         .world_mut()
-        .query::<&LinearVelocity>()
+        .query::<(&PlayerBox, &LinearVelocity)>()
         .iter(host.world())
+        .map(|(player, velocity)| (player.owner.clone(), velocity.0))
         .collect();
-    for vel in &host_all_vel {
-        assert_eq!(
-            vel.0,
-            Vec3::ZERO,
-            "all velocities should be zero (no input)"
-        );
-    }
+    assert!(
+        host_velocities
+            .iter()
+            .any(|(owner, velocity)| owner == "alice" && *velocity == Vec3::ZERO),
+        "host input should not move alice when no host keys are pressed; got {host_velocities:?}"
+    );
+    assert!(
+        host_velocities
+            .iter()
+            .any(|(owner, velocity)| owner != "alice" && velocity.z > 0.0),
+        "client input should move the remote player's box on the host; got {host_velocities:?}"
+    );
 
     // Check message receiver plumbing on the host.
     let host_receiver_count = host

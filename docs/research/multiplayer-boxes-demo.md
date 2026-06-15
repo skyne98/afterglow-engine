@@ -63,6 +63,10 @@ pub struct MoveInputMsg {
   and `KinematicBox` entities, and spawn local arena floor/wall visuals.
 - Client-to-server movement currently uses explicit Lightyear messages on
   `MoveInputChannel`, not shared resources or Leafwing input replication.
+- `MoveInputChannel` must be added to the client link transport as a sender
+  and to each server-side `LinkOf` transport as a receiver. The helper systems
+  extend the existing Lightyear `Transport` instead of replacing it, preserving
+  replication channels.
 
 ## Physics setup
 
@@ -77,9 +81,12 @@ pub struct MoveInputMsg {
 ## Movement
 
 Server-side system in `FixedUpdate`:
-- Read `MoveInput.direction` from authoritative player's entity
-- Apply linear velocity = direction * speed (5 m/s)
-- Avian handles collision response (pushing kinematic boxes)
+- Host-local keyboard input applies only to the host player's box, selected by
+  `PlayerName`.
+- Remote client input arrives as `MoveInputMsg { owner, direction }`; the
+  server applies velocity only to the `PlayerBox` whose `owner` matches the
+  sender's `SessionMemberId` string.
+- Avian handles collision response (pushing kinematic boxes).
 
 Client-side prediction:
 - v1 focuses on proving transport, replication, and client→server input.
@@ -149,7 +156,7 @@ Modified:
 
 Current regression result: `cargo test -p afterglow-engine --lib --features
 multiplayer demos::multiplayer_boxes::tests::net::host_and_client_share` passes.
-The full afterglow-engine lib suite reports 317 passed, 0 ignored.
+The full afterglow-engine lib suite reports 318 passed, 0 ignored.
 
 ## Debugging Notes
 
@@ -171,6 +178,11 @@ honest and pass:
    camera queried Avian `Position`, which was not replicated. The fix is to
    replicate `Transform`, target the camera by `Transform`, and attach local
    visual prefabs to replicated logical entities.
+4. Host input must be scoped to the host-owned player box. The initial server
+   movement system wrote the host keyboard velocity to every `PlayerBox`, so
+   Alice moved Bob. Remote input also needs explicit `MoveInputChannel`
+   receiver wiring on server-side `LinkOf` transports; adding a
+   `MessageReceiver` component alone is not enough.
 
 ## Out of scope for v1
 

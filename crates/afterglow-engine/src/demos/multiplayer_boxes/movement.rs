@@ -2,13 +2,19 @@ use avian3d::prelude::*;
 use bevy::prelude::*;
 use lightyear::prelude::*;
 
-use super::protocol::*;
+use super::{protocol::*, scene::PlayerName};
 
 use crate::network::lightyear::SessionLightyearLinks;
 use crate::network::session::AfterglowSessionState;
 
 #[derive(Resource, Default)]
 pub struct DemoInput(pub Vec2);
+
+#[derive(Component)]
+pub(crate) struct MoveInputSenderReady;
+
+#[derive(Component)]
+pub(crate) struct MoveInputReceiverReady;
 
 pub fn collect_input(
     keyboard: Option<Res<ButtonInput<KeyCode>>>,
@@ -42,41 +48,67 @@ pub fn apply_velocity_to_player(
 
 pub fn apply_movement(
     input: Res<DemoInput>,
-    mut players: Query<&mut LinearVelocity, (With<PlayerBox>, Without<Predicted>)>,
+    player_name: Res<PlayerName>,
+    mut players: Query<(&mut LinearVelocity, &PlayerBox), Without<Predicted>>,
 ) {
     let vel = Vec3::new(input.0.x, 0.0, input.0.y) * PLAYER_SPEED;
-    apply_velocity_to_player(vel, &mut players);
-}
-
-pub fn ensure_message_sender(
-    links: Res<SessionLightyearLinks>,
-    mut commands: Commands,
-    senders: Query<(), With<MessageSender<MoveInputMsg>>>,
-    registry: Option<Res<ChannelRegistry>>,
-) {
-    let Some(entity) = links.client_link else { return; };
-    if senders.get(entity).is_err() {
-        commands.entity(entity).insert(MessageSender::<MoveInputMsg>::default());
-
-        // Add the MoveInputChannel to the transport so messages can be sent.
-        if let Some(ref registry) = registry {
-            let mut transport = Transport::default();
-            transport.add_sender_from_registry::<MetadataChannel>(&registry);
-            transport.add_receiver_from_registry::<MetadataChannel>(&registry);
-            transport.add_sender_from_registry::<UpdatesChannel>(&registry);
-            transport.add_receiver_from_registry::<UpdatesChannel>(&registry);
-            transport.add_sender_from_registry::<MoveInputChannel>(&registry);
-            commands.entity(entity).insert(transport);
+    for (mut linear_vel, player_box) in players.iter_mut() {
+        if player_box.owner == player_name.0 {
+            linear_vel.0 = vel;
         }
     }
 }
 
-pub fn ensure_message_receivers(
+pub(crate) fn ensure_message_sender(
+    links: Res<SessionLightyearLinks>,
     mut commands: Commands,
-    links: Query<Entity, (With<LinkOf>, Without<MessageReceiver<MoveInputMsg>>)>,
+    senders: Query<(), With<MessageSender<MoveInputMsg>>>,
+    ready: Query<(), With<MoveInputSenderReady>>,
+    registry: Option<Res<ChannelRegistry>>,
+    mut transports: Query<&mut Transport>,
 ) {
+    let Some(entity) = links.client_link else { return; };
+    if senders.get(entity).is_err() {
+        commands
+            .entity(entity)
+            .insert(MessageSender::<MoveInputMsg>::default());
+    }
+    if ready.get(entity).is_ok() {
+        return;
+    }
+    let Some(ref registry) = registry else { return; };
+    if let Ok(mut transport) = transports.get_mut(entity) {
+        transport.add_sender_from_registry::<MoveInputChannel>(registry);
+    } else {
+        let mut transport = Transport::default();
+        transport.add_sender_from_registry::<MoveInputChannel>(registry);
+        commands.entity(entity).insert(transport);
+    }
+    commands.entity(entity).insert(MoveInputSenderReady);
+}
+
+pub(crate) fn ensure_message_receivers(
+    mut commands: Commands,
+    links: Query<Entity, (With<LinkOf>, Without<MoveInputReceiverReady>)>,
+    receivers: Query<(), With<MessageReceiver<MoveInputMsg>>>,
+    registry: Option<Res<ChannelRegistry>>,
+    mut transports: Query<&mut Transport>,
+) {
+    let Some(ref registry) = registry else { return; };
     for entity in &links {
-        commands.entity(entity).insert(MessageReceiver::<MoveInputMsg>::default());
+        if receivers.get(entity).is_err() {
+            commands
+                .entity(entity)
+                .insert(MessageReceiver::<MoveInputMsg>::default());
+        }
+        if let Ok(mut transport) = transports.get_mut(entity) {
+            transport.add_receiver_from_registry::<MoveInputChannel>(registry);
+        } else {
+            let mut transport = Transport::default();
+            transport.add_receiver_from_registry::<MoveInputChannel>(registry);
+            commands.entity(entity).insert(transport);
+        }
+        commands.entity(entity).insert(MoveInputReceiverReady);
     }
 }
 

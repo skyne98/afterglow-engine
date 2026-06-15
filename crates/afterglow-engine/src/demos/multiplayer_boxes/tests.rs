@@ -212,6 +212,7 @@ fn replicated_boxes_get_client_visuals() {
 #[test]
 fn movement_sets_velocity() {
     let mut app = test_app();
+    app.world_mut().resource_mut::<PlayerName>().0 = "mover".to_string();
     app.world_mut().resource_mut::<DemoInput>().0 = Vec2::new(1.0, 0.0);
 
     let _entity = app.world_mut().spawn((
@@ -244,6 +245,45 @@ fn movement_sets_velocity() {
     assert!(
         (vel.0.x - PLAYER_SPEED).abs() < 0.001,
         "velocity x should equal player speed"
+    );
+}
+
+#[test]
+fn apply_movement_only_moves_local_player() {
+    let mut app = test_app();
+    app.world_mut().resource_mut::<PlayerName>().0 = "alice".to_string();
+    app.world_mut().resource_mut::<DemoInput>().0 = Vec2::new(0.0, 1.0);
+
+    let alice = app
+        .world_mut()
+        .spawn((
+            PlayerBox {
+                owner: "alice".to_string(),
+            },
+            avian3d::prelude::LinearVelocity::ZERO,
+        ))
+        .id();
+    let bob = app
+        .world_mut()
+        .spawn((
+            PlayerBox {
+                owner: "2".to_string(),
+            },
+            avian3d::prelude::LinearVelocity::ZERO,
+        ))
+        .id();
+
+    app.add_systems(Update, super::movement::apply_movement);
+    app.update();
+
+    assert_eq!(
+        app.world().get::<avian3d::prelude::LinearVelocity>(alice).unwrap().0,
+        Vec3::new(0.0, 0.0, PLAYER_SPEED)
+    );
+    assert_eq!(
+        app.world().get::<avian3d::prelude::LinearVelocity>(bob).unwrap().0,
+        Vec3::ZERO,
+        "host input must not move the remote player's box"
     );
 }
 
