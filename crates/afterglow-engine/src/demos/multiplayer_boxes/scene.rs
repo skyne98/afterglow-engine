@@ -16,6 +16,20 @@ pub struct PlayerName(pub String);
 #[derive(Resource, Default)]
 pub struct MemberToPlayer(pub HashMap<SessionMemberId, Entity>);
 
+const LOCAL_VISUAL_CORRECTION_RATE: f32 = 24.0;
+const LOCAL_VISUAL_TELEPORT_DISTANCE: f32 = 3.0;
+
+#[derive(Component, Clone, Debug, PartialEq)]
+pub struct LocalPlayerPresentation {
+    pub visual_translation: Vec3,
+}
+
+#[derive(Component)]
+pub struct PlayerVisual;
+
+#[derive(Component)]
+pub struct PlayerVisualAttached;
+
 pub fn configure_physics(app: &mut App) {
     // Use standard Avian PhysicsPlugins. LightyearAvianPlugin is not available
     // due to avian3d version incompatibility with lightyear_avian3d.
@@ -213,33 +227,99 @@ pub fn attach_replicated_player_visuals(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     context: Option<Res<AfterglowNetworkContext>>,
-    players: Query<(Entity, &PlayerBox, Option<&Transform>), Without<Mesh3d>>,
+    players: Query<(
+        Entity,
+        &PlayerBox,
+        Option<&Transform>,
+        Option<&PlayerVisualAttached>,
+        Option<&LocalPlayerPresentation>,
+    )>,
 ) {
     let local_owner = context
         .as_deref()
         .and_then(|ctx| ctx.get_connection_status().local_member_owner());
-    for (entity, player, transform) in &players {
+    for (entity, player, transform, attached, local_presentation) in &players {
+        let is_local_owner = local_owner.as_deref() == Some(player.owner.as_str());
+        if local_presentation.is_some() || (!is_local_owner && attached.is_some()) {
+            continue;
+        }
+
         let hue = if player.owner == "alice" {
             200.0
         } else {
             330.0
         };
+        let mesh = Mesh3d(meshes.add(Cuboid::from_size(Vec3::splat(PLAYER_SIZE * 2.0))));
+        let material = MeshMaterial3d(materials.add(Color::hsla(hue, 0.8, 0.5, 1.0)));
+        let pos = transform.map_or(Vec3::ZERO, |transform| transform.translation);
         let mut entity_commands = commands.entity(entity);
-        entity_commands.insert((
-            Mesh3d(meshes.add(Cuboid::from_size(Vec3::splat(PLAYER_SIZE * 2.0)))),
-            MeshMaterial3d(materials.add(Color::hsla(hue, 0.8, 0.5, 1.0))),
-        ));
-        if local_owner.as_deref() == Some(player.owner.as_str()) {
-            let pos = transform.map_or(Vec3::ZERO, |transform| transform.translation);
-            entity_commands.insert((
-                RigidBody::Dynamic,
-                Collider::cuboid(PLAYER_SIZE * 2.0, PLAYER_SIZE * 2.0, PLAYER_SIZE * 2.0),
-                Position::from(pos),
-                Rotation::default(),
-                LinearVelocity::ZERO,
-            ));
+        entity_commands.insert(PlayerVisualAttached);
+        if is_local_owner {
+            entity_commands
+                .remove::<(Mesh3d, MeshMaterial3d<StandardMaterial>)>()
+                .insert((
+                    LocalPlayerPresentation {
+                        visual_translation: pos,
+                    },
+                    RigidBody::Dynamic,
+                    Collider::cuboid(PLAYER_SIZE * 2.0, PLAYER_SIZE * 2.0, PLAYER_SIZE * 2.0),
+                    Position::from(pos),
+                    Rotation::default(),
+                    LinearVelocity::ZERO,
+                ));
+            entity_commands.with_children(|children| {
+                children.spawn((PlayerVisual, mesh, material, Transform::default()));
+            });
+        } else {
+            entity_commands.insert((mesh, material));
         }
     }
+}
+
+pub fn smooth_local_player_visuals(
+    time: Res<Time>,
+    mut players: Query<(
+        &Transform,
+        Option<&LinearVelocity>,
+        &mut LocalPlayerPresentation,
+        &Children,
+    )>,
+    mut visuals: Query<&mut Transform, With<PlayerVisual>>,
+) {
+    let dt = time.delta_secs();
+    for (root_transform, velocity, mut presentation, children) in &mut players {
+        let velocity = velocity.map_or(Vec3::ZERO, |velocity| velocity.0);
+        presentation.visual_translation = advance_local_visual_translation(
+            presentation.visual_translation,
+            root_transform.translation,
+            velocity,
+            dt,
+        );
+        let local_offset = presentation.visual_translation - root_transform.translation;
+        for child in children.iter() {
+            if let Ok(mut transform) = visuals.get_mut(child) {
+                transform.translation = local_offset;
+            }
+        }
+    }
+}
+
+pub fn advance_local_visual_translation(
+    current_visual: Vec3,
+    authoritative_root: Vec3,
+    velocity: Vec3,
+    dt: f32,
+) -> Vec3 {
+    if dt <= 0.0 {
+        return current_visual;
+    }
+    let predicted_visual = current_visual + velocity * dt;
+    let correction = authoritative_root - predicted_visual;
+    if correction.length() >= LOCAL_VISUAL_TELEPORT_DISTANCE {
+        return authoritative_root;
+    }
+    let alpha = 1.0 - (-LOCAL_VISUAL_CORRECTION_RATE * dt).exp();
+    predicted_visual + correction * alpha
 }
 
 pub fn attach_replicated_kinematic_visuals(

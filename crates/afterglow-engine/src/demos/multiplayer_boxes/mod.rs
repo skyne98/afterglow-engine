@@ -84,28 +84,40 @@ impl Plugin for MultiplayerBoxesPlugin {
                 }),
         );
 
+        app.add_systems(Update, movement::collect_input);
         app.add_systems(
             Update,
             (
-                camera::setup_camera.run_if(|cam: Query<&camera::DemoCamera>| cam.is_empty()),
-                camera::follow_camera_system,
-                movement::collect_input,
-                (
-                    client_join_flow,
-                    scene::attach_replicated_player_visuals,
-                    scene::attach_replicated_kinematic_visuals,
-                )
-                    .run_if(|config: Res<AfterglowLightyearConfig>| {
-                        matches!(config.role, LightyearRole::Client)
-                    }),
-                (
-                    scene::spawn_player_on_member_joined,
-                    scene::despawn_player_on_member_left,
-                )
-                    .run_if(|config: Res<AfterglowLightyearConfig>| {
-                        matches!(config.role, LightyearRole::Host)
-                    }),
+                client_join_flow,
+                scene::attach_replicated_player_visuals,
+                scene::attach_replicated_kinematic_visuals,
+            )
+                .run_if(|config: Res<AfterglowLightyearConfig>| {
+                    matches!(config.role, LightyearRole::Client)
+                }),
+        );
+        app.add_systems(
+            Update,
+            scene::smooth_local_player_visuals.after(scene::attach_replicated_player_visuals),
+        );
+        app.add_systems(
+            Update,
+            (
+                camera::setup_camera
+                    .run_if(|cam: Query<&camera::DemoCamera>| cam.is_empty())
+                    .after(scene::smooth_local_player_visuals),
+                camera::follow_camera_system.after(scene::smooth_local_player_visuals),
             ),
+        );
+        app.add_systems(
+            Update,
+            (
+                scene::spawn_player_on_member_joined,
+                scene::despawn_player_on_member_left,
+            )
+                .run_if(|config: Res<AfterglowLightyearConfig>| {
+                    matches!(config.role, LightyearRole::Host)
+                }),
         );
 
         app.add_systems(
