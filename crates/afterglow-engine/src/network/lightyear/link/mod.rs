@@ -335,10 +335,13 @@ fn consume_pending_netcode_startup(
             Ok(client) => {
                 let registry = registry.as_deref().cloned().unwrap_or_default();
                 let mut transport = Transport::default();
-                transport.add_sender_from_registry::<MetadataChannel>(&registry);
-                transport.add_receiver_from_registry::<MetadataChannel>(&registry);
-                transport.add_sender_from_registry::<UpdatesChannel>(&registry);
-                transport.add_receiver_from_registry::<UpdatesChannel>(&registry);
+                let registry = &registry;
+                transport.add_sender_from_registry::<MetadataChannel>(registry);
+                transport.add_receiver_from_registry::<MetadataChannel>(registry);
+                transport.add_sender_from_registry::<UpdatesChannel>(registry);
+                transport.add_receiver_from_registry::<UpdatesChannel>(registry);
+                transport.add_sender_from_registry::<ActionsChannel>(registry);
+                transport.add_receiver_from_registry::<ActionsChannel>(registry);
 
                 let entity = commands
                     .spawn((

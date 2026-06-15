@@ -6,7 +6,9 @@ use bevy::prelude::*;
 use lightyear::prelude::*;
 
 use crate::demos::multiplayer_boxes::movement::{client_send_input, collect_input, ensure_message_receivers, ensure_message_sender, server_receive_input, apply_movement, DemoInput};
-use crate::demos::multiplayer_boxes::protocol::{MoveInput, MoveInputMsg, PlayerBox, PLAYER_SIZE, PLAYER_SPEED};
+use crate::demos::multiplayer_boxes::protocol::{
+    KinematicBox, MoveInput, MoveInputMsg, PlayerBox, PLAYER_SIZE, PLAYER_SPEED,
+};
 use crate::demos::multiplayer_boxes::scene::{MemberToPlayer, PlayerName};
 use crate::demos::multiplayer_boxes::network::register_demo_protocol;
 use crate::network::lightyear::{
@@ -265,20 +267,21 @@ fn host_and_client_share_player_boxes_over_real_network() {
         "host should have spawned at least one remote PlayerBox"
     );
 
-    // Wait for replication: client should observe at least one PlayerBox
-    // (either its own or the host's) within a reasonable number of frames.
-    let mut client_player_count = 0;
-    for _ in 0..600 {
-        drive(&mut [&mut host, &mut client], 1);
-        let mut world = client.world_mut();
-        client_player_count = world
-            .query_filtered::<Entity, With<PlayerBox>>()
-            .iter(&world)
-            .count();
-        if client_player_count > 0 {
-            break;
+    let client_player_count = {
+        let mut count = 0;
+        for _ in 0..600 {
+            drive(&mut [&mut host, &mut client], 1);
+            let mut world = client.world_mut();
+            count = world
+                .query_filtered::<Entity, With<PlayerBox>>()
+                .iter(&world)
+                .count();
+            if count > 0 {
+                break;
+            }
         }
-    }
+        count
+    };
     assert!(
         client_player_count > 0,
         "client should observe at least one replicated PlayerBox within 600 frames; \

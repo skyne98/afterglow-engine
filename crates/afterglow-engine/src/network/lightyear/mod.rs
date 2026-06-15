@@ -122,13 +122,20 @@ impl Plugin for AfterglowLightyearPlugin {
 /// Adds a [`ReplicationSender`] to any entity that gains a [`LinkOf`]
 /// component, so the server-side replication stream can route to it.
 ///
-/// Only adds the sender to entities that don't already have one. The
-/// host's own loopback client is intentionally skipped because the
-/// consumer plugin already attaches a sender to it.
+/// Also attaches a [`Transport`] with senders/receivers for the
+/// replication channels ([`UpdatesChannel`] + [`ActionsChannel`]). The
+/// `#[require(Transport)]` on `ReplicationSender` would otherwise insert
+/// a bare `Transport::default()` with no channels, and replication would
+/// silently no-op.
+///
+/// Skips entities that already have a `ReplicationSender` so the host's
+/// own loopback client (which the consumer plugin sets up directly) isn't
+/// double-configured.
 #[cfg(feature = "lightyear")]
 fn add_replication_sender_on_link_of(
     trigger: bevy::prelude::On<bevy::prelude::Add, lightyear::prelude::LinkOf>,
     mut commands: bevy::prelude::Commands,
+    registry: bevy::prelude::Res<lightyear::prelude::ChannelRegistry>,
     existing_senders: bevy::prelude::Query<
         (),
         bevy::prelude::With<lightyear::prelude::ReplicationSender>,
@@ -141,7 +148,15 @@ fn add_replication_sender_on_link_of(
     if existing_senders.get(trigger.entity).is_ok() {
         return;
     }
+    let mut transport = Transport::default();
+    transport.add_sender_from_registry::<MetadataChannel>(&registry);
+    transport.add_receiver_from_registry::<MetadataChannel>(&registry);
+    transport.add_sender_from_registry::<UpdatesChannel>(&registry);
+    transport.add_receiver_from_registry::<UpdatesChannel>(&registry);
+    transport.add_sender_from_registry::<ActionsChannel>(&registry);
+    transport.add_receiver_from_registry::<ActionsChannel>(&registry);
     commands.entity(trigger.entity).insert((
+        transport,
         ReplicationSender::new(Duration::from_millis(100), SendUpdatesMode::SinceLastAck, false),
         Name::from("RemoteClient"),
     ));
