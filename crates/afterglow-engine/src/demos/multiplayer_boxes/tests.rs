@@ -170,3 +170,48 @@ fn movement_sets_velocity() {
         "velocity x should equal player speed"
     );
 }
+
+#[test]
+fn input_mapping_wasd_is_not_inverted() {
+    use bevy::input::ButtonInput;
+    use bevy::prelude::KeyCode;
+
+    fn press(app: &mut App, key: KeyCode) {
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(key);
+    }
+
+    fn released_dir(app: &mut App) -> Vec2 {
+        // Reset, press the target key, run collect_input, read resource.
+        let target = match app.world().resource::<DemoInput>().0 {
+            _ => app.world().resource::<DemoInput>().0, // for type inference
+        };
+        let _ = target;
+        app.world().resource::<DemoInput>().0
+    }
+
+    fn collect(app: &mut App) {
+        app.add_systems(Update, super::movement::collect_input);
+        app.update();
+    }
+
+    // Each test starts with a fresh app so state doesn't leak.
+    for (key, expected, label) in [
+        (KeyCode::KeyW, Vec2::new(0.0, 1.0), "W should move forward (+Y in Vec2 -> +Z in Vec3)"),
+        (KeyCode::ArrowUp, Vec2::new(0.0, 1.0), "ArrowUp should move forward"),
+        (KeyCode::KeyS, Vec2::new(0.0, -1.0), "S should move backward"),
+        // Camera's right axis points in -X world (camera sits at player +Z<0,
+        // looking down). A/D are intentionally flipped so the on-screen
+        // motion matches the key label.
+        (KeyCode::KeyA, Vec2::new(1.0, 0.0), "A should move left on screen"),
+        (KeyCode::KeyD, Vec2::new(-1.0, 0.0), "D should move right on screen"),
+    ] {
+        let mut app = test_app();
+        app.init_resource::<ButtonInput<KeyCode>>();
+        press(&mut app, key);
+        collect(&mut app);
+        let got = released_dir(&mut app);
+        assert_eq!(got, expected, "{label}: expected {expected:?}, got {got:?}");
+    }
+}

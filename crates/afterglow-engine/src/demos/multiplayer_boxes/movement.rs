@@ -13,16 +13,20 @@ pub fn collect_input(
 ) {
     let mut dir = Vec2::ZERO;
     if keyboard.pressed(KeyCode::KeyW) || keyboard.pressed(KeyCode::ArrowUp) {
-        dir.y -= 1.0;
-    }
-    if keyboard.pressed(KeyCode::KeyS) || keyboard.pressed(KeyCode::ArrowDown) {
         dir.y += 1.0;
     }
+    if keyboard.pressed(KeyCode::KeyS) || keyboard.pressed(KeyCode::ArrowDown) {
+        dir.y -= 1.0;
+    }
+    // Camera is at player + (0, 8, -6) looking down at the player, so the
+    // camera's right axis points in -X world. A/D are flipped relative to
+    // world axes so that A moves the player left on screen and D moves
+    // them right.
     if keyboard.pressed(KeyCode::KeyA) || keyboard.pressed(KeyCode::ArrowLeft) {
-        dir.x -= 1.0;
+        dir.x += 1.0;
     }
     if keyboard.pressed(KeyCode::KeyD) || keyboard.pressed(KeyCode::ArrowRight) {
-        dir.x += 1.0;
+        dir.x -= 1.0;
     }
     input.0 = dir.clamp_length_max(1.0);
 }
