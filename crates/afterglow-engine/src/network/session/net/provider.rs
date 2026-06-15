@@ -76,7 +76,7 @@ impl ProviderClient {
     }
 
     fn try_read_request(&mut self) -> io::Result<Option<SessionRequest>> {
-        let mut tmp = [0u8; 1024];
+        let mut tmp = [0u8; 8192];
         match self.socket.read(&mut tmp) {
             Ok(0) => return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "client closed")),
             Ok(n) => self.read_buf.extend_from_slice(&tmp[..n]),

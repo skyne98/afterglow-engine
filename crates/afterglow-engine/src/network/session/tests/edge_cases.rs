@@ -178,12 +178,21 @@ fn owner_leave_notifies_remaining_members_and_ends() {
     app.update();
     drain_messages(&mut app);
 
-    let other_a_identity = native_identity_for_create();
-    let other_b_identity = native_identity_for_create();
-    // Rotate the deterministic key between helpers so the public keys differ.
-    // Because the helper always uses the all-zero test key, we intentionally
-    // rely on rejoin detection only in tests that exercise it. Here we just
-    // need distinct member slots; the catalog helper below creates them.
+    // Use distinct seeds so the two non-owner members have distinct public
+    // keys; otherwise the key_to_member map would collide and the catalog
+    // helper's insert would assert in debug builds.
+    let other_a_identity = PlayerIdentity::test_native(
+        &test_nonce(),
+        SessionBackend::NonSteam,
+        "owner-leave-test-a",
+        1,
+    );
+    let other_b_identity = PlayerIdentity::test_native(
+        &test_nonce(),
+        SessionBackend::NonSteam,
+        "owner-leave-test-b",
+        2,
+    );
     let other_a = SessionMemberId::new(200);
     let other_b = SessionMemberId::new(201);
     let session_id = app

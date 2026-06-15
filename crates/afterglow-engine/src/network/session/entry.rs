@@ -42,6 +42,18 @@ pub(crate) fn insert_native_key(
 ) {
     if let PlayerIdentity::Native(proof) = identity {
         if let Ok(key) = <[u8; 32]>::try_from(proof.public_key.as_slice()) {
+            // Guard against accidental key reuse by a different member. A
+            // colliding key that already maps to a *different* member is a
+            // bug or an attack — the new member must rejoin under their
+            // existing member id instead. Re-inserting the same key for the
+            // same member is a no-op and is allowed.
+            if let Some(existing) = entry.key_to_member.get(&key) {
+                debug_assert_eq!(
+                    *existing, member_id,
+                    "native public key collision: key already maps to a different member"
+                );
+                return;
+            }
             entry.key_to_member.insert(key, member_id);
         }
     }
