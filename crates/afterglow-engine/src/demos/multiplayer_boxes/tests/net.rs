@@ -1,25 +1,34 @@
-use std::net::{SocketAddr, TcpListener, UdpSocket};
-use std::time::Duration;
+use std::{
+    net::{SocketAddr, TcpListener, UdpSocket},
+    time::Duration,
+};
 
 use avian3d::prelude::LinearVelocity;
 use bevy::prelude::*;
 use lightyear::prelude::*;
 
-use crate::demos::multiplayer_boxes::movement::{client_send_input, collect_input, ensure_message_receivers, ensure_message_sender, server_receive_input, apply_movement, DemoInput};
-use crate::demos::multiplayer_boxes::protocol::{
-    KinematicBox, MoveInput, MoveInputMsg, PlayerBox, PLAYER_SIZE, PLAYER_SPEED,
+use crate::{
+    demos::multiplayer_boxes::{
+        movement::{
+            DemoInput, apply_movement, client_send_input, collect_input, ensure_message_receivers,
+            ensure_message_sender, server_receive_input,
+        },
+        network::register_demo_protocol,
+        protocol::{MoveInput, MoveInputMsg, PLAYER_SIZE, PlayerBox},
+        scene::{MemberToPlayer, PlayerName},
+    },
+    network::{
+        lightyear::{
+            AfterglowLightyearConfig, AfterglowLightyearPlugin, AfterglowNetcodeConsumerPlugin,
+            AfterglowSessionLightyearBridgePlugin, LightyearRole,
+        },
+        session::{
+            AfterglowSessionExt, AfterglowSessionPlugin, SessionBackend, SessionConfig,
+            SessionEvent, SessionIdentityNonce, SessionLeaveReason, SessionStatus,
+            SessionTransport, identity::PlayerIdentity,
+        },
+    },
 };
-use crate::demos::multiplayer_boxes::scene::{MemberToPlayer, PlayerName};
-use crate::demos::multiplayer_boxes::network::register_demo_protocol;
-use crate::network::lightyear::{
-    AfterglowLightyearConfig, AfterglowLightyearPlugin, AfterglowNetcodeConsumerPlugin,
-    AfterglowSessionLightyearBridgePlugin, LightyearRole,
-};
-use crate::network::session::{
-    AfterglowSessionExt, AfterglowSessionPlugin, SessionBackend, SessionConfig,
-    SessionEvent, SessionIdentityNonce, SessionLeaveReason, SessionStatus, SessionTransport,
-};
-use crate::network::session::identity::PlayerIdentity;
 
 fn find_tcp_addr() -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -79,10 +88,7 @@ fn build_demo_app(role: LightyearRole) -> App {
         .insert_resource(SessionIdentityNonce(test_nonce()));
 
     if is_host {
-        app.add_systems(
-            Startup,
-            spawn_arena_no_graphics,
-        );
+        app.add_systems(Startup, spawn_arena_no_graphics);
         app.add_systems(
             Update,
             (
@@ -93,41 +99,39 @@ fn build_demo_app(role: LightyearRole) -> App {
         );
         app.add_systems(
             FixedUpdate,
-            (apply_movement, server_receive_input, ensure_message_receivers),
+            (
+                apply_movement,
+                server_receive_input,
+                ensure_message_receivers,
+            ),
         );
     } else {
-        app.add_systems(
-            Update,
-            (collect_input,),
-        );
-        app.add_systems(
-            FixedUpdate,
-            (ensure_message_sender, client_send_input),
-        );
+        app.add_systems(Update, (collect_input,));
+        app.add_systems(FixedUpdate, (ensure_message_sender, client_send_input));
     }
+
+    // Tests drive apps manually with `App::update()` instead of `App::run()`.
+    // Bevy does not run plugin `finish()`/`cleanup()` from `update()`, and
+    // Lightyear installs its dynamically-built replication buffer system in
+    // `ReplicationSendPlugin::finish()`. Emulate Bevy's runner lifecycle so
+    // replication systems are actually present in this manual harness.
+    for _ in 0..8 {
+        if app.plugins_state() == bevy::app::PluginsState::Ready {
+            break;
+        }
+    }
+    app.finish();
+    app.cleanup();
 
     app
 }
 
-fn spawn_arena_no_graphics(
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    player_name: Res<PlayerName>,
-) {
+fn spawn_arena_no_graphics(mut commands: Commands, player_name: Res<PlayerName>) {
     // Spawn a PlayerBox for the host using the simplified no-physics variant.
-    spawn_player_box_no_physics(
-        &mut commands,
-        &player_name.0,
-        Vec3::new(-5.0, 0.4, 0.0),
-    );
+    spawn_player_box_no_physics(&mut commands, &player_name.0, Vec3::new(-5.0, 0.4, 0.0));
 }
 
-fn spawn_player_box_no_physics(
-    commands: &mut Commands,
-    owner: &str,
-    pos: Vec3,
-) -> Entity {
+fn spawn_player_box_no_physics(commands: &mut Commands, owner: &str, pos: Vec3) -> Entity {
     commands
         .spawn((
             PlayerBox {
@@ -224,14 +228,19 @@ fn host_and_client_share_player_boxes_over_real_network() {
     let mut client = build_demo_app(LightyearRole::Client);
     drive(&mut [&mut client], 5);
 
-    client
-        .session()
-        .search_non_steam(provider_addr, [("name".into(), "multiplayer-boxes-test".into())].into());
+    client.session().search_non_steam(
+        provider_addr,
+        [("name".into(), "multiplayer-boxes-test".into())].into(),
+    );
 
     let mut code = None;
     for _ in 0..80 {
         drive(&mut [&mut host, &mut client], 1);
-        let results = client.world().resource::<SessionStatus>().last_search_results.clone();
+        let results = client
+            .world()
+            .resource::<SessionStatus>()
+            .last_search_results
+            .clone();
         if !results.is_empty() {
             code = Some(results[0].code.clone());
             break;
@@ -239,7 +248,9 @@ fn host_and_client_share_player_boxes_over_real_network() {
     }
     let code = code.expect("client should find the host session");
 
-    client.session().join_non_steam(code.clone(), provider_addr, identity(1, code.as_str()));
+    client
+        .session()
+        .join_non_steam(code.clone(), provider_addr, identity(1, code.as_str()));
 
     // Wait for session connection + PlayerBox spawn
     let mut found = false;
@@ -247,7 +258,10 @@ fn host_and_client_share_player_boxes_over_real_network() {
         drive(&mut [&mut host, &mut client], 1);
 
         let client_in = client.world().resource::<SessionStatus>().is_in_session();
-        let link = client.world().resource::<crate::network::lightyear::SessionLightyearLinks>().client_link;
+        let link = client
+            .world()
+            .resource::<crate::network::lightyear::SessionLightyearLinks>()
+            .client_link;
         let members = host.world().resource::<SessionStatus>().members.len();
 
         if client_in && link.is_some() && members >= 2 {
@@ -255,7 +269,25 @@ fn host_and_client_share_player_boxes_over_real_network() {
             break;
         }
     }
-    assert!(found, "client should connect and host should see 2+ members");
+    assert!(
+        found,
+        "client should connect and host should see 2+ members; client_status={:?} host_status={:?} client_state={:?} host_state={:?} client_pending={:?} client_links={:?} host_links={:?}",
+        client.world().resource::<SessionStatus>(),
+        host.world().resource::<SessionStatus>(),
+        client
+            .world()
+            .resource::<crate::network::session::AfterglowSessionState>(),
+        host.world()
+            .resource::<crate::network::session::AfterglowSessionState>(),
+        client
+            .world()
+            .resource::<crate::network::lightyear::PendingNetcodeStartup>(),
+        client
+            .world()
+            .resource::<crate::network::lightyear::SessionLightyearLinks>(),
+        host.world()
+            .resource::<crate::network::lightyear::SessionLightyearLinks>(),
+    );
 
     // Give time for MemberJoined to be processed
     drive(&mut [&mut host, &mut client], 60);
@@ -271,7 +303,7 @@ fn host_and_client_share_player_boxes_over_real_network() {
         let mut count = 0;
         for _ in 0..600 {
             drive(&mut [&mut host, &mut client], 1);
-            let mut world = client.world_mut();
+            let world = client.world_mut();
             count = world
                 .query_filtered::<Entity, With<PlayerBox>>()
                 .iter(&world)
@@ -282,64 +314,6 @@ fn host_and_client_share_player_boxes_over_real_network() {
         }
         count
     };
-
-    // Diagnostic
-    if client_player_count == 0 {
-        let mut world = client.world_mut();
-        let total = world.entities().len();
-        let players = world
-            .query_filtered::<Entity, With<PlayerBox>>()
-            .iter(&world)
-            .count();
-        let replicated = world
-            .query_filtered::<Entity, With<Replicate>>()
-            .iter(&world)
-            .count();
-        let link = world.resource::<crate::network::lightyear::SessionLightyearLinks>();
-        let client_link = link.client_link;
-        let lc = client_link.map(|e| {
-            (
-                world.get::<lightyear::prelude::ReplicationReceiver>(e).is_some(),
-                world.get::<lightyear::prelude::MessageManager>(e).is_some(),
-                world.get::<lightyear::prelude::Connecting>(e).is_some(),
-                world.get::<lightyear::prelude::Disconnected>(e).is_some(),
-                world.get::<lightyear::prelude::Connected>(e).is_some(),
-                world.get::<RemoteId>(e).map(|r| r.0),
-                world.get::<LocalId>(e).map(|l| l.0),
-                world.get::<Link>(e).is_some(),
-                world.get::<Linked>(e).is_some(),
-                world.get::<Client>(e).is_some(),
-                world.get::<Transport>(e).is_some(),
-            )
-        });
-        let host_diag = {
-            let mut w = host.world_mut();
-            let total = w.entities().len();
-            let players = w
-                .query_filtered::<Entity, With<PlayerBox>>()
-                .iter(&w)
-                .count();
-            let netcode_servers = w
-                .query_filtered::<Entity, With<lightyear::prelude::server::NetcodeServer>>()
-                .iter(&w)
-                .count();
-            let link_of = w
-                .query_filtered::<Entity, With<lightyear::prelude::LinkOf>>()
-                .iter(&w)
-                .count();
-            let server_starts = w
-                .query_filtered::<Entity, With<lightyear::prelude::server::Started>>()
-                .iter(&w)
-                .count();
-            (total, players, netcode_servers, link_of, server_starts)
-        };
-        panic!(
-            "client should observe at least one replicated PlayerBox within 600 frames; replication is not flowing. \nClient: total={} playerboxes={} replicated={} client_link={:?} lc={:?}\n\
-             Host: total={} playerboxes={} netcode_servers={} link_of={} server_starts={}",
-            total, players, replicated, client_link, lc,
-            host_diag.0, host_diag.1, host_diag.2, host_diag.3, host_diag.4
-        );
-    }
 
     assert!(
         client_player_count > 0,
@@ -383,7 +357,11 @@ fn host_and_client_share_player_boxes_over_real_network() {
         .iter(host.world())
         .collect();
     for vel in &host_all_vel {
-        assert_eq!(vel.0, Vec3::ZERO, "all velocities should be zero (no input)");
+        assert_eq!(
+            vel.0,
+            Vec3::ZERO,
+            "all velocities should be zero (no input)"
+        );
     }
 
     // Check message receiver plumbing on the host.

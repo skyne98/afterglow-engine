@@ -28,42 +28,46 @@ bun run native -- --name multiplayer-boxes --connect 127.0.0.1:5000 \
 
 Or via `cargo run -p agx --` with the same flags.
 
-## Components
+## Implemented Components
 
 ```rust
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct PlayerBox {
-    pub owner: PlayerName,        // "alice" / "bob" / etc
-    pub color: Color,             // distinct per player
+    pub owner: String,
 }
 
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct KinematicBox {
-    pub id: u32,                  // 0..N, server-assigned
-    pub initial_pos: Vec3,        // for respawn
+    pub id: u32,
+    pub initial_pos: Vec3,
 }
 
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct MoveInput {
-    pub direction: Vec2,          // normalized in input system
+    pub direction: Vec2,
+}
+
+#[derive(Message, Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct MoveInputMsg {
+    pub owner: String,
+    pub direction: Vec2,
 }
 ```
 
-- `PlayerBox` is `Replicate`d with `PredictionTarget::to_clients(All)`,
-  pre-spawned on server at session join. Server authoritative.
-- `KinematicBox` is replicated, server-authoritative. Position/Rotation
-  are the Avian `Position`/`Rotation` components (via `lightyear_avian3d`'s
-  default `Position` replication mode).
-- `MoveInput` flows via Leafwing `ActionState` → Lightyear's input plugin.
+- `PlayerBox`, `KinematicBox`, `MoveInput`, and `Transform` are registered
+  in the Lightyear component protocol.
+- Server-spawned player and arena entities use `Replicate::to_clients(All)`.
+- Client-to-server movement currently uses explicit Lightyear messages on
+  `MoveInputChannel`, not shared resources or Leafwing input replication.
 
 ## Physics setup
 
-- `lightyear_avian3d` with `AvianReplicationMode::Position` (server physics
-  authoritative, predict on client).
+- Uses standard `avian3d::PhysicsPlugins`; `lightyear_avian3d` is not used in
+  v1 because the available crate versions are not compatible.
 - Floor: large static cuboid at y=0.
 - Walls: 4 static cuboids around a 20×20 arena.
-- 8 `KinematicBox`es scattered on the floor, each ~1m³, dynamic
-  colliders so players can shove them.
+- 8 `KinematicBox`es scattered on the floor, each ~1m³, dynamic colliders so
+  players can shove them.
 - Player boxes: 0.8m dynamic colliders, ~50kg, controlled by movement.
 
 ## Movement
@@ -74,8 +78,10 @@ Server-side system in `FixedUpdate`:
 - Avian handles collision response (pushing kinematic boxes)
 
 Client-side prediction:
-- Same system runs in `FixedUpdate` on Predicted entity
-- Lightyear rolls back on server correction, re-applies buffered inputs
+- v1 focuses on proving transport, replication, and client→server input.
+- The runnable test verifies that the remote client receives replicated
+  `PlayerBox` entities over real UDP/netcode and that client input moves the
+  authoritative server entity.
 
 ## Camera
 
@@ -129,7 +135,27 @@ Modified:
 4. CLI validation: `--host`/`--connect` mutual exclusion
 5. CLI validation: invalid combinations rejected
 6. Integration: two MinimalPlugin apps, host creates session, client joins,
-   server-authoritative physics runs, both observe each other.
+   Lightyear UDP/netcode links connect, replicated `PlayerBox` entities arrive
+   on the client, and client input moves the authoritative server entity.
+
+Current regression result: `cargo test -p afterglow-engine --lib --features
+multiplayer demos::multiplayer_boxes::tests::net::host_and_client_share` passes.
+The full afterglow-engine lib suite reports 315 passed, 0 ignored.
+
+## Debugging Notes
+
+Two Lightyear setup details were required for the integration test to become
+honest and pass:
+
+1. Bevy tests that manually call `App::update()` must emulate the runner
+   lifecycle with `plugins_state()`, `finish()`, and `cleanup()` after protocol
+   registration. Lightyear builds its replication buffer system in
+   `ReplicationSendPlugin::finish()`; without this, entities get
+   `ReplicationState` entries but `spawned` remains false forever.
+2. The session→Lightyear bridge cannot rely on a single `Joined` event.
+   `Joined` carries the transport while `MemberJoined` may be the event that
+   makes the local `SessionMemberId` valid. The bridge now reconciles DirectUdp
+   startup from `SessionStatus` + `AfterglowSessionState` each frame.
 
 ## Out of scope for v1
 

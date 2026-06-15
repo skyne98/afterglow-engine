@@ -27,17 +27,18 @@ use lightyear::{
 };
 
 #[cfg(feature = "lightyear")]
-use lightyear::prelude::{
-    Authentication as NetcodeAuthentication, LocalAddr, UdpIo,
-};
-#[cfg(feature = "lightyear")]
 use lightyear::prelude::client::{Connect, NetcodeClient, NetcodeConfig as ClientNetcodeConfig};
 #[cfg(feature = "lightyear")]
 use lightyear::prelude::server::{NetcodeConfig as ServerNetcodeConfig, NetcodeServer, Start};
+#[cfg(feature = "lightyear")]
+use lightyear::prelude::{Authentication as NetcodeAuthentication, LocalAddr, UdpIo};
 
 use crate::network::{
     lightyear::{AfterglowLightyearConfig, LightyearRole},
-    session::{AfterglowSessionSet, AfterglowSessionState, SessionEvent, SessionTransport},
+    session::{
+        AfterglowSessionSet, AfterglowSessionState, SessionEvent, SessionTransport,
+        status::SessionStatus,
+    },
 };
 
 // ---------------------------------------------------------------------------
@@ -145,6 +146,7 @@ fn handle_session_lightyear_links(
     mut links: ResMut<SessionLightyearLinks>,
     mut pending: ResMut<PendingNetcodeStartup>,
     session_state: Option<Res<AfterglowSessionState>>,
+    status: Option<Res<SessionStatus>>,
     config: Option<Res<AfterglowLightyearConfig>>,
     registry: Option<Res<ChannelRegistry>>,
     mut events: MessageReader<SessionEvent>,
@@ -227,39 +229,14 @@ fn handle_session_lightyear_links(
                         links.server_entity = Some(server_entity);
                     }
                     SessionTransport::DirectUdp { host } => {
-                        if let Ok(server_addr) = host.parse::<SocketAddr>() {
-                            let cfg = config.as_deref().cloned().unwrap_or_default();
-                            let protocol_id = cfg.protocol_id;
-                            let private_key = cfg.netcode_private_key;
-
-                            let client_id = session_state
-                                .as_deref()
-                                .and_then(|state| {
-                                    u64::try_from(state.local_member_id.as_raw()).ok()
-                                })
-                                .filter(|&id| id != 0);
-
-                            if matches!(cfg.role, LightyearRole::Host | LightyearRole::Client)
-                                && let Some(cid) = client_id
-                            {
-                                pending.client = Some(NetcodeClientParams {
-                                    server_addr,
-                                    client_id: cid,
-                                    protocol_id,
-                                    private_key,
-                                });
-                            }
-
-                            if matches!(cfg.role, LightyearRole::Host | LightyearRole::Server) {
-                                pending.server = Some(NetcodeServerParams {
-                                    bind_addr: server_addr,
-                                    protocol_id,
-                                    private_key,
-                                });
-                            }
-                        }
-                        // Invalid host: stale state cleared above; no panic,
-                        // no error event emitted.
+                        queue_direct_udp_startup(
+                            host,
+                            session_state.as_deref(),
+                            config.as_deref(),
+                            &mut pending,
+                            true,
+                            true,
+                        );
                     }
                 }
             }
@@ -276,9 +253,92 @@ fn handle_session_lightyear_links(
                 pending.client = None;
                 pending.server = None;
             }
-            // Ignored: SearchResults, MemberJoined, MemberLeft, Error
+            SessionEvent::MemberJoined { session, .. } => {
+                let Some(state) = session_state.as_deref() else {
+                    continue;
+                };
+                if state.current_session != Some(*session)
+                    || links.client_link.is_some()
+                    || pending.client.is_some()
+                {
+                    continue;
+                }
+                let Some(info) = status.as_deref().and_then(|s| s.info.as_ref()) else {
+                    continue;
+                };
+                if let SessionTransport::DirectUdp { host } = &info.transport {
+                    queue_direct_udp_startup(
+                        host,
+                        Some(state),
+                        config.as_deref(),
+                        &mut pending,
+                        false,
+                        true,
+                    );
+                }
+            }
+            // Ignored: SearchResults, MemberLeft, Error
             _ => {}
         }
+    }
+
+    // Reconcile DirectUdp startup independently of event order. `Joined`
+    // carries the transport while `MemberJoined` may be the first event that
+    // gives a remote client its local member id; if the bridge processes those
+    // in an unlucky order, a one-shot event handler can miss startup forever.
+    let Some(info) = status.as_deref().and_then(|s| s.info.as_ref()) else {
+        return;
+    };
+    if let SessionTransport::DirectUdp { host } = &info.transport {
+        let queue_server = links.server_link.is_none() && pending.server.is_none();
+        let queue_client = links.client_link.is_none() && pending.client.is_none();
+        queue_direct_udp_startup(
+            host,
+            session_state.as_deref(),
+            config.as_deref(),
+            &mut pending,
+            queue_server,
+            queue_client,
+        );
+    }
+}
+
+fn queue_direct_udp_startup(
+    host: &str,
+    session_state: Option<&AfterglowSessionState>,
+    config: Option<&AfterglowLightyearConfig>,
+    pending: &mut PendingNetcodeStartup,
+    queue_server: bool,
+    queue_client: bool,
+) {
+    let Ok(server_addr) = host.parse::<SocketAddr>() else {
+        return;
+    };
+    let cfg = config.cloned().unwrap_or_default();
+    let protocol_id = cfg.protocol_id;
+    let private_key = cfg.netcode_private_key;
+    let client_id = session_state
+        .and_then(|state| u64::try_from(state.local_member_id.as_raw()).ok())
+        .filter(|&id| id != 0);
+
+    if queue_client
+        && matches!(cfg.role, LightyearRole::Host | LightyearRole::Client)
+        && let Some(cid) = client_id
+    {
+        pending.client = Some(NetcodeClientParams {
+            server_addr,
+            client_id: cid,
+            protocol_id,
+            private_key,
+        });
+    }
+
+    if queue_server && matches!(cfg.role, LightyearRole::Host | LightyearRole::Server) {
+        pending.server = Some(NetcodeServerParams {
+            bind_addr: server_addr,
+            protocol_id,
+            private_key,
+        });
     }
 }
 
@@ -343,12 +403,11 @@ fn consume_pending_netcode_startup(
                 transport.add_sender_from_registry::<ActionsChannel>(registry);
                 transport.add_receiver_from_registry::<ActionsChannel>(registry);
 
-                // Per `docs/subject/lightyear.md` § 4.2:
-                //   Client entity requires Client, LocalId, RemoteId,
-                //   Link, Linked, Transport, MessageManager,
-                //   ReplicationReceiver, PredictionManager.
-                // `Connected` is added by the NetcodeClientPlugin's
-                // observer when the handshake completes.
+                // Per Lightyear's entity-as-peer model, a client link starts
+                // with Client, LocalId, RemoteId, Link, Transport,
+                // MessageManager, ReplicationReceiver, and PredictionManager.
+                // `Connect` triggers `LinkStart`; UdpIo then adds `Linked`,
+                // and NetcodeClientPlugin adds `Connected` after handshake.
                 let entity = commands
                     .spawn((
                         Client::default(),
@@ -384,10 +443,10 @@ fn consume_pending_netcode_startup(
             ..Default::default()
         };
         let server = NetcodeServer::new(config);
-        // Per `docs/subject/lightyear.md` § 4.2:
-        //   Server entity requires Server, Link, Transport, MessageManager.
-        // `Started` is added by the NetcodeServerPlugin's observer when the
-        // server finishes binding.
+        // The server entity owns the UDP listener. `Start` triggers
+        // `LinkStart`; ServerUdpIo then binds the socket and adds `Linked`,
+        // while NetcodeServerPlugin adds `Started`. Per-client replication
+        // transports live on the LinkOf entities created by Lightyear.
         let entity = commands
             .spawn((
                 Server::default(),

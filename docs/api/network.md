@@ -384,21 +384,36 @@ The consumer is separate so tests and headless scenarios can inspect
 `PendingNetcodeStartup` without opening sockets, and so games can replace it
 with custom transport logic if needed.
 
+Testing note: Bevy harnesses that drive apps manually with `App::update()` must
+emulate the runner lifecycle after registering the Lightyear protocol and before
+the first update:
+
+```rust
+while app.plugins_state() == bevy::app::PluginsState::Adding {}
+app.finish();
+app.cleanup();
+```
+
+Lightyear builds its dynamic replication buffer system in
+`ReplicationSendPlugin::finish()`; without this, connection/link components may
+look correct but replicated entity spawns will never be buffered.
+
 ### Transport Behaviour
 
 | `SessionTransport` | Bridge Action |
 |---|---|
 | `Local` | Despawns any previously tracked entities, then spawns a server entity (`Server::default()`, `Started`), a client link entity with Crossbeam transport, and a server link entity with Crossbeam transport. The client link carries `Client`, `LocalId`, `RemoteId(PeerId::Server)`, `Connected`, `Link`, `Linked`, `CrossbeamIo`, `Transport`, `MessageManager`, `ReplicationReceiver`, and `PredictionManager`. The server link carries `LinkOf { server }`, `ClientOf`, `LocalId(PeerId::Server)`, `RemoteId`, `Connected`, `Link`, `Linked`, `CrossbeamIo`, `Transport`, `MessageManager`, and `ReplicationSender::new(Duration::ZERO, SendUpdatesMode::SinceLastAck, false)`. |
-| `DirectUdp { host }` | Parses `host` into a `SocketAddr`. Writes `NetcodeClientParams` to `PendingNetcodeStartup` when the local `SessionMemberId` is a valid nonzero `u64`. If `AfterglowLightyearConfig.role` is `Host` or `Server`, also writes `NetcodeServerParams`. The `private_key` field in both param structs is populated from `AfterglowLightyearConfig.netcode_private_key` (default `[0u8; 32]` — a development placeholder that must be replaced before any real network deployment). If the host string cannot be parsed into a `SocketAddr`, pending state is cleared and a warning is logged; no panic occurs. No link entities are spawned — a separate consumer should drain `PendingNetcodeStartup`. |
+| `DirectUdp { host }` | Parses `host` into a `SocketAddr`. Writes `NetcodeClientParams` to `PendingNetcodeStartup` when the local `SessionMemberId` is a valid nonzero `u64`. If `AfterglowLightyearConfig.role` is `Host` or `Server`, also writes `NetcodeServerParams`. The bridge also reconciles DirectUdp startup from the current `SessionStatus` + `AfterglowSessionState` each frame, so startup is robust if `Joined` and `MemberJoined` arrive in either order. The `private_key` field in both param structs is populated from `AfterglowLightyearConfig.netcode_private_key` (default `[0u8; 32]` — a development placeholder that must be replaced before any real network deployment). If the host string cannot be parsed into a `SocketAddr`, no pending startup is written and no panic occurs. No link entities are spawned — a separate consumer should drain `PendingNetcodeStartup`. |
 
 ### Session Event Handling
 
 | Event | Action |
 |---|---|
 | `Created` / `Joined` (Local) | Spawn tracked Crossbeam link entities (idempotent). |
-| `Created` / `Joined` (Netcode) | Write pending netcode startup parameters. |
+| `Created` / `Joined` (Netcode) | Write pending netcode startup parameters when enough state is already available. |
+| `MemberJoined` (Netcode) | Retry/reconcile client startup if this is the event that made the local `SessionMemberId` valid. |
 | `Left` / `SessionEnded` | Despawn tracked entities, clear pending startup. |
-| `SearchResults`, `MemberJoined`, `MemberLeft`, `Error` | Ignored. |
+| `SearchResults`, `MemberLeft`, `Error` | Ignored by the Lightyear bridge. |
 
 ## Legacy Removals
 
