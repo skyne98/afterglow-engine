@@ -8,6 +8,7 @@ pub mod scene;
 pub mod tests;
 
 use bevy::prelude::*;
+use lightyear::prelude::{ReplicationSystems, client::input::InputSystems};
 use std::net::SocketAddr;
 
 use crate::network::{
@@ -84,7 +85,30 @@ impl Plugin for MultiplayerBoxesPlugin {
                 }),
         );
 
-        app.add_systems(Update, movement::collect_input);
+        app.add_systems(
+            Update,
+            (
+                movement::configure_demo_input_rebroadcast,
+                movement::configure_demo_input_timeline,
+                movement::add_input_map_to_local_predicted_player
+                    .after(scene::attach_replicated_player_visuals),
+            ),
+        );
+        app.add_systems(
+            FixedPreUpdate,
+            movement::collect_input.in_set(InputSystems::WriteClientInputs),
+        );
+        app.add_systems(
+            PreUpdate,
+            (
+                scene::attach_predicted_player_physics,
+                scene::attach_predicted_kinematic_physics,
+            )
+                .after(ReplicationSystems::Receive)
+                .run_if(|config: Res<AfterglowLightyearConfig>| {
+                    matches!(config.role, LightyearRole::Client)
+                }),
+        );
         app.add_systems(
             Update,
             (
@@ -119,27 +143,8 @@ impl Plugin for MultiplayerBoxesPlugin {
 
         app.add_systems(
             FixedUpdate,
-            (movement::apply_movement, movement::server_receive_input).run_if(
-                |config: Res<AfterglowLightyearConfig>| matches!(config.role, LightyearRole::Host),
-            ),
-        );
-
-        app.add_systems(
-            FixedUpdate,
-            (
-                movement::apply_movement,
-                movement::ensure_message_sender,
-                movement::client_send_input,
-            )
-                .run_if(|config: Res<AfterglowLightyearConfig>| {
-                    matches!(config.role, LightyearRole::Client)
-                }),
-        );
-
-        app.add_systems(
-            FixedUpdate,
-            movement::ensure_message_receivers.run_if(|config: Res<AfterglowLightyearConfig>| {
-                matches!(config.role, LightyearRole::Host)
+            movement::apply_movement.run_if(|config: Res<AfterglowLightyearConfig>| {
+                matches!(config.role, LightyearRole::Host | LightyearRole::Client)
             }),
         );
     }

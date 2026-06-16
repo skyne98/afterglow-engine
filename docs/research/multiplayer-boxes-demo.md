@@ -42,33 +42,30 @@ pub struct KinematicBox {
     pub initial_pos: Vec3,
 }
 
-#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub struct MoveInput {
-    pub direction: Vec2,
-}
-
-#[derive(Message, Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub struct MoveInputMsg {
-    pub owner: String,
-    pub direction: Vec2,
-}
 ```
 
-- `PlayerBox`, `KinematicBox`, `MoveInput`, and `Transform` are registered
+- `PlayerBox`, `KinematicBox`, `Transform`, and Avian physics state are registered
   in the Lightyear component protocol.
 - Server-spawned player and dynamic box entities use `Replicate::to_clients(All)`.
 - Server entities explicitly carry `Transform` so Lightyear replicates pose.
 - Bevy mesh/material handles are not replicated. Clients attach local
   `Mesh3d`/`MeshMaterial3d` presentation components to replicated `PlayerBox`
-  and `KinematicBox` entities, and spawn local arena floor/wall visuals.
-- Client-to-server movement currently uses explicit Lightyear messages on
-  `MoveInputChannel`, not shared resources or Leafwing input replication. This
-  remains a demo-local bridge; the documented long-term path is Lightyear's
-  native Leafwing input buffering.
-- `MoveInputChannel` must be added to the client link transport as a sender
-  and to each server-side `LinkOf` transport as a receiver. The helper systems
-  extend the existing Lightyear `Transport` instead of replacing it, preserving
-  replication channels.
+  and `KinematicBox` entities, and spawn local arena floor/wall visuals plus
+  static local wall/floor colliders.
+- Client-to-server movement uses Lightyear's native Leafwing input path for
+  `AfterglowAction`: local `InputMap<AfterglowAction>` components produce
+  `ActionState`s, Lightyear buffers them, sends them over `InputChannel`, and
+  applies them to the mapped server entity.
+- The demo enables Lightyear input rebroadcast for `AfterglowAction` so remote
+  predicted entities can receive other players' input history instead of waiting
+  only for transform snapshots. Client links receive a fixed two-tick
+  `InputTimelineConfig`; this delays server-side consumption, not local predicted
+  visuals. Keyboard-to-action writes run in `FixedPreUpdate` /
+  `InputSystems::WriteClientInputs`, before Lightyear buffers inputs and restores
+  delayed snapshots.
+- Link transports must include Lightyear's native `InputChannel` in addition to
+  replication channels. The engine link setup extends transports instead of
+  replacing them, preserving replication metadata/update/action channels.
 - Shared movement systems query `AfterglowNetworkContext::get_connection_status()`
   for side/session facts instead of hiding logic in separate client/server
   implementations.
@@ -86,17 +83,21 @@ pub struct MoveInputMsg {
 ## Movement
 
 Shared movement system in `FixedUpdate`:
-- Host-local keyboard input applies only to the host player's box, selected by
-  `PlayerName`.
-- Remote clients use the same movement system locally: when
-  `AfterglowNetworkContext` says this world runs client prediction, the system
-  matches the local `SessionMemberId` string (for example `"2"`) to the
-  replicated `PlayerBox.owner` and applies immediate velocity.
-- The authoritative server still receives `MoveInputMsg { owner, direction }`
-  and applies velocity only to the matching `PlayerBox`.
-- Avian handles collision response (pushing kinematic boxes). The workspace now
-  builds Avian without `parallel` and with `enhanced-determinism` for a simpler
-  deterministic baseline.
+- Host-local keyboard input is represented by a local `InputMap` on the host
+  player entity and applies only to the host player's box.
+- Remote clients use the same movement system locally on the Lightyear
+  `Predicted` player copy. The system writes `ActionState<AfterglowAction>` for
+  Lightyear networking, but local predicted presentation reads the current
+  `DemoInput` keyboard sample directly so a delayed or rollback-restored zero
+  `ActionState` cannot freeze the local player after focus changes.
+- The authoritative server reads the same `ActionState<AfterglowAction>` after
+  Lightyear maps and applies the client's input message to the server entity.
+- Avian handles collision response. Client worlds now include local static arena
+  colliders and Lightyear-predicted dynamic cubes so the local player collides
+  with the same kind of physics world instead of visually penetrating
+  server-only/interpolated props. The workspace builds Avian without `parallel`,
+  with `enhanced-determinism`, and with `serialize` for Lightyear component
+  replication.
 
 Client-side prediction:
 - Session-member player boxes now use Lightyear-native prediction targets:
@@ -104,15 +105,20 @@ Client-side prediction:
   `InterpolationTarget::AllExceptSingle(...)` for everyone else. The host also
   binds numeric-owner `PlayerBox` entities to the matching server-side client
   link with `ControlledBy` once that link exists.
-- `Transform` is registered for Lightyear prediction history and visual
-  correction (`Isometry3d` correction delta) plus transform interpolation.
+- `Transform` is registered as the single networked pose representation for
+  Lightyear prediction history, visual correction (`Isometry3d` correction
+  delta), and transform interpolation. Avian `Position`/`Rotation` are local
+  physics internals in this Avian 0.6 demo; they are not also registered for
+  Lightyear prediction, avoiding dual canonical pose state.
 - The client renders and simulates the Lightyear `Predicted` copy for its local
-  player. Remote players/physics boxes render through Lightyear `Interpolated`
-  copies. Confirmed roots are not rendered as gameplay presentation.
+  player. Predicted player/cube copies receive local Avian physics components in
+  `PreUpdate` after replication receive and before fixed simulation. Remote
+  players render through Lightyear `Interpolated` copies, while dynamic cubes are
+  predicted to all clients so local player/cube/wall contacts can resolve
+  immediately. Confirmed roots are not rendered as gameplay presentation.
 - Server snapshots still provide authority/correction through Lightyear's
-  rollback/reconciliation machinery. The remaining demo-local bridge is only the
-  explicit `MoveInputMsg`; the next step is replacing it with the documented
-  Lightyear/Leafwing native input path.
+  rollback/reconciliation machinery. Input transport is now Lightyear/Leafwing;
+  no demo-local movement message remains.
 - The runnable test verifies that the remote client receives replicated
   `PlayerBox` entities over real UDP/netcode, gains client-side presentation and
   local physics components on the predicted copy, and that client input moves the
@@ -204,9 +210,9 @@ honest and pass:
    visual prefabs to replicated logical entities.
 4. Host input must be scoped to the host-owned player box. The initial server
    movement system wrote the host keyboard velocity to every `PlayerBox`, so
-   Alice moved Bob. Remote input also needs explicit `MoveInputChannel`
-   receiver wiring on server-side `LinkOf` transports; adding a
-   `MessageReceiver` component alone is not enough.
+   Alice moved Bob. Remote input must use Lightyear's native `InputChannel` on
+   the relevant link transports; adding input components without channel wiring
+   is not enough.
 5. Side checks should stay explicit and simple. `AfterglowNetworkContext` is the
    Fabric-like global resource for querying whether a world runs authority,
    client prediction, host mode, and which `SessionMemberId` belongs to the
@@ -214,6 +220,21 @@ honest and pass:
 6. Client replay/correction should be handled by Lightyear, not an engine-local
    smoothing shim. Render the local `Predicted` copy and remote `Interpolated`
    copies; avoid rendering confirmed roots directly as gameplay presentation.
+7. Local prediction must include the collision world that affects the local
+   player. A predicted player colliding against server-only/interpolated cubes
+   will visually penetrate them and then snap out. For interactive dynamic props,
+   predict the prop (or at least a deterministic local proxy) and include local
+   static colliders for walls/floors.
+8. Do not mix predicted `Transform` with predicted Avian `Position`/`Rotation`
+   unless the Lightyear-Avian bridge for the exact Avian version owns the sync
+   order. Lightyear 0.26's official `lightyear_avian3d` bridge targets Avian
+   0.5, while Afterglow uses Avian 0.6, so the demo keeps Transform as the
+   networked pose and initializes Avian Position/Rotation locally before physics.
+9. Do not drive local presentation from a delayed Lightyear `ActionState`.
+   Lightyear may restore an older zero-input snapshot after focus changes,
+   timeline sync, or rollback. Write that `ActionState` for networking, mirror
+   Leafwing's update/fixed mirrors, and render/move the local predicted actor
+   from the immediate keyboard sample.
 
 ## Out of scope for v1
 

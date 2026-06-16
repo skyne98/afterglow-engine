@@ -114,7 +114,20 @@ of maintaining separate opaque client/server gameplay implementations.
 For locally predicted entities, render Lightyear's `Predicted` copy and let
 Lightyear handle rollback/reconciliation and visual correction. Remote actors
 should render through `Interpolated` copies where available; confirmed roots are
-state anchors, not player-facing presentation.
+state anchors, not player-facing presentation. Pick one canonical networked pose
+representation per physics stack. With Avian 0.6 in the current demo, that is
+`Transform`; Avian `Position`/`Rotation` stay local physics internals because
+Lightyear 0.26's official Avian bridge targets Avian 0.5. If a local predicted
+actor can physically contact props/walls, those contact participants must exist
+in the local prediction world too; otherwise the actor can visually penetrate
+stale server/interpolated objects until correction arrives.
+
+Use Lightyear's native input stack for player commands. In the current demo this
+means `InputMap<AfterglowAction>` + `ActionState<AfterglowAction>` on controlled
+entities and Lightyear's `InputChannel` on link transports; do not build parallel
+demo-local movement messages. Manual keyboard-to-action writes must run in
+`FixedPreUpdate` / `InputSystems::WriteClientInputs` so Lightyear buffers them
+before it restores delayed input snapshots.
 
 Use Lightyear's existing `ControlledBy` / `Controlled` relationship to bind an
 entity to the link that controls it, and Leafwing `InputMap<AfterglowAction>` /
@@ -134,8 +147,12 @@ Networked input is entity-scoped Leafwing state:
 app.add_plugins(lightyear_inputs_leafwing::InputPlugin::<AfterglowAction>::default());
 ```
 
-Gameplay reads `ActionState<AfterglowAction>` in fixed schedules. Afterglow no
-longer serializes custom command DTOs for movement/combat input.
+Gameplay reads `ActionState<AfterglowAction>` in fixed schedules on the server
+and for remote/rebroadcast prediction. Afterglow no longer serializes custom
+command DTOs for movement/combat input. If a game wants delayed server
+consumption, configure `InputTimelineConfig` on the client link, but keep the
+local predicted presentation immediate rather than rendering the local player
+from a delayed state.
 
 Clients send input only. They do not send authoritative spawn, despawn,
 interaction-result, hit, loot, health, or door-state requests. Server gameplay

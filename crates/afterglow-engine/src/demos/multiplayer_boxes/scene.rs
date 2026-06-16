@@ -5,9 +5,12 @@ use std::collections::HashMap;
 
 use super::protocol::*;
 
-use crate::network::{
-    AfterglowNetworkContext,
-    session::{SessionEvent, SessionLeaveReason, SessionMemberId},
+use crate::{
+    input::default_gameplay_input_map,
+    network::{
+        AfterglowNetworkContext,
+        session::{SessionEvent, SessionLeaveReason, SessionMemberId},
+    },
 };
 
 #[derive(Resource, Default)]
@@ -20,10 +23,9 @@ pub struct MemberToPlayer(pub HashMap<SessionMemberId, Entity>);
 pub struct PlayerVisualAttached;
 
 pub fn configure_physics(app: &mut App) {
-    // Use standard Avian PhysicsPlugins. LightyearAvianPlugin is not available
-    // due to avian3d version incompatibility with lightyear_avian3d.
-    // Physics simulation runs server-authoritative; Position/Rotation are
-    // replicated via custom wrapper components registered in network.rs.
+    // Keep Avian 0.6 as the physics runtime. Lightyear 0.26's official
+    // lightyear_avian3d bridge targets Avian 0.5, so this demo uses Transform
+    // as the networked pose and keeps Avian Position/Rotation local.
     app.add_plugins(PhysicsPlugins::default());
 }
 
@@ -111,9 +113,10 @@ pub fn spawn_arena(
             ),
             Position::from(*pos),
             Rotation::default(),
+            LinearVelocity::ZERO,
             Transform::from_translation(*pos),
             Replicate::to_clients(NetworkTarget::All),
-            InterpolationTarget::to_clients(NetworkTarget::All),
+            PredictionTarget::to_clients(NetworkTarget::All),
         ));
     }
 }
@@ -157,10 +160,8 @@ pub fn spawn_player_box(
             Collider::cuboid(PLAYER_SIZE * 2.0, PLAYER_SIZE * 2.0, PLAYER_SIZE * 2.0),
             Position::from(pos),
             Rotation::default(),
+            LinearVelocity::ZERO,
             Transform::from_translation(pos),
-            MoveInput {
-                direction: Vec2::ZERO,
-            },
             Replicate::to_clients(NetworkTarget::All),
             player_prediction_target(owner),
             player_interpolation_target(owner),
@@ -232,6 +233,59 @@ pub fn spawn_client_arena_visuals(
     }
 }
 
+pub fn attach_predicted_player_physics(
+    mut commands: Commands,
+    players: Query<
+        (Entity, Option<&Transform>, Has<LinearVelocity>),
+        (With<PlayerBox>, With<Predicted>, Without<RigidBody>),
+    >,
+) {
+    for (entity, transform, has_velocity) in &players {
+        let transform = transform.copied().unwrap_or_default();
+        let mut entity_commands = commands.entity(entity);
+        entity_commands.insert((
+            RigidBody::Dynamic,
+            Collider::cuboid(PLAYER_SIZE * 2.0, PLAYER_SIZE * 2.0, PLAYER_SIZE * 2.0),
+            Position::from(transform.translation),
+            Rotation::from(transform.rotation),
+        ));
+        if !has_velocity {
+            entity_commands.insert(LinearVelocity::ZERO);
+        }
+    }
+}
+
+pub fn attach_predicted_kinematic_physics(
+    mut commands: Commands,
+    boxes: Query<
+        (
+            Entity,
+            &KinematicBox,
+            Option<&Transform>,
+            Has<LinearVelocity>,
+        ),
+        (With<Predicted>, Without<RigidBody>),
+    >,
+) {
+    for (entity, box_, transform, has_velocity) in &boxes {
+        let pos = transform.map_or(box_.initial_pos, |transform| transform.translation);
+        let mut entity_commands = commands.entity(entity);
+        entity_commands.insert((
+            RigidBody::Dynamic,
+            Collider::cuboid(
+                KINEMATIC_BOX_SIZE * 2.0,
+                KINEMATIC_BOX_SIZE * 2.0,
+                KINEMATIC_BOX_SIZE * 2.0,
+            ),
+            Position::from(pos),
+            Rotation::from(transform.map_or(Quat::IDENTITY, |transform| transform.rotation)),
+        ));
+        if !has_velocity {
+            entity_commands.insert(LinearVelocity::ZERO);
+        }
+    }
+}
+
 pub fn attach_replicated_player_visuals(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -240,7 +294,6 @@ pub fn attach_replicated_player_visuals(
     players: Query<(
         Entity,
         &PlayerBox,
-        Option<&Transform>,
         Has<Predicted>,
         Has<Interpolated>,
         Option<&PlayerVisualAttached>,
@@ -249,7 +302,7 @@ pub fn attach_replicated_player_visuals(
     let local_owner = context
         .as_deref()
         .and_then(|ctx| ctx.get_connection_status().local_member_owner());
-    for (entity, player, transform, predicted, interpolated, attached) in &players {
+    for (entity, player, predicted, interpolated, attached) in &players {
         if attached.is_some() {
             continue;
         }
@@ -263,20 +316,11 @@ pub fn attach_replicated_player_visuals(
         } else {
             330.0
         };
-        let mesh = Mesh3d(meshes.add(Cuboid::from_size(Vec3::splat(PLAYER_SIZE * 2.0))));
-        let material = MeshMaterial3d(materials.add(Color::hsla(hue, 0.8, 0.5, 1.0)));
-        let pos = transform.map_or(Vec3::ZERO, |transform| transform.translation);
-        let mut entity_commands = commands.entity(entity);
-        entity_commands.insert((PlayerVisualAttached, mesh, material));
-        if is_local_owner {
-            entity_commands.insert((
-                RigidBody::Dynamic,
-                Collider::cuboid(PLAYER_SIZE * 2.0, PLAYER_SIZE * 2.0, PLAYER_SIZE * 2.0),
-                Position::from(pos),
-                Rotation::default(),
-                LinearVelocity::ZERO,
-            ));
-        }
+        commands.entity(entity).insert((
+            PlayerVisualAttached,
+            Mesh3d(meshes.add(Cuboid::from_size(Vec3::splat(PLAYER_SIZE * 2.0)))),
+            MeshMaterial3d(materials.add(Color::hsla(hue, 0.8, 0.5, 1.0))),
+        ));
     }
 }
 
@@ -284,7 +328,7 @@ pub fn attach_replicated_kinematic_visuals(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    boxes: Query<(Entity, &KinematicBox), (With<Interpolated>, Without<Mesh3d>)>,
+    boxes: Query<(Entity, &KinematicBox), (With<Predicted>, Without<Mesh3d>)>,
 ) {
     for (entity, box_) in &boxes {
         let hue = (box_.id as f32) * 45.0;
@@ -306,6 +350,9 @@ fn spawn_visual_cuboid(
         Mesh3d(meshes.add(Cuboid::from_size(size))),
         MeshMaterial3d(material),
         Transform::from_translation(translation),
+        RigidBody::Static,
+        Collider::cuboid(size.x, size.y, size.z),
+        Position::from(translation),
     ));
 }
 
@@ -334,13 +381,14 @@ pub fn spawn_host_player(
     mut materials: ResMut<Assets<StandardMaterial>>,
     player_name: Res<PlayerName>,
 ) {
-    spawn_player_box(
+    let entity = spawn_player_box(
         &mut commands,
         &mut meshes,
         &mut materials,
         &player_name.0,
         Vec3::new(-5.0, PLAYER_SIZE, 0.0),
     );
+    commands.entity(entity).insert(default_gameplay_input_map());
 }
 
 pub fn spawn_player_on_member_joined(

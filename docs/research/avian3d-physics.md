@@ -231,10 +231,16 @@ for Bevy-native physics.
 ## Current Engine Integration
 
 Afterglow uses `avian3d = 0.6.1` with explicit minimal deterministic-friendly
-features: `3d`, `f32`, `parry-f32`, `xpbd_joints`, and
-`enhanced-determinism`. The engine deliberately does **not** enable Avian's
-`parallel` feature in the core dependency, so prediction-sensitive physics is not
-subject to extra threaded solver nondeterminism. It also does not enable Avian's
+features: `3d`, `f32`, `parry-f32`, `xpbd_joints`, `enhanced-determinism`, and
+`serialize`. Serialization is enabled for physics-oriented networking work. The
+engine deliberately does **not** enable Avian's `parallel` feature in the core
+dependency, so prediction-sensitive physics is not subject to extra threaded
+solver nondeterminism. Lightyear 0.26's `lightyear_avian3d` helper targets Avian
+0.5, so Avian 0.6 demos must not import that bridge directly; they should choose
+one canonical replicated pose representation and handle Avian transform sync
+explicitly until versions align. The multiplayer boxes demo currently uses
+Lightyear-predicted `Transform` as networked pose and local Avian
+`Position`/`Rotation` as physics internals. It also does not enable Avian's
 default debug-render, picking, scene, or mesh-collider features, because those
 pull in extra Bevy resources that make minimal/headless runtime tests less clean.
 Mesh-derived colliders can be added later as an explicit import/tooling path.

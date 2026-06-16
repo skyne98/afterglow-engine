@@ -5,18 +5,19 @@ use std::{
 
 use avian3d::prelude::LinearVelocity;
 use bevy::prelude::*;
-use lightyear::prelude::*;
+use lightyear::prelude::{client::input::InputSystems, *};
 
 use crate::{
     demos::multiplayer_boxes::{
         movement::{
-            DemoInput, apply_movement, client_send_input, collect_input, ensure_message_receivers,
-            ensure_message_sender, server_receive_input,
+            DemoInput, add_input_map_to_local_predicted_player, apply_movement, collect_input,
+            configure_demo_input_rebroadcast, configure_demo_input_timeline,
         },
         network::register_demo_protocol,
-        protocol::{MoveInput, MoveInputMsg, PLAYER_SIZE, PlayerBox},
+        protocol::{PLAYER_SIZE, PlayerBox},
         scene::{
-            MemberToPlayer, PlayerName, attach_replicated_kinematic_visuals,
+            MemberToPlayer, PlayerName, attach_predicted_kinematic_physics,
+            attach_predicted_player_physics, attach_replicated_kinematic_visuals,
             attach_replicated_player_visuals,
         },
     },
@@ -57,7 +58,7 @@ fn identity(seed: u8, target: &str) -> PlayerIdentity {
 
 fn build_demo_app(role: LightyearRole) -> App {
     let mut app = App::new();
-    app.add_plugins(MinimalPlugins);
+    app.add_plugins((MinimalPlugins, bevy::input::InputPlugin));
 
     app.insert_resource(AfterglowLightyearConfig {
         role,
@@ -95,29 +96,40 @@ fn build_demo_app(role: LightyearRole) -> App {
         app.add_systems(
             Update,
             (
-                collect_input,
+                configure_demo_input_rebroadcast,
+                configure_demo_input_timeline,
                 spawn_player_on_member_joined_no_physics,
                 despawn_player_on_member_left_no_physics,
             ),
         );
+        app.add_systems(FixedUpdate, apply_movement);
         app.add_systems(
-            FixedUpdate,
-            (
-                apply_movement,
-                server_receive_input,
-                ensure_message_receivers,
-            ),
+            FixedPreUpdate,
+            collect_input.in_set(InputSystems::WriteClientInputs),
         );
     } else {
         app.add_systems(
+            PreUpdate,
+            (
+                attach_predicted_player_physics,
+                attach_predicted_kinematic_physics,
+            )
+                .after(ReplicationSystems::Receive),
+        );
+        app.add_systems(
             Update,
             (
-                collect_input,
+                configure_demo_input_rebroadcast,
+                configure_demo_input_timeline,
                 attach_replicated_player_visuals,
                 attach_replicated_kinematic_visuals,
+                add_input_map_to_local_predicted_player.after(attach_replicated_player_visuals),
             ),
         );
-        app.add_systems(FixedUpdate, (ensure_message_sender, client_send_input));
+        app.add_systems(
+            FixedPreUpdate,
+            collect_input.in_set(InputSystems::WriteClientInputs),
+        );
     }
 
     // Tests drive apps manually with `App::update()` instead of `App::run()`.
@@ -146,9 +158,6 @@ fn spawn_player_box_no_physics(commands: &mut Commands, owner: &str, pos: Vec3) 
         .spawn((
             PlayerBox {
                 owner: owner.to_string(),
-            },
-            MoveInput {
-                direction: Vec2::ZERO,
             },
             LinearVelocity::ZERO,
             Transform::from_translation(pos),
@@ -341,15 +350,69 @@ fn host_and_client_share_player_boxes_over_real_network() {
         "replicated PlayerBox should get client-side Mesh3d presentation"
     );
 
-    // Set client DemoInput and drive frames.
-    {
-        let mut input = client.world_mut().resource_mut::<DemoInput>();
-        input.0 = Vec2::new(0.0, 1.0);
-    }
-
-    for _ in 0..120 {
+    let mut native_input_ready = false;
+    for _ in 0..240 {
         drive(&mut [&mut host, &mut client], 1);
+        let link = client
+            .world()
+            .resource::<crate::network::lightyear::SessionLightyearLinks>()
+            .client_link;
+        let synced = link.is_some_and(|link| {
+            client
+                .world()
+                .get::<IsSynced<InputTimeline>>(link)
+                .is_some()
+        });
+        let has_map = client
+            .world_mut()
+            .query::<&leafwing_input_manager::input_map::InputMap<crate::input::AfterglowAction>>()
+            .iter(client.world())
+            .next()
+            .is_some();
+        let has_buffer = client
+            .world_mut()
+            .query::<&lightyear::prelude::input::leafwing::LeafwingBuffer<crate::input::AfterglowAction>>()
+            .iter(client.world())
+            .next()
+            .is_some();
+        if synced && has_map && has_buffer {
+            native_input_ready = true;
+            break;
+        }
     }
+    assert!(
+        native_input_ready,
+        "native Leafwing input path should be ready"
+    );
+
+    // Press W on the client so Leafwing/Lightyear native input drives the
+    // predicted local player and streams the action state to the server.
+    client
+        .world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::KeyW);
+
+    let mut remote_velocity_seen = false;
+    for _ in 0..600 {
+        drive(&mut [&mut host, &mut client], 1);
+        let velocities: Vec<(String, Vec3)> = host
+            .world_mut()
+            .query::<(&PlayerBox, &LinearVelocity)>()
+            .iter(host.world())
+            .map(|(player, velocity)| (player.owner.clone(), velocity.0))
+            .collect();
+        if velocities
+            .iter()
+            .any(|(owner, velocity)| owner != "alice" && velocity.z > 0.0)
+        {
+            remote_velocity_seen = true;
+            break;
+        }
+    }
+    assert!(
+        remote_velocity_seen,
+        "server should eventually consume the client's native Leafwing input"
+    );
 
     // Verify both PlayerBoxes exist on the host with the right owners.
     let host_owners: Vec<&str> = host
@@ -386,14 +449,15 @@ fn host_and_client_share_player_boxes_over_real_network() {
         "client input should move the remote player's box on the host; got {host_velocities:?}"
     );
 
-    // Check message receiver plumbing on the host.
-    let host_receiver_count = host
+    // Check native Lightyear input channel plumbing on host links.
+    let input_receiver_links = host
         .world_mut()
-        .query::<&MessageReceiver<MoveInputMsg>>()
+        .query::<&Transport>()
         .iter(host.world())
+        .filter(|transport| transport.has_receiver::<lightyear::input::InputChannel>())
         .count();
     assert!(
-        host_receiver_count > 0,
-        "host should have at least one MessageReceiver<MoveInputMsg>"
+        input_receiver_links > 0,
+        "host should have at least one transport receiving native input"
     );
 }

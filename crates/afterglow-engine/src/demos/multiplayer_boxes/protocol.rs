@@ -14,19 +14,6 @@ pub struct KinematicBox {
     pub initial_pos: Vec3,
 }
 
-#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub struct MoveInput {
-    pub direction: Vec2,
-}
-
-#[derive(Message, Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub struct MoveInputMsg {
-    pub owner: String,
-    pub direction: Vec2,
-}
-
-pub struct MoveInputChannel;
-
 pub const PLAYER_SPEED: f32 = 5.0;
 pub const PLAYER_SIZE: f32 = 0.4;
 pub const PLAYER_MASS: f32 = 50.0;

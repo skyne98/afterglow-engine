@@ -1,3 +1,4 @@
+mod input;
 #[cfg(feature = "lightyear")]
 pub mod net;
 
@@ -32,15 +33,11 @@ fn plugin_builds_and_registers_types() {
                 id: 0,
                 initial_pos: Vec3::ZERO,
             },
-            MoveInput {
-                direction: Vec2::ZERO,
-            },
         ))
         .id();
 
     assert!(app.world().get::<PlayerBox>(entity).is_some());
     assert!(app.world().get::<KinematicBox>(entity).is_some());
-    assert!(app.world().get::<MoveInput>(entity).is_some());
 }
 
 #[test]
@@ -87,6 +84,28 @@ fn scene_entity_counts_are_correct() {
     assert_eq!(kinematic_count, 8, "should have 8 kinematic boxes");
     assert_eq!(player_count, 0, "no player boxes before spawn");
     assert_eq!(light_count, 1, "should have 1 point light");
+}
+
+#[test]
+fn client_arena_visuals_have_static_physics_colliders() {
+    let mut app = test_app();
+    app.add_systems(Startup, spawn_client_arena_visuals);
+
+    app.finish();
+    app.cleanup();
+    app.update();
+
+    let static_collider_count = app
+        .world_mut()
+        .query::<(&avian3d::prelude::RigidBody, &avian3d::prelude::Collider)>()
+        .iter(app.world())
+        .filter(|(body, _)| matches!(**body, avian3d::prelude::RigidBody::Static))
+        .count();
+
+    assert_eq!(
+        static_collider_count, 5,
+        "client prediction should include floor and four wall colliders"
+    );
 }
 
 #[test]
@@ -166,6 +185,13 @@ fn camera_follows_session_member_owner_when_player_name_differs() {
 fn replicated_boxes_get_client_visuals() {
     let mut app = test_app();
     app.add_systems(
+        PreUpdate,
+        (
+            attach_predicted_player_physics,
+            attach_predicted_kinematic_physics,
+        ),
+    );
+    app.add_systems(
         Update,
         (
             attach_replicated_player_visuals,
@@ -191,7 +217,7 @@ fn replicated_boxes_get_client_visuals() {
                 initial_pos: Vec3::new(2.0, 0.5, 0.0),
             },
             Transform::from_xyz(2.0, 0.5, 0.0),
-            lightyear::prelude::Interpolated,
+            lightyear::prelude::Predicted,
         ))
         .id();
 
@@ -209,6 +235,18 @@ fn replicated_boxes_get_client_visuals() {
             "entity {entity:?} should get a material"
         );
     }
+    assert!(
+        app.world()
+            .get::<avian3d::prelude::RigidBody>(box_entity)
+            .is_some(),
+        "predicted cubes should get local physics bodies for immediate contacts"
+    );
+    assert!(
+        app.world()
+            .get::<avian3d::prelude::Collider>(box_entity)
+            .is_some(),
+        "predicted cubes should get local colliders for immediate contacts"
+    );
 }
 
 #[test]
@@ -248,6 +286,7 @@ fn local_replicated_box_gets_prediction_physics_components() {
             ..Default::default()
         },
     ));
+    app.add_systems(PreUpdate, attach_predicted_player_physics);
     app.add_systems(Update, attach_replicated_player_visuals);
 
     let entity = app
@@ -286,9 +325,6 @@ fn movement_sets_velocity() {
     let _entity = app.world_mut().spawn((
         PlayerBox {
             owner: "mover".to_string(),
-        },
-        MoveInput {
-            direction: Vec2::new(1.0, 0.0),
         },
         avian3d::prelude::RigidBody::Dynamic,
         avian3d::prelude::LinearVelocity::ZERO,

@@ -99,7 +99,23 @@ fn transport_from_registry(registry: &ChannelRegistry) -> Transport {
     transport.add_receiver_from_registry::<MetadataChannel>(registry);
     transport.add_sender_from_registry::<UpdatesChannel>(registry);
     transport.add_receiver_from_registry::<UpdatesChannel>(registry);
+    transport.add_sender_from_registry::<ActionsChannel>(registry);
+    transport.add_receiver_from_registry::<ActionsChannel>(registry);
+    add_input_channel_if_registered(&mut transport, registry);
     transport
+}
+
+fn add_input_channel_if_registered(transport: &mut Transport, registry: &ChannelRegistry) {
+    if registry
+        .settings(lightyear_transport::channel::ChannelKind::of::<
+            lightyear::input::InputChannel,
+        >())
+        .is_none()
+    {
+        return;
+    }
+    transport.add_sender_from_registry::<lightyear::input::InputChannel>(registry);
+    transport.add_receiver_from_registry::<lightyear::input::InputChannel>(registry);
 }
 
 // ---------------------------------------------------------------------------
@@ -402,6 +418,7 @@ fn consume_pending_netcode_startup(
                 transport.add_receiver_from_registry::<UpdatesChannel>(registry);
                 transport.add_sender_from_registry::<ActionsChannel>(registry);
                 transport.add_receiver_from_registry::<ActionsChannel>(registry);
+                add_input_channel_if_registered(&mut transport, registry);
 
                 // Per Lightyear's entity-as-peer model, a client link starts
                 // with Client, LocalId, RemoteId, Link, Transport,

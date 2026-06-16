@@ -85,8 +85,17 @@ impl Plugin for AfterglowLightyearPlugin {
 
         #[cfg(feature = "lightyear")]
         {
+            use lightyear::prelude::*;
+
             let cfg = app.world().resource::<AfterglowLightyearConfig>().clone();
             let tick_duration = Duration::from_secs_f64(1.0 / cfg.tick_rate.max(1) as f64);
+
+            app.add_channel::<lightyear::input::InputChannel>(ChannelSettings {
+                mode: ChannelMode::UnorderedUnreliable,
+                send_frequency: Duration::default(),
+                priority: f32::INFINITY,
+            })
+            .add_direction(NetworkDirection::Bidirectional);
 
             match cfg.role {
                 LightyearRole::Client => {
@@ -123,7 +132,8 @@ impl Plugin for AfterglowLightyearPlugin {
 /// component, so the server-side replication stream can route to it.
 ///
 /// Also attaches a [`Transport`] with senders/receivers for the
-/// replication channels ([`UpdatesChannel`] + [`ActionsChannel`]). The
+/// replication/input channels ([`UpdatesChannel`] + [`ActionsChannel`] +
+/// Lightyear's native input channel). The
 /// `#[require(Transport)]` on `ReplicationSender` would otherwise insert
 /// a bare `Transport::default()` with no channels, and replication would
 /// silently no-op.
@@ -155,6 +165,15 @@ fn add_replication_sender_on_link_of(
     transport.add_receiver_from_registry::<UpdatesChannel>(&registry);
     transport.add_sender_from_registry::<ActionsChannel>(&registry);
     transport.add_receiver_from_registry::<ActionsChannel>(&registry);
+    if registry
+        .settings(lightyear_transport::channel::ChannelKind::of::<
+            lightyear::input::InputChannel,
+        >())
+        .is_some()
+    {
+        transport.add_sender_from_registry::<lightyear::input::InputChannel>(&registry);
+        transport.add_receiver_from_registry::<lightyear::input::InputChannel>(&registry);
+    }
     commands.entity(trigger.entity).insert((
         transport,
         ReplicationSender::new(
