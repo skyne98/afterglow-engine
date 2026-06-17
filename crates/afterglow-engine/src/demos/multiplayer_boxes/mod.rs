@@ -160,10 +160,14 @@ impl Plugin for MultiplayerBoxesPlugin {
         app.add_observer(rope::on_roped_to_added);
         app.add_observer(rope::on_roped_to_removed);
 
-        // Local-only visual: highlight nearest box (runs on all sides in Update)
+        // Local-only visual: highlight nearest box and draw ropes
         app.add_systems(
             Update,
-            (rope::highlight_nearest_box, rope::update_highlight_colors),
+            (
+                rope::highlight_nearest_box,
+                rope::update_highlight_colors,
+                rope::draw_ropes,
+            ),
         );
     }
 }

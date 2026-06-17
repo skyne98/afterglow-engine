@@ -6,8 +6,7 @@
 //!   entity. The client predicts adding/removing it; the server validates and
 //!   replicates back.
 //! - The `DistanceJoint` is a **derived local entity** — created by an observer
-//!   when `RopedTo` is added, despawned when `RopedTo` is removed. No polling,
-//!   no sync system. Both client and server react to the same replicated state.
+//!   when `RopedTo` is added, despawned when `RopedTo` is removed.
 //! - `highlight_nearest_box` is a local-only visual system — no replication.
 
 use avian3d::prelude::*;
@@ -26,10 +25,17 @@ pub struct Highlighted;
 #[derive(Component)]
 pub struct RopeJointEntity(pub Entity);
 
+/// The owner identifier used by the rope system. On the host, this is the
+/// player's chosen name (e.g. "alice"). On the client, this is the
+/// `SessionMemberId` as a string (e.g. "2"). We use whichever matches the
+/// `PlayerBox.owner` field on the local entity.
+fn local_owner(player_name: &PlayerName, local_member: Option<&str>) -> String {
+    local_member
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| player_name.0.clone())
+}
+
 /// Toggle the rope on the nearest box when RopeToggle is released.
-/// Runs in `PreUpdate` after Leafwing's `update_action_state` (which sets
-/// `just_released` from keyboard) but before Lightyear's `FixedPreUpdate`
-/// overwrite (which replaces ActionState with delayed values).
 pub fn toggle_rope(
     mut commands: Commands,
     player_name: Res<PlayerName>,
@@ -51,7 +57,7 @@ pub fn toggle_rope(
         return;
     }
 
-    let owner = player_name.0.clone();
+    let owner = local_owner(&player_name, local_member.as_deref());
 
     // If we already have a box roped, release it
     if let Some((entity, _)) = roped.iter().find(|(_, r)| r.player_owner == owner) {
@@ -89,11 +95,9 @@ pub fn on_roped_to_added(
     let Ok(roped_to) = roped.get(trigger.entity) else {
         return;
     };
-    // Box must have RigidBody and not already have a joint
     if boxes.get(trigger.entity).is_err() {
         return;
     }
-    // Find the player with matching owner and RigidBody
     let Some((player_entity, _)) = players
         .iter()
         .find(|(_, pb)| pb.owner == roped_to.player_owner)
@@ -198,5 +202,30 @@ pub fn update_highlight_colors(
             let glow = Color::hsla(box_mat.base_hue, 0.9, 0.5, 1.0).to_srgba();
             mat.emissive = LinearRgba::new(glow.red * 0.3, glow.green * 0.3, glow.blue * 0.3, 1.0);
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Local-only visual system: draw the rope
+// ---------------------------------------------------------------------------
+
+/// Draws a line from each roped box to its owning player. Local-only.
+pub fn draw_ropes(
+    mut gizmos: Gizmos,
+    players: Query<(&PlayerBox, &Transform)>,
+    roped: Query<(&RopedTo, &Transform)>,
+) {
+    for (roped_to, box_transform) in roped.iter() {
+        let Some((_, player_transform)) = players
+            .iter()
+            .find(|(pb, _)| pb.owner == roped_to.player_owner)
+        else {
+            continue;
+        };
+        gizmos.line(
+            player_transform.translation,
+            box_transform.translation,
+            Color::srgb(0.8, 0.6, 0.2),
+        );
     }
 }

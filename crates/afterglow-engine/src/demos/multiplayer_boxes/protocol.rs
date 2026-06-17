@@ -36,8 +36,8 @@ pub const WALL_HEIGHT: f32 = 3.0;
 pub const WALL_THICKNESS: f32 = 0.4;
 
 /// Max rope length (distance joint upper limit).
-pub const ROPE_MAX_DISTANCE: f32 = 5.0;
+pub const ROPE_MAX_DISTANCE: f32 = 3.0;
 /// How close a box must be to be roped.
-pub const ROPE_GRAB_RANGE: f32 = 4.0;
+pub const ROPE_GRAB_RANGE: f32 = 3.0;
 /// Joint compliance (inverse stiffness). Higher = softer rope.
 pub const ROPE_COMPLIANCE: f32 = 0.001;
