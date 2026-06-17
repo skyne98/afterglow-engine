@@ -228,19 +228,19 @@ pub fn spawn_client_arena_visuals(
 
 pub fn attach_predicted_player_physics(
     mut commands: Commands,
-    players: Query<Entity, (With<PlayerBox>, With<Predicted>, Without<RigidBody>)>,
+    players: Query<
+        (Entity, Option<&Transform>),
+        (With<PlayerBox>, With<Predicted>, Without<RigidBody>),
+    >,
 ) {
-    // Predicted player physics is now attached in attach_replicated_player_visuals
-    // along with visuals, for both predicted and interpolated entities.
-    // This system is kept for the PreUpdate slot so physics is ready before
-    // FixedUpdate, but the query will be empty if visuals were already attached.
-    for entity in &players {
-        let transform = Transform::default();
+    for (entity, transform) in &players {
+        let pos = transform.map_or(Vec3::ZERO, |t| t.translation);
+        let rot = transform.map_or(Quat::IDENTITY, |t| t.rotation);
         commands.entity(entity).insert((
             RigidBody::Dynamic,
             Collider::cuboid(PLAYER_SIZE * 2.0, PLAYER_SIZE * 2.0, PLAYER_SIZE * 2.0),
-            Position::from(transform.translation),
-            Rotation::from(transform.rotation),
+            Position::from(pos),
+            Rotation::from(rot),
             LinearVelocity::ZERO,
             lightyear::frame_interpolation::FrameInterpolate::<Transform>::default(),
         ));

@@ -149,9 +149,17 @@ impl Plugin for AfterglowLightyearPlugin {
     }
 }
 
+/// Marker component to track that we've configured the input delay on a
+/// client link. `InputTimelineConfig` is a required component of `Client`,
+/// so checking for its existence doesn't work — it's always present from
+/// spawn. We need this marker to avoid re-inserting `InputTimelineConfig`
+/// every frame (which would trigger the config-update observer repeatedly).
+#[derive(Component)]
+struct InputDelayConfigured;
+
 /// Applies `rebroadcast_inputs` and `input_delay_ticks` from
 /// [`AfterglowLightyearConfig`] to Lightyear's input config resources and
-/// client link entities. Runs every frame but is idempotent.
+/// client link entities.
 #[cfg(feature = "lightyear")]
 fn configure_input_defaults(
     config: Res<AfterglowLightyearConfig>,
@@ -160,7 +168,7 @@ fn configure_input_defaults(
         ResMut<lightyear::prelude::input::server::ServerInputConfig<AfterglowAction>>,
     >,
     links: Option<Res<SessionLightyearLinks>>,
-    timelines: Query<(), With<lightyear::prelude::client::InputTimelineConfig>>,
+    configured: Query<(), With<InputDelayConfigured>>,
     mut commands: Commands,
 ) {
     if let Some(ref mut client_config) = client_config {
@@ -173,16 +181,21 @@ fn configure_input_defaults(
     let Some(client_link) = links.and_then(|links| links.client_link) else {
         return;
     };
-    if timelines.get(client_link).is_ok() {
+    if configured.get(client_link).is_ok() {
         return;
     }
-    commands.entity(client_link).insert(
+    // Replace the default InputTimelineConfig (which has no input delay) with
+    // one that has the configured delay. This is critical: without input delay,
+    // lost input packets create gaps in the server's InputBuffer, causing stale
+    // ActionState, jitter, and "stuck" inputs.
+    commands.entity(client_link).insert((
         lightyear::prelude::client::InputTimelineConfig::default().with_input_delay(
             lightyear::prelude::client::InputDelayConfig::fixed_input_delay(
                 config.input_delay_ticks,
             ),
         ),
-    );
+        InputDelayConfigured,
+    ));
 }
 
 /// Adds a [`ReplicationSender`] to any entity that gains a [`LinkOf`]
