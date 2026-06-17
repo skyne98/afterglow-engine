@@ -157,9 +157,9 @@ fn highlight_nearest_box_uses_hysteresis() {
     assert!(app.world().get::<Highlighted>(challenger).is_some());
 }
 
-/// Roped box is not highlighted (only un-roped boxes are highlighted).
+/// Linked box is not highlighted (only free boxes are highlighted).
 #[test]
-fn highlight_nearest_box_skips_roped() {
+fn highlight_nearest_box_skips_linked() {
     let mut app = rope_test_app();
     app.world_mut().resource_mut::<PlayerName>().0 = "alice".to_string();
 
@@ -170,7 +170,7 @@ fn highlight_nearest_box_skips_roped() {
         Transform::from_xyz(0.0, 0.4, 0.0),
     ));
 
-    let box_roped = app
+    let box_linked = app
         .world_mut()
         .spawn((
             KinematicBox {
@@ -178,11 +178,12 @@ fn highlight_nearest_box_skips_roped() {
                 initial_pos: Vec3::new(1.0, 0.5, 0.0),
             },
             Transform::from_xyz(1.0, 0.5, 0.0),
-            RopedTo {
-                player_owner: "alice".to_string(),
-            },
         ))
         .id();
+    app.world_mut().spawn(RopeLink {
+        player_owner: "alice".to_string(),
+        box_id: 0,
+    });
 
     let box_free = app
         .world_mut()
@@ -199,8 +200,8 @@ fn highlight_nearest_box_skips_roped() {
     app.update();
 
     assert!(
-        app.world().get::<Highlighted>(box_roped).is_none(),
-        "roped box should not be highlighted"
+        app.world().get::<Highlighted>(box_linked).is_none(),
+        "linked box should not be highlighted"
     );
     assert!(
         app.world().get::<Highlighted>(box_free).is_some(),

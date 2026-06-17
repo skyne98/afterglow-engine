@@ -3,6 +3,7 @@ mod input;
 pub mod net;
 mod rope_highlight_tests;
 mod rope_joint_tests;
+mod rope_prespawn_tests;
 mod rope_tests;
 
 use bevy::prelude::*;

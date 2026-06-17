@@ -160,8 +160,8 @@ impl Plugin for MultiplayerBoxesPlugin {
                     matches!(config.role, LightyearRole::Host | LightyearRole::Client)
                 }),
         );
-        app.add_observer(rope::on_roped_to_added);
-        app.add_observer(rope::on_roped_to_removed);
+        app.add_observer(rope::on_rope_link_added);
+        app.add_observer(rope::on_rope_link_removed);
 
         // Local-only visual: highlight nearest box and draw ropes
         app.add_systems(

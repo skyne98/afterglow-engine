@@ -14,16 +14,17 @@ pub struct KinematicBox {
     pub initial_pos: Vec3,
 }
 
-/// Marks a box as roped to a player. This is the replicated state — when
-/// present, a local system creates a [`DistanceJoint`] between the box and
-/// the player entity matching `player_owner`.
+/// Entity-backed rope state. Clients may spawn this as a Lightyear
+/// `PreSpawned` predicted entity; the server confirms it by spawning a
+/// replicated `RopeLink` with the same deterministic hash.
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub struct RopedTo {
+pub struct RopeLink {
     pub player_owner: String,
+    pub box_id: u32,
 }
 
-/// Marks a locally-spawned joint entity so it can be cleaned up when
-/// [`RopedTo`] is removed.
+/// Marks a locally-spawned joint entity so it can be cleaned up when its
+/// owning [`RopeLink`] is removed.
 #[derive(Component)]
 pub struct RopeJoint;
 

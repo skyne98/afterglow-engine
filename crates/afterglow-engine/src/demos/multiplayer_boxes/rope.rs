@@ -1,35 +1,38 @@
-//! Rope/grab mechanic: press F to attach a distance joint to the nearest box,
-//! press F again to release. Also highlights the nearest box.
+//! Rope/grab mechanic: release F to attach a rope entity to the nearest box,
+//! release F again to request release. Also highlights the nearest free box.
 //!
 //! Architecture:
-//! - `RopedTo { player_owner }` is a replicated, predicted component on the box
-//!   entity. The client predicts adding/removing it; the server validates and
-//!   replicates back.
-//! - The `DistanceJoint` is a **derived local entity** — created by an observer
-//!   when `RopedTo` is added, despawned when `RopedTo` is removed.
-//! - `highlight_nearest_box` is a local-only visual system — no replication.
+//! - `RopeLink { player_owner, box_id }` is an entity-backed rope state.
+//! - Clients may spawn `RopeLink + PreSpawned(hash).for_receiver(client_link)`
+//!   for immediate predicted feedback.
+//! - The server validates the same `ActionState` release and confirms by
+//!   spawning authoritative `RopeLink + PreSpawned(hash) + Replicate`.
+//! - `DistanceJoint` is a derived local entity created when `RopeLink` appears
+//!   and despawned when the link disappears.
 
 use avian3d::prelude::*;
 use bevy::prelude::*;
 use leafwing_input_manager::action_state::ActionState;
-use lightyear::prelude::Predicted;
+use lightyear::prelude::*;
 
 use super::{protocol::*, scene::PlayerName};
-use crate::{input::AfterglowAction, network::AfterglowNetworkContext};
+use crate::{
+    input::AfterglowAction,
+    network::{AfterglowNetworkContext, SessionLightyearLinks},
+};
 
 /// Component marking a box as currently highlighted (nearest to local player).
 #[derive(Component)]
 pub struct Highlighted;
 
-/// Tracks the locally-spawned joint entity so it can be despawned when
-/// `RopedTo` is removed.
+/// Tracks the locally-spawned joint entity so it can be despawned when the
+/// owning `RopeLink` entity is removed.
 #[derive(Component)]
 pub struct RopeJointEntity(pub Entity);
 
 /// Release-edge memory for rope toggles. This still uses `ActionState`; it
-/// reconstructs the release edge from the stable pressed state instead of
-/// relying on Leafwing's frame-local `just_released` flag, which can be
-/// observed more than once by remote/server-side gameplay.
+/// reconstructs the release edge from stable pressed state instead of relying
+/// on Leafwing's frame-local `just_released` flag.
 #[derive(Component, Default)]
 pub struct RopeToggleLatch {
     was_pressed: bool,
@@ -41,11 +44,31 @@ const ROPE_TOGGLE_COOLDOWN_FRAMES: u8 = 12;
 const ROPE_TOGGLE_MIN_PRESSED_FRAMES: u8 = 2;
 const HIGHLIGHT_SWITCH_MARGIN: f32 = 0.35;
 
-/// Toggle the rope on the nearest box when RopeToggle is released.
+#[derive(Clone, Copy)]
+enum RopeSpawnMode {
+    Authoritative,
+    ClientPredicted { client_link: Entity },
+}
+
+/// Deterministic hash used by Lightyear `PreSpawned` matching.
+pub fn rope_link_hash(player_owner: &str, box_id: u32) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for byte in player_owner.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash ^= u64::from(box_id);
+    hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    hash
+}
+
+/// Local/host toggle path. Clients only pre-spawn a `RopeLink`; authority
+/// writes the authoritative replicated link.
 pub fn toggle_rope(
     mut commands: Commands,
     player_name: Res<PlayerName>,
     context: Option<Res<AfterglowNetworkContext>>,
+    session_links: Option<Res<SessionLightyearLinks>>,
     players: Query<(
         Entity,
         &PlayerBox,
@@ -54,18 +77,11 @@ pub fn toggle_rope(
         Has<Predicted>,
         Option<&RopeToggleLatch>,
     )>,
-    boxes: Query<(Entity, &KinematicBox, &Transform), Without<RopedTo>>,
-    roped: Query<(Entity, &RopedTo)>,
+    boxes: Query<(&KinematicBox, &Transform)>,
+    links: Query<(Entity, &RopeLink)>,
 ) {
     let status = context.as_deref().map(|ctx| ctx.get_connection_status());
     let client_only = status.is_some_and(|status| status.is_client_only());
-    if client_only {
-        // Do not locally mutate replicated rope state on clients. Client-side
-        // prediction of a binary toggle can race with server correction and
-        // manifest as attach-then-immediate-detach. Clients still send the
-        // RopeToggle ActionState; the authoritative side writes RopedTo.
-        return;
-    }
     let authority = status.is_some_and(|status| status.runs_authority());
     let local_member = status.and_then(|s| s.local_member_owner());
 
@@ -73,10 +89,7 @@ pub fn toggle_rope(
         players.iter().find(|(_, pb, _, _, predicted, _)| {
             let is_local =
                 pb.owner == player_name.0 || local_member.as_deref() == Some(pb.owner.as_str());
-            if !is_local {
-                return false;
-            }
-            (!client_only || *predicted) && (!authority || !*predicted)
+            is_local && (!client_only || *predicted) && (!authority || !*predicted)
         })
     else {
         return;
@@ -89,24 +102,26 @@ pub fn toggle_rope(
         return;
     }
 
-    // Use the PlayerBox.owner from the found entity — this is the canonical
-    // identifier that on_roped_to_added, draw_ropes, and the other side's
-    // PlayerBox.owner will all match against.
     let owner = player_box.owner.clone();
+    let mode = if authority {
+        RopeSpawnMode::Authoritative
+    } else if let Some(client_link) = session_links.as_deref().and_then(|links| links.client_link) {
+        RopeSpawnMode::ClientPredicted { client_link }
+    } else {
+        return;
+    };
 
     apply_rope_toggle(
         commands,
         owner,
         player_transform.translation,
         &boxes,
-        &roped,
+        &links,
+        mode,
     );
 }
 
-/// Server-authoritative path for remote-client rope toggles. Clients may
-/// predict `RopedTo`, but the server must also apply the same toggle from the
-/// replicated `ActionState`; otherwise Lightyear correction removes the
-/// client's predicted rope immediately.
+/// Server-authoritative path for remote-client rope toggles.
 pub fn server_toggle_remote_ropes_from_inputs(
     mut commands: Commands,
     player_name: Res<PlayerName>,
@@ -119,8 +134,8 @@ pub fn server_toggle_remote_ropes_from_inputs(
         Has<Predicted>,
         Option<&RopeToggleLatch>,
     )>,
-    boxes: Query<(Entity, &KinematicBox, &Transform), Without<RopedTo>>,
-    roped: Query<(Entity, &RopedTo)>,
+    boxes: Query<(&KinematicBox, &Transform)>,
+    links: Query<(Entity, &RopeLink)>,
 ) {
     let status = context.as_deref().map(|ctx| ctx.get_connection_status());
     if !status.is_some_and(|status| status.runs_authority()) {
@@ -143,7 +158,8 @@ pub fn server_toggle_remote_ropes_from_inputs(
                 player_box.owner.clone(),
                 transform.translation,
                 &boxes,
-                &roped,
+                &links,
+                RopeSpawnMode::Authoritative,
             );
         }
         commands.entity(entity).insert(next_latch);
@@ -180,55 +196,84 @@ fn apply_rope_toggle(
     mut commands: Commands,
     owner: String,
     player_pos: Vec3,
-    boxes: &Query<(Entity, &KinematicBox, &Transform), Without<RopedTo>>,
-    roped: &Query<(Entity, &RopedTo)>,
+    boxes: &Query<(&KinematicBox, &Transform)>,
+    links: &Query<(Entity, &RopeLink)>,
+    mode: RopeSpawnMode,
 ) {
-    // If we already have a box roped, release it.
-    if let Some((entity, _)) = roped.iter().find(|(_, r)| r.player_owner == owner) {
-        commands.entity(entity).remove::<RopedTo>();
+    if let Some((entity, _)) = links.iter().find(|(_, link)| link.player_owner == owner) {
+        if matches!(mode, RopeSpawnMode::Authoritative) {
+            commands.entity(entity).despawn();
+        }
         return;
     }
 
-    // Find the nearest box within grab range.
-    let nearest = boxes.iter().min_by(|(_, _, a), (_, _, b)| {
-        a.translation
-            .distance(player_pos)
-            .partial_cmp(&b.translation.distance(player_pos))
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    let nearest = boxes
+        .iter()
+        .filter(|(box_data, _)| !box_has_link(box_data.id, links))
+        .min_by(|(_, a), (_, b)| {
+            a.translation
+                .distance(player_pos)
+                .partial_cmp(&b.translation.distance(player_pos))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
-    if let Some((entity, _, transform)) = nearest {
+    if let Some((box_data, transform)) = nearest {
         if transform.translation.distance(player_pos) <= ROPE_GRAB_RANGE {
-            commands.entity(entity).insert(RopedTo {
-                player_owner: owner,
-            });
+            spawn_rope_link(commands, owner, box_data.id, mode);
         }
     }
 }
 
-/// Observer: when `RopedTo` is added to a box, find the owning player and
-/// spawn a `DistanceJoint` between them. Both bodies must have `RigidBody`.
-pub fn on_roped_to_added(
-    trigger: On<Add, RopedTo>,
-    roped: Query<&RopedTo>,
+fn spawn_rope_link(mut commands: Commands, player_owner: String, box_id: u32, mode: RopeSpawnMode) {
+    let hash = rope_link_hash(&player_owner, box_id);
+    let link = RopeLink {
+        player_owner,
+        box_id,
+    };
+    match mode {
+        RopeSpawnMode::Authoritative => {
+            commands.spawn((
+                link,
+                PreSpawned::new(hash),
+                Replicate::to_clients(NetworkTarget::All),
+                PredictionTarget::to_clients(NetworkTarget::All),
+            ));
+        }
+        RopeSpawnMode::ClientPredicted { client_link } => {
+            commands.spawn((link, PreSpawned::new(hash).for_receiver(client_link)));
+        }
+    }
+}
+
+fn box_has_link(box_id: u32, links: &Query<(Entity, &RopeLink)>) -> bool {
+    links.iter().any(|(_, link)| link.box_id == box_id)
+}
+
+/// Observer: when `RopeLink` is added, find the owning player and target box,
+/// then spawn a local `DistanceJoint` between them.
+pub fn on_rope_link_added(
+    trigger: On<Add, RopeLink>,
+    links: Query<&RopeLink>,
     players: Query<(Entity, &PlayerBox), With<RigidBody>>,
-    boxes: Query<(), (With<RigidBody>, Without<RopeJointEntity>)>,
+    boxes: Query<(Entity, &KinematicBox), With<RigidBody>>,
+    existing: Query<(), With<RopeJointEntity>>,
     mut commands: Commands,
 ) {
-    let Ok(roped_to) = roped.get(trigger.entity) else {
-        return;
-    };
-    if boxes.get(trigger.entity).is_err() {
+    if existing.get(trigger.entity).is_ok() {
         return;
     }
-    let Some((player_entity, _)) = players
-        .iter()
-        .find(|(_, pb)| pb.owner == roped_to.player_owner)
+    let Ok(link) = links.get(trigger.entity) else {
+        return;
+    };
+    let Some((player_entity, _)) = players.iter().find(|(_, pb)| pb.owner == link.player_owner)
     else {
         return;
     };
+    let Some((box_entity, _)) = boxes.iter().find(|(_, b)| b.id == link.box_id) else {
+        return;
+    };
 
-    let joint = DistanceJoint::new(player_entity, trigger.entity)
+    let joint = DistanceJoint::new(player_entity, box_entity)
         .with_limits(0.0, ROPE_MAX_DISTANCE)
         .with_compliance(ROPE_COMPLIANCE);
     let joint_entity = commands.spawn((RopeJoint, joint)).id();
@@ -237,29 +282,29 @@ pub fn on_roped_to_added(
         .insert(RopeJointEntity(joint_entity));
 }
 
-/// Observer: when `RopedTo` is removed from a box, despawn the joint.
-pub fn on_roped_to_removed(
-    trigger: On<Remove, RopedTo>,
-    box_query: Query<&RopeJointEntity>,
+/// Observer: when `RopeLink` is removed, despawn its derived local joint.
+pub fn on_rope_link_removed(
+    trigger: On<Remove, RopeLink>,
+    link_query: Query<&RopeJointEntity>,
     mut commands: Commands,
 ) {
-    if let Ok(rope_joint) = box_query.get(trigger.entity) {
+    if let Ok(rope_joint) = link_query.get(trigger.entity) {
         commands.entity(rope_joint.0).despawn();
-        commands.entity(trigger.entity).remove::<RopeJointEntity>();
+        // Do not remove RopeJointEntity from trigger.entity here. This observer
+        // commonly runs while Lightyear is despawning an expired/unmatched
+        // PreSpawned RopeLink, so the link entity may already be invalid by the
+        // time queued commands apply.
     }
 }
 
-// ---------------------------------------------------------------------------
-// Local-only visual system: highlight the nearest box
-// ---------------------------------------------------------------------------
-
-/// Highlight the nearest un-roped box to the local player.
+/// Highlight the nearest unlinked box to the local player.
 pub fn highlight_nearest_box(
     mut commands: Commands,
     player_name: Res<PlayerName>,
     context: Option<Res<AfterglowNetworkContext>>,
     players: Query<(&PlayerBox, &Transform)>,
-    boxes: Query<(Entity, &KinematicBox, &Transform), Without<RopedTo>>,
+    boxes: Query<(Entity, &KinematicBox, &Transform)>,
+    links: Query<(Entity, &RopeLink)>,
     highlighted: Query<Entity, With<Highlighted>>,
 ) {
     let status = context.as_deref().map(|ctx| ctx.get_connection_status());
@@ -277,6 +322,7 @@ pub fn highlight_nearest_box(
     let desired = player_pos.and_then(|player_pos| {
         let nearest = boxes
             .iter()
+            .filter(|(_, box_data, _)| !box_has_link(box_data.id, &links))
             .min_by(|(_, _, a), (_, _, b)| {
                 a.translation
                     .distance(player_pos)
@@ -292,7 +338,10 @@ pub fn highlight_nearest_box(
             boxes
                 .get(entity)
                 .ok()
-                .map(|(_, _, transform)| transform.translation.distance(player_pos))
+                .and_then(|(_, box_data, transform)| {
+                    (!box_has_link(box_data.id, &links))
+                        .then_some(transform.translation.distance(player_pos))
+                })
                 .filter(|distance| *distance <= ROPE_GRAB_RANGE)
         });
 
@@ -358,21 +407,20 @@ pub fn update_highlight_colors(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Local-only visual system: draw the rope
-// ---------------------------------------------------------------------------
-
-/// Draws a line from each roped box to its owning player. Local-only.
+/// Draws a line from each rope link to its owning player and target box.
 pub fn draw_ropes(
     mut gizmos: Gizmos,
     players: Query<(&PlayerBox, &Transform)>,
-    roped: Query<(&RopedTo, &Transform)>,
+    boxes: Query<(&KinematicBox, &Transform)>,
+    links: Query<&RopeLink>,
 ) {
-    for (roped_to, box_transform) in roped.iter() {
-        let Some((_, player_transform)) = players
-            .iter()
-            .find(|(pb, _)| pb.owner == roped_to.player_owner)
+    for link in links.iter() {
+        let Some((_, player_transform)) =
+            players.iter().find(|(pb, _)| pb.owner == link.player_owner)
         else {
+            continue;
+        };
+        let Some((_, box_transform)) = boxes.iter().find(|(b, _)| b.id == link.box_id) else {
             continue;
         };
         gizmos.line(

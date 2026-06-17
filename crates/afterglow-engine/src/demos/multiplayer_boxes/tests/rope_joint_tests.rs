@@ -21,18 +21,13 @@ fn rope_test_app() -> App {
     app
 }
 
-// Sync rope joints tests
-// ---------------------------------------------------------------------------
-
-/// Adding RopedTo spawns a DistanceJoint (via observer).
+/// Adding RopeLink spawns a DistanceJoint (via observer).
 #[test]
 fn sync_rope_joints_creates_joint() {
     let mut app = rope_test_app();
     app.world_mut().resource_mut::<PlayerName>().0 = "alice".to_string();
-
-    // Register observers BEFORE spawning entities with RopedTo
-    app.add_observer(super::super::rope::on_roped_to_added);
-    app.add_observer(super::super::rope::on_roped_to_removed);
+    app.add_observer(super::super::rope::on_rope_link_added);
+    app.add_observer(super::super::rope::on_rope_link_removed);
 
     let player = app
         .world_mut()
@@ -54,14 +49,13 @@ fn sync_rope_joints_creates_joint() {
             },
             Transform::from_xyz(1.0, 0.5, 0.0),
             avian3d::prelude::RigidBody::Dynamic,
-            RopedTo {
-                player_owner: "alice".to_string(),
-            },
         ))
         .id();
 
-    app.add_observer(super::super::rope::on_roped_to_added);
-    app.add_observer(super::super::rope::on_roped_to_removed);
+    app.world_mut().spawn(RopeLink {
+        player_owner: "alice".to_string(),
+        box_id: 0,
+    });
     app.update();
 
     let joints: Vec<Entity> = app
@@ -79,15 +73,13 @@ fn sync_rope_joints_creates_joint() {
     assert_eq!(joint.body2, box_entity, "joint body2 should be the box");
 }
 
-/// Removing RopedTo despawns the joint (via observer).
+/// Removing RopeLink despawns the joint (via observer).
 #[test]
 fn sync_rope_joints_removes_joint_when_unroped() {
     let mut app = rope_test_app();
     app.world_mut().resource_mut::<PlayerName>().0 = "alice".to_string();
-
-    // Register observers BEFORE spawning entities with RopedTo
-    app.add_observer(super::super::rope::on_roped_to_added);
-    app.add_observer(super::super::rope::on_roped_to_removed);
+    app.add_observer(super::super::rope::on_rope_link_added);
+    app.add_observer(super::super::rope::on_rope_link_removed);
 
     app.world_mut().spawn((
         PlayerBox {
@@ -97,23 +89,22 @@ fn sync_rope_joints_removes_joint_when_unroped() {
         avian3d::prelude::RigidBody::Dynamic,
     ));
 
-    let box_entity = app
-        .world_mut()
-        .spawn((
-            KinematicBox {
-                id: 0,
-                initial_pos: Vec3::new(1.0, 0.5, 0.0),
-            },
-            Transform::from_xyz(1.0, 0.5, 0.0),
-            avian3d::prelude::RigidBody::Dynamic,
-            RopedTo {
-                player_owner: "alice".to_string(),
-            },
-        ))
-        .id();
+    app.world_mut().spawn((
+        KinematicBox {
+            id: 0,
+            initial_pos: Vec3::new(1.0, 0.5, 0.0),
+        },
+        Transform::from_xyz(1.0, 0.5, 0.0),
+        avian3d::prelude::RigidBody::Dynamic,
+    ));
 
-    app.add_observer(super::super::rope::on_roped_to_added);
-    app.add_observer(super::super::rope::on_roped_to_removed);
+    let link = app
+        .world_mut()
+        .spawn(RopeLink {
+            player_owner: "alice".to_string(),
+            box_id: 0,
+        })
+        .id();
     app.update();
 
     let count = app
@@ -123,7 +114,7 @@ fn sync_rope_joints_removes_joint_when_unroped() {
         .count();
     assert_eq!(count, 1);
 
-    app.world_mut().entity_mut(box_entity).remove::<RopedTo>();
+    app.world_mut().entity_mut(link).despawn();
     app.update();
 
     let count = app
