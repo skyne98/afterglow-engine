@@ -98,6 +98,7 @@ pub fn spawn_arena(
             },
             Mesh3d(meshes.add(Cuboid::from_size(Vec3::splat(KINEMATIC_BOX_SIZE * 2.0)))),
             MeshMaterial3d(mat),
+            BoxMaterial { base_hue: hue },
             RigidBody::Dynamic,
             Collider::cuboid(
                 KINEMATIC_BOX_SIZE * 2.0,

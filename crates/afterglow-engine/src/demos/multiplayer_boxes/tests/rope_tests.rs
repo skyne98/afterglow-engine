@@ -76,59 +76,70 @@ fn spawn_player_and_box(app: &mut App) -> (Entity, Entity) {
 // Rope toggle tests (use ActionState, NOT ButtonInput directly)
 // ---------------------------------------------------------------------------
 
-/// Pressing F (via ActionState) toggles RopedTo on the nearest box.
+/// Releasing F toggles RopedTo on the nearest box.
 #[test]
-fn toggle_rope_press_f_ropes_nearest_box() {
+fn toggle_rope_release_f_ropes_nearest_box() {
     let mut app = rope_test_app();
     app.world_mut().resource_mut::<PlayerName>().0 = "alice".to_string();
     let (_player, box_entity) = spawn_player_and_box(&mut app);
 
     app.add_systems(Update, super::super::rope::toggle_rope);
 
-    // Simulate pressing F by pressing the key and running update
-    // (Leafwing's update_action_state runs in PreUpdate and sets just_pressed)
+    // Press F (not roped yet — toggle is on release)
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
         .press(KeyCode::KeyF);
     app.update();
-
     assert!(
-        app.world().get::<RopedTo>(box_entity).is_some(),
-        "box should be roped after pressing F"
+        app.world().get::<RopedTo>(box_entity).is_none(),
+        "box should not be roped while F is held"
     );
-}
 
-/// Pressing F again releases the box.
-#[test]
-fn toggle_rope_press_f_again_releases_box() {
-    let mut app = rope_test_app();
-    app.world_mut().resource_mut::<PlayerName>().0 = "alice".to_string();
-    let (_player, box_entity) = spawn_player_and_box(&mut app);
-
-    app.add_systems(Update, super::super::rope::toggle_rope);
-
-    // Press F to rope
-    app.world_mut()
-        .resource_mut::<ButtonInput<KeyCode>>()
-        .press(KeyCode::KeyF);
-    app.update();
-    assert!(app.world().get::<RopedTo>(box_entity).is_some());
-
-    // Release key and update to clear just_pressed
+    // Release F (should rope)
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
         .release(KeyCode::KeyF);
     app.update();
 
-    // Press F again to release
+    assert!(
+        app.world().get::<RopedTo>(box_entity).is_some(),
+        "box should be roped after releasing F"
+    );
+}
+
+/// Releasing F again releases the box.
+#[test]
+fn toggle_rope_release_f_again_releases_box() {
+    let mut app = rope_test_app();
+    app.world_mut().resource_mut::<PlayerName>().0 = "alice".to_string();
+    let (_player, box_entity) = spawn_player_and_box(&mut app);
+
+    app.add_systems(Update, super::super::rope::toggle_rope);
+
+    // Press then release F to rope
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
         .press(KeyCode::KeyF);
     app.update();
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .release(KeyCode::KeyF);
+    app.update();
+    assert!(app.world().get::<RopedTo>(box_entity).is_some());
+
+    // Press then release F again to unrope
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::KeyF);
+    app.update();
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .release(KeyCode::KeyF);
+    app.update();
 
     assert!(
         app.world().get::<RopedTo>(box_entity).is_none(),
-        "box should be released after pressing F again"
+        "box should be released after releasing F again"
     );
 }
 
@@ -164,9 +175,14 @@ fn toggle_rope_box_too_far_not_roped() {
 
     app.add_systems(Update, super::super::rope::toggle_rope);
 
+    // Press then release F
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
         .press(KeyCode::KeyF);
+    app.update();
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .release(KeyCode::KeyF);
     app.update();
 
     assert!(
@@ -223,9 +239,14 @@ fn toggle_rope_skips_already_roped_box() {
 
     app.add_systems(Update, super::super::rope::toggle_rope);
 
+    // Press then release F
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
         .press(KeyCode::KeyF);
+    app.update();
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .release(KeyCode::KeyF);
     app.update();
 
     assert!(

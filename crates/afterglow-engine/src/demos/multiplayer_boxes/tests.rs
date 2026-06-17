@@ -1,7 +1,7 @@
 mod input;
-mod rope_tests;
 #[cfg(feature = "lightyear")]
 pub mod net;
+mod rope_tests;
 
 use bevy::prelude::*;
 use leafwing_input_manager::action_state::ActionState;

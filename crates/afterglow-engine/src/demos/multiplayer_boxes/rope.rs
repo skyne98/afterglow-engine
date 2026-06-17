@@ -46,7 +46,7 @@ pub fn toggle_rope(
         return;
     };
 
-    if !action.just_pressed(&AfterglowAction::RopeToggle) {
+    if !action.just_released(&AfterglowAction::RopeToggle) {
         return;
     }
 
