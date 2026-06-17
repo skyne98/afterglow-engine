@@ -145,3 +145,6 @@ pub fn update_member_link_map(
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

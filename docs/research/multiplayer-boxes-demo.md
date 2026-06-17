@@ -60,9 +60,10 @@ pub struct KinematicBox {
   predicted entities can receive other players' input history instead of waiting
   only for transform snapshots. Client links receive a fixed two-tick
   `InputTimelineConfig`; this delays server-side consumption, not local predicted
-  visuals. Keyboard-to-action writes run in `FixedPreUpdate` /
-  `InputSystems::WriteClientInputs`, before Lightyear buffers inputs and restores
-  delayed snapshots.
+  visuals. Both are now engine-owned defaults (`AfterglowLightyearConfig.rebroadcast_inputs`
+  and `AfterglowLightyearConfig.input_delay_ticks`). Keyboard-to-action writes
+  run in `FixedPreUpdate` / `InputSystems::WriteClientInputs`, before Lightyear
+  buffers inputs and restores delayed snapshots.
 - Link transports must include Lightyear's native `InputChannel` in addition to
   replication channels. The engine link setup extends transports instead of
   replacing them, preserving replication metadata/update/action channels.
@@ -105,15 +106,11 @@ Client-side prediction:
   `InterpolationTarget::AllExceptSingle(...)` for everyone else. The host also
   binds numeric-owner `PlayerBox` entities to the matching server-side client
   link with `ControlledBy` once that link exists.
-- `Transform` is registered as the single networked pose representation for
-  Lightyear prediction history, visual correction (`Isometry3d` correction
-  delta), and transform interpolation. Avian `Position`/`Rotation` are local
-  physics internals in this Avian 0.6 demo; they are not also registered for
-  Lightyear prediction, avoiding dual canonical pose state.
-  `afterglow-lightyear-avian3d` (our fork of Lightyear's Avian bridge) owns the
-  `PhysicsSchedule` ordering and the Position/Rotation <-> Transform sync so
-  physics state is captured in the prediction history at the correct tick and
-  corrections are not overwritten by Avian.
+- The demo uses `PlayerOwned::from_member(member)` on server-spawned player
+  entities. The engine's `ControlledEntityPlugin` + `MemberLinkMap` (populated
+  by the Lightyear bridge) automatically binds `ControlledBy` using the stable
+  `SessionMemberId`, not ephemeral `PeerId`. Games only write spawn/despawn
+  logic; the engine handles link binding.
 - The client renders and simulates the Lightyear `Predicted` copy for its local
   player. Predicted player/cube copies receive local Avian physics components in
   `PreUpdate` after replication receive and before fixed simulation. Remote

@@ -118,21 +118,23 @@ predicted movement is smooth between fixed ticks; entities must also receive
 the `FrameInterpolate<Transform>` component. Remote actors should render
 through `Interpolated` copies where available; confirmed roots are state
 anchors, not player-facing presentation. Pick one canonical networked pose
-representation per physics stack. With Avian 0.6 in the current demo, that is
-`Transform`; Avian `Position`/`Rotation` stay local physics internals because
-Lightyear 0.26's official Avian bridge targets Avian 0.5. The engine's
+representation per physics stack. With Avian 0.6, the engine's
 `AfterglowPhysicsPlugin` automatically uses the `afterglow-lightyear-avian3d`
-fork bridge when the `lightyear` feature is active. If a local predicted actor
-can physically contact props/walls, those contact participants must exist in
-the local prediction world too; otherwise the actor can visually penetrate
-stale server/interpolated objects until correction arrives.
+fork bridge (Transform mode) when the `lightyear` feature is active, disabling
+Avian's own transform/interpolation plugins and coordinating
+`PhysicsSchedule` ordering with Lightyear prediction history. If a local
+predicted actor can physically contact props/walls, those contact participants
+must exist in the local prediction world too; otherwise the actor can visually
+penetrate stale server/interpolated objects until correction arrives.
 
 Use Lightyear's native input stack for player commands. The engine's
 `AfterglowLightyearPlugin` owns the `InputChannel` registration, input
 rebroadcast, and `InputTimelineConfig` (fixed 2-tick delay by default,
 configurable via `AfterglowLightyearConfig.input_delay_ticks` and
-`AfterglowLightyearConfig.rebroadcast_inputs`). Games only need to add
-`InputMap<AfterglowAction>` + `ActionState<AfterglowAction>` on controlled
+`AfterglowLightyearConfig.rebroadcast_inputs`). The plugin also enables
+`FrameInterpolationPlugin::<Transform>` for smooth between-tick motion. Games
+only need to add `InputMap<AfterglowAction>` + `ActionState<AfterglowAction>`
+on controlled entities and add `FrameInterpolate<Transform>` to predicted
 entities. Manual keyboard-to-action writes must run in `FixedPreUpdate` /
 `InputSystems::WriteClientInputs` so Lightyear buffers them before it restores
 delayed input snapshots.

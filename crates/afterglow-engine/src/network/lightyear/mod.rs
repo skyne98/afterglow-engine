@@ -254,6 +254,8 @@ mod tests {
         assert_eq!(cfg.role, LightyearRole::Client);
         assert!(cfg.tick_rate > 0);
         assert!(cfg.predicted_ticks > 0);
+        assert_eq!(cfg.input_delay_ticks, 2);
+        assert!(cfg.rebroadcast_inputs);
     }
 
     #[test]
@@ -282,5 +284,20 @@ mod tests {
             });
 
         app.add_plugins(AfterglowLightyearPlugin);
+    }
+
+    #[cfg(feature = "lightyear")]
+    #[test]
+    fn frame_interpolation_plugin_is_registered() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(AfterglowLightyearConfig::default());
+        app.add_plugins(AfterglowLightyearPlugin);
+        // FrameInterpolationPlugin<Transform> should be registered by the engine
+        assert!(
+            app.is_plugin_added::<lightyear::frame_interpolation::FrameInterpolationPlugin<
+                bevy::transform::components::Transform,
+            >>()
+        );
     }
 }

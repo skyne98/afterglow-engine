@@ -2,8 +2,9 @@
 //!
 //! The upstream crate (`lightyear_avian3d` 0.26.4) depends on `avian3d = 0.5`,
 //! while Afterglow uses `avian3d = 0.6.1`. This crate ports the
-//! `AvianReplicationMode::Transform` branch of the upstream plugin, adapting the
-//! minor API differences (0.6 removed the `AsF32` trait and `Position::f32`).
+//! `AvianReplicationMode::Transform` branch of the upstream plugin, adapting
+//! the minor API differences (0.6 removed the `AsF32` trait and
+//! `Position::f32`).
 //!
 //! Only Transform mode is supported because the `Position` and
 //! `PositionButInterpolateTransform` modes require `Diffable` impls for
@@ -13,15 +14,13 @@
 
 #![allow(clippy::type_complexity)]
 
-use avian3d::physics_transform::*;
-use avian3d::prelude::*;
-use bevy::prelude::*;
-use bevy::transform::systems::{
-    mark_dirty_trees, propagate_parent_transforms, sync_simple_transforms,
+use avian3d::{physics_transform::*, prelude::*};
+use bevy::{
+    ecs::schedule::ScheduleLabel,
+    prelude::*,
+    transform::systems::{mark_dirty_trees, propagate_parent_transforms, sync_simple_transforms},
 };
-use bevy::ecs::schedule::ScheduleLabel;
-use lightyear::frame_interpolation::FrameInterpolationSystems;
-use lightyear::prelude::*;
+use lightyear::{frame_interpolation::FrameInterpolationSystems, prelude::*};
 
 /// Plugin that integrates Avian 0.6 with Lightyear for networked physics
 /// replication in Transform mode.
@@ -36,7 +35,8 @@ pub struct AfterglowAvianPlugin {
     /// If true, lightyear will update the way avian syncs (Position/Rotation
     /// <-> Transform) are handled.
     ///
-    /// Disable if you are an advanced user and want to handle the syncs manually.
+    /// Disable if you are an advanced user and want to handle the syncs
+    /// manually.
     pub update_syncs_manually: bool,
 }
 
@@ -97,7 +97,8 @@ impl Plugin for AfterglowAvianPlugin {
 impl AfterglowAvianPlugin {
     fn sync_transform_to_position(app: &mut App, schedule: impl ScheduleLabel) {
         let schedule = schedule.intern();
-        // Also add the system ordering for FixedPostUpdate (for ColliderTransformPlugin)
+        // Also add the system ordering for FixedPostUpdate (for
+        // ColliderTransformPlugin)
         app.configure_sets(
             FixedPostUpdate,
             (
@@ -164,12 +165,14 @@ impl AfterglowAvianPlugin {
         );
     }
 
-    /// Add Transform only when Position/Rotation are both present and Transform is not.
+    /// Add Transform only when Position/Rotation are both present and Transform
+    /// is not.
     ///
-    /// This is necessary because the PositionToTransform systems require `Transform`.
+    /// This is necessary because the PositionToTransform systems require
+    /// `Transform`.
     ///
-    /// - We cannot run this as an observer because the `ChildOf` component might
-    ///   be inserted after Position/Rotation.
+    /// - We cannot run this as an observer because the `ChildOf` component
+    ///   might be inserted after Position/Rotation.
     /// - We cannot add Transform::default because if the entity is spawned in
     ///   PreUpdate, the TransformToPosition will overwrite the correct
     ///   Position/Rotation.
@@ -177,10 +180,7 @@ impl AfterglowAvianPlugin {
     ///   systems requires the `Transform` component to be present.
     /// - Therefore we try to compute the correct `Transform`.
     fn add_transform(
-        query: Query<
-            (Entity, Ref<Position>, Ref<Rotation>, Option<&ChildOf>),
-            Without<Transform>,
-        >,
+        query: Query<(Entity, Ref<Position>, Ref<Rotation>, Option<&ChildOf>), Without<Transform>>,
         parents: Query<(
             Option<&GlobalTransform>,
             Option<&Position>,
@@ -194,8 +194,7 @@ impl AfterglowAvianPlugin {
             }
             let mut transform = Transform::default();
             if let Some(&ChildOf(parent)) = parent {
-                if let Ok((parent_global_transform, parent_pos, parent_rot)) = parents.get(parent)
-                {
+                if let Ok((parent_global_transform, parent_pos, parent_rot)) = parents.get(parent) {
                     // Compute the global transform of the parent using its Position and Rotation
                     let parent_transform = parent_global_transform
                         .unwrap_or(&GlobalTransform::IDENTITY)
@@ -260,4 +259,27 @@ impl AfterglowAvianPlugin {
 
 pub mod prelude {
     pub use crate::AfterglowAvianPlugin;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plugin_builds_without_panicking() {
+        let mut app = bevy::prelude::App::new();
+        app.add_plugins(bevy::prelude::MinimalPlugins);
+        app.add_plugins(AfterglowAvianPlugin::default());
+    }
+
+    #[test]
+    fn plugin_adds_physics_transform_config() {
+        let mut app = bevy::prelude::App::new();
+        app.add_plugins(bevy::prelude::MinimalPlugins);
+        app.add_plugins(AfterglowAvianPlugin::default());
+        assert!(
+            app.world()
+                .contains_resource::<avian3d::physics_transform::PhysicsTransformConfig>()
+        );
+    }
 }
