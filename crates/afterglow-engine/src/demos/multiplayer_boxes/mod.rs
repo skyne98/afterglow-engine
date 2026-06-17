@@ -141,7 +141,10 @@ impl Plugin for MultiplayerBoxesPlugin {
 
         app.add_systems(
             FixedUpdate,
-            movement::apply_movement
+            (
+                movement::apply_movement,
+                rope::server_toggle_remote_ropes_from_inputs,
+            )
                 .run_if(|config: Res<AfterglowLightyearConfig>| {
                     matches!(config.role, LightyearRole::Host | LightyearRole::Client)
                 })

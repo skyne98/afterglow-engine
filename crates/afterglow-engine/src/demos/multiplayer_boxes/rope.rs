@@ -25,9 +25,16 @@ pub struct Highlighted;
 #[derive(Component)]
 pub struct RopeJointEntity(pub Entity);
 
+/// Server-side release-edge memory for remote client rope toggles. This still
+/// uses `ActionState`; it only reconstructs the release edge from the current
+/// pressed state because remote input buffers may not preserve Leafwing's
+/// frame-local `just_released` flag at the point the server gameplay runs.
+#[derive(Component, Default)]
+pub struct RopeToggleWasPressed(pub bool);
+
 /// Toggle the rope on the nearest box when RopeToggle is released.
 pub fn toggle_rope(
-    mut commands: Commands,
+    commands: Commands,
     player_name: Res<PlayerName>,
     context: Option<Res<AfterglowNetworkContext>>,
     players: Query<(&PlayerBox, &Transform, &ActionState<AfterglowAction>)>,
@@ -52,14 +59,79 @@ pub fn toggle_rope(
     // PlayerBox.owner will all match against.
     let owner = player_box.owner.clone();
 
-    // If we already have a box roped, release it
+    apply_rope_toggle(
+        commands,
+        owner,
+        player_transform.translation,
+        &boxes,
+        &roped,
+    );
+}
+
+/// Server-authoritative path for remote-client rope toggles. Clients may
+/// predict `RopedTo`, but the server must also apply the same toggle from the
+/// replicated `ActionState`; otherwise Lightyear correction removes the
+/// client's predicted rope immediately.
+pub fn server_toggle_remote_ropes_from_inputs(
+    mut commands: Commands,
+    player_name: Res<PlayerName>,
+    context: Option<Res<AfterglowNetworkContext>>,
+    players: Query<(
+        Entity,
+        &PlayerBox,
+        &Transform,
+        &ActionState<AfterglowAction>,
+        Option<&RopeToggleWasPressed>,
+    )>,
+    boxes: Query<(Entity, &KinematicBox, &Transform), Without<RopedTo>>,
+    roped: Query<(Entity, &RopedTo)>,
+) {
+    let status = context.as_deref().map(|ctx| ctx.get_connection_status());
+    if !status.is_some_and(|status| status.runs_authority()) {
+        return;
+    }
+    let local_member = status.and_then(|status| status.local_member_owner());
+
+    for (entity, player_box, transform, action, previous) in players.iter() {
+        let is_local = player_box.owner == player_name.0
+            || local_member.as_deref() == Some(player_box.owner.as_str());
+        if is_local {
+            continue;
+        }
+
+        let pressed = action.pressed(&AfterglowAction::RopeToggle);
+        let was_pressed = previous.is_some_and(|previous| previous.0);
+        let released =
+            action.just_released(&AfterglowAction::RopeToggle) || (was_pressed && !pressed);
+        if released {
+            apply_rope_toggle(
+                commands.reborrow(),
+                player_box.owner.clone(),
+                transform.translation,
+                &boxes,
+                &roped,
+            );
+        }
+        commands
+            .entity(entity)
+            .insert(RopeToggleWasPressed(pressed));
+    }
+}
+
+fn apply_rope_toggle(
+    mut commands: Commands,
+    owner: String,
+    player_pos: Vec3,
+    boxes: &Query<(Entity, &KinematicBox, &Transform), Without<RopedTo>>,
+    roped: &Query<(Entity, &RopedTo)>,
+) {
+    // If we already have a box roped, release it.
     if let Some((entity, _)) = roped.iter().find(|(_, r)| r.player_owner == owner) {
         commands.entity(entity).remove::<RopedTo>();
         return;
     }
 
-    // Find the nearest box within grab range
-    let player_pos = player_transform.translation;
+    // Find the nearest box within grab range.
     let nearest = boxes.iter().min_by(|(_, _, a), (_, _, b)| {
         a.translation
             .distance(player_pos)
@@ -142,23 +214,30 @@ pub fn highlight_nearest_box(
         })
         .map(|(_, t)| t.translation);
 
-    for entity in highlighted.iter() {
-        commands.entity(entity).remove::<Highlighted>();
-    }
-
-    let Some(player_pos) = player_pos else {
-        return;
-    };
-
-    let nearest = boxes.iter().min_by(|(_, _, a), (_, _, b)| {
-        a.translation
-            .distance(player_pos)
-            .partial_cmp(&b.translation.distance(player_pos))
-            .unwrap_or(std::cmp::Ordering::Equal)
+    let desired = player_pos.and_then(|player_pos| {
+        boxes
+            .iter()
+            .min_by(|(_, _, a), (_, _, b)| {
+                a.translation
+                    .distance(player_pos)
+                    .partial_cmp(&b.translation.distance(player_pos))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .and_then(|(entity, _, transform)| {
+                (transform.translation.distance(player_pos) <= ROPE_GRAB_RANGE).then_some(entity)
+            })
     });
 
-    if let Some((entity, _, transform)) = nearest {
-        if transform.translation.distance(player_pos) <= ROPE_GRAB_RANGE {
+    let current: Vec<Entity> = highlighted.iter().collect();
+    for entity in current
+        .iter()
+        .copied()
+        .filter(|entity| Some(*entity) != desired)
+    {
+        commands.entity(entity).remove::<Highlighted>();
+    }
+    if let Some(entity) = desired {
+        if !current.contains(&entity) {
             commands.entity(entity).insert(Highlighted);
         }
     }

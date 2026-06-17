@@ -151,6 +151,70 @@ fn toggle_rope_release_f_again_releases_box() {
     );
 }
 
+/// The authoritative host consumes a remote client's replicated ActionState
+/// release edge and creates the server-owned RopedTo component. This prevents
+/// the client's predicted rope from being corrected away immediately.
+#[test]
+fn server_remote_action_state_release_ropes_nearest_box() {
+    let mut app = rope_test_app();
+    app.world_mut().resource_mut::<PlayerName>().0 = "alice".to_string();
+    app.world_mut()
+        .insert_resource(crate::network::AfterglowNetworkContext::from_status(
+            crate::network::AfterglowConnectionStatus {
+                role: crate::network::LightyearRole::Host,
+                local_member_id: crate::network::session::SessionMemberId::new(1),
+                ..Default::default()
+            },
+        ));
+
+    let remote = app
+        .world_mut()
+        .spawn((
+            PlayerBox {
+                owner: "2".to_string(),
+            },
+            Transform::from_xyz(0.0, 0.4, 0.0),
+            avian3d::prelude::RigidBody::Dynamic,
+            LinearVelocity::ZERO,
+            ActionState::<AfterglowAction>::default(),
+        ))
+        .id();
+
+    let box_entity = app
+        .world_mut()
+        .spawn((
+            KinematicBox {
+                id: 0,
+                initial_pos: Vec3::new(1.0, 0.5, 0.0),
+            },
+            Transform::from_xyz(1.0, 0.5, 0.0),
+            avian3d::prelude::RigidBody::Dynamic,
+            LinearVelocity::ZERO,
+        ))
+        .id();
+
+    app.add_systems(
+        Update,
+        super::super::rope::server_toggle_remote_ropes_from_inputs,
+    );
+
+    app.world_mut()
+        .get_mut::<ActionState<AfterglowAction>>(remote)
+        .unwrap()
+        .press(&AfterglowAction::RopeToggle);
+    app.update();
+    assert!(app.world().get::<RopedTo>(box_entity).is_none());
+
+    app.world_mut()
+        .get_mut::<ActionState<AfterglowAction>>(remote)
+        .unwrap()
+        .release(&AfterglowAction::RopeToggle);
+    app.update();
+
+    let roped = app.world().get::<RopedTo>(box_entity);
+    assert_eq!(roped.map(|r| r.player_owner.as_str()), Some("2"));
+}
+
 /// Box too far away is not roped.
 #[test]
 fn toggle_rope_box_too_far_not_roped() {
