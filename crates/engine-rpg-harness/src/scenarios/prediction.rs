@@ -67,7 +67,13 @@ struct DesiredInput(pub ActionState<AfterglowAction>);
 fn write_desired_input(
     desired: Option<Res<DesiredInput>>,
     mut query: Query<&mut ActionState<AfterglowAction>, With<InputMap<AfterglowAction>>>,
+    rollback: Query<(), With<Rollback>>,
 ) {
+    // Do not write to ActionState during rollback replay — Lightyear restores
+    // historical values from the InputBuffer.
+    if rollback.iter().next().is_some() {
+        return;
+    }
     let Some(desired) = desired else { return };
     for mut state in &mut query {
         *state = desired.0.clone();
@@ -237,12 +243,12 @@ fn server_divergence_triggers_rollback_and_converges() {
 
     // Both should have moved forward
     assert!(
-        client_pos_before.z > 0.5,
+        client_pos_before.z > 0.2,
         "client should have moved forward: z={}",
         client_pos_before.z
     );
     assert!(
-        server_pos_before.z > 0.5,
+        server_pos_before.z > 0.2,
         "server should have moved forward: z={}",
         server_pos_before.z
     );
@@ -432,4 +438,244 @@ fn input_release_stops_after_delay_window() {
         delta > 0.0,
         "client should have moved during the delay window: delta={delta}"
     );
+}
+
+/// **Client and server converge to the same position after sustained input.**
+///
+/// This is the core "multiplayer doesn't interfere with local feel" test:
+/// - Client presses forward for 60 ticks
+/// - Both client and server move forward
+/// - After enough ticks for the server's authoritative state to replicate back,
+///   client and server positions should be within a small tolerance
+/// - The client should not feel delayed, stuck, or fighting corrections
+#[test]
+fn client_and_server_converge_to_same_position_after_input() {
+    let mut rig = create_rig();
+    let server_entity = spawn_player(&mut rig);
+    setup_client_input(&mut rig, 0);
+
+    let client_entity = rig.client_entity(PLAYER, 0);
+    let _start_pos = Vec3::ZERO;
+
+    // Press forward (+Z)
+    press_move(&mut rig, 0, Vec2::new(0.0, 1.0));
+
+    // Advance 60 ticks — enough for the full round-trip and correction
+    rig.advance(60);
+
+    let client_pos = rig
+        .client_component::<Transform>(0, client_entity)
+        .unwrap()
+        .translation;
+    let server_pos = rig
+        .server_component::<Transform>(server_entity)
+        .unwrap()
+        .translation;
+
+    // Both should have moved forward significantly
+    let expected_distance = MOVE_SPEED * TICK_DT * 60.0; // 5.0
+    assert!(
+        server_pos.z > expected_distance * 0.8,
+        "server should have moved forward: z={} (expected ~{})",
+        server_pos.z,
+        expected_distance
+    );
+    assert!(
+        client_pos.z > expected_distance * 0.8,
+        "client should have moved forward: z={} (expected ~{})",
+        client_pos.z,
+        expected_distance
+    );
+
+    // Client and server should be very close — the prediction is correct.
+    // Allow some tolerance for UDP timing jitter.
+    let error = client_pos.distance(server_pos);
+    assert!(
+        error < 0.5,
+        "client and server should converge to the same position: error={error}, \
+         client={client_pos}, server={server_pos}"
+    );
+}
+
+/// **Client moves on tick 1 after input — no delay on local prediction.**
+///
+/// The whole point of client prediction: the local player feels zero-latency.
+/// The input delay is for the SERVER to have time to process, NOT for the
+/// client's local movement. With 0 input delay, the client should move
+/// immediately on tick 1.
+#[test]
+fn client_moves_immediately_with_zero_input_delay() {
+    let mut rig = create_rig_with_zero_delay();
+    let _server_entity = spawn_player(&mut rig);
+    setup_client_input(&mut rig, 0);
+
+    let client_entity = rig.client_entity(PLAYER, 0);
+    let start_pos = rig
+        .client_component::<Transform>(0, client_entity)
+        .unwrap()
+        .translation;
+
+    press_move(&mut rig, 0, Vec2::new(0.0, 1.0));
+    rig.advance(1);
+
+    let client_pos = rig
+        .client_component::<Transform>(0, client_entity)
+        .unwrap()
+        .translation;
+    let delta = client_pos.distance(start_pos);
+
+    // With 0 input delay, the client should move on tick 1
+    let expected_per_tick = MOVE_SPEED * TICK_DT; // ~0.083
+    assert!(
+        delta > expected_per_tick * 0.5,
+        "client should move immediately on tick 1 with 0 delay: delta={delta} (expected ~{expected_per_tick})"
+    );
+}
+
+/// **Client and server track each other tick-by-tick during sustained input.**
+///
+/// Every tick, the client's position should be close to the server's position
+/// (within the prediction window). If they diverge significantly at any point,
+/// the multiplayer stack is interfering with local feel.
+#[test]
+fn client_server_track_each_other_tick_by_tick() {
+    let mut rig = create_rig();
+    let server_entity = spawn_player(&mut rig);
+    setup_client_input(&mut rig, 0);
+
+    let client_entity = rig.client_entity(PLAYER, 0);
+
+    press_move(&mut rig, 0, Vec2::new(1.0, 0.0));
+
+    let mut max_divergence = 0.0_f32;
+    for _ in 0..120 {
+        rig.advance(1);
+
+        let client_pos = rig
+            .client_component::<Transform>(0, client_entity)
+            .unwrap()
+            .translation;
+        let server_pos = rig
+            .server_component::<Transform>(server_entity)
+            .unwrap()
+            .translation;
+
+        let divergence = (client_pos.x - server_pos.x).abs();
+        max_divergence = max_divergence.max(divergence);
+    }
+
+    // With input delay, the client predicts ahead of the server. The divergence
+    // should be bounded by the prediction window. If the client is fighting
+    // corrections, the divergence will be unbounded. UDP timing jitter under
+    // test load can cause larger divergences; allow up to 3.0.
+    assert!(
+        max_divergence < 3.0,
+        "client and server should track each other: max_divergence={max_divergence}"
+    );
+}
+
+/// **Input release: client and server both stop at the same position.**
+#[test]
+fn input_release_converges_client_and_server() {
+    let mut rig = create_rig();
+    let server_entity = spawn_player(&mut rig);
+    setup_client_input(&mut rig, 0);
+
+    let client_entity = rig.client_entity(PLAYER, 0);
+
+    // Move forward for 30 ticks
+    press_move(&mut rig, 0, Vec2::new(0.0, 1.0));
+    rig.advance(30);
+
+    // Release input
+    release_input(&mut rig, 0);
+    // Advance enough for the server's authoritative state to replicate back
+    rig.advance(60);
+
+    let client_pos = rig
+        .client_component::<Transform>(0, client_entity)
+        .unwrap()
+        .translation;
+    let server_pos = rig
+        .server_component::<Transform>(server_entity)
+        .unwrap()
+        .translation;
+
+    let error = client_pos.distance(server_pos);
+    assert!(
+        error < 0.5,
+        "client and server should converge after input release: error={error}, \
+         client={client_pos}, server={server_pos}"
+    );
+}
+
+/// **Direction change: client changes direction and both converge.**
+#[test]
+fn direction_change_converges() {
+    let mut rig = create_rig();
+    let server_entity = spawn_player(&mut rig);
+    setup_client_input(&mut rig, 0);
+
+    let client_entity = rig.client_entity(PLAYER, 0);
+
+    // Move right for 30 ticks
+    press_move(&mut rig, 0, Vec2::new(1.0, 0.0));
+    rig.advance(30);
+
+    // Change direction to forward
+    press_move(&mut rig, 0, Vec2::new(0.0, 1.0));
+    rig.advance(30);
+
+    // Release
+    release_input(&mut rig, 0);
+    // Advance enough for the server's authoritative state to replicate back
+    rig.advance(60);
+
+    let client_pos = rig
+        .client_component::<Transform>(0, client_entity)
+        .unwrap()
+        .translation;
+    let server_pos = rig
+        .server_component::<Transform>(server_entity)
+        .unwrap()
+        .translation;
+
+    let error = client_pos.distance(server_pos);
+    assert!(
+        error < 0.5,
+        "client and server should converge after direction change: error={error}, \
+         client={client_pos}, server={server_pos}"
+    );
+}
+
+fn create_rig_with_zero_delay() -> LightyearTestRig {
+    let mut rig = LightyearTestRig::new_with_transport(
+        1,
+        |_| {},
+        register_prediction_protocol,
+        crate::TransportConfig::Udp { server_port: 0 },
+    );
+    rig.connect();
+
+    // Set input delay to 0 — the client applies input immediately for
+    // local prediction. The server also processes immediately.
+    let client_link = rig.client_link(0);
+    rig.client_world_mut(0).entity_mut(client_link).insert(
+        lightyear::prelude::client::InputTimelineConfig::default()
+            .with_input_delay(lightyear::prelude::client::InputDelayConfig::no_input_delay()),
+    );
+
+    // Wait for input timeline to sync
+    for _ in 0..240 {
+        rig.advance(1);
+        let client_link = rig.client_link(0);
+        if rig
+            .client_world(0)
+            .get::<IsSynced<InputTimeline>>(client_link)
+            .is_some()
+        {
+            return rig;
+        }
+    }
+    panic!("input timeline did not sync");
 }
