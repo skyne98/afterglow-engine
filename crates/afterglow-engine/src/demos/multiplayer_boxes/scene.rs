@@ -228,25 +228,22 @@ pub fn spawn_client_arena_visuals(
 
 pub fn attach_predicted_player_physics(
     mut commands: Commands,
-    players: Query<
-        (Entity, Option<&Transform>, Has<LinearVelocity>),
-        (With<PlayerBox>, With<Predicted>, Without<RigidBody>),
-    >,
+    players: Query<Entity, (With<PlayerBox>, With<Predicted>, Without<RigidBody>)>,
 ) {
-    for (entity, transform, has_velocity) in &players {
-        let transform = transform.copied().unwrap_or_default();
-        let mut entity_commands = commands.entity(entity);
-        entity_commands.insert((
+    // Predicted player physics is now attached in attach_replicated_player_visuals
+    // along with visuals, for both predicted and interpolated entities.
+    // This system is kept for the PreUpdate slot so physics is ready before
+    // FixedUpdate, but the query will be empty if visuals were already attached.
+    for entity in &players {
+        let transform = Transform::default();
+        commands.entity(entity).insert((
             RigidBody::Dynamic,
             Collider::cuboid(PLAYER_SIZE * 2.0, PLAYER_SIZE * 2.0, PLAYER_SIZE * 2.0),
             Position::from(transform.translation),
             Rotation::from(transform.rotation),
-            // Enable frame interpolation so the body is smooth between ticks.
+            LinearVelocity::ZERO,
             lightyear::frame_interpolation::FrameInterpolate::<Transform>::default(),
         ));
-        if !has_velocity {
-            entity_commands.insert(LinearVelocity::ZERO);
-        }
     }
 }
 
@@ -290,6 +287,7 @@ pub fn attach_replicated_player_visuals(
     players: Query<(
         Entity,
         &PlayerBox,
+        Option<&Transform>,
         Has<Predicted>,
         Has<Interpolated>,
         Option<&PlayerVisualAttached>,
@@ -298,7 +296,7 @@ pub fn attach_replicated_player_visuals(
     let local_owner = context
         .as_deref()
         .and_then(|ctx| ctx.get_connection_status().local_member_owner());
-    for (entity, player, predicted, interpolated, attached) in &players {
+    for (entity, player, transform, predicted, interpolated, attached) in &players {
         if attached.is_some() {
             continue;
         }
@@ -312,10 +310,22 @@ pub fn attach_replicated_player_visuals(
         } else {
             330.0
         };
+        let pos = transform.map_or(Vec3::ZERO, |t| t.translation);
+        let rot = transform.map_or(Quat::IDENTITY, |t| t.rotation);
+        // Attach physics to BOTH predicted and interpolated entities so they
+        // participate in local collision. Predicted entities are simulated
+        // locally; interpolated entities get their Position/Rotation from
+        // Lightyear's interpolation, but still need a RigidBody+Collider for
+        // collision detection against the local predicted player.
         commands.entity(entity).insert((
             PlayerVisualAttached,
             Mesh3d(meshes.add(Cuboid::from_size(Vec3::splat(PLAYER_SIZE * 2.0)))),
             MeshMaterial3d(materials.add(Color::hsla(hue, 0.8, 0.5, 1.0))),
+            RigidBody::Dynamic,
+            Collider::cuboid(PLAYER_SIZE * 2.0, PLAYER_SIZE * 2.0, PLAYER_SIZE * 2.0),
+            Position::from(pos),
+            Rotation::from(rot),
+            LinearVelocity::ZERO,
         ));
     }
 }
