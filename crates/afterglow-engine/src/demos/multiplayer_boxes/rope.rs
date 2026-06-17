@@ -12,6 +12,7 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
 use leafwing_input_manager::action_state::ActionState;
+use lightyear::prelude::Predicted;
 
 use super::{protocol::*, scene::PlayerName};
 use crate::{input::AfterglowAction, network::AfterglowNetworkContext};
@@ -30,8 +31,12 @@ pub struct RopeJointEntity(pub Entity);
 /// relying on Leafwing's frame-local `just_released` flag, which can be
 /// observed more than once by remote/server-side gameplay.
 #[derive(Component, Default)]
-pub struct RopeToggleWasPressed(pub bool);
+pub struct RopeToggleLatch {
+    was_pressed: bool,
+    cooldown_frames: u8,
+}
 
+const ROPE_TOGGLE_COOLDOWN_FRAMES: u8 = 8;
 const HIGHLIGHT_SWITCH_MARGIN: f32 = 0.35;
 
 /// Toggle the rope on the nearest box when RopeToggle is released.
@@ -44,28 +49,33 @@ pub fn toggle_rope(
         &PlayerBox,
         &Transform,
         &ActionState<AfterglowAction>,
-        Option<&RopeToggleWasPressed>,
+        Has<Predicted>,
+        Option<&RopeToggleLatch>,
     )>,
     boxes: Query<(Entity, &KinematicBox, &Transform), Without<RopedTo>>,
     roped: Query<(Entity, &RopedTo)>,
 ) {
     let status = context.as_deref().map(|ctx| ctx.get_connection_status());
+    let client_only = status.is_some_and(|status| status.is_client_only());
+    let authority = status.is_some_and(|status| status.runs_authority());
     let local_member = status.and_then(|s| s.local_member_owner());
 
-    let Some((entity, player_box, player_transform, action, previous)) =
-        players.iter().find(|(_, pb, _, _, _)| {
-            pb.owner == player_name.0 || local_member.as_deref() == Some(pb.owner.as_str())
+    let Some((entity, player_box, player_transform, action, _predicted, previous)) =
+        players.iter().find(|(_, pb, _, _, predicted, _)| {
+            let is_local =
+                pb.owner == player_name.0 || local_member.as_deref() == Some(pb.owner.as_str());
+            if !is_local {
+                return false;
+            }
+            (!client_only || *predicted) && (!authority || !*predicted)
         })
     else {
         return;
     };
 
     let pressed = action.pressed(&AfterglowAction::RopeToggle);
-    let was_pressed = previous.is_some_and(|previous| previous.0);
-    let released = was_pressed && !pressed;
-    commands
-        .entity(entity)
-        .insert(RopeToggleWasPressed(pressed));
+    let (released, next_latch) = next_rope_latch(previous, pressed);
+    commands.entity(entity).insert(next_latch);
     if !released {
         return;
     }
@@ -97,7 +107,8 @@ pub fn server_toggle_remote_ropes_from_inputs(
         &PlayerBox,
         &Transform,
         &ActionState<AfterglowAction>,
-        Option<&RopeToggleWasPressed>,
+        Has<Predicted>,
+        Option<&RopeToggleLatch>,
     )>,
     boxes: Query<(Entity, &KinematicBox, &Transform), Without<RopedTo>>,
     roped: Query<(Entity, &RopedTo)>,
@@ -108,16 +119,15 @@ pub fn server_toggle_remote_ropes_from_inputs(
     }
     let local_member = status.and_then(|status| status.local_member_owner());
 
-    for (entity, player_box, transform, action, previous) in players.iter() {
+    for (entity, player_box, transform, action, predicted, previous) in players.iter() {
         let is_local = player_box.owner == player_name.0
             || local_member.as_deref() == Some(player_box.owner.as_str());
-        if is_local {
+        if is_local || predicted {
             continue;
         }
 
         let pressed = action.pressed(&AfterglowAction::RopeToggle);
-        let was_pressed = previous.is_some_and(|previous| previous.0);
-        let released = was_pressed && !pressed;
+        let (released, next_latch) = next_rope_latch(previous, pressed);
         if released {
             apply_rope_toggle(
                 commands.reborrow(),
@@ -127,10 +137,26 @@ pub fn server_toggle_remote_ropes_from_inputs(
                 &roped,
             );
         }
-        commands
-            .entity(entity)
-            .insert(RopeToggleWasPressed(pressed));
+        commands.entity(entity).insert(next_latch);
     }
+}
+
+fn next_rope_latch(previous: Option<&RopeToggleLatch>, pressed: bool) -> (bool, RopeToggleLatch) {
+    let was_pressed = previous.is_some_and(|previous| previous.was_pressed);
+    let cooldown = previous.map_or(0, |previous| previous.cooldown_frames);
+    let released = was_pressed && !pressed && cooldown == 0;
+    let next_cooldown = if released {
+        ROPE_TOGGLE_COOLDOWN_FRAMES
+    } else {
+        cooldown.saturating_sub(1)
+    };
+    (
+        released,
+        RopeToggleLatch {
+            was_pressed: pressed,
+            cooldown_frames: next_cooldown,
+        },
+    )
 }
 
 fn apply_rope_toggle(

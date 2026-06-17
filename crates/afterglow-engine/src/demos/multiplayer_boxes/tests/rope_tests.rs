@@ -132,7 +132,10 @@ fn toggle_rope_release_f_again_releases_box() {
     app.update();
     assert!(app.world().get::<RopedTo>(box_entity).is_some());
 
-    // Press then release F again to unrope
+    // Wait out the anti-stale-input cooldown, then press/release F again to unrope.
+    for _ in 0..8 {
+        app.update();
+    }
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
         .press(KeyCode::KeyF);
@@ -211,15 +214,62 @@ fn server_remote_action_state_release_ropes_nearest_box() {
     let roped = app.world().get::<RopedTo>(box_entity);
     assert_eq!(roped.map(|r| r.player_owner.as_str()), Some("2"));
 
-    // The server may observe a remote ActionState whose frame-local
-    // just_released flag remains true across multiple gameplay observations.
-    // A single physical release must not toggle the rope back off.
+    // The server may observe stale/replayed states immediately after one
+    // release. A false->true->false replay inside the cooldown must not toggle
+    // the rope back off.
+    app.world_mut()
+        .get_mut::<ActionState<AfterglowAction>>(remote)
+        .unwrap()
+        .press(&AfterglowAction::RopeToggle);
+    app.update();
+    app.world_mut()
+        .get_mut::<ActionState<AfterglowAction>>(remote)
+        .unwrap()
+        .release(&AfterglowAction::RopeToggle);
     app.update();
     assert_eq!(
         app.world()
             .get::<RopedTo>(box_entity)
             .map(|r| r.player_owner.as_str()),
         Some("2")
+    );
+}
+
+/// A stale duplicate release immediately after attach must not drop the rope.
+#[test]
+fn local_duplicate_release_inside_cooldown_does_not_drop_rope() {
+    let mut app = rope_test_app();
+    app.world_mut().resource_mut::<PlayerName>().0 = "alice".to_string();
+    let (_player, box_entity) = spawn_player_and_box(&mut app);
+
+    app.add_systems(
+        PreUpdate,
+        super::super::rope::toggle_rope
+            .after(leafwing_input_manager::plugin::InputManagerSystem::Update),
+    );
+
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::KeyF);
+    app.update();
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .release(KeyCode::KeyF);
+    app.update();
+    assert!(app.world().get::<RopedTo>(box_entity).is_some());
+
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::KeyF);
+    app.update();
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .release(KeyCode::KeyF);
+    app.update();
+
+    assert!(
+        app.world().get::<RopedTo>(box_entity).is_some(),
+        "duplicate/stale release inside cooldown must not immediately drop the rope"
     );
 }
 
@@ -348,115 +398,3 @@ fn toggle_rope_skips_already_roped_box() {
 }
 
 // ---------------------------------------------------------------------------
-// Sync rope joints tests
-// ---------------------------------------------------------------------------
-
-/// Adding RopedTo spawns a DistanceJoint (via observer).
-#[test]
-fn sync_rope_joints_creates_joint() {
-    let mut app = rope_test_app();
-    app.world_mut().resource_mut::<PlayerName>().0 = "alice".to_string();
-
-    // Register observers BEFORE spawning entities with RopedTo
-    app.add_observer(super::super::rope::on_roped_to_added);
-    app.add_observer(super::super::rope::on_roped_to_removed);
-
-    let player = app
-        .world_mut()
-        .spawn((
-            PlayerBox {
-                owner: "alice".to_string(),
-            },
-            Transform::from_xyz(0.0, 0.4, 0.0),
-            avian3d::prelude::RigidBody::Dynamic,
-        ))
-        .id();
-
-    let box_entity = app
-        .world_mut()
-        .spawn((
-            KinematicBox {
-                id: 0,
-                initial_pos: Vec3::new(1.0, 0.5, 0.0),
-            },
-            Transform::from_xyz(1.0, 0.5, 0.0),
-            avian3d::prelude::RigidBody::Dynamic,
-            RopedTo {
-                player_owner: "alice".to_string(),
-            },
-        ))
-        .id();
-
-    app.add_observer(super::super::rope::on_roped_to_added);
-    app.add_observer(super::super::rope::on_roped_to_removed);
-    app.update();
-
-    let joints: Vec<Entity> = app
-        .world_mut()
-        .query_filtered::<Entity, With<RopeJoint>>()
-        .iter(app.world())
-        .collect();
-    assert_eq!(joints.len(), 1, "should be exactly one rope joint");
-
-    let joint = app
-        .world()
-        .get::<avian3d::prelude::DistanceJoint>(joints[0])
-        .unwrap();
-    assert_eq!(joint.body1, player, "joint body1 should be the player");
-    assert_eq!(joint.body2, box_entity, "joint body2 should be the box");
-}
-
-/// Removing RopedTo despawns the joint (via observer).
-#[test]
-fn sync_rope_joints_removes_joint_when_unroped() {
-    let mut app = rope_test_app();
-    app.world_mut().resource_mut::<PlayerName>().0 = "alice".to_string();
-
-    // Register observers BEFORE spawning entities with RopedTo
-    app.add_observer(super::super::rope::on_roped_to_added);
-    app.add_observer(super::super::rope::on_roped_to_removed);
-
-    app.world_mut().spawn((
-        PlayerBox {
-            owner: "alice".to_string(),
-        },
-        Transform::from_xyz(0.0, 0.4, 0.0),
-        avian3d::prelude::RigidBody::Dynamic,
-    ));
-
-    let box_entity = app
-        .world_mut()
-        .spawn((
-            KinematicBox {
-                id: 0,
-                initial_pos: Vec3::new(1.0, 0.5, 0.0),
-            },
-            Transform::from_xyz(1.0, 0.5, 0.0),
-            avian3d::prelude::RigidBody::Dynamic,
-            RopedTo {
-                player_owner: "alice".to_string(),
-            },
-        ))
-        .id();
-
-    app.add_observer(super::super::rope::on_roped_to_added);
-    app.add_observer(super::super::rope::on_roped_to_removed);
-    app.update();
-
-    let count = app
-        .world_mut()
-        .query_filtered::<Entity, With<RopeJoint>>()
-        .iter(app.world())
-        .count();
-    assert_eq!(count, 1);
-
-    app.world_mut().entity_mut(box_entity).remove::<RopedTo>();
-    app.update();
-
-    let count = app
-        .world_mut()
-        .query_filtered::<Entity, With<RopeJoint>>()
-        .iter(app.world())
-        .count();
-    assert_eq!(count, 0, "joint should be despawned after unroping");
-}

@@ -144,10 +144,15 @@ entity to the link that controls it, and Leafwing `InputMap<AfterglowAction>` /
 `ActionState<AfterglowAction>` on the controlled entity for gameplay input.
 Afterglow does not add a separate player/avatar taxonomy.
 
-The missing reusable layer is controlled-entity lifecycle orchestration: assign,
-revoke, and rebind controlled entities for join, disconnect, respawn,
-possession, and reconnect. It is not a custom action transport or entity-routing
-protocol.
+`ControlledEntityPlugin` provides the reusable join-time binding layer for
+entities tagged with `PlayerOwned`. `MemberLinkMap` only exposes `ClientOf`
+links after they also have a `ReplicationSender`; inserting `ControlledBy`
+before the sender exists makes Lightyear reject the controlled entity. Game code
+can spawn/tag entities on session events without waiting for the link itself.
+
+The remaining reusable lifecycle surface is richer orchestration: assign,
+revoke, and rebind controlled entities for disconnect, respawn, possession, and
+reconnect. It is not a custom action transport or entity-routing protocol.
 
 ## Input Pattern
 

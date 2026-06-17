@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use lightyear::prelude::server::ClientOf;
 
 use super::*;
@@ -10,9 +12,21 @@ fn test_app() -> App {
     // Set up minimal Lightyear replication infrastructure so `Replicate`
     // component doesn't panic.
     app.add_plugins(lightyear::prelude::server::ServerPlugins {
-        tick_duration: std::time::Duration::from_secs_f64(1.0 / 60.0),
+        tick_duration: Duration::from_secs_f64(1.0 / 60.0),
     });
     app
+}
+
+fn ready_link(member: SessionMemberId) -> impl Bundle {
+    (
+        ClientOf,
+        RemoteId(PeerId::Netcode(member.as_raw() as u64)),
+        ReplicationSender::new(
+            Duration::from_millis(16),
+            SendUpdatesMode::SinceLastAck,
+            false,
+        ),
+    )
 }
 
 #[test]
@@ -38,16 +52,30 @@ fn member_link_map_starts_empty() {
 fn update_member_link_map_adds_netcode_links() {
     let mut app = test_app();
     let member = SessionMemberId::new(7);
-    let link_entity = app
-        .world_mut()
-        .spawn((ClientOf, RemoteId(PeerId::Netcode(member.as_raw() as u64))))
-        .id();
+    let link_entity = app.world_mut().spawn(ready_link(member)).id();
 
     app.add_systems(Update, update_member_link_map);
     app.update();
 
     let map = app.world().resource::<MemberLinkMap>();
     assert_eq!(map.link_for(member), Some(link_entity));
+}
+
+#[test]
+fn update_member_link_map_waits_for_replication_sender() {
+    let mut app = test_app();
+    let member = SessionMemberId::new(8);
+    app.world_mut()
+        .spawn((ClientOf, RemoteId(PeerId::Netcode(member.as_raw() as u64))));
+
+    app.add_systems(Update, update_member_link_map);
+    app.update();
+
+    let map = app.world().resource::<MemberLinkMap>();
+    assert!(
+        map.link_for(member).is_none(),
+        "ClientOf without ReplicationSender must not be bindable by ControlledBy"
+    );
 }
 
 #[test]
@@ -67,10 +95,7 @@ fn update_member_link_map_ignores_local_peers() {
 fn update_member_link_map_removes_stale_entries() {
     let mut app = test_app();
     let member = SessionMemberId::new(5);
-    let link_entity = app
-        .world_mut()
-        .spawn((ClientOf, RemoteId(PeerId::Netcode(member.as_raw() as u64))))
-        .id();
+    let link_entity = app.world_mut().spawn(ready_link(member)).id();
 
     app.add_systems(Update, update_member_link_map);
     app.update();
@@ -87,10 +112,7 @@ fn update_member_link_map_removes_stale_entries() {
 fn bind_controlled_entities_inserts_controlled_by() {
     let mut app = test_app();
     let member = SessionMemberId::new(3);
-    let link_entity = app
-        .world_mut()
-        .spawn((ClientOf, RemoteId(PeerId::Netcode(member.as_raw() as u64))))
-        .id();
+    let link_entity = app.world_mut().spawn(ready_link(member)).id();
     app.update(); // run update_member_link_map to populate the map
 
     let player_entity = app
@@ -141,8 +163,7 @@ fn bind_controlled_entities_skips_without_link() {
 fn bind_controlled_entities_is_idempotent() {
     let mut app = test_app();
     let member = SessionMemberId::new(11);
-    app.world_mut()
-        .spawn((ClientOf, RemoteId(PeerId::Netcode(member.as_raw() as u64))));
+    app.world_mut().spawn(ready_link(member));
     app.update();
 
     let player_entity = app

@@ -129,16 +129,21 @@ pub fn bind_controlled_entities<O: OwnershipSource>(
 /// `ControlledEntityPlugin`.
 pub fn update_member_link_map(
     mut member_links: ResMut<MemberLinkMap>,
-    links: Query<(Entity, &RemoteId), With<ClientOf>>,
+    links: Query<(Entity, &RemoteId, Has<ReplicationSender>), With<ClientOf>>,
 ) {
-    // Remove stale entries (link entity no longer exists)
-    member_links.links.retain(|_, &mut entity| {
-        // If the entity is still a ClientOf link, keep it
-        links.get(entity).is_ok()
-    });
+    // Remove stale entries and links that are not replication-ready yet.
+    // `ControlledBy` points at the link's `ReplicationSender`; inserting it
+    // before that component exists makes Lightyear reject replication for the
+    // controlled entity.
+    member_links
+        .links
+        .retain(|_, &mut entity| links.get(entity).is_ok_and(|(_, _, has_sender)| has_sender));
 
-    // Add new entries
-    for (entity, remote_id) in &links {
+    // Add new entries only once the link can actually own replicated entities.
+    for (entity, remote_id, has_sender) in &links {
+        if !has_sender {
+            continue;
+        }
         if let PeerId::Netcode(id) = remote_id.0 {
             let member = SessionMemberId::new(id as u128);
             member_links.links.insert(member, entity);

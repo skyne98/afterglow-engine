@@ -109,7 +109,9 @@ Client-side prediction:
 - The demo uses `PlayerOwned::from_member(member)` on server-spawned player
   entities. The engine's `ControlledEntityPlugin` + `MemberLinkMap` (populated
   by the Lightyear bridge) automatically binds `ControlledBy` using the stable
-  `SessionMemberId`, not ephemeral `PeerId`. Games only write spawn/despawn
+  `SessionMemberId`, not ephemeral `PeerId`. `MemberLinkMap` waits until the
+  `ClientOf` link also has `ReplicationSender`, avoiding early `ControlledBy`
+  bindings that Lightyear cannot replicate yet. Games only write spawn/despawn
   logic; the engine handles link binding.
 - The client renders and simulates the Lightyear `Predicted` copy for its local
   player. Predicted player/cube copies receive local Avian physics components in
@@ -119,7 +121,10 @@ Client-side prediction:
   immediately. Confirmed roots are not rendered as gameplay presentation.
 - Server snapshots still provide authority/correction through Lightyear's
   rollback/reconciliation machinery. Input transport is now Lightyear/Leafwing;
-  no demo-local movement message remains.
+  no demo-local movement message remains. Discrete rope toggles are still driven
+  from `ActionState<AfterglowAction>` but use a small per-player release latch
+  and cooldown so repeated/stale observations of the same release cannot attach
+  and immediately detach the cube.
 - The runnable test verifies that the remote client receives replicated
   `PlayerBox` entities over real UDP/netcode, gains client-side presentation and
   local physics components on the predicted copy, and that client input moves the
