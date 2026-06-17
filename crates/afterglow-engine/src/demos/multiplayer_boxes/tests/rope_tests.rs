@@ -17,6 +17,7 @@ fn rope_test_app() -> App {
         },
         leafwing_input_manager::plugin::InputManagerPlugin::<AfterglowAction>::default(),
     ));
+    super::super::network::register_demo_protocol(&mut app);
     app.init_resource::<PlayerName>()
         .init_resource::<Assets<Mesh>>()
         .init_resource::<Assets<StandardMaterial>>()

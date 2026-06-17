@@ -15,15 +15,14 @@ use bevy::prelude::*;
 use leafwing_input_manager::action_state::ActionState;
 use lightyear::prelude::*;
 
-use super::{protocol::*, scene::PlayerName};
+pub use super::rope_visual::{
+    Highlighted, draw_ropes, highlight_nearest_box, update_highlight_colors,
+};
+use super::{network::RopeIntentChannel, protocol::*, scene::PlayerName};
 use crate::{
     input::AfterglowAction,
     network::{AfterglowNetworkContext, SessionLightyearLinks},
 };
-
-/// Component marking a box as currently highlighted (nearest to local player).
-#[derive(Component)]
-pub struct Highlighted;
 
 /// Tracks the locally-spawned joint entity so it can be despawned when the
 /// owning `RopeLink` entity is removed.
@@ -42,7 +41,7 @@ pub struct RopeToggleLatch {
 
 const ROPE_TOGGLE_COOLDOWN_FRAMES: u8 = 12;
 const ROPE_TOGGLE_MIN_PRESSED_FRAMES: u8 = 2;
-const HIGHLIGHT_SWITCH_MARGIN: f32 = 0.35;
+pub(crate) const HIGHLIGHT_SWITCH_MARGIN: f32 = 0.35;
 
 #[derive(Clone, Copy)]
 enum RopeSpawnMode {
@@ -79,6 +78,7 @@ pub fn toggle_rope(
     )>,
     boxes: Query<(&KinematicBox, &Transform)>,
     links: Query<(Entity, &RopeLink)>,
+    mut intent_senders: Query<&mut MessageSender<RopeIntent>>,
 ) {
     let status = context.as_deref().map(|ctx| ctx.get_connection_status());
     let client_only = status.is_some_and(|status| status.is_client_only());
@@ -111,29 +111,25 @@ pub fn toggle_rope(
         return;
     };
 
-    apply_rope_toggle(
+    apply_local_rope_toggle(
         commands,
         owner,
         player_transform.translation,
         &boxes,
         &links,
         mode,
+        client_only.then_some(&mut intent_senders),
     );
 }
 
-/// Server-authoritative path for remote-client rope toggles.
-pub fn server_toggle_remote_ropes_from_inputs(
+/// Server-authoritative path for client-selected rope intents. The input edge
+/// still comes from `ActionState` on the client; this message carries the
+/// selected world target separately so ActionState remains pure input.
+pub fn server_apply_rope_intents(
     mut commands: Commands,
-    player_name: Res<PlayerName>,
     context: Option<Res<AfterglowNetworkContext>>,
-    players: Query<(
-        Entity,
-        &PlayerBox,
-        &Transform,
-        &ActionState<AfterglowAction>,
-        Has<Predicted>,
-        Option<&RopeToggleLatch>,
-    )>,
+    mut receivers: Query<(&RemoteId, &mut MessageReceiver<RopeIntent>)>,
+    players: Query<(&PlayerBox, &Transform)>,
     boxes: Query<(&KinematicBox, &Transform)>,
     links: Query<(Entity, &RopeLink)>,
 ) {
@@ -141,28 +137,21 @@ pub fn server_toggle_remote_ropes_from_inputs(
     if !status.is_some_and(|status| status.runs_authority()) {
         return;
     }
-    let local_member = status.and_then(|status| status.local_member_owner());
 
-    for (entity, player_box, transform, action, predicted, previous) in players.iter() {
-        let is_local = player_box.owner == player_name.0
-            || local_member.as_deref() == Some(player_box.owner.as_str());
-        if is_local || predicted {
+    for (remote_id, mut receiver) in receivers.iter_mut() {
+        let Some(owner) = owner_from_remote_id(remote_id) else {
             continue;
-        }
-
-        let pressed = action.pressed(&AfterglowAction::RopeToggle);
-        let (released, next_latch) = next_rope_latch(previous, pressed);
-        if released {
-            apply_rope_toggle(
+        };
+        for intent in receiver.receive() {
+            apply_authoritative_rope_intent(
                 commands.reborrow(),
-                player_box.owner.clone(),
-                transform.translation,
+                owner.clone(),
+                intent,
+                &players,
                 &boxes,
                 &links,
-                RopeSpawnMode::Authoritative,
             );
         }
-        commands.entity(entity).insert(next_latch);
     }
 }
 
@@ -192,17 +181,35 @@ fn next_rope_latch(previous: Option<&RopeToggleLatch>, pressed: bool) -> (bool, 
     )
 }
 
-fn apply_rope_toggle(
+fn apply_local_rope_toggle(
     mut commands: Commands,
     owner: String,
     player_pos: Vec3,
     boxes: &Query<(&KinematicBox, &Transform)>,
     links: &Query<(Entity, &RopeLink)>,
     mode: RopeSpawnMode,
+    intent_senders: Option<&mut Query<&mut MessageSender<RopeIntent>>>,
 ) {
     if let Some((entity, _)) = links.iter().find(|(_, link)| link.player_owner == owner) {
-        if matches!(mode, RopeSpawnMode::Authoritative) {
-            commands.entity(entity).despawn();
+        match mode {
+            RopeSpawnMode::Authoritative => commands.entity(entity).despawn(),
+            RopeSpawnMode::ClientPredicted { .. } => {
+                if let Some(senders) = intent_senders {
+                    let sent = send_rope_intent(
+                        senders,
+                        RopeIntent {
+                            op: RopeIntentOp::Detach,
+                            box_id: None,
+                        },
+                    );
+                    if sent {
+                        // Predict detach locally too. Otherwise the client's own
+                        // pre-spawned/confirmed RopeLink keeps blocking retries
+                        // until the authoritative despawn comes back.
+                        commands.entity(entity).try_despawn();
+                    }
+                }
+            }
         }
         return;
     }
@@ -219,8 +226,85 @@ fn apply_rope_toggle(
 
     if let Some((box_data, transform)) = nearest {
         if transform.translation.distance(player_pos) <= ROPE_GRAB_RANGE {
+            if matches!(mode, RopeSpawnMode::ClientPredicted { .. }) {
+                let Some(senders) = intent_senders else {
+                    return;
+                };
+                let sent = send_rope_intent(
+                    senders,
+                    RopeIntent {
+                        op: RopeIntentOp::Attach,
+                        box_id: Some(box_data.id),
+                    },
+                );
+                if !sent {
+                    return;
+                }
+            }
             spawn_rope_link(commands, owner, box_data.id, mode);
         }
+    }
+}
+
+fn send_rope_intent(
+    senders: &mut Query<&mut MessageSender<RopeIntent>>,
+    intent: RopeIntent,
+) -> bool {
+    let mut sent = false;
+    for mut sender in senders.iter_mut() {
+        sender.send::<RopeIntentChannel>(intent.clone());
+        sent = true;
+    }
+    sent
+}
+
+pub(crate) fn apply_authoritative_rope_intent(
+    mut commands: Commands,
+    owner: String,
+    intent: RopeIntent,
+    players: &Query<(&PlayerBox, &Transform)>,
+    boxes: &Query<(&KinematicBox, &Transform)>,
+    links: &Query<(Entity, &RopeLink)>,
+) {
+    match intent.op {
+        RopeIntentOp::Detach => {
+            if let Some((entity, _)) = links.iter().find(|(_, link)| link.player_owner == owner) {
+                commands.entity(entity).despawn();
+            }
+        }
+        RopeIntentOp::Attach => {
+            if links.iter().any(|(_, link)| link.player_owner == owner) {
+                return;
+            }
+            let Some(box_id) = intent.box_id else {
+                return;
+            };
+            if box_has_link(box_id, links) {
+                return;
+            }
+            let Some((_, player_transform)) = players.iter().find(|(pb, _)| pb.owner == owner)
+            else {
+                return;
+            };
+            let Some((_, box_transform)) = boxes.iter().find(|(b, _)| b.id == box_id) else {
+                return;
+            };
+            if box_transform
+                .translation
+                .distance(player_transform.translation)
+                <= ROPE_GRAB_RANGE
+            {
+                spawn_rope_link(commands, owner, box_id, RopeSpawnMode::Authoritative);
+            }
+        }
+    }
+}
+
+fn owner_from_remote_id(remote_id: &RemoteId) -> Option<String> {
+    match remote_id.0 {
+        PeerId::Netcode(id) => Some(id.to_string()),
+        PeerId::Local(id) => Some(id.to_string()),
+        _ => None,
     }
 }
 
@@ -289,144 +373,14 @@ pub fn on_rope_link_removed(
     mut commands: Commands,
 ) {
     if let Ok(rope_joint) = link_query.get(trigger.entity) {
-        commands.entity(rope_joint.0).despawn();
+        // The same predicted/confirmed RopeLink can be removed through multiple
+        // Lightyear correction/expiration paths. The derived joint may already
+        // be gone by the time this deferred command applies, so use the silent
+        // variant to avoid noisy invalid-entity warnings.
+        commands.entity(rope_joint.0).try_despawn();
         // Do not remove RopeJointEntity from trigger.entity here. This observer
         // commonly runs while Lightyear is despawning an expired/unmatched
         // PreSpawned RopeLink, so the link entity may already be invalid by the
         // time queued commands apply.
-    }
-}
-
-/// Highlight the nearest unlinked box to the local player.
-pub fn highlight_nearest_box(
-    mut commands: Commands,
-    player_name: Res<PlayerName>,
-    context: Option<Res<AfterglowNetworkContext>>,
-    players: Query<(&PlayerBox, &Transform)>,
-    boxes: Query<(Entity, &KinematicBox, &Transform)>,
-    links: Query<(Entity, &RopeLink)>,
-    highlighted: Query<Entity, With<Highlighted>>,
-) {
-    let status = context.as_deref().map(|ctx| ctx.get_connection_status());
-    let local_member = status.and_then(|s| s.local_member_owner());
-
-    let player_pos = players
-        .iter()
-        .find(|(pb, _)| {
-            pb.owner == player_name.0 || local_member.as_deref() == Some(pb.owner.as_str())
-        })
-        .map(|(_, t)| t.translation);
-
-    let current: Vec<Entity> = highlighted.iter().collect();
-    let current_entity = current.first().copied();
-    let desired = player_pos.and_then(|player_pos| {
-        let nearest = boxes
-            .iter()
-            .filter(|(_, box_data, _)| !box_has_link(box_data.id, &links))
-            .min_by(|(_, _, a), (_, _, b)| {
-                a.translation
-                    .distance(player_pos)
-                    .partial_cmp(&b.translation.distance(player_pos))
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
-            .and_then(|(entity, _, transform)| {
-                let distance = transform.translation.distance(player_pos);
-                (distance <= ROPE_GRAB_RANGE).then_some((entity, distance))
-            });
-
-        let current_distance = current_entity.and_then(|entity| {
-            boxes
-                .get(entity)
-                .ok()
-                .and_then(|(_, box_data, transform)| {
-                    (!box_has_link(box_data.id, &links))
-                        .then_some(transform.translation.distance(player_pos))
-                })
-                .filter(|distance| *distance <= ROPE_GRAB_RANGE)
-        });
-
-        match (current_entity, current_distance, nearest) {
-            (Some(current), Some(current_distance), Some((nearest, nearest_distance)))
-                if current != nearest
-                    && nearest_distance + HIGHLIGHT_SWITCH_MARGIN < current_distance =>
-            {
-                Some(nearest)
-            }
-            (Some(current), Some(_), _) => Some(current),
-            (_, _, Some((nearest, _))) => Some(nearest),
-            _ => None,
-        }
-    });
-
-    let current: Vec<Entity> = highlighted.iter().collect();
-    for entity in current
-        .iter()
-        .copied()
-        .filter(|entity| Some(*entity) != desired)
-    {
-        commands.entity(entity).remove::<Highlighted>();
-    }
-    if let Some(entity) = desired {
-        if !current.contains(&entity) {
-            commands.entity(entity).insert(Highlighted);
-        }
-    }
-}
-
-/// Updates the material color of highlighted boxes. Local-only.
-pub fn update_highlight_colors(
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    boxes: Query<
-        (
-            &MeshMaterial3d<StandardMaterial>,
-            &super::scene::BoxMaterial,
-        ),
-        Without<Highlighted>,
-    >,
-    highlighted: Query<
-        (
-            &MeshMaterial3d<StandardMaterial>,
-            &super::scene::BoxMaterial,
-        ),
-        With<Highlighted>,
-    >,
-) {
-    for (mat_handle, box_mat) in boxes.iter() {
-        if let Some(mat) = materials.get_mut(mat_handle) {
-            mat.base_color = Color::hsla(box_mat.base_hue, 0.7, 0.5, 1.0);
-            mat.emissive = LinearRgba::BLACK;
-        }
-    }
-
-    for (mat_handle, box_mat) in highlighted.iter() {
-        if let Some(mat) = materials.get_mut(mat_handle) {
-            mat.base_color = Color::hsla(box_mat.base_hue, 0.9, 0.7, 1.0);
-            let glow = Color::hsla(box_mat.base_hue, 0.9, 0.5, 1.0).to_srgba();
-            mat.emissive = LinearRgba::new(glow.red * 0.3, glow.green * 0.3, glow.blue * 0.3, 1.0);
-        }
-    }
-}
-
-/// Draws a line from each rope link to its owning player and target box.
-pub fn draw_ropes(
-    mut gizmos: Gizmos,
-    players: Query<(&PlayerBox, &Transform)>,
-    boxes: Query<(&KinematicBox, &Transform)>,
-    links: Query<&RopeLink>,
-) {
-    for link in links.iter() {
-        let Some((_, player_transform)) =
-            players.iter().find(|(pb, _)| pb.owner == link.player_owner)
-        else {
-            continue;
-        };
-        let Some((_, box_transform)) = boxes.iter().find(|(b, _)| b.id == link.box_id) else {
-            continue;
-        };
-        gizmos.line(
-            player_transform.translation,
-            box_transform.translation,
-            Color::srgb(0.8, 0.6, 0.2),
-        );
     }
 }

@@ -4,6 +4,7 @@ pub mod network;
 pub mod playground;
 pub mod protocol;
 pub mod rope;
+pub mod rope_visual;
 pub mod scene;
 #[cfg(test)]
 pub mod tests;
@@ -141,10 +142,7 @@ impl Plugin for MultiplayerBoxesPlugin {
 
         app.add_systems(
             FixedUpdate,
-            (
-                movement::apply_movement,
-                rope::server_toggle_remote_ropes_from_inputs,
-            )
+            (movement::apply_movement, rope::server_apply_rope_intents)
                 .run_if(|config: Res<AfterglowLightyearConfig>| {
                     matches!(config.role, LightyearRole::Host | LightyearRole::Client)
                 })

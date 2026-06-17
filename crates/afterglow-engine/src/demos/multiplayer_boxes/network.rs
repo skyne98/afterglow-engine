@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use avian3d::prelude::LinearVelocity;
 use bevy::prelude::*;
 use leafwing_input_manager::action_state::ActionState;
@@ -6,10 +8,20 @@ use lightyear::prelude::*;
 use super::protocol::*;
 use crate::input::AfterglowAction;
 
+pub struct RopeIntentChannel;
+
 pub fn register_demo_protocol(app: &mut App) {
     app.register_component::<PlayerBox>();
     app.register_component::<KinematicBox>();
     app.register_component::<RopeLink>().add_prediction();
+    app.register_message::<RopeIntent>()
+        .add_direction(NetworkDirection::ClientToServer);
+    app.add_channel::<RopeIntentChannel>(ChannelSettings {
+        mode: ChannelMode::UnorderedReliable(ReliableSettings::default()),
+        send_frequency: Duration::ZERO,
+        priority: 1.0,
+    })
+    .add_direction(NetworkDirection::ClientToServer);
     app.register_component::<LinearVelocity>().add_prediction();
 
     // Register Transform as the single networked pose representation for this
