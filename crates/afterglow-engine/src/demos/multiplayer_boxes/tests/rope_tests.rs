@@ -279,11 +279,15 @@ fn toggle_rope_skips_already_roped_box() {
 // Sync rope joints tests
 // ---------------------------------------------------------------------------
 
-/// Adding RopedTo spawns a DistanceJoint.
+/// Adding RopedTo spawns a DistanceJoint (via observer).
 #[test]
 fn sync_rope_joints_creates_joint() {
     let mut app = rope_test_app();
     app.world_mut().resource_mut::<PlayerName>().0 = "alice".to_string();
+
+    // Register observers BEFORE spawning entities with RopedTo
+    app.add_observer(super::super::rope::on_roped_to_added);
+    app.add_observer(super::super::rope::on_roped_to_removed);
 
     let player = app
         .world_mut()
@@ -311,7 +315,8 @@ fn sync_rope_joints_creates_joint() {
         ))
         .id();
 
-    app.add_systems(Update, super::super::rope::sync_rope_joints);
+    app.add_observer(super::super::rope::on_roped_to_added);
+    app.add_observer(super::super::rope::on_roped_to_removed);
     app.update();
 
     let joints: Vec<Entity> = app
@@ -329,11 +334,15 @@ fn sync_rope_joints_creates_joint() {
     assert_eq!(joint.body2, box_entity, "joint body2 should be the box");
 }
 
-/// Removing RopedTo despawns the joint.
+/// Removing RopedTo despawns the joint (via observer).
 #[test]
 fn sync_rope_joints_removes_joint_when_unroped() {
     let mut app = rope_test_app();
     app.world_mut().resource_mut::<PlayerName>().0 = "alice".to_string();
+
+    // Register observers BEFORE spawning entities with RopedTo
+    app.add_observer(super::super::rope::on_roped_to_added);
+    app.add_observer(super::super::rope::on_roped_to_removed);
 
     app.world_mut().spawn((
         PlayerBox {
@@ -358,7 +367,8 @@ fn sync_rope_joints_removes_joint_when_unroped() {
         ))
         .id();
 
-    app.add_systems(Update, super::super::rope::sync_rope_joints);
+    app.add_observer(super::super::rope::on_roped_to_added);
+    app.add_observer(super::super::rope::on_roped_to_removed);
     app.update();
 
     let count = app

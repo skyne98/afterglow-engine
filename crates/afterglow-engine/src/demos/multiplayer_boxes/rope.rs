@@ -5,15 +5,10 @@
 //! - `RopedTo { player_owner }` is a replicated, predicted component on the box
 //!   entity. The client predicts adding/removing it; the server validates and
 //!   replicates back.
-//! - `sync_rope_joints` runs locally on both client and server. When it sees a
-//!   `RopedTo` component, it spawns a local `DistanceJoint` entity connecting
-//!   the box to the owning player. When `RopedTo` is removed, the joint is
-//!   despawned.
-//! - Joints are **not** replicated — they're derived from the `RopedTo` state
-//!   and created locally.
-//! - `highlight_nearest_box` is a local-only visual system. It does NOT touch
-//!   any replicated state — it only changes material color locally.
-//! - `toggle_rope` uses `ActionState` for input — NEVER bypasses it.
+//! - The `DistanceJoint` is a **derived local entity** — created by an observer
+//!   when `RopedTo` is added, despawned when `RopedTo` is removed. No polling,
+//!   no sync system. Both client and server react to the same replicated state.
+//! - `highlight_nearest_box` is a local-only visual system — no replication.
 
 use avian3d::prelude::*;
 use bevy::prelude::*;
@@ -26,9 +21,15 @@ use crate::{input::AfterglowAction, network::AfterglowNetworkContext};
 #[derive(Component)]
 pub struct Highlighted;
 
-/// Toggle the rope on the nearest box when RopeToggle is pressed.
-/// Runs in `Update` (not `FixedUpdate`) so `just_pressed` is available
-/// before Lightyear's input delay pipeline overwrites `ActionState`.
+/// Tracks the locally-spawned joint entity so it can be despawned when
+/// `RopedTo` is removed.
+#[derive(Component)]
+pub struct RopeJointEntity(pub Entity);
+
+/// Toggle the rope on the nearest box when RopeToggle is released.
+/// Runs in `PreUpdate` after Leafwing's `update_action_state` (which sets
+/// `just_released` from keyboard) but before Lightyear's `FixedPreUpdate`
+/// overwrite (which replaces ActionState with delayed values).
 pub fn toggle_rope(
     mut commands: Commands,
     player_name: Res<PlayerName>,
@@ -76,43 +77,48 @@ pub fn toggle_rope(
     }
 }
 
-/// Create/destroy distance joints based on the `RopedTo` component.
-/// Runs locally on both client and server — joints are not replicated,
-/// only the `RopedTo` marker is.
-pub fn sync_rope_joints(
+/// Observer: when `RopedTo` is added to a box, find the owning player and
+/// spawn a `DistanceJoint` between them. Both bodies must have `RigidBody`.
+pub fn on_roped_to_added(
+    trigger: On<Add, RopedTo>,
+    roped: Query<&RopedTo>,
+    players: Query<(Entity, &PlayerBox), With<RigidBody>>,
+    boxes: Query<(), (With<RigidBody>, Without<RopeJointEntity>)>,
     mut commands: Commands,
-    players: Query<(Entity, &PlayerBox)>,
-    boxes: Query<(Entity, &RopedTo)>,
-    existing_joints: Query<(Entity, &DistanceJoint, &RopeJoint)>,
 ) {
-    // Remove joints for boxes that are no longer roped
-    let roped_boxes: std::collections::HashSet<Entity> = boxes.iter().map(|(e, _)| e).collect();
-    for (joint_entity, joint, _) in existing_joints.iter() {
-        if !roped_boxes.contains(&joint.body2) {
-            commands.entity(joint_entity).despawn();
-        }
+    let Ok(roped_to) = roped.get(trigger.entity) else {
+        return;
+    };
+    // Box must have RigidBody and not already have a joint
+    if boxes.get(trigger.entity).is_err() {
+        return;
     }
+    // Find the player with matching owner and RigidBody
+    let Some((player_entity, _)) = players
+        .iter()
+        .find(|(_, pb)| pb.owner == roped_to.player_owner)
+    else {
+        return;
+    };
 
-    // Create joints for boxes that are roped but don't have a joint yet
-    let jointed_boxes: std::collections::HashSet<Entity> =
-        existing_joints.iter().map(|(_, j, _)| j.body2).collect();
+    let joint = DistanceJoint::new(player_entity, trigger.entity)
+        .with_limits(0.0, ROPE_MAX_DISTANCE)
+        .with_compliance(ROPE_COMPLIANCE);
+    let joint_entity = commands.spawn((RopeJoint, joint)).id();
+    commands
+        .entity(trigger.entity)
+        .insert(RopeJointEntity(joint_entity));
+}
 
-    for (box_entity, roped) in boxes.iter() {
-        if jointed_boxes.contains(&box_entity) {
-            continue;
-        }
-        let Some(player_entity) = players
-            .iter()
-            .find(|(_, pb)| pb.owner == roped.player_owner)
-            .map(|(e, _)| e)
-        else {
-            continue;
-        };
-
-        let joint = DistanceJoint::new(player_entity, box_entity)
-            .with_limits(0.0, ROPE_MAX_DISTANCE)
-            .with_compliance(ROPE_COMPLIANCE);
-        commands.spawn((RopeJoint, joint));
+/// Observer: when `RopedTo` is removed from a box, despawn the joint.
+pub fn on_roped_to_removed(
+    trigger: On<Remove, RopedTo>,
+    box_query: Query<&RopeJointEntity>,
+    mut commands: Commands,
+) {
+    if let Ok(rope_joint) = box_query.get(trigger.entity) {
+        commands.entity(rope_joint.0).despawn();
+        commands.entity(trigger.entity).remove::<RopeJointEntity>();
     }
 }
 
@@ -121,8 +127,6 @@ pub fn sync_rope_joints(
 // ---------------------------------------------------------------------------
 
 /// Highlight the nearest un-roped box to the local player.
-/// This is a **local-only** system — it does NOT touch any replicated state.
-/// It only changes the material color locally. Both client and host run it.
 pub fn highlight_nearest_box(
     mut commands: Commands,
     player_name: Res<PlayerName>,
@@ -141,7 +145,6 @@ pub fn highlight_nearest_box(
         })
         .map(|(_, t)| t.translation);
 
-    // Clear all existing highlights
     for entity in highlighted.iter() {
         commands.entity(entity).remove::<Highlighted>();
     }
@@ -150,7 +153,6 @@ pub fn highlight_nearest_box(
         return;
     };
 
-    // Find nearest un-roped box within grab range
     let nearest = boxes.iter().min_by(|(_, _, a), (_, _, b)| {
         a.translation
             .distance(player_pos)
@@ -165,8 +167,7 @@ pub fn highlight_nearest_box(
     }
 }
 
-/// Updates the material color of highlighted boxes. Local-only — does not
-/// touch replicated state.
+/// Updates the material color of highlighted boxes. Local-only.
 pub fn update_highlight_colors(
     mut materials: ResMut<Assets<StandardMaterial>>,
     boxes: Query<
@@ -184,7 +185,6 @@ pub fn update_highlight_colors(
         With<Highlighted>,
     >,
 ) {
-    // Restore non-highlighted boxes to their base color
     for (mat_handle, box_mat) in boxes.iter() {
         if let Some(mat) = materials.get_mut(mat_handle) {
             mat.base_color = Color::hsla(box_mat.base_hue, 0.7, 0.5, 1.0);
@@ -192,7 +192,6 @@ pub fn update_highlight_colors(
         }
     }
 
-    // Make highlighted boxes glow brighter
     for (mat_handle, box_mat) in highlighted.iter() {
         if let Some(mat) = materials.get_mut(mat_handle) {
             mat.base_color = Color::hsla(box_mat.base_hue, 0.9, 0.7, 1.0);

@@ -148,12 +148,7 @@ impl Plugin for MultiplayerBoxesPlugin {
                 .before(avian3d::schedule::PhysicsSystems::Prepare),
         );
 
-        // Rope mechanic: toggle in PreUpdate (after Leafwing sets ActionState,
-        // before Lightyear's FixedPreUpdate overwrites it with delayed values).
-        // This is critical: Lightyear's get_action_state runs in FixedPreUpdate
-        // and overwrites ActionState with delayed values from InputBuffer,
-        // destroying just_released edges. Running in PreUpdate after Leafwing
-        // preserves the edge.
+        // Rope mechanic: reactive observers, no polling sync
         app.add_systems(
             PreUpdate,
             rope::toggle_rope
@@ -162,10 +157,8 @@ impl Plugin for MultiplayerBoxesPlugin {
                     matches!(config.role, LightyearRole::Host | LightyearRole::Client)
                 }),
         );
-        app.add_systems(
-            FixedUpdate,
-            rope::sync_rope_joints.before(avian3d::schedule::PhysicsSystems::Prepare),
-        );
+        app.add_observer(rope::on_roped_to_added);
+        app.add_observer(rope::on_roped_to_removed);
 
         // Local-only visual: highlight nearest box (runs on all sides in Update)
         app.add_systems(
