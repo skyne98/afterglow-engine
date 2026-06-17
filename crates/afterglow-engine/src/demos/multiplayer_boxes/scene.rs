@@ -312,16 +312,23 @@ pub fn attach_replicated_player_visuals(
         };
         let pos = transform.map_or(Vec3::ZERO, |t| t.translation);
         let rot = transform.map_or(Quat::IDENTITY, |t| t.rotation);
-        // Attach physics to BOTH predicted and interpolated entities so they
-        // participate in local collision. Predicted entities are simulated
-        // locally; interpolated entities get their Position/Rotation from
-        // Lightyear's interpolation, but still need a RigidBody+Collider for
-        // collision detection against the local predicted player.
+        // Predicted entities get RigidBody::Dynamic so Avian simulates them
+        // locally. Interpolated entities get RigidBody::Kinematic so they have
+        // a collider for local collision but Avian does NOT integrate their
+        // position — their Position/Rotation comes from Lightyear's
+        // interpolation. If interpolated entities were Dynamic, Avian would
+        // apply gravity/collision forces and fight with the interpolated
+        // values, causing janky, delayed movement.
+        let body_kind = if predicted {
+            RigidBody::Dynamic
+        } else {
+            RigidBody::Kinematic
+        };
         commands.entity(entity).insert((
             PlayerVisualAttached,
             Mesh3d(meshes.add(Cuboid::from_size(Vec3::splat(PLAYER_SIZE * 2.0)))),
             MeshMaterial3d(materials.add(Color::hsla(hue, 0.8, 0.5, 1.0))),
-            RigidBody::Dynamic,
+            body_kind,
             Collider::cuboid(PLAYER_SIZE * 2.0, PLAYER_SIZE * 2.0, PLAYER_SIZE * 2.0),
             Position::from(pos),
             Rotation::from(rot),
