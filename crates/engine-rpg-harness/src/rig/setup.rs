@@ -372,6 +372,7 @@ fn client_transport(app: &App) -> Transport {
     transport.add_receiver_from_registry::<MetadataChannel>(registry);
     transport.add_sender_from_registry::<UpdatesChannel>(registry);
     transport.add_receiver_from_registry::<UpdatesChannel>(registry);
+    add_input_channel_if_registered(&mut transport, registry);
     transport
 }
 
@@ -382,5 +383,17 @@ fn server_transport(app: &App) -> Transport {
     transport.add_receiver_from_registry::<MetadataChannel>(registry);
     transport.add_sender_from_registry::<UpdatesChannel>(registry);
     transport.add_receiver_from_registry::<UpdatesChannel>(registry);
+    add_input_channel_if_registered(&mut transport, registry);
     transport
+}
+
+fn add_input_channel_if_registered(transport: &mut Transport, registry: &ChannelRegistry) {
+    use lightyear_transport::channel::registry::ChannelKind;
+    if registry
+        .settings(ChannelKind::of::<lightyear::input::InputChannel>())
+        .is_some()
+    {
+        transport.add_sender_from_registry::<lightyear::input::InputChannel>(registry);
+        transport.add_receiver_from_registry::<lightyear::input::InputChannel>(registry);
+    }
 }

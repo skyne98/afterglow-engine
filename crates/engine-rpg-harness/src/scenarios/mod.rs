@@ -32,4 +32,7 @@ pub mod stress;
 pub mod native_input;
 
 #[cfg(test)]
+pub mod prediction;
+
+#[cfg(test)]
 pub mod udp_scenarios;

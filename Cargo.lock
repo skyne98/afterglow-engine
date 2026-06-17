@@ -3237,6 +3237,8 @@ dependencies = [
  "bevy",
  "leafwing-input-manager",
  "lightyear",
+ "lightyear_inputs_leafwing",
+ "lightyear_transport",
  "serde",
 ]
 
