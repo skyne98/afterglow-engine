@@ -142,6 +142,7 @@ pub fn run_multiplayer_boxes_demo(
         AfterglowSessionLightyearBridgePlugin,
         AfterglowNetcodeConsumerPlugin,
         crate::network::ControlledEntityPlugin,
+        crate::physics::AfterglowPhysicsPlugin,
         demos::multiplayer_boxes::MultiplayerBoxesPlugin,
     ));
 
