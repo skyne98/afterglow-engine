@@ -10,15 +10,13 @@ pub(crate) const MAX_PACKET_SIZE: usize = 64 * 1024;
 
 pub(crate) fn try_pop_request(buf: &mut Vec<u8>) -> io::Result<Option<SessionRequest>> {
     pop_frame(buf, |bytes| {
-        postcard::from_bytes(bytes)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+        postcard::from_bytes(bytes).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     })
 }
 
 pub(crate) fn try_pop_event(buf: &mut Vec<u8>) -> io::Result<Option<SessionEvent>> {
     pop_frame(buf, |bytes| {
-        postcard::from_bytes(bytes)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+        postcard::from_bytes(bytes).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     })
 }
 
@@ -52,13 +50,16 @@ fn pop_frame<T>(
 /// Serialize a request to bytes ready to be pushed onto a connection's write
 /// buffer (length-prefixed postcard payload).
 pub(crate) fn encode_request(request: &SessionRequest) -> io::Result<Vec<u8>> {
-    encode_frame(postcard::to_allocvec(request)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?)
+    encode_frame(
+        postcard::to_allocvec(request)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
+    )
 }
 
 pub(crate) fn encode_event(event: &SessionEvent) -> io::Result<Vec<u8>> {
-    encode_frame(postcard::to_allocvec(event)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?)
+    encode_frame(
+        postcard::to_allocvec(event).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
+    )
 }
 
 fn encode_frame(payload: Vec<u8>) -> io::Result<Vec<u8>> {
@@ -69,10 +70,7 @@ fn encode_frame(payload: Vec<u8>) -> io::Result<Vec<u8>> {
     Ok(out)
 }
 
-pub(crate) fn write_event(
-    writer: &mut dyn io::Write,
-    event: &SessionEvent,
-) -> io::Result<()> {
+pub(crate) fn write_event(writer: &mut dyn io::Write, event: &SessionEvent) -> io::Result<()> {
     let bytes = encode_event(event)?;
     writer.write_all(&bytes)?;
     writer.flush()

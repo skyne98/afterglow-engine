@@ -1,6 +1,6 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
-use lightyear::prelude::{server::ClientOf, *};
+use lightyear::prelude::*;
 use std::collections::HashMap;
 
 use super::protocol::*;
@@ -21,20 +21,6 @@ pub struct MemberToPlayer(pub HashMap<SessionMemberId, Entity>);
 
 #[derive(Component)]
 pub struct PlayerVisualAttached;
-
-pub fn configure_physics(app: &mut App) {
-    // Use our fork of the Lightyear-Avian bridge (Transform mode, Avian 0.6).
-    // This coordinates PhysicsSchedule ordering with Lightyear prediction
-    // history and visual interpolation so physics state is captured at the
-    // right tick and Transform corrections aren't overwritten by Avian.
-    app.add_plugins(
-        PhysicsPlugins::default()
-            .build()
-            .disable::<PhysicsTransformPlugin>()
-            .disable::<PhysicsInterpolationPlugin>(),
-    );
-    app.add_plugins(afterglow_lightyear_avian3d::prelude::AfterglowAvianPlugin::default());
-}
 
 pub fn spawn_arena(
     mut commands: Commands,
@@ -420,26 +406,12 @@ pub fn spawn_player_on_member_joined(
         let idx = map.0.len() as f32;
         let pos = Vec3::new(5.0 + idx * 2.0, PLAYER_SIZE, 0.0);
         let entity = spawn_player_box(&mut commands, &mut meshes, &mut materials, &owner, pos);
+        // Tag the entity so the engine's ControlledEntityPlugin can bind
+        // ControlledBy automatically when the ClientOf link appears.
+        commands
+            .entity(entity)
+            .insert(crate::network::PlayerOwned::from_owner_str(&owner));
         map.0.insert(member, entity);
-    }
-}
-
-pub fn attach_controlled_by_to_player_boxes(
-    mut commands: Commands,
-    players: Query<(Entity, &PlayerBox), (With<Replicate>, Without<ControlledBy>)>,
-    links: Query<(Entity, &RemoteId), With<ClientOf>>,
-) {
-    for (player_entity, player) in &players {
-        let Some(peer) = player_peer(&player.owner) else {
-            continue;
-        };
-        let Some((link_entity, _)) = links.iter().find(|(_, remote)| remote.0 == peer) else {
-            continue;
-        };
-        commands.entity(player_entity).insert(ControlledBy {
-            owner: link_entity,
-            lifetime: Default::default(),
-        });
     }
 }
 

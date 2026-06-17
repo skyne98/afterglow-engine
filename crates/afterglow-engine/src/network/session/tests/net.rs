@@ -1,12 +1,15 @@
-use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::time::Duration;
+use std::{
+    io::{Read, Write},
+    net::{SocketAddr, TcpListener, TcpStream},
+    time::Duration,
+};
 
 use super::{
-    native_identity_for_create, native_identity_for_join_by_code_with_seed, test_app, test_nonce,
     AfterglowSessionState, NonSteamSessionClient, NonSteamSessionProvider, ProviderEndpoint,
-    SessionBackend, SessionConfig, SessionEvent, SessionMemberId, SessionRequest, SessionSearch,
-    SessionIdentityNonce, SessionLeaveReason, non_steam::NonSteamSessionCatalog,
+    SessionBackend, SessionConfig, SessionEvent, SessionIdentityNonce, SessionLeaveReason,
+    SessionMemberId, SessionRequest, SessionSearch, native_identity_for_create,
+    native_identity_for_join_by_code_with_seed, non_steam::NonSteamSessionCatalog, test_app,
+    test_nonce,
 };
 
 fn find_test_addr() -> SocketAddr {
@@ -18,7 +21,9 @@ fn find_test_addr() -> SocketAddr {
 
 fn send_raw_request(stream: &mut TcpStream, request: &SessionRequest) {
     let bytes = postcard::to_allocvec(request).unwrap();
-    stream.write_all(&(bytes.len() as u32).to_le_bytes()).unwrap();
+    stream
+        .write_all(&(bytes.len() as u32).to_le_bytes())
+        .unwrap();
     stream.write_all(&bytes).unwrap();
     stream.flush().unwrap();
 }
@@ -51,7 +56,8 @@ fn drive_app(app: &mut bevy::app::App, frames: usize) {
 fn provider_accepts_create_and_returns_session_event() {
     let mut app = test_app();
     let addr = find_test_addr();
-    app.world_mut().insert_resource(NonSteamSessionProvider::new(addr).unwrap());
+    app.world_mut()
+        .insert_resource(NonSteamSessionProvider::new(addr).unwrap());
     drive_app(&mut app, 3);
 
     let mut client = TcpStream::connect(addr).unwrap();
@@ -73,7 +79,8 @@ fn provider_accepts_create_and_returns_session_event() {
 fn provider_search_by_ip_lists_sessions_and_join_by_code_works() {
     let mut app = test_app();
     let addr = find_test_addr();
-    app.world_mut().insert_resource(NonSteamSessionProvider::new(addr).unwrap());
+    app.world_mut()
+        .insert_resource(NonSteamSessionProvider::new(addr).unwrap());
     drive_app(&mut app, 3);
 
     // Host creates a session.
@@ -214,7 +221,8 @@ fn bevy_client_sends_request_and_receives_event() {
 fn provider_owner_leave_broadcasts_session_ended_to_members() {
     let mut app = test_app();
     let addr = find_test_addr();
-    app.world_mut().insert_resource(NonSteamSessionProvider::new(addr).unwrap());
+    app.world_mut()
+        .insert_resource(NonSteamSessionProvider::new(addr).unwrap());
     drive_app(&mut app, 3);
 
     // Host creates a session.
@@ -255,7 +263,9 @@ fn provider_owner_leave_broadcasts_session_ended_to_members() {
     drive_app(&mut app, 20);
     let joiner_events = drain_raw_events(&mut joiner);
     assert!(
-        joiner_events.iter().any(|e| matches!(e, SessionEvent::Joined(_))),
+        joiner_events
+            .iter()
+            .any(|e| matches!(e, SessionEvent::Joined(_))),
         "joiner should receive Joined, got {:?}",
         joiner_events
     );
@@ -285,7 +295,8 @@ fn provider_owner_leave_broadcasts_session_ended_to_members() {
 fn provider_non_owner_leave_broadcasts_member_left_to_host() {
     let mut app = test_app();
     let addr = find_test_addr();
-    app.world_mut().insert_resource(NonSteamSessionProvider::new(addr).unwrap());
+    app.world_mut()
+        .insert_resource(NonSteamSessionProvider::new(addr).unwrap());
     drive_app(&mut app, 3);
 
     let mut host = TcpStream::connect(addr).unwrap();
@@ -353,7 +364,8 @@ fn provider_non_owner_leave_broadcasts_member_left_to_host() {
 fn provider_rejoin_with_same_identity_returns_same_member_id() {
     let mut app = test_app();
     let addr = find_test_addr();
-    app.world_mut().insert_resource(NonSteamSessionProvider::new(addr).unwrap());
+    app.world_mut()
+        .insert_resource(NonSteamSessionProvider::new(addr).unwrap());
     drive_app(&mut app, 3);
 
     let mut host = TcpStream::connect(addr).unwrap();
@@ -434,7 +446,8 @@ fn provider_rejoin_with_same_identity_returns_same_member_id() {
 fn provider_cleans_up_membership_on_remote_client_disconnect() {
     let mut app = test_app();
     let addr = find_test_addr();
-    app.world_mut().insert_resource(NonSteamSessionProvider::new(addr).unwrap());
+    app.world_mut()
+        .insert_resource(NonSteamSessionProvider::new(addr).unwrap());
     drive_app(&mut app, 3);
 
     let mut host = TcpStream::connect(addr).unwrap();
@@ -476,13 +489,15 @@ fn provider_cleans_up_membership_on_remote_client_disconnect() {
     // Host should observe the disconnected member leaving and the catalog
     // should no longer list them.
     let host_events = drain_raw_events(&mut host);
-    let saw_disconnect = host_events.iter().any(|e| matches!(
-        e,
-        SessionEvent::MemberLeft {
-            reason: SessionLeaveReason::Disconnected,
-            ..
-        }
-    ));
+    let saw_disconnect = host_events.iter().any(|e| {
+        matches!(
+            e,
+            SessionEvent::MemberLeft {
+                reason: SessionLeaveReason::Disconnected,
+                ..
+            }
+        )
+    });
     assert!(
         saw_disconnect,
         "host should receive MemberLeft(Disconnected) on remote drop, got {:?}",

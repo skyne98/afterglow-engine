@@ -60,8 +60,25 @@ pub struct AfterglowPhysicsPlugin;
 
 impl Plugin for AfterglowPhysicsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(PhysicsPlugins::default())
-            .init_resource::<AfterglowPhysicsConfig>()
+        // When Lightyear networking is active, use our Avian 0.6 bridge fork
+        // to coordinate physics schedule ordering with prediction history and
+        // visual interpolation. Disable Avian's own transform/interpolation
+        // plugins since the bridge owns those syncs.
+        #[cfg(feature = "lightyear")]
+        if app.is_plugin_added::<crate::network::lightyear::AfterglowLightyearPlugin>() {
+            app.add_plugins(
+                avian::PhysicsPlugins::default()
+                    .build()
+                    .disable::<avian::PhysicsTransformPlugin>()
+                    .disable::<avian::PhysicsInterpolationPlugin>(),
+            );
+            app.add_plugins(afterglow_lightyear_avian3d::prelude::AfterglowAvianPlugin::default());
+        } else {
+            app.add_plugins(PhysicsPlugins::default());
+        }
+        #[cfg(not(feature = "lightyear"))]
+        app.add_plugins(PhysicsPlugins::default());
+        app.init_resource::<AfterglowPhysicsConfig>()
             .register_type::<AfterglowPhysicsConfig>()
             .register_type::<PhysicsBody>()
             .register_type::<PhysicsBodyKind>()

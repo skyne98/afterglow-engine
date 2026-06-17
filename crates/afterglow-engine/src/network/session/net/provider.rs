@@ -1,16 +1,18 @@
-use std::io::{self, Read, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::{
+    io::{self, Read, Write},
+    net::{SocketAddr, TcpListener, TcpStream},
+};
 
 use bevy::prelude::*;
 
 use crate::network::session::{
+    AfterglowSessionState, SessionBackend, SessionError, SessionEvent, SessionId,
+    SessionIdentityNonce, SessionLeaveReason, SessionMemberId, SessionRequest,
     entry::remove_native_key,
     non_steam::{
-        handle_create, handle_join, handle_join_by_code, handle_leave, handle_search,
-        NonSteamSessionCatalog,
+        NonSteamSessionCatalog, handle_create, handle_join, handle_join_by_code, handle_leave,
+        handle_search,
     },
-    AfterglowSessionState, SessionBackend, SessionError, SessionEvent, SessionIdentityNonce,
-    SessionLeaveReason, SessionMemberId, SessionRequest, SessionId,
 };
 
 use super::protocol;
@@ -78,7 +80,12 @@ impl ProviderClient {
     fn try_read_request(&mut self) -> io::Result<Option<SessionRequest>> {
         let mut tmp = [0u8; 8192];
         match self.socket.read(&mut tmp) {
-            Ok(0) => return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "client closed")),
+            Ok(0) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "client closed",
+                ));
+            }
             Ok(n) => self.read_buf.extend_from_slice(&tmp[..n]),
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => return Ok(None),
             Err(e) => return Err(e),
@@ -99,12 +106,7 @@ impl ProviderClient {
         let mut total = 0;
         while total < self.write_buf.len() {
             match self.socket.write(&self.write_buf[total..]) {
-                Ok(0) => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::WriteZero,
-                        "write returned 0",
-                    ))
-                }
+                Ok(0) => return Err(io::Error::new(io::ErrorKind::WriteZero, "write returned 0")),
                 Ok(n) => total += n,
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
                 Err(e) => return Err(e),
@@ -393,10 +395,7 @@ pub(crate) fn broadcast_provider_events(
     }
 }
 
-fn validate_backend(
-    backend: &SessionBackend,
-    events: &mut Vec<SessionEvent>,
-) -> bool {
+fn validate_backend(backend: &SessionBackend, events: &mut Vec<SessionEvent>) -> bool {
     match backend {
         SessionBackend::NonSteam => true,
         SessionBackend::Steam => {

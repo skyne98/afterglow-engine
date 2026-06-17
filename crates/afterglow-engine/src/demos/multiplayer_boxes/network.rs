@@ -24,11 +24,4 @@ pub fn register_demo_protocol(app: &mut App) {
         .set_interpolation::<Transform>(TransformLinearInterpolation::lerp);
 
     app.register_component::<ActionState<AfterglowAction>>();
-
-    // Enable frame interpolation for Transform so movement is visually smooth
-    // between fixed ticks at any frame rate. Entities must also receive the
-    // `FrameInterpolate<Transform>` component (added in scene.rs).
-    app.add_plugins(lightyear::frame_interpolation::FrameInterpolationPlugin::<
-        Transform,
-    >::default());
 }

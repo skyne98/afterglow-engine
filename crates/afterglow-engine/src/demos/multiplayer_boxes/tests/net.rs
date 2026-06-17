@@ -11,7 +11,6 @@ use crate::{
     demos::multiplayer_boxes::{
         movement::{
             DemoInput, add_input_map_to_local_predicted_player, apply_movement, collect_input,
-            configure_demo_input_rebroadcast, configure_demo_input_timeline,
         },
         network::register_demo_protocol,
         protocol::{PLAYER_SIZE, PlayerBox},
@@ -71,6 +70,7 @@ fn build_demo_app(role: LightyearRole) -> App {
         AfterglowSessionPlugin,
         AfterglowSessionLightyearBridgePlugin,
         AfterglowNetcodeConsumerPlugin,
+        crate::network::ControlledEntityPlugin,
     ));
 
     let is_host = matches!(role, LightyearRole::Host);
@@ -96,8 +96,6 @@ fn build_demo_app(role: LightyearRole) -> App {
         app.add_systems(
             Update,
             (
-                configure_demo_input_rebroadcast,
-                configure_demo_input_timeline,
                 spawn_player_on_member_joined_no_physics,
                 despawn_player_on_member_left_no_physics,
             ),
@@ -119,8 +117,6 @@ fn build_demo_app(role: LightyearRole) -> App {
         app.add_systems(
             Update,
             (
-                configure_demo_input_rebroadcast,
-                configure_demo_input_timeline,
                 attach_replicated_player_visuals,
                 attach_replicated_kinematic_visuals,
                 add_input_map_to_local_predicted_player.after(attach_replicated_player_visuals),
@@ -184,6 +180,9 @@ fn spawn_player_on_member_joined_no_physics(
         let idx = map.0.len() as f32;
         let pos = Vec3::new(5.0 + idx * 2.0, PLAYER_SIZE, 0.0);
         let entity = spawn_player_box_no_physics(&mut commands, &owner, pos);
+        commands
+            .entity(entity)
+            .insert(crate::network::PlayerOwned::from_owner_str(&owner));
         map.0.insert(member, entity);
     }
 }

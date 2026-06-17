@@ -2,11 +2,15 @@ use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
 pub mod context;
+pub mod controlled;
 pub mod interpolation;
 pub mod lightyear;
 pub mod session;
 
 pub use context::{AfterglowConnectionStatus, AfterglowNetworkContext};
+pub use controlled::{
+    ControlledEntityPlugin, OwnershipSource, PlayerOwned, bind_controlled_entities,
+};
 pub use interpolation::{NetworkTransformInterpolationBuffer, NetworkTransformSample};
 pub use lightyear::{
     AfterglowLightyearConfig, AfterglowLightyearPlugin, LightyearLinkConditioner, LightyearRole,

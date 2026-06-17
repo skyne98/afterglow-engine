@@ -1,49 +1,17 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
 use leafwing_input_manager::{action_state::ActionState, input_map::InputMap};
-use lightyear::prelude::{
-    client::{InputDelayConfig, InputTimelineConfig},
-    input::{InputConfig, server::ServerInputConfig},
-    *,
-};
+use lightyear::prelude::*;
 
 use super::{protocol::*, scene::PlayerName};
 
 use crate::{
     input::{AfterglowAction, default_gameplay_input_map},
-    network::{AfterglowNetworkContext, lightyear::SessionLightyearLinks},
+    network::AfterglowNetworkContext,
 };
 
 #[derive(Resource, Default)]
 pub struct DemoInput(pub Vec2);
-
-pub fn configure_demo_input_rebroadcast(
-    mut client: Option<ResMut<InputConfig<AfterglowAction>>>,
-    mut server: Option<ResMut<ServerInputConfig<AfterglowAction>>>,
-) {
-    if let Some(ref mut client) = client {
-        client.rebroadcast_inputs = true;
-    }
-    if let Some(ref mut server) = server {
-        server.rebroadcast_inputs = true;
-    }
-}
-
-pub fn configure_demo_input_timeline(
-    mut commands: Commands,
-    links: Option<Res<SessionLightyearLinks>>,
-    timelines: Query<(), With<InputTimelineConfig>>,
-) {
-    let Some(client_link) = links.and_then(|links| links.client_link) else {
-        return;
-    };
-    if timelines.get(client_link).is_ok() {
-        return;
-    }
-    commands.entity(client_link).insert(
-        InputTimelineConfig::default().with_input_delay(InputDelayConfig::fixed_input_delay(2)),
-    );
-}
 
 pub fn collect_input(
     keyboard: Option<Res<ButtonInput<KeyCode>>>,

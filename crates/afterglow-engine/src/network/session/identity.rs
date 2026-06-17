@@ -32,11 +32,7 @@ impl PlayerIdentity {
             secret[i] = key_seed.wrapping_add(i as u8).wrapping_mul(7);
         }
         let signing_key = SigningKey::from_bytes(&secret);
-        let challenge = NativeIdentityProof::challenge(
-            SessionBackend::NonSteam,
-            target,
-            nonce,
-        );
+        let challenge = NativeIdentityProof::challenge(SessionBackend::NonSteam, target, nonce);
         let signature = signing_key.sign(&challenge);
         Self::Native(NativeIdentityProof {
             public_key: signing_key.verifying_key().to_bytes().to_vec(),

@@ -1,14 +1,21 @@
-use std::net::{SocketAddr, TcpListener, UdpSocket};
-use std::time::Duration;
+use std::{
+    net::{SocketAddr, TcpListener, UdpSocket},
+    time::Duration,
+};
 
 use bevy::prelude::*;
 
-use super::{test_nonce, PlayerIdentity, SessionBackend, SessionConfig, SessionIdentityNonce, SessionStatus, SessionTransport};
-use crate::network::lightyear::{
-    AfterglowLightyearPlugin, AfterglowLightyearConfig, AfterglowNetcodeConsumerPlugin,
-    AfterglowSessionLightyearBridgePlugin, LightyearRole,
+use super::{
+    PlayerIdentity, SessionBackend, SessionConfig, SessionIdentityNonce, SessionStatus,
+    SessionTransport, test_nonce,
 };
-use crate::network::session::{AfterglowSessionExt, AfterglowSessionPlugin};
+use crate::network::{
+    lightyear::{
+        AfterglowLightyearConfig, AfterglowLightyearPlugin, AfterglowNetcodeConsumerPlugin,
+        AfterglowSessionLightyearBridgePlugin, LightyearRole,
+    },
+    session::{AfterglowSessionExt, AfterglowSessionPlugin},
+};
 
 fn find_tcp_addr() -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -91,14 +98,19 @@ fn host_and_client_establish_real_netcode_links_over_provider() {
     let mut client = lightyear_test_app(LightyearRole::Client);
     drive(&mut [&mut client], 5);
 
-    client
-        .session()
-        .search_non_steam(provider_addr, [("name".into(), "netcode-test".into())].into());
+    client.session().search_non_steam(
+        provider_addr,
+        [("name".into(), "netcode-test".into())].into(),
+    );
 
     let mut code = None;
     for _ in 0..80 {
         drive(&mut [&mut host, &mut client], 1);
-        let results = client.world().resource::<SessionStatus>().last_search_results.clone();
+        let results = client
+            .world()
+            .resource::<SessionStatus>()
+            .last_search_results
+            .clone();
         if !results.is_empty() {
             code = Some(results[0].code.clone());
             break;
@@ -107,7 +119,9 @@ fn host_and_client_establish_real_netcode_links_over_provider() {
     let code = code.expect("client should find the host session");
 
     let target = code.as_str().to_string();
-    client.session().join_non_steam(code, provider_addr, identity(1, &target));
+    client
+        .session()
+        .join_non_steam(code, provider_addr, identity(1, &target));
 
     let mut client_saw_connecting = false;
     let mut client_link_spawned = false;

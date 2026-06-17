@@ -91,14 +91,11 @@ pub(crate) fn update_session_status(
                 }
             }
             SessionEvent::MemberJoined { session, member } => {
-
                 if !status.members.contains(member) {
                     status.members.push(*member);
                 }
                 // Remote joins learn their own member id from this event.
-                if state.current_session == Some(*session)
-                    && !state.local_member_id.is_valid()
-                {
+                if state.current_session == Some(*session) && !state.local_member_id.is_valid() {
                     state.local_member_id = *member;
                 }
             }

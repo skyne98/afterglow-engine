@@ -8,5 +8,5 @@ pub mod client;
 pub mod protocol;
 pub mod provider;
 
-pub use client::{NonSteamSessionClient};
-pub use provider::{NonSteamSessionProvider};
+pub use client::NonSteamSessionClient;
+pub use provider::NonSteamSessionProvider;

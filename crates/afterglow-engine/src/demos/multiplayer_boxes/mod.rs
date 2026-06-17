@@ -59,7 +59,6 @@ impl Plugin for MultiplayerBoxesPlugin {
             .init_resource::<MemberToPlayer>();
 
         register_demo_protocol(app);
-        scene::configure_physics(app);
 
         app.add_systems(
             Startup,
@@ -87,12 +86,8 @@ impl Plugin for MultiplayerBoxesPlugin {
 
         app.add_systems(
             Update,
-            (
-                movement::configure_demo_input_rebroadcast,
-                movement::configure_demo_input_timeline,
-                movement::add_input_map_to_local_predicted_player
-                    .after(scene::attach_replicated_player_visuals),
-            ),
+            movement::add_input_map_to_local_predicted_player
+                .after(scene::attach_replicated_player_visuals),
         );
         app.add_systems(
             FixedPreUpdate,
@@ -136,7 +131,6 @@ impl Plugin for MultiplayerBoxesPlugin {
             Update,
             (
                 scene::spawn_player_on_member_joined,
-                scene::attach_controlled_by_to_player_boxes,
                 scene::despawn_player_on_member_left,
             )
                 .run_if(|config: Res<AfterglowLightyearConfig>| {

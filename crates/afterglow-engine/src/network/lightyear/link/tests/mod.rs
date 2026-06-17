@@ -387,7 +387,12 @@ fn consumer_clears_links_on_leave() {
     ));
     app.update();
 
-    assert!(app.world().resource::<SessionLightyearLinks>().client_link.is_some());
+    assert!(
+        app.world()
+            .resource::<SessionLightyearLinks>()
+            .client_link
+            .is_some()
+    );
 
     app.world_mut().write_message(SessionRequest::Leave);
     app.update();

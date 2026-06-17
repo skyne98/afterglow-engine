@@ -112,22 +112,30 @@ facts (`runs_authority`, `runs_client_prediction`, `local_member_owner`) instead
 of maintaining separate opaque client/server gameplay implementations.
 
 For locally predicted entities, render Lightyear's `Predicted` copy and let
-Lightyear handle rollback/reconciliation and visual correction. Remote actors
-should render through `Interpolated` copies where available; confirmed roots are
-state anchors, not player-facing presentation. Pick one canonical networked pose
+Lightyear handle rollback/reconciliation and visual correction. The engine's
+`AfterglowLightyearPlugin` enables `FrameInterpolationPlugin::<Transform>` so
+predicted movement is smooth between fixed ticks; entities must also receive
+the `FrameInterpolate<Transform>` component. Remote actors should render
+through `Interpolated` copies where available; confirmed roots are state
+anchors, not player-facing presentation. Pick one canonical networked pose
 representation per physics stack. With Avian 0.6 in the current demo, that is
 `Transform`; Avian `Position`/`Rotation` stay local physics internals because
-Lightyear 0.26's official Avian bridge targets Avian 0.5. If a local predicted
-actor can physically contact props/walls, those contact participants must exist
-in the local prediction world too; otherwise the actor can visually penetrate
+Lightyear 0.26's official Avian bridge targets Avian 0.5. The engine's
+`AfterglowPhysicsPlugin` automatically uses the `afterglow-lightyear-avian3d`
+fork bridge when the `lightyear` feature is active. If a local predicted actor
+can physically contact props/walls, those contact participants must exist in
+the local prediction world too; otherwise the actor can visually penetrate
 stale server/interpolated objects until correction arrives.
 
-Use Lightyear's native input stack for player commands. In the current demo this
-means `InputMap<AfterglowAction>` + `ActionState<AfterglowAction>` on controlled
-entities and Lightyear's `InputChannel` on link transports; do not build parallel
-demo-local movement messages. Manual keyboard-to-action writes must run in
-`FixedPreUpdate` / `InputSystems::WriteClientInputs` so Lightyear buffers them
-before it restores delayed input snapshots.
+Use Lightyear's native input stack for player commands. The engine's
+`AfterglowLightyearPlugin` owns the `InputChannel` registration, input
+rebroadcast, and `InputTimelineConfig` (fixed 2-tick delay by default,
+configurable via `AfterglowLightyearConfig.input_delay_ticks` and
+`AfterglowLightyearConfig.rebroadcast_inputs`). Games only need to add
+`InputMap<AfterglowAction>` + `ActionState<AfterglowAction>` on controlled
+entities. Manual keyboard-to-action writes must run in `FixedPreUpdate` /
+`InputSystems::WriteClientInputs` so Lightyear buffers them before it restores
+delayed input snapshots.
 
 Use Lightyear's existing `ControlledBy` / `Controlled` relationship to bind an
 entity to the link that controls it, and Leafwing `InputMap<AfterglowAction>` /

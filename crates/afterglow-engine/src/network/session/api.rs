@@ -5,8 +5,7 @@
 //! [`SessionRequest`](crate::network::session::SessionRequest) messages.
 
 use bevy::prelude::*;
-use std::io;
-use std::net::SocketAddr;
+use std::{io, net::SocketAddr};
 
 use crate::network::session::{
     AfterglowSessionState, NonSteamSessionClient, NonSteamSessionProvider, PlayerIdentity,
@@ -80,22 +79,26 @@ impl SessionHandle<'_> {
 
     /// Join a Steam lobby by its short code.
     pub fn join_steam(&mut self, code: SessionCode, identity: PlayerIdentity) {
-        self.app.world_mut().write_message(SessionRequest::JoinByCode {
-            backend: SessionBackend::Steam,
-            provider: ProviderEndpoint::Steam,
-            code,
-            identity,
-        });
+        self.app
+            .world_mut()
+            .write_message(SessionRequest::JoinByCode {
+                backend: SessionBackend::Steam,
+                provider: ProviderEndpoint::Steam,
+                code,
+                identity,
+            });
     }
 
     /// Join an in-process session by its short code.
     pub fn join_local(&mut self, code: SessionCode, identity: PlayerIdentity) {
-        self.app.world_mut().write_message(SessionRequest::JoinByCode {
-            backend: SessionBackend::NonSteam,
-            provider: ProviderEndpoint::InProcess,
-            code,
-            identity,
-        });
+        self.app
+            .world_mut()
+            .write_message(SessionRequest::JoinByCode {
+                backend: SessionBackend::NonSteam,
+                provider: ProviderEndpoint::InProcess,
+                code,
+                identity,
+            });
     }
 
     /// Leave the current session.
@@ -146,12 +149,11 @@ impl SessionHandle<'_> {
 mod tests {
     use super::*;
     use crate::network::session::{
-        tests::{test_app, test_nonce},
         AfterglowSessionState, PlayerIdentity, SessionBackend, SessionIdentityNonce,
         SessionTransport,
+        tests::{test_app, test_nonce},
     };
-    use std::net::TcpListener;
-    use std::time::Duration;
+    use std::{net::TcpListener, time::Duration};
 
     fn identity_fixture() -> PlayerIdentity {
         PlayerIdentity::Steam {
@@ -217,7 +219,8 @@ mod tests {
     #[test]
     fn api_join_local_round_trip() {
         let mut app = test_app();
-        app.world_mut().insert_resource(SessionIdentityNonce([0u8; 32]));
+        app.world_mut()
+            .insert_resource(SessionIdentityNonce([0u8; 32]));
 
         app.session().host(
             SessionConfig {
@@ -269,7 +272,10 @@ mod tests {
             )
             .unwrap();
         drive(&mut [&mut host_app], 5);
-        let host_session_id = host_app.world().resource::<AfterglowSessionState>().current_session;
+        let host_session_id = host_app
+            .world()
+            .resource::<AfterglowSessionState>()
+            .current_session;
         assert!(host_session_id.is_some(), "host should be in a session");
 
         let mut client_app = test_app();
@@ -278,10 +284,9 @@ mod tests {
             .insert_resource(SessionIdentityNonce(test_nonce()));
         drive(&mut [&mut client_app], 2);
 
-        client_app.session().search_non_steam(
-            provider_addr,
-            [("name".into(), "api-remote".into())].into(),
-        );
+        client_app
+            .session()
+            .search_non_steam(provider_addr, [("name".into(), "api-remote".into())].into());
         let mut code = None;
         for _ in 0..120 {
             drive(&mut [&mut host_app, &mut client_app], 1);
@@ -305,19 +310,18 @@ mod tests {
         let mut joined = false;
         for _ in 0..120 {
             drive(&mut [&mut host_app, &mut client_app], 1);
-            if client_app.world().resource::<SessionStatus>().is_in_session() {
+            if client_app
+                .world()
+                .resource::<SessionStatus>()
+                .is_in_session()
+            {
                 joined = true;
                 break;
             }
         }
         assert!(joined, "client should have joined the remote session");
         assert!(
-            host_app
-                .world()
-                .resource::<SessionStatus>()
-                .members
-                .len()
-                >= 2,
+            host_app.world().resource::<SessionStatus>().members.len() >= 2,
             "host should observe the new member"
         );
     }

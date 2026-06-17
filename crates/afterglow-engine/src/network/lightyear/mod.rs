@@ -44,6 +44,13 @@ pub struct AfterglowLightyearConfig {
     pub connect_token: Option<Vec<u8>>,
     pub protocol_id: u64,
     pub netcode_private_key: [u8; 32],
+    /// Fixed input delay (in ticks) applied to client links for server-side
+    /// consumption. Keeps local predicted presentation immediate while
+    /// delaying server input processing.
+    pub input_delay_ticks: u16,
+    /// If true, client inputs are rebroadcast to other clients so they can
+    /// predict remote players' actions.
+    pub rebroadcast_inputs: bool,
 }
 
 impl Default for AfterglowLightyearConfig {
@@ -58,6 +65,8 @@ impl Default for AfterglowLightyearConfig {
             connect_token: None,
             protocol_id: 0,
             netcode_private_key: [0u8; 32],
+            input_delay_ticks: 2,
+            rebroadcast_inputs: true,
         }
     }
 }
@@ -118,6 +127,17 @@ impl Plugin for AfterglowLightyearPlugin {
                 >::default());
             }
 
+            // Enable rebroadcast and input delay from config so every game
+            // gets sensible defaults without demo-local boilerplate.
+            app.add_systems(Update, configure_input_defaults);
+
+            // Enable frame interpolation for Transform so predicted movement is
+            // visually smooth between fixed ticks at any frame rate. Entities
+            // must also receive the `FrameInterpolate<Transform>` component.
+            app.add_plugins(lightyear::frame_interpolation::FrameInterpolationPlugin::<
+                Transform,
+            >::default());
+
             // Lightyear doesn't auto-add a ReplicationSender to entities that
             // gain a LinkOf component (see `handle_new_client` in the
             // `lightyear` crate's lib.rs doctest). Server-side replication
@@ -128,7 +148,42 @@ impl Plugin for AfterglowLightyearPlugin {
     }
 }
 
-/// Adds a [`ReplicationSender`] to any entity that gains a [`LinkOf`]
+/// Applies `rebroadcast_inputs` and `input_delay_ticks` from
+/// [`AfterglowLightyearConfig`] to Lightyear's input config resources and
+/// client link entities. Runs every frame but is idempotent.
+#[cfg(feature = "lightyear")]
+fn configure_input_defaults(
+    config: Res<AfterglowLightyearConfig>,
+    mut client_config: Option<ResMut<lightyear::prelude::input::InputConfig<AfterglowAction>>>,
+    mut server_config: Option<
+        ResMut<lightyear::prelude::input::server::ServerInputConfig<AfterglowAction>>,
+    >,
+    links: Option<Res<SessionLightyearLinks>>,
+    timelines: Query<(), With<lightyear::prelude::client::InputTimelineConfig>>,
+    mut commands: Commands,
+) {
+    if let Some(ref mut client_config) = client_config {
+        client_config.rebroadcast_inputs = config.rebroadcast_inputs;
+    }
+    if let Some(ref mut server_config) = server_config {
+        server_config.rebroadcast_inputs = config.rebroadcast_inputs;
+    }
+
+    let Some(client_link) = links.and_then(|links| links.client_link) else {
+        return;
+    };
+    if timelines.get(client_link).is_ok() {
+        return;
+    }
+    commands.entity(client_link).insert(
+        lightyear::prelude::client::InputTimelineConfig::default().with_input_delay(
+            lightyear::prelude::client::InputDelayConfig::fixed_input_delay(
+                config.input_delay_ticks,
+            ),
+        ),
+    );
+}
+
 /// component, so the server-side replication stream can route to it.
 ///
 /// Also attaches a [`Transport`] with senders/receivers for the

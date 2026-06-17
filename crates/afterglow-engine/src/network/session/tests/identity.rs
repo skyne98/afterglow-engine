@@ -42,9 +42,7 @@ fn native_identity_rejoin_returns_same_member_id() {
     // matching what `handle_leave` and `update_session_status` do in
     // production.
     {
-        let mut state = app
-            .world_mut()
-            .resource_mut::<AfterglowSessionState>();
+        let mut state = app.world_mut().resource_mut::<AfterglowSessionState>();
         state.current_session = None;
         state.local_member_id = SessionMemberId::INVALID;
     }
