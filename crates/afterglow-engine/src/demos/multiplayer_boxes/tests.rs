@@ -3,6 +3,7 @@ mod input;
 pub mod net;
 
 use bevy::prelude::*;
+use leafwing_input_manager::action_state::ActionState;
 use lightyear::prelude::Predicted;
 
 use super::{camera::*, movement::*, protocol::*, scene::*};
@@ -320,7 +321,9 @@ fn local_replicated_box_gets_prediction_physics_components() {
 fn movement_sets_velocity() {
     let mut app = test_app();
     app.world_mut().resource_mut::<PlayerName>().0 = "mover".to_string();
-    app.world_mut().resource_mut::<DemoInput>().0 = Vec2::new(1.0, 0.0);
+
+    let mut action_state = ActionState::<crate::input::AfterglowAction>::default();
+    action_state.set_axis_pair(&crate::input::AfterglowAction::Move, Vec2::new(1.0, 0.0));
 
     let _entity = app.world_mut().spawn((
         PlayerBox {
@@ -328,6 +331,7 @@ fn movement_sets_velocity() {
         },
         avian3d::prelude::RigidBody::Dynamic,
         avian3d::prelude::LinearVelocity::ZERO,
+        action_state,
     ));
 
     app.add_systems(Update, super::movement::apply_movement);
@@ -347,8 +351,8 @@ fn movement_sets_velocity() {
         "movement system should apply velocity"
     );
     assert!(
-        (vel.0.x - PLAYER_SPEED).abs() < 0.001,
-        "velocity x should equal player speed"
+        (vel.0.x - (-PLAYER_SPEED)).abs() < 0.001,
+        "velocity x should equal -player speed (axis flip)"
     );
 }
 
@@ -356,7 +360,9 @@ fn movement_sets_velocity() {
 fn apply_movement_only_moves_local_player() {
     let mut app = test_app();
     app.world_mut().resource_mut::<PlayerName>().0 = "alice".to_string();
-    app.world_mut().resource_mut::<DemoInput>().0 = Vec2::new(0.0, 1.0);
+
+    let mut alice_action = ActionState::<crate::input::AfterglowAction>::default();
+    alice_action.set_axis_pair(&crate::input::AfterglowAction::Move, Vec2::new(0.0, 1.0));
 
     let alice = app
         .world_mut()
@@ -365,6 +371,7 @@ fn apply_movement_only_moves_local_player() {
                 owner: "alice".to_string(),
             },
             avian3d::prelude::LinearVelocity::ZERO,
+            alice_action,
         ))
         .id();
     let bob = app

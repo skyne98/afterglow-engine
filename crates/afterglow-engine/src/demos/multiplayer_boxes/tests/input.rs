@@ -51,6 +51,8 @@ fn predicted_physics_is_attached_before_fixed_movement() {
         },
     ));
     app.world_mut().resource_mut::<DemoInput>().0 = Vec2::Y;
+    let mut action_state = ActionState::<AfterglowAction>::default();
+    action_state.set_axis_pair(&AfterglowAction::Move, Vec2::Y);
     let player = app
         .world_mut()
         .spawn((
@@ -59,6 +61,7 @@ fn predicted_physics_is_attached_before_fixed_movement() {
             },
             Predicted,
             Transform::from_xyz(0.0, 0.4, 0.0),
+            action_state,
         ))
         .id();
 
@@ -75,7 +78,7 @@ fn predicted_physics_is_attached_before_fixed_movement() {
 }
 
 #[test]
-fn local_prediction_uses_immediate_input_over_delayed_zero_action_state() {
+fn local_prediction_uses_action_state_for_movement() {
     let mut app = test_app();
     app.insert_resource(AfterglowNetworkContext::from_status(
         AfterglowConnectionStatus {
@@ -85,8 +88,8 @@ fn local_prediction_uses_immediate_input_over_delayed_zero_action_state() {
         },
     ));
     app.world_mut().resource_mut::<PlayerName>().0 = "ignored-name".to_string();
-    app.world_mut().resource_mut::<DemoInput>().0 = Vec2::Y;
-
+    let mut action_state = ActionState::<AfterglowAction>::default();
+    action_state.set_axis_pair(&AfterglowAction::Move, Vec2::Y);
     let player = app
         .world_mut()
         .spawn((
@@ -95,7 +98,7 @@ fn local_prediction_uses_immediate_input_over_delayed_zero_action_state() {
             },
             Predicted,
             LinearVelocity::ZERO,
-            ActionState::<AfterglowAction>::default(),
+            action_state,
         ))
         .id();
 
@@ -105,7 +108,7 @@ fn local_prediction_uses_immediate_input_over_delayed_zero_action_state() {
     let velocity = app.world().get::<LinearVelocity>(player).unwrap().0;
     assert!(
         velocity.z > 0.0,
-        "local predicted player should keep moving from immediate input even when delayed ActionState is zero; velocity={velocity:?}"
+        "local predicted player should move from ActionState: velocity={velocity:?}"
     );
 }
 

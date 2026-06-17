@@ -69,10 +69,8 @@ pub fn add_input_map_to_local_predicted_player(
 
 pub fn apply_movement(
     time: Res<Time>,
-    fallback_input: Res<DemoInput>,
     player_name: Res<PlayerName>,
     context: Option<Res<AfterglowNetworkContext>>,
-    rollback_links: Query<(), With<Rollback>>,
     mut players: Query<(
         Option<&mut LinearVelocity>,
         Option<&mut Transform>,
@@ -89,7 +87,6 @@ pub fn apply_movement(
     let local_member = status.and_then(|status| status.local_member_owner());
     let client_only = status.is_some_and(|status| status.is_client_only());
     let authority = status.is_some_and(|status| status.runs_authority());
-    let in_rollback = rollback_links.iter().next().is_some();
 
     for (linear_vel, transform, player_box, action_state, predicted) in players.iter_mut() {
         if client_only && !predicted {
@@ -103,21 +100,7 @@ pub fn apply_movement(
             continue;
         }
 
-        let dir = if client_only && is_local && !in_rollback {
-            // Local prediction must stay immediate even when Lightyear has an
-            // input delay configured for server-side consumption. The native
-            // input pipeline still sends the ActionState written by
-            // `collect_input`, but presentation uses the current keyboard
-            // sample so losing/regaining focus cannot leave visuals stuck on a
-            // delayed zero-input snapshot. During rollback replay, use the
-            // historical ActionState restored by Lightyear instead.
-            fallback_input.0.clamp_length_max(1.0)
-        } else {
-            movement_direction(
-                action_state,
-                (is_local && !in_rollback).then_some(fallback_input.0),
-            )
-        };
+        let dir = movement_direction(action_state, None);
         let vel = Vec3::new(dir.x, 0.0, dir.y) * PLAYER_SPEED;
         if let Some(mut linear_vel) = linear_vel {
             linear_vel.0 = vel;
@@ -129,14 +112,14 @@ pub fn apply_movement(
 
 fn movement_direction(
     action_state: Option<&ActionState<AfterglowAction>>,
-    fallback: Option<Vec2>,
+    _fallback: Option<Vec2>,
 ) -> Vec2 {
     action_state
         .map(|state| {
             let axis = state.clamped_axis_pair(&AfterglowAction::Move);
             Vec2::new(-axis.x, axis.y).clamp_length_max(1.0)
         })
-        .unwrap_or_else(|| fallback.unwrap_or(Vec2::ZERO))
+        .unwrap_or_default()
 }
 
 fn keyboard_direction(keyboard: &ButtonInput<KeyCode>) -> Vec2 {
