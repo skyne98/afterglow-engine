@@ -7,7 +7,6 @@ fn rope_test_app() -> App {
     let mut app = App::new();
     app.add_plugins((
         MinimalPlugins,
-        avian3d::prelude::PhysicsPlugins::default(),
         bevy::input::InputPlugin,
         leafwing_input_manager::plugin::InputManagerPlugin::<crate::input::AfterglowAction>::default(),
     ));

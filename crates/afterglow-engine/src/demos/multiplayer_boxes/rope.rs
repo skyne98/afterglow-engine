@@ -33,10 +33,12 @@ pub struct RopeJointEntity(pub Entity);
 #[derive(Component, Default)]
 pub struct RopeToggleLatch {
     was_pressed: bool,
+    pressed_frames: u8,
     cooldown_frames: u8,
 }
 
-const ROPE_TOGGLE_COOLDOWN_FRAMES: u8 = 8;
+const ROPE_TOGGLE_COOLDOWN_FRAMES: u8 = 12;
+const ROPE_TOGGLE_MIN_PRESSED_FRAMES: u8 = 2;
 const HIGHLIGHT_SWITCH_MARGIN: f32 = 0.35;
 
 /// Toggle the rope on the nearest box when RopeToggle is released.
@@ -57,6 +59,13 @@ pub fn toggle_rope(
 ) {
     let status = context.as_deref().map(|ctx| ctx.get_connection_status());
     let client_only = status.is_some_and(|status| status.is_client_only());
+    if client_only {
+        // Do not locally mutate replicated rope state on clients. Client-side
+        // prediction of a binary toggle can race with server correction and
+        // manifest as attach-then-immediate-detach. Clients still send the
+        // RopeToggle ActionState; the authoritative side writes RopedTo.
+        return;
+    }
     let authority = status.is_some_and(|status| status.runs_authority());
     let local_member = status.and_then(|s| s.local_member_owner());
 
@@ -143,17 +152,25 @@ pub fn server_toggle_remote_ropes_from_inputs(
 
 fn next_rope_latch(previous: Option<&RopeToggleLatch>, pressed: bool) -> (bool, RopeToggleLatch) {
     let was_pressed = previous.is_some_and(|previous| previous.was_pressed);
+    let pressed_frames = previous.map_or(0, |previous| previous.pressed_frames);
     let cooldown = previous.map_or(0, |previous| previous.cooldown_frames);
-    let released = was_pressed && !pressed && cooldown == 0;
+    let armed_press = pressed_frames >= ROPE_TOGGLE_MIN_PRESSED_FRAMES;
+    let released = was_pressed && !pressed && armed_press && cooldown == 0;
     let next_cooldown = if released {
         ROPE_TOGGLE_COOLDOWN_FRAMES
     } else {
         cooldown.saturating_sub(1)
     };
+    let next_pressed_frames = if pressed {
+        pressed_frames.saturating_add(1)
+    } else {
+        0
+    };
     (
         released,
         RopeToggleLatch {
             was_pressed: pressed,
+            pressed_frames: next_pressed_frames,
             cooldown_frames: next_cooldown,
         },
     )

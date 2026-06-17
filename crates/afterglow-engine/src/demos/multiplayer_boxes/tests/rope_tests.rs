@@ -1,6 +1,7 @@
 use avian3d::prelude::LinearVelocity;
 use bevy::prelude::*;
 use leafwing_input_manager::action_state::ActionState;
+use lightyear::prelude::Predicted;
 
 use super::*;
 use crate::input::{AfterglowAction, default_gameplay_input_map};
@@ -9,7 +10,6 @@ fn rope_test_app() -> App {
     let mut app = App::new();
     app.add_plugins((
         MinimalPlugins,
-        avian3d::prelude::PhysicsPlugins::default(),
         bevy::input::InputPlugin,
         leafwing_input_manager::plugin::InputManagerPlugin::<AfterglowAction>::default(),
     ));
@@ -91,6 +91,7 @@ fn toggle_rope_release_f_ropes_nearest_box() {
         .resource_mut::<ButtonInput<KeyCode>>()
         .press(KeyCode::KeyF);
     app.update();
+    app.update();
     assert!(
         app.world().get::<RopedTo>(box_entity).is_none(),
         "box should not be roped while F is held"
@@ -105,6 +106,68 @@ fn toggle_rope_release_f_ropes_nearest_box() {
     assert!(
         app.world().get::<RopedTo>(box_entity).is_some(),
         "box should be roped after releasing F"
+    );
+}
+
+/// Client-only local input does not mutate replicated rope state directly.
+/// The server consumes the client's ActionState and writes authoritative
+/// RopedTo, avoiding client prediction/correction attach-drop races.
+#[test]
+fn client_local_release_does_not_write_roped_to() {
+    let mut app = rope_test_app();
+    app.world_mut().resource_mut::<PlayerName>().0 = "bob".to_string();
+    app.world_mut()
+        .insert_resource(crate::network::AfterglowNetworkContext::from_status(
+            crate::network::AfterglowConnectionStatus {
+                role: crate::network::LightyearRole::Client,
+                local_member_id: crate::network::session::SessionMemberId::new(2),
+                ..Default::default()
+            },
+        ));
+
+    app.world_mut().spawn((
+        PlayerBox {
+            owner: "2".to_string(),
+        },
+        Transform::from_xyz(0.0, 0.4, 0.0),
+        avian3d::prelude::RigidBody::Dynamic,
+        LinearVelocity::ZERO,
+        default_gameplay_input_map(),
+        ActionState::<AfterglowAction>::default(),
+        Predicted,
+    ));
+
+    let box_entity = app
+        .world_mut()
+        .spawn((
+            KinematicBox {
+                id: 0,
+                initial_pos: Vec3::new(1.0, 0.5, 0.0),
+            },
+            Transform::from_xyz(1.0, 0.5, 0.0),
+            avian3d::prelude::RigidBody::Dynamic,
+            LinearVelocity::ZERO,
+        ))
+        .id();
+
+    app.add_systems(
+        PreUpdate,
+        super::super::rope::toggle_rope
+            .after(leafwing_input_manager::plugin::InputManagerSystem::Update),
+    );
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::KeyF);
+    app.update();
+    app.update();
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .release(KeyCode::KeyF);
+    app.update();
+
+    assert!(
+        app.world().get::<RopedTo>(box_entity).is_none(),
+        "client prediction must not write replicated RopedTo directly"
     );
 }
 
@@ -126,6 +189,7 @@ fn toggle_rope_release_f_again_releases_box() {
         .resource_mut::<ButtonInput<KeyCode>>()
         .press(KeyCode::KeyF);
     app.update();
+    app.update();
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
         .release(KeyCode::KeyF);
@@ -133,12 +197,13 @@ fn toggle_rope_release_f_again_releases_box() {
     assert!(app.world().get::<RopedTo>(box_entity).is_some());
 
     // Wait out the anti-stale-input cooldown, then press/release F again to unrope.
-    for _ in 0..8 {
+    for _ in 0..12 {
         app.update();
     }
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
         .press(KeyCode::KeyF);
+    app.update();
     app.update();
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
@@ -203,6 +268,7 @@ fn server_remote_action_state_release_ropes_nearest_box() {
         .unwrap()
         .press(&AfterglowAction::RopeToggle);
     app.update();
+    app.update();
     assert!(app.world().get::<RopedTo>(box_entity).is_none());
 
     app.world_mut()
@@ -252,6 +318,7 @@ fn local_duplicate_release_inside_cooldown_does_not_drop_rope() {
         .resource_mut::<ButtonInput<KeyCode>>()
         .press(KeyCode::KeyF);
     app.update();
+    app.update();
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
         .release(KeyCode::KeyF);
@@ -261,6 +328,7 @@ fn local_duplicate_release_inside_cooldown_does_not_drop_rope() {
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
         .press(KeyCode::KeyF);
+    app.update();
     app.update();
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
@@ -313,6 +381,7 @@ fn toggle_rope_box_too_far_not_roped() {
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
         .press(KeyCode::KeyF);
+    app.update();
     app.update();
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
@@ -381,6 +450,7 @@ fn toggle_rope_skips_already_roped_box() {
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
         .press(KeyCode::KeyF);
+    app.update();
     app.update();
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()

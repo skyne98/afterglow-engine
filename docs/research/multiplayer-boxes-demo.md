@@ -122,9 +122,11 @@ Client-side prediction:
 - Server snapshots still provide authority/correction through Lightyear's
   rollback/reconciliation machinery. Input transport is now Lightyear/Leafwing;
   no demo-local movement message remains. Discrete rope toggles are still driven
-  from `ActionState<AfterglowAction>` but use a small per-player release latch
-  and cooldown so repeated/stale observations of the same release cannot attach
-  and immediately detach the cube.
+  from `ActionState<AfterglowAction>`, but only the authoritative side writes
+  the replicated `RopedTo` component; clients do not locally mutate it. The
+  authoritative path uses a per-player release latch, minimum observed press
+  duration, and short cooldown so repeated/stale observations of the same
+  release cannot attach and immediately detach the cube.
 - The runnable test verifies that the remote client receives replicated
   `PlayerBox` entities over real UDP/netcode, gains client-side presentation and
   local physics components on the predicted copy, and that client input moves the
