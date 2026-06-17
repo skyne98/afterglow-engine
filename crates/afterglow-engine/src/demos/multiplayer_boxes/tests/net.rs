@@ -182,7 +182,7 @@ fn spawn_player_on_member_joined_no_physics(
         let entity = spawn_player_box_no_physics(&mut commands, &owner, pos);
         commands
             .entity(entity)
-            .insert(crate::network::PlayerOwned::from_owner_str(&owner));
+            .insert(crate::network::PlayerOwned::from_member(member));
         map.0.insert(member, entity);
     }
 }

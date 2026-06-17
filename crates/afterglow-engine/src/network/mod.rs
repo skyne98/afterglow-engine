@@ -9,7 +9,8 @@ pub mod session;
 
 pub use context::{AfterglowConnectionStatus, AfterglowNetworkContext};
 pub use controlled::{
-    ControlledEntityPlugin, OwnershipSource, PlayerOwned, bind_controlled_entities,
+    ControlledEntityPlugin, MemberLinkMap, OwnershipSource, PlayerOwned,
+    bind_controlled_entities, update_member_link_map,
 };
 pub use interpolation::{NetworkTransformInterpolationBuffer, NetworkTransformSample};
 pub use lightyear::{

@@ -1,8 +1,8 @@
 //! Controlled-entity lifecycle orchestration.
 //!
-//! Provides the reusable layer that games need: tracking which server-spawned
-//! entities are controlled by which client links, and binding [`ControlledBy`]
-//! automatically when a `ClientOf` link appears.
+//! Provides the reusable layer that games need: binding [`ControlledBy`] on
+//! server-spawned entities to the correct client link, using stable
+//! [`SessionMemberId`] identity rather than ephemeral `PeerId`s.
 //!
 //! Games are responsible for:
 //! - Spawning the entity on `SessionEvent::MemberJoined`
@@ -10,31 +10,41 @@
 //! - Despawning on `SessionEvent::MemberLeft`
 //!
 //! The engine handles:
-//! - Finding the `ClientOf` link entity for a given member
+//! - Finding the `ClientOf` link entity for a given `SessionMemberId` (via
+//!   [`MemberLinkMap`], populated by the Lightyear bridge)
 //! - Inserting [`ControlledBy`] on the entity once the link exists
-//! - Exposing a [`ControlledEntityRegistry`] for lookup
 
 use bevy::prelude::*;
 use lightyear::prelude::{server::ClientOf, *};
 
-/// Marker trait for components that identify which member owns an entity.
-/// Games implement this on their own player/character component.
+use crate::network::session::SessionMemberId;
+
+/// Marker trait for components that identify which session member owns an
+/// entity. Games implement this on their own player/character component.
 pub trait OwnershipSource: Component {
-    /// Returns the Lightyear `PeerId` that owns this entity, if any.
-    fn owning_peer(&self) -> Option<PeerId>;
+    /// Returns the session member that owns this entity, if any.
+    fn owning_member(&self) -> Option<SessionMemberId>;
 }
 
-/// Registry mapping session members to their controlled entities.
+/// Registry mapping session members to their Lightyear client link entities.
+///
+/// Populated by the Lightyear bridge when `ClientOf` links are created or
+/// removed. Used by [`bind_controlled_entities`] to find the correct link
+/// entity for a given `SessionMemberId`.
+///
+/// The mapping from `SessionMemberId` to `PeerId` is established by the
+/// bridge: `SessionMemberId.as_raw()` is used as the netcode `client_id`,
+/// which becomes `PeerId::Netcode(client_id)` on the server.
 #[derive(Resource, Default, Debug, Clone)]
-pub struct ControlledEntityRegistry {
-    /// Maps a peer ID to the entity they control.
-    pub entities: bevy::platform::collections::HashMap<PeerId, Entity>,
+pub struct MemberLinkMap {
+    /// Maps a session member ID to the `ClientOf` link entity.
+    pub links: bevy::platform::collections::HashMap<SessionMemberId, Entity>,
 }
 
-impl ControlledEntityRegistry {
-    /// Returns the entity controlled by the given peer, if any.
-    pub fn entity_for(&self, peer: PeerId) -> Option<Entity> {
-        self.entities.get(&peer).copied()
+impl MemberLinkMap {
+    /// Returns the link entity for the given member, if any.
+    pub fn link_for(&self, member: SessionMemberId) -> Option<Entity> {
+        self.links.get(&member).copied()
     }
 }
 
@@ -52,30 +62,30 @@ impl Plugin for ControlledEntityPlugin {
 }
 
 /// A blanket [`OwnershipSource`] implementation for entities whose owner is
-/// identified by a numeric peer ID stored as a string.
+/// identified by a [`SessionMemberId`].
 ///
-/// Games that store the owner as a string (e.g. a member ID rendered as a
-/// string) can use this directly by adding the [`PlayerOwned`] component to
-/// their entities.
+/// Games that store the owner as a `SessionMemberId` can use this directly by
+/// adding the [`PlayerOwned`] component to their entities.
 #[derive(Component, Clone, Debug, Default, Reflect)]
 #[reflect(Component)]
 pub struct PlayerOwned {
-    /// The owning peer's ID, parsed from the owner string.
-    pub peer: Option<PeerId>,
+    pub member: SessionMemberId,
 }
 
 impl OwnershipSource for PlayerOwned {
-    fn owning_peer(&self) -> Option<PeerId> {
-        self.peer
+    fn owning_member(&self) -> Option<SessionMemberId> {
+        if self.member.is_valid() {
+            Some(self.member)
+        } else {
+            None
+        }
     }
 }
 
 impl PlayerOwned {
-    /// Creates a `PlayerOwned` from an owner string that parses to a `u64`.
-    pub fn from_owner_str(owner: &str) -> Self {
-        Self {
-            peer: owner.parse::<u64>().ok().map(PeerId::Netcode),
-        }
+    /// Creates a `PlayerOwned` from a `SessionMemberId`.
+    pub fn from_member(member: SessionMemberId) -> Self {
+        Self { member }
     }
 }
 
@@ -90,19 +100,48 @@ impl PlayerOwned {
 /// ```
 pub fn bind_controlled_entities<O: OwnershipSource>(
     mut commands: Commands,
+    member_links: Res<MemberLinkMap>,
     players: Query<(Entity, &O), (With<Replicate>, Without<ControlledBy>)>,
-    links: Query<(Entity, &RemoteId), With<ClientOf>>,
 ) {
     for (player_entity, owner_source) in &players {
-        let Some(peer) = owner_source.owning_peer() else {
+        let Some(member) = owner_source.owning_member() else {
             continue;
         };
-        let Some((link_entity, _)) = links.iter().find(|(_, remote)| remote.0 == peer) else {
+        let Some(link_entity) = member_links.link_for(member) else {
             continue;
         };
         commands.entity(player_entity).insert(ControlledBy {
             owner: link_entity,
             lifetime: Default::default(),
         });
+    }
+}
+
+/// Updates [`MemberLinkMap`] by scanning `ClientOf` link entities and
+/// extracting their `SessionMemberId` from the `RemoteId`.
+///
+/// The bridge assigns `SessionMemberId.as_raw()` as the netcode `client_id`,
+/// so on the server, a `ClientOf` link's `RemoteId(PeerId::Netcode(id))`
+/// corresponds to `SessionMemberId::new(id as u128)`.
+///
+/// This system is added by the Lightyear bridge plugin, not by
+/// [`ControlledEntityPlugin`], so it runs even if the game doesn't use
+/// `ControlledEntityPlugin`.
+pub fn update_member_link_map(
+    mut member_links: ResMut<MemberLinkMap>,
+    links: Query<(Entity, &RemoteId), With<ClientOf>>,
+) {
+    // Remove stale entries (link entity no longer exists)
+    member_links.links.retain(|_, &mut entity| {
+        // If the entity is still a ClientOf link, keep it
+        links.get(entity).is_ok()
+    });
+
+    // Add new entries
+    for (entity, remote_id) in &links {
+        if let PeerId::Netcode(id) = remote_id.0 {
+            let member = SessionMemberId::new(id as u128);
+            member_links.links.insert(member, entity);
+        }
     }
 }

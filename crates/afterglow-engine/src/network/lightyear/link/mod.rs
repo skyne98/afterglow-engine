@@ -34,6 +34,7 @@ use lightyear::prelude::server::{NetcodeConfig as ServerNetcodeConfig, NetcodeSe
 use lightyear::prelude::{Authentication as NetcodeAuthentication, LocalAddr, UdpIo};
 
 use crate::network::{
+    controlled::update_member_link_map,
     lightyear::{AfterglowLightyearConfig, LightyearRole},
     session::{
         AfterglowSessionSet, AfterglowSessionState, SessionEvent, SessionTransport,
@@ -143,12 +144,14 @@ impl Plugin for AfterglowSessionLightyearBridgePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SessionLightyearLinks>()
             .init_resource::<PendingNetcodeStartup>()
+            .init_resource::<crate::network::controlled::MemberLinkMap>()
             .add_systems(
                 PreUpdate,
                 handle_session_lightyear_links
                     .in_set(AfterglowSessionSet::ApplyEffects)
                     .after(crate::network::session::status::update_session_status),
-            );
+            )
+            .add_systems(Update, update_member_link_map);
     }
 }
 

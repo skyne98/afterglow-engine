@@ -410,7 +410,7 @@ pub fn spawn_player_on_member_joined(
         // ControlledBy automatically when the ClientOf link appears.
         commands
             .entity(entity)
-            .insert(crate::network::PlayerOwned::from_owner_str(&owner));
+            .insert(crate::network::PlayerOwned::from_member(member));
         map.0.insert(member, entity);
     }
 }
