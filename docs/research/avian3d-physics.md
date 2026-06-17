@@ -236,11 +236,12 @@ features: `3d`, `f32`, `parry-f32`, `xpbd_joints`, `enhanced-determinism`, and
 engine deliberately does **not** enable Avian's `parallel` feature in the core
 dependency, so prediction-sensitive physics is not subject to extra threaded
 solver nondeterminism. Lightyear 0.26's `lightyear_avian3d` helper targets Avian
-0.5, so Avian 0.6 demos must not import that bridge directly; they should choose
-one canonical replicated pose representation and handle Avian transform sync
-explicitly until versions align. The multiplayer boxes demo currently uses
-Lightyear-predicted `Transform` as networked pose and local Avian
-`Position`/`Rotation` as physics internals. It also does not enable Avian's
+0.5, so Avian 0.6 demos use the `afterglow-lightyear-avian3d` fork (Transform
+mode only) which ports the bridge and owns `PhysicsSchedule` ordering and
+Position/Rotation <-> Transform sync. The multiplayer boxes demo uses
+Lightyear-predicted `Transform` as networked pose with frame interpolation
+enabled for smooth between-tick motion. Avian `Position`/`Rotation` are local
+physics internals. It also does not enable Avian's
 default debug-render, picking, scene, or mesh-collider features, because those
 pull in extra Bevy resources that make minimal/headless runtime tests less clean.
 Mesh-derived colliders can be added later as an explicit import/tooling path.

@@ -110,6 +110,10 @@ Client-side prediction:
   delta), and transform interpolation. Avian `Position`/`Rotation` are local
   physics internals in this Avian 0.6 demo; they are not also registered for
   Lightyear prediction, avoiding dual canonical pose state.
+  `afterglow-lightyear-avian3d` (our fork of Lightyear's Avian bridge) owns the
+  `PhysicsSchedule` ordering and the Position/Rotation <-> Transform sync so
+  physics state is captured in the prediction history at the correct tick and
+  corrections are not overwritten by Avian.
 - The client renders and simulates the Lightyear `Predicted` copy for its local
   player. Predicted player/cube copies receive local Avian physics components in
   `PreUpdate` after replication receive and before fixed simulation. Remote
@@ -227,9 +231,9 @@ honest and pass:
    static colliders for walls/floors.
 8. Do not mix predicted `Transform` with predicted Avian `Position`/`Rotation`
    unless the Lightyear-Avian bridge for the exact Avian version owns the sync
-   order. Lightyear 0.26's official `lightyear_avian3d` bridge targets Avian
-   0.5, while Afterglow uses Avian 0.6, so the demo keeps Transform as the
-   networked pose and initializes Avian Position/Rotation locally before physics.
+   order. Afterglow forks the bridge as `afterglow-lightyear-avian3d` for Avian
+   0.6 (Lightyear 0.26's official `lightyear_avian3d` targets Avian 0.5). The
+   fork supports `Transform` mode only, which is what the demo uses.
 9. Do not drive local presentation from a delayed Lightyear `ActionState`.
    Lightyear may restore an older zero-input snapshot after focus changes,
    timeline sync, or rollback. Write that `ActionState` for networking, mirror

@@ -5,7 +5,8 @@ use crate::network::session::AfterglowSessionState;
 
 const CAMERA_OFFSET: Vec3 = Vec3::new(0.0, 8.0, -6.0);
 const LOOK_AHEAD: f32 = 2.0;
-const FOLLOW_DAMPING: f32 = 10.0;
+/// Exponential decay constant for camera follow (higher = snappier).
+const FOLLOW_LAMBDA: f32 = 12.0;
 
 #[derive(Component)]
 pub struct DemoCamera;
@@ -34,6 +35,8 @@ pub fn setup_camera(
     ));
 }
 
+/// Runs in `PostUpdate` after Lightyear's `VisualCorrection` and
+/// `FrameInterpolation` so the camera reads the fully smoothed body Transform.
 pub fn follow_camera_system(
     time: Res<Time>,
     player_name: Res<PlayerName>,
@@ -54,8 +57,9 @@ pub fn follow_camera_system(
     let target_pos = transform.translation;
     let desired = target_pos + CAMERA_OFFSET;
     let look_at = target_pos + Vec3::new(0.0, 1.0, LOOK_AHEAD);
-    let t = (FOLLOW_DAMPING * time.delta_secs()).min(1.0);
-    cam_tf.translation = cam_tf.translation.lerp(desired, t);
+    // Frame-rate-independent exponential decay: same behaviour at 30/60/144fps.
+    let alpha = 1.0 - (-FOLLOW_LAMBDA * time.delta_secs()).exp();
+    cam_tf.translation = cam_tf.translation.lerp(desired, alpha);
     cam_tf.look_at(look_at, Vec3::Y);
 }
 

@@ -27,6 +27,7 @@ leafwing-input-manager.workspace = true
 lightyear = { workspace = true, optional = true }
 lightyear_transport = { workspace = true, optional = true }
 lightyear_inputs_leafwing = { workspace = true, optional = true }
+afterglow-lightyear-avian3d = { workspace = true }
 wgpu = { workspace = true, optional = true }
 
 [dependencies.web-time]

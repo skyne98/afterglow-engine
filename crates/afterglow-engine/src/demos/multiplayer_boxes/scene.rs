@@ -23,10 +23,17 @@ pub struct MemberToPlayer(pub HashMap<SessionMemberId, Entity>);
 pub struct PlayerVisualAttached;
 
 pub fn configure_physics(app: &mut App) {
-    // Keep Avian 0.6 as the physics runtime. Lightyear 0.26's official
-    // lightyear_avian3d bridge targets Avian 0.5, so this demo uses Transform
-    // as the networked pose and keeps Avian Position/Rotation local.
-    app.add_plugins(PhysicsPlugins::default());
+    // Use our fork of the Lightyear-Avian bridge (Transform mode, Avian 0.6).
+    // This coordinates PhysicsSchedule ordering with Lightyear prediction
+    // history and visual interpolation so physics state is captured at the
+    // right tick and Transform corrections aren't overwritten by Avian.
+    app.add_plugins(
+        PhysicsPlugins::default()
+            .build()
+            .disable::<PhysicsTransformPlugin>()
+            .disable::<PhysicsInterpolationPlugin>(),
+    );
+    app.add_plugins(afterglow_lightyear_avian3d::prelude::AfterglowAvianPlugin::default());
 }
 
 pub fn spawn_arena(
@@ -248,6 +255,8 @@ pub fn attach_predicted_player_physics(
             Collider::cuboid(PLAYER_SIZE * 2.0, PLAYER_SIZE * 2.0, PLAYER_SIZE * 2.0),
             Position::from(transform.translation),
             Rotation::from(transform.rotation),
+            // Enable frame interpolation so the body is smooth between ticks.
+            lightyear::frame_interpolation::FrameInterpolate::<Transform>::default(),
         ));
         if !has_velocity {
             entity_commands.insert(LinearVelocity::ZERO);
@@ -279,6 +288,7 @@ pub fn attach_predicted_kinematic_physics(
             ),
             Position::from(pos),
             Rotation::from(transform.map_or(Quat::IDENTITY, |transform| transform.rotation)),
+            lightyear::frame_interpolation::FrameInterpolate::<Transform>::default(),
         ));
         if !has_velocity {
             entity_commands.insert(LinearVelocity::ZERO);

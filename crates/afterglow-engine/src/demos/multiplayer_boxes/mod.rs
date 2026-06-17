@@ -8,7 +8,7 @@ pub mod scene;
 pub mod tests;
 
 use bevy::prelude::*;
-use lightyear::prelude::{ReplicationSystems, client::input::InputSystems};
+use lightyear::prelude::{ReplicationSystems, RollbackSystems, client::input::InputSystems};
 use std::net::SocketAddr;
 
 use crate::network::{
@@ -122,12 +122,15 @@ impl Plugin for MultiplayerBoxesPlugin {
         );
         app.add_systems(
             Update,
-            (
-                camera::setup_camera
-                    .run_if(|cam: Query<&camera::DemoCamera>| cam.is_empty())
-                    .after(scene::attach_replicated_player_visuals),
-                camera::follow_camera_system.after(scene::attach_replicated_player_visuals),
-            ),
+            camera::setup_camera
+                .run_if(|cam: Query<&camera::DemoCamera>| cam.is_empty())
+                .after(scene::attach_replicated_player_visuals),
+        );
+        app.add_systems(
+            PostUpdate,
+            camera::follow_camera_system
+                .after(lightyear::frame_interpolation::FrameInterpolationSystems::Interpolate)
+                .after(RollbackSystems::VisualCorrection),
         );
         app.add_systems(
             Update,

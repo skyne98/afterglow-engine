@@ -1,0 +1,14 @@
+[package]
+name = "afterglow-lightyear-avian3d"
+version = "0.1.0"
+edition = "2024"
+description = "Lightyear-Avian3d integration for Avian 0.6 (Transform mode only)"
+
+[features]
+default = ["std"]
+std = []
+
+[dependencies]
+avian3d = { workspace = true }
+bevy = { workspace = true }
+lightyear = { workspace = true, features = ["replication", "prediction", "interpolation", "frame_interpolation"] }

@@ -192,6 +192,7 @@ dependencies = [
 name = "afterglow-engine"
 version = "0.1.0"
 dependencies = [
+ "afterglow-lightyear-avian3d",
  "anyhow",
  "avian3d 0.6.1",
  "bevy",
@@ -212,6 +213,15 @@ dependencies = [
  "tracing-subscriber",
  "web-time",
  "wgpu",
+]
+
+[[package]]
+name = "afterglow-lightyear-avian3d"
+version = "0.1.0"
+dependencies = [
+ "avian3d 0.6.1",
+ "bevy",
+ "lightyear",
 ]
 
 [[package]]

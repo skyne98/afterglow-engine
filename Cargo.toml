@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "crates/afterglow-engine",
+    "crates/afterglow-lightyear-avian3d",
     "crates/agx",
     "crates/delta",
     "crates/delta-lightyear",
@@ -33,6 +34,7 @@ lightyear = { version = "0.26.4", default-features = false }
 lightyear_transport = "0.26.4"
 lightyear_inputs_leafwing = "0.26.4"
 lightyear_avian3d = { version = "0.26.4", default-features = false }
+afterglow-lightyear-avian3d = { path = "crates/afterglow-lightyear-avian3d" }
 wgpu = "27"
 wasm-bindgen = "=0.2.117"
 web-time = "1"
