@@ -144,6 +144,7 @@ impl Plugin for AfterglowLightyearPlugin {
             // would then silently skip them. Register the observer here so
             // every incoming remote-client connection gets a sender.
             app.add_observer(add_replication_sender_on_link_of);
+            app.add_systems(PreUpdate, ensure_replication_channels);
         }
     }
 }
@@ -184,14 +185,14 @@ fn configure_input_defaults(
     );
 }
 
+/// Adds a [`ReplicationSender`] to any entity that gains a [`LinkOf`]
 /// component, so the server-side replication stream can route to it.
 ///
-/// Also attaches a [`Transport`] with senders/receivers for the
-/// replication/input channels ([`UpdatesChannel`] + [`ActionsChannel`] +
-/// Lightyear's native input channel). The
-/// `#[require(Transport)]` on `ReplicationSender` would otherwise insert
-/// a bare `Transport::default()` with no channels, and replication would
-/// silently no-op.
+/// Does NOT insert a `Transport` — if the entity already has one (e.g. from
+/// `NetcodeServerPlugin`), inserting a bare `Transport::default()` would
+/// overwrite it and break the netcode connection. Instead,
+/// [`ensure_replication_channels`] runs as a system to add the missing
+/// channel senders/receivers to the existing `Transport`.
 ///
 /// Skips entities that already have a `ReplicationSender` so the host's
 /// own loopback client (which the consumer plugin sets up directly) isn't
@@ -200,7 +201,6 @@ fn configure_input_defaults(
 fn add_replication_sender_on_link_of(
     trigger: bevy::prelude::On<bevy::prelude::Add, lightyear::prelude::LinkOf>,
     mut commands: bevy::prelude::Commands,
-    registry: bevy::prelude::Res<lightyear::prelude::ChannelRegistry>,
     existing_senders: bevy::prelude::Query<
         (),
         bevy::prelude::With<lightyear::prelude::ReplicationSender>,
@@ -213,24 +213,7 @@ fn add_replication_sender_on_link_of(
     if existing_senders.get(trigger.entity).is_ok() {
         return;
     }
-    let mut transport = Transport::default();
-    transport.add_sender_from_registry::<MetadataChannel>(&registry);
-    transport.add_receiver_from_registry::<MetadataChannel>(&registry);
-    transport.add_sender_from_registry::<UpdatesChannel>(&registry);
-    transport.add_receiver_from_registry::<UpdatesChannel>(&registry);
-    transport.add_sender_from_registry::<ActionsChannel>(&registry);
-    transport.add_receiver_from_registry::<ActionsChannel>(&registry);
-    if registry
-        .settings(lightyear_transport::channel::ChannelKind::of::<
-            lightyear::input::InputChannel,
-        >())
-        .is_some()
-    {
-        transport.add_sender_from_registry::<lightyear::input::InputChannel>(&registry);
-        transport.add_receiver_from_registry::<lightyear::input::InputChannel>(&registry);
-    }
     commands.entity(trigger.entity).insert((
-        transport,
         ReplicationSender::new(
             Duration::from_millis(16),
             SendUpdatesMode::SinceLastAck,
@@ -238,6 +221,49 @@ fn add_replication_sender_on_link_of(
         ),
         Name::from("RemoteClient"),
     ));
+}
+
+/// Ensures every `LinkOf` entity's `Transport` has senders/receivers for the
+/// replication and input channels. Runs every frame; is idempotent —
+/// `Transport::add_sender_from_registry` / `add_receiver_from_registry` are
+/// no-ops if the channel is already present.
+///
+/// This replaces the old observer approach that inserted a bare
+/// `Transport::default()`, which overwrote the `Transport` created by
+/// `NetcodeServerPlugin` for netcode links and broke the connection.
+#[cfg(feature = "lightyear")]
+fn ensure_replication_channels(
+    registry: Res<lightyear::prelude::ChannelRegistry>,
+    links: Query<
+        Entity,
+        (
+            With<lightyear::prelude::LinkOf>,
+            With<lightyear::prelude::ReplicationSender>,
+        ),
+    >,
+    mut transports: Query<&mut lightyear::prelude::Transport>,
+) {
+    use lightyear::prelude::*;
+    for entity in &links {
+        let Ok(mut transport) = transports.get_mut(entity) else {
+            continue;
+        };
+        transport.add_sender_from_registry::<MetadataChannel>(&registry);
+        transport.add_receiver_from_registry::<MetadataChannel>(&registry);
+        transport.add_sender_from_registry::<UpdatesChannel>(&registry);
+        transport.add_receiver_from_registry::<UpdatesChannel>(&registry);
+        transport.add_sender_from_registry::<ActionsChannel>(&registry);
+        transport.add_receiver_from_registry::<ActionsChannel>(&registry);
+        if registry
+            .settings(lightyear_transport::channel::ChannelKind::of::<
+                lightyear::input::InputChannel,
+            >())
+            .is_some()
+        {
+            transport.add_sender_from_registry::<lightyear::input::InputChannel>(&registry);
+            transport.add_receiver_from_registry::<lightyear::input::InputChannel>(&registry);
+        }
+    }
 }
 
 // --------------------------------------------------------------------------
