@@ -25,16 +25,6 @@ pub struct Highlighted;
 #[derive(Component)]
 pub struct RopeJointEntity(pub Entity);
 
-/// The owner identifier used by the rope system. On the host, this is the
-/// player's chosen name (e.g. "alice"). On the client, this is the
-/// `SessionMemberId` as a string (e.g. "2"). We use whichever matches the
-/// `PlayerBox.owner` field on the local entity.
-fn local_owner(player_name: &PlayerName, local_member: Option<&str>) -> String {
-    local_member
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| player_name.0.clone())
-}
-
 /// Toggle the rope on the nearest box when RopeToggle is released.
 pub fn toggle_rope(
     mut commands: Commands,
@@ -47,7 +37,7 @@ pub fn toggle_rope(
     let status = context.as_deref().map(|ctx| ctx.get_connection_status());
     let local_member = status.and_then(|s| s.local_member_owner());
 
-    let Some((_, player_transform, action)) = players.iter().find(|(pb, _, _)| {
+    let Some((player_box, player_transform, action)) = players.iter().find(|(pb, _, _)| {
         pb.owner == player_name.0 || local_member.as_deref() == Some(pb.owner.as_str())
     }) else {
         return;
@@ -57,7 +47,10 @@ pub fn toggle_rope(
         return;
     }
 
-    let owner = local_owner(&player_name, local_member.as_deref());
+    // Use the PlayerBox.owner from the found entity — this is the canonical
+    // identifier that on_roped_to_added, draw_ropes, and the other side's
+    // PlayerBox.owner will all match against.
+    let owner = player_box.owner.clone();
 
     // If we already have a box roped, release it
     if let Some((entity, _)) = roped.iter().find(|(_, r)| r.player_owner == owner) {
