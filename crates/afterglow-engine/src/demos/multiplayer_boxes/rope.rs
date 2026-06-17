@@ -11,6 +11,14 @@
 //!   despawned.
 //! - Joints are **not** replicated — they're derived from the `RopedTo` state
 //!   and created locally. This avoids entity-mapping issues across the network.
+//!
+//! Input handling:
+//! - On the **client**: uses `ButtonInput<KeyCode>` directly. The input delay
+//!   pipeline overwrites `ActionState` with delayed values, which destroys
+//!   `just_pressed` edges. Using keyboard directly gives instant response.
+//! - On the **server/host authority**: uses `ActionState` from the InputMessage
+//!   (set by Lightyear's server input receiver). The InputBuffer preserves
+//!   `just_pressed` edges correctly across the delay.
 
 use avian3d::prelude::*;
 use bevy::prelude::*;
@@ -19,26 +27,48 @@ use leafwing_input_manager::action_state::ActionState;
 use super::{protocol::*, scene::PlayerName};
 use crate::{input::AfterglowAction, network::AfterglowNetworkContext};
 
-/// Toggle the rope on the nearest box when RopeToggle is pressed.
+/// Toggle the rope on the nearest box when F is pressed.
 /// Runs on both client (predicted) and server (authoritative).
 pub fn toggle_rope(
     mut commands: Commands,
     player_name: Res<PlayerName>,
     context: Option<Res<AfterglowNetworkContext>>,
+    keyboard: Option<Res<ButtonInput<KeyCode>>>,
     players: Query<(&PlayerBox, &Transform, &ActionState<AfterglowAction>)>,
     boxes: Query<(Entity, &KinematicBox, &Transform), Without<RopedTo>>,
     roped: Query<(Entity, &RopedTo)>,
 ) {
-    let local_member = context
-        .as_deref()
-        .and_then(|ctx| ctx.get_connection_status().local_member_owner());
+    let status = context.as_deref().map(|ctx| ctx.get_connection_status());
+    let is_client = status.is_some_and(|s| s.is_client_only());
+    let is_authority = status.is_some_and(|s| s.runs_authority());
+
+    // Find the local player
+    let local_member = status.and_then(|s| s.local_member_owner());
     let Some((_, player_transform, action)) = players.iter().find(|(pb, _, _)| {
         pb.owner == player_name.0 || local_member.as_deref() == Some(pb.owner.as_str())
     }) else {
         return;
     };
 
-    if !action.just_pressed(&AfterglowAction::RopeToggle) {
+    // Determine if the toggle was pressed:
+    // - Client: check keyboard directly (bypasses input delay that destroys
+    //   just_pressed edges in ActionState)
+    // - Server/Host: check ActionState (set from InputMessage by server input
+    //   receiver)
+    let toggle_pressed = if is_client {
+        keyboard
+            .as_deref()
+            .is_some_and(|kb| kb.just_pressed(KeyCode::KeyF))
+    } else if is_authority {
+        action.just_pressed(&AfterglowAction::RopeToggle)
+    } else {
+        // No context (e.g., standalone test) — check keyboard
+        keyboard
+            .as_deref()
+            .is_some_and(|kb| kb.just_pressed(KeyCode::KeyF))
+    };
+
+    if !toggle_pressed {
         return;
     }
 
