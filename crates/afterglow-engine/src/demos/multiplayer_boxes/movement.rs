@@ -32,12 +32,12 @@ fn write_move_action(
 ) {
     for mut action_state in maps.iter_mut() {
         action_state.set_axis_pair(&AfterglowAction::Move, Vec2::new(-dir.x, dir.y));
-        // Lightyear restores delayed/rollback snapshots into `ActionState`.
-        // Keep Leafwing's update and fixed-update mirrors in sync after our
-        // manual write so the next buffer/send pass cannot serialize an older
-        // zero-input mirror after focus changes or timeline corrections.
-        action_state.set_update_state_from_state();
-        action_state.set_fixed_update_state_from_state();
+        // Do NOT call set_update_state_from_state() /
+        // set_fixed_update_state_from_state() here. Leafwing's
+        // InputManagerPlugin manages state mirrors via
+        // swap_to_fixed_update_state / swap_to_update in RunFixedMainLoop.
+        // Manually copying state breaks the separation and causes inputs to
+        // appear "stuck" when stale state leaks across update/fixed mirrors.
     }
 }
 
