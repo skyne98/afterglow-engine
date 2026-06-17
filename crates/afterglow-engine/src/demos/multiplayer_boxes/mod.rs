@@ -148,26 +148,29 @@ impl Plugin for MultiplayerBoxesPlugin {
                 .before(avian3d::schedule::PhysicsSystems::Prepare),
         );
 
-        // Rope mechanic: toggle in Update, joint sync in FixedUpdate
+        // Rope mechanic: toggle in PreUpdate (after Leafwing sets ActionState,
+        // before Lightyear's FixedPreUpdate overwrites it with delayed values).
+        // This is critical: Lightyear's get_action_state runs in FixedPreUpdate
+        // and overwrites ActionState with delayed values from InputBuffer,
+        // destroying just_released edges. Running in PreUpdate after Leafwing
+        // preserves the edge.
         app.add_systems(
-            Update,
-            rope::toggle_rope.run_if(|config: Res<AfterglowLightyearConfig>| {
-                matches!(config.role, LightyearRole::Host | LightyearRole::Client)
-            }),
+            PreUpdate,
+            rope::toggle_rope
+                .after(leafwing_input_manager::plugin::InputManagerSystem::Update)
+                .run_if(|config: Res<AfterglowLightyearConfig>| {
+                    matches!(config.role, LightyearRole::Host | LightyearRole::Client)
+                }),
         );
         app.add_systems(
             FixedUpdate,
             rope::sync_rope_joints.before(avian3d::schedule::PhysicsSystems::Prepare),
         );
 
-        // Local-only visual: highlight nearest box (runs on all sides)
-        // Runs after toggle_rope so it sees the updated RopedTo state.
+        // Local-only visual: highlight nearest box (runs on all sides in Update)
         app.add_systems(
             Update,
-            (
-                rope::highlight_nearest_box.after(rope::toggle_rope),
-                rope::update_highlight_colors.after(rope::highlight_nearest_box),
-            ),
+            (rope::highlight_nearest_box, rope::update_highlight_colors),
         );
     }
 }

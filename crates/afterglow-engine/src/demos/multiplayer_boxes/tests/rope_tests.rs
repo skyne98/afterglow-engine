@@ -83,7 +83,11 @@ fn toggle_rope_release_f_ropes_nearest_box() {
     app.world_mut().resource_mut::<PlayerName>().0 = "alice".to_string();
     let (_player, box_entity) = spawn_player_and_box(&mut app);
 
-    app.add_systems(Update, super::super::rope::toggle_rope);
+    app.add_systems(
+        PreUpdate,
+        super::super::rope::toggle_rope
+            .after(leafwing_input_manager::plugin::InputManagerSystem::Update),
+    );
 
     // Press F (not roped yet — toggle is on release)
     app.world_mut()
@@ -114,7 +118,11 @@ fn toggle_rope_release_f_again_releases_box() {
     app.world_mut().resource_mut::<PlayerName>().0 = "alice".to_string();
     let (_player, box_entity) = spawn_player_and_box(&mut app);
 
-    app.add_systems(Update, super::super::rope::toggle_rope);
+    app.add_systems(
+        PreUpdate,
+        super::super::rope::toggle_rope
+            .after(leafwing_input_manager::plugin::InputManagerSystem::Update),
+    );
 
     // Press then release F to rope
     app.world_mut()
@@ -173,7 +181,11 @@ fn toggle_rope_box_too_far_not_roped() {
         ))
         .id();
 
-    app.add_systems(Update, super::super::rope::toggle_rope);
+    app.add_systems(
+        PreUpdate,
+        super::super::rope::toggle_rope
+            .after(leafwing_input_manager::plugin::InputManagerSystem::Update),
+    );
 
     // Press then release F
     app.world_mut()
@@ -237,7 +249,11 @@ fn toggle_rope_skips_already_roped_box() {
         ))
         .id();
 
-    app.add_systems(Update, super::super::rope::toggle_rope);
+    app.add_systems(
+        PreUpdate,
+        super::super::rope::toggle_rope
+            .after(leafwing_input_manager::plugin::InputManagerSystem::Update),
+    );
 
     // Press then release F
     app.world_mut()
