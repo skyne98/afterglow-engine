@@ -27,5 +27,6 @@ pub fn default_gameplay_input_map() -> InputMap<AfterglowAction> {
     map.insert(AfterglowAction::Sprint, KeyCode::ShiftLeft);
     map.insert(AfterglowAction::Menu, KeyCode::Escape);
     map.insert(AfterglowAction::DebugToggle, KeyCode::F3);
+    map.insert(AfterglowAction::RopeToggle, KeyCode::KeyF);
     map
 }

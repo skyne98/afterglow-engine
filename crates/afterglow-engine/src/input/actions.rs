@@ -17,4 +17,7 @@ pub enum AfterglowAction {
     Sprint,
     Menu,
     DebugToggle,
+    /// Toggle rope/grab on the nearest box (click to attach, click again to
+    /// release).
+    RopeToggle,
 }

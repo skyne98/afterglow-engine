@@ -3,6 +3,7 @@ pub mod movement;
 pub mod network;
 pub mod playground;
 pub mod protocol;
+pub mod rope;
 pub mod scene;
 #[cfg(test)]
 pub mod tests;
@@ -140,9 +141,25 @@ impl Plugin for MultiplayerBoxesPlugin {
 
         app.add_systems(
             FixedUpdate,
-            movement::apply_movement.run_if(|config: Res<AfterglowLightyearConfig>| {
-                matches!(config.role, LightyearRole::Host | LightyearRole::Client)
-            }),
+            movement::apply_movement
+                .run_if(|config: Res<AfterglowLightyearConfig>| {
+                    matches!(config.role, LightyearRole::Host | LightyearRole::Client)
+                })
+                .before(avian3d::schedule::PhysicsSystems::Prepare),
+        );
+
+        // Rope mechanic: toggle and joint sync
+        app.add_systems(
+            FixedUpdate,
+            rope::toggle_rope
+                .run_if(|config: Res<AfterglowLightyearConfig>| {
+                    matches!(config.role, LightyearRole::Host | LightyearRole::Client)
+                })
+                .before(avian3d::schedule::PhysicsSystems::Prepare),
+        );
+        app.add_systems(
+            FixedUpdate,
+            rope::sync_rope_joints.before(avian3d::schedule::PhysicsSystems::Prepare),
         );
     }
 }

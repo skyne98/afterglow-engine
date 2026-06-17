@@ -9,6 +9,7 @@ use crate::input::AfterglowAction;
 pub fn register_demo_protocol(app: &mut App) {
     app.register_component::<PlayerBox>();
     app.register_component::<KinematicBox>();
+    app.register_component::<RopedTo>().add_prediction();
     app.register_component::<LinearVelocity>().add_prediction();
 
     // Register Transform as the single networked pose representation for this
