@@ -13,39 +13,42 @@
 //!   and created locally.
 //! - `highlight_nearest_box` is a local-only visual system. It does NOT touch
 //!   any replicated state — it only changes material color locally.
+//! - `toggle_rope` uses `ActionState` for input — NEVER bypasses it.
 
 use avian3d::prelude::*;
 use bevy::prelude::*;
+use leafwing_input_manager::action_state::ActionState;
 
 use super::{protocol::*, scene::PlayerName};
-use crate::network::AfterglowNetworkContext;
+use crate::{input::AfterglowAction, network::AfterglowNetworkContext};
 
-/// Toggle the rope on the nearest box when F is pressed.
-/// Uses `ButtonInput` directly for the edge detection — this is the correct
-/// approach for discrete actions that need instant local response.
-/// The `RopedTo` component is predicted, so the client sees the toggle
-/// immediately; the server validates and replicates back.
+/// Component marking a box as currently highlighted (nearest to local player).
+#[derive(Component)]
+pub struct Highlighted;
+
+/// Toggle the rope on the nearest box when RopeToggle is pressed.
+/// Runs in `Update` (not `FixedUpdate`) so `just_pressed` is available
+/// before Lightyear's input delay pipeline overwrites `ActionState`.
 pub fn toggle_rope(
     mut commands: Commands,
     player_name: Res<PlayerName>,
     context: Option<Res<AfterglowNetworkContext>>,
-    keyboard: Res<ButtonInput<KeyCode>>,
-    players: Query<(&PlayerBox, &Transform)>,
+    players: Query<(&PlayerBox, &Transform, &ActionState<AfterglowAction>)>,
     boxes: Query<(Entity, &KinematicBox, &Transform), Without<RopedTo>>,
     roped: Query<(Entity, &RopedTo)>,
 ) {
-    if !keyboard.just_pressed(KeyCode::KeyF) {
-        return;
-    }
-
     let status = context.as_deref().map(|ctx| ctx.get_connection_status());
     let local_member = status.and_then(|s| s.local_member_owner());
 
-    let Some((_, player_transform)) = players.iter().find(|(pb, _)| {
+    let Some((_, player_transform, action)) = players.iter().find(|(pb, _, _)| {
         pb.owner == player_name.0 || local_member.as_deref() == Some(pb.owner.as_str())
     }) else {
         return;
     };
+
+    if !action.just_pressed(&AfterglowAction::RopeToggle) {
+        return;
+    }
 
     let owner = local_member
         .map(|s| s.to_string())
@@ -118,10 +121,6 @@ pub fn sync_rope_joints(
 // ---------------------------------------------------------------------------
 // Local-only visual system: highlight the nearest box
 // ---------------------------------------------------------------------------
-
-/// Component marking a box as currently highlighted.
-#[derive(Component)]
-pub struct Highlighted;
 
 /// Highlight the nearest un-roped box to the local player.
 /// This is a **local-only** system — it does NOT touch any replicated state.

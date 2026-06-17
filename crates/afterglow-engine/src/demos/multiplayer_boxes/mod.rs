@@ -150,16 +150,16 @@ impl Plugin for MultiplayerBoxesPlugin {
 
         // Rope mechanic: toggle and joint sync
         app.add_systems(
-            FixedUpdate,
+            Update,
             rope::toggle_rope
                 .run_if(|config: Res<AfterglowLightyearConfig>| {
                     matches!(config.role, LightyearRole::Host | LightyearRole::Client)
-                })
-                .before(avian3d::schedule::PhysicsSystems::Prepare),
+                }),
         );
         app.add_systems(
             FixedUpdate,
-            rope::sync_rope_joints.before(avian3d::schedule::PhysicsSystems::Prepare),
+            rope::sync_rope_joints
+                .before(avian3d::schedule::PhysicsSystems::Prepare),
         );
 
         // Local-only visual: highlight nearest box (runs on all sides)

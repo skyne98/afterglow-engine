@@ -1,4 +1,5 @@
 mod input;
+mod rope_tests;
 #[cfg(feature = "lightyear")]
 pub mod net;
 
