@@ -3,10 +3,7 @@ use bevy::prelude::*;
 use leafwing_input_manager::action_state::ActionState;
 
 use super::*;
-use crate::{
-    demos::multiplayer_boxes::rope::Highlighted,
-    input::{AfterglowAction, default_gameplay_input_map},
-};
+use crate::input::{AfterglowAction, default_gameplay_input_map};
 
 fn rope_test_app() -> App {
     let mut app = App::new();
@@ -213,6 +210,17 @@ fn server_remote_action_state_release_ropes_nearest_box() {
 
     let roped = app.world().get::<RopedTo>(box_entity);
     assert_eq!(roped.map(|r| r.player_owner.as_str()), Some("2"));
+
+    // The server may observe a remote ActionState whose frame-local
+    // just_released flag remains true across multiple gameplay observations.
+    // A single physical release must not toggle the rope back off.
+    app.update();
+    assert_eq!(
+        app.world()
+            .get::<RopedTo>(box_entity)
+            .map(|r| r.player_owner.as_str()),
+        Some("2")
+    );
 }
 
 /// Box too far away is not roped.
@@ -451,173 +459,4 @@ fn sync_rope_joints_removes_joint_when_unroped() {
         .iter(app.world())
         .count();
     assert_eq!(count, 0, "joint should be despawned after unroping");
-}
-
-// ---------------------------------------------------------------------------
-// Highlight tests
-// ---------------------------------------------------------------------------
-
-/// Nearest box within range gets Highlighted component.
-#[test]
-fn highlight_nearest_box_adds_highlight() {
-    let mut app = rope_test_app();
-    app.world_mut().resource_mut::<PlayerName>().0 = "alice".to_string();
-
-    app.world_mut().spawn((
-        PlayerBox {
-            owner: "alice".to_string(),
-        },
-        Transform::from_xyz(0.0, 0.4, 0.0),
-    ));
-
-    let box1 = app
-        .world_mut()
-        .spawn((
-            KinematicBox {
-                id: 0,
-                initial_pos: Vec3::new(1.0, 0.5, 0.0),
-            },
-            Transform::from_xyz(1.0, 0.5, 0.0),
-        ))
-        .id();
-
-    let box2 = app
-        .world_mut()
-        .spawn((
-            KinematicBox {
-                id: 1,
-                initial_pos: Vec3::new(5.0, 0.5, 0.0),
-            },
-            Transform::from_xyz(5.0, 0.5, 0.0),
-        ))
-        .id();
-
-    app.add_systems(Update, super::super::rope::highlight_nearest_box);
-    app.update();
-
-    assert!(
-        app.world().get::<Highlighted>(box1).is_some(),
-        "nearest box (box1) should be highlighted"
-    );
-    assert!(
-        app.world().get::<Highlighted>(box2).is_none(),
-        "farther box (box2) should not be highlighted"
-    );
-}
-
-/// Box outside range is not highlighted.
-#[test]
-fn highlight_nearest_box_outside_range_not_highlighted() {
-    let mut app = rope_test_app();
-    app.world_mut().resource_mut::<PlayerName>().0 = "alice".to_string();
-
-    app.world_mut().spawn((
-        PlayerBox {
-            owner: "alice".to_string(),
-        },
-        Transform::from_xyz(0.0, 0.4, 0.0),
-    ));
-
-    let box_far = app
-        .world_mut()
-        .spawn((
-            KinematicBox {
-                id: 0,
-                initial_pos: Vec3::new(100.0, 0.5, 0.0),
-            },
-            Transform::from_xyz(100.0, 0.5, 0.0),
-        ))
-        .id();
-
-    app.add_systems(Update, super::super::rope::highlight_nearest_box);
-    app.update();
-
-    assert!(
-        app.world().get::<Highlighted>(box_far).is_none(),
-        "far box should not be highlighted"
-    );
-}
-
-/// Roped box is not highlighted (only un-roped boxes are highlighted).
-#[test]
-fn highlight_nearest_box_skips_roped() {
-    let mut app = rope_test_app();
-    app.world_mut().resource_mut::<PlayerName>().0 = "alice".to_string();
-
-    app.world_mut().spawn((
-        PlayerBox {
-            owner: "alice".to_string(),
-        },
-        Transform::from_xyz(0.0, 0.4, 0.0),
-    ));
-
-    let box_roped = app
-        .world_mut()
-        .spawn((
-            KinematicBox {
-                id: 0,
-                initial_pos: Vec3::new(1.0, 0.5, 0.0),
-            },
-            Transform::from_xyz(1.0, 0.5, 0.0),
-            RopedTo {
-                player_owner: "alice".to_string(),
-            },
-        ))
-        .id();
-
-    let box_free = app
-        .world_mut()
-        .spawn((
-            KinematicBox {
-                id: 1,
-                initial_pos: Vec3::new(2.0, 0.5, 0.0),
-            },
-            Transform::from_xyz(2.0, 0.5, 0.0),
-        ))
-        .id();
-
-    app.add_systems(Update, super::super::rope::highlight_nearest_box);
-    app.update();
-
-    assert!(
-        app.world().get::<Highlighted>(box_roped).is_none(),
-        "roped box should not be highlighted"
-    );
-    assert!(
-        app.world().get::<Highlighted>(box_free).is_some(),
-        "nearest free box should be highlighted"
-    );
-}
-
-/// Highlight clears when no boxes are in range.
-#[test]
-fn highlight_clears_when_no_boxes_in_range() {
-    let mut app = rope_test_app();
-    app.world_mut().resource_mut::<PlayerName>().0 = "alice".to_string();
-
-    app.world_mut().spawn((
-        PlayerBox {
-            owner: "alice".to_string(),
-        },
-        Transform::from_xyz(0.0, 0.4, 0.0),
-    ));
-
-    let box_far = app
-        .world_mut()
-        .spawn((
-            KinematicBox {
-                id: 0,
-                initial_pos: Vec3::new(100.0, 0.5, 0.0),
-            },
-            Transform::from_xyz(100.0, 0.5, 0.0),
-        ))
-        .id();
-
-    app.add_systems(Update, super::super::rope::highlight_nearest_box);
-    app.update();
-
-    assert!(
-        app.world().get::<Highlighted>(box_far).is_none(),
-        "far box should not be highlighted"
-    );
 }

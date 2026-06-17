@@ -1,6 +1,7 @@
 mod input;
 #[cfg(feature = "lightyear")]
 pub mod net;
+mod rope_highlight_tests;
 mod rope_tests;
 
 use bevy::prelude::*;

@@ -25,32 +25,48 @@ pub struct Highlighted;
 #[derive(Component)]
 pub struct RopeJointEntity(pub Entity);
 
-/// Server-side release-edge memory for remote client rope toggles. This still
-/// uses `ActionState`; it only reconstructs the release edge from the current
-/// pressed state because remote input buffers may not preserve Leafwing's
-/// frame-local `just_released` flag at the point the server gameplay runs.
+/// Release-edge memory for rope toggles. This still uses `ActionState`; it
+/// reconstructs the release edge from the stable pressed state instead of
+/// relying on Leafwing's frame-local `just_released` flag, which can be
+/// observed more than once by remote/server-side gameplay.
 #[derive(Component, Default)]
 pub struct RopeToggleWasPressed(pub bool);
 
+const HIGHLIGHT_SWITCH_MARGIN: f32 = 0.35;
+
 /// Toggle the rope on the nearest box when RopeToggle is released.
 pub fn toggle_rope(
-    commands: Commands,
+    mut commands: Commands,
     player_name: Res<PlayerName>,
     context: Option<Res<AfterglowNetworkContext>>,
-    players: Query<(&PlayerBox, &Transform, &ActionState<AfterglowAction>)>,
+    players: Query<(
+        Entity,
+        &PlayerBox,
+        &Transform,
+        &ActionState<AfterglowAction>,
+        Option<&RopeToggleWasPressed>,
+    )>,
     boxes: Query<(Entity, &KinematicBox, &Transform), Without<RopedTo>>,
     roped: Query<(Entity, &RopedTo)>,
 ) {
     let status = context.as_deref().map(|ctx| ctx.get_connection_status());
     let local_member = status.and_then(|s| s.local_member_owner());
 
-    let Some((player_box, player_transform, action)) = players.iter().find(|(pb, _, _)| {
-        pb.owner == player_name.0 || local_member.as_deref() == Some(pb.owner.as_str())
-    }) else {
+    let Some((entity, player_box, player_transform, action, previous)) =
+        players.iter().find(|(_, pb, _, _, _)| {
+            pb.owner == player_name.0 || local_member.as_deref() == Some(pb.owner.as_str())
+        })
+    else {
         return;
     };
 
-    if !action.just_released(&AfterglowAction::RopeToggle) {
+    let pressed = action.pressed(&AfterglowAction::RopeToggle);
+    let was_pressed = previous.is_some_and(|previous| previous.0);
+    let released = was_pressed && !pressed;
+    commands
+        .entity(entity)
+        .insert(RopeToggleWasPressed(pressed));
+    if !released {
         return;
     }
 
@@ -101,8 +117,7 @@ pub fn server_toggle_remote_ropes_from_inputs(
 
         let pressed = action.pressed(&AfterglowAction::RopeToggle);
         let was_pressed = previous.is_some_and(|previous| previous.0);
-        let released =
-            action.just_released(&AfterglowAction::RopeToggle) || (was_pressed && !pressed);
+        let released = was_pressed && !pressed;
         if released {
             apply_rope_toggle(
                 commands.reborrow(),
@@ -214,8 +229,10 @@ pub fn highlight_nearest_box(
         })
         .map(|(_, t)| t.translation);
 
+    let current: Vec<Entity> = highlighted.iter().collect();
+    let current_entity = current.first().copied();
     let desired = player_pos.and_then(|player_pos| {
-        boxes
+        let nearest = boxes
             .iter()
             .min_by(|(_, _, a), (_, _, b)| {
                 a.translation
@@ -224,8 +241,29 @@ pub fn highlight_nearest_box(
                     .unwrap_or(std::cmp::Ordering::Equal)
             })
             .and_then(|(entity, _, transform)| {
-                (transform.translation.distance(player_pos) <= ROPE_GRAB_RANGE).then_some(entity)
-            })
+                let distance = transform.translation.distance(player_pos);
+                (distance <= ROPE_GRAB_RANGE).then_some((entity, distance))
+            });
+
+        let current_distance = current_entity.and_then(|entity| {
+            boxes
+                .get(entity)
+                .ok()
+                .map(|(_, _, transform)| transform.translation.distance(player_pos))
+                .filter(|distance| *distance <= ROPE_GRAB_RANGE)
+        });
+
+        match (current_entity, current_distance, nearest) {
+            (Some(current), Some(current_distance), Some((nearest, nearest_distance)))
+                if current != nearest
+                    && nearest_distance + HIGHLIGHT_SWITCH_MARGIN < current_distance =>
+            {
+                Some(nearest)
+            }
+            (Some(current), Some(_), _) => Some(current),
+            (_, _, Some((nearest, _))) => Some(nearest),
+            _ => None,
+        }
     });
 
     let current: Vec<Entity> = highlighted.iter().collect();
