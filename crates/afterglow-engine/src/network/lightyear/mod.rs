@@ -5,6 +5,9 @@ pub mod link;
 
 pub mod protocol;
 
+#[cfg(all(test, feature = "lightyear"))]
+mod tests;
+
 #[cfg(feature = "lightyear")]
 pub use link::{
     AfterglowNetcodeConsumerPlugin, AfterglowSessionLightyearBridgePlugin, NetcodeClientParams,
@@ -291,67 +294,5 @@ fn ensure_replication_channels(
                 transport.add_receiver_from_registry::<lightyear::input::InputChannel>(&registry);
             }
         }
-    }
-}
-
-// --------------------------------------------------------------------------
-// Unit tests (cfg-gated)
-// --------------------------------------------------------------------------
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn config_defaults_are_sensible() {
-        let cfg = AfterglowLightyearConfig::default();
-        assert_eq!(cfg.role, LightyearRole::Client);
-        assert!(cfg.tick_rate > 0);
-        assert!(cfg.predicted_ticks > 0);
-        assert_eq!(cfg.input_delay_ticks, 2);
-        assert!(cfg.rebroadcast_inputs);
-    }
-
-    #[test]
-    fn config_is_a_resource() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .add_plugins(AfterglowLightyearPlugin);
-        assert!(app.world().contains_resource::<AfterglowLightyearConfig>());
-    }
-
-    #[test]
-    fn tick_duration_does_not_divide_by_zero() {
-        let mut cfg = AfterglowLightyearConfig::default();
-        cfg.tick_rate = 0;
-        assert_eq!(cfg.tick_rate.max(1), 1);
-    }
-
-    #[cfg(feature = "lightyear")]
-    #[test]
-    fn host_role_adds_lightyear_plugins_without_panicking() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .insert_resource(AfterglowLightyearConfig {
-                role: LightyearRole::Host,
-                ..Default::default()
-            });
-
-        app.add_plugins(AfterglowLightyearPlugin);
-    }
-
-    #[cfg(feature = "lightyear")]
-    #[test]
-    fn frame_interpolation_plugin_is_registered() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .insert_resource(AfterglowLightyearConfig::default());
-        app.add_plugins(AfterglowLightyearPlugin);
-        // FrameInterpolationPlugin<Transform> should be registered by the engine
-        assert!(
-            app.is_plugin_added::<lightyear::frame_interpolation::FrameInterpolationPlugin<
-                bevy::transform::components::Transform,
-            >>()
-        );
     }
 }
