@@ -224,13 +224,12 @@ fn add_replication_sender_on_link_of(
 }
 
 /// Ensures every `LinkOf` entity's `Transport` has senders/receivers for the
-/// replication and input channels. Runs every frame; is idempotent —
-/// `Transport::add_sender_from_registry` / `add_receiver_from_registry` are
-/// no-ops if the channel is already present.
+/// replication and input channels. Runs every frame.
 ///
-/// This replaces the old observer approach that inserted a bare
-/// `Transport::default()`, which overwrote the `Transport` created by
-/// `NetcodeServerPlugin` for netcode links and broke the connection.
+/// Only adds channels that are missing — `add_sender_from_registry` uses
+/// `HashMap::insert` which would overwrite existing channel state (acks,
+/// nacks, messages_sent) if called again, causing "Received an update
+/// message-id ack but we don't know the corresponding group id" errors.
 #[cfg(feature = "lightyear")]
 fn ensure_replication_channels(
     registry: Res<lightyear::prelude::ChannelRegistry>,
@@ -248,20 +247,36 @@ fn ensure_replication_channels(
         let Ok(mut transport) = transports.get_mut(entity) else {
             continue;
         };
-        transport.add_sender_from_registry::<MetadataChannel>(&registry);
-        transport.add_receiver_from_registry::<MetadataChannel>(&registry);
-        transport.add_sender_from_registry::<UpdatesChannel>(&registry);
-        transport.add_receiver_from_registry::<UpdatesChannel>(&registry);
-        transport.add_sender_from_registry::<ActionsChannel>(&registry);
-        transport.add_receiver_from_registry::<ActionsChannel>(&registry);
+        if !transport.has_sender::<MetadataChannel>() {
+            transport.add_sender_from_registry::<MetadataChannel>(&registry);
+        }
+        if !transport.has_receiver::<MetadataChannel>() {
+            transport.add_receiver_from_registry::<MetadataChannel>(&registry);
+        }
+        if !transport.has_sender::<UpdatesChannel>() {
+            transport.add_sender_from_registry::<UpdatesChannel>(&registry);
+        }
+        if !transport.has_receiver::<UpdatesChannel>() {
+            transport.add_receiver_from_registry::<UpdatesChannel>(&registry);
+        }
+        if !transport.has_sender::<ActionsChannel>() {
+            transport.add_sender_from_registry::<ActionsChannel>(&registry);
+        }
+        if !transport.has_receiver::<ActionsChannel>() {
+            transport.add_receiver_from_registry::<ActionsChannel>(&registry);
+        }
         if registry
             .settings(lightyear_transport::channel::ChannelKind::of::<
                 lightyear::input::InputChannel,
             >())
             .is_some()
         {
-            transport.add_sender_from_registry::<lightyear::input::InputChannel>(&registry);
-            transport.add_receiver_from_registry::<lightyear::input::InputChannel>(&registry);
+            if !transport.has_sender::<lightyear::input::InputChannel>() {
+                transport.add_sender_from_registry::<lightyear::input::InputChannel>(&registry);
+            }
+            if !transport.has_receiver::<lightyear::input::InputChannel>() {
+                transport.add_receiver_from_registry::<lightyear::input::InputChannel>(&registry);
+            }
         }
     }
 }
