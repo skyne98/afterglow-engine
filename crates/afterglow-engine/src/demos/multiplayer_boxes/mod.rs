@@ -161,6 +161,12 @@ impl Plugin for MultiplayerBoxesPlugin {
             FixedUpdate,
             rope::sync_rope_joints.before(avian3d::schedule::PhysicsSystems::Prepare),
         );
+
+        // Local-only visual: highlight nearest box (runs on all sides)
+        app.add_systems(
+            Update,
+            (rope::highlight_nearest_box, rope::update_highlight_colors),
+        );
     }
 }
 

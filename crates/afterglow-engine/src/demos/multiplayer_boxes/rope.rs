@@ -1,5 +1,5 @@
 //! Rope/grab mechanic: press F to attach a distance joint to the nearest box,
-//! press F again to release.
+//! press F again to release. Also highlights the nearest box.
 //!
 //! Architecture:
 //! - `RopedTo { player_owner }` is a replicated, predicted component on the box
@@ -10,67 +10,42 @@
 //!   the box to the owning player. When `RopedTo` is removed, the joint is
 //!   despawned.
 //! - Joints are **not** replicated — they're derived from the `RopedTo` state
-//!   and created locally. This avoids entity-mapping issues across the network.
-//!
-//! Input handling:
-//! - On the **client**: uses `ButtonInput<KeyCode>` directly. The input delay
-//!   pipeline overwrites `ActionState` with delayed values, which destroys
-//!   `just_pressed` edges. Using keyboard directly gives instant response.
-//! - On the **server/host authority**: uses `ActionState` from the InputMessage
-//!   (set by Lightyear's server input receiver). The InputBuffer preserves
-//!   `just_pressed` edges correctly across the delay.
+//!   and created locally.
+//! - `highlight_nearest_box` is a local-only visual system. It does NOT touch
+//!   any replicated state — it only changes material color locally.
 
 use avian3d::prelude::*;
 use bevy::prelude::*;
-use leafwing_input_manager::action_state::ActionState;
 
 use super::{protocol::*, scene::PlayerName};
-use crate::{input::AfterglowAction, network::AfterglowNetworkContext};
+use crate::network::AfterglowNetworkContext;
 
 /// Toggle the rope on the nearest box when F is pressed.
-/// Runs on both client (predicted) and server (authoritative).
+/// Uses `ButtonInput` directly for the edge detection — this is the correct
+/// approach for discrete actions that need instant local response.
+/// The `RopedTo` component is predicted, so the client sees the toggle
+/// immediately; the server validates and replicates back.
 pub fn toggle_rope(
     mut commands: Commands,
     player_name: Res<PlayerName>,
     context: Option<Res<AfterglowNetworkContext>>,
-    keyboard: Option<Res<ButtonInput<KeyCode>>>,
-    players: Query<(&PlayerBox, &Transform, &ActionState<AfterglowAction>)>,
+    keyboard: Res<ButtonInput<KeyCode>>,
+    players: Query<(&PlayerBox, &Transform)>,
     boxes: Query<(Entity, &KinematicBox, &Transform), Without<RopedTo>>,
     roped: Query<(Entity, &RopedTo)>,
 ) {
-    let status = context.as_deref().map(|ctx| ctx.get_connection_status());
-    let is_client = status.is_some_and(|s| s.is_client_only());
-    let is_authority = status.is_some_and(|s| s.runs_authority());
+    if !keyboard.just_pressed(KeyCode::KeyF) {
+        return;
+    }
 
-    // Find the local player
+    let status = context.as_deref().map(|ctx| ctx.get_connection_status());
     let local_member = status.and_then(|s| s.local_member_owner());
-    let Some((_, player_transform, action)) = players.iter().find(|(pb, _, _)| {
+
+    let Some((_, player_transform)) = players.iter().find(|(pb, _)| {
         pb.owner == player_name.0 || local_member.as_deref() == Some(pb.owner.as_str())
     }) else {
         return;
     };
-
-    // Determine if the toggle was pressed:
-    // - Client: check keyboard directly (bypasses input delay that destroys
-    //   just_pressed edges in ActionState)
-    // - Server/Host: check ActionState (set from InputMessage by server input
-    //   receiver)
-    let toggle_pressed = if is_client {
-        keyboard
-            .as_deref()
-            .is_some_and(|kb| kb.just_pressed(KeyCode::KeyF))
-    } else if is_authority {
-        action.just_pressed(&AfterglowAction::RopeToggle)
-    } else {
-        // No context (e.g., standalone test) — check keyboard
-        keyboard
-            .as_deref()
-            .is_some_and(|kb| kb.just_pressed(KeyCode::KeyF))
-    };
-
-    if !toggle_pressed {
-        return;
-    }
 
     let owner = local_member
         .map(|s| s.to_string())
@@ -125,7 +100,6 @@ pub fn sync_rope_joints(
         if jointed_boxes.contains(&box_entity) {
             continue;
         }
-        // Find the player entity matching the owner
         let Some(player_entity) = players
             .iter()
             .find(|(_, pb)| pb.owner == roped.player_owner)
@@ -138,5 +112,95 @@ pub fn sync_rope_joints(
             .with_limits(0.0, ROPE_MAX_DISTANCE)
             .with_compliance(ROPE_COMPLIANCE);
         commands.spawn((RopeJoint, joint));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Local-only visual system: highlight the nearest box
+// ---------------------------------------------------------------------------
+
+/// Component marking a box as currently highlighted.
+#[derive(Component)]
+pub struct Highlighted;
+
+/// Highlight the nearest un-roped box to the local player.
+/// This is a **local-only** system — it does NOT touch any replicated state.
+/// It only changes the material color locally. Both client and host run it.
+pub fn highlight_nearest_box(
+    mut commands: Commands,
+    player_name: Res<PlayerName>,
+    context: Option<Res<AfterglowNetworkContext>>,
+    players: Query<(&PlayerBox, &Transform)>,
+    boxes: Query<(Entity, &KinematicBox, &Transform), Without<RopedTo>>,
+    highlighted: Query<Entity, With<Highlighted>>,
+) {
+    let status = context.as_deref().map(|ctx| ctx.get_connection_status());
+    let local_member = status.and_then(|s| s.local_member_owner());
+
+    let player_pos = players
+        .iter()
+        .find(|(pb, _)| {
+            pb.owner == player_name.0 || local_member.as_deref() == Some(pb.owner.as_str())
+        })
+        .map(|(_, t)| t.translation);
+
+    // Clear all existing highlights
+    for entity in highlighted.iter() {
+        commands.entity(entity).remove::<Highlighted>();
+    }
+
+    let Some(player_pos) = player_pos else {
+        return;
+    };
+
+    // Find nearest un-roped box within grab range
+    let nearest = boxes.iter().min_by(|(_, _, a), (_, _, b)| {
+        a.translation
+            .distance(player_pos)
+            .partial_cmp(&b.translation.distance(player_pos))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    if let Some((entity, _, transform)) = nearest {
+        if transform.translation.distance(player_pos) <= ROPE_GRAB_RANGE {
+            commands.entity(entity).insert(Highlighted);
+        }
+    }
+}
+
+/// Updates the material color of highlighted boxes. Local-only — does not
+/// touch replicated state.
+pub fn update_highlight_colors(
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    boxes: Query<
+        (
+            &MeshMaterial3d<StandardMaterial>,
+            &super::scene::BoxMaterial,
+        ),
+        Without<Highlighted>,
+    >,
+    highlighted: Query<
+        (
+            &MeshMaterial3d<StandardMaterial>,
+            &super::scene::BoxMaterial,
+        ),
+        With<Highlighted>,
+    >,
+) {
+    // Restore non-highlighted boxes to their base color
+    for (mat_handle, box_mat) in boxes.iter() {
+        if let Some(mat) = materials.get_mut(mat_handle) {
+            mat.base_color = Color::hsla(box_mat.base_hue, 0.7, 0.5, 1.0);
+            mat.emissive = LinearRgba::BLACK;
+        }
+    }
+
+    // Make highlighted boxes glow brighter
+    for (mat_handle, box_mat) in highlighted.iter() {
+        if let Some(mat) = materials.get_mut(mat_handle) {
+            mat.base_color = Color::hsla(box_mat.base_hue, 0.9, 0.7, 1.0);
+            let glow = Color::hsla(box_mat.base_hue, 0.9, 0.5, 1.0).to_srgba();
+            mat.emissive = LinearRgba::new(glow.red * 0.3, glow.green * 0.3, glow.blue * 0.3, 1.0);
+        }
     }
 }

@@ -348,8 +348,15 @@ pub fn attach_replicated_kinematic_visuals(
         commands.entity(entity).insert((
             Mesh3d(meshes.add(Cuboid::from_size(Vec3::splat(KINEMATIC_BOX_SIZE * 2.0)))),
             MeshMaterial3d(materials.add(Color::hsla(hue, 0.7, 0.5, 1.0))),
+            BoxMaterial { base_hue: hue },
         ));
     }
+}
+
+/// Tracks the base hue of a box so we can restore it after highlighting.
+#[derive(Component)]
+pub struct BoxMaterial {
+    pub base_hue: f32,
 }
 
 fn spawn_visual_cuboid(
