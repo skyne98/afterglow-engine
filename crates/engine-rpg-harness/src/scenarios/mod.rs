@@ -35,4 +35,7 @@ pub mod native_input;
 pub mod prediction;
 
 #[cfg(test)]
+pub mod corners;
+
+#[cfg(test)]
 pub mod udp_scenarios;
