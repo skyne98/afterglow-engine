@@ -50,9 +50,7 @@ pub fn toggle_rope(
         return;
     }
 
-    let owner = local_member
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| player_name.0.clone());
+    let owner = player_name.0.clone();
 
     // If we already have a box roped, release it
     if let Some((entity, _)) = roped.iter().find(|(_, r)| r.player_owner == owner) {
