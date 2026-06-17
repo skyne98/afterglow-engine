@@ -17,7 +17,17 @@ pub fn collect_input(
     keyboard: Option<Res<ButtonInput<KeyCode>>>,
     mut input: ResMut<DemoInput>,
     mut maps: Query<&mut ActionState<AfterglowAction>, With<InputMap<AfterglowAction>>>,
+    rollback: Query<(), With<Rollback>>,
 ) {
+    // Do not write to ActionState during rollback replay. Lightyear replays
+    // FixedMain (including FixedPreUpdate) for each historical tick, and
+    // get_action_state restores the correct historical ActionState from the
+    // InputBuffer. But if the InputBuffer doesn't have a value for a given
+    // tick, the current keyboard state written here would leak through,
+    // corrupting that rollback tick and causing rare input "sticking".
+    if rollback.iter().next().is_some() {
+        return;
+    }
     let dir = keyboard
         .as_deref()
         .map(keyboard_direction)
