@@ -3,6 +3,8 @@ use bevy::prelude::*;
 use lightyear::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::core::identity::StableEntityId;
+
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct PlayerBox {
     pub owner: String,
@@ -10,7 +12,6 @@ pub struct PlayerBox {
 
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct KinematicBox {
-    pub id: u32,
     pub initial_pos: Vec3,
 }
 
@@ -19,8 +20,9 @@ pub struct KinematicBox {
 /// replicated `RopeLink` with the same deterministic hash.
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct RopeLink {
+    pub rope_id: StableEntityId,
     pub player_owner: String,
-    pub box_id: u32,
+    pub target: StableEntityId,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
@@ -35,13 +37,18 @@ pub enum RopeIntentOp {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct RopeIntent {
     pub op: RopeIntentOp,
-    pub box_id: Option<u32>,
+    pub rope_id: StableEntityId,
+    pub target: Option<StableEntityId>,
 }
 
 /// Marks a locally-spawned joint entity so it can be cleaned up when its
 /// owning [`RopeLink`] is removed.
 #[derive(Component)]
 pub struct RopeJoint;
+
+pub fn kinematic_box_hue(id: StableEntityId) -> f32 {
+    (id.as_hash64() % 360) as f32
+}
 
 pub const PLAYER_SPEED: f32 = 5.0;
 pub const PLAYER_SIZE: f32 = 0.4;

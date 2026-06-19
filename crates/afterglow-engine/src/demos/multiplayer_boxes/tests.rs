@@ -10,6 +10,8 @@ use bevy::prelude::*;
 use leafwing_input_manager::action_state::ActionState;
 use lightyear::prelude::Predicted;
 
+use crate::core::identity::StableEntityId;
+
 use super::{camera::*, movement::*, protocol::*, scene::*};
 
 fn test_app() -> App {
@@ -35,7 +37,6 @@ fn plugin_builds_and_registers_types() {
                 owner: "test".to_string(),
             },
             KinematicBox {
-                id: 0,
                 initial_pos: Vec3::ZERO,
             },
         ))
@@ -60,11 +61,8 @@ fn scene_entity_counts_are_correct() {
             Vec3::new(0.0, 0.5, -2.0),
             Vec3::new(0.0, 0.5, 2.0),
         ];
-        for (i, pos) in positions.iter().enumerate() {
-            commands.spawn(KinematicBox {
-                id: i as u32,
-                initial_pos: *pos,
-            });
+        for pos in positions.iter() {
+            commands.spawn(KinematicBox { initial_pos: *pos });
         }
     });
 
@@ -218,9 +216,9 @@ fn replicated_boxes_get_client_visuals() {
         .world_mut()
         .spawn((
             KinematicBox {
-                id: 3,
                 initial_pos: Vec3::new(2.0, 0.5, 0.0),
             },
+            StableEntityId::new(10_000),
             Transform::from_xyz(2.0, 0.5, 0.0),
             lightyear::prelude::Predicted,
         ))

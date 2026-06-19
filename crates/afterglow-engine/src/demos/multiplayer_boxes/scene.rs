@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use super::protocol::*;
 
 use crate::{
+    core::identity::{AutoStableEntityId, StableEntityId},
     input::default_gameplay_input_map,
     network::{
         AfterglowNetworkContext,
@@ -92,10 +93,8 @@ pub fn spawn_arena(
         let hue = (i as f32) * 45.0;
         let mat = materials.add(Color::hsla(hue, 0.7, 0.5, 1.0));
         commands.spawn((
-            KinematicBox {
-                id: i as u32,
-                initial_pos: *pos,
-            },
+            KinematicBox { initial_pos: *pos },
+            AutoStableEntityId,
             Mesh3d(meshes.add(Cuboid::from_size(Vec3::splat(KINEMATIC_BOX_SIZE * 2.0)))),
             MeshMaterial3d(mat),
             BoxMaterial { base_hue: hue },
@@ -342,10 +341,10 @@ pub fn attach_replicated_kinematic_visuals(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    boxes: Query<(Entity, &KinematicBox), (With<Predicted>, Without<Mesh3d>)>,
+    boxes: Query<(Entity, &StableEntityId), (With<KinematicBox>, With<Predicted>, Without<Mesh3d>)>,
 ) {
-    for (entity, box_) in &boxes {
-        let hue = (box_.id as f32) * 45.0;
+    for (entity, stable_id) in &boxes {
+        let hue = kinematic_box_hue(*stable_id);
         commands.entity(entity).insert((
             Mesh3d(meshes.add(Cuboid::from_size(Vec3::splat(KINEMATIC_BOX_SIZE * 2.0)))),
             MeshMaterial3d(materials.add(Color::hsla(hue, 0.7, 0.5, 1.0))),

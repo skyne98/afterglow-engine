@@ -6,11 +6,12 @@ use leafwing_input_manager::action_state::ActionState;
 use lightyear::prelude::*;
 
 use super::protocol::*;
-use crate::input::AfterglowAction;
+use crate::{core::identity::StableEntityId, input::AfterglowAction};
 
 pub struct RopeIntentChannel;
 
 pub fn register_demo_protocol(app: &mut App) {
+    app.register_component::<StableEntityId>().add_prediction();
     app.register_component::<PlayerBox>();
     app.register_component::<KinematicBox>();
     app.register_component::<RopeLink>().add_prediction();

@@ -137,6 +137,7 @@ pub fn run_multiplayer_boxes_demo(
 
     app.add_plugins((
         default_plugins(),
+        AfterglowCorePlugin,
         AfterglowLightyearPlugin,
         AfterglowSessionPlugin,
         AfterglowSessionLightyearBridgePlugin,

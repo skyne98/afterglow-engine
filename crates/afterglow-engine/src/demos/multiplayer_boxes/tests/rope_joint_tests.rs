@@ -1,6 +1,15 @@
 use bevy::prelude::*;
 
 use super::*;
+use crate::core::identity::StableEntityId;
+
+fn test_box_id() -> StableEntityId {
+    StableEntityId::new(10_000)
+}
+
+fn test_rope_id() -> StableEntityId {
+    StableEntityId::new(20_000)
+}
 
 fn rope_test_app() -> App {
     let mut app = App::new();
@@ -44,17 +53,18 @@ fn sync_rope_joints_creates_joint() {
         .world_mut()
         .spawn((
             KinematicBox {
-                id: 0,
                 initial_pos: Vec3::new(1.0, 0.5, 0.0),
             },
+            test_box_id(),
             Transform::from_xyz(1.0, 0.5, 0.0),
             avian3d::prelude::RigidBody::Dynamic,
         ))
         .id();
 
     app.world_mut().spawn(RopeLink {
+        rope_id: test_rope_id(),
         player_owner: "alice".to_string(),
-        box_id: 0,
+        target: test_box_id(),
     });
     app.update();
 
@@ -91,9 +101,9 @@ fn sync_rope_joints_removes_joint_when_unroped() {
 
     app.world_mut().spawn((
         KinematicBox {
-            id: 0,
             initial_pos: Vec3::new(1.0, 0.5, 0.0),
         },
+        test_box_id(),
         Transform::from_xyz(1.0, 0.5, 0.0),
         avian3d::prelude::RigidBody::Dynamic,
     ));
@@ -101,8 +111,9 @@ fn sync_rope_joints_removes_joint_when_unroped() {
     let link = app
         .world_mut()
         .spawn(RopeLink {
+            rope_id: test_rope_id(),
             player_owner: "alice".to_string(),
-            box_id: 0,
+            target: test_box_id(),
         })
         .id();
     app.update();

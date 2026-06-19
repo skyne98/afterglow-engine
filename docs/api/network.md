@@ -46,9 +46,13 @@ Raw Bevy `Entity` values are local handles only and must not appear in network
 payloads, save data, or cross-peer gameplay references.
 
 Systems that need durable identity should require or insert `StableEntityId`.
-Entities marked `RuntimeOnly` are excluded from automatic stable-ID assignment in
-helpers that perform that pass. The allocator skips IDs already authored in the
-world, so generated IDs do not collide with scene, persistence, or network IDs.
+Entities may also opt into engine-owned automatic assignment by adding
+`AutoStableEntityId`; the marker requires a `StableEntityId` component and the
+core plugin fills invalid ids from `StableIdAllocator` in `PreUpdate`. Entities
+marked `RuntimeOnly` are for local-only entities and should not be used as
+network or persistence targets. Generated IDs must be allocated through
+`StableIdAllocator` so predicted runtime ids can be reserved/confirmed without
+colliding with authored or replicated IDs.
 
 When `register_afterglow_lightyear_protocol(app)` is called with the `lightyear`
 feature enabled, `StableEntityId` is registered through Lightyear's component

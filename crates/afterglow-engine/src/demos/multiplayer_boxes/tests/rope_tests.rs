@@ -5,7 +5,10 @@ use bevy::prelude::*;
 use leafwing_input_manager::action_state::ActionState;
 
 use super::*;
-use crate::input::{AfterglowAction, default_gameplay_input_map};
+use crate::{
+    core::identity::StableEntityId,
+    input::{AfterglowAction, default_gameplay_input_map},
+};
 
 fn rope_test_app() -> App {
     let mut app = App::new();
@@ -19,6 +22,7 @@ fn rope_test_app() -> App {
     ));
     super::super::network::register_demo_protocol(&mut app);
     app.init_resource::<PlayerName>()
+        .init_resource::<crate::core::identity::StableIdAllocator>()
         .init_resource::<Assets<Mesh>>()
         .init_resource::<Assets<StandardMaterial>>()
         .insert_resource(crate::network::AfterglowNetworkContext::from_status(
@@ -59,9 +63,9 @@ fn spawn_player_and_box(app: &mut App) -> (Entity, Entity) {
         .world_mut()
         .spawn((
             KinematicBox {
-                id: 0,
                 initial_pos: Vec3::new(1.0, 0.5, 0.0),
             },
+            test_box_id(0),
             Transform::from_xyz(1.0, 0.5, 0.0),
             avian3d::prelude::RigidBody::Dynamic,
             LinearVelocity::ZERO,
@@ -74,11 +78,20 @@ fn spawn_player_and_box(app: &mut App) -> (Entity, Entity) {
     (player, box_entity)
 }
 
-fn rope_link_for_box(app: &mut App, box_id: u32) -> Option<RopeLink> {
+fn test_box_id(index: u32) -> StableEntityId {
+    StableEntityId::new(10_000 + u128::from(index))
+}
+
+fn test_rope_id(index: u32) -> StableEntityId {
+    StableEntityId::new(20_000 + u128::from(index))
+}
+
+fn rope_link_for_box(app: &mut App, box_index: u32) -> Option<RopeLink> {
+    let target = test_box_id(box_index);
     app.world_mut()
         .query::<&RopeLink>()
         .iter(app.world())
-        .find(|link| link.box_id == box_id)
+        .find(|link| link.target == target)
         .cloned()
 }
 
@@ -234,9 +247,9 @@ fn toggle_rope_box_too_far_not_roped() {
 
     app.world_mut().spawn((
         KinematicBox {
-            id: 0,
             initial_pos: Vec3::new(100.0, 0.5, 0.0),
         },
+        test_box_id(0),
         Transform::from_xyz(100.0, 0.5, 0.0),
         avian3d::prelude::RigidBody::Dynamic,
         LinearVelocity::ZERO,
@@ -284,23 +297,24 @@ fn toggle_rope_skips_already_roped_box() {
 
     app.world_mut().spawn((
         KinematicBox {
-            id: 0,
             initial_pos: Vec3::new(1.0, 0.5, 0.0),
         },
+        test_box_id(0),
         Transform::from_xyz(1.0, 0.5, 0.0),
         avian3d::prelude::RigidBody::Dynamic,
         LinearVelocity::ZERO,
     ));
     app.world_mut().spawn(RopeLink {
+        rope_id: test_rope_id(0),
         player_owner: "alice".to_string(),
-        box_id: 0,
+        target: test_box_id(0),
     });
 
     app.world_mut().spawn((
         KinematicBox {
-            id: 1,
             initial_pos: Vec3::new(2.0, 0.5, 0.0),
         },
+        test_box_id(1),
         Transform::from_xyz(2.0, 0.5, 0.0),
         avian3d::prelude::RigidBody::Dynamic,
         LinearVelocity::ZERO,

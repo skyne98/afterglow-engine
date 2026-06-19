@@ -6,7 +6,10 @@ use leafwing_input_manager::action_state::ActionState;
 use lightyear::prelude::*;
 
 use super::*;
-use crate::input::{AfterglowAction, default_gameplay_input_map};
+use crate::{
+    core::identity::{StableEntityId, StableIdAllocator},
+    input::{AfterglowAction, default_gameplay_input_map},
+};
 
 fn rope_test_app() -> App {
     let mut app = App::new();
@@ -20,6 +23,7 @@ fn rope_test_app() -> App {
     ));
     super::super::network::register_demo_protocol(&mut app);
     app.init_resource::<PlayerName>()
+        .init_resource::<crate::core::identity::StableIdAllocator>()
         .init_resource::<Assets<Mesh>>()
         .init_resource::<Assets<StandardMaterial>>()
         .insert_resource(crate::network::AfterglowNetworkContext::from_status(
@@ -31,11 +35,20 @@ fn rope_test_app() -> App {
     app
 }
 
-fn rope_link_for_box(app: &mut App, box_id: u32) -> Option<RopeLink> {
+fn test_box_id(index: u32) -> StableEntityId {
+    StableEntityId::new(10_000 + u128::from(index))
+}
+
+fn test_rope_id(index: u32) -> StableEntityId {
+    StableEntityId::new(20_000 + u128::from(index))
+}
+
+fn rope_link_for_box(app: &mut App, box_index: u32) -> Option<RopeLink> {
+    let target = test_box_id(box_index);
     app.world_mut()
         .query::<&RopeLink>()
         .iter(app.world())
-        .find(|link| link.box_id == box_id)
+        .find(|link| link.target == target)
         .cloned()
 }
 
@@ -80,9 +93,9 @@ fn client_local_release_without_sender_does_not_prespawn_rope_link() {
     ));
     app.world_mut().spawn((
         KinematicBox {
-            id: 0,
             initial_pos: Vec3::new(1.0, 0.5, 0.0),
         },
+        test_box_id(0),
         Transform::from_xyz(1.0, 0.5, 0.0),
         avian3d::prelude::RigidBody::Dynamic,
         LinearVelocity::ZERO,
@@ -148,9 +161,9 @@ fn client_local_release_sends_intent_and_prespawns_rope_link() {
         .world_mut()
         .spawn((
             KinematicBox {
-                id: 0,
                 initial_pos: Vec3::new(1.0, 0.5, 0.0),
             },
+            test_box_id(0),
             Transform::from_xyz(1.0, 0.5, 0.0),
             avian3d::prelude::RigidBody::Dynamic,
             LinearVelocity::ZERO,
@@ -220,9 +233,9 @@ fn client_local_detach_sends_intent_and_despawns_predicted_rope_link() {
     ));
     app.world_mut().spawn((
         KinematicBox {
-            id: 0,
             initial_pos: Vec3::new(1.0, 0.5, 0.0),
         },
+        test_box_id(0),
         Transform::from_xyz(1.0, 0.5, 0.0),
         avian3d::prelude::RigidBody::Dynamic,
         LinearVelocity::ZERO,
@@ -293,9 +306,9 @@ fn server_rope_intent_confirms_exact_client_selected_box() {
         .world_mut()
         .spawn((
             KinematicBox {
-                id: 0,
                 initial_pos: Vec3::new(1.0, 0.5, 0.0),
             },
+            test_box_id(0),
             Transform::from_xyz(1.0, 0.5, 0.0),
             avian3d::prelude::RigidBody::Dynamic,
             LinearVelocity::ZERO,
@@ -317,18 +330,23 @@ fn server_rope_intent_confirms_exact_client_selected_box() {
 fn apply_test_attach_intent(
     commands: Commands,
     players: Query<(&PlayerBox, &Transform)>,
-    boxes: Query<(&KinematicBox, &Transform)>,
+    boxes: Query<(&KinematicBox, &StableEntityId, &Transform)>,
     links: Query<(Entity, &RopeLink)>,
+    stable_ids: Query<&StableEntityId>,
+    mut allocator: ResMut<StableIdAllocator>,
 ) {
     super::super::rope::apply_authoritative_rope_intent(
         commands,
         "2".to_string(),
         RopeIntent {
             op: RopeIntentOp::Attach,
-            box_id: Some(0),
+            rope_id: test_rope_id(0),
+            target: Some(test_box_id(0)),
         },
         &players,
         &boxes,
         &links,
+        &stable_ids,
+        &mut allocator,
     );
 }

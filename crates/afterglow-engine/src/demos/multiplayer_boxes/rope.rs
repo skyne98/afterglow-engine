@@ -2,7 +2,8 @@
 //! release F again to request release. Also highlights the nearest free box.
 //!
 //! Architecture:
-//! - `RopeLink { player_owner, box_id }` is an entity-backed rope state.
+//! - `RopeLink { rope_id, player_owner, target }` is an entity-backed rope
+//!   state.
 //! - Clients may spawn `RopeLink + PreSpawned(hash).for_receiver(client_link)`
 //!   for immediate predicted feedback.
 //! - The server validates the same `ActionState` release and confirms by
@@ -20,6 +21,7 @@ pub use super::rope_visual::{
 };
 use super::{network::RopeIntentChannel, protocol::*, scene::PlayerName};
 use crate::{
+    core::identity::{StableEntityId, StableIdAllocator},
     input::AfterglowAction,
     network::{AfterglowNetworkContext, SessionLightyearLinks},
 };
@@ -50,15 +52,8 @@ enum RopeSpawnMode {
 }
 
 /// Deterministic hash used by Lightyear `PreSpawned` matching.
-pub fn rope_link_hash(player_owner: &str, box_id: u32) -> u64 {
-    let mut hash = 0xcbf2_9ce4_8422_2325u64;
-    for byte in player_owner.as_bytes() {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    hash ^= u64::from(box_id);
-    hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    hash
+pub fn rope_link_hash(rope_id: StableEntityId) -> u64 {
+    rope_id.as_hash64()
 }
 
 /// Local/host toggle path. Clients only pre-spawn a `RopeLink`; authority
@@ -76,8 +71,10 @@ pub fn toggle_rope(
         Has<Predicted>,
         Option<&RopeToggleLatch>,
     )>,
-    boxes: Query<(&KinematicBox, &Transform)>,
+    boxes: Query<(&KinematicBox, &StableEntityId, &Transform)>,
     links: Query<(Entity, &RopeLink)>,
+    stable_ids: Query<&StableEntityId>,
+    mut allocator: ResMut<StableIdAllocator>,
     mut intent_senders: Query<&mut MessageSender<RopeIntent>>,
 ) {
     let status = context.as_deref().map(|ctx| ctx.get_connection_status());
@@ -117,6 +114,8 @@ pub fn toggle_rope(
         player_transform.translation,
         &boxes,
         &links,
+        &stable_ids,
+        &mut allocator,
         mode,
         client_only.then_some(&mut intent_senders),
     );
@@ -130,8 +129,10 @@ pub fn server_apply_rope_intents(
     context: Option<Res<AfterglowNetworkContext>>,
     mut receivers: Query<(&RemoteId, &mut MessageReceiver<RopeIntent>)>,
     players: Query<(&PlayerBox, &Transform)>,
-    boxes: Query<(&KinematicBox, &Transform)>,
+    boxes: Query<(&KinematicBox, &StableEntityId, &Transform)>,
     links: Query<(Entity, &RopeLink)>,
+    stable_ids: Query<&StableEntityId>,
+    mut allocator: ResMut<StableIdAllocator>,
 ) {
     let status = context.as_deref().map(|ctx| ctx.get_connection_status());
     if !status.is_some_and(|status| status.runs_authority()) {
@@ -150,6 +151,8 @@ pub fn server_apply_rope_intents(
                 &players,
                 &boxes,
                 &links,
+                &stable_ids,
+                &mut allocator,
             );
         }
     }
@@ -185,12 +188,14 @@ fn apply_local_rope_toggle(
     mut commands: Commands,
     owner: String,
     player_pos: Vec3,
-    boxes: &Query<(&KinematicBox, &Transform)>,
+    boxes: &Query<(&KinematicBox, &StableEntityId, &Transform)>,
     links: &Query<(Entity, &RopeLink)>,
+    stable_ids: &Query<&StableEntityId>,
+    allocator: &mut StableIdAllocator,
     mode: RopeSpawnMode,
     intent_senders: Option<&mut Query<&mut MessageSender<RopeIntent>>>,
 ) {
-    if let Some((entity, _)) = links.iter().find(|(_, link)| link.player_owner == owner) {
+    if let Some((entity, link)) = links.iter().find(|(_, link)| link.player_owner == owner) {
         match mode {
             RopeSpawnMode::Authoritative => commands.entity(entity).despawn(),
             RopeSpawnMode::ClientPredicted { .. } => {
@@ -199,7 +204,8 @@ fn apply_local_rope_toggle(
                         senders,
                         RopeIntent {
                             op: RopeIntentOp::Detach,
-                            box_id: None,
+                            rope_id: link.rope_id,
+                            target: None,
                         },
                     );
                     if sent {
@@ -216,16 +222,17 @@ fn apply_local_rope_toggle(
 
     let nearest = boxes
         .iter()
-        .filter(|(box_data, _)| !box_has_link(box_data.id, links))
-        .min_by(|(_, a), (_, b)| {
+        .filter(|(_, stable_id, _)| !box_has_link(**stable_id, links))
+        .min_by(|(_, _, a), (_, _, b)| {
             a.translation
                 .distance(player_pos)
                 .partial_cmp(&b.translation.distance(player_pos))
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
 
-    if let Some((box_data, transform)) = nearest {
+    if let Some((_, target, transform)) = nearest {
         if transform.translation.distance(player_pos) <= ROPE_GRAB_RANGE {
+            let rope_id = allocate_rope_id(allocator, stable_ids);
             if matches!(mode, RopeSpawnMode::ClientPredicted { .. }) {
                 let Some(senders) = intent_senders else {
                     return;
@@ -234,14 +241,15 @@ fn apply_local_rope_toggle(
                     senders,
                     RopeIntent {
                         op: RopeIntentOp::Attach,
-                        box_id: Some(box_data.id),
+                        rope_id,
+                        target: Some(*target),
                     },
                 );
                 if !sent {
                     return;
                 }
             }
-            spawn_rope_link(commands, owner, box_data.id, mode);
+            spawn_rope_link(commands, rope_id, owner, *target, mode);
         }
     }
 }
@@ -263,30 +271,38 @@ pub(crate) fn apply_authoritative_rope_intent(
     owner: String,
     intent: RopeIntent,
     players: &Query<(&PlayerBox, &Transform)>,
-    boxes: &Query<(&KinematicBox, &Transform)>,
+    boxes: &Query<(&KinematicBox, &StableEntityId, &Transform)>,
     links: &Query<(Entity, &RopeLink)>,
+    stable_ids: &Query<&StableEntityId>,
+    allocator: &mut StableIdAllocator,
 ) {
     match intent.op {
         RopeIntentOp::Detach => {
-            if let Some((entity, _)) = links.iter().find(|(_, link)| link.player_owner == owner) {
+            if let Some((entity, _)) = links
+                .iter()
+                .find(|(_, link)| link.player_owner == owner && link.rope_id == intent.rope_id)
+            {
                 commands.entity(entity).despawn();
             }
         }
         RopeIntentOp::Attach => {
-            if links.iter().any(|(_, link)| link.player_owner == owner) {
+            if !intent.rope_id.is_valid()
+                || stable_ids.iter().any(|id| *id == intent.rope_id)
+                || links.iter().any(|(_, link)| link.player_owner == owner)
+            {
                 return;
             }
-            let Some(box_id) = intent.box_id else {
+            let Some(target) = intent.target else {
                 return;
             };
-            if box_has_link(box_id, links) {
+            if box_has_link(target, links) {
                 return;
             }
             let Some((_, player_transform)) = players.iter().find(|(pb, _)| pb.owner == owner)
             else {
                 return;
             };
-            let Some((_, box_transform)) = boxes.iter().find(|(b, _)| b.id == box_id) else {
+            let Some((_, _, box_transform)) = boxes.iter().find(|(_, id, _)| **id == target) else {
                 return;
             };
             if box_transform
@@ -294,7 +310,14 @@ pub(crate) fn apply_authoritative_rope_intent(
                 .distance(player_transform.translation)
                 <= ROPE_GRAB_RANGE
             {
-                spawn_rope_link(commands, owner, box_id, RopeSpawnMode::Authoritative);
+                allocator.reserve_at_least(intent.rope_id.as_raw().saturating_add(1));
+                spawn_rope_link(
+                    commands,
+                    intent.rope_id,
+                    owner,
+                    target,
+                    RopeSpawnMode::Authoritative,
+                );
             }
         }
     }
@@ -308,11 +331,18 @@ fn owner_from_remote_id(remote_id: &RemoteId) -> Option<String> {
     }
 }
 
-fn spawn_rope_link(mut commands: Commands, player_owner: String, box_id: u32, mode: RopeSpawnMode) {
-    let hash = rope_link_hash(&player_owner, box_id);
+fn spawn_rope_link(
+    mut commands: Commands,
+    rope_id: StableEntityId,
+    player_owner: String,
+    target: StableEntityId,
+    mode: RopeSpawnMode,
+) {
+    let hash = rope_link_hash(rope_id);
     let link = RopeLink {
+        rope_id,
         player_owner,
-        box_id,
+        target,
     };
     match mode {
         RopeSpawnMode::Authoritative => {
@@ -329,8 +359,16 @@ fn spawn_rope_link(mut commands: Commands, player_owner: String, box_id: u32, mo
     }
 }
 
-fn box_has_link(box_id: u32, links: &Query<(Entity, &RopeLink)>) -> bool {
-    links.iter().any(|(_, link)| link.box_id == box_id)
+fn allocate_rope_id(
+    allocator: &mut StableIdAllocator,
+    stable_ids: &Query<&StableEntityId>,
+) -> StableEntityId {
+    let reserved = stable_ids.iter().copied().collect();
+    allocator.allocate_excluding(&reserved)
+}
+
+fn box_has_link(target: StableEntityId, links: &Query<(Entity, &RopeLink)>) -> bool {
+    links.iter().any(|(_, link)| link.target == target)
 }
 
 /// Observer: when `RopeLink` is added, find the owning player and target box,
@@ -339,7 +377,7 @@ pub fn on_rope_link_added(
     trigger: On<Add, RopeLink>,
     links: Query<&RopeLink>,
     players: Query<(Entity, &PlayerBox), With<RigidBody>>,
-    boxes: Query<(Entity, &KinematicBox), With<RigidBody>>,
+    boxes: Query<(Entity, &StableEntityId), (With<KinematicBox>, With<RigidBody>)>,
     existing: Query<(), With<RopeJointEntity>>,
     mut commands: Commands,
 ) {
@@ -353,7 +391,7 @@ pub fn on_rope_link_added(
     else {
         return;
     };
-    let Some((box_entity, _)) = boxes.iter().find(|(_, b)| b.id == link.box_id) else {
+    let Some((box_entity, _)) = boxes.iter().find(|(_, id)| **id == link.target) else {
         return;
     };
 

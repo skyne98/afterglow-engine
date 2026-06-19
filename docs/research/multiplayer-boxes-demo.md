@@ -123,16 +123,18 @@ Client-side prediction:
   rollback/reconciliation machinery. Input transport is now Lightyear/Leafwing;
   no demo-local movement message remains. Discrete rope toggles are still driven
   from `ActionState<AfterglowAction>`, but ActionState remains pure input: it
-  never carries world state such as a box id. On release, the client derives a
-  separate `RopeIntent { op, box_id }` gameplay message for the selected target
-  and pre-spawns an entity-backed `RopeLink { player_owner, box_id }` with
-  Lightyear `PreSpawned`. The server validates that exact requested box id and
-  confirms by spawning a replicated `RopeLink` with the same deterministic hash.
-  If the RopeIntent sender is not ready, the client does not pre-spawn an
-  unconfirmable rope. The derived `DistanceJoint` and rope gizmo are local
-  presentation/physics effects of `RopeLink`, not replicated render assets. A
-  per-player release latch, minimum observed press duration, and short cooldown
-  reject repeated/stale observations of the same release.
+  never carries world state such as a target id. On release, the client derives
+  a separate `RopeIntent { op, rope_id, target }` gameplay message, where both
+  rope and target are generic engine `StableEntityId`s. The client pre-spawns an
+  entity-backed `RopeLink { rope_id, player_owner, target }` with Lightyear
+  `PreSpawned(rope_id.as_hash64())`. The server validates that exact requested
+  stable target and confirms by spawning a replicated `RopeLink` with the same
+  stable rope id and PreSpawned hash. If the RopeIntent sender is not ready, the
+  client does not pre-spawn an unconfirmable rope. The derived `DistanceJoint`
+  and rope gizmo are local presentation/physics effects of `RopeLink`, not
+  replicated render assets. A per-player release latch, minimum observed press
+  duration, and short cooldown reject repeated/stale observations of the same
+  release.
 - The runnable test verifies that the remote client receives replicated
   `PlayerBox` entities over real UDP/netcode, gains client-side presentation and
   local physics components on the predicted copy, and that client input moves the

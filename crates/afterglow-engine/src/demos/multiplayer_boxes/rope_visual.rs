@@ -1,14 +1,14 @@
 use bevy::prelude::*;
 
 use super::{protocol::*, rope::HIGHLIGHT_SWITCH_MARGIN, scene::PlayerName};
-use crate::network::AfterglowNetworkContext;
+use crate::{core::identity::StableEntityId, network::AfterglowNetworkContext};
 
 /// Component marking a box as currently highlighted (nearest to local player).
 #[derive(Component)]
 pub struct Highlighted;
 
-fn box_has_link(box_id: u32, links: &Query<(Entity, &RopeLink)>) -> bool {
-    links.iter().any(|(_, link)| link.box_id == box_id)
+fn box_has_link(target: StableEntityId, links: &Query<(Entity, &RopeLink)>) -> bool {
+    links.iter().any(|(_, link)| link.target == target)
 }
 
 /// Highlight the nearest unlinked box to the local player.
@@ -17,7 +17,7 @@ pub fn highlight_nearest_box(
     player_name: Res<PlayerName>,
     context: Option<Res<AfterglowNetworkContext>>,
     players: Query<(&PlayerBox, &Transform)>,
-    boxes: Query<(Entity, &KinematicBox, &Transform)>,
+    boxes: Query<(Entity, &KinematicBox, &StableEntityId, &Transform)>,
     links: Query<(Entity, &RopeLink)>,
     highlighted: Query<Entity, With<Highlighted>>,
 ) {
@@ -36,14 +36,14 @@ pub fn highlight_nearest_box(
     let desired = player_pos.and_then(|player_pos| {
         let nearest = boxes
             .iter()
-            .filter(|(_, box_data, _)| !box_has_link(box_data.id, &links))
-            .min_by(|(_, _, a), (_, _, b)| {
+            .filter(|(_, _, stable_id, _)| !box_has_link(**stable_id, &links))
+            .min_by(|(_, _, _, a), (_, _, _, b)| {
                 a.translation
                     .distance(player_pos)
                     .partial_cmp(&b.translation.distance(player_pos))
                     .unwrap_or(std::cmp::Ordering::Equal)
             })
-            .and_then(|(entity, _, transform)| {
+            .and_then(|(entity, _, _, transform)| {
                 let distance = transform.translation.distance(player_pos);
                 (distance <= ROPE_GRAB_RANGE).then_some((entity, distance))
             });
@@ -52,8 +52,8 @@ pub fn highlight_nearest_box(
             boxes
                 .get(entity)
                 .ok()
-                .and_then(|(_, box_data, transform)| {
-                    (!box_has_link(box_data.id, &links))
+                .and_then(|(_, _, stable_id, transform)| {
+                    (!box_has_link(*stable_id, &links))
                         .then_some(transform.translation.distance(player_pos))
                 })
                 .filter(|distance| *distance <= ROPE_GRAB_RANGE)
@@ -125,7 +125,7 @@ pub fn update_highlight_colors(
 pub fn draw_ropes(
     mut gizmos: Gizmos,
     players: Query<(&PlayerBox, &Transform)>,
-    boxes: Query<(&KinematicBox, &Transform)>,
+    boxes: Query<(&KinematicBox, &StableEntityId, &Transform)>,
     links: Query<&RopeLink>,
 ) {
     for link in links.iter() {
@@ -134,7 +134,8 @@ pub fn draw_ropes(
         else {
             continue;
         };
-        let Some((_, box_transform)) = boxes.iter().find(|(b, _)| b.id == link.box_id) else {
+        let Some((_, _, box_transform)) = boxes.iter().find(|(_, id, _)| **id == link.target)
+        else {
             continue;
         };
         gizmos.line(
