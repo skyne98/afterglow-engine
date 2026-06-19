@@ -31,6 +31,12 @@ use crate::{
 #[derive(Component)]
 pub struct RopeJointEntity(pub Entity);
 
+/// Local-only marker for a client-predicted rope detach. We keep the
+/// Lightyear-tracked `RopeLink` entity alive until the authoritative despawn
+/// arrives, but local gameplay/visuals treat it as already gone.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct LocalRopeDetachPending;
+
 /// Release-edge memory for rope toggles. This still uses `ActionState`; it
 /// reconstructs the release edge from stable pressed state instead of relying
 /// on Leafwing's frame-local `just_released` flag.
@@ -72,8 +78,9 @@ pub fn toggle_rope(
         Option<&RopeToggleLatch>,
     )>,
     boxes: Query<(&KinematicBox, &StableEntityId, &Transform)>,
-    links: Query<(Entity, &RopeLink)>,
+    links: Query<(Entity, &RopeLink, Has<LocalRopeDetachPending>)>,
     stable_ids: Query<&StableEntityId>,
+    joint_entities: Query<&RopeJointEntity>,
     mut allocator: ResMut<StableIdAllocator>,
     mut intent_senders: Query<&mut MessageSender<RopeIntent>>,
 ) {
@@ -115,6 +122,7 @@ pub fn toggle_rope(
         &boxes,
         &links,
         &stable_ids,
+        &joint_entities,
         &mut allocator,
         mode,
         client_only.then_some(&mut intent_senders),
@@ -189,13 +197,17 @@ fn apply_local_rope_toggle(
     owner: String,
     player_pos: Vec3,
     boxes: &Query<(&KinematicBox, &StableEntityId, &Transform)>,
-    links: &Query<(Entity, &RopeLink)>,
+    links: &Query<(Entity, &RopeLink, Has<LocalRopeDetachPending>)>,
     stable_ids: &Query<&StableEntityId>,
+    joint_entities: &Query<&RopeJointEntity>,
     allocator: &mut StableIdAllocator,
     mode: RopeSpawnMode,
     intent_senders: Option<&mut Query<&mut MessageSender<RopeIntent>>>,
 ) {
-    if let Some((entity, link)) = links.iter().find(|(_, link)| link.player_owner == owner) {
+    if let Some((entity, link, _)) = links
+        .iter()
+        .find(|(_, link, pending)| !*pending && link.player_owner == owner)
+    {
         match mode {
             RopeSpawnMode::Authoritative => commands.entity(entity).despawn(),
             RopeSpawnMode::ClientPredicted { .. } => {
@@ -209,10 +221,14 @@ fn apply_local_rope_toggle(
                         },
                     );
                     if sent {
-                        // Predict detach locally too. Otherwise the client's own
-                        // pre-spawned/confirmed RopeLink keeps blocking retries
-                        // until the authoritative despawn comes back.
-                        commands.entity(entity).try_despawn();
+                        // Predict detach locally without despawning the
+                        // Lightyear-tracked entity. Deleting a confirmed or
+                        // pre-spawned entity locally can leave the replication
+                        // receiver with server updates for a remote entity that
+                        // no longer exists. The marker makes gameplay/visuals
+                        // treat the link as gone until the authoritative
+                        // despawn arrives.
+                        mark_rope_detach_pending(&mut commands, entity, joint_entities);
                     }
                 }
             }
@@ -222,7 +238,7 @@ fn apply_local_rope_toggle(
 
     let nearest = boxes
         .iter()
-        .filter(|(_, stable_id, _)| !box_has_link(**stable_id, links))
+        .filter(|(_, stable_id, _)| !box_has_active_link(**stable_id, links))
         .min_by(|(_, _, a), (_, _, b)| {
             a.translation
                 .distance(player_pos)
@@ -371,17 +387,41 @@ fn box_has_link(target: StableEntityId, links: &Query<(Entity, &RopeLink)>) -> b
     links.iter().any(|(_, link)| link.target == target)
 }
 
+fn box_has_active_link(
+    target: StableEntityId,
+    links: &Query<(Entity, &RopeLink, Has<LocalRopeDetachPending>)>,
+) -> bool {
+    links
+        .iter()
+        .any(|(_, link, pending)| !pending && link.target == target)
+}
+
+fn mark_rope_detach_pending(
+    commands: &mut Commands,
+    entity: Entity,
+    joint_entities: &Query<&RopeJointEntity>,
+) {
+    if let Ok(rope_joint) = joint_entities.get(entity) {
+        commands.entity(rope_joint.0).try_despawn();
+    }
+    commands
+        .entity(entity)
+        .remove::<RopeJointEntity>()
+        .insert(LocalRopeDetachPending);
+}
+
 /// Observer: when `RopeLink` is added, find the owning player and target box,
 /// then spawn a local `DistanceJoint` between them.
 pub fn on_rope_link_added(
     trigger: On<Add, RopeLink>,
     links: Query<&RopeLink>,
+    pending: Query<(), With<LocalRopeDetachPending>>,
     players: Query<(Entity, &PlayerBox), With<RigidBody>>,
     boxes: Query<(Entity, &StableEntityId), (With<KinematicBox>, With<RigidBody>)>,
     existing: Query<(), With<RopeJointEntity>>,
     mut commands: Commands,
 ) {
-    if existing.get(trigger.entity).is_ok() {
+    if existing.get(trigger.entity).is_ok() || pending.get(trigger.entity).is_ok() {
         return;
     }
     let Ok(link) = links.get(trigger.entity) else {

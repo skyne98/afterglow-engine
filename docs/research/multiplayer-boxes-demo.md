@@ -51,7 +51,9 @@ pub struct KinematicBox {
 - Bevy mesh/material handles are not replicated. Clients attach local
   `Mesh3d`/`MeshMaterial3d` presentation components to replicated `PlayerBox`
   and `KinematicBox` entities, and spawn local arena floor/wall visuals plus
-  static local wall/floor colliders.
+  static local wall/floor colliders. Dynamic cube base colors are derived from
+  the replicated `StableEntityId` on both host and clients, so presentation does
+  not depend on local entity allocation or spawn-order-only hues.
 - Client-to-server movement uses Lightyear's native Leafwing input path for
   `AfterglowAction`: local `InputMap<AfterglowAction>` components produce
   `ActionState`s, Lightyear buffers them, sends them over `InputChannel`, and
@@ -130,11 +132,15 @@ Client-side prediction:
   `PreSpawned(rope_id.as_hash64())`. The server validates that exact requested
   stable target and confirms by spawning a replicated `RopeLink` with the same
   stable rope id and PreSpawned hash. If the RopeIntent sender is not ready, the
-  client does not pre-spawn an unconfirmable rope. The derived `DistanceJoint`
-  and rope gizmo are local presentation/physics effects of `RopeLink`, not
-  replicated render assets. A per-player release latch, minimum observed press
-  duration, and short cooldown reject repeated/stale observations of the same
-  release.
+  client does not pre-spawn an unconfirmable rope. Rope intents use an ordered
+  reliable channel because attach/detach operations are state transitions. On a
+  predicted detach, the client marks the local `RopeLink` as detach-pending and
+  removes derived local visuals/joints, but does not despawn the Lightyear
+  entity; the authoritative despawn remains responsible for deleting replicated
+  state. The derived `DistanceJoint` and rope gizmo are local
+  presentation/physics effects of `RopeLink`, not replicated render assets. A
+  per-player release latch, minimum observed press duration, and short cooldown
+  reject repeated/stale observations of the same release.
 - The runnable test verifies that the remote client receives replicated
   `PlayerBox` entities over real UDP/netcode, gains client-side presentation and
   local physics components on the predicted copy, and that client input moves the

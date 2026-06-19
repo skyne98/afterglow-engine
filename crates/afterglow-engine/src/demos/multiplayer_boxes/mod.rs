@@ -166,9 +166,11 @@ impl Plugin for MultiplayerBoxesPlugin {
             Update,
             (
                 rope::highlight_nearest_box,
+                scene::sync_kinematic_box_materials,
                 rope::update_highlight_colors,
                 rope::draw_ropes,
-            ),
+            )
+                .chain(),
         );
     }
 }

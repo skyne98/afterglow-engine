@@ -47,7 +47,9 @@ pub struct RopeIntent {
 pub struct RopeJoint;
 
 pub fn kinematic_box_hue(id: StableEntityId) -> f32 {
-    (id.as_hash64() % 360) as f32
+    // Spread sequential runtime IDs around the hue circle instead of clustering
+    // `1, 2, 3, ...` into nearly identical reds.
+    (id.as_hash64().wrapping_mul(137) % 360) as f32
 }
 
 pub const PLAYER_SPEED: f32 = 5.0;

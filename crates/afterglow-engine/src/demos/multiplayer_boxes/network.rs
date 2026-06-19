@@ -18,7 +18,7 @@ pub fn register_demo_protocol(app: &mut App) {
     app.register_message::<RopeIntent>()
         .add_direction(NetworkDirection::ClientToServer);
     app.add_channel::<RopeIntentChannel>(ChannelSettings {
-        mode: ChannelMode::UnorderedReliable(ReliableSettings::default()),
+        mode: ChannelMode::OrderedReliable(ReliableSettings::default()),
         send_frequency: Duration::ZERO,
         priority: 1.0,
     })

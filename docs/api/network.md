@@ -108,7 +108,15 @@ Do not treat Bevy render assets as network state. Replicate stable logical
 components and pose (`Transform`, game ids, gameplay state), then attach
 client-local presentation components such as `Mesh3d`, `MeshMaterial3d`, UI,
 cameras, and debug helpers from local prefab systems. The multiplayer boxes demo
-uses this pattern for replicated `PlayerBox` / `KinematicBox` entities.
+uses this pattern for replicated `PlayerBox` / `KinematicBox` entities; dynamic
+cube colors are local materials derived from replicated `StableEntityId`.
+
+Client gameplay commands that refer to world entities should carry
+`StableEntityId` values on a gameplay message, not in `ActionState`. Ordered
+state transitions such as rope attach/detach should use ordered reliable
+channels. If a predicted client-side detach needs immediate local feedback, mark
+local presentation/gameplay state as pending-detached while keeping the
+Lightyear-tracked entity alive until the authoritative despawn arrives.
 
 Simulation systems should be shared where possible. Branch on the global
 `AfterglowNetworkContext::get_connection_status()` result for side-specific

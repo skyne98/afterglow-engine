@@ -1,14 +1,23 @@
 use bevy::prelude::*;
 
-use super::{protocol::*, rope::HIGHLIGHT_SWITCH_MARGIN, scene::PlayerName};
+use super::{
+    protocol::*,
+    rope::{HIGHLIGHT_SWITCH_MARGIN, LocalRopeDetachPending},
+    scene::PlayerName,
+};
 use crate::{core::identity::StableEntityId, network::AfterglowNetworkContext};
 
 /// Component marking a box as currently highlighted (nearest to local player).
 #[derive(Component)]
 pub struct Highlighted;
 
-fn box_has_link(target: StableEntityId, links: &Query<(Entity, &RopeLink)>) -> bool {
-    links.iter().any(|(_, link)| link.target == target)
+fn box_has_link(
+    target: StableEntityId,
+    links: &Query<(Entity, &RopeLink, Has<LocalRopeDetachPending>)>,
+) -> bool {
+    links
+        .iter()
+        .any(|(_, link, pending)| !pending && link.target == target)
 }
 
 /// Highlight the nearest unlinked box to the local player.
@@ -18,7 +27,7 @@ pub fn highlight_nearest_box(
     context: Option<Res<AfterglowNetworkContext>>,
     players: Query<(&PlayerBox, &Transform)>,
     boxes: Query<(Entity, &KinematicBox, &StableEntityId, &Transform)>,
-    links: Query<(Entity, &RopeLink)>,
+    links: Query<(Entity, &RopeLink, Has<LocalRopeDetachPending>)>,
     highlighted: Query<Entity, With<Highlighted>>,
 ) {
     let status = context.as_deref().map(|ctx| ctx.get_connection_status());
@@ -126,9 +135,12 @@ pub fn draw_ropes(
     mut gizmos: Gizmos,
     players: Query<(&PlayerBox, &Transform)>,
     boxes: Query<(&KinematicBox, &StableEntityId, &Transform)>,
-    links: Query<&RopeLink>,
+    links: Query<(&RopeLink, Has<LocalRopeDetachPending>)>,
 ) {
-    for link in links.iter() {
+    for (link, pending) in links.iter() {
+        if pending {
+            continue;
+        }
         let Some((_, player_transform)) =
             players.iter().find(|(pb, _)| pb.owner == link.player_owner)
         else {

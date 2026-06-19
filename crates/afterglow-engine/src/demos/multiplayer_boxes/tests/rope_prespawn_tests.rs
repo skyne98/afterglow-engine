@@ -52,6 +52,15 @@ fn rope_link_for_box(app: &mut App, box_index: u32) -> Option<RopeLink> {
         .cloned()
 }
 
+fn active_rope_link_for_box(app: &mut App, box_index: u32) -> Option<RopeLink> {
+    let target = test_box_id(box_index);
+    app.world_mut()
+        .query::<(&RopeLink, Has<super::super::rope::LocalRopeDetachPending>)>()
+        .iter(app.world())
+        .find(|(link, pending)| !*pending && link.target == target)
+        .map(|(link, _)| link.clone())
+}
+
 fn prespawned_rope_link_count(app: &mut App) -> usize {
     app.world_mut()
         .query::<(&RopeLink, &PreSpawned)>()
@@ -196,10 +205,10 @@ fn client_local_release_sends_intent_and_prespawns_rope_link() {
     );
 }
 
-/// Client detach sends an intent and immediately clears the predicted RopeLink
-/// so the client is not blocked waiting for server correction.
+/// Client detach sends an intent and immediately hides the predicted RopeLink
+/// from local gameplay/visuals without deleting Lightyear's tracked entity.
 #[test]
-fn client_local_detach_sends_intent_and_despawns_predicted_rope_link() {
+fn client_local_detach_sends_intent_and_marks_rope_link_pending() {
     let mut app = rope_test_app();
     app.world_mut().resource_mut::<PlayerName>().0 = "bob".to_string();
     app.world_mut()
@@ -256,7 +265,7 @@ fn client_local_detach_sends_intent_and_despawns_predicted_rope_link() {
         .resource_mut::<ButtonInput<KeyCode>>()
         .release(KeyCode::KeyF);
     app.update();
-    assert!(rope_link_for_box(&mut app, 0).is_some());
+    assert!(active_rope_link_for_box(&mut app, 0).is_some());
 
     for _ in 0..12 {
         app.update();
@@ -272,9 +281,19 @@ fn client_local_detach_sends_intent_and_despawns_predicted_rope_link() {
     app.update();
 
     assert!(
-        rope_link_for_box(&mut app, 0).is_none(),
-        "client detach should immediately clear the predicted RopeLink"
+        active_rope_link_for_box(&mut app, 0).is_none(),
+        "client detach should immediately stop the RopeLink from blocking local gameplay"
     );
+    assert!(
+        rope_link_for_box(&mut app, 0).is_some(),
+        "client detach must keep Lightyear's RopeLink entity alive until authoritative despawn"
+    );
+    let pending_count = app
+        .world_mut()
+        .query_filtered::<Entity, With<super::super::rope::LocalRopeDetachPending>>()
+        .iter(app.world())
+        .count();
+    assert_eq!(pending_count, 1);
 }
 
 /// The authoritative side validates the client-selected box id and confirms

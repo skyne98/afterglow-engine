@@ -1,3 +1,4 @@
+mod color_tests;
 mod input;
 #[cfg(feature = "lightyear")]
 pub mod net;
@@ -471,7 +472,6 @@ fn apply_velocity_to_player_writes_linear_velocity() {
     use bevy::ecs::system::SystemState;
 
     let mut app = test_app();
-
     let entity = app
         .world_mut()
         .spawn((

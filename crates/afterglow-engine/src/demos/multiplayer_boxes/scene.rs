@@ -344,6 +344,9 @@ pub fn attach_replicated_kinematic_visuals(
     boxes: Query<(Entity, &StableEntityId), (With<KinematicBox>, With<Predicted>, Without<Mesh3d>)>,
 ) {
     for (entity, stable_id) in &boxes {
+        if !stable_id.is_valid() {
+            continue;
+        }
         let hue = kinematic_box_hue(*stable_id);
         commands.entity(entity).insert((
             Mesh3d(meshes.add(Cuboid::from_size(Vec3::splat(KINEMATIC_BOX_SIZE * 2.0)))),
@@ -357,6 +360,16 @@ pub fn attach_replicated_kinematic_visuals(
 #[derive(Component)]
 pub struct BoxMaterial {
     pub base_hue: f32,
+}
+
+pub fn sync_kinematic_box_materials(
+    mut boxes: Query<(&StableEntityId, &mut BoxMaterial), With<KinematicBox>>,
+) {
+    for (stable_id, mut box_mat) in &mut boxes {
+        if stable_id.is_valid() {
+            box_mat.base_hue = kinematic_box_hue(*stable_id);
+        }
+    }
 }
 
 fn spawn_visual_cuboid(
