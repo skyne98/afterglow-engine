@@ -7,14 +7,11 @@ edition = "2024"
 default = []
 multiplayer = ["lightyear"]
 lightyear = ["dep:lightyear", "dep:lightyear_transport", "dep:lightyear_inputs_leafwing", "dep:afterglow-lightyear-avian3d", "lightyear/std", "lightyear/client", "lightyear/server", "lightyear/replication", "lightyear/prediction", "lightyear/interpolation", "lightyear/frame_interpolation", "lightyear/leafwing", "lightyear/crossbeam", "lightyear/udp", "lightyear/netcode", "lightyear_inputs_leafwing/client", "lightyear_inputs_leafwing/server"]
-test-support = ["dep:wgpu"]
+test-support = ["dep:wgpu", "multiplayer"]
 
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
-rayon.workspace = true
-anyhow.workspace = true
-thiserror.workspace = true
 clap.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

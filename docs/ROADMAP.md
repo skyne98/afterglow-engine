@@ -57,12 +57,12 @@ as architectural gaps.
       entities on join, disconnect, respawn, possession, and reconnect. This is
       lifecycle orchestration only; Lightyear plus Leafwing already own
       entity-scoped action routing through `InputMap` / `ActionState`.
-- [ ] Promote or wrap the harness-proven `LightyearTestRig` into reusable
-      dev/demo local-server infrastructure, or explicitly document it as a
-      test-only crate. Include clean shutdown and deterministic fixed-tick
-      stepping. Decide whether `mock-rpg-network-tests::LightyearNetworkedRpg`
+- [x] ~~Decide whether `mock-rpg-network-tests::LightyearNetworkedRpg`
       should be consolidated into this path or kept as a separate regression
-      oracle.
+      oracle.~~ → retired and deleted: `mock-rpg-network-tests` was fully
+      superseded by `engine-rpg-harness` (107 tests covering rig, controller,
+      combat, physics, PreSpawned, lockstep, adversarial, stress, UDP, and
+      native input). The harness remains a test-only crate for now.
 - [ ] Wire shared console networking requests (`connect`, `server start/stop`,
       `net stats`, latency simulation) to real Lightyear links beyond the mock
       RPG Crossbeam oracle. Parsing and request emission exist; the missing
@@ -77,9 +77,9 @@ as architectural gaps.
       variants already exist in `engine-rpg-harness`.
 - [ ] Add Lightyear/fixed-delay benchmarks for 1k, 10k, and 100k entity
       pressure.
-- [ ] Decide the role of `delta` and `delta-lightyear`: integrate them into a
-      current engine path, move them to prototypes/research, or retire them.
-      `delta-lightyear` currently does not depend on Lightyear despite the name.
+- [x] ~~Decide the role of `delta` and `delta-lightyear`~~ → retired: both
+      were orphaned (no dependents) and `delta-lightyear` did not depend on
+      Lightyear despite the name. Crates and their workspace deps removed.
 
 ## Completed Combat/Controller Foundation
 

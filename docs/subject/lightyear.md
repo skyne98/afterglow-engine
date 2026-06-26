@@ -125,8 +125,9 @@ app.add_plugins(ServerPlugins { tick_duration: Duration::from_secs_f64(1.0 / 60.
 There is no single "Client" or "Server" singleton. Instead:
 
 - **Server entity**: spawn with `Server::default()`, add `Link`, `Transport`, `MessageManager`, etc. Trigger `Start` to start listening.
-- **Client entity**: spawn with `Client::default()`, `LocalId(PeerId::Local(N))`, `RemoteId(PeerId::Server)`, `Connected`, `Link`, `Transport`, `MessageManager`, `ReplicationReceiver`, `PredictionManager`. Trigger `Connect`.
-- **Per-client link on server** (`LinkOf`): When a new client connects, a new entity is spawned with `LinkOf`. Use an `On<Add, LinkOf>` observer to decorate it with `ReplicationSender`, `MessageSender<X>`, `ClientOf`, etc.
+- **Manual/in-memory client entity**: for local Crossbeam/raw links with no handshake, spawn with `Client::default()`, explicit `LocalId`, `RemoteId(PeerId::Server)`, `Connected`, `Link`, `Transport`, `MessageManager`, `ReplicationReceiver`, `PredictionManager`, then trigger `Connect` or mark linked as appropriate for the test transport.
+- **Netcode client entity**: spawn with `Client::default()`, `NetcodeClient`, IO/backend, `Link`, `Transport`, `MessageManager`, `ReplicationReceiver`, and `PredictionManager`, then trigger `Connect`. Do **not** preinsert `LocalId`, `RemoteId`, or `Connected`; `NetcodeClientPlugin` inserts them when the handshake succeeds.
+- **Per-client link on server** (`LinkOf`): When a new client connects, a new entity is spawned with `LinkOf`. Use an `On<Add, LinkOf>` observer/system to decorate it with `ReplicationSender`, `MessageSender<X>`, `ClientOf`, etc. Wait for/insert `ReplicationSender` before using the link as a `ControlledBy` owner.
 
 State machine components for links: `Unlinked` → `Linking` → `Linked`.
 State machine components for connections: `Disconnected` → `Connecting` → `Connected`.
@@ -165,13 +166,14 @@ app.register_message::<MyMessage>().add_direction(NetworkDirection::ClientToServ
 ```rust
 app.register_component::<MyComponent>()
     .add_prediction()
-    .add_linear_interpolation()
+    .add_interpolation_with(my_interpolation_fn)
+    .add_linear_correction_fn::<MyCorrection>()
     .add_map_entities();
 ```
 
 Chainable on `ComponentRegistration`:
 - `add_prediction()` — enable client-side prediction/rollback
-- `add_linear_interpolation()` — interpolate between received states (requires `Ease`)
+- `add_linear_interpolation()` / `add_interpolation_with(fn)` — install Lightyear interpolation systems for the component. Merely writing to `InterpolationRegistry::set_interpolation::<T>(fn)` only stores a lerp function and does not add the systems.
 - `add_linear_correction_fn()` — smooth rollback correction (no `Ease` needed)
 - `add_should_rollback(fn)` — custom rollback trigger comparator
 - `add_map_entities()` — register `MapEntities` for entity references
@@ -266,6 +268,8 @@ Three backends:
 3. **BEI** (`input_bei`): `bevy_enhanced_input` actions.
 
 Input is buffered in `FixedPreUpdate` → consumed in `FixedUpdate`. The `InputTimeline` tracks when to buffer inputs so they arrive on time at the server.
+
+For Leafwing input, `lightyear_inputs_leafwing::InputPlugin::<A>` registers Lightyear's native `InputChannel` and input messages. Do not also replicate `ActionState<A>` as a normal component just to move player commands; the input plugin owns tick-buffered send/rebroadcast/replay semantics. `ActionState` is still a local component on controlled entities and may be read by gameplay systems.
 
 ---
 
@@ -571,7 +575,7 @@ fn on_new_client(trigger: On<Add, LinkOf>, mut commands: Commands) {
             false,
         ),
         ClientOf,
-        MessageReceiver::<ActionState<AfterglowAction>>::default(),
+        MessageReceiver::<GameplayCommand>::default(),
         MessageSender::<ServerMessage>::default(),
     ));
 }
@@ -796,10 +800,10 @@ The `PreSpawned` hook (`register_prespawn_hashes` observer on `On<Add, PreSpawne
 
 ### Key differences from canonical patterns
 
-1. **Input as action-state messages in the harness**: Afterglow's current harness sends `ActionState<AfterglowAction>` over `MessageSender<ActionState<AfterglowAction>>`; the server maps the receiving link to the authoritative player entity. No player/entity ID is sent in the input payload. This validates the fixed-delay baseline without reintroducing rollback input replay.
+1. **Native Leafwing input is the primary player-input path**: Afterglow installs `lightyear_inputs_leafwing::InputPlugin::<AfterglowAction>`, writes local desired input in `FixedPreUpdate` / `InputSystems::WriteClientInputs`, and reads `ActionState<AfterglowAction>` in fixed gameplay. Do not register `ActionState` as a normal replicated component for player commands. The older manual `MessageSender<ActionState<AfterglowAction>>` path is retained only as a regression comparison.
 
-2. **Manual replication in `lightyear.rs`**: Components are synced by deserializing into `CombatSnapshot` and applying via `sync_component_set`, rather than Lightyear's automatic `Replicate`-driven replication. This gives deterministic control in tests but bypasses prediction/interpolation for these components.
+2. **Player actions do not get parallel gameplay intents**: Interactions such as rope attach/detach are derived from `ActionState` in fixed simulation on both the server and owning predicted client. Target ids, rope ids, and hit results are outcomes in replicated gameplay components, not client-sent command payloads and not fields inside `ActionState`.
 
-3. **No avian plugin in main test harness**: Afterglow's `lightyear.rs` does not use `LightyearAvianPlugin`. Avian rollback is tested separately in `prototype-physics-lightyear`.
+3. **Netcode peer ids are handshake-owned**: Direct UDP/netcode client entities are spawned without `LocalId`, `RemoteId`, or `Connected`; Lightyear inserts those after a successful netcode handshake. Crossbeam/in-process test links may still use explicit ids because there is no handshake.
 
-4. **Manual `Transport` channel setup**: Afterglow correctly calls `transport.add_sender_from_registry()` and `transport.add_receiver_from_registry()` for each channel — matching the crossbeam gotcha noted above.
+4. **Manual `Transport` channel setup**: Afterglow correctly calls `transport.add_sender_from_registry()` and `transport.add_receiver_from_registry()` for each game channel. For native input, the Leafwing input plugin registers `InputChannel`; transports only add it from the registry if present.

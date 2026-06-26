@@ -10,3 +10,7 @@
 trace-*.json
 *.trace
 .work-out/
+
+# opencode agent runtime
+.opencode/node_modules/
+.opencode/package-lock.json

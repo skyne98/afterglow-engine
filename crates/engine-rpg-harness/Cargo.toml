@@ -8,6 +8,5 @@ afterglow-engine = { path = "../afterglow-engine", features = ["multiplayer"] }
 bevy.workspace = true
 lightyear = { workspace = true, default-features = false, features = ["std", "client", "server", "crossbeam", "udp", "netcode", "replication", "prediction", "interpolation", "frame_interpolation", "leafwing"] }
 lightyear_transport = { workspace = true }
-lightyear_inputs_leafwing = { workspace = true }
 leafwing-input-manager.workspace = true
 serde.workspace = true

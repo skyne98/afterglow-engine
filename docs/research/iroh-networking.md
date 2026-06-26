@@ -115,11 +115,12 @@ The adapter should map Iroh public keys/connections to engine `PeerId`s and use
 `NetworkPlayerId`, replicated components/resources, command validation,
 rollback, prediction, interpolation, chunk interest, or reconnect baselines.
 
-## Legacy Afterglow Implementation
+## Legacy Afterglow Implementation (Removed)
 
-The old backend lives in `crates/afterglow-engine/src/network/iroh.rs` behind the
-optional native `iroh` feature. This implementation is slated for deletion during
-the Lightyear rewrite.
+The old backend lived in `crates/afterglow-engine/src/network/iroh.rs` behind the
+optional native `iroh` feature. This implementation has been deleted during the
+Lightyear rewrite; the file no longer exists. The notes below describe the
+pre-deletion shape for historical reference only.
 
 - `IrohTransport` implements the existing synchronous `NetworkTransport` trait.
 - A background Tokio worker owns the async Iroh `Endpoint` and `Connection`

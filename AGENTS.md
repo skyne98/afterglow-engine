@@ -12,7 +12,7 @@
 - Before writing tests for an algorithm or system, explicitly identify its edge-case envelope and build tests that box it in: cover normal behavior, boundaries, invalid inputs, ordering/reordering, duplication, deletion/removal, stale state, empty/singleton/maximal cases, and adversarial/security cases where relevant. Do not only test the average path; aim to cover 100% of the edge cases implied by the algorithm.
 - Write and extend benchmarks for performance-critical systems, especially rendering, networking, replication, streaming, physics, culling, and persistence; keep benchmark commands documented in docs/api/
 - Prototypes live in crates/prototypes/ with a `prototype-` prefix (e.g. `prototype-physics-tumble`), each as a standalone Cargo crate
-- Keep crates/mock-rpg-network-tests as a living integration harness: whenever networking, input, identity, simulation, world streaming, persistence, rollback, or gameplay authority changes, update the mock RPG scenarios so they track the modern engine instead of becoming legacy examples
+- Keep crates/engine-rpg-harness as the living integration harness: whenever networking, input, identity, simulation, world streaming, persistence, rollback, or gameplay authority changes, update the RPG scenarios so they track the modern engine instead of becoming legacy examples
 - Legacy code is bad; delete legacy code, embrace new code and systems
 - From time to time, spawn a subagent to look at the code and suggest cleanups — you might have left a mess
 - For research-heavy tasks or parallel synthesis, prefer `opencode` subagents with `opencode-go/deepseek-v4-flash`
@@ -22,6 +22,23 @@
 - KISS and YAGNI
 - No files above 500 LOC
 - Build system lives in build-system/ — use `bun run <command>` (e.g. `bun run native`, `bun run wasm`, `bun run check`)
+
+## Lightyear Correctness Rules
+
+- Install `ClientPlugins` / `ServerPlugins` before registering protocol channels, messages, and replicated components; register protocol before spawning Lightyear link/server/client entities.
+- For interpolated replicated components, use `.add_interpolation_with(...)` or `.add_linear_interpolation()` on the component registration. Do not rely on `InterpolationRegistry::set_interpolation()` alone; it stores a lerp function but does not add interpolation systems.
+- Use Lightyear's native Leafwing input plugin for player input. Do not register `ActionState<AfterglowAction>` as a normal replicated component for movement/combat commands, and do not manually register `lightyear::input::InputChannel`; the input plugin owns the channel and input-message protocol.
+- Keep `ActionState` pure input-device state only. Do not send a parallel gameplay intent for the same player action. World targets, selected entities, command ids, rope ids, hit results, etc. are derived by server/predicted fixed simulation from input + world state, then represented in replicated gameplay components using `StableEntityId`. Server authority systems must process received input for all authoritative controlled players, not only the host/local player.
+- Write custom client input in `FixedPreUpdate` in `InputSystems::WriteClientInputs`; read gameplay input in fixed simulation after Lightyear has restored/buffered the relevant tick. Guard input-writing systems during rollback when they would overwrite restored history.
+- Avoid targeting the same replicated entity to the same client as both `Predicted` and `Interpolated` unless the lifecycle is explicitly proven safe. Confirmed roots are authoritative anchors, not player-facing presentation. For the multiplayer boxes demo, player bodies are predicted to all clients and rendered from `Predicted` copies; cubes are also predicted to all clients for contact responsiveness.
+- If a predicted or remote entity needs between-fixed-frame smoothing, add `FrameInterpolate<Transform>` to that presentation/simulation entity in addition to installing `FrameInterpolationPlugin::<Transform>`.
+- Spawn `PreSpawned` predicted entities in the fixed simulation schedule (`FixedUpdate` / Lightyear FixedMain), not `PreUpdate`/`Update`, so their spawn tick and prediction history match server confirmation. For input-derived predicted entities, derive deterministic ids/hashes from data both server and predicted client know identically despite input delay (for the boxes rope: owner + selected target, not local processing tick), not from a client-sent command id.
+- Do not directly despawn Lightyear-tracked predicted/confirmed entities for local feedback. Use Lightyear's prediction despawn command for predicted despawns, and let authoritative despawn or `PreSpawned` timeout reconcile lifecycle.
+- For netcode/UDP clients, do not preinsert `LocalId`, `RemoteId`, or `Connected`; `NetcodeClientPlugin` inserts them after handshake. Explicit ids are only for manual/in-process links such as Crossbeam test transports with no handshake.
+- Server-side `ClientOf` links are only safe as replication/control owners after they have a `ReplicationSender`; gate `ControlledBy` binding on sender readiness.
+- Replicate logical state and canonical poses, not Bevy render assets. Attach meshes/materials/camera/highlights locally from replicated identity/state.
+- With Avian + Lightyear, use the engine's Transform-mode bridge (`afterglow-lightyear-avian3d`) and deterministic baseline (`enhanced-determinism`, no Avian `parallel`). Pick one canonical networked pose representation per stack.
+- Bevy tests using Lightyear plugins must call `finish()` and `cleanup()` after plugin registration before manually driving updates; Lightyear builds replication buffer systems during plugin finish.
 
 # Agent Role: Manager, Integrator, Verifier
 

@@ -1,11 +1,14 @@
 # Physics Lightyear Prediction And Optional Lag Compensation
 
 **Date:** 2026-05-20
-**Crates:** `engine-rpg-harness`, `prototype-physics-lightyear`, legacy `mock-rpg-network-tests`
+**Crates:** `engine-rpg-harness` (the retired `prototype-physics-lightyear` and legacy `mock-rpg-network-tests` are referenced below as historical context only)
 
 **Status:** PreSpawned prediction is part of the main harness. Physics lag
-compensation is prototype-only research and is not part of the current engine or
-`engine-rpg-harness` baseline.
+compensation was prototype-only research and is **not** part of the current
+engine or `engine-rpg-harness` baseline. **The `prototype-physics-lightyear`
+prototype has been retired** (its lag-compensation goal was proven and closed;
+see ROADMAP); the crate no longer exists and the `cargo test --package
+prototype-physics-lightyear` commands below are historical only.
 
 ## Goal
 
@@ -152,13 +155,13 @@ and entity matching.
 | `crates/engine-rpg-harness/src/scenarios/prespawned.rs` | `PreSpawned` entity confirmation, expiration, and correction. |
 | `crates/engine-rpg-harness/src/scenarios/doors.rs` | Door interaction prediction using `PreSpawned` entities. |
 | `crates/mock-rpg-network-tests/src/network_e2e/physics_grab.rs` | Legacy end-to-end `PreSpawned` interaction entity prediction with two clients and one authoritative server. |
-| `crates/prototypes/prototype-physics-lightyear/src/main.rs` | Minimal Lightyear Avian lag-compensation setup and historical ray-query tests. |
+| `crates/prototypes/prototype-physics-lightyear/src/main.rs` | (Retired) Minimal Lightyear Avian lag-compensation setup and historical ray-query tests. |
 | `docs/api/network.md` | Current network API surface and the documented prediction/reconciliation pattern. |
 | `docs/api/physics.md` | Current Avian integration notes and prototype verification commands. |
 
 ## Avian Lag Compensation
 
-`crates/prototypes/prototype-physics-lightyear` now tests
+`crates/prototypes/prototype-physics-lightyear` (now retired) tested
 `lightyear_avian3d::LagCompensationPlugin` with Avian colliders.
 
 The prototype app:
@@ -207,7 +210,7 @@ Focused checks:
 ```sh
 cargo test --package engine-rpg-harness prespawned -- --nocapture
 cargo test --package engine-rpg-harness doors -- --nocapture
-cargo test --package prototype-physics-lightyear lag_compensation -- --nocapture
+# prototype-physics-lightyear retired; lag-compensation proof is historical
 ```
 
 Broader checks already passed after the implementation:
@@ -215,5 +218,5 @@ Broader checks already passed after the implementation:
 ```sh
 cargo test --package engine-rpg-harness
 cargo test --package mock-rpg-network-tests
-cargo test --package prototype-physics-lightyear
+# prototype-physics-lightyear retired
 ```

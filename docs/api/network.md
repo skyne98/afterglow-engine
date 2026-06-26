@@ -111,12 +111,13 @@ cameras, and debug helpers from local prefab systems. The multiplayer boxes demo
 uses this pattern for replicated `PlayerBox` / `KinematicBox` entities; dynamic
 cube colors are local materials derived from replicated `StableEntityId`.
 
-Client gameplay commands that refer to world entities should carry
-`StableEntityId` values on a gameplay message, not in `ActionState`. Ordered
-state transitions such as rope attach/detach should use ordered reliable
-channels. If a predicted client-side detach needs immediate local feedback, mark
-local presentation/gameplay state as pending-detached while keeping the
-Lightyear-tracked entity alive until the authoritative despawn arrives.
+Player actions must have a single command source: Lightyear/Leafwing
+`ActionState`. Do not send a parallel gameplay intent for the same input edge.
+If an action affects a world entity, the server derives the target from the
+authoritative world at the delayed input tick; the owning client may predict the
+same derivation locally. The resulting gameplay state uses `StableEntityId` in
+replicated components, not in `ActionState` and not in a client-authored target
+message.
 
 Simulation systems should be shared where possible. Branch on the global
 `AfterglowNetworkContext::get_connection_status()` result for side-specific
@@ -127,9 +128,15 @@ For locally predicted entities, render Lightyear's `Predicted` copy and let
 Lightyear handle rollback/reconciliation and visual correction. The engine's
 `AfterglowLightyearPlugin` enables `FrameInterpolationPlugin::<Transform>` so
 predicted movement is smooth between fixed ticks; entities must also receive
-the `FrameInterpolate<Transform>` component. Remote actors should render
-through `Interpolated` copies where available; confirmed roots are state
-anchors, not player-facing presentation. Pick one canonical networked pose
+the `FrameInterpolate<Transform>` component. Protocols that want Lightyear
+entity interpolation must register the component with
+`.add_interpolation_with(...)` / `.add_linear_interpolation()`; directly calling
+`InterpolationRegistry::set_interpolation()` only stores a lerp function and
+does not install interpolation systems. Remote actors should render through
+`Interpolated` copies where available, but do not target the same replicated
+entity to the same client as both `Predicted` and `Interpolated` unless that
+lifecycle has explicit tests. Confirmed roots are state anchors, not
+player-facing presentation. Pick one canonical networked pose
 representation per physics stack. With Avian 0.6, the engine's
 `AfterglowPhysicsPlugin` automatically uses the `afterglow-lightyear-avian3d`
 fork bridge (Transform mode) when the `lightyear` feature is active, disabling
@@ -140,14 +147,16 @@ must exist in the local prediction world too; otherwise the actor can visually
 penetrate stale server/interpolated objects until correction arrives.
 
 Use Lightyear's native input stack for player commands. The engine's
-`AfterglowLightyearPlugin` owns the `InputChannel` registration, input
-rebroadcast, and `InputTimelineConfig` (fixed 2-tick delay by default,
-configurable via `AfterglowLightyearConfig.input_delay_ticks` and
-`AfterglowLightyearConfig.rebroadcast_inputs`). The plugin also enables
-`FrameInterpolationPlugin::<Transform>` for smooth between-tick motion. Games
-only need to add `InputMap<AfterglowAction>` + `ActionState<AfterglowAction>`
-on controlled entities and add `FrameInterpolate<Transform>` to predicted
-entities. Manual keyboard-to-action writes must run in `FixedPreUpdate` /
+`AfterglowLightyearPlugin` installs the Leafwing Lightyear input plugin, which
+owns `InputChannel` registration and tick-buffered input message semantics.
+Afterglow configures input rebroadcast and `InputTimelineConfig` (fixed 2-tick
+delay by default, configurable via
+`AfterglowLightyearConfig.input_delay_ticks` and
+`AfterglowLightyearConfig.rebroadcast_inputs`). Do not register
+`ActionState<AfterglowAction>` as a normal replicated component for player
+commands. Games only need to add `InputMap<AfterglowAction>` +
+`ActionState<AfterglowAction>` on controlled entities. Manual
+keyboard-to-action writes must run in `FixedPreUpdate` /
 `InputSystems::WriteClientInputs` so Lightyear buffers them before it restores
 delayed input snapshots.
 
@@ -210,7 +219,10 @@ Two test paths exercise UDP input delivery:
 ## Predicted Interaction Pattern
 
 Use Lightyear `PreSpawned` for local interaction entities that need instant
-feedback and server confirmation:
+feedback and server confirmation. Spawn them from the fixed simulation schedule
+(`FixedUpdate` / Lightyear FixedMain), not render/update-only schedules, so the
+recorded spawn tick and prediction history align with authoritative
+confirmation:
 
 ```rust
 commands.spawn((
@@ -223,7 +235,10 @@ The server computes the same deterministic hash only when it accepts the
 interaction. Matching server replication confirms the predicted entity; no match
 means Lightyear expires the local entity. Use this for grab links, projectiles,
 door-use cues, hit markers, damage numbers, beams, decals, and other reversible
-presentation when they need prediction.
+presentation when they need prediction. Do not directly despawn Lightyear-tracked
+predicted entities for local feedback; use Lightyear's prediction despawn
+command for predicted despawns and let authoritative despawn or PreSpawned
+timeout reconcile the entity.
 
 ## Regression Harness
 
@@ -463,7 +478,7 @@ look correct but replicated entity spawns will never be buffered.
 
 | `SessionTransport` | Bridge Action |
 |---|---|
-| `Local` | Despawns any previously tracked entities, then spawns a server entity (`Server::default()`, `Started`), a client link entity with Crossbeam transport, and a server link entity with Crossbeam transport. The client link carries `Client`, `LocalId`, `RemoteId(PeerId::Server)`, `Connected`, `Link`, `Linked`, `CrossbeamIo`, `Transport`, `MessageManager`, `ReplicationReceiver`, and `PredictionManager`. The server link carries `LinkOf { server }`, `ClientOf`, `LocalId(PeerId::Server)`, `RemoteId`, `Connected`, `Link`, `Linked`, `CrossbeamIo`, `Transport`, `MessageManager`, and `ReplicationSender::new(Duration::ZERO, SendUpdatesMode::SinceLastAck, false)`. |
+| `Local` | Despawns any previously tracked entities, then spawns a server entity (`Server::default()`, `Started`), a client link entity with Crossbeam transport, and a server link entity with Crossbeam transport. Because Crossbeam local links have no netcode handshake, the client link explicitly carries `Client`, `LocalId`, `RemoteId(PeerId::Server)`, `Connected`, `Link`, `Linked`, `CrossbeamIo`, `Transport`, `MessageManager`, `ReplicationReceiver`, and `PredictionManager`. The server link carries `LinkOf { server }`, `ClientOf`, `LocalId(PeerId::Server)`, `RemoteId`, `Connected`, `Link`, `Linked`, `CrossbeamIo`, `Transport`, `MessageManager`, and `ReplicationSender::new(Duration::ZERO, SendUpdatesMode::SinceLastAck, false)`. Direct UDP/netcode client links are different: the netcode plugin owns `LocalId`, `RemoteId`, and `Connected` insertion after handshake. |
 | `DirectUdp { host }` | Parses `host` into a `SocketAddr`. Writes `NetcodeClientParams` to `PendingNetcodeStartup` when the local `SessionMemberId` is a valid nonzero `u64`. If `AfterglowLightyearConfig.role` is `Host` or `Server`, also writes `NetcodeServerParams`. The bridge also reconciles DirectUdp startup from the current `SessionStatus` + `AfterglowSessionState` each frame, so startup is robust if `Joined` and `MemberJoined` arrive in either order. The `private_key` field in both param structs is populated from `AfterglowLightyearConfig.netcode_private_key` (default `[0u8; 32]` — a development placeholder that must be replaced before any real network deployment). If the host string cannot be parsed into a `SocketAddr`, no pending startup is written and no panic occurs. No link entities are spawned — a separate consumer should drain `PendingNetcodeStartup`. |
 
 ### Session Event Handling
@@ -496,12 +511,11 @@ The old `afterglow-engine-macros` crate and networking benches were also removed
 
 ## Lag Compensation
 
-Physics lag compensation is not part of the current engine path. The focused
-prototype in `crates/prototypes/prototype-physics-lightyear` proves that
-`lightyear_avian3d::LagCompensationPlugin` can query historical Avian colliders,
-but the production baseline does not use historical collider queries for spells,
-projectiles, or melee. Revisit this only if a future FPS/twitch fairness
-requirement needs client-view hit validation.
+Physics lag compensation is not part of the current engine path. It was
+explored in a now-retired prototype (which proved `lightyear_avian3d::LagCompensationPlugin`
+can query historical Avian colliders), but the production baseline does not use
+historical collider queries for spells, projectiles, or melee. Revisit this only
+if a future FPS/twitch fairness requirement needs client-view hit validation.
 
 ## Chunk Interest
 

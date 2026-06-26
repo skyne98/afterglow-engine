@@ -80,34 +80,25 @@ Physics bodies are regular Bevy entities. Chunk unloads despawn entities by
 stable ID/chunk membership, so Avian state is removed with the entity and does
 not require a separate physics-world cleanup path.
 
-## Lightyear Physics Prototypes
+## Lightyear Physics Prediction
 
-`crates/prototypes/prototype-physics-lightyear` is a focused proof area for
-Lightyear-backed physics prediction and optional Avian lag-compensation queries.
-The main engine runtime and `engine-rpg-harness` do not use physics lag
-compensation.
-
-| Prototype coverage | Notes |
-|---|---|
-| Pre-spawned interactions | `engine-rpg-harness` predicts interaction/cue entities with Lightyear `PreSpawned`, then verifies server confirmation either preserves them or expiration removes them when rejected. |
-| Lag-compensated collision queries | Prototype-only coverage: `LagCompensationPlugin` plus `LagCompensationHistory` records Avian collider history. Tests query historical ticks with `LagCompensationSpatialQuery` and `InterpolationDelay`. |
+Lightyear-backed physics prediction is proven in `engine-rpg-harness`, which
+predicts interaction/cue entities with Lightyear `PreSpawned` and verifies
+server confirmation either preserves them or expiration removes them when
+rejected.
 
 Server-authoritative spells and projectiles currently use fixed-tick
 deterministic simulation with fixed server input delay. The server derives hits
 from the authoritative state at the delayed tick; it does not rewind colliders or
-accept client hit reports. Historical query helpers are optional future research
-for FPS/twitch fairness only. Presentation that needs client prediction, such as
+accept client hit reports. Historical collider-query lag compensation was
+explored in a now-retired prototype and remains optional future research for
+FPS/twitch fairness only. Presentation that needs client prediction, such as
 hit markers or beam trails, should be represented as small `PreSpawned` cue
 entities so Lightyear handles confirmation, deduplication, and rejection cleanup.
-
-The prototype pins `avian3d` to `0.5` because `lightyear_avian3d 0.26.4` depends
-on Avian 0.5. The engine runtime uses its workspace Avian version independently
-because it does not depend on `lightyear_avian3d`.
 
 ## Verification Commands
 
 | Command | Purpose |
 |---|---|
-| `cargo test -p prototype-physics-lightyear` | Prototype-only Lightyear + Avian prediction and lag-compensation coverage. |
 | `cargo run --release --package prototype-physics-bench <body_count> <steps>` | Deterministic Avian throughput characterization. |
 | `cargo run --release --package prototype-physics-serialize <body_count>` | Physics snapshot serialize/restore round-trip verification. |

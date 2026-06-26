@@ -14,7 +14,6 @@ have been deleted.
 | `afterglow-engine` | Main engine library |
 | `agx` | Binary launcher |
 | `engine-rpg-harness` | Primary Lightyear RPG integration harness for fixed delay, prediction, combat, physics, PreSpawned, and transport scenarios |
-| `mock-rpg-network-tests` | Legacy/frozen regression oracle for older rollback-style scenarios |
 
 ## Target Module Shape
 
@@ -123,8 +122,6 @@ coverage:
 |---|---|
 | `cargo test -p afterglow-engine` | Engine unit and renderless app tests |
 | `cargo test -p engine-rpg-harness` | Primary Lightyear RPG integration harness |
-| `cargo test -p mock-rpg-network-tests` | Legacy/frozen mock RPG oracle |
-| `cargo test -p prototype-physics-lightyear` | Prototype-only Lightyear physics prediction and lag-compensation tests |
 | `bun run test` | Build-system test wrapper |
 
 ## Dependencies
@@ -142,5 +139,5 @@ Target networking/input dependencies:
 | `clap` | In-engine dev console command parsing and testable command API |
 
 Legacy optional `iroh`, `steamworks`, `ggrs`, and custom macro dependencies were
-removed. `tokio` and `bytes` remain workspace dependencies only where still
-needed by active crates or transitive feature work.
+removed. `tokio` and `bytes` are no longer direct workspace dependencies; they
+exist only as transitive deps via Lightyear/Bevy.

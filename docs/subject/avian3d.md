@@ -1,16 +1,18 @@
 # Avian3d — Engine Reference
 
-> Engine version: 0.6.1 · Also covers 0.5 legacy prototype usage · Bevy compat: 0.18 · License: MIT/Apache-2.0
+> Engine version: 0.6.1 · Bevy compat: 0.18 · License: MIT/Apache-2.0
 > Author: Joona Aalto · Repository: https://github.com/avianphysics/avian
 > Re-exports Parry as `avian3d::parry` when the `parry-f32` or `parry-f64` feature is enabled.
 
 ---
 
-> **Scope:** This reference was written against Avian 0.5.0 source and updated
-> for the engine's Avian 0.6.1 baseline. The public API used by Afterglow is
-> largely identical across these versions. Legacy 0.5-only details are marked for
-> `prototype-physics-lightyear` / `lightyear_avian3d`, which still pin Avian 0.5.
-> For the engine's current 0.6.1 integration, see
+> **Scope:** This reference was originally written against Avian 0.5.0 source
+> and updated for the engine's Avian 0.6.1 baseline. The legacy 0.5-only
+> prototype (`prototype-physics-lightyear`) and upstream `lightyear_avian3d`
+> crate have been retired; the engine now uses its own
+> `afterglow-lightyear-avian3d` bridge on Avian 0.6.1. 0.5-only details below
+> are kept as historical notes only. For the engine's current 0.6.1
+> integration, see
 > [`docs/research/avian3d-physics.md`](../research/avian3d-physics.md).
 
 ---
@@ -1281,11 +1283,11 @@ CollisionDiagnostics            // Broad/narrow phase timers
 
 12. **The `xpbd_joints` feature is required for joint support** (enabled by default in the standard feature set).
 
-### 19.2 Legacy Avian 0.5 Notes
+### 19.2 Legacy Avian 0.5 Notes (Historical)
 
-These details matter only for `prototype-physics-lightyear`, which remains pinned
-to Avian 0.5 through `lightyear_avian3d`. The engine and other prototypes use
-Avian 0.6.1.
+These details applied to the now-retired `prototype-physics-lightyear`, which
+pinned Avian 0.5 through upstream `lightyear_avian3d`. The engine and remaining
+prototypes use Avian 0.6.1. Kept for historical reference only.
 
 - 0.5.0 uses `parry3d 0.25`; 0.6.1 uses `parry3d 0.26`
 - The custom constraint API (`XpbdConstraint`, `EntityConstraint`, `JointGraphPlugin`) is explicitly documented as unstable: "prone to large sweeping changes and breakage"
@@ -1337,7 +1339,7 @@ Avian 0.6.1.
 ## 20. Integration with Afterglow
 
 - Afterglow uses Avian 0.6.1 with f32 precision and workspace features `3d`, `f32`, `parry-f32`, `xpbd_joints`, and `parallel`
-- The `serialize` feature is used in `prototype-physics-serialize` (Avian 0.6.1) and `prototype-physics-lightyear` (Avian 0.5 legacy) for save/load and lag-compensation research
+- The `serialize` feature is used in `prototype-physics-serialize` (Avian 0.6.1) for save/load research. The retired `prototype-physics-lightyear` (Avian 0.5 legacy) previously also used it for lag-compensation research.
 - The `enhanced-determinism` feature is available but our benchmarks show same-machine determinism without it
 - Character controller patterns should follow the dynamic approach (simpler, more robust)
 - Joints are separate entities — Afterglow's snapshot system must handle joint→body reference mapping
