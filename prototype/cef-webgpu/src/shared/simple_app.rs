@@ -9,18 +9,62 @@
 
 use cef::*;
 use std::cell::RefCell;
+use std::sync::OnceLock;
 
 use super::simple_handler::*;
 
-/// The WebGPU demo HTML, embedded at compile time from `resources/index.html`.
+/// The WebGPU demo HTML + the latest Three.js WebGPU build, embedded at
+/// compile time from `resources/`.
 const DEMO_HTML: &str = include_str!("../../resources/index.html");
+const THREE_CORE: &[u8] = include_bytes!("../../resources/three.core.js");
+const THREE_WEBGPU: &[u8] = include_bytes!("../../resources/three.webgpu.js");
 
-/// Write the demo HTML to a temp file and return a `file://` URL to it.
+/// Start a tiny localhost HTTP server serving the embedded demo + Three.js
+/// modules, and return its URL.
+///
+/// Why not `file://`? ES-module `<script type=module>` imports are blocked by
+/// CORS from `file:` origins ("file: URLs are treated as unique security
+/// origins"), so Three.js's `import ... from './three.core.js'` fails. Serving
+/// over `http://127.0.0.1` gives a same-origin, secure-context page where both
+/// module imports and WebGPU work.
 fn demo_url() -> String {
-    let dir = std::env::temp_dir();
-    let path = dir.join("afterglow_cef_webgpu.html");
-    let _ = std::fs::write(&path, DEMO_HTML);
-    format!("file://{}", path.display())
+    static PORT: OnceLock<u16> = OnceLock::new();
+    let port = *PORT.get_or_init(|| serve_assets());
+    format!("http://127.0.0.1:{port}/index.html")
+}
+
+/// Minimal single-threaded HTTP server for the embedded assets. Good enough for
+/// a prototype (one request at a time from the local renderer).
+fn serve_assets() -> u16 {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind asset server");
+    let port = listener.local_addr().expect("local_addr").port();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let mut buf = [0u8; 4096];
+            let _ = stream.read(&mut buf);
+            let req = String::from_utf8_lossy(&buf);
+            let path = req
+                .lines()
+                .next()
+                .and_then(|l| l.split_whitespace().nth(1))
+                .unwrap_or("/");
+            let (mime, body): (&str, &[u8]) = match path {
+                "/" | "/index.html" => ("text/html; charset=utf-8", DEMO_HTML.as_bytes()),
+                "/three.core.js" => ("text/javascript", THREE_CORE),
+                "/three.webgpu.js" => ("text/javascript", THREE_WEBGPU),
+                _ => ("text/plain", b"not found"),
+            };
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: {mime}\r\nContent-Length: {}\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(head.as_bytes());
+            let _ = stream.write_all(body);
+        }
+    });
+    port
 }
 
 wrap_window_delegate! {

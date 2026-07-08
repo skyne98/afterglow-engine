@@ -6,17 +6,19 @@
 renders a WebGPU triangle.
 
 **Result: ✅ WebGPU works through cef-rs on Linux.** Confirmed via JS console
-forwarding to stderr:
+forwarding to stderr — first with a hand-written WebGPU triangle, then with
+**Three.js r185 (latest) WebGPU renderer**:
 
 ```
-[console] navigator.gpu present ✓
-[console] adapter: nvidia / ampere / ?        # real NVIDIA Ampere GPU
-[console] device acquired ✓ features: core-features-and-limits
-[console] rendering ✓ — WebGPU is working through cef-rs on this platform.
+[console] [three] THREE.REVISION = 185
+[console] [three] backend = WebGPUBackend  (WebGPU ✓)   # not a WebGL fallback
+[console] [three] adapter = nvidia/ampere/                # real GPU via Dawn→Vulkan
+[console] [three] rendering Three.js WebGPU scene ✓
 ```
 
-Dawn → Vulkan → real NVIDIA GPU. The triangle renders. The stack
-(Rust + cef-rs + CEF/Chromium + WebGPU) is viable on Linux.
+Dawn → Vulkan → real NVIDIA GPU. Three.js `MeshStandardNodeMaterial` (TSL node
+pipeline) renders. The full stack — Rust + cef-rs + CEF/Chromium 149 +
+Three.js WebGPU + real GPU — is viable on Linux.
 
 ---
 
@@ -90,6 +92,19 @@ To see WebGPU init status in the terminal, the prototype adds a
 `DisplayHandler::on_console_message` that prints JS `console.log` to stderr,
 and the demo HTML `console.log`s its milestones. (CEF does not forward
 `console.log` to the host stderr by default.)
+
+### 6. ⚠️ `file://` blocks ES modules — serve over `http://localhost` instead
+WebGPU itself works from a `file://` page (file URLs are a secure context in
+Chromium), **but** ES-module `<script type=module>` imports are blocked by CORS
+from `file:` origins ("file: URLs are treated as unique security origins"). So
+`import * as THREE from './three.webgpu.js'` fails under `file://`. Three.js is
+an ES module (`three.webgpu.js` imports `./three.core.js`), so this matters.
+
+Fix: the prototype serves the embedded HTML + Three.js modules from a tiny
+localhost HTTP server (`simple_app.rs::serve_assets`) and loads
+`http://127.0.0.1:<port>/index.html`. `localhost` is a secure context (WebGPU
+works) and same-origin (module imports work). This is also the pattern a real
+embedded engine would use (or a CEF custom scheme).
 
 ---
 

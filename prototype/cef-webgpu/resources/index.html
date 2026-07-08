@@ -3,98 +3,87 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>afterglow · cef-rs WebGPU prototype</title>
+  <title>afterglow · Three.js WebGPU on cef-rs</title>
   <style>
     html, body { margin: 0; height: 100%; background: #0a0c10; color: #e5e7eb;
-      font: 14px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
-    #wrap { display: flex; flex-direction: column; height: 100%; }
-    #hud { padding: 8px 12px; border-bottom: 1px solid #222; background: #11141b;
-      white-space: pre-wrap; }
+      font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; overflow: hidden; }
+    #hud { position: fixed; inset: auto 0 0 0; padding: 8px 12px;
+      background: rgba(8,10,14,.85); border-top: 1px solid #222; white-space: pre-wrap; z-index: 10; }
     #hud b { color: #7dd3fc; }
     #hud .err { color: #f87171; }
     #hud .ok { color: #4ade80; }
-    canvas { flex: 1; width: 100%; display: block; image-rendering: pixelated; }
+    canvas { display: block; width: 100vw; height: 100vh; }
   </style>
 </head>
 <body>
-  <div id="wrap">
-    <div id="hud">booting…</div>
-    <canvas id="c"></canvas>
-  </div>
-  <script>
+  <canvas id="c"></canvas>
+  <div id="hud">booting Three.js WebGPU…</div>
+  <script type="module">
+    import * as THREE from './three.webgpu.js';
+
     const hud = document.getElementById('hud');
     const log = (msg, cls) => {
-      console.log('[hud] ' + msg); // -> CEF DisplayHandler -> stderr
+      console.log('[three] ' + msg); // -> CEF DisplayHandler -> stderr
       const span = document.createElement('span');
       if (cls) span.className = cls;
       span.textContent = msg + '\n';
       hud.appendChild(span);
     };
 
+    const canvas = document.getElementById('c');
+
     (async () => {
-      if (!navigator.gpu) {
-        log('navigator.gpu is UNDEFINED — WebGPU not available in this CEF build.', 'err');
-        log('Check that --enable-unsafe-webgpu + --enable-features=Vulkan are passed.', 'err');
-        return;
-      }
-      log('navigator.gpu present ✓');
+      log('THREE.REVISION = ' + THREE.REVISION);
 
-      const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
-      if (!adapter) { log('requestAdapter() returned null — no GPU adapter.', 'err'); return; }
+      if (!navigator.gpu) { log('navigator.gpu UNDEFINED — no WebGPU.', 'err'); return; }
 
-      const info = adapter.info ?? {};
-      log(`adapter: ${info.vendor || '?'} / ${info.architecture || '?'} / ${info.device || '?'}`, 'ok');
-      log(`description: ${info.description || '(none)'}`);
+      // Latest Three.js WebGPU renderer (r185). Auto-uses WebGPU, falls back to WebGL2.
+      const renderer = new THREE.WebGPURenderer({ canvas, antialias: true });
+      await renderer.init();
 
-      const device = await adapter.requestDevice();
-      log(`device acquired ✓ features: ${[...device.features].join(', ') || '(none)'}`, 'ok');
+      const backend = renderer.backend?.constructor?.name
+        ?? renderer.backend?.isWebGPUBackend?.()
+        ?? '(unknown)';
+      const webgpu = String(backend).includes('WebGPU') || renderer.isWebGPURenderer;
+      log('backend = ' + backend + (webgpu ? '  (WebGPU ✓)' : '  (fallback?)'),
+          webgpu ? 'ok' : 'err');
 
-      const canvas = document.getElementById('c');
-      const ctx = canvas.getContext('webgpu');
-      ctx.configure({ device, format: navigator.gpu.getPreferredCanvasFormat(), alphaMode: 'opaque' });
+      const adapter = renderer.backend?.adapter?.info
+        ?? await navigator.gpu.requestAdapter().then(a => a && a.info);
+      log('adapter = ' + (adapter ? `${adapter.vendor}/${adapter.architecture}/${adapter.device}` : '(n/a)'), 'ok');
 
-      const module = device.createShaderModule({ code: `
-        @vertex
-        fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
-          var p = array<vec2<f32>, 3>(
-            vec2<f32>( 0.0,  0.7),
-            vec2<f32>(-0.7, -0.5),
-            vec2<f32>( 0.7, -0.5));
-          return vec4<f32>(p[i], 0.0, 1.0);
-        }
-        @fragment
-        fn fs(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
-          let t = frag.xyz * 0.5 + 0.5;
-          return vec4<f32>(t, 1.0);
-        }
-      `});
+      const scene = new THREE.Scene();
+      const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.1, 100);
+      camera.position.set(2.2, 1.8, 2.6);
+      camera.lookAt(0, 0, 0);
 
-      const pipeline = device.createRenderPipeline({
-        layout: 'auto',
-        vertex: { module, entryPoint: 'vs' },
-        fragment: { module, entryPoint: 'fs', targets: [{ format: ctx.getConfiguration().format }] },
-        primitive: { topology: 'triangle-list' },
+      // MeshStandardNodeMaterial exercises the TSL node-material pipeline.
+      const mesh = new THREE.Mesh(
+        new THREE.BoxGeometry(1, 1, 1),
+        new THREE.MeshStandardNodeMaterial({ color: 0x4ade80, roughness: 0.35, metalness: 0.1 })
+      );
+      scene.add(mesh);
+
+      const dir = new THREE.DirectionalLight(0xffffff, 2.2);
+      dir.position.set(3, 4, 2);
+      scene.add(dir);
+      scene.add(new THREE.AmbientLight(0x7dd3fc, 0.4));
+
+      renderer.setSize(innerWidth, innerHeight);
+      renderer.setPixelRatio(devicePixelRatio);
+      addEventListener('resize', () => {
+        camera.aspect = innerWidth / innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(innerWidth, innerHeight);
       });
 
-      function frame() {
-        const w = canvas.clientWidth, h = canvas.clientHeight;
-        if (canvas.width !== w || canvas.height !== h) canvas.width = w, canvas.height = h;
+      renderer.setAnimationLoop(() => {
+        mesh.rotation.x += 0.006;
+        mesh.rotation.y += 0.011;
+        renderer.render(scene, camera);
+      });
 
-        const enc = device.createCommandEncoder();
-        const view = ctx.getCurrentTexture().createView();
-        const pass = enc.beginRenderPass({
-          colorAttachments: [{
-            view, clearValue: { r: 0.04, g: 0.05, b: 0.06, a: 1 }, loadOp: 'clear', storeOp: 'store',
-          }],
-        });
-        pass.setPipeline(pipeline);
-        pass.draw(3);
-        pass.end();
-        device.queue.submit([enc.finish()]);
-        requestAnimationFrame(frame);
-      }
-      requestAnimationFrame(frame);
-      log('rendering ✓ — WebGPU is working through cef-rs on this platform.', 'ok');
+      log('rendering Three.js WebGPU scene ✓', 'ok');
     })().catch(e => log('ERROR: ' + (e?.stack || e), 'err'));
   </script>
 </body>

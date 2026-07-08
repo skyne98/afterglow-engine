@@ -17,24 +17,30 @@ with Three.js-ready Chromium underneath.
 ## Build & run
 
 CEF binaries are downloaded automatically by `cef-dll-sys`'s build script
-(~hundreds of MB, first build only).
+(~hundreds of MB, first build only). Three.js is fetched by a one-off script
+(gitignored — it's a build input for `include_bytes!`).
 
 ```sh
 cd prototype/cef-webgpu
 
-# 1. Build the binary.
-cargo build --release
+# 0. Fetch the Three.js WebGPU build (pinned version, one-off).
+bash resources/download-three.sh
 
-# 2. Bundle it with the CEF runtime/resources (locales, icudtl, etc.).
-cargo run --release --bin bundle-cef-app -- afterglow-cef-webgpu -o target/bundle --release
+# 1. Build the binary. Build WITHOUT CEF_PATH set so cef-dll-sys downloads the
+#    matching CEF version (a stale ~/.local/share/cef at a different version
+#    causes an API-mismatch abort — see findings doc).
+unset CEF_PATH && cargo build
 
-# 3. Run it. Pass --ozone-platform=wayland to force native Wayland
-#    (Chromium auto-detects on recent versions, so usually optional).
-./target/bundle/afterglow-cef-webgpu --ozone-platform=wayland
+# 2. Run inside the nix devshell (provides CEF's runtime libs + Vulkan ICD
+#    wiring). Must use X11 (XWayland) — Wayland+Vulkan is incompatible in
+#    CEF 149 (see findings doc).
+env CEF_PATH="$PWD/target/debug" nix-shell shell.nix --run \
+  "./target/debug/afterglow-cef-webgpu --ozone-platform=x11"
 ```
 
-You should see a window with a status HUD ("adapter: …", "WebGPU OK") and an
-animated WebGPU triangle below it.
+You should see a window with a status HUD (`THREE.REVISION = 185`,
+`backend = WebGPUBackend`, `adapter: nvidia/ampere`) and a rotating green box
+rendered via Three.js WebGPU on the real GPU.
 
 ## NixOS note
 
