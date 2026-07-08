@@ -4,23 +4,42 @@
 **Question:** Is there a "React Native"-style native runtime that lets a
 web-based Three.js engine run natively on Linux and ship on Steam?
 
-**Verdict:** There is **no** React-Native-style native UI runtime for Three.js
-(RN is for native UI components, not canvas/WebGPU). The practical answer is a
-**desktop webview wrapper**, and for Linux + WebGPU + Steam that means
-**Electron** (or NW.js / CEF). **Tauri is not viable on Linux for WebGPU**
-because it uses the system WebKitGTK, which has not shipped WebGPU.
+**Verdict (corrected):** There *is* a React-Native-style native runtime for
+WebGPU — **`react-native-webgpu`** (Dawn-backed, works with React Three Fiber)
+— but it covers **iOS, Android, macOS, visionOS only, not Linux/Windows**.
+For the Linux + Steam target specifically, the practical answer remains a
+**desktop webview wrapper**: **Electron** (or NW.js / CEF). **Tauri is not
+viable on Linux for WebGPU** because it uses system WebKitGTK, which has not
+shipped WebGPU.
+
+See §6 below for the `react-native-webgpu` / React Three Fiber path (the
+mobile + macOS native story that *complements* Electron on desktop).
 
 ---
 
-## 1. Why "React Native" is the wrong frame
+## 1. "React Native" *can* host WebGPU — via `react-native-webgpu`
 
-React Native transpiles RN components to **native platform UI widgets**
-(UIView, android.view). It is not a renderer for `<canvas>`/WebGPU apps. There
-is no equivalent that takes a Three.js/WebGPU app and gives you a "native"
-non-web GPU surface while keeping the Three.js API. What you actually want is a
-**desktop shell that hosts a Chromium (or other) webview** so your existing
-WebGPU code runs unchanged. The options differ by *which* webview engine they
-embed — and that's where Linux WebGPU support diverges.
+My earlier dismissal was wrong. **`wcandillon/react-native-webgpu`** is a real,
+serious native WebGPU runtime:
+
+- **Powered by Dawn** — the *same* WebGPU implementation Chromium uses. On
+  Apple it speaks Metal; on Android it speaks Vulkan. You get a genuine
+  `navigator.gpu` device, not a polyfill.
+- Maintained by **William Candillon** (author of `react-native-skia`),
+  Shopify-backed. 1.1k+ stars, actively pushed (last push 2026-07-08).
+- **Works with React Three Fiber.** There is an official Expo template:
+  `npx create-expo-app@latest -e with-webgpu` — preconfigured for Three.js
+  WebGPU builds on iOS, Android, and web.
+- **Platforms: iOS, Android, macOS, visionOS.** Native code ships only under
+  `android/` and `apple/` directories. **No Linux, no Windows** native module.
+
+So for a Three.js engine, this *is* the "native runtime" you'd use to ship to
+phones and macOS — but it does **not** give you a Linux or Windows desktop
+target, so it does **not** solve the Steam-on-Linux question. It complements
+Electron, not replaces it.
+
+The rest of this note covers the desktop/Linux/Steam path, which is what
+`react-native-webgpu` does not cover.
 
 ---
 
@@ -133,9 +152,76 @@ from the previous research note (`WebGPURenderer` auto-falls back to WebGL2).
 
 ---
 
-## Sources
+## 6. The React Native WebGPU path (mobile + macOS, NOT Linux/Steam)
 
-- WebGPU implementation status (gpuweb wiki): https://github.com/gpuweb/gpuweb/wiki/Implementation-Status
+`wcandillon/react-native-webgpu` (MIT, Dawn-backed, 1.1k★, actively maintained)
+is the native runtime the original question was actually pointing at.
+
+### What it is
+- Exposes the standard `navigator.gpu` entry point on native, so the same
+  WebGPU code that runs in a browser runs on device.
+- Rendering surface is a `<Canvas>` React Native view; you configure a WebGPU
+  context on it, encode passes, and call `context.present()` per frame
+  (presentation is explicit on RN, unlike the browser).
+- Optional `react-native-worklets` integration for off-JS-thread rendering.
+- Requires React Native **≥ 0.81** and the **new architecture** (no legacy).
+
+### React Three Fiber integration
+- Official Expo template: `npx create-expo-app@latest -e with-webgpu`.
+  Ships with Reanimated + Metro config tuned for Three.js WebGPU builds.
+- This means a **Three.js + R3F** engine can target iOS/Android/macOS/web from
+  one codebase with a real WebGPU device on each.
+
+### Platform support (the catch for Steam)
+| Platform | Supported? | Native backend |
+|---|---|---|
+| iOS | ✅ | Dawn → Metal |
+| Android | ✅ | Dawn → Vulkan |
+| macOS | ✅ | Dawn → Metal |
+| visionOS | ✅ | Dawn → Metal |
+| **Linux** | ❌ | — |
+| **Windows** | ❌ | — |
+| Web | ✅ (via browser) | — |
+
+RN-the-framework *can* target Windows (`react-native-windows`) and macOS
+(`react-native-macos`), but `react-native-webgpu` ships native modules only for
+`android/` and `apple/`. There is no Windows/Linux WebGPU native module.
+
+### Caveats from the docs
+- Android emulators may fall back to a **software adapter** (slow, no native
+  textures) — test on physical devices.
+- iOS Simulator: disable **Metal API Validation** (false positives from Dawn);
+  the Expo config plugin does this automatically on prebuild.
+- `context.present()` is **required** each frame on RN (browser does it
+  implicitly) — an engine abstraction must handle this.
+
+---
+
+## 7. Multi-target strategy for afterglow-engine
+
+Combining the above, one Three.js (R3F) codebase can target every platform
+with a real WebGPU device, using the right shell per platform:
+
+| Target | Shell | WebGPU backend |
+|---|---|---|
+| Web (browser) | — (native) | Browser WebGPU |
+| iOS / Android / macOS / visionOS | React Native + `react-native-webgpu` | Dawn (Metal/Vulkan) |
+| Linux / Windows desktop + Steam | Electron (bundles Chromium) | Dawn via Chromium |
+
+- **Engine core**: Three.js + TSL, written once.
+- **Presentation abstraction**: wrap the per-frame present step (`context.present()`
+  on RN, automatic on web/Electron) behind a single `Renderer` interface so the
+  same engine code is shell-agnostic.
+- **Steam release** = the Electron build (§5). RN build is the mobile/macOS
+  companion, not the Steam artifact.
+
+Sources for §6:
+- Repo: https://github.com/wcandillon/react-native-webgpu
+- Docs: https://wcandillon.github.io/react-native-webgpu/docs/getting-started/installation
+- Expo + R3F template: https://wcandillon.github.io/react-native-webgpu/docs/getting-started/expo
+- Shopify engineering writeup: https://shopify.engineering/webgpu-skia-web-graphics
+
+## Sources (desktop / Linux / Steam path)
 - Electron WebGPU enable issue #26944: https://github.com/electron/electron/issues/26944
 - Electron + WebGPU flags (utsubo migration guide): https://www.utsubo.com/blog/webgpu-threejs-migration-guide
 - Tauri "WebKitGTK is unusable" discussion #8524: https://github.com/orgs/tauri-apps/discussions/8524

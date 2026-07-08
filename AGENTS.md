@@ -26,4 +26,6 @@ up-to-date as the stack evolves.
   Three.js WebGPU renderer? (investigated 2026-07)
 - `docs/research/native-runtime-linux-steam.md` — Native runtime options to ship
   the web engine on Linux + Steam. Verdict: Electron (bundles Chromium →
-  WebGPU); Tauri/Neutralino are NOT viable on Linux (WebKitGTK lacks WebGPU).
+  WebGPU) for desktop/Steam; `react-native-webgpu` (Dawn) for iOS/Android/macOS
+  via React Three Fiber; Tauri/Neutralino NOT viable on Linux (WebKitGTK lacks
+  WebGPU). Includes a multi-target strategy.
