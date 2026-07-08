@@ -47,3 +47,10 @@ up-to-date as the stack evolves.
   Tauri-team-maintained, 408★, 130k dl, Chromium 149, Linux x86_64+ARM64. This is
   what `bevy_cef` uses. Foundation for a future wry/Tauri CEF backend → native
   WebGPU on Linux. Revised native-shell recommendation: use cef-rs windowed now.
+- `docs/research/cef-rs-webgpu-prototype-findings.md` — **Built & ran a cef-rs
+  WebGPU prototype.** ✅ WebGPU works through cef-rs on Linux (NVIDIA/Ampere via
+  Dawn→Vulkan). Empirical gotchas: NixOS runtime-lib wiring (shell.nix),
+  CEF-API-version must match (don't reuse stale CEF_PATH), must prefer system
+  libvulkan + real ICD over CEF's bundled swiftshader. ⚠️ CORRECTION: Wayland+
+  Vulkan are INCOMPATIBLE in CEF 149 — must use --ozone-platform=x11 (XWayland)
+  for WebGPU; native Wayland+WebGPU not available yet. See `prototype/cef-webgpu/`.

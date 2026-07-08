@@ -9,6 +9,15 @@ afterglow-engine case (Three.js = full-window renderer). WebGPU runs via
 Dawn → Vulkan on Wayland with explicit flags. **No for OSR** (offscreen /
 webview-as-texture overlay) on native Wayland — CEF forces OSR to X11.
 
+> ⚠️ **CORRECTION (2026-07-08, empirical):** The prototype
+> (`prototype/cef-webgpu/`) showed that in CEF 149, **`--ozone-platform=wayland`
+> is NOT compatible with Vulkan** — Chromium logs `"'--ozone-platform=wayland'
+> is not compatible with Vulkan"` and WebGPU fails to initialize. Since WebGPU
+> on Linux (Dawn) requires the Vulkan backend, you must run on **X11**
+> (`--ozone-platform=x11`, i.e. XWayland on a Wayland session) to get WebGPU.
+> Native Wayland + WebGPU is **not** available in this CEF/Chromium build.
+> See `docs/research/cef-rs-webgpu-prototype-findings.md`.
+
 ---
 
 ## The critical split: windowed vs OSR

@@ -1,0 +1,21 @@
+[package]
+name = "afterglow-cef-webgpu"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "afterglow-cef-webgpu"
+
+[features]
+default = ["sandbox"]
+sandbox = ["cef/sandbox"]
+
+# Configures `bundle-cef-app` (run: `cargo run --bin bundle-cef-app --
+# afterglow-cef-webgpu -o target/bundle`). `resources_path` ships index.html
+# next to the binary; helper_name is macOS-only.
+[package.metadata.cef.bundle]
+resources_path = "resources"
+
+[dependencies]
+cef = { version = "149.3", features = ["build-util"] }

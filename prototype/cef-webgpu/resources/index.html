@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>afterglow · cef-rs WebGPU prototype</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #0a0c10; color: #e5e7eb;
+      font: 14px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    #wrap { display: flex; flex-direction: column; height: 100%; }
+    #hud { padding: 8px 12px; border-bottom: 1px solid #222; background: #11141b;
+      white-space: pre-wrap; }
+    #hud b { color: #7dd3fc; }
+    #hud .err { color: #f87171; }
+    #hud .ok { color: #4ade80; }
+    canvas { flex: 1; width: 100%; display: block; image-rendering: pixelated; }
+  </style>
+</head>
+<body>
+  <div id="wrap">
+    <div id="hud">booting…</div>
+    <canvas id="c"></canvas>
+  </div>
+  <script>
+    const hud = document.getElementById('hud');
+    const log = (msg, cls) => {
+      console.log('[hud] ' + msg); // -> CEF DisplayHandler -> stderr
+      const span = document.createElement('span');
+      if (cls) span.className = cls;
+      span.textContent = msg + '\n';
+      hud.appendChild(span);
+    };
+
+    (async () => {
+      if (!navigator.gpu) {
+        log('navigator.gpu is UNDEFINED — WebGPU not available in this CEF build.', 'err');
+        log('Check that --enable-unsafe-webgpu + --enable-features=Vulkan are passed.', 'err');
+        return;
+      }
+      log('navigator.gpu present ✓');
+
+      const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
+      if (!adapter) { log('requestAdapter() returned null — no GPU adapter.', 'err'); return; }
+
+      const info = adapter.info ?? {};
+      log(`adapter: ${info.vendor || '?'} / ${info.architecture || '?'} / ${info.device || '?'}`, 'ok');
+      log(`description: ${info.description || '(none)'}`);
+
+      const device = await adapter.requestDevice();
+      log(`device acquired ✓ features: ${[...device.features].join(', ') || '(none)'}`, 'ok');
+
+      const canvas = document.getElementById('c');
+      const ctx = canvas.getContext('webgpu');
+      ctx.configure({ device, format: navigator.gpu.getPreferredCanvasFormat(), alphaMode: 'opaque' });
+
+      const module = device.createShaderModule({ code: `
+        @vertex
+        fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
+          var p = array<vec2<f32>, 3>(
+            vec2<f32>( 0.0,  0.7),
+            vec2<f32>(-0.7, -0.5),
+            vec2<f32>( 0.7, -0.5));
+          return vec4<f32>(p[i], 0.0, 1.0);
+        }
+        @fragment
+        fn fs(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
+          let t = frag.xyz * 0.5 + 0.5;
+          return vec4<f32>(t, 1.0);
+        }
+      `});
+
+      const pipeline = device.createRenderPipeline({
+        layout: 'auto',
+        vertex: { module, entryPoint: 'vs' },
+        fragment: { module, entryPoint: 'fs', targets: [{ format: ctx.getConfiguration().format }] },
+        primitive: { topology: 'triangle-list' },
+      });
+
+      function frame() {
+        const w = canvas.clientWidth, h = canvas.clientHeight;
+        if (canvas.width !== w || canvas.height !== h) canvas.width = w, canvas.height = h;
+
+        const enc = device.createCommandEncoder();
+        const view = ctx.getCurrentTexture().createView();
+        const pass = enc.beginRenderPass({
+          colorAttachments: [{
+            view, clearValue: { r: 0.04, g: 0.05, b: 0.06, a: 1 }, loadOp: 'clear', storeOp: 'store',
+          }],
+        });
+        pass.setPipeline(pipeline);
+        pass.draw(3);
+        pass.end();
+        device.queue.submit([enc.finish()]);
+        requestAnimationFrame(frame);
+      }
+      requestAnimationFrame(frame);
+      log('rendering ✓ — WebGPU is working through cef-rs on this platform.', 'ok');
+    })().catch(e => log('ERROR: ' + (e?.stack || e), 'err'));
+  </script>
+</body>
+</html>
