@@ -1,7 +1,0 @@
-{
-  "name": "afterglow-build",
-  "version": "0.1.0",
-  "type": "module",
-  "description": "Afterglow Engine build system",
-  "bin": "./build.ts"
-}

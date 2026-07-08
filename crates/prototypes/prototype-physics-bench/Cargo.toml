@@ -1,8 +1,0 @@
-[package]
-name = "prototype-physics-bench"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-bevy = { workspace = true, features = ["bevy_core_pipeline", "bevy_pbr", "x11"] }
-avian3d = { workspace = true, features = ["enhanced-determinism"] }
