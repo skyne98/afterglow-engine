@@ -37,3 +37,8 @@ up-to-date as the stack evolves.
   today. WebGL path has years-old unfixed bugs; WebGPU path is incomplete (missing
   methods, UB, crashes, broken CTS); a real WebGPU game (SpookyBall) doesn't run;
   0 reports of Three.js *WebGPU* on Servo. Revisit in ~2 yrs.
+- `docs/research/cef-wayland-vulkan-webgpu.md` — CEF graphics on Linux: YES for
+  windowed (Electron-style, Three.js full-window) on native Wayland+Vulkan+WebGPU
+  via flags; NO for OSR/webview-as-texture overlay (forced to X11). Blockers are
+  non-graphics (size ~100MB+, immature Rust bindings, build complexity) — offers
+  no advantage over Electron for this stack.
