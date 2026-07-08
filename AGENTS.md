@@ -24,3 +24,6 @@ up-to-date as the stack evolves.
 
 - `docs/research/threejs-webgpu-stability.md` — How stable and usable is the
   Three.js WebGPU renderer? (investigated 2026-07)
+- `docs/research/native-runtime-linux-steam.md` — Native runtime options to ship
+  the web engine on Linux + Steam. Verdict: Electron (bundles Chromium →
+  WebGPU); Tauri/Neutralino are NOT viable on Linux (WebKitGTK lacks WebGPU).
