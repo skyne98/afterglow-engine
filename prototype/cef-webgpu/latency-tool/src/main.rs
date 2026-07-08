@@ -153,4 +153,17 @@ fn report(events: &[Value]) {
     println!("  samples: {:?}", samples.iter().map(|x| format!("{x:.2}")).collect::<Vec<_>>());
     println!("  min={:.2}  median={:.2}  mean={:.2}  p90={:.2}  max={:.2}  (ms)",
              s[0], pct(0.5), mean, pct(0.9), s[s.len()-1]);
+
+    // Present rate: inter-swap intervals -> fps.
+    if swaps.len() > 1 {
+        let mut intervals = Vec::<f64>::new();
+        for w in swaps.windows(2) { intervals.push((w[1] - w[0]) / 1000.0); }
+        intervals.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let mean_int = intervals.iter().sum::<f64>() / intervals.len() as f64;
+        let med_int = intervals[intervals.len() / 2];
+        println!("\n=== present rate (SkiaRenderer::SwapBuffers cadence) ===");
+        println!("  swaps={}  mean interval={:.2}ms ({:.0} fps)  median interval={:.2}ms ({:.0} fps)",
+                 swaps.len(), mean_int, 1000.0/mean_int, med_int, 1000.0/med_int);
+        println!("  interval min={:.2}ms  max={:.2}ms", intervals[0], intervals[intervals.len()-1]);
+    }
 }
