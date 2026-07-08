@@ -54,3 +54,11 @@ up-to-date as the stack evolves.
   libvulkan + real ICD over CEF's bundled swiftshader. ⚠️ CORRECTION: Wayland+
   Vulkan are INCOMPATIBLE in CEF 149 — must use --ozone-platform=x11 (XWayland)
   for WebGPU; native Wayland+WebGPU not available yet. See `prototype/cef-webgpu/`.
+- `docs/research/cef-games-latency-footprint-debugging.md` — CEF for games:
+  real-world usage (Steam, GW2/ArenaNet ~3× faster than CoherentUI, Battle.net/
+  Epic, Coherent Gameface), input→pixel latency pipeline (our windowed
+  architecture sidesteps the OSR-texture-copy latency), latency flags
+  (--disable-gpu-vsync/--disable-frame-rate-limit/etc., + vsync-reset caveat),
+  footprint (Minimal dist + strip + en-US locale ~80-110MB floor, can't
+  feature-strip), debugging (remote-debugging-port + chrome://tracing +
+  crashpad), cef-rs accelerated_osr zero-copy path.
