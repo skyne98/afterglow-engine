@@ -6,11 +6,20 @@ Electron-like shell? (Motivation: Tauri uses WebKitGTK on Linux which has no
 WebGPU, so we want a Rust+Chromium alternative that gives WebGPU on Linux
 without Electron's ~150 MB weight.)
 
-**Verdict: No mature one exists.** "Lightweight" and "Chromium/CEF-based" are
-mutually exclusive — Chromium itself is ~150 MB. The Rust CEF bindings are all
-immature/stale/experimental. The only genuinely-lightweight Rust web engine
-is **Servo**, which has WebGPU but is unproven for a complex Three.js app.
-Realistic choices reduce to Electron vs Tauri vs a Servo research bet.
+**Verdict: No mature one exists.** ⚠️ **CORRECTED 2026-07-08 — see below:**
+`tauri-apps/cef-rs` (crates `cef` + `cef-dll-sys`) IS a mature, Tauri-team-
+maintained Rust CEF binding (408★, 130k crates.io downloads, Chromium 149,
+cross-platform incl. Linux x86_64+ARM64, pushed 2026-07-07). It is the binding
+`bevy_cef` uses, and the foundation for a future wry/Tauri CEF backend (which
+would give Tauri native WebGPU on Linux). This reopens CEF as viable for the
+native shell. See `docs/research/cef-rs-tauri-binding.md`.
+
+[Original (superseded) verdict retained for context:] "Lightweight" and
+"Chromium/CEF-based" are mutually exclusive — Chromium itself is ~150 MB. The
+Rust CEF bindings are all immature/stale/experimental. The only genuinely-
+lightweight Rust web engine is **Servo**, which has WebGPU but is unproven for
+a complex Three.js app. Realistic choices reduce to Electron vs Tauri vs a
+Servo research bet."
 
 ---
 

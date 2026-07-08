@@ -42,3 +42,8 @@ up-to-date as the stack evolves.
   via flags; NO for OSR/webview-as-texture overlay (forced to X11). Blockers are
   non-graphics (size ~100MB+, immature Rust bindings, build complexity) — offers
   no advantage over Electron for this stack.
+- `docs/research/cef-rs-tauri-binding.md` — **CORRECTION:** there IS a mature
+  Rust CEF binding — `tauri-apps/cef-rs` (crates `cef`+`cef-dll-sys`),
+  Tauri-team-maintained, 408★, 130k dl, Chromium 149, Linux x86_64+ARM64. This is
+  what `bevy_cef` uses. Foundation for a future wry/Tauri CEF backend → native
+  WebGPU on Linux. Revised native-shell recommendation: use cef-rs windowed now.
