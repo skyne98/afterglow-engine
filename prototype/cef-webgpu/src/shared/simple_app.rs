@@ -174,6 +174,12 @@ wrap_app! {
             if cl.has_switch(Some(&ua)) == 0 {
                 cl.append_switch_with_value(Some(&ua), Some(&CefString::from("vulkan")));
             }
+
+            // NOTE: latency flags (--disable-gpu-vsync / --disable-frame-rate-limit /
+            // --run-all-compositor-stages-before-draw) were tested and made rendering
+            // VERY choppy on this CEF/NVIDIA/Linux setup (0 swaps captured). Left
+            // off by default; vsync-on measures ~3ms median input→present. Pass
+            // them on the CLI to experiment. See cef-games-latency-footprint-debugging.md.
         }
 
         fn browser_process_handler(&self) -> Option<BrowserProcessHandler> {

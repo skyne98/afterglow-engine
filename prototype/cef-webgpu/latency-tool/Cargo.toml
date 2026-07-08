@@ -1,0 +1,13 @@
+[package]
+name = "latency-tool"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+tungstenite = "0.24"
+ureq = { version = "2", features = ["json"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = 2

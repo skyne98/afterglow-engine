@@ -54,8 +54,13 @@ pub fn run_main(main_args: &MainArgs, cmd_line: &CommandLine, sandbox_info: *mut
     // binary runs without `bundle-cef-app`. Also disable the sandbox for the
     // prototype (avoids chrome-sandbox SUID/CAP setup in dev).
     let cef_path = std::env::var("CEF_PATH").unwrap_or_default();
+    let devtools_port: i32 = std::env::var("AFTERGLOW_DEVTOOLS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0); // 0 = disabled; set AFTERGLOW_DEVTOOLS=9222 to enable CDP
     let settings = Settings {
         no_sandbox: 1,
+        remote_debugging_port: devtools_port,
         resources_dir_path: CefString::from(cef_path.as_str()),
         locales_dir_path: CefString::from(format!("{cef_path}/locales").as_str()),
         ..Default::default()
