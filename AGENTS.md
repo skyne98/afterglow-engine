@@ -29,3 +29,7 @@ up-to-date as the stack evolves.
   WebGPU) for desktop/Steam; `react-native-webgpu` (Dawn) for iOS/Android/macOS
   via React Three Fiber; Tauri/Neutralino NOT viable on Linux (WebKitGTK lacks
   WebGPU). Includes a multi-target strategy.
+- `docs/research/lightweight-rust-chromium-shell.md` — Is there a lightweight,
+  Rust-based, CEF/Chromium Electron-like? No mature one: CEF isn't lightweight
+  (~100MB+, `wef` abandoned it for that), Rust CEF bindings are stale, Servo is
+  the only light+Rust+WebGPU option but unproven for Three.js.
