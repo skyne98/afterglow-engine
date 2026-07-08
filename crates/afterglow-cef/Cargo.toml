@@ -1,0 +1,14 @@
+[package]
+name = "afterglow-cef"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Game-window-focused CEF (cef-rs) wrapper for afterglow-engine"
+
+[dependencies]
+cef.workspace = true
+serde_json.workspace = true
+
+[[example]]
+name = "minimal"

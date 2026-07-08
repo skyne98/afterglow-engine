@@ -20,9 +20,46 @@ use tungstenite::Message;
 const N: usize = 12;
 
 fn main() {
-    let addr = std::env::args().nth(1).unwrap_or_else(|| "127.0.0.1:9222".into());
+    let args: Vec<String> = std::env::args().collect();
+    let eval_expr = if args.get(1).map(|s| s.as_str()) == Some("eval") {
+        Some(args.get(2).cloned().expect("usage: latency-tool eval '<expr>'"))
+    } else if args.get(1).map(|s| s.as_str()) == Some("nav") {
+        let url = args.get(2).cloned().expect("usage: latency-tool nav <url>");
+        let addr = args.get(3).cloned().unwrap_or_else(|| "127.0.0.1:9222".into());
+        let v: Value = ureq::get(&format!("http://{addr}/json/version")).call().expect("version").into_json().expect("json");
+        let (mut ws, _) = tungstenite::connect(v["webSocketDebuggerUrl"].as_str().unwrap()).expect("ws");
+        let mut id = 0u32; let mut nid = || { id += 1; id };
+        let r = call_b(&mut ws, nid(), "Target.getTargets", json!({}));
+        let tgt = r["result"]["targetInfos"].as_array().unwrap().iter().find(|t| t["type"].as_str()==Some("page")).expect("page").clone();
+        let r = call_b(&mut ws, nid(), "Target.attachToTarget", json!({"targetId": tgt["targetId"], "flatten": true}));
+        let s = r["result"]["sessionId"].as_str().unwrap().to_string();
+        let _ = call_s(&mut ws, nid(), &s, "Network.enable", json!({}));
+        let _ = call_s(&mut ws, nid(), &s, "Page.enable", json!({}));
+        let r = call_s(&mut ws, nid(), &s, "Page.navigate", json!({"url": url}));
+        println!("Page.navigate => {}", r["result"]);
+        let deadline = std::time::Instant::now() + Duration::from_millis(2500);
+        while std::time::Instant::now() < deadline {
+            let Ok(msg) = ws.read() else { break };
+            let Message::Text(t) = msg else { continue };
+            let Ok(v) = serde_json::from_str::<Value>(&t) else { continue };
+            let m = v["method"].as_str().unwrap_or("");
+            if m.starts_with("Network.loadingFailed") {
+                println!("loadingFailed: {}", v["params"]);
+            } else if m == "Network.responseReceived" {
+                let p = &v["params"]["response"];
+                println!("responseReceived: status={} mime={} url={}", p["status"], p["mimeType"], p["url"]);
+            } else if m == "Network.loadingFinished" {
+                println!("loadingFinished: {}", v["params"]);
+            } else if m == "Page.frameNavigated" {
+                println!("frameNavigated: url={}", v["params"]["frame"]["url"]);
+            }
+        }
+        return;
+    } else { None };
+    let addr = if eval_expr.is_some() { args.get(3).cloned() } else { args.get(1).cloned() }
+        .unwrap_or_else(|| "127.0.0.1:9222".into());
     let v: Value = ureq::get(&format!("http://{addr}/json/version"))
-        .call().expect("GET /json/version").into_json().expect("parse version");
+        .timeout(Duration::from_secs(3)).call().expect("GET /json/version").into_json().expect("parse version");
     let ws_url = v["webSocketDebuggerUrl"].as_str().unwrap().to_string();
     eprintln!("browser ws: {ws_url}");
 
@@ -40,6 +77,17 @@ fn main() {
     let r = call_b(&mut ws, nid(), "Target.attachToTarget", json!({ "targetId": target_id, "flatten": true }));
     let session = r["result"]["sessionId"].as_str().unwrap().to_string();
     eprintln!("session: {session}");
+
+    if let Some(expr) = eval_expr {
+        let r = call_s(&mut ws, nid(), &session, "Runtime.evaluate",
+            json!({ "expression": expr, "returnByValue": true, "awaitPromise": true }));
+        if let Some(exc) = r["result"]["exceptionDetails"].as_object() {
+            println!("EXCEPTION: {}", exc.get("exception").and_then(|e| e["description"].as_str()).unwrap_or("(no desc)"));
+        } else {
+            println!("=> {}", r["result"]["result"]["value"]);
+        }
+        return;
+    }
 
     // Start trace (compositor+gpu for SwapBuffers; blink for performance marks).
     let cats = "blink,cc,gpu,v8,benchmark,devtools.timeline,disabled-by-default-devtools.timeline,user_timing";
