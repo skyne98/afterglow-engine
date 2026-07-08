@@ -179,13 +179,29 @@ is the native runtime the original question was actually pointing at.
 | Android | ✅ | Dawn → Vulkan |
 | macOS | ✅ | Dawn → Metal |
 | visionOS | ✅ | Dawn → Metal |
-| **Linux** | ❌ | — |
+| **Linux** | ❌ (not shipped; theoretically portable) | — |
 | **Windows** | ❌ | — |
 | Web | ✅ (via browser) | — |
 
 RN-the-framework *can* target Windows (`react-native-windows`) and macOS
 (`react-native-macos`), but `react-native-webgpu` ships native modules only for
 `android/` and `apple/`. There is no Windows/Linux WebGPU native module.
+
+### Why not Linux? (verified)
+- **The library ships no Linux build/surface code.** Native files exist only
+  under `android/` (CMake+Gradle) and `apple/` (podspec). The `build-dawn.yml`
+  CI runs on `ubuntu-latest` but only to *cross-compile Dawn for Android ABIs* —
+  there is no Linux-desktop Dawn target. Zero issues/PRs ask for Linux.
+- **No maintained React Native host ships Linux.** The official out-of-tree
+  platforms doc lists "React Native Skia — Currently supports Linux and macOS,"
+  but this is **stale** (early v0.1.0, "Ubuntu 18"). RNSkia's *current* supported
+  platforms are iOS/Android/tvOS/macOS/Catalyst/Web/TV, with prebuilts only for
+  `android` and `apple-*`. No Linux prebuilt.
+- **Dawn itself works on Linux (Vulkan)** — so it is *theoretically portable*.
+  What's missing is (a) a working RN-on-Linux host and (b) the react-native-webgpu
+  Linux platform glue (Vulkan surface binding, per-frame present path, build
+  config). Nobody has written either. Doing so is a large, unprecedented effort —
+  far more work than Electron for a Steam release.
 
 ### Caveats from the docs
 - Android emulators may fall back to a **software adapter** (slow, no native
