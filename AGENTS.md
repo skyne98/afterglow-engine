@@ -33,3 +33,7 @@ up-to-date as the stack evolves.
   Rust-based, CEF/Chromium Electron-like? No mature one: CEF isn't lightweight
   (~100MB+, `wef` abandoned it for that), Rust CEF bindings are stale, Servo is
   the only light+Rust+WebGPU option but unproven for Three.js.
+- `docs/research/servo-threejs-status.md` — Deep-dive: Servo canNOT run Three.js
+  today. WebGL path has years-old unfixed bugs; WebGPU path is incomplete (missing
+  methods, UB, crashes, broken CTS); a real WebGPU game (SpookyBall) doesn't run;
+  0 reports of Three.js *WebGPU* on Servo. Revisit in ~2 yrs.
