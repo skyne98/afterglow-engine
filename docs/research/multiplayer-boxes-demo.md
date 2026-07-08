@@ -115,32 +115,36 @@ Client-side prediction:
   `ClientOf` link also has `ReplicationSender`, avoiding early `ControlledBy`
   bindings that Lightyear cannot replicate yet. Games only write spawn/despawn
   logic; the engine handles link binding.
-- The client renders and simulates the Lightyear `Predicted` copy for its local
-  player. Predicted player/cube copies receive local Avian physics components in
-  `PreUpdate` after replication receive and before fixed simulation. Remote
-  players render through Lightyear `Interpolated` copies, while dynamic cubes are
-  predicted to all clients so local player/cube/wall contacts can resolve
-  immediately. Confirmed roots are not rendered as gameplay presentation.
+- The client renders Lightyear `Predicted` player copies for both local and
+  remote players. Player bodies are predicted to all clients so player/player
+  contacts have local physics participants and do not wait for interpolation or
+  server correction. The demo intentionally does not also interpolation-target
+  player bodies, because overlapping `Predicted` + `Interpolated` lifecycle for
+  the same replicated player caused missing-entity update spam. Predicted
+  player/cube copies receive local Avian physics components in `PreUpdate` after
+  replication receive and before fixed simulation. Dynamic cubes are predicted
+  to all clients so local player/cube/wall contacts can resolve immediately.
+  Confirmed roots are not rendered as gameplay presentation.
 - Server snapshots still provide authority/correction through Lightyear's
-  rollback/reconciliation machinery. Input transport is now Lightyear/Leafwing;
-  no demo-local movement message remains. Discrete rope toggles are still driven
-  from `ActionState<AfterglowAction>`, but ActionState remains pure input: it
-  never carries world state such as a target id. On release, the client derives
-  a separate `RopeIntent { op, rope_id, target }` gameplay message, where both
-  rope and target are generic engine `StableEntityId`s. The client pre-spawns an
-  entity-backed `RopeLink { rope_id, player_owner, target }` with Lightyear
-  `PreSpawned(rope_id.as_hash64())`. The server validates that exact requested
-  stable target and confirms by spawning a replicated `RopeLink` with the same
-  stable rope id and PreSpawned hash. If the RopeIntent sender is not ready, the
-  client does not pre-spawn an unconfirmable rope. Rope intents use an ordered
-  reliable channel because attach/detach operations are state transitions. On a
-  predicted detach, the client marks the local `RopeLink` as detach-pending and
-  removes derived local visuals/joints, but does not despawn the Lightyear
-  entity; the authoritative despawn remains responsible for deleting replicated
-  state. The derived `DistanceJoint` and rope gizmo are local
-  presentation/physics effects of `RopeLink`, not replicated render assets. A
-  per-player release latch, minimum observed press duration, and short cooldown
-  reject repeated/stale observations of the same release.
+  rollback/reconciliation machinery. Input transport is Lightyear/Leafwing;
+  there is no demo-local movement or rope intent message. Discrete rope toggles
+  are driven only from `ActionState<AfterglowAction>::just_released`; server
+  authority processes that received input for every authoritative player, not
+  only the host-local player. ActionState remains pure input and never carries
+  world state such as target ids. On a
+  release, both the authoritative server and the owning predicted client run the
+  same fixed-tick selection logic: detach if the owner has an active rope,
+  otherwise choose the nearest valid `KinematicBox` in range. Attach spawns an
+  entity-backed `RopeLink { rope_id, player_owner, target }`; the client
+  pre-spawns it with Lightyear `PreSpawned`, and the server confirms by spawning
+  the replicated `RopeLink` with the same deterministic hash. The rope id/hash
+  derive from owner + selected target, not local processing tick and not a
+  client-sent command id, so Lightyear input-delay offsets do not break
+  `PreSpawned` matching. Detach uses Lightyear's prediction despawn command on the owning
+  client and authoritative despawn on the server. The derived `DistanceJoint`
+  and rope gizmo are local presentation/physics effects of active `RopeLink`,
+  not replicated render assets. No custom release latch, cooldown, or
+  detach-pending gameplay state remains.
 - The runnable test verifies that the remote client receives replicated
   `PlayerBox` entities over real UDP/netcode, gains client-side presentation and
   local physics components on the predicted copy, and that client input moves the

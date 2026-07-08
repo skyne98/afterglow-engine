@@ -1,7 +1,10 @@
 use bevy::prelude::*;
 
 use super::*;
-use crate::{core::identity::StableEntityId, demos::multiplayer_boxes::rope::Highlighted};
+use crate::{
+    core::identity::StableEntityId, demos::multiplayer_boxes::rope::Highlighted,
+    network::connection::LocalPlayerId,
+};
 
 fn test_box_id(index: u32) -> StableEntityId {
     StableEntityId::new(10_000 + u128::from(index))
@@ -18,14 +21,12 @@ fn rope_test_app() -> App {
         bevy::input::InputPlugin,
         leafwing_input_manager::plugin::InputManagerPlugin::<crate::input::AfterglowAction>::default(),
     ));
-    app.init_resource::<PlayerName>()
+    app.insert_resource(LocalPlayerId(2))
         .init_resource::<Assets<Mesh>>()
         .init_resource::<Assets<StandardMaterial>>()
-        .insert_resource(crate::network::AfterglowNetworkContext::from_status(
-            crate::network::AfterglowConnectionStatus {
-                role: crate::network::LightyearRole::Host,
-                ..Default::default()
-            },
+        .insert_resource(crate::network::AfterglowNetworkContext::new(
+            crate::network::LightyearRole::Client,
+            2,
         ));
     app
 }
@@ -33,7 +34,7 @@ fn rope_test_app() -> App {
 fn spawn_player(app: &mut App) {
     app.world_mut().spawn((
         PlayerBox {
-            owner: "alice".to_string(),
+            owner: "2".to_string(),
         },
         Transform::from_xyz(0.0, 0.4, 0.0),
     ));
@@ -52,7 +53,6 @@ fn spawn_box(app: &mut App, index: u32, pos: Vec3) -> Entity {
 #[test]
 fn highlight_nearest_box_adds_highlight() {
     let mut app = rope_test_app();
-    app.world_mut().resource_mut::<PlayerName>().0 = "alice".to_string();
     spawn_player(&mut app);
     let box1 = spawn_box(&mut app, 0, Vec3::new(1.0, 0.5, 0.0));
     let box2 = spawn_box(&mut app, 1, Vec3::new(5.0, 0.5, 0.0));
@@ -67,7 +67,6 @@ fn highlight_nearest_box_adds_highlight() {
 #[test]
 fn highlight_nearest_box_outside_range_not_highlighted() {
     let mut app = rope_test_app();
-    app.world_mut().resource_mut::<PlayerName>().0 = "alice".to_string();
     spawn_player(&mut app);
     let box_far = spawn_box(&mut app, 0, Vec3::new(100.0, 0.5, 0.0));
 
@@ -80,7 +79,6 @@ fn highlight_nearest_box_outside_range_not_highlighted() {
 #[test]
 fn highlight_nearest_box_uses_hysteresis() {
     let mut app = rope_test_app();
-    app.world_mut().resource_mut::<PlayerName>().0 = "alice".to_string();
     spawn_player(&mut app);
     let current = app
         .world_mut()
@@ -112,12 +110,11 @@ fn highlight_nearest_box_uses_hysteresis() {
 #[test]
 fn highlight_nearest_box_skips_linked() {
     let mut app = rope_test_app();
-    app.world_mut().resource_mut::<PlayerName>().0 = "alice".to_string();
     spawn_player(&mut app);
     let box_linked = spawn_box(&mut app, 0, Vec3::new(1.0, 0.5, 0.0));
     app.world_mut().spawn(RopeLink {
         rope_id: test_rope_id(),
-        player_owner: "alice".to_string(),
+        player_owner: "2".to_string(),
         target: test_box_id(0),
     });
     let box_free = spawn_box(&mut app, 1, Vec3::new(2.0, 0.5, 0.0));
@@ -132,7 +129,6 @@ fn highlight_nearest_box_skips_linked() {
 #[test]
 fn highlight_clears_when_no_boxes_in_range() {
     let mut app = rope_test_app();
-    app.world_mut().resource_mut::<PlayerName>().0 = "alice".to_string();
     spawn_player(&mut app);
     let box_far = spawn_box(&mut app, 0, Vec3::new(100.0, 0.5, 0.0));
 

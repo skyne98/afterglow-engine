@@ -435,8 +435,9 @@ mod tests {
             .get::<NetworkTransformInterpolationBuffer>(entity)
             .unwrap();
         assert_eq!(buffer.delay_ticks, 4);
+        // After one FixedUpdate, the buffer should have 1 sample (index 0).
         assert_eq!(
-            buffer.sample_at(1).unwrap().translation,
+            buffer.sample_at(0).unwrap().translation,
             Vec3::new(2.0, 3.0, 4.0)
         );
     }

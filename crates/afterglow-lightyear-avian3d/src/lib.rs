@@ -14,7 +14,10 @@
 
 #![allow(clippy::type_complexity)]
 
-use avian3d::{physics_transform::*, prelude::*};
+use avian3d::{
+    collision::contact_types::ContactGraph, dynamics::solver::constraint_graph::ConstraintGraph,
+    physics_transform::*, prelude::*,
+};
 use bevy::{
     ecs::schedule::ScheduleLabel,
     prelude::*,
@@ -60,6 +63,13 @@ impl Plugin for AfterglowAvianPlugin {
                     .before(position_to_transform),
             );
         }
+
+        app.add_systems(
+            PhysicsSchedule,
+            Self::rebuild_constraint_graph_before_solver
+                .after(NarrowPhaseSystems::Last)
+                .before(SolverSystems::PrepareContactConstraints),
+        );
 
         // Proper ordering: TransformToPosition -> physics -> PositionToTransform
         // -> save history -> frame interpolation status.
@@ -165,6 +175,51 @@ impl AfterglowAvianPlugin {
         );
     }
 
+    fn rebuild_constraint_graph_before_solver(
+        mut contact_graph: ResMut<ContactGraph>,
+        mut constraint_graph: ResMut<ConstraintGraph>,
+    ) {
+        Self::rebuild_constraint_graph_from_contacts(&mut contact_graph, &mut constraint_graph);
+    }
+
+    fn rebuild_constraint_graph_from_contacts(
+        contact_graph: &mut ContactGraph,
+        constraint_graph: &mut ConstraintGraph,
+    ) {
+        let active_pairs = contact_graph.active_pairs().to_vec();
+        let contact_ids = active_pairs
+            .iter()
+            .map(|pair| pair.contact_id)
+            .chain(
+                contact_graph
+                    .sleeping_pairs()
+                    .iter()
+                    .map(|pair| pair.contact_id),
+            )
+            .collect::<Vec<_>>();
+
+        constraint_graph.clear();
+        for contact_id in contact_ids {
+            if let Some((contact_edge, _)) = contact_graph.get_mut_by_id(contact_id) {
+                contact_edge.constraint_handles.clear();
+            }
+        }
+
+        for pair in active_pairs {
+            let Some((contact_edge, _)) = contact_graph.get_mut_by_id(pair.contact_id) else {
+                continue;
+            };
+
+            if !pair.is_touching() || !pair.generates_constraints() || pair.manifolds.is_empty() {
+                continue;
+            }
+
+            for _ in 0..pair.manifolds.len() {
+                constraint_graph.push_manifold(contact_edge, &pair);
+            }
+        }
+    }
+
     /// Add Transform only when Position/Rotation are both present and Transform
     /// is not.
     ///
@@ -264,6 +319,14 @@ pub mod prelude {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use avian3d::{
+        collision::contact_types::{
+            ContactEdge, ContactEdgeFlags, ContactManifold, ContactPairFlags,
+        },
+        dynamics::solver::constraint_graph::ContactManifoldHandle,
+    };
+    use bevy::time::TimeUpdateStrategy;
+    use std::time::Duration;
 
     #[test]
     fn plugin_builds_without_panicking() {
@@ -280,6 +343,156 @@ mod tests {
         assert!(
             app.world()
                 .contains_resource::<avian3d::physics_transform::PhysicsTransformConfig>()
+        );
+    }
+
+    #[test]
+    fn constraint_graph_rebuild_removes_stale_manifold_handles() {
+        let mut world = World::new();
+        let collider1 = world.spawn_empty().id();
+        let collider2 = world.spawn_empty().id();
+        let body1 = world.spawn_empty().id();
+        let body2 = world.spawn_empty().id();
+
+        let mut contact_graph = ContactGraph::default();
+        let mut contact_edge = ContactEdge::new(collider1, collider2);
+        contact_edge.body1 = Some(body1);
+        contact_edge.body2 = Some(body2);
+        let contact_id = contact_graph
+            .add_edge_with(contact_edge, |pair| {
+                pair.body1 = Some(body1);
+                pair.body2 = Some(body2);
+                pair.flags = ContactPairFlags::TOUCHING | ContactPairFlags::GENERATE_CONSTRAINTS;
+                pair.manifolds.push(ContactManifold::new([], Vec3::Y));
+            })
+            .expect("contact edge should be inserted");
+
+        let mut constraint_graph = ConstraintGraph::default();
+        constraint_graph.colors[0]
+            .manifold_handles
+            .push(ContactManifoldHandle {
+                contact_id,
+                manifold_index: 1,
+            });
+
+        AfterglowAvianPlugin::rebuild_constraint_graph_from_contacts(
+            &mut contact_graph,
+            &mut constraint_graph,
+        );
+
+        let handles = constraint_graph
+            .colors
+            .iter()
+            .flat_map(|color| color.manifold_handles.iter())
+            .collect::<Vec<_>>();
+        assert_eq!(handles.len(), 1);
+        assert_eq!(handles[0].contact_id, contact_id);
+        assert_eq!(handles[0].manifold_index, 0);
+
+        let (edge, _) = contact_graph
+            .get_by_id(contact_id)
+            .expect("contact should remain in graph");
+        assert_eq!(edge.constraint_handles.len(), 1);
+    }
+
+    #[test]
+    fn constraint_graph_rebuild_does_not_readd_sleeping_contacts() {
+        let mut world = World::new();
+        let collider1 = world.spawn_empty().id();
+        let collider2 = world.spawn_empty().id();
+        let body1 = world.spawn_empty().id();
+        let body2 = world.spawn_empty().id();
+
+        let mut contact_graph = ContactGraph::default();
+        let mut contact_edge = ContactEdge::new(collider1, collider2);
+        contact_edge.body1 = Some(body1);
+        contact_edge.body2 = Some(body2);
+        contact_edge.flags.set(ContactEdgeFlags::TOUCHING, true);
+        let contact_id = contact_graph
+            .add_edge_with(contact_edge, |pair| {
+                pair.body1 = Some(body1);
+                pair.body2 = Some(body2);
+                pair.flags = ContactPairFlags::TOUCHING | ContactPairFlags::GENERATE_CONSTRAINTS;
+                pair.manifolds.push(ContactManifold::new([], Vec3::Y));
+            })
+            .expect("contact edge should be inserted");
+
+        let mut constraint_graph = ConstraintGraph::default();
+        AfterglowAvianPlugin::rebuild_constraint_graph_from_contacts(
+            &mut contact_graph,
+            &mut constraint_graph,
+        );
+        contact_graph.sleep_entity_with(collider1, |_, _| {});
+        AfterglowAvianPlugin::rebuild_constraint_graph_from_contacts(
+            &mut contact_graph,
+            &mut constraint_graph,
+        );
+
+        assert!(
+            constraint_graph
+                .colors
+                .iter()
+                .all(|color| color.manifold_handles.is_empty())
+        );
+        assert!(
+            contact_graph
+                .get_by_id(contact_id)
+                .expect("contact should remain in graph")
+                .0
+                .constraint_handles
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn transform_mode_writes_physics_position_back_to_transform() {
+        let mut app = bevy::prelude::App::new();
+        app.add_plugins((
+            bevy::prelude::MinimalPlugins,
+            bevy::transform::TransformPlugin,
+        ));
+        app.add_plugins(
+            avian3d::prelude::PhysicsPlugins::default()
+                .build()
+                .disable::<avian3d::prelude::PhysicsTransformPlugin>()
+                .disable::<avian3d::prelude::PhysicsInterpolationPlugin>(),
+        );
+        app.add_plugins(AfterglowAvianPlugin::default());
+        app.finish();
+        app.cleanup();
+        *app.world_mut().resource_mut::<TimeUpdateStrategy>() =
+            TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(1.0 / 60.0));
+        app.world_mut().insert_resource(Gravity(Vec3::ZERO));
+
+        let body = app
+            .world_mut()
+            .spawn((
+                RigidBody::Dynamic,
+                Collider::cuboid(1.0, 1.0, 1.0),
+                Position::from(Vec3::ZERO),
+                Rotation::default(),
+                LinearVelocity(Vec3::X),
+                Transform::default(),
+            ))
+            .id();
+
+        for _ in 0..10 {
+            app.update();
+        }
+
+        let position_x = app.world().get::<Position>(body).unwrap().x;
+        let transform_x = app.world().get::<Transform>(body).unwrap().translation.x;
+        assert!(
+            position_x > 0.05,
+            "physics Position should move, x={position_x}"
+        );
+        assert!(
+            transform_x > 0.05,
+            "bridge must write post-physics Position into Transform for replication, transform.x={transform_x}, position.x={position_x}"
+        );
+        assert!(
+            (transform_x - position_x).abs() <= 0.001,
+            "Transform must match Avian Position after writeback: transform.x={transform_x}, position.x={position_x}"
         );
     }
 }

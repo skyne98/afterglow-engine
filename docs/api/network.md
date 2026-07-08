@@ -22,19 +22,16 @@ path physics lag compensation.
 
 | Item | Purpose |
 |---|---|
-| `AfterglowNetworkPlugin` | Adds `AfterglowLightyearPlugin` and `AfterglowSessionPlugin`. |
-| `AfterglowLightyearPlugin` | Initializes `AfterglowLightyearConfig`; with the `lightyear` feature, adds Lightyear client/server plugin groups and Leafwing input networking. Concrete link/transport entity setup is still test/demo-owned. |
-| `AfterglowLightyearConfig` | Engine-facing Lightyear config: role, server/remote addresses, tick rate, prediction window, protocol id, optional connect token, link-conditioner settings, and `netcode_private_key`. The private key defaults to `[0u8; 32]` — a development placeholder that **must** be replaced before any real network deployment. |
-| `AfterglowNetworkContext` | Global side/session context resource. Call `get_connection_status()` to query whether this world runs authority, client prediction, host mode, the current session id, and the local `SessionMemberId`. Gameplay systems should prefer this explicit context over hard-coded role-specific duplicate systems. |
-| `register_afterglow_lightyear_protocol` | Opt-in helper that initializes `HistoryTick`, registers reflection for `HistoryTick` and `StableEntityId`, and — under the `lightyear` feature — registers `StableEntityId` as a replicated Lightyear component. Call it after Lightyear client/server plugins are present. |
+| `AfterglowNetworkPlugin` | Initializes the current network context layer. Lightyear connection plugins are installed explicitly by demos/apps that need networking. |
+| `AfterglowLightyearPlugin` | Initializes `AfterglowLightyearConfig`; with the `lightyear` feature, adds the selected Lightyear client or server plugin group, installs Leafwing input networking, frame interpolation for `Transform`, and registers the shared engine protocol. |
+| `AfterglowLightyearConfig` | Engine-facing Lightyear config: role, tick rate, input rebroadcast, and input delay. Session discovery and matchmaking are external to the engine. |
+| `AfterglowConnectionPlugin` | Real UDP/netcode connection boundary. The server variant spawns/listens with `ServerListenAddr`; the client variant connects to `ServerAddr` using `LocalIdentity`. |
+| `ConnectionConfig` | Runtime auth/input/link configuration for `AfterglowConnectionPlugin`. |
+| `ConnectionEvent` | Observer event emitted when a `PlayerId` connects/disconnects. Gameplay spawns/despawns authoritative player entities from this event. |
+| `LocalIdentity` / `LocalPlayerId` | `PlayerId` source and local client resource. `PlayerId` is the netcode `client_id`. |
+| `MemberLinkMap`, `PlayerOwned`, `ControlledEntityPlugin` | Server-side ownership helpers for mapping players to ready Lightyear links and binding `ControlledBy` safely. |
+| `register_afterglow_lightyear_protocol` | Shared protocol helper that registers `StableEntityId`, `Transform`, `LinearVelocity`, and `HistoryTick` support for Lightyear. Call gameplay component registrations after Lightyear plugins are present. |
 | `HistoryTick` | Plain `u32` resource used by deterministic fixed-step tests and scenario systems. It is not rewind history. |
-| `AfterglowSessionPlugin` | Platform-neutral session/matchmaking API layer. Registers `AfterglowSessionState`, `SessionStatus`, `NonSteamSessionCatalog`, `SessionRequest` and `SessionEvent` Bevy `Message` types, and systems that process session requests and maintain a session status snapshot. Future Steam lobby support will be added as an alternative backend. |
-| `AfterglowSessionState` | Resource tracking the local `SessionMemberId`, current `SessionId`, and current `SessionBackend` (if any). |
-| `SessionStatus` | Game-friendly snapshot derived from `SessionEvent`s: current `SessionInfo`, observed member list, and coarse connection state. |
-| `SessionConnectionState` | `Idle`, `Joining`, `Connected`, `Error(SessionError)`. |
-| `AfterglowSessionExt` | Fluent extension trait on `App` (`app.session()`) providing the high-level API in [`session-api.md`](session-api.md). |
-| `AfterglowSessionLightyearBridgePlugin` | Opt-in bridge that maps `SessionEvent`s to Lightyear link lifecycle. |
-| `AfterglowNetcodeConsumerPlugin` | Opt-in consumer that drains `PendingNetcodeStartup` and spawns real UDP/netcode link entities. |
 
 ## Universal Identity
 
@@ -146,19 +143,48 @@ predicted actor can physically contact props/walls, those contact participants
 must exist in the local prediction world too; otherwise the actor can visually
 penetrate stale server/interpolated objects until correction arrives.
 
+For the multiplayer boxes demo, `PlayerBox` and `KinematicBox` are predicted to
+all clients. The visible rendered entity is the `Predicted` copy. The live UDP
+demo disables Lightyear input rebroadcast and relies on authoritative
+replication/reconciliation for remote presentation; this avoids rebroadcasting
+entity-targeted input before late-joining clients have a valid entity map.
+Gameplay code must not copy `Confirmed<Transform>` into live predicted physics
+bodies; confirmed server state is an old-tick input to Lightyear rollback/replay, not a
+current-frame presentation command. The engine installs a generic confirmed-tick
+rollback guard so delayed/buffered confirmed state triggers rollback checks
+without demo-specific networking branches. `RopeLink` uses a stable
+`StableEntityId` component in addition to its `rope_id` field so Lightyear can
+confirm/predict the rope entity consistently across multiple clients. Rope
+physics joints are created only on the authoritative server and on the owning
+predicted client; non-owning clients keep replicated rope links visual-only
+until the all-clients deterministic rope-joint model is proven safe. Local rope release has an owning-client suppression path: when the physical
+rope key is released while a local rope is active, the client immediately marks
+that rope id locally released, disables its visible predicted entity/joint, and
+keeps re-hiding stale confirmed/predicted reappearances until authoritative
+despawn catches up. A later replayed `ActionState` release still cleans up an
+already-hidden local rope, and `sync_rope_joints` despawns orphan local Avian
+rope joints so a hidden/missing `RopeLink` cannot leave a block physically
+attached without a visible rope. This is local prediction state only; the server
+still receives the release through Lightyear's native input buffer.
+
 Use Lightyear's native input stack for player commands. The engine's
 `AfterglowLightyearPlugin` installs the Leafwing Lightyear input plugin, which
 owns `InputChannel` registration and tick-buffered input message semantics.
-Afterglow configures input rebroadcast and `InputTimelineConfig` (fixed 2-tick
-delay by default, configurable via
-`AfterglowLightyearConfig.input_delay_ticks` and
+Afterglow configures input rebroadcast plus live client-link timeline
+components (`InputTimeline`, `IsSynced<InputTimeline>`,
+`InterpolationTimeline`, `IsSynced<InterpolationTimeline>`, and
+`InputTimelineConfig`; fixed 2-tick delay by default, configurable via
+`ConnectionConfig.input_delay_ticks` and
 `AfterglowLightyearConfig.rebroadcast_inputs`). Do not register
 `ActionState<AfterglowAction>` as a normal replicated component for player
 commands. Games only need to add `InputMap<AfterglowAction>` +
 `ActionState<AfterglowAction>` on controlled entities. Manual
 keyboard-to-action writes must run in `FixedPreUpdate` /
 `InputSystems::WriteClientInputs` so Lightyear buffers them before it restores
-delayed input snapshots.
+delayed input snapshots. Input writers that skip during rollback must still
+remember physical button edges observed during the guarded window and replay
+those edges once normal input writing resumes; otherwise short release edges can
+be lost.
 
 Use Lightyear's existing `ControlledBy` / `Controlled` relationship to bind an
 entity to the link that controls it, and Leafwing `InputMap<AfterglowAction>` /
@@ -166,10 +192,16 @@ entity to the link that controls it, and Leafwing `InputMap<AfterglowAction>` /
 Afterglow does not add a separate player/avatar taxonomy.
 
 `ControlledEntityPlugin` provides the reusable join-time binding layer for
-entities tagged with `PlayerOwned`. `MemberLinkMap` only exposes `ClientOf`
-links after they also have a `ReplicationSender`; inserting `ControlledBy`
-before the sender exists makes Lightyear reject the controlled entity. Game code
-can spawn/tag entities on session events without waiting for the link itself.
+entities tagged with `PlayerOwned`. Server-side `ClientOf` links require a
+`ReplicationSender` at insertion time, and a readiness repair pass also wires
+standard transport channels before replication buffering. `MemberLinkMap` only
+exposes links after this sender is present; inserting `ControlledBy` before the
+sender exists makes Lightyear reject the controlled entity. If a connection observer will spawn all-client replicated entities, queue the
+spawn and apply it after the connection `PreUpdate` flush (the multiplayer boxes
+server does this in `PostUpdate`). Prefer explicit-server replication mode for
+live UDP spawns so Lightyear skips partially handshaken links without logging a
+`ClientOf ... does not have ReplicationSender` error; `handle_connection` adds
+those entities to the client once the link has `Connected + ReplicationSender`.
 
 The remaining reusable lifecycle surface is richer orchestration: assign,
 revoke, and rebind controlled entities for disconnect, respawn, possession, and
@@ -216,6 +248,17 @@ Two test paths exercise UDP input delivery:
   `MessageSender`/`MessageReceiver`. Retained as a regression baseline against
   the native input route.
 
+- **Production connection plugin path**
+  (`udp_scenarios/multiplayer_boxes.rs`,
+  `udp_scenarios/multiplayer_boxes_rope.rs`): Builds one server and two clients
+  through `AfterglowLightyearPlugin` + `AfterglowConnectionPlugin`, verifies
+  bidirectional Lightyear messages over real UDP, sends actual Leafwing input,
+  and asserts the server plus both clients' visible predicted `Transform`s move.
+  The rope variant attaches with `KeyF`, pulls a predicted block in a
+  test-local deterministic physics harness, releases while moving away, and
+  asserts the owning client never shows an active rope or duplicate PreSpawned
+  rope hash again while the authoritative despawn catches up.
+
 ## Predicted Interaction Pattern
 
 Use Lightyear `PreSpawned` for local interaction entities that need instant
@@ -248,221 +291,61 @@ sockets), UDP client-to-server `ActionState<AfterglowAction>` delivery into
 authoritative gameplay systems, fixed input delay, retention windows,
 PreSpawned confirmation/expiration, controller/physics behavior, combat, RPG
 status effects, doors, adversarial input, and replication stress. The harness
-now includes **28 UDP scenario variants** (lockstep, adversarial, RPG,
-PreSpawned, combat, doors, stress, full-stack manual input, and native Leafwing
-input) in `scenarios/udp_scenarios/` and native Leafwing input over Crossbeam
-in `scenarios/native_input.rs`, bringing the total test count to **80
-tests** across both transport backends.  Two additional infrastructure tests
-in `scenarios/native_input.rs` verify that the native input pipeline (timeline
+includes UDP scenario variants (lockstep, adversarial, RPG, PreSpawned, combat,
+doors, stress, full-stack manual input, and native Leafwing input) in
+`scenarios/udp_scenarios/`, native Leafwing input over Crossbeam in
+`scenarios/native_input.rs`, and a `scenarios/multiplayer_boxes.rs` regression
+that runs one server plus two clients with the Avian/Lightyear Transform-mode
+bridge installed. The multiplayer boxes scenario verifies that client input
+moves the authoritative player and both clients' visible `Transform`s,
+server-driven block movement reaches both visible predicted copies, and a
+stable predicted `RopeLink` plus player/block movement remains visible on both
+clients. The UDP rope regression additionally boxes in local release flicker:
+released ropes are hidden immediately on the owning client, stale reappearance
+is suppressed repeatedly, and duplicate deterministic PreSpawned hashes are
+rejected. Two additional infrastructure tests in
+`scenarios/native_input.rs` verify that the native input pipeline (timeline
 sync, LeafwingBuffer creation, `WriteClientInputs` ordering) initializes
 correctly over Crossbeam transport, even though full end-to-end input delivery
 requires the UDP/Netcode connection lifecycle.
 
 For UDP server links, the harness lets Lightyear/netcode create and own the link
-entity, `Transport`, and `MessageManager`. The harness decorates server-side
-`LinkOf` entities with only `ReplicationSender`; a regression test verifies that
-UDP entity replication works and repeated `connect()` calls do not replace
-Lightyear-owned link components.
+entity and `MessageManager`. `AfterglowConnectionPlugin` registers
+`ReplicationSender` as a required component of server-side `ClientOf` so
+Lightyear replication target hooks never see an unready client in
+`Server::collection()`. The readiness repair pass then idempotently wires the
+`Transport` channels for Metadata, Updates, Actions, and Lightyear input. A
+regression test verifies that UDP entity replication works and repeated
+`connect()` calls do not replace Lightyear-owned link components.
 
 The legacy `crates/mock-rpg-network-tests` crate still exists as a frozen oracle
 for older rollback-style scenarios. It now owns its own local snapshot/replay
 logic and no longer depends on engine rewind-history APIs.
 
-## Session / Matchmaking API
+## Connection / Identity Boundary
 
-The session layer is a platform-neutral wrapper for matchmaking operations
-(create, search, join, leave) backed at runtime by a chosen provider. Both
-`SessionRequest` and `SessionEvent` are Bevy `Message` types (not Lightyear
-messages).
+Afterglow no longer owns matchmaking or a session catalog. Session discovery, lobby membership, invites, and NAT traversal are external to the engine. The engine consumes already-chosen connection parameters and stable player identity.
 
-| Type | Purpose |
+| Type / Plugin | Purpose |
 |---|---|
-| `SessionId` / `SessionMemberId` | `u128` wrapper IDs with `INVALID`/`new`/`from_raw`/`as_raw`/`is_valid`, following the `StableEntityId` pattern. `SessionId` is internal/durable; players do not type it. |
-| `SessionCode` | Player-facing short join token (e.g., `XFQ-KRB`). Six uppercase characters in two hyphenated groups, excluding I/L/O. Generated by the non-Steam provider and unique among active sessions. |
-| `PlayerIdentity` | Durable anti-spoofing identity: `Native(NativeIdentityProof)` with Ed25519 public key + signature, or `Steam { steam_id, ticket }` for Steam ticket passthrough. |
-| `NativeIdentityProof` | Ed25519 public key and signature over a canonical challenge (`"afterglow-session:" + backend + target + nonce`). The client holds the private key locally; the server never sees it. |
-| `SessionIdentityNonce` | Server-side nonce resource used when verifying native proofs. Initialized from the OS CSPRNG. |
-| `IdentityError` | `InvalidPublicKey`, `InvalidSignature`, `UnsupportedBackend`. |
-| `SessionBackend` | `NonSteam` or `Steam` — identifies which provider the session came from. |
-| `SessionVisibility` | `Private` / `FriendsOnly` / `Public` / `Invisible` — maps to Steam lobby visibility. |
-| `SessionTransport` | `Local` or `DirectUdp { host: String }` — describes the expected transport without owning a Lightyear link. `DirectUdp` requires the host to publish its gameplay `host:port` string in the session info so remote clients can resolve it. |
-| `ProviderEndpoint` | `InProcess`, `Udp(SocketAddr)`, or `Steam`. A remote client must supply a `Udp` endpoint to find/join a NonSteam listen-server because there is no central registry. `Steam` resolves through Steamworks. `InProcess` routes requests through the in-process catalog for local co-op/tests. |
-| `SessionConfig` | Name, `backend`, capacity, visibility, metadata (key/value), and transport preference. `SessionConfig::default()` targets `NonSteam`. |
-| `SessionSearch` | `backend`, `provider`, metadata filter (exact AND semantics), `require_open_slot`, and `max_results` bound (0 returns empty). |
-| `SessionInfo` | Full read-only snapshot: id, code, backend, name, owner, owner identity, member count/capacity, visibility, metadata, transport. |
-| `SessionRequest` | Bevy `Message` enum: `Create(SessionConfig, PlayerIdentity)`, `Search(SessionSearch)`, `Join { backend, session, identity, provider }`, `JoinByCode { backend, provider, code, identity }`, `Leave`. `Join` and `JoinByCode` carry a `provider` so remote joiners can reach the host. `Search` carries a `provider` for the same reason. |
-| `SessionEvent` | Bevy `Message` enum carrying session lifecycle outcomes: `Created`, `SearchResults`, `Joined`, `Left`, `MemberJoined`, `MemberLeft`, `SessionEnded`, `Error`. |
-| `SessionError` | `AlreadyInSession`, `NotInSession`, `SessionNotFound`, `SessionFull`, `InvalidConfig`, `PermissionDenied`, `BackendUnavailable`. |
-| `SessionLeaveReason` | `Left`, `Disconnected`, `Kicked`, `Banned`, `HostEnded`. |
-| `AfterglowSessionState` | Resource with `local_member_id`, `identity`, `current_session`, `current_backend`. `local_member_id` defaults to `INVALID` and is lazily allocated by the catalog on first use. |
+| `AfterglowConnectionPlugin::server(NetcodeConfig)` | Spawns one Lightyear netcode server from `ServerListenAddr`; requires `ReplicationSender` on each `ClientOf`, configures Lightyear channels/auth state/`MemberLinkMap`, and emits `ConnectionEvent`. |
+| `AfterglowConnectionPlugin::client(NetcodeConfig)` | Spawns one Lightyear netcode client from `ServerAddr` + `LocalIdentity`; wires the client `Transport` from `ChannelRegistry`; inserts `LocalPlayerId`; starts the netcode handshake. |
+| `ConnectionConfig` | Runtime connection knobs: tick rate, input delay ticks, input rebroadcast, optional link conditioner, and `require_auth`. Demos currently set `require_auth: false` while auth message timing is validated. |
+| `LocalIdentity` | Local stable player id plus optional Ed25519 keypair. Steam builds should use `PlayerId = SteamId`; non-Steam builds derive `PlayerId = blake3(Ed25519_public_key)[..8]`. |
+| `ConnectionEvent` | Observer event emitted on connect/disconnect with `player_id` and link entity. Games spawn/despawn authoritative player entities from this event. |
+| `MemberLinkMap` | Server resource mapping `PlayerId` to ready Lightyear `ClientOf` link entities. |
+| `PlayerOwned` / `ControlledEntityPlugin` | Tags entities owned by a `PlayerId` and binds Lightyear `ControlledBy` only once the owning link has a `ReplicationSender`. |
+| `LocalPlayerId` | Client resource equal to the netcode `client_id`; used by input, camera, local prediction, and presentation systems. |
 
-Each `SessionRequest` carries a `backend` field (directly in `SessionConfig.backend`,
-`SessionSearch.backend`, or `Join.backend`). The non-Steam provider processes
-only `NonSteam` requests; `Steam` requests emit `BackendUnavailable`. This
-design avoids duplicate provider state — a future Steam provider will handle
-Steam-targeted requests without shadowing the non-Steam catalog.
+`PlayerId` is a `u64` and is the netcode `client_id`. Do not preinsert `LocalId`, `RemoteId`, or `Connected` for real UDP/netcode clients; the netcode plugin inserts those after handshake. Explicit IDs are only for manual/in-process links such as Crossbeam tests.
 
-The **in-process non-Steam provider** (`NonSteamSessionCatalog` + `process_non_steam_session_requests`) is the
-default in-memory implementation. It validates all operations, enforces capacity
-and ownership, generates a unique [`SessionCode`] for each created session, and
-emits the outcome protocol locally.
+Production client link invariants:
 
-The **networked non-Steam provider** (`NonSteamSessionProvider` + `NonSteamSessionClient`) lets a
-host listen on a TCP address and exposes the same catalog operations to remote
-clients over a length-prefixed postcard protocol. The provider shares the
-`NonSteamSessionCatalog` resource with the in-process system: a listen-server
-host can create a session via the normal in-process path and remote clients
-querying the provider will see it. Provider responses are sent back to the
-requester over TCP, and `MemberJoined`/`MemberLeft`/`SessionEnded` events are
-also emitted locally so the hosting app observes membership changes.
+- build the client `Transport` from the finalized `ChannelRegistry` before inserting it, so replication, auth, ping, and input channels exist in both directions;
+- let Lightyear required-component hooks own `MessageManager`. Do not insert a fresh `MessageManager` after `Client`, because that can wipe the private sender/receiver component-id lists and make client-to-server messages appear present while never leaving the client;
+- when `Connected` is added, insert `InputTimeline`, `IsSynced<InputTimeline>`, `InterpolationTimeline`, `IsSynced<InterpolationTimeline>`, and `InputTimelineConfig`. Lightyear input send systems filter on both synced timelines when interpolation is compiled in.
 
-Games usually send remote `Search`/`JoinByCode` requests through the
-`NonSteamSessionClient` resource (or via the [`AfterglowSessionExt`](session-api.md)
-high-level API), and then read `SessionStatus` or `AfterglowSessionState` for the
-result. Neither provider creates Lightyear transport links, Netcode connections,
-or lobby network traffic by itself.
-
-### Joining by Code
-
-To join a friend's session, use the player-facing code emitted in
-[`SessionEvent::Created`] / [`SessionEvent::Joined`]:
-
-```rust
-app.world_mut().write_message(SessionRequest::JoinByCode {
-    backend: SessionBackend::NonSteam,
-    provider: ProviderEndpoint::Udp("203.0.113.42:7777".parse().unwrap()),
-    code: SessionCode::new("XFQ-KRB"),
-    identity: my_identity(),
-});
-```
-
-Joining by internal [`SessionId`] remains available via
-`SessionRequest::Join { backend, session, identity }` for systems that already
-track the durable ID.
-
-### Player Identity
-
-Every create/join request must carry a [`PlayerIdentity`]:
-
-```rust
-let identity = PlayerIdentity::Native(NativeIdentityProof {
-    public_key: my_public_key.to_vec(),
-    signature: my_signing_key.sign(&NativeIdentityProof::challenge(
-        SessionBackend::NonSteam,
-        "create",
-        &nonce.0,
-    )).to_vec(),
-});
-
-app.world_mut().write_message(SessionRequest::Create(
-    SessionConfig::default(),
-    identity,
-));
-```
-
-The non-Steam provider:
-
-- verifies the Ed25519 signature against the canonical challenge for the
-  request target (`"create"`, the session id for `Join`, or the session code for
-  `JoinByCode`);
-- rejects requests that fail verification with `SessionError::PermissionDenied`;
-- binds the public key to a `SessionMemberId` so the same native key rejoining a
-  session gets the same member slot;
-- accepts `PlayerIdentity::Steam` as a passthrough; the future Steam backend will
-  validate the Steam ticket.
-
-`SessionMemberId` remains a per-session handle. `PlayerIdentity` is the trusted
-anti-spoofing/persistence boundary.
-
-**Future Steam mapping**: `SessionId` / `SessionMemberId` will wrap
-`steamworks::LobbyId` / `steamworks::SteamId`. `SessionRequest` messages
-will map to `ISteamMatchmaking` calls, and `SessionEvent` messages will deliver their
-completion callbacks. `SessionVisibility` maps directly to Steam lobby type.
-Metadata parity with Steam key/value lobby data is already present.
-
-The session layer does **not** own Lightyear transport, link spawning, or
-`StableEntityId` gameplay identity. Session member IDs are platform/session
-identity only. Clients send input through Leafwing/Lightyear regardless of
-session membership.
-
-### Provider Types in the Plugin
-
-| Type | Purpose |
-|---|---|
-| `NonSteamSessionProvider` | Optional resource. When inserted with a TCP listen address, it accepts remote clients and runs `NonSteamSessionCatalog` operations on their behalf. Defaults disabled. |
-| `NonSteamSessionClient` | Always-registered resource. Used by games to send `SessionRequest`s to a remote `ProviderEndpoint::Udp(addr)`. Manages a single outbound TCP connection at a time and writes remote responses as local `SessionEvent` messages. |
-| `RemoteClient` | Internal per-connection state stored in `NonSteamSessionProvider::clients`. |
-
-## Querying Session Status
-
-`AfterglowSessionPlugin` registers a [`SessionStatus`] resource that is kept in
-sync with session events. Query it instead of draining [`SessionEvent`]
-messages when you only need the current snapshot:
-
-```rust
-let state = app.world().resource::<AfterglowSessionState>();
-if state.is_in_session() {
-    let status = app.world().resource::<SessionStatus>();
-    println!("session: {:?}", status.info);
-    println!("members: {}", status.member_count());
-    match status.state {
-        SessionConnectionState::Idle => {}
-        SessionConnectionState::Joining => {}
-        SessionConnectionState::Connected => {}
-        SessionConnectionState::Error(err) => eprintln!("session error: {:?}", err),
-    }
-}
-```
-
-`SessionStatus` is also the natural hook for higher-level helpers such as the
-API proposed in [`session-api.md`](session-api.md) (e.g. `app.session().status()`).
-
-## Session-to-Lightyear Bridge
-
-[`AfterglowSessionLightyearBridgePlugin`] maps [`SessionEvent`] lifecycle
-events to Lightyear link management. It is opt-in and not included in
-[`AfterglowNetworkPlugin`]. Add it explicitly after Lightyear plugins and the
-session plugin:
-
-```rust
-app.add_plugins((
-    AfterglowLightyearPlugin,
-    AfterglowSessionPlugin,
-    AfterglowSessionLightyearBridgePlugin, // opt-in
-));
-```
-
-| Plugin / Type | Purpose |
-|---|---|
-| `AfterglowSessionLightyearBridgePlugin` | Initializes `SessionLightyearLinks` and `PendingNetcodeStartup` resources; runs its private bridge system in [`AfterglowSessionSet::ApplyEffects`]. Lightyear may observe newly spawned link entities on the following frame depending on its own internal `PreUpdate` ordering. |
-| `SessionLightyearLinks` | Resource tracking the client link, server link, and server entity spawned for a local session. Cleared on leave/session-end. |
-| `PendingNetcodeStartup` | Resource carrying optional `NetcodeClientParams` and `NetcodeServerParams` produced by `DirectUdp` session events. [`AfterglowNetcodeConsumerPlugin`] drains this and spawns real UDP/netcode link entities. |
-| `NetcodeClientParams` | Parameters for starting a Netcode client connection: `server_addr`, `client_id`, `protocol_id`, `private_key`. The `private_key` is populated from `AfterglowLightyearConfig.netcode_private_key`. |
-| `NetcodeServerParams` | Parameters for starting a Netcode server: `bind_addr`, `protocol_id`, `private_key`. The `private_key` is populated from `AfterglowLightyearConfig.netcode_private_key`. |
-
-### Netcode Link Consumer
-
-`AfterglowNetcodeConsumerPlugin` is an opt-in plugin that drains
-`PendingNetcodeStartup` each frame and spawns Lightyear `NetcodeClient` /
-`NetcodeServer` link entities with UDP transport. Add it when you want
-`SessionTransport::DirectUdp` sessions to open real sockets:
-
-```rust
-app.add_plugins((
-    AfterglowLightyearPlugin,
-    AfterglowSessionPlugin,
-    AfterglowSessionLightyearBridgePlugin,
-    AfterglowNetcodeConsumerPlugin,
-));
-```
-
-The consumer is separate so tests and headless scenarios can inspect
-`PendingNetcodeStartup` without opening sockets, and so games can replace it
-with custom transport logic if needed.
-
-Testing note: Bevy harnesses that drive apps manually with `App::update()` must
-emulate the runner lifecycle after registering the Lightyear protocol and before
-the first update:
+Testing note: Bevy harnesses that drive apps manually with schedules must emulate the runner lifecycle after registering Lightyear protocols and before the first update:
 
 ```rust
 while app.plugins_state() == bevy::app::PluginsState::Adding {}
@@ -470,26 +353,7 @@ app.finish();
 app.cleanup();
 ```
 
-Lightyear builds its dynamic replication buffer system in
-`ReplicationSendPlugin::finish()`; without this, connection/link components may
-look correct but replicated entity spawns will never be buffered.
-
-### Transport Behaviour
-
-| `SessionTransport` | Bridge Action |
-|---|---|
-| `Local` | Despawns any previously tracked entities, then spawns a server entity (`Server::default()`, `Started`), a client link entity with Crossbeam transport, and a server link entity with Crossbeam transport. Because Crossbeam local links have no netcode handshake, the client link explicitly carries `Client`, `LocalId`, `RemoteId(PeerId::Server)`, `Connected`, `Link`, `Linked`, `CrossbeamIo`, `Transport`, `MessageManager`, `ReplicationReceiver`, and `PredictionManager`. The server link carries `LinkOf { server }`, `ClientOf`, `LocalId(PeerId::Server)`, `RemoteId`, `Connected`, `Link`, `Linked`, `CrossbeamIo`, `Transport`, `MessageManager`, and `ReplicationSender::new(Duration::ZERO, SendUpdatesMode::SinceLastAck, false)`. Direct UDP/netcode client links are different: the netcode plugin owns `LocalId`, `RemoteId`, and `Connected` insertion after handshake. |
-| `DirectUdp { host }` | Parses `host` into a `SocketAddr`. Writes `NetcodeClientParams` to `PendingNetcodeStartup` when the local `SessionMemberId` is a valid nonzero `u64`. If `AfterglowLightyearConfig.role` is `Host` or `Server`, also writes `NetcodeServerParams`. The bridge also reconciles DirectUdp startup from the current `SessionStatus` + `AfterglowSessionState` each frame, so startup is robust if `Joined` and `MemberJoined` arrive in either order. The `private_key` field in both param structs is populated from `AfterglowLightyearConfig.netcode_private_key` (default `[0u8; 32]` — a development placeholder that must be replaced before any real network deployment). If the host string cannot be parsed into a `SocketAddr`, no pending startup is written and no panic occurs. No link entities are spawned — a separate consumer should drain `PendingNetcodeStartup`. |
-
-### Session Event Handling
-
-| Event | Action |
-|---|---|
-| `Created` / `Joined` (Local) | Spawn tracked Crossbeam link entities (idempotent). |
-| `Created` / `Joined` (Netcode) | Write pending netcode startup parameters when enough state is already available. |
-| `MemberJoined` (Netcode) | Retry/reconcile client startup if this is the event that made the local `SessionMemberId` valid. |
-| `Left` / `SessionEnded` | Despawn tracked entities, clear pending startup. |
-| `SearchResults`, `MemberLeft`, `Error` | Ignored by the Lightyear bridge. |
+Lightyear builds dynamic replication buffer systems in plugin `finish()`; without this, connection/link components may look correct but replicated entity spawns will never be buffered.
 
 ## Legacy Removals
 
@@ -532,7 +396,7 @@ modes.
 
 ## See Also
 
-- [`session-api.md`](session-api.md) — proposed simple public API for hosting
-  and joining sessions (Local, NonSteam listen-server, Steam).
-- [`session-workflows.md`](session-workflows.md) — end-to-end Steam, NonSteam
-  listen-server, and Local session workflows, plus identity and rejoin behavior.
+- [`session-api.md`](session-api.md) — historical/external session API notes;
+  session discovery is no longer engine-owned.
+- [`session-workflows.md`](session-workflows.md) — historical Steam/NonSteam
+  workflow notes for future platform/admission layers.

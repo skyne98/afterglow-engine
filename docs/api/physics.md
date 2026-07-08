@@ -32,6 +32,32 @@ Engine-facing authoring sync remains in `Update`; simulation-facing movement
 such as the first-person controller motor runs in the fixed gameplay schedule so
 large render/window frame spikes are consumed as fixed substeps.
 
+When the `lightyear` feature is active and `AfterglowLightyearPlugin` is present,
+`AfterglowPhysicsPlugin` disables Avian's built-in transform/interpolation sync
+plugins and installs `afterglow-lightyear-avian3d::AfterglowAvianPlugin` in
+Transform replication mode. The bridge keeps `Transform` as the replicated and
+prediction-history component while syncing Avian `Position`/`Rotation` for local
+physics. The bridge regression
+`afterglow-lightyear-avian3d::tests::transform_mode_writes_physics_position_back_to_transform`
+verifies that a body moved by `LinearVelocity` writes its post-physics
+`Position` back to the replicated `Transform`.
+
+Before each Avian solver contact-constraint preparation, the bridge rebuilds
+Avian's `ConstraintGraph` from the current active `ContactGraph` pairs after
+narrow phase. It clears obsolete handles on both active and sleeping pairs, but
+only re-adds active touching contacts, preserving contact pairs/islands while
+preventing Avian's solver from indexing a stale manifold after contact topology
+changes or prediction replay.
+
+In this Transform-mode stack, direct `Transform` edits on entities that also
+have Avian physics components are authoritative pose edits. Prefer
+`LinearVelocity`, forces, impulses, joints, or Avian `Position` changes for
+normal physics gameplay; use direct `Transform` writes only for deliberate
+server-authored pose overrides/tests because they can replace constraint/contact
+output for that tick. See
+[`../research/avian-lightyear-transform-bridge-runtime-sync-2026-06-26.md`](../research/avian-lightyear-transform-bridge-runtime-sync-2026-06-26.md)
+for the runtime-sync investigation.
+
 ## Authoring Components
 
 | Item | Fields/Variants | Purpose |
@@ -102,3 +128,5 @@ entities so Lightyear handles confirmation, deduplication, and rejection cleanup
 |---|---|
 | `cargo run --release --package prototype-physics-bench <body_count> <steps>` | Deterministic Avian throughput characterization. |
 | `cargo run --release --package prototype-physics-serialize <body_count>` | Physics snapshot serialize/restore round-trip verification. |
+| `cargo test -p afterglow-lightyear-avian3d transform_mode_writes` | Regression for Avian 0.6 + Lightyear Transform-mode writeback into replicated `Transform`. |
+| `cargo test -p afterglow-lightyear-avian3d constraint_graph_rebuild` | Regression for Avian contact graph rebuild removing stale manifold handles without re-adding sleeping contacts. |

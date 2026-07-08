@@ -110,6 +110,7 @@ impl LightyearTestRig {
             input_delay_ticks: 0,
             tick_rate: 60,
             retention_window_ticks: 0,
+            netcode_started: false,
             pending_inputs: Vec::new(),
         }
     }
@@ -182,6 +183,92 @@ impl LightyearTestRig {
             input_delay_ticks: 0,
             tick_rate: 60,
             retention_window_ticks: 0,
+            netcode_started: false,
+            pending_inputs: Vec::new(),
+        }
+    }
+
+    /// Create a UDP rig through Afterglow's production connection plugins
+    /// instead of manually wiring Lightyear link entities.
+    pub fn new_afterglow_udp(
+        client_count: usize,
+        plugins: impl Fn(&mut App),
+        register_protocol: impl Fn(&mut App, LightyearRole),
+        server_port: u16,
+    ) -> Self {
+        use afterglow_engine::network::connection::{
+            AfterglowConnectionPlugin, ConnectionConfig, LocalIdentity, NetcodeConfig, ServerAddr,
+            ServerListenAddr,
+        };
+
+        assert!(client_count > 0, "UDP rig needs at least one client");
+        let actual_port = if server_port == 0 {
+            allocate_dynamic_udp_port()
+        } else {
+            server_port
+        };
+        let bind_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), actual_port);
+        let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), actual_port);
+
+        let mut server_app = afterglow_lightyear_app(LightyearRole::Server, &plugins);
+        server_app
+            .insert_resource(ServerListenAddr(bind_addr))
+            .insert_resource(ConnectionConfig {
+                require_auth: false,
+                ..Default::default()
+            })
+            .insert_resource(LocalIdentity::unauthenticated(0));
+        server_app.add_plugins(AfterglowConnectionPlugin::server(NetcodeConfig {
+            protocol_id: PROTOCOL_ID,
+            private_key: PRIVATE_KEY,
+        }));
+        register_protocol(&mut server_app, LightyearRole::Server);
+        server_app.finish();
+        server_app.cleanup();
+        server_app.update();
+
+        let mut client_apps = Vec::new();
+        let mut client_links = Vec::new();
+        for i in 0..client_count {
+            let mut app = afterglow_lightyear_app(LightyearRole::Client, &plugins);
+            app.insert_resource(ServerAddr(server_addr))
+                .insert_resource(ConnectionConfig {
+                    require_auth: false,
+                    ..Default::default()
+                })
+                .insert_resource(LocalIdentity::unauthenticated(i as u64 + 1));
+            app.add_plugins(AfterglowConnectionPlugin::client(NetcodeConfig {
+                protocol_id: PROTOCOL_ID,
+                private_key: PRIVATE_KEY,
+            }));
+            register_protocol(&mut app, LightyearRole::Client);
+            app.finish();
+            app.cleanup();
+            app.update();
+
+            let client_link = app
+                .world_mut()
+                .query_filtered::<
+                    Entity,
+                    With<afterglow_engine::network::connection::ClientSpawned>,
+                >()
+                .single(app.world())
+                .expect("AfterglowConnectionPlugin should spawn one client link");
+            client_links.push(client_link);
+            client_apps.push(app);
+        }
+
+        Self {
+            server_app,
+            client_apps,
+            server_links: Vec::new(),
+            client_links,
+            current_tick: 0,
+            entity_map: HashMap::new(),
+            input_delay_ticks: 0,
+            tick_rate: 60,
+            retention_window_ticks: 0,
+            netcode_started: true,
             pending_inputs: Vec::new(),
         }
     }
@@ -241,6 +328,21 @@ fn lightyear_app(
     app
 }
 
+fn afterglow_lightyear_app(role: LightyearRole, plugins: impl Fn(&mut App)) -> App {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.add_plugins(afterglow_engine::core::AfterglowCorePlugin);
+    app.insert_resource(AfterglowLightyearConfig {
+        role,
+        tick_rate: 60,
+        ..Default::default()
+    });
+    plugins(&mut app);
+    app.add_plugins(afterglow_engine::network::AfterglowLightyearPlugin);
+    app.init_resource::<PeerMetadata>();
+    app
+}
+
 fn lightyear_app_udp(
     role: LightyearRole,
     plugins: impl Fn(&mut App),
@@ -261,13 +363,6 @@ fn lightyear_app_udp(
         }
         LightyearRole::Server => {
             app.add_plugins(lightyear::prelude::server::ServerPlugins { tick_duration });
-            app.add_observer(add_udp_replication_sender);
-        }
-        LightyearRole::Host => {
-            app.add_plugins((
-                lightyear::prelude::server::ServerPlugins { tick_duration },
-                lightyear::prelude::client::ClientPlugins { tick_duration },
-            ));
             app.add_observer(add_udp_replication_sender);
         }
     }
@@ -295,16 +390,17 @@ fn add_crossbeam_lightyear_plugins(app: &mut App, role: LightyearRole) {
                     .disable::<lightyear::prelude::server::NetcodeServerPlugin>(),
             );
         }
-        LightyearRole::Host => {
-            app.add_plugins((
-                lightyear::prelude::server::ServerPlugins { tick_duration }
-                    .build()
-                    .disable::<lightyear::prelude::server::NetcodeServerPlugin>(),
-                lightyear::prelude::client::ClientPlugins { tick_duration }
-                    .build()
-                    .disable::<lightyear::prelude::client::NetcodeClientPlugin>(),
-            ));
-        }
+    }
+    app.add_plugins(lightyear::frame_interpolation::FrameInterpolationPlugin::<
+        Transform,
+    >::default());
+    if role == LightyearRole::Client {
+        app.add_systems(
+            PreUpdate,
+            afterglow_engine::network::request_rollback_check_on_confirmed_tick_changed
+                .after(ReplicationSystems::Receive)
+                .before(RollbackSystems::Check),
+        );
     }
 }
 
@@ -372,6 +468,8 @@ fn client_transport(app: &App) -> Transport {
     transport.add_receiver_from_registry::<MetadataChannel>(registry);
     transport.add_sender_from_registry::<UpdatesChannel>(registry);
     transport.add_receiver_from_registry::<UpdatesChannel>(registry);
+    transport.add_sender_from_registry::<ActionsChannel>(registry);
+    transport.add_receiver_from_registry::<ActionsChannel>(registry);
     add_input_channel_if_registered(&mut transport, registry);
     transport
 }
@@ -383,6 +481,8 @@ fn server_transport(app: &App) -> Transport {
     transport.add_receiver_from_registry::<MetadataChannel>(registry);
     transport.add_sender_from_registry::<UpdatesChannel>(registry);
     transport.add_receiver_from_registry::<UpdatesChannel>(registry);
+    transport.add_sender_from_registry::<ActionsChannel>(registry);
+    transport.add_receiver_from_registry::<ActionsChannel>(registry);
     add_input_channel_if_registered(&mut transport, registry);
     transport
 }

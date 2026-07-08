@@ -8,6 +8,7 @@ use super::*;
 use crate::{
     core::identity::StableEntityId,
     input::{AfterglowAction, default_gameplay_input_map},
+    network::connection::{ClientSpawned, LocalPlayerId},
 };
 
 fn rope_test_app() -> App {
@@ -21,17 +22,30 @@ fn rope_test_app() -> App {
         leafwing_input_manager::plugin::InputManagerPlugin::<AfterglowAction>::default(),
     ));
     super::super::network::register_demo_protocol(&mut app);
-    app.init_resource::<PlayerName>()
+    app.insert_resource(LocalPlayerId(2))
         .init_resource::<crate::core::identity::StableIdAllocator>()
         .init_resource::<Assets<Mesh>>()
         .init_resource::<Assets<StandardMaterial>>()
-        .insert_resource(crate::network::AfterglowNetworkContext::from_status(
-            crate::network::AfterglowConnectionStatus {
-                role: crate::network::LightyearRole::Host,
-                ..Default::default()
-            },
+        .insert_resource(crate::network::AfterglowNetworkContext::new(
+            crate::network::LightyearRole::Client,
+            2,
         ));
     app
+}
+
+fn run_rope_frame(app: &mut App) {
+    app.world_mut().run_schedule(FixedUpdate);
+    app.world_mut().run_schedule(Update);
+    app.world_mut().run_schedule(PostUpdate);
+}
+
+fn release_rope_toggle(app: &mut App) {
+    let mut world = app.world_mut();
+    let mut query = world.query::<&mut ActionState<AfterglowAction>>();
+    for mut action in query.iter_mut(&mut world) {
+        action.press(&AfterglowAction::RopeToggle);
+        action.release(&AfterglowAction::RopeToggle);
+    }
 }
 
 /// Helper: spawn a player (with InputMap + ActionState) and a nearby box.
@@ -107,35 +121,103 @@ fn rope_link_for_owner(app: &mut App, owner: &str) -> Option<RopeLink> {
 // Rope toggle tests (use ActionState, NOT ButtonInput directly)
 // ---------------------------------------------------------------------------
 
+#[test]
+fn predicted_rope_attach_uses_horizontal_range_at_spawn_height() {
+    let mut app = rope_test_app();
+    app.world_mut().spawn(ClientSpawned);
+    app.world_mut().spawn((
+        PlayerBox {
+            owner: "alice".to_string(),
+        },
+        Transform::from_xyz(5.0, PLAYER_SIZE, 0.0),
+        default_gameplay_input_map(),
+        ActionState::<AfterglowAction>::default(),
+        Predicted,
+    ));
+    app.world_mut().spawn((
+        KinematicBox {
+            initial_pos: Vec3::new(2.0, KINEMATIC_BOX_SIZE, 0.0),
+        },
+        test_box_id(0),
+        Transform::from_xyz(2.0, KINEMATIC_BOX_SIZE, 0.0),
+    ));
+    app.add_systems(FixedUpdate, super::super::rope::toggle_rope);
+
+    release_rope_toggle(&mut app);
+    run_rope_frame(&mut app);
+
+    assert!(
+        rope_link_for_owner(&mut app, "alice").is_some(),
+        "client prediction must allow the spawn-position grab at exact horizontal range"
+    );
+}
+
+#[test]
+fn rope_attach_uses_horizontal_range_at_spawn_height() {
+    let mut app = rope_test_app();
+    app.world_mut().spawn((
+        PlayerBox {
+            owner: "alice".to_string(),
+        },
+        Transform::from_xyz(5.0, PLAYER_SIZE, 0.0),
+        ActionState::<AfterglowAction>::default(),
+    ));
+    app.world_mut().spawn((
+        KinematicBox {
+            initial_pos: Vec3::new(2.0, KINEMATIC_BOX_SIZE, 0.0),
+        },
+        test_box_id(0),
+        Transform::from_xyz(2.0, KINEMATIC_BOX_SIZE, 0.0),
+    ));
+    app.add_systems(FixedUpdate, super::super::rope::toggle_rope);
+
+    release_rope_toggle(&mut app);
+    run_rope_frame(&mut app);
+
+    assert!(
+        rope_link_for_owner(&mut app, "alice").is_some(),
+        "player and block centers differ vertically; horizontal spawn-range grab should still attach"
+    );
+}
+
+#[test]
+fn authoritative_rope_attach_allows_small_prediction_delay_slack() {
+    let mut app = rope_test_app();
+    app.world_mut().spawn((
+        PlayerBox {
+            owner: "alice".to_string(),
+        },
+        Transform::from_xyz(4.05, 0.4, 0.0),
+        ActionState::<AfterglowAction>::default(),
+    ));
+    app.world_mut().spawn((
+        KinematicBox {
+            initial_pos: Vec3::new(1.0, 0.5, 0.0),
+        },
+        test_box_id(0),
+        Transform::from_xyz(1.0, 0.5, 0.0),
+    ));
+    app.add_systems(FixedUpdate, super::super::rope::toggle_rope);
+
+    release_rope_toggle(&mut app);
+    run_rope_frame(&mut app);
+
+    assert!(
+        rope_link_for_owner(&mut app, "alice").is_some(),
+        "server should confirm a rope when input delay leaves authority only slightly outside the exact client grab range"
+    );
+}
+
 /// Releasing F creates a RopeLink for the nearest box.
 #[test]
 fn toggle_rope_release_f_ropes_nearest_box() {
     let mut app = rope_test_app();
-    app.world_mut().resource_mut::<PlayerName>().0 = "alice".to_string();
     let (_player, _box_entity) = spawn_player_and_box(&mut app);
 
-    app.add_systems(
-        PreUpdate,
-        super::super::rope::toggle_rope
-            .after(leafwing_input_manager::plugin::InputManagerSystem::Update),
-    );
+    app.add_systems(FixedUpdate, super::super::rope::toggle_rope);
 
-    // Press F (not roped yet — toggle is on release)
-    app.world_mut()
-        .resource_mut::<ButtonInput<KeyCode>>()
-        .press(KeyCode::KeyF);
-    app.update();
-    app.update();
-    assert!(
-        rope_link_for_box(&mut app, 0).is_none(),
-        "rope link should not be spawned while F is held"
-    );
-
-    // Release F (should rope)
-    app.world_mut()
-        .resource_mut::<ButtonInput<KeyCode>>()
-        .release(KeyCode::KeyF);
-    app.update();
+    release_rope_toggle(&mut app);
+    run_rope_frame(&mut app);
 
     assert!(
         rope_link_for_box(&mut app, 0).is_some(),
@@ -147,40 +229,16 @@ fn toggle_rope_release_f_ropes_nearest_box() {
 #[test]
 fn toggle_rope_release_f_again_releases_box() {
     let mut app = rope_test_app();
-    app.world_mut().resource_mut::<PlayerName>().0 = "alice".to_string();
     let (_player, _box_entity) = spawn_player_and_box(&mut app);
 
-    app.add_systems(
-        PreUpdate,
-        super::super::rope::toggle_rope
-            .after(leafwing_input_manager::plugin::InputManagerSystem::Update),
-    );
+    app.add_systems(FixedUpdate, super::super::rope::toggle_rope);
 
-    // Press then release F to rope
-    app.world_mut()
-        .resource_mut::<ButtonInput<KeyCode>>()
-        .press(KeyCode::KeyF);
-    app.update();
-    app.update();
-    app.world_mut()
-        .resource_mut::<ButtonInput<KeyCode>>()
-        .release(KeyCode::KeyF);
-    app.update();
+    release_rope_toggle(&mut app);
+    run_rope_frame(&mut app);
     assert!(rope_link_for_box(&mut app, 0).is_some());
 
-    // Wait out the anti-stale-input cooldown, then press/release F again to unrope.
-    for _ in 0..12 {
-        app.update();
-    }
-    app.world_mut()
-        .resource_mut::<ButtonInput<KeyCode>>()
-        .press(KeyCode::KeyF);
-    app.update();
-    app.update();
-    app.world_mut()
-        .resource_mut::<ButtonInput<KeyCode>>()
-        .release(KeyCode::KeyF);
-    app.update();
+    release_rope_toggle(&mut app);
+    run_rope_frame(&mut app);
 
     assert!(
         rope_link_for_box(&mut app, 0).is_none(),
@@ -188,43 +246,60 @@ fn toggle_rope_release_f_again_releases_box() {
     );
 }
 
-/// A stale duplicate release immediately after attach must not drop the rope.
+/// A second release immediately detaches; there is no custom cooldown state.
 #[test]
-fn local_duplicate_release_inside_cooldown_does_not_drop_rope() {
+fn second_action_release_detaches_without_custom_cooldown() {
     let mut app = rope_test_app();
-    app.world_mut().resource_mut::<PlayerName>().0 = "alice".to_string();
     let (_player, _box_entity) = spawn_player_and_box(&mut app);
 
-    app.add_systems(
-        PreUpdate,
-        super::super::rope::toggle_rope
-            .after(leafwing_input_manager::plugin::InputManagerSystem::Update),
-    );
+    app.add_systems(FixedUpdate, super::super::rope::toggle_rope);
 
-    app.world_mut()
-        .resource_mut::<ButtonInput<KeyCode>>()
-        .press(KeyCode::KeyF);
-    app.update();
-    app.update();
-    app.world_mut()
-        .resource_mut::<ButtonInput<KeyCode>>()
-        .release(KeyCode::KeyF);
-    app.update();
+    release_rope_toggle(&mut app);
+    run_rope_frame(&mut app);
     assert!(rope_link_for_box(&mut app, 0).is_some());
 
-    app.world_mut()
-        .resource_mut::<ButtonInput<KeyCode>>()
-        .press(KeyCode::KeyF);
-    app.update();
-    app.update();
-    app.world_mut()
-        .resource_mut::<ButtonInput<KeyCode>>()
-        .release(KeyCode::KeyF);
-    app.update();
+    release_rope_toggle(&mut app);
+    run_rope_frame(&mut app);
 
     assert!(
-        rope_link_for_box(&mut app, 0).is_some(),
-        "duplicate/stale release inside cooldown must not immediately drop the rope"
+        rope_link_for_box(&mut app, 0).is_none(),
+        "a real second ActionState release should detach immediately"
+    );
+}
+
+#[test]
+fn client_toggle_rope_skips_non_predicted_player_copies() {
+    let mut app = rope_test_app();
+    app.world_mut().spawn(ClientSpawned);
+
+    app.world_mut().spawn((
+        PlayerBox {
+            owner: "2".to_string(),
+        },
+        Transform::from_xyz(0.0, 0.4, 0.0),
+        avian3d::prelude::RigidBody::Dynamic,
+        LinearVelocity::ZERO,
+        default_gameplay_input_map(),
+        ActionState::<AfterglowAction>::default(),
+    ));
+
+    app.world_mut().spawn((
+        KinematicBox {
+            initial_pos: Vec3::new(1.0, 0.5, 0.0),
+        },
+        test_box_id(0),
+        Transform::from_xyz(1.0, 0.5, 0.0),
+        avian3d::prelude::RigidBody::Dynamic,
+        LinearVelocity::ZERO,
+    ));
+
+    app.add_systems(FixedUpdate, super::super::rope::toggle_rope);
+    release_rope_toggle(&mut app);
+    run_rope_frame(&mut app);
+
+    assert!(
+        rope_link_for_box(&mut app, 0).is_none(),
+        "client must ignore non-predicted presentation/confirmed player copies"
     );
 }
 
@@ -232,7 +307,6 @@ fn local_duplicate_release_inside_cooldown_does_not_drop_rope() {
 #[test]
 fn toggle_rope_box_too_far_not_roped() {
     let mut app = rope_test_app();
-    app.world_mut().resource_mut::<PlayerName>().0 = "alice".to_string();
 
     app.world_mut().spawn((
         PlayerBox {
@@ -255,22 +329,10 @@ fn toggle_rope_box_too_far_not_roped() {
         LinearVelocity::ZERO,
     ));
 
-    app.add_systems(
-        PreUpdate,
-        super::super::rope::toggle_rope
-            .after(leafwing_input_manager::plugin::InputManagerSystem::Update),
-    );
+    app.add_systems(FixedUpdate, super::super::rope::toggle_rope);
 
-    // Press then release F
-    app.world_mut()
-        .resource_mut::<ButtonInput<KeyCode>>()
-        .press(KeyCode::KeyF);
-    app.update();
-    app.update();
-    app.world_mut()
-        .resource_mut::<ButtonInput<KeyCode>>()
-        .release(KeyCode::KeyF);
-    app.update();
+    release_rope_toggle(&mut app);
+    run_rope_frame(&mut app);
 
     assert!(
         rope_link_for_box(&mut app, 0).is_none(),
@@ -282,7 +344,6 @@ fn toggle_rope_box_too_far_not_roped() {
 #[test]
 fn toggle_rope_skips_already_roped_box() {
     let mut app = rope_test_app();
-    app.world_mut().resource_mut::<PlayerName>().0 = "alice".to_string();
 
     app.world_mut().spawn((
         PlayerBox {
@@ -320,22 +381,10 @@ fn toggle_rope_skips_already_roped_box() {
         LinearVelocity::ZERO,
     ));
 
-    app.add_systems(
-        PreUpdate,
-        super::super::rope::toggle_rope
-            .after(leafwing_input_manager::plugin::InputManagerSystem::Update),
-    );
+    app.add_systems(FixedUpdate, super::super::rope::toggle_rope);
 
-    // Press then release F
-    app.world_mut()
-        .resource_mut::<ButtonInput<KeyCode>>()
-        .press(KeyCode::KeyF);
-    app.update();
-    app.update();
-    app.world_mut()
-        .resource_mut::<ButtonInput<KeyCode>>()
-        .release(KeyCode::KeyF);
-    app.update();
+    release_rope_toggle(&mut app);
+    run_rope_frame(&mut app);
 
     assert!(
         rope_link_for_owner(&mut app, "alice").is_none(),

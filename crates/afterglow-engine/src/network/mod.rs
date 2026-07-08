@@ -1,32 +1,28 @@
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "lightyear")]
+pub mod connection;
 pub mod context;
-pub mod controlled;
 pub mod interpolation;
 pub mod lightyear;
-pub mod session;
 
-pub use context::{AfterglowConnectionStatus, AfterglowNetworkContext};
-pub use controlled::{
-    ControlledEntityPlugin, MemberLinkMap, OwnershipSource, PlayerOwned,
-    bind_controlled_entities, update_member_link_map,
+/// Player identifier = netcode `client_id` = authenticated identity.
+pub type PlayerId = u64;
+
+#[cfg(feature = "lightyear")]
+pub use connection::{
+    AfterglowConnectionPlugin, AuthResponse, ChallengeMessage, ConnectionConfig, ConnectionEvent,
+    ConnectionEventKind, ControlledEntityPlugin, LocalIdentity, LocalPlayerId, MemberLinkMap,
+    NetcodeConfig, PlayerOwned, ServerAddr, ServerListenAddr,
 };
+pub use context::AfterglowNetworkContext;
 pub use interpolation::{NetworkTransformInterpolationBuffer, NetworkTransformSample};
+#[cfg(feature = "lightyear")]
+pub use lightyear::request_rollback_check_on_confirmed_tick_changed;
 pub use lightyear::{
     AfterglowLightyearConfig, AfterglowLightyearPlugin, LightyearLinkConditioner, LightyearRole,
     register_afterglow_lightyear_protocol,
-};
-#[cfg(feature = "lightyear")]
-pub use lightyear::{
-    AfterglowSessionLightyearBridgePlugin, NetcodeClientParams, NetcodeServerParams,
-    PendingNetcodeStartup, SessionLightyearLinks,
-};
-pub use session::{
-    AfterglowSessionPlugin, AfterglowSessionSet, AfterglowSessionState, IdentityError,
-    NativeIdentityProof, PlayerIdentity, SessionBackend, SessionCode, SessionConfig, SessionError,
-    SessionEvent, SessionId, SessionIdentityNonce, SessionInfo, SessionLeaveReason,
-    SessionMemberId, SessionRequest, SessionSearch, SessionTransport, SessionVisibility,
 };
 
 /// Simple tick counter for fixed-step systems that need a shared authoritative
@@ -38,6 +34,6 @@ pub struct AfterglowNetworkPlugin;
 
 impl Plugin for AfterglowNetworkPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((AfterglowLightyearPlugin, AfterglowSessionPlugin));
+        app.add_plugins(AfterglowLightyearPlugin);
     }
 }

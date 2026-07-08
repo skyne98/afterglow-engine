@@ -7,7 +7,7 @@
 | `AfterglowRuntimePlugins` | Demo-free runtime group: core, dev console overlay/core, Lightyear networking, Leafwing input, physics, and first-person controller. |
 | `AfterglowEnginePlugin` | App-level engine plugin. Adds `AfterglowRuntimePlugins`, the perf HUD, trace collection, and metrics systems. |
 | `demo::AfterglowDemoPlugin` | Optional demo content plugin. Installs the built-in demo cell manifest/load request plus demo animation systems. |
-| `run()` | Native/wasm entrypoint. Adds Bevy defaults, unthrottled window update settings, `AfterglowEnginePlugin`, and `AfterglowDemoPlugin`. |
+| `run()` | Native/wasm entrypoint. Adds Bevy defaults, unthrottled window update settings, hardware-renderer guard, `AfterglowEnginePlugin`, and `AfterglowDemoPlugin`. |
 
 ## Design Rules
 
@@ -35,12 +35,20 @@ AfterglowEnginePlugin
 run()
   WinitSettings::continuous()
   DefaultPlugins
+  RequireHardwareRendererPlugin
   AfterglowEnginePlugin
   AfterglowDemoPlugin
 ```
 
 The native/wasm run helpers insert `WinitSettings::continuous()` before
-`DefaultPlugins`, so focused and unfocused windows both keep ticking.
+`DefaultPlugins`, so focused and unfocused windows both keep ticking. The runtime
+also installs a hardware-renderer guard: if WGPU selects a CPU/software adapter
+such as Mesa `llvmpipe`/`lavapipe`, startup panics with a clear GPU-driver
+configuration error instead of silently rendering on the CPU. Set
+`AFTERGLOW_ALLOW_SOFTWARE_RENDERER=1` only for intentional CPU-rendered tests.
+Multiplayer boxes caps its detached headless server thread with
+`ScheduleRunnerPlugin::run_loop(1/60s)` because `MinimalPlugins` otherwise runs
+headless apps as fast as possible.
 
 New networked gameplay should be written against Leafwing action state,
 Lightyear replication/prediction/interpolation, console-emitted network requests,

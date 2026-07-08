@@ -1,22 +1,14 @@
 //! Lightyear integration boundary.
 
-#[cfg(feature = "lightyear")]
-pub mod link;
-
 pub mod protocol;
-
-#[cfg(all(test, feature = "lightyear"))]
-mod tests;
-
-#[cfg(feature = "lightyear")]
-pub use link::{
-    AfterglowNetcodeConsumerPlugin, AfterglowSessionLightyearBridgePlugin, NetcodeClientParams,
-    NetcodeServerParams, PendingNetcodeStartup, SessionLightyearLinks,
-};
 
 pub use protocol::register_afterglow_lightyear_protocol;
 
 use bevy::prelude::*;
+#[cfg(feature = "lightyear")]
+use lightyear::prelude::{
+    Client, ConfirmedTick, Predicted, ReplicationReceiver, ReplicationSystems, RollbackSystems,
+};
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "lightyear")]
 use std::time::Duration;
@@ -32,7 +24,6 @@ pub enum LightyearRole {
     #[default]
     Client,
     Server,
-    Host,
 }
 
 /// Top-level config for the Lightyear networking layer.
@@ -97,42 +88,34 @@ impl Plugin for AfterglowLightyearPlugin {
 
         #[cfg(feature = "lightyear")]
         {
-            use lightyear::prelude::*;
-
             let cfg = app.world().resource::<AfterglowLightyearConfig>().clone();
             let tick_duration = Duration::from_secs_f64(1.0 / cfg.tick_rate.max(1) as f64);
-
-            app.add_channel::<lightyear::input::InputChannel>(ChannelSettings {
-                mode: ChannelMode::UnorderedUnreliable,
-                send_frequency: Duration::default(),
-                priority: f32::INFINITY,
-            })
-            .add_direction(NetworkDirection::Bidirectional);
 
             match cfg.role {
                 LightyearRole::Client => {
                     app.add_plugins(lightyear::prelude::client::ClientPlugins { tick_duration });
+                    app.add_systems(
+                        PreUpdate,
+                        request_rollback_check_on_confirmed_tick_changed
+                            .after(ReplicationSystems::Receive)
+                            .before(RollbackSystems::Check),
+                    );
                 }
                 LightyearRole::Server => {
                     app.add_plugins(lightyear::prelude::server::ServerPlugins { tick_duration });
                 }
-                LightyearRole::Host => {
-                    app.add_plugins((
-                        lightyear::prelude::server::ServerPlugins { tick_duration },
-                        lightyear::prelude::client::ClientPlugins { tick_duration },
-                    ));
-                }
             }
 
             if !app.is_plugin_added::<InputManagerPlugin<AfterglowAction>>() {
-                app.add_plugins(lightyear_inputs_leafwing::prelude::InputPlugin::<
-                    AfterglowAction,
-                >::default());
+                // This plugin registers Lightyear's native InputChannel and
+                // InputMessage protocol. Do not register ActionState as a
+                // normal replicated component; the input plugin owns its
+                // tick-buffered transport and replay semantics.
+                let mut input_plugin =
+                    lightyear_inputs_leafwing::prelude::InputPlugin::<AfterglowAction>::default();
+                input_plugin.config.rebroadcast_inputs = cfg.rebroadcast_inputs;
+                app.add_plugins(input_plugin);
             }
-
-            // Enable rebroadcast and input delay from config so every game
-            // gets sensible defaults without demo-local boilerplate.
-            app.add_systems(Update, configure_input_defaults);
 
             // Enable frame interpolation for Transform so predicted movement is
             // visually smooth between fixed ticks at any frame rate. Entities
@@ -141,158 +124,56 @@ impl Plugin for AfterglowLightyearPlugin {
                 Transform,
             >::default());
 
-            // Lightyear doesn't auto-add a ReplicationSender to entities that
-            // gain a LinkOf component (see `handle_new_client` in the
-            // `lightyear` crate's lib.rs doctest). Server-side replication
-            // would then silently skip them. Register the observer here so
-            // every incoming remote-client connection gets a sender.
-            app.add_observer(add_replication_sender_on_link_of);
-            app.add_systems(PreUpdate, ensure_replication_channels);
+            // Register engine-level protocol (StableEntityId, Transform,
+            // LinearVelocity) with prediction and interpolation settings.
+            register_afterglow_lightyear_protocol(app);
         }
     }
 }
 
-/// Marker component to track that we've configured the input delay on a
-/// client link. `InputTimelineConfig` is a required component of `Client`,
-/// so checking for its existence doesn't work — it's always present from
-/// spawn. We need this marker to avoid re-inserting `InputTimelineConfig`
-/// every frame (which would trigger the config-update observer repeatedly).
-#[derive(Component)]
-struct InputDelayConfigured;
-
-/// Applies `rebroadcast_inputs` and `input_delay_ticks` from
-/// [`AfterglowLightyearConfig`] to Lightyear's input config resources and
-/// client link entities.
+/// Last confirmed tick value for which Afterglow explicitly requested a
+/// Lightyear rollback check.
 #[cfg(feature = "lightyear")]
-fn configure_input_defaults(
-    config: Res<AfterglowLightyearConfig>,
-    mut client_config: Option<ResMut<lightyear::prelude::input::InputConfig<AfterglowAction>>>,
-    mut server_config: Option<
-        ResMut<lightyear::prelude::input::server::ServerInputConfig<AfterglowAction>>,
-    >,
-    links: Option<Res<SessionLightyearLinks>>,
-    configured: Query<(), With<InputDelayConfigured>>,
+#[derive(Component, Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RollbackCheckedConfirmedTick(pub lightyear::prelude::Tick);
+
+/// Lightyear sets `ReplicationReceiver::received_this_frame` when a state
+/// packet is received, but ordered/buffered replication can apply the packet to
+/// `Confirmed<T>` on a later frame. Rollback correctness depends on checking
+/// prediction history when the confirmed tick actually changes, not only when
+/// bytes arrive. This generic engine-side guard keeps gameplay systems from
+/// copying confirmed state into live predicted physics bodies.
+#[cfg(feature = "lightyear")]
+pub fn request_rollback_check_on_confirmed_tick_changed(
     mut commands: Commands,
-) {
-    if let Some(ref mut client_config) = client_config {
-        client_config.rebroadcast_inputs = config.rebroadcast_inputs;
-    }
-    if let Some(ref mut server_config) = server_config {
-        server_config.rebroadcast_inputs = config.rebroadcast_inputs;
-    }
-
-    let Some(client_link) = links.and_then(|links| links.client_link) else {
-        return;
-    };
-    if configured.get(client_link).is_ok() {
-        return;
-    }
-    // Replace the default InputTimelineConfig (which has no input delay) with
-    // one that has the configured delay. This is critical: without input delay,
-    // lost input packets create gaps in the server's InputBuffer, causing stale
-    // ActionState, jitter, and "stuck" inputs.
-    commands.entity(client_link).insert((
-        lightyear::prelude::client::InputTimelineConfig::default().with_input_delay(
-            lightyear::prelude::client::InputDelayConfig::fixed_input_delay(
-                config.input_delay_ticks,
-            ),
-        ),
-        InputDelayConfigured,
-    ));
-}
-
-/// Adds a [`ReplicationSender`] to any entity that gains a [`LinkOf`]
-/// component, so the server-side replication stream can route to it.
-///
-/// Does NOT insert a `Transport` — if the entity already has one (e.g. from
-/// `NetcodeServerPlugin`), inserting a bare `Transport::default()` would
-/// overwrite it and break the netcode connection. Instead,
-/// [`ensure_replication_channels`] runs as a system to add the missing
-/// channel senders/receivers to the existing `Transport`.
-///
-/// Skips entities that already have a `ReplicationSender` so the host's
-/// own loopback client (which the consumer plugin sets up directly) isn't
-/// double-configured.
-#[cfg(feature = "lightyear")]
-fn add_replication_sender_on_link_of(
-    trigger: bevy::prelude::On<bevy::prelude::Add, lightyear::prelude::LinkOf>,
-    mut commands: bevy::prelude::Commands,
-    existing_senders: bevy::prelude::Query<
-        (),
-        bevy::prelude::With<lightyear::prelude::ReplicationSender>,
-    >,
-) {
-    use bevy::prelude::*;
-    use lightyear::prelude::*;
-    use std::time::Duration;
-
-    if existing_senders.get(trigger.entity).is_ok() {
-        return;
-    }
-    commands.entity(trigger.entity).insert((
-        ReplicationSender::new(
-            Duration::from_millis(16),
-            SendUpdatesMode::SinceLastAck,
-            false,
-        ),
-        Name::from("RemoteClient"),
-    ));
-}
-
-/// Ensures every `LinkOf` entity's `Transport` has senders/receivers for the
-/// replication and input channels. Runs every frame.
-///
-/// Only adds channels that are missing — `add_sender_from_registry` uses
-/// `HashMap::insert` which would overwrite existing channel state (acks,
-/// nacks, messages_sent) if called again, causing "Received an update
-/// message-id ack but we don't know the corresponding group id" errors.
-#[cfg(feature = "lightyear")]
-fn ensure_replication_channels(
-    registry: Res<lightyear::prelude::ChannelRegistry>,
-    links: Query<
-        Entity,
+    mut receivers: Query<&mut ReplicationReceiver, With<Client>>,
+    mut confirmed_entities: Query<
         (
-            With<lightyear::prelude::LinkOf>,
-            With<lightyear::prelude::ReplicationSender>,
+            Entity,
+            &mut ConfirmedTick,
+            Option<&RollbackCheckedConfirmedTick>,
         ),
+        With<Predicted>,
     >,
-    mut transports: Query<&mut lightyear::prelude::Transport>,
 ) {
-    use lightyear::prelude::*;
-    for entity in &links {
-        let Ok(mut transport) = transports.get_mut(entity) else {
+    let mut needs_rollback_check = false;
+    for (entity, mut confirmed_tick, last_checked) in &mut confirmed_entities {
+        if last_checked.is_some_and(|last| last.0 == confirmed_tick.tick) {
             continue;
-        };
-        if !transport.has_sender::<MetadataChannel>() {
-            transport.add_sender_from_registry::<MetadataChannel>(&registry);
         }
-        if !transport.has_receiver::<MetadataChannel>() {
-            transport.add_receiver_from_registry::<MetadataChannel>(&registry);
-        }
-        if !transport.has_sender::<UpdatesChannel>() {
-            transport.add_sender_from_registry::<UpdatesChannel>(&registry);
-        }
-        if !transport.has_receiver::<UpdatesChannel>() {
-            transport.add_receiver_from_registry::<UpdatesChannel>(&registry);
-        }
-        if !transport.has_sender::<ActionsChannel>() {
-            transport.add_sender_from_registry::<ActionsChannel>(&registry);
-        }
-        if !transport.has_receiver::<ActionsChannel>() {
-            transport.add_receiver_from_registry::<ActionsChannel>(&registry);
-        }
-        if registry
-            .settings(lightyear_transport::channel::ChannelKind::of::<
-                lightyear::input::InputChannel,
-            >())
-            .is_some()
-        {
-            if !transport.has_sender::<lightyear::input::InputChannel>() {
-                transport.add_sender_from_registry::<lightyear::input::InputChannel>(&registry);
-            }
-            if !transport.has_receiver::<lightyear::input::InputChannel>() {
-                transport.add_receiver_from_registry::<lightyear::input::InputChannel>(&registry);
-            }
+        // Lightyear's rollback checker additionally filters on
+        // `ConfirmedTick` change detection. Mark the component changed when the
+        // actual tick value advances, independent of whether Bevy observed the
+        // original mutation in this schedule.
+        confirmed_tick.set_changed();
+        commands
+            .entity(entity)
+            .insert(RollbackCheckedConfirmedTick(confirmed_tick.tick));
+        needs_rollback_check = true;
+    }
+    if needs_rollback_check {
+        for mut receiver in &mut receivers {
+            receiver.received_this_frame = true;
         }
     }
 }

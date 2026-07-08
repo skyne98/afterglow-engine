@@ -10,48 +10,35 @@ PreSpawned interactions, and UDP/netcode transport in tests; the next work is to
 turn those harness-proven patterns into reusable engine or game-facing APIs.
 Architecture gaps here are missing reusable runtime/API pieces. Regression
 coverage, benchmarks, and production-hardening checks are follow-ups, not counted
-as architectural gaps.
+as architectural gaps. The multiplayer_boxes demo now has one-server/two-client
+Crossbeam coverage for visible player, block, and RopeLink sync plus a real
+UDP/netcode regression that builds through `AfterglowConnectionPlugin`, verifies
+bidirectional Lightyear messages, sends Leafwing input, and asserts visible
+client `Transform`s. Live UDP should still be retried manually after connection
+changes.
 
 - [x] Decide whether Lightyear protocol registration is engine-owned or
       game-owned. Engine-owned: `register_afterglow_lightyear_protocol`
       registers only core `HistoryTick` and `StableEntityId` protocol state.
       With the `lightyear` feature, `StableEntityId` is registered as a
       replicated Lightyear component so server-spawned replicated entities carry
-      durable gameplay identity to clients. Lightyear still owns live session
+      durable gameplay identity to clients. Lightyear still owns live network
       entity remapping. Entity input ownership uses Lightyear's existing
       `ControlledBy` / `Controlled` relationship plus Leafwing `InputMap`, not
       custom player/avatar marker components. Not auto-installed — callers opt
       in explicitly.
-- [x] Add initial non-Steam session/matchmaking API slice:
-      `AfterglowSessionPlugin` with `SessionRequest`/`SessionEvent` Bevy
-      events, platform-neutral types (`SessionId`, `SessionMemberId`,
-      `SessionConfig`, `SessionInfo`, etc.), and an in-memory
-      `NonSteamSessionCatalog` provider. No Steam dependency, no Lightyear
-      transport/link wiring, no custom player/avatar marker taxonomy. The API
-      is designed so that a future Steam lobby backend can be added as an
-      alternative provider behind the same event protocol.
-- [x] Add initial session-to-Lightyear bridge slice:
-      `AfterglowSessionLightyearBridgePlugin` reads `SessionEvent` messages
-      and manages Lightyear link lifecycle: spawns in-process Crossbeam links
-      for `SessionTransport::Local` and writes pending netcode startup
-      parameters for `SessionTransport::DirectUdp`. Opt-in behind
-      `feature = "lightyear"`; not auto-added by `AfterglowNetworkPlugin`.
-      No Steam dependency, no controlled entity lifecycle, no custom transport
-      abstraction.
-- [x] Add player identity layer: `PlayerIdentity` (Native Ed25519 proof /
-      Steam ticket passthrough) attached to session create/join requests,
-      verified by the non-Steam provider, and bound to `SessionMemberId` for
-      rejoin detection. Private keys stay on the client; the server only sees
-      the public key.
-- [x] Add networked NonSteam session provider: `ProviderEndpoint` in
-      `Join`/`JoinByCode`/`Search`, `NonSteamSessionProvider` TCP listener,
-      and `NonSteamSessionClient` remote request sender. Remote clients can
-      now query and join a NonSteam listen-server by code + address.
-- [x] Engine consumer that drains `PendingNetcodeStartup` and spawns real
-      Lightyear netcode link entities.
-- [x] High-level session API: `AfterglowSessionExt` with `app.session().host`,
-      `host_with_endpoint`, `join_non_steam`, `join_steam`, `join_local`,
-      `search_non_steam`, `leave`, `status`, and `is_in_session`.
+- [x] Retire the engine-owned session/matchmaking layer. Session discovery,
+      lobbies, invites, and platform admission are external; the engine consumes
+      `ServerAddr`/`ServerListenAddr`, `LocalIdentity`, and `NetcodeConfig`.
+      `PlayerId` is a `u64` equal to the netcode `client_id`.
+- [x] Add `AfterglowConnectionPlugin` as the real UDP/netcode boundary:
+      server/client plugin variants spawn Lightyear netcode entities, wire
+      transports from `ChannelRegistry`, emit `ConnectionEvent`, maintain
+      `MemberLinkMap`, and configure live client input/interpolation timelines.
+- [x] Add player identity mapping: Steam uses `PlayerId = SteamId`; non-Steam
+      uses `PlayerId = blake3(Ed25519_public_key)[..8]`. Private keys stay on
+      the client; the server only needs the stable player id and optional auth
+      response.
 - [ ] Add reusable controlled-entity lifecycle outside scenario-only harness
       code: assign, revoke, and rebind Lightyear `ControlledBy` / `Controlled`
       entities on join, disconnect, respawn, possession, and reconnect. This is
@@ -73,8 +60,9 @@ as architectural gaps.
       rejection, and smoothing/correction behavior. The architecture is already
       server-authoritative: clients send input only, and server gameplay systems
       decide authoritative spawn/despawn/interact outcomes. Stress,
-      adversarial, interaction, PreSpawned, combat, RPG, native input, and UDP
-      variants already exist in `engine-rpg-harness`.
+      adversarial, interaction, PreSpawned, combat, RPG, native input, UDP, and
+      multiplayer_boxes visible-sync variants already exist in
+      `engine-rpg-harness`.
 - [ ] Add Lightyear/fixed-delay benchmarks for 1k, 10k, and 100k entity
       pressure.
 - [x] ~~Decide the role of `delta` and `delta-lightyear`~~ → retired: both

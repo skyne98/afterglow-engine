@@ -1,6 +1,5 @@
-import { $ } from "bun";
+import { runInDevShell } from "../utils/nix";
 
 export async function runFmt(): Promise<void> {
-  const r = Bun.spawnSync(["cargo", "fmt"], { stdio: ["inherit", "inherit", "inherit"] });
-  process.exit(r.exitCode ?? 1);
+  process.exit(await runInDevShell("cargo fmt"));
 }

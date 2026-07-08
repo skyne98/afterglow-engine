@@ -1,44 +1,34 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
+use leafwing_input_manager::action_state::ActionState;
 use lightyear::prelude::*;
-use std::collections::HashMap;
 
 use super::protocol::*;
 
 use crate::{
     core::identity::{AutoStableEntityId, StableEntityId},
-    input::default_gameplay_input_map,
-    network::{
-        AfterglowNetworkContext,
-        session::{SessionEvent, SessionLeaveReason, SessionMemberId},
-    },
+    input::AfterglowAction,
 };
 
-#[derive(Resource, Default)]
-pub struct PlayerName(pub String);
-
-#[derive(Resource, Default)]
-pub struct MemberToPlayer(pub HashMap<SessionMemberId, Entity>);
-
+/// The configured player name (used as a fallback for local-player detection
+/// Marker inserted on a player entity once its local-only presentation
+/// components (mesh, material) have been attached.
 #[derive(Component)]
 pub struct PlayerVisualAttached;
 
-pub fn spawn_arena(
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-) {
-    let floor_material = materials.add(Color::srgb(0.18, 0.2, 0.19));
-    let wall_material = materials.add(Color::srgb(0.24, 0.23, 0.2));
+/// Tracks the base hue of a box so we can restore it after highlighting.
+#[derive(Component)]
+pub struct BoxMaterial {
+    pub base_hue: f32,
+}
 
+// ---------------------------------------------------------------------------
+// Arena
+// ---------------------------------------------------------------------------
+
+pub fn spawn_arena(mut commands: Commands) {
     let floor_half = ARENA_HALF + WALL_THICKNESS;
     commands.spawn((
-        Mesh3d(meshes.add(Cuboid::from_size(Vec3::new(
-            floor_half * 2.0,
-            0.4,
-            floor_half * 2.0,
-        )))),
-        MeshMaterial3d(floor_material),
         RigidBody::Static,
         Collider::cuboid(floor_half * 2.0, 0.4, floor_half * 2.0),
         Position::from(Vec3::new(0.0, -0.2, 0.0)),
@@ -51,29 +41,21 @@ pub fn spawn_arena(
 
     spawn_wall(
         &mut commands,
-        &mut meshes,
-        wall_material.clone(),
         Vec3::new(half_extent * 2.0, WALL_HEIGHT, WALL_THICKNESS),
         Vec3::new(0.0, wall_up, -ARENA_HALF - WALL_THICKNESS * 0.5),
     );
     spawn_wall(
         &mut commands,
-        &mut meshes,
-        wall_material.clone(),
         Vec3::new(half_extent * 2.0, WALL_HEIGHT, WALL_THICKNESS),
         Vec3::new(0.0, wall_up, ARENA_HALF + WALL_THICKNESS * 0.5),
     );
     spawn_wall(
         &mut commands,
-        &mut meshes,
-        wall_material.clone(),
         Vec3::new(WALL_THICKNESS, WALL_HEIGHT, half_extent * 2.0),
         Vec3::new(-ARENA_HALF - WALL_THICKNESS * 0.5, wall_up, 0.0),
     );
     spawn_wall(
         &mut commands,
-        &mut meshes,
-        wall_material,
         Vec3::new(WALL_THICKNESS, WALL_HEIGHT, half_extent * 2.0),
         Vec3::new(ARENA_HALF + WALL_THICKNESS * 0.5, wall_up, 0.0),
     );
@@ -91,12 +73,9 @@ pub fn spawn_arena(
 
     for (i, pos) in box_positions.iter().enumerate() {
         let hue = (i as f32) * 45.0;
-        let mat = materials.add(Color::hsla(hue, 0.7, 0.5, 1.0));
         commands.spawn((
             KinematicBox { initial_pos: *pos },
             AutoStableEntityId,
-            Mesh3d(meshes.add(Cuboid::from_size(Vec3::splat(KINEMATIC_BOX_SIZE * 2.0)))),
-            MeshMaterial3d(mat),
             BoxMaterial { base_hue: hue },
             RigidBody::Dynamic,
             Collider::cuboid(
@@ -107,6 +86,7 @@ pub fn spawn_arena(
             Position::from(*pos),
             Rotation::default(),
             LinearVelocity::ZERO,
+            LockedAxes::ROTATION_LOCKED,
             Transform::from_translation(*pos),
             Replicate::to_clients(NetworkTarget::All),
             PredictionTarget::to_clients(NetworkTarget::All),
@@ -114,16 +94,8 @@ pub fn spawn_arena(
     }
 }
 
-fn spawn_wall(
-    commands: &mut Commands,
-    meshes: &mut Assets<Mesh>,
-    material: Handle<StandardMaterial>,
-    size: Vec3,
-    translation: Vec3,
-) {
+fn spawn_wall(commands: &mut Commands, size: Vec3, translation: Vec3) {
     commands.spawn((
-        Mesh3d(meshes.add(Cuboid::from_size(size))),
-        MeshMaterial3d(material),
         RigidBody::Static,
         Collider::cuboid(size.x, size.y, size.z),
         Position::from(translation),
@@ -132,53 +104,28 @@ fn spawn_wall(
     ));
 }
 
-pub fn spawn_player_box(
-    commands: &mut Commands,
-    meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
-    owner: &str,
-    pos: Vec3,
-) -> Entity {
-    let hue = if owner == "alice" { 200.0 } else { 330.0 };
-    let color = Color::hsla(hue, 0.8, 0.5, 1.0);
-    let mat = materials.add(color);
+/// Spawn a player box without Replicate (used by tests).
+pub fn spawn_player_box(commands: &mut Commands, owner: &str, pos: Vec3) -> Entity {
     commands
         .spawn((
             PlayerBox {
                 owner: owner.to_string(),
             },
-            Mesh3d(meshes.add(Cuboid::from_size(Vec3::splat(PLAYER_SIZE * 2.0)))),
-            MeshMaterial3d(mat),
             RigidBody::Dynamic,
             Collider::cuboid(PLAYER_SIZE * 2.0, PLAYER_SIZE * 2.0, PLAYER_SIZE * 2.0),
             Position::from(pos),
             Rotation::default(),
             LinearVelocity::ZERO,
+            LockedAxes::ROTATION_LOCKED,
             Transform::from_translation(pos),
-            Replicate::to_clients(NetworkTarget::All),
-            player_prediction_target(owner),
-            player_interpolation_target(owner),
+            ActionState::<AfterglowAction>::default(),
         ))
         .id()
 }
 
-fn player_peer(owner: &str) -> Option<PeerId> {
-    owner.parse::<u64>().ok().map(PeerId::Netcode)
-}
-
-fn player_prediction_target(owner: &str) -> PredictionTarget {
-    match player_peer(owner) {
-        Some(peer) => PredictionTarget::to_clients(NetworkTarget::Single(peer)),
-        None => PredictionTarget::manual(vec![]),
-    }
-}
-
-fn player_interpolation_target(owner: &str) -> InterpolationTarget {
-    match player_peer(owner) {
-        Some(peer) => InterpolationTarget::to_clients(NetworkTarget::AllExceptSingle(peer)),
-        None => InterpolationTarget::to_clients(NetworkTarget::All),
-    }
-}
+// ---------------------------------------------------------------------------
+// Client visuals
+// ---------------------------------------------------------------------------
 
 pub fn spawn_client_arena_visuals(
     mut commands: Commands,
@@ -229,21 +176,28 @@ pub fn spawn_client_arena_visuals(
 pub fn attach_predicted_player_physics(
     mut commands: Commands,
     players: Query<
-        (Entity, Option<&Transform>),
+        (Entity, Option<&Transform>, Has<LinearVelocity>),
         (With<PlayerBox>, With<Predicted>, Without<RigidBody>),
     >,
 ) {
-    for (entity, transform) in &players {
-        let pos = transform.map_or(Vec3::ZERO, |t| t.translation);
-        let rot = transform.map_or(Quat::IDENTITY, |t| t.rotation);
-        commands.entity(entity).insert((
+    for (entity, transform, has_velocity) in &players {
+        let Some(transform) = transform else {
+            continue;
+        };
+        let pos = transform.translation;
+        let rot = transform.rotation;
+        let mut entity_commands = commands.entity(entity);
+        entity_commands.insert((
             RigidBody::Dynamic,
             Collider::cuboid(PLAYER_SIZE * 2.0, PLAYER_SIZE * 2.0, PLAYER_SIZE * 2.0),
             Position::from(pos),
             Rotation::from(rot),
-            LinearVelocity::ZERO,
+            LockedAxes::ROTATION_LOCKED,
             lightyear::frame_interpolation::FrameInterpolate::<Transform>::default(),
         ));
+        if !has_velocity {
+            entity_commands.insert(LinearVelocity::ZERO);
+        }
     }
 }
 
@@ -260,7 +214,7 @@ pub fn attach_predicted_kinematic_physics(
     >,
 ) {
     for (entity, box_, transform, has_velocity) in &boxes {
-        let pos = transform.map_or(box_.initial_pos, |transform| transform.translation);
+        let pos = transform.map_or(box_.initial_pos, |t| t.translation);
         let mut entity_commands = commands.entity(entity);
         entity_commands.insert((
             RigidBody::Dynamic,
@@ -270,7 +224,8 @@ pub fn attach_predicted_kinematic_physics(
                 KINEMATIC_BOX_SIZE * 2.0,
             ),
             Position::from(pos),
-            Rotation::from(transform.map_or(Quat::IDENTITY, |transform| transform.rotation)),
+            Rotation::from(transform.map_or(Quat::IDENTITY, |t| t.rotation)),
+            LockedAxes::ROTATION_LOCKED,
             lightyear::frame_interpolation::FrameInterpolate::<Transform>::default(),
         ));
         if !has_velocity {
@@ -283,25 +238,21 @@ pub fn attach_replicated_player_visuals(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    context: Option<Res<AfterglowNetworkContext>>,
-    players: Query<(
-        Entity,
-        &PlayerBox,
-        Option<&Transform>,
-        Has<Predicted>,
-        Has<Interpolated>,
-        Option<&PlayerVisualAttached>,
-    )>,
+    players: Query<
+        (
+            Entity,
+            &PlayerBox,
+            Option<&Transform>,
+            Option<&PlayerVisualAttached>,
+        ),
+        With<Predicted>,
+    >,
 ) {
-    let local_owner = context
-        .as_deref()
-        .and_then(|ctx| ctx.get_connection_status().local_member_owner());
-    for (entity, player, transform, predicted, interpolated, attached) in &players {
+    for (entity, player, transform, attached) in &players {
         if attached.is_some() {
             continue;
         }
-        let is_local_owner = local_owner.as_deref() == Some(player.owner.as_str());
-        if (is_local_owner && !predicted) || (!is_local_owner && !interpolated) {
+        if transform.is_none() {
             continue;
         }
 
@@ -310,29 +261,10 @@ pub fn attach_replicated_player_visuals(
         } else {
             330.0
         };
-        let pos = transform.map_or(Vec3::ZERO, |t| t.translation);
-        let rot = transform.map_or(Quat::IDENTITY, |t| t.rotation);
-        // Predicted entities get RigidBody::Dynamic so Avian simulates them
-        // locally. Interpolated entities get RigidBody::Kinematic so they have
-        // a collider for local collision but Avian does NOT integrate their
-        // position — their Position/Rotation comes from Lightyear's
-        // interpolation. If interpolated entities were Dynamic, Avian would
-        // apply gravity/collision forces and fight with the interpolated
-        // values, causing janky, delayed movement.
-        let body_kind = if predicted {
-            RigidBody::Dynamic
-        } else {
-            RigidBody::Kinematic
-        };
         commands.entity(entity).insert((
             PlayerVisualAttached,
             Mesh3d(meshes.add(Cuboid::from_size(Vec3::splat(PLAYER_SIZE * 2.0)))),
             MeshMaterial3d(materials.add(Color::hsla(hue, 0.8, 0.5, 1.0))),
-            body_kind,
-            Collider::cuboid(PLAYER_SIZE * 2.0, PLAYER_SIZE * 2.0, PLAYER_SIZE * 2.0),
-            Position::from(pos),
-            Rotation::from(rot),
-            LinearVelocity::ZERO,
         ));
     }
 }
@@ -356,14 +288,11 @@ pub fn attach_replicated_kinematic_visuals(
     }
 }
 
-/// Tracks the base hue of a box so we can restore it after highlighting.
-#[derive(Component)]
-pub struct BoxMaterial {
-    pub base_hue: f32,
-}
-
 pub fn sync_kinematic_box_materials(
-    mut boxes: Query<(&StableEntityId, &mut BoxMaterial), With<KinematicBox>>,
+    mut boxes: Query<
+        (&StableEntityId, &mut BoxMaterial),
+        (With<KinematicBox>, Changed<StableEntityId>),
+    >,
 ) {
     for (stable_id, mut box_mat) in &mut boxes {
         if stable_id.is_valid() {
@@ -406,66 +335,4 @@ pub fn spawn_lights(mut commands: Commands) {
         },
         Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.9, -0.5, 0.0)),
     ));
-}
-
-pub fn spawn_host_player(
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    player_name: Res<PlayerName>,
-) {
-    let entity = spawn_player_box(
-        &mut commands,
-        &mut meshes,
-        &mut materials,
-        &player_name.0,
-        Vec3::new(-5.0, PLAYER_SIZE, 0.0),
-    );
-    commands.entity(entity).insert(default_gameplay_input_map());
-}
-
-pub fn spawn_player_on_member_joined(
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    mut map: ResMut<MemberToPlayer>,
-    mut events: MessageReader<SessionEvent>,
-) {
-    for event in events.read() {
-        let member = match event {
-            SessionEvent::MemberJoined { member, .. } => *member,
-            _ => continue,
-        };
-        if map.0.contains_key(&member) {
-            continue;
-        }
-        let owner = member.as_raw().to_string();
-        let idx = map.0.len() as f32;
-        let pos = Vec3::new(5.0 + idx * 2.0, PLAYER_SIZE, 0.0);
-        let entity = spawn_player_box(&mut commands, &mut meshes, &mut materials, &owner, pos);
-        // Tag the entity so the engine's ControlledEntityPlugin can bind
-        // ControlledBy automatically when the ClientOf link appears.
-        commands
-            .entity(entity)
-            .insert(crate::network::PlayerOwned::from_member(member));
-        map.0.insert(member, entity);
-    }
-}
-
-pub fn despawn_player_on_member_left(
-    mut commands: Commands,
-    mut map: ResMut<MemberToPlayer>,
-    mut events: MessageReader<SessionEvent>,
-) {
-    for event in events.read() {
-        let (member, reason) = match event {
-            SessionEvent::MemberLeft { member, reason, .. } => (*member, reason.clone()),
-            _ => continue,
-        };
-        if reason == SessionLeaveReason::Disconnected || reason == SessionLeaveReason::Left {
-            if let Some((_, entity)) = map.0.remove_entry(&member) {
-                commands.entity(entity).despawn();
-            }
-        }
-    }
 }

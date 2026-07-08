@@ -3,74 +3,107 @@ use bevy::prelude::*;
 use leafwing_input_manager::{action_state::ActionState, input_map::InputMap};
 use lightyear::prelude::*;
 
-use super::{protocol::*, scene::PlayerName};
+use super::protocol::*;
 
 use crate::{
     input::{AfterglowAction, default_gameplay_input_map},
-    network::AfterglowNetworkContext,
+    network::connection::LocalPlayerId,
 };
 
 #[derive(Resource, Default)]
 pub struct DemoInput(pub Vec2);
 
+#[doc(hidden)]
+#[derive(Default)]
+pub struct RopeInputEdgeMemory {
+    was_pressed: bool,
+    pending_release: bool,
+}
+
 pub fn collect_input(
     keyboard: Option<Res<ButtonInput<KeyCode>>>,
     mut input: ResMut<DemoInput>,
-    mut maps: Query<&mut ActionState<AfterglowAction>, With<InputMap<AfterglowAction>>>,
+    local_player_id: Option<Res<LocalPlayerId>>,
+    mut maps: Query<
+        (&PlayerBox, &mut ActionState<AfterglowAction>),
+        (With<InputMap<AfterglowAction>>, With<Predicted>),
+    >,
     rollback: Query<(), With<Rollback>>,
+    mut rope_edges: Local<RopeInputEdgeMemory>,
 ) {
-    // Do not write to ActionState during rollback replay. Lightyear replays
-    // FixedMain (including FixedPreUpdate) for each historical tick, and
-    // get_action_state restores the correct historical ActionState from the
-    // InputBuffer. But if the InputBuffer doesn't have a value for a given
-    // tick, the current keyboard state written here would leak through,
-    // corrupting that rollback tick and causing rare input "sticking".
+    let keyboard = keyboard.as_deref();
+    let rope_pressed = keyboard.is_some_and(|keyboard| keyboard.pressed(KeyCode::KeyF));
+    let physical_rope_released = rope_edges.was_pressed && !rope_pressed;
+
+    // Do not write to ActionState during rollback replay, but do not lose a
+    // physical release edge that happened during the guarded window.
     if rollback.iter().next().is_some() {
+        if physical_rope_released {
+            rope_edges.pending_release = true;
+        }
+        rope_edges.was_pressed = rope_pressed;
         return;
     }
-    let dir = keyboard
-        .as_deref()
-        .map(keyboard_direction)
-        .unwrap_or(input.0);
+
+    let dir = keyboard.map(keyboard_direction).unwrap_or(input.0);
+    let rope_just_released = rope_edges.pending_release || physical_rope_released;
+    rope_edges.pending_release = false;
+    rope_edges.was_pressed = rope_pressed;
     input.0 = dir;
-    write_move_action(dir, &mut maps);
+    let Some(local_owner) = local_player_id.as_deref().map(|id| id.0.to_string()) else {
+        return;
+    };
+    write_local_input_actions(
+        dir,
+        rope_pressed,
+        rope_just_released,
+        &local_owner,
+        &mut maps,
+    );
 }
 
-fn write_move_action(
+fn write_local_input_actions(
     dir: Vec2,
-    maps: &mut Query<&mut ActionState<AfterglowAction>, With<InputMap<AfterglowAction>>>,
+    rope_pressed: bool,
+    rope_just_released: bool,
+    local_owner: &str,
+    maps: &mut Query<
+        (&PlayerBox, &mut ActionState<AfterglowAction>),
+        (With<InputMap<AfterglowAction>>, With<Predicted>),
+    >,
 ) {
-    for mut action_state in maps.iter_mut() {
+    for (player, mut action_state) in maps.iter_mut() {
+        if player.owner != local_owner {
+            continue;
+        }
         action_state.set_axis_pair(&AfterglowAction::Move, Vec2::new(-dir.x, dir.y));
-        // Do NOT call set_update_state_from_state() /
-        // set_fixed_update_state_from_state() here. Leafwing's
-        // InputManagerPlugin manages state mirrors via
-        // swap_to_fixed_update_state / swap_to_update in RunFixedMainLoop.
-        // Manually copying state breaks the separation and causes inputs to
-        // appear "stuck" when stale state leaks across update/fixed mirrors.
-    }
-}
-
-pub fn apply_velocity_to_player(
-    velocity: Vec3,
-    query: &mut Query<&mut LinearVelocity, (With<PlayerBox>, Without<Predicted>)>,
-) {
-    for mut linear_vel in query.iter_mut() {
-        linear_vel.0 = velocity;
+        if rope_just_released {
+            // Lightyear rollback/input restoration can leave the local
+            // `ActionState` no longer marked pressed by the time the physical
+            // release is sampled. Force the button edge from fixed input state
+            // so release-driven gameplay (rope detach) remains deterministic.
+            if !action_state.pressed(&AfterglowAction::RopeToggle) {
+                action_state.press(&AfterglowAction::RopeToggle);
+            }
+            action_state.release(&AfterglowAction::RopeToggle);
+        } else if rope_pressed {
+            if !action_state.pressed(&AfterglowAction::RopeToggle) {
+                action_state.press(&AfterglowAction::RopeToggle);
+            }
+        } else if action_state.pressed(&AfterglowAction::RopeToggle) {
+            action_state.release(&AfterglowAction::RopeToggle);
+        }
     }
 }
 
 pub fn add_input_map_to_local_predicted_player(
     mut commands: Commands,
-    player_name: Res<PlayerName>,
-    context: Option<Res<AfterglowNetworkContext>>,
+    local_player_id: Option<Res<LocalPlayerId>>,
     players: Query<(Entity, &PlayerBox, Has<InputMap<AfterglowAction>>), With<Predicted>>,
 ) {
-    let local_member = context
-        .as_deref()
-        .and_then(|ctx| ctx.get_connection_status().local_member_owner());
+    let local_str = local_player_id.as_deref().map(|id| id.0.to_string());
     for (entity, player, has_map) in &players {
-        if has_map || !is_local_player(player, &player_name, local_member.as_deref()) {
+        if has_map || local_str.as_deref() != Some(player.owner.as_str()) {
             continue;
         }
         commands.entity(entity).insert(default_gameplay_input_map());
@@ -79,44 +112,51 @@ pub fn add_input_map_to_local_predicted_player(
 
 pub fn apply_movement(
     time: Res<Time>,
-    player_name: Res<PlayerName>,
-    context: Option<Res<AfterglowNetworkContext>>,
-    mut players: Query<(
-        Option<&mut LinearVelocity>,
-        Option<&mut Transform>,
-        &PlayerBox,
-        Option<&ActionState<AfterglowAction>>,
-        Has<Predicted>,
-    )>,
+    mut players: Query<
+        (
+            Option<&mut LinearVelocity>,
+            Option<&mut Transform>,
+            Option<&ActionState<AfterglowAction>>,
+        ),
+        With<PlayerBox>,
+    >,
 ) {
-    let status = context.as_deref().map(|ctx| ctx.get_connection_status());
-    if status.is_some_and(|status| !status.runs_authority() && !status.runs_client_prediction()) {
-        return;
+    for (linear_vel, transform, action_state) in players.iter_mut() {
+        apply_movement_to_player(&time, linear_vel, transform, action_state);
     }
+}
 
-    let local_member = status.and_then(|status| status.local_member_owner());
-    let client_only = status.is_some_and(|status| status.is_client_only());
-    let authority = status.is_some_and(|status| status.runs_authority());
+/// Client-side movement only drives predicted presentation/simulation copies.
+/// Interpolated remote copies are driven by replication interpolation, not
+/// local input systems.
+pub fn apply_predicted_movement(
+    time: Res<Time>,
+    mut players: Query<
+        (
+            Option<&mut LinearVelocity>,
+            Option<&mut Transform>,
+            Option<&ActionState<AfterglowAction>>,
+        ),
+        (With<PlayerBox>, With<Predicted>),
+    >,
+) {
+    for (linear_vel, transform, action_state) in players.iter_mut() {
+        apply_movement_to_player(&time, linear_vel, transform, action_state);
+    }
+}
 
-    for (linear_vel, transform, player_box, action_state, predicted) in players.iter_mut() {
-        if client_only && !predicted {
-            continue;
-        }
-        if authority && predicted {
-            continue;
-        }
-        let is_local = is_local_player(player_box, &player_name, local_member.as_deref());
-        if client_only && !is_local {
-            continue;
-        }
-
-        let dir = movement_direction(action_state, None);
-        let vel = Vec3::new(dir.x, 0.0, dir.y) * PLAYER_SPEED;
-        if let Some(mut linear_vel) = linear_vel {
-            linear_vel.0 = vel;
-        } else if let Some(mut transform) = transform {
-            transform.translation += vel * time.delta_secs();
-        }
+fn apply_movement_to_player(
+    time: &Time,
+    linear_vel: Option<Mut<LinearVelocity>>,
+    mut transform: Option<Mut<Transform>>,
+    action_state: Option<&ActionState<AfterglowAction>>,
+) {
+    let dir = movement_direction(action_state, None);
+    let vel = Vec3::new(dir.x, 0.0, dir.y) * PLAYER_SPEED;
+    if let Some(mut linear_vel) = linear_vel {
+        linear_vel.0 = vel;
+    } else if let Some(ref mut t) = transform {
+        t.translation += vel * time.delta_secs();
     }
 }
 
@@ -147,12 +187,4 @@ fn keyboard_direction(keyboard: &ButtonInput<KeyCode>) -> Vec2 {
         dir.x -= 1.0;
     }
     dir.clamp_length_max(1.0)
-}
-
-fn is_local_player(
-    player_box: &PlayerBox,
-    player_name: &PlayerName,
-    local_member: Option<&str>,
-) -> bool {
-    player_box.owner == player_name.0 || local_member == Some(player_box.owner.as_str())
 }

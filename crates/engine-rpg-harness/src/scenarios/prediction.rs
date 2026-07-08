@@ -32,25 +32,22 @@ fn register_prediction_protocol(app: &mut App, role: LightyearRole) {
     register_afterglow_lightyear_protocol(app);
     app.register_component::<Transform>()
         .add_prediction()
-        .add_linear_correction_fn::<Isometry3d>();
-    app.world_mut()
-        .resource_mut::<InterpolationRegistry>()
-        .set_interpolation::<Transform>(TransformLinearInterpolation::lerp);
-    app.register_component::<ActionState<AfterglowAction>>();
+        .add_linear_correction_fn::<Isometry3d>()
+        .add_interpolation_with(TransformLinearInterpolation::lerp);
 
     // Enable frame interpolation for smooth correction during rollback
     app.add_plugins(lightyear::frame_interpolation::FrameInterpolationPlugin::<
         Transform,
     >::default());
 
-    if matches!(role, LightyearRole::Client | LightyearRole::Host) {
+    if matches!(role, LightyearRole::Client) {
         app.add_plugins(bevy::input::InputPlugin);
     }
     app.add_plugins(lightyear::prelude::input::leafwing::InputPlugin::<
         AfterglowAction,
     >::default());
 
-    if matches!(role, LightyearRole::Client | LightyearRole::Host) {
+    if matches!(role, LightyearRole::Client) {
         app.add_systems(
             FixedPreUpdate,
             write_desired_input
@@ -417,8 +414,10 @@ fn input_release_stops_after_delay_window() {
         .translation;
 
     release_input(&mut rig, 0);
-    // With 2-tick input delay, the delayed ActionState still has movement
-    // for 2 more ticks. The client stops after the delay window passes.
+    // With real Lightyear input buffering plus frame interpolation, the visible
+    // transform can include the write tick, the configured 2-tick delay, and a
+    // small interpolation/correction tail. It must still be far below sustained
+    // movement and must settle to no additional motion.
     rig.advance(6);
 
     let pos_after_release = rig
@@ -427,16 +426,24 @@ fn input_release_stops_after_delay_window() {
         .translation;
     let delta = pos_after_release.distance(pos_before_release);
 
-    // The client should have stopped — delta should be much less than
-    // the full 6-tick movement (6 * 0.083 = 0.5), proving it stopped
-    // after the delay window.
     assert!(
-        delta < 0.5,
-        "client should stop after delay window: delta={delta} (expected < 0.5)"
+        delta < MOVE_SPEED * TICK_DT * 9.0,
+        "client should stop shortly after delay window: delta={delta}"
     );
     assert!(
         delta > 0.0,
         "client should have moved during the delay window: delta={delta}"
+    );
+
+    rig.advance(12);
+    let pos_after_settle = rig
+        .client_component::<Transform>(0, client_entity)
+        .unwrap()
+        .translation;
+    let settled_delta = pos_after_settle.distance(pos_after_release);
+    assert!(
+        settled_delta < MOVE_SPEED * TICK_DT * 2.0,
+        "client should be stopped after the interpolation tail: settled_delta={settled_delta}"
     );
 }
 

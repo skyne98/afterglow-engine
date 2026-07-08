@@ -102,91 +102,62 @@ pub fn run_fps_controller_demo() -> bevy::app::AppExit {
     app.run()
 }
 
+#[cfg(feature = "multiplayer")]
 pub fn run_multiplayer_boxes_demo(
     config: demos::multiplayer_boxes::MultiplayerBoxesDemoConfig,
 ) -> bevy::app::AppExit {
-    use std::net::SocketAddr;
-    use network::session::*;
-    use network::lightyear::*;
-    use demos::multiplayer_boxes::{ServerAddr, LocalIdentity};
+    demos::multiplayer_boxes::run_multiplayer_boxes_demo(config)
+}
 
-    let trace_data = setup_tracing();
-    let _trace_accum = trace_data.accum.clone();
+/// Server App for multiplayer boxes demo. Runs in a detached thread.
+#[cfg(feature = "multiplayer")]
+pub fn run_multiplayer_boxes_server(listen: &str) {
+    demos::multiplayer_boxes::run_multiplayer_boxes_server(listen);
+}
 
-    let mut app = App::new();
-    keep_windowed_runtime_unthrottled_when_unfocused(&mut app);
-
-    let role = if config.host {
-        LightyearRole::Host
-    } else {
-        LightyearRole::Client
-    };
-
-    let nonce = [42u8; 32];
-
-    app.insert_resource(trace_data)
-        .insert_resource(AfterglowLightyearConfig {
-            role,
-            protocol_id: 42,
-            netcode_private_key: [42u8; 32],
-            tick_rate: 60,
-            predicted_ticks: 12,
-            ..Default::default()
-        })
-        .insert_resource(SessionIdentityNonce(nonce));
-
-    app.add_plugins((
-        default_plugins(),
-        AfterglowCorePlugin,
-        AfterglowLightyearPlugin,
-        AfterglowSessionPlugin,
-        AfterglowSessionLightyearBridgePlugin,
-        AfterglowNetcodeConsumerPlugin,
-        crate::network::ControlledEntityPlugin,
-        crate::physics::AfterglowPhysicsPlugin,
-        demos::multiplayer_boxes::MultiplayerBoxesPlugin,
-    ));
-
-    app.world_mut()
-        .resource_mut::<demos::multiplayer_boxes::scene::PlayerName>()
-        .0 = config.player_name.clone();
-
-    if config.host {
-        let listen_addr: SocketAddr = config
-            .listen
-            .parse()
-            .expect("invalid --listen address");
-        let identity = PlayerIdentity::demo(&nonce, "create", 0);
-        app.session()
-            .host_with_endpoint(
-                SessionConfig {
-                    backend: SessionBackend::NonSteam,
-                    transport: SessionTransport::DirectUdp {
-                        host: listen_addr.to_string(),
-                    },
-                    name: "multiplayer-boxes".into(),
-                    metadata: [("name".into(), "multiplayer-boxes".into())].into(),
-                    ..Default::default()
-                },
-                identity,
-                listen_addr,
-            )
-            .expect("failed to host session");
-    } else {
-        let server_addr: SocketAddr = config
-            .connect
-            .parse()
-            .expect("invalid --connect address");
-        app.insert_resource(ServerAddr(server_addr));
-        // LocalIdentity will be created by client_join_flow after search
-        app.insert_resource(LocalIdentity(PlayerIdentity::demo(&nonce, "", 1)));
-    }
-
-    app.run()
+/// Client App for multiplayer boxes demo.
+#[cfg(feature = "multiplayer")]
+pub fn run_multiplayer_boxes_client(connect: &str, player_name: &str) -> bevy::app::AppExit {
+    demos::multiplayer_boxes::run_multiplayer_boxes_client(connect, player_name)
 }
 
 fn keep_windowed_runtime_unthrottled_when_unfocused(app: &mut App) {
     app.insert_resource(WinitSettings::continuous());
+}
+
+struct RequireHardwareRendererPlugin;
+
+impl Plugin for RequireHardwareRendererPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(Startup, reject_software_renderer);
+    }
+}
+
+fn is_software_renderer(device_type: &str, adapter_name: &str) -> bool {
+    let adapter_name = adapter_name.to_ascii_lowercase();
+    device_type == "Cpu"
+        || adapter_name.contains("llvmpipe")
+        || adapter_name.contains("lavapipe")
+        || adapter_name.contains("softpipe")
+        || adapter_name.contains("swiftshader")
+}
+
+fn reject_software_renderer(adapter: Option<Res<bevy::render::renderer::RenderAdapterInfo>>) {
+    let Some(adapter) = adapter else {
+        return;
+    };
+    let device_type = format!("{:?}", adapter.device_type);
+
+    if is_software_renderer(&device_type, &adapter.name)
+        && std::env::var_os("AFTERGLOW_ALLOW_SOFTWARE_RENDERER").is_none()
+    {
+        panic!(
+            "Afterglow selected a software renderer ({:?}). This is CPU rendering, not GPU rendering. \
+Install/fix your GPU driver, make the GPU visible to Vulkan/WGPU, or explicitly select an adapter \
+with WGPU_ADAPTER_NAME. Set AFTERGLOW_ALLOW_SOFTWARE_RENDERER=1 only for intentional CPU-rendered tests.",
+            **adapter
+        );
+    }
 }
 
 fn default_plugins() -> PluginGroupBuilder {
@@ -236,11 +207,16 @@ fn default_plugins() -> PluginGroupBuilder {
         })
         .set(bevy::render::RenderPlugin {
             render_creation: bevy::render::settings::RenderCreation::Automatic(
-                bevy::render::settings::WgpuSettings { ..render },
+                bevy::render::settings::WgpuSettings {
+                    power_preference: bevy::render::settings::PowerPreference::HighPerformance,
+                    force_fallback_adapter: false,
+                    ..render
+                },
             ),
             ..default()
         })
-        .build();
+        .build()
+        .add(RequireHardwareRendererPlugin);
 
     #[cfg(target_arch = "wasm32")]
     let plugins = plugins
@@ -270,6 +246,17 @@ mod tests {
                 trace_accum: Arc::new(Mutex::new(std::collections::HashMap::new())),
             },
         ));
+    }
+
+    #[test]
+    fn software_renderer_detector_rejects_llvmpipe_and_cpu_adapters() {
+        assert!(crate::is_software_renderer("Cpu", "llvmpipe"));
+        assert!(crate::is_software_renderer("DiscreteGpu", "SwiftShader"));
+        assert!(!crate::is_software_renderer(
+            "DiscreteGpu",
+            "NVIDIA GeForce"
+        ));
+        assert!(!crate::is_software_renderer("IntegratedGpu", "AMD RADV"));
     }
 
     #[test]

@@ -1,11 +1,13 @@
 use bevy::prelude::*;
 
+use lightyear::prelude::PredictionDisable;
+
 use super::{
     protocol::*,
-    rope::{HIGHLIGHT_SWITCH_MARGIN, LocalRopeDetachPending},
-    scene::PlayerName,
+    rope::{HIGHLIGHT_SWITCH_MARGIN, RopeJointDetachPending, rope_grab_distance},
+    scene::BoxMaterial,
 };
-use crate::{core::identity::StableEntityId, network::AfterglowNetworkContext};
+use crate::{core::identity::StableEntityId, network::connection::LocalPlayerId};
 
 /// Component marking a box as currently highlighted (nearest to local player).
 #[derive(Component)]
@@ -13,31 +15,37 @@ pub struct Highlighted;
 
 fn box_has_link(
     target: StableEntityId,
-    links: &Query<(Entity, &RopeLink, Has<LocalRopeDetachPending>)>,
+    links: &Query<(
+        Entity,
+        &RopeLink,
+        Has<PredictionDisable>,
+        Has<RopeJointDetachPending>,
+    )>,
 ) -> bool {
-    links
-        .iter()
-        .any(|(_, link, pending)| !pending && link.target == target)
+    links.iter().any(|(_, link, disabled, detach_pending)| {
+        !disabled && !detach_pending && link.target == target
+    })
 }
 
 /// Highlight the nearest unlinked box to the local player.
 pub fn highlight_nearest_box(
     mut commands: Commands,
-    player_name: Res<PlayerName>,
-    context: Option<Res<AfterglowNetworkContext>>,
+    local_player_id: Option<Res<LocalPlayerId>>,
     players: Query<(&PlayerBox, &Transform)>,
     boxes: Query<(Entity, &KinematicBox, &StableEntityId, &Transform)>,
-    links: Query<(Entity, &RopeLink, Has<LocalRopeDetachPending>)>,
+    links: Query<(
+        Entity,
+        &RopeLink,
+        Has<PredictionDisable>,
+        Has<RopeJointDetachPending>,
+    )>,
     highlighted: Query<Entity, With<Highlighted>>,
 ) {
-    let status = context.as_deref().map(|ctx| ctx.get_connection_status());
-    let local_member = status.and_then(|s| s.local_member_owner());
+    let local_str = local_player_id.as_deref().map(|id| id.0.to_string());
 
     let player_pos = players
         .iter()
-        .find(|(pb, _)| {
-            pb.owner == player_name.0 || local_member.as_deref() == Some(pb.owner.as_str())
-        })
+        .find(|(pb, _)| local_str.as_deref() == Some(pb.owner.as_str()))
         .map(|(_, t)| t.translation);
 
     let current: Vec<Entity> = highlighted.iter().collect();
@@ -47,13 +55,12 @@ pub fn highlight_nearest_box(
             .iter()
             .filter(|(_, _, stable_id, _)| !box_has_link(**stable_id, &links))
             .min_by(|(_, _, _, a), (_, _, _, b)| {
-                a.translation
-                    .distance(player_pos)
-                    .partial_cmp(&b.translation.distance(player_pos))
+                rope_grab_distance(a.translation, player_pos)
+                    .partial_cmp(&rope_grab_distance(b.translation, player_pos))
                     .unwrap_or(std::cmp::Ordering::Equal)
             })
             .and_then(|(entity, _, _, transform)| {
-                let distance = transform.translation.distance(player_pos);
+                let distance = rope_grab_distance(transform.translation, player_pos);
                 (distance <= ROPE_GRAB_RANGE).then_some((entity, distance))
             });
 
@@ -63,7 +70,7 @@ pub fn highlight_nearest_box(
                 .ok()
                 .and_then(|(_, _, stable_id, transform)| {
                     (!box_has_link(*stable_id, &links))
-                        .then_some(transform.translation.distance(player_pos))
+                        .then_some(rope_grab_distance(transform.translation, player_pos))
                 })
                 .filter(|distance| *distance <= ROPE_GRAB_RANGE)
         });
@@ -99,20 +106,8 @@ pub fn highlight_nearest_box(
 /// Updates the material color of highlighted boxes. Local-only.
 pub fn update_highlight_colors(
     mut materials: ResMut<Assets<StandardMaterial>>,
-    boxes: Query<
-        (
-            &MeshMaterial3d<StandardMaterial>,
-            &super::scene::BoxMaterial,
-        ),
-        Without<Highlighted>,
-    >,
-    highlighted: Query<
-        (
-            &MeshMaterial3d<StandardMaterial>,
-            &super::scene::BoxMaterial,
-        ),
-        With<Highlighted>,
-    >,
+    boxes: Query<(&MeshMaterial3d<StandardMaterial>, &BoxMaterial), Without<Highlighted>>,
+    highlighted: Query<(&MeshMaterial3d<StandardMaterial>, &BoxMaterial), With<Highlighted>>,
 ) {
     for (mat_handle, box_mat) in boxes.iter() {
         if let Some(mat) = materials.get_mut(mat_handle) {
@@ -135,10 +130,14 @@ pub fn draw_ropes(
     mut gizmos: Gizmos,
     players: Query<(&PlayerBox, &Transform)>,
     boxes: Query<(&KinematicBox, &StableEntityId, &Transform)>,
-    links: Query<(&RopeLink, Has<LocalRopeDetachPending>)>,
+    links: Query<(
+        &RopeLink,
+        Has<PredictionDisable>,
+        Has<RopeJointDetachPending>,
+    )>,
 ) {
-    for (link, pending) in links.iter() {
-        if pending {
+    for (link, disabled, detach_pending) in links.iter() {
+        if disabled || detach_pending {
             continue;
         }
         let Some((_, player_transform)) =

@@ -54,9 +54,14 @@ fn main() {
             afterglow_engine::run_multiplayer_boxes_demo(config);
         }
         Some("fps-controller") => {
-            if cli.host || cli.connect.is_some() || cli.listen.is_some() || cli.name_player.is_some()
+            if cli.host
+                || cli.connect.is_some()
+                || cli.listen.is_some()
+                || cli.name_player.is_some()
             {
-                eprintln!("error: --host, --connect, --listen, --name-player are only valid with --name multiplayer-boxes");
+                eprintln!(
+                    "error: --host, --connect, --listen, --name-player are only valid with --name multiplayer-boxes"
+                );
                 std::process::exit(1);
             }
             afterglow_engine::run_fps_controller_demo();
@@ -87,15 +92,7 @@ mod tests {
             ])
             .is_ok()
         );
-        assert!(
-            Cli::try_parse_from([
-                "agx",
-                "--name",
-                "fps-controller",
-                "--host",
-            ])
-            .is_ok()
-        );
+        assert!(Cli::try_parse_from(["agx", "--name", "fps-controller", "--host",]).is_ok());
         assert!(
             Cli::try_parse_from([
                 "agx",
@@ -107,22 +104,14 @@ mod tests {
             .is_ok()
         );
         assert!(
-            Cli::try_parse_from([
-                "agx",
-                "--name",
-                "fps-controller",
-                "--name-player",
-                "test",
-            ])
-            .is_ok()
+            Cli::try_parse_from(["agx", "--name", "fps-controller", "--name-player", "test",])
+                .is_ok()
         );
     }
 
     #[test]
     fn multiplayer_boxes_requires_host_or_connect() {
-        assert!(
-            Cli::try_parse_from(["agx", "--name", "multiplayer-boxes", "--host"]).is_ok()
-        );
+        assert!(Cli::try_parse_from(["agx", "--name", "multiplayer-boxes", "--host"]).is_ok());
         assert!(
             Cli::try_parse_from([
                 "agx",

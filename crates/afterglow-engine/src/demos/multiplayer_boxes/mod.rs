@@ -1,4 +1,5 @@
 pub mod camera;
+pub mod client;
 pub mod movement;
 pub mod network;
 pub mod playground;
@@ -6,23 +7,20 @@ pub mod protocol;
 pub mod rope;
 pub mod rope_visual;
 pub mod scene;
+pub mod server;
 #[cfg(test)]
 pub mod tests;
 
-use bevy::prelude::*;
-use lightyear::prelude::{ReplicationSystems, RollbackSystems, client::input::InputSystems};
-use std::net::SocketAddr;
+use bevy::{app::ScheduleRunnerPlugin, prelude::*};
+use std::{net::SocketAddr, time::Duration};
 
 use crate::network::{
-    lightyear::{AfterglowLightyearConfig, LightyearRole},
-    session::{
-        AfterglowSessionState, NonSteamSessionClient, PlayerIdentity, ProviderEndpoint,
-        SessionBackend, SessionCode, SessionRequest, SessionSearch, SessionStatus,
+    connection::{
+        AfterglowConnectionPlugin, ConnectionConfig, LocalIdentity, NetcodeConfig, ServerAddr,
+        ServerListenAddr,
     },
+    lightyear::{AfterglowLightyearConfig, AfterglowLightyearPlugin, LightyearRole},
 };
-use movement::DemoInput;
-use network::register_demo_protocol;
-use scene::{MemberToPlayer, PlayerName};
 
 #[derive(Clone)]
 pub struct MultiplayerBoxesDemoConfig {
@@ -32,207 +30,118 @@ pub struct MultiplayerBoxesDemoConfig {
     pub connect: String,
 }
 
-#[derive(Resource)]
-pub struct ServerAddr(pub SocketAddr);
+// ---------------------------------------------------------------------------
+// Server App (headless, MinimalPlugins)
+// ---------------------------------------------------------------------------
 
-#[derive(Resource)]
-pub struct LocalIdentity(pub PlayerIdentity);
+pub fn run_multiplayer_boxes_server(listen: &str) {
+    let listen_addr: SocketAddr = listen.parse().expect("invalid --listen address");
 
-#[allow(dead_code)]
-#[derive(Resource, Default)]
-enum ClientJoinState {
-    #[default]
-    Idle,
-    Search,
-    SearchSent,
-    Join(SessionCode),
-    Joining,
-    Joined,
-    Failed,
-}
+    let mut app = App::new();
+    app.add_plugins((
+        MinimalPlugins.set(ScheduleRunnerPlugin::run_loop(Duration::from_secs_f64(
+            1.0 / 60.0,
+        ))),
+        bevy::transform::TransformPlugin,
+    ));
 
-pub struct MultiplayerBoxesPlugin;
+    app.insert_resource(AfterglowLightyearConfig {
+        role: LightyearRole::Server,
+        tick_rate: 60,
+        rebroadcast_inputs: false,
+        ..Default::default()
+    })
+    .insert_resource(ConnectionConfig {
+        require_auth: false,
+        ..Default::default()
+    })
+    .insert_resource(ServerListenAddr(listen_addr))
+    .insert_resource(LocalIdentity::unauthenticated(0));
 
-impl Plugin for MultiplayerBoxesPlugin {
-    fn build(&self, app: &mut App) {
-        app.init_resource::<PlayerName>()
-            .init_resource::<DemoInput>()
-            .init_resource::<ClientJoinState>()
-            .init_resource::<MemberToPlayer>();
-
-        register_demo_protocol(app);
-
-        app.add_systems(
-            Startup,
-            (
-                scene::spawn_arena,
-                scene::spawn_host_player,
-                scene::spawn_lights,
-            )
-                .run_if(|config: Res<AfterglowLightyearConfig>| {
-                    matches!(config.role, LightyearRole::Host)
-                }),
-        );
-
-        app.add_systems(
-            Startup,
-            (
-                scene::spawn_client_arena_visuals,
-                scene::spawn_lights,
-                client_start_search,
-            )
-                .run_if(|config: Res<AfterglowLightyearConfig>| {
-                    matches!(config.role, LightyearRole::Client)
-                }),
-        );
-
-        app.add_systems(
-            Update,
-            movement::add_input_map_to_local_predicted_player
-                .after(scene::attach_replicated_player_visuals),
-        );
-        app.add_systems(
-            FixedPreUpdate,
-            movement::collect_input.in_set(InputSystems::WriteClientInputs),
-        );
-        app.add_systems(
-            PreUpdate,
-            (
-                scene::attach_predicted_player_physics,
-                scene::attach_predicted_kinematic_physics,
-            )
-                .after(ReplicationSystems::Receive)
-                .run_if(|config: Res<AfterglowLightyearConfig>| {
-                    matches!(config.role, LightyearRole::Client)
-                }),
-        );
-        app.add_systems(
-            Update,
-            (
-                client_join_flow,
-                scene::attach_replicated_player_visuals,
-                scene::attach_replicated_kinematic_visuals,
-            )
-                .run_if(|config: Res<AfterglowLightyearConfig>| {
-                    matches!(config.role, LightyearRole::Client)
-                }),
-        );
-        app.add_systems(
-            Update,
-            camera::setup_camera
-                .run_if(|cam: Query<&camera::DemoCamera>| cam.is_empty())
-                .after(scene::attach_replicated_player_visuals),
-        );
-        app.add_systems(
-            PostUpdate,
-            camera::follow_camera_system
-                .after(lightyear::frame_interpolation::FrameInterpolationSystems::Interpolate)
-                .after(RollbackSystems::VisualCorrection),
-        );
-        app.add_systems(
-            Update,
-            (
-                scene::spawn_player_on_member_joined,
-                scene::despawn_player_on_member_left,
-            )
-                .run_if(|config: Res<AfterglowLightyearConfig>| {
-                    matches!(config.role, LightyearRole::Host)
-                }),
-        );
-
-        app.add_systems(
-            FixedUpdate,
-            (movement::apply_movement, rope::server_apply_rope_intents)
-                .run_if(|config: Res<AfterglowLightyearConfig>| {
-                    matches!(config.role, LightyearRole::Host | LightyearRole::Client)
-                })
-                .before(avian3d::schedule::PhysicsSystems::Prepare),
-        );
-
-        // Rope mechanic: reactive observers, no polling sync
-        app.add_systems(
-            PreUpdate,
-            rope::toggle_rope
-                .after(leafwing_input_manager::plugin::InputManagerSystem::Update)
-                .run_if(|config: Res<AfterglowLightyearConfig>| {
-                    matches!(config.role, LightyearRole::Host | LightyearRole::Client)
-                }),
-        );
-        app.add_observer(rope::on_rope_link_added);
-        app.add_observer(rope::on_rope_link_removed);
-
-        // Local-only visual: highlight nearest box and draw ropes
-        app.add_systems(
-            Update,
-            (
-                rope::highlight_nearest_box,
-                scene::sync_kinematic_box_materials,
-                rope::update_highlight_colors,
-                rope::draw_ropes,
-            )
-                .chain(),
-        );
-    }
-}
-
-fn client_start_search(
-    mut client: ResMut<NonSteamSessionClient>,
-    server_addr: Res<ServerAddr>,
-    mut state: ResMut<ClientJoinState>,
-) {
-    if !matches!(*state, ClientJoinState::Idle) {
-        return;
-    }
-    let _ = client.send_request(
-        &ProviderEndpoint::Udp(server_addr.0),
-        &SessionRequest::Search(SessionSearch {
-            backend: SessionBackend::NonSteam,
-            provider: ProviderEndpoint::Udp(server_addr.0),
-            metadata: [("name".into(), "multiplayer-boxes".into())].into(),
-            require_open_slot: true,
-            max_results: 16,
+    app.add_plugins((
+        crate::core::AfterglowCorePlugin,
+        AfterglowLightyearPlugin,
+        AfterglowConnectionPlugin::server(NetcodeConfig {
+            protocol_id: 42,
+            private_key: [42u8; 32],
         }),
-    );
-    *state = ClientJoinState::Search;
+        crate::physics::AfterglowPhysicsPlugin,
+        server::MultiplayerBoxesServerPlugin,
+    ));
+
+    app.run();
 }
 
-fn client_join_flow(
-    mut client: ResMut<NonSteamSessionClient>,
-    server_addr: Res<ServerAddr>,
-    status: Res<SessionStatus>,
-    session_state: Res<AfterglowSessionState>,
-    nonce: Res<crate::network::session::SessionIdentityNonce>,
-    mut join_state: ResMut<ClientJoinState>,
-) {
-    match *join_state {
-        ClientJoinState::Search | ClientJoinState::SearchSent => {
-            if !status.last_search_results.is_empty() {
-                let info = &status.last_search_results[0];
-                let code = info.code.clone();
-                let identity = PlayerIdentity::demo(&nonce.0, code.as_str(), 1);
-                let _ = client.send_request(
-                    &ProviderEndpoint::Udp(server_addr.0),
-                    &SessionRequest::JoinByCode {
-                        backend: SessionBackend::NonSteam,
-                        code: code.clone(),
-                        identity,
-                        provider: ProviderEndpoint::Udp(server_addr.0),
-                    },
-                );
-                *join_state = ClientJoinState::Join(code);
-            } else {
-                *join_state = ClientJoinState::SearchSent;
-            }
-        }
-        ClientJoinState::Join(..) | ClientJoinState::Joining => {
-            if session_state.is_in_session() {
-                *join_state = ClientJoinState::Joined;
-                bevy::log::info!("client joined session");
-            } else {
-                *join_state = ClientJoinState::Joining;
-            }
-        }
-        ClientJoinState::Joined | ClientJoinState::Failed => {}
-        ClientJoinState::Idle => {}
+// ---------------------------------------------------------------------------
+// Client App (DefaultPlugins with rendering)
+// ---------------------------------------------------------------------------
+
+pub fn run_multiplayer_boxes_client(connect: &str, player_name: &str) -> bevy::app::AppExit {
+    let connect_addr: SocketAddr = connect.parse().expect("invalid --connect address");
+
+    let trace_data = crate::perf_hud::setup_tracing();
+
+    let mut app = App::new();
+    crate::keep_windowed_runtime_unthrottled_when_unfocused(&mut app);
+
+    app.insert_resource(trace_data)
+        .insert_resource(AfterglowLightyearConfig {
+            role: LightyearRole::Client,
+            tick_rate: 60,
+            rebroadcast_inputs: false,
+            ..Default::default()
+        })
+        .insert_resource(ConnectionConfig {
+            require_auth: false,
+            ..Default::default()
+        })
+        .insert_resource(ServerAddr(connect_addr))
+        .insert_resource(LocalIdentity::load_or_create_named(&player_name));
+
+    app.add_plugins((
+        crate::default_plugins(),
+        crate::core::AfterglowCorePlugin,
+        AfterglowLightyearPlugin,
+        AfterglowConnectionPlugin::client(NetcodeConfig {
+            protocol_id: 42,
+            private_key: [42u8; 32],
+        }),
+        crate::physics::AfterglowPhysicsPlugin,
+        client::MultiplayerBoxesClientPlugin,
+    ));
+
+    app.run()
+}
+
+// ---------------------------------------------------------------------------
+// Entry point
+// ---------------------------------------------------------------------------
+
+pub fn run_multiplayer_boxes_demo(config: MultiplayerBoxesDemoConfig) -> bevy::app::AppExit {
+    if config.host {
+        let listen_addr: SocketAddr = config.listen.parse().expect("invalid --listen address");
+
+        // Spawn the server App in a detached thread.
+        let server_listen = listen_addr.to_string();
+        std::thread::Builder::new()
+            .name("boxes-server".into())
+            .spawn(move || {
+                run_multiplayer_boxes_server(&server_listen);
+            })
+            .expect("failed to spawn server thread");
+
+        // Give the server a moment to bind before client connects
+        std::thread::sleep(std::time::Duration::from_millis(200));
+
+        // Connect to 127.0.0.1, not the listen address (which may be 0.0.0.0
+        // and is not a valid connect target on Linux).
+        let client_connect = if listen_addr.ip().is_unspecified() {
+            format!("127.0.0.1:{}", listen_addr.port())
+        } else {
+            listen_addr.to_string()
+        };
+        run_multiplayer_boxes_client(&client_connect, &config.player_name)
+    } else {
+        run_multiplayer_boxes_client(&config.connect, &config.player_name)
     }
 }

@@ -1,17 +1,23 @@
 mod color_tests;
+mod connection_lifecycle_tests;
 mod input;
-#[cfg(feature = "lightyear")]
-pub mod net;
+mod movement_unit_tests;
+mod physics_runtime_tests;
+mod prediction_target_tests;
+mod rope_hider_tests;
 mod rope_highlight_tests;
 mod rope_joint_tests;
 mod rope_prespawn_tests;
+mod rope_release_tests;
 mod rope_tests;
 
 use bevy::prelude::*;
-use leafwing_input_manager::action_state::ActionState;
 use lightyear::prelude::Predicted;
 
-use crate::core::identity::StableEntityId;
+use crate::{
+    core::identity::StableEntityId,
+    network::connection::{ConnectionEvent, ConnectionEventKind, LocalPlayerId},
+};
 
 use super::{camera::*, movement::*, protocol::*, scene::*};
 
@@ -19,7 +25,7 @@ fn test_app() -> App {
     let mut app = App::new();
     app.add_plugins((MinimalPlugins, avian3d::prelude::PhysicsPlugins::default()));
 
-    app.init_resource::<PlayerName>()
+    app.insert_resource(LocalPlayerId(2))
         .init_resource::<DemoInput>()
         .init_resource::<Assets<Mesh>>()
         .init_resource::<Assets<StandardMaterial>>();
@@ -115,15 +121,14 @@ fn client_arena_visuals_have_static_physics_colliders() {
 #[test]
 fn camera_setup_follows_player() {
     let mut app = test_app();
-    let _ = app.world_mut().resource_mut::<PlayerName>().0 = "test_player".to_string();
-
     let _player = app
         .world_mut()
         .spawn((
             PlayerBox {
-                owner: "test_player".to_string(),
+                owner: "2".to_string(),
             },
             avian3d::prelude::Position::from(Vec3::new(2.0, 0.5, 3.0)),
+            lightyear::prelude::Predicted,
         ))
         .id();
 
@@ -149,19 +154,15 @@ fn camera_setup_follows_player() {
 #[test]
 fn camera_follows_session_member_owner_when_player_name_differs() {
     let mut app = test_app();
-    app.world_mut().resource_mut::<PlayerName>().0 = "bob".to_string();
     app.world_mut()
-        .insert_resource(crate::network::session::AfterglowSessionState {
-            local_member_id: crate::network::session::SessionMemberId::new(2),
-            current_session: Some(crate::network::session::SessionId::new(1)),
-            ..Default::default()
-        });
+        .insert_resource(crate::network::connection::LocalPlayerId(2));
 
     app.world_mut().spawn((
         PlayerBox {
             owner: "2".to_string(),
         },
         Transform::from_xyz(3.0, 0.5, 4.0),
+        lightyear::prelude::Predicted,
     ));
 
     app.add_systems(
@@ -210,7 +211,7 @@ fn replicated_boxes_get_client_visuals() {
                 owner: "alice".to_string(),
             },
             Transform::from_xyz(1.0, 0.4, 0.0),
-            lightyear::prelude::Interpolated,
+            lightyear::prelude::Predicted,
         ))
         .id();
     let box_entity = app
@@ -256,12 +257,9 @@ fn replicated_boxes_get_client_visuals() {
 #[test]
 fn confirmed_local_box_is_not_rendered_before_predicted_copy_exists() {
     let mut app = test_app();
-    app.insert_resource(crate::network::AfterglowNetworkContext::from_status(
-        crate::network::AfterglowConnectionStatus {
-            role: crate::network::LightyearRole::Client,
-            local_member_id: crate::network::SessionMemberId::new(2),
-            ..Default::default()
-        },
+    app.insert_resource(crate::network::AfterglowNetworkContext::new(
+        crate::network::LightyearRole::Client,
+        2,
     ));
     app.add_systems(Update, attach_replicated_player_visuals);
 
@@ -283,12 +281,9 @@ fn confirmed_local_box_is_not_rendered_before_predicted_copy_exists() {
 #[test]
 fn local_replicated_box_gets_prediction_physics_components() {
     let mut app = test_app();
-    app.insert_resource(crate::network::AfterglowNetworkContext::from_status(
-        crate::network::AfterglowConnectionStatus {
-            role: crate::network::LightyearRole::Client,
-            local_member_id: crate::network::SessionMemberId::new(2),
-            ..Default::default()
-        },
+    app.insert_resource(crate::network::AfterglowNetworkContext::new(
+        crate::network::LightyearRole::Client,
+        2,
     ));
     app.add_systems(PreUpdate, attach_predicted_player_physics);
     app.add_systems(Update, attach_replicated_player_visuals);
@@ -321,179 +316,149 @@ fn local_replicated_box_gets_prediction_physics_components() {
 }
 
 #[test]
-fn movement_sets_velocity() {
+fn disconnect_despawns_owned_player_and_rope_links() {
     let mut app = test_app();
-    app.world_mut().resource_mut::<PlayerName>().0 = "mover".to_string();
+    app.add_observer(super::server::despawn_player_on_disconnected);
 
-    let mut action_state = ActionState::<crate::input::AfterglowAction>::default();
-    action_state.set_axis_pair(&crate::input::AfterglowAction::Move, Vec2::new(1.0, 0.0));
+    let player = app
+        .world_mut()
+        .spawn(PlayerBox {
+            owner: "2".to_string(),
+        })
+        .id();
+    let rope = app
+        .world_mut()
+        .spawn(RopeLink {
+            rope_id: StableEntityId::new(20_000),
+            player_owner: "2".to_string(),
+            target: StableEntityId::new(10_000),
+        })
+        .id();
 
-    let _entity = app.world_mut().spawn((
-        PlayerBox {
-            owner: "mover".to_string(),
+    app.world_mut().commands().trigger(ConnectionEvent {
+        kind: ConnectionEventKind::Disconnected {
+            reason: "test disconnect".to_string(),
         },
-        avian3d::prelude::RigidBody::Dynamic,
-        avian3d::prelude::LinearVelocity::ZERO,
-        action_state,
-    ));
-
-    app.add_systems(Update, super::movement::apply_movement);
+        player_id: 2,
+        link_entity: Entity::PLACEHOLDER,
+    });
     app.update();
 
-    let velocities: Vec<avian3d::prelude::LinearVelocity> = app
-        .world_mut()
-        .query_filtered::<&avian3d::prelude::LinearVelocity, With<PlayerBox>>()
-        .iter(app.world())
-        .copied()
-        .collect();
-
-    assert!(!velocities.is_empty(), "should find at least one velocity");
-    let vel = velocities[0];
     assert!(
-        vel.0.length() > 0.0,
-        "movement system should apply velocity"
+        app.world().get::<PlayerBox>(player).is_none(),
+        "disconnect should despawn the owned player entity"
     );
     assert!(
-        (vel.0.x - (-PLAYER_SPEED)).abs() < 0.001,
-        "velocity x should equal -player speed (axis flip)"
+        app.world().get::<RopeLink>(rope).is_none(),
+        "disconnect should despawn stale ropes owned by that player"
     );
 }
 
 #[test]
-fn apply_movement_only_moves_local_player() {
+fn predicted_player_physics_has_locked_axes() {
     let mut app = test_app();
-    app.world_mut().resource_mut::<PlayerName>().0 = "alice".to_string();
+    app.add_systems(PreUpdate, attach_predicted_player_physics);
 
-    let mut alice_action = ActionState::<crate::input::AfterglowAction>::default();
-    alice_action.set_axis_pair(&crate::input::AfterglowAction::Move, Vec2::new(0.0, 1.0));
-
-    let alice = app
-        .world_mut()
-        .spawn((
-            PlayerBox {
-                owner: "alice".to_string(),
-            },
-            avian3d::prelude::LinearVelocity::ZERO,
-            alice_action,
-        ))
-        .id();
-    let bob = app
-        .world_mut()
-        .spawn((
-            PlayerBox {
-                owner: "2".to_string(),
-            },
-            avian3d::prelude::LinearVelocity::ZERO,
-        ))
-        .id();
-
-    app.add_systems(Update, super::movement::apply_movement);
-    app.update();
-
-    assert_eq!(
-        app.world()
-            .get::<avian3d::prelude::LinearVelocity>(alice)
-            .unwrap()
-            .0,
-        Vec3::new(0.0, 0.0, PLAYER_SPEED)
-    );
-    assert_eq!(
-        app.world()
-            .get::<avian3d::prelude::LinearVelocity>(bob)
-            .unwrap()
-            .0,
-        Vec3::ZERO,
-        "host input must not move the remote player's box"
-    );
-}
-
-#[test]
-fn input_mapping_wasd_is_not_inverted() {
-    use bevy::{input::ButtonInput, prelude::KeyCode};
-
-    fn press(app: &mut App, key: KeyCode) {
-        app.world_mut()
-            .resource_mut::<ButtonInput<KeyCode>>()
-            .press(key);
-    }
-
-    fn released_dir(app: &mut App) -> Vec2 {
-        let target = match app.world().resource::<DemoInput>().0 {
-            _ => app.world().resource::<DemoInput>().0,
-        };
-        let _ = target;
-        app.world().resource::<DemoInput>().0
-    }
-
-    fn collect(app: &mut App) {
-        app.add_systems(Update, super::movement::collect_input);
-        app.update();
-    }
-
-    for (key, expected, label) in [
-        (
-            KeyCode::KeyW,
-            Vec2::new(0.0, 1.0),
-            "W should move forward (+Y in Vec2 -> +Z in Vec3)",
-        ),
-        (
-            KeyCode::ArrowUp,
-            Vec2::new(0.0, 1.0),
-            "ArrowUp should move forward",
-        ),
-        (
-            KeyCode::KeyS,
-            Vec2::new(0.0, -1.0),
-            "S should move backward",
-        ),
-        (
-            KeyCode::KeyA,
-            Vec2::new(1.0, 0.0),
-            "A should move left on screen",
-        ),
-        (
-            KeyCode::KeyD,
-            Vec2::new(-1.0, 0.0),
-            "D should move right on screen",
-        ),
-    ] {
-        let mut app = test_app();
-        app.init_resource::<ButtonInput<KeyCode>>();
-        press(&mut app, key);
-        collect(&mut app);
-        let got = released_dir(&mut app);
-        assert_eq!(got, expected, "{label}: expected {expected:?}, got {got:?}");
-    }
-}
-
-#[test]
-fn apply_velocity_to_player_writes_linear_velocity() {
-    use avian3d::prelude::*;
-    use bevy::ecs::system::SystemState;
-
-    let mut app = test_app();
     let entity = app
         .world_mut()
         .spawn((
             PlayerBox {
-                owner: "velocity-test".to_string(),
+                owner: "locks".to_string(),
             },
-            avian3d::prelude::RigidBody::Dynamic,
-            avian3d::prelude::LinearVelocity::ZERO,
+            Transform::from_xyz(0.0, 0.4, 0.0),
+            lightyear::prelude::Predicted,
         ))
         .id();
 
-    let vel = Vec3::new(3.0, 0.0, 4.0);
+    app.update();
 
-    let mut system_state: SystemState<
-        Query<&mut LinearVelocity, (With<PlayerBox>, Without<Predicted>)>,
-    > = SystemState::new(app.world_mut());
-    let mut query = system_state.get_mut(app.world_mut());
-    apply_velocity_to_player(vel, &mut query);
+    assert!(
+        app.world()
+            .get::<avian3d::prelude::LockedAxes>(entity)
+            .is_some(),
+        "predicted player physics should include LockedAxes"
+    );
+    assert!(
+        app.world()
+            .get::<avian3d::prelude::LockedAxes>(entity)
+            .is_some_and(|l| l.is_rotation_locked()),
+        "predicted player LockedAxes should have rotation locked"
+    );
+}
 
-    let result = app.world().get::<LinearVelocity>(entity).unwrap();
+#[test]
+fn predicted_player_physics_preserves_existing_velocity() {
+    let mut app = test_app();
+    app.add_systems(PreUpdate, attach_predicted_player_physics);
+
+    let expected_velocity = avian3d::prelude::LinearVelocity(Vec3::new(1.0, 0.0, 2.0));
+    let entity = app
+        .world_mut()
+        .spawn((
+            PlayerBox {
+                owner: "preserve-velocity".to_string(),
+            },
+            Transform::from_xyz(0.0, 0.4, 0.0),
+            Predicted,
+            expected_velocity,
+        ))
+        .id();
+
+    app.update();
+
     assert_eq!(
-        result.0, vel,
-        "apply_velocity_to_player should write the correct velocity vector"
+        app.world()
+            .get::<avian3d::prelude::LinearVelocity>(entity)
+            .copied(),
+        Some(expected_velocity),
+        "predicted physics attachment must not zero a replicated velocity"
+    );
+}
+
+#[test]
+fn predicted_kinematic_physics_has_locked_axes() {
+    let mut app = test_app();
+    app.add_systems(PreUpdate, attach_predicted_kinematic_physics);
+
+    let entity = app
+        .world_mut()
+        .spawn((
+            KinematicBox {
+                initial_pos: Vec3::new(2.0, 0.5, 0.0),
+            },
+            Transform::from_xyz(2.0, 0.5, 0.0),
+            lightyear::prelude::Predicted,
+        ))
+        .id();
+
+    app.update();
+
+    assert!(
+        app.world()
+            .get::<avian3d::prelude::LockedAxes>(entity)
+            .is_some(),
+        "predicted kinematic physics should include LockedAxes"
+    );
+    assert!(
+        app.world()
+            .get::<avian3d::prelude::LockedAxes>(entity)
+            .is_some_and(|l| l.is_rotation_locked()),
+        "predicted kinematic LockedAxes should have rotation locked"
+    );
+}
+
+#[test]
+fn spawn_player_box_helper_has_locked_axes() {
+    let mut app = test_app();
+    let entity = spawn_player_box(&mut app.world_mut().commands(), "locked-test", Vec3::ZERO);
+    app.update();
+
+    let locked = app
+        .world()
+        .get::<avian3d::prelude::LockedAxes>(entity)
+        .expect("spawn_player_box should include LockedAxes");
+    assert!(
+        locked.is_rotation_locked(),
+        "spawn_player_box LockedAxes should have rotation locked"
     );
 }

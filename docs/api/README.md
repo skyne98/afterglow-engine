@@ -13,7 +13,7 @@ have been deleted.
 |---|---|
 | `afterglow-engine` | Main engine library |
 | `agx` | Binary launcher |
-| `engine-rpg-harness` | Primary Lightyear RPG integration harness for fixed delay, prediction, combat, physics, PreSpawned, and transport scenarios |
+| `engine-rpg-harness` | Primary Lightyear RPG integration harness for fixed delay, prediction, combat, physics, PreSpawned, transport scenarios, and multiplayer_boxes visible sync regressions |
 
 ## Target Module Shape
 
@@ -23,8 +23,8 @@ afterglow-engine
 ├── console/              clap-backed dev console overlay/commands/autocomplete
 ├── input/                Leafwing wrapper and `AfterglowAction`
 ├── network/
+│   ├── connection/       UDP/netcode identity, auth, link lifecycle, ownership binding
 │   ├── lightyear/        Lightyear plugin/config/protocol glue
-│   ├── session/          Platform-neutral session/matchmaking API + non-Steam provider
 │   └── interpolation.rs  small transform interpolation buffer
 ├── controller/           first-person controller
 ├── physics/              Avian-backed physics authoring
@@ -41,9 +41,9 @@ rewind, interest}` modules were removed.
 |---|---|
 | `AfterglowCorePlugin` | Stable entity IDs, chunk IDs, and core schedule resources |
 | `DevConsolePlugin` | Source-style console overlay plus clap-backed parser/executor, cvars, command queue, network requests, and autocomplete support |
-| `AfterglowNetworkPlugin` | Lightyear boundary plugin + session plugin |
-| `AfterglowLightyearPlugin` | Lightyear client/server setup when the `lightyear` feature is enabled |
-| `AfterglowSessionPlugin` | Platform-neutral session/matchmaking API with in-memory non-Steam provider |
+| `AfterglowNetworkPlugin` | Lightweight network context/plugin boundary; real Lightyear connection plugins are installed explicitly by apps/demos |
+| `AfterglowLightyearPlugin` | Lightyear client/server setup, shared protocol registration, Leafwing input networking, and frame interpolation when the `lightyear` feature is enabled |
+| `AfterglowConnectionPlugin` | Real UDP/netcode server/client spawning, identity, auth messages, input timeline setup, and ownership binding helpers |
 | `AfterglowInputPlugin` | Leafwing action mapping for `AfterglowAction`; idempotent when Lightyear already installed the same input manager |
 | `AfterglowPhysicsPlugin` | Avian-backed physics authoring and runtime integration |
 | `AfterglowEnginePlugin` | Runtime composition plus perf HUD, tracing, and metrics |
@@ -57,8 +57,8 @@ rewind, interest}` modules were removed.
 | `console.md` | Source-style dev console overlay, parser, executor, cvars, and autocomplete |
 | `input.md` | Leafwing/Lightyear input target API |
 | `network.md` | Lightyear, fixed input delay, prediction, interpolation, and PreSpawned API |
-| `session-api.md` | Proposed simple public API for hosting and joining sessions |
-| `session-workflows.md` | End-to-end Steam, NonSteam listen-server, and Local multiplayer workflows |
+| `session-api.md` | Historical/external session API notes; session discovery is no longer engine-owned |
+| `session-workflows.md` | Historical/external Steam, NonSteam listen-server, and Local workflow notes |
 | `controller.md` | First-person controller |
 | `physics.md` | Avian-backed physics |
 | `world.md` | Current world-adjacent core IDs plus planned cell/lifecycle API status |
@@ -74,22 +74,14 @@ rewind, interest}` modules were removed.
 | `ConsoleNetworkRequest` | `console` | Typed console request for connect/disconnect/server/network debug operations |
 | `AfterglowAction` | `input` | Leafwing `Actionlike` enum for gameplay controls |
 | `HistoryTick` | `network` | Plain fixed-step tick counter for deterministic scenario systems |
-| `AfterglowLightyearConfig` | `network::lightyear` | Tick duration, client/server role, and Lightyear protocol settings |
-| `register_afterglow_lightyear_protocol` | `network::lightyear` | Opt-in helper for core protocol state: `HistoryTick` plus replicated `StableEntityId`; player/control ownership uses upstream Lightyear `ControlledBy` / `Controlled` and Leafwing `InputMap` / `ActionState` |
+| `AfterglowLightyearConfig` | `network::lightyear` | Tick duration, client/server role, input rebroadcast, and shared protocol settings |
+| `register_afterglow_lightyear_protocol` | `network::lightyear` | Shared protocol helper for `StableEntityId`, `Transform`, `LinearVelocity`, and `HistoryTick`; player/control ownership uses upstream Lightyear `ControlledBy` / `Controlled` and Leafwing `InputMap` / `ActionState` |
+| `AfterglowConnectionPlugin` | `network::connection` | Real UDP/netcode server/client spawning from external connection params, auth messages, link lifecycle events, and input timeline setup |
+| `ConnectionConfig` | `network::connection` | Runtime input-delay, auth, rebroadcast, and link-conditioner settings |
+| `LocalIdentity` / `LocalPlayerId` | `network::connection` | Stable `PlayerId` source and client-local player id resource; `PlayerId` is the netcode `client_id` |
+| `ConnectionEvent` / `MemberLinkMap` | `network::connection` | Join/leave observer event and server player-to-link map |
+| `PlayerOwned` / `ControlledEntityPlugin` | `network::connection` | Ownership tags and safe `ControlledBy` binding once `ReplicationSender` exists |
 | `NetworkTransformInterpolationBuffer` | `network` | Bounded delayed transform interpolation for remote avatars and replicated physics presentation |
-| `AfterglowSessionPlugin` | `network::session` | Platform-neutral session/matchmaking API; registers `SessionRequest`/`SessionEvent` Bevy messages and the non-Steam in-memory provider |
-| `SessionId` / `SessionMemberId` | `network::session` | `u128` wrapper IDs for durable session identity, following the `StableEntityId` pattern |
-| `SessionCode` | `network::session` | Player-facing short join token (e.g., `XFQ-KRB`) generated by the non-Steam provider |
-| `PlayerIdentity` | `network::session` | Durable anti-spoofing identity: `Native` Ed25519 proof or `Steam` ticket passthrough |
-| `NativeIdentityProof` | `network::session` | Ed25519 public key + signature over a canonical server-nonce challenge |
-| `SessionIdentityNonce` | `network::session` | Server-side nonce resource used when verifying native identity proofs |
-| `SessionConfig` / `SessionSearch` / `SessionInfo` | `network::session` | Config, search filter, and result snapshot for session operations |
-| `SessionRequest` / `SessionEvent` | `network::session` | Bevy messages for create/search/join/join-by-code/leave and their outcomes |
-| `AfterglowSessionLightyearBridgePlugin` | `network::lightyear` | Opt-in plugin mapping `SessionEvent` lifecycle to Lightyear link management (Crossbeam spawn or pending netcode params). |
-| `SessionLightyearLinks` | `network::lightyear` | Resource tracking spawned client link, server link, and server entity for a local session. |
-| `PendingNetcodeStartup` | `network::lightyear` | Resource carrying pending `NetcodeClientParams` and `NetcodeServerParams` for `DirectUdp` sessions. |
-| `NetcodeClientParams` | `network::lightyear` | Server address, client ID, protocol ID, and private key for starting a Netcode client. |
-| `NetcodeServerParams` | `network::lightyear` | Bind address, protocol ID, and private key for starting a Netcode server. |
 | `PhysicsBreakable` / `PhysicsGrabbedState` / `PhysicsGrabSpringConfig` | `physics` | Server/master-authoritative physics interaction state for impact/break and damped grab/link/release flows |
 
 ## Target Schedules
@@ -122,6 +114,8 @@ coverage:
 |---|---|
 | `cargo test -p afterglow-engine` | Engine unit and renderless app tests |
 | `cargo test -p engine-rpg-harness` | Primary Lightyear RPG integration harness |
+| `cargo test -p engine-rpg-harness multiplayer_boxes` | One-server/two-client multiplayer_boxes visible player, block, and rope sync regression |
+| `cargo test -p afterglow-lightyear-avian3d transform_mode_writes` | Avian 0.6 + Lightyear Transform-mode writeback regression |
 | `bun run test` | Build-system test wrapper |
 
 ## Dependencies

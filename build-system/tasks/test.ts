@@ -1,11 +1,11 @@
-export async function runTest(): Promise<void> {
-  const normal = Bun.spawnSync(["cargo", "test"], { stdio: ["inherit", "inherit", "inherit"] });
-  if ((normal.exitCode ?? 1) !== 0) {
-    process.exit(normal.exitCode ?? 1);
-  }
+import { runInDevShell } from "../utils/nix";
 
-  const testSupport = Bun.spawnSync(["cargo", "test", "-p", "afterglow-engine", "--features", "test-support"], {
-    stdio: ["inherit", "inherit", "inherit"],
-  });
-  process.exit(testSupport.exitCode ?? 1);
+export async function runTest(): Promise<void> {
+  const code1 = await runInDevShell("cargo test");
+  if (code1 !== 0) process.exit(code1);
+
+  const code2 = await runInDevShell(
+    "cargo test -p afterglow-engine --features test-support"
+  );
+  process.exit(code2);
 }

@@ -7,8 +7,9 @@ use lightyear::prelude::*;
 
 use super::*;
 use crate::{
-    core::identity::{StableEntityId, StableIdAllocator},
+    core::identity::StableEntityId,
     input::{AfterglowAction, default_gameplay_input_map},
+    network::connection::{ClientSpawned, LocalPlayerId},
 };
 
 fn rope_test_app() -> App {
@@ -22,25 +23,24 @@ fn rope_test_app() -> App {
         leafwing_input_manager::plugin::InputManagerPlugin::<AfterglowAction>::default(),
     ));
     super::super::network::register_demo_protocol(&mut app);
-    app.init_resource::<PlayerName>()
-        .init_resource::<crate::core::identity::StableIdAllocator>()
+    app.insert_resource(LocalPlayerId(2))
         .init_resource::<Assets<Mesh>>()
         .init_resource::<Assets<StandardMaterial>>()
-        .insert_resource(crate::network::AfterglowNetworkContext::from_status(
-            crate::network::AfterglowConnectionStatus {
-                role: crate::network::LightyearRole::Host,
-                ..Default::default()
-            },
+        .insert_resource(crate::network::AfterglowNetworkContext::new(
+            crate::network::LightyearRole::Client,
+            2,
         ));
     app
 }
 
-fn test_box_id(index: u32) -> StableEntityId {
-    StableEntityId::new(10_000 + u128::from(index))
+fn run_rope_frame(app: &mut App) {
+    app.world_mut().run_schedule(FixedUpdate);
+    app.world_mut().run_schedule(Update);
+    app.world_mut().run_schedule(PostUpdate);
 }
 
-fn test_rope_id(index: u32) -> StableEntityId {
-    StableEntityId::new(20_000 + u128::from(index))
+fn test_box_id(index: u32) -> StableEntityId {
+    StableEntityId::new(10_000 + u128::from(index))
 }
 
 fn rope_link_for_box(app: &mut App, box_index: u32) -> Option<RopeLink> {
@@ -52,15 +52,6 @@ fn rope_link_for_box(app: &mut App, box_index: u32) -> Option<RopeLink> {
         .cloned()
 }
 
-fn active_rope_link_for_box(app: &mut App, box_index: u32) -> Option<RopeLink> {
-    let target = test_box_id(box_index);
-    app.world_mut()
-        .query::<(&RopeLink, Has<super::super::rope::LocalRopeDetachPending>)>()
-        .iter(app.world())
-        .find(|(link, pending)| !*pending && link.target == target)
-        .map(|(link, _)| link.clone())
-}
-
 fn prespawned_rope_link_count(app: &mut App) -> usize {
     app.world_mut()
         .query::<(&RopeLink, &PreSpawned)>()
@@ -68,27 +59,31 @@ fn prespawned_rope_link_count(app: &mut App) -> usize {
         .count()
 }
 
-/// Client-only local input does not pre-spawn a RopeLink until a RopeIntent
-/// sender exists, because an unsent intent can never be confirmed.
 #[test]
-fn client_local_release_without_sender_does_not_prespawn_rope_link() {
-    let mut app = rope_test_app();
-    app.world_mut().resource_mut::<PlayerName>().0 = "bob".to_string();
-    app.world_mut()
-        .insert_resource(crate::network::AfterglowNetworkContext::from_status(
-            crate::network::AfterglowConnectionStatus {
-                role: crate::network::LightyearRole::Client,
-                local_member_id: crate::network::session::SessionMemberId::new(2),
-                ..Default::default()
-            },
-        ));
-    let client_link = app.world_mut().spawn_empty().id();
-    app.world_mut()
-        .insert_resource(crate::network::SessionLightyearLinks {
-            client_link: Some(client_link),
-            ..Default::default()
-        });
+fn rope_id_is_stable_across_client_server_input_delay_tick_offsets() {
+    let target = test_box_id(0);
+    let client_processing_tick = 120_u16;
+    let server_processing_tick = client_processing_tick.saturating_sub(2);
 
+    let client_id = super::super::rope::rope_id_for_input("2", target);
+    let server_id = super::super::rope::rope_id_for_input("2", target);
+
+    assert_ne!(client_processing_tick, server_processing_tick);
+    assert_eq!(
+        client_id, server_id,
+        "rope PreSpawned ids must not depend on local processing tick"
+    );
+    assert_ne!(
+        client_id,
+        super::super::rope::rope_id_for_input("3", target)
+    );
+    assert_ne!(
+        client_id,
+        super::super::rope::rope_id_for_input("2", test_box_id(1))
+    );
+}
+
+fn spawn_predicted_player_and_box(app: &mut App) {
     app.world_mut().spawn((
         PlayerBox {
             owner: "2".to_string(),
@@ -109,125 +104,105 @@ fn client_local_release_without_sender_does_not_prespawn_rope_link() {
         avian3d::prelude::RigidBody::Dynamic,
         LinearVelocity::ZERO,
     ));
+}
 
-    app.add_systems(
-        PreUpdate,
-        super::super::rope::toggle_rope
-            .after(leafwing_input_manager::plugin::InputManagerSystem::Update),
-    );
+fn release_rope_toggle(app: &mut App) {
+    let mut query = app.world_mut().query::<&mut ActionState<AfterglowAction>>();
+    for mut action in query.iter_mut(app.world_mut()) {
+        action.press(&AfterglowAction::RopeToggle);
+        action.release(&AfterglowAction::RopeToggle);
+    }
+}
+
+/// Client-only local input cannot pre-spawn a RopeLink until the Lightyear
+/// client link exists, because `PreSpawned::for_receiver` needs that receiver.
+#[test]
+fn client_local_release_without_client_link_does_not_prespawn_rope_link() {
+    let mut app = rope_test_app();
     app.world_mut()
-        .resource_mut::<ButtonInput<KeyCode>>()
-        .press(KeyCode::KeyF);
-    app.update();
-    app.update();
-    app.world_mut()
-        .resource_mut::<ButtonInput<KeyCode>>()
-        .release(KeyCode::KeyF);
-    app.update();
+        .insert_resource(crate::network::AfterglowNetworkContext::new(
+            crate::network::LightyearRole::Client,
+            2,
+        ));
+    spawn_predicted_player_and_box(&mut app);
+
+    app.add_systems(FixedUpdate, super::super::rope::toggle_rope);
+    release_rope_toggle(&mut app);
+    run_rope_frame(&mut app);
 
     assert!(
         rope_link_for_box(&mut app, 0).is_none(),
-        "client must not pre-spawn an unconfirmable RopeLink without a sender"
+        "client must not pre-spawn an unmatchable RopeLink without a client link"
     );
 }
 
-/// Client-only local input sends a RopeIntent and pre-spawns a RopeLink.
+/// Client-only local input pre-spawns a RopeLink from ActionState only.
 #[test]
-fn client_local_release_sends_intent_and_prespawns_rope_link() {
+fn client_local_release_prespawns_rope_link_from_action_state() {
     let mut app = rope_test_app();
-    app.world_mut().resource_mut::<PlayerName>().0 = "bob".to_string();
-    app.world_mut()
-        .insert_resource(crate::network::AfterglowNetworkContext::from_status(
-            crate::network::AfterglowConnectionStatus {
-                role: crate::network::LightyearRole::Client,
-                local_member_id: crate::network::session::SessionMemberId::new(2),
-                ..Default::default()
-            },
-        ));
-    let client_link = app
-        .world_mut()
-        .spawn(MessageSender::<RopeIntent>::default())
-        .id();
-    app.world_mut()
-        .insert_resource(crate::network::SessionLightyearLinks {
-            client_link: Some(client_link),
-            ..Default::default()
-        });
+    let client_link = app.world_mut().spawn(ClientSpawned).id();
+    spawn_predicted_player_and_box(&mut app);
 
+    app.add_systems(FixedUpdate, super::super::rope::toggle_rope);
+    release_rope_toggle(&mut app);
+    run_rope_frame(&mut app);
+
+    let target = test_box_id(0);
+    let expected_rope_id = super::super::rope::rope_id_for_input("2", target);
+    let mut query = app.world_mut().query::<(&RopeLink, &PreSpawned)>();
+    let links: Vec<_> = query.iter(app.world()).collect();
+    assert_eq!(links.len(), 1, "client should pre-spawn exactly one rope");
+    let (link, prespawned) = links[0];
+    assert_eq!(link.player_owner, "2");
+    assert_eq!(link.target, target);
+    assert_eq!(link.rope_id, expected_rope_id);
+    assert_eq!(
+        prespawned.hash,
+        Some(super::super::rope::rope_link_hash(expected_rope_id))
+    );
+    assert_eq!(prespawned.receiver, Some(client_link));
+}
+
+/// Client detach goes through Lightyear's prediction despawn command when an
+/// active locally predicted rope exists for the owner.
+#[test]
+fn client_local_detach_removes_active_rope_link() {
+    let mut app = rope_test_app();
+    let client_link = app.world_mut().spawn(ClientSpawned).id();
+    spawn_predicted_player_and_box(&mut app);
+
+    let target = test_box_id(0);
+    let rope_id = super::super::rope::rope_id_for_input("2", target);
     app.world_mut().spawn((
-        PlayerBox {
-            owner: "2".to_string(),
+        RopeLink {
+            rope_id,
+            player_owner: "2".to_string(),
+            target,
         },
-        Transform::from_xyz(0.0, 0.4, 0.0),
-        avian3d::prelude::RigidBody::Dynamic,
-        LinearVelocity::ZERO,
-        default_gameplay_input_map(),
-        ActionState::<AfterglowAction>::default(),
-        Predicted,
+        rope_id,
+        PreSpawned::new(super::super::rope::rope_link_hash(rope_id)).for_receiver(client_link),
     ));
 
-    let _box_entity = app
-        .world_mut()
-        .spawn((
-            KinematicBox {
-                initial_pos: Vec3::new(1.0, 0.5, 0.0),
-            },
-            test_box_id(0),
-            Transform::from_xyz(1.0, 0.5, 0.0),
-            avian3d::prelude::RigidBody::Dynamic,
-            LinearVelocity::ZERO,
-        ))
-        .id();
-
-    app.add_systems(
-        PreUpdate,
-        super::super::rope::toggle_rope
-            .after(leafwing_input_manager::plugin::InputManagerSystem::Update),
-    );
-    app.world_mut()
-        .resource_mut::<ButtonInput<KeyCode>>()
-        .press(KeyCode::KeyF);
-    app.update();
-    app.update();
-    app.world_mut()
-        .resource_mut::<ButtonInput<KeyCode>>()
-        .release(KeyCode::KeyF);
-    app.update();
+    app.add_systems(FixedUpdate, super::super::rope::toggle_rope);
+    release_rope_toggle(&mut app);
+    run_rope_frame(&mut app);
 
     assert!(
-        rope_link_for_box(&mut app, 0).is_some(),
-        "client prediction should pre-spawn a local RopeLink entity"
-    );
-    assert_eq!(
-        prespawned_rope_link_count(&mut app),
-        1,
-        "predicted RopeLink should use Lightyear PreSpawned"
+        rope_link_for_box(&mut app, 0).is_none(),
+        "client detach should remove or prediction-disable the active local rope"
     );
 }
 
-/// Client detach sends an intent and immediately hides the predicted RopeLink
-/// from local gameplay/visuals without deleting Lightyear's tracked entity.
+/// The authoritative side derives the target and rope id from input/world
+/// state; it does not trust a client-selected target message.
 #[test]
-fn client_local_detach_sends_intent_and_marks_rope_link_pending() {
+fn server_action_state_release_confirms_nearest_valid_box() {
     let mut app = rope_test_app();
-    app.world_mut().resource_mut::<PlayerName>().0 = "bob".to_string();
     app.world_mut()
-        .insert_resource(crate::network::AfterglowNetworkContext::from_status(
-            crate::network::AfterglowConnectionStatus {
-                role: crate::network::LightyearRole::Client,
-                local_member_id: crate::network::session::SessionMemberId::new(2),
-                ..Default::default()
-            },
+        .insert_resource(crate::network::AfterglowNetworkContext::new(
+            crate::network::LightyearRole::Client,
+            2,
         ));
-    let client_link = app
-        .world_mut()
-        .spawn(MessageSender::<RopeIntent>::default())
-        .id();
-    app.world_mut()
-        .insert_resource(crate::network::SessionLightyearLinks {
-            client_link: Some(client_link),
-            ..Default::default()
-        });
 
     app.world_mut().spawn((
         PlayerBox {
@@ -236,9 +211,7 @@ fn client_local_detach_sends_intent_and_marks_rope_link_pending() {
         Transform::from_xyz(0.0, 0.4, 0.0),
         avian3d::prelude::RigidBody::Dynamic,
         LinearVelocity::ZERO,
-        default_gameplay_input_map(),
         ActionState::<AfterglowAction>::default(),
-        Predicted,
     ));
     app.world_mut().spawn((
         KinematicBox {
@@ -250,122 +223,19 @@ fn client_local_detach_sends_intent_and_marks_rope_link_pending() {
         LinearVelocity::ZERO,
     ));
 
-    app.add_systems(
-        PreUpdate,
-        super::super::rope::toggle_rope
-            .after(leafwing_input_manager::plugin::InputManagerSystem::Update),
+    app.add_systems(FixedUpdate, super::super::rope::toggle_rope);
+    release_rope_toggle(&mut app);
+    run_rope_frame(&mut app);
+
+    let roped = rope_link_for_box(&mut app, 0).expect("server should spawn authoritative rope");
+    assert_eq!(roped.player_owner.as_str(), "2");
+    assert_eq!(
+        roped.rope_id,
+        super::super::rope::rope_id_for_input("2", test_box_id(0))
     );
-
-    app.world_mut()
-        .resource_mut::<ButtonInput<KeyCode>>()
-        .press(KeyCode::KeyF);
-    app.update();
-    app.update();
-    app.world_mut()
-        .resource_mut::<ButtonInput<KeyCode>>()
-        .release(KeyCode::KeyF);
-    app.update();
-    assert!(active_rope_link_for_box(&mut app, 0).is_some());
-
-    for _ in 0..12 {
-        app.update();
-    }
-    app.world_mut()
-        .resource_mut::<ButtonInput<KeyCode>>()
-        .press(KeyCode::KeyF);
-    app.update();
-    app.update();
-    app.world_mut()
-        .resource_mut::<ButtonInput<KeyCode>>()
-        .release(KeyCode::KeyF);
-    app.update();
-
-    assert!(
-        active_rope_link_for_box(&mut app, 0).is_none(),
-        "client detach should immediately stop the RopeLink from blocking local gameplay"
-    );
-    assert!(
-        rope_link_for_box(&mut app, 0).is_some(),
-        "client detach must keep Lightyear's RopeLink entity alive until authoritative despawn"
-    );
-    let pending_count = app
-        .world_mut()
-        .query_filtered::<Entity, With<super::super::rope::LocalRopeDetachPending>>()
-        .iter(app.world())
-        .count();
-    assert_eq!(pending_count, 1);
-}
-
-/// The authoritative side validates the client-selected box id and confirms
-/// the matching PreSpawned RopeLink instead of recomputing a target.
-#[test]
-fn server_rope_intent_confirms_exact_client_selected_box() {
-    let mut app = rope_test_app();
-    app.world_mut().resource_mut::<PlayerName>().0 = "alice".to_string();
-    app.world_mut()
-        .insert_resource(crate::network::AfterglowNetworkContext::from_status(
-            crate::network::AfterglowConnectionStatus {
-                role: crate::network::LightyearRole::Host,
-                local_member_id: crate::network::session::SessionMemberId::new(1),
-                ..Default::default()
-            },
-        ));
-
-    app.world_mut().spawn((
-        PlayerBox {
-            owner: "2".to_string(),
-        },
-        Transform::from_xyz(0.0, 0.4, 0.0),
-        avian3d::prelude::RigidBody::Dynamic,
-        LinearVelocity::ZERO,
-        ActionState::<AfterglowAction>::default(),
-    ));
-
-    let _box_entity = app
-        .world_mut()
-        .spawn((
-            KinematicBox {
-                initial_pos: Vec3::new(1.0, 0.5, 0.0),
-            },
-            test_box_id(0),
-            Transform::from_xyz(1.0, 0.5, 0.0),
-            avian3d::prelude::RigidBody::Dynamic,
-            LinearVelocity::ZERO,
-        ))
-        .id();
-
-    app.add_systems(Update, apply_test_attach_intent);
-    app.update();
-
-    let roped = rope_link_for_box(&mut app, 0);
-    assert_eq!(roped.as_ref().map(|r| r.player_owner.as_str()), Some("2"));
     assert_eq!(
         prespawned_rope_link_count(&mut app),
         1,
-        "authoritative RopeLink should carry matching PreSpawned metadata"
-    );
-}
-
-fn apply_test_attach_intent(
-    commands: Commands,
-    players: Query<(&PlayerBox, &Transform)>,
-    boxes: Query<(&KinematicBox, &StableEntityId, &Transform)>,
-    links: Query<(Entity, &RopeLink)>,
-    stable_ids: Query<&StableEntityId>,
-    mut allocator: ResMut<StableIdAllocator>,
-) {
-    super::super::rope::apply_authoritative_rope_intent(
-        commands,
-        "2".to_string(),
-        RopeIntent {
-            op: RopeIntentOp::Attach,
-            rope_id: test_rope_id(0),
-            target: Some(test_box_id(0)),
-        },
-        &players,
-        &boxes,
-        &links,
-        &stable_ids,
-        &mut allocator,
+        "authoritative RopeLink should carry PreSpawned metadata for matching"
     );
 }

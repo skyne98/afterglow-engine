@@ -24,14 +24,14 @@ pub(crate) fn register_native_input(app: &mut App, role: LightyearRole) {
     app.register_component::<CombatState>().add_prediction();
     app.register_component::<Transform>().add_prediction();
 
-    if matches!(role, LightyearRole::Client | LightyearRole::Host) {
+    if matches!(role, LightyearRole::Client) {
         app.add_plugins(bevy::input::InputPlugin);
     }
     app.add_plugins(lightyear::prelude::input::leafwing::InputPlugin::<
         AfterglowAction,
     >::default());
 
-    if matches!(role, LightyearRole::Client | LightyearRole::Host) {
+    if matches!(role, LightyearRole::Client) {
         app.add_systems(
             FixedPreUpdate,
             apply_desired_input.in_set(InputSystems::WriteClientInputs),

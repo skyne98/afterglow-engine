@@ -9,16 +9,16 @@ struct AfterglowLightyearProtocolRegistered;
 
 /// Register all engine-provided Lightyear protocol types with the app.
 ///
-/// Always initializes [`HistoryTick`] and registers reflection for
-/// [`HistoryTick`] and [`StableEntityId`]. When the `lightyear` feature is
-/// active, also registers [`StableEntityId`] as a Lightyear-replicated
-/// component. Call this after Lightyear client/server plugins have been added;
-/// the helper needs Lightyear's protocol registry to exist before component
-/// registration.
+/// Registers:
+/// - `StableEntityId` (with prediction)
+/// - `Transform` (with prediction + linear correction + interpolation)
+/// - `LinearVelocity` (with prediction)
+///
+/// Initializes [`HistoryTick`] and registers reflection types.
+///
+/// Call this AFTER Lightyear client/server plugins have been added.
 ///
 /// Idempotent: repeated calls after the first are a no-op.
-///
-/// Returns `&mut App` for chaining.
 pub fn register_afterglow_lightyear_protocol(app: &mut App) -> &mut App {
     if app
         .world()
@@ -33,8 +33,24 @@ pub fn register_afterglow_lightyear_protocol(app: &mut App) -> &mut App {
 
     #[cfg(feature = "lightyear")]
     {
+        use avian3d::prelude::LinearVelocity;
+        use bevy::math::Isometry3d;
         use lightyear::prelude::*;
-        app.register_component::<StableEntityId>();
+
+        // Engine-level replicated components.
+        // StableEntityId is predicted so predicted copies keep the same id.
+        app.register_component::<StableEntityId>().add_prediction();
+
+        // Transform is the canonical networked pose. Predicted + linearly
+        // corrected + interpolated for smooth visual presentation.
+        app.register_component::<Transform>()
+            .add_prediction()
+            .add_linear_correction_fn::<Isometry3d>()
+            .add_interpolation_with(TransformLinearInterpolation::lerp);
+
+        // LinearVelocity is predicted so predicted copies maintain correct
+        // velocities for rollback reconciliation.
+        app.register_component::<LinearVelocity>().add_prediction();
     }
 
     app.insert_resource(AfterglowLightyearProtocolRegistered);
@@ -76,10 +92,11 @@ mod tests {
     #[cfg(feature = "lightyear")]
     #[test]
     fn protocol_helper_adds_lightyear_components() {
+        use std::time::Duration;
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_plugins(lightyear::prelude::server::ServerPlugins {
-            tick_duration: std::time::Duration::from_secs_f64(1.0 / 60.0),
+            tick_duration: Duration::from_secs_f64(1.0 / 60.0),
         });
         // Should not panic:
         register_afterglow_lightyear_protocol(&mut app);
@@ -88,10 +105,11 @@ mod tests {
     #[cfg(feature = "lightyear")]
     #[test]
     fn protocol_registration_is_idempotent() {
+        use std::time::Duration;
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_plugins(lightyear::prelude::server::ServerPlugins {
-            tick_duration: std::time::Duration::from_secs_f64(1.0 / 60.0),
+            tick_duration: Duration::from_secs_f64(1.0 / 60.0),
         });
         register_afterglow_lightyear_protocol(&mut app);
         // Second call — must not panic.

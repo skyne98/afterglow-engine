@@ -48,6 +48,9 @@ pub struct LightyearTestRig {
     /// `[current_tick - retention_window_ticks, current_tick]` are dropped
     /// before delivery. 0 = no limit.
     retention_window_ticks: u32,
+    /// True when server/client netcode Start/Connect triggers are owned by
+    /// engine startup systems instead of `connect()`.
+    netcode_started: bool,
 }
 
 impl LightyearTestRig {
@@ -62,26 +65,28 @@ impl LightyearTestRig {
             return;
         }
 
-        let server_entity = self
-            .server_app
-            .world_mut()
-            .query_filtered::<Entity, With<server::NetcodeServer>>()
-            .iter(self.server_app.world())
-            .next()
-            .expect("server entity with NetcodeServer not found");
+        if !self.netcode_started {
+            let server_entity = self
+                .server_app
+                .world_mut()
+                .query_filtered::<Entity, With<server::NetcodeServer>>()
+                .iter(self.server_app.world())
+                .next()
+                .expect("server entity with NetcodeServer not found");
 
-        {
-            let mut c = self.server_app.world_mut().commands();
-            c.trigger(Start {
-                entity: server_entity,
-            });
-        }
+            {
+                let mut c = self.server_app.world_mut().commands();
+                c.trigger(Start {
+                    entity: server_entity,
+                });
+            }
 
-        for (i, &client_entity) in self.client_links.iter().enumerate() {
-            let mut c = self.client_apps[i].world_mut().commands();
-            c.trigger(Connect {
-                entity: client_entity,
-            });
+            for (i, &client_entity) in self.client_links.iter().enumerate() {
+                let mut c = self.client_apps[i].world_mut().commands();
+                c.trigger(Connect {
+                    entity: client_entity,
+                });
+            }
         }
 
         let expected_links = self.client_apps.len();

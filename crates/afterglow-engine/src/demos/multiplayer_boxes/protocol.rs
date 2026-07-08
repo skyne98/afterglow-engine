@@ -25,22 +25,6 @@ pub struct RopeLink {
     pub target: StableEntityId,
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RopeIntentOp {
-    Attach,
-    Detach,
-}
-
-/// Client-to-server gameplay request derived from `ActionState::RopeToggle`.
-/// This carries world-state selection separately from input state: ActionState
-/// remains pure input, while this message proposes the exact box to validate.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub struct RopeIntent {
-    pub op: RopeIntentOp,
-    pub rope_id: StableEntityId,
-    pub target: Option<StableEntityId>,
-}
-
 /// Marks a locally-spawned joint entity so it can be cleaned up when its
 /// owning [`RopeLink`] is removed.
 #[derive(Component)]

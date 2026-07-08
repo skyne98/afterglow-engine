@@ -195,6 +195,7 @@ dependencies = [
  "afterglow-lightyear-avian3d",
  "avian3d 0.6.1",
  "bevy",
+ "blake3",
  "clap",
  "ed25519-dalek",
  "leafwing-input-manager",
@@ -3131,6 +3132,7 @@ checksum = "70e796c081cee67dc755e1a36a0a172b897fab85fc3f6bc48307991f64e4eca9"
 dependencies = [
  "curve25519-dalek",
  "ed25519",
+ "rand_core 0.6.4",
  "serde",
  "sha2",
  "subtle",
@@ -3206,9 +3208,12 @@ name = "engine-rpg-harness"
 version = "0.1.0"
 dependencies = [
  "afterglow-engine",
+ "afterglow-lightyear-avian3d",
+ "avian3d 0.6.1",
  "bevy",
  "leafwing-input-manager",
  "lightyear",
+ "lightyear_inputs_leafwing",
  "lightyear_transport",
  "serde",
 ]

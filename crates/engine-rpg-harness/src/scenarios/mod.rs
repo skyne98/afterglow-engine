@@ -38,4 +38,7 @@ pub mod prediction;
 pub mod corners;
 
 #[cfg(test)]
+pub mod multiplayer_boxes;
+
+#[cfg(test)]
 pub mod udp_scenarios;
