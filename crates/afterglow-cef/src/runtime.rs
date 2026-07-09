@@ -5,6 +5,8 @@ use std::cell::RefCell;
 
 use crate::config::CONFIG;
 use crate::flags;
+use crate::input::{InputEvent, InputKind};
+use cef::sys::XEvent;
 
 /// Entry: set config, register the scheme, init CEF, run the message loop.
 pub fn run(cfg: crate::config::Config) {
@@ -210,6 +212,29 @@ wrap_client! {
         }
         fn life_span_handler(&self) -> Option<LifeSpanHandler> {
             Some(GameLifeSpanHandler::new(RefCell::new(Vec::new())))
+        }
+        /// Capture keyboard input natively (before the page) -> the game loop's
+        /// input channel. No web/JS messages.
+        fn keyboard_handler(&self) -> Option<KeyboardHandler> {
+            Some(GameKeyboardHandler::new())
+        }
+    }
+}
+
+wrap_keyboard_handler! {
+    struct GameKeyboardHandler;
+
+    impl KeyboardHandler {
+        fn on_pre_key_event(&self, _browser: Option<&mut Browser>, event: Option<&KeyEvent>, _os_event: Option<&mut XEvent>, _is_keyboard_shortcut: Option<&mut ::std::os::raw::c_int>) -> ::std::os::raw::c_int {
+            if let Some(e) = event {
+                let kind = if e.type_ == KeyEventType::KEYUP { InputKind::KeyUp }
+                    else if e.type_ == KeyEventType::CHAR { InputKind::Char }
+                    else { InputKind::KeyDown };
+                let ev = InputEvent { kind, key_code: e.windows_key_code, modifiers: e.modifiers };
+                eprintln!("[afterglow] input: {:?}", ev);
+                crate::input::push_input(ev);
+            }
+            0 // don't consume — let the page handle UI too
         }
     }
 }

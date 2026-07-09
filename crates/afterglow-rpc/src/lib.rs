@@ -19,6 +19,26 @@ use serde::{de::DeserializeOwned, Serialize};
 #[cfg(not(target_arch = "wasm32"))]
 pub mod native;
 
+/// Web Worker transport (wasm32). The WASM worker receives postMessage'd
+/// framed requests, runs the generated `serve`, and posts responses. The TS
+/// client (xtask gen-ts) posts requests + listens for responses.
+#[cfg(target_arch = "wasm32")]
+pub mod web {
+    use crate::{RpcError, RpcResult};
+    /// Frame layout: `[method_id: u32 LE][args bytes...]`. Returns (method_id, args).
+    pub fn decode_frame(msg: &[u8]) -> RpcResult<(u32, &[u8])> {
+        if msg.len() < 4 {
+            return Err(RpcError::Transport("short frame".into()));
+        }
+        let method = u32::from_le_bytes([msg[0], msg[1], msg[2], msg[3]]);
+        Ok((method, &msg[4..]))
+    }
+    /// Frame a response (serve already encoded it): raw bytes.
+    pub fn frame_response(resp: &[u8]) -> Vec<u8> {
+        resp.to_vec()
+    }
+}
+
 pub type RpcResult<T> = Result<T, RpcError>;
 
 #[derive(Debug)]

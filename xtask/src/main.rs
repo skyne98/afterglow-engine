@@ -15,7 +15,7 @@ fn main() {
         std::process::exit(2);
     });
     let r = match cmd.as_str() {
-        "build" => sh("cargo", &["build", "--example", "minimal"]),
+        "build" => build(),
         "wasm" => wasm(),
         "dist" => dist(),
         "check" => sh("cargo", &["check", "--workspace"]),

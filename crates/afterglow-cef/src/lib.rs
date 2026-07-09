@@ -23,11 +23,13 @@
 
 mod config;
 mod flags;
+mod input;
 mod ipc;
 mod resources;
 mod runtime;
 
 pub use config::{AppBuilder, Config, SCHEME, SCHEME_DOMAIN};
+pub use input::{take_input_receiver, InputEvent, InputKind};
 pub use ipc::{config_js, emit, set_main_browser, INVOKE_JS};
 
 /// `afterglow://local/` + a path, e.g. `root_url("/index.html")`.
