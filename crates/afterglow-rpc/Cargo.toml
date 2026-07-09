@@ -1,0 +1,12 @@
+[package]
+name = "afterglow-rpc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "afterglow RPC runtime: transport trait + lightweight binary codec + schema"
+
+[dependencies]
+postcard.workspace = true
+serde.workspace = true
+serde_json.workspace = true

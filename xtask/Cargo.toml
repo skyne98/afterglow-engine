@@ -11,3 +11,5 @@ name = "xtask"
 path = "src/main.rs"
 
 [dependencies]
+afterglow-rpc = { path = "../crates/afterglow-rpc" }
+serde_json.workspace = true

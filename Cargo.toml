@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/afterglow-cef", "crates/afterglow-engine-core", "crates/latency-tool", "xtask"]
+members = ["crates/afterglow-cef", "crates/afterglow-engine-core", "crates/afterglow-rpc", "crates/afterglow-rpc-macros", "crates/afterglow-rpc-demo", "crates/latency-tool", "xtask"]
 
 [workspace.package]
 version = "0.1.0"
@@ -10,9 +10,14 @@ repository = "https://github.com/skyne98/afterglow-engine"
 
 [workspace.dependencies]
 cef = "149.3"
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+postcard = { version = "1", features = ["alloc"] }
 tungstenite = "0.24"
 ureq = { version = "2", features = ["json"] }
+syn = { version = "2", features = ["full"] }
+quote = "1"
+proc-macro2 = "1"
 
 [profile.release]
 opt-level = 2
