@@ -115,6 +115,29 @@ pub fn rpc(_attr: TokenStream, item: TokenStream) -> TokenStream {
             name: #name_str,
             methods: &[#( #schema_methods ),*],
         };
+
+        /// Spawn the worker as a native OS thread talking over engineered
+        /// channels (no web/JS messages). Returns a client (RPC) + an event
+        /// receiver the main game context drains each frame.
+        #[cfg(not(target_arch = "wasm32"))]
+        pub fn spawn_worker<S: #server_name + Send + 'static>(mut impl_: S)
+            -> (#client_name<::afterglow_rpc::native::ChannelTransport>, ::afterglow_rpc::native::EventReceiver)
+        {
+            use std::sync::mpsc::channel;
+            let (req_tx, req_rx) = channel();
+            let (resp_tx, resp_rx) = channel();
+            let (event_tx, event_rx) = channel();
+            std::thread::spawn(move || {
+                ::afterglow_rpc::native::set_event_sender(event_tx);
+                loop {
+                    let req: (::std::primitive::u32, Vec<::std::primitive::u8>) = match req_rx.recv() { Ok(r) => r, Err(_) => break };
+                    let (method, args) = req;
+                    let _ = resp_tx.send(serve(&mut impl_, method, &args));
+                }
+            });
+            (#client_name::new(::afterglow_rpc::native::ChannelTransport::new(req_tx, resp_rx)),
+             ::afterglow_rpc::native::EventReceiver::new(event_rx))
+        }
     };
     expanded.into()
 }

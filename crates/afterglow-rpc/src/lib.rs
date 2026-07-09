@@ -16,6 +16,9 @@
 
 use serde::{de::DeserializeOwned, Serialize};
 
+#[cfg(not(target_arch = "wasm32"))]
+pub mod native;
+
 pub type RpcResult<T> = Result<T, RpcError>;
 
 #[derive(Debug)]
