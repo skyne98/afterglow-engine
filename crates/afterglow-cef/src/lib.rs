@@ -32,7 +32,7 @@ mod runtime;
 pub use config::{AppBuilder, Config, SCHEME, SCHEME_DOMAIN};
 pub use input::{take_input_receiver, InputEvent, InputKind};
 pub use ipc::{config_js, emit, set_main_browser, INVOKE_JS};
-pub use message_router::EMULATED_WORKER_JS;
+pub use message_router::{EMULATED_WORKER_JS, RPC_HANDLER};
 
 /// `afterglow://local/` + a path, e.g. `root_url("/index.html")`.
 pub fn root_url(path: &str) -> String {
