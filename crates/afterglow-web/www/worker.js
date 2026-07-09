@@ -72,9 +72,19 @@ self.onmessage = async (e) => {
       const w = Atomics.load(reqW, 0);
       const r = Atomics.load(reqR, 0);
       if (w === r) {
-        // Block up to 1ms waiting for a request (main thread can't
-        // Atomics.notify from Rust, so we use a short timeout).
-        Atomics.wait(reqW, 0, w, 1);
+        // Hybrid spin: tight non-blocking poll for ~200µs, then sleep 1ms.
+        // Near-zero latency when the main thread is actively sending;
+        // low CPU when idle.
+        let spins = 0;
+        const SPIN_LIMIT = 10000;
+        while (spins < SPIN_LIMIT) {
+          if (Atomics.load(reqW, 0) !== w) break;
+          Atomics.wait(reqW, 0, w, 0); // non-blocking check
+          spins++;
+        }
+        if (spins >= SPIN_LIMIT) {
+          Atomics.wait(reqW, 0, w, 1); // sleep 1ms
+        }
         continue;
       }
 
