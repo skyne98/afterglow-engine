@@ -43,10 +43,6 @@ pub(crate) static CONFIG: OnceLock<Config> = OnceLock::new();
 ///     .devtools(9222)                 // 0 = off
 ///     .root("/index.html")
 ///     .asset("/index.html", "text/html", include_bytes!("../assets/index.html"))
-///     .on_invoke(|method: &str, params: Value| match method {
-///         "ping" => json!({ "pong": params }),
-///         _ => json!({ "error": "unknown" }),
-///     })
 ///     .run();
 /// ```
 pub struct AppBuilder {
@@ -90,21 +86,6 @@ impl AppBuilder {
     /// Forward JS `console.*` to this callback (defaults to stderr).
     pub fn on_console(mut self, f: impl Fn(&str) + Send + Sync + 'static) -> Self {
         self.cfg.console = Some(Arc::new(f));
-        self
-    }
-
-    /// Handle `window.afterglow.invoke(method, params)` from JS. See [`INVOKE_JS`].
-    pub fn on_invoke(mut self, f: impl Fn(&str, Value) -> Value + Send + Sync + 'static) -> Self {
-        self.cfg.invoke = Some(Arc::new(f));
-        self
-    }
-
-    /// Handle page->host RPC: `(request_string) -> response_string`.
-    /// The request is `service\0payload`; route to workers, return the response.
-    /// Must NOT spawn threads before CEF init (use lazy init inside the closure).
-    pub fn on_rpc(mut self, f: impl Fn(&str) -> String + Send + Sync + 'static) -> Self {
-        let arc: Arc<dyn Fn(&str) -> String + Send + Sync> = Arc::new(f);
-        crate::message_router::RPC_HANDLER.set(arc).ok();
         self
     }
 

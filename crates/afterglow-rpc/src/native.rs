@@ -1,75 +1,151 @@
-//! Native worker transport: workers are OS threads, RPC is over engineered
-//! mpsc channels that post results/events back to the main game context.
-//! **No web/JS messages** — this is pure Rust thread-to-thread.
+//! Native worker transport: OS threads + ring buffers in shared memory.
 //!
-//! `spawn_worker` (generated per service by the `#[rpc]` macro) creates the
-//! channel pair, spawns the worker thread running the generated `serve` loop,
-//! and returns a client + an event receiver the game loop drains each frame.
+//! `spawn_worker` (generated per service by `#[rpc]`) creates two ring buffers
+//! (backed by heap-allocated `Vec<u8>` for same-process), spawns the worker
+//! thread, and returns a client + an event receiver.
+//!
+//! For cross-process (CEF browser↔renderer), the ring buffers are backed by
+//! `CefSharedMemoryRegion` instead — same API, different backing.
 
-use std::sync::mpsc::{Receiver, Sender};
-use std::sync::Mutex;
+use std::sync::mpsc::{channel, Receiver, Sender};
 
-use crate::{RpcError, RpcResult, Transport};
+use crate::{RingBuffer, RingBufferTransport, Transport, RpcResult, RpcError};
 
-/// (method_id, args) — main -> worker.
-pub(crate) type Req = (u32, Vec<u8>);
-/// worker -> main (RPC response).
-pub(crate) type Resp = RpcResult<Vec<u8>>;
-
-/// Client side of a native worker channel. `call` blocks until the worker
-/// responds — the game loop stays in control (no async runtime needed).
-pub struct ChannelTransport {
-    req_tx: Sender<Req>,
-    resp_rx: Receiver<Resp>,
+/// Client side of a native worker ring buffer transport.
+pub struct WorkerTransport {
+    // Keep the backing buffers alive for the RingBuffer's lifetime.
+    _req_buf: std::sync::Arc<Vec<u8>>,
+    _resp_buf: std::sync::Arc<Vec<u8>>,
+    // The transport (borrows the bufs). We store it as a raw pointer + manually
+    // manage the lifetime via the Arc above.
+    transport_ptr: *const RingBufferTransport<'static>,
 }
-impl ChannelTransport {
-    pub fn new(req_tx: Sender<Req>, resp_rx: Receiver<Resp>) -> Self {
-        Self { req_tx, resp_rx }
+
+// SAFETY: the transport is only accessed from the thread that owns WorkerTransport.
+// The backing buffers live as long as the Arcs.
+unsafe impl Send for WorkerTransport {}
+unsafe impl Sync for WorkerTransport {}
+
+impl WorkerTransport {
+    /// Create a pair of (caller, worker) ring buffer transports.
+    /// Returns the caller transport + the worker's request/response buffers.
+    pub fn new_pair(capacity: usize) -> (WorkerTransport, WorkerBuffers) {
+        let mut req_buf = vec![0u8; capacity + 12];
+        let mut resp_buf = vec![0u8; capacity + 12];
+        RingBuffer::init(&mut req_buf);
+        RingBuffer::init(&mut resp_buf);
+
+        let req_arc = std::sync::Arc::new(req_buf);
+        let resp_arc = std::sync::Arc::new(resp_buf);
+
+        // Create the transport borrowing from the Arcs.
+        let request = RingBuffer::new(&req_arc[..]);
+        let response = RingBuffer::new(&resp_arc[..]);
+        let transport = Box::new(RingBufferTransport { request, response });
+        let transport_ptr = Box::into_raw(transport) as *const RingBufferTransport<'static>;
+
+        // Worker gets clones of the same Arcs (same memory).
+        let worker = WorkerBuffers {
+            req_buf: req_arc.clone(),
+            resp_buf: resp_arc.clone(),
+        };
+
+        (WorkerTransport {
+            _req_buf: req_arc,
+            _resp_buf: resp_arc,
+            transport_ptr,
+        }, worker)
+    }
+
+    fn transport(&self) -> &RingBufferTransport<'static> {
+        unsafe { &*self.transport_ptr }
     }
 }
-impl Transport for ChannelTransport {
-    fn call(&self, _service: &str, method: u32, args: &[u8]) -> RpcResult<Vec<u8>> {
-        self.req_tx
-            .send((method, args.to_vec()))
-            .map_err(|_| RpcError::Transport("worker request channel closed".into()))?;
-        self.resp_rx
-            .recv()
-            .map_err(|_| RpcError::Transport("worker died".into()))?
+
+impl Transport for WorkerTransport {
+    fn call(&self, service: &str, method: u32, args: &[u8]) -> RpcResult<Vec<u8>> {
+        self.transport().call(service, method, args)
     }
 }
 
-/// Worker -> main event stream. The game loop drains this each frame
-/// (`try_recv`) for unsolicited pushes (e.g. physics state updates).
+impl Drop for WorkerTransport {
+    fn drop(&mut self) {
+        unsafe { drop(Box::from_raw(self.transport_ptr as *mut RingBufferTransport<'static>)) }
+    }
+}
+
+/// The worker side's ring buffer handles (shared memory with the caller).
+pub struct WorkerBuffers {
+    pub req_buf: std::sync::Arc<Vec<u8>>,
+    pub resp_buf: std::sync::Arc<Vec<u8>>,
+}
+
+impl WorkerBuffers {
+    /// Create the worker's transport (reads requests, writes responses).
+    pub fn transport(&self) -> RingBufferTransport<'_> {
+        let request = RingBuffer::new(&self.req_buf[..]);
+        let response = RingBuffer::new(&self.resp_buf[..]);
+        RingBufferTransport { request, response }
+    }
+}
+
+/// Worker→main event stream (drained each frame).
 pub struct EventReceiver {
-    rx: Receiver<Vec<u8>>,
+    pub rx: Receiver<Vec<u8>>,
 }
 impl EventReceiver {
-    pub fn new(rx: Receiver<Vec<u8>>) -> Self { Self { rx } }
-    /// Non-blocking: take one pending event, if any.
-    pub fn try_recv(&self) -> Option<Vec<u8>> {
-        self.rx.try_recv().ok()
-    }
-    /// Drain all pending events into `out`.
+    pub fn try_recv(&self) -> Option<Vec<u8>> { self.rx.try_recv().ok() }
     pub fn drain_into(&self, out: &mut Vec<Vec<u8>>) {
-        while let Ok(ev) = self.rx.try_recv() {
-            out.push(ev);
-        }
+        while let Ok(ev) = self.rx.try_recv() { out.push(ev); }
     }
 }
 
-// A worker sets its event sender on its thread so the impl can push events
-// to the main game context via [`push_event`].
-static EVENT_TX: Mutex<Option<Sender<Vec<u8>>>> = Mutex::new(None);
+static EVENT_TX: std::sync::Mutex<Option<Sender<Vec<u8>>>> = std::sync::Mutex::new(None);
 
-/// Set the current thread's event channel (called by the generated worker loop).
 pub fn set_event_sender(tx: Sender<Vec<u8>>) {
     *EVENT_TX.lock().expect("event tx lock") = Some(tx);
 }
 
-/// Push an event from a worker thread to the main game context. No-op if not
-/// on a worker thread.
 pub fn push_event(bytes: Vec<u8>) {
     if let Some(tx) = EVENT_TX.lock().expect("event tx lock").as_ref() {
         let _ = tx.send(bytes);
+    }
+}
+
+/// Run a worker's serve loop on the current thread, reading from the ring
+/// buffer and writing responses. The `serve` function is generated per-service
+/// by the `#[rpc]` macro.
+pub fn run_worker_loop<S, Serve>(mut impl_: S, bufs: WorkerBuffers, event_tx: Sender<Vec<u8>>, serve: Serve)
+where
+    S: Send + 'static,
+    Serve: Fn(&mut S, u32, &[u8]) -> RpcResult<Vec<u8>> + Send + 'static,
+{
+    set_event_sender(event_tx);
+    let transport = bufs.transport();
+    // The worker reads from the REQUEST ring buffer (caller wrote there),
+    // and writes to the RESPONSE ring buffer.
+    // Note: the transport's `request` is the caller's write side; the worker
+    // reads from it. The transport's `response` is the worker's write side.
+    loop {
+        match transport.request.read() {
+            Ok(frame) => {
+                if frame.len() < 4 { continue; }
+                let method = u32::from_le_bytes(frame[0..4].try_into().unwrap());
+                let args = &frame[4..];
+                let resp = serve(&mut impl_, method, args);
+                let resp_bytes = match resp {
+                    Ok(b) => b,
+                    Err(e) => format!("error: {e}").into_bytes(),
+                };
+                let _ = transport.response.write(&resp_bytes);
+            }
+            Err(RpcError::BufferEmpty) => {
+                std::hint::spin_loop();
+            }
+            Err(e) => {
+                eprintln!("[afterglow] worker ring buffer error: {e}");
+                break;
+            }
+        }
     }
 }

@@ -1,61 +1,18 @@
-//! Minimal afterglow-cef app: WebGPU triangle + page<->host<->worker RPC
-//! round trip + latency/bandwidth benchmark. Assets served via afterglow://.
+//! Minimal afterglow-cef app: WebGPU triangle + ring-buffer RPC benchmark.
 //!
 //!   nix-shell shell.nix --run "cargo build --example minimal"
 //!   nix-shell shell.nix --run "./target/debug/examples/minimal --ozone-platform=x11"
 
 use afterglow_cef::AppBuilder;
-use serde_json::{json, Value};
+use afterglow_rpc_demo::{spawn_worker, PhysicsWorker};
+use afterglow_rpc::Transport;
 
 const HTML: &[u8] = br#"<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>afterglow-cef</title>
 <style>html,body{margin:0;height:100%;background:#0a0c10;color:#e5e7eb;font:13px/1.4 ui-monospace,monospace}
-#hud{position:fixed;inset:auto 0 0 0;padding:8px 12px;background:rgba(8,10,14,.85);border-top:1px solid #222;white-space:pre-wrap}
-button{font:inherit;color:#0a0c10;background:#7dd3fc;border:0;padding:4px 10px;border-radius:4px;cursor:pointer}
 canvas{display:block;width:100vw;height:100vh}</style></head>
 <body><canvas id="c"></canvas>
-<div id="hud">
-<button id="ping">ping worker</button> <span id="r">...</span>
-<button id="bench">benchmark</button> <span id="b">...</span>
-</div>
-<script src="/__afterglow_bootstrap.js"></script>
 <script>
-const worker = new AfterglowWorker('Physics');
-worker.onmessage = (e) => { window.__last_resp = e.data; };
-
-function rpc(service, payload) {
-  return new Promise((res) => {
-    const orig = worker.onmessage;
-    worker.onmessage = (e) => { worker.onmessage = orig; res(e.data); };
-    worker.postMessage(service + '\u0000' + payload);
-  });
-}
-
-document.getElementById('ping').onclick = async () => {
-  const resp = await rpc('Physics', JSON.stringify({method:'ping',params:{n:42}}));
-  document.getElementById('r').textContent = 'pong: ' + resp;
-  console.log('pong: ' + resp);
-};
-
-document.getElementById('bench').onclick = async () => {
-  const N = 50;
-  const sizes = [0, 64, 256, 1024, 4096, 16384, 65536];
-  let results = '';
-  for (const sz of sizes) {
-    const payload = 'x'.repeat(sz);
-    const t0 = performance.now();
-    for (let i = 0; i < N; i++) {
-      await rpc('bench', payload);
-    }
-    const dt = performance.now() - t0;
-    const lat = (dt / N).toFixed(2);
-    const tp = sz > 0 ? ((sz * N * 2) / (dt / 1000) / 1024 / 1024).toFixed(1) + ' MB/s' : '-';
-    results += sz + 'B: ' + lat + 'ms/op ' + tp + '\n';
-  }
-  document.getElementById('b').textContent = results;
-  console.log('benchmark:\n' + results);
-};
-
 (async () => {
   if (!navigator.gpu) { console.log('no WebGPU'); return; }
   const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
@@ -86,31 +43,42 @@ document.getElementById('bench').onclick = async () => {
 </script></body></html>"#;
 
 fn main() {
+    // Spawn a Physics worker (native thread + shared-memory ring buffer).
+    let (client, _events) = spawn_worker(PhysicsWorker);
+
+    // Benchmark: RPC over the ring buffer (no IPC, no postMessage).
+    let next = client.step(vec![0.0, 1.0, 2.0], 0.5).unwrap();
+    assert_eq!(next, vec![0.5, 1.5, 2.5]);
+
+    let accepted = client.apply_force(3, 0.0, 9.8, 0.0).unwrap();
+    assert!(accepted);
+
+    // Latency + bandwidth benchmark
+    let n = 1000;
+    for size in [0usize, 64, 256, 1024, 4096, 16384, 65536] {
+        let state: Vec<f32> = (0..size).map(|i| i as f32).collect();
+        let t0 = std::time::Instant::now();
+        for _ in 0..n {
+            let _ = client.step(state.clone(), 0.0).unwrap();
+        }
+        let dt = t0.elapsed();
+        let lat_us = dt.as_micros() as f64 / n as f64;
+        let lat_ms = lat_us / 1000.0;
+        let bytes = size * 4; // Vec<f32> → bytes
+        let throughput = if bytes > 0 {
+            (bytes as f64 * n as f64 * 2.0) / dt.as_secs_f64() / 1024.0 / 1024.0
+        } else { 0.0 };
+        eprintln!(
+            "{:6} B: {:7.3} ms/op  {:7.1} MB/s",
+            bytes, lat_ms, throughput
+        );
+    }
+
     AppBuilder::new()
         .title("afterglow-cef minimal")
         .size(1280, 800)
         .devtools(9222)
         .root("/index.html")
         .asset("/index.html", "text/html", HTML)
-        .on_rpc(|request: &str| {
-            let (service, payload) = request.split_once('\u{0}').unwrap_or((request, ""));
-            match service {
-                "Physics" => {
-                    let parsed: Value = serde_json::from_str(payload).unwrap_or(json!({}));
-                    let method = parsed["method"].as_str().unwrap_or("");
-                    if method == "ping" {
-                        serde_json::to_string(&json!({ "pong": parsed["params"] })).unwrap_or_default()
-                    } else {
-                        serde_json::to_string(&json!({ "error": "unknown" })).unwrap_or_default()
-                    }
-                }
-                "bench" => payload.to_string(),
-                _ => serde_json::to_string(&json!({ "error": "unknown service" })).unwrap_or_default(),
-            }
-        })
-        .on_invoke(|method: &str, params: Value| match method {
-            "ping" => json!({ "pong": params }),
-            _ => json!({ "error": format!("unknown method: {method}") }),
-        })
         .run();
 }

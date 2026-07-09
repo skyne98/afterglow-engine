@@ -1,6 +1,14 @@
 [workspace]
 resolver = "2"
-members = ["crates/afterglow-cef", "crates/afterglow-engine-core", "crates/afterglow-rpc", "crates/afterglow-rpc-macros", "crates/afterglow-rpc-demo", "crates/afterglow-wasm-worker", "crates/latency-tool", "xtask"]
+members = [
+    "crates/afterglow-cef",
+    "crates/afterglow-engine-core",
+    "crates/afterglow-rpc",
+    "crates/afterglow-rpc-macros",
+    "crates/afterglow-rpc-demo",
+    "crates/latency-tool",
+    "xtask",
+]
 
 [workspace.package]
 version = "0.1.0"

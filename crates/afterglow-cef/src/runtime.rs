@@ -7,7 +7,6 @@ use crate::config::CONFIG;
 use crate::flags;
 use crate::input::{InputEvent, InputKind};
 use cef::sys::XEvent;
-use cef::wrapper::message_router::MessageRouterBrowserSideHandlerCallbacks;
 
 /// Entry: set config, register the scheme, init CEF, run the message loop.
 pub fn run(cfg: crate::config::Config) {
@@ -46,9 +45,6 @@ fn run_main(main_args: &MainArgs, cmd_line: &CommandLine, sandbox_info: *mut u8)
     let switch = CefString::from("type");
     let is_browser_process = cmd_line.has_switch(Some(&switch)) != 1;
 
-    // Pass the App to execute_process so CHILD processes also run
-    // on_register_custom_schemes — otherwise the renderer never learns the
-    // `afterglow://` scheme and the main-frame load aborts with net::ERR_ABORTED.
     let mut app = GameApp::new();
     let ret = execute_process(Some(main_args), Some(&mut app), sandbox_info);
 
@@ -56,13 +52,17 @@ fn run_main(main_args: &MainArgs, cmd_line: &CommandLine, sandbox_info: *mut u8)
         assert_eq!(ret, -1, "cannot execute browser process");
     } else {
         assert!(ret >= 0, "cannot execute non-browser process");
-        return; // child process does not initialize CEF
+        return;
     }
 
     let cef_path = std::env::var("CEF_PATH").unwrap_or_default();
+    let devtools_port: i32 = std::env::var("AFTERGLOW_DEVTOOLS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
     let settings = Settings {
         no_sandbox: 1,
-        remote_debugging_port: CONFIG.get().unwrap().devtools_port,
+        remote_debugging_port: devtools_port,
         resources_dir_path: CefString::from(cef_path.as_str()),
         locales_dir_path: CefString::from(format!("{cef_path}/locales").as_str()),
         ..Default::default()
@@ -146,6 +146,8 @@ wrap_app! {
             if let Some(cl) = cl { flags::apply(cl); }
         }
 
+        /// Register `afterglow://` as standard + secure + CORS + fetch so ES
+        /// modules and WebGPU work on it.
         fn on_register_custom_schemes(&self, registrar: Option<&mut SchemeRegistrar>) {
             if let Some(r) = registrar {
                 let name = CefString::from(crate::config::SCHEME);
@@ -156,13 +158,6 @@ wrap_app! {
 
         fn browser_process_handler(&self) -> Option<BrowserProcessHandler> {
             Some(GameBrowserProcessHandler::new(RefCell::new(None)))
-        }
-
-        /// Renderer-side: registers `window.cefQuery` (Message Router) in each
-        /// frame context. The App is passed to execute_process, so the renderer
-        /// process runs this.
-        fn render_process_handler(&self) -> Option<RenderProcessHandler> {
-            Some(crate::message_router::GameRenderProcessHandler::make())
         }
     }
 }
@@ -209,7 +204,7 @@ wrap_browser_process_handler! {
     }
 }
 
-// --- client + life-span + console-forwarding display handler ---------------
+// --- client + life-span + console-forwarding display handler + keyboard ----
 
 wrap_client! {
     pub struct GameClient;
@@ -221,39 +216,10 @@ wrap_client! {
         fn life_span_handler(&self) -> Option<LifeSpanHandler> {
             Some(GameLifeSpanHandler::new(RefCell::new(Vec::new())))
         }
-        fn request_handler(&self) -> Option<RequestHandler> {
-            Some(crate::message_router::GameRequestHandler::new())
-        }
-        /// Browser-side Message Router IPC: cefQuery messages arrive here.
-        fn on_process_message_received(&self, browser: Option<&mut Browser>, frame: Option<&mut Frame>, source_process: ProcessId, message: Option<&mut ProcessMessage>) -> ::std::os::raw::c_int {
-            crate::message_router::handle_browser_message(
-                browser.map(|b| b.clone()),
-                frame.map(|f| f.clone()),
-                message.map(|m| m.clone()),
-            ) as i32
-        }
         /// Capture keyboard input natively (before the page) -> the game loop's
         /// input channel. No web/JS messages.
         fn keyboard_handler(&self) -> Option<KeyboardHandler> {
             Some(GameKeyboardHandler::new())
-        }
-    }
-}
-
-wrap_keyboard_handler! {
-    struct GameKeyboardHandler;
-
-    impl KeyboardHandler {
-        fn on_pre_key_event(&self, _browser: Option<&mut Browser>, event: Option<&KeyEvent>, _os_event: Option<&mut XEvent>, _is_keyboard_shortcut: Option<&mut ::std::os::raw::c_int>) -> ::std::os::raw::c_int {
-            if let Some(e) = event {
-                let kind = if e.type_ == KeyEventType::KEYUP { InputKind::KeyUp }
-                    else if e.type_ == KeyEventType::CHAR { InputKind::Char }
-                    else { InputKind::KeyDown };
-                let ev = InputEvent { kind, key_code: e.windows_key_code, modifiers: e.modifiers };
-                eprintln!("[afterglow] input: {:?}", ev);
-                crate::input::push_input(ev);
-            }
-            0 // don't consume — let the page handle UI too
         }
     }
 }
@@ -266,13 +232,11 @@ wrap_life_span_handler! {
     impl LifeSpanHandler {
         fn on_after_created(&self, browser: Option<&mut Browser>) {
             let b = browser.cloned().expect("Browser is None");
-            crate::ipc::set_main_browser(b.clone());
             self.browsers.borrow_mut().push(b);
         }
 
         fn on_before_close(&self, browser: Option<&mut Browser>) {
-            let owned = browser.map(|b| b.clone());
-            let mut b = owned.expect("Browser is None");
+            let mut b = browser.cloned().expect("Browser is None");
             let mut list = self.browsers.borrow_mut();
             if let Some(i) = list.iter().position(|e| e.is_same(Some(&mut b)) != 0) {
                 list.remove(i);
@@ -288,7 +252,6 @@ wrap_display_handler! {
     struct GameDisplayHandler;
 
     impl DisplayHandler {
-        /// Forward JS console.* to the configured callback (or stderr).
         fn on_console_message(
             &self,
             _browser: Option<&mut Browser>,
@@ -304,6 +267,23 @@ wrap_display_handler! {
                 eprintln!("[console] {msg}");
             }
             1
+        }
+    }
+}
+
+wrap_keyboard_handler! {
+    struct GameKeyboardHandler;
+
+    impl KeyboardHandler {
+        fn on_pre_key_event(&self, _browser: Option<&mut Browser>, event: Option<&KeyEvent>, _os_event: Option<&mut XEvent>, _is_keyboard_shortcut: Option<&mut ::std::os::raw::c_int>) -> ::std::os::raw::c_int {
+            if let Some(e) = event {
+                let kind = if e.type_ == KeyEventType::KEYUP { InputKind::KeyUp }
+                    else if e.type_ == KeyEventType::CHAR { InputKind::Char }
+                    else { InputKind::KeyDown };
+                let ev = InputEvent { kind, key_code: e.windows_key_code, modifiers: e.modifiers };
+                crate::input::push_input(ev);
+            }
+            0
         }
     }
 }
