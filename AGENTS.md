@@ -186,8 +186,12 @@ CEF native path; the web `SharedArrayBuffer` path has no such issue.
   crashpad), cef-rs accelerated_osr zero-copy path.
 - `docs/research/performance-benchmarks.md` — Ring buffer stress test results:
   native (heap + native threads) ~3µs/64B call, 73 MB/s (postcard limited);
-  web (SAB + Web Workers) ~4µs/64B, true zero-copy. Input→present 3.71ms
+  web (SAB + Web Workers) ~5µs/64B, true zero-copy. Input→present 3.71ms
   median @ 144fps. Run `cargo run --example bench_rpc -p afterglow-rpc-demo`.
+- `docs/research/steam-overlay-cef.md` — How the Steam Overlay works (hooks
+  Present/SwapBuffers/vkQueuePresentKHR in the game process), why it doesn't
+  work with CEF multi-process GPU, and how to fix it (`--in-process-gpu` flag
+  + `SteamAPI_Init` before CEF init).
 
 ## API docs
 
