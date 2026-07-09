@@ -144,6 +144,15 @@ pub fn rpc(_attr: TokenStream, item: TokenStream) -> TokenStream {
             unsafe { WORKER = Some(impl_); }
         }
 
+        /// Get a client that talks to the web worker over the SharedArrayBuffer
+        /// ring buffer. Uses `afterglow_web::WebTransport` which encodes args
+        /// (postcard), writes to the request ring buffer (notifying the worker
+        /// via `AtomicU32::notify`), spins on the response, and decodes.
+        #[cfg(target_arch = "wasm32")]
+        pub fn get_client() -> #client_name<::afterglow_web::WebTransport> {
+            #client_name::new(::afterglow_web::WebTransport)
+        }
+
         #[cfg(target_arch = "wasm32")]
         #[unsafe(no_mangle)]
         pub extern "C" fn wasm_serve_frame(method: u32, args_ptr: *const u8, args_len: usize, out_ptr: *mut u8, out_max_len: usize) -> i32 {

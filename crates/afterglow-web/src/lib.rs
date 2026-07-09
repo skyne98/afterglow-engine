@@ -126,3 +126,56 @@ fn request_rb<'a>() -> RingBuffer<'a> {
 fn response_rb<'a>() -> RingBuffer<'a> {
     unsafe { RingBuffer::new(&RESPONSE_BUFFER[..]) }
 }
+
+// --- WebTransport: Transport impl using the ring buffer statics ----------
+
+/// Scratch buffers for encoding requests and decoding responses.
+/// In wasm linear memory — no allocation per call.
+const SCRATCH_SIZE: usize = 1024 * 1024; // 1 MiB
+static mut REQUEST_SCRATCH: [u8; SCRATCH_SIZE] = [0; SCRATCH_SIZE];
+static mut RESPONSE_SCRATCH: [u8; SCRATCH_SIZE] = [0; SCRATCH_SIZE];
+
+/// A `Transport` that reads/writes the ring buffer statics in shared wasm
+/// memory. Used by the generated client on the main thread (web target).
+///
+/// Flow: encode args → write_frame (ring buffer + Atomics.notify) →
+///       spin on has_response → read_response → decode.
+///
+/// The worker (Web Worker, own wasm memory) reads the request via JS,
+/// calls `wasm_serve_frame`, and writes the response back.
+pub struct WebTransport;
+
+impl afterglow_rpc::Transport for WebTransport {
+    fn call(&self, _service: &str, method: u32, args: &[u8]) -> afterglow_rpc::RpcResult<Vec<u8>> {
+        // Build frame: [method:u32][args]
+        let frame_len = 4 + args.len();
+        // SAFETY: REQUEST_SCRATCH is a static; we have exclusive access
+        // (single-threaded main thread).
+        let scratch = unsafe { &mut REQUEST_SCRATCH[..] };
+        if frame_len > scratch.len() {
+            return Err(afterglow_rpc::RpcError::Transport("frame too large".into()));
+        }
+        scratch[..4].copy_from_slice(&method.to_le_bytes());
+        scratch[4..frame_len].copy_from_slice(args);
+
+        // Write to request ring buffer (also notifies the worker via
+        // AtomicU32::notify inside RingBuffer::write)
+        request_rb().write(&scratch[..frame_len])?;
+
+        // Wait for response (spin — main thread can't Atomics.wait)
+        let resp = loop {
+            match response_rb().read_into(unsafe { &mut RESPONSE_SCRATCH[..] }) {
+                Ok(n) => break unsafe { RESPONSE_SCRATCH[..n].to_vec() },
+                Err(afterglow_rpc::RpcError::BufferEmpty) => {
+                    // Yield to the event loop to avoid blocking the page
+                    // (in practice, the response arrives within microseconds)
+                    // TODO: use Atomics.wait with timeout when available on main thread
+                    std::hint::spin_loop();
+                }
+                Err(e) => return Err(e),
+            }
+        };
+
+        Ok(resp)
+    }
+}

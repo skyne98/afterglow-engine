@@ -30,6 +30,7 @@ version = "0.1.0"
 dependencies = [
  "afterglow-rpc",
  "afterglow-rpc-macros",
+ "afterglow-web",
  "serde",
  "serde_json",
 ]

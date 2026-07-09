@@ -22,6 +22,7 @@
 //! Interfaces are defined once in Rust; the `afterglow-rpc-macros` `#[rpc]`
 //! macro generates the server dispatch, the Rust client, and the schema.
 
+
 use serde::{de::DeserializeOwned, Serialize};
 use std::sync::atomic::{AtomicU32, Ordering};
 

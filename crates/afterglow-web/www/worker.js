@@ -72,8 +72,9 @@ self.onmessage = async (e) => {
       const w = Atomics.load(reqW, 0);
       const r = Atomics.load(reqR, 0);
       if (w === r) {
-        // Block until the main thread writes (near-zero latency vs setTimeout's ~4ms)
-        Atomics.wait(reqW, 0, w);
+        // Block up to 1ms waiting for a request (main thread can't
+        // Atomics.notify from Rust, so we use a short timeout).
+        Atomics.wait(reqW, 0, w, 1);
         continue;
       }
 

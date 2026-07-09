@@ -88,9 +88,8 @@ async function main() {
         // Buffer full — drain response if needed
         if (wasm.has_response()) wasm.read_response(readBuf, 1048576);
       }
-      // Notify the worker that a request is available
-      const reqW = new Int32Array(memory.buffer, reqPtr + 4, 1);
-      Atomics.notify(reqW, 0, 1);
+      // Notify the worker that a request is available (worker polls with 1ms timeout)
+      // No Atomics.notify needed — worker uses Atomics.wait(reqW, 0, w, 1)
       // Wait for response
       let waited = 0;
       while (!wasm.has_response()) {
