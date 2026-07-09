@@ -41,13 +41,13 @@ Two backends, same `RingBuffer`:
 
 | Crate | Purpose |
 |-------|---------|
-| `afterglow-rpc` | Core: `RingBuffer`, `RingBufferTransport`, `Transport` trait, postcard codec, `#[rpc]` macro. `native` module has `spawn_worker` + `run_worker_loop`. |
+| `afterglow-rpc` | Core: `RingBuffer`, `RingBufferTransport`, `Transport` trait, postcard codec, `#[rpc]` macro, schema. `native` module has `spawn_worker` + `run_worker_loop`. |
 | `afterglow-rpc-macros` | `#[rpc]` proc macro: generates server trait, client, dispatch, schema. |
-| `afterglow-rpc-demo` | Demo `Physics` service + `bench_rpc` stress test. |
-| `afterglow-web` | Wasm target: `#[no_mangle]` exports (`write_frame`, `read_frame`, `has_data`) on a static ring buffer in shared wasm memory. No wasm-bindgen. |
+| `afterglow-rpc-demo` | Demo `Physics` service + `bench_rpc` stress test + `dump-schema` bin. |
+| `afterglow-web` | Wasm target: `#[no_mangle]` exports (`write_frame`, `read_frame`, `write_response`, `read_response`, `has_data`, `has_response`) on two static ring buffers in shared wasm memory. No wasm-bindgen. Includes `bench.html` (stress test) + `coep_server` example. |
 | `afterglow-cef` | Thin CEF shell: window + WebGPU flags + `afterglow://` scheme + COOP/COEP headers. No worker code, no IPC, no input. |
-| `afterglow-engine-core` | (Placeholder) Engine core. |
 | `latency-tool` | CDP-based input→present latency measurement. |
+| `xtask` | Build orchestrator: `build`, `wasm`, `check`, `test`, `bench`. |
 
 ### CEF shell (`afterglow-cef`)
 

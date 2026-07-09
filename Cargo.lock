@@ -13,15 +13,6 @@ name = "afterglow-cef"
 version = "0.1.0"
 dependencies = [
  "cef",
- "serde_json",
-]
-
-[[package]]
-name = "afterglow-engine-core"
-version = "0.1.0"
-dependencies = [
- "serde_json",
- "wasm-bindgen",
 ]
 
 [[package]]
@@ -1737,10 +1728,6 @@ dependencies = [
 [[package]]
 name = "xtask"
 version = "0.1.0"
-dependencies = [
- "afterglow-rpc",
- "serde_json",
-]
 
 [[package]]
 name = "yoke"

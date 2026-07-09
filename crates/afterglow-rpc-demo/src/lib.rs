@@ -33,7 +33,6 @@ impl PhysicsServer for PhysicsWorker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use afterglow_rpc::Transport;
 
     #[test]
     fn ring_buffer_worker_round_trip() {

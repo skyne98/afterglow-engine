@@ -1,6 +1,5 @@
 //! Builder + config for an afterglow-cef app.
 
-use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
@@ -25,8 +24,6 @@ pub struct Config {
     pub fs_root: Option<PathBuf>,
     /// JS console.* forwarded here (stderr if unset).
     pub console: Option<Arc<dyn Fn(&str) + Send + Sync>>,
-    /// JS↔Rust invoke handler: `window.afterglow.invoke(method, params)`.
-    pub invoke: Option<Arc<dyn Fn(&str, Value) -> Value + Send + Sync>>,
 }
 
 pub(crate) static CONFIG: OnceLock<Config> = OnceLock::new();
@@ -35,7 +32,6 @@ pub(crate) static CONFIG: OnceLock<Config> = OnceLock::new();
 ///
 /// ```no_run
 /// use afterglow_cef::AppBuilder;
-/// use serde_json::{json, Value};
 ///
 /// AppBuilder::new()
 ///     .title("my game")

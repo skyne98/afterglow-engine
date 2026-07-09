@@ -1,6 +1,6 @@
 //! # afterglow-rpc
 //!
-//! Ultra-low-latency RPC over shared-memory ring buffers.
+//! Ultra-low-latency communication over shared-memory ring buffers.
 //!
 //! Per worker, two ring buffers in shared memory (one per direction):
 //! - **Request** (caller → worker): the caller writes framed requests.
@@ -14,9 +14,10 @@
 //! - **Framing**: `[len: u32 LE][payload]` per message in the ring buffer.
 //! - **Transport**: [`RingBufferTransport`] reads/writes the ring buffer;
 //!   the generated clients are transport-agnostic.
-//! - **Setup**: the shared memory handle is transferred once via `postMessage`
-//!   (web: `SharedArrayBuffer`; native CEF: `CefSharedMemoryRegion`). After
-//!   that, all comms go through the ring buffer — no `postMessage` per call.
+//! - **Native**: `afterglow_rpc::native::spawn_worker` creates ring buffers
+//!   on heap memory (`Arc<Vec<u8>>`) and spawns an OS thread.
+//! - **Web**: `afterglow-web` creates ring buffers on `SharedArrayBuffer`-
+//!   backed wasm memory; workers are Web Workers sharing the same memory.
 //!
 //! Interfaces are defined once in Rust; the `afterglow-rpc-macros` `#[rpc]`
 //! macro generates the server dispatch, the Rust client, and the schema.
@@ -26,17 +27,6 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod native;
-
-#[cfg(target_arch = "wasm32")]
-pub mod web {
-    use crate::{RpcError, RpcResult};
-    pub fn decode_frame(msg: &[u8]) -> RpcResult<(u32, &[u8])> {
-        if msg.len() < 4 { return Err(RpcError::Transport("short frame".into())); }
-        let method = u32::from_le_bytes([msg[0], msg[1], msg[2], msg[3]]);
-        Ok((method, &msg[4..]))
-    }
-    pub fn frame_response(resp: &[u8]) -> Vec<u8> { resp.to_vec() }
-}
 
 pub type RpcResult<T> = Result<T, RpcError>;
 
@@ -92,8 +82,9 @@ pub trait Transport {
 /// circular buffer of `capacity` bytes. Each message is framed as
 /// `[len: u32 LE][payload]`. Messages wrap around the end.
 ///
-/// Producers call [`RingBuffer::write`], consumers call [`RingBuffer::read`].
-/// Both are lock-free (atomic Acquire/Release).
+/// Producers call [`RingBuffer::write`], consumers call [`RingBuffer::read`]
+/// or [`RingBuffer::read_into`] (no allocation). Both are lock-free
+/// (atomic Acquire/Release).
 pub struct RingBuffer<'a> {
     capacity: u32,
     write_idx: &'a AtomicU32,
@@ -104,17 +95,12 @@ pub struct RingBuffer<'a> {
 const HEADER_SIZE: usize = 12; // capacity(4) + write_idx(4) + read_idx(4)
 
 impl<'a> RingBuffer<'a> {
-    /// Initialize a ring buffer in a fresh backing buffer of `total_size` bytes.
-    /// The first `HEADER_SIZE` bytes are the header; the rest is the data ring.
+    /// Initialize a ring buffer in a fresh backing buffer.
     pub fn init(buf: &mut [u8]) {
         let cap = (buf.len() - HEADER_SIZE) as u32;
-        buf[..4].copy_from_slice(&cap.to_le_bytes());
-        AtomicU32::from(0u32).store(0, Ordering::Relaxed); // won't persist — see below
-        // Write header directly:
-        let w = 0u32.to_le_bytes();
-        let r = 0u32.to_le_bytes();
-        buf[4..8].copy_from_slice(&w);
-        buf[8..12].copy_from_slice(&r);
+        buf[0..4].copy_from_slice(&cap.to_le_bytes());
+        buf[4..8].copy_from_slice(&0u32.to_le_bytes()); // write_idx
+        buf[8..12].copy_from_slice(&0u32.to_le_bytes()); // read_idx
     }
 
     /// Wrap an existing backing buffer as a ring buffer.
@@ -140,24 +126,21 @@ impl<'a> RingBuffer<'a> {
             return Err(RpcError::BufferFull);
         }
 
-        // Write frame: [len][payload], wrapping around.
         let data_len = self.capacity as usize;
         let offset = (w as usize) % data_len;
         let len_bytes = (payload.len() as u32).to_le_bytes();
 
-        // Write length prefix
         self.write_bytes(offset, &len_bytes);
-        // Write payload
         let payload_offset = (offset + 4) % data_len;
         self.write_bytes(payload_offset, payload);
 
-        // Publish (Release fence)
         self.write_idx.store(w.wrapping_add(frame_len), Ordering::Release);
         Ok(())
     }
 
-    /// Read the next framed message from the ring buffer.
-    /// Returns `Err(BufferEmpty)` if no message is available.
+    /// Read the next framed message. Returns `Err(BufferEmpty)` if empty.
+    /// Allocates a `Vec` — prefer [`read_into`](Self::read_into) for
+    /// allocation-free reads (required for multi-instance wasm memory).
     pub fn read(&self) -> RpcResult<Vec<u8>> {
         let w = self.write_idx.load(Ordering::Acquire);
         let r = self.read_idx.load(Ordering::Relaxed);
@@ -168,23 +151,22 @@ impl<'a> RingBuffer<'a> {
         let data_len = self.capacity as usize;
         let offset = (r as usize) % data_len;
 
-        // Read length prefix
-        let len_bytes = self.read_bytes(offset, 4);
-        let payload_len = u32::from_le_bytes(len_bytes.try_into().unwrap()) as usize;
+        let mut len_bytes = [0u8; 4];
+        self.read_bytes_into(offset, &mut len_bytes);
+        let payload_len = u32::from_le_bytes(len_bytes) as usize;
         let frame_len = 4 + payload_len as u32;
 
-        // Read payload
         let payload_offset = (offset + 4) % data_len;
-        let payload = self.read_bytes(payload_offset, payload_len);
+        let mut payload = vec![0u8; payload_len];
+        self.read_bytes_into(payload_offset, &mut payload);
 
-        // Consume (Release fence)
         self.read_idx.store(r.wrapping_add(frame_len), Ordering::Release);
         Ok(payload)
     }
 
-    /// Read the next frame directly into `out`. Returns the number of bytes
-    /// written, or `Err(BufferEmpty)`. No allocation — safe for multi-instance
-    /// shared wasm memory where allocators conflict.
+    /// Read the next frame directly into `out`. Returns bytes written, or
+    /// `Err(BufferEmpty)`. No allocation — safe for multi-instance shared
+    /// wasm memory where allocators conflict.
     pub fn read_into(&self, out: &mut [u8]) -> RpcResult<usize> {
         let w = self.write_idx.load(Ordering::Acquire);
         let r = self.read_idx.load(Ordering::Relaxed);
@@ -195,18 +177,15 @@ impl<'a> RingBuffer<'a> {
         let data_len = self.capacity as usize;
         let offset = (r as usize) % data_len;
 
-        // Read length prefix directly (no Vec allocation)
         let mut len_bytes = [0u8; 4];
         self.read_bytes_into(offset, &mut len_bytes);
         let payload_len = u32::from_le_bytes(len_bytes) as usize;
         let frame_len = 4 + payload_len as u32;
 
-        // Read payload directly into out (no allocation)
         let n = payload_len.min(out.len());
         let payload_offset = (offset + 4) % data_len;
         self.read_bytes_into(payload_offset, &mut out[..n]);
 
-        // Consume (Release fence)
         self.read_idx.store(r.wrapping_add(frame_len), Ordering::Release);
         Ok(n)
     }
@@ -226,14 +205,11 @@ impl<'a> RingBuffer<'a> {
     fn write_bytes(&self, offset: usize, src: &[u8]) {
         let data_len = self.capacity as usize;
         if offset + src.len() <= data_len {
-            // SAFETY: both sides have access to the shared buffer. The writer
-            // owns the region [w, w+len) (guaranteed by the capacity check).
             unsafe {
                 let dst = self.data.as_ptr().add(offset) as *mut u8;
                 std::ptr::copy_nonoverlapping(src.as_ptr(), dst, src.len());
             }
         } else {
-            // Wrap around
             let first = data_len - offset;
             unsafe {
                 let dst = self.data.as_ptr().add(offset) as *mut u8;
@@ -242,12 +218,6 @@ impl<'a> RingBuffer<'a> {
                 std::ptr::copy_nonoverlapping(src.as_ptr().add(first), dst2, src.len() - first);
             }
         }
-    }
-
-    fn read_bytes(&self, offset: usize, len: usize) -> Vec<u8> {
-        let mut out = vec![0u8; len];
-        self.read_bytes_into(offset, &mut out);
-        out
     }
 
     fn read_bytes_into(&self, offset: usize, out: &mut [u8]) {
@@ -281,58 +251,19 @@ pub struct RingBufferTransport<'a> {
 }
 
 impl<'a> Transport for RingBufferTransport<'a> {
-    fn call(&self, service: &str, method: u32, args: &[u8]) -> RpcResult<Vec<u8>> {
-        // Frame: [method: u32][args...]
+    fn call(&self, _service: &str, method: u32, args: &[u8]) -> RpcResult<Vec<u8>> {
         let mut frame = Vec::with_capacity(4 + args.len());
         frame.extend_from_slice(&method.to_le_bytes());
         frame.extend_from_slice(args);
         self.request.write(&frame)?;
-        // Block until response is available (poll — or use Atomics.wait on web)
         loop {
             match self.response.read() {
                 Ok(resp) => return Ok(resp),
-                Err(RpcError::BufferEmpty) => {
-                    std::hint::spin_loop();
-                }
+                Err(RpcError::BufferEmpty) => std::hint::spin_loop(),
                 Err(e) => return Err(e),
             }
         }
     }
-}
-
-// --- in-memory loopback (for tests + same-process workers) ----------------
-
-/// In-memory loopback: handy for tests and for worker<->worker calls within the
-/// same process. Uses RingBuffer over a plain `Vec<u8>` backing.
-pub struct LoopbackTransport {
-    _request_buf: Vec<u8>,
-    _response_buf: Vec<u8>,
-    // The RingBuffers borrow the bufs — we need to keep them alive.
-    // In practice, use `LoopbackTransport::new()` which returns owned handles.
-}
-
-impl LoopbackTransport {
-    /// Create a pair of (caller, worker) transports backed by ring buffers.
-    pub fn new_pair(capacity: usize) -> (LoopbackCaller, LoopbackWorker) {
-        let mut req_buf = vec![0u8; capacity + 12];
-        let mut resp_buf = vec![0u8; capacity + 12];
-        RingBuffer::init(&mut req_buf);
-        RingBuffer::init(&mut resp_buf);
-        (
-            LoopbackCaller { req_buf, resp_buf },
-            LoopbackWorker { req_buf: Vec::new(), resp_buf: Vec::new() },
-        )
-    }
-}
-
-pub struct LoopbackCaller {
-    req_buf: Vec<u8>,
-    resp_buf: Vec<u8>,
-}
-
-pub struct LoopbackWorker {
-    req_buf: Vec<u8>,
-    resp_buf: Vec<u8>,
 }
 
 // --- schema (for build-system codegen) ------------------------------------

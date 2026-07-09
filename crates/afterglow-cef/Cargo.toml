@@ -8,7 +8,6 @@ description = "Game-window-focused CEF (cef-rs) wrapper for afterglow-engine"
 
 [dependencies]
 cef.workspace = true
-serde_json.workspace = true
 
 [[example]]
 name = "minimal"

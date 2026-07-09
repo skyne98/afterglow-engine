@@ -4,10 +4,9 @@
 //! (backed by heap-allocated `Vec<u8>` for same-process), spawns the worker
 //! thread, and returns a client + an event receiver.
 //!
-//! For cross-process (CEF browser↔renderer), the ring buffers are backed by
-//! `CefSharedMemoryRegion` instead — same API, different backing.
+//! For the web target, see `afterglow-web` (SharedArrayBuffer-backed).
 
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::{Receiver, Sender};
 
 use crate::{RingBuffer, RingBufferTransport, Transport, RpcResult, RpcError};
 
@@ -63,8 +62,8 @@ impl WorkerTransport {
 }
 
 impl Transport for WorkerTransport {
-    fn call(&self, service: &str, method: u32, args: &[u8]) -> RpcResult<Vec<u8>> {
-        self.transport().call(service, method, args)
+    fn call(&self, _service: &str, method: u32, args: &[u8]) -> RpcResult<Vec<u8>> {
+        self.transport().call(_service, method, args)
     }
 }
 
