@@ -1,12 +1,16 @@
 //! Demo worker interface: define the RPC once in Rust; the `#[rpc]` macro
 //! generates the server trait, the Rust client, the dispatch, and the schema.
-//! The build system turns the schema into a TypeScript client.
+//!
+//! `#[rpc(worker = PhysicsWorker)]` tells the macro the concrete impl type,
+//! so it generates `spawn_worker(impl)` (native), `wasm_init()` (web worker
+//! init), `get_client()` (web main thread), and `wasm_serve_frame()` (web
+//! worker dispatch). Zero boilerplate.
 
 use afterglow_rpc_macros::rpc;
 
 /// A physics worker. Methods are called by the main thread (or another worker)
-/// as if the worker were local — `PhysicsClient::new(transport).step(...)`.
-#[rpc]
+/// as if the worker were local — `client.step(...)`.
+#[rpc(worker = PhysicsWorker)]
 pub trait Physics {
     /// Advance a body's state by dt; returns the new state.
     fn step(state: Vec<f32>, dt: f32) -> Vec<f32>;
@@ -30,30 +34,20 @@ impl PhysicsServer for PhysicsWorker {
     }
 }
 
-/// Web worker init: called by JS to initialize the server impl.
-/// The user writes this one-liner; the macro generates `wasm_init_worker` + `wasm_serve_frame`.
-#[cfg(target_arch = "wasm32")]
-#[unsafe(no_mangle)]
-pub extern "C" fn wasm_init() {
-    wasm_init_worker(Box::new(PhysicsWorker));
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use afterglow_rpc::Transport;
 
     #[test]
     fn ring_buffer_worker_round_trip() {
-        // spawn_worker uses a shared-memory ring buffer (no IPC, no postMessage).
         let (client, events) = spawn_worker(PhysicsWorker);
 
-        // main -> worker (RPC over the ring buffer)
         let next = client.step(vec![0.0, 1.0, 2.0], 0.5).unwrap();
         assert_eq!(next, vec![0.5, 1.5, 2.5]);
 
         assert!(client.apply_force(3, 0.0, 9.8, 0.0).unwrap());
 
-        // worker -> main (event push)
         let mut evs = Vec::new();
         events.drain_into(&mut evs);
         assert!(evs.iter().any(|e| e == b"stepped:3"));
