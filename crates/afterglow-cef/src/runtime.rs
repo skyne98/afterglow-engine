@@ -7,6 +7,7 @@ use crate::config::CONFIG;
 use crate::flags;
 use crate::input::{InputEvent, InputKind};
 use cef::sys::XEvent;
+use cef::wrapper::message_router::MessageRouterBrowserSideHandlerCallbacks;
 
 /// Entry: set config, register the scheme, init CEF, run the message loop.
 pub fn run(cfg: crate::config::Config) {
@@ -156,6 +157,13 @@ wrap_app! {
         fn browser_process_handler(&self) -> Option<BrowserProcessHandler> {
             Some(GameBrowserProcessHandler::new(RefCell::new(None)))
         }
+
+        /// Renderer-side: registers `window.cefQuery` (Message Router) in each
+        /// frame context. The App is passed to execute_process, so the renderer
+        /// process runs this.
+        fn render_process_handler(&self) -> Option<RenderProcessHandler> {
+            Some(crate::message_router::GameRenderProcessHandler::make())
+        }
     }
 }
 
@@ -167,6 +175,9 @@ wrap_browser_process_handler! {
     impl BrowserProcessHandler {
         fn on_context_initialized(&self) {
             debug_assert_ne!(currently_on(ThreadId::UI), 0);
+
+            // Message Router (browser side): page -> host -> worker bridge.
+            crate::message_router::init_browser_router();
 
             // Serve assets directly via the afterglow:// scheme.
             crate::resources::register_factory();
@@ -213,6 +224,15 @@ wrap_client! {
         fn life_span_handler(&self) -> Option<LifeSpanHandler> {
             Some(GameLifeSpanHandler::new(RefCell::new(Vec::new())))
         }
+        fn request_handler(&self) -> Option<RequestHandler> {
+            Some(crate::message_router::GameRequestHandler::new())
+        }
+        /// Browser-side Message Router IPC: cefQuery messages arrive here.
+        fn on_process_message_received(&self, browser: Option<&mut Browser>, frame: Option<&mut Frame>, source_process: ProcessId, message: Option<&mut ProcessMessage>) -> ::std::os::raw::c_int {
+            eprintln!("[afterglow] client on_process_message_received");
+            crate::message_router::browser_router()
+                .on_process_message_received(browser.map(|b| b.clone()), frame.map(|f| f.clone()), source_process, message.map(|m| m.clone())) as i32
+        }
         /// Capture keyboard input natively (before the page) -> the game loop's
         /// input channel. No web/JS messages.
         fn keyboard_handler(&self) -> Option<KeyboardHandler> {
@@ -252,7 +272,10 @@ wrap_life_span_handler! {
         }
 
         fn on_before_close(&self, browser: Option<&mut Browser>) {
-            let mut b = browser.cloned().expect("Browser is None");
+            // Cancel pending cefQuery requests for this browser.
+            let owned = browser.map(|b| b.clone());
+            crate::message_router::browser_router().on_before_close(owned.clone());
+            let mut b = owned.expect("Browser is None");
             let mut list = self.browsers.borrow_mut();
             if let Some(i) = list.iter().position(|e| e.is_same(Some(&mut b)) != 0) {
                 list.remove(i);

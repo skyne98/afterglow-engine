@@ -25,6 +25,7 @@ mod config;
 mod flags;
 mod input;
 mod ipc;
+mod message_router;
 mod resources;
 mod runtime;
 
