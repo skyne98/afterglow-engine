@@ -192,6 +192,10 @@ CEF native path; the web `SharedArrayBuffer` path has no such issue.
   Present/SwapBuffers/vkQueuePresentKHR in the game process), why it doesn't
   work with CEF multi-process GPU, and how to fix it (`--in-process-gpu` flag
   + `SteamAPI_Init` before CEF init).
+- `docs/research/steamworks-native-worker.md` — Steamworks as a native Rust
+  worker via `#[rpc(worker = SteamWorker)]`. `Client::init()` before CEF,
+  `run_callbacks()` in the worker loop, overlay events via `push_event`,
+  `--in-process-gpu` flag, `steam_appid.txt`.
 
 ## API docs
 
