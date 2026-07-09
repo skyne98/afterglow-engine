@@ -131,14 +131,6 @@ pub fn rpc(_attr: TokenStream, item: TokenStream) -> TokenStream {
             });
             (#client_name::new(transport), ::afterglow_rpc::native::EventReceiver { rx: event_rx })
         }
-
-        /// WASM worker entry (web build): decode a postMessage'd framed request,
-        /// run the generated serve, return the response bytes to post back.
-        #[cfg(target_arch = "wasm32")]
-        pub fn wasm_serve<S: #server_name>(impl_: &mut S, msg: &[u8]) -> ::afterglow_rpc::RpcResult<Vec<u8>> {
-            let (method, args) = ::afterglow_rpc::web::decode_frame(msg)?;
-            serve(impl_, method, args)
-        }
     };
     expanded.into()
 }
