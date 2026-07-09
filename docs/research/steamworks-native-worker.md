@@ -250,6 +250,85 @@ generates `spawn_worker` for native only — on web, the trait exists but
    requests (or add a "tick" mechanism to the worker loop)
 7. **Handle overlay events** via `push_event` → game loop drains
 
+## Real-world examples of CEF/Electron games on Steam
+
+### Construct (game engine — closest to afterglow-engine)
+
+Construct exports web-based games and uses CEF on Linux/Steam Deck. Their
+"Export for Steam" option:
+- Adds `--in-process-gpu` automatically
+- Adds `--disable-windows10-custom-titlebar`
+- Forces the game window to **constantly redraw** (improves overlay compatibility)
+- Source: [Sleeping Panda blog](https://www.sleepingpanda.games/blog/how-to-export-your-construct-3-game-for-steam-and-steamdeck/)
+
+**Moonstone Island** (Construct game on Steam) — overlay works "kind of",
+with some input bugs. Source: [Steam community](https://steamcommunity.com/app/1658150/discussions/1/3877092663686935034/)
+
+Construct forum discussion on using CEF for Windows too (to fix overlay):
+[construct.net](https://www.construct.net/en/forum/construct-3/general-discussion-7/using-cef-windows-too-fix-185095)
+
+### Electron games on Steam
+
+Multiple shipped Electron games on Steam use `--in-process-gpu`:
+
+- **The Qubit Factory** — [developer post-mortem](https://www.reddit.com/r/electronjs/comments/1mefty1/just_released_a_steam_game_built_using_electron/)
+- **Power Troll / The Test of Insanity** — [publishing guide](https://dev.to/jacklehamster/publish-your-web-game-to-steam-using-electron-670)
+- **Phaser tutorial** — [publishing web games on Steam with Electron](https://phaser.io/news/2025/03/publishing-web-games-on-steam-with-electron)
+
+Post-mortem quote: "Steamworks.js Wouldn't it be nice to leverage Steam
+features like the Overlay and Achievements? Well, with the Steamworks.js
+library you can... Sometimes..."
+Source: [r/electronjs](https://www.reddit.com/r/electronjs/comments/17nyqqp/post_mortem_of_creating_a_game_for_steam_with/)
+
+### Spacetech's electronsteamoverlaytest
+
+A test repo specifically for Steam Overlay in Electron:
+- Confirms `--in-process-gpu` is required
+- Windows only (due to the in-process-gpu requirement)
+- Source: [GitHub](https://github.com/Spacetech/electronsteamoverlaytest)
+
+### Steamworks.js (Electron Steamworks library)
+
+`steamworks.js` is a Node.js wrapper for Steamworks SDK used by Electron
+games. Overlay issues reported on Linux:
+- [Issue #195](https://github.com/ceifa/steamworks.js/issues/195): Overlay woes on Linux
+- Tried `--in-process-gpu`, `--disable-transparency`, `--disable-direct-composition`
+- `steamworks.electronEnableSteamOverlay()` before window creation
+
+### Guild Wars 2 (ArenaNet)
+
+Replaced CoherentUI with CEF for in-game UI (trading post, books, launcher).
+This is CEF as a UI overlay within a native game (not a pure web game).
+- CEF provides faster development and better rendering than CoherentUI
+- Steam overlay has issues (doesn't work well with the native game window)
+- Source: [ArenaNet blog](https://www.guildwars2.com/en/news/inside-arenanet-chromium-embedded-framework-in-guild-wars-2/)
+
+### Valve's official recommendation
+
+From the [Steamworks docs](https://partner.steamgames.com/doc/features/overlay):
+> "A workaround for web based games is to host an embedded Chromium inside
+> a native application, with a D3D window and input forwarding to the
+> embedded Chromium. That can be setup to render in offscreen mode, which
+> then renders the resulting chromium texture each frame in the native app.
+> Partners often use CEF to do this, though this is not an easy task."
+
+### SteamDB: Games using CEF SDK
+
+[SteamDB](https://steamdb.info/tech/SDK/CEF/) detects games with CEF SDK
+files in their depots. The list is auto-detected and includes false
+positives, but shows CEF is used by shipped Steam games.
+
+### Pattern across ALL examples
+
+1. **`--in-process-gpu` is required** — every working example uses this flag
+2. **`SteamAPI_Init()` before GPU init** — the overlay hooks device creation
+3. **Constant redraw helps** — Construct forces constant window redraw to
+   trigger the overlay's frame hook (Chromium skips frames when nothing
+   changes, which breaks the overlay)
+4. **Windows works best** — Linux/Steam Deck support is spotty
+5. **OSR is Valve's recommended solution** — but complex; nobody in the
+   examples above uses it (they all use `--in-process-gpu` instead)
+
 ## Sources
 
 - [steamworks-rs (GitHub)](https://github.com/Noxime/steamworks-rs)
