@@ -102,7 +102,7 @@ pub fn rpc(_attr: TokenStream, item: TokenStream) -> TokenStream {
         }
 
         /// Server-side dispatch: decode args, call the impl, encode the return.
-        pub fn serve<S: #server_name>(s: &mut S, method: u32, args: &[u8]) -> ::afterglow_rpc::RpcResult<Vec<u8>> {
+        pub fn serve<S: #server_name + ?Sized>(s: &mut S, method: u32, args: &[u8]) -> ::afterglow_rpc::RpcResult<Vec<u8>> {
             match method {
                 #( #serve_arms )*
                 _ => Err(::afterglow_rpc::RpcError::UnknownMethod),
@@ -130,6 +130,34 @@ pub fn rpc(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 ::afterglow_rpc::native::run_worker_loop(impl_, bufs, event_tx, serve::<S>);
             });
             (#client_name::new(transport), ::afterglow_rpc::native::EventReceiver { rx: event_rx })
+        }
+
+        /// Web worker: initialize with a server impl. The JS worker calls
+        /// `wasm_serve_frame` after this. The worker's wasm instance has its
+        /// OWN memory (not shared with the main thread), so allocations
+        /// (decode/encode inside `serve`) are safe — no allocator conflict.
+        #[cfg(target_arch = "wasm32")]
+        static mut WORKER: Option<Box<dyn #server_name>> = None;
+
+        #[cfg(target_arch = "wasm32")]
+        pub fn wasm_init_worker(impl_: Box<dyn #server_name>) {
+            unsafe { WORKER = Some(impl_); }
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        #[unsafe(no_mangle)]
+        pub extern "C" fn wasm_serve_frame(method: u32, args_ptr: *const u8, args_len: usize, out_ptr: *mut u8, out_max_len: usize) -> i32 {
+            let args = unsafe { std::slice::from_raw_parts(args_ptr, args_len) };
+            let out = unsafe { std::slice::from_raw_parts_mut(out_ptr, out_max_len) };
+            let impl_ = unsafe { WORKER.as_deref_mut().expect("wasm_init_worker not called") };
+            match serve(impl_, method, args) {
+                Ok(resp) => {
+                    let n = resp.len().min(out.len());
+                    out[..n].copy_from_slice(&resp[..n]);
+                    n as i32
+                }
+                Err(_) => -1,
+            }
         }
     };
     expanded.into()

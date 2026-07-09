@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>afterglow worker test</title>
+<style>body{background:#0a0c10;color:#e5e7eb;font:13px/1.4 ui-monospace,monospace;padding:16px}pre{white-space:pre}</style>
+</head><body><pre id="out"></pre>
+<script type="module">
+const out = document.getElementById('out');
+const p = m => { out.textContent += m + '\n'; console.log('[test] ' + m); };
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+async function main() {
+  p('Loading wasm...');
+  const wasmBytes = await (await fetch('afterglow_web.wasm')).arrayBuffer();
+  const module = await WebAssembly.compile(wasmBytes);
+
+  // Main thread: shared memory (has ring buffers)
+  const memory = new WebAssembly.Memory({ shared: true, initial: 256, maximum: 1024 });
+  const instance = await WebAssembly.instantiate(module, { env: { memory } });
+  const wasm = instance.exports;
+  wasm.init_ring_buffers();
+
+  const reqPtr = wasm.get_request_ptr();
+  const respPtr = wasm.get_response_ptr();
+  const bufSize = wasm.get_buffer_size();
+  p(`Main: ring buffers ready (req=${reqPtr}, resp=${respPtr}, size=${bufSize})`);
+
+  // Need the rpc-demo wasm too (has wasm_serve_frame)
+  // For now, test with the afterglow-web wasm (which only has ring buffer ops)
+  // A real test would use the rpc-demo wasm compiled for wasm32
+
+  // Spawn a Web Worker
+  p('Spawning worker...');
+  const worker = new Worker('worker.js');
+  worker.postMessage({
+    type: 'init',
+    sab: memory.buffer,
+    reqBase: reqPtr,
+    respBase: respPtr,
+    bufSize,
+    wasmUrl: 'afterglow_web.wasm', // Would be the rpc-demo wasm in a real app
+  });
+  await new Promise(r => worker.onmessage = (e) => e.data.type === 'ready' && r());
+  p('Worker ready');
+
+  // Write a test request to the ring buffer
+  const freeBase = respPtr + bufSize;
+  const payload = new Uint8Array([0x01, 0x00, 0x00, 0x00, 0x42]); // method=1, args=[0x42]
+  wasm.write_frame(freeBase, payload.length);
+  p(`Wrote request: ${payload.length} bytes`);
+
+  // Start the worker loop
+  worker.postMessage({ type: 'run' });
+
+  // Wait for response
+  p('Waiting for response...');
+  for (let i = 0; i < 100; i++) {
+    if (wasm.has_response()) {
+      const readBuf = freeBase + 1024;
+      const n = wasm.read_response(readBuf, 1024);
+      p(`Got response: ${n} bytes`);
+      p('Worker round-trip works!');
+      break;
+    }
+    await sleep(50);
+  }
+
+  worker.terminate();
+}
+
+main().catch(e => p('ERROR: ' + e.message + '\n' + e.stack));
+</script></body></html>

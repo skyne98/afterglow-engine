@@ -45,6 +45,8 @@ canvas{display:block;width:100vw;height:100vh}</style></head>
 </script></body></html>"#;
 
 // SAB ring buffer stress test page + wasm.
+const WORKER_TEST_HTML: &[u8] = include_bytes!("../../afterglow-web/www/worker-test.html");
+const WORKER_JS: &[u8] = include_bytes!("../../afterglow-web/www/worker.js");
 const BENCH_HTML: &[u8] = include_bytes!("../../afterglow-web/www/bench.html");
 const BENCH_WASM: &[u8] = include_bytes!("../../afterglow-web/www/afterglow_web.wasm");
 
@@ -55,6 +57,8 @@ fn main() {
         .devtools(9222)
         .root("/index.html")
         .asset("/index.html", "text/html", HTML)
+        .asset("/worker-test.html", "text/html", WORKER_TEST_HTML)
+        .asset("/worker.js", "application/javascript", WORKER_JS)
         .asset("/bench.html", "text/html", BENCH_HTML)
         .asset("/afterglow_web.wasm", "application/wasm", BENCH_WASM)
         .run();
