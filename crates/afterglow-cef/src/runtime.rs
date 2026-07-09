@@ -2,11 +2,17 @@
 
 use cef::*;
 use std::cell::RefCell;
+use std::sync::Mutex;
 
 use crate::config::CONFIG;
 use crate::flags;
 use crate::input::{InputEvent, InputKind};
 use cef::sys::XEvent;
+
+/// Global handle to the main browser, set in `on_after_created`.
+/// Other threads (e.g., the game loop) can use this to access the main frame
+/// for `push_frame_data` etc.
+pub static MAIN_BROWSER: Mutex<Option<Browser>> = Mutex::new(None);
 
 /// Entry: set config, register the scheme, init CEF, run the message loop.
 pub fn run(cfg: crate::config::Config) {
@@ -56,10 +62,7 @@ fn run_main(main_args: &MainArgs, cmd_line: &CommandLine, sandbox_info: *mut u8)
     }
 
     let cef_path = std::env::var("CEF_PATH").unwrap_or_default();
-    let devtools_port: i32 = std::env::var("AFTERGLOW_DEVTOOLS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(0);
+    let devtools_port = CONFIG.get().unwrap().devtools_port;
     let settings = Settings {
         no_sandbox: 1,
         remote_debugging_port: devtools_port,
@@ -159,6 +162,13 @@ wrap_app! {
         fn browser_process_handler(&self) -> Option<BrowserProcessHandler> {
             Some(GameBrowserProcessHandler::new(RefCell::new(None)))
         }
+
+        /// Renderer side: receives the shared memory region and exposes it
+        /// as `window.__afterglow_buffer` (a V8 ArrayBuffer backed by the
+        /// shared memory — zero-copy).
+        fn render_process_handler(&self) -> Option<RenderProcessHandler> {
+            Some(crate::shared_memory::GameRenderProcessHandler::make())
+        }
     }
 }
 
@@ -231,8 +241,23 @@ wrap_life_span_handler! {
 
     impl LifeSpanHandler {
         fn on_after_created(&self, browser: Option<&mut Browser>) {
-            let b = browser.cloned().expect("Browser is None");
-            self.browsers.borrow_mut().push(b);
+            let mut b = browser.cloned().expect("Browser is None");
+            self.browsers.borrow_mut().push(b.clone());
+
+            // Expose the main browser globally so other threads (game loop,
+            // push thread) can access the main frame.
+            *MAIN_BROWSER.lock().unwrap() = Some(b.clone());
+
+            // Send the shared memory ring buffer to the renderer now that
+            // the browser + main frame exist.
+            if let Some(frame) = b.main_frame() {
+                crate::shared_memory::send_shared_buffer(&frame, 8 * 1024 * 1024);
+            }
+
+            // Fire the user's ready callback (spawn game-loop / push threads).
+            if let Some(cb) = &crate::config::CONFIG.get().unwrap().ready {
+                cb();
+            }
         }
 
         fn on_before_close(&self, browser: Option<&mut Browser>) {

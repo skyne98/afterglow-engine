@@ -30,6 +30,14 @@ pub fn apply(cl: &CommandLine) {
     sv(cl, "enable-features", "Vulkan");
     sv(cl, "use-angle", "vulkan");
 
+    // --- V8 sandbox: CEF 149 ships with the V8 sandbox compiled in (not
+    //     toggleable at runtime). This blocks CefV8Value::CreateArrayBuffer
+    //     (external backing store) — it always returns nullptr. We use
+    //     CreateArrayBufferWithCopy instead (one memcpy per frame, ~8 µs for
+    //     64 KB). The `--disable-v8-sandbox` flag is kept for future CEF
+    //     versions that might make it toggleable. ---
+    sw(cl, "disable-v8-sandbox");
+
     // --- X11/XWayland: Wayland+Vulkan are incompatible in CEF 149.
     //     (Native Wayland + WebGPU isn't available yet; revisit when Chromium
     //     supports Wayland+Vulkan.) Overridable via CLI --ozone-platform=... ---

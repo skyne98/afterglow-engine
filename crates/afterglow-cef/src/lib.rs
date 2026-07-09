@@ -27,9 +27,12 @@ mod flags;
 mod input;
 mod resources;
 mod runtime;
+mod shared_memory;
 
 pub use config::{AppBuilder, Config, SCHEME, SCHEME_DOMAIN};
 pub use input::{take_input_receiver, InputEvent, InputKind};
+pub use runtime::MAIN_BROWSER;
+pub use shared_memory::{push_frame_data, send_shared_buffer, GameRenderProcessHandler};
 
 /// `afterglow://local/` + a path, e.g. `root_url("/index.html")`.
 pub fn root_url(path: &str) -> String {

@@ -9,8 +9,6 @@ description = "Game-window-focused CEF (cef-rs) wrapper for afterglow-engine"
 [dependencies]
 cef.workspace = true
 serde_json.workspace = true
-afterglow-rpc-demo = { path = "../afterglow-rpc-demo" }
-afterglow-rpc = { path = "../afterglow-rpc" }
 
 [[example]]
 name = "minimal"
