@@ -100,25 +100,31 @@ fn main() {
                 let browser = MAIN_BROWSER.lock().unwrap().clone().unwrap();
                 let frame = browser.main_frame().unwrap();
                 eprintln!("[afterglow] benchmarking push_frame_data latency...");
+                eprintln!("[bench] payload   latency   throughput");
                 for size in [64, 256, 1024, 4096, 16384, 65536, 262144, 1048576] {
                     let data = vec![0xAAu8; size];
-                    let n = 200;
+                    let n = 500;
                     let t0 = std::time::Instant::now();
                     for _ in 0..n {
                         push_frame_data(&frame, &data);
                     }
                     let dt = t0.elapsed();
                     let lat_us = dt.as_micros() as f64 / n as f64;
-                    eprintln!(
-                        "  {:7} B: {:7.1} µs/push  {:7.1} MB/s",
-                        size,
-                        lat_us,
-                        (size as f64 * n as f64) / dt.as_secs_f64() / 1024.0 / 1024.0
-                    );
+                    let lat_ms = lat_us / 1000.0;
+                    let mbps = (size as f64 * n as f64) / dt.as_secs_f64() / 1024.0 / 1024.0;
+                    eprintln!("[bench] {:6} B  {:7.3} ms  {:7.1} MB/s", size, lat_ms, mbps);
                 }
+                eprintln!("[bench] done");
 
-                // Then push 600 frames at 60 FPS to demonstrate live data.
-                let frame_count = 600u32;
+                // Push a marker frame so JS knows the benchmark is done
+                let mut done = vec![0u8; 8];
+                done[0] = 0xD0;  // "done" marker
+                done[1] = 0xE0;
+                push_frame_data(&frame, &done);
+                eprintln!("[afterglow] benchmark complete, pushing live frames...");
+
+                // Then push 300 frames at 60 FPS to demonstrate live data.
+                let frame_count = 300u32;
                 for i in 0..frame_count {
                     let browser = MAIN_BROWSER.lock().unwrap().clone();
                     if let Some(browser) = browser {

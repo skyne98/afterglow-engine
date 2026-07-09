@@ -15,3 +15,6 @@ serde_json.workspace = true
 [[bin]]
 name = "dump-schema"
 path = "src/bin/dump_schema.rs"
+
+[[example]]
+name = "bench_rpc"

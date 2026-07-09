@@ -139,6 +139,38 @@
             }
             log(`Main thread read ${framesRead} frames total ✓`, 'ok');
             log('\nSharedArrayBuffer ring buffer works! Zero-copy, zero-IPC.', 'ok');
+
+            // --- Benchmark: measure write→read round-trip latency ---
+            log('\n--- Benchmark: SAB ring buffer write→read latency ---');
+            log('payload   latency   throughput');
+            // Use memory AFTER the ring buffer (rbOffset + rbSize)
+            // Layout: [read_buf 1MB][scratch area up to 1MB]
+            const readBufBase = rbOffset + rbSize;
+            const scratchBase = readBufBase + 1048576; // 1MB gap for read buffer
+            const benchSizes = [64, 256, 1024, 4096, 16384, 65536, 262144, 1048576];
+            // Run benchmark asynchronously to avoid blocking the main thread
+            (async () => {
+            for (const size of benchSizes) {
+              const payload = new Uint8Array(size).fill(0xBB);
+              const n = 50;
+              let ok = 0;
+              const t0 = performance.now();
+              for (let i = 0; i < n; i++) {
+                const scratchView = new Uint8Array(memory.buffer, scratchBase, size);
+                scratchView.set(payload);
+                const wr = wasm.write_frame(scratchBase, size);
+                if (wr !== 0) continue;
+                wasm.read_frame(readBufBase, 1048576);
+                ok++;
+              }
+              const dt = performance.now() - t0;
+              const latUs = ok > 0 ? (dt * 1000) / ok : 0;
+              const mbps = ok > 0 ? (size * ok) / (dt / 1000) / 1024 / 1024 : 0;
+              log(`${size.toString().padStart(7)} B  ${latUs.toFixed(1).padStart(7)} \u00b5s  ${mbps.toFixed(1).padStart(7)} MB/s  (${ok}/${n} ok)`);
+              await new Promise(r => setTimeout(r, 50)); // yield to event loop
+            }
+            log('Benchmark complete \u2713', 'ok');
+            })();
           }, 500);
         }
       };
