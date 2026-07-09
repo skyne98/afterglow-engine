@@ -1,24 +1,13 @@
-//! Minimal afterglow-cef app: WebGPU triangle + cross-process shared memory
-//! data push via CefSharedMemoryRegion.
+//! Minimal afterglow-cef app: WebGPU triangle + SharedArrayBuffer ring buffer.
 //!
-//! The browser process creates a shared memory message each "frame" and
-//! sends it to the renderer. The renderer copies it into a V8 ArrayBuffer
-//! (one memcpy — V8 sandbox blocks external ArrayBuffers in CEF 149) and
-//! exposes it as `window.__afterglow_frame_data`. JS reads it and logs the
-//! size + first bytes.
+//! The CEF shell just provides a window with WebGPU + COOP/COEP headers.
+//! Workers and ring buffers use `afterglow-web` (SharedArrayBuffer) — the same
+//! mechanism as the web target.
 //!
 //!   nix-shell shell.nix --run "cargo build --example minimal"
 //!   nix-shell shell.nix --run "./target/debug/examples/minimal --ozone-platform=x11"
 
-use afterglow_cef::{push_frame_data, AppBuilder, MAIN_BROWSER};
-use cef::{ImplBrowser, ImplFrame};
-use std::time::Duration;
-
-// Web target test page: verifies SharedArrayBuffer + ring buffer works
-// via afterglow:// scheme with COOP/COEP headers.
-const WEB_TEST_HTML: &[u8] = include_bytes!("../../afterglow-web/www/index.html");
-const WEB_TEST_WASM: &[u8] = include_bytes!("../../afterglow-web/www/afterglow_web.wasm");
-const WEB_TEST_WORKER: &[u8] = include_bytes!("../../afterglow-web/www/worker.js");
+use afterglow_cef::AppBuilder;
 
 const HTML: &[u8] = br#"<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>afterglow-cef</title>
@@ -26,32 +15,6 @@ const HTML: &[u8] = br#"<!DOCTYPE html>
 canvas{display:block;width:100vw;height:100vh}</style></head>
 <body><canvas id="c"></canvas>
 <script>
-// Per-frame data callback: called when the browser pushes new data via
-// shared memory. The data is in window.__afterglow_frame_data (ArrayBuffer).
-window.__afterglow_on_frame_data = function() {
-  var ab = window.__afterglow_frame_data;
-  if (!ab) return;
-  var u8 = new Uint8Array(ab);
-  // Log size + first 4 bytes (should be 0xDE 0xAD 0xBE 0xEF)
-  if (!window.__frame_count) window.__frame_count = 0;
-  window.__frame_count++;
-  if (window.__frame_count <= 3 || window.__frame_count % 60 === 0)
-    console.log('frame_data: ' + ab.byteLength + ' bytes, first=' +
-      u8[0].toString(16) + u8[1].toString(16) + u8[2].toString(16) + u8[3].toString(16) +
-      ' count=' + window.__frame_count);
-};
-
-// Wait for the persistent ring buffer (sent once at startup).
-function waitForBuffer() {
-  if (window.__afterglow_buffer) {
-    var dv = new DataView(window.__afterglow_buffer);
-    console.log('ring buffer: ' + window.__afterglow_buffer.byteLength + ' bytes, cap=' + dv.getUint32(0, true));
-  } else {
-    setTimeout(waitForBuffer, 100);
-  }
-}
-waitForBuffer();
-
 (async () => {
   if (!navigator.gpu) { console.log('no WebGPU'); return; }
   const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
@@ -81,6 +44,11 @@ waitForBuffer();
 })().catch(e => console.log('ERR ' + (e?.stack||e)));
 </script></body></html>"#;
 
+// Web target test page + wasm + worker — served via afterglow:// so SAB works.
+const WEB_TEST_HTML: &[u8] = include_bytes!("../../afterglow-web/www/index.html");
+const WEB_TEST_WASM: &[u8] = include_bytes!("../../afterglow-web/www/afterglow_web.wasm");
+const WEB_TEST_WORKER: &[u8] = include_bytes!("../../afterglow-web/www/worker.js");
+
 fn main() {
     AppBuilder::new()
         .title("afterglow-cef minimal")
@@ -91,57 +59,5 @@ fn main() {
         .asset("/web-test.html", "text/html", WEB_TEST_HTML)
         .asset("/afterglow_web.wasm", "application/wasm", WEB_TEST_WASM)
         .asset("/worker.js", "application/javascript", WEB_TEST_WORKER)
-        .on_ready(|| {
-            // Spawn a thread that pushes fake "physics data" to the renderer
-            // every 16ms (60 FPS). Must be spawned after CEF init (spawning
-            // threads before execute_process crashes the GPU process).
-            std::thread::spawn(|| {
-                // Benchmark: measure push_frame_data latency at various sizes.
-                let browser = MAIN_BROWSER.lock().unwrap().clone().unwrap();
-                let frame = browser.main_frame().unwrap();
-                eprintln!("[afterglow] benchmarking push_frame_data latency...");
-                eprintln!("[bench] payload   latency   throughput");
-                for size in [64, 256, 1024, 4096, 16384, 65536, 262144, 1048576] {
-                    let data = vec![0xAAu8; size];
-                    let n = 500;
-                    let t0 = std::time::Instant::now();
-                    for _ in 0..n {
-                        push_frame_data(&frame, &data);
-                    }
-                    let dt = t0.elapsed();
-                    let lat_us = dt.as_micros() as f64 / n as f64;
-                    let lat_ms = lat_us / 1000.0;
-                    let mbps = (size as f64 * n as f64) / dt.as_secs_f64() / 1024.0 / 1024.0;
-                    eprintln!("[bench] {:6} B  {:7.3} ms  {:7.1} MB/s", size, lat_ms, mbps);
-                }
-                eprintln!("[bench] done");
-
-                // Push a marker frame so JS knows the benchmark is done
-                let mut done = vec![0u8; 8];
-                done[0] = 0xD0;  // "done" marker
-                done[1] = 0xE0;
-                push_frame_data(&frame, &done);
-                eprintln!("[afterglow] benchmark complete, pushing live frames...");
-
-                // Then push 300 frames at 60 FPS to demonstrate live data.
-                let frame_count = 300u32;
-                for i in 0..frame_count {
-                    let browser = MAIN_BROWSER.lock().unwrap().clone();
-                    if let Some(browser) = browser {
-                        if let Some(frame) = browser.main_frame() {
-                            let mut data = vec![0u8; 64];
-                            data[0] = 0xDE;
-                            data[1] = 0xAD;
-                            data[2] = 0xBE;
-                            data[3] = 0xEF;
-                            data[4] = (i & 0xFF) as u8;
-                            push_frame_data(&frame, &data);
-                        }
-                    }
-                    std::thread::sleep(Duration::from_millis(16));
-                }
-                eprintln!("[afterglow] push thread finished ({frame_count} frames)");
-            });
-        })
         .run();
 }

@@ -27,10 +27,6 @@ pub struct Config {
     pub console: Option<Arc<dyn Fn(&str) + Send + Sync>>,
     /// JS↔Rust invoke handler: `window.afterglow.invoke(method, params)`.
     pub invoke: Option<Arc<dyn Fn(&str, Value) -> Value + Send + Sync>>,
-    /// Called once after the browser is created (on the UI thread). Use this
-    /// to spawn game-loop / push threads (spawning threads before CEF init
-    /// causes the GPU process to crash).
-    pub ready: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 pub(crate) static CONFIG: OnceLock<Config> = OnceLock::new();
@@ -90,14 +86,6 @@ impl AppBuilder {
     /// Forward JS `console.*` to this callback (defaults to stderr).
     pub fn on_console(mut self, f: impl Fn(&str) + Send + Sync + 'static) -> Self {
         self.cfg.console = Some(Arc::new(f));
-        self
-    }
-
-    /// Called once after the browser is created. Use this to start game-loop
-    /// or data-push threads (spawning threads before CEF init crashes the GPU
-    /// process).
-    pub fn on_ready(mut self, f: impl Fn() + Send + Sync + 'static) -> Self {
-        self.cfg.ready = Some(Arc::new(f));
         self
     }
 

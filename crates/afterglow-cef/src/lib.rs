@@ -17,22 +17,23 @@
 //!   + CSP-bypass) serving embedded assets and/or files from a FS root directly
 //!   through CEF — ES-module Three.js and WebGPU both work, same-origin, no TCP
 //!   server.
+//! - **COOP/COEP headers** on the scheme handler so `SharedArrayBuffer` works
+//!   — workers and the main thread share memory via the same mechanism as the
+//!   web target (`afterglow-web`).
 //! - **DevTools** behind a port flag; **JS console** forwarded to a callback.
-//! - **Native keyboard input capture** → game-loop channel (no web messages).
+//!
+//! Workers and worker↔worker comms use `SharedArrayBuffer` ring buffers via
+//! the [`afterglow-web`](../afterglow-web) crate — same mechanism on native
+//! (CEF is Chromium) and web.
 //!
 //! [cef-rs]: https://github.com/tauri-apps/cef-rs
 
 mod config;
 mod flags;
-mod input;
 mod resources;
 mod runtime;
-mod shared_memory;
 
 pub use config::{AppBuilder, Config, SCHEME, SCHEME_DOMAIN};
-pub use input::{take_input_receiver, InputEvent, InputKind};
-pub use runtime::MAIN_BROWSER;
-pub use shared_memory::{push_frame_data, send_shared_buffer, GameRenderProcessHandler};
 
 /// `afterglow://local/` + a path, e.g. `root_url("/index.html")`.
 pub fn root_url(path: &str) -> String {
