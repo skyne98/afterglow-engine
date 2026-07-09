@@ -25,6 +25,13 @@
 
 use afterglow_rpc::RingBuffer;
 
+/// JS-provided callback: called after writing to the request ring buffer.
+/// JS implementation: `() => worker.postMessage('wake')`.
+/// The worker's instance provides a no-op.
+unsafe extern "C" {
+    fn notify_worker();
+}
+
 const BUFFER_SIZE: usize = 4 * 1024 * 1024; // 4 MiB per ring buffer
 
 static mut REQUEST_BUFFER: [u8; BUFFER_SIZE] = [0; BUFFER_SIZE];
@@ -158,9 +165,12 @@ impl afterglow_rpc::Transport for WebTransport {
         scratch[..4].copy_from_slice(&method.to_le_bytes());
         scratch[4..frame_len].copy_from_slice(args);
 
-        // Write to request ring buffer (also notifies the worker via
-        // AtomicU32::notify inside RingBuffer::write)
+        // Write to request ring buffer
         request_rb().write(&scratch[..frame_len])?;
+
+        // Wake the worker via postMessage (near-zero latency).
+        // JS provides: `() => worker.postMessage('wake')`
+        unsafe { notify_worker(); }
 
         // Wait for response (spin — main thread can't Atomics.wait)
         let resp = loop {

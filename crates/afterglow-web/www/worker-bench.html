@@ -14,7 +14,7 @@ async function main() {
   const mainBytes = await (await fetch('afterglow_web.wasm')).arrayBuffer();
   const mainModule = await WebAssembly.compile(mainBytes);
   const memory = new WebAssembly.Memory({ shared: true, initial: 256, maximum: 1024 });
-  const mainInst = await WebAssembly.instantiate(mainModule, { env: { memory } });
+  const mainInst = await WebAssembly.instantiate(mainModule, { env: { memory, notify_worker: () => worker.postMessage('wake') } });
   const wasm = mainInst.exports;
   wasm.init_ring_buffers();
 
