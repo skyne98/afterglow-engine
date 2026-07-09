@@ -69,4 +69,3 @@ fn main() {
             _ => json!({ "error": format!("unknown method: {method}") }),
         })
         .run();
-}

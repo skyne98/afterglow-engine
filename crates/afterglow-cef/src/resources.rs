@@ -45,6 +45,7 @@ fn resolve(path: &str) -> (Vec<u8>, String) {
     if path == "/__afterglow_bootstrap.js" {
         let mut s = crate::ipc::config_js();
         s.push_str(crate::ipc::INVOKE_JS);
+        s.push_str(crate::message_router::EMULATED_WORKER_JS);
         return (s.into_bytes(), "text/javascript".to_string());
     }
     let cfg = CONFIG.get().expect("afterglow-cef config not set");
