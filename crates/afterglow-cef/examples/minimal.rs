@@ -14,6 +14,12 @@ use afterglow_cef::{push_frame_data, AppBuilder, MAIN_BROWSER};
 use cef::{ImplBrowser, ImplFrame};
 use std::time::Duration;
 
+// Web target test page: verifies SharedArrayBuffer + ring buffer works
+// via afterglow:// scheme with COOP/COEP headers.
+const WEB_TEST_HTML: &[u8] = include_bytes!("../../afterglow-web/www/index.html");
+const WEB_TEST_WASM: &[u8] = include_bytes!("../../afterglow-web/www/afterglow_web.wasm");
+const WEB_TEST_WORKER: &[u8] = include_bytes!("../../afterglow-web/www/worker.js");
+
 const HTML: &[u8] = br#"<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>afterglow-cef</title>
 <style>html,body{margin:0;height:100%;background:#0a0c10;color:#e5e7eb;font:13px/1.4 ui-monospace,monospace}
@@ -82,6 +88,9 @@ fn main() {
         .devtools(9222)
         .root("/index.html")
         .asset("/index.html", "text/html", HTML)
+        .asset("/web-test.html", "text/html", WEB_TEST_HTML)
+        .asset("/afterglow_web.wasm", "application/wasm", WEB_TEST_WASM)
+        .asset("/worker.js", "application/javascript", WEB_TEST_WORKER)
         .on_ready(|| {
             // Spawn a thread that pushes fake "physics data" to the renderer
             // every 16ms (60 FPS). Must be spawned after CEF init (spawning

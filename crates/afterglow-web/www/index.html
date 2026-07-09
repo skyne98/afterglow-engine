@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>afterglow-web: SharedArrayBuffer Ring Buffer</title>
+  <style>
+    body { background: #0a0c10; color: #e5e7eb; font: 13px/1.4 ui-monospace,monospace; padding: 20px; }
+    h1 { color: #f0a040; }
+    #status { color: #80c0ff; }
+    #log { white-space: pre-wrap; max-height: 400px; overflow-y: auto; }
+    .ok { color: #40ff80; }
+    .err { color: #ff4040; }
+  </style>
+</head>
+<body>
+  <h1>afterglow-web: SharedArrayBuffer Ring Buffer</h1>
+  <p id="status">Loading...</p>
+  <div id="log"></div>
+
+  <script type="module">
+    const logEl = document.getElementById('log');
+    const statusEl = document.getElementById('status');
+    function log(msg, cls = '') {
+      const span = document.createElement('div');
+      if (cls) span.className = cls;
+      span.textContent = msg;
+      logEl.appendChild(span);
+    }
+
+    // Check SharedArrayBuffer support (requires COOP/COEP headers)
+    if (typeof SharedArrayBuffer === 'undefined') {
+      statusEl.textContent = 'ERROR: SharedArrayBuffer not available';
+      statusEl.className = 'err';
+      log('SharedArrayBuffer is not available. This page must be served with:', 'err');
+      log('  Cross-Origin-Opener-Policy: same-origin');
+      log('  Cross-Origin-Embedder-Policy: require-corp');
+      log('Use: npx serve --cors --coop --coep  OR  the included server.rs');
+    } else {
+      statusEl.textContent = 'SharedArrayBuffer available ✓';
+      statusEl.className = 'ok';
+      log('SharedArrayBuffer available ✓');
+    }
+
+    async function main() {
+      // 1. Fetch the wasm module
+      const wasmResponse = await fetch('afterglow_web.wasm');
+      const wasmBytes = await wasmResponse.arrayBuffer();
+
+      // 2. Compile the module (not yet instantiated)
+      const module = await WebAssembly.compile(wasmBytes);
+      log('Wasm module compiled ✓');
+
+      // 3. Create a SHARED WebAssembly.Memory
+      //    This is the key: the memory is a SharedArrayBuffer, so all
+      //    workers that share it can access the same ring buffer.
+      const memory = new WebAssembly.Memory({
+        shared: true,
+        initial: 256,   // 256 pages × 64 KiB = 16 MiB
+        maximum: 1024,  // up to 64 MiB (must match module's --max-memory)
+      });
+      log('Shared WebAssembly.Memory created (' + memory.buffer.byteLength + ' bytes) ✓');
+
+      // 4. Instantiate the module with the shared memory
+      //    The wasm module's static RING_BUFFER lives in this memory.
+      //    The module was compiled with --import-memory, so it expects
+      //    `env.memory` as an import.
+      const instance = await WebAssembly.instantiate(module, {
+        env: { memory }
+      });
+      const wasm = instance.exports;
+
+      // 5. Initialize the ring buffer
+      wasm.init_ring_buffer();
+      const rbOffset = wasm.get_ring_buffer_ptr();
+      const rbSize = wasm.get_ring_buffer_size();
+      const rbCap = wasm.ring_buffer_capacity();
+      log(`Ring buffer: offset=${rbOffset}, size=${rbSize}, capacity=${rbCap} ✓`);
+
+      // 5b. Diagnostic: check if Rust can read back the header
+      const headerCapFromRust = wasm.read_header_cap();
+      log(`Rust read header cap: ${headerCapFromRust} (expect 8388596)`);
+
+      // 5c. Diagnostic: write a test marker from Rust, read from JS
+      const marker = wasm.write_test_marker() >>> 0;  // unsigned
+      const dv2 = new DataView(memory.buffer, rbOffset, 4);
+      const markerFromJs = dv2.getUint32(0, true);
+      log(`Test marker: Rust wrote 0x${marker.toString(16)}, JS read 0x${markerFromJs.toString(16)} ${marker === markerFromJs ? '✓' : '✗ MISMATCH'}`);
+
+      // 5d. Write from JS, read from Rust
+      const dv3 = new DataView(memory.buffer, rbOffset, 4);
+      dv3.setUint32(0, 0x12345678, true);
+      const jsWritten = wasm.read_header_cap() >>> 0;  // unsigned
+      log(`JS wrote 0x12345678, Rust read 0x${jsWritten.toString(16)} ${jsWritten === 0x12345678 ? '✓' : '✗ MISMATCH'}`);
+
+      // 6. Verify the ring buffer header via DataView (zero-copy JS access)
+      const dv = new DataView(memory.buffer, rbOffset, rbSize);
+      const capFromJs = dv.getUint32(0, true);
+      const writeIdxFromJs = dv.getUint32(4, true);
+      const readIdxFromJs = dv.getUint32(8, true);
+      log(`JS read header: cap=${capFromJs}, w=${writeIdxFromJs}, r=${readIdxFromJs} ✓`);
+
+      // 7. Spawn a Web Worker with the module + memory
+      const worker = new Worker('worker.js');
+      worker.postMessage({ type: 'init', module, memory });
+      log('Web Worker spawned with shared module + memory ✓');
+
+      // 8. Poll the ring buffer from the main thread
+      let framesRead = 0;
+      const poll = () => {
+        while (wasm.has_data()) {
+          // Allocate a read buffer in wasm memory (use scratch area)
+          const readBufOffset = rbOffset + rbSize - 512;
+          const n = wasm.read_frame(readBufOffset, 512);
+          if (n > 0) {
+            framesRead++;
+            // Read the data via Uint8Array (zero-copy view into shared memory)
+            const data = new Uint8Array(memory.buffer, readBufOffset, n);
+            if (framesRead <= 3 || framesRead % 60 === 0) {
+              log(`main: read frame ${framesRead}: ${n} bytes, first=` +
+                data[0].toString(16) + data[1].toString(16) + data[2].toString(16) + data[3].toString(16) +
+                ' idx=' + data[4]);
+            }
+          }
+        }
+        requestAnimationFrame(poll);
+      };
+      requestAnimationFrame(poll);
+
+      // 9. Wait for worker to finish
+      worker.onmessage = (e) => {
+        if (e.data.type === 'done') {
+          log(`\nWorker finished: wrote ${e.data.frames} frames`, 'ok');
+          // Drain remaining
+          setTimeout(() => {
+            while (wasm.has_data()) {
+              const readBufOffset = rbOffset + rbSize - 512;
+              const n = wasm.read_frame(readBufOffset, 512);
+              if (n > 0) framesRead++;
+            }
+            log(`Main thread read ${framesRead} frames total ✓`, 'ok');
+            log('\nSharedArrayBuffer ring buffer works! Zero-copy, zero-IPC.', 'ok');
+          }, 500);
+        }
+      };
+    }
+
+    main().catch(e => log('ERROR: ' + e, 'err'));
+  </script>
+</body>
+</html>

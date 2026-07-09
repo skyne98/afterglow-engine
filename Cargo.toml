@@ -6,6 +6,7 @@ members = [
     "crates/afterglow-rpc",
     "crates/afterglow-rpc-macros",
     "crates/afterglow-rpc-demo",
+    "crates/afterglow-web",
     "crates/latency-tool",
     "xtask",
 ]
@@ -28,4 +29,13 @@ quote = "1"
 proc-macro2 = "1"
 
 [profile.release]
+opt-level = 2
+
+[profile.wasm-dev]
+inherits = "dev"
+panic = "abort"
+
+[profile.wasm-release]
+inherits = "release"
+panic = "abort"
 opt-level = 2

@@ -187,6 +187,11 @@ impl<'a> RingBuffer<'a> {
         self.write_idx.load(Ordering::Acquire) != self.read_idx.load(Ordering::Relaxed)
     }
 
+    /// Data area capacity (excluding the 12-byte header).
+    pub fn capacity(&self) -> u32 {
+        self.capacity
+    }
+
     // --- internal helpers ---
 
     fn write_bytes(&self, offset: usize, src: &[u8]) {

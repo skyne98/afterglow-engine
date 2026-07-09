@@ -85,6 +85,16 @@ wrap_resource_handler! {
             if let Some(r) = response {
                 r.set_mime_type(Some(&CefString::from(mime.as_str())));
                 r.set_status(200);
+                // COOP/COEP headers: required for SharedArrayBuffer support.
+                // On the web target, the server sets these; on the native
+                // (CEF) target, we set them here so afterglow:// pages get
+                // crossOriginIsolated = true.
+                let key1 = CefString::from("Cross-Origin-Opener-Policy");
+                let val1 = CefString::from("same-origin");
+                r.set_header_by_name(Some(&key1), Some(&val1), 1);
+                let key2 = CefString::from("Cross-Origin-Embedder-Policy");
+                let val2 = CefString::from("require-corp");
+                r.set_header_by_name(Some(&key2), Some(&val2), 1);
             }
             if let Some(rl) = response_length { *rl = -1; } // read until EOF
         }
