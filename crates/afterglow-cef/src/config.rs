@@ -99,6 +99,15 @@ impl AppBuilder {
         self
     }
 
+    /// Handle page->host RPC: `(request_string) -> response_string`.
+    /// The request is `service\0payload`; route to workers, return the response.
+    /// Must NOT spawn threads before CEF init (use lazy init inside the closure).
+    pub fn on_rpc(mut self, f: impl Fn(&str) -> String + Send + Sync + 'static) -> Self {
+        let arc: Arc<dyn Fn(&str) -> String + Send + Sync> = Arc::new(f);
+        crate::message_router::RPC_HANDLER.set(arc).ok();
+        self
+    }
+
     /// Configure and run the CEF message loop (blocks until the window closes).
     pub fn run(self) {
         crate::runtime::run(self.cfg);

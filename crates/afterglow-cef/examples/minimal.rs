@@ -5,7 +5,6 @@
 //!   nix-shell shell.nix --run "./target/debug/examples/minimal --ozone-platform=x11"
 
 use afterglow_cef::AppBuilder;
-use afterglow_rpc_demo::{spawn_worker, PhysicsWorker};
 use serde_json::{json, Value};
 
 const HTML: &[u8] = br#"<!DOCTYPE html>
@@ -21,42 +20,37 @@ canvas{display:block;width:100vw;height:100vh}</style></head>
 </div>
 <script src="/__afterglow_bootstrap.js"></script>
 <script>
-// Emulated Worker (native CEF) - postMessage/onmessage identical to a real Worker.
 const worker = new AfterglowWorker('Physics');
 worker.onmessage = (e) => { window.__last_resp = e.data; };
 
-// Helper: send a framed RPC request via postMessage, await the response.
 function rpc(service, payload) {
-  return new Promise((res, rej) => {
+  return new Promise((res) => {
     const orig = worker.onmessage;
-    worker.onmessage = (e) => {
-      worker.onmessage = orig;
-      res(e.data);
-    };
+    worker.onmessage = (e) => { worker.onmessage = orig; res(e.data); };
     worker.postMessage(service + '\u0000' + payload);
   });
 }
 
 document.getElementById('ping').onclick = async () => {
-  const resp = await rpc('Physics', 'ping');
+  const resp = await rpc('Physics', JSON.stringify({method:'ping',params:{n:42}}));
   document.getElementById('r').textContent = 'pong: ' + resp;
   console.log('pong: ' + resp);
 };
 
 document.getElementById('bench').onclick = async () => {
-  const N = 100;
+  const N = 50;
   const sizes = [0, 64, 256, 1024, 4096, 16384, 65536];
   let results = '';
-  for (const size of sizes) {
-    const payload = 'x'.repeat(size);
+  for (const sz of sizes) {
+    const payload = 'x'.repeat(sz);
     const t0 = performance.now();
     for (let i = 0; i < N; i++) {
       await rpc('bench', payload);
     }
     const dt = performance.now() - t0;
-    const latency = (dt / N).toFixed(2);
-    const throughput = size > 0 ? ((size * N * 2) / (dt / 1000) / 1024 / 1024).toFixed(1) + ' MB/s' : '-';
-    results += `${size}B: ${latency}ms/op ${throughput}\n`;
+    const lat = (dt / N).toFixed(2);
+    const tp = sz > 0 ? ((sz * N * 2) / (dt / 1000) / 1024 / 1024).toFixed(1) + ' MB/s' : '-';
+    results += sz + 'B: ' + lat + 'ms/op ' + tp + '\n';
   }
   document.getElementById('b').textContent = results;
   console.log('benchmark:\n' + results);
@@ -92,39 +86,28 @@ document.getElementById('bench').onclick = async () => {
 </script></body></html>"#;
 
 fn main() {
-    // Route page->host RPC messages. The page sends "service\0payload".
-    // (Worker thread spawning must happen AFTER CEF init — in on_context_initialized
-    // or lazily on first RPC — not here in main before execute_process.)
-    afterglow_cef::RPC_HANDLER.set(std::sync::Arc::new(|request: &str| {
-        // Split "service\0payload"
-        let (service, payload) = request.split_once('\u{0}').unwrap_or((request, ""));
-        match service {
-            "Physics" => {
-                // Route to the Physics worker via its channel (postcard-encoded).
-                // For now, the worker's step/apply_force take typed args; we use
-                // a simple JSON protocol for the page<->host framing.
-                let parsed: Value = serde_json::from_str(payload).unwrap_or(json!({}));
-                let method = parsed["method"].as_str().unwrap_or("");
-                if method == "ping" {
-                    serde_json::to_string(&json!({ "pong": parsed["params"] })).unwrap_or_default()
-                } else {
-                    serde_json::to_string(&json!({ "error": "unknown" })).unwrap_or_default()
-                }
-            }
-            "bench" => {
-                // Echo the payload back (for bandwidth/latency measurement).
-                payload.to_string()
-            }
-            _ => serde_json::to_string(&serde_json::json!({"error":"unknown"})).unwrap_or_default(),
-        }
-    }) as std::sync::Arc<dyn Fn(&str) -> String + Send + Sync>).ok();
-
     AppBuilder::new()
         .title("afterglow-cef minimal")
         .size(1280, 800)
         .devtools(9222)
         .root("/index.html")
         .asset("/index.html", "text/html", HTML)
+        .on_rpc(|request: &str| {
+            let (service, payload) = request.split_once('\u{0}').unwrap_or((request, ""));
+            match service {
+                "Physics" => {
+                    let parsed: Value = serde_json::from_str(payload).unwrap_or(json!({}));
+                    let method = parsed["method"].as_str().unwrap_or("");
+                    if method == "ping" {
+                        serde_json::to_string(&json!({ "pong": parsed["params"] })).unwrap_or_default()
+                    } else {
+                        serde_json::to_string(&json!({ "error": "unknown" })).unwrap_or_default()
+                    }
+                }
+                "bench" => payload.to_string(),
+                _ => serde_json::to_string(&json!({ "error": "unknown service" })).unwrap_or_default(),
+            }
+        })
         .on_invoke(|method: &str, params: Value| match method {
             "ping" => json!({ "pong": params }),
             _ => json!({ "error": format!("unknown method: {method}") }),
