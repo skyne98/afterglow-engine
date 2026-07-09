@@ -1,53 +1,63 @@
 # afterglow-web API — SharedArrayBuffer Ring Buffer
 
-> Status: **working** — verified end-to-end on CEF 149 (used as the browser),
-> with COOP/COEP headers enabling `SharedArrayBuffer` + `crossOriginIsolated`.
+> Status: **working** — verified on CEF 149 (native) and web browser.
 
 ## Overview
 
-Web target for afterglow-engine. Uses `SharedArrayBuffer`-backed shared wasm
-memory for zero-copy ring buffers between Web Workers and the main thread.
+The `afterglow-rpc::RingBuffer` is the single communication mechanism for
+website ↔ worker and worker ↔ worker. It operates on raw pointers + `AtomicU32`
+with `Acquire/Release` ordering. The backing store differs by target:
 
-**True zero-copy** — no IPC, no serialization, no copies. The `RingBuffer`
-from `afterglow-rpc` operates directly on shared memory using `AtomicU32`
-with `Acquire/Release` ordering.
+| Target | Worker type | Memory backing | Spawn mechanism |
+|--------|-------------|----------------|-----------------|
+| Native (CEF) | Native thread (`std::thread`) | Heap (`Arc<Vec<u8>>`) | `afterglow_rpc::native::spawn_worker` |
+| Web | Web Worker (wasm) | `SharedArrayBuffer` | `new Worker('worker.js')` |
 
-## Architecture
+Both use the same `RingBuffer::new()`, `write()`, `read()`, `has_data()` API.
+No IPC, no serialization per call — just atomic memory writes.
 
-```text
-Main thread (renderer):
-  JS creates WebAssembly.Memory({ shared: true })
-  JS instantiates wasm module with --import-memory
-  wasm.init_ring_buffer()
-  JS polls wasm.has_data() → wasm.read_frame()
-  ↑ shares the same SharedArrayBuffer-backed wasm memory
+## Native (CEF)
 
-Web Worker (physics):
-  Receives { module, memory } via postMessage
-  Instantiates the same module with the same shared memory
-  wasm.write_frame(data) → writes directly to shared memory
-  ↑ no IPC, no copy — just atomic memory writes
+Workers are **native threads** — real OS threads with full `std`, no wasm
+overhead. The ring buffer is in heap memory (`Arc<Vec<u8>>`), shared between
+threads via `Arc`. The `afterglow-rpc::native` module provides `spawn_worker`,
+`WorkerTransport`, and `run_worker_loop`.
+
+```
+Browser process:
+  ┌─────────────┐     heap ring buffer     ┌──────────────┐
+  │ Main thread │◄─── Arc<Vec<u8>> ──────►│ Worker thread │
+  └─────────────┘                          └──────────────┘
 ```
 
-## Native vs Web comparison
+The CEF shell (`afterglow-cef`) provides the window + WebGPU + scheme handler
++ COOP/COEP headers. It does NOT contain any worker or communication code —
+that's all in `afterglow-rpc`.
 
-| Aspect | Native (CEF) | Web (SharedArrayBuffer) |
-|--------|:---:|:---:|
-| Shared memory | `CefSharedMemoryRegion` (cross-process) | `SharedArrayBuffer` (cross-thread) |
-| V8 sandbox issue | ✗ blocks external ArrayBuffers → one copy | ✓ no issue — SAB is designed for sharing |
-| IPC per frame | yes (process message) | **none** — shared memory |
-| Copies per frame | 1 (memcpy ~20µs for 64KB) | **0** — true zero-copy |
-| Atomics | `std::sync::atomic` | `std::sync::atomic` (same) |
-| RingBuffer | same `afterglow-rpc::RingBuffer` | same |
+## Web
 
-## Build
+Workers are **Web Workers** running compiled wasm. The ring buffer is in
+`SharedArrayBuffer`-backed `WebAssembly.Memory`. JS creates the shared memory,
+instantiates the wasm module with `--import-memory`, and shares the module +
+memory with Web Workers via `postMessage`.
+
+```
+Renderer (same process):
+  ┌─────────────┐   SharedArrayBuffer    ┌──────────────┐
+  │ Main thread │◄── (wasm memory) ────►│ Web Worker    │
+  │ (JS/Three.js)│                      │ (wasm)       │
+  └─────────────┘                       └──────────────┘
+```
+
+## Build (web target)
 
 ```sh
-# The .cargo/config.toml at the workspace root sets:
-#   --import-memory  (module uses JS-provided shared memory)
-#   --shared-memory  (memory is a SharedArrayBuffer)
-#   --max-memory=64MiB
-#   +atomics,+bulk-memory,+mutable-globals
+# .cargo/config.toml at workspace root:
+# [target.wasm32-unknown-unknown]
+# rustflags = ['-C', 'target-feature=+atomics,+bulk-memory,+mutable-globals',
+#              '-C', 'link-arg=--import-memory',
+#              '-C', 'link-arg=--max-memory=67108864',
+#              '-C', 'link-arg=--shared-memory']
 
 cargo build -p afterglow-web \
   --target wasm32-unknown-unknown \
@@ -57,62 +67,19 @@ cargo build -p afterglow-web \
 
 ## Requirements
 
-- **COOP/COEP headers** — required for `SharedArrayBuffer`:
-  ```http
-  Cross-Origin-Opener-Policy: same-origin
-  Cross-Origin-Embedder-Policy: require-corp
-  ```
-  On native (CEF), these are set by the scheme handler (`resources.rs`).
-  On web, the web server must set them (see `examples/coep_server.rs`).
+- **COOP/COEP headers** — required for `SharedArrayBuffer` on web. On native
+  (CEF), set by the scheme handler in `afterglow-cef/src/resources.rs`.
+- **Shared `WebAssembly.Memory`** (web only) — JS must create the memory with
+  `shared: true` and pass it to the module as `env.memory`.
 
-- **Shared `WebAssembly.Memory`** — JS must create the memory with
-  `shared: true` and pass it to the module as `env.memory` (the module
-  is compiled with `--import-memory`).
-
-## Wasm exports
+## Wasm exports (web target)
 
 | Export | Purpose |
 |--------|---------|
-| `init_ring_buffer()` | Initialize the ring buffer header (call once) |
+| `init_ring_buffer()` | Initialize the ring buffer header |
 | `get_ring_buffer_ptr() -> usize` | Offset of ring buffer in wasm memory |
 | `get_ring_buffer_size() -> usize` | Total size (8 MiB) |
 | `ring_buffer_capacity() -> u32` | Data area capacity |
-| `write_frame(ptr, len) -> i32` | Write a frame (Web Worker side) |
+| `write_frame(ptr, len) -> i32` | Write a frame (worker side) |
 | `read_frame(ptr, max_len) -> i32` | Read a frame (main thread) |
 | `has_data() -> i32` | Non-blocking poll |
-| `read_header_cap() -> u32` | Diagnostic: read capacity from header |
-| `write_test_marker() -> u32` | Diagnostic: write test bytes |
-
-## JS interface
-
-```js
-// 1. Create shared memory
-const memory = new WebAssembly.Memory({
-  shared: true, initial: 256, maximum: 1024,
-});
-
-// 2. Instantiate the wasm module with the shared memory
-const instance = await WebAssembly.instantiate(module, { env: { memory } });
-const wasm = instance.exports;
-
-// 3. Initialize the ring buffer
-wasm.init_ring_buffer();
-const offset = wasm.get_ring_buffer_ptr();
-
-// 4. Share the module + memory with a Web Worker
-const worker = new Worker('worker.js');
-worker.postMessage({ type: 'init', module, memory });
-
-// 5. Poll for data on the main thread
-function poll() {
-  while (wasm.has_data()) {
-    const readBuf = offset + size - 512; // scratch area
-    const n = wasm.read_frame(readBuf, 512);
-    if (n > 0) {
-      const data = new Uint8Array(memory.buffer, readBuf, n);
-      // Use data for device.queue.write_buffer(), etc.
-    }
-  }
-  requestAnimationFrame(poll);
-}
-```
