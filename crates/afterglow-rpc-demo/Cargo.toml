@@ -6,6 +6,9 @@ license.workspace = true
 publish = false
 description = "afterglow-rpc demo: a Physics worker interface + round-trip test + schema dump"
 
+[lib]
+crate-type = ["cdylib", "rlib"]
+
 [dependencies]
 afterglow-rpc = { path = "../afterglow-rpc" }
 afterglow-rpc-macros = { path = "../afterglow-rpc-macros" }

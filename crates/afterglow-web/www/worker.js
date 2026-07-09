@@ -25,15 +25,15 @@ self.onmessage = async (e) => {
     const bytes = await fetch(e.data.wasmUrl).then(r => r.arrayBuffer());
     const module = await WebAssembly.compile(bytes);
 
-    // Own (non-shared) memory — allocations are isolated from the main thread
-    wasmMem = new WebAssembly.Memory({ initial: 256 });
+    // Own memory — shared:true to satisfy the module's --shared-memory flag,
+    // but this is the worker's PRIVATE memory (not shared with the main thread).
+    // Allocations inside serve are isolated — no allocator conflict.
+    wasmMem = new WebAssembly.Memory({ shared: true, initial: 256, maximum: 1024 });
     const instance = await WebAssembly.instantiate(module, { env: { memory: wasmMem } });
     wasm = instance.exports;
 
-    // Initialize the worker's ring buffers (these are in the worker's OWN memory,
-    // NOT the shared SAB — we don't use them, we use the SAB directly via JS)
-    // But init_ring_buffers also sets up the static state, so call it
-    if (wasm.init_ring_buffers) wasm.init_ring_buffers();
+    // Initialize the worker's server impl (calls wasm_init_worker internally)
+    if (wasm.wasm_init) wasm.wasm_init();
 
     self.postMessage({ type: 'ready' });
     return;
@@ -51,12 +51,12 @@ self.onmessage = async (e) => {
     // Main worker loop: read requests from SAB, call wasm_serve_frame, write responses
     const dataLen = bufSize - 12;
     const reqCap = new Uint32Array(sab, reqBase, 1)[0];
-    const reqW = new Uint32Array(sab, reqBase + 4, 1);
-    const reqR = new Uint32Array(sab, reqBase + 8, 1);
+    const reqW = new Int32Array(sab, reqBase + 4, 1);
+    const reqR = new Int32Array(sab, reqBase + 8, 1);
     const reqData = new Uint8Array(sab, reqBase + 12, dataLen);
 
-    const respW = new Uint32Array(sab, respBase + 4, 1);
-    const respR = new Uint32Array(sab, respBase + 8, 1);
+    const respW = new Int32Array(sab, respBase + 4, 1);
+    const respR = new Int32Array(sab, respBase + 8, 1);
     const respData = new Uint8Array(sab, respBase + 12, dataLen);
 
     // Scratch buffers in the worker's OWN wasm memory (for serve args + response)
@@ -72,8 +72,8 @@ self.onmessage = async (e) => {
       const w = Atomics.load(reqW, 0);
       const r = Atomics.load(reqR, 0);
       if (w === r) {
-        // No request — yield to event loop occasionally
-        await new Promise(resolve => setTimeout(resolve, 0));
+        // Block until the main thread writes (near-zero latency vs setTimeout's ~4ms)
+        Atomics.wait(reqW, 0, w);
         continue;
       }
 

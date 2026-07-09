@@ -115,3 +115,34 @@ nix-shell shell.nix --run "./target/debug/examples/minimal --ozone-platform=x11"
 # Input→present latency
 ./target/debug/latency-tool
 ```
+
+## Cross-Thread Worker (Web Worker + SAB, with Atomics.wait/notify)
+
+**Path**: Main thread → SharedArrayBuffer ring buffer → Web Worker (own wasm memory) → SAB → Main thread
+**Mechanism**: JS worker reads from SAB via `DataView` + `Atomics`, calls `wasm_serve_frame` in its own wasm instance (allocations safe — own heap), writes response back to SAB. Main thread notified via `Atomics.notify`.
+
+| f32 count | Payload | Latency | Bandwidth |
+|-----------|---------|---------|-----------|
+| 1 | 4 B | 31.7 µs | 0.2 MB/s |
+| 4 | 16 B | 15.8 µs | 1.9 MB/s |
+| 16 | 64 B | 20.7 µs | 5.9 MB/s |
+| 64 | 256 B | 48.6 µs | 10.0 MB/s |
+| 256 | 1 KB | 6.5 µs | 302.8 MB/s |
+| 1024 | 4 KB | 6.6 µs | 1183.7 MB/s |
+| 4096 | 16 KB | 9.1 µs | 3424.7 MB/s |
+| 16384 | 64 KB | 16.9 µs | 7418.4 MB/s |
+
+The worker has its OWN wasm memory — `serve`'s allocations (postcard decode/encode) are completely isolated. No allocator conflict. `Atomics.wait`/`notify` provides near-zero-latency wake-up (vs ~4ms with `setTimeout(0)`).
+
+### Comparison: Native vs Web Worker round-trip
+
+| Payload | Native | Web Worker |
+|---------|--------|------------|
+| 64 B | 0.3 µs | 20.7 µs |
+| 256 B | 1.0 µs | 48.6 µs |
+| 1 KB | 1.2 µs | 6.5 µs |
+| 4 KB | 1.1 µs | 6.6 µs |
+| 16 KB | 5.3 µs | 9.1 µs |
+| 64 KB | 10.1 µs | 16.9 µs |
+
+Native is ~2-70× faster for small payloads (OS thread wake-up is cheaper than Web Worker `Atomics.wait`). For large payloads (16KB+), the gap narrows to ~2× (memcpy dominates). Both are well within the 16.7ms frame budget.

@@ -30,6 +30,14 @@ impl PhysicsServer for PhysicsWorker {
     }
 }
 
+/// Web worker init: called by JS to initialize the server impl.
+/// The user writes this one-liner; the macro generates `wasm_init_worker` + `wasm_serve_frame`.
+#[cfg(target_arch = "wasm32")]
+#[unsafe(no_mangle)]
+pub extern "C" fn wasm_init() {
+    wasm_init_worker(Box::new(PhysicsWorker));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
