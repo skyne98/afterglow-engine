@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>afterglow wasm bench</title>
+<style>body{background:#0a0c10;color:#e5e7eb;font:13px/1.4 monospace;padding:12px}</style>
+</head><body>
+<h3>Web Worker + WASM RPC benchmark</h3>
+<button id="bench">Run benchmark</button>
+<pre id="r">...</pre>
+<script type="module">
+// Framing: [method_id u32 LE][args bytes] (matches afterglow-rpc::web::decode_frame)
+function frame(method, args) {
+  const f = new Uint8Array(4 + args.length);
+  f[0]=method&0xFF; f[1]=(method>>8)&0xFF; f[2]=(method>>16)&0xFF; f[3]=(method>>24)&0xFF;
+  f.set(args, 4);
+  return f;
+}
+
+// Simple postcard-compatible encoder: JSON as fallback (matches postcard.ts stub).
+function encode(v) { return new TextEncoder().encode(JSON.stringify(v)); }
+function decode(b) { return JSON.parse(new TextDecoder().decode(b)); }
+
+// WorkerTransport: postMessage + onmessage, typed.
+class WorkerTransport {
+  constructor(worker) {
+    this.worker = worker;
+    this.pending = null;
+    this.worker.onmessage = (e) => {
+      if (this.pending) { const p = this.pending; this.pending = null; p(new Uint8Array(e.data)); }
+    };
+  }
+  async call(service, method, args) {
+    const f = frame(method, args);
+    // Transfer the buffer (zero-copy)
+    return new Promise((res) => {
+      this.pending = res;
+      this.worker.postMessage(f.buffer, [f.buffer]);
+    });
+  }
+}
+
+document.getElementById('bench').onclick = async () => {
+  const worker = new Worker('./worker.js', { type: 'module' });
+  const t = new WorkerTransport(worker);
+  // PhysicsClient: step(state: number[], dt: number) -> number[] (method 0)
+  //                apply_force(body_id, fx, fy, fz) -> bool (method 1)
+  const physics = {
+    step: async (state, dt) => decode(await t.call('Physics', 0, encode([state, dt]))),
+    apply_force: async (id, fx, fy, fz) => decode(await t.call('Physics', 1, encode([id, fx, fy, fz]))),
+  };
+
+  let out = '';
+  // Functional test
+  const s = await physics.step([0, 1, 2], 0.5);
+  out += `step([0,1,2], 0.5) = ${JSON.stringify(s)}\n`;
+  const f = await physics.apply_force(3, 0, 9.8, 0);
+  out += `apply_force(3, 0, 9.8, 0) = ${f}\n`;
+
+  // Latency + bandwidth benchmark
+  const N = 100;
+  const sizes = [0, 64, 256, 1024, 4096, 16384, 65536];
+  out += '\n--- latency + bandwidth ---\n';
+  for (const sz of sizes) {
+    const payload = new Array(sz).fill(1);
+    const t0 = performance.now();
+    for (let i = 0; i < N; i++) {
+      // Use method 0 (step) with a large state array as the payload
+      await t.call('Physics', 0, encode([payload, 0.0]));
+    }
+    const dt = performance.now() - t0;
+    const lat = (dt / N).toFixed(2);
+    const tp = sz > 0 ? ((sz * N * 2) / (dt / 1000) / 1024 / 1024).toFixed(1) + ' MB/s' : '-';
+    out += `${sz}B: ${lat}ms/op  ${tp}\n`;
+  }
+
+  document.getElementById('r').textContent = out;
+  worker.terminate();
+};
+</script></body></html>
