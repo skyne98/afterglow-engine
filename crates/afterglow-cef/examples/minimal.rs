@@ -48,6 +48,8 @@ canvas{display:block;width:100vw;height:100vh}</style></head>
 const WEB_TEST_HTML: &[u8] = include_bytes!("../../afterglow-web/www/index.html");
 const WEB_TEST_WASM: &[u8] = include_bytes!("../../afterglow-web/www/afterglow_web.wasm");
 const WEB_TEST_WORKER: &[u8] = include_bytes!("../../afterglow-web/www/worker.js");
+const BENCH_HTML: &[u8] = include_bytes!("../../afterglow-web/www/bench.html");
+const BENCH_WORKER: &[u8] = include_bytes!("../../afterglow-web/www/bench_worker.js");
 
 fn main() {
     AppBuilder::new()
@@ -57,7 +59,10 @@ fn main() {
         .root("/index.html")
         .asset("/index.html", "text/html", HTML)
         .asset("/web-test.html", "text/html", WEB_TEST_HTML)
+        .asset("/bench.html", "text/html", BENCH_HTML)
         .asset("/afterglow_web.wasm", "application/wasm", WEB_TEST_WASM)
         .asset("/worker.js", "application/javascript", WEB_TEST_WORKER)
+        .asset("/bench_worker.js", "application/javascript", BENCH_WORKER)
         .run();
 }
+// force rebuild

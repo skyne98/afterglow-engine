@@ -4,133 +4,131 @@
 //! wasm memory for zero-copy ring buffers between Web Workers and the main
 //! thread.
 //!
-//! ## Architecture
+//! Two ring buffers (same as native `RingBufferTransport`):
+//! - **Request** (main→worker): main writes, worker reads.
+//! - **Response** (worker→main): worker writes, main reads.
 //!
-//! On the web target, JS creates a `WebAssembly.Memory({ shared: true })`,
-//! making the wasm linear memory a `SharedArrayBuffer`. Web Workers import
-//! the same module + memory, so all code operates on shared memory.
-//! `AtomicU32` with `Acquire/Release` ordering provides correct
-//! synchronization across threads.
+//! Both use `afterglow_rpc::RingBuffer` on raw pointers + `AtomicU32`.
 //!
-//! ## No wasm-bindgen
+//! ## Exports (all `#[no_mangle]`, no wasm-bindgen)
 //!
-//! This crate uses `#[no_mangle]` exports only — no wasm-bindgen dependency.
-//! JS creates the shared memory and instantiates the module manually. This
-//! gives full control over the memory (must be `shared: true` for
-//! `SharedArrayBuffer`).
+//! Request buffer (main→worker):
+//! - `write_frame(ptr, len)` — write a frame to the request buffer
+//! - `read_frame(ptr, max_len)` — read a frame from the request buffer
+//! - `has_data()` — poll the request buffer
 //!
-//! ## Exports
+//! Response buffer (worker→main):
+//! - `write_response(ptr, len)` — write a frame to the response buffer
+//! - `read_response(ptr, max_len)` — read a frame from the response buffer
+//! - `has_response()` — poll the response buffer
 //!
-//! - `get_ring_buffer_ptr() -> usize` — offset of the ring buffer in wasm memory
-//! - `get_ring_buffer_size() -> usize` — total size (including 12-byte header)
-//! - `ring_buffer_capacity() -> u32` — data area capacity
-//! - `write_frame(ptr: *const u8, len: usize) -> i32` — write a frame (worker side)
-//! - `read_frame(ptr: *mut u8, max_len: usize) -> i32` — read a frame (main thread)
-//! - `has_data() -> i32` — non-blocking poll
-//!
-//! ## Requirements
-//!
-//! - Compile: `RUSTFLAGS='-C target-feature=+atomics,+bulk-memory,+mutable-globals' cargo build --target wasm32-unknown-unknown -Zbuild-std=core,alloc,std,panic_abort`
-//! - Serve with COOP/COEP headers (for `SharedArrayBuffer` support)
+//! Setup:
+//! - `init_ring_buffers()` — initialize both headers
+//! - `get_request_ptr()` / `get_response_ptr()` — offsets in wasm memory
+//! - `get_buffer_size()` — total size per buffer
 
 use afterglow_rpc::RingBuffer;
 
-/// The ring buffer lives in a static allocation in wasm linear memory.
-/// When the `WebAssembly.Memory` is created with `shared: true`, this
-/// static is automatically a `SharedArrayBuffer` — visible to all Web
-/// Workers that share the memory.
-const RING_BUFFER_SIZE: usize = 8 * 1024 * 1024; // 8 MiB
-static mut RING_BUFFER: [u8; RING_BUFFER_SIZE] = [0; RING_BUFFER_SIZE];
+const BUFFER_SIZE: usize = 4 * 1024 * 1024; // 4 MiB per ring buffer
 
-/// Initialize the ring buffer header. Called once at startup.
+static mut REQUEST_BUFFER: [u8; BUFFER_SIZE] = [0; BUFFER_SIZE];
+static mut RESPONSE_BUFFER: [u8; BUFFER_SIZE] = [0; BUFFER_SIZE];
+
 #[unsafe(no_mangle)]
-pub extern "C" fn init_ring_buffer() {
+pub extern "C" fn init_ring_buffers() {
     unsafe {
-        let buf = &mut RING_BUFFER[..];
-        RingBuffer::init(buf);
+        RingBuffer::init(&mut REQUEST_BUFFER[..]);
+        RingBuffer::init(&mut RESPONSE_BUFFER[..]);
     }
 }
 
-/// Get the offset of the ring buffer within wasm linear memory.
-/// JS uses this to create `Uint8Array` / `DataView` views for direct access.
 #[unsafe(no_mangle)]
-pub extern "C" fn get_ring_buffer_ptr() -> usize {
-    unsafe { (&raw const RING_BUFFER).cast::<u8>() as usize }
+pub extern "C" fn get_request_ptr() -> usize {
+    unsafe { (&raw const REQUEST_BUFFER).cast::<u8>() as usize }
 }
 
-/// Total size of the ring buffer (including 12-byte header).
 #[unsafe(no_mangle)]
-pub extern "C" fn get_ring_buffer_size() -> usize {
-    RING_BUFFER_SIZE
+pub extern "C" fn get_response_ptr() -> usize {
+    unsafe { (&raw const RESPONSE_BUFFER).cast::<u8>() as usize }
 }
 
-/// Data area capacity (excluding header).
 #[unsafe(no_mangle)]
-pub extern "C" fn ring_buffer_capacity() -> u32 {
-    (RING_BUFFER_SIZE - 12) as u32
+pub extern "C" fn get_buffer_size() -> usize {
+    BUFFER_SIZE
 }
 
-/// Write a frame to the ring buffer. Called from a Web Worker (physics).
-/// Returns 0 on success, -1 if full.
+// --- Request buffer (main→worker) ---
+
 #[unsafe(no_mangle)]
 pub extern "C" fn write_frame(ptr: *const u8, len: usize) -> i32 {
     let data = unsafe { std::slice::from_raw_parts(ptr, len) };
-    let rb = ring_buffer();
-    match rb.write(data) {
+    match request_rb().write(data) {
         Ok(()) => 0,
-        Err(afterglow_rpc::RpcError::BufferFull) => -1,
-        Err(_) => -2,
-    }
-}
-
-/// Read the next frame from the ring buffer into the provided buffer.
-/// Called from the main thread (renderer).
-/// Returns the number of bytes read, or -1 if empty.
-#[unsafe(no_mangle)]
-pub extern "C" fn read_frame(ptr: *mut u8, max_len: usize) -> i32 {
-    let out = unsafe { std::slice::from_raw_parts_mut(ptr, max_len) };
-    let rb = ring_buffer();
-    match rb.read() {
-        Ok(data) => {
-            let n = data.len().min(max_len);
-            out[..n].copy_from_slice(&data[..n]);
-            n as i32
-        }
         Err(_) => -1,
     }
 }
 
-/// Non-blocking: is there data to read?
 #[unsafe(no_mangle)]
-pub extern "C" fn has_data() -> i32 {
-    let rb = ring_buffer();
-    if rb.has_data() { 1 } else { 0 }
-}
-
-/// Read the capacity field from the actual ring buffer header in memory.
-/// Used to verify that init_ring_buffer() actually wrote to the shared memory.
-#[unsafe(no_mangle)]
-pub extern "C" fn read_header_cap() -> u32 {
-    unsafe {
-        u32::from_le_bytes([
-            RING_BUFFER[0], RING_BUFFER[1], RING_BUFFER[2], RING_BUFFER[3],
-        ])
+pub extern "C" fn read_frame(ptr: *mut u8, max_len: usize) -> i32 {
+    let out = unsafe { std::slice::from_raw_parts_mut(ptr, max_len) };
+    match request_rb().read_into(out) {
+        Ok(n) => n as i32,
+        Err(_) => -1,
     }
 }
 
-/// Write a test marker to the ring buffer header and return it.
-/// JS can verify it reads the same value via DataView.
+#[unsafe(no_mangle)]
+pub extern "C" fn has_data() -> i32 {
+    if request_rb().has_data() { 1 } else { 0 }
+}
+
+// --- Response buffer (worker→main) ---
+
+#[unsafe(no_mangle)]
+pub extern "C" fn write_response(ptr: *const u8, len: usize) -> i32 {
+    let data = unsafe { std::slice::from_raw_parts(ptr, len) };
+    match response_rb().write(data) {
+        Ok(()) => 0,
+        Err(_) => -1,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn read_response(ptr: *mut u8, max_len: usize) -> i32 {
+    let out = unsafe { std::slice::from_raw_parts_mut(ptr, max_len) };
+    match response_rb().read_into(out) {
+        Ok(n) => n as i32,
+        Err(_) => -1,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn has_response() -> i32 {
+    if response_rb().has_data() { 1 } else { 0 }
+}
+
+// --- Diagnostic ---
+
+#[unsafe(no_mangle)]
+pub extern "C" fn read_header_cap() -> u32 {
+    request_rb().capacity()
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn write_test_marker() -> u32 {
     unsafe {
-        RING_BUFFER[0] = 0xDE;
-        RING_BUFFER[1] = 0xAD;
-        RING_BUFFER[2] = 0xBE;
-        RING_BUFFER[3] = 0xEF;
+        REQUEST_BUFFER[0] = 0xDE;
+        REQUEST_BUFFER[1] = 0xAD;
+        REQUEST_BUFFER[2] = 0xBE;
+        REQUEST_BUFFER[3] = 0xEF;
         u32::from_le_bytes([0xDE, 0xAD, 0xBE, 0xEF])
     }
 }
 
-fn ring_buffer<'a>() -> RingBuffer<'a> {
-    unsafe { RingBuffer::new(&RING_BUFFER[..]) }
+fn request_rb<'a>() -> RingBuffer<'a> {
+    unsafe { RingBuffer::new(&REQUEST_BUFFER[..]) }
+}
+
+fn response_rb<'a>() -> RingBuffer<'a> {
+    unsafe { RingBuffer::new(&RESPONSE_BUFFER[..]) }
 }

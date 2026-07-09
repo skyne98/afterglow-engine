@@ -182,6 +182,35 @@ impl<'a> RingBuffer<'a> {
         Ok(payload)
     }
 
+    /// Read the next frame directly into `out`. Returns the number of bytes
+    /// written, or `Err(BufferEmpty)`. No allocation — safe for multi-instance
+    /// shared wasm memory where allocators conflict.
+    pub fn read_into(&self, out: &mut [u8]) -> RpcResult<usize> {
+        let w = self.write_idx.load(Ordering::Acquire);
+        let r = self.read_idx.load(Ordering::Relaxed);
+        if w == r {
+            return Err(RpcError::BufferEmpty);
+        }
+
+        let data_len = self.capacity as usize;
+        let offset = (r as usize) % data_len;
+
+        // Read length prefix directly (no Vec allocation)
+        let mut len_bytes = [0u8; 4];
+        self.read_bytes_into(offset, &mut len_bytes);
+        let payload_len = u32::from_le_bytes(len_bytes) as usize;
+        let frame_len = 4 + payload_len as u32;
+
+        // Read payload directly into out (no allocation)
+        let n = payload_len.min(out.len());
+        let payload_offset = (offset + 4) % data_len;
+        self.read_bytes_into(payload_offset, &mut out[..n]);
+
+        // Consume (Release fence)
+        self.read_idx.store(r.wrapping_add(frame_len), Ordering::Release);
+        Ok(n)
+    }
+
     /// Non-blocking: is there data to read?
     pub fn has_data(&self) -> bool {
         self.write_idx.load(Ordering::Acquire) != self.read_idx.load(Ordering::Relaxed)
@@ -216,8 +245,14 @@ impl<'a> RingBuffer<'a> {
     }
 
     fn read_bytes(&self, offset: usize, len: usize) -> Vec<u8> {
-        let data_len = self.capacity as usize;
         let mut out = vec![0u8; len];
+        self.read_bytes_into(offset, &mut out);
+        out
+    }
+
+    fn read_bytes_into(&self, offset: usize, out: &mut [u8]) {
+        let data_len = self.capacity as usize;
+        let len = out.len();
         if offset + len <= data_len {
             unsafe {
                 std::ptr::copy_nonoverlapping(self.data.as_ptr().add(offset), out.as_mut_ptr(), len);
@@ -229,7 +264,6 @@ impl<'a> RingBuffer<'a> {
                 std::ptr::copy_nonoverlapping(self.data.as_ptr(), out.as_mut_ptr().add(first), len - first);
             }
         }
-        out
     }
 }
 
