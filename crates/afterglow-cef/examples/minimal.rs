@@ -56,15 +56,8 @@ document.getElementById('b').onclick = async () => {
 </script></body></html>"#;
 
 fn main() {
-    // Rust -> Web: emit a "tick" event every 500ms (after the browser is up).
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_secs(2));
-        for i in 0u32.. {
-            afterglow_cef::emit("tick", &format!(r#"{{"i":{i}}}"#));
-            std::thread::sleep(std::time::Duration::from_millis(500));
-        }
-    });
-
+    // (rust->web emit demo temporarily disabled: spawning a thread before
+    //  CEF's execute_process breaks child-process (GPU/renderer) launch.)
     AppBuilder::new()
         .title("afterglow-cef minimal")
         .size(1280, 800)

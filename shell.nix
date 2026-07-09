@@ -40,7 +40,10 @@ pkgs.mkShell {
     # init failures).
     export VK_ICD_FILENAMES="''${VK_ICD_FILENAMES:-/run/opengl-driver/share/vulkan/icd.d/nvidia_icd.json:/run/opengl-driver/share/vulkan/icd.d/radeon_icd.x86_64.json:/run/opengl-driver/share/vulkan/icd.d/intel_icd.x86_64.json}"
     export LD_LIBRARY_PATH="/run/opengl-driver/lib:$CEF_PATH:${pkgs.lib.makeLibraryPath cefRuntimeLibs}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-    echo "[afterglow-engine] devShell ready  CEF_PATH=$CEF_PATH"
+    # X11/XWayland display (the app runs --ozone-platform=x11). Xwayland is
+    # typically at :0 on a Wayland session; fall back to it if unset.
+    export DISPLAY="''${DISPLAY:-:0}"
+    echo "[afterglow-engine] devShell ready  CEF_PATH=$CEF_PATH  DISPLAY=$DISPLAY"
     echo "[afterglow-engine] tip: nix-shell shell.nix --run \"cargo ...\""
   '';
 }

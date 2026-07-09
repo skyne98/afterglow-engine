@@ -96,7 +96,7 @@ fn start_invoke_server() -> u16 {
 
             // CORS preflight
             if method == "OPTIONS" {
-                let _ = s.write_all(b"HTTP/1.1 204 No Content\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: content-type\r\nAccess-Control-Allow-Methods: POST, OPTIONS\r\nContent-Length: 0\r\n\r\n");
+                let _ = s.write_all(b"HTTP/1.1 204 No Content\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: content-type\r\nAccess-Control-Allow-Methods: POST, OPTIONS\r\nAccess-Control-Allow-Private-Network: true\r\nContent-Length: 0\r\n\r\n");
                 continue;
             }
             let body = req.split("\r\n\r\n").nth(1).unwrap_or("").as_bytes();
@@ -112,7 +112,7 @@ fn start_invoke_server() -> u16 {
                 b"{\"error\":\"not found\"}".to_vec()
             };
             let head = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: *\r\n\r\n",
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Private-Network: true\r\n\r\n",
                 resp_bytes.len()
             );
             let _ = s.write_all(head.as_bytes());
