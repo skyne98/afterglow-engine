@@ -18,34 +18,37 @@ process". Workers do computation; the website orchestrates and renders.
 ### Communication: one mechanism
 
 **`afterglow-rpc::RingBuffer`** — a lock-free SPSC ring buffer on raw pointers
-+ `AtomicU32` (Acquire/Release). Zero serialization, zero IPC per call. This is
-the ONLY communication mechanism for website↔worker and worker↔worker.
++ `AtomicU32` (Acquire/Release). It is the only **payload** communication
+mechanism for website↔worker and worker↔worker. RPC values use postcard;
+thread unparks and payload-free `postMessage` calls are wake-ups only.
 
-Two backends, same `RingBuffer`:
+Two backends, same framing and ring layout:
 
 | Target | Worker type | Memory backing | Crate |
 |--------|-------------|----------------|-------|
-| Native (CEF) | Native thread (`std::thread`) | Heap (`Arc<Vec<u8>>`) | `afterglow-rpc::native` |
+| Native (CEF) | Native thread (`std::thread`) | Compact aligned heap allocation shared internally by `Arc` | `afterglow-rpc::native` |
 | Web | Web Worker (wasm) | `SharedArrayBuffer` | `afterglow-web` |
 
 - **Native**: workers are real OS threads with full `std`, no wasm overhead.
-  `afterglow_rpc::native::spawn_worker` creates two ring buffers (`Arc<Vec<u8>>`),
-  spawns the worker thread, returns a client. `run_worker_loop` drains the
-  request ring buffer and writes responses.
-- **Web**: workers are Web Workers running compiled wasm. JS creates a
-  `SharedArrayBuffer`-backed `WebAssembly.Memory` (`shared: true`), instantiates
-  the wasm module with `--import-memory`, shares module+memory with Web Workers
-  via `postMessage`. The `RingBuffer` operates on the shared wasm memory.
+  The generated `Client::spawn_worker` creates request, response, and event
+  rings, spawns the worker thread, and returns a typed client + event receiver.
+  `run_worker_loop` drains requests and writes response envelopes.
+- **Web**: JS creates a `SharedArrayBuffer`-backed `WebAssembly.Memory`
+  (`shared: true`) and instantiates the page-side wasm with `--import-memory`.
+  It sends the SAB + ring offsets to a Web Worker. The service wasm in that
+  worker has separate memory; `worker.js` accesses the SAB rings with matching
+  Atomics/framing and copies arguments/results to/from the service wasm.
 
 ### Crate structure
 
 | Crate | Purpose |
 |-------|---------|
-| `afterglow-rpc` | Core: `RingBuffer`, `RingBufferTransport`, `Transport` trait, postcard codec, `#[rpc]` macro, schema. `native` module has `spawn_worker` + `run_worker_loop`. |
+| `afterglow-rpc` | Core: `RingBuffer`, `Transport` trait, postcard codec, response envelope, and schema types. `native` has `RingStorage`, `spawn_worker_loop`, `run_worker_loop`, and event rings. |
 | `afterglow-rpc-macros` | `#[rpc]` proc macro: generates server trait, client, dispatch, schema. |
 | `afterglow-rpc-demo` | Demo `Physics` service + `bench_rpc` stress test + `dump-schema` bin. |
-| `afterglow-web` | Wasm target: `#[no_mangle]` exports (`write_frame`, `read_frame`, `write_response`, `read_response`, `has_data`, `has_response`) on two static ring buffers in shared wasm memory. No wasm-bindgen. Includes `bench.html` (stress test) + `coep_server` example. |
-| `afterglow-cef` | Thin CEF shell: window + WebGPU flags + `afterglow://` scheme + COOP/COEP headers. No worker code, no IPC, no input. |
+| `afterglow-assets` | Shared asset-path/MIME helpers (`guess_mime`, `resolve`) for the CEF scheme handler and the web dev server. No deps, no file-content reads (resolution canonicalizes); the single security boundary for FS asset confinement. |
+| `afterglow-web` | Wasm target: `#[no_mangle]` exports (`write_frame`, `read_frame`, `write_response`, `read_response`, `has_data`, `has_response`) on two static ring buffers in shared wasm memory. No wasm-bindgen. Includes `bench.html` (stress test) + `coep_server` example (uses `afterglow-assets`). |
+| `afterglow-cef` | Thin CEF shell: window + WebGPU flags + `afterglow://` scheme (embedded-first / FS-fallback assets via `afterglow-assets`) + COOP/COEP headers. No worker code, no IPC, no input. |
 | `latency-tool` | CDP-based input→present latency measurement. |
 | `xtask` | Build orchestrator: `build`, `wasm`, `check`, `test`, `bench`. |
 
@@ -55,7 +58,7 @@ Thin wrapper — does NOT contain worker or communication code:
 - Windowed rendering (Views framework)
 - WebGPU + Vulkan forced on the real GPU
 - X11/XWayland (`--ozone-platform=x11`; Wayland+Vulkan incompatible in CEF 149)
-- `afterglow://local/` custom scheme (standard + secure + CORS + fetch + CSP-bypass)
+- `afterglow://local/` custom scheme (standard + secure + CORS + fetch + CSP-bypass) serving **embedded-first / FS-fallback assets via `afterglow-assets`** — no localhost HTTP server
 - **COOP/COEP headers** on the scheme handler — enables `SharedArrayBuffer`
 - DevTools on a port; JS console forwarded to a callback
 
@@ -184,10 +187,12 @@ CEF native path; the web `SharedArrayBuffer` path has no such issue.
   footprint (Minimal dist + strip + en-US locale ~80-110MB floor, can't
   feature-strip), debugging (remote-debugging-port + chrome://tracing +
   crashpad), cef-rs accelerated_osr zero-copy path.
-- `docs/research/performance-benchmarks.md` — Ring buffer stress test results:
-  native (heap + native threads) ~3µs/64B call, 73 MB/s (postcard limited);
-  web (SAB + Web Workers) ~5µs/64B, true zero-copy. Input→present 3.71ms
-  median @ 144fps. Run `cargo run --example bench_rpc -p afterglow-rpc-demo`.
+- `docs/research/performance-benchmarks.md` — Optimized communication results
+  (2026-07-10): 64B service RPC is 2.4µs native vs 10.9µs web; 64KiB
+  service RPC is 76.4µs / 1,636 MiB/s native vs 106.5µs / 1,174 MiB/s web.
+  The web worker has separate wasm memory, so calls copy SAB→worker wasm→SAB.
+  Historical input→present: 1.16ms median @ 144fps (not rerun). Run
+  `cargo run --release --example bench_rpc -p afterglow-rpc-demo`.
 - `docs/research/steam-overlay-cef.md` — How the Steam Overlay works (hooks
   Present/SwapBuffers/vkQueuePresentKHR in the game process), why it doesn't
   work with CEF multi-process GPU, and how to fix it (`--in-process-gpu` flag
@@ -199,5 +204,13 @@ CEF native path; the web `SharedArrayBuffer` path has no such issue.
 
 ## API docs
 
-- `docs/api/web-shared-memory.md` — `afterglow-web` wasm exports, JS interface,
-  build instructions, two-backend architecture (native heap + web SAB).
+- `docs/api/ring-buffer.md` — `afterglow-rpc` ring buffer + native transport
+  (SPSC framing, owned halves, worker transport, events, poison/timeout).
+- `docs/api/rpc-macro.md` — `afterglow-rpc-macros` `#[rpc]` attribute: server/
+  client/schema generation, native spawn + wasm exports, reserved names.
+- `docs/api/web-shared-memory.md` — `afterglow-web` wasm exports, JS client/
+  worker contract, build, and COOP/COEP headers.
+- `docs/api/assets.md` — `afterglow-assets` shared `guess_mime`/`resolve`:
+  path/MIME + canonical confinement for the CEF scheme and web dev server.
+- `docs/api/cef-shell.md` — `afterglow-cef` game-window shell: `AppBuilder`,
+  `afterglow://` scheme, WebGPU/X11 flags, COOP/COEP, console, startup caveat.

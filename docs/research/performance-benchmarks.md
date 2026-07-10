@@ -1,126 +1,130 @@
-# afterglow-engine Performance
+# afterglow-engine communication performance
 
-> Date: 2026-07-09
-> Hardware: NVIDIA Ampere (RTX 3070), NixOS Linux, X11/XWayland
-> CEF 149 (Chromium 149), Rust 1.98 nightly, wasm32 +atomics
+> Refreshed: 2026-07-10
+>
+> Host: AMD Ryzen 9 9950X3D (16C/32T), Linux 6.18.38, `powersave` governor
+> with normal boost, no CPU affinity
+>
+> Toolchain: Rust 1.98.0-nightly (2026-06-30), Chromium 150.0.7871.46
+>
+> Builds: native `release`; wasm `wasm-release` (`opt-level = 2`, shared-memory
+> atomics)
 
-## 1. Native Ring Buffer (threads + heap, 8 MiB, 2000 iterations)
+## Method
 
-### Main → Worker (write)
+- Service-RPC values are the **median of five independent run averages**;
+  raw-ring values are the median of three, all under low background load.
+- Service-RPC tests perform 100 warm-up calls followed by 1,000 measured calls
+  per payload. Immutable request bytes are encoded once before timing. Timed
+  work includes transport, worker dispatch, and caller result decode; every
+  result is validated outside the timer and was valid.
+- Native raw-ring tests use 10,000 operations per payload. Web local-ring tests
+  use 2,000 operations per payload after 1,000 warm-up iterations.
+- Bandwidth is binary MiB/s. End-to-end and round-trip bandwidth counts useful
+  payload in both directions (`2 × payload`), not framing/codec overhead.
+- Latency is round-trip wall time per call, not one-way latency.
 
-| Payload | Latency | Bandwidth |
-|---------|---------|-----------|
-| 64 B | 0.1 µs | 888 MB/s |
-| 256 B | 0.1 µs | 2,234 MB/s |
-| 1 KB | 0.1 µs | 9,116 MB/s |
-| 4 KB | 0.1 µs | 36,043 MB/s |
-| 16 KB | 1.0 µs | 16,286 MB/s |
-| 64 KB | 5.6 µs | 11,195 MB/s |
-| 256 KB | 22.6 µs | 11,043 MB/s |
-| 1 MB | 39.4 µs | 25,368 MB/s |
+## 1. End-to-end worker service RPC
 
-### Worker → Main (read)
+This is the most representative communication comparison. Both paths call
+`Physics::step(Vec<f32>, f32) -> Vec<f32>` with a pre-encoded immutable request.
+Timing includes request/response ring copies, worker-side postcard argument
+decode and result encode, the worker method, response-envelope decode, and
+caller result decode. Validation is outside the timer.
 
-| Payload | Latency | Bandwidth |
-|---------|---------|-----------|
-| 64 B | 0.2 µs | 353 MB/s |
-| 256 B | 0.3 µs | 859 MB/s |
-| 1 KB | 0.2 µs | 4,607 MB/s |
-| 4 KB | 0.5 µs | 7,829 MB/s |
-| 16 KB | 1.0 µs | 15,054 MB/s |
-| 64 KB | 1.5 µs | 41,510 MB/s |
-| 256 KB | 4.6 µs | 54,323 MB/s |
-| 1 MB | 19.8 µs | 50,619 MB/s |
+- **Native:** generated `PhysicsClient` → heap-backed rings → native worker
+  thread, with `park`/`unpark` wake-up.
+- **Web:** JS `Rpc` → shared wasm-memory rings → Web Worker, with payload-free
+  `postMessage` wake-up. The worker has separate wasm memory, so the path also
+  copies SAB → worker wasm → SAB.
 
-### Round-trip
+| Payload each way | Native latency | Native bandwidth | Web latency | Web bandwidth |
+|---:|---:|---:|---:|---:|
+| 4 B | 2.2 µs | 3.5 MiB/s | 11.7 µs | 0.7 MiB/s |
+| 16 B | 2.1 µs | 14.5 MiB/s | 11.4 µs | 2.7 MiB/s |
+| 64 B | 2.4 µs | 51.6 MiB/s | 10.9 µs | 11.2 MiB/s |
+| 256 B | 3.0 µs | 161.8 MiB/s | 11.4 µs | 42.7 MiB/s |
+| 1 KiB | 3.4 µs | 574.5 MiB/s | 14.4 µs | 135.8 MiB/s |
+| 4 KiB | 8.0 µs | 974.5 MiB/s | 16.9 µs | 462.0 MiB/s |
+| 16 KiB | 21.3 µs | 1,466.6 MiB/s | 34.6 µs | 903.8 MiB/s |
+| 64 KiB | 76.4 µs | 1,635.5 MiB/s | 106.5 µs | 1,174.0 MiB/s |
 
-| Payload | Latency | Bandwidth |
-|---------|---------|-----------|
-| 64 B | 0.9 µs | 65 MB/s |
-| 256 B | 1.0 µs | 249 MB/s |
-| 1 KB | 1.2 µs | 832 MB/s |
-| 4 KB | 2.3 µs | 1,710 MB/s |
-| 16 KB | 5.5 µs | 2,832 MB/s |
-| 64 KB | 5.2 µs | 11,953 MB/s |
-| 256 KB | 26.3 µs | 9,503 MB/s |
-| 1 MB | 73.5 µs | 13,605 MB/s |
+At 64 B, native is about **4.5× lower latency**. At 64 KiB, native is about
+**1.4× lower latency / higher useful bandwidth**. Small-payload results vary
+with scheduler wake-up noise, so medians are more meaningful than one run.
 
-## 2. Web SAB Ring Buffer (wasm, single-thread, 4 MiB, 200 iterations)
+The current demo worker emits a native event from `Physics::step`; wasm does
+not. Consequently this measures the current real behavior, but slightly
+understates native transport performance in a transport-only comparison.
 
-### Write (write+drain)
+## 2. Native raw ring baseline (cross-thread)
 
-| Payload | Latency | Bandwidth |
-|---------|---------|-----------|
-| 64 B | 1.0 µs | 60 MB/s |
-| 256 B | 0.9 µs | 279 MB/s |
-| 1 KB | 0.9 µs | 1,085 MB/s |
-| 4 KB | 1.1 µs | 3,720 MB/s |
-| 16 KB | 3.5 µs | 4,529 MB/s |
-| 64 KB | 2.5 µs | 24,510 MB/s |
-| 256 KB | 7.3 µs | 34,130 MB/s |
-| 1 MB | 31.6 µs | 31,671 MB/s |
+Main thread writes one heap-backed ring, a native thread echoes into a second,
+and main reads it. This omits postcard dispatch and the service workload.
 
-### Read (write+read)
+| Payload | Round-trip latency | Aggregate bandwidth |
+|---:|---:|---:|
+| 64 B | 0.2 µs | 569 MiB/s |
+| 256 B | 0.9 µs | 567 MiB/s |
+| 1 KiB | 1.1 µs | 1,857 MiB/s |
+| 4 KiB | 1.4 µs | 5,539 MiB/s |
+| 16 KiB | 2.2 µs | 14,334 MiB/s |
+| 64 KiB | 4.1 µs | 30,199 MiB/s |
+| 256 KiB | 14.9 µs | 33,670 MiB/s |
+| 1 MiB | 73.1 µs | 27,357 MiB/s |
 
-| Payload | Latency | Bandwidth |
-|---------|---------|-----------|
-| 64 B | 1.0 µs | 58 MB/s |
-| 256 B | 0.8 µs | 315 MB/s |
-| 1 KB | 1.0 µs | 977 MB/s |
-| 4 KB | 0.8 µs | 4,735 MB/s |
-| 16 KB | 1.3 µs | 12,500 MB/s |
-| 64 KB | 2.2 µs | 28,090 MB/s |
-| 256 KB | 6.1 µs | 40,650 MB/s |
-| 1 MB | 27.9 µs | 35,842 MB/s |
+Median peak directional throughput was approximately **50,496 MiB/s write**
+and **54,696 MiB/s read**. The raw test allocates a `Vec` on native reads, so
+it is a ring/allocator baseline rather than an allocation-free upper bound.
 
-### Round-trip
+## 3. Web local ring baseline (same thread; not worker RPC)
 
-| Payload | Latency | Bandwidth |
-|---------|---------|-----------|
-| 64 B | 1.4 µs | 86 MB/s |
-| 256 B | 1.6 µs | 310 MB/s |
-| 1 KB | 1.4 µs | 1,395 MB/s |
-| 4 KB | 1.6 µs | 5,040 MB/s |
-| 16 KB | 2.2 µs | 14,368 MB/s |
-| 64 KB | 4.4 µs | 28,571 MB/s |
-| 256 KB | 16.5 µs | 30,257 MB/s |
-| 1 MB | 57.3 µs | 34,935 MB/s |
+This test calls the optimized wasm ring exports locally. It measures ring
+framing/copies without worker scheduling, `postMessage`, postcard, or a service
+method. It is useful only as an upper bound on the primitive.
 
-## 3. Cross-Thread Worker (Web Worker + SAB, round-trip)
+| Payload | Round-trip latency | Aggregate bandwidth |
+|---:|---:|---:|
+| 64 B | 0.2 µs | 588 MiB/s |
+| 256 B | 0.2 µs | 2,537 MiB/s |
+| 1 KiB | 0.2 µs | 11,323 MiB/s |
+| 4 KiB | 0.3 µs | 29,206 MiB/s |
+| 16 KiB | 0.6 µs | 49,020 MiB/s |
+| 64 KiB | 3.3 µs | 37,341 MiB/s |
+| 256 KiB | 12.3 µs | 40,775 MiB/s |
 
-Main thread → SAB ring buffer → Web Worker (own wasm memory, wasm_serve_frame) → SAB → main thread.
+Median peak directional throughput was approximately **45,290 MiB/s write**
+and **53,879 MiB/s read**.
 
-| Payload | Latency | Bandwidth |
-|---------|---------|-----------|
-| 4 B | 1,054 µs | — |
-| 16 B | 1,038 µs | — |
-| 64 B | 1,040 µs | 0.1 MB/s |
-| 256 B | 1,072 µs | 0.5 MB/s |
-| 1 KB | 1,045 µs | 1.9 MB/s |
-| 4 KB | 1,044 µs | 7.5 MB/s |
-| 16 KB | 1,045 µs | 29.9 MB/s |
-| 64 KB | 1,057 µs | 118.3 MB/s |
+## Conclusions
 
-~1ms latency — dominated by the 1ms `Atomics.wait` poll timeout (the worker
-checks for requests every 1ms). When `AtomicU32::notify` stabilizes in Rust,
-this drops to ~50µs.
+1. The old ~1 ms web-worker result was caused by a 1 ms polling timeout. Small
+   web service round trips now take **~11 µs** with lossless `postMessage` wake-up.
+2. The ring primitive itself is not the web bottleneck: local aggregate
+   useful-payload throughput reaches **49,020 MiB/s (~47.9 GiB/s)**.
+   Service-RPC throughput reaches
+   **1,174 MiB/s** at 64 KiB each way despite separate worker wasm memory.
+3. Native service RPC is faster throughout, but the gap narrows as payloads
+   grow: roughly 4.5× at 64 B and 1.4× at 64 KiB.
 
-## 4. Input→Present (CDP tracing)
+## Reproduce
 
-| Stat | Value |
-|------|-------|
-| min | 0.01 ms |
-| median | 1.16 ms |
-| mean | 2.44 ms |
-| p90 | 5.02 ms |
-| max | 6.64 ms |
-| Present rate | 144 fps (6.95ms interval) |
+```sh
+# Native optimized benchmark
+cargo run --release --example bench_rpc -p afterglow-rpc-demo
 
-## Summary
+# Build optimized web artifacts
+cargo build -p afterglow-web --target wasm32-unknown-unknown \
+  -Zbuild-std=core,alloc,std,panic_abort --profile wasm-release
+cargo build -p afterglow-rpc-demo --target wasm32-unknown-unknown \
+  -Zbuild-std=core,alloc,std,panic_abort --profile wasm-release
 
-| Path | 64 B | 64 KB | 1 MB |
-|------|------|-------|------|
-| Native round-trip | 0.9 µs | 5.2 µs | 73.5 µs |
-| Web SAB round-trip | 1.4 µs | 4.4 µs | 57.3 µs |
-| Cross-thread worker | 1,040 µs | 1,057 µs | — |
-| Input→present | — | — | 1.16ms median @ 144fps |
+# Serve worker-bench.html and bench.html with COOP/COEP headers after placing
+# those release artifacts at afterglow_web.wasm and physics_worker.wasm.
+```
+
+## Historical input-to-present result (2026-07-09)
+
+This is retained for context and was **not** rerun during the communication
+refresh. On the prior RTX 3070 / CEF 149 setup: minimum 0.01 ms, median 1.16 ms,
+mean 2.44 ms, p90 5.02 ms, maximum 6.64 ms at a 144 fps present rate.

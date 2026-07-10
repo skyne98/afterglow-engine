@@ -63,7 +63,12 @@ fn run_main(main_args: &MainArgs, cmd_line: &CommandLine, sandbox_info: *mut u8)
         ..Default::default()
     };
     assert_eq!(
-        initialize(Some(main_args), Some(&settings), Some(&mut app), sandbox_info),
+        initialize(
+            Some(main_args),
+            Some(&settings),
+            Some(&mut app),
+            sandbox_info
+        ),
         1
     );
 
@@ -90,7 +95,11 @@ wrap_window_delegate! {
     impl WindowDelegate {
         fn on_window_created(&self, window: Option<&mut Window>) {
             let bv = self.browser_view.borrow();
+            let cfg = CONFIG.get().unwrap();
             let (Some(window), Some(bv)) = (window, bv.as_ref()) else { return };
+            if !cfg.title.is_empty() {
+                window.set_title(Some(&CefString::from(cfg.title.as_str())));
+            }
             let mut view = View::from(bv);
             window.add_child_view(Some(&mut view));
             window.show();
@@ -167,6 +176,14 @@ wrap_browser_process_handler! {
             debug_assert_ne!(currently_on(ThreadId::UI), 0);
 
             crate::resources::register_factory();
+
+            // Run the one-shot readiness callback (set via `AppBuilder::on_ready`)
+            // exactly once. This is the safe point to spawn native RPC worker
+            // threads: it necessarily runs after `execute_process` and CEF
+            // context initialization, on the browser-process UI thread, after
+            // the scheme factory is registered and before the browser view is
+            // created.
+            CONFIG.get().unwrap().run_ready();
 
             {
                 let mut client = self.client.borrow_mut();

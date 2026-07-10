@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/afterglow-assets",
     "crates/afterglow-cef",
     "crates/afterglow-rpc",
     "crates/afterglow-rpc-macros",

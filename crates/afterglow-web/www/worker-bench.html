@@ -1,117 +1,44 @@
 <!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Worker Benchmark</title>
-<style>body{background:#0a0c10;color:#e5e7eb;font:13px/1.4 ui-monospace,monospace;padding:16px}pre{white-space:pre}</style>
-</head><body><pre id="out"></pre>
+<style>body{background:#0a0c10;color:#e5e7eb;font:13px/1.4 ui-monospace,monospace;padding:16px}.ok{color:#34d399}.bad{color:#f87171}pre{white-space:pre-wrap}</style></head>
+<body><pre id="out"></pre>
 <script type="module">
+import { Rpc, concat, encodeF32Vec, encodeF32, decodeF32Vec } from './rpc.js';
 const out = document.getElementById('out');
-const p = m => { out.textContent += m + '\n'; console.log('[bench] ' + m); };
-const sleep = ms => new Promise(r => setTimeout(r, ms));
-
-async function main() {
-  p('=== Cross-Thread Worker Benchmark (Web Worker + SAB ring buffer) ===\n');
-
-  // Load the main thread wasm (ring buffer exports)
-  const mainBytes = await (await fetch('afterglow_web.wasm')).arrayBuffer();
-  const mainModule = await WebAssembly.compile(mainBytes);
-  const memory = new WebAssembly.Memory({ shared: true, initial: 256, maximum: 1024 });
-  const mainInst = await WebAssembly.instantiate(mainModule, { env: { memory, notify_worker: () => worker.postMessage('wake') } });
-  const wasm = mainInst.exports;
-  wasm.init_ring_buffers();
-
-  const reqPtr = wasm.get_request_ptr();
-  const respPtr = wasm.get_response_ptr();
-  const bufSize = wasm.get_buffer_size();
-  const free = respPtr + bufSize;
-  const scratch = free;      // scratch for writing request payloads
-  const readBuf = free + 1048576;  // read buffer for responses
-  p(`Ring buffers: req=${reqPtr} resp=${respPtr} size=${bufSize}`);
-
-  // Spawn the Web Worker (own wasm memory, calls wasm_serve_frame)
-  p('Spawning Web Worker...');
-  const worker = new Worker('worker.js');
-  worker.postMessage({
-    type: 'init',
-    sab: memory.buffer,
-    reqBase: reqPtr,
-    respBase: respPtr,
-    bufSize,
-    wasmUrl: 'physics_worker.wasm',  // the rpc-demo wasm (has wasm_serve_frame)
-  });
-  await new Promise(r => worker.onmessage = (e) => e.data.type === 'ready' && r());
-  p('Worker ready (own wasm memory, no allocator conflict)');
-
-  // Start the worker loop
-  worker.postMessage({ type: 'run' });
-
-  // The Physics trait: method 0 = step(state: Vec<f32>, dt: f32) -> Vec<f32>
-  // Frame format: [method:u32][postcard_encoded_args]
-  // We encode: method=0, args=postcard((Vec<f32>, f32))
-  // For simplicity, we'll use raw bytes that match the postcard encoding.
-
-  const SIZES = [1, 4, 16, 64, 256, 1024, 4096, 16384]; // f32 count
-  const N = 200;
-
-  p('--- Cross-thread round-trip: main → SAB → worker (serve) → SAB → main ---');
-  p('  f32 count   payload   latency   bandwidth');
-
-  for (const count of SIZES) {
-    // Build a postcard-encoded request: method=0 + postcard(Vec<f32>, f32)
-    // Postcard encoding of Vec<f32>: [varint len][f32 data...]
-    // Postcard encoding of f32: 4 bytes LE
-    const payloadBytes = 4 + 1 + count * 4 + 4; // method(4) + varint_len(1) + data + dt(4)
-    const dt = 0.016;
-
-    // Write the frame to the scratch area
-    const view = new Uint8Array(memory.buffer, scratch, payloadBytes);
-    const dv = new DataView(memory.buffer, scratch, payloadBytes);
-    let off = 0;
-    // method = 0
-    dv.setUint32(off, 0, true); off += 4;
-    // postcard varint for Vec length (count)
-    // Postcard varint: for values < 251, it's just the byte
-    dv.setUint8(off, count & 0xFF); off += 1; // simplified: works for count < 251
-    // f32 data
-    for (let i = 0; i < count; i++) {
-      dv.setFloat32(off, i * 1.0, true); off += 4;
-    }
-    // dt (f32)
-    dv.setFloat32(off, dt, true); off += 4;
-
-    const actualPayload = off;
-
-    // Benchmark: write request, wait for response
-    const t0 = performance.now();
-    let ok = 0;
-    for (let i = 0; i < N; i++) {
-      // Write request frame: [len:u32][payload]
-      while (wasm.write_frame(scratch, actualPayload) !== 0) {
-        // Buffer full — drain response if needed
-        if (wasm.has_response()) wasm.read_response(readBuf, 1048576);
-      }
-      // Notify the worker that a request is available (worker polls with 1ms timeout)
-      // No Atomics.notify needed — worker uses Atomics.wait(reqW, 0, w, 1)
-      // Wait for response
-      let waited = 0;
-      while (!wasm.has_response()) {
-        waited++;
-        if (waited > 1000000) break; // timeout
-      }
-      if (wasm.has_response()) {
-        wasm.read_response(readBuf, 1048576);
-        ok++;
-      }
-    }
-    const dt_ms = performance.now() - t0;
-    const latUs = ok > 0 ? (dt_ms * 1000) / ok : 0;
-    const bytes = count * 4;
-    const mbps = ok > 0 ? (bytes * ok * 2) / (dt_ms / 1000) / 1024 / 1024 : 0;
-    p(`  ${String(count).padStart(9)}  ${String(bytes).padStart(6)} B  ${latUs.toFixed(1).padStart(6)} µs  ${mbps.toFixed(1).padStart(8)} MB/s`);
-    await sleep(0);
+const p = m => { out.textContent += m + '\n'; };
+p('=== Cross-Thread Worker Benchmark (Web Worker + SAB ring) ===');
+p('Async notification latency is the honest cross-thread RPC metric.\n');
+const rpc = await Rpc.create({
+  mainWasmUrl: 'afterglow_web.wasm', workerJsUrl: 'worker.js', workerWasmUrl: 'physics_worker.wasm',
+});
+// Sizes include >127 (256/1024) to exercise 2-byte LEB128 lengths.
+const SIZES = [1, 4, 16, 64, 256, 1024, 4096, 16384], N = 1000, dt = 0.016;
+// The worker adds f32(dt) to each f32 element; validate against the f32-rounded
+// expected value (a plain double `input[j] + dt` rejects large magnitudes due
+// to f32 rounding, e.g. 4095.016 -> 4095.01611328125).
+const dtF = Math.fround(dt);
+// Warm the JS/Wasm/worker path before timing so the first payload does not
+// absorb tier-up and one-time message-loop costs.
+const warmupInput = Array.from({ length: 64 }, (_, i) => i);
+const warmupArgs = concat(encodeF32Vec(warmupInput), encodeF32(dt));
+for (let i = 0; i < 100; i++) decodeF32Vec(await rpc.call(0, warmupArgs));
+p('  f32 count   payload   latency    bandwidth    valid/total');
+for (const count of SIZES) {
+  const input = Array.from({ length: count }, (_, i) => i);
+  const args = concat(encodeF32Vec(input), encodeF32(dt));
+  let el = 0, ok = 0;
+  for (let i = 0; i < N; i++) {
+    // Match native: time transport, worker dispatch, and result decode. Validate
+    // every result outside the timer with allocation-free TypedArray.every().
+    const started = performance.now();
+    const vec = decodeF32Vec(await rpc.call(0, args));
+    el += performance.now() - started;
+    if (vec.length === count && vec.every((v, j) => Math.abs(v - Math.fround(input[j] + dtF)) < 1e-6)) ok++;
   }
-
-  p('\nDone. Worker terminated.');
-  worker.terminate();
+  const lat = el * 1000 / N;
+  const mbps = (count * 4 * N * 2) / (el / 1000) / 1048576; // round-trip = 2x
+  p(`  ${String(count).padStart(9)}  ${String(count * 4).padStart(6)} B  ${lat.toFixed(1).padStart(7)} µs  ${mbps.toFixed(1).padStart(8)} MiB/s  ${ok}/${N} ${ok === N ? 'OK' : 'PARTIAL'}`);
 }
-
-main().catch(e => p('ERROR: ' + e.message + '\n' + e.stack));
+rpc.terminate();
+p('\nDone.');
 </script></body></html>

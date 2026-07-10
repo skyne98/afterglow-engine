@@ -1,0 +1,246 @@
+# `afterglow-cef` API — game-window CEF shell
+
+> Status: working; API checked against the 2026-07-10 source.
+
+## Purpose
+
+`afterglow-cef` is a game-window-focused CEF ([cef-rs] / `tauri-apps/cef-rs`)
+wrapper. It configures CEF internally for the best game-window experience and
+serves engine assets **directly from embedded bytes and/or a filesystem root
+through a CEF custom scheme** — no localhost HTTP server, no network stack on
+the resource path (lower-latency native loads).
+
+[cef-rs]: https://github.com/tauri-apps/cef-rs
+
+What it sets up:
+
+- **Windowed** rendering (Views framework; lowest structural input→present
+  latency — no OSR texture copies).
+- **WebGPU + Vulkan on the real GPU**: `--enable-unsafe-webgpu`,
+  `--ignore-gpu-blocklist`, `--enable-features=Vulkan`, `--use-angle=vulkan`.
+- **X11/XWayland** (`--ozone-platform=x11`): Wayland+Vulkan is incompatible in
+  CEF 149 (native Wayland + WebGPU isn't available yet). Overridable via CLI.
+- **`afterglow://local/` custom scheme** (standard + secure + CORS + fetch +
+  CSP-bypass) serving embedded assets and/or files from a FS root directly
+  through CEF — ES-module Three.js and WebGPU both work, same-origin, no TCP
+  server.
+- **COOP/COEP headers** on the scheme handler so `SharedArrayBuffer` works.
+- **DevTools** behind a port flag; **JS console** forwarded to a callback.
+
+The minimal example (`crates/afterglow-cef/examples/minimal.rs`) serves the
+`afterglow-web` SharedArrayBuffer worker transport (`afterglow_web.wasm` +
+`physics_worker.wasm` + `worker.js` + `rpc.js`) over `afterglow://` — the same
+ring-buffer mechanism as the web target (see
+[`web-shared-memory.md`](web-shared-memory.md)). Native `#[rpc]` workers
+(`spawn_worker`) are an OS-thread option started safely from
+`AppBuilder::on_ready` (the readiness callback that fires once after CEF
+context init); see the startup caveat below and
+[`ring-buffer.md`](ring-buffer.md).
+
+## Public API
+
+The crate re-exports its public surface from `lib.rs`:
+
+```rust
+pub use config::{AppBuilder, Config, SCHEME, SCHEME_DOMAIN};
+pub fn root_url(path: &str) -> String;
+```
+
+Everything else (`runtime`, `flags`, `resources`, and the `GameApp` /
+`GameClient` / `AfterglowResource` / `AfterglowSchemeFactory` wrappers) is
+internal — driven by the process-global `Config` — and is documented as
+*behavior* below, not as API you call.
+
+### `AppBuilder`
+
+Builder for an afterglow-cef game window. `run` blocks until the window closes.
+
+```rust
+pub struct AppBuilder { /* private config */ }
+
+impl AppBuilder {
+    pub fn new() -> Self;
+    pub fn title(self, t: impl Into<String>) -> Self;
+    pub fn size(self, w: i32, h: i32) -> Self;
+    pub fn devtools(self, port: u16) -> Self;   // 0 = off
+    pub fn vsync(self, on: bool) -> Self;
+    pub fn root(self, path: impl Into<String>) -> Self;       // scheme path loaded on startup
+    pub fn asset(self, path: impl Into<String>, mime: impl Into<String>, bytes: &'static [u8]) -> Self;
+    pub fn fs_root(self, dir: impl Into<PathBuf>) -> Self;     // FS fallback for non-embedded paths
+    pub fn on_console(self, f: impl Fn(&str) + Send + Sync + 'static) -> Self;
+    pub fn on_ready(self, f: impl FnOnce() + Send + 'static) -> Self;  // one-shot readiness cb after CEF init
+    pub fn run(self);                                          // blocks until window closes
+}
+```
+
+Defaults:
+
+| Field | Default |
+|---|---|
+| `title` | `"afterglow"` |
+| `size` | `1280 × 800` |
+| `devtools` | `0` (off) |
+| `vsync` | `true` |
+| `root` | `"/index.html"` |
+| `asset` | none (empty embedded list) |
+| `fs_root` | `None` (embedded-only) |
+| `on_console` | `None` (console → stderr) |
+| `on_ready` | `None` (unset; no callback) |
+
+Minimal app (from `crates/afterglow-cef/examples/minimal.rs`):
+
+```rust
+use afterglow_cef::AppBuilder;
+
+AppBuilder::new()
+    .title("my game")
+    .size(1920, 1080)
+    .devtools(9222)                 // 0 = off
+    .root("/index.html")
+    .asset("/index.html", "text/html", include_bytes!("index.html"))
+    .run();
+```
+
+### `Config`
+
+```rust
+pub struct Config { /* built by AppBuilder; stored in a process-global OnceLock */ }
+```
+
+`Config` is re-exported but is the **resolved** configuration the runtime reads
+from a process-global `OnceLock`; build it with `AppBuilder`. Its `console` and
+`on_ready` callback fields are crate-private, so `Config` cannot be constructed
+via struct literal outside the crate (the `Default` impl exists but is not a
+supported entry point). `on_ready` is set only via `AppBuilder::on_ready` and
+consumed once by the runtime (see the startup caveat below). Public readable
+fields mirror the builder: `title`, `width`,
+`height`, `devtools_port` (`i32`, `0` = off), `vsync`, `root_path`,
+`embedded: Vec<(String, String, &'static [u8])>` (scheme-path, mime, bytes), and
+`fs_root: Option<PathBuf>`.
+
+### Constants and `root_url`
+
+```rust
+pub const SCHEME: &str = "afterglow";
+pub const SCHEME_DOMAIN: &str = "local";
+
+/// `afterglow://local/` + path; a missing leading slash is added.
+pub fn root_url(path: &str) -> String;
+```
+
+So `root_url("/index.html")` and `root_url("index.html")` both yield
+`afterglow://local/index.html`. The runtime loads `root_url(cfg.root_path)` on
+startup.
+
+## Resource serving (internal behavior)
+
+Resources are served through CEF's internal request routing on the
+`afterglow://local/` scheme — no localhost HTTP server. The `resources` module
+owns only the CEF-specific policy; path/MIME/status resolution is shared with
+the web dev server via [`afterglow-assets`](assets.md).
+
+**Scheme registration** (`on_register_custom_schemes`): `afterglow` is
+registered with flags `121` = `STANDARD(1) | SECURE(8) | CORS_ENABLED(16) |
+CSP_BYPASSING(32) | FETCH_ENABLED(64)`, so ES-module imports, WebGPU, fetch, and
+inline scripts work on `afterglow://` URLs. The factory is registered for
+`SCHEME` + `SCHEME_DOMAIN` on the browser-process UI thread
+(`on_context_initialized`).
+
+**Resolution policy** (`AfterglowResource::open`), per request:
+
+1. Strip `afterglow://local` + `?query` from the URL → `/foo/bar.js`.
+2. **Embedded-first**: if the path matches an `asset(..)` entry, serve its
+   bytes with its configured MIME (200).
+3. **FS fallback**: else if `fs_root` is set, delegate to
+   [`afterglow_assets::resolve`](assets.md) (lexically + canonically confined —
+   traversal/symlink escapes rejected) and `std::fs::read` the result; MIME from
+   [`afterglow_assets::guess_mime`](assets.md).
+4. Anything else (missing, escaped, unreadable, or no FS root) → `404 not found`
+   as `text/plain`. A malformed request (no `Request`) → `400 bad request`.
+
+Each response resets a single mutex-protected `ResponseState`
+(body/mime/status/offset) on `open`, so a reused handler can never leak a prior
+response. `read` copies body bytes with offset tracking; `cancel` is a no-op.
+
+## COOP/COEP (SharedArrayBuffer)
+
+`response_headers` sets, on every response:
+
+```http
+Cross-Origin-Opener-Policy: same-origin
+Cross-Origin-Embedder-Policy: require-corp
+```
+
+These are the two headers required for `self.crossOriginIsolated === true`,
+which enables `SharedArrayBuffer` on `afterglow://` pages. The web dev server
+(`coep_server`) sets the same two plus `Cross-Origin-Resource-Policy:
+same-origin` — see [`web-shared-memory.md`](web-shared-memory.md).
+
+## Console forwarding
+
+`on_console(f)` forwards every JS `console.*` message (as the rendered string)
+to `f`; the level, source, and line are currently dropped. If unset, messages
+go to stderr as `[console] <msg>`. This is the only JS→Rust callback the shell
+exposes today.
+
+## WebGPU / X11 constraints
+
+Flags are applied in `on_before_command_line_processing` (so they propagate to
+all child processes) and only added if not already present — **CLI flags win**,
+so `--ozone-platform=wayland` or `--disable-gpu-vsync` override the defaults.
+
+| Flag | Why |
+|---|---|
+| `--enable-unsafe-webgpu` | enable WebGPU |
+| `--ignore-gpu-blocklist` | use the real GPU even if "unsupported" |
+| `--enable-features=Vulkan` | Dawn → Vulkan backend |
+| `--use-angle=vulkan` | ANGLE over Vulkan |
+| `--ozone-platform=x11` | Wayland+Vulkan incompatible in CEF 149 → XWayland |
+| `--disable-gpu-vsync` | only when `vsync(false)` — smooth by default, opt-in uncapped |
+| `--disable-frame-rate-limit` | only when `vsync(false)` |
+
+See
+[`docs/research/cef-rs-webgpu-prototype-findings.md`](../research/cef-rs-webgpu-prototype-findings.md)
+and
+[`docs/research/cef-games-latency-footprint-debugging.md`](../research/cef-games-latency-footprint-debugging.md)
+for the empirical basis, and the debugging notes in
+[`AGENTS.md`](../../AGENTS.md) for `CEF_PATH` / `shell.nix` wiring.
+
+## Process / thread startup caveat
+
+`AppBuilder::run` sets the config, loads the CEF library, parses args, then
+calls `execute_process` (which forks CEF child processes) followed by
+`initialize` + `run_message_loop`. **Do not spawn OS threads before
+`execute_process` runs** — spawning threads before the GPU process is forked
+crashes it. The shell itself spawns no threads before that point.
+
+Consequence for native workers: a `#[rpc]` native worker
+(`PhysicsClient::spawn_worker`) creates an OS thread and must be started only
+after CEF context initialization (from the browser-process UI thread), never
+before `.run()`. Use `AppBuilder::on_ready` for this — it stores a one-shot
+`FnOnce() + Send + 'static` callback that the runtime invokes **exactly once**
+from `BrowserProcessHandler::on_context_initialized`, which necessarily runs
+after `execute_process` and CEF init.
+
+Startup ordering inside `on_context_initialized`:
+
+1. `resources::register_factory()` — the `afterglow://` scheme handler.
+2. `Config::run_ready()` — the `on_ready` callback, if set.
+3. Browser-view + top-level window creation.
+
+The callback runs on CEF's browser-process UI thread, so it must not block —
+spawn the worker and return; the worker runs on its own thread. Default is unset
+(`None`), in which case `run_ready` is a no-op. Calling `on_ready` again
+**replaces** any previously set callback (last wins; the replaced callback is
+dropped without running). The practical alternative — for page-driven workers
+without a native thread — is the `SharedArrayBuffer` web transport used by the
+minimal example; see [`web-shared-memory.md`](web-shared-memory.md).
+
+## Cross-links
+
+- [`assets.md`](assets.md) — `guess_mime` / `resolve`, the shared path/MIME
+  boundary the FS-fallback path delegates to.
+- [`web-shared-memory.md`](web-shared-memory.md) — the `SharedArrayBuffer`
+  worker transport served over `afterglow://`, and COOP/COEP.
+- [`ring-buffer.md`](ring-buffer.md) / [`rpc-macro.md`](rpc-macro.md) — native
+  worker transport and the `#[rpc]` macro (for the native-worker option).

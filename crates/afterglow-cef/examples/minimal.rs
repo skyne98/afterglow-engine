@@ -46,6 +46,7 @@ canvas{display:block;width:100vw;height:100vh}</style></head>
 
 // SAB ring buffer stress test page + wasm.
 const WORKER_TEST_HTML: &[u8] = include_bytes!("../../afterglow-web/www/worker-test.html");
+const RPC_JS: &[u8] = include_bytes!("../../afterglow-web/www/rpc.js");
 const WORKER_JS: &[u8] = include_bytes!("../../afterglow-web/www/worker.js");
 const WORKER_BENCH_HTML: &[u8] = include_bytes!("../../afterglow-web/www/worker-bench.html");
 const PHYSICS_WORKER_WASM: &[u8] = include_bytes!("../../afterglow-web/www/physics_worker.wasm");
@@ -60,9 +61,14 @@ fn main() {
         .root("/index.html")
         .asset("/index.html", "text/html", HTML)
         .asset("/worker-test.html", "text/html", WORKER_TEST_HTML)
+        .asset("/rpc.js", "text/javascript", RPC_JS)
         .asset("/worker.js", "application/javascript", WORKER_JS)
         .asset("/worker-bench.html", "text/html", WORKER_BENCH_HTML)
-        .asset("/physics_worker.wasm", "application/wasm", PHYSICS_WORKER_WASM)
+        .asset(
+            "/physics_worker.wasm",
+            "application/wasm",
+            PHYSICS_WORKER_WASM,
+        )
         .asset("/bench.html", "text/html", BENCH_HTML)
         .asset("/afterglow_web.wasm", "application/wasm", BENCH_WASM)
         .run();

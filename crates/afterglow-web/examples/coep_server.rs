@@ -1,62 +1,67 @@
-//! Simple HTTP server with COOP/COEP headers for SharedArrayBuffer support.
+//! Minimal COOP/COEP dev server for `afterglow-web`'s `www/` directory.
 //!
 //! ```sh
-//! cargo run --example coep_server
+//! cargo run -p afterglow-web --example coep_server
 //! ```
 //! Then open http://localhost:8787
+//!
+//! Each connection is served on its own thread with a read timeout, so an idle
+//! or early-disconnecting client cannot block the server. Writes never panic on
+//! `BrokenPipe` (a disconnecting client is normal). Path resolution rejects
+//! traversal and canonically confines existing files (symlinks cannot escape).
 
 use std::io::{Read, Write};
 use std::net::TcpListener;
+use std::path::Path;
+use std::time::Duration;
+
+use afterglow_web::dev_server::{CROSS_ORIGIN_HEADERS, handle_request};
 
 fn main() {
-    let listener = TcpListener::bind("127.0.0.1:8787").unwrap();
+    let www_dir = Path::new("crates/afterglow-web/www");
+    if !www_dir.exists() {
+        eprintln!(
+            "www dir not found at {} (run from the workspace root)",
+            www_dir.display()
+        );
+        std::process::exit(1);
+    }
+    let listener = TcpListener::bind("127.0.0.1:8787").expect("bind 127.0.0.1:8787");
     eprintln!("COOP/COEP server running on http://localhost:8787");
-    eprintln!("Serving from crates/afterglow-web/www/");
-
-    let www_dir = std::path::Path::new("crates/afterglow-web/www");
+    eprintln!("Serving from {}", www_dir.display());
 
     for stream in listener.incoming() {
-        let mut stream = stream.unwrap();
-        let mut buf = [0u8; 4096];
-        let n = stream.read(&mut buf).unwrap();
-        let request = String::from_utf8_lossy(&buf[..n]);
-        let path = request.lines().next().unwrap_or("");
-        // Parse: GET /path HTTP/1.1
-        let path = path.split_whitespace().nth(1).unwrap_or("/");
-
-        let file_path = if path == "/" {
-            www_dir.join("index.html")
-        } else {
-            www_dir.join(path.trim_start_matches('/'))
-        };
-
-        let (content_type, body) = if file_path.exists() {
-            let body = std::fs::read(&file_path).unwrap();
-            let ct = match file_path.extension().and_then(|e| e.to_str()) {
-                Some("html") => "text/html",
-                Some("js") => "application/javascript",
-                Some("wasm") => "application/wasm",
-                _ => "application/octet-stream",
+        let Ok(mut stream) = stream else { continue };
+        let root = www_dir.to_path_buf();
+        // Per-connection thread + read timeout: an idle client cannot block the
+        // accept loop or any other connection.
+        std::thread::spawn(move || {
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+            let mut buf = [0u8; 8192];
+            // Read the request; tolerate a clean EOF / timeout / early close.
+            let n = match stream.read(&mut buf) {
+                Ok(0) | Err(_) => return,
+                Ok(n) => n,
             };
-            (ct, body)
-        } else {
-            ("text/plain", b"Not Found".to_vec())
-        };
+            let request = String::from_utf8_lossy(&buf[..n]);
+            let resp = handle_request(&root, &request);
 
-        let status = if file_path.exists() { "200 OK" } else { "404 Not Found" };
+            let mut head = format!(
+                "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\n",
+                resp.status,
+                resp.reason,
+                resp.mime,
+                resp.body.len()
+            );
+            for (k, v) in CROSS_ORIGIN_HEADERS {
+                head.push_str(&format!("{k}: {v}\r\n"));
+            }
+            head.push_str("Connection: close\r\n\r\n");
 
-        let response = format!(
-            "HTTP/1.1 {status}\r\n\
-             Content-Type: {content_type}\r\n\
-             Content-Length: {len}\r\n\
-             Cross-Origin-Opener-Policy: same-origin\r\n\
-             Cross-Origin-Embedder-Policy: require-corp\r\n\
-             Cross-Origin-Resource-Policy: same-origin\r\n\
-             \r\n",
-            len = body.len(),
-        );
-
-        stream.write_all(response.as_bytes()).unwrap();
-        stream.write_all(&body).unwrap();
+            // Writes must not panic on BrokenPipe (client gone).
+            let _ = stream.write_all(head.as_bytes());
+            let _ = stream.write_all(&resp.body);
+            let _ = stream.flush();
+        });
     }
 }

@@ -15,16 +15,25 @@
 //!   in CEF 149. Overridable via CLI.
 //! - **`afterglow://local/` custom scheme** (standard + secure + CORS + fetch
 //!   + CSP-bypass) serving embedded assets and/or files from a FS root directly
-//!   through CEF — ES-module Three.js and WebGPU both work, same-origin, no TCP
-//!   server.
+//!     through CEF — ES-module Three.js and WebGPU both work, same-origin, no TCP
+//!     server.
 //! - **COOP/COEP headers** on the scheme handler so `SharedArrayBuffer` works
-//!   — workers and the main thread share memory via the same mechanism as the
-//!   web target (`afterglow-web`).
+//!   — web workers and the main thread can share memory the same way as on the
+//!   web target ([`afterglow-web`](../afterglow-web)).
 //! - **DevTools** behind a port flag; **JS console** forwarded to a callback.
 //!
-//! Workers and worker↔worker comms use `SharedArrayBuffer` ring buffers via
-//! the [`afterglow-web`](../afterglow-web) crate — same mechanism on native
-//! (CEF is Chromium) and web.
+//! ## Workers
+//!
+//! Two worker options, both built on `afterglow-rpc` ring buffers:
+//! - **Web workers** hosted by CEF (Chromium is the browser engine) communicate
+//!   over `SharedArrayBuffer` ring buffers via the
+//!   [`afterglow-web`](../afterglow-web) crate — the same mechanism and JS as
+//!   the web target.
+//! - **Native Rust workers** (`#[rpc]` + `spawn_worker`) run on real OS threads
+//!   via `afterglow-rpc::native` and are started from the safe readiness
+//!   callback [`AppBuilder::on_ready`], which fires once after CEF context
+//!   initialization (necessarily after `execute_process`). Spawning OS threads
+//!   before `execute_process` crashes the GPU process.
 //!
 //! [cef-rs]: https://github.com/tauri-apps/cef-rs
 
@@ -35,7 +44,13 @@ mod runtime;
 
 pub use config::{AppBuilder, Config, SCHEME, SCHEME_DOMAIN};
 
-/// `afterglow://local/` + a path, e.g. `root_url("/index.html")`.
+/// `afterglow://local/` + a path, e.g. `root_url("/index.html")`. A missing
+/// leading slash is added so `root_url("index.html")` is equivalent.
 pub fn root_url(path: &str) -> String {
-    format!("{SCHEME}://{SCHEME_DOMAIN}{path}")
+    let (sep, p) = if path.starts_with('/') {
+        ("", path)
+    } else {
+        ("/", path)
+    };
+    format!("{SCHEME}://{SCHEME_DOMAIN}{sep}{p}")
 }

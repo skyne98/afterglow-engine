@@ -1,87 +1,58 @@
 <!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>SAB Stress Test</title>
-<style>body{background:#0a0c10;color:#e5e7eb;font:13px/1.4 ui-monospace,monospace;padding:16px}pre{white-space:pre}</style>
-</head><body><pre id="out"></pre>
+<style>body{background:#0a0c10;color:#e5e7eb;font:13px/1.4 ui-monospace,monospace;padding:16px}pre{white-space:pre}</style></head>
+<body><pre id="out"></pre>
 <script type="module">
 const out = document.getElementById('out');
-const p = m => { out.textContent += m + '\n'; console.log('[bench] ' + m); };
+const p = m => { out.textContent += m + '\n'; };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
-
+p('=== Local same-thread ring-copy microbenchmark (NOT worker RPC) ===\n');
 try {
-  const bytes = await (await fetch('afterglow_web.wasm')).arrayBuffer();
-  const module = await WebAssembly.compile(bytes);
   const memory = new WebAssembly.Memory({ shared: true, initial: 256, maximum: 1024 });
-  const { exports: wasm } = await WebAssembly.instantiate(module, { env: { memory } });
+  const { exports: wasm } = await WebAssembly.instantiate(
+    await WebAssembly.compile(await (await fetch('afterglow_web.wasm')).arrayBuffer()),
+    { env: { memory, notify_worker: () => {} } },
+  );
   wasm.init_ring_buffers();
-
-  const reqPtr = wasm.get_request_ptr();
-  const respPtr = wasm.get_response_ptr();
-  const bufSize = wasm.get_buffer_size();
-  const free = respPtr + bufSize;
-  const scratch = free;
-  const readBuf = free + 1048576;
-
-  p(`SAB ring buffers: req=${reqPtr} resp=${respPtr} size=${bufSize}`);
-  p(`sanity: write=${wasm.write_frame(scratch, 64)} read=${wasm.read_frame(readBuf, 128)}\n`);
-
-  const SIZES = [64, 256, 1024, 4096, 16384, 65536, 262144, 1048576];
-  const N = 200;
-
-  // Direction 1: Write (write + drain on same thread)
-  p('--- Direction 1: Write (write+drain) ---');
-  p('  payload   latency   bandwidth');
+  const scratch = wasm.get_scratch_ptr(), scratchSize = wasm.get_scratch_size();
+  p(`scratch=${scratch} size=${scratchSize} ring=${wasm.get_buffer_size()}\n`);
+  // Warm tiered JS/Wasm code before measuring; 2000 iterations keeps the
+  // sub-microsecond cases above timer noise without making large copies slow.
+  new Uint8Array(memory.buffer, scratch, 64).fill(0x5A);
+  for (let i = 0; i < 1000; i++) {
+    wasm.write_frame(scratch, 64);
+    wasm.read_frame(scratch, 64);
+    wasm.write_response(scratch, 64);
+    wasm.read_response(scratch, 64);
+  }
+  const SIZES = [64, 256, 1024, 4096, 16384, 65536, 262144], N = 2000;
+  const report = (size, dt, factor) =>
+    p(`  ${String(size).padStart(6)} B  ${(dt * 1000 / N).toFixed(1).padStart(6)} us  ${(size * N * factor / (dt / 1000 || 1e-9) / 1048576).toFixed(1).padStart(8)} MiB/s`);
+  p('--- Direction 1: write + drain (request ring) ---\n  payload   latency   bandwidth');
   for (const size of SIZES) {
     new Uint8Array(memory.buffer, scratch, size).fill(0xAA);
     const t0 = performance.now();
-    let ok = 0;
-    for (let i = 0; i < N; i++) {
-      while (wasm.write_frame(scratch, size) !== 0) wasm.read_frame(readBuf, size + 64);
-      ok++;
-    }
-    while (wasm.has_data()) wasm.read_frame(readBuf, size + 64);
-    const dt = performance.now() - t0;
-    p(`  ${String(size).padStart(6)} B  ${(dt*1000/ok).toFixed(1).padStart(6)} us  ${(size*ok/(dt/1000)/1048576).toFixed(1).padStart(8)} MB/s`);
+    for (let i = 0; i < N; i++) while (wasm.write_frame(scratch, size) !== 0) wasm.read_frame(scratch, size + 64);
+    while (wasm.has_data()) wasm.read_frame(scratch, size + 64);
+    report(size, performance.now() - t0, 1);
     await sleep(0);
   }
-
-  // Direction 2: Read (write response + read response)
-  p('\n--- Direction 2: Read (write+read response) ---');
-  p('  payload   latency   bandwidth');
+  p('\n--- Direction 2: write + read response ---\n  payload   latency   bandwidth');
   for (const size of SIZES) {
     new Uint8Array(memory.buffer, scratch, size).fill(0xBB);
     const t0 = performance.now();
-    let ok = 0;
-    for (let i = 0; i < N; i++) {
-      while (wasm.write_response(scratch, size) !== 0) wasm.read_response(readBuf, size + 64);
-      wasm.read_response(readBuf, size + 64);
-      ok++;
-    }
-    const dt = performance.now() - t0;
-    p(`  ${String(size).padStart(6)} B  ${(dt*1000/ok).toFixed(1).padStart(6)} us  ${(size*ok/(dt/1000)/1048576).toFixed(1).padStart(8)} MB/s`);
+    for (let i = 0; i < N; i++) { while (wasm.write_response(scratch, size) !== 0) wasm.read_response(scratch, size + 64); wasm.read_response(scratch, size + 64); }
+    report(size, performance.now() - t0, 1);
     await sleep(0);
   }
-
-  // Round-trip (write request + read + write response + read response)
-  p('\n--- Round-trip ---');
-  p('  payload   latency   bandwidth');
+  p('\n--- Round-trip (request + response) ---\n  payload   latency   bandwidth');
   for (const size of SIZES) {
     new Uint8Array(memory.buffer, scratch, size).fill(0xCC);
     const t0 = performance.now();
-    let ok = 0;
-    for (let i = 0; i < N; i++) {
-      while (wasm.write_frame(scratch, size) !== 0) {}
-      wasm.read_frame(readBuf, size + 64);
-      while (wasm.write_response(readBuf, size) !== 0) {}
-      wasm.read_response(scratch, size + 64);
-      ok++;
-    }
-    const dt = performance.now() - t0;
-    p(`  ${String(size).padStart(6)} B  ${(dt*1000/ok).toFixed(1).padStart(6)} us  ${(size*ok*2/(dt/1000)/1048576).toFixed(1).padStart(8)} MB/s`);
+    for (let i = 0; i < N; i++) { while (wasm.write_frame(scratch, size) !== 0) {} wasm.read_frame(scratch, size + 64); while (wasm.write_response(scratch, size) !== 0) {} wasm.read_response(scratch, size + 64); }
+    report(size, performance.now() - t0, 2);
     await sleep(0);
   }
-
   p('\nDone');
-} catch(e) {
-  p('ERROR: ' + e.message + '\n' + e.stack);
-}
+} catch (e) { p('ERROR: ' + ((e && e.message) || e)); }
 </script></body></html>
