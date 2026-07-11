@@ -17,9 +17,15 @@ export function encodeVarint(n) {
   return b;
 }
 export function decodeVarint(bytes, off) {
-  let r = 0, s = 0, b;
-  do { b = bytes[off++]; r |= (b & 0x7f) << s; s += 7; } while (b & 0x80);
-  return [r >>> 0, off];
+  let r = 0;
+  for (let shift = 0; shift < 35; shift += 7) {
+    if (off >= bytes.length) throw new Error('postcard varint truncated');
+    const b = bytes[off++];
+    if (shift === 28 && (b & 0xf0)) throw new Error('postcard varint overflows u32');
+    r += (b & 0x7f) * 2 ** shift;
+    if (!(b & 0x80)) return [r >>> 0, off];
+  }
+  throw new Error('postcard varint overflows u32');
 }
 export function concat(...arrs) {
   const out = new Uint8Array(arrs.reduce((s, a) => s + a.length, 0));
@@ -42,6 +48,7 @@ export function encodeF32(x) {
 }
 export function decodeF32Vec(bytes) {
   const [n, off] = decodeVarint(bytes, 0);
+  if (n > Math.floor((bytes.length - off) / 4)) throw new Error('postcard f32 vector truncated');
   const out = new Float32Array(n);
   const dv = new DataView(bytes.buffer, bytes.byteOffset + off, n * 4);
   for (let i = 0; i < n; i++) out[i] = dv.getFloat32(i * 4, true);
@@ -53,7 +60,7 @@ export function decodeF32Vec(bytes) {
 //  Ok(payload)             = [0][varint len][bytes]
 //  Server{method,message} = [1][varint method][varint len][bytes]
 //  Decode{method,message} = [2][varint method][varint len][bytes]
-function unwrapResponse(bytes) {
+export function unwrapResponse(bytes) {
   const [variant, off] = decodeVarint(bytes, 0);
   if (variant === 0) {
     const [plen, poff] = decodeVarint(bytes, off);
@@ -72,7 +79,7 @@ export class Rpc {
   /// worker reports ready. `notify_worker` is wired to wake the worker.
   static async create({ mainWasmUrl, workerJsUrl, workerWasmUrl, timeoutMs }) {
     const memory = new WebAssembly.Memory({ shared: true, initial: 256, maximum: 1024 });
-    const worker = new Worker(workerJsUrl);
+    const worker = new Worker(workerJsUrl, { type: 'module' });
     let rpc = null;
     try {
       const { exports: wasm } = await WebAssembly.instantiate(

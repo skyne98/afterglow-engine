@@ -26,7 +26,6 @@ tungstenite = "0.24"
 ureq = { version = "2", features = ["json"] }
 syn = { version = "2", features = ["full"] }
 quote = "1"
-proc-macro2 = "1"
 
 [profile.release]
 opt-level = 2

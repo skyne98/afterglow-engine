@@ -162,40 +162,6 @@ pub unsafe extern "C" fn write_frame(ptr: *const u8, len: usize) -> i32 {
     }
 }
 
-/// Read one request frame into `out`. Returns the payload length (>=0), `-1` if
-/// empty, `-2` if `max_len` is too small (frame left for retry), `-3` corrupt.
-///
-/// # Safety
-/// `ptr` must point to `max_len` writable bytes.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn read_frame(ptr: *mut u8, max_len: usize) -> i32 {
-    // SAFETY: caller upholds `ptr` validity (see # Safety).
-    let out = unsafe { std::slice::from_raw_parts_mut(ptr, max_len) };
-    read_ring(&REQUEST_BUFFER, out)
-}
-
-/// Non-blocking: does the request ring have a frame?
-#[unsafe(no_mangle)]
-pub extern "C" fn has_data() -> i32 {
-    if rb(&REQUEST_BUFFER).has_data() { 1 } else { 0 }
-}
-
-/// Write a response frame `[len:u32][payload]` to the response ring. Returns `0`
-/// ok, `-1` full, `-3` corrupt.
-///
-/// # Safety
-/// `ptr` must point to `len` readable bytes in wasm linear memory.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn write_response(ptr: *const u8, len: usize) -> i32 {
-    // SAFETY: caller upholds `ptr` validity (see # Safety).
-    let data = unsafe { std::slice::from_raw_parts(ptr, len) };
-    match rb(&RESPONSE_BUFFER).write(data) {
-        Ok(()) => 0,
-        Err(RpcError::BufferFull) => -1,
-        Err(_) => -3,
-    }
-}
-
 /// Read one response frame into `out`. Returns the payload length (>=0), `-1` if
 /// empty, `-2` if `max_len` is too small (frame left for retry), `-3` corrupt.
 ///
@@ -206,14 +172,4 @@ pub unsafe extern "C" fn read_response(ptr: *mut u8, max_len: usize) -> i32 {
     // SAFETY: caller upholds `ptr` validity (see # Safety).
     let out = unsafe { std::slice::from_raw_parts_mut(ptr, max_len) };
     read_ring(&RESPONSE_BUFFER, out)
-}
-
-/// Non-blocking: does the response ring have a frame?
-#[unsafe(no_mangle)]
-pub extern "C" fn has_response() -> i32 {
-    if rb(&RESPONSE_BUFFER).has_data() {
-        1
-    } else {
-        0
-    }
 }

@@ -15,6 +15,7 @@ use std::net::TcpListener;
 use std::path::Path;
 use std::time::Duration;
 
+use afterglow_assets::AssetRoot;
 use afterglow_web::dev_server::{CROSS_ORIGIN_HEADERS, handle_request};
 
 fn main() {
@@ -26,13 +27,14 @@ fn main() {
         );
         std::process::exit(1);
     }
+    let root = AssetRoot::new(www_dir).expect("canonicalize www directory");
     let listener = TcpListener::bind("127.0.0.1:8787").expect("bind 127.0.0.1:8787");
     eprintln!("COOP/COEP server running on http://localhost:8787");
     eprintln!("Serving from {}", www_dir.display());
 
     for stream in listener.incoming() {
         let Ok(mut stream) = stream else { continue };
-        let root = www_dir.to_path_buf();
+        let root = root.clone();
         // Per-connection thread + read timeout: an idle client cannot block the
         // accept loop or any other connection.
         std::thread::spawn(move || {

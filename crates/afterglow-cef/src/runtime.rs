@@ -7,7 +7,7 @@ use crate::config::CONFIG;
 use crate::flags;
 
 /// Entry: set config, register the scheme, init CEF, run the message loop.
-pub fn run(cfg: crate::config::Config) {
+pub(crate) fn run(cfg: crate::config::Config) {
     if CONFIG.set(cfg).is_err() {
         panic!("afterglow-cef::run called twice");
     }
@@ -261,12 +261,14 @@ wrap_display_handler! {
         fn on_console_message(
             &self,
             _browser: Option<&mut Browser>,
-            _level: LogSeverity,
+            level: LogSeverity,
             message: Option<&CefString>,
-            _source: Option<&CefString>,
-            _line: ::std::os::raw::c_int,
+            source: Option<&CefString>,
+            line: ::std::os::raw::c_int,
         ) -> ::std::os::raw::c_int {
-            let msg = message.map(CefString::to_string).unwrap_or_default();
+            let message = message.map(CefString::to_string).unwrap_or_default();
+            let source = source.map(CefString::to_string).unwrap_or_default();
+            let msg = format!("[{level:?}] {source}:{line} {message}");
             if let Some(cb) = CONFIG.get().and_then(|c| c.console.as_ref()) {
                 cb(&msg);
             } else {

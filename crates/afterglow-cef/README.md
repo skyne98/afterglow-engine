@@ -30,7 +30,6 @@ same-origin secure context (modules + WebGPU both work).
 - **X11/XWayland** (`--ozone-platform=x11`): Wayland+Vulkan is incompatible in
   CEF 149. CLI-overridable.
 - **`afterglow://local/`** scheme serving embedded + FS assets directly.
-- **JS↔Rust invoke** bridge over the same scheme (`POST /__invoke`).
 - **DevTools** behind a port flag; **JS console** forwarded to a callback.
 - vsync on by default (smooth, monitor refresh rate); opt-in uncapped.
 
@@ -38,7 +37,6 @@ same-origin secure context (modules + WebGPU both work).
 
 ```rust
 use afterglow_cef::AppBuilder;
-use serde_json::{json, Value};
 
 AppBuilder::new()
     .title("my game")
@@ -48,21 +46,12 @@ AppBuilder::new()
     .asset("/index.html", "text/html", include_bytes!("../assets/index.html"))
     .asset("/three.webgpu.js", "text/javascript", include_bytes!("../assets/three.webgpu.js"))
     .fs_root("assets")              // serve other files straight from disk
-    .on_invoke(|method: &str, params: Value| match method {
-        "ping" => json!({ "pong": params }),
-        _ => json!({ "error": "unknown" }),
-    })
+    .on_console(|message| eprintln!("[js] {message}"))
     .run();
 ```
 
-In the page, include the invoke helper (`afterglow_cef::INVOKE_JS`):
-
-```html
-<script>/* paste INVOKE_JS here */</script>
-<script>
-  const out = await window.afterglow.invoke("ping", { n: 1 });
-</script>
-```
+Worker payloads use `afterglow-rpc` ring buffers. The shell intentionally has
+no second JS↔Rust invoke or IPC mechanism.
 
 ## Build & run (NixOS)
 

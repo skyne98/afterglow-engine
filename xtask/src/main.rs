@@ -23,7 +23,7 @@ fn main() {
         ),
         "wasm" => wasm(),
         "check" => sh("cargo", &["check", "--workspace"]),
-        "test" => sh("cargo", &["test", "--workspace"]),
+        "test" => test_all(),
         "bench" => sh(
             "cargo",
             &[
@@ -98,6 +98,17 @@ fn wasm() -> i32 {
     }
     eprintln!("wasm artifacts updated in {}", www.display());
     0
+}
+
+fn test_all() -> i32 {
+    let rust = sh("cargo", &["test", "--workspace"]);
+    if rust != 0 {
+        return rust;
+    }
+    sh(
+        "node",
+        &["--test", "crates/afterglow-web/tests/rpc.test.mjs"],
+    )
 }
 
 fn workspace_root() -> PathBuf {

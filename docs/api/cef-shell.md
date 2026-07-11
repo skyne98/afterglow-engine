@@ -42,7 +42,7 @@ context init); see the startup caveat below and
 The crate re-exports its public surface from `lib.rs`:
 
 ```rust
-pub use config::{AppBuilder, Config, SCHEME, SCHEME_DOMAIN};
+pub use config::{AppBuilder, SCHEME, SCHEME_DOMAIN};
 pub fn root_url(path: &str) -> String;
 ```
 
@@ -101,22 +101,9 @@ AppBuilder::new()
     .run();
 ```
 
-### `Config`
-
-```rust
-pub struct Config { /* built by AppBuilder; stored in a process-global OnceLock */ }
-```
-
-`Config` is re-exported but is the **resolved** configuration the runtime reads
-from a process-global `OnceLock`; build it with `AppBuilder`. Its `console` and
-`on_ready` callback fields are crate-private, so `Config` cannot be constructed
-via struct literal outside the crate (the `Default` impl exists but is not a
-supported entry point). `on_ready` is set only via `AppBuilder::on_ready` and
-consumed once by the runtime (see the startup caveat below). Public readable
-fields mirror the builder: `title`, `width`,
-`height`, `devtools_port` (`i32`, `0` = off), `vsync`, `root_path`,
-`embedded: Vec<(String, String, &'static [u8])>` (scheme-path, mime, bytes), and
-`fs_root: Option<PathBuf>`.
+The resolved `Config` is intentionally crate-private; `AppBuilder` is the only
+configuration API, preventing callers from constructing partially initialized
+runtime state.
 
 ### Constants and `root_url`
 
@@ -148,7 +135,7 @@ inline scripts work on `afterglow://` URLs. The factory is registered for
 
 **Resolution policy** (`AfterglowResource::open`), per request:
 
-1. Strip `afterglow://local` + `?query` from the URL → `/foo/bar.js`.
+1. Strip `afterglow://local` + `?query` and percent-decode the UTF-8 path.
 2. **Embedded-first**: if the path matches an `asset(..)` entry, serve its
    bytes with its configured MIME (200).
 3. **FS fallback**: else if `fs_root` is set, delegate to
@@ -169,19 +156,17 @@ response. `read` copies body bytes with offset tracking; `cancel` is a no-op.
 ```http
 Cross-Origin-Opener-Policy: same-origin
 Cross-Origin-Embedder-Policy: require-corp
+Cross-Origin-Resource-Policy: same-origin
 ```
 
-These are the two headers required for `self.crossOriginIsolated === true`,
-which enables `SharedArrayBuffer` on `afterglow://` pages. The web dev server
-(`coep_server`) sets the same two plus `Cross-Origin-Resource-Policy:
-same-origin` — see [`web-shared-memory.md`](web-shared-memory.md).
+These headers match the web dev server and enable `SharedArrayBuffer` on
+`afterglow://` pages.
 
 ## Console forwarding
 
-`on_console(f)` forwards every JS `console.*` message (as the rendered string)
-to `f`; the level, source, and line are currently dropped. If unset, messages
-go to stderr as `[console] <msg>`. This is the only JS→Rust callback the shell
-exposes today.
+`on_console(f)` forwards each JS console message formatted with severity,
+source, and line. If unset, messages go to stderr with a `[console]` prefix.
+This is the only JS→Rust callback the shell exposes today.
 
 ## WebGPU / X11 constraints
 

@@ -1,21 +1,21 @@
 // afterglow-web Web Worker. Has its OWN wasm memory (shared:true, separate
 // from the main thread's SAB). Reads requests from / writes responses to the
-// main SAB ring buffers via Atomics + byte-wise (wrap-safe) helpers. For each
-// request it copies args into the worker wasm input scratch (pointer/size from
-// exports, never hard-coded), calls `afterglow_wasm_serve_frame`, and copies
-// the response envelope into the SAB response ring.
+// main SAB ring buffers via Atomics + ring buffer wrap-safe helpers (imported
+// from ring-buf.js). For each request it copies args into the worker wasm
+// input scratch (pointer/size from exports, never hard-coded), calls
+// `afterglow_wasm_serve_frame`, and copies the response envelope into the SAB
+// response ring.
 //
 // Ring layout: [cap:u32][write_idx:u32][read_idx:u32][data...]. A frame in
-// data: [len:u32 LE][payload], payload = [method:u32 LE][args]. All u32 math
-// is unsigned (`>>> 0`); 4-byte reads/writes are wrap-safe (a frame may
-// straddle the data-area end). Wake state is lossless with no idle CPU spin:
-// the worker awaits a postMessage('wake') from the main thread; a wake that
-// arrives while not awaiting is recorded in `wakePending` and consumed next
-// iteration. A response wake is posted to main only AFTER the response ring
-// index is published, and carries no payload (the ring is the transport).
+// data: [len:u32 LE][payload], payload = [method:u32 LE][args]. All ring
+// accesses use the wrap-safe helpers from ring-buf.js. Wake state is lossless
+// with no idle CPU spin: the worker awaits a postMessage('wake') from the main
+// thread; a wake that arrives while not awaiting is recorded in `wakePending`
+// and consumed next iteration. A response wake is posted to main only AFTER
+// the response ring index is published, and carries no payload (the ring is
+// the transport).
 
-const HEADER = 12;          // RingHeader: capacity + write_idx + read_idx
-const U32 = 4;
+import { HEADER, U32, rdU32, wrU32, xfer } from './ring-buf.js';
 
 let state = 'init';         // 'init' -> 'ready' -> 'running'
 let sab = null;             // main thread's SharedArrayBuffer (its wasm memory)
@@ -60,33 +60,6 @@ async function initWorker(m) {
 function waitForWake() {
   if (wakePending) { wakePending = 0; return Promise.resolve(); }
   return new Promise(r => { wakeResolve = r; });
-}
-
-// Read 4 LE bytes at `off` (wrap-safe across the `cap`-byte data area).
-function rdU32(u8, off, cap) {
-  return (u8[off % cap]
-    | (u8[(off + 1) % cap] << 8)
-    | (u8[(off + 2) % cap] << 16)
-    | (u8[(off + 3) % cap] << 24)) >>> 0;
-}
-// Write 4 LE bytes of `val` at `off` (wrap-safe).
-function wrU32(u8, off, cap, val) {
-  u8[off % cap] = val & 0xff;
-  u8[(off + 1) % cap] = (val >>> 8) & 0xff;
-  u8[(off + 2) % cap] = (val >>> 16) & 0xff;
-  u8[(off + 3) % cap] = (val >>> 24) & 0xff;
-}
-// Copy `len` bytes between ring data `u8` (at `off`, wrapping at `cap`) and a
-// flat `buf`. mode 'rd': ring->buf, 'wr': buf->ring.
-function xfer(u8, off, cap, buf, len, mode) {
-  const o = off % cap, first = Math.min(len, cap - o);
-  if (mode === 'rd') {
-    buf.set(u8.subarray(o, o + first), 0);
-    if (first < len) buf.set(u8.subarray(0, len - first), first);
-  } else {
-    u8.set(buf.subarray(0, first), o);
-    if (first < len) u8.set(buf.subarray(first), 0);
-  }
 }
 
 async function runLoop() {

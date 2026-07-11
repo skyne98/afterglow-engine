@@ -4,7 +4,6 @@
 //!   `serve` fn, so two traits in one module don't collide).
 //! - `<Name>Client<T: Transport>` — a typed client with per-method wrappers
 //!   and a `transport(&self) -> &T` accessor (fields stay private).
-//! - `<NAME>_SCHEMA: &RpcSchema` — a service-prefixed schema static.
 //! - With `#[rpc(worker = Type)]`: `spawn_worker` (native) + the wasm exports
 //!   `afterglow_wasm_init` / `afterglow_wasm_serve_frame` (+ scratch ptr/size
 //!   exports) used by `afterglow-web`'s `worker.js`.
@@ -32,7 +31,7 @@
 //! `cdylib`. Multiple non-worker `#[rpc]` traits may coexist in one module.
 
 use proc_macro::TokenStream;
-use quote::{ToTokens, format_ident, quote};
+use quote::{format_ident, quote};
 use syn::{FnArg, Ident, ItemTrait, Pat, TraitItem, Type};
 
 /// Parsed `#[rpc]` attribute: empty or `worker = <Type>`.
@@ -79,24 +78,18 @@ pub fn rpc(attr: TokenStream, item: TokenStream) -> TokenStream {
     let name = &tr.ident;
     let server = format_ident!("{}Server", name);
     let client = format_ident!("{}Client", name);
-    let schema = format_ident!("{}_SCHEMA", name.to_string().to_uppercase());
-    let name_str = name.to_string();
-
     let mut sigs = Vec::new();
     let mut clients = Vec::new();
     let mut arms = Vec::new();
-    let mut methods = Vec::new();
 
     for (id, item) in tr.items.iter().enumerate() {
         let TraitItem::Fn(m) = item else { continue }; // validate_trait rejected the rest
         let sig = &m.sig;
         let mname = &sig.ident;
-        let mname_str = mname.to_string();
         let id_lit = id as u32;
 
         let mut pats = Vec::new();
         let mut tys = Vec::new();
-        let mut ppairs = Vec::new();
         for a in &sig.inputs {
             let FnArg::Typed(pt) = a else { continue }; // receivers rejected
             let Pat::Ident(pi) = &*pt.pat else { continue }; // idents only
@@ -104,23 +97,17 @@ pub fn rpc(attr: TokenStream, item: TokenStream) -> TokenStream {
             let ty = &pt.ty;
             pats.push(quote! { #pat });
             tys.push(quote! { #ty });
-            ppairs.push((
-                pat.to_string(),
-                ty.to_token_stream().to_string().replace(' ', ""),
-            ));
         }
         let ret: Type = match &sig.output {
             syn::ReturnType::Type(_, t) => (**t).clone(),
             _ => syn::parse_quote!(()),
         };
-        let ret_str = ret.to_token_stream().to_string().replace(' ', "");
-
         // Trailing commas force tuple semantics for the 1-param case (`(a,)`),
         // so single-arg methods round-trip like multi-arg ones.
         sigs.push(quote! { fn #mname(&mut self, #( #pats: #tys ),*) -> #ret; });
         clients.push(quote! {
             pub fn #mname(&self, #( #pats: #tys ),*) -> ::afterglow_rpc::RpcResult<#ret> {
-                let resp = self.t.call(#name_str, #id_lit, &::afterglow_rpc::encode(&(#( #pats, )*))?)?;
+                let resp = self.t.call(#id_lit, &::afterglow_rpc::encode(&(#( #pats, )*))?)?;
                 ::afterglow_rpc::decode(&resp)
             }
         });
@@ -129,10 +116,6 @@ pub fn rpc(attr: TokenStream, item: TokenStream) -> TokenStream {
                 let (#( #pats, )*): (#( #tys, )*) = ::afterglow_rpc::decode(args)?;
                 ::afterglow_rpc::encode(&self.#mname(#( #pats ),*))
             }
-        });
-        let pp = ppairs.iter().map(|(p, t)| quote! { (#p, #t) });
-        methods.push(quote! {
-            ::afterglow_rpc::RpcMethod { id: #id_lit, name: #mname_str, params: &[#( #pp ),*], returns: #ret_str }
         });
     }
 
@@ -160,17 +143,14 @@ pub fn rpc(attr: TokenStream, item: TokenStream) -> TokenStream {
                 #[cfg(target_arch = "wasm32")]
                 mod afterglow_wasm {
                     use super::{#server, #wt};
-                    use std::cell::{RefCell, UnsafeCell};
+                    use std::cell::RefCell;
+                    use ::afterglow_rpc::wasm::Scratch;
 
                     const IN_SIZE: usize = 1 << 20;
                     const OUT_SIZE: usize = 1 << 20;
 
-                    #[repr(C, align(4))]
-                    struct Scratch<const N: usize>(UnsafeCell<[u8; N]>);
-                    unsafe impl<const N: usize> Sync for Scratch<N> {}
-
-                    static INPUT: Scratch<{ IN_SIZE }> = Scratch(UnsafeCell::new([0; IN_SIZE]));
-                    static OUTPUT: Scratch<{ OUT_SIZE }> = Scratch(UnsafeCell::new([0; OUT_SIZE]));
+                    static INPUT: Scratch<{ IN_SIZE }> = Scratch::new();
+                    static OUTPUT: Scratch<{ OUT_SIZE }> = Scratch::new();
 
                     thread_local! {
                         static WORKER: RefCell<Option<Box<dyn #server>>> = const { RefCell::new(None) };
@@ -200,45 +180,27 @@ pub fn rpc(attr: TokenStream, item: TokenStream) -> TokenStream {
                         // SAFETY: caller upholds pointer validity (see # Safety).
                         let args = unsafe { std::slice::from_raw_parts(args_ptr, args_len) };
                         let out = unsafe { std::slice::from_raw_parts_mut(out_ptr, out_max) };
-                        // Always postcard-encode the `Response` envelope — success,
-                        // server/decode errors, and unit/zero-byte results alike.
-                        let env = WORKER.with(|w| match w.borrow_mut().as_deref_mut() {
-                            Some(s) => ::afterglow_rpc::make_response(method, s.serve(method, args)),
-                            None => ::afterglow_rpc::Response::Server {
-                                method,
-                                message: "wasm worker not initialized".into(),
-                            },
+                        let result = WORKER.with(|w| match w.borrow_mut().as_deref_mut() {
+                            Some(s) => s.serve(method, args),
+                            None => Err(::afterglow_rpc::RpcError::Server(
+                                "wasm worker not initialized".into(),
+                            )),
                         });
-                        // An oversized response is replaced with a tiny error envelope
-                        // (if even that can't fit `out`, e.g. out_max == 0, bail with -1).
-                        let bytes = match ::afterglow_rpc::encode(&env) {
-                            Ok(b) if b.len() <= out.len() => b,
-                            _ => match ::afterglow_rpc::encode(&::afterglow_rpc::Response::Server {
-                                method,
-                                message: "response too large".into(),
-                            }) {
-                                Ok(b) => b,
-                                Err(_) => return -1,
-                            },
-                        };
-                        let n = bytes.len();
-                        if n > out.len() { return -1; } // even the error envelope may not fit
-                        out[..n].copy_from_slice(&bytes);
-                        n as i32
+                        ::afterglow_rpc::wasm::write_response(method, result, out)
                     }
 
                     #[unsafe(no_mangle)]
                     pub extern "C" fn afterglow_wasm_input_ptr() -> usize {
-                        INPUT.0.get() as *const u8 as usize
+                        INPUT.ptr()
                     }
                     #[unsafe(no_mangle)]
-                    pub extern "C" fn afterglow_wasm_input_size() -> usize { IN_SIZE }
+                    pub extern "C" fn afterglow_wasm_input_size() -> usize { INPUT.size() }
                     #[unsafe(no_mangle)]
                     pub extern "C" fn afterglow_wasm_output_ptr() -> usize {
-                        OUTPUT.0.get() as *const u8 as usize
+                        OUTPUT.ptr()
                     }
                     #[unsafe(no_mangle)]
-                    pub extern "C" fn afterglow_wasm_output_size() -> usize { OUT_SIZE }
+                    pub extern "C" fn afterglow_wasm_output_size() -> usize { OUTPUT.size() }
                 }
             };
             (spawn, wasm)
@@ -266,11 +228,6 @@ pub fn rpc(attr: TokenStream, item: TokenStream) -> TokenStream {
             pub fn transport(&self) -> &T { &self.t }
             #( #clients )*
         }
-
-        #vis static #schema: &::afterglow_rpc::RpcSchema = &::afterglow_rpc::RpcSchema {
-            name: #name_str,
-            methods: &[#( #methods ),*],
-        };
 
         #spawn
         #wasm

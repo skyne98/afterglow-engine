@@ -1,7 +1,7 @@
 //! Demo worker interface: define the RPC once in Rust; the `#[rpc]` macro
 //! generates the server trait (with a provided `serve` dispatch), the Rust
-//! client, the `PHYSICS_SCHEMA` static, and (because `worker = PhysicsWorker`
-//! is given) the native `spawn_worker` + web wasm exports.
+//! client, and (because `worker = PhysicsWorker` is given) the native
+//! `spawn_worker` + web wasm exports.
 //!
 //! `#[rpc(worker = PhysicsWorker)]` tells the macro the concrete impl type.
 //! Methods are written without a receiver; the macro injects `&mut self` into
@@ -66,28 +66,17 @@ mod tests {
     fn unknown_method_returns_server_error() {
         let (client, _events) = PhysicsClient::spawn_worker(PhysicsWorker).unwrap();
         // Call an unknown method id (99) via the transport directly.
-        let err = client.transport().call("Physics", 99, &[]).unwrap_err();
+        let err = client.transport().call(99, &[]).unwrap_err();
         match err {
             afterglow_rpc::RpcError::Server(m) => assert_eq!(m, "unknown method"),
             other => panic!("expected Server(unknown method), got {other:?}"),
         }
     }
-
-    #[test]
-    fn schema_describes_methods() {
-        let s = PHYSICS_SCHEMA;
-        assert_eq!(s.name, "Physics");
-        assert_eq!(s.methods.len(), 2);
-        assert_eq!(s.methods[0].id, 0);
-        assert_eq!(s.methods[0].name, "step");
-        assert_eq!(s.methods[1].id, 1);
-        assert_eq!(s.methods[1].name, "apply_force");
-    }
 }
 
 /// Two non-worker `#[rpc]` traits in one module: proves the generated
-/// `<Name>Server`/`<Name>Client`/`<NAME>_SCHEMA` names coexist without
-/// collision, and that single-param (1-tuple) + unit/zero-byte results
+/// `<Name>Server`/`<Name>Client` names coexist without collision, and that
+/// single-param (1-tuple) + unit/zero-byte results
 /// round-trip through the real native worker loop. `#[cfg(test)]` so the
 /// wasm build (one worker service per cdylib) is unaffected.
 #[cfg(test)]
@@ -116,15 +105,12 @@ mod multi_trait {
     }
 
     #[test]
-    fn two_non_worker_traits_dispatch_and_schema() {
+    fn two_non_worker_traits_dispatch() {
         let (t, _) = spawn_worker_loop(FooImpl, 1 << 16, |s, m, a| s.serve(m, a)).unwrap();
         let foo = FooClient::new(t);
         assert_eq!(foo.echo("hi".into()).unwrap(), "hi!");
         let (t, _) = spawn_worker_loop(BarImpl, 1 << 16, |s, m, a| s.serve(m, a)).unwrap();
         let bar = BarClient::new(t);
         bar.log("x".into()).unwrap(); // unit/zero-byte result via the real envelope
-        assert_eq!(FOO_SCHEMA.name, "Foo");
-        assert_eq!(BAR_SCHEMA.name, "Bar");
-        assert_ne!(FOO_SCHEMA as *const _, BAR_SCHEMA as *const _);
     }
 }

@@ -42,7 +42,7 @@ mod flags;
 mod resources;
 mod runtime;
 
-pub use config::{AppBuilder, Config, SCHEME, SCHEME_DOMAIN};
+pub use config::{AppBuilder, SCHEME, SCHEME_DOMAIN};
 
 /// `afterglow://local/` + a path, e.g. `root_url("/index.html")`. A missing
 /// leading slash is added so `root_url("index.html")` is equivalent.

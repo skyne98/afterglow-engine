@@ -14,6 +14,7 @@
 //! escape, and unreadable path maps to `None` so
 //! callers can answer a uniform 404 without leaking which check failed.
 
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
 /// Guess a MIME type from a path's extension.
@@ -38,7 +39,63 @@ pub fn guess_mime(path: &str) -> &'static str {
     }
 }
 
+/// A canonical asset root. Construct it once and reuse it for requests, avoiding
+/// repeated root canonicalization while retaining symlink confinement.
+#[derive(Debug, Clone)]
+pub struct AssetRoot(PathBuf);
+
+impl AssetRoot {
+    /// Canonicalize an existing asset directory.
+    pub fn new(root: impl AsRef<Path>) -> Option<Self> {
+        root.as_ref().canonicalize().ok().map(Self)
+    }
+
+    /// Resolve a URL path beneath this root.
+    pub fn resolve(&self, url_path: &str) -> Option<PathBuf> {
+        resolve_canonical(&self.0, url_path)
+    }
+
+    pub fn as_path(&self) -> &Path {
+        &self.0
+    }
+}
+
+/// Percent-decode a URL path as UTF-8. Invalid escapes and invalid UTF-8 are
+/// rejected instead of being interpreted inconsistently by different backends.
+pub fn decode_url_path(path: &str) -> Option<Cow<'_, str>> {
+    if !path.as_bytes().contains(&b'%') {
+        return Some(Cow::Borrowed(path));
+    }
+    let bytes = path.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            let hi = hex(*bytes.get(i + 1)?)?;
+            let lo = hex(*bytes.get(i + 2)?)?;
+            out.push((hi << 4) | lo);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok().map(Cow::Owned)
+}
+
+fn hex(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
 /// Resolve a URL/scheme path beneath `root` into a canonical, confined path.
+///
+/// This convenience function canonicalizes `root` on each call. Request
+/// handlers should construct and reuse [`AssetRoot`] instead.
 ///
 /// This is the single security boundary for serving filesystem assets. It:
 ///
@@ -55,8 +112,13 @@ pub fn guess_mime(path: &str) -> &'static str {
 /// Returns the canonical, in-root [`PathBuf`] on success, else `None`. Reading
 /// the bytes is left to the caller; a successful result is guaranteed confined.
 pub fn resolve(root: &Path, url_path: &str) -> Option<PathBuf> {
+    AssetRoot::new(root)?.resolve(url_path)
+}
+
+fn resolve_canonical(root: &Path, url_path: &str) -> Option<PathBuf> {
     let path = url_path.split_once('?').map(|(p, _)| p).unwrap_or(url_path);
-    let rel = path.strip_prefix('/').unwrap_or(path);
+    let decoded = decode_url_path(path)?;
+    let rel = decoded.strip_prefix('/').unwrap_or(&decoded);
     let mut acc = PathBuf::new();
     for seg in rel.split(['/', '\\']) {
         match seg {
@@ -75,13 +137,10 @@ pub fn resolve(root: &Path, url_path: &str) -> Option<PathBuf> {
     confine(root, &root.join(acc))
 }
 
-/// Canonically confine `candidate` within `root`: both must canonicalize and
-/// `candidate` must stay within `root`, so symlinks cannot escape. Missing or
-/// unreadable paths fail canonicalize -> `None` (no content leak).
+/// Canonically confine `candidate` within an already-canonical `root`.
 fn confine(root: &Path, candidate: &Path) -> Option<PathBuf> {
-    let root_c = root.canonicalize().ok()?;
     let cand_c = candidate.canonicalize().ok()?;
-    cand_c.starts_with(root_c).then_some(cand_c)
+    cand_c.starts_with(root).then_some(cand_c)
 }
 
 #[cfg(test)]
@@ -137,6 +196,25 @@ mod tests {
         // case-insensitive extensions
         assert_eq!(guess_mime("UPPER.PNG"), "image/png");
         assert_eq!(guess_mime("Mixed.WaSm"), "application/wasm");
+    }
+
+    #[test]
+    fn decode_url_path_validates_escapes_and_utf8() {
+        assert_eq!(decode_url_path("a%20b.js").as_deref(), Some("a b.js"));
+        assert_eq!(decode_url_path("caf%C3%A9").as_deref(), Some("café"));
+        assert!(decode_url_path("bad%2").is_none());
+        assert!(decode_url_path("bad%zz").is_none());
+        assert!(decode_url_path("%ff").is_none());
+    }
+
+    #[test]
+    fn resolve_percent_encoded_file() {
+        let s = Scratch::new();
+        let root = s.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("a b.js"), b"hi").unwrap();
+        let want = root.canonicalize().unwrap().join("a b.js");
+        assert_eq!(resolve(&root, "/a%20b.js").as_deref(), Some(want.as_path()));
     }
 
     #[test]

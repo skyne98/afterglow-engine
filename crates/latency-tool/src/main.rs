@@ -18,6 +18,78 @@ use std::time::Duration;
 use tungstenite::Message;
 
 const N: usize = 12;
+type Ws = tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<std::net::TcpStream>>;
+
+struct Cdp {
+    ws: Ws,
+    next_id: u32,
+    session: String,
+}
+
+impl Cdp {
+    fn connect(addr: &str) -> Self {
+        let version: Value = ureq::get(&format!("http://{addr}/json/version"))
+            .timeout(Duration::from_secs(3))
+            .call()
+            .expect("GET /json/version")
+            .into_json()
+            .expect("parse version");
+        let ws_url = version["webSocketDebuggerUrl"]
+            .as_str()
+            .expect("webSocketDebuggerUrl");
+        eprintln!("browser ws: {ws_url}");
+        let (ws, _) = tungstenite::connect(ws_url).expect("ws connect");
+        let mut this = Self {
+            ws,
+            next_id: 0,
+            session: String::new(),
+        };
+        let targets = this.browser("Target.getTargets", json!({}));
+        let page = targets["result"]["targetInfos"]
+            .as_array()
+            .expect("targetInfos")
+            .iter()
+            .find(|t| t["type"].as_str() == Some("page"))
+            .expect("no page target");
+        let target_id = page["targetId"].as_str().expect("targetId").to_owned();
+        let attached = this.browser(
+            "Target.attachToTarget",
+            json!({ "targetId": target_id, "flatten": true }),
+        );
+        this.session = attached["result"]["sessionId"]
+            .as_str()
+            .expect("sessionId")
+            .to_owned();
+        eprintln!("session: {}", this.session);
+        this
+    }
+
+    fn id(&mut self) -> u32 {
+        self.next_id += 1;
+        self.next_id
+    }
+
+    fn browser(&mut self, method: &str, params: Value) -> Value {
+        let id = self.id();
+        self.ws
+            .send(Message::Text(
+                json!({ "id": id, "method": method, "params": params }).to_string(),
+            ))
+            .unwrap();
+        recv(&mut self.ws, id)
+    }
+
+    fn session(&mut self, method: &str, params: Value) -> Value {
+        let id = self.id();
+        self.ws
+            .send(Message::Text(
+                json!({ "id": id, "sessionId": self.session, "method": method, "params": params })
+                    .to_string(),
+            ))
+            .unwrap();
+        recv(&mut self.ws, id)
+    }
+}
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -33,40 +105,14 @@ fn main() {
             .get(3)
             .cloned()
             .unwrap_or_else(|| "127.0.0.1:9222".into());
-        let v: Value = ureq::get(&format!("http://{addr}/json/version"))
-            .call()
-            .expect("version")
-            .into_json()
-            .expect("json");
-        let (mut ws, _) =
-            tungstenite::connect(v["webSocketDebuggerUrl"].as_str().unwrap()).expect("ws");
-        let mut id = 0u32;
-        let mut nid = || {
-            id += 1;
-            id
-        };
-        let r = call_b(&mut ws, nid(), "Target.getTargets", json!({}));
-        let tgt = r["result"]["targetInfos"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|t| t["type"].as_str() == Some("page"))
-            .expect("page")
-            .clone();
-        let r = call_b(
-            &mut ws,
-            nid(),
-            "Target.attachToTarget",
-            json!({"targetId": tgt["targetId"], "flatten": true}),
-        );
-        let s = r["result"]["sessionId"].as_str().unwrap().to_string();
-        let _ = call_s(&mut ws, nid(), &s, "Network.enable", json!({}));
-        let _ = call_s(&mut ws, nid(), &s, "Page.enable", json!({}));
-        let r = call_s(&mut ws, nid(), &s, "Page.navigate", json!({"url": url}));
+        let mut cdp = Cdp::connect(&addr);
+        let _ = cdp.session("Network.enable", json!({}));
+        let _ = cdp.session("Page.enable", json!({}));
+        let r = cdp.session("Page.navigate", json!({"url": url}));
         println!("Page.navigate => {}", r["result"]);
         let deadline = std::time::Instant::now() + Duration::from_millis(2500);
         while std::time::Instant::now() < deadline {
-            let Ok(msg) = ws.read() else { break };
+            let Ok(msg) = cdp.ws.read() else { break };
             let Message::Text(t) = msg else { continue };
             let Ok(v) = serde_json::from_str::<Value>(&t) else {
                 continue;
@@ -96,47 +142,10 @@ fn main() {
         args.get(1).cloned()
     }
     .unwrap_or_else(|| "127.0.0.1:9222".into());
-    let v: Value = ureq::get(&format!("http://{addr}/json/version"))
-        .timeout(Duration::from_secs(3))
-        .call()
-        .expect("GET /json/version")
-        .into_json()
-        .expect("parse version");
-    let ws_url = v["webSocketDebuggerUrl"].as_str().unwrap().to_string();
-    eprintln!("browser ws: {ws_url}");
-
-    let (mut ws, _) = tungstenite::connect(&ws_url).expect("ws connect");
-    let mut id = 0u32;
-    let mut nid = || {
-        id += 1;
-        id
-    };
-
-    // Find + attach to the page target (CEF Views browsers aren't in /json/list).
-    let r = call_b(&mut ws, nid(), "Target.getTargets", json!({}));
-    let page = r["result"]["targetInfos"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|t| t["type"].as_str() == Some("page"))
-        .expect("no page target");
-    let target_id = page["targetId"].as_str().unwrap().to_string();
-    eprintln!("page target: {target_id}");
-
-    let r = call_b(
-        &mut ws,
-        nid(),
-        "Target.attachToTarget",
-        json!({ "targetId": target_id, "flatten": true }),
-    );
-    let session = r["result"]["sessionId"].as_str().unwrap().to_string();
-    eprintln!("session: {session}");
+    let mut cdp = Cdp::connect(&addr);
 
     if let Some(expr) = eval_expr {
-        let r = call_s(
-            &mut ws,
-            nid(),
-            &session,
+        let r = cdp.session(
             "Runtime.evaluate",
             json!({ "expression": expr, "returnByValue": true, "awaitPromise": true }),
         );
@@ -155,9 +164,7 @@ fn main() {
 
     // Start trace (compositor+gpu for SwapBuffers; blink for performance marks).
     let cats = "blink,cc,gpu,v8,benchmark,devtools.timeline,disabled-by-default-devtools.timeline,user_timing";
-    let _ = call_b(
-        &mut ws,
-        nid(),
+    let _ = cdp.browser(
         "Tracing.start",
         json!({ "traceConfig": { "includedCategories": cats.split(',').collect::<Vec<_>>() } }),
     );
@@ -168,19 +175,14 @@ fn main() {
     std::thread::sleep(Duration::from_millis(150));
     for i in 0..N {
         for kind in ["mouseMoved", "mousePressed", "mouseReleased"] {
-            let _ = call_s(
-                &mut ws,
-                nid(),
-                &session,
+            let _ = cdp.session(
                 "Input.dispatchMouseEvent",
                 json!({
                     "type": kind, "x": 640.0, "y": 400.0, "button": "left", "clickCount": 1
                 }),
             );
         }
-        let _ = call_b(
-            &mut ws,
-            nid(),
+        let _ = cdp.browser(
             "Tracing.recordClockSyncMarker",
             json!({ "syncId": format!("ag_{i}") }),
         );
@@ -189,14 +191,16 @@ fn main() {
     std::thread::sleep(Duration::from_millis(200));
 
     // End trace and drain.
-    ws.send(Message::Text(
-        json!({ "id": nid(), "method": "Tracing.end", "params": {} }).to_string(),
-    ))
-    .unwrap();
+    let end_id = cdp.id();
+    cdp.ws
+        .send(Message::Text(
+            json!({ "id": end_id, "method": "Tracing.end", "params": {} }).to_string(),
+        ))
+        .unwrap();
     let mut events: Vec<Value> = Vec::new();
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     while std::time::Instant::now() < deadline {
-        let Ok(msg) = ws.read() else { break };
+        let Ok(msg) = cdp.ws.read() else { break };
         let Message::Text(t) = msg else { continue };
         let Ok(v) = serde_json::from_str::<Value>(&t) else {
             continue;
@@ -213,20 +217,6 @@ fn main() {
     report(&events);
 }
 
-fn call_b(ws: &mut Ws, id: u32, method: &str, params: Value) -> Value {
-    ws.send(Message::Text(
-        json!({ "id": id, "method": method, "params": params }).to_string(),
-    ))
-    .unwrap();
-    recv(ws, id)
-}
-fn call_s(ws: &mut Ws, id: u32, session: &str, method: &str, params: Value) -> Value {
-    ws.send(Message::Text(
-        json!({ "id": id, "sessionId": session, "method": method, "params": params }).to_string(),
-    ))
-    .unwrap();
-    recv(ws, id)
-}
 fn recv(ws: &mut Ws, id: u32) -> Value {
     loop {
         let msg = ws.read().unwrap();
@@ -239,10 +229,15 @@ fn recv(ws: &mut Ws, id: u32) -> Value {
     }
 }
 
-type Ws = tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<std::net::TcpStream>>;
+fn is_input(name: &str) -> bool {
+    name == "EventDispatch"
+        || name.contains("MousePress")
+        || name.contains("MouseRelease")
+        || name.contains("MouseMove")
+        || name.contains("OnHandleInputEvent")
+}
 
-fn report(events: &[Value]) {
-    // Present signal: SkiaRenderer::SwapBuffers (the GPU-process swap = present).
+fn collect_samples(events: &[Value]) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
     let mut swaps: Vec<f64> = events
         .iter()
         .filter(|e| e["name"].as_str() == Some("SkiaRenderer::SwapBuffers"))
@@ -250,15 +245,6 @@ fn report(events: &[Value]) {
         .collect();
     swaps.sort_by(|a, b| a.partial_cmp(b).unwrap());
 
-    // Markers: the synthetic input events themselves (in trace clock). Use the
-    // blink mouse-handler / dispatch events as the input-arrival timestamps.
-    let is_input = |name: &str| {
-        name == "EventDispatch"
-            || name.contains("MousePress")
-            || name.contains("MouseRelease")
-            || name.contains("MouseMove")
-            || name.contains("OnHandleInputEvent")
-    };
     let mut markers: Vec<f64> = events
         .iter()
         .filter_map(|e| {
@@ -282,6 +268,11 @@ fn report(events: &[Value]) {
             samples.push((t1 - t0) / 1000.0); // µs -> ms
         }
     }
+    (markers, swaps, samples)
+}
+
+fn report(events: &[Value]) {
+    let (markers, swaps, samples) = collect_samples(events);
     eprintln!(
         "markers={} swaps={} samples={}",
         markers.len(),
@@ -364,5 +355,25 @@ fn report(events: &[Value]) {
             intervals[0],
             intervals[intervals.len() - 1]
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn trace_events_pair_each_input_burst_with_next_present() {
+        let events = vec![
+            json!({"name":"EventDispatch", "ts":1000.0}),
+            json!({"name":"MousePress", "ts":1100.0}),
+            json!({"name":"SkiaRenderer::SwapBuffers", "ts":2500.0}),
+            json!({"name":"MouseMove", "ts":4000.0}),
+            json!({"name":"SkiaRenderer::SwapBuffers", "ts":7000.0}),
+        ];
+        let (markers, swaps, samples) = collect_samples(&events);
+        assert_eq!(markers.len(), 3);
+        assert_eq!(swaps, vec![2500.0, 7000.0]);
+        assert_eq!(samples, vec![1.5, 3.0]);
     }
 }

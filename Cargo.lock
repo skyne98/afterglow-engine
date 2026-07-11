@@ -26,7 +26,6 @@ version = "0.1.0"
 dependencies = [
  "postcard",
  "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -35,15 +34,12 @@ version = "0.1.0"
 dependencies = [
  "afterglow-rpc",
  "afterglow-rpc-macros",
- "serde",
- "serde_json",
 ]
 
 [[package]]
 name = "afterglow-rpc-macros"
 version = "0.1.0"
 dependencies = [
- "proc-macro2",
  "quote",
  "syn",
 ]

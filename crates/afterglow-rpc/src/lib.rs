@@ -22,7 +22,7 @@
 //!
 //! Interfaces are defined once in Rust; the `afterglow-rpc-macros` `#[rpc]`
 //! macro generates the server trait (with a provided `serve` dispatch), the
-//! typed Rust client, and the schema.
+//! typed Rust client.
 
 use std::cell::Cell;
 use std::marker::PhantomData;
@@ -30,6 +30,56 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod native;
+
+/// Shared support for the thin service ABI emitted by `#[rpc(worker = ...)]`.
+#[cfg(target_arch = "wasm32")]
+pub mod wasm {
+    use std::cell::UnsafeCell;
+
+    use crate::{Response, RpcResult, encode, make_response};
+
+    /// Fixed scratch storage whose address is exported to the JS worker.
+    #[repr(C, align(4))]
+    pub struct Scratch<const N: usize>(UnsafeCell<[u8; N]>);
+    // SAFETY: one worker instance accesses each scratch region synchronously.
+    unsafe impl<const N: usize> Sync for Scratch<N> {}
+
+    impl<const N: usize> Default for Scratch<N> {
+        fn default() -> Self {
+            Self(UnsafeCell::new([0; N]))
+        }
+    }
+
+    impl<const N: usize> Scratch<N> {
+        pub const fn new() -> Self {
+            Self(UnsafeCell::new([0; N]))
+        }
+        pub fn ptr(&self) -> usize {
+            self.0.get().cast::<u8>() as usize
+        }
+        pub const fn size(&self) -> usize {
+            N
+        }
+    }
+
+    /// Encode a service result as a response envelope into `out`. Oversized
+    /// responses are replaced by a compact error envelope.
+    pub fn write_response(method: u32, result: RpcResult<Vec<u8>>, out: &mut [u8]) -> i32 {
+        let env = make_response(method, result);
+        let bytes = match encode(&env) {
+            Ok(bytes) if bytes.len() <= out.len() => bytes,
+            _ => match encode(&Response::Server {
+                method,
+                message: "response too large".into(),
+            }) {
+                Ok(bytes) if bytes.len() <= out.len() => bytes,
+                _ => return -1,
+            },
+        };
+        out[..bytes.len()].copy_from_slice(&bytes);
+        bytes.len() as i32
+    }
+}
 
 pub type RpcResult<T> = Result<T, RpcError>;
 
@@ -101,11 +151,11 @@ pub fn decode<T: serde::de::DeserializeOwned>(b: &[u8]) -> RpcResult<T> {
 
 // --- transport trait ------------------------------------------------------
 
-/// The byte-pipe a generated client talks over. A `call` writes a framed
-/// request `[method: u32 LE][args]` and returns the response payload bytes
-/// (already unwrapped from the [`Response`] envelope) or an [`RpcError`].
+/// The byte-pipe a generated client talks over. Each worker hosts one service;
+/// a `call` writes `[method: u32 LE][args]` and returns the response payload
+/// (already unwrapped from [`Response`]) or an [`RpcError`].
 pub trait Transport {
-    fn call(&self, service: &str, method: u32, args: &[u8]) -> RpcResult<Vec<u8>>;
+    fn call(&self, method: u32, args: &[u8]) -> RpcResult<Vec<u8>>;
 }
 
 // --- response envelope ----------------------------------------------------
@@ -469,21 +519,6 @@ impl<'a> RingBuffer<'a> {
             }
         }
     }
-}
-
-// --- schema (for the `dump-schema` bin; no TS codegen exists) --------------
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct RpcSchema {
-    pub name: &'static str,
-    pub methods: &'static [RpcMethod],
-}
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct RpcMethod {
-    pub id: u32,
-    pub name: &'static str,
-    pub params: &'static [(&'static str, &'static str)],
-    pub returns: &'static str,
 }
 
 #[cfg(test)]

@@ -2,7 +2,7 @@
 
 Ultra-fast, statically-typed RPC for main↔worker and worker↔worker calls in
 afterglow-engine. Interfaces are defined **once in Rust**; the `#[rpc]` macro
-generates the Rust server trait + typed client + a schema static, and (for
+generates the Rust server trait + typed client, and (for
 worker services) the native thread spawn and the wasm exports. You call a
 worker as if it were a local object.
 
@@ -46,7 +46,6 @@ The `#[rpc]` macro generates:
   and provides `serve(&mut self, method: u32, args: &[u8]) -> RpcResult<Vec<u8>>`
   dispatch.
 - `PhysicsClient<T: Transport>` — a typed client; call methods as if local.
-- `PHYSICS_SCHEMA: &RpcSchema` — service-prefixed schema static.
 - With `worker = ...`: `PhysicsClient::spawn_worker` (native) + the wasm exports
   `afterglow_wasm_*` used by `afterglow-web`'s `worker.js`.
 
@@ -84,29 +83,22 @@ carries a request, response, or event payload. See
 [`docs/api/web-shared-memory.md`](../../docs/api/web-shared-memory.md) for the
 exports, the JS client contract, and the web lifecycle.
 
-## No TypeScript generator
+## JavaScript boundary
 
-There is **no TypeScript client generator**. The `dump-schema` bin serializes
-the macro-generated `RpcSchema` as JSON only:
-
-```sh
-cargo run -p afterglow-rpc-demo --bin dump-schema
-```
-
-The current main-thread client is the hand-written
-[`crates/afterglow-web/www/rpc.js`](../afterglow-web/www/rpc.js). Its codec
-helpers (`encodeF32Vec`, `decodeF32Vec`, `encodeF32`, varint, `concat`) cover
-the demo `Physics` types; they are not a general postcard schema/codegen system.
+The generated client is Rust-only. The browser API is deliberately a low-level
+`call(method_id, encoded_args)` byte transport; applications own their JS/TS
+value codecs. The demo's hand-written
+[`rpc.js`](../afterglow-web/www/rpc.js) helpers cover only its `Physics` types
+and do not pretend to be a general Rust-to-TypeScript schema generator.
 
 ## Crates
 
 - `afterglow-rpc` — runtime: `RingBuffer`, `Transport` trait, postcard codec,
-  `Response` envelope, `RpcSchema`/`RpcMethod`, and the `native` module
+  `Response` envelope and the `native` module
   (`RingStorage`, `spawn_worker_loop`, `run_worker_loop`, events).
 - `afterglow-rpc-macros` — the `#[rpc]` proc-macro (server trait + client +
-  dispatch + schema + native spawn + wasm exports).
-- `afterglow-rpc-demo` — demo `Physics` service + `bench_rpc` stress test +
-  `dump-schema` bin.
+  dispatch + native spawn + wasm exports).
+- `afterglow-rpc-demo` — demo `Physics` service + `bench_rpc` stress test.
 - `afterglow-web` — web wasm target + `www/rpc.js` + `www/worker.js`.
 
 ## Status

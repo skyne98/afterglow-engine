@@ -119,8 +119,8 @@ cargo build -p afterglow-web --target wasm32-unknown-unknown \
 cargo build -p afterglow-rpc-demo --target wasm32-unknown-unknown \
   -Zbuild-std=core,alloc,std,panic_abort --profile wasm-release
 
-# Serve worker-bench.html and bench.html with COOP/COEP headers after placing
-# those release artifacts at afterglow_web.wasm and physics_worker.wasm.
+# Copy the artifacts to afterglow_web.wasm and physics_worker.wasm, then serve
+# worker-bench.html with COOP/COEP headers.
 ```
 
 ## Historical input-to-present result (2026-07-09)

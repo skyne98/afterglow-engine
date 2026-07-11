@@ -199,7 +199,7 @@ fn bench_service_rpc() {
     // worker startup, allocation, or code-cache effects.
     let warmup_args = encode(&(vec![0.0_f32; 64], dt)).unwrap();
     for _ in 0..100 {
-        let bytes = client.transport().call("Physics", 0, &warmup_args).unwrap();
+        let bytes = client.transport().call(0, &warmup_args).unwrap();
         let _: Vec<f32> = decode(&bytes).unwrap();
     }
     for &count in RPC_COUNTS {
@@ -211,7 +211,7 @@ fn bench_service_rpc() {
         let mut ok = 0u64;
         for _ in 0..RPC_N {
             let started = Instant::now();
-            let bytes = client.transport().call("Physics", 0, &args).unwrap();
+            let bytes = client.transport().call(0, &args).unwrap();
             let output: Vec<f32> = decode(&bytes).unwrap();
             elapsed += started.elapsed();
             if output.len() == count

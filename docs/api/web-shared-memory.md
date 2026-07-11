@@ -71,24 +71,17 @@ get_scratch_size() -> usize  # 1 MiB
 
 Call `init_ring_buffers` once before starting the worker. It resets both rings.
 
-### Requests
+### Transport operations
 
 ```text
 write_frame(ptr, len) -> i32
-read_frame(ptr, max_len) -> i32
-has_data() -> i32
+read_response(ptr, max_len) -> i32
 ```
 
 A successful `write_frame` publishes the request frame and calls the imported
-`env.notify_worker` wake callback.
-
-### Responses
-
-```text
-write_response(ptr, len) -> i32
-read_response(ptr, max_len) -> i32
-has_response() -> i32
-```
+`env.notify_worker` wake callback. The page only produces requests and consumes
+responses; worker-side directions are implemented directly over the SAB in
+`worker.js`, so benchmark-only reverse-direction exports are not exposed.
 
 Read return codes:
 
@@ -171,11 +164,18 @@ The client latches the first fatal failure permanently into `_fatal`
 
 `rpc.js` also exports the small codec helpers used by the demo:
 `encodeVarint`, `decodeVarint`, `concat`, `encodeF32Vec`, `encodeF32`, and
-`decodeF32Vec`.
+`decodeF32Vec`. Decoders reject truncated and overflowing inputs. These helpers
+and the pure wrap-safe operations in `www/ring-buf.js` are covered by the
+no-dependency Node suite:
+
+```sh
+node --test crates/afterglow-web/tests/rpc.test.mjs
+```
 
 ## Worker state and wake correctness (`www/worker.js`)
 
-The worker transitions `init → ready → running`. A wake arriving while it is
+The worker is an ES module and imports the tested wrap-safe primitives from
+`www/ring-buf.js`. It transitions `init → ready → running`. A wake arriving while it is
 not awaiting is retained in `wakePending`, preventing lost notifications. When
 the request ring is empty, the worker awaits the next wake and consumes no idle
 CPU. Corrupt ring state is drained/resynchronized and reported to the page.

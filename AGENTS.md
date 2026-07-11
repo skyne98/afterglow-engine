@@ -43,11 +43,11 @@ Two backends, same framing and ring layout:
 
 | Crate | Purpose |
 |-------|---------|
-| `afterglow-rpc` | Core: `RingBuffer`, `Transport` trait, postcard codec, response envelope, and schema types. `native` has `RingStorage`, `spawn_worker_loop`, `run_worker_loop`, and event rings. |
-| `afterglow-rpc-macros` | `#[rpc]` proc macro: generates server trait, client, dispatch, schema. |
-| `afterglow-rpc-demo` | Demo `Physics` service + `bench_rpc` stress test + `dump-schema` bin. |
-| `afterglow-assets` | Shared asset-path/MIME helpers (`guess_mime`, `resolve`) for the CEF scheme handler and the web dev server. No deps, no file-content reads (resolution canonicalizes); the single security boundary for FS asset confinement. |
-| `afterglow-web` | Wasm target: `#[no_mangle]` exports (`write_frame`, `read_frame`, `write_response`, `read_response`, `has_data`, `has_response`) on two static ring buffers in shared wasm memory. No wasm-bindgen. Includes `bench.html` (stress test) + `coep_server` example (uses `afterglow-assets`). |
+| `afterglow-rpc` | Core: `RingBuffer`, `Transport` trait, postcard codec, response envelope, and shared wasm ABI helpers. `native` has `RingStorage`, `spawn_worker_loop`, `run_worker_loop`, and event rings. |
+| `afterglow-rpc-macros` | `#[rpc]` proc macro: generates the server trait, typed Rust client, dispatch, native spawn, and thin wasm exports. |
+| `afterglow-rpc-demo` | Demo `Physics` service + `bench_rpc` stress test. |
+| `afterglow-assets` | Shared asset-path/MIME helpers (`AssetRoot`, `decode_url_path`, `guess_mime`, `resolve`) for the CEF scheme handler and web dev server. No deps or file-content reads; the single security boundary for FS asset confinement. |
+| `afterglow-web` | Wasm target: page-side `#[no_mangle]` exports (`write_frame`, `read_response`) over two static rings in shared wasm memory. `worker.js` accesses the opposite halves directly with tested helpers from `ring-buf.js`. No wasm-bindgen. Includes a real worker benchmark + `coep_server` example. |
 | `afterglow-cef` | Thin CEF shell: window + WebGPU flags + `afterglow://` scheme (embedded-first / FS-fallback assets via `afterglow-assets`) + COOP/COEP headers. No worker code, no IPC, no input. |
 | `latency-tool` | CDP-based input→present latency measurement. |
 | `xtask` | Build orchestrator: `build`, `wasm`, `check`, `test`, `bench`. |
@@ -207,10 +207,11 @@ CEF native path; the web `SharedArrayBuffer` path has no such issue.
 - `docs/api/ring-buffer.md` — `afterglow-rpc` ring buffer + native transport
   (SPSC framing, owned halves, worker transport, events, poison/timeout).
 - `docs/api/rpc-macro.md` — `afterglow-rpc-macros` `#[rpc]` attribute: server/
-  client/schema generation, native spawn + wasm exports, reserved names.
+  typed client/dispatch generation, native spawn + wasm exports, reserved names.
 - `docs/api/web-shared-memory.md` — `afterglow-web` wasm exports, JS client/
   worker contract, build, and COOP/COEP headers.
 - `docs/api/assets.md` — `afterglow-assets` shared `guess_mime`/`resolve`:
   path/MIME + canonical confinement for the CEF scheme and web dev server.
 - `docs/api/cef-shell.md` — `afterglow-cef` game-window shell: `AppBuilder`,
   `afterglow://` scheme, WebGPU/X11 flags, COOP/COEP, console, startup caveat.
+- `docs/api/latency-tool.md` — CDP diagnostic CLI commands and measurement semantics.

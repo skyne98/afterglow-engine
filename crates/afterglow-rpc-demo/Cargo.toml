@@ -12,12 +12,6 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 afterglow-rpc = { path = "../afterglow-rpc" }
 afterglow-rpc-macros = { path = "../afterglow-rpc-macros" }
-serde = { version = "1", features = ["derive"] }
-serde_json.workspace = true
-
-[[bin]]
-name = "dump-schema"
-path = "src/bin/dump_schema.rs"
 
 [[example]]
 name = "bench_rpc"

@@ -8,11 +8,12 @@
 resource logic the engine's two resource servers need:
 
 - [`guess_mime`]: MIME type from a path extension.
-- [`resolve`]: secure resolution of a URL/scheme path beneath an asset root
-  into a canonical, confined `PathBuf`.
+- [`AssetRoot`]: a canonicalized root reused across requests.
+- [`resolve`]: one-shot secure resolution beneath an asset root.
 
-It is deliberately tiny: **no third-party dependencies, no HTTP types, no
-percent-decoder, and no file-content reads; resolution performs canonicalization** — callers read the returned path themselves.
+It is deliberately tiny: **no third-party dependencies, no HTTP types, and no
+file-content reads**. URL paths are consistently percent-decoded as UTF-8 and
+callers read the resolved path themselves.
 Both resource backends consume it:
 
 - [`afterglow-cef`](cef-shell.md) serves embedded bytes and/or FS files through
@@ -49,7 +50,17 @@ Unknown or missing extensions fall back to `application/octet-stream`. The
 extension is the substring after the last `.`; a path with no dot has no
 extension and also falls back to `application/octet-stream`.
 
-## `resolve`
+## `AssetRoot` and `resolve`
+
+```rust
+pub struct AssetRoot(/* canonical path */);
+pub fn AssetRoot::new(root: impl AsRef<Path>) -> Option<AssetRoot>;
+pub fn AssetRoot::resolve(&self, url_path: &str) -> Option<PathBuf>;
+```
+
+Request handlers should construct `AssetRoot` once. The free `resolve` function
+is a convenience API that canonicalizes the root on each call.
+
 
 ```rust
 pub fn resolve(root: &std::path::Path, url_path: &str) -> Option<std::path::PathBuf>
@@ -58,7 +69,7 @@ pub fn resolve(root: &std::path::Path, url_path: &str) -> Option<std::path::Path
 Resolve a URL/scheme path beneath `root` into a canonical, confined `PathBuf`.
 This is the single security boundary for serving filesystem assets. It:
 
-- **strips a `?query` string**, if present (the path before `?` is used);
+- **strips a `?query` string** and percent-decodes the path as UTF-8;
 - **splits on both `/` and `\`** separators, so Windows-style backslashes and
   mixed separators cannot smuggle traversal;
 - **ignores `.` and empty segments**;
@@ -91,8 +102,8 @@ anyway.
 use afterglow_assets::{guess_mime, resolve};
 use std::path::Path;
 
-let root = Path::new("/srv/assets");
-match resolve(root, "/index.html?v=2") {
+let root = afterglow_assets::AssetRoot::new("/srv/assets").unwrap();
+match root.resolve("/index.html?v=2") {
     Some(path) => {
         let mime = guess_mime("/index.html");
         let body = std::fs::read(&path)?; // caller decides error policy

@@ -19,23 +19,18 @@ pub(crate) type OnReadyCallback = Mutex<Option<Box<dyn FnOnce() + Send + 'static
 /// Resolved app configuration. Built by [`AppBuilder`]; read by the runtime
 /// from a process-global [`OnceLock`].
 #[derive(Default)]
-pub struct Config {
-    pub title: String,
-    pub width: i32,
-    pub height: i32,
-    pub devtools_port: i32,
-    pub vsync: bool,
-    /// Path under the scheme to load first, e.g. "/index.html".
-    pub root_path: String,
-    /// Embedded assets: (scheme-path, mime, bytes).
-    pub embedded: Vec<(String, String, &'static [u8])>,
-    /// If set, files under this dir are served for paths not in `embedded`.
-    pub fs_root: Option<PathBuf>,
-    /// JS console.* forwarded here (stderr if unset).
+pub(crate) struct Config {
+    pub(crate) title: String,
+    pub(crate) width: i32,
+    pub(crate) height: i32,
+    pub(crate) devtools_port: i32,
+    pub(crate) vsync: bool,
+    pub(crate) root_path: String,
+    pub(crate) embedded: Vec<(String, String, &'static [u8])>,
+    pub(crate) fs_root: Option<PathBuf>,
+    /// Canonicalized once before CEF starts; used by every resource request.
+    pub(crate) asset_root: Option<afterglow_assets::AssetRoot>,
     pub(crate) console: Option<ConsoleCallback>,
-    /// One-shot readiness callback (set via [`AppBuilder::on_ready`]). Taken
-    /// and run exactly once from `on_context_initialized`, after
-    /// `execute_process` and CEF init. `None` by default.
     pub(crate) on_ready: OnReadyCallback,
 }
 
@@ -158,7 +153,12 @@ impl AppBuilder {
     }
 
     /// Configure and run the CEF message loop (blocks until the window closes).
-    pub fn run(self) {
+    pub fn run(mut self) {
+        self.cfg.asset_root = self
+            .cfg
+            .fs_root
+            .as_deref()
+            .and_then(afterglow_assets::AssetRoot::new);
         crate::runtime::run(self.cfg);
     }
 }

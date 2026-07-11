@@ -7,13 +7,12 @@
 //!
 //! ## Backing
 //!
-//! [`RingStorage`] owns a single heap allocation per ring: a `RingAlloc`
-//! (4-byte-aligned, `alloc_zeroed`, header written in place with `ptr::write`,
-//! raw data only, `Drop` deallocs). Shared across the SPSC halves via `Arc`.
-//! This is genuinely compact (1 byte per data byte, no per-element padding),
-//! unlike a `Vec<UnsafeCell<u8>>` whose 4-byte alignment forces a 4-byte
-//! stride. The web target later uses `RingHeader + UnsafeCell<[u8; N]>` and
-//! views it through [`RingBuffer::from_header_data`].
+//! [`RingStorage`] owns one four-byte-aligned boxed allocation per ring. It is
+//! represented as initialized `u32` words solely to obtain alignment, with a
+//! `RingHeader` constructed over the first 12 bytes and compact byte data after
+//! it (at most three unused tail bytes). It is shared through `Arc`. The web
+//! target uses `RingHeader + UnsafeCell<[u8; N]>` and views it through the same
+//! [`RingBuffer::from_header_data`].
 //!
 //! ## Lifecycle
 //!
@@ -42,9 +41,9 @@
 //! [`WorkerTransport`]'s `Drop` detaches it after a bounded wait (the
 //! `Arc`-backed ring buffers stay valid, so this leaks a thread without UB).
 
-use std::alloc::{Layout, alloc_zeroed, dealloc};
 use std::cell::{Cell, RefCell};
 use std::marker::PhantomData;
+use std::mem::MaybeUninit;
 use std::ptr::NonNull;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -61,16 +60,12 @@ const SHUTDOWN_DEADLINE: Duration = Duration::from_secs(2);
 
 // --- compact owned backing ------------------------------------------------
 
-/// A 4-byte-aligned heap allocation owning a fully-constructed ring buffer
-/// region: a [`RingHeader`] at `[0..HEADER_SIZE]` followed by `capacity` data
-/// bytes. The header is written once in [`RingAlloc::new`]; the data area is
-/// zeroed (== empty). Shared across the SPSC halves via `Arc`.
+/// One aligned boxed allocation containing a constructed header followed by
+/// `capacity` compact data bytes. `u32` words provide the required alignment;
+/// the ring itself accesses the allocation as bytes.
 struct RingAlloc {
-    /// Invariant: 4-byte-aligned, allocated with `layout`, points to
-    /// `layout.size()` bytes; `[0..HEADER_SIZE]` is a constructed `RingHeader`,
-    /// `[HEADER_SIZE..]` is the data area.
-    ptr: NonNull<u8>,
-    layout: Layout,
+    words: Box<[MaybeUninit<u32>]>,
+    capacity: u32,
 }
 
 // SAFETY: the bytes are only mutated through the SPSC producer/consumer halves
@@ -86,50 +81,32 @@ impl RingAlloc {
             return Err(RpcError::BadBacking(format!("invalid capacity {capacity}")));
         }
         let total = HEADER_SIZE + capacity;
-        let layout = Layout::from_size_align(total, ALIGN)
-            .map_err(|_| RpcError::BadBacking(format!("bad layout for {total} bytes")))?;
-        // SAFETY: `total >= HEADER_SIZE + 1` (>= 13) so non-zero; `ALIGN` is a
-        // valid power-of-two alignment.
-        let ptr = unsafe { alloc_zeroed(layout) };
-        let ptr = NonNull::new(ptr)
-            .ok_or_else(|| RpcError::BadBacking("ring allocation failed".into()))?;
-        // Construct the header in place. The data area is already zeroed
-        // (== empty ring). SAFETY: `ptr` is 4-aligned and valid for a write of
-        // `RingHeader` (HEADER_SIZE bytes). `RingHeader` carries only `u32` +
-        // atomics — no `Drop` glue beyond the allocation itself.
+        let word_count = total.div_ceil(ALIGN);
+        let mut words = vec![MaybeUninit::new(0u32); word_count].into_boxed_slice();
+        // SAFETY: boxed u32 storage is four-byte aligned and has at least
+        // `HEADER_SIZE` bytes. The header has no drop glue.
         unsafe {
             std::ptr::write(
-                ptr.as_ptr() as *mut RingHeader,
+                words.as_mut_ptr().cast::<RingHeader>(),
                 RingHeader::new(capacity as u32),
             );
         }
-        Ok(Self { ptr, layout })
+        Ok(Self {
+            words,
+            capacity: capacity as u32,
+        })
     }
 
     /// A `RingBuffer` view over this allocation's constructed region.
     fn view(&self) -> RingBuffer<'_> {
-        let base = self.ptr.as_ptr();
-        // SAFETY: `RingAlloc` invariant — `base` is 4-aligned, `[0..HEADER_SIZE]`
-        // is a constructed `RingHeader` (written in `new`), and
-        // `[HEADER_SIZE..layout.size()]` is `capacity` data bytes. Both valid
-        // for `&self`'s lifetime. `RingHeader` is `repr(C)`, so the header sits
-        // at offset 0 and the data area follows at `HEADER_SIZE`.
+        let base = self.words.as_ptr().cast::<u8>();
+        // SAFETY: `new` constructed a header at the aligned allocation start;
+        // at least `capacity` bytes follow it and remain valid for `&self`.
         unsafe {
-            let header = &*(base as *const RingHeader);
-            let data = base.add(HEADER_SIZE);
-            RingBuffer::from_header_data(header, data, header.capacity() as usize)
+            let header = &*base.cast::<RingHeader>();
+            let data = base.add(HEADER_SIZE).cast_mut();
+            RingBuffer::from_header_data(header, data, self.capacity as usize)
                 .expect("RingAlloc invariant: constructed ring buffer")
-        }
-    }
-}
-
-impl Drop for RingAlloc {
-    fn drop(&mut self) {
-        // SAFETY: `ptr` was allocated with `layout` in `new`; `Drop` runs once.
-        // `RingHeader`/data are trivially droppable (no resources beyond the
-        // allocation), so no per-field `Drop` is needed before dealloc.
-        unsafe {
-            dealloc(self.ptr.as_ptr(), self.layout);
         }
     }
 }
@@ -281,7 +258,7 @@ impl WorkerTransport {
 }
 
 impl Transport for WorkerTransport {
-    fn call(&self, _service: &str, method: u32, args: &[u8]) -> RpcResult<Vec<u8>> {
+    fn call(&self, method: u32, args: &[u8]) -> RpcResult<Vec<u8>> {
         // A previously timed-out call latched this transport poisoned: reject
         // immediately (as `WorkerDead`) rather than writing a new request and
         // possibly consuming the timed-out call's late response as our reply.
@@ -562,7 +539,7 @@ mod tests {
     #[test]
     fn happy_path_round_trip() {
         let (t, _ev) = spawn_echo(1 << 16);
-        let resp = t.call("svc", 7, &[1, 2, 3, 4]).unwrap();
+        let resp = t.call(7, &[1, 2, 3, 4]).unwrap();
         assert_eq!(resp, vec![1, 2, 3, 4]);
     }
 
@@ -582,7 +559,7 @@ mod tests {
             Err::<Vec<u8>, _>(RpcError::Server("boom".into()))
         })
         .unwrap();
-        match t.call("svc", 0, &[]) {
+        match t.call(0, &[]) {
             Err(RpcError::Server(m)) => assert_eq!(m, "boom"),
             other => panic!("expected Server(boom), got {other:?}"),
         }
@@ -594,7 +571,7 @@ mod tests {
         // fails, it sends a tiny error envelope, the client gets an error.
         let (t, _ev) =
             spawn_worker_loop((), 256, |_: &mut (), _m, _a| Ok(vec![0u8; 10_000])).unwrap();
-        match t.call("svc", 0, &[]) {
+        match t.call(0, &[]) {
             Err(RpcError::Server(_)) => {}
             other => panic!("expected server error, got {other:?}"),
         }
@@ -605,7 +582,7 @@ mod tests {
         let start = Instant::now();
         {
             let (t, _ev) = spawn_echo(1 << 16);
-            let _ = t.call("svc", 0, &[9]).unwrap();
+            let _ = t.call(0, &[9]).unwrap();
             // drop here
         }
         // Join + shutdown should be near-instant (well under the deadline).
@@ -616,7 +593,7 @@ mod tests {
     fn dead_worker_call_returns_worker_dead() {
         let (t, _ev) = spawn_echo(1 << 16);
         // Warm up: confirm the worker is alive.
-        assert_eq!(t.call("svc", 1, &[42]).unwrap(), vec![42]);
+        assert_eq!(t.call(1, &[42]).unwrap(), vec![42]);
         // Send the shutdown control frame directly and let the worker exit.
         t.req.write(&[]).unwrap();
         t.wake();
@@ -626,7 +603,7 @@ mod tests {
         }
         assert!(t.is_dead(), "worker should have exited");
         // A subsequent call reports WorkerDead rather than hanging.
-        match t.call("svc", 2, &[]) {
+        match t.call(2, &[]) {
             Err(RpcError::WorkerDead) => {}
             other => panic!("expected WorkerDead, got {other:?}"),
         }
@@ -653,7 +630,7 @@ mod tests {
 
         // First call: the worker is still sleeping, so the deadline elapses
         // and the call returns Timeout (latching the transport poisoned).
-        match t.call("svc", 1, b"first") {
+        match t.call(1, b"first") {
             Err(RpcError::Timeout) => {}
             other => panic!("expected Timeout, got {other:?}"),
         }
@@ -670,7 +647,7 @@ mod tests {
 
         // Second call: poisoned -> immediate WorkerDead, NOT the stale "late"
         // response that is sitting in the ring.
-        match t.call("svc", 2, b"second") {
+        match t.call(2, b"second") {
             Err(RpcError::WorkerDead) => {}
             other => panic!("expected WorkerDead (poisoned), got {other:?}"),
         }
@@ -701,8 +678,8 @@ mod tests {
         })
         .unwrap();
 
-        ta.call("svc", 0, &[]).unwrap();
-        tb.call("svc", 0, &[]).unwrap();
+        ta.call(0, &[]).unwrap();
+        tb.call(0, &[]).unwrap();
 
         let mut a_events = Vec::new();
         eva.drain_into(&mut a_events);
@@ -734,6 +711,6 @@ mod tests {
             Ok(Vec::new())
         })
         .unwrap();
-        t.call("svc", 0, &[]).unwrap();
+        t.call(0, &[]).unwrap();
     }
 }

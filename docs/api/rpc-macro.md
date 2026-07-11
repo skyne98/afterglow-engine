@@ -2,9 +2,8 @@
 
 > Status: working; API checked against the 2026-07-10 source.
 
-`#[rpc]` on a trait generates the Rust server trait, the typed client, a schema
-static, and (with `worker = Type`) the native spawn constructor and the wasm
-worker exports. It is the single source of truth for an RPC interface.
+`#[rpc]` on a trait generates the Rust server trait, typed Rust client, and
+(with `worker = Type`) the native spawn constructor and wasm worker exports.
 
 See [`ring-buffer.md`](ring-buffer.md) for the transport the client talks over
 and [`web-shared-memory.md`](web-shared-memory.md) for the wasm export contract
@@ -76,18 +75,10 @@ impl<T: Transport> PhysicsClient<T> {
 ```
 
 Each method encodes its args as a postcard tuple (`(arg0, arg1, …)`), calls
-`Transport::call("Physics", method_id, &args)`, and decodes the returned
+`Transport::call(method_id, &args)`, and decodes the returned
 payload. Trailing commas force tuple semantics, so a single-argument method
 round-trips the same way as a multi-argument one. Fields stay private; use
 `transport()` for ad-hoc/raw calls.
-
-### `<NAME>_SCHEMA: &RpcSchema`
-
-The schema static inherits the trait's visibility; its name is the trait
-uppercased (`Physics` → `PHYSICS_SCHEMA`). It is `pub` when the trait is
-`pub`. Each `RpcMethod` records `id`, `name`,
-`params: &[(name, type)]` (type strings are whitespace-normalized), and
-`returns`. The `dump-schema` bin serializes it as JSON.
 
 ### Native spawn (only with `worker = Type`)
 
@@ -126,15 +117,14 @@ oversized-response error envelope cannot fit. See
 The wasm exports use fixed `#[no_mangle]` names (`afterglow_wasm_*`), so **at
 most one `#[rpc(worker = ...)]` service may be linked into a single wasm
 cdylib**. Multiple non-worker `#[rpc]` traits (no `worker = …`) may coexist in
-one module — they only generate `Server` / `Client` / `SCHEMA` names and never
+one module — they only generate `Server` / `Client` names and never
 emit wasm symbols. (The demo's `multi_trait` test module exercises two
 non-worker traits dispatching through the real native worker loop in one
 module.)
 
-## No TypeScript generator
+## JavaScript boundary
 
-There is no TypeScript client generator. The macro emits the `RpcSchema` static;
-the `dump-schema` bin serializes it as JSON. The main-thread web client is
-hand-written (`www/rpc.js`) with codec helpers for the demo types only — see the
-[`crates/afterglow-rpc` README](../../crates/afterglow-rpc/README.md) and
-[`web-shared-memory.md`](web-shared-memory.md).
+The browser client is intentionally a low-level byte API:
+`call(method_id, postcard_args)`. The macro does not claim to translate
+arbitrary serde-enabled Rust types into TypeScript. Applications provide their
+own browser-side value codecs; `www/rpc.js` includes only the demo's helpers.

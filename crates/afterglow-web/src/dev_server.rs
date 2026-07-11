@@ -5,9 +5,7 @@
 //! HTTP policy (request-line parsing, GET-only routing, response assembly),
 //! kept in pure functions so it can be tested without a socket.
 
-use std::path::Path;
-
-use afterglow_assets::{guess_mime, resolve};
+use afterglow_assets::{AssetRoot, guess_mime};
 
 /// Parsed HTTP request line: `(method, raw_path)` where `raw_path` keeps its
 /// query string (the handler strips it). `None` if malformed.
@@ -44,7 +42,7 @@ fn plain(status: u16, reason: &'static str, body: &'static [u8]) -> Response {
 /// Existing files are canonically confined (symlinks cannot escape); resolution
 /// and confinement are delegated to [`afterglow_assets::resolve`].
 #[doc(hidden)]
-pub fn handle_request(root: &Path, request: &str) -> Response {
+pub fn handle_request(root: &AssetRoot, request: &str) -> Response {
     let Some((method, raw)) = parse_request_line(request) else {
         return plain(400, "Bad Request", b"bad request");
     };
@@ -57,7 +55,7 @@ pub fn handle_request(root: &Path, request: &str) -> Response {
     } else {
         path
     };
-    match resolve(root, path).and_then(|p| std::fs::read(p).ok()) {
+    match root.resolve(path).and_then(|p| std::fs::read(p).ok()) {
         Some(body) => Response {
             status: 200,
             reason: "OK",
@@ -80,7 +78,6 @@ pub const CROSS_ORIGIN_HEADERS: &[(&str, &str)] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
 
     #[test]
     fn parse_request_line_basic() {
@@ -98,18 +95,19 @@ mod tests {
 
     #[test]
     fn handle_request_get_404_405_400() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("www");
-        let r = handle_request(&root, "GET /bench.html HTTP/1.1\r\n");
+        let root =
+            AssetRoot::new(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("www")).unwrap();
+        let r = handle_request(&root, "GET /worker-test.html HTTP/1.1\r\n");
         assert_eq!(r.status, 200);
         assert_eq!(r.mime, "text/html");
         assert!(!r.body.is_empty());
         // GET-only: HEAD and POST are 405
         assert_eq!(
-            handle_request(&root, "HEAD /bench.html HTTP/1.1\r\n").status,
+            handle_request(&root, "HEAD /worker-test.html HTTP/1.1\r\n").status,
             405
         );
         assert_eq!(
-            handle_request(&root, "POST /bench.html HTTP/1.1\r\n").status,
+            handle_request(&root, "POST /worker-test.html HTTP/1.1\r\n").status,
             405
         );
         // missing -> 404; malformed -> 400
@@ -124,8 +122,9 @@ mod tests {
     fn query_string_still_serves_file() {
         // A query on an existing file must be stripped and the file served with
         // the right MIME (regression for query handling at the handler level).
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("www");
-        let r = handle_request(&root, "GET /bench.html?cachebust=42 HTTP/1.1\r\n");
+        let root =
+            AssetRoot::new(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("www")).unwrap();
+        let r = handle_request(&root, "GET /worker-test.html?cachebust=42 HTTP/1.1\r\n");
         assert_eq!(r.status, 200);
         assert_eq!(r.mime, "text/html");
         assert!(!r.body.is_empty());
@@ -133,7 +132,8 @@ mod tests {
 
     #[test]
     fn root_serves_worker_test() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("www");
+        let root =
+            AssetRoot::new(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("www")).unwrap();
         let r = handle_request(&root, "GET / HTTP/1.1\r\n");
         assert_eq!(r.status, 200);
         assert_eq!(r.mime, "text/html");
@@ -144,7 +144,8 @@ mod tests {
     fn traversal_cannot_reach_cargo_toml() {
         // The confirmed prior exploit: GET /../../../Cargo.toml returned 200.
         // The manifest dir is the crate root; Cargo.toml is one level up.
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("www");
+        let root =
+            AssetRoot::new(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("www")).unwrap();
         let r = handle_request(&root, "GET /../../../Cargo.toml HTTP/1.1\r\n");
         assert_eq!(r.status, 404);
         assert!(!r.body.contains(&b'[')); // not TOML content
