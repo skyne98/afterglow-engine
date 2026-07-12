@@ -135,12 +135,37 @@ const store = new AssetStore(loader, meshopt, texture);
 // --- Load model + texture through AssetStore ---
 loadingEl.textContent = 'loading + optimizing model + transcoding texture...';
 const modelHandle = store.loadModel('sphere.glb');
-const texHandle = store.loadTexture('checker.basis');
-let lastModelGen = -1, lastTexGen = -1;
+
+// Load basis texture as raw transcoded bytes (we'll create per-LOD textures).
+const basisTexHandle = store.loadBasisTexture('checker.basis');
+let lastModelGen = -1, lastBasisGen = -1;
 let modelReady = false;
 
+// Per-LOD textures: LOD 0 = mip 0 (128×128), LOD 1 = mip 1 (64×64), etc.
+// Lower-LOD meshes get lower-resolution textures (fewer triangles → fewer texels).
+let lodTextures = [];
+
+function buildLodTextures(serializedMips) {
+  if (lodTextures.length > 0) return;
+  const mips = store.parseSerializedMips(serializedMips);
+  if (mips.length === 0) return;
+  // Create one texture per LOD level, each using a different mip.
+  const numLods = 4;
+  for (let i = 0; i < numLods; i++) {
+    const mipIdx = Math.min(i, mips.length - 1);
+    const mip = mips[mipIdx];
+    const tex = new THREE.DataTexture(mip.data, mip.width, mip.height, THREE.RGBAFormat);
+    tex.wrapS = THREE.RepeatWrapping;
+    tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(4, 2);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.needsUpdate = true;
+    lodTextures.push(tex);
+  }
+}
+
 // --- Info overlay ---
-function updateInfo(asset, texReady, texGen) {
+function updateInfo(asset) {
   let html = '<b>afterglow-engine — LOD Demo (AssetStore)</b><br>';
   html += `Source: UV sphere ${segments}×${rings} — ${sphere.indices.length / 3} triangles<br>`;
   html += `Texture: checker.basis (128×128, 8 mips, UASTC → BC7)<br>`;
@@ -163,9 +188,16 @@ function updateInfo(asset, texReady, texGen) {
     }
     html += `<br>`;
   }
-  html += `<b>Texture streaming:</b><br>`;
+  html += `<b>Texture LOD (per-sphere):</b><br>`;
   html += `  Basis file: ${basisBytes.length} bytes<br>`;
-  html += `  Status: ${texReady ? 'ready' : 'streaming...'} (gen ${texGen})<br>`;
+  if (lodTextures.length > 0) {
+    const labels = ['LOD 0 — Full', 'LOD 1 — 50%', 'LOD 2 — 25%', 'LOD 3 — 10%'];
+    for (let i = 0; i < lodTextures.length; i++) {
+      html += `  ${labels[i]}: ${lodTextures[i].image.width}×${lodTextures[i].image.height} tex<br>`;
+    }
+  } else {
+    html += `  Status: transcoding... (gen ${basisTexHandle.generation})<br>`;
+  }
   infoEl.innerHTML = html;
   infoEl.style.display = 'block';
 }
@@ -197,8 +229,8 @@ function buildMeshesFromAsset(asset) {
     geom.setIndex(new THREE.BufferAttribute(lod.indices, 1));
     geom.computeVertexNormals();
 
-    // Use the streamed texture (or fallback) — same texture on all LODs.
-    const tex = texHandle.asset || texHandle.fallback;
+    // Use the per-LOD texture (or fallback if not ready yet).
+    const tex = lodTextures[i] || lodTextures[lodTextures.length - 1] || texHandle?.fallback;
     const solidMat = new THREE.MeshStandardMaterial({ map: tex, metalness: 0.0, roughness: 0.9 });
     const wireMat = new THREE.MeshBasicMaterial({ color: colors[i], wireframe: true, transparent: true, opacity: 0.25 });
 
@@ -216,7 +248,7 @@ function buildMeshesFromAsset(asset) {
   }
 
   loadingEl.style.display = 'none';
-  updateInfo(asset, texHandle.state === 'ready', texHandle.generation);
+  updateInfo(asset);
 }
 
 // --- Animation loop ---
@@ -237,17 +269,12 @@ function animate() {
     }
   }
 
-  // Update texture on meshes when new mips arrive.
-  if (texHandle.generation > lastTexGen) {
-    lastTexGen = texHandle.generation;
-    if (texHandle.asset && lodGroups.length > 0) {
-      for (const lod of lodGroups) {
-        lod.solidMat.map = texHandle.asset;
-        lod.solidMat.needsUpdate = true;
-      }
-    }
-    if (modelReady) {
-      updateInfo(modelHandle.asset, texHandle.state === 'ready', texHandle.generation);
+  // Check basis texture readiness — create per-LOD textures when ready.
+  if (basisTexHandle.generation > lastBasisGen) {
+    lastBasisGen = basisTexHandle.generation;
+    if (basisTexHandle.state === 'ready' && basisTexHandle.asset) {
+      buildLodTextures(basisTexHandle.asset);
+      if (modelReady) updateInfo(modelHandle.asset);
     }
   }
 

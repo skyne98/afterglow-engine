@@ -108,6 +108,25 @@ export function parseJSON<T = unknown>(bytes: Uint8Array): T {
 
 // --- internal types ------------------------------------------------------
 
+/** Nearest-neighbor upscale RGBA data to a larger size. */
+function nearestUpscale(src: Uint8Array, srcW: number, srcH: number, dstW: number, dstH: number): Uint8Array {
+  if (srcW === dstW && srcH === dstH) return src;
+  const dst = new Uint8Array(dstW * dstH * 4);
+  for (let y = 0; y < dstH; y++) {
+    const sy = Math.floor(y * srcH / dstH);
+    for (let x = 0; x < dstW; x++) {
+      const sx = Math.floor(x * srcW / dstW);
+      const si = (sy * srcW + sx) * 4;
+      const di = (y * dstW + x) * 4;
+      dst[di] = src[si];
+      dst[di + 1] = src[si + 1];
+      dst[di + 2] = src[si + 2];
+      dst[di + 3] = src[si + 3];
+    }
+  }
+  return dst;
+}
+
 interface PendingLoad<T> {
   handle: AssetHandle<T>;
   promise: Promise<Uint8Array>;
@@ -120,6 +139,8 @@ interface StreamingTexture {
   pendingMips: { data: Uint8Array; width: number; height: number; level: number }[];
   mipsUploaded: number;
   totalMips: number;
+  fullW: number;
+  fullH: number;
 }
 
 // --- AssetStore ----------------------------------------------------------
@@ -225,16 +246,15 @@ export class AssetStore {
     for (const [, stream] of this.streaming) {
       while (processed < MAX_MIP_UPLOADS_PER_FRAME && stream.pendingMips.length > 0) {
         const mip = stream.pendingMips.shift()!;
-        stream.texture.mipmaps![mip.level] = { data: mip.data, width: mip.width, height: mip.height };
-        if (mip.level === 0) {
-          stream.texture.image = { data: mip.data, width: mip.width, height: mip.height };
-        }
+        // Upscale the mip to the texture's full size (nearest-neighbor).
+        const upscaled = nearestUpscale(mip.data, mip.width, mip.height, stream.fullW, stream.fullH);
+        stream.texture.image = { data: upscaled, width: stream.fullW, height: stream.fullH };
         stream.texture.needsUpdate = true;
         stream.mipsUploaded++;
         stream.handle.generation++;
         processed++;
       }
-      if (stream.mipsUploaded >= stream.totalMips) {
+      if (stream.pendingMips.length === 0) {
         stream.handle.state = 'ready';
         this.streaming.delete(stream.handle.path);
       }
@@ -474,11 +494,22 @@ export class AssetStore {
         console.error(`[afterglow] basis texture: no mips in ${path}`);
         return;
       }
-      // Create a DataTexture with the largest mip (mips[0]).
-      const largest = mips[0];
-      const texture = new THREE.DataTexture(
-        largest.data, largest.width, largest.height, THREE.RGBAFormat,
-      );
+
+      // mips[0] = largest (128×128), mips[N-1] = smallest (1×1).
+      // Progressive streaming: upload smallest first (instant preview),
+      // then larger mips each frame (sharper).
+      //
+      // WebGPU DataTexture can't change dimensions after creation, so we
+      // create it at full size and fill it with the smallest mip upscaled.
+      // Each frame, processStreaming() uploads the next larger mip
+      // (nearest-neighbor upscaled to full size) until the full-res data arrives.
+      const fullW = mips[0].width;
+      const fullH = mips[0].height;
+
+      // Start with the smallest mip, upscaled to full size.
+      const smallest = mips[mips.length - 1];
+      const initialData = nearestUpscale(smallest.data, smallest.width, smallest.height, fullW, fullH);
+      const texture = new THREE.DataTexture(initialData, fullW, fullH, THREE.RGBAFormat);
       texture.generateMipmaps = true;
       texture.minFilter = THREE.LinearMipmapLinearFilter;
       texture.magFilter = THREE.LinearFilter;
@@ -488,8 +519,26 @@ export class AssetStore {
       texture.needsUpdate = true;
       handle.asset = texture;
       handle.generation++;
-      handle.state = 'ready';
-      this.cache.set(path, handle);
+      handle.state = 'loading';
+
+      // Queue remaining mips (smallest→largest, excluding the one we just uploaded).
+      // We uploaded the smallest (index N-1). Queue N-2 down to 0 (largest).
+      const queue: { data: Uint8Array; width: number; height: number }[] = [];
+      for (let i = mips.length - 2; i >= 0; i--) {
+        queue.push(mips[i]);
+      }
+
+      this.streaming.set(path, {
+        handle,
+        texture,
+        pendingMips: queue.map(m => ({
+          data: m.data, width: m.width, height: m.height, level: 0,
+        })),
+        mipsUploaded: 1,
+        totalMips: mips.length,
+        fullW,
+        fullH,
+      });
     }).catch((err) => {
       handle.state = 'error';
       console.error(`[afterglow] basis texture failed: ${path}`, err);
@@ -498,7 +547,8 @@ export class AssetStore {
     return handle;
   }
 
-  private parseSerializedMips(data: Uint8Array): { data: Uint8Array; width: number; height: number }[] {
+  /** Parse serialized mip data: [count][w0][h0][len0][data0]... */
+  parseSerializedMips(data: Uint8Array): { data: Uint8Array; width: number; height: number }[] {
     if (data.length < 4) return [];
     const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
     const count = view.getUint32(0, true);

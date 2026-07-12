@@ -137,12 +137,12 @@ test('AssetStore: Basis texture creates handle with fallback immediately', async
   assert.equal(handle.state, 'loading', 'state is loading');
 });
 
-test('AssetStore: Basis texture transcodes and creates DataTexture', async () => {
+test('AssetStore: Basis texture transcodes and streams mips progressively', async () => {
   const { AssetStore } = await transpile('www/engine/asset-store.ts');
   const loader = new FakeLoader();
   const transcoder = new FakeTranscoder();
 
-  // Configure transcoder to return 3 mip levels.
+  // Configure transcoder to return 3 mip levels (largest first).
   transcoder.setMips([
     { width: 8, height: 8, data: new Uint8Array(8 * 8 * 4).fill(0xAA) },
     { width: 4, height: 4, data: new Uint8Array(4 * 4 * 4).fill(0xBB) },
@@ -155,17 +155,21 @@ test('AssetStore: Basis texture transcodes and creates DataTexture', async () =>
   const handle = store.loadTexture('sky.basis');
   assert.equal(handle.state, 'loading', 'loading initially');
 
-  await drive(store, 30);
+  await drive(store, 5);
 
-  // After driving, texture should be created from transcoded data.
+  // After transcode, texture should be created at full size (8×8)
+  // with the smallest mip (2×2) upscaled. With MAX_MIP_UPLOADS_PER_FRAME=2,
+  // 3 mips (1 initial + 2 queued) may already be fully uploaded.
   assert.ok(handle.asset, 'texture created after transcode');
-  assert.equal(handle.state, 'ready', 'should be ready');
-  assert.ok(handle.generation > 0, 'generation should have incremented');
+  assert.equal(handle.asset.image.width, 8, 'texture width = full size');
+  assert.equal(handle.asset.image.height, 8, 'texture height = full size');
+  assert.ok(handle.generation >= 1, 'generation incremented for initial mip');
   assert.equal(transcoder.transcodeCalls, 1, 'transcode called once');
-  // DataTexture should have the largest mip as image data.
-  assert.equal(handle.asset.image.width, 8, 'texture width = largest mip');
-  assert.equal(handle.asset.image.height, 8, 'texture height = largest mip');
-  assert.ok(handle.asset.mipmaps.length > 0, 'extra mips stored in mipmaps array');
+
+  // Drive more to ensure all mips are uploaded.
+  await drive(store, 30);
+  assert.equal(handle.state, 'ready', 'should be ready after all mips');
+  assert.ok(handle.generation >= 3, 'generation incremented for each mip');
 });
 
 test('AssetStore: poll drives both loader and transcoder', async () => {

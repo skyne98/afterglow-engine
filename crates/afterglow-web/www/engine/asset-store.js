@@ -144,6 +144,24 @@ async function parseGLTF(bytes, loader) {
 function parseJSON(bytes) {
   return JSON.parse(new TextDecoder().decode(bytes));
 }
+function nearestUpscale(src, srcW, srcH, dstW, dstH) {
+  if (srcW === dstW && srcH === dstH)
+    return src;
+  const dst = new Uint8Array(dstW * dstH * 4);
+  for (let y = 0;y < dstH; y++) {
+    const sy = Math.floor(y * srcH / dstH);
+    for (let x = 0;x < dstW; x++) {
+      const sx = Math.floor(x * srcW / dstW);
+      const si = (sy * srcW + sx) * 4;
+      const di = (y * dstW + x) * 4;
+      dst[di] = src[si];
+      dst[di + 1] = src[si + 1];
+      dst[di + 2] = src[si + 2];
+      dst[di + 3] = src[si + 3];
+    }
+  }
+  return dst;
+}
 
 class AssetStore {
   cache = new Map;
@@ -194,16 +212,14 @@ class AssetStore {
     for (const [, stream] of this.streaming) {
       while (processed < MAX_MIP_UPLOADS_PER_FRAME && stream.pendingMips.length > 0) {
         const mip = stream.pendingMips.shift();
-        stream.texture.mipmaps[mip.level] = { data: mip.data, width: mip.width, height: mip.height };
-        if (mip.level === 0) {
-          stream.texture.image = { data: mip.data, width: mip.width, height: mip.height };
-        }
+        const upscaled = nearestUpscale(mip.data, mip.width, mip.height, stream.fullW, stream.fullH);
+        stream.texture.image = { data: upscaled, width: stream.fullW, height: stream.fullH };
         stream.texture.needsUpdate = true;
         stream.mipsUploaded++;
         stream.handle.generation++;
         processed++;
       }
-      if (stream.mipsUploaded >= stream.totalMips) {
+      if (stream.pendingMips.length === 0) {
         stream.handle.state = "ready";
         this.streaming.delete(stream.handle.path);
       }
@@ -406,8 +422,11 @@ class AssetStore {
         console.error(`[afterglow] basis texture: no mips in ${path}`);
         return;
       }
-      const largest = mips[0];
-      const texture = new THREE.DataTexture(largest.data, largest.width, largest.height, THREE.RGBAFormat);
+      const fullW = mips[0].width;
+      const fullH = mips[0].height;
+      const smallest = mips[mips.length - 1];
+      const initialData = nearestUpscale(smallest.data, smallest.width, smallest.height, fullW, fullH);
+      const texture = new THREE.DataTexture(initialData, fullW, fullH, THREE.RGBAFormat);
       texture.generateMipmaps = true;
       texture.minFilter = THREE.LinearMipmapLinearFilter;
       texture.magFilter = THREE.LinearFilter;
@@ -417,8 +436,25 @@ class AssetStore {
       texture.needsUpdate = true;
       handle.asset = texture;
       handle.generation++;
-      handle.state = "ready";
-      this.cache.set(path, handle);
+      handle.state = "loading";
+      const queue = [];
+      for (let i = mips.length - 2;i >= 0; i--) {
+        queue.push(mips[i]);
+      }
+      this.streaming.set(path, {
+        handle,
+        texture,
+        pendingMips: queue.map((m) => ({
+          data: m.data,
+          width: m.width,
+          height: m.height,
+          level: 0
+        })),
+        mipsUploaded: 1,
+        totalMips: mips.length,
+        fullW,
+        fullH
+      });
     }).catch((err) => {
       handle.state = "error";
       console.error(`[afterglow] basis texture failed: ${path}`, err);
