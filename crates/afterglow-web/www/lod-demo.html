@@ -153,8 +153,8 @@ function buildLodTextures(serializedMips) {
   const numLods = 4;
   for (let i = 0; i < numLods; i++) {
     // Use progressively lower mip levels for lower LODs.
-    // mip 0=128, mip 2=32, mip 4=8, mip 6=2 — dramatic resolution drop.
-    const mipIdx = Math.min(i * 2, mips.length - 1);
+    // mip 0=128, mip 2=32, mip 4=8, mip 5=4 — dramatic but still colorful.
+    const mipIdx = Math.min(i === 3 ? 5 : i * 2, mips.length - 1);
     const mip = mips[mipIdx];
     const tex = new THREE.DataTexture(mip.data, mip.width, mip.height, THREE.RGBAFormat);
     tex.wrapS = THREE.RepeatWrapping;
@@ -199,6 +199,7 @@ function updateInfo(asset) {
   } else {
     html += `  Status: transcoding... (gen ${basisTexHandle.generation})<br>`;
   }
+  html += `<br>Press W to toggle wireframes`;
   infoEl.innerHTML = html;
   infoEl.style.display = 'block';
 }
@@ -245,12 +246,23 @@ function buildMeshesFromAsset(asset) {
     const [x, y, z] = grid[i] || [0, 0, 0];
     group.position.set(x, y, z);
     scene.add(group);
-    lodGroups.push({ group, solid, wire, solidMat });
+    lodGroups.push({ group, solid, wire, solidMat, wireMat });
   }
 
   loadingEl.style.display = 'none';
   updateInfo(asset);
 }
+
+// --- Wireframe toggle (press W) ---
+let wireframesVisible = true;
+addEventListener('keydown', e => {
+  if (e.key === 'w' || e.key === 'W') {
+    wireframesVisible = !wireframesVisible;
+    for (const lod of lodGroups) {
+      lod.wire.visible = wireframesVisible;
+    }
+  }
+});
 
 // --- Animation loop ---
 const startTime = performance.now();
