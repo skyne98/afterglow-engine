@@ -20,6 +20,11 @@ import * as THREE from 'three';
 
 import { Resource, defineResource } from './resource.js';
 
+/** Maximum bytes a single `load()` call can return (the response ring size). */
+const MAX_SINGLE_LOAD = 1 << 20; // 1 MiB
+/** Chunk size for streaming large assets. */
+const CHUNK_SIZE = 512 * 1024; // 512 KiB
+
 // --- asset loader interface (what AssetLoaderClient implements) -----------
 
 /**
@@ -164,8 +169,11 @@ export class AssetStore {
   /**
    * Load an asset with a custom parser. Returns a cached asset immediately
    * if already loaded. Prevents duplicate loads of the same path.
+   *
+   * If the asset exceeds the 1 MiB response ring, the store automatically
+   * falls back to chunked `size` + `read` calls internally.
    */
-  async load<T>(path: string, parser: AssetParser<T>): Promise<T> {
+  async load<T>(path: string, parser: AssetParser<T>, onProgress?: ProgressFn): Promise<T> {
     // Return cached immediately.
     const cached = this.cache.get(path);
     if (cached) return cached.asset as T;
@@ -176,7 +184,14 @@ export class AssetStore {
 
     // Start a new load.
     const promise = (async () => {
-      const bytes = await this.loader.load(path);
+      // If the asset is larger than the 1 MiB response ring, chunk it.
+      let bytes: Uint8Array;
+      const total = await this.loader.size(path);
+      if (total > MAX_SINGLE_LOAD) {
+        bytes = await this.loadChunked(path, total, onProgress);
+      } else {
+        bytes = await this.loader.load(path);
+      }
       const asset = await parser(bytes);
       this.cache.set(path, { asset, refCount: 0 });
       return asset;
@@ -208,61 +223,39 @@ export class AssetStore {
     return this.pending.has(path);
   }
 
-  // --- Convenience methods for common Three.js types ---
-
   /** Load an image as a `THREE.Texture` (PNG, JPEG, etc.). */
-  loadTexture(path: string): Promise<THREE.Texture> {
-    return this.load(path, parseTexture);
+  loadTexture(path: string, onProgress?: ProgressFn): Promise<THREE.Texture> {
+    return this.load(path, parseTexture, onProgress);
   }
 
   /** Load a GLTF/GLB model as a `THREE.Group`. */
-  loadGLTF(path: string, loader?: Parameters<typeof parseGLTF>[1]): Promise<THREE.Group> {
-    return this.load(path, (bytes) => parseGLTF(bytes, loader));
+  loadGLTF(path: string, loader?: Parameters<typeof parseGLTF>[1], onProgress?: ProgressFn): Promise<THREE.Group> {
+    return this.load(path, (bytes) => parseGLTF(bytes, loader), onProgress);
   }
 
   /** Load a JSON file (material defs, scene descriptions, etc.). */
-  loadJSON<T = unknown>(path: string): Promise<T> {
-    return this.load(path, parseJSON<T>);
+  loadJSON<T = unknown>(path: string, onProgress?: ProgressFn): Promise<T> {
+    return this.load(path, parseJSON<T>, onProgress);
   }
 
-  /**
-   * Load a large asset in chunks via `size` + `read` (streaming, no
-   * whole-file load). The chunks are concatenated before parsing.
-   * Useful for assets larger than the 1 MiB response ring.
-   */
-  async loadStreamed<T>(
-    path: string,
-    parser: AssetParser<T>,
-    chunkSize: number = 512 * 1024,
-    onProgress?: (loaded: number, total: number) => void,
-  ): Promise<T> {
-    // Return cached immediately.
-    const cached = this.cache.get(path);
-    if (cached) return cached.asset as T;
-
-    const total = await this.loader.size(path);
+  /** Internal: chunked load for assets larger than the 1 MiB response ring. */
+  private async loadChunked(path: string, total: number, onProgress?: ProgressFn): Promise<Uint8Array> {
     const chunks: Uint8Array[] = [];
     let offset = 0;
-
     while (offset < total) {
-      const len = Math.min(chunkSize, total - offset);
+      const len = Math.min(CHUNK_SIZE, total - offset);
       const chunk = await this.loader.read(path, offset, len);
       chunks.push(chunk);
       offset += chunk.byteLength;
       onProgress?.(offset, total);
     }
-
-    // Concatenate chunks.
     const bytes = new Uint8Array(total);
     let pos = 0;
     for (const chunk of chunks) {
       bytes.set(chunk, pos);
       pos += chunk.byteLength;
     }
-
-    const asset = await parser(bytes);
-    this.cache.set(path, { asset, refCount: 0 });
-    return asset;
+    return bytes;
   }
 
   /** Remove an asset from the cache (does not dispose GPU resources). */
