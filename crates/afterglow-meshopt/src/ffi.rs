@@ -28,9 +28,24 @@ pub struct meshopt_VertexCacheStatistics {
 }
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct meshopt_VertexFetchStatistics {
     pub overfetch: f32,
+    /// Padding to force sret (> 4 bytes) on WASM, matching the C++ ABI.
+    /// C++ uses sret for all struct returns; Rust uses scalar return for
+    /// structs ≤ 4 bytes. The padding makes Rust use sret too.
+    #[cfg(target_arch = "wasm32")]
+    _pad: [u8; 4],
+}
+
+impl Default for meshopt_VertexFetchStatistics {
+    fn default() -> Self {
+        Self {
+            overfetch: 0.0,
+            #[cfg(target_arch = "wasm32")]
+            _pad: [0; 4],
+        }
+    }
 }
 
 #[repr(C)]
@@ -387,22 +402,12 @@ unsafe extern "C" {
         primgroup_size: c_uint,
     ) -> meshopt_VertexCacheStatistics;
 
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn meshopt_analyzeVertexFetch(
         indices: *const c_uint,
         index_count: usize,
         vertex_count: usize,
         vertex_size: usize,
     ) -> meshopt_VertexFetchStatistics;
-
-    // On WASM, 4-byte structs are returned as scalars, not via hidden pointer.
-    #[cfg(target_arch = "wasm32")]
-    pub fn meshopt_analyzeVertexFetch(
-        indices: *const c_uint,
-        index_count: usize,
-        vertex_count: usize,
-        vertex_size: usize,
-    ) -> f32;
 
     pub fn meshopt_analyzeOverdraw(
         indices: *const c_uint,

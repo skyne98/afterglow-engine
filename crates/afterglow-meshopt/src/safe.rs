@@ -330,18 +330,8 @@ pub fn analyze_vertex_cache(
 
 /// Vertex fetch statistics (overfetch ratio).
 pub fn analyze_vertex_fetch(indices: &[u32], vertex_count: usize, vertex_size: usize) -> ffi::meshopt_VertexFetchStatistics {
-    #[cfg(target_arch = "wasm32")]
-    {
-        let overfetch = unsafe {
-            ffi::meshopt_analyzeVertexFetch(indices.as_ptr(), indices.len(), vertex_count, vertex_size)
-        };
-        ffi::meshopt_VertexFetchStatistics { overfetch }
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        unsafe {
-            ffi::meshopt_analyzeVertexFetch(indices.as_ptr(), indices.len(), vertex_count, vertex_size)
-        }
+    unsafe {
+        ffi::meshopt_analyzeVertexFetch(indices.as_ptr(), indices.len(), vertex_count, vertex_size)
     }
 }
 

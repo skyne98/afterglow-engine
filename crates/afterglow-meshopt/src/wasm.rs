@@ -58,9 +58,8 @@ pub extern "C" fn afterglow_meshopt_test() -> i32 {
     // --- Analyze ---
     let vc_stats = analyze_vertex_cache(&indices, 4, 16, 32, 32);
     if vc_stats.acmr > 0.0 { passed += 1; }
-    // analyze_vertex_fetch: skipped in WASM due to ABI mismatch with 4-byte struct return.
-    // The function works natively; WASM needs a wrapper that returns f32 directly.
-    // let vf_stats = analyze_vertex_fetch(&indices, 4, 3);
+    let vf_stats = analyze_vertex_fetch(&indices, 4, 3);
+    if vf_stats.overfetch >= 0.0 { passed += 1; }
     let od_stats = analyze_overdraw(&indices, &positions, 12);
     if od_stats.overdraw >= 0.0 { passed += 1; }
 

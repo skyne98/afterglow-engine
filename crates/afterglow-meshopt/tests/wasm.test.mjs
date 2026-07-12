@@ -26,7 +26,7 @@ async function loadWasm() {
 test('WASM: all meshopt functions work (21 checks)', async () => {
   const exports = await loadWasm();
   const passed = exports.afterglow_meshopt_test();
-  assert.ok(passed >= 19, `expected ≥19 checks passed, got ${passed}`);
+  assert.ok(passed >= 20, `expected ≥20 checks passed, got ${passed}`);
   console.log(`  ✅ ${passed} meshopt checks passed in WASM`);
 });
 
