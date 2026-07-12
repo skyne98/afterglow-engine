@@ -10,7 +10,7 @@ pub const MAGIC: &[u8; 4] = b"BIG1";
 pub const VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum AssetType { Texture, Mesh }
+pub enum AssetType { Texture, Mesh, VirtualTexture }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Compression { Meshopt, None }
@@ -30,6 +30,13 @@ pub struct ChunkInfo {
 pub enum ChunkMeta {
     Texture { width: u32, height: u32 },
     Mesh { index_count: u32, vertex_count: u32, position_stride: u32, uv_stride: u32 },
+    /// A virtual texture page — 128×128 texels (+ 4px border per side).
+    /// Stored as a chunk in the .big file, seekable by offset.
+    VirtualTexturePage {
+        mip: u8,
+        page_x: u32,
+        page_y: u32,
+    },
     Raw,
 }
 
@@ -105,6 +112,33 @@ impl BigWriter {
         self.assets.push(AssetEntry { name: name.to_string(), asset_type: AssetType::Texture, chunks: chunks_meta });
     }
 
+    /// Add a virtual texture as a set of page chunks.
+    /// Each page is 128×128 texels (+ 4px border per side = 136×136 slot).
+    /// Pages are stored as individual seekable chunks in the .big file.
+    pub fn add_virtual_texture(&mut self, name: &str, virtual_size: u32, pages: Vec<VirtualTexturePageData>) {
+        let asset_idx = self.assets.len();
+        let mut chunks_meta = Vec::new();
+        for page in &pages {
+            let uncompressed_size = page.data.len() as u64;
+            self.chunks.push((asset_idx, chunks_meta.len(), page.data.clone(), Compression::None));
+            chunks_meta.push(ChunkInfo {
+                offset: 0, compressed_size: 0, uncompressed_size,
+                lod_level: 0, mip_level: page.mip,
+                compression: Compression::None,
+                meta: ChunkMeta::VirtualTexturePage {
+                    mip: page.mip,
+                    page_x: page.page_x,
+                    page_y: page.page_y,
+                },
+            });
+        }
+        self.assets.push(AssetEntry {
+            name: name.to_string(),
+            asset_type: AssetType::VirtualTexture,
+            chunks: chunks_meta,
+        });
+    }
+
     pub fn add_mesh(&mut self, name: &str, lods: Vec<MeshLodData>) {
         let asset_idx = self.assets.len();
         let mut chunks_meta = Vec::new();
@@ -170,6 +204,14 @@ impl BigWriter {
     }
 }
 
+pub struct VirtualTexturePageData {
+    pub mip: u8,
+    pub page_x: u32,
+    pub page_y: u32,
+    /// Raw page data: SLOT_SIZE × SLOT_SIZE × 4 bytes (RGBA8, with border).
+    pub data: Vec<u8>,
+}
+
 pub struct MeshLodData {
     pub indices: Vec<u32>,
     pub positions: Vec<f32>,
@@ -211,6 +253,36 @@ pub fn read_chunk_decompressed(data: &[u8], chunk: &ChunkInfo) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn roundtrip_virtual_texture_pages() {
+        let mut writer = BigWriter::new();
+        let page_data = vec![0xAB; 136 * 136 * 4]; // SLOT_SIZE × SLOT_SIZE × 4
+        writer.add_virtual_texture("terrain", 4096, vec![
+            VirtualTexturePageData { mip: 0, page_x: 0, page_y: 0, data: page_data.clone() },
+            VirtualTexturePageData { mip: 1, page_x: 0, page_y: 0, data: vec![0xCD; 136 * 136 * 4] },
+        ]);
+        let mut buf = Vec::new();
+        writer.finish(&mut buf).unwrap();
+        let (header, _) = parse_header(&buf).unwrap();
+        assert_eq!(header.assets.len(), 1);
+        assert_eq!(header.assets[0].asset_type, AssetType::VirtualTexture);
+        assert_eq!(header.assets[0].chunks.len(), 2);
+        // Verify page metadata
+        match &header.assets[0].chunks[0].meta {
+            ChunkMeta::VirtualTexturePage { mip, page_x, page_y } => {
+                assert_eq!(*mip, 0);
+                assert_eq!(*page_x, 0);
+                assert_eq!(*page_y, 0);
+            }
+            _ => panic!("expected VirtualTexturePage"),
+        }
+        // Verify data roundtrip (Compression::None for VT pages)
+        let c0 = &header.assets[0].chunks[0];
+        assert_eq!(c0.compression, Compression::None);
+        let decoded = read_chunk_decompressed(&buf, c0);
+        assert_eq!(decoded, page_data);
+    }
 
     #[test]
     fn roundtrip_compressed_texture() {

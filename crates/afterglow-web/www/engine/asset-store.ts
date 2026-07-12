@@ -15,6 +15,7 @@ import * as THREE from 'three';
 import { Resource, defineResource } from './resource.js';
 import { AssetHandle } from './asset-handle.js';
 import { fallbackTexture, fallbackGroup } from './fallback.js';
+import type { VirtualTextureStore } from './virtual-texture.js';
 
 // --- interfaces (match the generated client APIs) -----------------------
 
@@ -179,6 +180,7 @@ export class AssetStore {
   };
 
   private loader: AssetLoader;
+  private vtStore: VirtualTextureStore | null = null;
 
   constructor(
     loader: AssetLoader,
@@ -202,6 +204,12 @@ export class AssetStore {
   }
 
   get assetLoader(): AssetLoader { return this.loader; }
+
+  /** Set the VirtualTextureStore — enables universal VT for all textures. */
+  setVirtualTextureStore(vt: VirtualTextureStore) { this.vtStore = vt; }
+
+  /** Get the VirtualTextureStore (if set). */
+  get virtualTextureStore(): VirtualTextureStore | null { return this.vtStore; }
 
   /** Drive all workers + process pending loads + stream mips. Call each frame. */
   poll(): void {
@@ -471,6 +479,12 @@ export class AssetStore {
   // --- Texture loading (existing, unchanged) ---
 
   loadTexture(path: string): AssetHandle<THREE.Texture> {
+    // Universal VT: all textures go through the VirtualTextureStore.
+    // If a VT store is available, delegate to it.
+    if (this.vtStore) {
+      return this.vtStore.loadTexture(path, { virtualSize: 4096 });
+    }
+    // Fallback: legacy non-VT path (for testing without VT)
     const lower = path.toLowerCase();
     if (this.texture && (lower.endsWith('.basis') || lower.endsWith('.ktx2'))) {
       return this.loadStreamingBasisTexture(path);

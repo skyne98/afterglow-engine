@@ -113,6 +113,9 @@ fn inspect(args: &[String]) {
                     format!("{index_count} indices, {vertex_count} verts")
                 }
                 afterglow_pipeline::ChunkMeta::Raw => "raw".to_string(),
+                afterglow_pipeline::ChunkMeta::VirtualTexturePage { mip, page_x, page_y } => {
+                    format!("VT page mip={mip} ({page_x},{page_y})")
+                }
             };
             println!("    LOD{} MIP{} {:?} {} ({}→{} bytes at offset {})",
                 chunk.lod_level, chunk.mip_level, chunk.compression, detail, chunk.uncompressed_size, chunk.compressed_size, chunk.offset);
