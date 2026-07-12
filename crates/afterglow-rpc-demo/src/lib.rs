@@ -150,27 +150,65 @@ mod type_matrix {
     pub struct TypeMatrixImpl;
 
     impl TypeMatrixServer for TypeMatrixImpl {
-        fn echo_f32(&mut self, x: f32) -> f32 { x }
-        fn echo_f64(&mut self, x: f64) -> f64 { x }
-        fn echo_u8(&mut self, x: u8) -> u8 { x }
-        fn echo_u16(&mut self, x: u16) -> u16 { x }
-        fn echo_u32(&mut self, x: u32) -> u32 { x }
-        fn echo_u64(&mut self, x: u64) -> u64 { x }
-        fn echo_usize(&mut self, x: usize) -> usize { x }
-        fn echo_i8(&mut self, x: i8) -> i8 { x }
-        fn echo_i16(&mut self, x: i16) -> i16 { x }
-        fn echo_i32(&mut self, x: i32) -> i32 { x }
-        fn echo_i64(&mut self, x: i64) -> i64 { x }
-        fn echo_isize(&mut self, x: isize) -> isize { x }
-        fn echo_bool(&mut self, x: bool) -> bool { x }
-        fn echo_string(&mut self, s: String) -> String { s }
-        fn echo_vec_u8(&mut self, v: Vec<u8>) -> Vec<u8> { v }
-        fn echo_vec_f32(&mut self, v: Vec<f32>) -> Vec<f32> { v }
-        fn echo_vec_f64(&mut self, v: Vec<f64>) -> Vec<f64> { v }
-        fn multi(&mut self, a: u32, b: f32, c: String, d: bool) -> u64 {
-            (a as u64).wrapping_add((b as u64).wrapping_mul(c.len() as u64)).wrapping_add(if d { 1000 } else { 0 })
+        fn echo_f32(&mut self, x: f32) -> f32 {
+            x
         }
-        fn no_args(&mut self) -> u32 { 42 }
+        fn echo_f64(&mut self, x: f64) -> f64 {
+            x
+        }
+        fn echo_u8(&mut self, x: u8) -> u8 {
+            x
+        }
+        fn echo_u16(&mut self, x: u16) -> u16 {
+            x
+        }
+        fn echo_u32(&mut self, x: u32) -> u32 {
+            x
+        }
+        fn echo_u64(&mut self, x: u64) -> u64 {
+            x
+        }
+        fn echo_usize(&mut self, x: usize) -> usize {
+            x
+        }
+        fn echo_i8(&mut self, x: i8) -> i8 {
+            x
+        }
+        fn echo_i16(&mut self, x: i16) -> i16 {
+            x
+        }
+        fn echo_i32(&mut self, x: i32) -> i32 {
+            x
+        }
+        fn echo_i64(&mut self, x: i64) -> i64 {
+            x
+        }
+        fn echo_isize(&mut self, x: isize) -> isize {
+            x
+        }
+        fn echo_bool(&mut self, x: bool) -> bool {
+            x
+        }
+        fn echo_string(&mut self, s: String) -> String {
+            s
+        }
+        fn echo_vec_u8(&mut self, v: Vec<u8>) -> Vec<u8> {
+            v
+        }
+        fn echo_vec_f32(&mut self, v: Vec<f32>) -> Vec<f32> {
+            v
+        }
+        fn echo_vec_f64(&mut self, v: Vec<f64>) -> Vec<f64> {
+            v
+        }
+        fn multi(&mut self, a: u32, b: f32, c: String, d: bool) -> u64 {
+            (a as u64)
+                .wrapping_add((b as u64).wrapping_mul(c.len() as u64))
+                .wrapping_add(if d { 1000 } else { 0 })
+        }
+        fn no_args(&mut self) -> u32 {
+            42
+        }
         fn void(&mut self, _x: u32) {}
     }
 
@@ -199,12 +237,24 @@ mod type_matrix {
         assert_eq!(c.echo_string("héllo 世界".into()).unwrap(), "héllo 世界");
 
         // Vectors.
-        assert_eq!(c.echo_vec_u8(vec![1, 2, 3, 250]).unwrap(), vec![1, 2, 3, 250]);
-        assert_eq!(c.echo_vec_f32(vec![1.5, -2.5, 3.0]).unwrap(), vec![1.5, -2.5, 3.0]);
-        assert_eq!(c.echo_vec_f64(vec![1e100, -1e100]).unwrap(), vec![1e100, -1e100]);
+        assert_eq!(
+            c.echo_vec_u8(vec![1, 2, 3, 250]).unwrap(),
+            vec![1, 2, 3, 250]
+        );
+        assert_eq!(
+            c.echo_vec_f32(vec![1.5, -2.5, 3.0]).unwrap(),
+            vec![1.5, -2.5, 3.0]
+        );
+        assert_eq!(
+            c.echo_vec_f64(vec![1e100, -1e100]).unwrap(),
+            vec![1e100, -1e100]
+        );
 
         // Multi-param mixed types.
-        assert_eq!(c.multi(10, 2.0, "hello".into(), true).unwrap(), 10 + 10 + 1000);
+        assert_eq!(
+            c.multi(10, 2.0, "hello".into(), true).unwrap(),
+            10 + 10 + 1000
+        );
 
         // No args + return.
         assert_eq!(c.no_args().unwrap(), 42);

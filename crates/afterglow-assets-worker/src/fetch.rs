@@ -14,8 +14,8 @@
 
 #![cfg(target_arch = "wasm32")]
 
-use afterglow_rpc::{RpcError, RpcResult, encode};
 use afterglow_rpc::wasm::Scratch;
+use afterglow_rpc::{RpcError, RpcResult, encode};
 
 const FETCH_SCRATCH_SIZE: usize = 1 << 20; // 1 MiB
 
@@ -77,7 +77,9 @@ pub async fn fetch_range(path: &str, offset: u64, len: u32) -> RpcResult<Vec<u8>
     let url = path.as_bytes();
     let fetch_id = unsafe { ag_fetch_range_start(url.as_ptr(), url.len(), offset, len) };
     if fetch_id == 0 {
-        return Err(RpcError::Server(format!("range fetch start failed: {path}")));
+        return Err(RpcError::Server(format!(
+            "range fetch start failed: {path}"
+        )));
     }
     let bytes = poll_fetch_body(fetch_id, path).await?;
     encode(&bytes)

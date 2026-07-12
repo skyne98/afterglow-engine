@@ -88,7 +88,9 @@ impl AssetLoaderWorker {
 #[cfg(not(target_arch = "wasm32"))]
 impl Default for AssetLoaderWorker {
     fn default() -> Self {
-        Self { root: ASSET_ROOT.get().cloned() }
+        Self {
+            root: ASSET_ROOT.get().cloned(),
+        }
     }
 }
 #[cfg(target_arch = "wasm32")]
@@ -230,7 +232,8 @@ mod tests {
         assert!(eof.is_empty(), "read at EOF should return empty");
 
         // 6. Read past end → partial.
-        let tail: Vec<u8> = drive(&client, client.read("test.txt".into(), 9, 100).unwrap()).unwrap();
+        let tail: Vec<u8> =
+            drive(&client, client.read("test.txt".into(), 9, 100).unwrap()).unwrap();
         assert_eq!(tail, b"et", "partial read at end");
 
         // 7. Missing asset → error.
@@ -309,7 +312,11 @@ mod tests {
             assert!(n > 0, "read at {offset} returned 0");
             // Verify data.
             for i in 0..n {
-                assert_eq!(buf[i], ((offset as usize + i) % 256) as u8, "byte at {offset}+{i}");
+                assert_eq!(
+                    buf[i],
+                    ((offset as usize + i) % 256) as u8,
+                    "byte at {offset}+{i}"
+                );
             }
             offset += n as u64;
         }
@@ -320,15 +327,15 @@ mod tests {
 
     static VTABLE: RawWakerVTable = RawWakerVTable::new(
         |_| RawWaker::new(std::ptr::null(), &VTABLE), // clone
-        |_| {},                                        // wake
-        |_| {},                                        // wake_by_ref
-        |_| {},                                        // drop
+        |_| {},                                       // wake
+        |_| {},                                       // wake_by_ref
+        |_| {},                                       // drop
     );
 
     // --- Async type matrix: every type round-trips through the async poll model ---
 
-    use afterglow_rpc_macros::rpc;
     use afterglow_rpc::ServeFuture;
+    use afterglow_rpc_macros::rpc;
 
     #[rpc(worker = AsyncTypeMatrixWorker)]
     pub trait AsyncTypeMatrix {
@@ -415,17 +422,50 @@ mod tests {
     fn async_all_types_round_trip() {
         let (client, _ev) = AsyncTypeMatrixClient::spawn_worker(AsyncTypeMatrixWorker).unwrap();
 
-        assert_eq!(drive_to_completion(&client, client.echo_f32(3.14).unwrap()).unwrap(), 3.14);
-        assert_eq!(drive_to_completion(&client, client.echo_u32(42).unwrap()).unwrap(), 42);
-        assert_eq!(drive_to_completion(&client, client.echo_u64(u64::MAX).unwrap()).unwrap(), u64::MAX);
-        assert_eq!(drive_to_completion(&client, client.echo_i64(i64::MIN).unwrap()).unwrap(), i64::MIN);
-        assert_eq!(drive_to_completion(&client, client.echo_bool(true).unwrap()).unwrap(), true);
-        assert_eq!(drive_to_completion(&client, client.echo_bool(false).unwrap()).unwrap(), false);
-        assert_eq!(drive_to_completion(&client, client.echo_string("héllo".into()).unwrap()).unwrap(), "héllo");
-        assert_eq!(drive_to_completion(&client, client.echo_vec_u8(vec![1, 2, 3]).unwrap()).unwrap(), vec![1, 2, 3]);
-        assert_eq!(drive_to_completion(&client, client.echo_vec_f32(vec![1.5, -2.5]).unwrap()).unwrap(), vec![1.5, -2.5]);
-        assert_eq!(drive_to_completion(&client, client.multi(10, "hello".into(), true).unwrap()).unwrap(), 10 + 5 + 1000);
-        assert_eq!(drive_to_completion(&client, client.no_args().unwrap()).unwrap(), 42);
+        assert_eq!(
+            drive_to_completion(&client, client.echo_f32(3.14).unwrap()).unwrap(),
+            3.14
+        );
+        assert_eq!(
+            drive_to_completion(&client, client.echo_u32(42).unwrap()).unwrap(),
+            42
+        );
+        assert_eq!(
+            drive_to_completion(&client, client.echo_u64(u64::MAX).unwrap()).unwrap(),
+            u64::MAX
+        );
+        assert_eq!(
+            drive_to_completion(&client, client.echo_i64(i64::MIN).unwrap()).unwrap(),
+            i64::MIN
+        );
+        assert_eq!(
+            drive_to_completion(&client, client.echo_bool(true).unwrap()).unwrap(),
+            true
+        );
+        assert_eq!(
+            drive_to_completion(&client, client.echo_bool(false).unwrap()).unwrap(),
+            false
+        );
+        assert_eq!(
+            drive_to_completion(&client, client.echo_string("héllo".into()).unwrap()).unwrap(),
+            "héllo"
+        );
+        assert_eq!(
+            drive_to_completion(&client, client.echo_vec_u8(vec![1, 2, 3]).unwrap()).unwrap(),
+            vec![1, 2, 3]
+        );
+        assert_eq!(
+            drive_to_completion(&client, client.echo_vec_f32(vec![1.5, -2.5]).unwrap()).unwrap(),
+            vec![1.5, -2.5]
+        );
+        assert_eq!(
+            drive_to_completion(&client, client.multi(10, "hello".into(), true).unwrap()).unwrap(),
+            10 + 5 + 1000
+        );
+        assert_eq!(
+            drive_to_completion(&client, client.no_args().unwrap()).unwrap(),
+            42
+        );
         assert!(drive_to_completion(&client, client.void(99).unwrap()).is_ok());
     }
 
@@ -452,26 +492,39 @@ mod tests {
         let mut f4 = std::pin::pin!(f4);
         let mut f5 = std::pin::pin!(f5);
 
-        let mut r1 = None; let mut r2 = None; let mut r3 = None;
-        let mut r4 = None; let mut r5 = None;
+        let mut r1 = None;
+        let mut r2 = None;
+        let mut r3 = None;
+        let mut r4 = None;
+        let mut r5 = None;
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
 
         while r1.is_none() || r2.is_none() || r3.is_none() || r4.is_none() || r5.is_none() {
             client.poll();
             if r1.is_none() {
-                if let Poll::Ready(v) = f1.as_mut().poll(&mut cx) { r1 = Some(v); }
+                if let Poll::Ready(v) = f1.as_mut().poll(&mut cx) {
+                    r1 = Some(v);
+                }
             }
             if r2.is_none() {
-                if let Poll::Ready(v) = f2.as_mut().poll(&mut cx) { r2 = Some(v); }
+                if let Poll::Ready(v) = f2.as_mut().poll(&mut cx) {
+                    r2 = Some(v);
+                }
             }
             if r3.is_none() {
-                if let Poll::Ready(v) = f3.as_mut().poll(&mut cx) { r3 = Some(v); }
+                if let Poll::Ready(v) = f3.as_mut().poll(&mut cx) {
+                    r3 = Some(v);
+                }
             }
             if r4.is_none() {
-                if let Poll::Ready(v) = f4.as_mut().poll(&mut cx) { r4 = Some(v); }
+                if let Poll::Ready(v) = f4.as_mut().poll(&mut cx) {
+                    r4 = Some(v);
+                }
             }
             if r5.is_none() {
-                if let Poll::Ready(v) = f5.as_mut().poll(&mut cx) { r5 = Some(v); }
+                if let Poll::Ready(v) = f5.as_mut().poll(&mut cx) {
+                    r5 = Some(v);
+                }
             }
             if std::time::Instant::now() > deadline {
                 panic!("concurrent test timed out");

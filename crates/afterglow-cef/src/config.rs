@@ -116,11 +116,9 @@ impl AppBuilder {
     pub fn index_html(mut self, bytes: &'static [u8]) -> Self {
         // Replace any prior entry (there's only one embedded asset slot).
         self.cfg.embedded.clear();
-        self.cfg.embedded.push((
-            self.cfg.root_path.clone(),
-            "text/html".to_string(),
-            bytes,
-        ));
+        self.cfg
+            .embedded
+            .push((self.cfg.root_path.clone(), "text/html".to_string(), bytes));
         self
     }
 

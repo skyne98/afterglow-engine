@@ -25,9 +25,9 @@ use std::path::{Path, PathBuf};
 pub mod range;
 pub mod source;
 
-pub use source::{AssetSource, BytesSource};
 #[cfg(not(target_arch = "wasm32"))]
 pub use source::FsSource;
+pub use source::{AssetSource, BytesSource};
 
 /// Guess a MIME type from a path's extension.
 ///

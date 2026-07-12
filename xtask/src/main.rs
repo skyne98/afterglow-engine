@@ -92,9 +92,7 @@ fn wasm() -> i32 {
     let www = workspace_root().join("crates/afterglow-web/www");
 
     // Copy the transport wasm (afterglow-web) + JS glue.
-    let copies: &[(&str, &str)] = &[
-        ("afterglow_web.wasm", "afterglow_web.wasm"),
-    ];
+    let copies: &[(&str, &str)] = &[("afterglow_web.wasm", "afterglow_web.wasm")];
     for (from, to) in copies {
         let from_path = src.join(from);
         let to_path = www.join(to);
@@ -142,10 +140,18 @@ fn wasm() -> i32 {
                                 let to_wasm = format!("{trait_lower}.wasm");
                                 let to_path = www.join(&to_wasm);
                                 if let Err(e) = std::fs::copy(&from_path, &to_path) {
-                                    eprintln!("failed to copy {} -> {}: {e}", from_path.display(), to_path.display());
+                                    eprintln!(
+                                        "failed to copy {} -> {}: {e}",
+                                        from_path.display(),
+                                        to_path.display()
+                                    );
                                     return 1;
                                 }
-                                eprintln!("copied {} -> {}", from_path.display(), to_path.display());
+                                eprintln!(
+                                    "copied {} -> {}",
+                                    from_path.display(),
+                                    to_path.display()
+                                );
                             }
                         }
                     }
@@ -176,7 +182,14 @@ fn wasm() -> i32 {
                         let js_name = name.to_string_lossy().replace(".ts", ".js");
                         let js_to = www.join(&js_name);
                         match std::process::Command::new("bun")
-                            .args(["build", &path.to_string_lossy(), "--outfile", &js_to.to_string_lossy(), "--target", "browser"])
+                            .args([
+                                "build",
+                                &path.to_string_lossy(),
+                                "--outfile",
+                                &js_to.to_string_lossy(),
+                                "--target",
+                                "browser",
+                            ])
                             .output()
                         {
                             Ok(o) if o.status.success() => {
@@ -184,7 +197,10 @@ fn wasm() -> i32 {
                             }
                             _ => {
                                 // bun not available: leave the .ts; users can compile manually.
-                                eprintln!("warn: bun not available; {} left as .ts", path.display());
+                                eprintln!(
+                                    "warn: bun not available; {} left as .ts",
+                                    path.display()
+                                );
                             }
                         }
                     }

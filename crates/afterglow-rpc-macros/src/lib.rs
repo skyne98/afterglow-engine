@@ -45,7 +45,10 @@ struct RpcAttr {
 impl syn::parse::Parse for RpcAttr {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
         if input.is_empty() {
-            return Ok(Self { worker: None, singleton: false });
+            return Ok(Self {
+                worker: None,
+                singleton: false,
+            });
         }
         let ident: Ident = input.parse()?;
         if ident != "worker" {
@@ -77,7 +80,10 @@ impl syn::parse::Parse for RpcAttr {
                 "unexpected tokens after `worker = Type`",
             ));
         }
-        Ok(Self { worker: Some(ty), singleton })
+        Ok(Self {
+            worker: Some(ty),
+            singleton,
+        })
     }
 }
 
@@ -95,9 +101,10 @@ pub fn rpc(attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 
     // Detect async: if any method is `async fn`, the whole trait is async (poll model).
-    let is_async = tr.items.iter().any(|item| {
-        matches!(item, TraitItem::Fn(m) if m.sig.asyncness.is_some())
-    });
+    let is_async = tr
+        .items
+        .iter()
+        .any(|item| matches!(item, TraitItem::Fn(m) if m.sig.asyncness.is_some()));
 
     // Generate the typed TS client when `worker = Type` (wasm exports exist →
     // JS needs a client). Non-worker traits are Rust-only; no TS needed.
@@ -139,7 +146,9 @@ pub fn rpc(attr: TokenStream, item: TokenStream) -> TokenStream {
         // so single-arg methods round-trip like multi-arg ones.
         if is_async {
             // Async: server trait returns ServeFuture, client returns a Future.
-            sigs.push(quote! { fn #mname(&self, #( #pats: #tys ),*) -> ::afterglow_rpc::ServeFuture; });
+            sigs.push(
+                quote! { fn #mname(&self, #( #pats: #tys ),*) -> ::afterglow_rpc::ServeFuture; },
+            );
             clients.push(quote! {
                 pub fn #mname(&self, #( #pats: #tys ),*)
                     -> ::afterglow_rpc::RpcResult<impl ::std::future::Future<Output = #ret>>
@@ -219,26 +228,29 @@ pub fn rpc(attr: TokenStream, item: TokenStream) -> TokenStream {
                         }
                     }
                 };
-                (spawn, quote! {
-                    #[cfg(not(target_arch = "wasm32"))]
-                    #vis struct #client {
-                        transport: ::std::sync::Arc<::afterglow_rpc::native::AsyncWorkerTransport>,
-                    }
-
-                    #[cfg(not(target_arch = "wasm32"))]
-                    impl ::std::clone::Clone for #client {
-                        fn clone(&self) -> Self {
-                            Self { transport: ::std::sync::Arc::clone(&self.transport) }
+                (
+                    spawn,
+                    quote! {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        #vis struct #client {
+                            transport: ::std::sync::Arc<::afterglow_rpc::native::AsyncWorkerTransport>,
                         }
-                    }
 
-                    #[cfg(not(target_arch = "wasm32"))]
-                    impl #client {
-                        pub fn new(t: ::std::sync::Arc<::afterglow_rpc::native::AsyncWorkerTransport>) -> Self {
-                            Self { transport: t }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        impl ::std::clone::Clone for #client {
+                            fn clone(&self) -> Self {
+                                Self { transport: ::std::sync::Arc::clone(&self.transport) }
+                            }
                         }
-                    }
-                })
+
+                        #[cfg(not(target_arch = "wasm32"))]
+                        impl #client {
+                            pub fn new(t: ::std::sync::Arc<::afterglow_rpc::native::AsyncWorkerTransport>) -> Self {
+                                Self { transport: t }
+                            }
+                        }
+                    },
+                )
             } else {
                 // Per-spawn: each call creates a new worker thread.
                 let spawn = quote! {
@@ -257,15 +269,18 @@ pub fn rpc(attr: TokenStream, item: TokenStream) -> TokenStream {
                         }
                     }
                 };
-                (spawn, quote! {
-                    #[cfg(not(target_arch = "wasm32"))]
-                    #vis struct #client { transport: ::afterglow_rpc::native::AsyncWorkerTransport }
+                (
+                    spawn,
+                    quote! {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        #vis struct #client { transport: ::afterglow_rpc::native::AsyncWorkerTransport }
 
-                    #[cfg(not(target_arch = "wasm32"))]
-                    impl #client {
-                        pub fn new(t: ::afterglow_rpc::native::AsyncWorkerTransport) -> Self { Self { transport: t } }
-                    }
-                })
+                        #[cfg(not(target_arch = "wasm32"))]
+                        impl #client {
+                            pub fn new(t: ::afterglow_rpc::native::AsyncWorkerTransport) -> Self { Self { transport: t } }
+                        }
+                    },
+                )
             };
             let wasm = quote! {
                 // Wasm async worker exports (poll model). `worker.js` drives these:
@@ -410,76 +425,76 @@ pub fn rpc(attr: TokenStream, item: TokenStream) -> TokenStream {
                         }
                     }
                 };
-            let wasm = quote! {
-                // Web worker exports in a private `#[cfg(wasm32)]` module, so none
-                // of this is compiled natively (where multiple worker traits may
-                // coexist). On wasm at most one worker service is allowed.
-                #[cfg(target_arch = "wasm32")]
-                mod afterglow_wasm {
-                    use super::{#server, #wt};
-                    use std::cell::RefCell;
-                    use ::afterglow_rpc::wasm::Scratch;
+                let wasm = quote! {
+                    // Web worker exports in a private `#[cfg(wasm32)]` module, so none
+                    // of this is compiled natively (where multiple worker traits may
+                    // coexist). On wasm at most one worker service is allowed.
+                    #[cfg(target_arch = "wasm32")]
+                    mod afterglow_wasm {
+                        use super::{#server, #wt};
+                        use std::cell::RefCell;
+                        use ::afterglow_rpc::wasm::Scratch;
 
-                    const IN_SIZE: usize = 1 << 20;
-                    const OUT_SIZE: usize = 1 << 20;
+                        const IN_SIZE: usize = 1 << 20;
+                        const OUT_SIZE: usize = 1 << 20;
 
-                    static INPUT: Scratch<{ IN_SIZE }> = Scratch::new();
-                    static OUTPUT: Scratch<{ OUT_SIZE }> = Scratch::new();
+                        static INPUT: Scratch<{ IN_SIZE }> = Scratch::new();
+                        static OUTPUT: Scratch<{ OUT_SIZE }> = Scratch::new();
 
-                    thread_local! {
-                        static WORKER: RefCell<Option<Box<dyn #server>>> = const { RefCell::new(None) };
+                        thread_local! {
+                            static WORKER: RefCell<Option<Box<dyn #server>>> = const { RefCell::new(None) };
+                        }
+
+                        /// Construct the worker impl. JS calls this once after
+                        /// instantiating the module. Requires `#wt: Default`.
+                        #[unsafe(no_mangle)]
+                        pub extern "C" fn afterglow_wasm_init() {
+                            WORKER.with(|w| *w.borrow_mut() = Some(Box::new(#wt::default())));
+                        }
+
+                        /// # Safety
+                        /// `args_ptr` must point to `args_len` readable bytes and
+                        /// `out_ptr` to `out_max` writable bytes in wasm linear memory,
+                        /// both valid for the call. Must be called after
+                        /// `afterglow_wasm_init`. Single-threaded (one worker = one
+                        /// instance on one thread).
+                        #[unsafe(no_mangle)]
+                        pub unsafe extern "C" fn afterglow_wasm_serve_frame(
+                            method: u32,
+                            args_ptr: *const u8,
+                            args_len: usize,
+                            out_ptr: *mut u8,
+                            out_max: usize,
+                        ) -> i32 {
+                            // SAFETY: caller upholds pointer validity (see # Safety).
+                            let args = unsafe { std::slice::from_raw_parts(args_ptr, args_len) };
+                            let out = unsafe { std::slice::from_raw_parts_mut(out_ptr, out_max) };
+                            let result = WORKER.with(|w| match w.borrow_mut().as_deref_mut() {
+                                Some(s) => s.serve(method, args),
+                                None => Err(::afterglow_rpc::RpcError::Server(
+                                    "wasm worker not initialized".into(),
+                                )),
+                            });
+                            ::afterglow_rpc::wasm::write_response(method, result, out)
+                        }
+
+                        #[unsafe(no_mangle)]
+                        pub extern "C" fn afterglow_wasm_input_ptr() -> usize {
+                            INPUT.ptr()
+                        }
+                        #[unsafe(no_mangle)]
+                        pub extern "C" fn afterglow_wasm_input_size() -> usize { INPUT.size() }
+                        #[unsafe(no_mangle)]
+                        pub extern "C" fn afterglow_wasm_output_ptr() -> usize {
+                            OUTPUT.ptr()
+                        }
+                        #[unsafe(no_mangle)]
+                        pub extern "C" fn afterglow_wasm_output_size() -> usize { OUTPUT.size() }
                     }
-
-                    /// Construct the worker impl. JS calls this once after
-                    /// instantiating the module. Requires `#wt: Default`.
-                    #[unsafe(no_mangle)]
-                    pub extern "C" fn afterglow_wasm_init() {
-                        WORKER.with(|w| *w.borrow_mut() = Some(Box::new(#wt::default())));
-                    }
-
-                    /// # Safety
-                    /// `args_ptr` must point to `args_len` readable bytes and
-                    /// `out_ptr` to `out_max` writable bytes in wasm linear memory,
-                    /// both valid for the call. Must be called after
-                    /// `afterglow_wasm_init`. Single-threaded (one worker = one
-                    /// instance on one thread).
-                    #[unsafe(no_mangle)]
-                    pub unsafe extern "C" fn afterglow_wasm_serve_frame(
-                        method: u32,
-                        args_ptr: *const u8,
-                        args_len: usize,
-                        out_ptr: *mut u8,
-                        out_max: usize,
-                    ) -> i32 {
-                        // SAFETY: caller upholds pointer validity (see # Safety).
-                        let args = unsafe { std::slice::from_raw_parts(args_ptr, args_len) };
-                        let out = unsafe { std::slice::from_raw_parts_mut(out_ptr, out_max) };
-                        let result = WORKER.with(|w| match w.borrow_mut().as_deref_mut() {
-                            Some(s) => s.serve(method, args),
-                            None => Err(::afterglow_rpc::RpcError::Server(
-                                "wasm worker not initialized".into(),
-                            )),
-                        });
-                        ::afterglow_rpc::wasm::write_response(method, result, out)
-                    }
-
-                    #[unsafe(no_mangle)]
-                    pub extern "C" fn afterglow_wasm_input_ptr() -> usize {
-                        INPUT.ptr()
-                    }
-                    #[unsafe(no_mangle)]
-                    pub extern "C" fn afterglow_wasm_input_size() -> usize { INPUT.size() }
-                    #[unsafe(no_mangle)]
-                    pub extern "C" fn afterglow_wasm_output_ptr() -> usize {
-                        OUTPUT.ptr()
-                    }
-                    #[unsafe(no_mangle)]
-                    pub extern "C" fn afterglow_wasm_output_size() -> usize { OUTPUT.size() }
-                }
-            };
-            (spawn, wasm, quote! {})
-        }
-        None => (quote! {}, quote! {}, quote! {}),
+                };
+                (spawn, wasm, quote! {})
+            }
+            None => (quote! {}, quote! {}, quote! {}),
         }
     };
 
@@ -716,7 +731,10 @@ mod tests {
         );
         let ts = crate::ts::generate_client(&tr, false).unwrap();
         assert!(ts.contains("export class PhysicsClient"), "{ts}");
-        assert!(ts.contains("async step(state: Float32Array, dt: number): Promise<Float32Array>"), "{ts}");
+        assert!(
+            ts.contains("async step(state: Float32Array, dt: number): Promise<Float32Array>"),
+            "{ts}"
+        );
         assert!(ts.contains("async applyForce(bodyId: number, fx: number, fy: number, fz: number): Promise<boolean>"), "{ts}");
         assert!(ts.contains("this.rpc.call(0,"), "method 0 id");
         assert!(ts.contains("this.rpc.call(1,"), "method 1 id");
@@ -736,7 +754,10 @@ mod tests {
         assert!(ts.contains("await this.rpc.call(0, args)"), "{ts}");
         // The void method body should not return a decoded value — check the
         // method body specifically (spawn() has return statements, that's fine).
-        assert!(!ts.contains("return decode"), "void method must not return a decoded value");
+        assert!(
+            !ts.contains("return decode"),
+            "void method must not return a decoded value"
+        );
     }
 
     #[test]
@@ -761,25 +782,66 @@ mod tests {
     #[test]
     fn ts_type_matrix_all_primitives() {
         // Every supported primitive type as a param + return.
-        let tr = parsed("pub trait Types { fn float32(x: f32) -> f32; fn float64(x: f64) -> f64; fn byte(x: u8) -> u8; fn word(x: u16) -> u16; fn dword(x: u32) -> u32; fn qword(x: u64) -> u64; fn count(x: usize) -> usize; fn sbyte(x: i8) -> i8; fn sword(x: i16) -> i16; fn sdword(x: i32) -> i32; fn sqword(x: i64) -> i64; fn offset(x: isize) -> isize; fn flag(x: bool) -> bool; }");
+        let tr = parsed(
+            "pub trait Types { fn float32(x: f32) -> f32; fn float64(x: f64) -> f64; fn byte(x: u8) -> u8; fn word(x: u16) -> u16; fn dword(x: u32) -> u32; fn qword(x: u64) -> u64; fn count(x: usize) -> usize; fn sbyte(x: i8) -> i8; fn sword(x: i16) -> i16; fn sdword(x: i32) -> i32; fn sqword(x: i64) -> i64; fn offset(x: isize) -> isize; fn flag(x: bool) -> bool; }",
+        );
         let ts = crate::ts::generate_client(&tr, false).unwrap();
         // f32/f64 → number
-        assert!(ts.contains("async float32(x: number): Promise<number>"), "{ts}");
-        assert!(ts.contains("async float64(x: number): Promise<number>"), "{ts}");
+        assert!(
+            ts.contains("async float32(x: number): Promise<number>"),
+            "{ts}"
+        );
+        assert!(
+            ts.contains("async float64(x: number): Promise<number>"),
+            "{ts}"
+        );
         // unsigned ints → number
-        assert!(ts.contains("async byte(x: number): Promise<number>"), "{ts}");
-        assert!(ts.contains("async word(x: number): Promise<number>"), "{ts}");
-        assert!(ts.contains("async dword(x: number): Promise<number>"), "{ts}");
-        assert!(ts.contains("async qword(x: number): Promise<number>"), "{ts}");
-        assert!(ts.contains("async count(x: number): Promise<number>"), "{ts}");
+        assert!(
+            ts.contains("async byte(x: number): Promise<number>"),
+            "{ts}"
+        );
+        assert!(
+            ts.contains("async word(x: number): Promise<number>"),
+            "{ts}"
+        );
+        assert!(
+            ts.contains("async dword(x: number): Promise<number>"),
+            "{ts}"
+        );
+        assert!(
+            ts.contains("async qword(x: number): Promise<number>"),
+            "{ts}"
+        );
+        assert!(
+            ts.contains("async count(x: number): Promise<number>"),
+            "{ts}"
+        );
         // signed ints → number
-        assert!(ts.contains("async sbyte(x: number): Promise<number>"), "{ts}");
-        assert!(ts.contains("async sword(x: number): Promise<number>"), "{ts}");
-        assert!(ts.contains("async sdword(x: number): Promise<number>"), "{ts}");
-        assert!(ts.contains("async sqword(x: number): Promise<number>"), "{ts}");
-        assert!(ts.contains("async offset(x: number): Promise<number>"), "{ts}");
+        assert!(
+            ts.contains("async sbyte(x: number): Promise<number>"),
+            "{ts}"
+        );
+        assert!(
+            ts.contains("async sword(x: number): Promise<number>"),
+            "{ts}"
+        );
+        assert!(
+            ts.contains("async sdword(x: number): Promise<number>"),
+            "{ts}"
+        );
+        assert!(
+            ts.contains("async sqword(x: number): Promise<number>"),
+            "{ts}"
+        );
+        assert!(
+            ts.contains("async offset(x: number): Promise<number>"),
+            "{ts}"
+        );
         // bool → boolean
-        assert!(ts.contains("async flag(x: boolean): Promise<boolean>"), "{ts}");
+        assert!(
+            ts.contains("async flag(x: boolean): Promise<boolean>"),
+            "{ts}"
+        );
         // Correct codec functions are imported.
         assert!(ts.contains("encodeF32"), "{ts}");
         assert!(ts.contains("encodeF64"), "{ts}");
@@ -811,10 +873,22 @@ mod tests {
             "pub trait Coll { fn name(s: String) -> String; fn raw(b: Vec<u8>) -> Vec<u8>; fn f32s(v: Vec<f32>) -> Vec<f32>; fn f64s(v: Vec<f64>) -> Vec<f64>; }",
         );
         let ts = crate::ts::generate_client(&tr, false).unwrap();
-        assert!(ts.contains("async name(s: string): Promise<string>"), "{ts}");
-        assert!(ts.contains("async raw(b: Uint8Array): Promise<Uint8Array>"), "{ts}");
-        assert!(ts.contains("async f32s(v: Float32Array): Promise<Float32Array>"), "{ts}");
-        assert!(ts.contains("async f64s(v: Float64Array): Promise<Float64Array>"), "{ts}");
+        assert!(
+            ts.contains("async name(s: string): Promise<string>"),
+            "{ts}"
+        );
+        assert!(
+            ts.contains("async raw(b: Uint8Array): Promise<Uint8Array>"),
+            "{ts}"
+        );
+        assert!(
+            ts.contains("async f32s(v: Float32Array): Promise<Float32Array>"),
+            "{ts}"
+        );
+        assert!(
+            ts.contains("async f64s(v: Float64Array): Promise<Float64Array>"),
+            "{ts}"
+        );
         assert!(ts.contains("encodeString"), "{ts}");
         assert!(ts.contains("encodeBytes"), "{ts}");
         assert!(ts.contains("encodeF32Vec"), "{ts}");
@@ -830,7 +904,10 @@ mod tests {
         // RpcResult<T> → T in TS (errors are thrown).
         let tr = parsed("pub trait R { fn load(p: String) -> RpcResult<Vec<u8>>; }");
         let ts = crate::ts::generate_client(&tr, false).unwrap();
-        assert!(ts.contains("async load(p: string): Promise<Uint8Array>"), "{ts}");
+        assert!(
+            ts.contains("async load(p: string): Promise<Uint8Array>"),
+            "{ts}"
+        );
         assert!(ts.contains("decodeBytes"), "{ts}");
         // No mention of RpcResult in the TS type.
         assert!(!ts.contains("RpcResult"), "{ts}");

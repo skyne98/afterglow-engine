@@ -285,12 +285,18 @@ then lock the screen. The demo renders a dark background (#0a0c10) with
 moving entities, so burn-in risk from a 10-second run is negligible.
 
 The demo (`engine-demo.html`) uses 5,000 entities at medium; the CEF window
-is 1440×900 (native logical at the panel's 200% desktop scaling). Run:
+is 1440×900 (native logical at the panel's 200% desktop scaling). The demo
+has a **built-in frame benchmark**: press **B** in the window to run a
+300-frame rAF timing benchmark (p50/p90/p99/max + dropped-frame count), or
+load `?bench=300` to auto-run. Results appear in an on-screen HUD overlay
+and in the JS console (`[bench]` prefix). The `www/engine/bench.ts` module
+is the reusable engine API (`FrameBench` class + `formatBenchResults`). Run:
 
 ```sh
 nix-shell shell.nix --run "cargo build --example minimal -p afterglow-cef"
 DISPLAY=:0 XAUTHORITY=/run/user/$(id -u)/.mutter-Xwaylandauth.* \
   nix-shell shell.nix --run "./target/debug/examples/minimal --ozone-platform=x11"
-# In another terminal, measure frame timing (DevTools on port 9222):
-./target/release/latency-tool eval '(async()=>{const f=[];let p=-1;await new Promise(r=>{function l(t){if(p>=0)f.push(t-p);p=t;if(f.length<600)requestAnimationFrame(l);else r()}requestAnimationFrame(l)});const s=[...f].sort((a,b)=>a-b);return JSON.stringify({n:f.length,fps:(1000/(s.reduce((q,v)=>q+v,0)/s.length)).toFixed(1),p99:s[s.length*0.99|0].toFixed(2),max:s[s.length-1].toFixed(2),below55:f.filter(x=>x>1000/55).length})})()' 127.0.0.1:9222
+# Press B in the window, or load ?bench=300. DevTools on port 9222.
+# For headless/OLED-safe measurement via CDP:
+./target/release/latency-tool eval '(async()=>{const f=[];let p=-1;await new Promise(r=>{function l(t){if(p>=0)f.push(t-p);p=t;if(f.length<300)requestAnimationFrame(l);else r()}requestAnimationFrame(l)});const s=[...f].sort((a,b)=>a-b);return JSON.stringify({n:f.length,fps:(1000/(s.reduce((q,v)=>q+v,0)/s.length)).toFixed(1),p99:s[s.length*0.99|0].toFixed(2),max:s[s.length-1].toFixed(2),below55:f.filter(x=>x>1000/55).length})})()' 127.0.0.1:9222
 ```

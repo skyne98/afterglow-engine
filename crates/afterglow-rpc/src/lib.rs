@@ -86,7 +86,8 @@ pub type RpcResult<T> = Result<T, RpcError>;
 /// A boxed async serve future. Used by `#[rpc]` traits with `async fn` methods:
 /// the generated `serve_async` dispatch returns this type. The impl boxes its
 /// async method body (`Box::pin(async move { ... })`).
-pub type ServeFuture = std::pin::Pin<Box<dyn std::future::Future<Output = RpcResult<Vec<u8>>> + 'static>>;
+pub type ServeFuture =
+    std::pin::Pin<Box<dyn std::future::Future<Output = RpcResult<Vec<u8>>> + 'static>>;
 
 /// All errors produced by the RPC runtime: codec/framing, ring-buffer
 /// state, transport, and worker lifecycle.

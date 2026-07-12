@@ -11,8 +11,8 @@
 //! (also streamed).
 
 use afterglow_assets::range::{self, RangeSpec};
-use afterglow_assets::{AssetRoot, BytesSource, guess_mime};
 use afterglow_assets::source::AssetSource;
+use afterglow_assets::{AssetRoot, BytesSource, guess_mime};
 
 /// Parsed HTTP request line: `(method, raw_path)` where `raw_path` keeps its
 /// query string (the handler strips it). `None` if malformed.
@@ -209,7 +209,10 @@ mod tests {
             405
         );
         // missing -> 404; malformed -> 400
-        assert_eq!(handle_request(&root, "GET /nope.html HTTP/1.1\r\n").status, 404);
+        assert_eq!(
+            handle_request(&root, "GET /nope.html HTTP/1.1\r\n").status,
+            404
+        );
         assert_eq!(handle_request(&root, "garbage").status, 400);
     }
 

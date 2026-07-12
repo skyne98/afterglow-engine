@@ -18,8 +18,8 @@
 //! `ResourceHandler` wrapper holding one mutex-protected response state
 //! (source/mime/status/offset).
 
-use afterglow_assets::{AssetRoot, BytesSource, decode_url_path, guess_mime};
 use afterglow_assets::source::AssetSource;
+use afterglow_assets::{AssetRoot, BytesSource, decode_url_path, guess_mime};
 use cef::*;
 use std::borrow::Cow;
 use std::sync::{Arc, Mutex};
@@ -42,7 +42,11 @@ type BoxedSource = Box<dyn AssetSource + Send + Sync>;
 /// miss (404). Takes `embedded` and `fs_root` explicitly so tests can drive it
 /// without the global [`CONFIG`].
 enum Resolved {
-    Found { source: BoxedSource, mime: String, etag: Option<String> },
+    Found {
+        source: BoxedSource,
+        mime: String,
+        etag: Option<String>,
+    },
     NotFound,
 }
 

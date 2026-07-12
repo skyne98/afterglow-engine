@@ -78,7 +78,10 @@ pub fn parse_range(header: Option<&str>, len: u64) -> RangeSpec {
                 }
                 let n = n.min(len);
                 let start = len - n;
-                RangeSpec::Range { start, end: len - 1 }
+                RangeSpec::Range {
+                    start,
+                    end: len - 1,
+                }
             }
             Err(_) => RangeSpec::Unsatisfiable,
         },
@@ -88,7 +91,10 @@ pub fn parse_range(header: Option<&str>, len: u64) -> RangeSpec {
                 if start >= len || len == 0 {
                     return RangeSpec::Unsatisfiable;
                 }
-                RangeSpec::Range { start, end: len - 1 }
+                RangeSpec::Range {
+                    start,
+                    end: len - 1,
+                }
             }
             Err(_) => RangeSpec::Unsatisfiable,
         },
@@ -139,7 +145,10 @@ mod tests {
         );
         assert_eq!(
             parse_range(Some("bytes=100-199"), LEN),
-            RangeSpec::Range { start: 100, end: 199 }
+            RangeSpec::Range {
+                start: 100,
+                end: 199
+            }
         );
     }
 
@@ -148,7 +157,10 @@ mod tests {
         // `bytes=500-2000` on a 1000-byte resource → clamps to 500-999
         assert_eq!(
             parse_range(Some("bytes=500-2000"), LEN),
-            RangeSpec::Range { start: 500, end: 999 }
+            RangeSpec::Range {
+                start: 500,
+                end: 999
+            }
         );
     }
 
@@ -156,7 +168,10 @@ mod tests {
     fn open_end() {
         assert_eq!(
             parse_range(Some("bytes=500-"), LEN),
-            RangeSpec::Range { start: 500, end: 999 }
+            RangeSpec::Range {
+                start: 500,
+                end: 999
+            }
         );
     }
 
@@ -164,7 +179,10 @@ mod tests {
     fn suffix() {
         assert_eq!(
             parse_range(Some("bytes=-500"), LEN),
-            RangeSpec::Range { start: 500, end: 999 }
+            RangeSpec::Range {
+                start: 500,
+                end: 999
+            }
         );
         // suffix larger than resource → whole thing
         assert_eq!(
@@ -175,22 +193,37 @@ mod tests {
 
     #[test]
     fn start_at_len_is_unsatisfiable() {
-        assert_eq!(parse_range(Some("bytes=1000-"), LEN), RangeSpec::Unsatisfiable);
-        assert_eq!(parse_range(Some("bytes=1000-2000"), LEN), RangeSpec::Unsatisfiable);
+        assert_eq!(
+            parse_range(Some("bytes=1000-"), LEN),
+            RangeSpec::Unsatisfiable
+        );
+        assert_eq!(
+            parse_range(Some("bytes=1000-2000"), LEN),
+            RangeSpec::Unsatisfiable
+        );
     }
 
     #[test]
     fn invalid_values() {
         assert_eq!(parse_range(Some("bytes=-"), LEN), RangeSpec::Unsatisfiable);
-        assert_eq!(parse_range(Some("bytes=abc-"), LEN), RangeSpec::Unsatisfiable);
-        assert_eq!(parse_range(Some("bytes=10-5"), LEN), RangeSpec::Unsatisfiable);
+        assert_eq!(
+            parse_range(Some("bytes=abc-"), LEN),
+            RangeSpec::Unsatisfiable
+        );
+        assert_eq!(
+            parse_range(Some("bytes=10-5"), LEN),
+            RangeSpec::Unsatisfiable
+        );
         assert_eq!(parse_range(Some("bytes=-0"), LEN), RangeSpec::Unsatisfiable);
     }
 
     #[test]
     fn multi_range_is_full() {
         // Multi-range → caller serves full 200 (we don't do multipart).
-        assert_eq!(parse_range(Some("bytes=0-99,200-299"), LEN), RangeSpec::Full);
+        assert_eq!(
+            parse_range(Some("bytes=0-99,200-299"), LEN),
+            RangeSpec::Full
+        );
     }
 
     #[test]
@@ -216,7 +249,10 @@ mod tests {
 
     #[test]
     fn range_len_and_start() {
-        let r = RangeSpec::Range { start: 100, end: 199 };
+        let r = RangeSpec::Range {
+            start: 100,
+            end: 199,
+        };
         assert_eq!(r.start(), 100);
         assert_eq!(r.len(1000), 100);
         assert!(!r.is_empty(1000));

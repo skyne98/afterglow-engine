@@ -46,12 +46,12 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::mem::MaybeUninit;
+use std::pin::Pin;
 use std::ptr::NonNull;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::task::{Context, Poll, Waker};
-use std::pin::Pin;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -589,7 +589,11 @@ pub struct AsyncWorkerTransport {
 impl AsyncWorkerTransport {
     /// Is the worker thread no longer running?
     fn is_dead(&self) -> bool {
-        self.handle.lock().unwrap().as_ref().is_none_or(|h| h.is_finished())
+        self.handle
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_none_or(|h| h.is_finished())
     }
 
     /// Non-blocking call: writes `[method][task_id][args]` to the request ring,
@@ -754,16 +758,18 @@ where
                 let fut = serve_async(&impl_, method, &args);
                 let resp_arc = side.resp.clone();
                 let client_thread = side.client_thread.clone();
-                executor.spawn(async move {
-                    let result = fut.await;
-                    let env = make_response(method, result);
-                    let env_bytes = crate::encode(&env).unwrap_or_default();
-                    let mut completion = Vec::with_capacity(8 + env_bytes.len());
-                    completion.extend_from_slice(&task_id.to_le_bytes());
-                    completion.extend_from_slice(&env_bytes);
-                    let _ = resp_arc.view().write(&completion);
-                    client_thread.unpark();
-                }).detach();
+                executor
+                    .spawn(async move {
+                        let result = fut.await;
+                        let env = make_response(method, result);
+                        let env_bytes = crate::encode(&env).unwrap_or_default();
+                        let mut completion = Vec::with_capacity(8 + env_bytes.len());
+                        completion.extend_from_slice(&task_id.to_le_bytes());
+                        completion.extend_from_slice(&env_bytes);
+                        let _ = resp_arc.view().write(&completion);
+                        client_thread.unpark();
+                    })
+                    .detach();
             }
             Err(RpcError::BufferEmpty) => {}
             Err(e) => {
