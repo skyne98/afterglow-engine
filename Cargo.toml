@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/afterglow-assets",
+    "crates/afterglow-assets-worker",
     "crates/afterglow-cef",
     "crates/afterglow-rpc",
     "crates/afterglow-rpc-macros",
@@ -26,6 +27,7 @@ tungstenite = "0.24"
 ureq = { version = "2", features = ["json"] }
 syn = { version = "2", features = ["full"] }
 quote = "1"
+async-executor = "1"
 
 [profile.release]
 opt-level = 2

@@ -1,0 +1,41 @@
+# afterglow-engine — mdBook
+
+The user-facing guide for afterglow-engine, built with [mdBook] and
+[mdbook-mermaid] for the rendered diagrams.
+
+[mdBook]: https://rust-lang.github.io/mdBook/
+[mdbook-mermaid]: https://github.com/badboy/mdbook-mermaid
+
+## Build
+
+```sh
+# One-time: install mdbook + mdbook-mermaid and vendor the mermaid JS
+nix-shell -p mdbook mdbook-mermaid --run "mdbook-mermaid install ."
+
+# Build the HTML into book/book/
+nix-shell -p mdbook mdbook-mermaid --run "mdbook build"
+```
+
+## Serve (live reload while editing)
+
+```sh
+nix-shell -p mdbook mdbook-mermaid --run "mdbook serve --open"
+```
+
+This serves the book at <http://localhost:3000> and rebuilds on every save.
+
+## Layout
+
+- `book.toml` — mdBook + mermaid configuration.
+- `src/SUMMARY.md` — the table of contents; defines the chapter order.
+- `src/**/*.md` — the chapter sources.
+- `book/` — generated HTML output (gitignored; produced by `mdbook build`).
+- `mermaid.min.js`, `mermaid-init.js` — vendored by `mdbook-mermaid install`
+  (gitignored; regenerable).
+
+## Relationship to the rest of the docs
+
+This book is the user-facing front door. For the precise, source-checked API
+surface, see [`../docs/api/`](../docs/api/). For the research behind each design
+decision, see [`../docs/research/`](../docs/research/). When this book and an
+API doc disagree, the API doc is canonical.

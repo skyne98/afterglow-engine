@@ -49,8 +49,7 @@ fn main() {
         .title("afterglow-cef minimal")
         .size(1280, 800)
         .devtools(9222)
-        .root("/index.html")
-        .asset("/index.html", "text/html", HTML)
+        .index_html(HTML)
         // `cargo run -p xtask wasm` creates the worker artifacts here.
         .fs_root("crates/afterglow-web/www")
         .run();

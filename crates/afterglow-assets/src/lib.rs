@@ -1,21 +1,33 @@
 //! Shared asset-path/MIME helpers for afterglow-engine.
 //!
-//! Single owner of the two pieces of security-sensitive resource logic that
-//! were previously duplicated by the CEF resource handler (`afterglow-cef`)
-//! and the web dev server (`afterglow-web`):
+//! Single owner of the security-sensitive resource logic the engine's two
+//! resource servers need:
 //!
 //! - [`guess_mime`]: MIME type from a path extension.
-//! - [`resolve`]: secure resolution of a URL/scheme path beneath an asset root
-//!   into a canonical, confined [`PathBuf`].
+//! - [`AssetRoot`]: a canonicalized root reused across requests.
+//! - [`resolve`]: one-shot secure resolution beneath an asset root.
+//! - [`AssetSource`](source::AssetSource): a positional, streaming byte source
+//!   (`FsSource` reads from disk via `pread`; `BytesSource` wraps an embedded
+//!   `&'static [u8]`). Both serving backends stream through this trait — no
+//!   whole-file buffering.
+//! - [`range::parse_range`]: single-range HTTP `Range` parsing shared by both
+//!   backends.
 //!
-//! Deliberately tiny: no third-party dependencies, no HTTP types, no
-//! percent-decoder, and no file-content reads; resolution performs
-//! canonicalization — callers read the returned path themselves. Every miss,
-//! escape, and unreadable path maps to `None` so
-//! callers can answer a uniform 404 without leaking which check failed.
+//! No third-party dependencies. The confinement logic (`resolve`) performs
+//! canonicalization but no content reads; the streaming sources (`source`
+//! module) own the reads. Every miss, escape, and unreadable path maps to
+//! `None` so callers can answer a uniform 404 without leaking which check
+//! failed.
 
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
+
+pub mod range;
+pub mod source;
+
+pub use source::{AssetSource, BytesSource};
+#[cfg(not(target_arch = "wasm32"))]
+pub use source::FsSource;
 
 /// Guess a MIME type from a path's extension.
 ///
@@ -53,6 +65,15 @@ impl AssetRoot {
     /// Resolve a URL path beneath this root.
     pub fn resolve(&self, url_path: &str) -> Option<PathBuf> {
         resolve_canonical(&self.0, url_path)
+    }
+
+    /// Resolve and open a URL path as a streaming [`FsSource`] (native only).
+    /// Returns `None` if the path is missing/escaped/unreadable — callers
+    /// answer a uniform 404.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn open_source(&self, url_path: &str) -> Option<FsSource> {
+        let path = self.resolve(url_path)?;
+        FsSource::open(path)
     }
 
     pub fn as_path(&self) -> &Path {

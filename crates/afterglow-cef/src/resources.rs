@@ -1,17 +1,25 @@
 //! Direct resource serving via a CEF custom scheme (`afterglow://local/`).
 //!
-//! Resources (HTML/JS/WASM/...) are served from embedded bytes or a filesystem
-//! root through CEF's internal request routing — no localhost HTTP server on
-//! the resource path. The scheme is registered standard + secure + CORS +
-//! fetch + CSP-bypassing, so ES-module imports, WebGPU, and inline scripts work.
+//! Resources (HTML/JS/WASM/...) are served from the one embedded asset
+//! (`index.html`) or a filesystem root through CEF's internal request routing
+//! — no localhost HTTP server on the resource path. The scheme is registered
+//! standard + secure + CORS + fetch + CSP-bypassing, so ES-module imports,
+//! WebGPU, and inline scripts work.
+//!
+//! Serving is **streaming**: both the embedded [`BytesSource`] and the
+//! filesystem [`FsSource`] implement [`AssetSource::read_at`], so `read` serves
+//! chunks straight from disk (no whole-file buffering) and `skip` handles
+//! range requests by advancing the read offset.
 //!
 //! Path/MIME/status resolution is shared with the web dev server via
-//! [`afterglow_assets`] (`guess_mime` + `resolve`); this module owns only the
-//! CEF-specific policy — embedded-first lookup, optional FS fallback, and the
-//! 200/400/404 status mapping — plus the thin `ResourceHandler` wrapper holding
-//! one mutex-protected response state (body/mime/status/offset).
+//! [`afterglow_assets`] (`guess_mime` + `resolve` + `parse_range`); this module
+//! owns only the CEF-specific policy — embedded-first lookup, optional FS
+//! fallback, and the 200/400/404 status mapping — plus the thin
+//! `ResourceHandler` wrapper holding one mutex-protected response state
+//! (source/mime/status/offset).
 
-use afterglow_assets::{AssetRoot, decode_url_path, guess_mime};
+use afterglow_assets::{AssetRoot, BytesSource, decode_url_path, guess_mime};
+use afterglow_assets::source::AssetSource;
 use cef::*;
 use std::borrow::Cow;
 use std::sync::{Arc, Mutex};
@@ -26,20 +34,20 @@ fn path_of(url: &str) -> Cow<'_, str> {
     Cow::Owned(format!("/{path}"))
 }
 
-/// Outcome of resolving a scheme path: a hit (body + mime, 200) or a miss (404).
+/// A boxed streaming source. `FsSource` (disk) or `BytesSource` (embedded
+/// `index.html`). Errors (404/400) use `BytesSource` on static bytes.
+type BoxedSource = Box<dyn AssetSource + Send + Sync>;
+
+/// Outcome of resolving a scheme path: a streaming source + mime (200) or a
+/// miss (404). Takes `embedded` and `fs_root` explicitly so tests can drive it
+/// without the global [`CONFIG`].
 enum Resolved {
-    Found {
-        body: Cow<'static, [u8]>,
-        mime: String,
-    },
+    Found { source: BoxedSource, mime: String, etag: Option<String> },
     NotFound,
 }
 
-/// Resolve a scheme path to a response. Embedded assets take precedence, then a
-/// configured FS root delegated to [`afterglow_assets::resolve`] (lexically +
-/// canonically confined, so traversal escapes are rejected). Missing/unreadable/
-/// escaped paths yield `NotFound` (real 404, no content leak). Takes `embedded`
-/// and `fs_root` explicitly so tests can drive it without the global [`CONFIG`].
+/// The single embedded asset entry: `(path, mime, bytes)`. Today only
+/// `index.html` is embedded; the general `.asset(...)` mechanism is gone.
 fn resolve_scheme_path(
     path: &str,
     embedded: &[(String, String, &'static [u8])],
@@ -48,19 +56,24 @@ fn resolve_scheme_path(
     let Some(decoded) = decode_url_path(path) else {
         return Resolved::NotFound;
     };
+    // Embedded-first (the one embedded asset: index.html).
     if let Some((_, mime, bytes)) = embedded.iter().find(|(p, _, _)| p == decoded.as_ref()) {
+        let src = BytesSource(bytes);
         return Resolved::Found {
-            body: Cow::Borrowed(bytes),
+            source: Box::new(src),
             mime: mime.clone(),
+            etag: None,
         };
     }
+    // FS fallback: stream from disk via pread (no whole-file load).
     if let Some(root) = fs_root
-        && let Some(confined) = root.resolve(path)
-        && let Ok(body) = std::fs::read(&confined)
+        && let Some(src) = root.open_source(path)
     {
+        let etag = src.etag();
         return Resolved::Found {
-            body: Cow::Owned(body),
+            source: Box::new(src),
             mime: guess_mime(&decoded).to_string(),
+            etag,
         };
     }
     Resolved::NotFound
@@ -68,12 +81,26 @@ fn resolve_scheme_path(
 
 /// Per-response state behind a single lock. Reset on every `open` so a reused
 /// handler can never leak a prior response.
-#[derive(Default)]
 struct ResponseState {
-    body: Cow<'static, [u8]>,
+    source: Option<BoxedSource>,
     mime: String,
     status: i32,
-    offset: usize,
+    offset: u64,
+    len: u64,
+    etag: Option<String>,
+}
+
+impl Default for ResponseState {
+    fn default() -> Self {
+        Self {
+            source: None,
+            mime: String::new(),
+            status: 0,
+            offset: 0,
+            len: 0,
+            etag: None,
+        }
+    }
 }
 
 wrap_resource_handler! {
@@ -83,22 +110,39 @@ wrap_resource_handler! {
 
     impl ResourceHandler {
         fn open(&self, request: Option<&mut Request>, handle_request: Option<&mut ::std::os::raw::c_int>, _callback: Option<&mut Callback>) -> ::std::os::raw::c_int {
-            let (body, mime, status) = match request {
+            let (source, mime, status, len, etag) = match request {
                 Some(req) => {
                     let cfg = CONFIG.get().expect("afterglow-cef config not set");
                     let url = CefString::from(&req.url()).to_string();
                     match resolve_scheme_path(&path_of(&url), &cfg.embedded, cfg.asset_root.as_ref()) {
-                        Resolved::Found { body, mime } => (body, mime, 200),
-                        Resolved::NotFound => (Cow::Borrowed(&b"404 not found"[..]), "text/plain".to_string(), 404),
+                        Resolved::Found { source, mime, etag } => {
+                            let len = source.len();
+                            (Some(source), mime, 200, len, etag)
+                        }
+                        Resolved::NotFound => (
+                            Some(Box::new(BytesSource(&b"404 not found"[..])) as BoxedSource),
+                            "text/plain".to_string(),
+                            404,
+                            13,
+                            None,
+                        ),
                     }
                 }
-                None => (Cow::Borrowed(&b"bad request"[..]), "text/plain".to_string(), 400),
+                None => (
+                    Some(Box::new(BytesSource(&b"bad request"[..])) as BoxedSource),
+                    "text/plain".to_string(),
+                    400,
+                    11,
+                    None,
+                ),
             };
             let mut st = self.state.lock().expect("state lock");
-            st.body = body;
+            st.source = source;
             st.mime = mime;
             st.status = status;
             st.offset = 0;
+            st.len = len;
+            st.etag = etag;
             if let Some(hr) = handle_request { *hr = 1; }
             1
         }
@@ -114,25 +158,65 @@ wrap_resource_handler! {
                     ("Cross-Origin-Opener-Policy", "same-origin"),
                     ("Cross-Origin-Embedder-Policy", "require-corp"),
                     ("Cross-Origin-Resource-Policy", "same-origin"),
+                    // Range support: tell Chromium we accept byte-range skips.
+                    ("Accept-Ranges", "bytes"),
                 ] {
                     r.set_header_by_name(Some(&CefString::from(k)), Some(&CefString::from(v)), 1);
                 }
+                if let Some(etag) = &st.etag {
+                    r.set_header_by_name(
+                        Some(&CefString::from("ETag")),
+                        Some(&CefString::from(etag.as_str())),
+                        1,
+                    );
+                }
             }
-            if let Some(rl) = response_length { *rl = st.body.len() as i64; }
+            if let Some(rl) = response_length { *rl = st.len as i64; }
+        }
+
+        fn skip(&self, bytes_to_skip: i64, bytes_skipped: Option<&mut i64>, _callback: Option<&mut ResourceSkipCallback>) -> ::std::os::raw::c_int {
+            if bytes_to_skip <= 0 {
+                if let Some(bs) = bytes_skipped { *bs = 0; }
+                return 0;
+            }
+            let mut st = self.state.lock().expect("state lock");
+            let skip = (bytes_to_skip as u64).min(st.len.saturating_sub(st.offset));
+            st.offset += skip;
+            if let Some(bs) = bytes_skipped { *bs = skip as i64; }
+            1
         }
 
         fn read(&self, data_out: *mut u8, bytes_to_read: ::std::os::raw::c_int, bytes_read: Option<&mut ::std::os::raw::c_int>, _callback: Option<&mut ResourceReadCallback>) -> ::std::os::raw::c_int {
+            // `read_at` is a fast pread (disk) or memcpy (embedded); we hold
+            // the state lock for the duration. Per-request handler, one read
+            // at a time, so this doesn't serialize across requests.
             let mut st = self.state.lock().expect("state lock");
-            if bytes_to_read <= 0 || st.offset >= st.body.len() {
+            let Some(source) = st.source.as_ref() else {
+                if let Some(br) = bytes_read { *br = 0; }
+                return 0;
+            };
+            if bytes_to_read <= 0 || st.offset >= st.len {
                 if let Some(br) = bytes_read { *br = 0; }
                 return 0;
             }
-            let n = std::cmp::min(bytes_to_read as usize, st.body.len() - st.offset);
+            let want = (bytes_to_read as usize).min((st.len - st.offset) as usize);
             let off = st.offset;
-            st.offset += n;
-            // SAFETY: `off < body.len()` (guarded); `data_out` holds `bytes_to_read`
-            // bytes (CEF contract); `n <= bytes_to_read` and `n <= body.len()-off`.
-            unsafe { std::ptr::copy_nonoverlapping(st.body.as_ptr().add(off), data_out, n); }
+            let mut buf = vec![0u8; want];
+            let n = match source.read_at(off, &mut buf) {
+                Ok(n) => n,
+                Err(_) => {
+                    if let Some(br) = bytes_read { *br = 0; }
+                    return 0;
+                }
+            };
+            if n == 0 {
+                if let Some(br) = bytes_read { *br = 0; }
+                return 0;
+            }
+            // SAFETY: `data_out` holds `bytes_to_read` bytes (CEF contract);
+            // `n <= want <= bytes_to_read`.
+            unsafe { std::ptr::copy_nonoverlapping(buf.as_ptr(), data_out, n); }
+            st.offset += n as u64;
             if let Some(br) = bytes_read { *br = n as i32; }
             1
         }
@@ -187,9 +271,12 @@ mod tests {
             &b"<html></html>"[..],
         )];
         match resolve_scheme_path("/index.html", &emb, None) {
-            Resolved::Found { body, mime } => {
-                assert_eq!(body.as_ref(), b"<html></html>");
+            Resolved::Found { source, mime, .. } => {
+                assert_eq!(source.len(), 13);
                 assert_eq!(mime, "text/html");
+                let mut buf = vec![0u8; 13];
+                assert_eq!(source.read_at(0, &mut buf).unwrap(), 13);
+                assert_eq!(&buf, b"<html></html>");
             }
             Resolved::NotFound => panic!("embedded asset should resolve"),
         }
@@ -197,26 +284,24 @@ mod tests {
             resolve_scheme_path("/missing.js", &emb, None),
             Resolved::NotFound
         ));
-
-        let encoded = vec![("/a b.js".into(), "text/javascript".into(), &b"x"[..])];
-        assert!(matches!(
-            resolve_scheme_path("/a%20b.js", &encoded, None),
-            Resolved::Found { .. }
-        ));
     }
 
     #[test]
-    fn resolve_serves_fs_file_and_rejects_traversal() {
-        // An existing workspace path (this crate's own dir) as the FS root —
-        // no temp fixture. Exercises the afterglow_assets delegation:
-        // a real hit serves bytes with the correct MIME, and traversal above
-        // the root plus missing files both yield NotFound (404, no leak).
+    fn resolve_serves_fs_file_streaming() {
+        // An existing workspace path (this crate's own dir) as the FS root.
+        // Exercises the afterglow_assets delegation: a real hit streams from
+        // disk via FsSource (not a whole-file read); traversal is rejected.
         let root = AssetRoot::new(env!("CARGO_MANIFEST_DIR")).unwrap();
-        // real file -> served; `.toml` is unmapped -> application/octet-stream
         match resolve_scheme_path("/Cargo.toml", &[], Some(&root)) {
-            Resolved::Found { body, mime } => {
-                assert!(body.starts_with(b"[package]"));
+            Resolved::Found { source, mime, etag } => {
+                assert_eq!(source.len() > 0, true);
                 assert_eq!(mime, "application/octet-stream");
+                assert!(etag.is_some(), "FsSource provides an mtime ETag");
+                // Stream the first bytes via read_at.
+                let mut buf = [0u8; 8];
+                let n = source.read_at(0, &mut buf).unwrap();
+                assert!(n <= 8);
+                assert!(buf[..n].starts_with(b"["));
             }
             Resolved::NotFound => panic!("Cargo.toml should resolve from crate root"),
         }

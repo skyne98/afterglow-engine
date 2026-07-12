@@ -1,0 +1,21 @@
+[package]
+name = "afterglow-assets-worker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Asset loader worker: async #[rpc] service for streaming asset loading"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+afterglow-rpc = { path = "../afterglow-rpc" }
+afterglow-rpc-macros = { path = "../afterglow-rpc-macros" }
+afterglow-assets = { path = "../afterglow-assets" }
+serde.workspace = true
+futures-lite = "2"
+async-executor.workspace = true
+
+# Native-only: FsSource reads from disk via pread.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]

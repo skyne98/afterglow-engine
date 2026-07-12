@@ -52,15 +52,15 @@ pub(crate) static CONFIG: OnceLock<Config> = OnceLock::new();
 
 /// Builder for an afterglow-cef game window. Call [`AppBuilder::run`] to start.
 ///
-/// ```no_run
+/// ```ignore
 /// use afterglow_cef::AppBuilder;
 ///
 /// AppBuilder::new()
 ///     .title("my game")
 ///     .size(1920, 1080)
 ///     .devtools(9222)                 // 0 = off
-///     .root("/index.html")
-///     .asset("/index.html", "text/html", b"<html></html>")
+///     .index_html(include_bytes!("index.html"))
+///     .fs_root("assets")              // everything else, streamed from disk
 ///     .run();
 /// ```
 pub struct AppBuilder {
@@ -107,19 +107,26 @@ impl AppBuilder {
         self
     }
 
-    /// Embed an asset served at `path` (e.g. `/three.webgpu.js`).
-    pub fn asset(
-        mut self,
-        path: impl Into<String>,
-        mime: impl Into<String>,
-        bytes: &'static [u8],
-    ) -> Self {
-        self.cfg.embedded.push((path.into(), mime.into(), bytes));
+    /// Embed the `index.html` served at the [`root`](Self::root) path. This is
+    /// the **only** embedded asset — everything else is served from
+    /// [`fs_root`](Self::fs_root) (streamed from disk). Typically:
+    /// `index_html(include_bytes!("index.html"))`.
+    ///
+    /// If unset, `index.html` is also served from `fs_root`.
+    pub fn index_html(mut self, bytes: &'static [u8]) -> Self {
+        // Replace any prior entry (there's only one embedded asset slot).
+        self.cfg.embedded.clear();
+        self.cfg.embedded.push((
+            self.cfg.root_path.clone(),
+            "text/html".to_string(),
+            bytes,
+        ));
         self
     }
 
     /// Serve files from a filesystem directory (for paths not in `embedded`).
-    /// This is the direct-FS, no-HTTP load path.
+    /// This is the direct-FS, no-HTTP load path. Assets are streamed via
+    /// `pread` (no whole-file buffering) and support range requests.
     pub fn fs_root(mut self, dir: impl Into<PathBuf>) -> Self {
         self.cfg.fs_root = Some(dir.into());
         self

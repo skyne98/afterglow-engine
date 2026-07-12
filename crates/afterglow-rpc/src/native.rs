@@ -42,11 +42,16 @@
 //! `Arc`-backed ring buffers stay valid, so this leaks a thread without UB).
 
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
+use std::future::Future;
 use std::marker::PhantomData;
 use std::mem::MaybeUninit;
 use std::ptr::NonNull;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::task::{Context, Poll, Waker};
+use std::pin::Pin;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -480,7 +485,300 @@ where
     Ok((transport, EventReceiver { cons: ev_cons }))
 }
 
-#[cfg(test)]
+// --- async worker transport (poll model) ---------------------------------
+//
+// For `#[rpc]` traits with `async fn` methods. The worker runs an
+// `async-executor::LocalExecutor` to drive async tasks; the client is non-blocking
+// (`call_async` writes a request and returns a [`Oneshot`] future; `poll`
+// drains completions and resolves pending futures). Multiple in-flight calls
+// are supported — each gets a unique task_id for matching.
+//
+// Framing:
+// - Request:  `[method: u32 LE][task_id: u64 LE][postcard args]`
+// - Completion: `[task_id: u64 LE][Response envelope]` on the response ring
+//
+// The client's `poll()` drains the response ring and resolves pending
+// oneshot receivers. The caller drives `poll()` each frame (the poll model):
+// `loadAsset` returns a Future that resolves on a later `poll()`.
+
+/// A boxed async serve future: `Pin<Box<dyn Future<Output = RpcResult<Vec<u8>>> + 'static>>`.
+pub type ServeFuture = Pin<Box<dyn Future<Output = RpcResult<Vec<u8>>> + 'static>>;
+
+/// A simple oneshot future: resolves when `poll()` delivers the result.
+/// No waker registration — the caller's executor polls it, and `poll()` (the
+/// transport's poll, called each frame) is what delivers the value.
+pub struct Oneshot {
+    inner: Arc<OneshotInner>,
+}
+
+struct OneshotInner {
+    value: Mutex<Option<RpcResult<Vec<u8>>>>,
+    waker: Mutex<Option<Waker>>,
+}
+
+impl Oneshot {
+    fn pair() -> (OneshotSender, Oneshot) {
+        let inner: Arc<OneshotInner> = Arc::new(OneshotInner {
+            value: Mutex::new(None),
+            waker: Mutex::new(None),
+        });
+        (
+            OneshotSender {
+                inner: inner.clone(),
+            },
+            Oneshot { inner },
+        )
+    }
+}
+
+impl Future for Oneshot {
+    type Output = RpcResult<Vec<u8>>;
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let mut val = self.inner.value.lock().unwrap();
+        if let Some(v) = val.take() {
+            Poll::Ready(v)
+        } else {
+            *self.inner.waker.lock().unwrap() = Some(cx.waker().clone());
+            Poll::Pending
+        }
+    }
+}
+
+/// The sender half of an [`Oneshot`]. Used by `AsyncWorkerTransport::poll` to
+/// deliver completions.
+pub struct OneshotSender {
+    inner: Arc<OneshotInner>,
+}
+
+impl OneshotSender {
+    fn send(self, value: RpcResult<Vec<u8>>) {
+        *self.inner.value.lock().unwrap() = Some(value);
+        if let Some(waker) = self.inner.waker.lock().unwrap().take() {
+            waker.wake();
+        }
+    }
+}
+
+/// Client side of an async native worker. Non-blocking: `call_async` writes a
+/// request and returns a [`Oneshot`] future; `poll` drains completions from the
+/// response ring and resolves pending futures.
+///
+/// The caller must call `poll()` each frame (or on a timer) to drive completion.
+/// `call_async` never blocks.
+/// Client side of an async native worker. Non-blocking: `call_async` writes a
+/// request and returns a [`Oneshot`] future; `poll` drains completions from the
+/// response ring and resolves pending futures.
+///
+/// The caller must call `poll()` each frame (or on a timer) to drive completion.
+/// `call_async` never blocks.
+///
+/// **Thread-safe:** the request/response ring halves are behind `Mutex`es so
+/// multiple threads can share an `Arc<AsyncWorkerTransport>` and call
+/// `call_async` / `poll` concurrently. The mutexes are held only for the
+/// microsecond-level ring write/read — never during an `await`.
+pub struct AsyncWorkerTransport {
+    req: Mutex<RingProducer>,
+    resp: Mutex<RingConsumer>,
+    handle: Mutex<Option<JoinHandle<()>>>,
+    worker_thread: thread::Thread,
+    next_task_id: AtomicU64,
+    pending: Mutex<HashMap<u64, OneshotSender>>,
+    poisoned: AtomicBool,
+}
+
+impl AsyncWorkerTransport {
+    /// Is the worker thread no longer running?
+    fn is_dead(&self) -> bool {
+        self.handle.lock().unwrap().as_ref().is_none_or(|h| h.is_finished())
+    }
+
+    /// Non-blocking call: writes `[method][task_id][args]` to the request ring,
+    /// registers a pending oneshot, and returns the [`Oneshot`] future. The
+    /// caller `await`s the future; it resolves on a later `poll()`.
+    ///
+    /// Thread-safe: the request ring write is mutex-protected (microsecond-level).
+    pub fn call_async(&self, method: u32, args: &[u8]) -> RpcResult<Oneshot> {
+        if self.poisoned.load(Ordering::Acquire) || self.is_dead() {
+            return Err(RpcError::WorkerDead);
+        }
+        let task_id = self.next_task_id.fetch_add(1, Ordering::Relaxed);
+        let (tx, rx) = Oneshot::pair();
+        self.pending.lock().unwrap().insert(task_id, tx);
+
+        let mut frame = Vec::with_capacity(12 + args.len());
+        frame.extend_from_slice(&method.to_le_bytes());
+        frame.extend_from_slice(&task_id.to_le_bytes());
+        frame.extend_from_slice(args);
+        // Lock the request producer — multiple threads may write concurrently.
+        match self.req.lock().unwrap().write(&frame) {
+            Ok(()) => {
+                self.worker_thread.unpark();
+                Ok(rx)
+            }
+            Err(e) => {
+                self.pending.lock().unwrap().remove(&task_id);
+                Err(e)
+            }
+        }
+    }
+
+    /// Drain completions from the response ring and resolve pending futures.
+    /// Call this each frame (or on a timer). Never blocks.
+    ///
+    /// Thread-safe: the response ring read is mutex-protected.
+    pub fn poll(&self) {
+        let resp = self.resp.lock().unwrap();
+        while let Ok(completion) = resp.read() {
+            if completion.len() < 8 {
+                continue;
+            }
+            let task_id = u64::from_le_bytes(completion[0..8].try_into().unwrap());
+            let response_bytes = completion[8..].to_vec();
+            let result = unwrap_response(&response_bytes);
+            if let Some(tx) = self.pending.lock().unwrap().remove(&task_id) {
+                tx.send(result);
+            }
+        }
+    }
+}
+
+impl Drop for AsyncWorkerTransport {
+    fn drop(&mut self) {
+        // Same shutdown as WorkerTransport: empty request frame.
+        let _ = self.req.lock().unwrap().write(&[]);
+        self.worker_thread.unpark();
+        let handle = self.handle.lock().unwrap().take();
+        if let Some(handle) = handle {
+            let deadline = Instant::now() + SHUTDOWN_DEADLINE;
+            while !handle.is_finished() && Instant::now() < deadline {
+                thread::park_timeout(Duration::from_millis(1));
+            }
+            if handle.is_finished() {
+                let _ = handle.join();
+            }
+        }
+    }
+}
+
+/// The async serve function type: takes `&self` (the impl), method, args → a
+/// boxed future producing `RpcResult<Vec<u8>>`. `&self` (not `&mut self`)
+/// because multiple in-flight tasks can't each borrow `&mut`.
+
+/// Spawn an async worker thread running `serve_async` over fresh
+/// request/response/event ring buffers. The worker uses an
+/// `async-executor::Executor` to drive async tasks. Returns the async client
+/// transport + event receiver.
+///
+/// The worker thread:
+/// 1. Reads request frames from the request ring.
+/// 2. For each: spawns `serve_async(impl, method, args)` on the executor.
+/// 3. When a task completes: writes `[task_id][Response]` to the response ring,
+///    unparks the client.
+/// 4. Ticks the executor when idle.
+pub fn spawn_async_worker_loop<S, F>(
+    impl_: S,
+    capacity: usize,
+    serve_async: F,
+) -> RpcResult<(AsyncWorkerTransport, EventReceiver)>
+where
+    S: Send + 'static,
+    F: Fn(&S, u32, &[u8]) -> ServeFuture + Send + 'static,
+{
+    let req = RingStorage::new(capacity)?;
+    let resp = RingStorage::new(capacity)?;
+    let events = RingStorage::new(capacity)?;
+    let (req_prod, req_cons) = req.split();
+    let (resp_prod, resp_cons) = resp.split();
+    let (ev_prod, ev_cons) = events.split();
+    let client_thread = thread::current();
+    // Extract the response ring's Arc for cross-task writes (RingProducer is
+    // !Sync, but Arc<RingAlloc> is Send+Sync — the executor writes through it).
+    let resp_arc = resp_prod.alloc.clone();
+    drop(resp_prod); // don't hold the !Sync producer; we write via the Arc
+    let side = AsyncWorkerSide {
+        req: req_cons,
+        resp: resp_arc,
+        events: ev_prod,
+        client_thread,
+    };
+    let handle = thread::spawn(move || {
+        run_async_worker_loop(impl_, side, serve_async);
+    });
+    let worker_thread = handle.thread().clone();
+    let transport = AsyncWorkerTransport {
+        req: Mutex::new(req_prod),
+        resp: Mutex::new(resp_cons),
+        handle: Mutex::new(Some(handle)),
+        worker_thread,
+        next_task_id: AtomicU64::new(0),
+        pending: Mutex::new(HashMap::new()),
+        poisoned: AtomicBool::new(false),
+    };
+    Ok((transport, EventReceiver { cons: ev_cons }))
+}
+
+/// Worker-side halves for the async loop.
+struct AsyncWorkerSide {
+    req: RingConsumer,
+    resp: Arc<RingAlloc>,
+    events: RingProducer,
+    client_thread: thread::Thread,
+}
+
+/// Run an async worker's serve loop on the current thread.
+///
+/// Reads request frames `[method][task_id][args]`, spawns `serve_async` on
+/// an `async-executor::Executor`, and writes completions `[task_id][Response]`
+/// to the response ring when tasks complete. The executor is ticked on each
+/// loop iteration.
+pub fn run_async_worker_loop<S, F>(impl_: S, side: AsyncWorkerSide, serve_async: F)
+where
+    S: Send + 'static,
+    F: Fn(&S, u32, &[u8]) -> ServeFuture + Send + 'static,
+{
+    let _sink = install_event_sink(&side.events);
+    // Single-threaded executor (no Send requirement) — compiles on wasm too.
+    let executor = async_executor::LocalExecutor::new();
+
+    loop {
+        // 1. Drain requests.
+        match side.req.read() {
+            Ok(frame) if frame.is_empty() => break,
+            Ok(frame) => {
+                if frame.len() < 12 {
+                    continue;
+                }
+                let method = u32::from_le_bytes(frame[0..4].try_into().unwrap());
+                let task_id = u64::from_le_bytes(frame[4..12].try_into().unwrap());
+                let args = frame[12..].to_vec();
+                let fut = serve_async(&impl_, method, &args);
+                let resp_arc = side.resp.clone();
+                let client_thread = side.client_thread.clone();
+                executor.spawn(async move {
+                    let result = fut.await;
+                    let env = make_response(method, result);
+                    let env_bytes = crate::encode(&env).unwrap_or_default();
+                    let mut completion = Vec::with_capacity(8 + env_bytes.len());
+                    completion.extend_from_slice(&task_id.to_le_bytes());
+                    completion.extend_from_slice(&env_bytes);
+                    let _ = resp_arc.view().write(&completion);
+                    client_thread.unpark();
+                }).detach();
+            }
+            Err(RpcError::BufferEmpty) => {}
+            Err(e) => {
+                eprintln!("[afterglow] async worker ring error: {e}; exiting");
+                break;
+            }
+        }
+        // 2. Tick the executor (drive async tasks).
+        executor.try_tick();
+        // 3. Park briefly when idle.
+        if !side.req.has_data() {
+            thread::park_timeout(Duration::from_micros(500));
+        }
+    }
+}
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;

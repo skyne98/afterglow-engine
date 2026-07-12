@@ -9,3 +9,4 @@ description = "afterglow RPC runtime: ring buffer transport + postcard codec"
 [dependencies]
 postcard.workspace = true
 serde.workspace = true
+async-executor.workspace = true

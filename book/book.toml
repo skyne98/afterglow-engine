@@ -1,0 +1,21 @@
+[book]
+title        = "afterglow-engine"
+authors      = ["afterglow-engine contributors"]
+language     = "en"
+description  = "A web-based game engine: Three.js + WebGPU rendering, Rust workers, lock-free ring-buffer RPC."
+src          = "src"
+
+[output.html]
+default-theme     = "ayu"
+preferred-dark-theme = "ayu"
+git-repository-url = "https://github.com/skyne98/afterglow-engine"
+edit-url-template  = "https://github.com/skyne98/afterglow-engine/edit/main/book/src/{path}"
+additional-js = ["mermaid.min.js", "mermaid-init.js"]
+
+[rust]
+edition = "2024"
+
+[preprocessor]
+
+[preprocessor.mermaid]
+command = "mdbook-mermaid"

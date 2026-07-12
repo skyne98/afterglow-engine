@@ -83,6 +83,11 @@ pub mod wasm {
 
 pub type RpcResult<T> = Result<T, RpcError>;
 
+/// A boxed async serve future. Used by `#[rpc]` traits with `async fn` methods:
+/// the generated `serve_async` dispatch returns this type. The impl boxes its
+/// async method body (`Box::pin(async move { ... })`).
+pub type ServeFuture = std::pin::Pin<Box<dyn std::future::Future<Output = RpcResult<Vec<u8>>> + 'static>>;
+
 /// All errors produced by the RPC runtime: codec/framing, ring-buffer
 /// state, transport, and worker lifecycle.
 #[derive(Debug)]
@@ -113,6 +118,8 @@ pub enum RpcError {
     WorkerDead,
     /// No response arrived before the bounded wait deadline.
     Timeout,
+    /// An I/O error (e.g. from `AssetSource::read_at`).
+    Io(String),
 }
 
 impl std::fmt::Display for RpcError {
@@ -135,10 +142,17 @@ impl std::fmt::Display for RpcError {
             Self::Decode(s) => write!(f, "rpc decode error: {s}"),
             Self::WorkerDead => write!(f, "rpc worker dead"),
             Self::Timeout => write!(f, "rpc timeout"),
+            Self::Io(s) => write!(f, "rpc io: {s}"),
         }
     }
 }
 impl std::error::Error for RpcError {}
+
+impl From<std::io::Error> for RpcError {
+    fn from(e: std::io::Error) -> Self {
+        RpcError::Io(e.to_string())
+    }
+}
 
 // --- codec helpers (used by generated code) -------------------------------
 

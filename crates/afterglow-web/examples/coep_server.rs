@@ -16,7 +16,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use afterglow_assets::AssetRoot;
-use afterglow_web::dev_server::{CROSS_ORIGIN_HEADERS, handle_request};
+use afterglow_web::dev_server::{CROSS_ORIGIN_HEADERS, handle_request, stream_body};
 
 fn main() {
     let www_dir = Path::new("crates/afterglow-web/www");
@@ -53,16 +53,23 @@ fn main() {
                 resp.status,
                 resp.reason,
                 resp.mime,
-                resp.body.len()
+                resp.body_len()
             );
             for (k, v) in CROSS_ORIGIN_HEADERS {
                 head.push_str(&format!("{k}: {v}\r\n"));
+            }
+            if let Some(cr) = &resp.content_range {
+                head.push_str(&format!("Content-Range: {cr}\r\n"));
+            }
+            if let Some(etag) = &resp.etag {
+                head.push_str(&format!("ETag: {etag}\r\n"));
             }
             head.push_str("Connection: close\r\n\r\n");
 
             // Writes must not panic on BrokenPipe (client gone).
             let _ = stream.write_all(head.as_bytes());
-            let _ = stream.write_all(&resp.body);
+            let mut chunk = [0u8; 8192];
+            let _ = stream_body(&resp, &mut stream, &mut chunk);
             let _ = stream.flush();
         });
     }

@@ -22,6 +22,13 @@ process". Workers do computation; the website orchestrates and renders.
 mechanism for website↔worker and worker↔worker. RPC values use postcard;
 thread unparks and payload-free `postMessage` calls are wake-ups only.
 
+**Sync `#[rpc]`**: blocking request→response (one-in-flight, park/unpark).
+**Async `#[rpc]`**: the poll model — `call_async` writes `[method][task_id][args]`
+and returns a `Future` immediately; `poll()` per frame drains `[task_id][Response]`
+completions and resolves pending futures. The worker runs an
+`async-executor::LocalExecutor` (compiles on wasm). Multiple in-flight calls
+are supported via `task_id` matching.
+
 Two backends, same framing and ring layout:
 
 | Target | Worker type | Memory backing | Crate |
@@ -43,10 +50,11 @@ Two backends, same framing and ring layout:
 
 | Crate | Purpose |
 |-------|---------|
-| `afterglow-rpc` | Core: `RingBuffer`, `Transport` trait, postcard codec, response envelope, and shared wasm ABI helpers. `native` has `RingStorage`, `spawn_worker_loop`, `run_worker_loop`, and event rings. |
-| `afterglow-rpc-macros` | `#[rpc]` proc macro: generates the server trait, typed Rust client, dispatch, native spawn, and thin wasm exports. |
+| `afterglow-rpc` | Core: `RingBuffer`, `Transport` trait, postcard codec, response envelope, `ServeFuture` type, and shared wasm ABI helpers. `native` has `RingStorage`, `spawn_worker_loop`, `run_worker_loop`, `spawn_async_worker_loop`, `run_async_worker_loop`, `AsyncWorkerTransport`, `Oneshot`, and event rings. |
+| `afterglow-rpc-macros` | `#[rpc]` proc macro: generates the server trait, typed Rust client, dispatch, native spawn, thin wasm exports, **and a typed TypeScript client**. Supports both sync (`fn`) and async (`async fn`) methods — async uses the poll model (task_id framing, completion queue, `async-executor`). |
 | `afterglow-rpc-demo` | Demo `Physics` service + `bench_rpc` stress test. |
-| `afterglow-assets` | Shared asset-path/MIME helpers (`AssetRoot`, `decode_url_path`, `guess_mime`, `resolve`) for the CEF scheme handler and web dev server. No deps or file-content reads; the single security boundary for FS asset confinement. |
+| `afterglow-assets-worker` | Asset loader worker: `#[rpc(worker = AssetLoaderWorker)]` with `async fn load(path) -> RpcResult<Vec<u8>>`. Uses the async `#[rpc]` poll model + `async-executor`. Native only (reads disk via `FsSource`); web asset loading goes through the serving layer (fetch + Range). |
+| `afterglow-assets` | Shared asset-path/MIME helpers (`AssetRoot`, `decode_url_path`, `guess_mime`, `resolve`) for the CEF scheme handler and web dev server. Plus streaming `AssetSource` trait + `FsSource`/`BytesSource` + `Range` parser. No deps or file-content reads in the confinement module; `FsSource` owns streaming reads via `pread`. The single security boundary for FS asset confinement. |
 | `afterglow-web` | Wasm target: page-side `#[no_mangle]` exports (`write_frame`, `read_response`) over two static rings in shared wasm memory. `worker.js` accesses the opposite halves directly with tested helpers from `ring-buf.js`. No wasm-bindgen. Includes a real worker benchmark + `coep_server` example. |
 | `afterglow-cef` | Thin CEF shell: window + WebGPU flags + `afterglow://` scheme (embedded-first / FS-fallback assets via `afterglow-assets`) + COOP/COEP headers. No worker code, no IPC, no input. |
 | `latency-tool` | CDP-based input→present latency measurement. |
@@ -139,6 +147,7 @@ CEF native path; the web `SharedArrayBuffer` path has no such issue.
 - Use semver for crate versions
 - Use semantic commits (feat, fix, chore, refactor, docs, test, etc.)
 - Agent must always maintain a docs/api/ directory with notes describing the fully up-to-date engine API surface per system
+- Agent must always keep the user-facing mdBook (`book/`) in sync with engine changes — when a crate's public API, behavior, flags, build steps, or performance numbers change, update the relevant `book/src/` chapter in the same change. The book is the front door; `docs/api/` is the source-checked reference. When the two disagree, `docs/api/` is canonical — fix the book. Build/serve locally with `cd book && nix-shell -p mdbook mdbook-mermaid --run "mdbook serve --open"`
 - Write extensive unit and regression tests; do not rely on memory, write tests for everything
 - Legacy code is bad; delete legacy code, embrace new code and systems
 - From time to time, spawn a subagent to look at the code and suggest cleanups — you might have left a mess
@@ -204,10 +213,17 @@ CEF native path; the web `SharedArrayBuffer` path has no such issue.
 
 ## API docs
 
+- `book/` — the user-facing mdBook (introductory front door). `book/src/SUMMARY.md`
+  is the table of contents; build/serve with `cd book && nix-shell -p mdbook
+  mdbook-mermaid --run "mdbook serve --open"`. Kept in sync with engine changes.
 - `docs/api/ring-buffer.md` — `afterglow-rpc` ring buffer + native transport
   (SPSC framing, owned halves, worker transport, events, poison/timeout).
 - `docs/api/rpc-macro.md` — `afterglow-rpc-macros` `#[rpc]` attribute: server/
-  typed client/dispatch generation, native spawn + wasm exports, reserved names.
+  typed client/dispatch generation, native spawn + wasm exports, reserved names,
+  TS client generation, async `#[rpc]` poll model.
+- `docs/api/asset-system.md` — `afterglow-assets` streaming `AssetSource` +
+  `FsSource`/`BytesSource` + range parser, serving layer (CEF scheme + web HTTP),
+  `afterglow-assets-worker` async asset loader, async `#[rpc]` transport.
 - `docs/api/web-shared-memory.md` — `afterglow-web` wasm exports, JS client/
   worker contract, build, and COOP/COEP headers.
 - `docs/api/assets.md` — `afterglow-assets` shared `guess_mime`/`resolve`:
