@@ -25,14 +25,19 @@ const infoEl = document.getElementById('info');
 // --- Three.js setup ---
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0a0c10);
-const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 100);
+const camera = new THREE.OrthographicCamera(-7, 7, 5, -5, 0.1, 100);
 camera.position.set(0, 0, 14);
+camera.lookAt(0, 0, 0);
 const renderer = new THREE.WebGPURenderer({ antialias: true });
 renderer.setSize(innerWidth, innerHeight);
 document.body.appendChild(renderer.domElement);
 await renderer.init();
 addEventListener('resize', () => {
-  camera.aspect = innerWidth / innerHeight;
+  const aspect = innerWidth / innerHeight;
+  camera.left = -7 * aspect;
+  camera.right = 7 * aspect;
+  camera.top = 5;
+  camera.bottom = -5;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
 });
@@ -291,16 +296,11 @@ function animate() {
     }
   }
 
-  // Spin each sphere individually.
+  // Synced rotation — apply to group so solid + wire stay aligned.
   for (const lod of lodGroups) {
-    lod.solid.rotation.y = elapsed * 0.5;
-    lod.solid.rotation.x = elapsed * 0.2;
-    lod.wire.rotation.y = elapsed * 0.5;
-    lod.wire.rotation.x = elapsed * 0.2;
+    lod.group.rotation.y = elapsed * 0.5;
+    lod.group.rotation.x = elapsed * 0.2;
   }
-
-  camera.position.set(0, 0, 14);
-  camera.lookAt(0, 0, 0);
 
   renderer.render(scene, camera);
   requestAnimationFrame(animate);
