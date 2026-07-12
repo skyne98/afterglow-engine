@@ -60,6 +60,54 @@ function isResident(entry: number): boolean { return (entry & 1) !== 0; }
 function getPhysX(entry: number): number { return (entry >> 1) & 0xFF; }
 function getPhysY(entry: number): number { return (entry >> 9) & 0xFF; }
 
+// Compressed format block sizes (4×4 texel blocks)
+const BLOCK_SIZE = 4;
+// BC7 = 16 bytes per 4×4 block. ASTC 4×4 = 16 bytes. RGBA8 = 64 bytes (4×4×4).
+const BC7_BYTES_PER_BLOCK = 16;
+const ASTC_BYTES_PER_BLOCK = 16;
+const RGBA_BYTES_PER_BLOCK = BLOCK_SIZE * BLOCK_SIZE * 4; // 64
+
+// Slots in compressed blocks
+const SLOT_BLOCKS_X = SLOT_SIZE / BLOCK_SIZE; // 34
+const SLOT_BLOCKS_Y = SLOT_SIZE / BLOCK_SIZE; // 34
+const ATLAS_BLOCKS_X = ATLAS_WIDTH / BLOCK_SIZE; // 510
+const ATLAS_BLOCKS_Y = ATLAS_HEIGHT / BLOCK_SIZE; // 510
+
+/** Texture format constants — match afterglow-texture worker */
+export const FORMAT_BC7 = 0;
+export const FORMAT_ASTC = 1;
+export const FORMAT_RGBA = 4;
+
+/** Detect the best texture format for the current GPU. */
+export async function detectBestTextureFormat(adapter?: GPUAdapter | null): Promise<number> {
+  if (adapter) {
+    const f = adapter.features;
+    if (f.has('texture-compression-bc')) return FORMAT_BC7;
+    if (f.has('texture-compression-astc')) return FORMAT_ASTC;
+  }
+  return FORMAT_RGBA;
+}
+
+/** Get bytes per compressed block for a format. */
+function bytesPerBlock(format: number): number {
+  if (format === FORMAT_BC7 || format === FORMAT_ASTC) return BC7_BYTES_PER_BLOCK;
+  return RGBA_BYTES_PER_BLOCK;
+}
+
+/** Get the WebGPU GPUTextureFormat for a format. */
+function gpuFormat(format: number): GPUTextureFormat {
+  if (format === FORMAT_BC7) return 'bctr7-unorm' as GPUTextureFormat;
+  if (format === FORMAT_ASTC) return 'astc-4x4-unorm' as GPUTextureFormat;
+  return 'rgba8unorm' as GPUTextureFormat;
+}
+
+/** Get the Three.js format constant for a format. */
+function threeFormat(format: number): number {
+  if (format === FORMAT_BC7) return 36492;      // RGBA_BPTC_Format
+  if (format === FORMAT_ASTC) return 37808;      // RGBA_ASTC_4x4_Format
+  return THREE.RGBAFormat;
+}
+
 /** A virtual texture descriptor — created by loadTexture(). */
 export interface VirtualTextureEntry {
   /** Path in the .big file (or loader key). */
@@ -146,8 +194,14 @@ class PageTable {
 // ============================================================================
 
 class PageCache {
-  /** Atlas pixel data (RGBA8). */
+  /** Atlas pixel data (compressed blocks or RGBA8). */
   atlas: Uint8Array;
+  /** Bytes per row in the atlas (for the selected format). */
+  atlasBytesPerRow: number;
+  /** Bytes per slot row. */
+  slotBytesPerRow: number;
+  /** Slot data size in bytes (for one page). */
+  slotDataSize: number;
   /** Which virtual page is in each slot. */
   private slots: (PageRequest | null)[] = [];
   /** Free slot indices. */
@@ -159,9 +213,13 @@ class PageCache {
   /** Pinned mip levels (never evicted). */
   private pinnedMips: Set<number>;
 
-  constructor(pinnedMips: Set<number>) {
-    this.atlas = new Uint8Array(ATLAS_WIDTH * ATLAS_HEIGHT * 4);
+  constructor(pinnedMips: Set<number>, format: number = FORMAT_RGBA) {
     this.pinnedMips = pinnedMips;
+    const bpb = bytesPerBlock(format);
+    this.atlasBytesPerRow = ATLAS_BLOCKS_X * bpb;
+    this.slotBytesPerRow = SLOT_BLOCKS_X * bpb;
+    this.slotDataSize = SLOT_BLOCKS_X * SLOT_BLOCKS_Y * bpb;
+    this.atlas = new Uint8Array(ATLAS_BLOCKS_X * ATLAS_BLOCKS_Y * bpb);
 
     for (let y = 0; y < ATLAS_PAGES_Y; y++) {
       for (let x = 0; x < ATLAS_PAGES_X; x++) {
@@ -225,15 +283,15 @@ class PageCache {
 
   /** Write page data into a slot and mark as resident. */
   commit(req: PageRequest, slot: PageSlot, data: Uint8Array) {
-    const dstX = slot.x * SLOT_SIZE;
-    const dstY = slot.y * SLOT_SIZE;
+    const dstBlockX = slot.x * SLOT_BLOCKS_X;
+    const dstBlockY = slot.y * SLOT_BLOCKS_Y;
 
-    // Copy page data into atlas at slot position
-    for (let y = 0; y < SLOT_SIZE; y++) {
-      const srcRow = y * SLOT_SIZE * 4;
-      const dstRow = ((dstY + y) * ATLAS_WIDTH + dstX) * 4;
-      for (let x = 0; x < SLOT_SIZE * 4; x++) {
-        this.atlas[dstRow + x] = data[srcRow + x];
+    // Copy page data into atlas at slot position (block-aligned)
+    for (let row = 0; row < SLOT_BLOCKS_Y; row++) {
+      const srcOffset = row * this.slotBytesPerRow;
+      const dstOffset = (dstBlockY + row) * this.atlasBytesPerRow + dstBlockX * (this.slotBytesPerRow / SLOT_BLOCKS_X);
+      for (let i = 0; i < this.slotBytesPerRow; i++) {
+        this.atlas[dstOffset + i] = data[srcOffset + i];
       }
     }
 
@@ -280,7 +338,13 @@ class PageCache {
  */
 export class VirtualTextureStore {
   /** The shared physical atlas texture (all VT textures sample from this). */
-  readonly atlasTexture: THREE.DataTexture;
+  readonly atlasTexture: THREE.Texture;
+  /** The raw WebGPU GPUTexture for the atlas (for writeTexture). */
+  gpuAtlasTexture: GPUTexture | null = null;
+  /** The detected texture format (FORMAT_BC7, FORMAT_ASTC, or FORMAT_RGBA). */
+  readonly format: number;
+  /** The WebGPU device (for compressed texture writes). */
+  private device: GPUDevice | null = null;
 
   /** Page tables per virtual texture path. */
   private entries = new Map<string, VirtualTextureEntry>();
@@ -341,22 +405,51 @@ export class VirtualTextureStore {
   constructor(
     loader: { read(path: string, offset: number, len: number): Promise<Uint8Array>; poll(): void },
     pageDataProvider?: (path: string, req: PageRequest) => Promise<Uint8Array>,
+    format?: number,
+    device?: GPUDevice,
   ) {
     this.loader = loader;
     this.pageDataProvider = pageDataProvider;
-    this.cache = new PageCache(PINNED_MIPS);
+    this.format = format ?? FORMAT_RGBA;
+    this.device = device ?? null;
+    this.cache = new PageCache(PINNED_MIPS, this.format);
 
     // Create the shared atlas texture
-    this.atlasTexture = new THREE.DataTexture(
-      this.cache.atlas,
-      ATLAS_WIDTH,
-      ATLAS_HEIGHT,
-      THREE.RGBAFormat,
-    );
-    this.atlasTexture.minFilter = THREE.LinearFilter;
-    this.atlasTexture.magFilter = THREE.LinearFilter;
-    this.atlasTexture.generateMipmaps = false;
-    this.atlasTexture.needsUpdate = true;
+    if (this.format === FORMAT_RGBA) {
+      // Uncompressed: use DataTexture (simple, works everywhere)
+      this.atlasTexture = new THREE.DataTexture(
+        this.cache.atlas,
+        ATLAS_WIDTH,
+        ATLAS_HEIGHT,
+        THREE.RGBAFormat,
+      );
+      (this.atlasTexture as THREE.DataTexture).minFilter = THREE.LinearFilter;
+      (this.atlasTexture as THREE.DataTexture).magFilter = THREE.LinearFilter;
+      (this.atlasTexture as THREE.DataTexture).generateMipmaps = false;
+      this.atlasTexture.needsUpdate = true;
+    } else {
+      // Compressed (BC7/ASTC): use CompressedTexture + raw GPUTexture
+      const tex = new THREE.CompressedTexture(
+        [{ data: this.cache.atlas, width: ATLAS_WIDTH, height: ATLAS_HEIGHT }],
+        ATLAS_WIDTH,
+        ATLAS_HEIGHT,
+        threeFormat(this.format),
+      );
+      tex.minFilter = THREE.LinearFilter;
+      tex.magFilter = THREE.LinearFilter;
+      tex.generateMipmaps = false;
+      tex.needsUpdate = true;
+      this.atlasTexture = tex;
+
+      // If we have a device, create the raw GPUTexture for writeTexture
+      if (device) {
+        this.gpuAtlasTexture = device.createTexture({
+          size: { width: ATLAS_WIDTH, height: ATLAS_HEIGHT },
+          format: gpuFormat(this.format),
+          usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING,
+        });
+      }
+    }
   }
 
   getLodBias(): number { return Math.max(this.frameTimeLodBias, this.oversubscriptionLodBias); }
@@ -558,8 +651,8 @@ export class VirtualTextureStore {
         if (this.pageDataProvider) {
           this.pageDataProvider(path, req).then(data => {
             this.cache.commit(req, slot, data);
+            this.writePage(slot, data);
             pt.setResident(req, slot);
-            this.atlasTexture.needsUpdate = true;
             // Update page table texture
             this.updatePageTableTexture(path, req, slot);
           });
@@ -638,6 +731,35 @@ export class VirtualTextureStore {
   /** Get a virtual texture entry by path. */
   getEntry(path: string): VirtualTextureEntry | undefined {
     return this.entries.get(path);
+  }
+
+  /**
+   * Write page data to the atlas at a specific slot.
+   *
+   * For compressed formats (BC7/ASTC): uses device.queue.writeTexture()
+   * to write compressed blocks directly to the GPU texture.
+   * For RGBA: updates the DataTexture's data array + sets needsUpdate.
+   */
+  writePage(slot: PageSlot, data: Uint8Array) {
+    if (this.gpuAtlasTexture && this.device) {
+      // Compressed: write directly to GPUTexture via writeTexture
+      // [SHLOM] uses gl.texSubImage2D / UpdateSubregion — WebGPU equivalent
+      this.device.queue.writeTexture(
+        {
+          texture: this.gpuAtlasTexture,
+          origin: { x: slot.x * SLOT_SIZE, y: slot.y * SLOT_SIZE },
+        },
+        data,
+        {
+          bytesPerRow: this.cache.slotBytesPerRow,
+          rowsPerImage: SLOT_BLOCKS_Y,
+        },
+        { width: SLOT_SIZE, height: SLOT_SIZE },
+      );
+    } else {
+      // RGBA: mark atlas texture for update
+      this.atlasTexture.needsUpdate = true;
+    }
   }
 
   /** Poll the store (call every frame before processFeedback). */
