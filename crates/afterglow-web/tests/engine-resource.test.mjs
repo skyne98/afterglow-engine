@@ -35,11 +35,11 @@ function transpile(tsRelPath) {
 // --- Fake asset loader ---
 
 class FakeLoader {
-  constructor() { this.files = new Map(); this.pollCalls = 0; this.loadCalls = 0; this.sizeCalls = 0; this.readCalls = 0; }
+  constructor() { this.files = new Map(); this.pollCalls = 0; this.loadCalls = 0; this.sizeCalls = 0; this.readCalls = 0; this.virtualSize = 0; this.virtualRead = null; }
   addFile(path, bytes) { this.files.set(path, bytes); }
   async load(path) { this.loadCalls++; const f = this.files.get(path); if (!f) throw new Error(`not found: ${path}`); return f; }
-  async size(path) { this.sizeCalls++; return this.files.get(path)?.byteLength ?? 0; }
-  async read(path, offset, len) { this.readCalls++; return this.files.get(path)?.subarray(offset, offset + len); }
+  async size(path) { this.sizeCalls++; if (this.files.get(path) === null && this.virtualSize) return this.virtualSize; return this.files.get(path)?.byteLength ?? 0; }
+  async read(path, offset, len) { this.readCalls++; if (this.virtualRead) return this.virtualRead(offset, len); return this.files.get(path)?.subarray(offset, offset + len); }
   poll() { this.pollCalls++; }
 }
 
@@ -182,6 +182,61 @@ test('AssetStore: small asset uses single load (not chunked)', async () => {
   assert.equal(result, 'small file');
   assert.equal(loader.loadCalls, 1, 'load() called once');
   assert.equal(loader.readCalls, 0, 'read() NOT called for small asset');
+});
+
+test('AssetStore: 500 MB synthetic asset loads via chunked read', async () => {
+  const { AssetStore } = await transpile('www/engine/asset-store.ts');
+
+  const loader = new FakeLoader();
+
+  // 500 MB synthetic model. We can't allocate 500 MB in the test, so the
+  // FakeLoader returns slices of a virtual file — it knows the size without
+  // holding the full buffer in memory.
+  const totalSize = 500 * 1024 * 1024; // 500 MB
+  loader.files.set('huge.glb', null); // null = virtual file
+  loader.virtualSize = totalSize;
+  loader.virtualRead = (offset, len) => {
+    // Generate deterministic data on the fly for the requested range.
+    const chunk = new Uint8Array(len);
+    for (let i = 0; i < len; i++) {
+      chunk[i] = ((offset + i) * 7 + 13) % 256;
+    }
+    return chunk;
+  };
+
+  const store = new AssetStore(loader);
+
+  // Load with a parser that verifies data integrity at sampled offsets.
+  const progress = [];
+  const result = await store.load('huge.glb', (bytes) => {
+    assert.equal(bytes.byteLength, totalSize, 'parser received full 500 MB');
+
+    // Verify data at several offsets (can't check all 500M).
+    const checks = [0, 1, 255, 1024, 65535, 1048576, totalSize / 2, totalSize - 1];
+    for (const off of checks) {
+      const expected = ((off) * 7 + 13) % 256;
+      assert.equal(bytes[off], expected, `byte at offset ${off} matches`);
+    }
+
+    return { byteLength: bytes.byteLength, checked: checks.length };
+  }, (loaded, total) => progress.push({ loaded, total }));
+
+  // Must use the chunked path.
+  assert.equal(loader.sizeCalls, 1, 'size() called once');
+  assert.equal(loader.loadCalls, 0, 'load() NOT called for 500 MB');
+  assert.ok(loader.readCalls >= Math.ceil(totalSize / (512 * 1024)),
+    `read() called ${loader.readCalls} times (expected ~${Math.ceil(totalSize / (512 * 1024))})`);
+
+  // Progress reached 100%.
+  assert.equal(progress[progress.length - 1].loaded, totalSize, 'progress reached 500 MB');
+  assert.equal(progress[0].total, totalSize, 'total is 500 MB');
+
+  // Result.
+  assert.equal(result.byteLength, totalSize);
+  assert.equal(result.checked, 8);
+
+  // Cached.
+  assert.equal(store.has('huge.glb'), true);
 });
 
 test('AssetStore: poll forwards to loader', async () => {
