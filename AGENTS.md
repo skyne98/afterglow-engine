@@ -243,8 +243,18 @@ logical native.
 Configuration: medium (5,000 instanced entities), 1440×900 window (native
 logical), vsync on.
 
-Frame timing measured via `requestAnimationFrame` intervals (CDP
+Frame timing measured via `requestAnimationFrame` timestamps (CDP
 `Runtime.evaluate` with `awaitPromise`). 600 consecutive frames sampled.
+
+**Method validity:** rAF timestamp intervals are the standard frame-rate
+measurement used by Chrome DevTools' own FPS counter, web FPS testers, and
+MDN ("the frequency of calls to the callback function will generally match
+the display refresh rate"). The timestamp is a `DOMHighResTimeStamp` with
+sub-millisecond precision. It measures main-thread frame *production* rate
+(JS compute + Three.js render commands + matrix compose) — whether the main
+thread stays within the vsync budget. If it overflows 16.67 ms, rAF fires
+less often and the interval increases. It does NOT measure GPU presentation
+time (when pixels reach the display) or input→present latency.
 
 **Note:** CDP trace-based `SkiaRenderer::SwapBuffers` counting (the
 latency-tool's default mode) undercounts swaps on RADV — the GPU process
