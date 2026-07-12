@@ -275,6 +275,15 @@ Targets met: ✅ 60 FPS steady (vsync-locked), ✅ p99 = 60.0 FPS (≥ 55 FPS).
 Every single frame hit the 16.68 ms vsync budget — zero drops across 600
 frames (10 seconds at 60 Hz).
 
+**Screen lock / OLED protection:** GNOME's screen lock suspends the
+compositor, so rAF fires at ~1 Hz regardless of Chrome background-throttling
+flags (`--disable-background-timer-throttling`, etc. were added to `flags.rs`
+but cannot override compositor suspension). Setting backlight brightness to 0
+triggers display/GPU power-saving and drops FPS to ~10. For OLED-safe
+benchmarking: run short benchmarks (5–10 seconds) at normal brightness,
+then lock the screen. The demo renders a dark background (#0a0c10) with
+moving entities, so burn-in risk from a 10-second run is negligible.
+
 The demo (`engine-demo.html`) uses 5,000 entities at medium; the CEF window
 is 1440×900 (native logical at the panel's 200% desktop scaling). Run:
 
