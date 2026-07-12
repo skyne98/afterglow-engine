@@ -110,31 +110,26 @@ for (let i = 0; i < lodRatios.length; i++) {
   const color = [0x4fc3f7, 0x66bb6a, 0xffa726, 0xef5350][i];
 
   // Procedural checkerboard texture (canvas-based) so we can see UVs.
-  const texSize = 256;
+  const texSize = 128;
   const canvas = document.createElement('canvas');
   canvas.width = texSize; canvas.height = texSize;
   const ctx = canvas.getContext('2d');
-  const sq = 32;
+  const sq = 16;
   for (let ty = 0; ty < texSize; ty += sq) {
     for (let tx = 0; tx < texSize; tx += sq) {
       const isLight = ((tx / sq) + (ty / sq)) % 2 === 0;
-      ctx.fillStyle = isLight ? '#e0e0e0' : '#404040';
+      ctx.fillStyle = isLight ? '#e0e0e0' : '#303030';
       ctx.fillRect(tx, ty, sq, sq);
     }
   }
-  // Draw a colored stripe per LOD level so we can tell them apart.
-  ctx.fillStyle = `#${color.toString(16).padStart(6, '0')}`;
-  ctx.fillRect(0, 0, texSize, 8);
-  ctx.fillRect(0, texSize - 8, texSize, 8);
   const texture = new THREE.CanvasTexture(canvas);
   texture.wrapS = THREE.RepeatWrapping;
   texture.wrapT = THREE.RepeatWrapping;
+  texture.repeat.set(4, 2);
 
-  // Textured material (shows UVs) + wireframe overlay.
-  const solidMat = new THREE.MeshStandardMaterial({
-    map: texture, metalness: 0.1, roughness: 0.7, flatShading: true
-  });
-  const wireMat = new THREE.MeshBasicMaterial({ color, wireframe: true, transparent: true, opacity: 0.3 });
+  // Unlit textured material (MeshBasicMaterial works reliably with WebGPU).
+  const solidMat = new THREE.MeshBasicMaterial({ map: texture });
+  const wireMat = new THREE.MeshBasicMaterial({ color, wireframe: true, transparent: true, opacity: 0.25 });
 
   // Two meshes per LOD: solid + wireframe overlay.
   const group = new THREE.Group();
