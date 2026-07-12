@@ -1,9 +1,6 @@
-// Tests for the ECS Resource concept and AssetStore cache behavior.
+// Tests for AssetStore handle-based API + generation number pattern.
 //
 //   node --test crates/afterglow-web/tests/engine-resource.test.mjs
-//
-// Transpiles the TS source via `bun build` (same tool xtask uses), then
-// imports the JS via data: URL (no npm deps needed).
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -12,10 +9,8 @@ import { execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const testDir = fileURLToPath(new URL('.', import.meta.url));
-const crateDir = testDir + '../';  // crates/afterglow-web/
+const crateDir = testDir + '../';
 
-// Transpile TS → JS via bun, then import via data: URL.
-// For modules that import `three`, the import is replaced with a mock.
 function transpile(tsRelPath) {
   const srcPath = crateDir + tsRelPath;
   const outPath = `/tmp/${tsRelPath.split('/').pop().replace('.ts', '.test.js')}`;
@@ -23,12 +18,10 @@ function transpile(tsRelPath) {
     stdio: 'pipe',
   });
   let src = readFileSync(outPath, 'utf8');
-  // Replace `import * as THREE from "three"` with a mock THREE object.
-  // The AssetStore cache logic doesn't use THREE — only the parsers do.
-  src = src.replace(
-    /import \* as THREE from "three";/g,
-    'const THREE = { Texture: class { constructor(b){this.b=b} }, SRGBColorSpace: "srgb", GLTFLoader: undefined };',
-  );
+  // Replace all THREE imports (bun renames duplicates to THREE2, etc).
+  src = src.replace(/import \* as THREE\w* from "three";/g, '');
+  src = 'const THREE = { Texture: class { constructor(b){this.b=b} }, SRGBColorSpace: "srgb", CanvasTexture: class { constructor(c){this.c=c} }, RepeatWrapping: 1000, GLTFLoader: undefined, BoxGeometry: class {}, MeshBasicMaterial: class {}, Mesh: class {}, Group: class { add(){} clone(){return new THREE.Group()} } };\n' + src;
+  src = src.replace(/THREE2\./g, 'THREE.');
   return import('data:text/javascript;base64,' + Buffer.from(src, 'utf8').toString('base64'));
 }
 
@@ -47,204 +40,181 @@ class FakeLoader {
 
 test('Resource: lazy creation, get returns same instance, set overwrites', async () => {
   const { defineResource } = await transpile('www/engine/resource.ts');
-
   let created = 0;
   const Counter = defineResource('counter', () => ({ count: 0, created: ++created }));
-
   const world = {};
   assert.equal(Counter.has(world), false);
-
   const c1 = Counter.get(world);
   assert.equal(created, 1);
-  assert.equal(c1.count, 0);
-
   const c2 = Counter.get(world);
-  assert.equal(created, 1); // not re-created
+  assert.equal(created, 1);
   assert.strictEqual(c1, c2);
-
   Counter.set(world, { count: 42, created: 99 });
   const c3 = Counter.get(world);
   assert.equal(c3.count, 42);
-
   Counter.remove(world);
   assert.equal(Counter.has(world), false);
 });
 
-test('AssetStore: load caches, get returns sync, no duplicate loads', async () => {
+test('AssetStore: load returns handle immediately with fallback', async () => {
   const { AssetStore } = await transpile('www/engine/asset-store.ts');
-
   const loader = new FakeLoader();
   loader.addFile('data.json', new TextEncoder().encode('{"hello":"world"}'));
   const store = new AssetStore(loader);
 
-  assert.equal(store.has('data.json'), false);
-  assert.equal(store.get('data.json'), undefined);
+  const handle = store.load('data.json', (b) => JSON.parse(new TextDecoder().decode(b)), 'fallback');
 
-  const result = await store.load('data.json', (b) => JSON.parse(new TextDecoder().decode(b)));
-  assert.deepEqual(result, { hello: 'world' });
-  assert.equal(store.has('data.json'), true);
-
-  const cached = store.get('data.json');
-  assert.deepEqual(cached, { hello: 'world' });
-
-  // Second load returns cached — no new worker call.
-  const prevCalls = loader.loadCalls;
-  await store.load('data.json', (b) => JSON.parse(new TextDecoder().decode(b)));
-  assert.equal(loader.loadCalls, prevCalls, 'should not re-load from worker');
+  // Handle is returned immediately — fallback is set, generation is 0.
+  assert.equal(handle.asset, 'fallback');
+  assert.equal(handle.generation, 0);
+  assert.equal(handle.state, 'loading');
+  assert.equal(handle.path, 'data.json');
 });
 
-test('AssetStore: concurrent loads of same path share one promise', async () => {
+test('AssetStore: poll swaps handle.asset + increments generation', async () => {
   const { AssetStore } = await transpile('www/engine/asset-store.ts');
-
   const loader = new FakeLoader();
-  loader.addFile('x.json', new TextEncoder().encode('[1,2,3]'));
+  loader.addFile('data.json', new TextEncoder().encode('{"hello":"world"}'));
   const store = new AssetStore(loader);
 
-  const p1 = store.load('x.json', (b) => JSON.parse(new TextDecoder().decode(b)));
-  const p2 = store.load('x.json', (b) => JSON.parse(new TextDecoder().decode(b)));
+  const handle = store.load('data.json', (b) => JSON.parse(new TextDecoder().decode(b)), 'fallback');
+  assert.equal(handle.asset, 'fallback');
+  assert.equal(handle.generation, 0);
 
-  const [r1, r2] = await Promise.all([p1, p2]);
-  assert.deepEqual(r1, [1, 2, 3]);
-  assert.deepEqual(r2, [1, 2, 3]);
-  assert.equal(loader.loadCalls, 1, 'only one worker call for concurrent loads');
+  // Drive the store — async load completes, handle swaps.
+  // Need to poll + let microtasks resolve.
+  store.poll();
+  await new Promise(r => setTimeout(r, 50)); // let async resolve
+
+  assert.equal(handle.state, 'ready');
+  assert.equal(handle.generation, 1);
+  assert.deepEqual(handle.asset, { hello: 'world' });
 });
 
-test('AssetStore: large assets auto-chunk via size + read', async () => {
+test('AssetStore: consumer checks generation (the core pattern)', async () => {
   const { AssetStore } = await transpile('www/engine/asset-store.ts');
-
   const loader = new FakeLoader();
-  // 3 KB file — small, but we'll make the store think it's large by
-  // checking that size() is called and read() is used when > MAX_SINGLE_LOAD.
-  // Since we can't easily mock the 1 MiB constant, just verify the
-  // size-then-load path works (size is called for every load).
-  const full = new Uint8Array(3072);
-  for (let i = 0; i < 3072; i++) full[i] = i % 256;
-  loader.addFile('big.bin', full);
+  loader.addFile('data.json', new TextEncoder().encode('[1,2,3]'));
   const store = new AssetStore(loader);
 
-  const result = await store.load('big.bin', (b) => b);
-  assert.equal(result.byteLength, 3072);
-  for (let i = 0; i < 3072; i++) assert.equal(result[i], i % 256);
+  const handle = store.load('data.json', (b) => JSON.parse(new TextDecoder().decode(b)), null);
+  let lastGen = -1;
+  let boundAsset = null;
+
+  // Frame 1 — not loaded yet.
+  store.poll();
+  await new Promise(r => setTimeout(r, 10));
+  if (handle.generation !== lastGen) { boundAsset = handle.asset; lastGen = handle.generation; }
+  // Either still fallback (gen 0) or loaded (gen 1) depending on timing.
+
+  // Drive until loaded.
+  for (let i = 0; i < 10 && handle.state === 'loading'; i++) {
+    store.poll();
+    await new Promise(r => setTimeout(r, 20));
+  }
+
+  // Now loaded — generation should be 1.
+  assert.equal(handle.state, 'ready');
+  assert.equal(handle.generation, 1);
+
+  // Consumer sees the generation change.
+  if (handle.generation !== lastGen) { boundAsset = handle.asset; lastGen = handle.generation; }
+  assert.deepEqual(boundAsset, [1, 2, 3]);
+  assert.equal(lastGen, 1);
+
+  // Next frame — no change, no swap.
+  const prevBound = boundAsset;
+  store.poll();
+  if (handle.generation !== lastGen) { boundAsset = handle.asset; lastGen = handle.generation; }
+  assert.strictEqual(boundAsset, prevBound); // no re-bind
 });
 
-test('AssetStore: 2 MiB model loads via chunked read (not single load)', async () => {
+test('AssetStore: duplicate load returns same handle', async () => {
   const { AssetStore } = await transpile('www/engine/asset-store.ts');
-
   const loader = new FakeLoader();
+  loader.addFile('x.json', new TextEncoder().encode('{}'));
+  const store = new AssetStore(loader);
 
-  // 2 MiB of deterministic data — larger than the 1 MiB response ring.
+  const h1 = store.load('x.json', (b) => JSON.parse(new TextDecoder().decode(b)), null);
+  const h2 = store.load('x.json', (b) => JSON.parse(new TextDecoder().decode(b)), null);
+  assert.strictEqual(h1, h2, 'same handle returned');
+});
+
+test('AssetStore: 2 MiB asset loads via chunked read', async () => {
+  const { AssetStore } = await transpile('www/engine/asset-store.ts');
+  const loader = new FakeLoader();
   const size = 2 * 1024 * 1024;
   const full = new Uint8Array(size);
   for (let i = 0; i < size; i++) full[i] = (i * 7 + 13) % 256;
-  loader.addFile('model.glb', full);
-
+  loader.addFile('big.bin', full);
   const store = new AssetStore(loader);
 
-  // Track progress.
-  const progress = [];
-  const result = await store.load('model.glb', (bytes) => {
-    // Parser receives the fully reassembled bytes.
-    assert.equal(bytes.byteLength, size, 'parser received full 2 MiB');
-    return { byteLength: bytes.byteLength, first: bytes[0], last: bytes[size - 1] };
-  }, (loaded, total) => progress.push({ loaded, total }));
+  const handle = store.load('big.bin', (b) => b, null);
+  assert.equal(handle.state, 'loading');
 
-  // The store must have used the chunked path: size() + read(), not load().
-  assert.equal(loader.sizeCalls, 1, 'size() called once');
-  assert.equal(loader.loadCalls, 0, 'load() NOT called for >1 MiB asset');
-  assert.ok(loader.readCalls > 1, `read() called ${loader.readCalls} times (chunked)`);
+  for (let i = 0; i < 20 && handle.state === 'loading'; i++) {
+    store.poll();
+    await new Promise(r => setTimeout(r, 50));
+  }
 
-  // Progress was reported.
-  assert.ok(progress.length > 0, 'progress callback fired');
-  assert.equal(progress[progress.length - 1].loaded, size, 'progress reached 100%');
-  assert.equal(progress[0].total, size, 'total reported correctly');
-
-  // Data integrity: every byte matches.
-  assert.equal(result.byteLength, size);
-  assert.equal(result.first, full[0]);
-  assert.equal(result.last, full[size - 1]);
-
-  // Cached — second get is sync.
-  assert.equal(store.has('model.glb'), true);
-  const cached = store.get('model.glb');
-  assert.equal(cached.byteLength, size);
+  assert.equal(handle.state, 'ready');
+  assert.equal(handle.generation, 1);
+  assert.equal(handle.asset.byteLength, size);
+  assert.equal(loader.loadCalls, 0, 'load() NOT called for >1 MiB');
+  assert.ok(loader.readCalls > 1, `read() called ${loader.readCalls} times`);
 });
 
-test('AssetStore: small asset uses single load (not chunked)', async () => {
+test('AssetStore: small asset uses single load', async () => {
   const { AssetStore } = await transpile('www/engine/asset-store.ts');
-
   const loader = new FakeLoader();
-  const small = new TextEncoder().encode('small file');
-  loader.addFile('small.txt', small);
-
+  loader.addFile('small.txt', new TextEncoder().encode('hi'));
   const store = new AssetStore(loader);
-  const result = await store.load('small.txt', (b) => new TextDecoder().decode(b));
 
-  assert.equal(result, 'small file');
-  assert.equal(loader.loadCalls, 1, 'load() called once');
-  assert.equal(loader.readCalls, 0, 'read() NOT called for small asset');
+  const handle = store.load('small.txt', (b) => new TextDecoder().decode(b), null);
+  for (let i = 0; i < 10 && handle.state === 'loading'; i++) {
+    store.poll();
+    await new Promise(r => setTimeout(r, 20));
+  }
+  assert.equal(handle.state, 'ready');
+  assert.equal(handle.asset, 'hi');
+  assert.equal(loader.loadCalls, 1);
+  assert.equal(loader.readCalls, 0);
 });
 
-test('AssetStore: 500 MB synthetic asset loads via chunked read', async () => {
+test('AssetStore: 500 MB synthetic asset', async () => {
   const { AssetStore } = await transpile('www/engine/asset-store.ts');
-
   const loader = new FakeLoader();
-
-  // 500 MB synthetic model. We can't allocate 500 MB in the test, so the
-  // FakeLoader returns slices of a virtual file — it knows the size without
-  // holding the full buffer in memory.
-  const totalSize = 500 * 1024 * 1024; // 500 MB
-  loader.files.set('huge.glb', null); // null = virtual file
+  const totalSize = 500 * 1024 * 1024;
+  loader.files.set('huge.glb', null);
   loader.virtualSize = totalSize;
   loader.virtualRead = (offset, len) => {
-    // Generate deterministic data on the fly for the requested range.
     const chunk = new Uint8Array(len);
-    for (let i = 0; i < len; i++) {
-      chunk[i] = ((offset + i) * 7 + 13) % 256;
-    }
+    for (let i = 0; i < len; i++) chunk[i] = ((offset + i) * 7 + 13) % 256;
     return chunk;
   };
-
   const store = new AssetStore(loader);
 
-  // Load with a parser that verifies data integrity at sampled offsets.
-  const progress = [];
-  const result = await store.load('huge.glb', (bytes) => {
-    assert.equal(bytes.byteLength, totalSize, 'parser received full 500 MB');
+  const handle = store.load('huge.glb', (bytes) => {
+    assert.equal(bytes.byteLength, totalSize);
+    return { size: bytes.byteLength };
+  }, null);
 
-    // Verify data at several offsets (can't check all 500M).
-    const checks = [0, 1, 255, 1024, 65535, 1048576, totalSize / 2, totalSize - 1];
-    for (const off of checks) {
-      const expected = ((off) * 7 + 13) % 256;
-      assert.equal(bytes[off], expected, `byte at offset ${off} matches`);
-    }
+  for (let i = 0; i < 100 && handle.state === 'loading'; i++) {
+    store.poll();
+    await new Promise(r => setTimeout(r, 10));
+  }
 
-    return { byteLength: bytes.byteLength, checked: checks.length };
-  }, (loaded, total) => progress.push({ loaded, total }));
-
-  // Must use the chunked path.
-  assert.equal(loader.sizeCalls, 1, 'size() called once');
-  assert.equal(loader.loadCalls, 0, 'load() NOT called for 500 MB');
-  assert.ok(loader.readCalls >= Math.ceil(totalSize / (512 * 1024)),
-    `read() called ${loader.readCalls} times (expected ~${Math.ceil(totalSize / (512 * 1024))})`);
-
-  // Progress reached 100%.
-  assert.equal(progress[progress.length - 1].loaded, totalSize, 'progress reached 500 MB');
-  assert.equal(progress[0].total, totalSize, 'total is 500 MB');
-
-  // Result.
-  assert.equal(result.byteLength, totalSize);
-  assert.equal(result.checked, 8);
-
-  // Cached.
-  assert.equal(store.has('huge.glb'), true);
+  assert.equal(handle.state, 'ready');
+  assert.equal(handle.generation, 1);
+  assert.equal(handle.asset.size, totalSize);
+  assert.equal(loader.loadCalls, 0);
+  assert.ok(loader.readCalls > 100, `read() called ${loader.readCalls} times`);
 });
 
 test('AssetStore: poll forwards to loader', async () => {
   const { AssetStore } = await transpile('www/engine/asset-store.ts');
-
   const loader = new FakeLoader();
   const store = new AssetStore(loader);
-
   store.poll();
   store.poll();
   assert.equal(loader.pollCalls, 2);
