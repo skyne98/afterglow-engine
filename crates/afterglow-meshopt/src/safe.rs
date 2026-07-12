@@ -236,6 +236,50 @@ pub fn simplify(
     (out, actual, result_error)
 }
 
+/// Simplify a mesh with attribute-awareness (e.g., UV preservation).
+///
+/// `vertex_attributes` is interleaved attribute data (e.g., UVs: [u,v, u,v, ...]).
+/// `attribute_weights` controls how much each attribute channel matters
+/// (e.g., [1.0, 1.0] for equal weight on u and v).
+///
+/// The simplifier prefers collapsing vertices with similar attributes,
+/// reducing texture distortion at LOD boundaries.
+pub fn simplify_with_attributes(
+    indices: &[u32],
+    vertex_positions: &[f32],
+    vertex_positions_stride: usize,
+    vertex_attributes: &[f32],
+    vertex_attributes_stride: usize,
+    attribute_weights: &[f32],
+    target_index_count: usize,
+    target_error: f32,
+) -> (Vec<u32>, usize, f32) {
+    let vertex_count = vertex_positions.len() / (vertex_positions_stride / 4);
+    let mut out = vec![0u32; indices.len()];
+    let mut result_error = 0.0f32;
+    let actual = unsafe {
+        ffi::meshopt_simplifyWithAttributes(
+            out.as_mut_ptr(),
+            indices.as_ptr(),
+            indices.len(),
+            vertex_positions.as_ptr(),
+            vertex_count,
+            vertex_positions_stride,
+            vertex_attributes.as_ptr(),
+            vertex_attributes_stride,
+            attribute_weights.as_ptr(),
+            attribute_weights.len(),
+            std::ptr::null(),
+            target_index_count,
+            target_error,
+            ffi::meshopt_Simplify_None,
+            &mut result_error,
+        )
+    };
+    out.truncate(actual);
+    (out, actual, result_error)
+}
+
 /// Fast, less accurate simplification. Good for aggressive LOD reduction.
 pub fn simplify_sloppy(
     indices: &[u32],

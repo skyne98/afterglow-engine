@@ -69,6 +69,19 @@ pub trait Meshopt {
         target_error: f32,
     ) -> RpcResult<Vec<u32>>;
 
+    /// Simplify a mesh with UV-awareness — preserves UV boundaries.
+    /// `uv_weight` controls how much UVs matter (0.0 = ignore, 1.0 = equal to position).
+    async fn simplify_with_uvs(
+        indices: Vec<u32>,
+        positions: Vec<f32>,
+        position_stride: u32,
+        uvs: Vec<f32>,
+        uv_stride: u32,
+        uv_weight: f32,
+        target_index_count: u32,
+        target_error: f32,
+    ) -> RpcResult<Vec<u32>>;
+
     // --- Optimization ---
 
     /// Reorder triangles for GPU vertex cache efficiency (FIFO cache).
@@ -196,6 +209,33 @@ impl MeshoptServer for MeshoptWorker {
                 &indices,
                 &positions,
                 position_stride as usize,
+                target_index_count as usize,
+                target_error,
+            );
+            afterglow_rpc::encode(&simplified)
+        })
+    }
+
+    fn simplify_with_uvs(
+        &self,
+        indices: Vec<u32>,
+        positions: Vec<f32>,
+        position_stride: u32,
+        uvs: Vec<f32>,
+        uv_stride: u32,
+        uv_weight: f32,
+        target_index_count: u32,
+        target_error: f32,
+    ) -> ServeFuture {
+        Box::pin(async move {
+            let weights = vec![uv_weight; (uv_stride / 4) as usize];
+            let (simplified, _, _) = safe::simplify_with_attributes(
+                &indices,
+                &positions,
+                position_stride as usize,
+                &uvs,
+                uv_stride as usize,
+                &weights,
                 target_index_count as usize,
                 target_error,
             );

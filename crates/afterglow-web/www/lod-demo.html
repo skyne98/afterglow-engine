@@ -96,8 +96,8 @@ for (let i = 0; i < lodRatios.length; i++) {
   const targetIndexCount = targetTris * 3;
 
   client.poll();
-  const lodIndices = await client.simplify(
-    indices, positions, 12, targetIndexCount, 0.02
+  const lodIndices = await client.simplifyWithUvs(
+    indices, positions, 12, uvs, 8, 0.5, targetIndexCount, 0.02
   );
 
   // Build a Three.js geometry from the LOD indices.

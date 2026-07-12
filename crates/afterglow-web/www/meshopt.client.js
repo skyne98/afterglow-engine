@@ -340,59 +340,64 @@ class MeshoptClient {
     const resp = await this.rpc.call(1, args);
     return decodeU32Vec(resp, 0)[0];
   }
+  async simplifyWithUvs(indices, positions, positionStride, uvs, uvStride, uvWeight, targetIndexCount, targetError) {
+    const args = concat(encodeU32Vec(indices), encodeF32Vec(positions), encodeU32(positionStride), encodeF32Vec(uvs), encodeU32(uvStride), encodeF32(uvWeight), encodeU32(targetIndexCount), encodeF32(targetError));
+    const resp = await this.rpc.call(2, args);
+    return decodeU32Vec(resp, 0)[0];
+  }
   async optimizeVertexCache(indices, vertexCount) {
     const args = concat(encodeU32Vec(indices), encodeU32(vertexCount));
-    const resp = await this.rpc.call(2, args);
+    const resp = await this.rpc.call(3, args);
     return decodeU32Vec(resp, 0)[0];
   }
   async optimizeOverdraw(indices, positions, positionStride, threshold) {
     const args = concat(encodeU32Vec(indices), encodeF32Vec(positions), encodeU32(positionStride), encodeF32(threshold));
-    const resp = await this.rpc.call(3, args);
+    const resp = await this.rpc.call(4, args);
     return decodeU32Vec(resp, 0)[0];
   }
   async encodeIndexBuffer(indices, vertexCount) {
     const args = concat(encodeU32Vec(indices), encodeU32(vertexCount));
-    const resp = await this.rpc.call(4, args);
+    const resp = await this.rpc.call(5, args);
     return decodeBytes(resp, 0)[0];
   }
   async decodeIndexBuffer(buffer, indexCount) {
     const args = concat(encodeBytes(buffer), encodeU32(indexCount));
-    const resp = await this.rpc.call(5, args);
+    const resp = await this.rpc.call(6, args);
     return decodeU32Vec(resp, 0)[0];
   }
   async encodeVertexBuffer(vertices, vertexSize) {
     const args = concat(encodeBytes(vertices), encodeU32(vertexSize));
-    const resp = await this.rpc.call(6, args);
+    const resp = await this.rpc.call(7, args);
     return decodeBytes(resp, 0)[0];
   }
   async decodeVertexBuffer(buffer, vertexCount, vertexSize) {
     const args = concat(encodeBytes(buffer), encodeU32(vertexCount), encodeU32(vertexSize));
-    const resp = await this.rpc.call(7, args);
+    const resp = await this.rpc.call(8, args);
     return decodeBytes(resp, 0)[0];
   }
   async generateVertexRemap(indices, vertices, vertexSize) {
     const args = concat(encodeU32Vec(indices), encodeBytes(vertices), encodeU32(vertexSize));
-    const resp = await this.rpc.call(8, args);
+    const resp = await this.rpc.call(9, args);
     return decodeU32Vec(resp, 0)[0];
   }
   async stripify(indices, vertexCount, restartIndex) {
     const args = concat(encodeU32Vec(indices), encodeU32(vertexCount), encodeU32(restartIndex));
-    const resp = await this.rpc.call(9, args);
+    const resp = await this.rpc.call(10, args);
     return decodeU32Vec(resp, 0)[0];
   }
   async buildMeshlets(indices, positions, positionStride, maxVertices, maxTriangles, coneWeight) {
     const args = concat(encodeU32Vec(indices), encodeF32Vec(positions), encodeU32(positionStride), encodeU32(maxVertices), encodeU32(maxTriangles), encodeF32(coneWeight));
-    const resp = await this.rpc.call(10, args);
+    const resp = await this.rpc.call(11, args);
     return decodeBytes(resp, 0)[0];
   }
   async analyzeVertexCache(indices, vertexCount) {
     const args = concat(encodeU32Vec(indices), encodeU32(vertexCount));
-    const resp = await this.rpc.call(11, args);
+    const resp = await this.rpc.call(12, args);
     return decodeF32Vec(resp, 0)[0];
   }
   async quantizeHalf(value) {
     const args = encodeF32(value);
-    const resp = await this.rpc.call(12, args);
+    const resp = await this.rpc.call(13, args);
     return decodeU16(resp, 0)[0];
   }
 }

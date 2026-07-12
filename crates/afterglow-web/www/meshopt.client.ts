@@ -38,69 +38,75 @@ export class MeshoptClient {
     return decodeU32Vec(resp, 0)[0];
   }
 
+  async simplifyWithUvs(indices: Uint32Array, positions: Float32Array, positionStride: number, uvs: Float32Array, uvStride: number, uvWeight: number, targetIndexCount: number, targetError: number): Promise<Uint32Array> {
+    const args = concat(encodeU32Vec(indices), encodeF32Vec(positions), encodeU32(positionStride), encodeF32Vec(uvs), encodeU32(uvStride), encodeF32(uvWeight), encodeU32(targetIndexCount), encodeF32(targetError));
+    const resp = await this.rpc.call(2, args);
+    return decodeU32Vec(resp, 0)[0];
+  }
+
   async optimizeVertexCache(indices: Uint32Array, vertexCount: number): Promise<Uint32Array> {
     const args = concat(encodeU32Vec(indices), encodeU32(vertexCount));
-    const resp = await this.rpc.call(2, args);
+    const resp = await this.rpc.call(3, args);
     return decodeU32Vec(resp, 0)[0];
   }
 
   async optimizeOverdraw(indices: Uint32Array, positions: Float32Array, positionStride: number, threshold: number): Promise<Uint32Array> {
     const args = concat(encodeU32Vec(indices), encodeF32Vec(positions), encodeU32(positionStride), encodeF32(threshold));
-    const resp = await this.rpc.call(3, args);
+    const resp = await this.rpc.call(4, args);
     return decodeU32Vec(resp, 0)[0];
   }
 
   async encodeIndexBuffer(indices: Uint32Array, vertexCount: number): Promise<Uint8Array> {
     const args = concat(encodeU32Vec(indices), encodeU32(vertexCount));
-    const resp = await this.rpc.call(4, args);
+    const resp = await this.rpc.call(5, args);
     return decodeBytes(resp, 0)[0];
   }
 
   async decodeIndexBuffer(buffer: Uint8Array, indexCount: number): Promise<Uint32Array> {
     const args = concat(encodeBytes(buffer), encodeU32(indexCount));
-    const resp = await this.rpc.call(5, args);
+    const resp = await this.rpc.call(6, args);
     return decodeU32Vec(resp, 0)[0];
   }
 
   async encodeVertexBuffer(vertices: Uint8Array, vertexSize: number): Promise<Uint8Array> {
     const args = concat(encodeBytes(vertices), encodeU32(vertexSize));
-    const resp = await this.rpc.call(6, args);
+    const resp = await this.rpc.call(7, args);
     return decodeBytes(resp, 0)[0];
   }
 
   async decodeVertexBuffer(buffer: Uint8Array, vertexCount: number, vertexSize: number): Promise<Uint8Array> {
     const args = concat(encodeBytes(buffer), encodeU32(vertexCount), encodeU32(vertexSize));
-    const resp = await this.rpc.call(7, args);
+    const resp = await this.rpc.call(8, args);
     return decodeBytes(resp, 0)[0];
   }
 
   async generateVertexRemap(indices: Uint32Array, vertices: Uint8Array, vertexSize: number): Promise<Uint32Array> {
     const args = concat(encodeU32Vec(indices), encodeBytes(vertices), encodeU32(vertexSize));
-    const resp = await this.rpc.call(8, args);
+    const resp = await this.rpc.call(9, args);
     return decodeU32Vec(resp, 0)[0];
   }
 
   async stripify(indices: Uint32Array, vertexCount: number, restartIndex: number): Promise<Uint32Array> {
     const args = concat(encodeU32Vec(indices), encodeU32(vertexCount), encodeU32(restartIndex));
-    const resp = await this.rpc.call(9, args);
+    const resp = await this.rpc.call(10, args);
     return decodeU32Vec(resp, 0)[0];
   }
 
   async buildMeshlets(indices: Uint32Array, positions: Float32Array, positionStride: number, maxVertices: number, maxTriangles: number, coneWeight: number): Promise<Uint8Array> {
     const args = concat(encodeU32Vec(indices), encodeF32Vec(positions), encodeU32(positionStride), encodeU32(maxVertices), encodeU32(maxTriangles), encodeF32(coneWeight));
-    const resp = await this.rpc.call(10, args);
+    const resp = await this.rpc.call(11, args);
     return decodeBytes(resp, 0)[0];
   }
 
   async analyzeVertexCache(indices: Uint32Array, vertexCount: number): Promise<Float32Array> {
     const args = concat(encodeU32Vec(indices), encodeU32(vertexCount));
-    const resp = await this.rpc.call(11, args);
+    const resp = await this.rpc.call(12, args);
     return decodeF32Vec(resp, 0)[0];
   }
 
   async quantizeHalf(value: number): Promise<number> {
     const args = encodeF32(value);
-    const resp = await this.rpc.call(12, args);
+    const resp = await this.rpc.call(13, args);
     return decodeU16(resp, 0)[0];
   }
 }
