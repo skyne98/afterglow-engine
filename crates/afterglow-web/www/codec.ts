@@ -74,21 +74,17 @@ export function decodeU8(bytes: Uint8Array, off: number): [number, number] {
 }
 
 export function encodeU16(n: number): Uint8Array {
-  const b = new Uint8Array(2);
-  new DataView(b.buffer).setUint16(0, n, true);
-  return b;
+  return new Uint8Array(encodeVarint(n));
 }
 export function decodeU16(bytes: Uint8Array, off: number): [number, number] {
-  return [new DataView(bytes.buffer, bytes.byteOffset + off, 2).getUint16(0, true), off + 2];
+  return decodeVarint(bytes, off);
 }
 
 export function encodeU32(n: number): Uint8Array {
-  const b = new Uint8Array(4);
-  new DataView(b.buffer).setUint32(0, n, true);
-  return b;
+  return new Uint8Array(encodeVarint(n));
 }
 export function decodeU32(bytes: Uint8Array, off: number): [number, number] {
-  return [new DataView(bytes.buffer, bytes.byteOffset + off, 4).getUint32(0, true), off + 4];
+  return decodeVarint(bytes, off);
 }
 
 export function encodeU64(n: number): Uint8Array {
@@ -111,21 +107,17 @@ export function decodeI8(bytes: Uint8Array, off: number): [number, number] {
 }
 
 export function encodeI16(n: number): Uint8Array {
-  const b = new Uint8Array(2);
-  new DataView(b.buffer).setInt16(0, n, true);
-  return b;
+  return new Uint8Array(encodeZigzag(n));
 }
 export function decodeI16(bytes: Uint8Array, off: number): [number, number] {
-  return [new DataView(bytes.buffer, bytes.byteOffset + off, 2).getInt16(0, true), off + 2];
+  return decodeZigzag(bytes, off);
 }
 
 export function encodeI32(n: number): Uint8Array {
-  const b = new Uint8Array(4);
-  new DataView(b.buffer).setInt32(0, n, true);
-  return b;
+  return new Uint8Array(encodeZigzag(n));
 }
 export function decodeI32(bytes: Uint8Array, off: number): [number, number] {
-  return [new DataView(bytes.buffer, bytes.byteOffset + off, 4).getInt32(0, true), off + 4];
+  return decodeZigzag(bytes, off);
 }
 
 export function encodeI64(n: number): Uint8Array {
@@ -229,19 +221,35 @@ export function decodeF64Vec(bytes: Uint8Array, off: number): [Float64Array, num
 // --- typed arrays (Vec<u32>) -------------------------------------------
 
 export function encodeU32Vec(vec: Uint32Array): Uint8Array {
-  const v = encodeVarint(vec.length);
-  const out = new Uint8Array(v.length + vec.length * 4);
-  out.set(v, 0);
-  const dv = new DataView(out.buffer, out.byteOffset + v.length, vec.length * 4);
-  for (let i = 0; i < vec.length; i++) dv.setUint32(i * 4, vec[i], true);
-  return out;
+  // Postcard encodes Vec<u32> as: varint(count) + count × varint(value)
+  const parts = [encodeVarint(vec.length)];
+  for (let i = 0; i < vec.length; i++) parts.push(encodeVarint(vec[i]));
+  return concat(...parts);
 }
 export function decodeU32Vec(bytes: Uint8Array, off: number): [Uint32Array, number] {
   const [n, o] = decodeVarint(bytes, off);
-  const end = o + n * 4;
-  if (end > bytes.length) throw new Error('postcard u32 vec truncated');
   const out = new Uint32Array(n);
-  const dv = new DataView(bytes.buffer, bytes.byteOffset + o, n * 4);
-  for (let i = 0; i < n; i++) out[i] = dv.getUint32(i * 4, true);
-  return [out, end];
+  let pos = o;
+  for (let i = 0; i < n; i++) {
+    const [val, next] = decodeVarint(bytes, pos);
+    out[i] = val;
+    pos = next;
+  }
+  return [out, pos];
+}
+
+// --- response envelope unwrap ---
+
+export function unwrapResponse(bytes: Uint8Array): Uint8Array {
+  const [variant, off] = decodeVarint(bytes, 0);
+  if (variant === 0) {
+    const [plen, poff] = decodeVarint(bytes, off);
+    if (poff + plen > bytes.length) throw new Error('RPC response truncated');
+    return bytes.subarray(poff, poff + plen);
+  }
+  const [method, moff] = decodeVarint(bytes, off);
+  const [mlen, eoff] = decodeVarint(bytes, moff);
+  if (eoff + mlen > bytes.length) throw new Error('RPC error truncated');
+  const msg = new TextDecoder().decode(bytes.subarray(eoff, eoff + mlen));
+  throw new Error(`RPC ${variant === 1 ? 'server' : 'decode'} error (method ${method}): ${msg}`);
 }

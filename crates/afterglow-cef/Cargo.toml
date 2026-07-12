@@ -12,3 +12,6 @@ cef.workspace = true
 
 [[example]]
 name = "minimal"
+
+[[example]]
+name = "lod-demo"

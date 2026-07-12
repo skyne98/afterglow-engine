@@ -12,6 +12,8 @@
 // which calls `call()` under the hood. `AsyncWorker` implements `RpcTransport`:
 // `call(method, args)` returns a Promise that resolves on a later `poll()`.
 
+import { unwrapResponse } from './codec.js';
+
 /// A pending JS fetch (full GET), keyed by `fetch_id`.
 class PendingFetch {
   constructor(url) {
@@ -92,6 +94,7 @@ export class AsyncWorker {
   constructor(wasm, baseUrl = '') {
     this.w = wasm;
     this.baseUrl = baseUrl;
+    this._memory = null; // set by asyncWorkerImports
     this.nextFetchId = 1;
     this.pendingFetches = new Map();
     this._pendingCalls = new Map(); // task_id → { resolve, reject }
@@ -109,6 +112,16 @@ export class AsyncWorker {
     if (taskId < 0) throw new Error('async worker: serveAsync failed');
     return new Promise((resolve, reject) => {
       this._pendingCalls.set(taskId, { resolve, reject });
+      // Auto-poll: the WASM executor runs in the main thread (not a Web Worker),
+      // so we must drive it ourselves. setTimeout(0) yields to the event loop
+      // between ticks, preventing infinite loops.
+      const poll = () => {
+        this.poll();
+        if (this._pendingCalls.has(taskId)) {
+          setTimeout(poll, 0);
+        }
+      };
+      setTimeout(poll, 0);
     });
   }
 
@@ -126,10 +139,10 @@ export class AsyncWorker {
       return -1;
     }
     // Write [method:u32 LE][task_id:u64 LE][args] to the input scratch.
-    const view = new DataView(this.w.memory.buffer, inPtr, 12 + args.length);
+    const view = new DataView((this._memory || this.w.memory).buffer, inPtr, 12 + args.length);
     view.setUint32(0, method, true);
     view.setBigUint64(4, BigInt(taskId), true);
-    new Uint8Array(this.w.memory.buffer, inPtr + 12, args.length).set(args);
+    new Uint8Array((this._memory || this.w.memory).buffer, inPtr + 12, args.length).set(args);
     // Call serve_async with the input scratch (it reads method+task_id+args).
     // Actually the exported fn takes (method, args_ptr, args_len, task_id).
     const r = this.w.afterglow_wasm_serve_async(method, inPtr + 12, args.length, BigInt(taskId));
@@ -152,7 +165,7 @@ export class AsyncWorker {
     for (;;) {
       const n = this.w.afterglow_wasm_drain_completion(outPtr, outSize);
       if (n < 0) break; // -1 = none, -2 = too small (shouldn't happen with 1MiB)
-      const bytes = new Uint8Array(this.w.memory.buffer, outPtr, n).slice();
+      const bytes = new Uint8Array((this._memory || this.w.memory).buffer, outPtr, n).slice();
       // Parse [task_id:u64 LE][Response envelope].
       const dv = new DataView(bytes.buffer, bytes.byteOffset, 8);
       const taskId = Number(dv.getBigUint64(0, true));
@@ -163,7 +176,7 @@ export class AsyncWorker {
       if (pending) {
         this._pendingCalls.delete(taskId);
         try {
-          pending.resolve(responseBytes);
+          pending.resolve(unwrapResponse(responseBytes));
         } catch (e) {
           pending.reject(e);
         }
@@ -178,7 +191,7 @@ export class AsyncWorker {
   /// @returns {number} fetch_id (>0) or 0 on error
   fetchStart(urlPtr, urlLen) {
     const url = new TextDecoder().decode(
-      new Uint8Array(this.w.memory.buffer, urlPtr, urlLen)
+      new Uint8Array((this._memory || this.w.memory).buffer, urlPtr, urlLen)
     );
     const fullUrl = this._resolveUrl(url);
     const id = this.nextFetchId++;
@@ -201,7 +214,7 @@ export class AsyncWorker {
       return 0;
     }
     if (pending.bytes.length > outMax) return -2;
-    new Uint8Array(this.w.memory.buffer, outPtr, outMax).set(pending.bytes);
+    new Uint8Array((this._memory || this.w.memory).buffer, outPtr, outMax).set(pending.bytes);
     return pending.bytes.length;
   }
 
@@ -212,7 +225,7 @@ export class AsyncWorker {
   /// @returns {number} fetch_id (>0) or 0 on error
   headStart(urlPtr, urlLen) {
     const url = new TextDecoder().decode(
-      new Uint8Array(this.w.memory.buffer, urlPtr, urlLen)
+      new Uint8Array((this._memory || this.w.memory).buffer, urlPtr, urlLen)
     );
     const fullUrl = this._resolveUrl(url);
     const id = this.nextFetchId++;
@@ -233,7 +246,7 @@ export class AsyncWorker {
     if (pending.error || pending.contentLength === null) return -2;
     const buf = new ArrayBuffer(8);
     new DataView(buf).setBigUint64(0, BigInt(pending.contentLength), true);
-    new Uint8Array(this.w.memory.buffer, outPtr, 8).set(new Uint8Array(buf));
+    new Uint8Array((this._memory || this.w.memory).buffer, outPtr, 8).set(new Uint8Array(buf));
     return 8;
   }
 
@@ -245,7 +258,7 @@ export class AsyncWorker {
   /// @returns {number} fetch_id (>0) or 0 on error
   rangeStart(urlPtr, urlLen, offset, len) {
     const url = new TextDecoder().decode(
-      new Uint8Array(this.w.memory.buffer, urlPtr, urlLen)
+      new Uint8Array((this._memory || this.w.memory).buffer, urlPtr, urlLen)
     );
     const fullUrl = this._resolveUrl(url);
     const id = this.nextFetchId++;
@@ -272,10 +285,12 @@ export class AsyncWorker {
 /// @param {AsyncWorker} driver
 /// @param {WebAssembly.Memory} memory
 export function asyncWorkerImports(driver, memory) {
+  driver._memory = memory; // store for AsyncWorker methods that need buffer access
   return {
     env: {
       memory,
       notify_worker: () => {}, // wake-up only (not used by async workers)
+      performance_now: () => performance.now(), // for benchmark functions
       ag_fetch_start: (urlPtr, urlLen) => driver.fetchStart(urlPtr, urlLen),
       ag_fetch_poll: (fetchId, outPtr, outMax) => driver.fetchPoll(fetchId, outPtr, outMax),
       ag_fetch_head_start: (urlPtr, urlLen) => driver.headStart(urlPtr, urlLen),
