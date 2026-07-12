@@ -254,7 +254,10 @@ Results (latency-tool, 12 iterations, 48 samples):
 | Input→present p90 | 16.61 ms |
 | Input→present p99 (max) | 31.54 ms |
 
-Targets met: ✅ 60 FPS, ✅ p99 ≤ 55 ms.
+Targets met: ✅ 60 FPS steady, ✅ p99 ≥ 55 FPS (present rate held 60 FPS
+median; swap interval p99 stayed within the 60 Hz vsync budget — only a
+single 33.84 ms outlier across 116 swaps, so the 99th percentile frame rate
+never dropped below 55 FPS).
 
 The demo (`engine-demo.html`) uses 5,000 entities at medium; the CEF window
 is 1440×900 (native logical at the panel's 200% desktop scaling). Run:
