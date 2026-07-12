@@ -231,3 +231,38 @@ CEF native path; the web `SharedArrayBuffer` path has no such issue.
 - `docs/api/cef-shell.md` — `afterglow-cef` game-window shell: `AppBuilder`,
   `afterglow://` scheme, WebGPU/X11 flags, COOP/COEP, console, startup caveat.
 - `docs/api/latency-tool.md` — CDP diagnostic CLI commands and measurement semantics.
+
+## Benchmarks
+
+### fox-laptop (2026-07-12)
+
+Hardware: AMD Ryzen 7 6800U (16 threads), AMD Radeon 680M (RADV Rembrandt,
+integrated), 14 GB RAM. Panel: 2880×1800 eDP, GNOME 200% scaling → 1440×900
+logical native.
+
+Configuration: medium (5,000 instanced entities), 1440×900 window (native
+logical), vsync on.
+
+Results (latency-tool, 12 iterations, 48 samples):
+
+| Metric | Value |
+|--------|-------|
+| FPS | 60 (steady, vsync-locked at 60 Hz) |
+| Present rate | 59 fps mean / 60 fps median (16.66 ms interval) |
+| Input→present median | 14.29 ms |
+| Input→present mean | 12.76 ms |
+| Input→present p90 | 16.61 ms |
+| Input→present p99 (max) | 31.54 ms |
+
+Targets met: ✅ 60 FPS, ✅ p99 ≤ 55 ms.
+
+The demo (`engine-demo.html`) uses 5,000 entities at medium; the CEF window
+is 1440×900 (native logical at the panel's 200% desktop scaling). Run:
+
+```sh
+nix-shell shell.nix --run "cargo build --example minimal -p afterglow-cef"
+DISPLAY=:0 XAUTHORITY=/run/user/$(id -u)/.mutter-Xwaylandauth.* \
+  nix-shell shell.nix --run "./target/debug/examples/minimal --ozone-platform=x11"
+# In another terminal (DevTools on port 9222):
+./target/release/latency-tool 127.0.0.1:9222
+```

@@ -13,7 +13,7 @@ use afterglow_cef::AppBuilder;
 fn main() {
     AppBuilder::new()
         .title("afterglow-engine — bitECS + Three.js")
-        .size(1280, 800)
+        .size(1440, 900)
         .devtools(9222)
         .index_html(b"<script>location.href='/engine-demo.html'</script>")
         .fs_root("crates/afterglow-web/www")
