@@ -479,13 +479,8 @@ export class AssetStore {
       const texture = new THREE.DataTexture(
         largest.data, largest.width, largest.height, THREE.RGBAFormat,
       );
-      texture.generateMipmaps = false;
-      texture.mipmaps = [];
-      // Add remaining mips (smaller levels) if any.
-      for (let i = 1; i < mips.length; i++) {
-        texture.mipmaps.push({ data: mips[i].data, width: mips[i].width, height: mips[i].height });
-      }
-      texture.minFilter = mips.length > 1 ? THREE.LinearMipmapLinearFilter : THREE.LinearFilter;
+      texture.generateMipmaps = true;
+      texture.minFilter = THREE.LinearMipmapLinearFilter;
       texture.magFilter = THREE.LinearFilter;
       texture.wrapS = THREE.RepeatWrapping;
       texture.wrapT = THREE.RepeatWrapping;
