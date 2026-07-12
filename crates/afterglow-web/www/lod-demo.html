@@ -15,6 +15,7 @@
 <script src="engine-bundle.js"></script>
 <script type="module">
 import { MeshoptClient } from './meshopt.client.js';
+import { TextureClient } from './texture.client.js';
 import { AssetStore } from './engine/asset-store.js';
 
 const THREE = window.THREE;
@@ -61,7 +62,7 @@ function generateSphere(segments, rings) {
   return { positions: new Float32Array(positions), uvs: new Float32Array(uvs), indices: new Uint32Array(indices) };
 }
 
-// --- Build a minimal GLB from mesh data (so AssetStore.loadModel can load it) ---
+// --- Build a minimal GLB from mesh data ---
 function buildGLB(indices, positions, uvs) {
   const indexBytes = indices.byteLength;
   const posBytes = positions.byteLength;
@@ -69,10 +70,7 @@ function buildGLB(indices, positions, uvs) {
   const binSize = indexBytes + posBytes + uvBytes;
   const json = {
     asset: { version: '2.0' },
-    meshes: [{ primitives: [{
-      attributes: { POSITION: 0, TEXCOORD_0: 1 },
-      indices: 2,
-    }] }],
+    meshes: [{ primitives: [{ attributes: { POSITION: 0, TEXCOORD_0: 1 }, indices: 2 }] }],
     accessors: [
       { bufferView: 1, componentType: 5126, count: positions.length / 3, type: 'VEC3' },
       { bufferView: 2, componentType: 5126, count: uvs.length / 2, type: 'VEC2' },
@@ -92,18 +90,16 @@ function buildGLB(indices, positions, uvs) {
   const totalSize = 12 + 8 + jsonBytes.length + jsonPad + 8 + binSize + binPad;
   const glb = new ArrayBuffer(totalSize);
   const view = new DataView(glb);
-  view.setUint32(0, 0x46546C67, true); // "glTF"
-  view.setUint32(4, 2, true);          // version
-  view.setUint32(8, totalSize, true);   // length
-  // JSON chunk
+  view.setUint32(0, 0x46546C67, true);
+  view.setUint32(4, 2, true);
+  view.setUint32(8, totalSize, true);
   let off = 12;
   view.setUint32(off, jsonBytes.length + jsonPad, true); off += 4;
-  view.setUint32(off, 0x4E4F534A, true); off += 4; // "JSON"
+  view.setUint32(off, 0x4E4F534A, true); off += 4;
   new Uint8Array(glb, off, jsonBytes.length).set(jsonBytes); off += jsonBytes.length;
   for (let i = 0; i < jsonPad; i++) new Uint8Array(glb)[off++] = 0x20;
-  // BIN chunk
   view.setUint32(off, binSize + binPad, true); off += 4;
-  view.setUint32(off, 0x004E4942, true); off += 4; // "BIN\0"
+  view.setUint32(off, 0x004E4942, true); off += 4;
   const binView = new Uint8Array(glb, off, binSize);
   binView.set(new Uint8Array(indices.buffer, indices.byteOffset, indexBytes), 0);
   binView.set(new Uint8Array(positions.buffer, positions.byteOffset, posBytes), indexBytes);
@@ -112,57 +108,64 @@ function buildGLB(indices, positions, uvs) {
 }
 
 // --- Spawn workers ---
-loadingEl.textContent = 'spawning meshopt worker...';
+loadingEl.textContent = 'spawning meshopt + texture workers...';
 const meshopt = await MeshoptClient.spawn('meshopt.wasm');
+const texture = await TextureClient.spawn('texture.wasm');
 
 // --- Generate sphere + build GLB ---
 const segments = 48, rings = 32;
 const sphere = generateSphere(segments, rings);
 const glbBytes = buildGLB(sphere.indices, sphere.positions, sphere.uvs);
 
-// --- Create AssetStore with meshopt worker ---
-// In-memory loader that serves the GLB bytes.
+// --- Fetch the .basis texture ---
+loadingEl.textContent = 'fetching checker.basis...';
+const basisResp = await fetch('checker.basis');
+const basisBytes = new Uint8Array(await basisResp.arrayBuffer());
+
+// --- Create AssetStore with both workers ---
 const loader = {
-  files: new Map([['sphere.glb', glbBytes]]),
+  files: new Map([['sphere.glb', glbBytes], ['checker.basis', basisBytes]]),
   async load(path) { return this.files.get(path); },
   async size(path) { return this.files.get(path)?.byteLength ?? 0; },
   async read(path, off, len) { return this.files.get(path)?.subarray(off, off + len); },
   poll() {},
 };
-const store = new AssetStore(loader, meshopt);
+const store = new AssetStore(loader, meshopt, texture);
 
-// --- Load the model through AssetStore (optimizes + generates LODs) ---
-loadingEl.textContent = 'loading + optimizing model...';
-const handle = store.loadModel('sphere.glb');
-let lastGen = -1;
+// --- Load model + texture through AssetStore ---
+loadingEl.textContent = 'loading + optimizing model + transcoding texture...';
+const modelHandle = store.loadModel('sphere.glb');
+const texHandle = store.loadTexture('checker.basis');
+let lastModelGen = -1, lastTexGen = -1;
 let modelReady = false;
 
 // --- Info overlay ---
-function updateInfo(asset) {
+function updateInfo(asset, texReady, texGen) {
   let html = '<b>afterglow-engine — LOD Demo (AssetStore)</b><br>';
   html += `Source: UV sphere ${segments}×${rings} — ${sphere.indices.length / 3} triangles<br>`;
-  html += `Pipeline: GLB → parse → optimizeVertexCache → optimizeOverdraw → simplifyWithUvs<br>`;
+  html += `Texture: checker.basis (128×128, 8 mips, UASTC → BC7)<br>`;
   html += `<br>`;
   if (asset && asset.stats && asset.stats.length > 0) {
     const s = asset.stats[0];
-    html += `<b>Optimization stats:</b><br>`;
+    html += `<b>Mesh optimization:</b><br>`;
     html += `  Original: ${s.originalTriangles} tris, ACMR=${s.originalAcmr.toFixed(2)}<br>`;
     html += `  Optimized: ACMR=${s.optimizedAcmr.toFixed(2)}<br>`;
-    html += `  Compressed: ${s.uncompressedIndexBytes}→${s.compressedIndexBytes} bytes (${(100 * s.compressedIndexBytes / s.uncompressedIndexBytes).toFixed(0)}%)<br>`;
+    html += `  Index: ${s.uncompressedIndexBytes}→${s.compressedIndexBytes} bytes (${(100 * s.compressedIndexBytes / s.uncompressedIndexBytes).toFixed(0)}%)<br>`;
     html += `<br>`;
   }
   if (asset && asset.meshes && asset.meshes.length > 0) {
     const lods = asset.meshes[0];
     const labels = ['LOD 0 — Full', 'LOD 1 — 50%', 'LOD 2 — 25%', 'LOD 3 — 10%'];
-    const colors = [0x4fc3f7, 0x66bb6a, 0xffa726, 0xef5350];
     html += `<b>LOD levels:</b><br>`;
     for (let i = 0; i < lods.length; i++) {
       const pct = (lods[i].triangleCount / (sphere.indices.length / 3) * 100).toFixed(0);
       html += `  ${labels[i]}: ${lods[i].triangleCount} tris (${pct}%)<br>`;
     }
-  } else {
-    html += `Loading... (check generation: ${handle.generation})<br>`;
+    html += `<br>`;
   }
+  html += `<b>Texture streaming:</b><br>`;
+  html += `  Basis file: ${basisBytes.length} bytes<br>`;
+  html += `  Status: ${texReady ? 'ready' : 'streaming...'} (gen ${texGen})<br>`;
   infoEl.innerHTML = html;
   infoEl.style.display = 'block';
 }
@@ -194,26 +197,9 @@ function buildMeshesFromAsset(asset) {
     geom.setIndex(new THREE.BufferAttribute(lod.indices, 1));
     geom.computeVertexNormals();
 
-    // Procedural checkerboard DataTexture.
-    const texSize = 128, sq = 16;
-    const texData = new Uint8Array(texSize * texSize * 4);
-    for (let ty = 0; ty < texSize; ty++) {
-      for (let tx = 0; tx < texSize; tx++) {
-        const isLight = (Math.floor(tx / sq) + Math.floor(ty / sq)) % 2 === 0;
-        const idx = (ty * texSize + tx) * 4;
-        texData[idx] = isLight ? 220 : 30;
-        texData[idx + 1] = isLight ? 220 : 30;
-        texData[idx + 2] = isLight ? 200 : 60;
-        texData[idx + 3] = 255;
-      }
-    }
-    const texture = new THREE.DataTexture(texData, texSize, texSize, THREE.RGBAFormat);
-    texture.wrapS = THREE.RepeatWrapping;
-    texture.wrapT = THREE.RepeatWrapping;
-    texture.repeat.set(4, 2);
-    texture.needsUpdate = true;
-
-    const solidMat = new THREE.MeshStandardMaterial({ map: texture, metalness: 0.0, roughness: 0.9 });
+    // Use the streamed texture (or fallback) — same texture on all LODs.
+    const tex = texHandle.asset || texHandle.fallback;
+    const solidMat = new THREE.MeshStandardMaterial({ map: tex, metalness: 0.0, roughness: 0.9 });
     const wireMat = new THREE.MeshBasicMaterial({ color: colors[i], wireframe: true, transparent: true, opacity: 0.25 });
 
     const group = new THREE.Group();
@@ -226,11 +212,11 @@ function buildMeshesFromAsset(asset) {
     const [x, y, z] = grid[i] || [0, 0, 0];
     group.position.set(x, y, z);
     scene.add(group);
-    lodGroups.push({ group, solid, wire });
+    lodGroups.push({ group, solid, wire, solidMat });
   }
 
   loadingEl.style.display = 'none';
-  updateInfo(asset);
+  updateInfo(asset, texHandle.state === 'ready', texHandle.generation);
 }
 
 // --- Animation loop ---
@@ -239,19 +225,33 @@ const startTime = performance.now();
 function animate() {
   const elapsed = (performance.now() - startTime) / 1000;
 
-  // Drive the AssetStore (polls meshopt worker + processes loads).
+  // Drive the AssetStore (polls all workers + streams mips).
   store.poll();
 
-  // Check if the model is ready.
-  if (!modelReady && handle.generation > lastGen) {
-    lastGen = handle.generation;
-    if (handle.state === 'ready' && handle.asset) {
+  // Check model readiness.
+  if (!modelReady && modelHandle.generation > lastModelGen) {
+    lastModelGen = modelHandle.generation;
+    if (modelHandle.state === 'ready' && modelHandle.asset) {
       modelReady = true;
-      buildMeshesFromAsset(handle.asset);
+      buildMeshesFromAsset(modelHandle.asset);
     }
   }
 
-  // Spin each sphere individually (grid is static).
+  // Update texture on meshes when new mips arrive.
+  if (texHandle.generation > lastTexGen) {
+    lastTexGen = texHandle.generation;
+    if (texHandle.asset && lodGroups.length > 0) {
+      for (const lod of lodGroups) {
+        lod.solidMat.map = texHandle.asset;
+        lod.solidMat.needsUpdate = true;
+      }
+    }
+    if (modelReady) {
+      updateInfo(modelHandle.asset, texHandle.state === 'ready', texHandle.generation);
+    }
+  }
+
+  // Spin each sphere individually.
   for (const lod of lodGroups) {
     lod.solid.rotation.y = elapsed * 0.5;
     lod.solid.rotation.x = elapsed * 0.2;
@@ -267,6 +267,6 @@ function animate() {
 }
 
 requestAnimationFrame(animate);
-console.log('afterglow-engine: LOD demo started (AssetStore pipeline)');
+console.log('afterglow-engine: LOD demo started (AssetStore pipeline + Basis texture)');
 </script>
 </body></html>

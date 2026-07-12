@@ -115,24 +115,6 @@ var FORMAT_ASTC = 1;
 var FORMAT_RGBA = 4;
 var _bestFormat = null;
 async function detectBestTextureFormat() {
-  if (_bestFormat !== null)
-    return _bestFormat;
-  if (typeof navigator !== "undefined" && navigator.gpu) {
-    try {
-      const adapter = await navigator.gpu.requestAdapter();
-      if (adapter) {
-        const f = adapter.features;
-        if (f.has("texture-compression-bc")) {
-          _bestFormat = FORMAT_BC7;
-          return FORMAT_BC7;
-        }
-        if (f.has("texture-compression-astc")) {
-          _bestFormat = FORMAT_ASTC;
-          return FORMAT_ASTC;
-        }
-      }
-    } catch {}
-  }
   _bestFormat = FORMAT_RGBA;
   return FORMAT_RGBA;
 }
@@ -414,36 +396,37 @@ class AssetStore {
     if (cached)
       return cached;
     const handle = new AssetHandle(path, fallbackTexture());
-    const texture = new THREE.DataTexture(new Uint8Array(0), 1, 1, THREE.RGBAFormat);
-    texture.generateMipmaps = false;
-    texture.mipmaps = [];
-    texture.minFilter = THREE.LinearMipmapLinearFilter;
-    texture.magFilter = THREE.LinearFilter;
-    texture.colorSpace = THREE.SRGBColorSpace;
-    handle.asset = texture;
     const promise = this.startLoad(path);
     promise.then(async (bytes) => {
       const format = await detectBestTextureFormat();
       const transcoded = await this.texture.transcode(bytes, format);
       const mips = this.parseSerializedMips(transcoded);
       if (mips.length === 0) {
-        const blockSize = format === FORMAT_RGBA ? 4 : 16;
-        const blocks = transcoded.length / blockSize;
-        const dim = Math.round(Math.sqrt(blocks * (format === FORMAT_RGBA ? 1 : 16)));
-        const w = Math.max(4, Math.ceil(dim / 4) * 4);
-        this.queueMipUpload(path, handle, texture, 0, transcoded, w, w, 1, 1);
-      } else {
-        const reversed = [...mips].reverse();
-        for (let i = 0;i < reversed.length; i++) {
-          const m = reversed[i];
-          this.queueMipUpload(path, handle, texture, i, m.data, m.width, m.height, i + 1, reversed.length);
-        }
+        handle.state = "error";
+        console.error(`[afterglow] basis texture: no mips in ${path}`);
+        return;
       }
+      const largest = mips[0];
+      const texture = new THREE.DataTexture(largest.data, largest.width, largest.height, THREE.RGBAFormat);
+      texture.generateMipmaps = false;
+      texture.mipmaps = [];
+      for (let i = 1;i < mips.length; i++) {
+        texture.mipmaps.push({ data: mips[i].data, width: mips[i].width, height: mips[i].height });
+      }
+      texture.minFilter = mips.length > 1 ? THREE.LinearMipmapLinearFilter : THREE.LinearFilter;
+      texture.magFilter = THREE.LinearFilter;
+      texture.wrapS = THREE.RepeatWrapping;
+      texture.wrapT = THREE.RepeatWrapping;
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.needsUpdate = true;
+      handle.asset = texture;
+      handle.generation++;
+      handle.state = "ready";
+      this.cache.set(path, handle);
     }).catch((err) => {
       handle.state = "error";
       console.error(`[afterglow] basis texture failed: ${path}`, err);
     });
-    this.streaming.set(path, { handle, texture, pendingMips: [], mipsUploaded: 0, totalMips: 1 });
     return handle;
   }
   parseSerializedMips(data) {

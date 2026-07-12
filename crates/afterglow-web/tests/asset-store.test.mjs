@@ -124,7 +124,7 @@ test('AssetStore: regular PNG texture loads and increments generation', async ()
   assert.ok(handle.generation > 0, 'generation should have incremented');
 });
 
-test('AssetStore: Basis texture creates streaming texture with empty mipmaps', async () => {
+test('AssetStore: Basis texture creates handle with fallback immediately', async () => {
   const { AssetStore } = await transpile('www/engine/asset-store.ts');
   const loader = new FakeLoader();
   const transcoder = new FakeTranscoder();
@@ -132,14 +132,12 @@ test('AssetStore: Basis texture creates streaming texture with empty mipmaps', a
   const store = new AssetStore(loader, undefined, transcoder);
 
   const handle = store.loadTexture('sky.basis');
-  assert.ok(handle.asset, 'texture created immediately');
-  assert.ok(handle.asset.mipmaps, 'texture has mipmaps array');
-  assert.equal(handle.asset.mipmaps.length, 0, 'mipmaps array starts empty');
-  assert.equal(handle.asset.generateMipmaps, false, 'auto-mipmaps disabled');
+  assert.ok(handle.asset, 'fallback texture set as asset immediately');
   assert.equal(handle.generation, 0, 'generation starts at 0');
+  assert.equal(handle.state, 'loading', 'state is loading');
 });
 
-test('AssetStore: Basis texture streams mips progressively', async () => {
+test('AssetStore: Basis texture transcodes and creates DataTexture', async () => {
   const { AssetStore } = await transpile('www/engine/asset-store.ts');
   const loader = new FakeLoader();
   const transcoder = new FakeTranscoder();
@@ -155,15 +153,19 @@ test('AssetStore: Basis texture streams mips progressively', async () => {
   const store = new AssetStore(loader, undefined, transcoder);
 
   const handle = store.loadTexture('sky.basis');
-  assert.equal(handle.asset.mipmaps.length, 0, 'no mips yet');
+  assert.equal(handle.state, 'loading', 'loading initially');
 
   await drive(store, 30);
 
-  // After driving, mips should have been uploaded.
-  assert.ok(handle.asset.mipmaps.length > 0, 'mipmaps should have been uploaded');
+  // After driving, texture should be created from transcoded data.
+  assert.ok(handle.asset, 'texture created after transcode');
+  assert.equal(handle.state, 'ready', 'should be ready');
   assert.ok(handle.generation > 0, 'generation should have incremented');
-  assert.equal(handle.state, 'ready', 'should be ready after all mips uploaded');
   assert.equal(transcoder.transcodeCalls, 1, 'transcode called once');
+  // DataTexture should have the largest mip as image data.
+  assert.equal(handle.asset.image.width, 8, 'texture width = largest mip');
+  assert.equal(handle.asset.image.height, 8, 'texture height = largest mip');
+  assert.ok(handle.asset.mipmaps.length > 0, 'extra mips stored in mipmaps array');
 });
 
 test('AssetStore: poll drives both loader and transcoder', async () => {
