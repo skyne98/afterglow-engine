@@ -332,9 +332,12 @@ class PageCache {
  *
  * Usage:
  *   const vt = VirtualTextureRes.get(world);
- *   const handle = vt.loadTexture('terrain', { virtualSize: 4096, pageData: ... });
+ *   const handle = vt.loadTexture('terrain');
  *   // handle.asset = shared atlas texture
  *   // handle.generation increments when pages are loaded/evicted
+ *
+ * The VT store reads page data from the .big file via the pageDataProvider.
+ * Pages are transcoded from Basis to the optimal GPU format on load.
  */
 export class VirtualTextureStore {
   /** The shared physical atlas texture (all VT textures sample from this). */
@@ -478,13 +481,18 @@ export class VirtualTextureStore {
    * Load a virtual texture. Returns an AssetHandle pointing to the shared atlas.
    *
    * The handle's generation increments when pages are loaded/evicted for
-   * this virtual texture.
+   * this virtual texture. The pageDataProvider (set in constructor) reads
+   * page data from the .big file and transcodes via the texture worker.
+   *
+   * @param path Asset name in the .big file
+   * @param options Optional configuration (virtualSize overrides auto-detection)
    */
   loadTexture(
     path: string,
-    options: { virtualSize: number; pageData?: Map<string, Uint8Array> },
+    options?: { virtualSize?: number },
   ): AssetHandle<THREE.Texture> {
-    const virtualSize = options.virtualSize;
+    // Default virtual size if not specified
+    const virtualSize = options?.virtualSize ?? 4096;
     const pageGrid = virtualSize / PAGE_SIZE;
     const maxMip = Math.floor(Math.log2(pageGrid));
 
@@ -534,25 +542,29 @@ export class VirtualTextureStore {
       for (let y = 0; y < pagesAtMip; y++) {
         for (let x = 0; x < pagesAtMip; x++) {
           const req: PageRequest = { mip, x, y };
-          this.loadPageSync(path, req, pageTable);
+          this.loadPage(path, req, pageTable);
         }
       }
     }
   }
 
-  /** Load a single page synchronously (for pinned pages). */
-  private loadPageSync(path: string, req: PageRequest, pageTable: PageTable) {
+  /** Load a single page (async, for pinned pages). */
+  private async loadPage(path: string, req: PageRequest, pageTable: PageTable) {
     if (!this.pageDataProvider) return;
     if (pageTable.isResident(req)) return;
 
-    const { slot, evicted } = this.cache.acquire(req);
-    if (evicted) pageTable.setEvicted(evicted);
+    try {
+      const { slot, evicted } = this.cache.acquire(req);
+      if (evicted) pageTable.setEvicted(evicted);
 
-    // Synchronous load (pinned pages should be available immediately)
-    // In practice, this would use pre-loaded data
-    const data = new Uint8Array(SLOT_SIZE * SLOT_SIZE * 4); // placeholder
-    this.cache.commit(req, slot, data);
-    pageTable.setResident(req, slot);
+      const data = await this.pageDataProvider(path, req);
+      this.cache.commit(req, slot, data);
+      this.writePage(slot, data);
+      pageTable.setResident(req, slot);
+      this.updatePageTableTexture(path, req, slot);
+    } catch (e) {
+      console.error(`[VT] Failed to load page ${path} mip=${req.mip} (${req.x},${req.y}):`, e);
+    }
   }
 
   /**
