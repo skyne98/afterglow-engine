@@ -16,6 +16,10 @@
 
 pub mod safe;
 pub mod mips;
+pub mod worker_tests;
+
+#[cfg(target_arch = "wasm32")]
+pub mod wasm;
 
 pub use safe::*;
 pub use mips::*;
