@@ -4,6 +4,7 @@ members = [
     "crates/afterglow-assets",
     "crates/afterglow-assets-worker",
     "crates/afterglow-cef",
+    "crates/afterglow-meshopt",
     "crates/afterglow-rpc",
     "crates/afterglow-rpc-macros",
     "crates/afterglow-rpc-demo",

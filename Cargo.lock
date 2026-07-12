@@ -33,6 +33,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "afterglow-meshopt"
+version = "0.1.0"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "afterglow-rpc"
 version = "0.1.0"
 dependencies = [
