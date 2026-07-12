@@ -307,40 +307,74 @@ export class AssetStore {
 
   /** @internal — parse GLTF + optimize meshes + generate LODs. */
   private async processModel(bytes: Uint8Array, path: string): Promise<ModelAsset> {
-    // Parse GLTF to get the scene.
-    const scene = await parseGLTF(bytes);
+    let meshes: { indices: Uint32Array; positions: Float32Array; uvs: Float32Array }[] = [];
+    let textures = new Map<string, THREE.Texture>();
 
-    // Extract meshes from the scene.
-    const meshes: { indices: Uint32Array; positions: Float32Array; uvs: Float32Array }[] = [];
-    scene.traverse((obj: any) => {
-      if (obj.isMesh && obj.geometry?.index) {
-        const geo = obj.geometry;
-        const indices = new Uint32Array(geo.index.array);
-        const pos = geo.attributes.position;
-        const positions = new Float32Array(pos.array);
-        const uvs = geo.attributes.uv ? new Float32Array(geo.attributes.uv.array) : new Float32Array(0);
-        meshes.push({ indices, positions, uvs });
-      }
-    });
+    try {
+      const scene = await parseGLTF(bytes);
+      scene.traverse((obj: any) => {
+        if (obj.isMesh && obj.geometry?.index) {
+          const geo = obj.geometry;
+          meshes.push({
+            indices: new Uint32Array(geo.index.array),
+            positions: new Float32Array(geo.attributes.position.array),
+            uvs: geo.attributes.uv ? new Float32Array(geo.attributes.uv.array) : new Float32Array(0),
+          });
+        }
+        if (obj.isMesh && obj.material?.map) textures.set('diffuse', obj.material.map);
+      });
+    } catch {
+      // GLTFLoader not available — parse GLB manually.
+      meshes = this.parseMinimalGLB(bytes);
+    }
 
     const stats: MeshStats[] = [];
     const meshLods: MeshLOD[][] = [];
-
     for (const mesh of meshes) {
       const { lods, stat } = await this.optimizeMesh(mesh.indices, mesh.positions, mesh.uvs);
       meshLods.push(lods);
       if (stat) stats.push(stat);
     }
-
-    // Collect textures from materials.
-    const textures = new Map<string, THREE.Texture>();
-    scene.traverse((obj: any) => {
-      if (obj.isMesh && obj.material?.map) {
-        textures.set('diffuse', obj.material.map);
-      }
-    });
-
     return { meshes: meshLods, textures, stats };
+  }
+
+  /** @internal — parse a minimal GLB (one mesh, POSITION + TEXCOORD_0 + indices). */
+  private parseMinimalGLB(bytes: Uint8Array): { indices: Uint32Array; positions: Float32Array; uvs: Float32Array }[] {
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    if (view.getUint32(0, true) !== 0x46546C67) throw new Error('not a GLB');
+    const totalLen = view.getUint32(8, true);
+    let off = 12;
+    let json: any = null;
+    let bin: Uint8Array | null = null;
+    while (off < totalLen) {
+      const len = view.getUint32(off, true); off += 4;
+      const type = view.getUint32(off, true); off += 4;
+      if (type === 0x4E4F534A) json = JSON.parse(new TextDecoder().decode(bytes.subarray(off, off + len)));
+      else if (type === 0x004E4942) bin = bytes.subarray(off, off + len);
+      off += len;
+    }
+    if (!json || !bin) throw new Error('GLB missing JSON or BIN');
+
+    const accs = json.accessors || [];
+    const bvs = json.bufferViews || [];
+    const prims = json.meshes?.[0]?.primitives || [];
+    const meshes: { indices: Uint32Array; positions: Float32Array; uvs: Float32Array }[] = [];
+    for (const prim of prims) {
+      const read = (aIdx: number, T: any) => {
+        if (aIdx === undefined) return new T(0);
+        const a = accs[aIdx];
+        const bv = bvs[a.bufferView];
+        const o = (bv.byteOffset || 0) + (a.byteOffset || 0);
+        const comps = a.type === 'VEC3' ? 3 : a.type === 'VEC2' ? 2 : 1;
+        return new T(bin.buffer, bin.byteOffset + o, a.count * comps).slice();
+      };
+      meshes.push({
+        indices: read(prim.indices, Uint32Array),
+        positions: read(prim.attributes.POSITION, Float32Array),
+        uvs: prim.attributes.TEXCOORD_0 !== undefined ? read(prim.attributes.TEXCOORD_0, Float32Array) : new Float32Array(0),
+      });
+    }
+    return meshes;
   }
 
   /** @internal — optimize a mesh and generate LOD levels. */
