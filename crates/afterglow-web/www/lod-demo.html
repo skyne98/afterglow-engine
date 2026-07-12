@@ -152,12 +152,13 @@ function buildLodTextures(serializedMips) {
   // Create one texture per LOD level, each using a different mip.
   const numLods = 4;
   for (let i = 0; i < numLods; i++) {
-    const mipIdx = Math.min(i, mips.length - 1);
+    // Use progressively lower mip levels for lower LODs.
+    // mip 0=128, mip 2=32, mip 4=8, mip 6=2 — dramatic resolution drop.
+    const mipIdx = Math.min(i * 2, mips.length - 1);
     const mip = mips[mipIdx];
     const tex = new THREE.DataTexture(mip.data, mip.width, mip.height, THREE.RGBAFormat);
     tex.wrapS = THREE.RepeatWrapping;
     tex.wrapT = THREE.RepeatWrapping;
-    tex.repeat.set(4, 2);
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.needsUpdate = true;
     lodTextures.push(tex);
