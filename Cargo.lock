@@ -45,6 +45,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "afterglow-pipeline"
+version = "0.1.0"
+dependencies = [
+ "afterglow-meshopt",
+ "bytemuck",
+ "postcard",
+ "serde",
+]
+
+[[package]]
 name = "afterglow-rpc"
 version = "0.1.0"
 dependencies = [

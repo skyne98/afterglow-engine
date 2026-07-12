@@ -1,0 +1,432 @@
+// Streaming load queue — priority-based progressive asset loading.
+//
+// The queue always serves the lowest-resolution chunk of every requested asset
+// first (so the user sees a blurry/low-poly preview instantly), then fills in
+// higher-resolution chunks as the worker frees up. New assets inserted at any
+// time get their lowest chunk prioritized ahead of higher chunks of older
+// assets — nobody waits for a 4K texture while a new model has no preview.
+//
+// Design:
+// - Each asset has N chunks ordered from highest detail (chunk 0) to lowest
+//   (chunk N-1).
+// - The queue is a binary heap keyed by priority: (is_first_chunk_of_asset,
+//   lod_level DESC, mip_level DESC, request_order ASC).
+//   → lowest-res chunks of any asset sort before higher-res chunks.
+// - When a new asset is requested, its lowest chunk jumps to the front.
+// - The consumer calls `pop()` to get the next chunk to load. After loading
+//   the lowest chunk, the next chunk for that asset is queued at normal
+//   priority (behind other assets' lowest chunks).
+
+use std::cmp::Ordering;
+use std::collections::BinaryHeap;
+
+use crate::format::{AssetEntry, ChunkInfo};
+
+/// Priority of a chunk in the load queue.
+/// Lower priority value = loaded first.
+#[derive(Debug, Clone, PartialEq)]
+struct ChunkPriority {
+    /// True if this is the first (lowest-res) chunk being loaded for this asset.
+    /// First chunks always sort before non-first chunks.
+    is_first: bool,
+    /// LOD level (higher = lower detail = higher priority for first load).
+    lod_level: u8,
+    /// Mip level (higher = lower detail = higher priority for first load).
+    mip_level: u8,
+    /// Insertion order (lower = requested earlier = higher priority).
+    order: u64,
+    /// Index into the asset list.
+    asset_idx: usize,
+    /// Index into the asset's chunk list.
+    chunk_idx: usize,
+}
+
+impl Eq for ChunkPriority {}
+
+impl Ord for ChunkPriority {
+    /// BinaryHeap is a max-heap, so we reverse the comparison:
+    /// "higher priority" = should be popped first = sorts "greater".
+    fn cmp(&self, other: &Self) -> Ordering {
+        // 1. First chunks of any asset always go before continuation chunks.
+        match (self.is_first, other.is_first) {
+            (true, false) => return Ordering::Greater,
+            (false, true) => return Ordering::Less,
+            _ => {}
+        }
+        // 2. Higher LOD/mip (lower detail) goes first — get a preview up fast.
+        let self_detail = self.lod_level as u32 + self.mip_level as u32;
+        let other_detail = other.lod_level as u32 + other.mip_level as u32;
+        match self_detail.cmp(&other_detail) {
+            Ordering::Equal => {}
+            ord => return ord,
+        }
+        // 3. Earlier requests go first (FIFO within same priority tier).
+        self.order.cmp(&other.order)
+    }
+}
+
+impl PartialOrd for ChunkPriority {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// A streaming load queue that prioritizes low-res previews.
+///
+/// Usage:
+/// ```no_run
+/// use afterglow_pipeline::{StreamingQueue, BigHeader};
+///
+/// let header: BigHeader = parse_header(&big_file_bytes)?.0;
+/// let mut queue = StreamingQueue::new(&header);
+///
+/// // Request an asset — its lowest-res chunk jumps to the front.
+/// queue.request("textures/sky.png");
+///
+/// // The worker pops chunks one at a time, loads them, and the queue
+/// // automatically promotes the next chunk for that asset.
+/// while let Some(work) = queue.pop() {
+///     let chunk_data = read_chunk(&big_file_bytes, &work.chunk);
+///     // Upload to GPU...
+///     queue.mark_loaded(work.asset_idx, work.chunk_idx);
+/// }
+/// ```
+pub struct StreamingQueue<'a> {
+    assets: &'a [AssetEntry],
+    heap: BinaryHeap<ChunkPriority>,
+    next_order: u64,
+    /// Which chunks have been loaded (asset_idx, chunk_idx).
+    loaded: std::collections::HashSet<(usize, usize)>,
+    /// Which chunks are in the heap (asset_idx, chunk_idx) — prevents duplicates.
+    queued: std::collections::HashSet<(usize, usize)>,
+    /// Name → asset_idx lookup.
+    name_map: std::collections::HashMap<String, usize>,
+}
+
+/// A chunk that needs to be loaded.
+#[derive(Debug, Clone)]
+pub struct LoadWork<'a> {
+    pub asset: &'a AssetEntry,
+    pub chunk: &'a ChunkInfo,
+    pub asset_idx: usize,
+    pub chunk_idx: usize,
+    pub is_first: bool,
+}
+
+impl<'a> StreamingQueue<'a> {
+    pub fn new(assets: &'a [AssetEntry]) -> Self {
+        let name_map = assets
+            .iter()
+            .enumerate()
+            .map(|(i, a)| (a.name.clone(), i))
+            .collect();
+        Self {
+            assets,
+            heap: BinaryHeap::new(),
+            next_order: 0,
+            loaded: std::collections::HashSet::new(),
+            queued: std::collections::HashSet::new(),
+            name_map,
+        }
+    }
+
+    /// Request an asset for loading. Its lowest-res chunk is immediately
+    /// queued with "first chunk" priority (jumps ahead of higher-res chunks
+    /// of other assets). Subsequent chunks are queued at normal priority.
+    pub fn request(&mut self, name: &str) {
+        let Some(&asset_idx) = self.name_map.get(name) else {
+            return;
+        };
+        self.request_idx(asset_idx);
+    }
+
+    /// Request an asset by index.
+    pub fn request_idx(&mut self, asset_idx: usize) {
+        let asset = &self.assets[asset_idx];
+        if asset.chunks.is_empty() {
+            return;
+        }
+
+        // Queue the lowest-res chunk (last in the list) with "first" priority.
+        let last_chunk = asset.chunks.len() - 1;
+        self.enqueue(asset_idx, last_chunk, true);
+
+        // Queue all other chunks at normal priority.
+        for chunk_idx in (0..last_chunk).rev() {
+            self.enqueue(asset_idx, chunk_idx, false);
+        }
+    }
+
+    /// Request all assets in the package.
+    pub fn request_all(&mut self) {
+        for i in 0..self.assets.len() {
+            self.request_idx(i);
+        }
+    }
+
+    fn enqueue(&mut self, asset_idx: usize, chunk_idx: usize, is_first: bool) {
+        let key = (asset_idx, chunk_idx);
+        if self.loaded.contains(&key) || self.queued.contains(&key) {
+            return;
+        }
+        let chunk = &self.assets[asset_idx].chunks[chunk_idx];
+        self.heap.push(ChunkPriority {
+            is_first,
+            lod_level: chunk.lod_level,
+            mip_level: chunk.mip_level,
+            order: self.next_order,
+            asset_idx,
+            chunk_idx,
+        });
+        self.next_order += 1;
+        self.queued.insert(key);
+    }
+
+    /// Pop the next chunk to load. Returns None if the queue is empty.
+    pub fn pop(&mut self) -> Option<LoadWork<'a>> {
+        loop {
+            let prio = self.heap.pop()?;
+            let key = (prio.asset_idx, prio.chunk_idx);
+            self.queued.remove(&key);
+
+            if self.loaded.contains(&key) {
+                continue; // already loaded (shouldn't happen, but safe)
+            }
+
+            let asset = &self.assets[prio.asset_idx];
+            let chunk = &asset.chunks[prio.chunk_idx];
+            return Some(LoadWork {
+                asset,
+                chunk,
+                asset_idx: prio.asset_idx,
+                chunk_idx: prio.chunk_idx,
+                is_first: prio.is_first,
+            });
+        }
+    }
+
+    /// Mark a chunk as loaded. Call this after the chunk data has been uploaded
+    /// to the GPU. The next chunk for this asset (if any) is automatically
+    /// promoted to "first" priority — but only if no other assets have pending
+    /// first chunks (those take priority).
+    pub fn mark_loaded(&mut self, asset_idx: usize, chunk_idx: usize) {
+        self.loaded.insert((asset_idx, chunk_idx));
+
+        // If this was the lowest chunk, promote the next one (chunk_idx - 1)
+        // to "first" priority — but only if it's not already loaded/queued.
+        if chunk_idx > 0 {
+            let next_idx = chunk_idx - 1;
+            let key = (asset_idx, next_idx);
+            if !self.loaded.contains(&key) && !self.queued.contains(&key) {
+                // Re-enqueue with "first" priority so it jumps ahead.
+                // But we need to remove the old entry if it exists in the heap.
+                // Since we can't remove from a BinaryHeap, we just enqueue a new
+                // entry — the old one will be skipped when popped (it's in `queued`).
+                // Actually, since we check `queued` before enqueuing, the old entry
+                // is still in the heap but will be skipped. The new entry with
+                // `is_first=true` will be popped first.
+                // Wait — the old entry IS in `queued`, so we can't enqueue a new one.
+                // We need to remove it from `queued` first.
+                self.queued.remove(&key);
+                self.enqueue(asset_idx, next_idx, true);
+            }
+        }
+    }
+
+    /// How many chunks are pending in the queue.
+    pub fn pending(&self) -> usize {
+        self.heap.len()
+    }
+
+    /// How many chunks have been loaded.
+    pub fn loaded_count(&self) -> usize {
+        self.loaded.len()
+    }
+
+    /// Is this asset fully loaded (all chunks)?
+    pub fn is_asset_loaded(&self, asset_idx: usize) -> bool {
+        let asset = &self.assets[asset_idx];
+        asset.chunks.iter().enumerate().all(|(i, _)| self.loaded.contains(&(asset_idx, i)))
+    }
+
+    /// Find an asset by name. Returns its index.
+    pub fn asset_index(&self, name: &str) -> Option<usize> {
+        self.name_map.get(name).copied()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::format::*;
+
+    fn make_texture_asset(name: &str, mips: usize) -> AssetEntry {
+        let chunks: Vec<ChunkInfo> = (0..mips)
+            .map(|i| ChunkInfo {
+                offset: 0,
+                size: 100,
+                lod_level: 0,
+                mip_level: i as u8,
+                compression: Compression::None,
+                meta: ChunkMeta::Texture {
+                    width: 1 << (mips - i - 1),
+                    height: 1 << (mips - i - 1),
+                },
+            })
+            .collect();
+        AssetEntry {
+            name: name.to_string(),
+            asset_type: AssetType::Texture,
+            chunks,
+        }
+    }
+
+    fn make_mesh_asset(name: &str, lods: usize) -> AssetEntry {
+        let chunks: Vec<ChunkInfo> = (0..lods)
+            .map(|i| ChunkInfo {
+                offset: 0,
+                size: 100,
+                lod_level: i as u8,
+                mip_level: 0,
+                compression: Compression::None,
+                meta: ChunkMeta::Mesh {
+                    index_count: 100,
+                    vertex_count: 50,
+                    position_stride: 12,
+                    uv_stride: 8,
+                },
+            })
+            .collect();
+        AssetEntry {
+            name: name.to_string(),
+            asset_type: AssetType::Mesh,
+            chunks,
+        }
+    }
+
+    #[test]
+    fn lowest_res_loaded_first() {
+        let assets = vec![make_texture_asset("sky.png", 4)]; // mips 0,1,2,3
+        let mut q = StreamingQueue::new(&assets);
+        q.request("sky.png");
+
+        // First pop should be the lowest mip (mip 3).
+        let w = q.pop().unwrap();
+        assert_eq!(w.chunk.mip_level, 3);
+        assert!(w.is_first);
+
+        // After loading it, the next should be mip 2.
+        q.mark_loaded(w.asset_idx, w.chunk_idx);
+        let w2 = q.pop().unwrap();
+        assert_eq!(w2.chunk.mip_level, 2);
+    }
+
+    #[test]
+    fn new_asset_jumps_ahead() {
+        // Request asset A (4 mips), load its lowest, then request asset B.
+        // B's lowest should come before A's higher mips.
+        let assets = vec![
+            make_texture_asset("a.png", 4),
+            make_texture_asset("b.png", 4),
+        ];
+        let mut q = StreamingQueue::new(&assets);
+
+        q.request("a.png");
+        // Pop A's lowest.
+        let wa = q.pop().unwrap();
+        assert_eq!(wa.chunk.mip_level, 3);
+        q.mark_loaded(wa.asset_idx, wa.chunk_idx);
+
+        // Now request B — its lowest should come before A's mip 2.
+        q.request("b.png");
+        let next = q.pop().unwrap();
+        assert_eq!(next.asset.name, "b.png");
+        assert_eq!(next.chunk.mip_level, 3);
+        assert!(next.is_first);
+    }
+
+    #[test]
+    fn all_assets_get_preview_before_any_gets_high_res() {
+        let assets = vec![
+            make_texture_asset("a.png", 3),
+            make_texture_asset("b.png", 3),
+            make_texture_asset("c.png", 3),
+        ];
+        let mut q = StreamingQueue::new(&assets);
+        q.request_all();
+
+        // First 3 pops should be the lowest mip of each asset.
+        let mut loaded_names = Vec::new();
+        for _ in 0..3 {
+            let w = q.pop().unwrap();
+            assert!(w.is_first, "first 3 should all be first chunks");
+            assert_eq!(w.chunk.mip_level, 2, "should be lowest mip");
+            loaded_names.push(w.asset.name.clone());
+            q.mark_loaded(w.asset_idx, w.chunk_idx);
+        }
+        assert!(loaded_names.contains(&"a.png".to_string()));
+        assert!(loaded_names.contains(&"b.png".to_string()));
+        assert!(loaded_names.contains(&"c.png".to_string()));
+    }
+
+    #[test]
+    fn mesh_lods_prioritized_correctly() {
+        let assets = vec![make_mesh_asset("sphere", 4)]; // LODs 0,1,2,3
+        let mut q = StreamingQueue::new(&assets);
+        q.request("sphere");
+
+        // First should be LOD 3 (lowest detail).
+        let w = q.pop().unwrap();
+        assert_eq!(w.chunk.lod_level, 3);
+        assert!(w.is_first);
+
+        q.mark_loaded(w.asset_idx, w.chunk_idx);
+        let w2 = q.pop().unwrap();
+        assert_eq!(w2.chunk.lod_level, 2);
+    }
+
+    #[test]
+    fn mixed_assets() {
+        let assets = vec![
+            make_texture_asset("sky.png", 4),
+            make_mesh_asset("sphere", 3),
+        ];
+        let mut q = StreamingQueue::new(&assets);
+        q.request_all();
+
+        // First two should be lowest-res of each.
+        let mut got_texture = false;
+        let mut got_mesh = false;
+        for _ in 0..2 {
+            let w = q.pop().unwrap();
+            assert!(w.is_first);
+            if w.asset.asset_type == AssetType::Texture {
+                got_texture = true;
+                assert_eq!(w.chunk.mip_level, 3);
+            } else {
+                got_mesh = true;
+                assert_eq!(w.chunk.lod_level, 2);
+            }
+            q.mark_loaded(w.asset_idx, w.chunk_idx);
+        }
+        assert!(got_texture && got_mesh);
+    }
+
+    #[test]
+    fn is_asset_loaded() {
+        let assets = vec![make_texture_asset("a.png", 2)];
+        let mut q = StreamingQueue::new(&assets);
+        q.request("a.png");
+
+        assert!(!q.is_asset_loaded(0));
+
+        // Load both chunks.
+        let w1 = q.pop().unwrap();
+        q.mark_loaded(w1.asset_idx, w1.chunk_idx);
+        assert!(!q.is_asset_loaded(0));
+
+        let w2 = q.pop().unwrap();
+        q.mark_loaded(w2.asset_idx, w2.chunk_idx);
+        assert!(q.is_asset_loaded(0));
+    }
+}

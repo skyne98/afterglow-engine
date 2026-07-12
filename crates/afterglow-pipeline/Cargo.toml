@@ -1,0 +1,17 @@
+[package]
+name = "afterglow-pipeline"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Offline asset pipeline — preprocess, compress, and package assets for streaming (.big format)"
+
+[[bin]]
+name = "afterglow-pipeline"
+path = "src/main.rs"
+
+[dependencies]
+afterglow-meshopt = { path = "../afterglow-meshopt" }
+postcard.workspace = true
+serde.workspace = true
+bytemuck = "1"
