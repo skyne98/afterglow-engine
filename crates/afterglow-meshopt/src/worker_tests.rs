@@ -213,6 +213,42 @@ fn worker_quantize_half() {
     assert!((restored - 1.0).abs() < 0.01, "half roundtrip: 1.0 → {restored}");
 }
 
+// --- LOD chain generation ---
+
+#[test]
+fn worker_generate_lod_chain() {
+    let (client, _) = MeshoptClient::spawn_worker(MeshoptWorker).unwrap();
+    let (indices, positions) = test_grid(50); // 50×50 = 2500 verts, ~4802 triangles
+    let orig_tris = indices.len() / 3;
+
+    // Generate 4 LOD levels: 100%, 50%, 25%, 10% of original triangles.
+    let lod_ratios = [1.0f32, 0.5, 0.25, 0.1];
+    let mut lods = Vec::new();
+
+    for &ratio in &lod_ratios {
+        let target = ((orig_tris as f32 * ratio) as u32).max(3) * 3;
+        let simplified: Vec<u32> = drive(&client, client
+            .simplify(indices.clone(), positions.clone(), STRIDE, target, 0.02)
+            .unwrap()).unwrap();
+        lods.push(simplified);
+    }
+
+    // Verify each LOD level.
+    for (i, lod) in lods.iter().enumerate() {
+        let tris = lod.len() / 3;
+        let ratio = tris as f32 / orig_tris as f32;
+        println!("  LOD{i}: {tris} triangles ({:.1}% of original)", ratio * 100.0);
+        assert!(lod.len() % 3 == 0, "LOD{i} is a triangle list");
+        assert!(tris >= 1, "LOD{i} has at least 1 triangle");
+    }
+
+    // LOD 0 = original (100%), LOD 3 = ~10%.
+    assert_eq!(lods[0].len(), indices.len(), "LOD0 = original");
+    assert!(lods[3].len() < lods[0].len() / 5, "LOD3 should be < 20% of original");
+    assert!(lods[2].len() < lods[1].len(), "each LOD should be smaller than the previous");
+    assert!(lods[3].len() < lods[2].len(), "LOD3 < LOD2");
+}
+
 // --- Concurrent in-flight ---
 
 #[test]
