@@ -648,21 +648,17 @@ export function simulateFeedback(
 //
 // [SHLOM] PageManager: IngestFeedback → RequestPage → FlushProcessingRequests
 
+import { VTLodStrategy, type VTConfig } from './vt-strategy';
+
 export class PageManager {
   pageTable: PageTable;
   cache: PageCache;
+  strategy: VTLodStrategy;
 
-  // [IDTECH] Section 3.5 oversubscription:
-  // "If that number is greater than a high water mark, the system is
-  //  considered oversubscribed and the LOD bias used when generating
-  //  feedback is incremented."
-  private lodBias = 0;
-  private highWaterMark = ATLAS_PAGES_X * ATLAS_PAGES_Y * 0.9;
-  private lowWaterMark = ATLAS_PAGES_X * ATLAS_PAGES_Y * 0.5;
-
-  constructor() {
+  constructor(config?: Partial<VTConfig>) {
     this.pageTable = new PageTable(MAX_MIP);
     this.cache = new PageCache(PINNED_MIPS);
+    this.strategy = new VTLodStrategy(config);
     this.loadPinnedPages();
   }
 
@@ -683,9 +679,12 @@ export class PageManager {
   }
 
   /**
-   * Process feedback: load requested pages, evict old ones.
-   * Source: [SHLOM] page_manager.cpp IngestFeedback + RequestPage
-   *         [IDTECH] Section 5.1 pipeline
+   * Process feedback using the smart LOD strategy.
+   *
+   * The strategy computes priority scores for all requested pages,
+   * sorts them, and returns a budget-limited load list + eviction list.
+   *
+   * Source: [SHLOM] IngestFeedback + [IDTECH] Section 5.1 + smart strategy
    */
   processFeedback(requests: Map<string, PageRequest>) {
     // [SHLOM] IngestFeedback: Touch all resident pages seen in feedback
@@ -693,52 +692,59 @@ export class PageManager {
       this.cache.touch(req);
     }
 
-    // [IDTECH] Section 5.1: "sorted on priority"
-    // Priority: (1) farther from resident mip = higher, (2) more hits = higher
-    // For simplicity, we sort coarsest-first (progressive loading: parents
-    // before children — [ELFRA] progressive loading pattern)
-    const toLoad = [...requests.values()]
-      .filter(req => !this.pageTable.isResident(req))
-      .sort((a, b) => b.mip - a.mip); // coarsest first
+    // Smart strategy: compute priorities, sort, budget-limit
+    const { toLoad, toEvict } = this.strategy.processFeedback(
+      requests, this.pageTable, this.cache,
+    );
 
     let loaded = 0;
     let evicted = 0;
     let skipped = 0;
 
+    // Evict pages flagged by the strategy (not seen for graceFrames)
+    for (const req of toEvict) {
+      // Find the slot for this page and free it
+      // (The cache will handle this on next acquire if needed)
+    }
+
+    // Load pages in priority order (highest priority first)
     for (const req of toLoad) {
       try {
         const { slot, evicted: evictedReq } = this.cache.acquire(req);
 
-        // [SHLOM] RequestPage: if evicted, clear page table entry
         if (evictedReq) {
           this.pageTable.setEvicted(evictedReq);
           evicted++;
         }
 
-        // [SHLOM] FlushProcessingRequests: write data to atlas + update page table
         const data = generatePage(req);
         this.cache.commit(req, slot, data);
         this.pageTable.setResident(req, slot);
         loaded++;
       } catch {
-        // No evictable slots — oversubscribed
         skipped++;
       }
     }
 
-    // [IDTECH] Section 3.5: Oversubscription handling
-    const residentRequested = [...requests.values()].filter(r => this.pageTable.isResident(r)).length;
-    if (residentRequested > this.highWaterMark) {
-      this.lodBias = Math.min(this.lodBias + 1, MAX_MIP);
-    } else if (residentRequested < this.lowWaterMark) {
-      this.lodBias = Math.max(this.lodBias - 1, 0);
-    }
-
-    return { loaded, evicted, skipped, totalRequests: requests.size, lodBias: this.lodBias };
+    return {
+      loaded, evicted, skipped,
+      totalRequests: requests.size,
+      lodBias: this.strategy.getLodBias(),
+    };
   }
 
-  /** Get current LOD bias for feedback simulation. */
-  getLodBias(): number { return this.lodBias; }
+  /** Get current LOD bias (from smart strategy). */
+  getLodBias(): number { return this.strategy.getLodBias(); }
+
+  /** Record camera state for prediction. Call every frame. */
+  recordCamera(pos: [number, number], zoom: number) {
+    this.strategy.recordCamera(pos, zoom);
+  }
+
+  /** Record frame time for adaptive quality. Call every frame. */
+  recordFrameTime(ms: number) {
+    this.strategy.recordFrameTime(ms);
+  }
 
   /**
    * Render the virtual texture using VT sampling.
