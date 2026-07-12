@@ -26,4 +26,7 @@ pub mod ffi;
 pub mod safe;
 pub mod tests;
 
+#[cfg(target_arch = "wasm32")]
+pub mod wasm;
+
 pub use safe::*;

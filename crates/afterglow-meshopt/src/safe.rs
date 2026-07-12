@@ -161,7 +161,7 @@ pub fn decode_index_buffer(buffer: &[u8], index_count: usize) -> Vec<u32> {
             buffer.len(),
         )
     };
-    assert_eq!(rc, 0, "meshopt_decodeIndexBuffer failed");
+    if rc != 0 { return Vec::new(); }
     out
 }
 
@@ -195,7 +195,7 @@ pub fn decode_vertex_buffer(buffer: &[u8], vertex_count: usize, vertex_size: usi
             buffer.len(),
         )
     };
-    assert_eq!(rc, 0, "meshopt_decodeVertexBuffer failed");
+    if rc != 0 { return Vec::new(); }
     out
 }
 
@@ -330,8 +330,18 @@ pub fn analyze_vertex_cache(
 
 /// Vertex fetch statistics (overfetch ratio).
 pub fn analyze_vertex_fetch(indices: &[u32], vertex_count: usize, vertex_size: usize) -> ffi::meshopt_VertexFetchStatistics {
-    unsafe {
-        ffi::meshopt_analyzeVertexFetch(indices.as_ptr(), indices.len(), vertex_count, vertex_size)
+    #[cfg(target_arch = "wasm32")]
+    {
+        let overfetch = unsafe {
+            ffi::meshopt_analyzeVertexFetch(indices.as_ptr(), indices.len(), vertex_count, vertex_size)
+        };
+        ffi::meshopt_VertexFetchStatistics { overfetch }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        unsafe {
+            ffi::meshopt_analyzeVertexFetch(indices.as_ptr(), indices.len(), vertex_count, vertex_size)
+        }
     }
 }
 

@@ -387,12 +387,22 @@ unsafe extern "C" {
         primgroup_size: c_uint,
     ) -> meshopt_VertexCacheStatistics;
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn meshopt_analyzeVertexFetch(
         indices: *const c_uint,
         index_count: usize,
         vertex_count: usize,
         vertex_size: usize,
     ) -> meshopt_VertexFetchStatistics;
+
+    // On WASM, 4-byte structs are returned as scalars, not via hidden pointer.
+    #[cfg(target_arch = "wasm32")]
+    pub fn meshopt_analyzeVertexFetch(
+        indices: *const c_uint,
+        index_count: usize,
+        vertex_count: usize,
+        vertex_size: usize,
+    ) -> f32;
 
     pub fn meshopt_analyzeOverdraw(
         indices: *const c_uint,
