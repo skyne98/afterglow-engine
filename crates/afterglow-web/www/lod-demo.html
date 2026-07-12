@@ -30,6 +30,7 @@ camera.position.set(0, 0, 12);
 const renderer = new THREE.WebGPURenderer({ antialias: true });
 renderer.setSize(innerWidth, innerHeight);
 document.body.appendChild(renderer.domElement);
+await renderer.init();
 
 addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
@@ -109,26 +110,34 @@ for (let i = 0; i < lodRatios.length; i++) {
   const tris = lodIndices.length / 3;
   const color = [0x4fc3f7, 0x66bb6a, 0xffa726, 0xef5350][i];
 
-  // Procedural checkerboard texture (canvas-based) so we can see UVs.
+  // Procedural checkerboard texture via DataTexture (raw RGBA — WebGPU safe).
   const texSize = 128;
-  const canvas = document.createElement('canvas');
-  canvas.width = texSize; canvas.height = texSize;
-  const ctx = canvas.getContext('2d');
   const sq = 16;
-  for (let ty = 0; ty < texSize; ty += sq) {
-    for (let tx = 0; tx < texSize; tx += sq) {
-      const isLight = ((tx / sq) + (ty / sq)) % 2 === 0;
-      ctx.fillStyle = isLight ? '#e0e0e0' : '#303030';
-      ctx.fillRect(tx, ty, sq, sq);
+  const texData = new Uint8Array(texSize * texSize * 4);
+  for (let ty = 0; ty < texSize; ty++) {
+    for (let tx = 0; tx < texSize; tx++) {
+      const cx = Math.floor(tx / sq);
+      const cy = Math.floor(ty / sq);
+      const isLight = (cx + cy) % 2 === 0;
+      const idx = (ty * texSize + tx) * 4;
+      // Light = warm white, Dark = deep blue (so LOD levels are distinguishable)
+      texData[idx]     = isLight ? 220 : 30;
+      texData[idx + 1] = isLight ? 220 : 30;
+      texData[idx + 2] = isLight ? 200 : 60;
+      texData[idx + 3] = 255;
     }
   }
-  const texture = new THREE.CanvasTexture(canvas);
+  const texture = new THREE.DataTexture(texData, texSize, texSize, THREE.RGBAFormat);
   texture.wrapS = THREE.RepeatWrapping;
   texture.wrapT = THREE.RepeatWrapping;
   texture.repeat.set(4, 2);
+  texture.needsUpdate = true;
 
-  // Unlit textured material (MeshBasicMaterial works reliably with WebGPU).
-  const solidMat = new THREE.MeshBasicMaterial({ map: texture });
+  // Textured material — shows UV mapping. MeshStandardMaterial with map works
+  // in WebGPU after renderer.init().
+  const solidMat = new THREE.MeshStandardMaterial({
+    map: texture, metalness: 0.0, roughness: 0.9
+  });
   const wireMat = new THREE.MeshBasicMaterial({ color, wireframe: true, transparent: true, opacity: 0.25 });
 
   // Two meshes per LOD: solid + wireframe overlay.
@@ -203,7 +212,7 @@ function animate() {
   camera.lookAt(0, 0, 0);
 
   client.poll();
-  renderer.renderAsync(scene, camera);
+  renderer.render(scene, camera);
   requestAnimationFrame(animate);
 }
 
