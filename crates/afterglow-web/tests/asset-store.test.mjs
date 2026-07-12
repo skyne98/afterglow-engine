@@ -129,7 +129,7 @@ test('AssetStore: Basis texture creates streaming texture with empty mipmaps', a
   const loader = new FakeLoader();
   const transcoder = new FakeTranscoder();
   loader.addFile('sky.basis', new Uint8Array([0xAB, 0xCD]));
-  const store = new AssetStore(loader, transcoder);
+  const store = new AssetStore(loader, undefined, transcoder);
 
   const handle = store.loadTexture('sky.basis');
   assert.ok(handle.asset, 'texture created immediately');
@@ -152,7 +152,7 @@ test('AssetStore: Basis texture streams mips progressively', async () => {
   ]);
 
   loader.addFile('sky.basis', new Uint8Array([0x01, 0x02, 0x03]));
-  const store = new AssetStore(loader, transcoder);
+  const store = new AssetStore(loader, undefined, transcoder);
 
   const handle = store.loadTexture('sky.basis');
   assert.equal(handle.asset.mipmaps.length, 0, 'no mips yet');
@@ -170,7 +170,7 @@ test('AssetStore: poll drives both loader and transcoder', async () => {
   const { AssetStore } = await transpile('www/engine/asset-store.ts');
   const loader = new FakeLoader();
   const transcoder = new FakeTranscoder();
-  const store = new AssetStore(loader, transcoder);
+  const store = new AssetStore(loader, undefined, transcoder);
 
   store.poll();
   store.poll();
@@ -273,7 +273,7 @@ test('AssetStore: loadBasisTexture requires transcoder', async () => {
   const loader = new FakeLoader();
   const store = new AssetStore(loader);
 
-  assert.throws(() => store.loadBasisTexture('sky.basis'), /No texture transcoder/);
+  assert.throws(() => store.loadBasisTexture('sky.basis'), /No texture worker/);
 });
 
 test('AssetStore: loadJSON parses correctly', async () => {
