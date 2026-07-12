@@ -1,5 +1,6 @@
 // Virtual Texturing Prototype — validates all VT algorithms in pure TypeScript.
 // Run: bun run prototype/vt/vt.ts
+// Tests: bun test prototype/vt/vt.test.ts
 //
 // Each algorithm is annotated with its source reference:
 //   [SHLOM]  shlomnissan/virtual-textures (C++/OpenGL, 2025)
@@ -8,6 +9,8 @@
 //   [BARRE]  Sean Barrett "Sparse Virtual Textures" (GDC 2008)
 //
 // Output: PPM images showing rendered result, ground truth, and atlas contents.
+//
+// All functions/classes are exported for unit testing.
 
 // ============================================================================
 // Constants
@@ -57,20 +60,28 @@ const PINNED_MIPS = new Set<number>([MAX_MIP, MAX_MIP - 1]);
 // ============================================================================
 
 /** A page request: which virtual page at which mip level is needed. */
-interface PageRequest {
+export interface PageRequest {
   mip: number;
   x: number;   // page X in virtual texture at this mip level
   y: number;   // page Y in virtual texture at this mip level
 }
 
 /** A physical page slot in the atlas. */
-interface PageSlot {
+export interface PageSlot {
   x: number;   // slot X in atlas (0..ATLAS_PAGES_X-1)
   y: number;   // slot Y in atlas
 }
 
 /** RGBA pixel */
-type Pixel = [number, number, number, number]; // R, G, B, A (0-255)
+export type Pixel = [number, number, number, number]; // R, G, B, A (0-255)
+
+// Export constants for testing
+export {
+  PAGE_SIZE, PAGE_BORDER, SLOT_SIZE,
+  ATLAS_PAGES_X, ATLAS_PAGES_Y, ATLAS_WIDTH, ATLAS_HEIGHT,
+  VIRTUAL_SIZE, VIRTUAL_PAGES_X, VIRTUAL_PAGES_Y, MAX_MIP,
+  SCREEN_WIDTH, SCREEN_HEIGHT, FEEDBACK_SCALE, PINNED_MIPS,
+};
 
 // ============================================================================
 // Page Table Entry — bit-packed u32
@@ -89,23 +100,23 @@ type Pixel = [number, number, number, number]; // R, G, B, A (0-255)
 //   if ((entry & 1u) != 0u) { is_resident = true; break; }
 //   ivec2 physical_page = ivec2((entry >> 1) & 0xFFu, (entry >> 9) & 0xFFu);
 
-function packEntry(resident: boolean, physX: number, physY: number, mip: number): number {
+export function packEntry(resident: boolean, physX: number, physY: number, mip: number): number {
   return (resident ? 1 : 0) |
          ((physX & 0xFF) << 1) |
          ((physY & 0xFF) << 9) |
          ((mip & 0x1F) << 17);
 }
-function isResident(entry: number): boolean { return (entry & 1) !== 0; }
-function getPhysX(entry: number): number { return (entry >> 1) & 0xFF; }
-function getPhysY(entry: number): number { return (entry >> 9) & 0xFF; }
-function getMip(entry: number): number { return (entry >> 17) & 0x1F; }
+export function isResident(entry: number): boolean { return (entry & 1) !== 0; }
+export function getPhysX(entry: number): number { return (entry >> 1) & 0xFF; }
+export function getPhysY(entry: number): number { return (entry >> 9) & 0xFF; }
+export function getMip(entry: number): number { return (entry >> 17) & 0x1F; }
 
 // ============================================================================
 // Virtual Texture (source data — what we're virtualizing)
 // ============================================================================
 
 /** Sample the virtual texture directly (ground truth for verification). */
-function sampleVirtualTexture(u: number, v: number): Pixel {
+export function sampleVirtualTexture(u: number, v: number): Pixel {
   const x = Math.floor(u * VIRTUAL_SIZE);
   const y = Math.floor(v * VIRTUAL_SIZE);
 
@@ -148,7 +159,7 @@ function sampleVirtualTexture(u: number, v: number): Pixel {
 //   as a practical matter, it is far less complicated to have pages be fully
 //   independent and actually store the additional 12% texels on disk."
 
-function generatePage(req: PageRequest): Uint8Array {
+export function generatePage(req: PageRequest): Uint8Array {
   const pagesAtMip = VIRTUAL_PAGES_X >> req.mip;
   const texelsAtMip = VIRTUAL_SIZE >> req.mip;
   const data = new Uint8Array(SLOT_SIZE * SLOT_SIZE * 4);
@@ -198,7 +209,7 @@ function generatePage(req: PageRequest): Uint8Array {
 //
 // For the prototype, we use a Map<string, u32> which is functionally equivalent.
 
-class PageTable {
+export class PageTable {
   private entries = new Map<string, number>();
   private maxMip: number;
 
@@ -272,7 +283,7 @@ class PageTable {
 // [SHLOM] uses pure LRU (no mip-priority), with pinned LODs (kMinPinnedLod=4).
 // We follow [SHLOM]'s approach for simplicity.
 
-class PageCache {
+export class PageCache {
   atlas: Uint8Array;
   slots: (PageRequest | null)[] = [];
   freeSlots: number[] = [];
@@ -450,7 +461,7 @@ class PageCache {
  * @param virtualSize  width of the virtual texture in texels
  * @returns mip level (float, should be floored + clamped before use)
  */
-function computeMipLevel(
+export function computeMipLevel(
   uvDx: [number, number],
   uvDy: [number, number],
   virtualSize: number,
@@ -504,7 +515,7 @@ function computeMipLevel(
 // Note: [SHLOM] uses half_padding = padding * 0.5 (padding is TOTAL).
 // We use PAGE_BORDER per side, so offset = PAGE_BORDER (not PAGE_BORDER/2).
 
-function vtSample(
+export function vtSample(
   u: number,
   v: number,
   uvDx: [number, number],
@@ -573,7 +584,7 @@ function vtSample(
 // In the prototype, we simulate the GPU feedback pass by computing what
 // the GPU would request for each screen pixel.
 
-function simulateFeedback(
+export function simulateFeedback(
   cameraUv: [number, number],
   cameraZoom: number,
   lodBias: number = 0,  // [IDTECH] Section 3.5 oversubscription
@@ -637,7 +648,7 @@ function simulateFeedback(
 //
 // [SHLOM] PageManager: IngestFeedback → RequestPage → FlushProcessingRequests
 
-class PageManager {
+export class PageManager {
   pageTable: PageTable;
   cache: PageCache;
 
@@ -803,7 +814,7 @@ class PageManager {
 // PPM Output
 // ============================================================================
 
-function writePPM(path: string, data: Uint8Array, width: number, height: number) {
+export function writePPM(path: string, data: Uint8Array, width: number, height: number) {
   const header = `P6\n${width} ${height}\n255\n`;
   const headerBytes = new TextEncoder().encode(header);
   const rgb = new Uint8Array(width * height * 3);
