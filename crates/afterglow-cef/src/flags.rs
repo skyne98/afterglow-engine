@@ -35,6 +35,14 @@ pub fn apply(cl: &CommandLine) {
     //     supports Wayland+Vulkan.) Overridable via CLI --ozone-platform=... ---
     sv(cl, "ozone-platform", "x11");
 
+    // --- Prevent background throttling when the window is occluded (e.g.
+    //     screen locked). Keeps rAF firing at full rate for headless benchmarks.
+    //     Also prevents renderer process priority reduction. ---
+    sw(cl, "disable-background-timer-throttling");
+    sw(cl, "disable-backgrounding-occluded-windows");
+    sw(cl, "disable-renderer-backgrounding");
+    sw(cl, "disable-features=CalculateNativeWinOcclusion");
+
     // --- Latency: vsync toggle.
     //     vsync-on (default) is smooth and runs at the monitor's refresh rate
     //     (verified: 144 Hz). vsync-off was choppy on this CEF/NVIDIA/Linux
