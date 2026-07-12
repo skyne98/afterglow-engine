@@ -1,14 +1,19 @@
 //! # afterglow-texture
 //!
-//! Basis Universal texture transcoder + mip generation.
+//! Basis Universal texture transcoder + mip generation — pure Rust, no C++.
 //!
-//! - **Transcoder**: decodes Basis Universal / KTX2 textures to GPU-native
-//!   formats (BC7, ASTC, ETC2, etc.) at load time. Single .cpp, no deps.
-//! - **Mip generation**: box-filter downscaling (no deps, works in WASM).
+//! Uses `basisu_rs` (pure Rust, `#![no_std]`, `#![forbid(unsafe_code)]`) for
+//! transcoding Basis/KTX2 textures to GPU-native formats:
+//! - BC7 (desktop)
+//! - ASTC (mobile)
+//! - ETC1/ETC2 (mobile)
+//! - RGBA (uncompressed fallback)
 //!
-//! Compiles to both native and `wasm32-unknown-unknown`.
+//! Box-filter mip generation (pure Rust, no deps).
+//!
+//! Compiles to both native and `wasm32-unknown-unknown` — no C++, no
+//! Emscripten, no pre-built WASM. Pure Rust.
 
-pub mod ffi;
 pub mod safe;
 pub mod mips;
 
@@ -18,11 +23,18 @@ pub use mips::*;
 use afterglow_rpc::{RpcResult, ServeFuture};
 use afterglow_rpc_macros::rpc;
 
+/// Target GPU format for transcoding.
+pub const FORMAT_BC7: u32 = 0;
+pub const FORMAT_ASTC: u32 = 1;
+pub const FORMAT_ETC1: u32 = 2;
+pub const FORMAT_ETC2: u32 = 3;
+pub const FORMAT_RGBA: u32 = 4;
+
 /// Texture transcode worker. All methods run async on a background thread.
 #[rpc(worker = TextureWorker)]
 pub trait Texture {
-    /// Transcode a Basis/KTX2 texture to a GPU-native format.
-    /// `target_format` is a transcoder_texture_format constant (e.g. 6 = BC7).
+    /// Transcode a Basis texture to a GPU-native format.
+    /// `target_format` is one of the FORMAT_* constants.
     /// Returns the transcoded GPU-compressed texture data.
     async fn transcode(
         data: Vec<u8>,
@@ -30,7 +42,7 @@ pub trait Texture {
     ) -> RpcResult<Vec<u8>>;
 
     /// Generate a mip chain from raw RGBA data.
-    /// Returns serialized mips: [mip_count(u32)][mip0_w(u32)][mip0_h(u32)][mip0_data...][mip1...]...
+    /// Returns serialized mips: [count][w0][h0][len0][data0...][w1]...
     async fn generate_mips(
         data: Vec<u8>,
         width: u32,
@@ -63,7 +75,6 @@ impl TextureServer for TextureWorker {
     fn generate_mips(&self, data: Vec<u8>, width: u32, height: u32) -> ServeFuture {
         Box::pin(async move {
             let mips = mips::generate_mip_chain(&data, width, height);
-            // Serialize: [count][w0][h0][data0...][w1][h1][data1...]...
             let mut out = Vec::new();
             out.extend_from_slice(&(mips.len() as u32).to_le_bytes());
             for (w, h, mip_data) in &mips {
