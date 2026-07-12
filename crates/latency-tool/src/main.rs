@@ -350,10 +350,28 @@ fn report(events: &[Value]) {
             med_int,
             1000.0 / med_int
         );
+        let p1 = intervals[(intervals.len() as f64 * 0.01) as usize];
+        let p99 = intervals[(intervals.len() as f64 * 0.99).floor() as usize];
+        let p999 = intervals[(intervals.len() as f64 * 0.999).floor() as usize];
         println!(
-            "  interval min={:.2}ms  max={:.2}ms",
+            "  interval min={:.2}ms  p1={:.2}ms  median={:.2}ms  p99={:.2}ms ({:.0} fps)  p99.9={:.2}ms  max={:.2}ms",
             intervals[0],
+            p1,
+            med_int,
+            p99,
+            1000.0 / p99,
+            p999,
             intervals[intervals.len() - 1]
+        );
+        // Count frames below 55 FPS (>18.18ms interval).
+        let below_55 = intervals.iter().filter(|&&i| i > 18.18).count();
+        let below_30 = intervals.iter().filter(|&&i| i > 33.33).count();
+        println!(
+            "  frames < 55 FPS: {} / {} ({:.1}%)   frames < 30 FPS: {}",
+            below_55,
+            intervals.len(),
+            100.0 * below_55 as f64 / intervals.len() as f64,
+            below_30
         );
     }
 }
