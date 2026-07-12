@@ -1,0 +1,19 @@
+[package]
+name = "afterglow-texture"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Basis Universal texture transcoder + mip generation — Rust + WASM"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+afterglow-rpc = { path = "../afterglow-rpc" }
+afterglow-rpc-macros = { path = "../afterglow-rpc-macros" }
+serde.workspace = true
+async-executor.workspace = true
+
+[build-dependencies]
+cc = "1"

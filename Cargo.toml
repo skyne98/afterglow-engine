@@ -9,6 +9,7 @@ members = [
     "crates/afterglow-rpc",
     "crates/afterglow-rpc-macros",
     "crates/afterglow-rpc-demo",
+    "crates/afterglow-texture",
     "crates/afterglow-web",
     "crates/latency-tool",
     "xtask",

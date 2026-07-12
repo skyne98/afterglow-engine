@@ -80,6 +80,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "afterglow-texture"
+version = "0.1.0"
+dependencies = [
+ "afterglow-rpc",
+ "afterglow-rpc-macros",
+ "async-executor",
+ "cc",
+ "serde",
+]
+
+[[package]]
 name = "afterglow-web"
 version = "0.1.0"
 dependencies = [
