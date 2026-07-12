@@ -49,6 +49,7 @@ fn translate(ty: &Type) -> syn::Result<TsType> {
             let inner_ident = type_ident(inner)?;
             match inner_ident.to_string().as_str() {
                 "u8" => ok("Uint8Array", "encodeBytes", "decodeBytes"),
+                "u32" => ok("Uint32Array", "encodeU32Vec", "decodeU32Vec"),
                 "f32" => ok("Float32Array", "encodeF32Vec", "decodeF32Vec"),
                 "f64" => ok("Float64Array", "encodeF64Vec", "decodeF64Vec"),
                 other => Err(err(

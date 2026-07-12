@@ -225,3 +225,23 @@ export function decodeF64Vec(bytes: Uint8Array, off: number): [Float64Array, num
   for (let i = 0; i < n; i++) out[i] = dv.getFloat64(i * 8, true);
   return [out, end];
 }
+
+// --- typed arrays (Vec<u32>) -------------------------------------------
+
+export function encodeU32Vec(vec: Uint32Array): Uint8Array {
+  const v = encodeVarint(vec.length);
+  const out = new Uint8Array(v.length + vec.length * 4);
+  out.set(v, 0);
+  const dv = new DataView(out.buffer, out.byteOffset + v.length, vec.length * 4);
+  for (let i = 0; i < vec.length; i++) dv.setUint32(i * 4, vec[i], true);
+  return out;
+}
+export function decodeU32Vec(bytes: Uint8Array, off: number): [Uint32Array, number] {
+  const [n, o] = decodeVarint(bytes, off);
+  const end = o + n * 4;
+  if (end > bytes.length) throw new Error('postcard u32 vec truncated');
+  const out = new Uint32Array(n);
+  const dv = new DataView(bytes.buffer, bytes.byteOffset + o, n * 4);
+  for (let i = 0; i < n; i++) out[i] = dv.getUint32(i * 4, true);
+  return [out, end];
+}

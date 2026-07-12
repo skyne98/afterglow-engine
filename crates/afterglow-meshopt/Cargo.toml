@@ -10,6 +10,11 @@ description = "Rust + WASM wrappers for meshoptimizer — mesh optimization, LOD
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+afterglow-rpc = { path = "../afterglow-rpc" }
+afterglow-rpc-macros = { path = "../afterglow-rpc-macros" }
+serde.workspace = true
+async-executor.workspace = true
+bytemuck = "1"
 
 [build-dependencies]
 cc = "1"
