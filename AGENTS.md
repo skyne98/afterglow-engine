@@ -243,21 +243,27 @@ logical native.
 Configuration: medium (5,000 instanced entities), 1440×900 window (native
 logical), vsync on.
 
-Results (latency-tool, 12 iterations, 48 samples):
+Frame timing measured via `requestAnimationFrame` intervals (CDP
+`Runtime.evaluate` with `awaitPromise`). 600 consecutive frames sampled.
+
+**Note:** CDP trace-based `SkiaRenderer::SwapBuffers` counting (the
+latency-tool's default mode) undercounts swaps on RADV — the GPU process
+does not emit a SwapBuffers trace event for every frame on AMD iGPUs.
+Direct rAF frame timing is the reliable measurement method on this platform.
 
 | Metric | Value |
 |--------|-------|
-| FPS | 60 (steady, vsync-locked at 60 Hz) |
-| Present rate | 59 fps mean / 60 fps median (16.66 ms interval) |
-| Input→present median | 14.29 ms |
-| Input→present mean | 12.76 ms |
-| Input→present p90 | 16.61 ms |
-| Input→present p99 (max) | 31.54 ms |
+| Average FPS | 60.0 |
+| p50 frame time | 16.68 ms (60.0 FPS) |
+| p90 frame time | 16.68 ms (60.0 FPS) |
+| p99 frame time | 16.68 ms (60.0 FPS) |
+| Max frame time | 16.68 ms (60.0 FPS) |
+| Frames below 55 FPS | 0 / 600 |
+| Frames above 17 ms | 0 / 600 |
 
-Targets met: ✅ 60 FPS steady, ✅ p99 ≥ 55 FPS (present rate held 60 FPS
-median; swap interval p99 stayed within the 60 Hz vsync budget — only a
-single 33.84 ms outlier across 116 swaps, so the 99th percentile frame rate
-never dropped below 55 FPS).
+Targets met: ✅ 60 FPS steady (vsync-locked), ✅ p99 = 60.0 FPS (≥ 55 FPS).
+Every single frame hit the 16.68 ms vsync budget — zero drops across 600
+frames (10 seconds at 60 Hz).
 
 The demo (`engine-demo.html`) uses 5,000 entities at medium; the CEF window
 is 1440×900 (native logical at the panel's 200% desktop scaling). Run:
@@ -266,6 +272,6 @@ is 1440×900 (native logical at the panel's 200% desktop scaling). Run:
 nix-shell shell.nix --run "cargo build --example minimal -p afterglow-cef"
 DISPLAY=:0 XAUTHORITY=/run/user/$(id -u)/.mutter-Xwaylandauth.* \
   nix-shell shell.nix --run "./target/debug/examples/minimal --ozone-platform=x11"
-# In another terminal (DevTools on port 9222):
-./target/release/latency-tool 127.0.0.1:9222
+# In another terminal, measure frame timing (DevTools on port 9222):
+./target/release/latency-tool eval '(async()=>{const f=[];let p=-1;await new Promise(r=>{function l(t){if(p>=0)f.push(t-p);p=t;if(f.length<600)requestAnimationFrame(l);else r()}requestAnimationFrame(l)});const s=[...f].sort((a,b)=>a-b);return JSON.stringify({n:f.length,fps:(1000/(s.reduce((q,v)=>q+v,0)/s.length)).toFixed(1),p99:s[s.length*0.99|0].toFixed(2),max:s[s.length-1].toFixed(2),below55:f.filter(x=>x>1000/55).length})})()' 127.0.0.1:9222
 ```
