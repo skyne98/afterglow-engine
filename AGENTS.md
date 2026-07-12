@@ -53,6 +53,7 @@ Two backends, same framing and ring layout:
 | `afterglow-rpc` | Core: `RingBuffer`, `Transport` trait, postcard codec, response envelope, `ServeFuture` type, and shared wasm ABI helpers. `native` has `RingStorage`, `spawn_worker_loop`, `run_worker_loop`, `spawn_async_worker_loop`, `run_async_worker_loop`, `AsyncWorkerTransport`, `Oneshot`, and event rings. |
 | `afterglow-rpc-macros` | `#[rpc]` proc macro: generates the server trait, typed Rust client, dispatch, native spawn, thin wasm exports, **and a typed TypeScript client**. Supports both sync (`fn`) and async (`async fn`) methods — async uses the poll model (task_id framing, completion queue, `async-executor`). |
 | `afterglow-rpc-demo` | Demo `Physics` service + `bench_rpc` stress test. |
+| `afterglow-basis-encoder` | Offline-only official Basis Universal C++ UASTC encoder used by `afterglow-pipeline`; never linked into runtime or wasm crates. |
 | `afterglow-assets-worker` | Asset loader worker: `#[rpc(worker = AssetLoaderWorker)]` with `async fn load(path) -> RpcResult<Vec<u8>>`. Uses the async `#[rpc]` poll model + `async-executor`. Native only (reads disk via `FsSource`); web asset loading goes through the serving layer (fetch + Range). |
 | `afterglow-assets` | Shared asset-path/MIME helpers (`AssetRoot`, `decode_url_path`, `guess_mime`, `resolve`) for the CEF scheme handler and web dev server. Plus streaming `AssetSource` trait + `FsSource`/`BytesSource` + `Range` parser. No deps or file-content reads in the confinement module; `FsSource` owns streaming reads via `pread`. The single security boundary for FS asset confinement. |
 | `afterglow-web` | Wasm target: page-side `#[no_mangle]` exports (`write_frame`, `read_response`) over two static rings in shared wasm memory. `worker.js` accesses the opposite halves directly with tested helpers from `ring-buf.js`. No wasm-bindgen. Includes a real worker benchmark + `coep_server` example. |
@@ -300,3 +301,30 @@ DISPLAY=:0 XAUTHORITY=/run/user/$(id -u)/.mutter-Xwaylandauth.* \
 # For headless/OLED-safe measurement via CDP:
 ./target/release/latency-tool eval '(async()=>{const f=[];let p=-1;await new Promise(r=>{function l(t){if(p>=0)f.push(t-p);p=t;if(f.length<300)requestAnimationFrame(l);else r()}requestAnimationFrame(l)});const s=[...f].sort((a,b)=>a-b);return JSON.stringify({n:f.length,fps:(1000/(s.reduce((q,v)=>q+v,0)/s.length)).toFixed(1),p99:s[s.length*0.99|0].toFixed(2),max:s[s.length-1].toFixed(2),below55:f.filter(x=>x>1000/55).length})})()' 127.0.0.1:9222
 ```
+
+### Virtual-texture GPU validation and frame timing (2026-07-12)
+
+The 256K procedural VT demo was validated on fox-laptop (Ryzen 7 6800U,
+Radeon 680M/RADV, 1440×900 logical CEF window). The session was explicitly
+unlocked for measurement and locked immediately afterward; locked GNOME
+sessions throttle rAF and invalidate results.
+
+Real-GPU validation ran three independent CEF launches. Every launch exercised
+east/west/rotated RG32Uint feedback, eastbound/westbound/diagonal LOD
+trajectories, three byte-verified RGBA subregion uploads, and three BC7
+subregion uploads. All 9,216 feedback pixels passed; no WebGPU errors occurred.
+
+Frame timing uses 600 consecutive rAF timestamp intervals per scenario:
+
+| Scenario | FPS | p50 | p90 | p99 | max | Frames below 55 FPS |
+|---|---:|---:|---:|---:|---:|---:|
+| Stable VT | 59.97 | 16.675 ms | 16.680 ms | 16.680 ms | 16.680 ms | 0/600 |
+| Bidirectional pan | 59.97 | 16.675 ms | 16.680 ms | 16.680 ms | 16.680 ms | 0/600 |
+| Continuous overview streaming | 59.97 | 16.675 ms | 16.680 ms | 16.680 ms | 16.680 ms | 0/600 |
+| 12-way teleport every frame | 59.87 | 16.675 ms | 16.680 ms | 16.680 ms | 33.350 ms | 1/600 |
+| Full-cache 20-way thrash, 4 camera updates/frame | 59.87 | 16.675 ms | 16.680 ms | 16.680 ms | 33.355 ms | 1/600 |
+
+Normal rendering and streaming had zero dropped frames. Deliberately impossible
+camera teleport/thrash workloads each missed one vsync out of 600 while retaining
+p99 at 16.68 ms and producing no GPU validation errors. Run the validation with
+`DISPLAY=:0 ./scripts/test-vt-gpu.sh` while the session is unlocked.

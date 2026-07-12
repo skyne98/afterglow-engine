@@ -1,4 +1,4 @@
-// engine/big-parser.ts
+// crates/afterglow-web/www/engine/big-parser.ts
 function decodeVarint(bytes, off) {
   let r = 0;
   for (let shift = 0;shift < 56; shift += 7) {
@@ -61,6 +61,14 @@ function decodeCompression(bytes, off) {
       throw new Error(`unknown Compression variant: ${variant}`);
   }
 }
+function decodeTextureEncoding(bytes, off) {
+  const [variant, next] = decodeU32(bytes, off);
+  if (variant === 0)
+    return ["RawRgba8", next];
+  if (variant === 1)
+    return ["Basis", next];
+  throw new Error(`unknown TextureEncoding variant: ${variant}`);
+}
 function decodeChunkMeta(bytes, off) {
   const [variant, o] = decodeU32(bytes, off);
   switch (variant) {
@@ -80,10 +88,16 @@ function decodeChunkMeta(bytes, off) {
       const [mip, o2] = decodeU8(bytes, o);
       const [px, o3] = decodeU32(bytes, o2);
       const [py, o4] = decodeU32(bytes, o3);
-      return [{ type: "VirtualTexturePage", mip, pageX: px, pageY: py }, o4];
+      const [encoding, o5] = decodeTextureEncoding(bytes, o4);
+      return [{ type: "VirtualTexturePage", mip, pageX: px, pageY: py, encoding }, o5];
     }
     case 3: {
       return [{ type: "Raw" }, o];
+    }
+    case 4: {
+      const [firstMip, o2] = decodeU8(bytes, o);
+      const [encoding, o3] = decodeTextureEncoding(bytes, o2);
+      return [{ type: "VirtualTextureMipTail", mip: firstMip, encoding }, o3];
     }
     default:
       throw new Error(`unknown ChunkMeta variant: ${variant}`);
@@ -114,7 +128,7 @@ function decodeAssetEntry(bytes, off) {
   return [{ name, assetType, chunks }, o3];
 }
 var BIG_MAGIC = 826755394;
-var BIG_VERSION = 2;
+var BIG_VERSION = 3;
 function parseBigHeader(data) {
   if (data.length < 16)
     throw new Error(".big: file too small");
@@ -138,6 +152,10 @@ function parseBigHeader(data) {
     dataOffset
   };
 }
+function findVTMipTailChunk(header, assetName) {
+  const asset = header.assets.find((a) => a.name === assetName);
+  return asset?.chunks.find((c) => c.meta.type === "VirtualTextureMipTail") ?? null;
+}
 function findVTPageChunk(header, assetName, mip, pageX, pageY) {
   const asset = header.assets.find((a) => a.name === assetName);
   if (!asset)
@@ -147,18 +165,34 @@ function findVTPageChunk(header, assetName, mip, pageX, pageY) {
 function createPageDataProvider(loader, header, textureWorker, format) {
   let bigFileData = null;
   return async (path, req) => {
-    const chunk = findVTPageChunk(header, path, req.mip, req.x, req.y);
+    const chunk = req.tail ? findVTMipTailChunk(header, path) : findVTPageChunk(header, path, req.mip, req.x, req.y);
     if (!chunk) {
       throw new Error(`VT page not found: ${path} mip=${req.mip} (${req.x},${req.y})`);
     }
     const pageData = await loader.read(path + ".big", Number(chunk.offset), Number(chunk.compressedSize));
+    if (chunk.meta.encoding === "RawRgba8") {
+      if (format !== 4) {
+        throw new Error(`VT page ${path} is raw RGBA8 but GPU format ${format} requires Basis encoding`);
+      }
+      return pageData;
+    }
     const transcoded = await textureWorker.transcode(pageData, format);
-    return transcoded;
+    if (transcoded.byteLength < 16)
+      throw new Error("truncated transcoded VT page");
+    const view = new DataView(transcoded.buffer, transcoded.byteOffset, transcoded.byteLength);
+    const count = view.getUint32(0, true);
+    const width = view.getUint32(4, true);
+    const height = view.getUint32(8, true);
+    const length = view.getUint32(12, true);
+    if (count < 1 || width !== 136 || height !== 136 || 16 + length > transcoded.byteLength)
+      throw new Error(`invalid transcoded VT page header: count=${count}, size=${width}x${height}, bytes=${length}`);
+    return transcoded.slice(16, 16 + length);
   };
 }
 export {
   parseBigHeader,
   findVTPageChunk,
+  findVTMipTailChunk,
   createPageDataProvider,
   BIG_VERSION,
   BIG_MAGIC

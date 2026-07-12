@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/afterglow-assets",
     "crates/afterglow-assets-worker",
+    "crates/afterglow-basis-encoder",
     "crates/afterglow-cef",
     "crates/afterglow-meshopt",
     "crates/afterglow-pipeline",

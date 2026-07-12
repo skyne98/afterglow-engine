@@ -4,7 +4,7 @@
 
 import type { RenderAdapter } from './render-adapter.js';
 import type { RenderFrame } from './types.js';
-import type { VirtualTextureStore } from './virtual-texture.js';
+import type { VirtualPageRequest, VirtualTextureStore } from './virtual-texture.js';
 
 /**
  * A worker input interface — the render adapter doesn't depend on the
@@ -24,7 +24,7 @@ export interface VTInput {
   /** The virtual texture store. */
   store: VirtualTextureStore;
   /** Feedback from the previous frame's feedback pass (page requests). */
-  feedback: Map<string, { mip: number; x: number; y: number }>;
+  feedback: Map<string, VirtualPageRequest>;
   /** Camera position for prediction. */
   cameraPos?: [number, number];
   /** Camera zoom for prediction. */
@@ -68,9 +68,6 @@ export function prepareAfterglowFrame(
     vtInput.store.poll();
     if (vtInput.frameTime !== undefined) {
       vtInput.store.recordFrameTime(vtInput.frameTime);
-    }
-    if (vtInput.cameraPos && vtInput.cameraZoom) {
-      vtInput.store.recordCamera(vtInput.cameraPos, vtInput.cameraZoom);
     }
     vtInput.store.processFeedback(vtInput.feedback, vtInput.cameraPos, vtInput.cameraZoom);
   }

@@ -75,9 +75,10 @@ function decodeU8(bytes: Uint8Array, off: number): [number, number] {
 
 export type AssetType = 'Texture' | 'Mesh' | 'VirtualTexture';
 export type Compression = 'Meshopt' | 'None';
+export type TextureEncoding = 'RawRgba8' | 'Basis';
 
 export interface ChunkMeta {
-  type: 'Texture' | 'Mesh' | 'VirtualTexturePage' | 'Raw';
+  type: 'Texture' | 'Mesh' | 'VirtualTexturePage' | 'VirtualTextureMipTail' | 'Raw';
   width?: number;
   height?: number;
   indexCount?: number;
@@ -87,6 +88,7 @@ export interface ChunkMeta {
   mip?: number;
   pageX?: number;
   pageY?: number;
+  encoding?: TextureEncoding;
 }
 
 export interface ChunkInfo {
@@ -134,6 +136,13 @@ function decodeCompression(bytes: Uint8Array, off: number): [Compression, number
   }
 }
 
+function decodeTextureEncoding(bytes: Uint8Array, off: number): [TextureEncoding, number] {
+  const [variant, next] = decodeU32(bytes, off);
+  if (variant === 0) return ['RawRgba8', next];
+  if (variant === 1) return ['Basis', next];
+  throw new Error(`unknown TextureEncoding variant: ${variant}`);
+}
+
 function decodeChunkMeta(bytes: Uint8Array, off: number): [ChunkMeta, number] {
   const [variant, o] = decodeU32(bytes, off);
   switch (variant) {
@@ -149,14 +158,20 @@ function decodeChunkMeta(bytes: Uint8Array, off: number): [ChunkMeta, number] {
       const [us, o5] = decodeU32(bytes, o4);
       return [{ type: 'Mesh', indexCount: ic, vertexCount: vc, positionStride: ps, uvStride: us }, o5];
     }
-    case 2: { // VirtualTexturePage { mip, page_x, page_y }
+    case 2: { // VirtualTexturePage { mip, page_x, page_y, encoding }
       const [mip, o2] = decodeU8(bytes, o);
       const [px, o3] = decodeU32(bytes, o2);
       const [py, o4] = decodeU32(bytes, o3);
-      return [{ type: 'VirtualTexturePage', mip, pageX: px, pageY: py }, o4];
+      const [encoding, o5] = decodeTextureEncoding(bytes, o4);
+      return [{ type: 'VirtualTexturePage', mip, pageX: px, pageY: py, encoding }, o5];
     }
     case 3: { // Raw
       return [{ type: 'Raw' }, o];
+    }
+    case 4: { // VirtualTextureMipTail { first_mip, encoding }
+      const [firstMip, o2] = decodeU8(bytes, o);
+      const [encoding, o3] = decodeTextureEncoding(bytes, o2);
+      return [{ type: 'VirtualTextureMipTail', mip: firstMip, encoding }, o3];
     }
     default: throw new Error(`unknown ChunkMeta variant: ${variant}`);
   }
@@ -188,7 +203,7 @@ function decodeAssetEntry(bytes: Uint8Array, off: number): [AssetEntry, number] 
 // ============================================================================
 
 export const BIG_MAGIC = 0x31474942; // "BIG1" as u32 LE
-export const BIG_VERSION = 2;
+export const BIG_VERSION = 3;
 
 /**
  * Parse a .big file header from raw bytes.
@@ -237,6 +252,11 @@ export function parseBigHeader(data: Uint8Array): { header: BigHeader; dataOffse
  * @param pageY Page Y coordinate
  * @returns The ChunkInfo for the matching page, or null
  */
+export function findVTMipTailChunk(header: BigHeader, assetName: string): ChunkInfo | null {
+  const asset = header.assets.find(a => a.name === assetName);
+  return asset?.chunks.find(c => c.meta.type === 'VirtualTextureMipTail') ?? null;
+}
+
 export function findVTPageChunk(
   header: BigHeader,
   assetName: string,
@@ -270,13 +290,14 @@ export function createPageDataProvider(
   header: BigHeader,
   textureWorker: { transcode(data: Uint8Array, targetFormat: number): Promise<Uint8Array>; poll(): void },
   format: number,
-): (path: string, req: { mip: number; x: number; y: number }) => Promise<Uint8Array> {
+): (path: string, req: { mip: number; x: number; y: number; tail?: boolean }) => Promise<Uint8Array> {
   // Cache the .big file data (loaded once)
   let bigFileData: Uint8Array | null = null;
 
-  return async (path: string, req: { mip: number; x: number; y: number }) => {
-    // Find the page chunk in the .big header
-    const chunk = findVTPageChunk(header, path, req.mip, req.x, req.y);
+  return async (path: string, req: { mip: number; x: number; y: number; tail?: boolean }) => {
+    const chunk = req.tail
+      ? findVTMipTailChunk(header, path)
+      : findVTPageChunk(header, path, req.mip, req.x, req.y);
     if (!chunk) {
       throw new Error(`VT page not found: ${path} mip=${req.mip} (${req.x},${req.y})`);
     }
@@ -288,9 +309,24 @@ export function createPageDataProvider(
       Number(chunk.compressedSize),
     );
 
-    // Transcode from Basis to the target GPU format
-    const transcoded = await textureWorker.transcode(pageData, format);
+    if (chunk.meta.encoding === 'RawRgba8') {
+      if (format !== 4) {
+        throw new Error(`VT page ${path} is raw RGBA8 but GPU format ${format} requires Basis encoding`);
+      }
+      return pageData;
+    }
 
-    return transcoded;
+    // The worker returns [count][width][height][length][data]...; a VT page
+    // consumes only the first image payload, never the serialization header.
+    const transcoded = await textureWorker.transcode(pageData, format);
+    if (transcoded.byteLength < 16) throw new Error('truncated transcoded VT page');
+    const view = new DataView(transcoded.buffer, transcoded.byteOffset, transcoded.byteLength);
+    const count = view.getUint32(0, true);
+    const width = view.getUint32(4, true);
+    const height = view.getUint32(8, true);
+    const length = view.getUint32(12, true);
+    if (count < 1 || width !== 136 || height !== 136 || 16 + length > transcoded.byteLength)
+      throw new Error(`invalid transcoded VT page header: count=${count}, size=${width}x${height}, bytes=${length}`);
+    return transcoded.slice(16, 16 + length);
   };
 }

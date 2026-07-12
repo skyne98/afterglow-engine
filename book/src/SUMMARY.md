@@ -12,6 +12,7 @@
 - [The AppBuilder API](./window/app-builder.md)
 - [Serving Assets](./window/assets.md)
 - [The Asset System](./window/asset-system.md)
+- [Virtual Texturing](./window/virtual-texturing.md)
 - [Graphics & DevTools](./window/graphics.md)
 
 # Worker Services

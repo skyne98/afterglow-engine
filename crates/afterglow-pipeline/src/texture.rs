@@ -4,7 +4,103 @@
 // is half the width and height of the previous, computed by averaging 2×2
 // pixel blocks. This is the same algorithm GPU `generateMipmap()` uses.
 //
-// No dependencies, no image decoding — raw RGBA in, raw RGBA out.
+// Raw RGBA in, deterministic mip and bordered virtual-page data out.
+
+pub const VT_PAGE_SIZE: u32 = 128;
+pub const VT_PAGE_BORDER: u32 = 4;
+pub const VT_SLOT_SIZE: u32 = VT_PAGE_SIZE + VT_PAGE_BORDER * 2;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TiledVirtualPage {
+    pub mip: u8,
+    pub page_x: u32,
+    pub page_y: u32,
+    pub data: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackedMipTail {
+    pub first_mip: u8,
+    pub data: Vec<u8>,
+}
+
+/// Fixed payload rectangles for 64, 32, 16, 8, 4, 2 and 1 texel mips.
+/// Each rectangle includes its own four-texel border and all fit in one slot.
+pub const VT_MIP_TAIL_RECTS: [(u32, u32, u32); 7] = [
+    (0, 0, 64), (72, 0, 32), (112, 0, 16), (72, 40, 8),
+    (88, 40, 4), (100, 40, 2), (110, 40, 1),
+];
+
+pub fn pack_virtual_mip_tail(data: &[u8], width: u32, height: u32) -> Result<PackedMipTail, String> {
+    if width != height || width < VT_PAGE_SIZE || !width.is_power_of_two() {
+        return Err("mip tails require a square power-of-two texture of at least 128 texels".into());
+    }
+    if data.len() != width as usize * height as usize * 4 {
+        return Err("RGBA byte length does not match dimensions".into());
+    }
+    let mips = generate_mip_chain(data, width, height);
+    let first_mip = width.ilog2() - 6; // first level is 64x64
+    let mut tail = vec![0; (VT_SLOT_SIZE * VT_SLOT_SIZE * 4) as usize];
+    for (tail_level, &(origin_x, origin_y, expected_size)) in VT_MIP_TAIL_RECTS.iter().enumerate() {
+        let mip = first_mip as usize + tail_level;
+        let (mip_width, mip_height, pixels) = &mips[mip];
+        if *mip_width != expected_size || *mip_height != expected_size {
+            return Err("unexpected mip-tail dimensions".into());
+        }
+        let rect_size = expected_size + VT_PAGE_BORDER * 2;
+        for rect_y in 0..rect_size {
+            for rect_x in 0..rect_size {
+                let source_x = (rect_x as i64 - VT_PAGE_BORDER as i64)
+                    .clamp(0, expected_size as i64 - 1) as u32;
+                let source_y = (rect_y as i64 - VT_PAGE_BORDER as i64)
+                    .clamp(0, expected_size as i64 - 1) as u32;
+                let source = ((source_y * expected_size + source_x) * 4) as usize;
+                let target_x = origin_x + rect_x;
+                let target_y = origin_y + rect_y;
+                let target = ((target_y * VT_SLOT_SIZE + target_x) * 4) as usize;
+                tail[target..target + 4].copy_from_slice(&pixels[source..source + 4]);
+            }
+        }
+    }
+    Ok(PackedMipTail { first_mip: first_mip as u8, data: tail })
+}
+
+/// Build every paged mip down through the 128×128 terminal page.
+/// Borders sample neighboring virtual texels and clamp only at image edges.
+pub fn tile_virtual_texture(data: &[u8], width: u32, height: u32) -> Result<Vec<TiledVirtualPage>, String> {
+    if width != height { return Err("virtual textures must currently be square".into()); }
+    if width < VT_PAGE_SIZE || !width.is_power_of_two() {
+        return Err(format!("virtual texture size {width} must be a power of two >= {VT_PAGE_SIZE}"));
+    }
+    if data.len() != width as usize * height as usize * 4 {
+        return Err("RGBA byte length does not match dimensions".into());
+    }
+
+    let mut pages = Vec::new();
+    for (mip, (mip_width, mip_height, mip_data)) in generate_mip_chain(data, width, height).into_iter().enumerate() {
+        if mip_width < VT_PAGE_SIZE || mip_height < VT_PAGE_SIZE { break; }
+        let grid_x = mip_width / VT_PAGE_SIZE;
+        let grid_y = mip_height / VT_PAGE_SIZE;
+        for page_y in 0..grid_y {
+            for page_x in 0..grid_x {
+                let mut page = vec![0; (VT_SLOT_SIZE * VT_SLOT_SIZE * 4) as usize];
+                for slot_y in 0..VT_SLOT_SIZE {
+                    for slot_x in 0..VT_SLOT_SIZE {
+                        let source_x = (page_x as i64 * VT_PAGE_SIZE as i64 + slot_x as i64 - VT_PAGE_BORDER as i64)
+                            .clamp(0, mip_width as i64 - 1) as u32;
+                        let source_y = (page_y as i64 * VT_PAGE_SIZE as i64 + slot_y as i64 - VT_PAGE_BORDER as i64)
+                            .clamp(0, mip_height as i64 - 1) as u32;
+                        let source = ((source_y * mip_width + source_x) * 4) as usize;
+                        let target = ((slot_y * VT_SLOT_SIZE + slot_x) * 4) as usize;
+                        page[target..target + 4].copy_from_slice(&mip_data[source..source + 4]);
+                    }
+                }
+                pages.push(TiledVirtualPage { mip: mip as u8, page_x, page_y, data: page });
+            }
+        }
+    }
+    Ok(pages)
+}
 
 /// Generate a full mip chain from a source texture.
 ///
@@ -91,6 +187,50 @@ pub fn downscale_box(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn packs_all_sub_page_mips_into_one_tail_slot() {
+        let mut source = vec![0; 256 * 256 * 4];
+        for y in 0..256usize { for x in 0..256usize {
+            let i = (y * 256 + x) * 4;
+            source[i..i + 4].copy_from_slice(&[x as u8, y as u8, 33, 255]);
+        }}
+        let tail = pack_virtual_mip_tail(&source, 256, 256).unwrap();
+        assert_eq!(tail.first_mip, 2); // 256 -> 128 -> 64
+        assert_eq!(tail.data.len(), (VT_SLOT_SIZE * VT_SLOT_SIZE * 4) as usize);
+        for &(x, y, size) in &VT_MIP_TAIL_RECTS {
+            assert!(x + size + VT_PAGE_BORDER * 2 <= VT_SLOT_SIZE);
+            assert!(y + size + VT_PAGE_BORDER * 2 <= VT_SLOT_SIZE);
+            let alpha = (((y + VT_PAGE_BORDER) * VT_SLOT_SIZE + x + VT_PAGE_BORDER) * 4 + 3) as usize;
+            assert_eq!(tail.data[alpha], 255);
+        }
+    }
+
+    #[test]
+    fn tiles_virtual_texture_with_neighbor_borders() {
+        let mut source = vec![0; 256 * 256 * 4];
+        for y in 0..256usize {
+            for x in 0..256usize {
+                let i = (y * 256 + x) * 4;
+                source[i..i + 4].copy_from_slice(&[x as u8, y as u8, 7, 255]);
+            }
+        }
+        let pages = tile_virtual_texture(&source, 256, 256).unwrap();
+        // mip 0 has four pages, mip 1 has one terminal page.
+        assert_eq!(pages.len(), 5);
+        let right = pages.iter().find(|p| p.mip == 0 && p.page_x == 1 && p.page_y == 0).unwrap();
+        // Left border of page (1,0) samples x=124..127 from its neighbor.
+        assert_eq!(&right.data[0..4], &[124, 0, 7, 255]);
+        let payload = ((VT_PAGE_BORDER * VT_SLOT_SIZE + VT_PAGE_BORDER) * 4) as usize;
+        assert_eq!(&right.data[payload..payload + 4], &[128, 0, 7, 255]);
+        assert!(pages.iter().any(|p| p.mip == 1 && p.page_x == 0 && p.page_y == 0));
+    }
+
+    #[test]
+    fn rejects_unsupported_virtual_texture_dimensions() {
+        assert!(tile_virtual_texture(&vec![0; 128 * 64 * 4], 128, 64).is_err());
+        assert!(tile_virtual_texture(&vec![0; 192 * 192 * 4], 192, 192).is_err());
+    }
 
     #[test]
     fn downscale_2x2_to_1x1() {

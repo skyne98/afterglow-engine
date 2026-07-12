@@ -1,0 +1,723 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>afterglow-engine — Virtual Texturing</title>
+<style>
+  html,body{margin:0;height:100%;background:#0a0c10;overflow:hidden}
+  canvas{display:block}
+  #info{position:fixed;top:8px;left:8px;color:#e5e7eb;font:13px/1.4 ui-monospace,monospace;
+    background:rgba(0,0,0,0.7);padding:8px 12px;border-radius:4px;pointer-events:none;z-index:10}
+  #loading{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);color:#e5e7eb;
+    font:16px/1.4 ui-monospace,monospace;text-align:center}
+  #controls{position:fixed;top:8px;right:8px;z-index:20;display:flex;gap:8px}
+  button{background:#172033;color:#e5e7eb;border:1px solid #60708d;border-radius:4px;
+    padding:7px 10px;font:12px ui-monospace,monospace;cursor:pointer}
+  button.active{background:#8a3d13;border-color:#ffb36b;color:white}
+  #atlasPanel{display:none;position:fixed;right:8px;bottom:8px;z-index:20;
+    width:272px;height:272px;color:#e5e7eb;font:11px ui-monospace,monospace;
+    border:1px solid #60708d;pointer-events:none}
+  #atlasPanel>div:first-child{position:absolute;left:0;top:0;z-index:1;padding:4px 6px;background:rgba(0,0,0,.8)}
+  #atlasPreview{display:none}
+</style>
+</head>
+<body>
+<div id="loading">afterglow-engine — Virtual Texturing Demo</div>
+<div id="info" style="display:none"></div>
+<div id="controls"><button id="atlasButton">Show atlas</button><button id="slowButton">Slow VT + mip debug</button></div>
+<div id="atlasPanel"><div>PHYSICAL ATLAS — 16×16 slots</div><div id="atlasPreview"></div></div>
+<script src="engine-bundle.js"></script>
+<script type="module">
+const THREE = window.THREE;
+const { wgslFn, Fn, texture, sampler, uv, uniform, vec2, vec4, float } = THREE;
+const loadingEl = document.getElementById('loading');
+const infoEl = document.getElementById('info');
+const atlasButton = document.getElementById('atlasButton');
+const slowButton = document.getElementById('slowButton');
+const atlasPanel = document.getElementById('atlasPanel');
+const atlasPreview = document.getElementById('atlasPreview');
+let slowMode = false;
+let atlasVisible = false;
+
+// --- Three.js setup ---
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0a0c10);
+const camera = new THREE.OrthographicCamera(-7, 7, 5, -5, 0.1, 100);
+camera.position.set(0, 0, 14);
+camera.lookAt(0, 0, 0);
+const renderer = new THREE.WebGPURenderer({ antialias: true });
+renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+await renderer.init();
+const gpuErrors = [];
+renderer.backend.device.addEventListener('uncapturederror', event => gpuErrors.push(String(event.error?.message ?? event.error)));
+addEventListener('error', event => gpuErrors.push(String(event.error?.stack ?? event.message)));
+addEventListener('unhandledrejection', event => gpuErrors.push(String(event.reason?.stack ?? event.reason)));
+
+addEventListener('resize', () => {
+  const aspect = innerWidth / innerHeight;
+  camera.left = -7 * aspect;
+  camera.right = 7 * aspect;
+  camera.top = 5;
+  camera.bottom = -5;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+scene.add(new THREE.AmbientLight(0x404060, 0.5));
+const dirLight = new THREE.DirectionalLight(0xffffff, 1.0);
+dirLight.position.set(5, 10, 7);
+scene.add(dirLight);
+
+// --- WGSL VT sampling shader ---
+// This is the core shader: page table lookup + atlas sampling with mip fallback.
+// Source: [SHLOM] material.frag, validated in prototype (282 tests).
+const vtSampleFn = wgslFn(`
+  fn vtSample(
+    pageTable: texture_2d<u32>,
+    atlas: texture_2d<f32>,
+    atlasSampler: sampler,
+    virtCoords: vec2f,
+    virtualSize: vec2f,
+    pageGrid: vec2f,
+    pageSize: f32,
+    pageBorder: f32,
+    atlasSize: vec2f,
+    maxMip: f32,
+    debugMip: f32
+  ) -> vec4f {
+    // 1. Compute desired mip level from screen-space derivatives. Clamp the
+    // lookup coordinate at texture edges; using fract() on out-of-range UVs
+    // would wrap local page coordinates and create seams while zoomed out.
+    let outside = any(virtCoords < vec2f(0.0)) || any(virtCoords > vec2f(1.0));
+    let lookup_uv = clamp(virtCoords, vec2f(0.0), vec2f(0.99999994));
+    let dx = dpdx(virtCoords * virtualSize);
+    let dy = dpdy(virtCoords * virtualSize);
+    let texel_footprint = max(dot(dx, dx), dot(dy, dy));
+    let mip_float = clamp(0.5 * log2(max(texel_footprint, 1e-8)), 0.0, maxMip);
+
+    // 2. Walk from desired mip up, looking for resident page
+    var mip_level = i32(mip_float);
+    let max_level = i32(maxMip);
+    var is_resident = false;
+    var entry = 0u;
+    var curr_page_grid = vec2f(0.0);
+
+    for (var m = mip_level; m <= max_level; m = m + 1) {
+      let mip_scale = exp2(-f32(m));
+      curr_page_grid = max(pageGrid * mip_scale, vec2f(1.0));
+      let page_coords = vec2i(clamp(floor(lookup_uv * curr_page_grid), vec2f(0.0), curr_page_grid - vec2f(1.0)));
+      // All mip tables are packed vertically into one r32uint texture because
+      // Three.js DataTexture cannot upload custom integer mip chains.
+      let mip_offset = i32(pageGrid.y * (2.0 - exp2(1.0 - f32(m))));
+      entry = textureLoad(pageTable, vec2i(page_coords.x, page_coords.y + mip_offset), 0).r;
+      if ((entry & 1u) != 0u) {
+        is_resident = true;
+        mip_level = m;
+        break;
+      }
+    }
+
+    if (!is_resident) {
+      return vec4f(0.5, 0.0, 0.5, 1.0); // magenta fallback
+    }
+
+    // 3. Compute physical atlas UV
+    let physX = (entry >> 1) & 0xFFu;
+    let physY = (entry >> 9) & 0xFFu;
+    let local_uv = fract(lookup_uv * curr_page_grid);
+    let slot_size = pageSize + pageBorder * 2.0;
+    let page_origin = vec2f(f32(physX), f32(physY)) * slot_size;
+    let sample_texel = page_origin + pageBorder + local_uv * pageSize;
+    let atlas_uv = sample_texel / atlasSize;
+
+    // 4. Sample the atlas. Outside the virtual image is deliberately dark so
+    // the bright procedural perimeter clearly identifies its true extent.
+    let color = textureSample(atlas, atlasSampler, atlas_uv);
+    let mip_color = vec4f(
+      fract(f32(mip_level) * 0.37 + 0.15),
+      fract(f32(mip_level) * 0.61 + 0.35),
+      fract(f32(mip_level) * 0.83 + 0.55), 1.0);
+    let debug_color = mix(color, mip_color, debugMip * 0.62);
+    return select(debug_color, vec4f(0.005, 0.007, 0.012, 1.0), outside);
+  }
+`);
+
+// --- VT feedback shader (writes page IDs at 1/8 resolution) ---
+// Source: [SHLOM] feedback.frag
+const vtFeedbackFn = wgslFn(`
+  fn vtFeedback(
+    virtCoords: vec2f,
+    virtualSize: vec2f,
+    pageGrid: vec2f,
+    maxMip: f32,
+    bufferScreenRatio: f32
+  ) -> u32 {
+    let effective_size = virtualSize * bufferScreenRatio;
+    let dx = dpdx(virtCoords * effective_size);
+    let dy = dpdy(virtCoords * effective_size);
+    let texel_footprint = max(dot(dx, dx), dot(dy, dy));
+    let mip_level = u32(clamp(0.5 * log2(max(texel_footprint, 1e-8)), 0.0, maxMip));
+
+    let mip_scale = exp2(-f32(mip_level));
+    let curr_page_grid = max(pageGrid * mip_scale, vec2f(1.0));
+    let page_coords = floor(virtCoords * curr_page_grid);
+
+    return 0x80000000u |
+           (mip_level & 0x1Fu) |
+           ((u32(page_coords.x) & 0xFFu) << 5) |
+           ((u32(page_coords.y) & 0xFFu) << 13);
+  }
+`);
+
+// --- Create a simple VT setup for demo ---
+// Virtual texture: 256K×256K. An ordinary RGBA8 allocation would require
+// 256 GiB, so this asset can only exist as generated virtual pages.
+const VIRTUAL_SIZE = 256 * 1024;
+const PAGE_SIZE = 128;
+const PAGE_BORDER = 4;
+const SLOT_SIZE = PAGE_SIZE + PAGE_BORDER * 2; // 136
+const PAGE_GRID = VIRTUAL_SIZE / PAGE_SIZE; // 32
+const MAX_MIP = Math.floor(Math.log2(PAGE_GRID)); // 5
+const ATLAS_PAGES_X = 16;
+const ATLAS_PAGES_Y = 16;
+const ATLAS_WIDTH = ATLAS_PAGES_X * SLOT_SIZE; // 1088
+const ATLAS_HEIGHT = ATLAS_PAGES_Y * SLOT_SIZE;
+const FEEDBACK_SCALE = 0.125;
+
+// --- Create atlas texture (RGBA for now, BC7 later) ---
+// Fill with procedural data so we can see something
+const atlasData = new Uint8Array(ATLAS_WIDTH * ATLAS_HEIGHT * 4);
+// Independent page copies keep the inspector reliable even if Three.js takes
+// ownership of or replaces the DataTexture's original upload buffer.
+const atlasPreviewPages = new Array(ATLAS_PAGES_X * ATLAS_PAGES_Y).fill(null);
+const atlasTexture = new THREE.DataTexture(atlasData, ATLAS_WIDTH, ATLAS_HEIGHT, THREE.RGBAFormat);
+atlasTexture.minFilter = THREE.LinearFilter;
+atlasTexture.magFilter = THREE.LinearFilter;
+atlasTexture.generateMipmaps = false;
+atlasTexture.needsUpdate = true;
+
+// --- Create page table texture (one r32uint entry per virtual page) ---
+// Mip tables are packed vertically: 32 + 16 + 8 + 4 + 2 + 1 = 63 rows.
+const pageTableSize = PAGE_GRID;
+const pageTableMipOffsets = [];
+let pageTableHeight = 0;
+for (let mip = 0; mip <= MAX_MIP; mip++) {
+  pageTableMipOffsets.push(pageTableHeight);
+  pageTableHeight += Math.max(1, PAGE_GRID >> mip);
+}
+const pageTableData = new Uint32Array(pageTableSize * pageTableHeight);
+const pageTableTexture = new THREE.DataTexture(
+  pageTableData,
+  pageTableSize, pageTableHeight,
+  THREE.RedIntegerFormat, THREE.UnsignedIntType,
+);
+pageTableTexture.minFilter = THREE.NearestFilter;
+pageTableTexture.magFilter = THREE.NearestFilter;
+pageTableTexture.generateMipmaps = false;
+pageTableTexture.needsUpdate = true;
+
+// --- Simple page cache (CPU side) ---
+// Maps (mip, x, y) → atlas slot (slotX, slotY)
+const pageCache = new Map();
+const loadedPages = new Set();
+let gpuReady = false;
+let atlasGPU = null;
+let pageTableGPU = null;
+
+function writePageTableEntry(mip, x, y) {
+  if (!gpuReady) {
+    pageTableTexture.needsUpdate = true;
+    return;
+  }
+  const index = (pageTableMipOffsets[mip] + y) * pageTableSize + x;
+  renderer.backend.device.queue.writeTexture(
+    { texture: pageTableGPU, origin: { x, y: pageTableMipOffsets[mip] + y } },
+    pageTableData.subarray(index, index + 1),
+    {},
+    { width: 1, height: 1, depthOrArrayLayers: 1 },
+  );
+}
+const slotOwners = new Array(ATLAS_PAGES_X * ATLAS_PAGES_Y).fill(null);
+let nextSlotIdx = 0;
+
+function clearResident(owner) {
+  if (!owner) return;
+  if (owner.pinned) throw new Error('attempted to evict a pinned VT page');
+  const { mip, x, y, key } = owner;
+  const index = (pageTableMipOffsets[mip] + y) * pageTableSize + x;
+  pageTableData[index] = 0;
+  writePageTableEntry(mip, x, y);
+  pageCache.delete(key);
+  loadedPages.delete(key);
+}
+
+function allocateSlot() {
+  // Coarsest pages guarantee that every lookup has a fallback, so they must
+  // never be selected for eviction.
+  for (let attempts = 0; attempts < slotOwners.length; attempts++) {
+    const index = nextSlotIdx;
+    nextSlotIdx = (nextSlotIdx + 1) % slotOwners.length;
+    if (slotOwners[index]?.pinned) continue;
+    clearResident(slotOwners[index]);
+    return { index, x: index % ATLAS_PAGES_X, y: Math.floor(index / ATLAS_PAGES_X) };
+  }
+  throw new Error('VT atlas contains only pinned pages');
+}
+
+function packEntry(slot) {
+  return 1 | ((slot.x & 0xFF) << 1) | ((slot.y & 0xFF) << 9);
+}
+
+function setResident(mip, x, y, slot, pinned = false) {
+  const key = `${mip}:${x}:${y}`;
+  pageCache.set(key, slot);
+  slotOwners[slot.index] = { mip, x, y, key, pinned };
+  const index = (pageTableMipOffsets[mip] + y) * pageTableSize + x;
+  pageTableData[index] = packEntry(slot);
+  writePageTableEntry(mip, x, y);
+}
+
+// --- Generate deterministic procedural fBm noise pages ---
+// The hash is based on absolute virtual texel coordinates, so independently
+// generated neighboring pages (including their borders) match exactly.
+function noiseHash(x, y) {
+  let h = Math.imul(x | 0, 0x1f123bb5) ^ Math.imul(y | 0, 0x5f356495) ^ 0x6d2b79f5;
+  h = Math.imul(h ^ (h >>> 15), h | 1);
+  h ^= h + Math.imul(h ^ (h >>> 7), h | 61);
+  return ((h ^ (h >>> 14)) >>> 0) / 4294967295;
+}
+
+function smoothNoise(x, y, scale) {
+  const gx = x / scale, gy = y / scale;
+  const ix = Math.floor(gx), iy = Math.floor(gy);
+  const fx = gx - ix, fy = gy - iy;
+  const sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy);
+  const a = noiseHash(ix, iy), b = noiseHash(ix + 1, iy);
+  const c = noiseHash(ix, iy + 1), d = noiseHash(ix + 1, iy + 1);
+  return (a + (b - a) * sx) + ((c + (d - c) * sx) - (a + (b - a) * sx)) * sy;
+}
+
+function generatePage(mip, pageX, pageY) {
+  const data = new Uint8Array(SLOT_SIZE * SLOT_SIZE * 4);
+  const mipScale = 2 ** mip;
+  for (let sy = 0; sy < SLOT_SIZE; sy++) {
+    for (let sx = 0; sx < SLOT_SIZE; sx++) {
+      const mx = pageX * PAGE_SIZE + sx - PAGE_BORDER;
+      const my = pageY * PAGE_SIZE + sy - PAGE_BORDER;
+      const x = Math.max(0, Math.min(VIRTUAL_SIZE - 1, mx * mipScale));
+      const y = Math.max(0, Math.min(VIRTUAL_SIZE - 1, my * mipScale));
+
+      let value = 0, amplitude = 0.55, total = 0;
+      for (const scale of [16384, 4096, 1024, 256, 64]) {
+        // Frequencies below the mip's Nyquist limit would alias and waste CPU.
+        if (scale >= mipScale * 2) {
+          value += smoothNoise(x, y, scale) * amplitude;
+          total += amplitude;
+        }
+        amplitude *= 0.5;
+      }
+      if (total === 0) { value = smoothNoise(x, y, mipScale * 2); total = 1; }
+      value /= total;
+      const ridge = 1 - Math.abs(value * 2 - 1);
+      const elevation = Math.max(0, Math.min(1, value * 0.72 + ridge * 0.28));
+
+      // Terrain-like palette makes page continuity and detail easy to inspect.
+      let r, g, b;
+      if (elevation < 0.38) {
+        const t = elevation / 0.38; r = 8 + 18*t; g = 24 + 55*t; b = 55 + 95*t;
+      } else if (elevation < 0.58) {
+        const t = (elevation-0.38)/0.20; r = 24 + 42*t; g = 72 + 55*t; b = 45 + 22*t;
+      } else if (elevation < 0.78) {
+        const t = (elevation-0.58)/0.20; r = 66 + 78*t; g = 127 + 48*t; b = 67 + 54*t;
+      } else {
+        const t = (elevation-0.78)/0.22; r = 144 + 105*t; g = 175 + 74*t; b = 121 + 128*t;
+      }
+      // A 1024-texel orange/white perimeter marks the 256K image boundary.
+      const edge = Math.min(x, y, VIRTUAL_SIZE - 1 - x, VIRTUAL_SIZE - 1 - y);
+      if (edge < 1024) {
+        const checker = ((Math.floor(x / 256) + Math.floor(y / 256)) & 1) === 0;
+        r = 255; g = checker ? 245 : 92; b = checker ? 235 : 18;
+      }
+      const idx = (sy * SLOT_SIZE + sx) * 4;
+      data[idx] = r; data[idx + 1] = g; data[idx + 2] = b; data[idx + 3] = 255;
+    }
+  }
+  return data;
+}
+
+function writePageToAtlas(slot, pageData) {
+  const dstX = slot.x * SLOT_SIZE;
+  const dstY = slot.y * SLOT_SIZE;
+  // Keep CPU mirrors solely for the optional atlas inspector.
+  atlasPreviewPages[slot.index] = pageData.slice();
+  for (let y = 0; y < SLOT_SIZE; y++) {
+    const srcRow = y * SLOT_SIZE * 4;
+    const dstRow = ((dstY + y) * ATLAS_WIDTH + dstX) * 4;
+    atlasData.set(pageData.subarray(srcRow, srcRow + SLOT_SIZE * 4), dstRow);
+  }
+
+  if (gpuReady) {
+    // Upload only the 136x136 changed slot (~72 KiB), not the full 18 MiB atlas.
+    renderer.backend.device.queue.writeTexture(
+      { texture: atlasGPU, origin: { x: dstX, y: dstY } }, pageData,
+      { bytesPerRow: SLOT_SIZE * 4, rowsPerImage: SLOT_SIZE },
+      { width: SLOT_SIZE, height: SLOT_SIZE, depthOrArrayLayers: 1 });
+  } else {
+    atlasTexture.needsUpdate = true;
+  }
+}
+
+// --- Pre-load coarsest mip pages (pinned) ---
+for (let mip = MAX_MIP; mip >= MAX_MIP - 1; mip--) {
+  const pages = PAGE_GRID >> mip;
+  for (let y = 0; y < pages; y++) {
+    for (let x = 0; x < pages; x++) {
+      const slot = allocateSlot();
+      const data = generatePage(mip, x, y);
+      writePageToAtlas(slot, data);
+      setResident(mip, x, y, slot, true);
+    }
+  }
+}
+
+// --- Create VT material ---
+// Override colorNode with the VT sampling shader
+const pageTableTex = texture(pageTableTexture);
+const atlasTex = texture(atlasTexture);
+const atlasSamp = sampler(atlasTex);
+
+// A second WebGPU scene displays the actual atlas GPUTexture directly. It is
+// rendered into a corner viewport after the main scene—no CPU copy or page
+// reconstruction is involved.
+const atlasScene = new THREE.Scene();
+const atlasCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 2);
+atlasCamera.position.z = 1;
+const atlasMaterial = new THREE.MeshBasicNodeMaterial();
+atlasMaterial.colorNode = atlasTex;
+atlasMaterial.depthTest = false;
+atlasMaterial.depthWrite = false;
+atlasScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), atlasMaterial));
+
+const mipDebugUniform = uniform(0);
+const vtMaterial = new THREE.MeshStandardNodeMaterial({
+  metalness: 0.0,
+  roughness: 0.9,
+});
+vtMaterial.colorNode = Fn(() => {
+  return vtSampleFn({
+    pageTable: pageTableTex,
+    atlas: atlasTex,
+    atlasSampler: atlasSamp,
+    virtCoords: uv(),
+    virtualSize: uniform(new THREE.Vector2(VIRTUAL_SIZE, VIRTUAL_SIZE)),
+    pageGrid: uniform(new THREE.Vector2(PAGE_GRID, PAGE_GRID)),
+    pageSize: float(PAGE_SIZE),
+    pageBorder: float(PAGE_BORDER),
+    atlasSize: uniform(new THREE.Vector2(ATLAS_WIDTH, ATLAS_HEIGHT)),
+    maxMip: float(MAX_MIP),
+    debugMip: mipDebugUniform,
+  });
+})();
+
+// --- Create the scene ---
+// A large quad that shows the virtual texture
+const quadGeom = new THREE.PlaneGeometry(12, 10);
+const quad = new THREE.Mesh(quadGeom, vtMaterial);
+scene.add(quad);
+
+// --- Camera control: WASD + mouse zoom ---
+let camX = 0.5, camY = 0.5, zoom = 4; // UV center + zoom level
+const keys = {};
+addEventListener('keydown', e => { keys[e.key.toLowerCase()] = true; if (e.key === 'w' || e.key === 'a' || e.key === 's' || e.key === 'd') e.preventDefault(); });
+addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+addEventListener('wheel', e => {
+  // Exponential wheel scaling remains controllable across 19 octaves, from a
+  // full overview down to approximately one virtual texel.
+  zoom = Math.max(0.5, Math.min(VIRTUAL_SIZE, zoom * Math.exp(e.deltaY * 0.001)));
+});
+
+// --- Page loading simulation ---
+// Each frame: determine which pages are needed based on camera, load them
+let pagesLoadedThisFrame = 0;
+// One procedurally generated page per frame bounds main-thread work while
+// panning. GPU uploads are subregion writes and do not re-upload either atlas.
+const MAX_PAGES_PER_FRAME = 1;
+
+let vtFrame = 0;
+function updatePages() {
+  pagesLoadedThisFrame = 0;
+  vtFrame++;
+  // In slow mode, reveal one residency decision every 20 frames.
+  if (slowMode && vtFrame % 20 !== 0) return;
+  const uvWidth = 1 / zoom;
+  const uvHeight = 1 / zoom;
+  const minU = camX - uvWidth/2;
+  const maxU = camX + uvWidth/2;
+  const minV = camY - uvHeight/2;
+  const maxV = camY + uvHeight/2;
+
+  // Estimate the visible texel footprint and request one level coarser than
+  // the shader's ideal mip. This bounds the working set while the shader's
+  // fallback walk keeps every pixel valid.
+  const screenPixels = Math.max(1, renderer.domElement.width);
+  const requestedMip = Math.max(0, Math.min(MAX_MIP - 2,
+    Math.ceil(Math.log2((VIRTUAL_SIZE / zoom) / screenPixels)) + 1));
+
+  for (let mip = requestedMip; mip <= Math.min(requestedMip + 1, MAX_MIP - 2); mip++) {
+    const pagesAtMip = PAGE_GRID >> mip;
+    const u0 = Math.max(0, Math.floor(minU * pagesAtMip));
+    const u1 = Math.min(pagesAtMip - 1, Math.floor(maxU * pagesAtMip));
+    const v0 = Math.max(0, Math.floor(minV * pagesAtMip));
+    const v1 = Math.min(pagesAtMip - 1, Math.floor(maxV * pagesAtMip));
+
+    for (let py = v0; py <= v1; py++) {
+      for (let px = u0; px <= u1; px++) {
+        if (pagesLoadedThisFrame >= MAX_PAGES_PER_FRAME) return;
+        const key = `${mip}:${px}:${py}`;
+        if (loadedPages.has(key)) continue;
+
+        const slot = allocateSlot();
+        const data = generatePage(mip, px, py);
+        writePageToAtlas(slot, data);
+        setResident(mip, px, py, slot);
+        loadedPages.add(key);
+        pagesLoadedThisFrame++;
+      }
+    }
+  }
+}
+
+// --- Info overlay ---
+function updateInfo() {
+  const uvWidth = (1/zoom).toFixed(4);
+  infoEl.innerHTML = `<b>afterglow-engine — Virtual Texturing</b><br>` +
+    `Virtual: ${VIRTUAL_SIZE.toLocaleString()}×${VIRTUAL_SIZE.toLocaleString()} (${PAGE_GRID}×${PAGE_GRID} pages)<br>` +
+    `Unvirtualized RGBA8: ${(VIRTUAL_SIZE*VIRTUAL_SIZE*4/2**30).toFixed(0)} GiB<br>` +
+    `Page: ${PAGE_SIZE}×${PAGE_SIZE} + ${PAGE_BORDER}px border = ${SLOT_SIZE}px slot<br>` +
+    `Atlas: ${ATLAS_WIDTH}×${ATLAS_HEIGHT} (${ATLAS_PAGES_X}×${ATLAS_PAGES_Y} = ${ATLAS_PAGES_X*ATLAS_PAGES_Y} slots)<br>` +
+    `Max mip: ${MAX_MIP} (${MAX_MIP+1} levels)<br>` +
+    `Camera: UV=(${camX.toFixed(3)}, ${camY.toFixed(3)}) zoom=${zoom.toFixed(1)}×<br>` +
+    `UV coverage: ${uvWidth} × ${uvWidth}<br>` +
+    `Visible texels: ${(VIRTUAL_SIZE/zoom).toFixed(2)} × ${(VIRTUAL_SIZE/zoom).toFixed(2)}<br>` +
+    `Pages loaded: ${loadedPages.size} (${pagesLoadedThisFrame} this frame)<br>` +
+    `Cache: ${pageCache.size} resident<br>` +
+    `<br>WASD: pan | Wheel: zoom | P: one pixel | O: overview | R: reset`;
+  infoEl.style.display = 'block';
+}
+
+loadingEl.style.display = 'none';
+
+atlasButton.addEventListener('click', () => {
+  atlasVisible = !atlasVisible;
+  atlasPanel.style.display = atlasVisible ? 'block' : 'none';
+  atlasButton.textContent = atlasVisible ? 'Hide atlas' : 'Show atlas';
+  atlasButton.classList.toggle('active', atlasVisible);
+});
+slowButton.addEventListener('click', () => {
+  slowMode = !slowMode;
+  mipDebugUniform.value = slowMode ? 1 : 0;
+  slowButton.textContent = slowMode ? 'Slow VT + mip debug: ON' : 'Slow VT + mip debug';
+  slowButton.classList.toggle('active', slowMode);
+});
+
+// Reset camera
+addEventListener('keydown', e => {
+  const key = e.key.toLowerCase();
+  if (key === 'r') { camX = 0.5; camY = 0.5; zoom = 4; }
+  if (key === 'p') zoom = VIRTUAL_SIZE; // exactly one virtual texel across
+  if (key === 'o') { camX = 0.5; camY = 0.5; zoom = 0.5; } // border overview
+});
+
+// --- Animation loop ---
+function animate() {
+  // Camera movement
+  const speed = 0.01 / zoom;
+  if (keys['a']) camX -= speed;
+  if (keys['d']) camX += speed;
+  if (keys['w']) camY += speed;
+  if (keys['s']) camY -= speed;
+  camX = Math.max(0, Math.min(1, camX));
+  camY = Math.max(0, Math.min(1, camY));
+
+  // Update UV transform on the material's UVs
+  const uvWidth = 1 / zoom;
+  const uvHeight = 1 / zoom;
+  quadGeom.attributes.uv.array[0] = camX - uvWidth/2; quadGeom.attributes.uv.array[0+1] = camY + uvHeight/2;
+  quadGeom.attributes.uv.array[2] = camX + uvWidth/2; quadGeom.attributes.uv.array[2+1] = camY + uvHeight/2;
+  quadGeom.attributes.uv.array[4] = camX - uvWidth/2; quadGeom.attributes.uv.array[4+1] = camY - uvHeight/2;
+  quadGeom.attributes.uv.array[6] = camX + uvWidth/2; quadGeom.attributes.uv.array[6+1] = camY - uvHeight/2;
+  quadGeom.attributes.uv.needsUpdate = true;
+
+  // Load pages for current view
+  updatePages();
+
+  updateInfo();
+  renderer.setScissorTest(false);
+  renderer.setViewport(0, 0, innerWidth, innerHeight);
+  renderer.render(scene, camera);
+  if (atlasVisible) {
+    const size = 272;
+    renderer.autoClear = false;
+    const atlasY = innerHeight - size - 8;
+    renderer.setViewport(innerWidth - size - 8, atlasY, size, size);
+    renderer.setScissor(innerWidth - size - 8, atlasY, size, size);
+    renderer.setScissorTest(true);
+    renderer.render(atlasScene, atlasCamera);
+    renderer.setScissorTest(false);
+    renderer.autoClear = true;
+  }
+  if (!gpuReady) {
+    // Three.js creates the native textures during the first render. Subsequent
+    // residency changes use small queue.writeTexture subregion updates.
+    atlasGPU = renderer.backend.get(atlasTexture).texture;
+    pageTableGPU = renderer.backend.get(pageTableTexture).texture;
+    gpuReady = Boolean(atlasGPU && pageTableGPU);
+  }
+  requestAnimationFrame(animate);
+}
+
+requestAnimationFrame(animate);
+
+async function runRawFeedbackGpuTest(direction) {
+  const device = renderer.backend.device;
+  const transform = direction === 'west' ? 'vec2f(1.0-in.uv.x,in.uv.y)'
+    : direction === 'rotated' ? 'vec2f(in.uv.y,1.0-in.uv.x)' : 'in.uv';
+  const shader = device.createShaderModule({ code: `
+    struct Out { @builtin(position) position: vec4f, @location(0) uv: vec2f };
+    @vertex fn vs(@builtin(vertex_index) i: u32) -> Out {
+      var p = array<vec2f,3>(vec2f(-1,-1), vec2f(3,-1), vec2f(-1,3));
+      var o: Out; o.position = vec4f(p[i],0,1); o.uv = p[i]*0.5+0.5; return o;
+    }
+    @fragment fn fs(in: Out) -> @location(0) vec2u {
+      let sample_uv = ${transform};
+      let x = u32(clamp(floor(sample_uv.x * 2048.0), 0.0, 2047.0));
+      let y = u32(clamp(floor(sample_uv.y * 2048.0), 0.0, 2047.0));
+      return vec2u(0x80000000u | (x << 6) | (y << 17), 0x12345678u);
+    }` });
+  const compilation = await shader.getCompilationInfo();
+  const shaderErrors = compilation.messages.filter(message => message.type === 'error');
+  if (shaderErrors.length) throw new Error(shaderErrors.map(error => error.message).join('\n'));
+  const pipeline = device.createRenderPipeline({
+    layout: 'auto', vertex: { module: shader, entryPoint: 'vs' },
+    fragment: { module: shader, entryPoint: 'fs', targets: [{ format: 'rg32uint' }] },
+    primitive: { topology: 'triangle-list' },
+  });
+  const feedbackTexture = device.createTexture({ size: [32,32], format: 'rg32uint',
+    usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC });
+  const readback = device.createBuffer({ size: 32*32*8,
+    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+  const encoder = device.createCommandEncoder();
+  const pass = encoder.beginRenderPass({ colorAttachments: [{ view: feedbackTexture.createView(),
+    loadOp: 'clear', storeOp: 'store', clearValue: {r:0,g:0,b:0,a:0} }] });
+  pass.setPipeline(pipeline); pass.draw(3); pass.end();
+  encoder.copyTextureToBuffer({ texture: feedbackTexture }, { buffer: readback, bytesPerRow: 256 }, [32,32]);
+  device.queue.submit([encoder.finish()]);
+  await readback.mapAsync(GPUMapMode.READ);
+  const words = new Uint32Array(readback.getMappedRange());
+  let valid = 0, minX=2048, maxX=-1, minY=2048, maxY=-1;
+  const uniqueX=new Set(), uniqueY=new Set();
+  for (let i=0;i<words.length;i+=2) if ((words[i] & 0x80000000) && words[i+1] === 0x12345678) {
+    valid++; const x=(words[i]>>>6)&0x7ff, y=(words[i]>>>17)&0x7ff;
+    minX=Math.min(minX,x);maxX=Math.max(maxX,x);minY=Math.min(minY,y);maxY=Math.max(maxY,y);
+    uniqueX.add(x);uniqueY.add(y);
+  }
+  readback.unmap(); readback.destroy(); feedbackTexture.destroy();
+  if (valid !== 1024 || uniqueX.size!==32 || uniqueY.size!==32 || minX>=maxX || minY>=maxY)
+    throw new Error(`feedback ${direction}: valid=${valid}, unique=${uniqueX.size}x${uniqueY.size}, range=${minX}..${maxX}/${minY}..${maxY}`);
+  return {direction,valid,range:[minX,maxX,minY,maxY]};
+}
+
+async function testAtlasUploadPaths() {
+  const device = renderer.backend.device;
+  const results = { rgba: 0, compressed: 0, compressedFormat: 'unsupported' };
+
+  // Exercise and byte-verify three distinct RGBA subregions.
+  const rgba = device.createTexture({ size:[64,64], format:'rgba8unorm',
+    usage:GPUTextureUsage.COPY_DST|GPUTextureUsage.COPY_SRC|GPUTextureUsage.TEXTURE_BINDING });
+  const rgbaOrigins=[{x:0,y:0},{x:60,y:60},{x:24,y:36}];
+  for (let repetition=0; repetition<3; repetition++) {
+    const color = new Uint8Array([17+repetition, 83, 201, 255]);
+    const pixels = new Uint8Array(4*4*4);
+    for (let i=0;i<pixels.length;i+=4) pixels.set(color,i);
+    const origin = rgbaOrigins[repetition];
+    device.queue.writeTexture({texture:rgba,origin},pixels,{bytesPerRow:16,rowsPerImage:4},[4,4]);
+    const readback = device.createBuffer({size:1024,usage:GPUBufferUsage.COPY_DST|GPUBufferUsage.MAP_READ});
+    const encoder = device.createCommandEncoder();
+    encoder.copyTextureToBuffer({texture:rgba,origin},{buffer:readback,bytesPerRow:256},[4,4]);
+    device.queue.submit([encoder.finish()]);
+    await readback.mapAsync(GPUMapMode.READ);
+    const bytes = new Uint8Array(readback.getMappedRange());
+    for (let row=0;row<4;row++) for (let x=0;x<4;x++) {
+      const offset=row*256+x*4;
+      for (let channel=0;channel<4;channel++) if(bytes[offset+channel]!==color[channel])
+        throw new Error(`RGBA subregion mismatch repetition=${repetition} row=${row} x=${x} channel=${channel}`);
+    }
+    readback.unmap(); readback.destroy(); results.rgba++;
+  }
+  rgba.destroy();
+
+  const compressed = device.features.has('texture-compression-bc')
+    ? {feature:'bc7',format:'bc7-rgba-unorm'}
+    : device.features.has('texture-compression-astc')
+      ? {feature:'astc',format:'astc-4x4-unorm'} : null;
+  if (compressed) {
+    const texture = device.createTexture({size:[ATLAS_WIDTH,ATLAS_HEIGHT],format:compressed.format,
+      usage:GPUTextureUsage.COPY_DST|GPUTextureUsage.TEXTURE_BINDING});
+    const compressedOrigins=[[0,0],[ATLAS_WIDTH-SLOT_SIZE,ATLAS_HEIGHT-SLOT_SIZE],
+      [Math.floor(ATLAS_PAGES_X/2)*SLOT_SIZE,Math.floor(ATLAS_PAGES_Y/2)*SLOT_SIZE]];
+    for(let repetition=0;repetition<3;repetition++) {
+      const blocks=new Uint8Array(34*34*16); blocks.fill(31+repetition);
+      device.queue.writeTexture({texture,origin:compressedOrigins[repetition]},blocks,
+        {bytesPerRow:34*16,rowsPerImage:34},[SLOT_SIZE,SLOT_SIZE]);
+      results.compressed++;
+    }
+    texture.destroy(); results.compressedFormat=compressed.feature;
+  }
+  await device.queue.onSubmittedWorkDone();
+  return results;
+}
+
+window.__afterglowVtGpuTest = {
+  snapshot: () => ({ gpuReady, resident: pageCache.size, loaded: loadedPages.size, errors:[...gpuErrors] }),
+  setCamera: (x,y,z) => {
+    camX=Math.max(0,Math.min(1,x)); camY=Math.max(0,Math.min(1,y));
+    zoom=Math.max(0.5,Math.min(VIRTUAL_SIZE,z));
+  },
+  run: async () => {
+    for (let i=0;i<90;i++) await new Promise(resolve => requestAnimationFrame(resolve));
+    if (!gpuReady) throw new Error('Three.js backend textures were not attached');
+    if (pageCache.size < 6) throw new Error(`only ${pageCache.size} pages resident`);
+    // Same feedback path from eastward, westward, and rotated raster directions.
+    const feedbackRuns = [];
+    for (const direction of ['east','west','rotated']) feedbackRuns.push(await runRawFeedbackGpuTest(direction));
+
+    // Exercise cache/fallback from genuinely different trajectories and LODs.
+    const residencyRuns = [];
+    const scenarios = [
+      {name:'eastbound',points:[{x:.08,y:.25,z:8},{x:.5,y:.25,z:16},{x:.92,y:.25,z:32}]},
+      {name:'westbound',points:[{x:.92,y:.75,z:32},{x:.5,y:.75,z:8},{x:.08,y:.75,z:2}]},
+      {name:'diagonal-lod',points:[{x:.08,y:.08,z:.5},{x:.5,y:.5,z:64},{x:.92,y:.92,z:VIRTUAL_SIZE}]},
+    ];
+    for (const scenario of scenarios) {
+      const before=pageCache.size, checkpoints=[];
+      for(const point of scenario.points) {
+        camX=point.x;camY=point.y;zoom=point.z;
+        for(let frame=0;frame<35;frame++) await new Promise(resolve=>requestAnimationFrame(resolve));
+        if(pageCache.size<5) throw new Error(`${scenario.name}: pinned fallback pages disappeared`);
+        checkpoints.push({x:camX,y:camY,zoom,pages:pageCache.size});
+      }
+      if(checkpoints.some((point,index)=>point.x!==scenario.points[index].x||point.y!==scenario.points[index].y))
+        throw new Error(`${scenario.name}: camera trajectory mismatch`);
+      residencyRuns.push({name:scenario.name,before,after:pageCache.size,checkpoints});
+    }
+    const uploads = await testAtlasUploadPaths();
+    await renderer.backend.device.queue.onSubmittedWorkDone();
+    if (gpuErrors.length) throw new Error(gpuErrors.join('\n'));
+    if (feedbackRuns.some(run=>run.valid!==1024)) throw new Error(`feedback runs failed: ${JSON.stringify(feedbackRuns)}`);
+    if (uploads.rgba!==3) throw new Error(`RGBA upload paths ${uploads.rgba}/3`);
+    if (uploads.compressedFormat!=='unsupported' && uploads.compressed!==3)
+      throw new Error(`compressed upload paths ${uploads.compressed}/3`);
+    return { ok:true, feedbackRuns, uploads, residencyRuns, resident:pageCache.size,
+      virtualSize:VIRTUAL_SIZE, atlas:[ATLAS_WIDTH,ATLAS_HEIGHT] };
+  },
+};
+console.log('afterglow-engine: Virtual Texturing demo started');
+</script>
+</body></html>

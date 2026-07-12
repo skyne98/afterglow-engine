@@ -7,13 +7,16 @@
 use std::io::{self, Write};
 
 pub const MAGIC: &[u8; 4] = b"BIG1";
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum AssetType { Texture, Mesh, VirtualTexture }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Compression { Meshopt, None }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum TextureEncoding { RawRgba8, Basis }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ChunkInfo {
@@ -36,8 +39,14 @@ pub enum ChunkMeta {
         mip: u8,
         page_x: u32,
         page_y: u32,
+        encoding: TextureEncoding,
     },
     Raw,
+    /// All sub-128 mips packed into one permanently resident 136×136 slot.
+    VirtualTextureMipTail {
+        first_mip: u8,
+        encoding: TextureEncoding,
+    },
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -116,6 +125,16 @@ impl BigWriter {
     /// Each page is 128×128 texels (+ 4px border per side = 136×136 slot).
     /// Pages are stored as individual seekable chunks in the .big file.
     pub fn add_virtual_texture(&mut self, name: &str, virtual_size: u32, pages: Vec<VirtualTexturePageData>) {
+        self.add_virtual_texture_with_tail(name, virtual_size, pages, None);
+    }
+
+    pub fn add_virtual_texture_with_tail(
+        &mut self,
+        name: &str,
+        _virtual_size: u32,
+        pages: Vec<VirtualTexturePageData>,
+        tail: Option<VirtualTextureMipTailData>,
+    ) {
         let asset_idx = self.assets.len();
         let mut chunks_meta = Vec::new();
         for page in &pages {
@@ -129,6 +148,20 @@ impl BigWriter {
                     mip: page.mip,
                     page_x: page.page_x,
                     page_y: page.page_y,
+                    encoding: page.encoding,
+                },
+            });
+        }
+        if let Some(tail) = tail {
+            let uncompressed_size = tail.data.len() as u64;
+            self.chunks.push((asset_idx, chunks_meta.len(), tail.data, Compression::None));
+            chunks_meta.push(ChunkInfo {
+                offset: 0, compressed_size: 0, uncompressed_size,
+                lod_level: 0, mip_level: tail.first_mip,
+                compression: Compression::None,
+                meta: ChunkMeta::VirtualTextureMipTail {
+                    first_mip: tail.first_mip,
+                    encoding: tail.encoding,
                 },
             });
         }
@@ -204,11 +237,18 @@ impl BigWriter {
     }
 }
 
+pub struct VirtualTextureMipTailData {
+    pub first_mip: u8,
+    pub encoding: TextureEncoding,
+    pub data: Vec<u8>,
+}
+
 pub struct VirtualTexturePageData {
     pub mip: u8,
     pub page_x: u32,
     pub page_y: u32,
-    /// Raw page data: SLOT_SIZE × SLOT_SIZE × 4 bytes (RGBA8, with border).
+    pub encoding: TextureEncoding,
+    /// Encoded page payload. RawRgba8 is SLOT_SIZE × SLOT_SIZE × 4 bytes.
     pub data: Vec<u8>,
 }
 
@@ -258,22 +298,26 @@ mod tests {
     fn roundtrip_virtual_texture_pages() {
         let mut writer = BigWriter::new();
         let page_data = vec![0xAB; 136 * 136 * 4]; // SLOT_SIZE × SLOT_SIZE × 4
-        writer.add_virtual_texture("terrain", 4096, vec![
-            VirtualTexturePageData { mip: 0, page_x: 0, page_y: 0, data: page_data.clone() },
-            VirtualTexturePageData { mip: 1, page_x: 0, page_y: 0, data: vec![0xCD; 136 * 136 * 4] },
-        ]);
+        writer.add_virtual_texture_with_tail("terrain", 4096, vec![
+            VirtualTexturePageData { mip: 0, page_x: 0, page_y: 0, encoding: TextureEncoding::RawRgba8, data: page_data.clone() },
+            VirtualTexturePageData { mip: 1, page_x: 0, page_y: 0, encoding: TextureEncoding::RawRgba8, data: vec![0xCD; 136 * 136 * 4] },
+        ], Some(VirtualTextureMipTailData {
+            first_mip: 6, encoding: TextureEncoding::RawRgba8,
+            data: vec![0xEF; 136 * 136 * 4],
+        }));
         let mut buf = Vec::new();
         writer.finish(&mut buf).unwrap();
         let (header, _) = parse_header(&buf).unwrap();
         assert_eq!(header.assets.len(), 1);
         assert_eq!(header.assets[0].asset_type, AssetType::VirtualTexture);
-        assert_eq!(header.assets[0].chunks.len(), 2);
+        assert_eq!(header.assets[0].chunks.len(), 3);
         // Verify page metadata
         match &header.assets[0].chunks[0].meta {
-            ChunkMeta::VirtualTexturePage { mip, page_x, page_y } => {
+            ChunkMeta::VirtualTexturePage { mip, page_x, page_y, encoding } => {
                 assert_eq!(*mip, 0);
                 assert_eq!(*page_x, 0);
                 assert_eq!(*page_y, 0);
+                assert_eq!(*encoding, TextureEncoding::RawRgba8);
             }
             _ => panic!("expected VirtualTexturePage"),
         }
@@ -282,6 +326,9 @@ mod tests {
         assert_eq!(c0.compression, Compression::None);
         let decoded = read_chunk_decompressed(&buf, c0);
         assert_eq!(decoded, page_data);
+        let tail = header.assets[0].chunks.iter().find(|chunk| matches!(chunk.meta, ChunkMeta::VirtualTextureMipTail { .. })).unwrap();
+        assert!(matches!(tail.meta, ChunkMeta::VirtualTextureMipTail { first_mip: 6, encoding: TextureEncoding::RawRgba8 }));
+        assert_eq!(read_chunk_decompressed(&buf, tail), vec![0xEF; 136 * 136 * 4]);
     }
 
     #[test]

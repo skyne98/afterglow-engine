@@ -5,9 +5,10 @@
 //   afterglow-pipeline inspect assets.big
 
 use std::path::PathBuf;
-use std::io::Write;
-
-use afterglow_pipeline::{BigWriter, parse_header, generate_mip_chain};
+use afterglow_pipeline::{
+    BigWriter, TextureEncoding, VirtualTextureMipTailData, VirtualTexturePageData,
+    pack_virtual_mip_tail, parse_header, tile_virtual_texture,
+};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -39,7 +40,7 @@ fn process(args: &[String]) {
     }
     let input_dir = PathBuf::from(&args[0]);
     let output_path = PathBuf::from(&args[1]);
-    let mesh_lods: usize = args.iter()
+    let _mesh_lods: usize = args.iter()
         .find(|a| a.starts_with("--mesh-lods="))
         .and_then(|a| a.split('=').nth(1))
         .and_then(|s| s.parse().ok())
@@ -53,9 +54,8 @@ fn process(args: &[String]) {
     let mut writer = BigWriter::new();
     let mut asset_count = 0;
 
-    // Process textures (.png, .jpg — raw RGBA would be decoded here).
-    // For now, we generate synthetic test textures since we don't have an image decoder.
-    // In production, use the `image` crate to decode.
+    // Universal VT: decode source images and emit independently seekable,
+    // bordered virtual pages rather than conventional per-texture mip blobs.
     for entry in std::fs::read_dir(&input_dir).unwrap().flatten() {
         let path = entry.path();
         let name = path.file_name().unwrap().to_string_lossy().to_string();
@@ -63,14 +63,41 @@ fn process(args: &[String]) {
 
         match ext {
             "png" | "jpg" | "jpeg" => {
-                eprintln!("[texture] {name} — generating mips...");
-                // TODO: decode image to RGBA. For now, create a synthetic texture.
-                let size = 256u32;
-                let data = vec![200u8; (size * size * 4) as usize];
-                let mips = generate_mip_chain(&data, size, size);
-                let mip_count = mips.len();
-                writer.add_texture(&name, mips);
-                eprintln!("  → {mip_count} mip levels");
+                eprintln!("[virtual-texture] {name} — decoding and tiling...");
+                let image = match image::open(&path) {
+                    Ok(image) => image.into_rgba8(),
+                    Err(error) => {
+                        eprintln!("error: failed to decode {}: {error}", path.display());
+                        std::process::exit(1);
+                    }
+                };
+                let (width, height) = image.dimensions();
+                let pages = match tile_virtual_texture(image.as_raw(), width, height) {
+                    Ok(pages) => pages,
+                    Err(error) => {
+                        eprintln!("error: unsupported virtual texture {name}: {error}");
+                        std::process::exit(1);
+                    }
+                };
+                let page_count = pages.len();
+                let tail = pack_virtual_mip_tail(image.as_raw(), width, height)
+                    .expect("validated VT dimensions must produce a mip tail");
+                let encoded_pages: Vec<_> = pages.into_iter().map(|page| {
+                    let data = afterglow_basis_encoder::encode_uastc_rgba(&page.data, 136, 136)
+                        .unwrap_or_else(|error| panic!("failed to encode {name} mip {} ({},{}): {error}", page.mip, page.page_x, page.page_y));
+                    VirtualTexturePageData {
+                        mip: page.mip, page_x: page.page_x, page_y: page.page_y,
+                        encoding: TextureEncoding::Basis, data,
+                    }
+                }).collect();
+                let encoded_tail = afterglow_basis_encoder::encode_uastc_rgba(&tail.data, 136, 136)
+                    .unwrap_or_else(|error| panic!("failed to encode {name} mip tail: {error}"));
+                writer.add_virtual_texture_with_tail(&name, width, encoded_pages, Some(VirtualTextureMipTailData {
+                    first_mip: tail.first_mip,
+                    encoding: TextureEncoding::Basis,
+                    data: encoded_tail,
+                }));
+                eprintln!("  → {width}×{height}, {page_count} bordered pages");
                 asset_count += 1;
             }
             _ => {
@@ -113,8 +140,11 @@ fn inspect(args: &[String]) {
                     format!("{index_count} indices, {vertex_count} verts")
                 }
                 afterglow_pipeline::ChunkMeta::Raw => "raw".to_string(),
-                afterglow_pipeline::ChunkMeta::VirtualTexturePage { mip, page_x, page_y } => {
-                    format!("VT page mip={mip} ({page_x},{page_y})")
+                afterglow_pipeline::ChunkMeta::VirtualTextureMipTail { first_mip, encoding } => {
+                    format!("VT mip tail first_mip={first_mip} {encoding:?}")
+                }
+                afterglow_pipeline::ChunkMeta::VirtualTexturePage { mip, page_x, page_y, encoding } => {
+                    format!("VT page mip={mip} ({page_x},{page_y}) {encoding:?}")
                 }
             };
             println!("    LOD{} MIP{} {:?} {} ({}→{} bytes at offset {})",

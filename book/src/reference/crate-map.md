@@ -9,6 +9,9 @@ truth.
 | `afterglow-rpc-macros` | The `#[rpc]` proc macro: generates the server trait, typed Rust client, dispatch, native spawn, and thin wasm exports. |
 | `afterglow-rpc-demo` | Demo `Physics` service + `bench_rpc` stress test. The reference example of a `#[rpc(worker = ...)]` service. |
 | `afterglow-assets` | Shared asset-path/MIME helpers (`AssetRoot`, `guess_mime`, `resolve`). The single security boundary for FS asset confinement. |
+| `afterglow-basis-encoder` | Offline-only UASTC encoder used by the asset pipeline; isolates the official C++ Basis encoder from runtime and wasm crates. |
+| `afterglow-pipeline` | Decodes source assets, builds bordered VT pages and packed mip tails, UASTC-encodes slots, and writes seekable `.big` containers. |
+| `afterglow-texture` | Pure-Rust runtime worker that transcodes Basis pages to BC7, ASTC, ETC, or RGBA. |
 | `afterglow-web` | Wasm target: page-side `#[no_mangle]` exports over two static rings in shared wasm memory. Includes `worker.js`, `rpc.js`, and the `coep_server` example. |
 | `afterglow-cef` | Thin CEF shell: window + WebGPU flags + `afterglow://` scheme + COOP/COEP headers. No worker code, no IPC, no input. |
 | `latency-tool` | CDP-based input→present latency measurement. |

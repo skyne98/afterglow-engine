@@ -58150,6 +58150,10 @@ var N2 = (e, t) => K(e[u].entityIndex, t);
 
 // engine-bundle-input.js
 window.THREE = exports_three_webgpu;
+// Spread TSL functions onto THREE for easy access
+if (exports_three_webgpu.TSL) {
+  Object.assign(window.THREE, exports_three_webgpu.TSL);
+}
 window.bitecsCreateWorld = Je;
 window.bitecsAddEntity = Ne;
 window.bitecsAddComponent = j;

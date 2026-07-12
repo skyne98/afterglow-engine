@@ -128,3 +128,28 @@ cargo build -p afterglow-rpc-demo --target wasm32-unknown-unknown \
 This is retained for context and was **not** rerun during the communication
 refresh. On the prior RTX 3070 / CEF 149 setup: minimum 0.01 ms, median 1.16 ms,
 mean 2.44 ms, p90 5.02 ms, maximum 6.64 ms at a 144 fps present rate.
+
+## Virtual texturing on fox-laptop (2026-07-12)
+
+Hardware: Ryzen 7 6800U, Radeon 680M/RADV, 1440×900 logical CEF window,
+60 Hz presentation. Measurements use 600 consecutive rAF timestamp intervals.
+The GNOME session was unlocked during each short measurement and locked
+immediately afterward.
+
+| Scenario | FPS | p50 | p99 | max | Below 55 FPS |
+|---|---:|---:|---:|---:|---:|
+| Stable 256K VT | 59.97 | 16.675 ms | 16.680 ms | 16.680 ms | 0/600 |
+| Bidirectional panning | 59.97 | 16.675 ms | 16.680 ms | 16.680 ms | 0/600 |
+| Continuous overview streaming | 59.97 | 16.675 ms | 16.680 ms | 16.680 ms | 0/600 |
+| 12-way camera teleport every frame | 59.87 | 16.675 ms | 16.680 ms | 33.350 ms | 1/600 |
+| Full-cache 20-way thrash, four updates/frame | 59.87 | 16.675 ms | 16.680 ms | 33.355 ms | 1/600 |
+
+The aggressive cases deliberately jump among opposite corners and zoom factors
+from 0.5× to 262,144× every frame. The full-cache case reached all 256 physical
+slots and continuously exercised replacement. Each pathological 600-frame run
+missed one vsync; normal panning and streaming missed none.
+
+`scripts/test-vt-gpu.sh` also passed three independent CEF launches: 9,216 exact
+RG32Uint feedback pixels, nine byte-verified RGBA writes, nine BC7 writes, three
+opposed/rotated feedback directions, and three camera/LOD trajectories, with no
+WebGPU validation errors.
