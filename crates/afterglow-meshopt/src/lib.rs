@@ -33,6 +33,7 @@
 pub mod ffi;
 pub mod safe;
 pub mod tests;
+pub mod worker_tests;
 
 #[cfg(target_arch = "wasm32")]
 pub mod wasm;
