@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>afterglow-engine — 10K instanced cubes</title>
+<style>html,body{margin:0;height:100%;background:#0a0c10;overflow:hidden}canvas{display:block}</style>
+</head>
+<body>
+<script type="module">
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js';
+import { RenderAdapter } from './engine/render-adapter.js';
+import { RenderTier } from './engine/types.js';
+import { prepareAfterglowFrame } from './engine/frame.js';
+
+// --- Three.js setup (WebGPU renderer) ---
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.1, 5000);
+camera.position.set(0, 200, 600);
+camera.lookAt(0, 0, 0);
+
+const renderer = new THREE.WebGPURenderer({ antialias: true });
+renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+
+// Handle resize
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+// --- Render adapter setup ---
+
+const adapter = new RenderAdapter(scene, 100_000);
+
+// Register an instanced cube descriptor.
+const cubeGeom = new THREE.BoxGeometry(5, 5, 5);
+const cubeDescId = adapter.registry.register({
+  tier: RenderTier.Instanced,
+  geometry: cubeGeom,
+  createMaterial: (tintOpacity) => new THREE.MeshStandardMaterial({
+    vertexColors: false,
+    metalness: 0.1,
+    roughness: 0.8,
+  }),
+  shardCapacity: 65_536,
+  boundsPolicy: 'dynamic-disable-three-culling',
+  castShadow: false,
+  receiveShadow: false,
+});
+
+// Add a light so the cubes are visible.
+const light = new THREE.DirectionalLight(0xffffff, 1.5);
+light.position.set(100, 200, 100);
+scene.add(light);
+scene.add(new THREE.AmbientLight(0x404060, 0.5));
+
+// --- Create 10,000 entities ---
+
+const ENTITY_COUNT = 10_000;
+const entities = [];
+
+for (let i = 0; i < ENTITY_COUNT; i++) {
+  const eid = adapter.createEntity();
+  adapter.addTransform(eid);
+  adapter.addRenderRef(eid, cubeDescId);
+
+  // Random position in a grid
+  const x = (Math.random() - 0.5) * 1000;
+  const y = (Math.random() - 0.5) * 400;
+  const z = (Math.random() - 0.5) * 1000;
+  adapter.transform.positionX[eid] = x;
+  adapter.transform.positionY[eid] = y;
+  adapter.transform.positionZ[eid] = z;
+
+  // Random rotation (as quaternion)
+  const q = new THREE.Quaternion().setFromEuler(
+    new THREE.Euler(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI)
+  );
+  adapter.transform.rotationX[eid] = q.x;
+  adapter.transform.rotationY[eid] = q.y;
+  adapter.transform.rotationZ[eid] = q.z;
+  adapter.transform.rotationW[eid] = q.w;
+
+  // Random tint
+  adapter.appearance.red[eid] = Math.random();
+  adapter.appearance.green[eid] = Math.random();
+  adapter.appearance.blue[eid] = Math.random();
+
+  // Mark as structurally dirty so the adapter attaches the proxy
+  adapter.markStructural(eid);
+  adapter.markTransformDirty(eid);
+  adapter.markAppearanceDirty(eid);
+
+  entities.push(eid);
+}
+
+console.log(`Created ${ENTITY_COUNT} entities`);
+
+// --- Animation loop ---
+
+let frameId = 0;
+const startTime = performance.now();
+let lastTime = startTime;
+let fpsCounter = 0;
+let fpsTime = startTime;
+let currentFps = 0;
+
+function animate() {
+  const now = performance.now();
+  const delta = (now - lastTime) / 1000;
+  const elapsed = (now - startTime) / 1000;
+  lastTime = now;
+
+  // Move 10% of entities each frame (simulate physics)
+  for (let i = 0; i < ENTITY_COUNT; i += 10) {
+    const eid = entities[i];
+    adapter.transform.positionY[eid] += Math.sin(elapsed + i) * 0.5;
+    adapter.markTransformDirty(eid);
+  }
+
+  // Rotate camera slowly
+  camera.position.x = Math.cos(elapsed * 0.1) * 600;
+  camera.position.z = Math.sin(elapsed * 0.1) * 600;
+  camera.lookAt(0, 0, 0);
+
+  // Prepare the frame (structural changes → transform sync → GPU uploads)
+  prepareAfterglowFrame(
+    { frameId: frameId++, deltaSeconds: delta, elapsedSeconds: elapsed },
+    null, // no workers yet
+    adapter,
+  );
+
+  // Render
+  renderer.renderAsync(scene, camera);
+
+  // FPS counter
+  fpsCounter++;
+  if (now - fpsTime > 1000) {
+    currentFps = fpsCounter;
+    fpsCounter = 0;
+    fpsTime = now;
+    console.log(`FPS: ${currentFps}  entities: ${ENTITY_COUNT}  frame: ${frameId}`);
+  }
+
+  requestAnimationFrame(animate);
+}
+
+requestAnimationFrame(animate);
+</script>
+</body></html>
