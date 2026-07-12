@@ -42,9 +42,10 @@ const dirLight = new THREE.DirectionalLight(0xffffff, 1.0);
 dirLight.position.set(5, 10, 7);
 scene.add(dirLight);
 
-// --- Generate a UV sphere mesh ---
+// --- Generate a UV sphere mesh with UVs ---
 function generateSphere(segments, rings) {
   const positions = [];
+  const uvs = [];
   const indices = [];
   for (let y = 0; y <= rings; y++) {
     const v = y / rings;
@@ -52,22 +53,25 @@ function generateSphere(segments, rings) {
     for (let x = 0; x <= segments; x++) {
       const u = x / segments;
       const theta = u * Math.PI * 2;
-      positions.push(
-        Math.cos(theta) * Math.sin(phi),
-        Math.cos(phi),
-        Math.sin(theta) * Math.sin(phi)
-      );
+      // Outward-facing normals: phi from 0 (top) to PI (bottom)
+      const px = Math.cos(theta) * Math.sin(phi);
+      const py = Math.cos(phi);
+      const pz = Math.sin(theta) * Math.sin(phi);
+      positions.push(px, py, pz);
+      uvs.push(u, v);
     }
   }
   for (let y = 0; y < rings; y++) {
     for (let x = 0; x < segments; x++) {
       const i = y * (segments + 1) + x;
-      indices.push(i, i + segments + 1, i + 1);
-      indices.push(i + 1, i + segments + 1, i + segments + 2);
+      // CCW winding (outward-facing when viewed from outside)
+      indices.push(i, i + 1, i + segments + 1);
+      indices.push(i + 1, i + segments + 2, i + segments + 1);
     }
   }
   return {
     positions: new Float32Array(positions),
+    uvs: new Float32Array(uvs),
     indices: new Uint32Array(indices),
   };
 }
@@ -78,7 +82,7 @@ loadingEl.textContent = 'afterglow-engine — generating LOD levels...';
 
 // --- Generate the source mesh ---
 const segments = 48, rings = 32;
-const { positions, indices } = generateSphere(segments, rings);
+const { positions, uvs, indices } = generateSphere(segments, rings);
 const origTris = indices.length / 3;
 
 // --- Generate 4 LOD levels ---
@@ -98,17 +102,39 @@ for (let i = 0; i < lodRatios.length; i++) {
   // Build a Three.js geometry from the LOD indices.
   const geom = new THREE.BufferGeometry();
   geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geom.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
   geom.setIndex(new THREE.BufferAttribute(lodIndices, 1));
   geom.computeVertexNormals();
 
   const tris = lodIndices.length / 3;
   const color = [0x4fc3f7, 0x66bb6a, 0xffa726, 0xef5350][i];
 
-  // Wireframe material — shows triangle density.
-  const wireMat = new THREE.MeshBasicMaterial({ color, wireframe: true });
+  // Procedural checkerboard texture (canvas-based) so we can see UVs.
+  const texSize = 256;
+  const canvas = document.createElement('canvas');
+  canvas.width = texSize; canvas.height = texSize;
+  const ctx = canvas.getContext('2d');
+  const sq = 32;
+  for (let ty = 0; ty < texSize; ty += sq) {
+    for (let tx = 0; tx < texSize; tx += sq) {
+      const isLight = ((tx / sq) + (ty / sq)) % 2 === 0;
+      ctx.fillStyle = isLight ? '#e0e0e0' : '#404040';
+      ctx.fillRect(tx, ty, sq, sq);
+    }
+  }
+  // Draw a colored stripe per LOD level so we can tell them apart.
+  ctx.fillStyle = `#${color.toString(16).padStart(6, '0')}`;
+  ctx.fillRect(0, 0, texSize, 8);
+  ctx.fillRect(0, texSize - 8, texSize, 8);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+
+  // Textured material (shows UVs) + wireframe overlay.
   const solidMat = new THREE.MeshStandardMaterial({
-    color, metalness: 0.3, roughness: 0.6, flatShading: true
+    map: texture, metalness: 0.1, roughness: 0.7, flatShading: true
   });
+  const wireMat = new THREE.MeshBasicMaterial({ color, wireframe: true, transparent: true, opacity: 0.3 });
 
   // Two meshes per LOD: solid + wireframe overlay.
   const group = new THREE.Group();
@@ -118,7 +144,7 @@ for (let i = 0; i < lodRatios.length; i++) {
   group.add(solid);
   group.add(wire);
 
-  lodMeshes.push({ group, tris, label: lodLabels[i] });
+  lodMeshes.push({ group, solid, wire, tris, label: lodLabels[i] });
 }
 
 // --- Arrange in a 2×2 grid ---
@@ -169,15 +195,16 @@ const startTime = performance.now();
 function animate() {
   const elapsed = (performance.now() - startTime) / 1000;
 
-  // Rotate each LOD group.
+  // Each LOD sphere spins individually. Grid is static.
   for (const lod of lodMeshes) {
-    lod.group.rotation.y = elapsed * 0.3;
+    lod.solid.rotation.y = elapsed * 0.5;
+    lod.solid.rotation.x = elapsed * 0.2;
+    lod.wire.rotation.y = elapsed * 0.5;
+    lod.wire.rotation.x = elapsed * 0.2;
   }
 
-  // Camera slowly orbits.
-  camera.position.x = Math.cos(elapsed * 0.1) * 12;
-  camera.position.z = Math.sin(elapsed * 0.1) * 12;
-  camera.position.y = Math.sin(elapsed * 0.15) * 2;
+  // Static camera looking at the grid.
+  camera.position.set(0, 0, 14);
   camera.lookAt(0, 0, 0);
 
   client.poll();
