@@ -1,5 +1,5 @@
 // engine/asset-store.ts
-const THREE = window.THREE;
+import * as THREE2 from "three";
 
 // engine/resource.ts
 var RESOURCES = Symbol.for("afterglow-resources");
@@ -57,36 +57,10 @@ class AssetHandle {
 }
 
 // engine/fallback.ts
-var _fallbackTexture = null;
+import * as THREE from "three";
 var _fallbackGeometry = null;
 var _fallbackMaterial = null;
 var _fallbackGroup = null;
-function createCheckerboardTexture() {
-  const size = 64;
-  const sq = 8;
-  const canvas = document.createElement("canvas");
-  canvas.width = size;
-  canvas.height = size;
-  const ctx = canvas.getContext("2d");
-  for (let y = 0;y < size; y += sq) {
-    for (let x = 0;x < size; x += sq) {
-      const isBlack = (x / sq + y / sq) % 2 === 0;
-      ctx.fillStyle = isBlack ? "#000000" : "#9b00ff";
-      ctx.fillRect(x, y, sq, sq);
-    }
-  }
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.wrapS = THREE.RepeatWrapping;
-  texture.wrapT = THREE.RepeatWrapping;
-  texture.repeat.set(4, 4);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  return texture;
-}
-function fallbackTexture() {
-  if (!_fallbackTexture)
-    _fallbackTexture = createCheckerboardTexture();
-  return _fallbackTexture;
-}
 function fallbackGeometry() {
   if (!_fallbackGeometry) {
     _fallbackGeometry = new THREE.BoxGeometry(2, 2, 2);
@@ -110,24 +84,15 @@ function fallbackGroup() {
 }
 
 // engine/asset-store.ts
-var FORMAT_BC7 = 0;
-var FORMAT_ASTC = 1;
-var FORMAT_RGBA = 4;
-var _bestFormat = null;
-async function detectBestTextureFormat() {
-  _bestFormat = FORMAT_RGBA;
-  return FORMAT_RGBA;
-}
 var MAX_SINGLE_LOAD = 1 << 20;
 var CHUNK_SIZE = 512 * 1024;
-var MAX_MIP_UPLOADS_PER_FRAME = 2;
 var DEFAULT_LOD_RATIOS = [1, 0.5, 0.25, 0.1];
 var DEFAULT_TARGET_ERROR = 0.02;
 async function parseTexture(bytes) {
   const bitmap = await createImageBitmap(new Blob([bytes]));
-  const tex = new THREE.Texture(bitmap);
+  const tex = new THREE2.Texture(bitmap);
   tex.needsUpdate = true;
-  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.colorSpace = THREE2.SRGBColorSpace;
   return tex;
 }
 async function parseGLTF(bytes, loader) {
@@ -135,7 +100,7 @@ async function parseGLTF(bytes, loader) {
   new Uint8Array(buf).set(bytes);
   if (loader)
     return new Promise((res, rej) => loader.parse(buf, "", (r) => res(r.scene), rej));
-  const GLTFLoader2 = THREE.GLTFLoader;
+  const GLTFLoader2 = THREE2.GLTFLoader;
   if (!GLTFLoader2)
     throw new Error("GLTFLoader not available");
   const gl = new GLTFLoader2;
@@ -144,46 +109,30 @@ async function parseGLTF(bytes, loader) {
 function parseJSON(bytes) {
   return JSON.parse(new TextDecoder().decode(bytes));
 }
-function nearestUpscale(src, srcW, srcH, dstW, dstH) {
-  if (srcW === dstW && srcH === dstH)
-    return src;
-  const dst = new Uint8Array(dstW * dstH * 4);
-  for (let y = 0;y < dstH; y++) {
-    const sy = Math.floor(y * srcH / dstH);
-    for (let x = 0;x < dstW; x++) {
-      const sx = Math.floor(x * srcW / dstW);
-      const si = (sy * srcW + sx) * 4;
-      const di = (y * dstW + x) * 4;
-      dst[di] = src[si];
-      dst[di + 1] = src[si + 1];
-      dst[di + 2] = src[si + 2];
-      dst[di + 3] = src[si + 3];
-    }
-  }
-  return dst;
-}
 
 class AssetStore {
   cache = new Map;
   pending = new Map;
-  streaming = new Map;
   meshopt;
-  texture;
   loader;
-  constructor(loader, meshopt, texture) {
+  vtStore = null;
+  constructor(loader, meshopt) {
     this.loader = loader;
     this.meshopt = meshopt;
-    this.texture = texture;
   }
   get assetLoader() {
     return this.loader;
   }
+  setVirtualTextureStore(vt) {
+    this.vtStore = vt;
+  }
+  get virtualTextureStore() {
+    return this.vtStore;
+  }
   poll() {
     this.loader.poll();
     this.meshopt?.poll();
-    this.texture?.poll();
     this.processPendingLoads();
-    this.processStreaming();
   }
   processPendingLoads() {
     for (const [path, pending] of this.pending) {
@@ -205,24 +154,6 @@ class AssetStore {
         console.error(`[afterglow] load failed: ${path}`, err);
         this.pending.delete(path);
       });
-    }
-  }
-  processStreaming() {
-    let processed = 0;
-    for (const [, stream] of this.streaming) {
-      while (processed < MAX_MIP_UPLOADS_PER_FRAME && stream.pendingMips.length > 0) {
-        const mip = stream.pendingMips.shift();
-        const upscaled = nearestUpscale(mip.data, mip.width, mip.height, stream.fullW, stream.fullH);
-        stream.texture.image = { data: upscaled, width: stream.fullW, height: stream.fullH };
-        stream.texture.needsUpdate = true;
-        stream.mipsUploaded++;
-        stream.handle.generation++;
-        processed++;
-      }
-      if (stream.pendingMips.length === 0) {
-        stream.handle.state = "ready";
-        this.streaming.delete(stream.handle.path);
-      }
     }
   }
   load(path, parser, fallback) {
@@ -346,12 +277,7 @@ class AssetStore {
     const uvStride = 8;
     if (!this.meshopt) {
       return {
-        lods: [{
-          indices,
-          positions,
-          uvs,
-          triangleCount: originalTriangles
-        }]
+        lods: [{ indices, positions, uvs, triangleCount: originalTriangles }]
       };
     }
     const origStats = await this.meshopt.analyzeVertexCache(indices, vertexCount);
@@ -381,12 +307,7 @@ class AssetStore {
         const targetTris = Math.max(4, Math.floor(originalTriangles * ratio));
         const targetIndexCount = targetTris * 3;
         const simplified = await this.meshopt.simplifyWithUvs(optimized, positions, stride, uvs, uvStride, 0.5, targetIndexCount, DEFAULT_TARGET_ERROR);
-        lods.push({
-          indices: simplified,
-          positions,
-          uvs,
-          triangleCount: simplified.length / 3
-        });
+        lods.push({ indices: simplified, positions, uvs, triangleCount: simplified.length / 3 });
       }
     }
     return {
@@ -401,109 +322,10 @@ class AssetStore {
     };
   }
   loadTexture(path) {
-    const lower = path.toLowerCase();
-    if (this.texture && (lower.endsWith(".basis") || lower.endsWith(".ktx2"))) {
-      return this.loadStreamingBasisTexture(path);
+    if (this.vtStore) {
+      return this.vtStore.loadTexture(path);
     }
-    return this.load(path, parseTexture, fallbackTexture());
-  }
-  loadStreamingBasisTexture(path) {
-    const cached = this.cache.get(path);
-    if (cached)
-      return cached;
-    const handle = new AssetHandle(path, fallbackTexture());
-    const promise = this.startLoad(path);
-    promise.then(async (bytes) => {
-      const format = await detectBestTextureFormat();
-      const transcoded = await this.texture.transcode(bytes, format);
-      const mips = this.parseSerializedMips(transcoded);
-      if (mips.length === 0) {
-        handle.state = "error";
-        console.error(`[afterglow] basis texture: no mips in ${path}`);
-        return;
-      }
-      const fullW = mips[0].width;
-      const fullH = mips[0].height;
-      const smallest = mips[mips.length - 1];
-      const initialData = nearestUpscale(smallest.data, smallest.width, smallest.height, fullW, fullH);
-      const texture = new THREE.DataTexture(initialData, fullW, fullH, THREE.RGBAFormat);
-      texture.generateMipmaps = true;
-      texture.minFilter = THREE.LinearMipmapLinearFilter;
-      texture.magFilter = THREE.LinearFilter;
-      texture.wrapS = THREE.RepeatWrapping;
-      texture.wrapT = THREE.RepeatWrapping;
-      texture.colorSpace = THREE.SRGBColorSpace;
-      texture.needsUpdate = true;
-      handle.asset = texture;
-      handle.generation++;
-      handle.state = "loading";
-      const queue = [];
-      for (let i = mips.length - 2;i >= 0; i--) {
-        queue.push(mips[i]);
-      }
-      this.streaming.set(path, {
-        handle,
-        texture,
-        pendingMips: queue.map((m) => ({
-          data: m.data,
-          width: m.width,
-          height: m.height,
-          level: 0
-        })),
-        mipsUploaded: 1,
-        totalMips: mips.length,
-        fullW,
-        fullH
-      });
-    }).catch((err) => {
-      handle.state = "error";
-      console.error(`[afterglow] basis texture failed: ${path}`, err);
-    });
-    return handle;
-  }
-  parseSerializedMips(data) {
-    if (data.length < 4)
-      return [];
-    const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
-    const count = view.getUint32(0, true);
-    if (count === 0 || count > 20)
-      return [];
-    let offset = 4;
-    const mips = [];
-    for (let i = 0;i < count; i++) {
-      if (offset + 12 > data.length)
-        break;
-      const w = view.getUint32(offset, true);
-      offset += 4;
-      const h = view.getUint32(offset, true);
-      offset += 4;
-      const len = view.getUint32(offset, true);
-      offset += 4;
-      if (offset + len > data.length)
-        break;
-      mips.push({ data: data.slice(offset, offset + len), width: w, height: h });
-      offset += len;
-    }
-    return mips;
-  }
-  queueMipUpload(path, handle, texture, level, data, width, height, mipNumber, totalMips) {
-    const stream = this.streaming.get(path);
-    if (!stream)
-      return;
-    stream.pendingMips.push({ data, width, height, level });
-    stream.totalMips = totalMips;
-    if (mipNumber === 1) {
-      handle.generation++;
-      handle.state = "loading";
-    }
-  }
-  loadBasisTexture(path) {
-    if (!this.texture)
-      throw new Error("No texture worker");
-    return this.load(path, async (bytes) => {
-      const format = await detectBestTextureFormat();
-      return this.texture.transcode(bytes, format);
-    }, new Uint8Array);
+    return this.load(path, parseTexture, undefined);
   }
   loadGLTF(path, loader) {
     return this.load(path, (bytes) => parseGLTF(bytes, loader), fallbackGroup());
@@ -535,7 +357,6 @@ class AssetStore {
   }
   evict(path) {
     this.cache.delete(path);
-    this.streaming.delete(path);
   }
   get size() {
     return this.cache.size;
@@ -548,20 +369,15 @@ class AssetStore {
       h.asset?.dispose?.();
     this.cache.clear();
     this.pending.clear();
-    this.streaming.clear();
   }
 }
 var AssetStoreRes = defineResource("assetStore", () => {
-  throw new Error("AssetStore not initialized. Call AssetStoreRes.set(world, new AssetStore(loader, meshopt, texture)).");
+  throw new Error("AssetStore not initialized. Call AssetStoreRes.set(world, new AssetStore(loader, meshopt)).");
 });
 export {
   parseTexture,
   parseJSON,
   parseGLTF,
-  detectBestTextureFormat,
-  FORMAT_RGBA,
-  FORMAT_BC7,
-  FORMAT_ASTC,
   AssetStoreRes,
   AssetStore
 };
