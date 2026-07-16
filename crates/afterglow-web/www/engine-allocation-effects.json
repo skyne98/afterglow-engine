@@ -23,6 +23,7 @@
     "reactive.ts": "gameFacing",
     "relative-pointer.ts": "budgeted",
     "render-adapter.ts": "pooled",
+    "renderer-host.ts": "budgeted",
     "renderer-seal.ts": "bootstrap",
     "resource.ts": "bootstrap",
     "runtime.ts": "pooled",

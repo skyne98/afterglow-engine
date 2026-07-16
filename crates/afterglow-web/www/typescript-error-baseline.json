@@ -1812,42 +1812,6 @@
       "source": "const THREE=window.THREE, VT=window.AfterglowVT;"
     },
     {
-      "id": "b7e8c61553997d5a5a10",
-      "file": "dungeon.ts",
-      "line": 21,
-      "column": 149,
-      "code": 2339,
-      "message": "Property 'setSize' does not exist on type 'WebGPUOnlyRenderer'.",
-      "source": "const renderer=await createWebGPUOnlyRenderer({antialias:false,trackTimestamp:false}).catch(error=>{showWebGPUFailure(error);throw error});renderer.setSize(innerWidth,innerHeight);renderer.setPixelRatio(devicePixelRatio);document.body.append(renderer.domElement);"
-    },
-    {
-      "id": "262820d73408cd3495e0",
-      "file": "dungeon.ts",
-      "line": 21,
-      "column": 190,
-      "code": 2339,
-      "message": "Property 'setPixelRatio' does not exist on type 'WebGPUOnlyRenderer'.",
-      "source": "const renderer=await createWebGPUOnlyRenderer({antialias:false,trackTimestamp:false}).catch(error=>{showWebGPUFailure(error);throw error});renderer.setSize(innerWidth,innerHeight);renderer.setPixelRatio(devicePixelRatio);document.body.append(renderer.domElement);"
-    },
-    {
-      "id": "9c91261a2f20bd996bf3",
-      "file": "dungeon.ts",
-      "line": 21,
-      "column": 252,
-      "code": 2339,
-      "message": "Property 'domElement' does not exist on type 'WebGPUOnlyRenderer'.",
-      "source": "const renderer=await createWebGPUOnlyRenderer({antialias:false,trackTimestamp:false}).catch(error=>{showWebGPUFailure(error);throw error});renderer.setSize(innerWidth,innerHeight);renderer.setPixelRatio(devicePixelRatio);document.body.append(renderer.domElement);"
-    },
-    {
-      "id": "a966c33deff2b900506c",
-      "file": "dungeon.ts",
-      "line": 22,
-      "column": 37,
-      "code": 2345,
-      "message": "Argument of type '{ isWebGPUBackend?: boolean; device?: unknown; }' is not assignable to parameter of type 'PipelineBackend'. Type '{ isWebGPUBackend?: boolean; device?: unknown; }' is missing the following properties from type 'PipelineBackend': createRenderPipeline, createComputePipeline",
-      "source": "const rendererSeal=new RendererSeal(renderer.backend),rendererSealStats={renderPipelines:0,computePipelines:0,renderPipelineViolations:0,computePipelineViolations:0};function pipelineTelemetry(){rendererSealStats.renderPipelines=rendererSeal.renderPipelines;rendererSealStats.computePipelines=rendererSeal.computePipelines;rendererSealStats.renderPipelineViolations=rendererSeal.renderPipelineViolations;rendererSealStats.computePipelineViolations=rendererSeal.computePipelineViolations;return rendererSealStats}const errors=[];renderer.backend.device.addEventListener('uncapturederror',e=>errors.push(String(e.error?.message??e.error)));addEventListener('error',e=>errors.push(String(e.error?.stack??e.message)));addEventListener('unhandledrejection',e=>errors.push(String(e.reason?.stack??e.reason)));"
-    },
-    {
       "id": "9343a03b6bb6ccfa6017",
       "file": "dungeon.ts",
       "line": 22,
@@ -2208,12 +2172,12 @@
       "source": "const [x1,z1,x2,z2]=segments[i],set=materialSets[i%materialSets.length],entry=set.albedo,path=entry.path;"
     },
     {
-      "id": "ab3616daf0165738148b",
+      "id": "ae2b737036f8dadbd9c5",
       "file": "dungeon.ts",
       "line": 138,
       "column": 169,
       "code": 2339,
-      "message": "Property 'hasTimestamp' does not exist on type '{ isWebGPUBackend?: boolean; device?: unknown; }'.",
+      "message": "Property 'hasTimestamp' does not exist on type '{ isWebGPUBackend?: boolean; device?: unknown; createRenderPipeline: (renderObject: unknown, promises: Promise<unknown>[]) => void; createComputePipeline: (computePipeline: unknown, bindings: unknown) => void; }'.",
       "source": "const runtimeTiming={vtCpuUs:0,renderSubmitUs:0,feedbackSubmitUs:0,frameCpuUs:0,gpuMainMs:0,gpuFeedbackMs:0,gpuTotalMs:0,gpuTimestampSupported:Boolean(renderer.backend.hasTimestamp)};let resolvingGpuTimestamps=false;"
     },
     {
@@ -2235,12 +2199,12 @@
       "source": "const contexts=renderer._renderContexts,pool=renderer.backend.timestampQueryPool?.render,timestamps=pool?.timestamps;"
     },
     {
-      "id": "0d4242ab1e032fbd3129",
+      "id": "0f67f56b8db4d164198b",
       "file": "dungeon.ts",
       "line": 144,
       "column": 67,
       "code": 2339,
-      "message": "Property 'timestampQueryPool' does not exist on type '{ isWebGPUBackend?: boolean; device?: unknown; }'.",
+      "message": "Property 'timestampQueryPool' does not exist on type '{ isWebGPUBackend?: boolean; device?: unknown; createRenderPipeline: (renderObject: unknown, promises: Promise<unknown>[]) => void; createComputePipeline: (computePipeline: unknown, bindings: unknown) => void; }'.",
       "source": "const contexts=renderer._renderContexts,pool=renderer.backend.timestampQueryPool?.render,timestamps=pool?.timestamps;"
     },
     {
@@ -2253,21 +2217,21 @@
       "source": "function setGpuTimingEnabled(enabled){const active=Boolean(enabled)&&runtimeTiming.gpuTimestampSupported;renderer.backend.trackTimestamp=active;for(const pool of Object.values(renderer.backend.timestampQueryPool??{}))if(pool)pool.trackTimestamp=active}"
     },
     {
-      "id": "5f6ea3d1bb24d35cd528",
+      "id": "f9f580fbf5e4fb5f788f",
       "file": "dungeon.ts",
       "line": 153,
       "column": 123,
       "code": 2339,
-      "message": "Property 'trackTimestamp' does not exist on type '{ isWebGPUBackend?: boolean; device?: unknown; }'.",
+      "message": "Property 'trackTimestamp' does not exist on type '{ isWebGPUBackend?: boolean; device?: unknown; createRenderPipeline: (renderObject: unknown, promises: Promise<unknown>[]) => void; createComputePipeline: (computePipeline: unknown, bindings: unknown) => void; }'.",
       "source": "function setGpuTimingEnabled(enabled){const active=Boolean(enabled)&&runtimeTiming.gpuTimestampSupported;renderer.backend.trackTimestamp=active;for(const pool of Object.values(renderer.backend.timestampQueryPool??{}))if(pool)pool.trackTimestamp=active}"
     },
     {
-      "id": "897a1fed4d5eef807277",
+      "id": "1d3bf0be9bad45a3a914",
       "file": "dungeon.ts",
       "line": 153,
       "column": 194,
       "code": 2339,
-      "message": "Property 'timestampQueryPool' does not exist on type '{ isWebGPUBackend?: boolean; device?: unknown; }'.",
+      "message": "Property 'timestampQueryPool' does not exist on type '{ isWebGPUBackend?: boolean; device?: unknown; createRenderPipeline: (renderObject: unknown, promises: Promise<unknown>[]) => void; createComputePipeline: (computePipeline: unknown, bindings: unknown) => void; }'.",
       "source": "function setGpuTimingEnabled(enabled){const active=Boolean(enabled)&&runtimeTiming.gpuTimestampSupported;renderer.backend.trackTimestamp=active;for(const pool of Object.values(renderer.backend.timestampQueryPool??{}))if(pool)pool.trackTimestamp=active}"
     },
     {
@@ -2379,24 +2343,6 @@
       "source": "function update(dt){"
     },
     {
-      "id": "aa28a8626aefebda0369",
-      "file": "dungeon.ts",
-      "line": 163,
-      "column": 30,
-      "code": 2339,
-      "message": "Property 'domElement' does not exist on type 'WebGPUOnlyRenderer'.",
-      "source": "feedbackPass.resize(renderer.domElement.width,renderer.domElement.height);"
-    },
-    {
-      "id": "4413edab8a892c581d26",
-      "file": "dungeon.ts",
-      "line": 163,
-      "column": 56,
-      "code": 2339,
-      "message": "Property 'domElement' does not exist on type 'WebGPUOnlyRenderer'.",
-      "source": "feedbackPass.resize(renderer.domElement.width,renderer.domElement.height);"
-    },
-    {
       "id": "98a371a802761bdd5401",
       "file": "dungeon.ts",
       "line": 166,
@@ -2424,15 +2370,6 @@
       "source": "let pomShaderContracts=0,pomFeedbackContracts=0;const gpuDevice=renderer.backend.device,createShaderModule=gpuDevice.createShaderModule.bind(gpuDevice);gpuDevice.createShaderModule=descriptor=>{if(descriptor.code.includes('fn pomMarchUV')){if(descriptor.code.includes('fn vtSampleFromLevel')){assertPomGeneratedWgsl(descriptor.code);pomShaderContracts++}else if(descriptor.code.includes('fn vtFeedback'))pomFeedbackContracts++;else throw new Error('unknown POM shader variant compiled during warm-up')}return createShaderModule(descriptor)};"
     },
     {
-      "id": "c64c0e05ddaa3b079103",
-      "file": "dungeon.ts",
-      "line": 170,
-      "column": 28,
-      "code": 2345,
-      "message": "Argument of type 'WebGPUOnlyRenderer' is not assignable to parameter of type '{ compileAsync(scene: THREE.Scene, camera: THREE.Camera): Promise<unknown>; }'. Property 'compileAsync' is missing in type 'WebGPUOnlyRenderer' but required in type '{ compileAsync(scene: THREE.Scene, camera: THREE.Camera): Promise<unknown>; }'.",
-      "source": "await warmRendererVariants(renderer,[{scene,camera}]);"
-    },
-    {
       "id": "2d05787657c7f7f49bae",
       "file": "dungeon.ts",
       "line": 171,
@@ -2451,15 +2388,6 @@
       "source": "const previousTarget=renderer.getRenderTarget();renderer.setRenderTarget(feedbackPass.target);await warmRendererVariants(renderer,[{scene:feedbackScene,camera}]);"
     },
     {
-      "id": "a0b2bb172bb01bd6b664",
-      "file": "dungeon.ts",
-      "line": 171,
-      "column": 122,
-      "code": 2345,
-      "message": "Argument of type 'WebGPUOnlyRenderer' is not assignable to parameter of type '{ compileAsync(scene: THREE.Scene, camera: THREE.Camera): Promise<unknown>; }'. Property 'compileAsync' is missing in type 'WebGPUOnlyRenderer' but required in type '{ compileAsync(scene: THREE.Scene, camera: THREE.Camera): Promise<unknown>; }'.",
-      "source": "const previousTarget=renderer.getRenderTarget();renderer.setRenderTarget(feedbackPass.target);await warmRendererVariants(renderer,[{scene:feedbackScene,camera}]);"
-    },
-    {
       "id": "40d3d562b0dd663cbe0e",
       "file": "dungeon.ts",
       "line": 173,
@@ -2469,30 +2397,12 @@
       "source": "renderer.setRenderTarget(previousTarget);await warmRendererVariants(renderer,[{scene,camera}]);renderer.setRenderTarget(feedbackPass.target);await warmRendererVariants(renderer,[{scene:feedbackScene,camera}]);renderer.setRenderTarget(previousTarget);gpuDevice.createShaderModule=createShaderModule;if(pomShaderContracts<1||pomFeedbackContracts<1)throw new Error('POM render/feedback shader contracts were not compiled during warm-up');"
     },
     {
-      "id": "1ccad5b78fda7ed5e70f",
-      "file": "dungeon.ts",
-      "line": 173,
-      "column": 69,
-      "code": 2345,
-      "message": "Argument of type 'WebGPUOnlyRenderer' is not assignable to parameter of type '{ compileAsync(scene: THREE.Scene, camera: THREE.Camera): Promise<unknown>; }'. Property 'compileAsync' is missing in type 'WebGPUOnlyRenderer' but required in type '{ compileAsync(scene: THREE.Scene, camera: THREE.Camera): Promise<unknown>; }'.",
-      "source": "renderer.setRenderTarget(previousTarget);await warmRendererVariants(renderer,[{scene,camera}]);renderer.setRenderTarget(feedbackPass.target);await warmRendererVariants(renderer,[{scene:feedbackScene,camera}]);renderer.setRenderTarget(previousTarget);gpuDevice.createShaderModule=createShaderModule;if(pomShaderContracts<1||pomFeedbackContracts<1)throw new Error('POM render/feedback shader contracts were not compiled during warm-up');"
-    },
-    {
       "id": "b8d01aa5771684115295",
       "file": "dungeon.ts",
       "line": 173,
       "column": 105,
       "code": 2339,
       "message": "Property 'setRenderTarget' does not exist on type 'WebGPUOnlyRenderer'.",
-      "source": "renderer.setRenderTarget(previousTarget);await warmRendererVariants(renderer,[{scene,camera}]);renderer.setRenderTarget(feedbackPass.target);await warmRendererVariants(renderer,[{scene:feedbackScene,camera}]);renderer.setRenderTarget(previousTarget);gpuDevice.createShaderModule=createShaderModule;if(pomShaderContracts<1||pomFeedbackContracts<1)throw new Error('POM render/feedback shader contracts were not compiled during warm-up');"
-    },
-    {
-      "id": "a0d98a6205ef4364ddaa",
-      "file": "dungeon.ts",
-      "line": 173,
-      "column": 169,
-      "code": 2345,
-      "message": "Argument of type 'WebGPUOnlyRenderer' is not assignable to parameter of type '{ compileAsync(scene: THREE.Scene, camera: THREE.Camera): Promise<unknown>; }'. Property 'compileAsync' is missing in type 'WebGPUOnlyRenderer' but required in type '{ compileAsync(scene: THREE.Scene, camera: THREE.Camera): Promise<unknown>; }'.",
       "source": "renderer.setRenderTarget(previousTarget);await warmRendererVariants(renderer,[{scene,camera}]);renderer.setRenderTarget(feedbackPass.target);await warmRendererVariants(renderer,[{scene:feedbackScene,camera}]);renderer.setRenderTarget(previousTarget);gpuDevice.createShaderModule=createShaderModule;if(pomShaderContracts<1||pomFeedbackContracts<1)throw new Error('POM render/feedback shader contracts were not compiled during warm-up');"
     },
     {
@@ -2523,12 +2433,12 @@
       "source": "await new Promise(r=>setTimeout(r,0));renderer.render(scene,camera);for(const height of heightTextures)assertHeightTextureGpuFormat(renderer.backend,height);renderer.setRenderTarget(feedbackPass.target);renderer.render(feedbackScene,camera);renderer.setRenderTarget(previousTarget);store.attachRenderer(renderer);rendererSeal.seal();"
     },
     {
-      "id": "9b3b43a9a4f3f6a6bcb9",
+      "id": "39298ff041b5eb24cff6",
       "file": "dungeon.ts",
       "line": 174,
       "column": 133,
       "code": 2559,
-      "message": "Type '{ isWebGPUBackend?: boolean; device?: unknown; }' has no properties in common with type '{ utils?: { getTextureFormatGPU(texture: HeightTexture): string | undefined; }; }'.",
+      "message": "Type '{ isWebGPUBackend?: boolean; device?: unknown; createRenderPipeline: (renderObject: unknown, promises: Promise<unknown>[]) => void; createComputePipeline: (computePipeline: unknown, bindings: unknown) => void; }' has no properties in common with type '{ utils?: { getTextureFormatGPU(texture: HeightTexture): string | undefined; }; }'.",
       "source": "await new Promise(r=>setTimeout(r,0));renderer.render(scene,camera);for(const height of heightTextures)assertHeightTextureGpuFormat(renderer.backend,height);renderer.setRenderTarget(feedbackPass.target);renderer.render(feedbackScene,camera);renderer.setRenderTarget(previousTarget);store.attachRenderer(renderer);rendererSeal.seal();"
     },
     {
@@ -2649,33 +2559,6 @@
       "source": "renderer.setAnimationLoop(now=>{const frameCpuStart=performance.now(),dt=Math.min(.05,(now-last)/1000);last=now;smoothedDt=smoothedDt*.95+dt*.05;store.recordFrameTime(dt*1000);update(dt);const renderStart=performance.now();renderer.render(scene,camera);runtimeTiming.renderSubmitUs=(performance.now()-renderStart)*1000;if(feedbackEnabled&&!diagnosticAtlas&&frame%FEEDBACK_INTERVAL===0){const feedbackStart=performance.now();feedbackPass.submit(renderer,feedbackScene,camera,store);runtimeTiming.feedbackSubmitUs=(performance.now()-feedbackStart)*1000}else runtimeTiming.feedbackSubmitUs=0;runtimeTiming.frameCpuUs=(performance.now()-frameCpuStart)*1000;frame++;for(let i=waiters.length-1;i>=0;i--)if(frame>=waiters[i].target){waiters[i].resolve();waiters.splice(i,1)}if(hudVisible&&frame%15===0){const d=store.getStats(),input=relativePointer.getStatus();hud.innerHTML=`<b>afterglow — Engine Dungeon</b><br>3 × 8K scanned PBR material sets · 12 wall instances<br>Virtual RGBA channels: 1.875 GiB · physical atlas: ${store.atlasWidth}²<br>Position: ${pose.x.toFixed(2)}, ${pose.z.toFixed(2)} · yaw ${(pose.yaw*180/Math.PI).toFixed(0)}° · ${(1/smoothedDt).toFixed(0)} FPS<br>Input: ${input.eventType}${input.unadjustedMovement?' · unadjusted':''}<br>POM: ${pomEnabled?`${POM_MIN_LAYERS}–${POM_MAX_LAYERS} layers · ${POM_SHADOW_STEPS}-step light self-shadow · no radial fade`:'off'}<br>Textures: ${d.textureCount} · resident ${d.atlasSlotsUsed}/${d.atlasSlotsTotal} · pending ${d.pendingPages}<br>GPU feedback pages: ${lastResult.totalRequests} · mips [${feedbackPass.getLatestMips().join(',')}] · quality ${VT_QUALITY_BIAS} · capacity bias ${d.lodBias} · budget ${d.budget} · errors ${errors.length}`}});"
     },
     {
-      "id": "8e1e23933e78edcf9900",
-      "file": "dungeon.ts",
-      "line": 178,
-      "column": 110,
-      "code": 2339,
-      "message": "Property 'setSize' does not exist on type 'WebGPUOnlyRenderer'.",
-      "source": "addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);feedbackPass.resize(renderer.domElement.width,renderer.domElement.height)});"
-    },
-    {
-      "id": "57bc2ea4bed5eba94626",
-      "file": "dungeon.ts",
-      "line": 178,
-      "column": 171,
-      "code": 2339,
-      "message": "Property 'domElement' does not exist on type 'WebGPUOnlyRenderer'.",
-      "source": "addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);feedbackPass.resize(renderer.domElement.width,renderer.domElement.height)});"
-    },
-    {
-      "id": "71499c2e44954158407d",
-      "file": "dungeon.ts",
-      "line": 178,
-      "column": 197,
-      "code": 2339,
-      "message": "Property 'domElement' does not exist on type 'WebGPUOnlyRenderer'.",
-      "source": "addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);feedbackPass.resize(renderer.domElement.width,renderer.domElement.height)});"
-    },
-    {
       "id": "a1ee407269a1f08af3a7",
       "file": "dungeon.ts",
       "line": 179,
@@ -2719,24 +2602,6 @@
       "code": 2339,
       "message": "Property 'key' does not exist on type 'Event'.",
       "source": "addEventListener('keydown',e=>{if(programmatic)return;const key=e.key.toLowerCase();keys.add(key);if(key==='r')setPose(-5.5,-5.5,0,0);if(key==='p')setPomEnabled(!pomEnabled);if(e.key==='1')setPose(-5.5,-5.5,0,0);if(e.key==='2')setPose(5.5,-5.5,Math.PI,0);if(e.key==='3')setPose(5.5,6.5,-Math.PI/2,0)});addEventListener('keyup',e=>keys.delete(e.key.toLowerCase()));"
-    },
-    {
-      "id": "2884f570694273b65612",
-      "file": "dungeon.ts",
-      "line": 180,
-      "column": 57,
-      "code": 2339,
-      "message": "Property 'domElement' does not exist on type 'WebGPUOnlyRenderer'.",
-      "source": "const relativePointer=new RelativePointerInput(renderer.domElement,(movementX,movementY)=>{if(!programmatic){pose.yaw-=movementX*.002;pose.pitch=Math.max(-1.45,Math.min(1.45,pose.pitch-movementY*.002))}});"
-    },
-    {
-      "id": "47bb235a2aecd6dc8198",
-      "file": "dungeon.ts",
-      "line": 181,
-      "column": 10,
-      "code": 2339,
-      "message": "Property 'domElement' does not exist on type 'WebGPUOnlyRenderer'.",
-      "source": "renderer.domElement.addEventListener('click',()=>{if(!programmatic)relativePointer.requestLock()});"
     },
     {
       "id": "8c245b5b806313efe94f",
@@ -2964,15 +2829,6 @@
       "source": "runScenario:async name=>{if(!scenarios[name])throw new Error(`unknown scenario ${name}`);programmatic=true;keys.clear();scenarios[name]();await window.__afterglowDungeon.step(120);await window.__afterglowDungeon.waitForIdle(15000);await window.__afterglowDungeon.step(16);await window.__afterglowDungeon.waitForIdle(15000);return window.__afterglowDungeon.snapshot()},"
     },
     {
-      "id": "de80ecbb41a03f2e2d30",
-      "file": "engine-bundle-input.ts",
-      "line": 1,
-      "column": 24,
-      "code": 7016,
-      "message": "Could not find a declaration file for module 'three/webgpu'. '/home/fox/Project/afterglow-engine/crates/afterglow-web/www/node_modules/three/build/three.webgpu.js' implicitly has an 'any' type. Try `npm i --save-dev @types/three` if it exists or add a new declaration (.d.ts) file containing `declare module 'three/webgpu';`",
-      "source": "import * as THREE from 'three/webgpu';"
-    },
-    {
       "id": "2fe5fca67f0c6667d398",
       "file": "engine-bundle-input.ts",
       "line": 2,
@@ -3151,33 +3007,6 @@
       "code": 2339,
       "message": "Property 'bitecsQuery' does not exist on type 'Window & typeof globalThis'.",
       "source": "query: window.bitecsQuery,"
-    },
-    {
-      "id": "e61428df255cf28e22a1",
-      "file": "engine-demo.ts",
-      "line": 24,
-      "column": 10,
-      "code": 2339,
-      "message": "Property 'setSize' does not exist on type 'WebGPUOnlyRenderer'.",
-      "source": "renderer.setSize(innerWidth, innerHeight);"
-    },
-    {
-      "id": "e93a9f3fcbc3e65800a1",
-      "file": "engine-demo.ts",
-      "line": 25,
-      "column": 36,
-      "code": 2339,
-      "message": "Property 'domElement' does not exist on type 'WebGPUOnlyRenderer'.",
-      "source": "document.body.appendChild(renderer.domElement);"
-    },
-    {
-      "id": "abd45c52d9c830a7d552",
-      "file": "engine-demo.ts",
-      "line": 30,
-      "column": 12,
-      "code": 2339,
-      "message": "Property 'setSize' does not exist on type 'WebGPUOnlyRenderer'.",
-      "source": "renderer.setSize(innerWidth, innerHeight);"
     },
     {
       "id": "5ed2652d56b6fe6cef4b",
@@ -3682,15 +3511,6 @@
       "code": 2532,
       "message": "Object is possibly 'undefined'.",
       "source": "Position.y[eid] += Math.sin(elapsed * 2 + i * 0.1) * 0.5;"
-    },
-    {
-      "id": "69743b81ca9d9218ebb3",
-      "file": "engine-demo.ts",
-      "line": 223,
-      "column": 12,
-      "code": 2339,
-      "message": "Property 'renderAsync' does not exist on type 'WebGPUOnlyRenderer'.",
-      "source": "renderer.renderAsync(scene, camera);"
     },
     {
       "id": "bd98822b519ad6f6d811",
@@ -9032,20 +8852,11 @@
     {
       "id": "726c774a1a6f062f2b27",
       "file": "engine/webgpu-only.ts",
-      "line": 42,
+      "line": 63,
       "column": 25,
       "code": 2339,
       "message": "Property 'gpu' does not exist on type 'Navigator'.",
       "source": "const gpu = navigator.gpu;"
-    },
-    {
-      "id": "d561a49b2fb2d3103fd9",
-      "file": "engine/webgpu-only.ts",
-      "line": 51,
-      "column": 31,
-      "code": 2339,
-      "message": "Property 'THREE' does not exist on type 'Window & typeof globalThis'.",
-      "source": "const renderer = new window.THREE.WebGPURenderer({ ...parameters }) as WebGPUOnlyRenderer;"
     },
     {
       "id": "a2b5570b6f7b7b9cda3a",
@@ -9055,33 +8866,6 @@
       "code": 2339,
       "message": "Property 'THREE' does not exist on type 'Window & typeof globalThis'.",
       "source": "const THREE = window.THREE;"
-    },
-    {
-      "id": "05af25451ba8a3642428",
-      "file": "lod-demo.ts",
-      "line": 20,
-      "column": 10,
-      "code": 2339,
-      "message": "Property 'setSize' does not exist on type 'WebGPUOnlyRenderer'.",
-      "source": "renderer.setSize(innerWidth, innerHeight);"
-    },
-    {
-      "id": "8443d7df52ad6937f9bf",
-      "file": "lod-demo.ts",
-      "line": 21,
-      "column": 36,
-      "code": 2339,
-      "message": "Property 'domElement' does not exist on type 'WebGPUOnlyRenderer'.",
-      "source": "document.body.appendChild(renderer.domElement);"
-    },
-    {
-      "id": "56d39818a55a4f08dd7b",
-      "file": "lod-demo.ts",
-      "line": 29,
-      "column": 12,
-      "code": 2339,
-      "message": "Property 'setSize' does not exist on type 'WebGPUOnlyRenderer'.",
-      "source": "renderer.setSize(innerWidth, innerHeight);"
     },
     {
       "id": "a5528d96ab35b2bdd7c4",
@@ -9471,24 +9255,6 @@
       "source": "const AssetStore = window.AfterglowAssets?.AssetStore;"
     },
     {
-      "id": "b2a5465134c09e63b1ef",
-      "file": "rigged-vt-demo.ts",
-      "line": 41,
-      "column": 10,
-      "code": 2339,
-      "message": "Property 'setPixelRatio' does not exist on type 'WebGPUOnlyRenderer'.",
-      "source": "renderer.setPixelRatio(devicePixelRatio);"
-    },
-    {
-      "id": "3100229e268b05f7019b",
-      "file": "rigged-vt-demo.ts",
-      "line": 42,
-      "column": 10,
-      "code": 2339,
-      "message": "Property 'setSize' does not exist on type 'WebGPUOnlyRenderer'.",
-      "source": "renderer.setSize(innerWidth, innerHeight);"
-    },
-    {
       "id": "7694ebdbded1f89bcbd5",
       "file": "rigged-vt-demo.ts",
       "line": 43,
@@ -9505,24 +9271,6 @@
       "code": 2339,
       "message": "Property 'shadowMap' does not exist on type 'WebGPUOnlyRenderer'.",
       "source": "renderer.shadowMap.type = THREE.PCFShadowMap;"
-    },
-    {
-      "id": "336fcc4f3f29fd5e10d4",
-      "file": "rigged-vt-demo.ts",
-      "line": 45,
-      "column": 31,
-      "code": 2339,
-      "message": "Property 'domElement' does not exist on type 'WebGPUOnlyRenderer'.",
-      "source": "document.body.append(renderer.domElement);"
-    },
-    {
-      "id": "c6f8a214c7ab1ec2d66d",
-      "file": "rigged-vt-demo.ts",
-      "line": 46,
-      "column": 39,
-      "code": 2345,
-      "message": "Argument of type '{ isWebGPUBackend?: boolean; device?: unknown; }' is not assignable to parameter of type 'PipelineBackend'. Type '{ isWebGPUBackend?: boolean; device?: unknown; }' is missing the following properties from type 'PipelineBackend': createRenderPipeline, createComputePipeline",
-      "source": "const rendererSeal = new RendererSeal(renderer.backend);"
     },
     {
       "id": "8a8716387f1a5cf5eb7f",
@@ -9606,24 +9354,6 @@
       "source": ": renderer.backend.device.features.has('texture-compression-astc') ? 1 : VT.FORMAT_RGBA;"
     },
     {
-      "id": "1e7460c78eba44fe1ffe",
-      "file": "rigged-vt-demo.ts",
-      "line": 133,
-      "column": 24,
-      "code": 2339,
-      "message": "Property 'domElement' does not exist on type 'WebGPUOnlyRenderer'.",
-      "source": "pass.resize(renderer.domElement.width, renderer.domElement.height);"
-    },
-    {
-      "id": "a2db028081f81bb162d2",
-      "file": "rigged-vt-demo.ts",
-      "line": 133,
-      "column": 51,
-      "code": 2339,
-      "message": "Property 'domElement' does not exist on type 'WebGPUOnlyRenderer'.",
-      "source": "pass.resize(renderer.domElement.width, renderer.domElement.height);"
-    },
-    {
       "id": "94f2cbc699562cf6d39e",
       "file": "rigged-vt-demo.ts",
       "line": 253,
@@ -9687,33 +9417,6 @@
       "source": "const secondClip = secondGltf.animations.find(clip => clip.name === 'Idle') ?? secondGltf.animations[0];"
     },
     {
-      "id": "36d2eb3214352448e732",
-      "file": "rigged-vt-demo.ts",
-      "line": 339,
-      "column": 28,
-      "code": 2345,
-      "message": "Argument of type 'WebGPUOnlyRenderer' is not assignable to parameter of type '{ compileAsync(scene: THREE.Scene, camera: THREE.Camera): Promise<unknown>; }'. Property 'compileAsync' is missing in type 'WebGPUOnlyRenderer' but required in type '{ compileAsync(scene: THREE.Scene, camera: THREE.Camera): Promise<unknown>; }'.",
-      "source": "await warmRendererVariants(renderer, [{ scene, camera }]);"
-    },
-    {
-      "id": "11fc293bb7474d469fd2",
-      "file": "rigged-vt-demo.ts",
-      "line": 341,
-      "column": 28,
-      "code": 2345,
-      "message": "Argument of type 'WebGPUOnlyRenderer' is not assignable to parameter of type '{ compileAsync(scene: THREE.Scene, camera: THREE.Camera): Promise<unknown>; }'. Property 'compileAsync' is missing in type 'WebGPUOnlyRenderer' but required in type '{ compileAsync(scene: THREE.Scene, camera: THREE.Camera): Promise<unknown>; }'.",
-      "source": "await warmRendererVariants(renderer, [{ scene, camera }]);"
-    },
-    {
-      "id": "481ed4e4a3aa4cc1d9cf",
-      "file": "rigged-vt-demo.ts",
-      "line": 344,
-      "column": 28,
-      "code": 2345,
-      "message": "Argument of type 'WebGPUOnlyRenderer' is not assignable to parameter of type '{ compileAsync(scene: THREE.Scene, camera: THREE.Camera): Promise<unknown>; }'. Property 'compileAsync' is missing in type 'WebGPUOnlyRenderer' but required in type '{ compileAsync(scene: THREE.Scene, camera: THREE.Camera): Promise<unknown>; }'.",
-      "source": "await warmRendererVariants(renderer, [{ scene, camera }]);"
-    },
-    {
       "id": "2b1aff2669ef0929a3b5",
       "file": "rigged-vt-demo.ts",
       "line": 345,
@@ -9721,15 +9424,6 @@
       "code": 2339,
       "message": "Property 'render' does not exist on type 'WebGPUOnlyRenderer'.",
       "source": "renderer.render(scene, camera);"
-    },
-    {
-      "id": "f05b4665616cc101cbeb",
-      "file": "rigged-vt-demo.ts",
-      "line": 347,
-      "column": 28,
-      "code": 2345,
-      "message": "Argument of type 'WebGPUOnlyRenderer' is not assignable to parameter of type '{ compileAsync(scene: THREE.Scene, camera: THREE.Camera): Promise<unknown>; }'. Property 'compileAsync' is missing in type 'WebGPUOnlyRenderer' but required in type '{ compileAsync(scene: THREE.Scene, camera: THREE.Camera): Promise<unknown>; }'.",
-      "source": "await warmRendererVariants(renderer, [{ scene, camera }]);"
     },
     {
       "id": "a09fcd38fd204483f923",
@@ -9777,15 +9471,6 @@
       "source": "renderer.setRenderTarget(feedbackPass.target);"
     },
     {
-      "id": "9e9974312247053c67ba",
-      "file": "rigged-vt-demo.ts",
-      "line": 358,
-      "column": 28,
-      "code": 2345,
-      "message": "Argument of type 'WebGPUOnlyRenderer' is not assignable to parameter of type '{ compileAsync(scene: THREE.Scene, camera: THREE.Camera): Promise<unknown>; }'. Property 'compileAsync' is missing in type 'WebGPUOnlyRenderer' but required in type '{ compileAsync(scene: THREE.Scene, camera: THREE.Camera): Promise<unknown>; }'.",
-      "source": "await warmRendererVariants(renderer, [{ scene, camera }]);"
-    },
-    {
       "id": "57d93d09475ef3461df1",
       "file": "rigged-vt-demo.ts",
       "line": 359,
@@ -9802,15 +9487,6 @@
       "code": 2339,
       "message": "Property 'setRenderTarget' does not exist on type 'WebGPUOnlyRenderer'.",
       "source": "renderer.setRenderTarget(feedbackPasses[index].target);"
-    },
-    {
-      "id": "9e5bf06efb076db72437",
-      "file": "rigged-vt-demo.ts",
-      "line": 365,
-      "column": 30,
-      "code": 2345,
-      "message": "Argument of type 'WebGPUOnlyRenderer' is not assignable to parameter of type '{ compileAsync(scene: THREE.Scene, camera: THREE.Camera): Promise<unknown>; }'. Property 'compileAsync' is missing in type 'WebGPUOnlyRenderer' but required in type '{ compileAsync(scene: THREE.Scene, camera: THREE.Camera): Promise<unknown>; }'.",
-      "source": "await warmRendererVariants(renderer, [{ scene, camera }]);"
     },
     {
       "id": "805954223fb88c81cfd1",
@@ -9919,33 +9595,6 @@
       "code": 2532,
       "message": "Object is possibly 'undefined'.",
       "source": "waiters[index].resolve();"
-    },
-    {
-      "id": "79896c5f76994fca9fe7",
-      "file": "rigged-vt-demo.ts",
-      "line": 472,
-      "column": 12,
-      "code": 2339,
-      "message": "Property 'setSize' does not exist on type 'WebGPUOnlyRenderer'.",
-      "source": "renderer.setSize(innerWidth, innerHeight);"
-    },
-    {
-      "id": "9f8a1d67c348a52d49a4",
-      "file": "rigged-vt-demo.ts",
-      "line": 473,
-      "column": 59,
-      "code": 2339,
-      "message": "Property 'domElement' does not exist on type 'WebGPUOnlyRenderer'.",
-      "source": "for (const pass of feedbackPasses) pass.resize(renderer.domElement.width, renderer.domElement.height);"
-    },
-    {
-      "id": "6223bf765871b9477361",
-      "file": "rigged-vt-demo.ts",
-      "line": 473,
-      "column": 86,
-      "code": 2339,
-      "message": "Property 'domElement' does not exist on type 'WebGPUOnlyRenderer'.",
-      "source": "for (const pass of feedbackPasses) pass.resize(renderer.domElement.width, renderer.domElement.height);"
     },
     {
       "id": "04f805ee022dba36fc69",
@@ -10938,24 +10587,6 @@
       "source": "const THREE=window.THREE,VT=window.AfterglowVT,{wgslFn,Fn,texture,sampler,uv,uniform,float,uint}=THREE,VIRTUAL_SIZE=262144,PAGE_GRID=VIRTUAL_SIZE/VT.PAGE_SIZE;"
     },
     {
-      "id": "4c380d251f77fdbcafe2",
-      "file": "vt-demo.ts",
-      "line": 3,
-      "column": 127,
-      "code": 2339,
-      "message": "Property 'setSize' does not exist on type 'WebGPUOnlyRenderer'.",
-      "source": "const renderer=await createWebGPUOnlyRenderer({antialias:true}).catch(error=>{showWebGPUFailure(error);throw error});renderer.setSize(innerWidth,innerHeight);document.body.append(renderer.domElement);const errors=[];renderer.backend.device.addEventListener('uncapturederror',e=>errors.push(String(e.error?.message??e.error)));addEventListener('error',e=>errors.push(String(e.error?.stack??e.message)));addEventListener('unhandledrejection',e=>errors.push(String(e.reason?.stack??e.reason)));"
-    },
-    {
-      "id": "f29a036040692563b2fe",
-      "file": "vt-demo.ts",
-      "line": 3,
-      "column": 189,
-      "code": 2339,
-      "message": "Property 'domElement' does not exist on type 'WebGPUOnlyRenderer'.",
-      "source": "const renderer=await createWebGPUOnlyRenderer({antialias:true}).catch(error=>{showWebGPUFailure(error);throw error});renderer.setSize(innerWidth,innerHeight);document.body.append(renderer.domElement);const errors=[];renderer.backend.device.addEventListener('uncapturederror',e=>errors.push(String(e.error?.message??e.error)));addEventListener('error',e=>errors.push(String(e.error?.stack??e.message)));addEventListener('unhandledrejection',e=>errors.push(String(e.reason?.stack??e.reason)));"
-    },
-    {
       "id": "4d49280da15a753ca23f",
       "file": "vt-demo.ts",
       "line": 3,
@@ -11046,15 +10677,6 @@
       "source": "const scene=new THREE.Scene();scene.background=new THREE.Color(0x0a0c10);scene.add(new THREE.AmbientLight(0x8090a0,1.5));const camera=new THREE.OrthographicCamera(-7,7,5,-5,.1,30);camera.position.z=14;const quad=new THREE.Mesh(new THREE.PlaneGeometry(12,10),material);scene.add(quad);let camX=.5,camY=.5,zoom=4,frame=0,last=performance.now(),programmatic=false;const keys=new Set(),waiters=[];"
     },
     {
-      "id": "abcd8e60498abf99a4cd",
-      "file": "vt-demo.ts",
-      "line": 7,
-      "column": 54,
-      "code": 2339,
-      "message": "Property 'renderAsync' does not exist on type 'WebGPUOnlyRenderer'.",
-      "source": "await new Promise(r=>setTimeout(r,0));await renderer.renderAsync(scene,camera);store.attachRenderer(renderer);"
-    },
-    {
       "id": "ab06224499a477eaf316",
       "file": "vt-demo.ts",
       "line": 8,
@@ -11070,15 +10692,6 @@
       "column": 33,
       "code": 7006,
       "message": "Parameter 'now' implicitly has an 'any' type.",
-      "source": "renderer.setAnimationLoop(async now=>{const dt=Math.min(.05,(now-last)/1000);last=now;if(!programmatic){const speed=1.4/zoom*dt;camX=Math.max(0,Math.min(1,camX+((keys.has('d')?1:0)-(keys.has('a')?1:0))*speed));camY=Math.max(0,Math.min(1,camY+((keys.has('w')?1:0)-(keys.has('s')?1:0))*speed))}const result=store.processFeedback(feedback());store.poll();quad.geometry.attributes.uv.array.set([camX-.5/zoom,camY+.5/zoom,camX+.5/zoom,camY+.5/zoom,camX-.5/zoom,camY-.5/zoom,camX+.5/zoom,camY-.5/zoom]);quad.geometry.attributes.uv.needsUpdate=true;await renderer.renderAsync(scene,camera);frame++;for(let i=waiters.length-1;i>=0;i--)if(frame>=waiters[i].target){waiters[i].resolve();waiters.splice(i,1)}const d=store.getStats();document.getElementById('info').innerHTML=`<b>afterglow — Engine Virtual Texture</b><br>262,144² terrain · 256 GiB logical RGBA<br>Production VirtualTextureStore · ${store.atlasWidth}² shared atlas<br>UV ${camX.toFixed(3)}, ${camY.toFixed(3)} · zoom ${zoom.toFixed(1)}×<br>Resident ${d.atlasSlotsUsed}/${d.atlasSlotsTotal} · pending ${d.pendingPages}<br>Requests ${result.totalRequests} · errors ${errors.length}<br><br>WASD pan · wheel zoom · O overview · P pixel`});"
-    },
-    {
-      "id": "b8aaa3e0dd5848922df6",
-      "file": "vt-demo.ts",
-      "line": 8,
-      "column": 558,
-      "code": 2339,
-      "message": "Property 'renderAsync' does not exist on type 'WebGPUOnlyRenderer'.",
       "source": "renderer.setAnimationLoop(async now=>{const dt=Math.min(.05,(now-last)/1000);last=now;if(!programmatic){const speed=1.4/zoom*dt;camX=Math.max(0,Math.min(1,camX+((keys.has('d')?1:0)-(keys.has('a')?1:0))*speed));camY=Math.max(0,Math.min(1,camY+((keys.has('w')?1:0)-(keys.has('s')?1:0))*speed))}const result=store.processFeedback(feedback());store.poll();quad.geometry.attributes.uv.array.set([camX-.5/zoom,camY+.5/zoom,camX+.5/zoom,camY+.5/zoom,camX-.5/zoom,camY-.5/zoom,camX+.5/zoom,camY-.5/zoom]);quad.geometry.attributes.uv.needsUpdate=true;await renderer.renderAsync(scene,camera);frame++;for(let i=waiters.length-1;i>=0;i--)if(frame>=waiters[i].target){waiters[i].resolve();waiters.splice(i,1)}const d=store.getStats();document.getElementById('info').innerHTML=`<b>afterglow — Engine Virtual Texture</b><br>262,144² terrain · 256 GiB logical RGBA<br>Production VirtualTextureStore · ${store.atlasWidth}² shared atlas<br>UV ${camX.toFixed(3)}, ${camY.toFixed(3)} · zoom ${zoom.toFixed(1)}×<br>Resident ${d.atlasSlotsUsed}/${d.atlasSlotsTotal} · pending ${d.pendingPages}<br>Requests ${result.totalRequests} · errors ${errors.length}<br><br>WASD pan · wheel zoom · O overview · P pixel`});"
     },
     {
@@ -11160,15 +10773,6 @@
       "column": 334,
       "code": 2339,
       "message": "Property 'deltaY' does not exist on type 'Event'.",
-      "source": "addEventListener('keydown',e=>{if(programmatic)return;keys.add(e.key.toLowerCase());if(e.key.toLowerCase()==='o')zoom=.5;if(e.key.toLowerCase()==='p')zoom=VIRTUAL_SIZE});addEventListener('keyup',e=>keys.delete(e.key.toLowerCase()));addEventListener('wheel',e=>{if(!programmatic)zoom=Math.max(.5,Math.min(VIRTUAL_SIZE,zoom*Math.exp(e.deltaY*.001)))});addEventListener('resize',()=>renderer.setSize(innerWidth,innerHeight));"
-    },
-    {
-      "id": "7647d01dc27bd2504ff6",
-      "file": "vt-demo.ts",
-      "line": 9,
-      "column": 390,
-      "code": 2339,
-      "message": "Property 'setSize' does not exist on type 'WebGPUOnlyRenderer'.",
       "source": "addEventListener('keydown',e=>{if(programmatic)return;keys.add(e.key.toLowerCase());if(e.key.toLowerCase()==='o')zoom=.5;if(e.key.toLowerCase()==='p')zoom=VIRTUAL_SIZE});addEventListener('keyup',e=>keys.delete(e.key.toLowerCase()));addEventListener('wheel',e=>{if(!programmatic)zoom=Math.max(.5,Math.min(VIRTUAL_SIZE,zoom*Math.exp(e.deltaY*.001)))});addEventListener('resize',()=>renderer.setSize(innerWidth,innerHeight));"
     },
     {

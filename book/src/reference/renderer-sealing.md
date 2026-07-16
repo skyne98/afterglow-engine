@@ -6,6 +6,12 @@ can detect any render or compute pipeline created afterward. The VT dungeon
 warms both the main color context and RG32Uint feedback context and records GPU
 timestamps outside the frame hot path.
 
+`RendererHost` is the canonical renderer owner used as an `EngineRuntime`
+render pass. It creates a fail-closed WebGPU renderer from the typed module
+graph, owns canvas/resize/GPU-error listener lifetime, applies the configured
+pixel-ratio ceiling, compiles during warm-up, seals with the runtime, and rolls
+back partial initialization. Disposal is idempotent.
+
 Render descriptors declare fixed capacity:
 
 - instanced descriptors use `maxShards`;

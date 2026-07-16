@@ -1,3 +1,5 @@
+import { WebGPURenderer } from 'three/webgpu';
+
 /**
  * WebGPU-only renderer bootstrap.
  *
@@ -7,11 +9,22 @@
  */
 
 export type WebGPUOnlyRenderer = {
-  backend: { isWebGPUBackend?: boolean; device?: unknown };
+  backend: {
+    isWebGPUBackend?: boolean;
+    device?: unknown;
+    createRenderPipeline: (renderObject: unknown, promises: Promise<unknown>[]) => void;
+    createComputePipeline: (computePipeline: unknown, bindings: unknown) => void;
+  };
   afterglowAdapterInfo?: { vendor?: string; architecture?: string; device?: string; description?: string };
   _getFallback: unknown;
   onDeviceLost: (info: { api?: string; message?: string; reason?: string | null }) => void;
-  dispose?: () => void;
+  init: () => Promise<void>;
+  compileAsync: (scene: unknown, camera: unknown) => Promise<unknown>;
+  renderAsync: (scene: unknown, camera: unknown) => Promise<unknown>;
+  setPixelRatio: (ratio: number) => void;
+  setSize: (width: number, height: number) => void;
+  domElement: HTMLCanvasElement;
+  dispose: () => void;
 };
 
 export function disableWebGLFallback(renderer: WebGPUOnlyRenderer): void {
@@ -37,8 +50,16 @@ export function showWebGPUFailure(error: unknown): void {
   console.error('Afterglow WebGPU startup failed:', error);
 }
 
+export type WebGPUOnlyRendererFactory = (parameters: Record<string, unknown>) => WebGPUOnlyRenderer;
+
+const defaultRendererFactory: WebGPUOnlyRendererFactory = parameters =>
+  new WebGPURenderer(parameters) as unknown as WebGPUOnlyRenderer;
+
 /** Create a renderer that can never initialize or continue under WebGL. */
-export async function createWebGPUOnlyRenderer(parameters: Record<string, unknown> = {}): Promise<WebGPUOnlyRenderer> {
+export async function createWebGPUOnlyRenderer(
+  parameters: Record<string, unknown> = {},
+  factory: WebGPUOnlyRendererFactory = defaultRendererFactory,
+): Promise<WebGPUOnlyRenderer> {
   const gpu = navigator.gpu;
   if (!gpu) throw new Error('navigator.gpu is unavailable. WebGL fallback is disabled.');
 
@@ -48,15 +69,15 @@ export async function createWebGPUOnlyRenderer(parameters: Record<string, unknow
   // Let Three request the device so it retains every adapter feature it normally
   // enables (for example BC/ASTC texture compression). init() below is still
   // fail-closed because its fallback callback has been cleared.
-  const renderer = new window.THREE.WebGPURenderer({ ...parameters }) as WebGPUOnlyRenderer;
+  const renderer = factory(parameters);
   renderer.afterglowAdapterInfo = adapter.info;
   disableWebGLFallback(renderer);
 
   try {
-    await (renderer as unknown as { init: () => Promise<void> }).init();
+    await renderer.init();
     assertWebGPUBackend(renderer);
   } catch (error) {
-    renderer.dispose?.();
+    renderer.dispose();
     throw error;
   }
 

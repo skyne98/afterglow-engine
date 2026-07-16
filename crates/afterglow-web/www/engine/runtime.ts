@@ -39,6 +39,7 @@ export interface RuntimeRenderAdapter extends FrameRenderAdapter {
 
 export interface EngineRenderPass {
   warm?(): Promise<void>;
+  seal?(): void;
   render(frame: Readonly<RenderFrame>): void;
   dispose(): void;
 }
@@ -196,6 +197,10 @@ export class EngineRuntime {
     this.adapter.sealGameplay();
     this.memory.sealGameplay();
     this.manifest.seal(this.adapter.world);
+    for (let index = 0; index < this.passCount; index++) {
+      const pass = this.passes[index];
+      if (pass !== null && pass !== undefined) pass.seal?.();
+    }
     this.mutableState = RuntimeState.GameplaySealed;
   }
 

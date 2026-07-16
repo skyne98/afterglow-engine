@@ -13,6 +13,18 @@ or snapshot allocation. `assertNoViolations()` is a deterministic development
 gate. The VT dungeon warms its main and RG32Uint feedback contexts; its measured
 steady-state count is six render pipelines with zero post-seal creation.
 
+`renderer-host.ts` is the canonical owner of a WebGPU-only renderer. It creates
+the renderer through `createWebGPUOnlyRenderer`, validates the methods required
+by the host, appends/removes the canvas, applies a bounded pixel ratio, owns the
+resize and uncaptured-GPU-error listeners, compiles its scene/camera during
+runtime warm-up, implements `EngineRenderPass`, and seals its `RendererSeal`
+when `EngineRuntime` seals registered passes. Initialization failure disposes
+the partially created renderer; `dispose()` is idempotent.
+
+`webgpu-only.ts` imports Three's WebGPU renderer from the module graph instead
+of reading `window.THREE`. A renderer factory can be injected for tests, while
+the production factory remains fail-closed against WebGL fallback.
+
 Three.js is initialized with `trackTimestamp: true` where profiling is enabled.
 `resolveTimestampsAsync('render')` runs once per diagnostic second, not in the
 frame hot path. Context IDs distinguish main and feedback GPU durations.

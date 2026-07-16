@@ -6,11 +6,22 @@ import {
   type WebGPUOnlyRenderer,
 } from './webgpu-only.ts';
 
-function renderer(backend: WebGPUOnlyRenderer['backend']): WebGPUOnlyRenderer {
+function renderer(partialBackend: Partial<WebGPUOnlyRenderer['backend']>): WebGPUOnlyRenderer {
   return {
-    backend,
+    backend: {
+      createRenderPipeline() {},
+      createComputePipeline() {},
+      ...partialBackend,
+    },
     _getFallback: () => ({ isWebGLBackend: true }),
     onDeviceLost: () => {},
+    async init() {},
+    async compileAsync() {},
+    async renderAsync() {},
+    setPixelRatio() {},
+    setSize() {},
+    domElement: {} as HTMLCanvasElement,
+    dispose() {},
   };
 }
 
@@ -29,7 +40,6 @@ describe('WebGPU-only renderer guard', () => {
 
   test('fails initialization instead of invoking Three WebGL fallback', async () => {
     const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
-    const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
     let fallbackCalled = false;
     const candidate = renderer({ isWebGPUBackend: true, device: {} }) as WebGPUOnlyRenderer & { init: () => Promise<void> };
     candidate.init = async () => {
@@ -42,18 +52,12 @@ describe('WebGPU-only renderer guard', () => {
         configurable: true,
         value: { gpu: { requestAdapter: async () => ({ info: { vendor: 'test-vendor', architecture: 'test-arch' } }) } },
       });
-      Object.defineProperty(globalThis, 'window', {
-        configurable: true,
-        value: { THREE: { WebGPURenderer: function () { return candidate; } } },
-      });
-      await expect(createWebGPUOnlyRenderer()).rejects.toThrow('WebGPU device initialization failed');
+      await expect(createWebGPUOnlyRenderer({}, () => candidate)).rejects.toThrow('WebGPU device initialization failed');
       expect(candidate.afterglowAdapterInfo).toMatchObject({ vendor: 'test-vendor', architecture: 'test-arch' });
       expect(fallbackCalled).toBeFalse();
     } finally {
       if (originalNavigator) Object.defineProperty(globalThis, 'navigator', originalNavigator);
       else delete (globalThis as { navigator?: unknown }).navigator;
-      if (originalWindow) Object.defineProperty(globalThis, 'window', originalWindow);
-      else delete (globalThis as { window?: unknown }).window;
     }
   });
 });
