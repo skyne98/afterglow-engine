@@ -16,10 +16,10 @@ hard transport bounds are listed below.
 | VT scheduler | physical atlas slot count | Typed counters report overflow; visible generations persist |
 | VT in-flight pages | 64 and 8 MiB | Admission rejected and retried from scheduler |
 | VT ready uploads | 64 | Fixed completion ownership |
-| VT transcode waiting ring | 64 | Promise boundary rejects capacity |
-| VT upload commit | 4 pages, 0.35 ms/poll | Ready suffix deferred |
-| VT scheduling | 8 admissions, 0.25 ms/poll | Persistent cursor resumes next frame |
-| VT stale horizon | 16 feedback epochs | Read/transcode canceled or stale output discarded |
+| VT transcode workers / waiting ring | 2–4 independent SPSC workers / 64 shared jobs | Promise boundary rejects capacity; each worker remains one-in-flight |
+| VT upload commit | adaptive 1–4 pages and 0.10–0.35 ms/poll; starts 2 / 0.20 ms | Ready suffix deferred; overload resets promoted settings |
+| VT scheduling | 8 admissions, 0.25 ms/poll, 22 priority lanes | Highest nonempty exact-rung/center lane resumes next frame |
+| VT stale horizon | 2 feedback epochs | Read/transcode canceled or stale output discarded |
 | Feedback readback | 1 outstanding | New submit returns `false` until consume |
 | Structural renderer slice | 256/frame | Fixed ring suffix retained |
 | Dirty root slice | 4,096/frame | Dirty flags remain on ring suffix |

@@ -343,63 +343,105 @@ interface TranscodeJob {
   data: Uint8Array;
   format: number;
   signal?: AbortSignal;
+  queuedAt: number;
   resolve(value: Uint8Array): void;
   reject(error: unknown): void;
 }
 
-/** Fixed-capacity serial boundary for one-in-flight texture RPC transports. */
-export class BoundedSerialTranscoder {
+/** Fixed-capacity dispatcher over independent one-in-flight SPSC workers. */
+export class BoundedTranscoderPool {
   private readonly jobs: (TranscodeJob | null)[];
+  private readonly workerBusy: Uint8Array;
   private head = 0;
   private tail = 0;
   private count = 0;
-  private running = false;
+  private active = 0;
+  private completed = 0;
+  private totalQueueMs = 0;
+  private maxQueueMs = 0;
+  private totalTranscodeMs = 0;
+  private maxTranscodeMs = 0;
+  private readonly stats = {
+    workerCount: 0, active: 0, queued: 0, completed: 0,
+    averageQueueMs: 0, maxQueueMs: 0,
+    averageTranscodeMs: 0, maxTranscodeMs: 0,
+  };
 
   constructor(
-    private readonly worker: { transcode(data: Uint8Array, targetFormat: number): Promise<Uint8Array> },
+    private readonly workers: readonly {
+      transcode(data: Uint8Array, targetFormat: number): Promise<Uint8Array>;
+    }[],
     capacity: number,
   ) {
+    if (workers.length === 0 || !Number.isInteger(capacity) || capacity < 1)
+      throw new RangeError('VT transcoder pool requires workers and positive capacity');
     this.jobs = new Array(capacity).fill(null);
+    this.workerBusy = new Uint8Array(workers.length);
   }
 
   submit(data: Uint8Array, format: number, signal?: AbortSignal): Promise<Uint8Array> {
     if (this.count === this.jobs.length) return Promise.reject(new Error('VT transcode queue capacity exceeded'));
     return new Promise((resolve, reject) => {
-      this.jobs[this.tail] = { data, format, signal, resolve, reject };
+      this.jobs[this.tail] = { data, format, signal, queuedAt: performance.now(), resolve, reject };
       this.tail = (this.tail + 1) % this.jobs.length;
       this.count++;
-      void this.pump();
+      this.pump();
     });
   }
 
-  private async pump(): Promise<void> {
-    if (this.running) return;
-    this.running = true;
-    try {
-      while (this.count !== 0) {
-        const job = this.jobs[this.head]!;
-        this.jobs[this.head] = null;
-        this.head = (this.head + 1) % this.jobs.length;
-        this.count--;
-        if (job.signal?.aborted) {
-          job.reject(new Error('VT transcode canceled before dispatch'));
-          continue;
-        }
-        try {
-          const result = await this.worker.transcode(job.data, job.format);
-          if (job.signal?.aborted) job.reject(new Error('VT transcode canceled after dispatch'));
-          // Rpc resolves a view into its reusable response scratch. Own the
-          // bytes before dispatching the next call, which overwrites scratch.
-          else job.resolve(result.slice());
-        } catch (error) {
-          job.reject(error);
-        }
+  private pump(): void {
+    for (let workerIndex = 0; workerIndex < this.workers.length && this.count !== 0; workerIndex++) {
+      if (this.workerBusy[workerIndex] !== 0) continue;
+      const job = this.jobs[this.head]!;
+      this.jobs[this.head] = null;
+      this.head = (this.head + 1) % this.jobs.length;
+      this.count--;
+      if (job.signal?.aborted) {
+        job.reject(new Error('VT transcode canceled before dispatch'));
+        workerIndex--;
+        continue;
       }
-    } finally {
-      this.running = false;
-      // A submit can race the final loop condition through a resolved promise.
-      if (this.count !== 0) void this.pump();
+      const queueMs = performance.now() - job.queuedAt;
+      this.totalQueueMs += queueMs;
+      this.maxQueueMs = Math.max(this.maxQueueMs, queueMs);
+      this.workerBusy[workerIndex] = 1;
+      this.active++;
+      void this.run(workerIndex, job);
     }
+  }
+
+  private async run(workerIndex: number, job: TranscodeJob): Promise<void> {
+    const startedAt = performance.now();
+    try {
+      const result = await this.workers[workerIndex].transcode(job.data, job.format);
+      if (job.signal?.aborted) job.reject(new Error('VT transcode canceled after dispatch'));
+      // Each worker owns one reusable response scratch. Copy before that same
+      // worker receives its next call; other workers may complete independently.
+      else job.resolve(result.slice());
+    } catch (error) {
+      job.reject(error);
+    } finally {
+      const elapsed = performance.now() - startedAt;
+      this.completed++;
+      this.totalTranscodeMs += elapsed;
+      this.maxTranscodeMs = Math.max(this.maxTranscodeMs, elapsed);
+      this.workerBusy[workerIndex] = 0;
+      this.active--;
+      this.pump();
+    }
+  }
+
+  getStats() {
+    const stats = this.stats;
+    stats.workerCount = this.workers.length;
+    stats.active = this.active;
+    stats.queued = this.count;
+    stats.completed = this.completed;
+    stats.averageQueueMs = this.completed === 0 ? 0 : this.totalQueueMs / this.completed;
+    stats.maxQueueMs = this.maxQueueMs;
+    stats.averageTranscodeMs = this.completed === 0 ? 0 : this.totalTranscodeMs / this.completed;
+    stats.maxTranscodeMs = this.maxTranscodeMs;
+    return stats;
   }
 }
 
@@ -413,12 +455,72 @@ export class BoundedSerialTranscoder {
  * @param format The target GPU format (FORMAT_BC7, FORMAT_ASTC, FORMAT_RGBA)
  * @returns A function (path, req) → Promise<Uint8Array> that returns transcoded page data
  */
+export interface FetchRangeLoader {
+  load(path: string): Promise<Uint8Array>;
+  size(path: string): Promise<number>;
+  read(path: string, offset: number, len: number): Promise<Uint8Array>;
+}
+
+/** Browser/CEF serving-layer loader. Large assets use exact HTTP-style ranges. */
+export function createFetchRangeLoader(baseUrl = ''): FetchRangeLoader {
+  const url = (path: string) => baseUrl + path;
+  return {
+    async load(path: string): Promise<Uint8Array> {
+      const response = await fetch(url(path));
+      if (!response.ok) throw new Error(`asset fetch ${response.status}: ${path}`);
+      return new Uint8Array(await response.arrayBuffer());
+    },
+    async size(path: string): Promise<number> {
+      const response = await fetch(url(path), { method: 'HEAD' });
+      if (!response.ok) throw new Error(`asset HEAD ${response.status}: ${path}`);
+      const length = Number(response.headers.get('content-length'));
+      if (!Number.isSafeInteger(length) || length < 0)
+        throw new Error(`asset HEAD has invalid content-length: ${path}`);
+      return length;
+    },
+    async read(path: string, offset: number, len: number): Promise<Uint8Array> {
+      if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(len) || len < 0)
+        throw new RangeError('asset range must use non-negative safe integers');
+      if (len === 0) return new Uint8Array(0);
+      const response = await fetch(url(path), {
+        headers: { Range: `bytes=${offset}-${offset + len - 1}` },
+      });
+      if (response.status !== 206)
+        throw new Error(`asset range fetch expected 206, got ${response.status}: ${path}`);
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      if (bytes.byteLength !== len)
+        throw new Error(`asset range returned ${bytes.byteLength} bytes; expected ${len}: ${path}`);
+      return bytes;
+    },
+  };
+}
+
+export interface PageProviderStats {
+  reads: number;
+  averageReadMs: number;
+  maxReadMs: number;
+  workerCount: number;
+  activeTranscodes: number;
+  queuedTranscodes: number;
+  completedTranscodes: number;
+  averageTranscodeQueueMs: number;
+  maxTranscodeQueueMs: number;
+  averageTranscodeMs: number;
+  maxTranscodeMs: number;
+}
+
+export type VirtualTexturePageProvider = ((
+  path: string,
+  req: { mip: number; x: number; y: number; tail?: boolean },
+  signal?: AbortSignal,
+) => Promise<Uint8Array>) & { getStats(): Readonly<PageProviderStats> };
+
 export function createPageDataProvider(
   loader: { read(path: string, offset: number, len: number): Promise<Uint8Array>; load(path: string): Promise<Uint8Array>; size(path: string): Promise<number> },
   header: BigHeader,
-  textureWorker: { transcode(data: Uint8Array, targetFormat: number): Promise<Uint8Array> },
+  textureWorkers: readonly { transcode(data: Uint8Array, targetFormat: number): Promise<Uint8Array> }[],
   format: number,
-): (path: string, req: { mip: number; x: number; y: number; tail?: boolean }, signal?: AbortSignal) => Promise<Uint8Array> {
+): VirtualTexturePageProvider {
   interface RuntimeMipDirectory {
     pagesX: number;
     pagesY: number;
@@ -457,9 +559,22 @@ export function createPageDataProvider(
     });
   }
 
-  const transcoder = new BoundedSerialTranscoder(textureWorker, 64);
+  const transcoder = new BoundedTranscoderPool(textureWorkers, 64);
+  let reads = 0;
+  let totalReadMs = 0;
+  let maxReadMs = 0;
+  const stats: PageProviderStats = {
+    reads: 0, averageReadMs: 0, maxReadMs: 0,
+    workerCount: textureWorkers.length, activeTranscodes: 0, queuedTranscodes: 0,
+    completedTranscodes: 0, averageTranscodeQueueMs: 0, maxTranscodeQueueMs: 0,
+    averageTranscodeMs: 0, maxTranscodeMs: 0,
+  };
 
-  return async (path: string, req: { mip: number; x: number; y: number; tail?: boolean }, signal?: AbortSignal) => {
+  const provider = (async (
+    path: string,
+    req: { mip: number; x: number; y: number; tail?: boolean },
+    signal?: AbortSignal,
+  ) => {
     if (signal?.aborted) throw new Error('VT page load canceled before read');
     const directory = directories.get(path);
     let offset = 0;
@@ -478,7 +593,12 @@ export function createPageDataProvider(
     if (!directory || size === 0)
       throw new Error(`VT page not found: ${path} mip=${req.mip} (${req.x},${req.y})`);
 
+    const readStartedAt = performance.now();
     const pageData = await loader.read(path + '.big', offset, size);
+    const readMs = performance.now() - readStartedAt;
+    reads++;
+    totalReadMs += readMs;
+    maxReadMs = Math.max(maxReadMs, readMs);
     if (signal?.aborted) throw new Error('VT page load canceled after read');
 
     if (directory.encoding === 'RawRgba8') {
@@ -506,5 +626,21 @@ export function createPageDataProvider(
     if (count < 1 || width !== 136 || height !== 136 || 16 + length > transcoded.byteLength)
       throw new Error(`invalid transcoded VT page header: count=${count}, size=${width}x${height}, bytes=${length}`);
     return transcoded.slice(16, 16 + length);
+  }) as VirtualTexturePageProvider;
+  provider.getStats = () => {
+    const transcode = transcoder.getStats();
+    stats.reads = reads;
+    stats.averageReadMs = reads === 0 ? 0 : totalReadMs / reads;
+    stats.maxReadMs = maxReadMs;
+    stats.workerCount = transcode.workerCount;
+    stats.activeTranscodes = transcode.active;
+    stats.queuedTranscodes = transcode.queued;
+    stats.completedTranscodes = transcode.completed;
+    stats.averageTranscodeQueueMs = transcode.averageQueueMs;
+    stats.maxTranscodeQueueMs = transcode.maxQueueMs;
+    stats.averageTranscodeMs = transcode.averageTranscodeMs;
+    stats.maxTranscodeMs = transcode.maxTranscodeMs;
+    return stats;
   };
+  return provider;
 }

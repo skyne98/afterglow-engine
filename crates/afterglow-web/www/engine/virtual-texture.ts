@@ -42,6 +42,7 @@ export const ATLAS_PAGES_Y = 15;
 export const ATLAS_WIDTH = ATLAS_PAGES_X * SLOT_SIZE;
 export const ATLAS_HEIGHT = ATLAS_PAGES_Y * SLOT_SIZE;
 const MAX_MIP = 10;              // supports up to 2^10 = 1024 pages per side
+const PRIORITY_LANE_COUNT = (MAX_MIP + 1) * 2; // exact quality rung × center/edge
 const FEEDBACK_SCALE = 0.125;    // feedback at 1/8 screen resolution
 
 // ============================================================================
@@ -63,6 +64,12 @@ export interface VirtualPageRequest extends PageRequest {
   textureId?: number;
   /** Asset path retained for providers and game-facing diagnostics. */
   path: string;
+  /** 0 is screen center and 255 is the farthest edge/corner. */
+  screenPriority?: number;
+  /** Number of feedback pixels covered by this page in the latest readback. */
+  coverage?: number;
+  /** Internal fixed-lane admission priority; 0 is highest. */
+  priorityTier?: number;
 }
 
 interface CachedPage extends VirtualPageRequest {
@@ -178,6 +185,7 @@ interface PendingPageRecord {
   page: CachedPage;
   lastSeen: number;
   startedAt: number;
+  priorityTier: number;
   controller: AbortController | null;
   canceled: boolean;
 }
@@ -189,6 +197,24 @@ interface ReadyPageUpload {
   req: PageRequest;
   data: Uint8Array;
 }
+
+interface PageDataProviderTelemetry {
+  reads: number;
+  averageReadMs: number;
+  maxReadMs: number;
+  workerCount: number;
+  activeTranscodes: number;
+  queuedTranscodes: number;
+  completedTranscodes: number;
+  averageTranscodeQueueMs: number;
+  maxTranscodeQueueMs: number;
+  averageTranscodeMs: number;
+  maxTranscodeMs: number;
+}
+
+type PageDataProvider = ((path: string, req: PageRequest, signal?: AbortSignal) => Promise<Uint8Array>) & {
+  getStats?(): Readonly<PageDataProviderTelemetry>;
+};
 
 export interface VirtualMaterialSet {
   albedo: VirtualTextureEntry;
@@ -233,6 +259,10 @@ class PageTable {
 
   isResident(req: PageRequest): boolean {
     return isResident(this.get(req));
+  }
+
+  isResidentAt(mip: number, x: number, y: number): boolean {
+    return isResident(this.entries[packedPageTableIndex(this.layout, mip, x, y)]);
   }
 
   get residentCount(): number { return this.count; }
@@ -502,6 +532,203 @@ class PageCache {
 }
 
 // ============================================================================
+// Central VT upload tuning
+// ============================================================================
+
+/** Bootstrap-only policy for bounded per-frame atlas/page-table commits. */
+export interface VirtualTextureTuningConfig {
+  minUploadsPerPoll: number;
+  baselineUploadsPerPoll: number;
+  maxUploadsPerPoll: number;
+  minUploadBudgetMs: number;
+  baselineUploadBudgetMs: number;
+  maxUploadBudgetMs: number;
+  uploadBudgetStepMs: number;
+  targetFrameMs: number;
+  overloadMultiplier: number;
+  overloadSamples: number;
+  sampleWindow: number;
+  stableWindowsBeforeProbe: number;
+  probeCooldownWindows: number;
+}
+
+export const DEFAULT_VIRTUAL_TEXTURE_TUNING: Readonly<VirtualTextureTuningConfig> = {
+  minUploadsPerPoll: 1,
+  baselineUploadsPerPoll: 2,
+  maxUploadsPerPoll: 4,
+  minUploadBudgetMs: 0.10,
+  baselineUploadBudgetMs: 0.20,
+  maxUploadBudgetMs: 0.35,
+  uploadBudgetStepMs: 0.05,
+  targetFrameMs: 1000 / 60,
+  overloadMultiplier: 1.25,
+  overloadSamples: 2,
+  sampleWindow: 15,
+  stableWindowsBeforeProbe: 1,
+  probeCooldownWindows: 60,
+};
+
+/**
+ * Central, allocation-free VT upload tuner. It discovers throughput only under
+ * real backlog: after several clean windows it probes one bounded step above
+ * the configured device caps. A repeated presentation miss rolls any promoted
+ * setting back immediately to the independently validated baseline and applies
+ * a cooldown, so powerful devices can climb while
+ * weaker devices do not continuously oscillate around a failing cap.
+ */
+export class VirtualTextureTuning {
+  readonly minUploadsPerPoll: number;
+  readonly baselineUploadsPerPoll: number;
+  readonly maxUploadsPerPoll: number;
+  readonly minUploadBudgetMs: number;
+  readonly baselineUploadBudgetMs: number;
+  readonly maxUploadBudgetMs: number;
+  readonly uploadBudgetStepMs: number;
+  readonly targetFrameMs: number;
+  readonly overloadFrameMs: number;
+  readonly overloadSamples: number;
+  readonly sampleWindow: number;
+  readonly stableWindowsBeforeProbe: number;
+  readonly probeCooldownWindows: number;
+  uploadsPerPoll: number;
+  uploadBudgetMs: number;
+  bestSafeUploadsPerPoll: number;
+  bestSafeUploadBudgetMs: number;
+  private samples = 0;
+  private overloaded = 0;
+  private stableWindows = 0;
+  private cooldownWindows = 0;
+  private probing = false;
+  downshifts = 0;
+  recoveries = 0;
+  probes = 0;
+  probeRejections = 0;
+
+  constructor(config: Readonly<VirtualTextureTuningConfig> = DEFAULT_VIRTUAL_TEXTURE_TUNING) {
+    const integers = [config.minUploadsPerPoll, config.baselineUploadsPerPoll,
+      config.maxUploadsPerPoll, config.overloadSamples, config.sampleWindow,
+      config.stableWindowsBeforeProbe, config.probeCooldownWindows];
+    if (integers.some(value => !Number.isInteger(value) || value < 1) ||
+        config.minUploadsPerPoll > config.baselineUploadsPerPoll ||
+        config.baselineUploadsPerPoll > config.maxUploadsPerPoll ||
+        !Number.isFinite(config.minUploadBudgetMs) || !Number.isFinite(config.baselineUploadBudgetMs) ||
+        !Number.isFinite(config.maxUploadBudgetMs) || config.minUploadBudgetMs <= 0 ||
+        config.minUploadBudgetMs > config.baselineUploadBudgetMs ||
+        config.baselineUploadBudgetMs > config.maxUploadBudgetMs ||
+        !Number.isFinite(config.uploadBudgetStepMs) || config.uploadBudgetStepMs <= 0 ||
+        !Number.isFinite(config.targetFrameMs) || config.targetFrameMs <= 0 ||
+        !Number.isFinite(config.overloadMultiplier) || config.overloadMultiplier <= 1)
+      throw new RangeError('invalid virtual-texture tuning configuration');
+    this.minUploadsPerPoll = config.minUploadsPerPoll;
+    this.baselineUploadsPerPoll = config.baselineUploadsPerPoll;
+    this.maxUploadsPerPoll = config.maxUploadsPerPoll;
+    this.minUploadBudgetMs = config.minUploadBudgetMs;
+    this.baselineUploadBudgetMs = config.baselineUploadBudgetMs;
+    this.maxUploadBudgetMs = config.maxUploadBudgetMs;
+    this.uploadBudgetStepMs = config.uploadBudgetStepMs;
+    this.targetFrameMs = config.targetFrameMs;
+    this.overloadFrameMs = config.targetFrameMs * config.overloadMultiplier;
+    this.overloadSamples = config.overloadSamples;
+    this.sampleWindow = config.sampleWindow;
+    this.stableWindowsBeforeProbe = config.stableWindowsBeforeProbe;
+    this.probeCooldownWindows = config.probeCooldownWindows;
+    this.uploadsPerPoll = config.baselineUploadsPerPoll;
+    this.uploadBudgetMs = config.baselineUploadBudgetMs;
+    this.bestSafeUploadsPerPoll = config.baselineUploadsPerPoll;
+    this.bestSafeUploadBudgetMs = config.baselineUploadBudgetMs;
+  }
+
+  private resetWindow(): void {
+    this.samples = 0;
+    this.overloaded = 0;
+  }
+
+  private lowerOneStep(): void {
+    if (this.uploadsPerPoll > this.minUploadsPerPoll) {
+      this.uploadsPerPoll--;
+    } else {
+      this.uploadBudgetMs = Math.max(this.minUploadBudgetMs, this.uploadBudgetMs - this.uploadBudgetStepMs);
+    }
+    this.bestSafeUploadsPerPoll = this.uploadsPerPoll;
+    this.bestSafeUploadBudgetMs = this.uploadBudgetMs;
+    this.downshifts++;
+  }
+
+  private probeOneStep(): boolean {
+    if (this.uploadsPerPoll < this.maxUploadsPerPoll) {
+      this.uploadsPerPoll++;
+    } else if (this.uploadBudgetMs < this.maxUploadBudgetMs) {
+      this.uploadBudgetMs = Math.min(this.maxUploadBudgetMs, this.uploadBudgetMs + this.uploadBudgetStepMs);
+    } else {
+      return false;
+    }
+    this.probing = true;
+    this.probes++;
+    return true;
+  }
+
+  // @hot-no-alloc-begin VirtualTextureTuning.recordFrameTime
+  recordFrameTime(frameMs: number, backlog: number): void {
+    if (!Number.isFinite(frameMs) || frameMs <= 0) {
+      this.stableWindows = 0;
+      this.resetWindow();
+      return;
+    }
+    // Preserve evidence across short empty gaps: gameplay streaming arrives in
+    // bursts, and resetting here prevented any burst from calibrating the cap.
+    if (backlog <= 0) return;
+    this.samples++;
+    if (frameMs > this.overloadFrameMs) this.overloaded++;
+    if (this.samples < this.sampleWindow) return;
+
+    if (this.overloaded >= this.overloadSamples) {
+      // The bootstrap baseline was independently validated. Any promoted cap
+      // that starts missing presentation deadlines abandons its whole probe
+      // ladder at once; only a failing baseline tightens one step further.
+      if (this.probing || this.uploadsPerPoll > this.baselineUploadsPerPoll ||
+          this.uploadBudgetMs > this.baselineUploadBudgetMs) {
+        this.uploadsPerPoll = this.baselineUploadsPerPoll;
+        this.uploadBudgetMs = this.baselineUploadBudgetMs;
+        this.bestSafeUploadsPerPoll = this.baselineUploadsPerPoll;
+        this.bestSafeUploadBudgetMs = this.baselineUploadBudgetMs;
+        this.probing = false;
+        this.probeRejections++;
+      } else {
+        this.lowerOneStep();
+      }
+      this.stableWindows = 0;
+      this.cooldownWindows = this.probeCooldownWindows;
+    } else if (this.overloaded === 0) {
+      if (this.probing) {
+        this.bestSafeUploadsPerPoll = this.uploadsPerPoll;
+        this.bestSafeUploadBudgetMs = this.uploadBudgetMs;
+        this.probing = false;
+        this.recoveries++;
+        this.stableWindows = 0;
+      } else if (this.cooldownWindows > 0) {
+        this.cooldownWindows--;
+        this.stableWindows = 0;
+      } else {
+        this.stableWindows++;
+        if (this.stableWindows >= this.stableWindowsBeforeProbe) {
+          this.probeOneStep();
+          this.stableWindows = 0;
+        }
+      }
+    } else {
+      this.stableWindows = 0;
+    }
+    this.resetWindow();
+  }
+  // @hot-no-alloc-end VirtualTextureTuning.recordFrameTime
+}
+
+export const VirtualTextureTuningRes = defineResource<VirtualTextureTuning>(
+  'virtualTextureTuning',
+  () => new VirtualTextureTuning(),
+);
+
+// ============================================================================
 // Virtual Texture Store
 // ============================================================================
 
@@ -555,7 +782,7 @@ export class VirtualTextureStore {
   private loader: { read(path: string, offset: number, len: number): Promise<Uint8Array>; poll(): void };
 
   /** Page data loader (returns raw page bytes for a given request). */
-  private pageDataProvider?: (path: string, req: PageRequest, signal?: AbortSignal) => Promise<Uint8Array>;
+  private pageDataProvider?: PageDataProvider;
 
   /** Fixed in-flight table; slots are acquired at ready time. */
   private readonly pendingRecords: PendingPageRecord[];
@@ -569,12 +796,12 @@ export class VirtualTextureStore {
   private readyUploadTail = 0;
   private readyUploadCount = 0;
   private loadGeneration = 0;
-  private readonly uploadsPerPoll = 4;
+  /** Shared central policy; created during bootstrap and sampled each frame. */
+  readonly tuning: VirtualTextureTuning;
   private readonly maxPendingPages = 64;
   private readonly maxPendingBytes = 8 * 1024 * 1024;
   private pendingBytes = 0;
   private readonly scheduleBudgetMs = 0.25;
-  private readonly uploadBudgetMs = 0.35;
   private rejectedAdmissions = 0;
   private scheduleBudgetExhaustions = 0;
   private uploadBudgetExhaustions = 0;
@@ -584,15 +811,21 @@ export class VirtualTextureStore {
   private scheduledRequests: VirtualPageRequest[];
   private scheduledActive: Uint8Array;
   private scheduledLastSeen: Uint32Array;
+  private scheduledSince: Uint32Array;
+  private scheduledPriority: Uint8Array;
+  private scheduledNext: Int32Array;
+  private scheduledPrevious: Int32Array;
+  private readonly priorityHeads = new Int32Array(PRIORITY_LANE_COUNT);
+  private readonly priorityTails = new Int32Array(PRIORITY_LANE_COUNT);
   private scheduledFree: Uint32Array;
   private scheduledFreeTop = 0;
   private scheduledByKey: FixedPageSlotMap;
   private scheduledCount = 0;
-  private schedulerCursor = 0;
   private feedbackEpoch = 0;
-  /** At 36 Hz feedback this covers the observed ~430 ms worst-case load. */
-  private readonly staleFeedbackEpochs = 16;
+  /** Two absent 36 Hz feedback epochs tolerate readback jitter but drop old views quickly. */
+  private readonly staleFeedbackEpochs = 2;
   private staleCancellations = 0;
+  private priorityPreemptions = 0;
   private schedulerOverflows = 0;
   private feedbackScratch: VirtualPageRequest[];
   private feedbackScratchKeys: FixedPageSlotMap;
@@ -621,23 +854,32 @@ export class VirtualTextureStore {
     pendingPages: 0, lodBias: 0, budget: 0, readyUploads: 0,
     maxPendingPages: 0, pendingBytes: 0, maxPendingBytes: 0,
     scheduledRequests: 0, schedulerCapacity: 0, schedulerOverflows: 0,
-    staleCancellations: 0, rejectedAdmissions: 0, cacheHits: 0,
-    cacheMisses: 0, cacheEvictions: 0, completedLoads: 0, failedLoads: 0,
+    staleCancellations: 0, priorityPreemptions: 0, rejectedAdmissions: 0,
+    cacheHits: 0, cacheMisses: 0, cacheEvictions: 0, completedLoads: 0, failedLoads: 0,
     averageLoadMs: 0, maxLoadMs: 0, completedUploads: 0,
     averageUploadMs: 0, maxUploadMs: 0, scheduleBudgetMs: 0,
-    uploadBudgetMs: 0, scheduleBudgetExhaustions: 0, uploadBudgetExhaustions: 0,
+    uploadBudgetMs: 0, uploadsPerPoll: 0, tuningDownshifts: 0, tuningRecoveries: 0,
+    tuningProbes: 0, tuningProbeRejections: 0,
+    tuningBestSafeUploadsPerPoll: 0, tuningBestSafeUploadBudgetMs: 0,
+    scheduleBudgetExhaustions: 0, uploadBudgetExhaustions: 0,
+    pageReads: 0, averagePageReadMs: 0, maxPageReadMs: 0,
+    transcodeWorkers: 0, activeTranscodes: 0, queuedTranscodes: 0,
+    completedTranscodes: 0, averageTranscodeQueueMs: 0, maxTranscodeQueueMs: 0,
+    averageTranscodeMs: 0, maxTranscodeMs: 0,
   };
 
   constructor(
     loader: { read(path: string, offset: number, len: number): Promise<Uint8Array>; poll(): void },
-    pageDataProvider?: (path: string, req: PageRequest, signal?: AbortSignal) => Promise<Uint8Array>,
+    pageDataProvider?: PageDataProvider,
     format?: number,
     device?: GPUDevice,
+    tuning?: VirtualTextureTuning,
   ) {
     this.loader = loader;
     this.pageDataProvider = pageDataProvider;
     this.format = format ?? FORMAT_RGBA;
     this.device = device ?? null;
+    this.tuning = tuning ?? new VirtualTextureTuning();
     this.cache = new PageCache(this.format, device?.limits.maxTextureDimension2D ?? ATLAS_WIDTH);
     this.atlasWidth = this.cache.width;
     this.atlasHeight = this.cache.height;
@@ -649,6 +891,12 @@ export class VirtualTextureStore {
     this.scheduledRequests = new Array(schedulerCapacity);
     this.scheduledActive = new Uint8Array(schedulerCapacity);
     this.scheduledLastSeen = new Uint32Array(schedulerCapacity);
+    this.scheduledSince = new Uint32Array(schedulerCapacity);
+    this.scheduledPriority = new Uint8Array(schedulerCapacity);
+    this.scheduledNext = new Int32Array(schedulerCapacity);
+    this.scheduledPrevious = new Int32Array(schedulerCapacity);
+    this.priorityHeads.fill(-1);
+    this.priorityTails.fill(-1);
     this.scheduledFree = new Uint32Array(schedulerCapacity);
     this.scheduledByKey = new FixedPageSlotMap(schedulerCapacity);
     this.pendingRecords = new Array(this.maxPendingPages);
@@ -661,6 +909,7 @@ export class VirtualTextureStore {
         page: { path: '', mip: 0, x: 0, y: 0, pinned: false, cacheKey: 0 },
         lastSeen: 0,
         startedAt: 0,
+        priorityTier: 7,
         controller: null,
         canceled: false,
       };
@@ -677,6 +926,8 @@ export class VirtualTextureStore {
       this.feedbackScratch[index] = { path: '', mip: 0, x: 0, y: 0 };
     for (let index = schedulerCapacity - 1; index >= 0; index--) {
       this.scheduledRequests[index] = { path: '', mip: 0, x: 0, y: 0 };
+      this.scheduledNext[index] = -1;
+      this.scheduledPrevious[index] = -1;
       this.scheduledFree[this.scheduledFreeTop++] = index;
     }
 
@@ -906,14 +1157,41 @@ export class VirtualTextureStore {
     return pending;
   }
 
+  /** Cancel one strictly worse non-pinned load so urgent visible work can enter. */
+  private preemptWorstPending(priorityTier: number): boolean {
+    let candidate = -1;
+    let worstTier = priorityTier;
+    for (let slot = 0; slot < this.pendingRecords.length; slot++) {
+      if (this.pendingActive[slot] === 0) continue;
+      const pending = this.pendingRecords[slot];
+      if (pending.page.pinned || pending.canceled || pending.priorityTier <= worstTier) continue;
+      candidate = slot;
+      worstTier = pending.priorityTier;
+    }
+    if (candidate < 0) return false;
+    const pending = this.pendingRecords[candidate];
+    pending.canceled = true;
+    pending.controller?.abort('VT load preempted by a higher-priority visible page');
+    // Keep the fixed slot occupied until the asynchronous stage acknowledges
+    // cancellation; immediate reuse can overrun its equally bounded task ring.
+    this.priorityPreemptions++;
+    return true;
+  }
+
   /** Queue one deduplicated load. Physical residency is acquired only when data is ready. */
-  private queuePageLoad(entry: VirtualTextureEntry, req: PageRequest, pageTable: PageTable, pinned = false): boolean {
+  private queuePageLoad(
+    entry: VirtualTextureEntry,
+    req: PageRequest,
+    pageTable: PageTable,
+    pinned = false,
+    priorityTier = 7,
+  ): boolean {
     const path = entry.path;
     if (!this.pageDataProvider || (req.tail ? isResident(entry.tailEntry) : pageTable.isResident(req)) ||
         !this.isValidEntryRequest(entry, req)) return false;
     if (this.pendingCount >= this.maxPendingPages ||
         this.pendingBytes + this.cache.slotDataSize > this.maxPendingBytes) {
-      this.rejectedAdmissions++;
+      if (!this.preemptWorstPending(priorityTier)) this.rejectedAdmissions++;
       return false;
     }
     const key = packedPageIdentity(entry.textureId, req);
@@ -935,6 +1213,7 @@ export class VirtualTextureStore {
     pendingRecord.generation = generation;
     pendingRecord.lastSeen = this.feedbackEpoch;
     pendingRecord.startedAt = performance.now();
+    pendingRecord.priorityTier = priorityTier;
     pendingRecord.controller = controller;
     pendingRecord.canceled = false;
     this.pendingActive[slot] = 1;
@@ -957,7 +1236,7 @@ export class VirtualTextureStore {
       this.completedLoads++;
       this.totalLoadMs += loadMs;
       this.maxLoadMs = Math.max(this.maxLoadMs, loadMs);
-      if (!pending.page.pinned && this.feedbackEpoch - pending.lastSeen > this.staleFeedbackEpochs) {
+      if (!pending.page.pinned && this.feedbackEpoch - pending.lastSeen >= this.staleFeedbackEpochs) {
         this.deletePending(key);
         this.staleCancellations++;
         return;
@@ -994,26 +1273,74 @@ export class VirtualTextureStore {
   }
 
   // @hot-no-alloc-begin VirtualTextureStore.addFeedbackRequest
-  private addFeedbackRequest(textureId: number, source: VirtualPageRequest, bias: number, capacity: number): boolean {
-    const entry = this.entriesById[textureId];
-    if (!entry || !this.isValidEntryRequest(entry, source)) return true;
-    const tail = source.tail === true;
-    const mip = tail ? source.mip : Math.min(entry.maxMip, source.mip + bias);
-    const shift = mip - source.mip;
-    const x = tail ? 0 : source.x >> shift;
-    const y = tail ? 0 : source.y >> shift;
+  private addFeedbackPage(
+    textureId: number,
+    entry: VirtualTextureEntry,
+    source: VirtualPageRequest,
+    mip: number,
+    x: number,
+    y: number,
+    tail: boolean,
+    capacity: number,
+  ): boolean {
     const key = packedPageCoordinates(entry.textureId, mip, x, y, tail);
-    if (this.feedbackScratchKeys.get(key) !== undefined) return true;
+    const existing = this.feedbackScratchKeys.get(key);
+    if (existing !== undefined) {
+      const request = this.feedbackScratch[existing];
+      request.screenPriority = Math.min(request.screenPriority ?? 255, source.screenPriority ?? 0);
+      request.coverage = Math.min(0xffff, (request.coverage ?? 1) + (source.coverage ?? 1));
+      if (request.screenPriority <= 96 || request.coverage >= 4)
+        request.priorityTier = (request.priorityTier ?? 1) & ~1;
+      return true;
+    }
     if (this.feedbackScratchCount >= capacity) return false;
     const index = this.feedbackScratchCount++;
     const request = this.feedbackScratch[index];
+    const qualityDepth = tail ? 0 : Math.min(MAX_MIP, entry.maxMip - mip);
+    const centralOrLarge = (source.screenPriority ?? 0) <= 96 || (source.coverage ?? 1) >= 4;
     request.textureId = textureId;
     request.path = entry.path;
     request.mip = mip;
     request.x = x;
     request.y = y;
     request.tail = tail ? true : undefined;
+    request.screenPriority = source.screenPriority ?? 0;
+    request.coverage = source.coverage ?? 1;
+    request.priorityTier = qualityDepth * 2 + (centralOrLarge ? 0 : 1);
     this.feedbackScratchKeys.set(key, index);
+    return true;
+  }
+
+  private addFeedbackRequest(textureId: number, source: VirtualPageRequest, bias: number, capacity: number): boolean {
+    const entry = this.entriesById[textureId];
+    const pageTable = this.pageTablesById[textureId];
+    if (!entry || !pageTable || !this.isValidEntryRequest(entry, source)) return true;
+    if (source.tail === true)
+      return this.addFeedbackPage(textureId, entry, source, source.mip, 0, 0, true, capacity);
+
+    const desiredMip = Math.min(entry.maxMip, source.mip + bias);
+    const desiredX = source.x >> (desiredMip - source.mip);
+    const desiredY = source.y >> (desiredMip - source.mip);
+    if (pageTable.isResidentAt(desiredMip, desiredX, desiredY))
+      return this.addFeedbackPage(textureId, entry, source, desiredMip, desiredX, desiredY, false, capacity);
+
+    let fallbackMip = desiredMip + 1;
+    while (fallbackMip <= entry.maxMip &&
+           !pageTable.isResidentAt(
+             fallbackMip,
+             desiredX >> (fallbackMip - desiredMip),
+             desiredY >> (fallbackMip - desiredMip),
+           )) fallbackMip++;
+
+    // Enqueue the whole missing chain now instead of waiting for another GPU
+    // feedback roundtrip after every rung. Fixed priority lanes still dispatch
+    // coarse restoration before middle/high/ultra upgrades.
+    for (let mip = Math.min(entry.maxMip, fallbackMip - 1); mip >= desiredMip; mip--) {
+      const shift = mip - desiredMip;
+      if (!this.addFeedbackPage(
+        textureId, entry, source, mip, desiredX >> shift, desiredY >> shift, false, capacity,
+      )) return false;
+    }
     return true;
   }
   // @hot-no-alloc-end VirtualTextureStore.addFeedbackRequest
@@ -1051,6 +1378,7 @@ export class VirtualTextureStore {
   }
   // @hot-no-alloc-end VirtualTextureStore.buildEffectiveFeedback
 
+  // @hot-no-alloc-begin VirtualTextureStore.schedulePriority
   private copyRequest(target: VirtualPageRequest, source: VirtualPageRequest): void {
     target.textureId = source.textureId;
     target.path = source.path;
@@ -1058,10 +1386,42 @@ export class VirtualTextureStore {
     target.x = source.x;
     target.y = source.y;
     target.tail = source.tail;
+    target.screenPriority = source.screenPriority;
+    target.coverage = source.coverage;
+    target.priorityTier = source.priorityTier;
+  }
+
+  private linkScheduledTail(index: number, priority: number): void {
+    const tail = this.priorityTails[priority];
+    this.scheduledPriority[index] = priority;
+    this.scheduledPrevious[index] = tail;
+    this.scheduledNext[index] = -1;
+    if (tail < 0) this.priorityHeads[priority] = index;
+    else this.scheduledNext[tail] = index;
+    this.priorityTails[priority] = index;
+  }
+
+  private unlinkScheduled(index: number): void {
+    const priority = this.scheduledPriority[index];
+    const previous = this.scheduledPrevious[index];
+    const next = this.scheduledNext[index];
+    if (previous < 0) this.priorityHeads[priority] = next;
+    else this.scheduledNext[previous] = next;
+    if (next < 0) this.priorityTails[priority] = previous;
+    else this.scheduledPrevious[next] = previous;
+    this.scheduledPrevious[index] = -1;
+    this.scheduledNext[index] = -1;
+  }
+
+  private moveScheduled(index: number, priority: number): void {
+    if (this.scheduledPriority[index] === priority) return;
+    this.unlinkScheduled(index);
+    this.linkScheduledTail(index, priority);
   }
 
   private removeScheduled(index: number): void {
     if (this.scheduledActive[index] === 0) return;
+    this.unlinkScheduled(index);
     this.scheduledByKey.delete(this.scheduledKeys[index]);
     this.scheduledActive[index] = 0;
     this.scheduledFree[this.scheduledFreeTop++] = index;
@@ -1085,11 +1445,15 @@ export class VirtualTextureStore {
     const pending = this.getPending(key);
     if (pending) {
       pending.lastSeen = this.feedbackEpoch;
+      pending.priorityTier = Math.min(pending.priorityTier, request.priorityTier ?? 7);
       return;
     }
     const existing = this.scheduledByKey.get(key);
     if (existing !== undefined) {
       this.copyRequest(this.scheduledRequests[existing], request);
+      const agePromotion = (this.feedbackEpoch - this.scheduledSince[existing]) >> 2;
+      const priority = Math.max(0, (request.priorityTier ?? 7) - agePromotion);
+      this.moveScheduled(existing, priority);
       this.scheduledLastSeen[existing] = this.feedbackEpoch;
       return;
     }
@@ -1102,29 +1466,33 @@ export class VirtualTextureStore {
     this.copyRequest(this.scheduledRequests[index], request);
     this.scheduledActive[index] = 1;
     this.scheduledLastSeen[index] = this.feedbackEpoch;
+    this.scheduledSince[index] = this.feedbackEpoch;
+    this.linkScheduledTail(index, request.priorityTier ?? 7);
     this.scheduledByKey.set(key, index);
     this.scheduledCount++;
   }
 
-  /** Advance persistent requests under both operation and wall-clock budgets. */
+  /** Advance persistent requests through fixed priority lanes under hard budgets. */
   private schedulePendingRequests(): void {
     const operationBudget = this.debugPaused ? 0 : (this.debugPageBudget ?? this.pageBudget);
     if (operationBudget === 0 || this.scheduledCount === 0) return;
     const deadline = performance.now() + this.scheduleBudgetMs;
+    const inspectionLimit = this.scheduledCount;
     let loaded = 0;
     let inspected = 0;
 
-    while (inspected < this.scheduledRequests.length && loaded < operationBudget) {
+    while (inspected < inspectionLimit && loaded < operationBudget) {
       if ((inspected & 3) === 0 && performance.now() >= deadline) {
         this.scheduleBudgetExhaustions++;
         break;
       }
-      const index = this.schedulerCursor;
-      this.schedulerCursor = (this.schedulerCursor + 1) % this.scheduledRequests.length;
+      let priority = 0;
+      while (priority < this.priorityHeads.length && this.priorityHeads[priority] < 0) priority++;
+      if (priority === this.priorityHeads.length) break;
+      const index = this.priorityHeads[priority];
       inspected++;
-      if (this.scheduledActive[index] === 0) continue;
       const request = this.scheduledRequests[index];
-      if (this.feedbackEpoch - this.scheduledLastSeen[index] > this.staleFeedbackEpochs) {
+      if (this.feedbackEpoch - this.scheduledLastSeen[index] >= this.staleFeedbackEpochs) {
         this.removeScheduled(index);
         this.staleCancellations++;
         continue;
@@ -1137,21 +1505,28 @@ export class VirtualTextureStore {
         continue;
       }
       this.cache.touch(this.scheduledKeys[index]);
-      if (this.queuePageLoad(entry, request, pageTable, false)) {
+      if (this.queuePageLoad(entry, request, pageTable, false, priority)) { // @alloc-allowed reason=AssetFetch
         this.removeScheduled(index);
         loaded++;
+      } else {
+        // Capacity or its downstream worker stage is still occupied. Keep this
+        // highest-priority request at the head and retry next poll.
+        break;
       }
     }
   }
+  // @hot-no-alloc-end VirtualTextureStore.schedulePriority
 
+  // @hot-no-alloc-begin VirtualTextureStore.mergeFeedback
   private cancelStalePending(): void {
     for (let slot = 0; slot < this.pendingRecords.length; slot++) {
       if (this.pendingActive[slot] === 0) continue;
       const pending = this.pendingRecords[slot];
       if (pending.page.pinned || pending.canceled ||
-          this.feedbackEpoch - pending.lastSeen <= this.staleFeedbackEpochs) continue;
+          this.feedbackEpoch - pending.lastSeen < this.staleFeedbackEpochs) continue;
       pending.canceled = true;
       pending.controller?.abort('VT request left the visibility window');
+      // The provider/cancellation continuation owns final slot release.
       this.staleCancellations++;
     }
   }
@@ -1171,6 +1546,7 @@ export class VirtualTextureStore {
     result.lodBias = this.capacityLodBias;
     return result;
   }
+  // @hot-no-alloc-end VirtualTextureStore.mergeFeedback
 
   private clearEvictedPage(page: CachedPage): void {
     if (page.tail) {
@@ -1324,11 +1700,18 @@ export class VirtualTextureStore {
     }
   }
 
+  /** Feed the presentation interval into the central bounded upload policy. */
+  // @hot-no-alloc-begin VirtualTextureStore.recordFrameTime
+  recordFrameTime(frameMs: number): void {
+    this.tuning.recordFrameTime(frameMs, this.pendingCount + this.readyUploadCount + this.scheduledCount);
+  }
+  // @hot-no-alloc-end VirtualTextureStore.recordFrameTime
+
   /** Poll workers and commit a bounded number of completed uploads per frame. */
   poll() {
     this.loader.poll();
-    const deadline = performance.now() + this.uploadBudgetMs;
-    for (let count = 0; count < this.uploadsPerPoll && this.readyUploadCount !== 0; count++) {
+    const deadline = performance.now() + this.tuning.uploadBudgetMs;
+    for (let count = 0; count < this.tuning.uploadsPerPoll && this.readyUploadCount !== 0; count++) {
       if (count !== 0 && performance.now() >= deadline) {
         this.uploadBudgetExhaustions++;
         break;
@@ -1338,6 +1721,10 @@ export class VirtualTextureStore {
       this.readyUploadCount--;
       const pending = this.getPending(ready.key);
       if (!pending || pending.generation !== ready.generation) continue;
+      if (pending.canceled) {
+        this.deletePending(ready.key);
+        continue;
+      }
       this.deletePending(ready.key);
       const textureId = ready.page.textureId ?? 0;
       const entry = this.entriesById[textureId];
@@ -1431,6 +1818,7 @@ export class VirtualTextureStore {
     stats.schedulerCapacity = this.scheduledRequests.length;
     stats.schedulerOverflows = this.schedulerOverflows;
     stats.staleCancellations = this.staleCancellations;
+    stats.priorityPreemptions = this.priorityPreemptions;
     stats.rejectedAdmissions = this.rejectedAdmissions;
     stats.cacheHits = this.cacheHits;
     stats.cacheMisses = this.cacheMisses;
@@ -1443,9 +1831,30 @@ export class VirtualTextureStore {
     stats.averageUploadMs = this.completedUploads === 0 ? 0 : this.totalUploadMs / this.completedUploads;
     stats.maxUploadMs = this.maxUploadMs;
     stats.scheduleBudgetMs = this.scheduleBudgetMs;
-    stats.uploadBudgetMs = this.uploadBudgetMs;
+    stats.uploadBudgetMs = this.tuning.uploadBudgetMs;
+    stats.uploadsPerPoll = this.tuning.uploadsPerPoll;
+    stats.tuningDownshifts = this.tuning.downshifts;
+    stats.tuningRecoveries = this.tuning.recoveries;
+    stats.tuningProbes = this.tuning.probes;
+    stats.tuningProbeRejections = this.tuning.probeRejections;
+    stats.tuningBestSafeUploadsPerPoll = this.tuning.bestSafeUploadsPerPoll;
+    stats.tuningBestSafeUploadBudgetMs = this.tuning.bestSafeUploadBudgetMs;
     stats.scheduleBudgetExhaustions = this.scheduleBudgetExhaustions;
     stats.uploadBudgetExhaustions = this.uploadBudgetExhaustions;
+    const provider = this.pageDataProvider?.getStats?.();
+    if (provider) {
+      stats.pageReads = provider.reads;
+      stats.averagePageReadMs = provider.averageReadMs;
+      stats.maxPageReadMs = provider.maxReadMs;
+      stats.transcodeWorkers = provider.workerCount;
+      stats.activeTranscodes = provider.activeTranscodes;
+      stats.queuedTranscodes = provider.queuedTranscodes;
+      stats.completedTranscodes = provider.completedTranscodes;
+      stats.averageTranscodeQueueMs = provider.averageTranscodeQueueMs;
+      stats.maxTranscodeQueueMs = provider.maxTranscodeQueueMs;
+      stats.averageTranscodeMs = provider.averageTranscodeMs;
+      stats.maxTranscodeMs = provider.maxTranscodeMs;
+    }
     return stats;
   }
   // @hot-no-alloc-end VirtualTextureStore.getStats

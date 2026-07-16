@@ -1,10 +1,28 @@
 import { describe, expect, test } from 'bun:test';
 import {
-  BoundedSerialTranscoder, createPageDataProvider, findVTPageChunk,
+  BoundedTranscoderPool, createFetchRangeLoader, createPageDataProvider, findVTPageChunk,
   getVirtualTextureDimensions, type BigHeader,
 } from './big-parser.ts';
 
 const flush = () => new Promise(resolve => setTimeout(resolve, 0));
+
+describe('browser range loader', () => {
+  test('issues an exact Range request and rejects non-partial responses', async () => {
+    const original = globalThis.fetch;
+    let range = '';
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      range = new Headers(init?.headers).get('range') ?? '';
+      return new Response(new Uint8Array([1, 2, 3, 4]), { status: 206 });
+    }) as typeof fetch;
+    try {
+      const loader = createFetchRangeLoader('afterglow://local/');
+      expect(await loader.read('data.big', 10, 4)).toEqual(new Uint8Array([1, 2, 3, 4]));
+      expect(range).toBe('bytes=10-13');
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+});
 
 describe('.big v5 compact VT directories', () => {
   const header: BigHeader = {
@@ -37,9 +55,9 @@ describe('.big v5 compact VT directories', () => {
       async load() { return new Uint8Array(); },
       async size() { return 0; },
     };
-    const provider = createPageDataProvider(loader, header, {
+    const provider = createPageDataProvider(loader, header, [{
       async transcode() { throw new Error('raw pages do not transcode'); },
-    }, 4);
+    }], 4);
     expect((await provider('terrain', { mip: 0, x: 1, y: 0 })).byteLength).toBe(20);
     expect((await provider('terrain', { mip: 1, x: 0, y: 0, tail: true })).byteLength).toBe(30);
     expect(reads).toEqual([
@@ -49,7 +67,7 @@ describe('.big v5 compact VT directories', () => {
   });
 });
 
-describe('BoundedSerialTranscoder', () => {
+describe('BoundedTranscoderPool', () => {
   test('keeps one RPC in flight and rejects canceled queued work', async () => {
     const resolvers: Array<(value: Uint8Array) => void> = [];
     let active = 0;
@@ -66,7 +84,7 @@ describe('BoundedSerialTranscoder', () => {
         }));
       },
     };
-    const queue = new BoundedSerialTranscoder(worker, 2);
+    const queue = new BoundedTranscoderPool([worker], 2);
     const first = queue.submit(new Uint8Array([1]), 0);
     const controller = new AbortController();
     const second = queue.submit(new Uint8Array([2]), 0, controller.signal);
@@ -80,6 +98,31 @@ describe('BoundedSerialTranscoder', () => {
     expect(maxActive).toBe(1);
   });
 
+  test('dispatches concurrently across independent workers', async () => {
+    const resolvers: Array<(value: Uint8Array) => void> = [];
+    let active = 0;
+    let maxActive = 0;
+    const workers = [0, 1].map(() => ({
+      transcode() {
+        active++;
+        maxActive = Math.max(maxActive, active);
+        return new Promise<Uint8Array>(resolve => resolvers.push(value => {
+          active--;
+          resolve(value);
+        }));
+      },
+    }));
+    const pool = new BoundedTranscoderPool(workers, 4);
+    const first = pool.submit(new Uint8Array([1]), 0);
+    const second = pool.submit(new Uint8Array([2]), 0);
+    expect(maxActive).toBe(2);
+    resolvers.shift()!(new Uint8Array([1]));
+    resolvers.shift()!(new Uint8Array([2]));
+    expect(await first).toEqual(new Uint8Array([1]));
+    expect(await second).toEqual(new Uint8Array([2]));
+    expect(pool.getStats()).toMatchObject({ workerCount: 2, active: 0, queued: 0, completed: 2 });
+  });
+
   test('owns reusable RPC scratch before dispatching the next call', async () => {
     const scratch = new Uint8Array(1);
     let call = 0;
@@ -89,7 +132,7 @@ describe('BoundedSerialTranscoder', () => {
         return scratch;
       },
     };
-    const queue = new BoundedSerialTranscoder(worker, 2);
+    const queue = new BoundedTranscoderPool([worker], 2);
     const first = queue.submit(new Uint8Array(), 0);
     const second = queue.submit(new Uint8Array(), 0);
     expect((await first)[0]).toBe(1);
@@ -103,7 +146,7 @@ describe('BoundedSerialTranscoder', () => {
         return new Promise<Uint8Array>(resolve => resolvers.push(resolve));
       },
     };
-    const queue = new BoundedSerialTranscoder(worker, 1);
+    const queue = new BoundedTranscoderPool([worker], 1);
     const running = queue.submit(new Uint8Array([1]), 0);
     const waiting = queue.submit(new Uint8Array([2]), 0);
     await expect(queue.submit(new Uint8Array([3]), 0)).rejects.toThrow('capacity exceeded');

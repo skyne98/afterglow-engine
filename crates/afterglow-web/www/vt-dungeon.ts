@@ -1,7 +1,6 @@
-import { AssetLoaderClient } from './assetloader.client.ts';
 import { TextureClient } from './texture.client.ts';
 import { Rpc } from './rpc.ts';
-import { createPageDataProvider, getVirtualTextureDimensions, parseBigHeader } from './engine/big-parser.ts';
+import { createFetchRangeLoader, createPageDataProvider, getVirtualTextureDimensions, parseBigHeader } from './engine/big-parser.ts';
 import { createWebGPUOnlyRenderer, showWebGPUFailure } from './engine/webgpu-only.ts';
 import { RendererSeal, warmRendererVariants } from './engine/renderer-seal.ts';
 const THREE=window.THREE, VT=window.AfterglowVT;
@@ -19,19 +18,29 @@ scene.add(new THREE.HemisphereLight(0xb9c8e8,0x241b15,1.6));const lamp=new THREE
 const floor=new THREE.Mesh(new THREE.PlaneGeometry(16,16),new THREE.MeshStandardMaterial({color:0x292722,roughness:1}));floor.rotation.x=-Math.PI/2;scene.add(floor);
 const ceiling=floor.clone();ceiling.position.y=4;ceiling.rotation.x=Math.PI/2;ceiling.material=new THREE.MeshStandardMaterial({color:0x18191b,roughness:1});scene.add(ceiling);
 
-const assetLoader=await AssetLoaderClient.spawn('assetloader.wasm','');
-const textureRpc=await Rpc.create({mainWasmUrl:'afterglow_web.wasm',workerJsUrl:'worker.js',workerWasmUrl:'texture.wasm',timeoutMs:10000});
-const textureWorker=new TextureClient(textureRpc);
-async function drive(promise){let done=false,value,error;promise.then(v=>{value=v;done=true},e=>{error=e;done=true});while(!done){assetLoader.poll();await new Promise(requestAnimationFrame)}if(error)throw error;return value}
-const prefix=await drive(assetLoader.read('vt-dungeon.big',0,16));
+const rangeLoader=createFetchRangeLoader();
+const TEXTURE_WORKER_COUNT=Math.max(2,Math.min(4,Math.floor((navigator.hardwareConcurrency||4)/2)));
+const textureRpcs=await Promise.all(Array.from({length:TEXTURE_WORKER_COUNT},()=>Rpc.create({
+  mainWasmUrl:'afterglow_web.wasm',workerJsUrl:'worker.js',workerWasmUrl:'texture.wasm',timeoutMs:10000,
+})));
+const textureWorkers=textureRpcs.map(rpc=>new TextureClient(rpc));
+addEventListener('beforeunload',()=>{for(const rpc of textureRpcs)rpc.terminate()},{once:true});
+const prefix=await rangeLoader.read('vt-dungeon.big',0,16);
 const dataOffset=Number(new DataView(prefix.buffer,prefix.byteOffset+8,8).getBigUint64(0,true));
-const headerBytes=await drive(assetLoader.read('vt-dungeon.big',0,dataOffset));
+const headerBytes=await rangeLoader.read('vt-dungeon.big',0,dataOffset);
 const {header}=parseBigHeader(headerBytes);
 const format=renderer.backend.device.features.has('texture-compression-bc')?0:renderer.backend.device.features.has('texture-compression-astc')?1:VT.FORMAT_RGBA;
-const containerLoader={load:path=>assetLoader.load(path),size:path=>assetLoader.size(path),read:(_path,offset,len)=>assetLoader.read('vt-dungeon.big',offset,len)};
-const pageProvider=createPageDataProvider(containerLoader,header,textureWorker,format);
-const loader={read:(path,offset,len)=>assetLoader.read(path,offset,len),poll(){assetLoader.poll()}};
-const store=new VT.VirtualTextureStore(loader,pageProvider,format,renderer.backend.device);
+const containerLoader={
+  load:path=>rangeLoader.load(path),size:path=>rangeLoader.size(path),
+  read:(_path,offset,len)=>rangeLoader.read('vt-dungeon.big',offset,len),
+};
+const pageProvider=createPageDataProvider(containerLoader,header,textureWorkers,format);
+const loader={read:(path,offset,len)=>rangeLoader.read(path,offset,len),poll(){}};
+// One central bootstrap resource owns bounded admission. It receives rAF
+// intervals below, probes upward only after stable backlog, and rolls a bad
+// promoted cap back to the independently validated two-page baseline.
+const vtTuning=new VT.VirtualTextureTuning();
+const store=new VT.VirtualTextureStore(loader,pageProvider,format,renderer.backend.device,vtTuning);
 const vtSampleLevel=wgslFn(VT.VT_SAMPLE_LEVEL_WGSL),vtResolveMaterialMip4=wgslFn(VT.VT_RESOLVE_MATERIAL_MIP4_WGSL),vtFeedback=wgslFn(VT.VT_FEEDBACK_WGSL),atlasNode=texture(store.atlasTexture),atlasSampler=sampler(atlasNode);
 const feedbackScene=new THREE.Scene(),feedbackPass=new VT.VirtualTextureFeedbackPass(.125);
 const materialNames=['Rock064','Ground103','PavingStones150'];
@@ -103,7 +112,7 @@ feedbackPass.resize(renderer.domElement.width,renderer.domElement.height);
 await warmRendererVariants(renderer,[{scene,camera}]);const previousTarget=renderer.getRenderTarget();renderer.setRenderTarget(feedbackPass.target);await warmRendererVariants(renderer,[{scene:feedbackScene,camera}]);renderer.setRenderTarget(previousTarget);
 await new Promise(r=>setTimeout(r,0));renderer.render(scene,camera);renderer.setRenderTarget(feedbackPass.target);renderer.render(feedbackScene,camera);renderer.setRenderTarget(previousTarget);store.attachRenderer(renderer);rendererSeal.seal();
 const waiters=[],hud=document.getElementById('hud');let hudVisible=true;
-renderer.setAnimationLoop(now=>{const frameCpuStart=performance.now(),dt=Math.min(.05,(now-last)/1000);last=now;smoothedDt=smoothedDt*.95+dt*.05;update(dt);const renderStart=performance.now();renderer.render(scene,camera);runtimeTiming.renderSubmitUs=(performance.now()-renderStart)*1000;if(!diagnosticAtlas&&frame%FEEDBACK_INTERVAL===0){const feedbackStart=performance.now();feedbackPass.submit(renderer,feedbackScene,camera,store);runtimeTiming.feedbackSubmitUs=(performance.now()-feedbackStart)*1000}else runtimeTiming.feedbackSubmitUs=0;runtimeTiming.frameCpuUs=(performance.now()-frameCpuStart)*1000;frame++;for(let i=waiters.length-1;i>=0;i--)if(frame>=waiters[i].target){waiters[i].resolve();waiters.splice(i,1)}if(hudVisible&&frame%15===0){const d=store.getStats();hud.innerHTML=`<b>afterglow — Engine VT Dungeon</b><br>3 × 8K scanned PBR material sets · 12 wall instances<br>Virtual RGBA channels: 1.875 GiB · physical atlas: ${store.atlasWidth}²<br>Position: ${pose.x.toFixed(2)}, ${pose.z.toFixed(2)} · yaw ${(pose.yaw*180/Math.PI).toFixed(0)}° · ${(1/smoothedDt).toFixed(0)} FPS<br>Textures: ${d.textureCount} · resident ${d.atlasSlotsUsed}/${d.atlasSlotsTotal} · pending ${d.pendingPages}<br>GPU feedback pages: ${lastResult.totalRequests} · mips [${feedbackPass.getLatestMips().join(',')}] · bias ${VT_LOD_BIAS} · budget ${d.budget} · errors ${errors.length}`}});
+renderer.setAnimationLoop(now=>{const frameCpuStart=performance.now(),dt=Math.min(.05,(now-last)/1000);last=now;smoothedDt=smoothedDt*.95+dt*.05;store.recordFrameTime(dt*1000);update(dt);const renderStart=performance.now();renderer.render(scene,camera);runtimeTiming.renderSubmitUs=(performance.now()-renderStart)*1000;if(!diagnosticAtlas&&frame%FEEDBACK_INTERVAL===0){const feedbackStart=performance.now();feedbackPass.submit(renderer,feedbackScene,camera,store);runtimeTiming.feedbackSubmitUs=(performance.now()-feedbackStart)*1000}else runtimeTiming.feedbackSubmitUs=0;runtimeTiming.frameCpuUs=(performance.now()-frameCpuStart)*1000;frame++;for(let i=waiters.length-1;i>=0;i--)if(frame>=waiters[i].target){waiters[i].resolve();waiters.splice(i,1)}if(hudVisible&&frame%15===0){const d=store.getStats();hud.innerHTML=`<b>afterglow — Engine VT Dungeon</b><br>3 × 8K scanned PBR material sets · 12 wall instances<br>Virtual RGBA channels: 1.875 GiB · physical atlas: ${store.atlasWidth}²<br>Position: ${pose.x.toFixed(2)}, ${pose.z.toFixed(2)} · yaw ${(pose.yaw*180/Math.PI).toFixed(0)}° · ${(1/smoothedDt).toFixed(0)} FPS<br>Textures: ${d.textureCount} · resident ${d.atlasSlotsUsed}/${d.atlasSlotsTotal} · pending ${d.pendingPages}<br>GPU feedback pages: ${lastResult.totalRequests} · mips [${feedbackPass.getLatestMips().join(',')}] · bias ${VT_LOD_BIAS} · budget ${d.budget} · errors ${errors.length}`}});
 addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);feedbackPass.resize(renderer.domElement.width,renderer.domElement.height)});
 addEventListener('keydown',e=>{if(programmatic)return;keys.add(e.key.toLowerCase());if(e.key.toLowerCase()==='r')setPose(-5.5,-5.5,0,0);if(e.key==='1')setPose(-5.5,-5.5,0,0);if(e.key==='2')setPose(5.5,-5.5,Math.PI,0);if(e.key==='3')setPose(5.5,6.5,-Math.PI/2,0)});addEventListener('keyup',e=>keys.delete(e.key.toLowerCase()));
 renderer.domElement.addEventListener('click',()=>{if(!programmatic)renderer.domElement.requestPointerLock()});addEventListener('mousemove',e=>{if(!programmatic&&document.pointerLockElement===renderer.domElement){pose.yaw-=e.movementX*.002;pose.pitch=Math.max(-1.45,Math.min(1.45,pose.pitch-e.movementY*.002))}});
@@ -116,30 +125,40 @@ function atlasFeedback(groupCount,startPage=0){
   }
   return feedback;
 }
-async function waitForAtlas(target,timeout){
-  const end=performance.now()+timeout;
-  while(performance.now()<end){const stats=store.getStats();if(stats.atlasSlotsUsed>=target&&!stats.pendingPages&&!stats.scheduledRequests&&!stats.readyUploads)return true;await window.__afterglowVtDungeon.step(1)}
+async function waitForAtlas(target,timeout,feedback=null){
+  const end=performance.now()+timeout;let steps=0;
+  while(performance.now()<end){
+    const stats=store.getStats();
+    if(stats.atlasSlotsUsed>=target&&!stats.pendingPages&&!stats.scheduledRequests&&!stats.readyUploads)return true;
+    if(feedback&&steps%FEEDBACK_INTERVAL===0)store.processFeedback(feedback);
+    steps++;await window.__afterglowVtDungeon.step(1);
+  }
   return false;
 }
 async function runAtlasScenario(name,timeout=120000){
   if(!['cold','half','full','churn'].includes(name))throw new Error(`unknown atlas scenario ${name}`);
+  const previousProgrammatic=programmatic;
   programmatic=true;diagnosticAtlas=true;keys.clear();feedbackPass.consume();
   try{
     const initial=store.getStats(),total=initial.atlasSlotsTotal;let target=name==='half'?Math.floor(total/2):name==='cold'?initial.atlasSlotsUsed:Math.floor(total*0.995);
     if(name==='cold'){await waitForAtlas(target,timeout);target=store.getStats().atlasSlotsUsed}else{
       const groups=Math.ceil(Math.max(0,target-initial.atlasSlotsUsed)/3)+32;
-      store.processFeedback(atlasFeedback(groups,name==='half'?0:1024));
-      await waitForAtlas(target,timeout);
+      const admission=atlasFeedback(groups,name==='half'?0:1024);
+      store.processFeedback(admission);
+      await waitForAtlas(target,timeout,admission);
     }
     if(name==='churn'){
       const before=store.getStats().cacheEvictions,groups=Math.ceil(total/3);
       const replacement=atlasFeedback(groups,3072);
       for(let epoch=0;epoch<17;epoch++)store.processFeedback(replacement);
-      const end=performance.now()+timeout;
-      while(performance.now()<end&&(store.getStats().cacheEvictions===before||store.getStats().pendingPages||store.getStats().scheduledRequests||store.getStats().readyUploads))await window.__afterglowVtDungeon.step(1);
+      const end=performance.now()+timeout;let steps=0;
+      while(performance.now()<end&&(store.getStats().cacheEvictions===before||store.getStats().pendingPages||store.getStats().scheduledRequests||store.getStats().readyUploads)){
+        if(steps%FEEDBACK_INTERVAL===0)store.processFeedback(replacement);
+        steps++;await window.__afterglowVtDungeon.step(1);
+      }
     }
     return {name,target,...store.getStats(),timing:{...runtimeTiming},errors:errors.length};
-  }finally{diagnosticAtlas=false}
+  }finally{diagnosticAtlas=false;programmatic=previousProgrammatic}
 }
 window.__afterglowVtDungeon={
   ready:()=>true,telemetry:()=>store.getStats(),timing:()=>runtimeTiming,pipelineTelemetry,resolveGpuTimings,setGpuTimingEnabled,errorCount:()=>errors.length,runAtlasScenario,snapshot:()=>({pose:{...pose},...store.getDebugSnapshot(),requests:lastResult.totalRequests,feedbackMips:[...feedbackPass.getLatestMips()],errors:[...errors]}),

@@ -34,16 +34,6 @@ function concat(...arrs) {
 function encodeU32(n) {
   return new Uint8Array(encodeVarint(n));
 }
-function encodeU64(n) {
-  return new Uint8Array(encodeVarint(n));
-}
-function decodeU64(bytes, off) {
-  return decodeVarint(bytes, off);
-}
-function encodeString(s) {
-  const enc = new TextEncoder().encode(s);
-  return concat(encodeVarint(enc.length), enc);
-}
 function encodeBytes(b) {
   return concat(encodeVarint(b.length), b);
 }
@@ -337,40 +327,6 @@ function asyncWorkerImports(driver, memory) {
   };
 }
 
-// crates/afterglow-web/www/assetloader.client.ts
-class AssetLoaderClient {
-  rpc;
-  static async spawn(workerWasmUrl = "assetloader.wasm", baseUrl = "") {
-    const driver = new AsyncWorker(null, baseUrl);
-    const memory = new WebAssembly.Memory({ shared: true, initial: 256, maximum: 1024 });
-    const { instance } = await WebAssembly.instantiate(await (await fetch(workerWasmUrl)).arrayBuffer(), asyncWorkerImports(driver, memory));
-    driver.w = instance.exports;
-    instance.exports.afterglow_wasm_init();
-    return new AssetLoaderClient(driver);
-  }
-  poll() {
-    this.rpc.poll();
-  }
-  constructor(rpc) {
-    this.rpc = rpc;
-  }
-  async load(path) {
-    const args = encodeString(path);
-    const resp = await this.rpc.call(0, args);
-    return decodeBytes(resp, 0)[0];
-  }
-  async size(path) {
-    const args = encodeString(path);
-    const resp = await this.rpc.call(1, args);
-    return decodeU64(resp, 0)[0];
-  }
-  async read(path, offset, len) {
-    const args = concat(encodeString(path), encodeU64(offset), encodeU32(len));
-    const resp = await this.rpc.call(2, args);
-    return decodeBytes(resp, 0)[0];
-  }
-}
-
 // crates/afterglow-web/www/texture.client.ts
 class TextureClient {
   rpc;
@@ -584,7 +540,7 @@ function decodeVarint3(bytes, off) {
 function decodeU32(bytes, off) {
   return decodeVarint3(bytes, off);
 }
-function decodeU642(bytes, off) {
+function decodeU64(bytes, off) {
   let result = 0n;
   for (let shift = 0n;shift < 70n; shift += 7n) {
     if (off >= bytes.length)
@@ -675,9 +631,9 @@ function decodeChunkMeta(bytes, off) {
   }
 }
 function decodeChunkInfo(bytes, off) {
-  const [offset, o1] = decodeU642(bytes, off);
-  const [compressedSize, o2] = decodeU642(bytes, o1);
-  const [uncompressedSize, o3] = decodeU642(bytes, o2);
+  const [offset, o1] = decodeU64(bytes, off);
+  const [compressedSize, o2] = decodeU64(bytes, o1);
+  const [uncompressedSize, o3] = decodeU64(bytes, o2);
   const [lodLevel, o4] = decodeU8(bytes, o3);
   const [mipLevel, o5] = decodeU8(bytes, o4);
   const [compression, o6] = decodeCompression(bytes, o5);
@@ -696,13 +652,13 @@ function decodeVTMipDirectory(bytes, off) {
   const [mip, o1] = decodeU8(bytes, off);
   const [pagesX, o2] = decodeU32(bytes, o1);
   const [pagesY, o3] = decodeU32(bytes, o2);
-  const [offset, o4] = decodeU642(bytes, o3);
+  const [offset, o4] = decodeU64(bytes, o3);
   const [pageSizes, o5] = decodeVec(bytes, o4, decodeU32);
   return [{ mip, pagesX, pagesY, offset, pageSizes }, o5];
 }
 function decodeVTTailDirectory(bytes, off) {
   const [firstMip, o1] = decodeU8(bytes, off);
-  const [offset, o2] = decodeU642(bytes, o1);
+  const [offset, o2] = decodeU64(bytes, o1);
   const [size, o3] = decodeU32(bytes, o2);
   return [{ firstMip, offset, size }, o3];
 }
@@ -743,7 +699,7 @@ function parseBigHeader(data) {
   let off = 0;
   const [hdrVersion, o1] = decodeU32(headerBytes, off);
   off = o1;
-  const [hdrDataOffset, o2] = decodeU642(headerBytes, off);
+  const [hdrDataOffset, o2] = decodeU64(headerBytes, off);
   off = o2;
   const [assets, o3] = decodeVec(headerBytes, off, decodeAssetEntry);
   off = o3;
@@ -758,59 +714,136 @@ function getVirtualTextureDimensions(header, assetName) {
     throw new Error(`VT dimensions unavailable: ${assetName}`);
   return { width: directory.width, height: directory.height };
 }
-class BoundedSerialTranscoder {
-  worker;
+class BoundedTranscoderPool {
+  workers;
   jobs;
+  workerBusy;
   head = 0;
   tail = 0;
   count = 0;
-  running = false;
-  constructor(worker, capacity) {
-    this.worker = worker;
+  active = 0;
+  completed = 0;
+  totalQueueMs = 0;
+  maxQueueMs = 0;
+  totalTranscodeMs = 0;
+  maxTranscodeMs = 0;
+  stats = {
+    workerCount: 0,
+    active: 0,
+    queued: 0,
+    completed: 0,
+    averageQueueMs: 0,
+    maxQueueMs: 0,
+    averageTranscodeMs: 0,
+    maxTranscodeMs: 0
+  };
+  constructor(workers, capacity) {
+    this.workers = workers;
+    if (workers.length === 0 || !Number.isInteger(capacity) || capacity < 1)
+      throw new RangeError("VT transcoder pool requires workers and positive capacity");
     this.jobs = new Array(capacity).fill(null);
+    this.workerBusy = new Uint8Array(workers.length);
   }
   submit(data, format, signal) {
     if (this.count === this.jobs.length)
       return Promise.reject(new Error("VT transcode queue capacity exceeded"));
     return new Promise((resolve, reject) => {
-      this.jobs[this.tail] = { data, format, signal, resolve, reject };
+      this.jobs[this.tail] = { data, format, signal, queuedAt: performance.now(), resolve, reject };
       this.tail = (this.tail + 1) % this.jobs.length;
       this.count++;
       this.pump();
     });
   }
-  async pump() {
-    if (this.running)
-      return;
-    this.running = true;
-    try {
-      while (this.count !== 0) {
-        const job = this.jobs[this.head];
-        this.jobs[this.head] = null;
-        this.head = (this.head + 1) % this.jobs.length;
-        this.count--;
-        if (job.signal?.aborted) {
-          job.reject(new Error("VT transcode canceled before dispatch"));
-          continue;
-        }
-        try {
-          const result = await this.worker.transcode(job.data, job.format);
-          if (job.signal?.aborted)
-            job.reject(new Error("VT transcode canceled after dispatch"));
-          else
-            job.resolve(result.slice());
-        } catch (error) {
-          job.reject(error);
-        }
+  pump() {
+    for (let workerIndex = 0;workerIndex < this.workers.length && this.count !== 0; workerIndex++) {
+      if (this.workerBusy[workerIndex] !== 0)
+        continue;
+      const job = this.jobs[this.head];
+      this.jobs[this.head] = null;
+      this.head = (this.head + 1) % this.jobs.length;
+      this.count--;
+      if (job.signal?.aborted) {
+        job.reject(new Error("VT transcode canceled before dispatch"));
+        workerIndex--;
+        continue;
       }
-    } finally {
-      this.running = false;
-      if (this.count !== 0)
-        this.pump();
+      const queueMs = performance.now() - job.queuedAt;
+      this.totalQueueMs += queueMs;
+      this.maxQueueMs = Math.max(this.maxQueueMs, queueMs);
+      this.workerBusy[workerIndex] = 1;
+      this.active++;
+      this.run(workerIndex, job);
     }
   }
+  async run(workerIndex, job) {
+    const startedAt = performance.now();
+    try {
+      const result = await this.workers[workerIndex].transcode(job.data, job.format);
+      if (job.signal?.aborted)
+        job.reject(new Error("VT transcode canceled after dispatch"));
+      else
+        job.resolve(result.slice());
+    } catch (error) {
+      job.reject(error);
+    } finally {
+      const elapsed = performance.now() - startedAt;
+      this.completed++;
+      this.totalTranscodeMs += elapsed;
+      this.maxTranscodeMs = Math.max(this.maxTranscodeMs, elapsed);
+      this.workerBusy[workerIndex] = 0;
+      this.active--;
+      this.pump();
+    }
+  }
+  getStats() {
+    const stats = this.stats;
+    stats.workerCount = this.workers.length;
+    stats.active = this.active;
+    stats.queued = this.count;
+    stats.completed = this.completed;
+    stats.averageQueueMs = this.completed === 0 ? 0 : this.totalQueueMs / this.completed;
+    stats.maxQueueMs = this.maxQueueMs;
+    stats.averageTranscodeMs = this.completed === 0 ? 0 : this.totalTranscodeMs / this.completed;
+    stats.maxTranscodeMs = this.maxTranscodeMs;
+    return stats;
+  }
 }
-function createPageDataProvider(loader, header, textureWorker, format) {
+function createFetchRangeLoader(baseUrl = "") {
+  const url = (path) => baseUrl + path;
+  return {
+    async load(path) {
+      const response = await fetch(url(path));
+      if (!response.ok)
+        throw new Error(`asset fetch ${response.status}: ${path}`);
+      return new Uint8Array(await response.arrayBuffer());
+    },
+    async size(path) {
+      const response = await fetch(url(path), { method: "HEAD" });
+      if (!response.ok)
+        throw new Error(`asset HEAD ${response.status}: ${path}`);
+      const length = Number(response.headers.get("content-length"));
+      if (!Number.isSafeInteger(length) || length < 0)
+        throw new Error(`asset HEAD has invalid content-length: ${path}`);
+      return length;
+    },
+    async read(path, offset, len) {
+      if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(len) || len < 0)
+        throw new RangeError("asset range must use non-negative safe integers");
+      if (len === 0)
+        return new Uint8Array(0);
+      const response = await fetch(url(path), {
+        headers: { Range: `bytes=${offset}-${offset + len - 1}` }
+      });
+      if (response.status !== 206)
+        throw new Error(`asset range fetch expected 206, got ${response.status}: ${path}`);
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      if (bytes.byteLength !== len)
+        throw new Error(`asset range returned ${bytes.byteLength} bytes; expected ${len}: ${path}`);
+      return bytes;
+    }
+  };
+}
+function createPageDataProvider(loader, header, textureWorkers, format) {
   const directories = new Map;
   for (const asset of header.assets) {
     const source = asset.virtualTexture;
@@ -837,8 +870,24 @@ function createPageDataProvider(loader, header, textureWorker, format) {
       tailSize: source.tail?.size ?? 0
     });
   }
-  const transcoder = new BoundedSerialTranscoder(textureWorker, 64);
-  return async (path, req, signal) => {
+  const transcoder = new BoundedTranscoderPool(textureWorkers, 64);
+  let reads = 0;
+  let totalReadMs = 0;
+  let maxReadMs = 0;
+  const stats = {
+    reads: 0,
+    averageReadMs: 0,
+    maxReadMs: 0,
+    workerCount: textureWorkers.length,
+    activeTranscodes: 0,
+    queuedTranscodes: 0,
+    completedTranscodes: 0,
+    averageTranscodeQueueMs: 0,
+    maxTranscodeQueueMs: 0,
+    averageTranscodeMs: 0,
+    maxTranscodeMs: 0
+  };
+  const provider = async (path, req, signal) => {
     if (signal?.aborted)
       throw new Error("VT page load canceled before read");
     const directory = directories.get(path);
@@ -857,7 +906,12 @@ function createPageDataProvider(loader, header, textureWorker, format) {
     }
     if (!directory || size === 0)
       throw new Error(`VT page not found: ${path} mip=${req.mip} (${req.x},${req.y})`);
+    const readStartedAt = performance.now();
     const pageData = await loader.read(path + ".big", offset, size);
+    const readMs = performance.now() - readStartedAt;
+    reads++;
+    totalReadMs += readMs;
+    maxReadMs = Math.max(maxReadMs, readMs);
     if (signal?.aborted)
       throw new Error("VT page load canceled after read");
     if (directory.encoding === "RawRgba8") {
@@ -882,6 +936,22 @@ function createPageDataProvider(loader, header, textureWorker, format) {
       throw new Error(`invalid transcoded VT page header: count=${count}, size=${width}x${height}, bytes=${length}`);
     return transcoded.slice(16, 16 + length);
   };
+  provider.getStats = () => {
+    const transcode = transcoder.getStats();
+    stats.reads = reads;
+    stats.averageReadMs = reads === 0 ? 0 : totalReadMs / reads;
+    stats.maxReadMs = maxReadMs;
+    stats.workerCount = transcode.workerCount;
+    stats.activeTranscodes = transcode.active;
+    stats.queuedTranscodes = transcode.queued;
+    stats.completedTranscodes = transcode.completed;
+    stats.averageTranscodeQueueMs = transcode.averageQueueMs;
+    stats.maxTranscodeQueueMs = transcode.maxQueueMs;
+    stats.averageTranscodeMs = transcode.averageTranscodeMs;
+    stats.maxTranscodeMs = transcode.maxTranscodeMs;
+    return stats;
+  };
+  return provider;
 }
 
 // crates/afterglow-web/www/engine/webgpu-only.ts
@@ -1018,37 +1088,33 @@ ceiling.position.y = 4;
 ceiling.rotation.x = Math.PI / 2;
 ceiling.material = new THREE.MeshStandardMaterial({ color: 1579291, roughness: 1 });
 scene.add(ceiling);
-var assetLoader = await AssetLoaderClient.spawn("assetloader.wasm", "");
-var textureRpc = await Rpc.create({ mainWasmUrl: "afterglow_web.wasm", workerJsUrl: "worker.js", workerWasmUrl: "texture.wasm", timeoutMs: 1e4 });
-var textureWorker = new TextureClient(textureRpc);
-async function drive(promise) {
-  let done = false, value, error;
-  promise.then((v) => {
-    value = v;
-    done = true;
-  }, (e) => {
-    error = e;
-    done = true;
-  });
-  while (!done) {
-    assetLoader.poll();
-    await new Promise(requestAnimationFrame);
-  }
-  if (error)
-    throw error;
-  return value;
-}
-var prefix = await drive(assetLoader.read("vt-dungeon.big", 0, 16));
+var rangeLoader = createFetchRangeLoader();
+var TEXTURE_WORKER_COUNT = Math.max(2, Math.min(4, Math.floor((navigator.hardwareConcurrency || 4) / 2)));
+var textureRpcs = await Promise.all(Array.from({ length: TEXTURE_WORKER_COUNT }, () => Rpc.create({
+  mainWasmUrl: "afterglow_web.wasm",
+  workerJsUrl: "worker.js",
+  workerWasmUrl: "texture.wasm",
+  timeoutMs: 1e4
+})));
+var textureWorkers = textureRpcs.map((rpc) => new TextureClient(rpc));
+addEventListener("beforeunload", () => {
+  for (const rpc of textureRpcs)
+    rpc.terminate();
+}, { once: true });
+var prefix = await rangeLoader.read("vt-dungeon.big", 0, 16);
 var dataOffset = Number(new DataView(prefix.buffer, prefix.byteOffset + 8, 8).getBigUint64(0, true));
-var headerBytes = await drive(assetLoader.read("vt-dungeon.big", 0, dataOffset));
+var headerBytes = await rangeLoader.read("vt-dungeon.big", 0, dataOffset);
 var { header } = parseBigHeader(headerBytes);
 var format = renderer.backend.device.features.has("texture-compression-bc") ? 0 : renderer.backend.device.features.has("texture-compression-astc") ? 1 : VT.FORMAT_RGBA;
-var containerLoader = { load: (path) => assetLoader.load(path), size: (path) => assetLoader.size(path), read: (_path, offset, len) => assetLoader.read("vt-dungeon.big", offset, len) };
-var pageProvider = createPageDataProvider(containerLoader, header, textureWorker, format);
-var loader = { read: (path, offset, len) => assetLoader.read(path, offset, len), poll() {
-  assetLoader.poll();
-} };
-var store = new VT.VirtualTextureStore(loader, pageProvider, format, renderer.backend.device);
+var containerLoader = {
+  load: (path) => rangeLoader.load(path),
+  size: (path) => rangeLoader.size(path),
+  read: (_path, offset, len) => rangeLoader.read("vt-dungeon.big", offset, len)
+};
+var pageProvider = createPageDataProvider(containerLoader, header, textureWorkers, format);
+var loader = { read: (path, offset, len) => rangeLoader.read(path, offset, len), poll() {} };
+var vtTuning = new VT.VirtualTextureTuning;
+var store = new VT.VirtualTextureStore(loader, pageProvider, format, renderer.backend.device, vtTuning);
 var vtSampleLevel = wgslFn(VT.VT_SAMPLE_LEVEL_WGSL);
 var vtResolveMaterialMip4 = wgslFn(VT.VT_RESOLVE_MATERIAL_MIP4_WGSL);
 var vtFeedback = wgslFn(VT.VT_FEEDBACK_WGSL);
@@ -1223,6 +1289,7 @@ renderer.setAnimationLoop((now) => {
   const frameCpuStart = performance.now(), dt = Math.min(0.05, (now - last) / 1000);
   last = now;
   smoothedDt = smoothedDt * 0.95 + dt * 0.05;
+  store.recordFrameTime(dt * 1000);
   update(dt);
   const renderStart = performance.now();
   renderer.render(scene, camera);
@@ -1284,12 +1351,16 @@ function atlasFeedback(groupCount, startPage = 0) {
   }
   return feedback;
 }
-async function waitForAtlas(target, timeout) {
+async function waitForAtlas(target, timeout, feedback = null) {
   const end = performance.now() + timeout;
+  let steps = 0;
   while (performance.now() < end) {
     const stats = store.getStats();
     if (stats.atlasSlotsUsed >= target && !stats.pendingPages && !stats.scheduledRequests && !stats.readyUploads)
       return true;
+    if (feedback && steps % FEEDBACK_INTERVAL === 0)
+      store.processFeedback(feedback);
+    steps++;
     await window.__afterglowVtDungeon.step(1);
   }
   return false;
@@ -1297,6 +1368,7 @@ async function waitForAtlas(target, timeout) {
 async function runAtlasScenario(name, timeout = 120000) {
   if (!["cold", "half", "full", "churn"].includes(name))
     throw new Error(`unknown atlas scenario ${name}`);
+  const previousProgrammatic = programmatic;
   programmatic = true;
   diagnosticAtlas = true;
   keys.clear();
@@ -1309,8 +1381,9 @@ async function runAtlasScenario(name, timeout = 120000) {
       target = store.getStats().atlasSlotsUsed;
     } else {
       const groups = Math.ceil(Math.max(0, target - initial.atlasSlotsUsed) / 3) + 32;
-      store.processFeedback(atlasFeedback(groups, name === "half" ? 0 : 1024));
-      await waitForAtlas(target, timeout);
+      const admission = atlasFeedback(groups, name === "half" ? 0 : 1024);
+      store.processFeedback(admission);
+      await waitForAtlas(target, timeout, admission);
     }
     if (name === "churn") {
       const before = store.getStats().cacheEvictions, groups = Math.ceil(total / 3);
@@ -1318,12 +1391,18 @@ async function runAtlasScenario(name, timeout = 120000) {
       for (let epoch = 0;epoch < 17; epoch++)
         store.processFeedback(replacement);
       const end = performance.now() + timeout;
-      while (performance.now() < end && (store.getStats().cacheEvictions === before || store.getStats().pendingPages || store.getStats().scheduledRequests || store.getStats().readyUploads))
+      let steps = 0;
+      while (performance.now() < end && (store.getStats().cacheEvictions === before || store.getStats().pendingPages || store.getStats().scheduledRequests || store.getStats().readyUploads)) {
+        if (steps % FEEDBACK_INTERVAL === 0)
+          store.processFeedback(replacement);
+        steps++;
         await window.__afterglowVtDungeon.step(1);
+      }
     }
     return { name, target, ...store.getStats(), timing: { ...runtimeTiming }, errors: errors.length };
   } finally {
     diagnosticAtlas = false;
+    programmatic = previousProgrammatic;
   }
 }
 window.__afterglowVtDungeon = {

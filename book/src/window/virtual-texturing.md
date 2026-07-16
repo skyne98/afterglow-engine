@@ -27,15 +27,33 @@ poll the store and submit the previous globally identified feedback results with
 the mip directly in that target's viewport and supports an explicit quality
 bias (the dungeon uses `-1.5`). The dungeon submits this pass every four frames,
 retaining 36 Hz residency updates on a 144 Hz display without forcing a GPU
-readback every frame; the store adds only minimum capacity fitting, deduplication,
-bounded scheduling/upload budgets, and fixed second-chance clock residency.
+readback every frame. The feedback pass retains each page's nearest-to-center
+sample and pixel coverage. The store adds capacity fitting, progressive quality
+selection, priority admission, bounded scheduling/upload budgets, and fixed
+second-chance clock residency.
 Resident lookup/touch is O(1); it does not scan or rebuild an LRU as the atlas
 fills. Feedback expansion and capacity fitting reuse preallocated numeric
 scratch records rather than constructing per-frame maps and channel objects. A
-fixed persistent scheduler keeps requests that exceed one frame's
-budget and expires requests absent from sixteen newer feedback snapshots
-(about 444 ms at the dungeon's 36 Hz feedback rate). Physical
-slots are acquired only after bytes are ready, so slow reads/transcodes do not
+fixed persistent scheduler keeps requests that exceed one frame's budget.
+Twenty-two fixed-array lanes prioritize exact quality rungs—low→middle before
+middle→high before high→ultra—then center/large-coverage pages before small edge
+pages. The whole missing mip chain enters those lanes in one feedback update, so
+quality no longer waits for another GPU readback after every rung. Waiting
+requests age upward to prevent starvation. Pages absent
+from two newer feedback snapshots expire (about 56 ms at 36 Hz), and newly
+important work may preempt a strictly worse non-pinned in-flight load. Thus pages
+behind a turning camera stop consuming the bounded queue quickly. Atlas/page-table commits
+are governed by the central `VirtualTextureTuning` resource. It starts at two
+completed pages and 0.20 ms per frame, tightens after repeated overloaded rAF
+samples while work is queued, then probes one step after each clean 15-active-
+frame window toward the configured device caps. Evidence survives short empty
+backlog gaps, so this calibrates during bootstrap and short gameplay bursts use
+the discovered throughput. A bad promoted cap rolls back to the independently
+validated two-page / 0.20 ms baseline and waits through a cooldown, so powerful
+GPUs can discover higher sustained throughput without continuous oscillation.
+Excess completed work remains in a
+fixed ready ring for a later frame rather than
+causing a full-cache presentation burst. Physical slots are acquired only after bytes are ready, so slow reads/transcodes do not
 evict useful pages. At most 64 jobs and 8 MiB of expected output may be pending;
 stage budget exhaustion is reported rather than allowing an unbounded burst. Because color and data
 channels share one linear atlas, material nodes explicitly decode albedo with
@@ -87,9 +105,11 @@ Use **WASD** to pan, the mouse wheel to zoom, **P** for a one-texel view, and
 The `vt-dungeon` example is a minimal first-person corridor using three scanned
 8K PBR materials. A demo script extracts their albedo, OpenGL normal, roughness,
 and AO PNGs, runs the generic asset pipeline once, and caches the resulting
-Basis `.big` container under `/tmp`. At runtime AssetLoader range reads,
-TextureWorker transcoding, GPU feedback, and linked material sets keep matching
-pages resident for all three physical channels while `MeshStandardNodeMaterial` retains
+Basis `.big` container under `/tmp`. At runtime exact serving-layer
+`fetch + Range` reads and a fixed two-to-four `TextureWorker` pool stream pages
+without the former page-side AssetLoader latency. GPU feedback and linked
+material sets keep matching pages resident for all three physical channels while
+`MeshStandardNodeMaterial` retains
 Three.js's PBR shader. The shared atlas expands to the largest whole page grid
 supported by the active GPU:
 
@@ -114,6 +134,13 @@ rAF interval. A subsequent 1,014-eviction churn run averaged 6.970 ms, peaked at
 20.850 ms, and missed one 17 ms threshold; failed loads, queue overflow, long
 tasks, and GPU errors remained zero. Full-state WebGPU timestamp queries measured
 0.149 ms for the main context and 0.018 ms for feedback.
+
+The corrected close-wall streaming path bypasses the former page-side
+AssetLoader latency and uses four texture workers on fox-laptop. Forty-eight new
+physical PBR pages settled in 283.29 ms; a larger unseen view showed its first
+page at 79.32 ms and first 12 coarse-priority pages at 132.75 ms. Mean page
+admission-to-ready latency fell from 445.81 ms to 26.25 ms, with zero failed
+loads or overflows.
 
 Corrected 10/30/60-minute real-GPU soaks held a 6.950 ms mean across stable,
 traversal, and eight-way per-frame teleport modes (863,264 total frames). All

@@ -102,7 +102,20 @@ export class VirtualTextureFeedbackPass {
             ? 0x10000000
             : ((requestMip & 0x3f) | ((requestX & 0x7ff) << 6) | ((requestY & 0x7ff) << 17)) >>> 0;
           const key = entry.textureId * 0x20000000 + local;
-          if (requests.has(key)) continue;
+          const pixel = index >> 1;
+          const pixelX = pixel % this.width;
+          const pixelY = Math.floor(pixel / this.width);
+          const normalizedX = ((pixelX + 0.5) * 2 / this.width) - 1;
+          const normalizedY = ((pixelY + 0.5) * 2 / this.height) - 1;
+          const screenPriority = Math.min(255, Math.floor(
+            (normalizedX * normalizedX + normalizedY * normalizedY) * 128,
+          ));
+          const existing = requests.get(key);
+          if (existing) {
+            existing.screenPriority = Math.min(existing.screenPriority ?? 255, screenPriority);
+            existing.coverage = Math.min(0xffff, (existing.coverage ?? 1) + 1);
+            continue;
+          }
           const request = this.requestPool[requestCount++];
           request.textureId = entry.textureId;
           request.path = entry.path;
@@ -110,6 +123,9 @@ export class VirtualTextureFeedbackPass {
           request.x = requestX;
           request.y = requestY;
           request.tail = tail ? true : undefined;
+          request.screenPriority = screenPriority;
+          request.coverage = 1;
+          request.priorityTier = undefined;
           requests.set(key, request);
           this.seenMips[mip] = 1;
         }

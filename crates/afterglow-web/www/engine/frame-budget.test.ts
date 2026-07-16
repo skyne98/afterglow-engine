@@ -56,6 +56,30 @@ describe('FrameBudget', () => {
     expect(budget.stageDeferred[FrameStage.RenderPrepare]).toBe(0);
   });
 
+  test('feeds VT presentation timing into the central tuner before polling', () => {
+    let recorded = -1;
+    let processed = 0;
+    let polled = 0;
+    const adapter = { prepareFrame() {} };
+    prepareAfterglowFrame(
+      { frameId: 1, deltaSeconds: 0.016, elapsedSeconds: 0.016 },
+      null,
+      adapter as never,
+      {
+        frameTimeMs: 16.7,
+        feedback: new Map(),
+        store: {
+          recordFrameTime(value: number) { recorded = value; },
+          processFeedback() { processed++; },
+          poll() { polled++; },
+        } as never,
+      },
+    );
+    expect(recorded).toBe(16.7);
+    expect(processed).toBe(1);
+    expect(polled).toBe(1);
+  });
+
   test('frame orchestration defers optional work but always prepares rendering', () => {
     let now = 0;
     const budget = new FrameBudget(config, () => now);

@@ -14,13 +14,25 @@ fixed per-frame page upload budget.
 
 ## Public surface
 
-- `VirtualTextureStore(loader, pageDataProvider?, format?, device?)`
+- `VirtualTextureTuning(config?)` owns the central bounded atlas/page-table
+  commit policy. `VirtualTextureTuningRes` is the ECS resource definition.
+  It starts at two pages / 0.20 ms, tightens after repeated overloaded rAF
+  samples with backlog, then cautiously probes toward configured device caps
+  after stable windows; a bad promoted cap immediately returns to the
+  independently validated baseline.
+- `VirtualTextureStore(loader, pageDataProvider?, format?, device?, tuning?)`
+  accepts the shared tuning instance. `recordFrameTime(milliseconds)` feeds
+  the tuner without allocation; `getStats()` exposes active limits and
+  downshift/recovery counters.
 - `loadTexture(path, options?) -> AssetHandle<THREE.Texture>`
 - `loadMaterialSet({ albedo, normal?, roughness?, ao? }, options?)` loads aligned
   PBR channels and expands each albedo feedback page to every linked channel.
 - `processFeedback(feedback)` accepts globally identified requests
-  `{ path, mip, x, y }` and merges them into a fixed persistent scheduler.
-  `poll()` dispatches and commits one bounded scheduling quantum per frame.
+  `{ path, mip, x, y, screenPriority?, coverage? }` and merges them into a
+  fixed persistent priority scheduler. `screenPriority` ranges from 0 at the
+  screen center to 255 at the edge/corners; `coverage` is the feedback-pixel
+  count. `VirtualTextureFeedbackPass` supplies both automatically. `poll()`
+  dispatches and commits one bounded scheduling quantum per frame.
 - `attachRenderer(renderer)` binds the actual Three.js backend textures so
   atlas-slot and packed-page-table changes use `GPUQueue.writeTexture`.
 - `unloadTexture(path)` cancels pending generations and releases owned slots.
@@ -35,7 +47,9 @@ fixed per-frame page upload budget.
   `consume()` returns `null` when no newer readback has completed, distinguishing
   that state from a completed readback containing zero pages. Readback decoding
   alternates two retained Maps, uses request objects pooled at `resize()`, and
-  reuses fixed mip scratch; a second submit is deferred until the previous map
+  reuses fixed mip scratch. Duplicate pixels retain the closest-to-center sample
+  and accumulate bounded screen coverage for admission priority; a second submit
+  is deferred until the previous map
   is consumed so pooled records cannot be mutated under a consumer.
 - `getDebugSnapshot()`, `setDebugPaused()`, `setDebugPageBudget()`, and
   `VirtualTextureDebugController` support reusable atlas and slow-residency UIs.
@@ -78,7 +92,7 @@ requesting one to two levels finer than the strict screen footprint without the
 old accidental fixed three-level bias. The dungeon submits feedback every four
 frames: at 144 Hz this is still a 36 Hz residency update while avoiding a GPU
 readback and second scene pass on every presented frame. Completed worker jobs
-are also committed through a four-page-per-frame upload queue rather than
+are committed through the centrally tuned bounded upload queue rather than
 issuing an unbounded burst of atlas and page-table writes between frames.
 
 Feedback uses `RG32Uint`: word zero stores valid, six mip bits, and eleven bits
@@ -98,14 +112,26 @@ Feedback expansion, material-channel deduplication, and capacity-bias fitting
 write into preallocated request records plus a fixed numeric scratch map; they
 do not construct per-feedback Maps, channel objects, or string keys. A fixed-
 capacity persistent scheduler retains feedback that does not fit in one frame's
-dispatch budget. Requests unseen for sixteen newer feedback snapshots are
-removed; visible requests refresh their age. At the dungeon's 36 Hz feedback
-rate this covers the measured ~430 ms worst-case page latency. Cancellation is propagated through
-an `AbortSignal`: queued jobs stop before read/transcode stage boundaries, while
-an already-running one-in-flight RPC is allowed to finish and its generation is
-discarded. A fixed 64-entry serial transcode ring matches that RPC constraint
-without an unbounded Promise chain and copies reusable RPC scratch before the
-next dispatch. Physical slots are acquired only
+dispatch budget. Twenty-two intrusive fixed-array lanes (eleven exact mip rungs
+× center/edge) avoid sorting and allocation. One feedback sample enqueues the
+whole missing ancestor chain immediately, eliminating a feedback roundtrip per
+rung; lane order still guarantees low→middle restoration before middle→high,
+then high→ultra. Within each exact rung, center/large-coverage pages outrank
+small edge pages. Visible waiting requests age upward every four feedback epochs
+to prevent starvation.
+
+Requests absent from two newer feedback snapshots are removed (about 56 ms at
+the dungeon's 36 Hz feedback rate). Newly important center/coarse-restoration
+work can immediately preempt a strictly worse non-pinned in-flight load when the
+64-entry table is full. Cancellation propagates through an `AbortSignal`:
+queued jobs stop before read/transcode stage boundaries, while an already-running
+one-in-flight RPC may finish and its stale generation is discarded. Web/CEF uses
+`createFetchRangeLoader()` to issue exact serving-layer `fetch + Range` reads;
+it avoids routing tiny page ranges through the page-side AssetLoader wasm
+executor. A fixed 64-entry `BoundedTranscoderPool` dispatches across two to four
+independent texture workers (four on machines exposing eight or more logical
+CPUs). Each worker remains one-in-flight/SPSC-safe and owns its response before
+reuse. Physical slots are acquired only
 after page bytes are ready, so a slow range read or transcode cannot evict useful
 resident data while it is pending.
 
@@ -114,9 +140,21 @@ pending table, ready-upload ring, scheduler, cache slots, and feedback scratch
 are preallocated; hot identity uses numeric `textureId`/packed page keys. Path
 Maps remain only for load/unload and game-facing lookup. The
 scheduler capacity equals the physical atlas capacity. Scheduling checks a
-0.25 ms budget in small batches; upload commits are limited to four pages and a
-0.35 ms budget per `poll()`. Rejected admissions, stale cancellations, cache
-hits/misses/evictions, queue bytes, read latency, upload CPU time, and budget
+0.25 ms budget in small batches; atlas/page-table commits are limited to **two**
+pages and a **0.20 ms** budget per `poll()` by default. The central
+`VirtualTextureTuning` observes presentation intervals only while residency
+backlog exists. Active streaming samples accumulate across short empty gaps. In
+a 15-sample window, two intervals above 1.25× the target reduce the active page
+cap (then its time budget at the one-page floor). One stable window with real
+backlog probes one step toward configured device caps
+(four pages / 0.35 ms by default), allowing bootstrap streaming to calibrate
+short gameplay bursts. A clean probe becomes the new known-safe setting; a bad
+promoted cap immediately rolls back to the independently validated two-page /
+0.20 ms baseline and waits sixty quarter-second windows before probing again. Completed pages stay in the fixed ready
+ring for a later rAF rather than turning a full-cache replacement into a
+presentation burst. Rejected admissions, stale cancellations, priority
+preemptions, cache hits/misses/evictions, queue bytes, range-read latency,
+transcode worker/queue/runtime telemetry, upload CPU time, and budget
 exhaustion are exposed by `getStats()`. `getStats()` updates and returns one
 stable preallocated object and is safe for per-frame telemetry; the allocating
 `getDebugSnapshot()` is intended only for explicit diagnostics.
@@ -129,10 +167,13 @@ absolute block offset, page-grid dimensions, and a vector of encoded page
 sizes. The optional tail stores one offset and size. It does **not** serialize a
 full `ChunkInfo` or repeated mip/x/y/encoding metadata per page.
 
-`parseBigHeader()` admits this directory once. `createPageDataProvider()`
-expands each compact size vector into fixed `Float64Array` offsets and
-`Uint32Array` sizes, after which page lookup is direct `y * pagesX + x`
-indexing. The production nine-channel dungeon header fell from 764,192 bytes in
+`parseBigHeader()` admits this directory once. `createFetchRangeLoader(baseUrl?)`
+returns the browser/CEF serving-layer `load`/`size`/`read` implementation;
+`read` requires an exact 206 response. `createPageDataProvider(loader, header,
+textureWorkers, format)` accepts a fixed worker list, expands each compact size
+vector into fixed `Float64Array` offsets and `Uint32Array` sizes, and exposes a
+stable `getStats()` view for read/transcode stages. Page lookup is direct
+`y * pagesX + x` indexing. The production nine-channel dungeon header fell from 764,192 bytes in
 v4 to 123,768 bytes in v5, safely below the 1 MiB RPC output limit. v4 is
 rejected; bundled assets were rebuilt rather than retaining compatibility.
 

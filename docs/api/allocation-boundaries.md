@@ -6,9 +6,9 @@ game-facing APIs necessarily allocate.
 
 | Boundary | Effect classification | Why allocation remains | Admission/measurement |
 |---|---|---|---|
-| Asset HTTP range fetch | `budgeted` | `fetch`, `Response.arrayBuffer`, browser networking | 256 fetch slots; VT 64 pages / 8 MiB in flight; pending bytes/counters |
+| Asset HTTP range fetch | `budgeted` | `fetch`, `Response.arrayBuffer`, browser networking | VT serving-layer ranges are bounded by 64 pages / 8 MiB in flight; pending bytes/counters |
 | Worker RPC convenience Promise | `gameFacing` | JS Promise and owned response envelope | 256 task slots; 32 completions/poll; capacity rejection |
-| Basis transcode | `budgeted` | Codec output and postcard response vectors | Serial 64-job ring; output bytes counted by VT admission |
+| Basis transcode | `budgeted` | Codec output and postcard response vectors | Shared 64-job ring over 2–4 independent one-in-flight workers; output bytes counted by VT admission |
 | Image/model parse | `budgeted` | `Blob`, `createImageBitmap`, GLTF/Three objects | Fixed AssetStore IDs and completion ring; loading/warm-up only |
 | Feedback readback | `budgeted` | Three/WebGPU asynchronous readback buffer | One outstanding readback; two retained maps and pooled requests |
 | Renderer pipeline compile | `bootstrap` | Browser/Dawn pipeline implementation | Declared variant warm-up; post-seal pipeline monitor |

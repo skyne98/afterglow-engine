@@ -35,6 +35,65 @@ const settle = async (store: { poll(): void }) => {
 };
 
 describe('VirtualTextureStore residency identity', () => {
+  test('central tuning probes upward only after stability and rolls back a bad probe', () => {
+    const tuning = new VT.VirtualTextureTuning({
+      minUploadsPerPoll: 1,
+      baselineUploadsPerPoll: 2,
+      maxUploadsPerPoll: 3,
+      minUploadBudgetMs: 0.10,
+      baselineUploadBudgetMs: 0.20,
+      maxUploadBudgetMs: 0.30,
+      uploadBudgetStepMs: 0.05,
+      targetFrameMs: 10,
+      overloadMultiplier: 1.25,
+      overloadSamples: 2,
+      sampleWindow: 3,
+      stableWindowsBeforeProbe: 1,
+      probeCooldownWindows: 1,
+    });
+    const stable = () => { tuning.recordFrameTime(10, 1); tuning.recordFrameTime(10, 1); tuning.recordFrameTime(10, 1); };
+    const overloaded = () => { tuning.recordFrameTime(20, 1); tuning.recordFrameTime(20, 1); tuning.recordFrameTime(10, 1); };
+
+    // Sustained overload tightens the baseline and records that new fallback.
+    overloaded();
+    expect(tuning.uploadsPerPoll).toBe(1);
+    expect(tuning.bestSafeUploadsPerPoll).toBe(1);
+    // Cooldown consumes one stable window; the next one probes 1 -> 2.
+    stable(); stable();
+    expect(tuning.uploadsPerPoll).toBe(2);
+    expect(tuning.probes).toBe(1);
+    // A clean probe is promoted to the known-safe setting.
+    stable();
+    expect(tuning.bestSafeUploadsPerPoll).toBe(2);
+    expect(tuning.recoveries).toBe(1);
+    // A later stable window probes 2 -> 3 and promotes it. A workload change
+    // then rolls the whole promoted ladder back to the validated 2-page cap.
+    stable();
+    expect(tuning.uploadsPerPoll).toBe(3);
+    stable();
+    expect(tuning.bestSafeUploadsPerPoll).toBe(3);
+    overloaded();
+    expect(tuning.uploadsPerPoll).toBe(2);
+    expect(tuning.bestSafeUploadsPerPoll).toBe(2);
+    expect(tuning.probeRejections).toBe(1);
+  });
+
+  test('central tuning preserves clean evidence across transiently empty backlogs', () => {
+    const tuning = new VT.VirtualTextureTuning({
+      minUploadsPerPoll: 1, baselineUploadsPerPoll: 2, maxUploadsPerPoll: 3,
+      minUploadBudgetMs: 0.10, baselineUploadBudgetMs: 0.20, maxUploadBudgetMs: 0.30,
+      uploadBudgetStepMs: 0.05, targetFrameMs: 10, overloadMultiplier: 1.25,
+      overloadSamples: 2, sampleWindow: 3, stableWindowsBeforeProbe: 1,
+      probeCooldownWindows: 1,
+    });
+    tuning.recordFrameTime(10, 1);
+    tuning.recordFrameTime(10, 1);
+    for (let idle = 0; idle < 60; idle++) tuning.recordFrameTime(10, 0);
+    tuning.recordFrameTime(10, 1);
+    expect(tuning.uploadsPerPoll).toBe(3);
+    expect(tuning.probes).toBe(1);
+  });
+
   test('deduplicates in-flight requests but keeps texture paths distinct', async () => {
     const calls: string[] = [];
     const store = new VT.VirtualTextureStore(loader, async (path, req) => {
@@ -44,7 +103,8 @@ describe('VirtualTextureStore residency identity', () => {
     });
     store.loadTexture('a', { width: 512, height: 512 });
     store.loadTexture('b', { width: 512, height: 512 });
-    await flush();
+    await settle(store);
+    calls.length = 0;
 
     const a: VirtualPageRequest = { path: 'a', mip: 0, x: 0, y: 0 };
     const b: VirtualPageRequest = { path: 'b', mip: 0, x: 0, y: 0 };
@@ -211,25 +271,96 @@ describe('VirtualTextureStore residency identity', () => {
     expect(captured.map(req => [req.mip, req.x, req.y])).toEqual([[0, 0, 0], [0, 1, 0]]);
   });
 
-  test('persists visible requests across polls instead of dropping the frame overflow', () => {
+  test('commits at most two completed page uploads per poll', async () => {
+    const releases: Array<() => void> = [];
+    const page = new Uint8Array(PAGE_BYTES);
+    const store = new VT.VirtualTextureStore(loader, async (_path, req) => {
+      // Let pinned coarse mips settle immediately, then release four fine pages
+      // together to emulate a worker completion burst.
+      if (req.mip !== 0) return page;
+      return new Promise<Uint8Array>(resolve => releases.push(() => resolve(page)));
+    });
+    store.loadTexture('paced', { width: 512, height: 512 });
+    await settle(store);
+    const feedback = new Map<string, VirtualPageRequest>();
+    for (let pageIndex = 0; pageIndex < 4; pageIndex++) {
+      feedback.set(`${pageIndex}`, {
+        path: 'paced', mip: 0, x: pageIndex, y: 0,
+      });
+    }
+    store.processFeedback(feedback);
+    store.poll();
+    expect(releases).toHaveLength(4);
+    for (const release of releases) release();
+    await flush(); await flush();
+
+    const before = store.getStats().completedUploads;
+    store.poll();
+    expect(store.getStats().completedUploads - before).toBe(2);
+    expect(store.getStats().readyUploads).toBe(2);
+    store.poll();
+    expect(store.getStats().completedUploads - before).toBe(4);
+    expect(store.getStats().readyUploads).toBe(0);
+  });
+
+  test('persists visible requests across polls instead of dropping the frame overflow', async () => {
     const calls: string[] = [];
     const never = new Promise<Uint8Array>(() => {});
     const store = new VT.VirtualTextureStore(loader, async (path, req) => {
       calls.push(`${path}:${req.mip}:${req.x}:${req.y}`);
-      return never;
+      return req.mip >= 4 ? new Uint8Array(PAGE_BYTES) : never;
     });
     store.loadTexture('persistent', { width: 4096, height: 4096 });
+    await settle(store);
+    calls.length = 0;
     const feedback = new Map<string, VirtualPageRequest>();
-    for (let page = 0; page < 20; page++) {
-      const request = { path: 'persistent', mip: 0, x: page % 32, y: Math.floor(page / 32) };
+    for (let page = 0; page < 16; page++) {
+      const request = { path: 'persistent', mip: 0, x: (page & 3) << 3, y: (page >> 2) << 3 };
       feedback.set(`${page}`, request);
     }
     const first = store.processFeedback(feedback);
     expect(first.loaded).toBe(0);
-    expect(first.queuedRequests).toBe(20);
-    for (let frame = 0; frame < 3; frame++) store.poll();
-    expect(calls.filter(call => call.startsWith('persistent:0:'))).toHaveLength(20);
+    expect(first.queuedRequests).toBe(64);
+    for (let frame = 0; frame < 8; frame++) store.poll();
+    expect(calls.filter(call => call.startsWith('persistent:3:'))).toHaveLength(16);
+    expect(calls).toHaveLength(64);
     expect(store.getStats().scheduledRequests).toBe(0);
+  });
+
+  test('prioritizes coarse restoration, then screen center, before ultra upgrades', async () => {
+    const calls: Array<{ mip: number; x: number; y: number }> = [];
+    const store = new VT.VirtualTextureStore(loader, async (_path, req) => {
+      calls.push({ mip: req.mip, x: req.x, y: req.y });
+      return new Uint8Array(PAGE_BYTES);
+    });
+    store.loadTexture('priority', { width: 4096, height: 4096 });
+    await settle(store);
+    // Build one coordinate through mip 1 so its next request is an ultra mip-0
+    // upgrade, while the other coordinates remain at the pinned fallback.
+    store.processFeedback(new Map([['middle', {
+      path: 'priority', mip: 1, x: 0, y: 0, screenPriority: 0, coverage: 8,
+    }]]));
+    await settle(store);
+    calls.length = 0;
+    store.setDebugPageBudget(1);
+    store.processFeedback(new Map([
+      ['ultra-center', { path: 'priority', mip: 0, x: 0, y: 0, screenPriority: 0, coverage: 8 }],
+      ['coarse-edge', { path: 'priority', mip: 0, x: 24, y: 24, screenPriority: 255, coverage: 1 }],
+      ['coarse-center', { path: 'priority', mip: 0, x: 16, y: 16, screenPriority: 0, coverage: 8 }],
+    ]));
+    for (let dispatch = 0; dispatch < 7; dispatch++) {
+      store.poll();
+      await flush();
+    }
+    expect(calls.slice(0, 7)).toEqual([
+      { mip: 3, x: 2, y: 2 },
+      { mip: 3, x: 3, y: 3 },
+      { mip: 2, x: 4, y: 4 },
+      { mip: 2, x: 6, y: 6 },
+      { mip: 1, x: 8, y: 8 },
+      { mip: 1, x: 12, y: 12 },
+      { mip: 0, x: 0, y: 0 },
+    ]);
   });
 
   test('cooperatively cancels stale reads before they enter later stages', async () => {
@@ -254,17 +385,19 @@ describe('VirtualTextureStore residency identity', () => {
     expect(store.getStats().failedLoads).toBe(0);
   });
 
-  test('drops queued requests after sixteen newer feedback snapshots', () => {
+  test('drops queued requests after two absent feedback snapshots', async () => {
     const never = new Promise<Uint8Array>(() => {});
-    const store = new VT.VirtualTextureStore(loader, async () => never);
+    const store = new VT.VirtualTextureStore(loader, async (_path, req) =>
+      req.mip >= 4 ? new Uint8Array(PAGE_BYTES) : never);
     store.loadTexture('stale', { width: 4096, height: 4096 });
+    await settle(store);
     const feedback = new Map<string, VirtualPageRequest>();
-    for (let page = 0; page < 100; page++) {
-      feedback.set(`${page}`, { path: 'stale', mip: 0, x: page % 32, y: Math.floor(page / 32) });
+    for (let page = 0; page < 16; page++) {
+      feedback.set(`${page}`, { path: 'stale', mip: 0, x: (page & 3) << 3, y: (page >> 2) << 3 });
     }
     store.processFeedback(feedback);
     store.poll();
-    for (let epoch = 0; epoch < 17; epoch++) {
+    for (let epoch = 0; epoch < 2; epoch++) {
       store.processFeedback(new Map());
       store.poll();
     }
@@ -272,38 +405,83 @@ describe('VirtualTextureStore residency identity', () => {
     expect(store.getStats().scheduledRequests).toBe(0);
   });
 
-  test('bounds admitted asynchronous page work', () => {
+  test('bounds admitted asynchronous page work', async () => {
     const never = new Promise<Uint8Array>(() => {});
-    const store = new VT.VirtualTextureStore(loader, async () => never);
-    store.loadTexture('bounded', { width: 4096, height: 4096 });
-    for (let batch = 0; batch < 20; batch++) {
-      const feedback = new Map<string, VirtualPageRequest>();
-      for (let i = 0; i < 32; i++) {
-        const page = batch * 32 + i;
-        const request = { path: 'bounded', mip: 0, x: page % 32, y: Math.floor(page / 32) % 32 };
-        feedback.set(`${page}`, request);
-      }
-      store.processFeedback(feedback);
-      store.poll();
+    const store = new VT.VirtualTextureStore(loader, async (_path, req) =>
+      req.mip >= 4 ? new Uint8Array(PAGE_BYTES) : never);
+    for (let texture = 0; texture < 5; texture++) {
+      store.loadTexture(`bounded-${texture}`, { width: 4096, height: 4096 });
+      await settle(store);
     }
+    const feedback = new Map<string, VirtualPageRequest>();
+    for (let texture = 0; texture < 5; texture++) for (let page = 0; page < 16; page++) {
+      const request = {
+        path: `bounded-${texture}`, mip: 0,
+        x: (page & 3) << 3, y: (page >> 2) << 3,
+      };
+      feedback.set(`${texture}:${page}`, request);
+    }
+    store.processFeedback(feedback);
+    for (let frame = 0; frame < 12; frame++) store.poll();
     const stats = store.getStats();
     expect(stats.pendingPages).toBe(64);
     expect(stats.maxPendingPages).toBe(64);
     expect(stats.rejectedAdmissions).toBeGreaterThan(0);
   });
 
-  test('coarsens GPU feedback only when its working set exceeds atlas capacity', async () => {
+  test('preempts worse in-flight edge work for a newly visible center page', async () => {
+    const calls: string[] = [];
+    const store = new VT.VirtualTextureStore(loader, async (path, req, signal) => {
+      calls.push(`${path}:${req.mip}:${req.x}:${req.y}`);
+      if (req.mip >= 4) return new Uint8Array(PAGE_BYTES);
+      return new Promise<Uint8Array>((_resolve, reject) =>
+        signal?.addEventListener('abort', () => reject(new Error('canceled')), { once: true }));
+    });
+    for (let texture = 0; texture < 6; texture++) {
+      store.loadTexture(`preempt-${texture}`, { width: 4096, height: 4096 });
+      await settle(store);
+    }
+    calls.length = 0;
+    const edge = new Map<string, VirtualPageRequest>();
+    for (let texture = 0; texture < 5; texture++) for (let page = 0; page < 16; page++) {
+      edge.set(`${texture}:${page}`, {
+        path: `preempt-${texture}`, mip: 0,
+        x: (page & 3) << 3, y: (page >> 2) << 3,
+        screenPriority: 255, coverage: 1,
+      });
+    }
+    store.processFeedback(edge);
+    for (let frame = 0; frame < 8; frame++) store.poll();
+    expect(store.getStats().pendingPages).toBe(64);
+
+    store.processFeedback(new Map([['new-center', {
+      path: 'preempt-5', mip: 0, x: 0, y: 0, screenPriority: 0, coverage: 8,
+    }]]));
+    store.poll();
+    expect(store.getStats().priorityPreemptions).toBe(1);
+    await flush();
+    store.poll();
+    expect(store.getStats().pendingPages).toBe(64);
+    expect(calls).toContain('preempt-5:3:0:0');
+  });
+
+  test('coarsens progressive feedback only when its working set exceeds atlas capacity', async () => {
     const store = new VT.VirtualTextureStore(loader, async () => new Uint8Array(PAGE_BYTES));
-    store.loadTexture('oversubscribed', { width: 4096, height: 4096 });
-    await settle(store);
+    for (let texture = 0; texture < 14; texture++) {
+      store.loadTexture(`oversubscribed-${texture}`, { width: 4096, height: 4096 });
+      await settle(store);
+    }
     const feedback = new Map<string, VirtualPageRequest>();
-    for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) {
-      const request = { path: 'oversubscribed', mip: 0, x, y };
-      feedback.set(`${x}:${y}`, request);
+    for (let texture = 0; texture < 14; texture++) for (let page = 0; page < 16; page++) {
+      const request = {
+        path: `oversubscribed-${texture}`, mip: 0,
+        x: (page & 3) << 3, y: (page >> 2) << 3,
+      };
+      feedback.set(`${texture}:${page}`, request);
     }
     const result = store.processFeedback(feedback);
-    expect(result.totalRequests).toBe(64);
-    expect(result.lodBias).toBe(1);
+    expect(result.totalRequests).toBeLessThanOrEqual(155);
+    expect(result.lodBias).toBeGreaterThan(0);
   });
 
   test('pins terminal mips relative to each texture size', async () => {

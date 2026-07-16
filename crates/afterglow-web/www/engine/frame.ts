@@ -27,6 +27,8 @@ export interface VTInput {
   store: VirtualTextureStore;
   /** Feedback from the previous frame's feedback pass (page requests). */
   feedback: ReadonlyMap<unknown, VirtualPageRequest>;
+  /** Latest rAF presentation interval in milliseconds, for VT auto-tuning. */
+  frameTimeMs?: number;
 
 }
 
@@ -74,6 +76,7 @@ export function prepareAfterglowFrame(
   //    [IDTECH] Section 3.4: "it is typically fine to use a frame old data"
   if (vtInput) {
     budget?.beginStage(FrameStage.VirtualTexture, true);
+    if (vtInput.frameTimeMs !== undefined) vtInput.store.recordFrameTime(vtInput.frameTimeMs);
     vtInput.store.processFeedback(vtInput.feedback);
     vtInput.store.poll();
     budget?.endStage(FrameStage.VirtualTexture);

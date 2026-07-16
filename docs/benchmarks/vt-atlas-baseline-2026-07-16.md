@@ -56,3 +56,56 @@ fixed in-flight limits. Raw per-second samples and final counters are adjacent:
 - `vt-atlas-half-2026-07-16.log`
 - `vt-atlas-full-2026-07-16.log`
 - `vt-atlas-churn-2026-07-16.log`
+
+## Follow-up: two-page commit pacing (2026-07-16)
+
+The original four-page / 0.35 ms commit quantum was tightened to **two pages /
+0.20 ms** after an unlocked 1440×900 CEF repeat exposed 33–67 ms presentation
+intervals during full-atlas admission. The repeat used the same Radeon 680M,
+BC7, v5 nine-channel dungeon, eight-page admission budget, and 3,600-slot
+atlas. This desktop session presented at a 60 Hz rAF cadence, so these are not
+directly comparable to the 144 Hz baseline above; they are a targeted
+full-cache pacing regression.
+
+| State | Duration | Mean frame | Max frame | >17 ms | Resident | Evictions | Failed / overflow / GPU errors |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Half | 14.56 s | 16.694 ms | 33.350 ms | 1 | 1,896 / 3,600 | 0 | 0 / 0 / 0 |
+| Full | 16.00 s | 16.692 ms | 33.350 ms | 1 | 3,598 / 3,600 | 80 | 0 / 0 / 0 |
+| Churn | 8.12 s | 16.744 ms | 50.025 ms | 1 | 3,598 / 3,600 | 1,019 | 0 / 0 / 0 |
+
+Relative to the earlier four-page run, full admission improved from 23 frames
+above 17 ms with a 66.695 ms maximum to one such frame with a 33.350 ms maximum.
+Churn retained one isolated 50.025 ms interval, so this is a substantial
+reduction—not a strict zero-drop certification. GPU timings remained bounded:
+main 1.00–1.05 ms, feedback 0.013–0.015 ms, aggregate render 4.01–5.90 ms.
+
+## Follow-up: range/transcode latency and progressive priority
+
+Interactive close-wall testing exposed a software pipeline bottleneck rather
+than an SSD or GPU limit. The old route admitted 64 small ranges through the
+page-side AssetLoader wasm executor and then serialized Basis conversion through
+one texture worker. At the initial dungeon view it averaged **445.81 ms/page**:
+**440.96 ms** was attributed to the AssetLoader range stage, while actual BC7
+transcoding averaged only **1.51 ms**. Direct serving-layer control reads against
+the same 727 MiB container took 0.81–1.64 ms for serial and four-way parallel
+20,001-byte ranges.
+
+The corrected path uses exact `fetch + Range`, four independent one-in-flight
+texture workers on fox-laptop, and submits the complete missing mip chain into
+exact coarse-to-fine priority lanes in one feedback update. After warm-up and a
+close-wall transition, 48 new physical PBR pages completely settled in
+**283.29 ms** with the tuner at four pages / 0.30 ms. Cumulative stage means were
+**26.25 ms/page** admission-to-ready, **10.39 ms** range read, **13.39 ms**
+transcode queue, **2.42 ms** transcode, and roughly 0.1 ms/upload. A larger new
+view showed its first page at **79.32 ms**, first 12 coarse-priority pages at
+**132.75 ms**, and all 306 physical pages at 1.60 s; the latter is intentionally
+bounded by presentation-safe atlas commits. No page failed, no scheduler
+overflowed, and no WebGPU error occurred.
+
+A subsequent deterministic full-atlas run with repeated diagnostic feedback
+filled all 3,600 slots in **38.99 s**. It averaged 16.711 ms/frame, had four
+intervals above 17 ms and a 50.025 ms maximum, and finished with zero pending,
+failed, or overflowed work. Final stage means were 8.48 ms admission-to-ready,
+6.08 ms range read, 0.66 ms transcode queue, and 1.70 ms transcode across four
+workers. The upload tuner reached four pages / 0.35 ms; one rejected probe
+rolled back and later recovered under its hysteresis policy.

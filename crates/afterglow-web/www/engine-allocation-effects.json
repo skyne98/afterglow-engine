@@ -60,6 +60,10 @@
     "PageCache.acquire": "virtual-texture.ts",
     "VirtualTextureStore.addFeedbackRequest": "virtual-texture.ts",
     "VirtualTextureStore.buildEffectiveFeedback": "virtual-texture.ts",
+    "VirtualTextureStore.schedulePriority": "virtual-texture.ts",
+    "VirtualTextureStore.mergeFeedback": "virtual-texture.ts",
+    "VirtualTextureTuning.recordFrameTime": "virtual-texture.ts",
+    "VirtualTextureStore.recordFrameTime": "virtual-texture.ts",
     "VirtualTextureStore.getStats": "virtual-texture.ts",
     "AssetStore.drainCompletions": "asset-store.ts"
   },
@@ -68,8 +72,10 @@
     "AssetStore.observeLoad": "AssetLoad",
     "parseTexture": "BrowserImageDecode",
     "parseGLTF": "ModelParse",
+    "createFetchRangeLoader": "AssetFetch",
     "createPageDataProvider": "AssetFetch",
-    "BoundedSerialTranscoder.submit": "WorkerPromise"
+    "VirtualTextureStore.queuePageLoad": "AssetFetch",
+    "BoundedTranscoderPool.submit": "WorkerPromise"
   },
   "bootstrapOnly": {
     "AssetStore.registerAsset": "PathInterning",

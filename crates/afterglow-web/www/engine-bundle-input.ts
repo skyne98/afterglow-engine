@@ -5,7 +5,8 @@ import { VirtualTextureFeedbackPass } from './engine/virtual-texture-feedback-pa
 import { EngineMemory, EnginePhase, FixedIndexPool, LinearArena, defineEngineMemoryResource } from './engine/engine-memory.ts';
 import { BudgetDecision, FrameBudget, FrameBudgetRes, FrameStage } from './engine/frame-budget.ts';
 import {
-  VirtualTextureStore, VT_SAMPLE_WGSL, VT_SAMPLE_LEVEL_WGSL,
+  VirtualTextureStore, VirtualTextureTuning, VirtualTextureTuningRes,
+  VT_SAMPLE_WGSL, VT_SAMPLE_LEVEL_WGSL,
   VT_RESOLVE_MATERIAL_MIP4_WGSL, VT_FEEDBACK_WGSL,
   FORMAT_RGBA, PAGE_SIZE, PAGE_BORDER, SLOT_SIZE,
   ATLAS_WIDTH, ATLAS_HEIGHT,
@@ -22,7 +23,8 @@ window.AfterglowMemory = {
   BudgetDecision, FrameBudget, FrameBudgetRes, FrameStage,
 };
 window.AfterglowVT = {
-  VirtualTextureStore, VirtualTextureFeedbackPass, VT_SAMPLE_WGSL,
+  VirtualTextureStore, VirtualTextureTuning, VirtualTextureTuningRes,
+  VirtualTextureFeedbackPass, VT_SAMPLE_WGSL,
   VT_SAMPLE_LEVEL_WGSL, VT_RESOLVE_MATERIAL_MIP4_WGSL, VT_FEEDBACK_WGSL,
   FORMAT_RGBA, PAGE_SIZE, PAGE_BORDER, SLOT_SIZE, ATLAS_WIDTH, ATLAS_HEIGHT,
 };

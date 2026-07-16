@@ -230,59 +230,136 @@ function findVTPageChunk(header, assetName, mip, pageX, pageY) {
   };
 }
 
-class BoundedSerialTranscoder {
-  worker;
+class BoundedTranscoderPool {
+  workers;
   jobs;
+  workerBusy;
   head = 0;
   tail = 0;
   count = 0;
-  running = false;
-  constructor(worker, capacity) {
-    this.worker = worker;
+  active = 0;
+  completed = 0;
+  totalQueueMs = 0;
+  maxQueueMs = 0;
+  totalTranscodeMs = 0;
+  maxTranscodeMs = 0;
+  stats = {
+    workerCount: 0,
+    active: 0,
+    queued: 0,
+    completed: 0,
+    averageQueueMs: 0,
+    maxQueueMs: 0,
+    averageTranscodeMs: 0,
+    maxTranscodeMs: 0
+  };
+  constructor(workers, capacity) {
+    this.workers = workers;
+    if (workers.length === 0 || !Number.isInteger(capacity) || capacity < 1)
+      throw new RangeError("VT transcoder pool requires workers and positive capacity");
     this.jobs = new Array(capacity).fill(null);
+    this.workerBusy = new Uint8Array(workers.length);
   }
   submit(data, format, signal) {
     if (this.count === this.jobs.length)
       return Promise.reject(new Error("VT transcode queue capacity exceeded"));
     return new Promise((resolve, reject) => {
-      this.jobs[this.tail] = { data, format, signal, resolve, reject };
+      this.jobs[this.tail] = { data, format, signal, queuedAt: performance.now(), resolve, reject };
       this.tail = (this.tail + 1) % this.jobs.length;
       this.count++;
       this.pump();
     });
   }
-  async pump() {
-    if (this.running)
-      return;
-    this.running = true;
-    try {
-      while (this.count !== 0) {
-        const job = this.jobs[this.head];
-        this.jobs[this.head] = null;
-        this.head = (this.head + 1) % this.jobs.length;
-        this.count--;
-        if (job.signal?.aborted) {
-          job.reject(new Error("VT transcode canceled before dispatch"));
-          continue;
-        }
-        try {
-          const result = await this.worker.transcode(job.data, job.format);
-          if (job.signal?.aborted)
-            job.reject(new Error("VT transcode canceled after dispatch"));
-          else
-            job.resolve(result.slice());
-        } catch (error) {
-          job.reject(error);
-        }
+  pump() {
+    for (let workerIndex = 0;workerIndex < this.workers.length && this.count !== 0; workerIndex++) {
+      if (this.workerBusy[workerIndex] !== 0)
+        continue;
+      const job = this.jobs[this.head];
+      this.jobs[this.head] = null;
+      this.head = (this.head + 1) % this.jobs.length;
+      this.count--;
+      if (job.signal?.aborted) {
+        job.reject(new Error("VT transcode canceled before dispatch"));
+        workerIndex--;
+        continue;
       }
-    } finally {
-      this.running = false;
-      if (this.count !== 0)
-        this.pump();
+      const queueMs = performance.now() - job.queuedAt;
+      this.totalQueueMs += queueMs;
+      this.maxQueueMs = Math.max(this.maxQueueMs, queueMs);
+      this.workerBusy[workerIndex] = 1;
+      this.active++;
+      this.run(workerIndex, job);
     }
   }
+  async run(workerIndex, job) {
+    const startedAt = performance.now();
+    try {
+      const result = await this.workers[workerIndex].transcode(job.data, job.format);
+      if (job.signal?.aborted)
+        job.reject(new Error("VT transcode canceled after dispatch"));
+      else
+        job.resolve(result.slice());
+    } catch (error) {
+      job.reject(error);
+    } finally {
+      const elapsed = performance.now() - startedAt;
+      this.completed++;
+      this.totalTranscodeMs += elapsed;
+      this.maxTranscodeMs = Math.max(this.maxTranscodeMs, elapsed);
+      this.workerBusy[workerIndex] = 0;
+      this.active--;
+      this.pump();
+    }
+  }
+  getStats() {
+    const stats = this.stats;
+    stats.workerCount = this.workers.length;
+    stats.active = this.active;
+    stats.queued = this.count;
+    stats.completed = this.completed;
+    stats.averageQueueMs = this.completed === 0 ? 0 : this.totalQueueMs / this.completed;
+    stats.maxQueueMs = this.maxQueueMs;
+    stats.averageTranscodeMs = this.completed === 0 ? 0 : this.totalTranscodeMs / this.completed;
+    stats.maxTranscodeMs = this.maxTranscodeMs;
+    return stats;
+  }
 }
-function createPageDataProvider(loader, header, textureWorker, format) {
+function createFetchRangeLoader(baseUrl = "") {
+  const url = (path) => baseUrl + path;
+  return {
+    async load(path) {
+      const response = await fetch(url(path));
+      if (!response.ok)
+        throw new Error(`asset fetch ${response.status}: ${path}`);
+      return new Uint8Array(await response.arrayBuffer());
+    },
+    async size(path) {
+      const response = await fetch(url(path), { method: "HEAD" });
+      if (!response.ok)
+        throw new Error(`asset HEAD ${response.status}: ${path}`);
+      const length = Number(response.headers.get("content-length"));
+      if (!Number.isSafeInteger(length) || length < 0)
+        throw new Error(`asset HEAD has invalid content-length: ${path}`);
+      return length;
+    },
+    async read(path, offset, len) {
+      if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(len) || len < 0)
+        throw new RangeError("asset range must use non-negative safe integers");
+      if (len === 0)
+        return new Uint8Array(0);
+      const response = await fetch(url(path), {
+        headers: { Range: `bytes=${offset}-${offset + len - 1}` }
+      });
+      if (response.status !== 206)
+        throw new Error(`asset range fetch expected 206, got ${response.status}: ${path}`);
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      if (bytes.byteLength !== len)
+        throw new Error(`asset range returned ${bytes.byteLength} bytes; expected ${len}: ${path}`);
+      return bytes;
+    }
+  };
+}
+function createPageDataProvider(loader, header, textureWorkers, format) {
   const directories = new Map;
   for (const asset of header.assets) {
     const source = asset.virtualTexture;
@@ -309,8 +386,24 @@ function createPageDataProvider(loader, header, textureWorker, format) {
       tailSize: source.tail?.size ?? 0
     });
   }
-  const transcoder = new BoundedSerialTranscoder(textureWorker, 64);
-  return async (path, req, signal) => {
+  const transcoder = new BoundedTranscoderPool(textureWorkers, 64);
+  let reads = 0;
+  let totalReadMs = 0;
+  let maxReadMs = 0;
+  const stats = {
+    reads: 0,
+    averageReadMs: 0,
+    maxReadMs: 0,
+    workerCount: textureWorkers.length,
+    activeTranscodes: 0,
+    queuedTranscodes: 0,
+    completedTranscodes: 0,
+    averageTranscodeQueueMs: 0,
+    maxTranscodeQueueMs: 0,
+    averageTranscodeMs: 0,
+    maxTranscodeMs: 0
+  };
+  const provider = async (path, req, signal) => {
     if (signal?.aborted)
       throw new Error("VT page load canceled before read");
     const directory = directories.get(path);
@@ -329,7 +422,12 @@ function createPageDataProvider(loader, header, textureWorker, format) {
     }
     if (!directory || size === 0)
       throw new Error(`VT page not found: ${path} mip=${req.mip} (${req.x},${req.y})`);
+    const readStartedAt = performance.now();
     const pageData = await loader.read(path + ".big", offset, size);
+    const readMs = performance.now() - readStartedAt;
+    reads++;
+    totalReadMs += readMs;
+    maxReadMs = Math.max(maxReadMs, readMs);
     if (signal?.aborted)
       throw new Error("VT page load canceled after read");
     if (directory.encoding === "RawRgba8") {
@@ -354,6 +452,22 @@ function createPageDataProvider(loader, header, textureWorker, format) {
       throw new Error(`invalid transcoded VT page header: count=${count}, size=${width}x${height}, bytes=${length}`);
     return transcoded.slice(16, 16 + length);
   };
+  provider.getStats = () => {
+    const transcode = transcoder.getStats();
+    stats.reads = reads;
+    stats.averageReadMs = reads === 0 ? 0 : totalReadMs / reads;
+    stats.maxReadMs = maxReadMs;
+    stats.workerCount = transcode.workerCount;
+    stats.activeTranscodes = transcode.active;
+    stats.queuedTranscodes = transcode.queued;
+    stats.completedTranscodes = transcode.completed;
+    stats.averageTranscodeQueueMs = transcode.averageQueueMs;
+    stats.maxTranscodeQueueMs = transcode.maxQueueMs;
+    stats.averageTranscodeMs = transcode.averageTranscodeMs;
+    stats.maxTranscodeMs = transcode.maxTranscodeMs;
+    return stats;
+  };
+  return provider;
 }
 export {
   parseBigHeader,
@@ -361,7 +475,8 @@ export {
   findVTPageChunk,
   findVTMipTailChunk,
   createPageDataProvider,
-  BoundedSerialTranscoder,
+  createFetchRangeLoader,
+  BoundedTranscoderPool,
   BIG_VERSION,
   BIG_MAGIC
 };

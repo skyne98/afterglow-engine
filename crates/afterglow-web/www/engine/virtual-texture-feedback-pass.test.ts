@@ -6,6 +6,29 @@ import { encodeFeedback } from './virtual-texture-feedback.ts';
 const flush = () => new Promise(resolve => setTimeout(resolve, 0));
 
 describe('VirtualTextureFeedbackPass reuse', () => {
+  test('records center proximity and pixel coverage while deduplicating', async () => {
+    const pass = new VirtualTextureFeedbackPass(1);
+    pass.resize(3, 1);
+    const layout = createPackedPageTableLayout(4, 4);
+    const entry = {
+      textureId: 3, path: 'page', textureMaxMip: 2, maxMip: 2,
+      tailFirstMip: null, pageTableLayout: layout,
+    };
+    const encoded = encodeFeedback(3, 0, 1, 2);
+    const words = new Uint32Array([...encoded, ...encoded, ...encoded]);
+    const renderer = {
+      getRenderTarget: () => null,
+      setRenderTarget() {}, render() {},
+      async readRenderTargetPixelsAsync() { return words; },
+    };
+    const store = { getEntryById: (id: number) => id === 3 ? entry : undefined };
+    pass.submit(renderer as never, {} as never, {} as never, store as never);
+    await flush();
+    const request = pass.consume()!.values().next().value;
+    expect(request).toMatchObject({ screenPriority: 0, coverage: 3 });
+    pass.dispose();
+  });
+
   test('reuses two maps and pooled request records across readbacks', async () => {
     const pass = new VirtualTextureFeedbackPass(1);
     pass.resize(2, 1);
