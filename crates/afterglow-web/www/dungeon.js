@@ -1784,21 +1784,25 @@ ${message}`;
   document.body.replaceChildren(panel);
   console.error("Afterglow WebGPU startup failed:", error);
 }
-async function createWebGPUOnlyRenderer(parameters = {}) {
+var legacyWindowRendererFactory = (parameters) => {
+  const legacyWindow = window;
+  return new legacyWindow.THREE.WebGPURenderer(parameters);
+};
+async function createWebGPUOnlyRenderer(parameters = {}, factory) {
   const gpu = navigator.gpu;
   if (!gpu)
     throw new Error("navigator.gpu is unavailable. WebGL fallback is disabled.");
   const adapter = await gpu.requestAdapter();
   if (!adapter)
     throw new Error("Unable to acquire a hardware WebGPU adapter. WebGL fallback is disabled.");
-  const renderer = new window.THREE.WebGPURenderer({ ...parameters });
+  const renderer = factory(parameters);
   renderer.afterglowAdapterInfo = adapter.info;
   disableWebGLFallback(renderer);
   try {
     await renderer.init();
     assertWebGPUBackend(renderer);
   } catch (error) {
-    renderer.dispose?.();
+    renderer.dispose();
     throw error;
   }
   const onDeviceLost = renderer.onDeviceLost.bind(renderer);
@@ -2130,7 +2134,7 @@ scene.background = new THREE.Color(1053464);
 scene.fog = new THREE.Fog(1053464, 7, 28);
 var camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.05, 60);
 camera.rotation.order = "YXZ";
-var renderer = await createWebGPUOnlyRenderer({ antialias: false, trackTimestamp: false }).catch((error) => {
+var renderer = await createWebGPUOnlyRenderer({ antialias: false, trackTimestamp: false }, legacyWindowRendererFactory).catch((error) => {
   showWebGPUFailure(error);
   throw error;
 });

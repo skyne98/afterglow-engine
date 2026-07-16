@@ -5,7 +5,7 @@
 // bitset to build contiguous ranges. If fragmentation is high (>25% dirty
 // or >maxRanges), falls back to one bounding range.
 
-import * as THREE from 'three';
+import * as THREE from 'three/webgpu';
 import { NONE_U32 } from './types.ts';
 
 interface UpdateRange {

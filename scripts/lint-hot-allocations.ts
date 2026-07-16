@@ -2,9 +2,11 @@
 /** Conservative allocation lint for explicitly sealed engine hot regions. */
 import { readFile } from 'node:fs/promises';
 import { join, relative, resolve } from 'node:path';
+import ts from '../crates/afterglow-web/www/node_modules/typescript/lib/typescript.js';
 
 const root = resolve(import.meta.dir, '..');
-const engine = join(root, 'crates/afterglow-web/www/engine');
+const www = join(root, 'crates/afterglow-web/www');
+const engine = join(www, 'engine');
 const effectsPath = join(root, 'crates/afterglow-web/www/engine-allocation-effects.json');
 const effects = JSON.parse(await readFile(effectsPath, 'utf8')) as {
   version: number;
@@ -27,6 +29,12 @@ const banned: Array<[RegExp, string]> = [
   [/\.subarray\s*\(/, 'new typed-array view'],
   [/\.{3}[A-Za-z_$\[{]/, 'spread/rest allocation'],
   [/\breturn\s*\{/, 'object literal return'],
+];
+const effectBanned: Array<[RegExp, string]> = [
+  ...banned,
+  [/\b(?:requestAnimationFrame|queueMicrotask|setTimeout|setInterval)\s*\(/, 'scheduling/browser callback allocation'],
+  [/\bconsole\.(?:log|info|warn|error|debug)\s*\(/, 'dynamic console diagnostic'],
+  [/\.(?:innerHTML|textContent)\s*=/, 'dynamic DOM diagnostic'],
 ];
 
 const glob = new Bun.Glob('**/*.ts');
@@ -89,6 +97,43 @@ for await (const path of glob.scan({ cwd: engine, onlyFiles: true })) {
     failures++;
   }
 }
+// JSDoc effects close the marker-omission loophole for registered frame clients.
+// Every authored function declaring @alloc-effect none is scanned as a whole,
+// including demo entrypoints outside engine/.
+let effectFunctions = 0;
+const authoredGlob = new Bun.Glob('**/*.ts');
+for await (const path of authoredGlob.scan({ cwd: www, onlyFiles: true })) {
+  if (path.startsWith('node_modules/') || path.endsWith('.test.ts') || path.endsWith('.d.ts')) continue;
+  const sourceText = await readFile(join(www, path), 'utf8');
+  const source = ts.createSourceFile(path, sourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const visit = (node: ts.Node): void => {
+    if (ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node) ||
+        ts.isFunctionExpression(node) || ts.isArrowFunction(node)) {
+      const leading = sourceText.slice(node.getFullStart(), node.getStart(source));
+      if (/@alloc-effect\s+none\b/.test(leading)) {
+        effectFunctions++;
+        const start = source.getLineAndCharacterOfPosition(node.getStart(source)).line;
+        const lines = node.getText(source).split('\n');
+        for (let index = 0; index < lines.length; index++) {
+          const line = lines[index];
+          const permit = line.match(/@alloc-allowed\s+reason=\S+\s+issue=DME-\d+\s+expires=(\d{4}-\d{2}-\d{2})/);
+          if (permit?.[1] !== undefined && permit[1] >= new Date().toISOString().slice(0, 10)) continue;
+          for (const [pattern, description] of effectBanned) if (pattern.test(line)) {
+            console.error(`${relative(root, join(www, path))}:${start + index + 1}: @alloc-effect none: ${description}`);
+            failures++;
+          }
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+}
+if (effectFunctions === 0) {
+  console.error('no @alloc-effect none functions found');
+  failures++;
+}
+
 if (regions === 0) {
   console.error('no @hot-no-alloc regions found');
   failures++;
@@ -127,4 +172,4 @@ for (const path of Object.keys(effects.moduleEffects)) {
   }
 }
 if (failures) process.exit(1);
-console.log(`allocation lint passed for ${regions} sealed hot regions`);
+console.log(`allocation lint passed for ${regions} sealed hot regions and ${effectFunctions} effect-declared functions`);

@@ -175,21 +175,25 @@ ${message}`;
   document.body.replaceChildren(panel);
   console.error("Afterglow WebGPU startup failed:", error);
 }
-async function createWebGPUOnlyRenderer(parameters = {}) {
+var legacyWindowRendererFactory = (parameters) => {
+  const legacyWindow = window;
+  return new legacyWindow.THREE.WebGPURenderer(parameters);
+};
+async function createWebGPUOnlyRenderer(parameters = {}, factory) {
   const gpu = navigator.gpu;
   if (!gpu)
     throw new Error("navigator.gpu is unavailable. WebGL fallback is disabled.");
   const adapter = await gpu.requestAdapter();
   if (!adapter)
     throw new Error("Unable to acquire a hardware WebGPU adapter. WebGL fallback is disabled.");
-  const renderer = new window.THREE.WebGPURenderer({ ...parameters });
+  const renderer = factory(parameters);
   renderer.afterglowAdapterInfo = adapter.info;
   disableWebGLFallback(renderer);
   try {
     await renderer.init();
     assertWebGPUBackend(renderer);
   } catch (error) {
-    renderer.dispose?.();
+    renderer.dispose();
     throw error;
   }
   const onDeviceLost = renderer.onDeviceLost.bind(renderer);
@@ -206,7 +210,7 @@ var VT = window.AfterglowVT;
 var { wgslFn, Fn, texture, sampler, uv, uniform, float, uint } = THREE;
 var VIRTUAL_SIZE = 262144;
 var PAGE_GRID = VIRTUAL_SIZE / VT.PAGE_SIZE;
-var renderer = await createWebGPUOnlyRenderer({ antialias: true }).catch((error) => {
+var renderer = await createWebGPUOnlyRenderer({ antialias: true }, legacyWindowRendererFactory).catch((error) => {
   showWebGPUFailure(error);
   throw error;
 });

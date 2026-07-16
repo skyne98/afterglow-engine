@@ -37,7 +37,11 @@ fixed per-frame page upload budget.
   count. `VirtualTextureFeedbackPass` supplies both automatically. `poll()`
   dispatches and commits one bounded scheduling quantum per frame.
 - `attachRenderer(renderer)` binds the actual Three.js backend textures so
-  atlas-slot and packed-page-table changes use `GPUQueue.writeTexture`.
+  atlas-slot and packed-page-table changes use `GPUQueue.writeTexture`. Packed
+  page-table writes reuse one preallocated `Uint32Array` instead of creating
+  per-update subarray views. Atlas page uploads require bytes backed by an owned
+  `ArrayBuffer`; a `SharedArrayBuffer` view is rejected rather than passed to an
+  incompatible WebGPU queue boundary.
 - `unloadTexture(path)` cancels pending generations and releases owned slots.
 - `poll()` advances asynchronous page work.
 - `getEntry(path)` exposes the read-only per-texture descriptor needed to bind

@@ -60,6 +60,25 @@ not a menu.
 No Wave C work starts by copying another demo helper. Wave B establishes the
 ownership/lifecycle pattern first.
 
+### Progress record
+
+Implemented on 2026-07-17:
+
+- DME-001–003: authoritative artifact/conformance manifests, architecture debt
+  fingerprinting, protected-branch comparison support, and CI/xtask gates;
+- DME-004 foundation: strict TypeScript and source-hygiene ratchets plus whole-
+  function syntax checking for `@alloc-effect none`; transitive authored call-
+  graph checking remains open;
+- DME-010–011: fixed diagnostics, owned renderer host, and sealed
+  `EngineRuntime` with fixed worker/render-pass registrations;
+- DME-012: `engine-demo.ts` is the first `canonical` visual entrypoint and uses
+  the runtime, render adapter, renderer host, explicit capacities, and one Three
+  module identity;
+- DME-013: fixed-capacity `FrameBench` capture with explicit diagnostic finish.
+
+The machine-readable source of truth remains `engine-conformance.json`; this
+progress note does not override its gates.
+
 ## 4. Wave A — freeze the debt and make status truthful
 
 ### DME-001 — Reopen the sealed-runtime rollout

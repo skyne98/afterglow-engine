@@ -16,6 +16,7 @@ interface TypeFinding {
   source: string;
 }
 interface TypeBaseline { version: number; config: string; findings: TypeFinding[] }
+const baselineVersion = 2;
 const root = resolve(import.meta.dir, '..');
 const www = join(root, 'crates/afterglow-web/www');
 const configName = 'tsconfig.harsh.json';
@@ -31,7 +32,10 @@ function baselineAtRef(ref: string): TypeBaseline | null {
   const path = 'crates/afterglow-web/www/typescript-error-baseline.json';
   const result = spawnSync('git', ['show', `${ref}:${path}`], { cwd: root, encoding: 'utf8' });
   if (result.status !== 0) return null;
-  try { return JSON.parse(result.stdout) as TypeBaseline; } catch { return null; }
+  try {
+    const baseline = JSON.parse(result.stdout) as TypeBaseline;
+    return baseline.version === baselineVersion ? baseline : null;
+  } catch { return null; }
 }
 
 export function collectTypeFindings(): TypeFinding[] {
@@ -48,7 +52,9 @@ export function collectTypeFindings(): TypeFinding[] {
     const position = diagnostic.file && diagnostic.start !== undefined
       ? diagnostic.file.getLineAndCharacterOfPosition(diagnostic.start)
       : { line: 0, character: 0 };
-    const source = diagnostic.file ? compact(diagnostic.file.text.split(/\r?\n/)[position.line] ?? '') : '';
+    const source = diagnostic.file && diagnostic.start !== undefined
+      ? compact(diagnostic.file.text.slice(diagnostic.start, diagnostic.start + (diagnostic.length ?? 1)))
+      : '';
     const message = compact(ts.flattenDiagnosticMessageText(diagnostic.messageText, ' '));
     return { file, line: position.line + 1, column: position.character + 1, code: diagnostic.code, message, source };
   }).sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line || a.column - b.column || a.code - b.code || a.message.localeCompare(b.message));
@@ -65,11 +71,11 @@ export function collectTypeFindings(): TypeFinding[] {
 if (import.meta.main) {
   const findings = collectTypeFindings();
   if (process.argv.includes('--json')) {
-    console.log(JSON.stringify({ version: 1, config: configName, findings }, null, 2));
+    console.log(JSON.stringify({ version: baselineVersion, config: configName, findings }, null, 2));
     process.exit(0);
   }
   if (process.argv.includes('--write-baseline')) {
-    const baseline: TypeBaseline = { version: 1, config: configName, findings };
+    const baseline: TypeBaseline = { version: baselineVersion, config: configName, findings };
     await writeFile(baselinePath, `${JSON.stringify(baseline, null, 2)}\n`);
     console.log(`wrote ${findings.length} frozen strict TypeScript error(s) to ${relative(root, baselinePath)}`);
     process.exit(0);
@@ -78,7 +84,7 @@ if (import.meta.main) {
   let baseline: TypeBaseline;
   try { baseline = JSON.parse(await readFile(baselinePath, 'utf8')) as TypeBaseline; }
   catch { console.error('strict TypeScript baseline is missing; bootstrap it explicitly with --write-baseline'); process.exit(1); }
-  if (baseline.version !== 1 || baseline.config !== configName || !Array.isArray(baseline.findings)) {
+  if (baseline.version !== baselineVersion || baseline.config !== configName || !Array.isArray(baseline.findings)) {
     console.error('strict TypeScript baseline has an unsupported or malformed schema');
     process.exit(1);
   }

@@ -145,10 +145,10 @@ function bytesPerBlock(format: number): number {
 }
 
 /** Get the Three.js format constant for a format. */
-function threeFormat(format: number): number {
-  if (format === FORMAT_BC7) return 36492;      // RGBA_BPTC_Format
-  if (format === FORMAT_ASTC) return 37808;      // RGBA_ASTC_4x4_Format
-  return THREE.RGBAFormat;
+function threeFormat(format: number): THREE.CompressedPixelFormat {
+  if (format === FORMAT_BC7) return THREE.RGBA_BPTC_Format;
+  if (format === FORMAT_ASTC) return THREE.RGBA_ASTC_4x4_Format;
+  throw new RangeError(`unsupported compressed texture format ${format}`);
 }
 
 /** A virtual texture descriptor — created by loadTexture(). */
@@ -825,6 +825,7 @@ export class VirtualTextureStore {
   private rejectedAdmissions = 0;
   private scheduleBudgetExhaustions = 0;
   private uploadBudgetExhaustions = 0;
+  private readonly pageTableUploadScratch = new Uint32Array(1);
 
   /** Fixed persistent request set; survives individual feedback frames. */
   private scheduledKeys: Float64Array;
@@ -1625,9 +1626,12 @@ export class VirtualTextureStore {
     entry.pageTable[index] = value;
     const gpuTexture = this.gpuPageTables.get(path);
     if (gpuTexture && this.device) {
+      const mipOffset = entry.pageTableLayout.mipOffsets[entry.maxMip];
+      if (mipOffset === undefined) throw new RangeError('mip tail offset is outside the packed page table');
+      this.pageTableUploadScratch[0] = value;
       this.device.queue.writeTexture(
-        { texture: gpuTexture, origin: { x: 1, y: entry.pageTableLayout.mipOffsets[entry.maxMip] } },
-        entry.pageTable.subarray(index, index + 1), {},
+        { texture: gpuTexture, origin: { x: 1, y: mipOffset } },
+        this.pageTableUploadScratch, {},
         { width: 1, height: 1, depthOrArrayLayers: 1 },
       );
     } else {
@@ -1646,12 +1650,15 @@ export class VirtualTextureStore {
     entry.pageTable[idx] = value;
     const gpuTexture = this.gpuPageTables.get(path);
     if (gpuTexture && this.device) {
+      const mipOffset = entry.pageTableLayout.mipOffsets[req.mip];
+      if (mipOffset === undefined) throw new RangeError('page mip is outside the packed page table');
+      this.pageTableUploadScratch[0] = value;
       this.device.queue.writeTexture(
         {
           texture: gpuTexture,
-          origin: { x: req.x, y: entry.pageTableLayout.mipOffsets[req.mip] + req.y },
+          origin: { x: req.x, y: mipOffset + req.y },
         },
-        entry.pageTable.subarray(idx, idx + 1),
+        this.pageTableUploadScratch,
         {},
         { width: 1, height: 1, depthOrArrayLayers: 1 },
       );
@@ -1722,6 +1729,9 @@ export class VirtualTextureStore {
    */
   writePage(slot: PageSlot, data: Uint8Array) {
     if (this.gpuAtlasTexture && this.device) {
+      if (!(data.buffer instanceof ArrayBuffer))
+        throw new TypeError('atlas uploads require page bytes backed by an owned ArrayBuffer');
+      const uploadData = data as Uint8Array<ArrayBuffer>;
       // Compressed: write directly to GPUTexture via writeTexture
       // [SHLOM] uses gl.texSubImage2D / UpdateSubregion — WebGPU equivalent
       this.device.queue.writeTexture(
@@ -1729,7 +1739,7 @@ export class VirtualTextureStore {
           texture: this.gpuAtlasTexture,
           origin: { x: slot.x * SLOT_SIZE, y: slot.y * SLOT_SIZE },
         },
-        data,
+        uploadData,
         this.format === FORMAT_RGBA
           ? { bytesPerRow: SLOT_SIZE * 4, rowsPerImage: SLOT_SIZE }
           : { bytesPerRow: this.cache.slotBytesPerRow, rowsPerImage: SLOT_BLOCKS_Y },

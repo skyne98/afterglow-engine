@@ -1,5 +1,3 @@
-import { WebGPURenderer } from 'three/webgpu';
-
 /**
  * WebGPU-only renderer bootstrap.
  *
@@ -20,6 +18,8 @@ export type WebGPUOnlyRenderer = {
   onDeviceLost: (info: { api?: string; message?: string; reason?: string | null }) => void;
   init: () => Promise<void>;
   compileAsync: (scene: unknown, camera: unknown) => Promise<unknown>;
+  render: (scene: unknown, camera: unknown) => void;
+  /** Legacy demos only; canonical RendererHost uses render() after init. */
   renderAsync: (scene: unknown, camera: unknown) => Promise<unknown>;
   setPixelRatio: (ratio: number) => void;
   setSize: (width: number, height: number) => void;
@@ -52,13 +52,18 @@ export function showWebGPUFailure(error: unknown): void {
 
 export type WebGPUOnlyRendererFactory = (parameters: Record<string, unknown>) => WebGPUOnlyRenderer;
 
-const defaultRendererFactory: WebGPUOnlyRendererFactory = parameters =>
-  new WebGPURenderer(parameters) as unknown as WebGPUOnlyRenderer;
+/** Temporary bridge for legacy demos; canonical code uses RendererHost. */
+export const legacyWindowRendererFactory: WebGPUOnlyRendererFactory = parameters => {
+  const legacyWindow = window as unknown as {
+    THREE: { WebGPURenderer: new (options: Record<string, unknown>) => WebGPUOnlyRenderer };
+  };
+  return new legacyWindow.THREE.WebGPURenderer(parameters);
+};
 
 /** Create a renderer that can never initialize or continue under WebGL. */
 export async function createWebGPUOnlyRenderer(
   parameters: Record<string, unknown> = {},
-  factory: WebGPUOnlyRendererFactory = defaultRendererFactory,
+  factory: WebGPUOnlyRendererFactory,
 ): Promise<WebGPUOnlyRenderer> {
   const gpu = navigator.gpu;
   if (!gpu) throw new Error('navigator.gpu is unavailable. WebGL fallback is disabled.');

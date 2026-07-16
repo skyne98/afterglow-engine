@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "findings": [
     {
       "id": "0545923f17ae49e57907",
@@ -10,7 +10,7 @@
       "excerpt": "geometry.index!"
     },
     {
-      "id": "d5fbc0bc2288cf401235",
+      "id": "295d34d2df712dd3284b",
       "rule": "AG-TS-001",
       "file": "engine/asset-store.ts",
       "line": 129,
@@ -58,7 +58,7 @@
       "excerpt": "this.paths[id]!"
     },
     {
-      "id": "c52401479a03b2e20795",
+      "id": "688a3fd327247b49a9e2",
       "rule": "AG-TS-001",
       "file": "engine/asset-store.ts",
       "line": 505,
@@ -66,7 +66,7 @@
       "excerpt": "any"
     },
     {
-      "id": "dffc26151fab5e839cef",
+      "id": "a8055fd882baf3b3eae2",
       "rule": "AG-TS-001",
       "file": "engine/asset-store.ts",
       "line": 536,
@@ -74,7 +74,7 @@
       "excerpt": "any"
     },
     {
-      "id": "338cf53e4e42a8abe25e",
+      "id": "07557860b649a4ec8595",
       "rule": "AG-TS-001",
       "file": "engine/asset-store.ts",
       "line": 552,
@@ -146,6 +146,14 @@
       "excerpt": "this.jobs[this.head]!"
     },
     {
+      "id": "048cb1ebc8b918e036ab",
+      "rule": "AG-TS-009",
+      "file": "engine/descriptors.ts",
+      "line": 60,
+      "column": 55,
+      "excerpt": "null as unknown as RenderDescriptor"
+    },
+    {
       "id": "bb789a3cdf47e776caee",
       "rule": "AG-TS-006",
       "file": "engine/fallback.ts",
@@ -160,6 +168,22 @@
       "line": 71,
       "column": 5,
       "excerpt": "backend.files.get('values-0.pack')!"
+    },
+    {
+      "id": "d0cdcf21d7acfa5954c5",
+      "rule": "AG-TS-009",
+      "file": "engine/persistent-blob-cache.ts",
+      "line": 125,
+      "column": 28,
+      "excerpt": "data as unknown as FileSystemWriteChunkType"
+    },
+    {
+      "id": "29eebfd5f5c629ee6251",
+      "rule": "AG-TS-009",
+      "file": "engine/persistent-blob-cache.ts",
+      "line": 134,
+      "column": 28,
+      "excerpt": "data as unknown as FileSystemWriteChunkType"
     },
     {
       "id": "6a6ae67bbd29e91982f0",
@@ -210,6 +234,70 @@
       "excerpt": "chain.levels.get(4)!"
     },
     {
+      "id": "656bf73cdfde9f5b4042",
+      "rule": "AG-TS-009",
+      "file": "engine/relative-pointer.test.ts",
+      "line": 25,
+      "column": 33,
+      "excerpt": "undefined as unknown as Promise<void>"
+    },
+    {
+      "id": "b65551f37ae3d6210733",
+      "rule": "AG-TS-009",
+      "file": "engine/relative-pointer.test.ts",
+      "line": 43,
+      "column": 7,
+      "excerpt": "element as unknown as HTMLElement"
+    },
+    {
+      "id": "219968e0ffd228e79b16",
+      "rule": "AG-TS-009",
+      "file": "engine/relative-pointer.test.ts",
+      "line": 45,
+      "column": 19,
+      "excerpt": "document as unknown as Document"
+    },
+    {
+      "id": "59bd421e149c129add97",
+      "rule": "AG-TS-009",
+      "file": "engine/relative-pointer.test.ts",
+      "line": 68,
+      "column": 7,
+      "excerpt": "element as unknown as HTMLElement"
+    },
+    {
+      "id": "0401b9ab6cff4991562b",
+      "rule": "AG-TS-009",
+      "file": "engine/relative-pointer.test.ts",
+      "line": 70,
+      "column": 19,
+      "excerpt": "document as unknown as Document"
+    },
+    {
+      "id": "ff73e04bbe7ab28f3d49",
+      "rule": "AG-TS-009",
+      "file": "engine/relative-pointer.test.ts",
+      "line": 83,
+      "column": 7,
+      "excerpt": "element as unknown as HTMLElement"
+    },
+    {
+      "id": "85466bf1288dca89e07e",
+      "rule": "AG-TS-009",
+      "file": "engine/relative-pointer.test.ts",
+      "line": 85,
+      "column": 19,
+      "excerpt": "document as unknown as Document"
+    },
+    {
+      "id": "50e1de894c8a495d4363",
+      "rule": "AG-TS-009",
+      "file": "engine/render-adapter-pool.test.ts",
+      "line": 22,
+      "column": 22,
+      "excerpt": "adapter as unknown as { attachProxy(entity: number, descriptor: number): RenderAttachStatus; detachProxy(entity: number): void; syncUniqueProxies(frame: unknown): void; }"
+    },
+    {
       "id": "b53fe1d428726640d837",
       "rule": "AG-TS-006",
       "file": "engine/render-adapter.ts",
@@ -240,6 +328,30 @@
       "line": 562,
       "column": 22,
       "excerpt": "this.uniqueObjects[entity]!"
+    },
+    {
+      "id": "08547698f8b89eb8d487",
+      "rule": "AG-TS-009",
+      "file": "engine/renderer-host.test.ts",
+      "line": 29,
+      "column": 18,
+      "excerpt": "{ parentNode: null } as unknown as HTMLCanvasElement"
+    },
+    {
+      "id": "70dcfd247be2c65238ae",
+      "rule": "AG-TS-009",
+      "file": "engine/renderer-host.test.ts",
+      "line": 78,
+      "column": 25,
+      "excerpt": "{ appendChild(child: unknown) { children.push(child); (child as { parentNode: unknown }).parentNode = container; }, removeChild(child: unknown) { const index = children.indexOf(chi"
+    },
+    {
+      "id": "311ea2c27802073c058d",
+      "rule": "AG-TS-009",
+      "file": "engine/renderer-host.test.ts",
+      "line": 119,
+      "column": 20,
+      "excerpt": "{ appendChild() {} } as unknown as HTMLElement"
     },
     {
       "id": "e14a3b15148c30d72d1d",
@@ -378,6 +490,22 @@
       "excerpt": "store.getEntry('tail')!"
     },
     {
+      "id": "c471ef5ab525df51b8be",
+      "rule": "AG-TS-009",
+      "file": "engine/virtual-texture-store.test.ts",
+      "line": 177,
+      "column": 20,
+      "excerpt": "store.atlasTexture as unknown as DataTexture"
+    },
+    {
+      "id": "a4d1e6c82269c39c9afc",
+      "rule": "AG-TS-009",
+      "file": "engine/virtual-texture-store.test.ts",
+      "line": 186,
+      "column": 20,
+      "excerpt": "{ limits: { maxTextureDimension2D: 8192 }, queue: { writeTexture(_dst: unknown, _data: unknown, layout: { bytesPerRow?: number; rowsPerImage?: number }) { layouts.push(layout); } }"
+    },
+    {
       "id": "212b124b3d50dab4deb8",
       "rule": "AG-TS-006",
       "file": "engine/virtual-texture-store.test.ts",
@@ -437,7 +565,7 @@
       "id": "126e92ee9d37920569b8",
       "rule": "AG-TS-006",
       "file": "engine/virtual-texture.ts",
-      "line": 1108,
+      "line": 1109,
       "column": 14,
       "excerpt": "this.entries.get(path)!"
     },
@@ -445,7 +573,7 @@
       "id": "dce5b74c912c66b5c145",
       "rule": "AG-TS-006",
       "file": "engine/virtual-texture.ts",
-      "line": 1141,
+      "line": 1142,
       "column": 50,
       "excerpt": "this.entriesById[textureId]!"
     },
@@ -453,7 +581,7 @@
       "id": "056fa54deb4f3ac55ed0",
       "rule": "AG-TS-006",
       "file": "engine/virtual-texture.ts",
-      "line": 1150,
+      "line": 1151,
       "column": 23,
       "excerpt": "this.pageTables.get(path)!"
     },
@@ -461,12 +589,20 @@
       "id": "7aca353e6c45dd192239",
       "rule": "AG-TS-007",
       "file": "engine/virtual-texture.ts",
-      "line": 1550,
+      "line": 1551,
       "column": 80,
       "excerpt": "if (this.queuePageLoad(entry, request, pageTable, false, priority)) { // @alloc-allowed reason=AssetFetch"
     },
     {
-      "id": "80bb393699d6ec1a105d",
+      "id": "32c0bcb3de7521eda2c9",
+      "rule": "AG-TS-009",
+      "file": "engine/webgpu-only.ts",
+      "line": 55,
+      "column": 24,
+      "excerpt": "window as unknown as { THREE: { WebGPURenderer: new (options: Record<string, unknown>) => WebGPUOnlyRenderer }; }"
+    },
+    {
+      "id": "38a79a8ab6caee63e912",
       "rule": "AG-TS-001",
       "file": "rigged-vt-demo.ts",
       "line": 21,
@@ -474,7 +610,7 @@
       "excerpt": "any"
     },
     {
-      "id": "98c33e93cedde1bdf79e",
+      "id": "d91baf58bf2cbd4325ba",
       "rule": "AG-TS-001",
       "file": "rigged-vt-demo.ts",
       "line": 22,
@@ -482,7 +618,7 @@
       "excerpt": "any"
     },
     {
-      "id": "024fa3c386bd8f526ef0",
+      "id": "f8d8f04097247f63cd9d",
       "rule": "AG-TS-001",
       "file": "rigged-vt-demo.ts",
       "line": 137,
@@ -490,7 +626,7 @@
       "excerpt": "any"
     },
     {
-      "id": "7a08f6da6cc72fe6a9a7",
+      "id": "a5215d7d73e6917dc810",
       "rule": "AG-TS-001",
       "file": "rigged-vt-demo.ts",
       "line": 138,
@@ -498,7 +634,7 @@
       "excerpt": "any"
     },
     {
-      "id": "699ab4670648c8622282",
+      "id": "342af9b579a6a96042d2",
       "rule": "AG-TS-001",
       "file": "rigged-vt-demo.ts",
       "line": 139,
@@ -506,7 +642,7 @@
       "excerpt": "any"
     },
     {
-      "id": "cf756e189f14da0e533c",
+      "id": "f97f5e6b24eea5921710",
       "rule": "AG-TS-001",
       "file": "rigged-vt-demo.ts",
       "line": 197,
@@ -514,7 +650,7 @@
       "excerpt": "any"
     },
     {
-      "id": "dd321b082b0fa76231b3",
+      "id": "60176e809e319e8e97ef",
       "rule": "AG-TS-001",
       "file": "rigged-vt-demo.ts",
       "line": 233,
@@ -522,7 +658,7 @@
       "excerpt": "any"
     },
     {
-      "id": "961bc9cf10937a9a594a",
+      "id": "29f282b2ae94908e9524",
       "rule": "AG-TS-001",
       "file": "rigged-vt-demo.ts",
       "line": 234,
@@ -530,7 +666,7 @@
       "excerpt": "any"
     },
     {
-      "id": "a6e22c3a704a2c33a126",
+      "id": "289acc03b02b08740f2b",
       "rule": "AG-TS-001",
       "file": "rigged-vt-demo.ts",
       "line": 254,
@@ -538,7 +674,7 @@
       "excerpt": "any"
     },
     {
-      "id": "cd8b97bdece98ffbba8f",
+      "id": "d091338a5679bb9898ca",
       "rule": "AG-TS-001",
       "file": "rigged-vt-demo.ts",
       "line": 255,
@@ -546,7 +682,7 @@
       "excerpt": "any"
     },
     {
-      "id": "d1c70994d3b37ef681f1",
+      "id": "1446aa9560b6ae25bea8",
       "rule": "AG-TS-001",
       "file": "rigged-vt-demo.ts",
       "line": 256,

@@ -5,7 +5,7 @@
 // The per-frame `syncTransforms()` is the hot path: one batched loop over
 // dirty entities composing matrices directly to GPU buffers.
 
-import * as THREE from 'three';
+import * as THREE from 'three/webgpu';
 import {
   createWorld, addEntity, addComponent, removeComponent,
   entityExists, hasComponent, commitRemovals,
@@ -533,7 +533,7 @@ export class RenderAdapter {
       if (!obj) return;
       const dest = obj.matrix.elements;
       for (let c = 0; c < 16; c++) {
-        dest[c] = this.worldMatrices[worldOffset + c];
+        dest[c] = this.worldMatrices[worldOffset + c] ?? 0;
       }
       obj.matrixWorldNeedsUpdate = true;
     }

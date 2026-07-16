@@ -2,7 +2,7 @@
 // Entities store only the integer descriptor ID; the descriptor determines
 // geometry, material, render tier, and how the proxy is created/synced.
 
-import * as THREE from 'three';
+import * as THREE from 'three/webgpu';
 import type { EntityId, RenderDescriptorId, RenderTier, RenderFrame, RenderDirty } from './types.ts';
 
 export type BoundsPolicy =

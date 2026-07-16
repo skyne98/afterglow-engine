@@ -2,7 +2,7 @@ import { TextureClient } from './texture.client.ts';
 import { Rpc } from './rpc.ts';
 import { createFetchRangeLoader, createPageDataProvider, getVirtualTextureDimensions, parseBigHeader } from './engine/big-parser.ts';
 import { PersistentBlobCache, persistentCacheNamespace } from './engine/persistent-blob-cache.ts';
-import { createWebGPUOnlyRenderer, showWebGPUFailure } from './engine/webgpu-only.ts';
+import { createWebGPUOnlyRenderer, legacyWindowRendererFactory, showWebGPUFailure } from './engine/webgpu-only.ts';
 import { assertHeightTextureGpuFormat, loadHeightTextureR16 } from './engine/height-texture.ts';
 import { RendererSeal, warmRendererVariants } from './engine/renderer-seal.ts';
 import { RelativePointerInput } from './engine/relative-pointer.ts';
@@ -18,7 +18,7 @@ const camera=new THREE.PerspectiveCamera(70,innerWidth/innerHeight,.05,60);camer
 // Four VT-backed PBR channels are substantially more expensive under 4x MSAA.
 // The engine demo renders one sample per pixel; production AA should be a
 // temporal/post-process pass rather than multiplying all VT lookups.
-const renderer=await createWebGPUOnlyRenderer({antialias:false,trackTimestamp:false}).catch(error=>{showWebGPUFailure(error);throw error});renderer.setSize(innerWidth,innerHeight);renderer.setPixelRatio(devicePixelRatio);document.body.append(renderer.domElement);
+const renderer=await createWebGPUOnlyRenderer({antialias:false,trackTimestamp:false},legacyWindowRendererFactory).catch(error=>{showWebGPUFailure(error);throw error});renderer.setSize(innerWidth,innerHeight);renderer.setPixelRatio(devicePixelRatio);document.body.append(renderer.domElement);
 const rendererSeal=new RendererSeal(renderer.backend),rendererSealStats={renderPipelines:0,computePipelines:0,renderPipelineViolations:0,computePipelineViolations:0};function pipelineTelemetry(){rendererSealStats.renderPipelines=rendererSeal.renderPipelines;rendererSealStats.computePipelines=rendererSeal.computePipelines;rendererSealStats.renderPipelineViolations=rendererSeal.renderPipelineViolations;rendererSealStats.computePipelineViolations=rendererSeal.computePipelineViolations;return rendererSealStats}const errors=[];renderer.backend.device.addEventListener('uncapturederror',e=>errors.push(String(e.error?.message??e.error)));addEventListener('error',e=>errors.push(String(e.error?.stack??e.message)));addEventListener('unhandledrejection',e=>errors.push(String(e.reason?.stack??e.reason)));
 scene.add(new THREE.HemisphereLight(0xb9c8e8,0x241b15,1.6));const lamp=new THREE.PointLight(0xffc985,30,18,2);lamp.position.set(0,3.2,0);scene.add(lamp);
 const floor=new THREE.Mesh(new THREE.PlaneGeometry(16,16),new THREE.MeshStandardMaterial({color:0x292722,roughness:1}));floor.rotation.x=-Math.PI/2;scene.add(floor);

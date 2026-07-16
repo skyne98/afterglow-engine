@@ -13,8 +13,9 @@ Bootstrap -> Warmup -> GameplaySealed -> Running <-> Stopped -> Shutdown
 
 `EngineRuntime` constructs and owns one `EngineMemory`, one `FrameBudget`, one
 fixed `EngineDiagnostics`, a fixed worker-input table, and a fixed render-pass
-table. It eagerly installs memory and budget resources in the adapter world
-through a `ResourceManifest`.
+table. `EngineRuntime.forScene()` also constructs and owns the scene's
+`RenderAdapter` at an explicit entity capacity. The runtime eagerly installs
+memory and budget resources in the adapter world through a `ResourceManifest`.
 
 During bootstrap, callers register worker inputs and render passes. Registration
 returns:
@@ -35,7 +36,8 @@ in this order:
 1. render adapter;
 2. engine memory;
 3. ECS resource manifest;
-4. runtime state.
+4. every registered render pass, including `RendererHost`;
+5. runtime state.
 
 `start(client)` is legal only after sealing or from `Stopped`. The runtime owns
 the only animation callback and mutates one persistent `RenderFrame` record.
@@ -46,7 +48,9 @@ Each frame executes:
 3. structural/pose drains;
 4. render-adapter preparation;
 5. the allocation-effect-checked game update;
-6. registered render passes in registration order.
+6. registered render passes in registration order. `RendererHost` uses Three's
+   synchronous `render()` after async initialization, avoiding a render promise
+   per gameplay frame.
 
 A frame exception is stored in the bounded diagnostics ring and stops the loop.
 Stopping during update does not schedule another frame. `dispose()` is
@@ -63,6 +67,7 @@ interface EngineFrameClient {
 
 interface EngineRenderPass {
   warm?(): Promise<void>;
+  seal?(): void;
   render(frame: Readonly<RenderFrame>): void;
   dispose(): void;
 }

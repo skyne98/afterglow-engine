@@ -14,11 +14,14 @@ class RenderTarget {
   setSize(width: number, height: number) { this.width = width; this.height = height; }
   dispose() {}
 }
-mock.module('three', () => ({
+const threeMock = {
   Texture, DataTexture, CompressedTexture, RenderTarget,
   RGBAFormat: 1, RedIntegerFormat: 2, UnsignedIntType: 3, RGIntegerFormat: 6,
+  RGBA_BPTC_Format: 36492, RGBA_ASTC_4x4_Format: 37808,
   LinearFilter: 4, NearestFilter: 5,
-}));
+};
+mock.module('three', () => threeMock);
+mock.module('three/webgpu', () => threeMock);
 
 type VTModule = typeof import('./virtual-texture.ts');
 let VT: VTModule;

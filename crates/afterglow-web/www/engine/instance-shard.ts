@@ -5,7 +5,7 @@
 // contiguity). Matrix and appearance data are written directly to the
 // InstancedMesh's Float32Array buffers — no setMatrixAt() calls.
 
-import * as THREE from 'three';
+import * as THREE from 'three/webgpu';
 import { NONE_U32, type EntityId, type RenderDescriptorId } from './types.ts';
 import type { InstancedRenderDescriptor } from './descriptors.ts';
 import { DirtySlotRanges } from './dirty-ranges.ts';

@@ -17,6 +17,7 @@ function renderer(partialBackend: Partial<WebGPUOnlyRenderer['backend']>): WebGP
     onDeviceLost: () => {},
     async init() {},
     async compileAsync() {},
+    render() {},
     async renderAsync() {},
     setPixelRatio() {},
     setSize() {},

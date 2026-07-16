@@ -45,6 +45,7 @@ function fakeRenderer(device: EventTarget): FakeRenderer {
     sizes: [],
     async init() { renderer.initialized++; },
     async compileAsync() { renderer.compiled++; },
+    render() { renderer.rendered++; },
     async renderAsync() { renderer.rendered++; },
     setPixelRatio(value) { renderer.ratios.push(value); },
     setSize(width, height) { renderer.sizes.push(width, height); },
@@ -115,7 +116,7 @@ describe('RendererHost', () => {
       Reflect.deleteProperty(renderer, 'setSize');
       await expect(RendererHost.create({
         scene: {}, camera: {}, diagnostics: new EngineDiagnostics(1),
-        viewport: new FakeViewport(), factory: () => renderer,
+        viewport: new FakeViewport(), factory: () => renderer, showFailure: false,
         container: { appendChild() {} } as unknown as HTMLElement,
       })).rejects.toThrow('missing a required host method');
       expect(renderer.disposed).toBe(1);

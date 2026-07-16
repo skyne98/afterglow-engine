@@ -49,8 +49,10 @@ class FakeAdapter implements RuntimeRenderAdapter {
 
 class FakePass implements EngineRenderPass {
   disposed = 0;
+  sealed = 0;
   constructor(private readonly name: string, private readonly events: string[]) {}
   async warm(): Promise<void> { this.events.push(`warm-${this.name}`); }
+  seal(): void { this.sealed++; this.events.push(`seal-${this.name}`); }
   render(): void { this.events.push(`render-${this.name}`); }
   dispose(): void { this.disposed++; this.events.push(`dispose-${this.name}`); }
 }
@@ -114,6 +116,8 @@ describe('EngineRuntime', () => {
     runtime.enterWarmup();
     await runtime.warm();
     runtime.sealGameplay();
+    expect(first.sealed).toBe(1);
+    expect(second.sealed).toBe(1);
     events.length = 0;
     let observed: Readonly<RenderFrame> | null = null;
     runtime.start({ update(frame) { observed = frame; events.push('update'); } });

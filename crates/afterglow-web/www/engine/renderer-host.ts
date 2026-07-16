@@ -1,8 +1,10 @@
+import { WebGPURenderer } from 'three/webgpu';
 import { EngineDiagnostics, DiagnosticCode, DiagnosticSource } from './diagnostics.ts';
 import { RendererSeal } from './renderer-seal.ts';
 import type { EngineRenderPass } from './runtime.ts';
 import {
   createWebGPUOnlyRenderer,
+  showWebGPUFailure,
   type WebGPUOnlyRenderer,
   type WebGPUOnlyRendererFactory,
 } from './webgpu-only.ts';
@@ -34,6 +36,9 @@ class BrowserRendererViewport implements RendererViewport {
   }
 }
 
+const moduleRendererFactory: WebGPUOnlyRendererFactory = parameters =>
+  new WebGPURenderer(parameters) as unknown as WebGPUOnlyRenderer; // @unsafe-cast reason=ThreePrivateRenderer issue=DME-040 expires=2026-10-01
+
 export interface RendererHostOptions {
   scene: unknown;
   camera: unknown;
@@ -43,6 +48,8 @@ export interface RendererHostOptions {
   parameters?: Record<string, unknown>;
   factory?: WebGPUOnlyRendererFactory;
   maxPixelRatio?: number;
+  onResize?: (width: number, height: number) => void;
+  showFailure?: boolean;
 }
 
 function requirePipelineBackend(renderer: WebGPUOnlyRenderer): PipelineBackend {
@@ -69,6 +76,7 @@ export class RendererHost implements EngineRenderPass {
   private readonly viewport: RendererViewport;
   private readonly maxPixelRatio: number;
   private readonly deviceTarget: GpuErrorTarget | null;
+  private readonly resizeClient: ((width: number, height: number) => void) | undefined;
   private readonly onResize: () => void;
   private readonly onGpuError: (event: Event) => void;
   private unsubscribeResize: (() => void) | null = null;
@@ -76,7 +84,7 @@ export class RendererHost implements EngineRenderPass {
 
   private constructor(renderer: WebGPUOnlyRenderer, options: RendererHostOptions) {
     if (!renderer.domElement || !renderer.setPixelRatio || !renderer.setSize ||
-        !renderer.compileAsync || !renderer.renderAsync)
+        !renderer.compileAsync || !renderer.render)
       throw new Error('Three WebGPU renderer is missing a required host method');
     this.renderer = renderer;
     this.scene = options.scene;
@@ -85,6 +93,7 @@ export class RendererHost implements EngineRenderPass {
     this.container = options.container ?? document.body;
     this.viewport = options.viewport ?? new BrowserRendererViewport();
     this.maxPixelRatio = options.maxPixelRatio ?? 2;
+    this.resizeClient = options.onResize;
     if (!Number.isFinite(this.maxPixelRatio) || this.maxPixelRatio <= 0)
       throw new RangeError('maxPixelRatio must be positive');
     this.sealMonitor = new RendererSeal(requirePipelineBackend(renderer));
@@ -93,26 +102,43 @@ export class RendererHost implements EngineRenderPass {
     this.onGpuError = (event: Event): void => {
       this.diagnostics.tryRecord(DiagnosticCode.UncapturedGpuError, DiagnosticSource.Renderer, event);
     };
-    this.container.appendChild(renderer.domElement);
-    this.resize();
-    this.unsubscribeResize = this.viewport.subscribe(this.onResize);
-    this.deviceTarget?.addEventListener('uncapturederror', this.onGpuError);
+    try {
+      this.container.appendChild(renderer.domElement);
+      this.resize();
+      this.unsubscribeResize = this.viewport.subscribe(this.onResize);
+      this.deviceTarget?.addEventListener('uncapturederror', this.onGpuError);
+    } catch (error) {
+      this.unsubscribeResize?.();
+      this.unsubscribeResize = null;
+      this.deviceTarget?.removeEventListener('uncapturederror', this.onGpuError);
+      if (renderer.domElement.parentNode === this.container)
+        this.container.removeChild(renderer.domElement);
+      throw error;
+    }
   }
 
   static async create(options: RendererHostOptions): Promise<RendererHost> {
-    const renderer = await createWebGPUOnlyRenderer(options.parameters, options.factory);
+    let renderer: WebGPUOnlyRenderer | null = null;
     try {
+      renderer = await createWebGPUOnlyRenderer(
+        options.parameters,
+        options.factory ?? moduleRendererFactory,
+      );
       return new RendererHost(renderer, options);
     } catch (error) {
-      renderer.dispose();
+      renderer?.dispose();
+      if (options.showFailure !== false) showWebGPUFailure(error);
       throw error;
     }
   }
 
   resize(): void {
     const ratio = Math.min(this.maxPixelRatio, Math.max(0.1, this.viewport.pixelRatio));
+    const width = Math.max(1, this.viewport.width);
+    const height = Math.max(1, this.viewport.height);
     this.renderer.setPixelRatio(ratio);
-    this.renderer.setSize(Math.max(1, this.viewport.width), Math.max(1, this.viewport.height));
+    this.renderer.setSize(width, height);
+    this.resizeClient?.(width, height);
   }
 
   async warm(): Promise<void> {
@@ -125,7 +151,7 @@ export class RendererHost implements EngineRenderPass {
   render(): void {
     if (this.disposed) return;
     this.renderSubmissions++;
-    void this.renderer.renderAsync(this.scene, this.camera);
+    this.renderer.render(this.scene, this.camera);
   }
 
   dispose(): void {

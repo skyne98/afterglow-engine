@@ -1,0 +1,5 @@
+# Browser JavaScript is generated or vendored. Some upstream Three.js shader
+# template literals intentionally contain trailing spaces; authored sources are
+# TypeScript and retain normal whitespace enforcement.
+crates/afterglow-web/www/*.js -whitespace
+crates/afterglow-web/www/engine/*.js -whitespace

@@ -1,4 +1,4 @@
-import type * as THREE from 'three';
+import type * as THREE from 'three/webgpu';
 
 interface PipelineBackend {
   createRenderPipeline(renderObject: unknown, promises: Promise<unknown>[]): void;

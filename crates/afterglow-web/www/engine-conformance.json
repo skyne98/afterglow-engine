@@ -3,7 +3,7 @@
   "releaseStatus": "migration",
   "visualEntrypoints": {
     "dungeon.ts": "legacy",
-    "engine-demo.ts": "legacy",
+    "engine-demo.ts": "canonical",
     "lod-demo.ts": "legacy",
     "rigged-vt-demo.ts": "legacy",
     "vt-demo.ts": "legacy"

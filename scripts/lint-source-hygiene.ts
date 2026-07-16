@@ -8,6 +8,7 @@ import { spawnSync } from 'node:child_process';
 
 interface Finding { id: string; rule: string; file: string; line: number; column: number; excerpt: string }
 interface Baseline { version: number; findings: Finding[] }
+const baselineVersion = 2;
 const root = resolve(import.meta.dir, '..');
 const www = join(root, 'crates/afterglow-web/www');
 const baselinePath = join(www, 'source-hygiene-baseline.json');
@@ -20,6 +21,8 @@ const descriptions: Record<string, string> = {
   'AG-TS-006': 'non-null/definite-assignment assertion bypasses checking',
   'AG-TS-007': 'allocation permit lacks an issue and expiry',
   'AG-TS-008': 'architecture suppression is forbidden outside the temporary ratchet',
+  'AG-TS-009': 'double type assertion bypasses structural type checking',
+  'AG-TS-010': 'unsafe-cast permit is malformed or expired',
 };
 function compact(text: string): string { return text.replace(/\s+/g, ' ').trim().slice(0, 180); }
 function compareRef(): string | null {
@@ -30,7 +33,10 @@ function atRef(ref: string): Baseline | null {
   const path = 'crates/afterglow-web/www/source-hygiene-baseline.json';
   const result = spawnSync('git', ['show', `${ref}:${path}`], { cwd: root, encoding: 'utf8' });
   if (result.status !== 0) return null;
-  try { return JSON.parse(result.stdout) as Baseline; } catch { return null; }
+  try {
+    const baseline = JSON.parse(result.stdout) as Baseline;
+    return baseline.version === baselineVersion ? baseline : null;
+  } catch { return null; }
 }
 
 export async function scanSourceHygiene(): Promise<Finding[]> {
@@ -47,10 +53,17 @@ export async function scanSourceHygiene(): Promise<Finding[]> {
         identity: `${file}\0${rule}\0${identity ?? excerpt}` });
     };
     const visit = (node: ts.Node): void => {
-      if (node.kind === ts.SyntaxKind.AnyKeyword) add('AG-TS-001', node, `any:${node.pos}`);
+      if (node.kind === ts.SyntaxKind.AnyKeyword) add('AG-TS-001', node, 'explicit-any');
       if (ts.isNonNullExpression(node) ||
           ((ts.isPropertyDeclaration(node) || ts.isPropertySignature(node)) && node.exclamationToken))
         add('AG-TS-006', node, compact(node.getText(source)));
+      if (ts.isAsExpression(node) && ts.isAsExpression(node.expression)) {
+        const position = source.getLineAndCharacterOfPosition(node.getStart(source));
+        const line = text.split(/\r?\n/)[position.line] ?? '';
+        const permit = line.match(/@unsafe-cast\s+reason=\S+\s+issue=DME-\d+\s+expires=(\d{4}-\d{2}-\d{2})/);
+        const validPermit = permit?.[1] !== undefined && permit[1] >= new Date().toISOString().slice(0, 10);
+        if (!validPermit) add('AG-TS-009', node, compact(node.getText(source)));
+      }
       if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'eval')
         add('AG-TS-003', node, 'eval');
       if (ts.isNewExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'Function')
@@ -76,6 +89,11 @@ export async function scanSourceHygiene(): Promise<Finding[]> {
           !/@alloc-allowed\s+reason=\S+\s+issue=DME-\d+\s+expires=\d{4}-\d{2}-\d{2}/.test(line))
         lexical('AG-TS-007', '@alloc-allowed');
       lexical('AG-TS-008', '@architecture-allow');
+      if (line.includes('@unsafe-cast')) {
+        const permit = line.match(/@unsafe-cast\s+reason=\S+\s+issue=DME-\d+\s+expires=(\d{4}-\d{2}-\d{2})/);
+        if (permit?.[1] === undefined || permit[1] < new Date().toISOString().slice(0, 10))
+          lexical('AG-TS-010', '@unsafe-cast');
+      }
     }
   }
   raw.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line || a.column - b.column || a.rule.localeCompare(b.rule));
@@ -91,14 +109,14 @@ export async function scanSourceHygiene(): Promise<Finding[]> {
 if (import.meta.main) {
   const findings = await scanSourceHygiene();
   if (process.argv.includes('--write-baseline')) {
-    await writeFile(baselinePath, `${JSON.stringify({ version: 1, findings }, null, 2)}\n`);
+    await writeFile(baselinePath, `${JSON.stringify({ version: baselineVersion, findings }, null, 2)}\n`);
     console.log(`wrote ${findings.length} frozen source-hygiene violation(s) to ${relative(root, baselinePath)}`);
     process.exit(0);
   }
   let baseline: Baseline;
   try { baseline = JSON.parse(await readFile(baselinePath, 'utf8')) as Baseline; }
   catch { console.error('source-hygiene baseline is missing; bootstrap it explicitly with --write-baseline'); process.exit(1); }
-  if (baseline.version !== 1 || !Array.isArray(baseline.findings)) {
+  if (baseline.version !== baselineVersion || !Array.isArray(baseline.findings)) {
     console.error('source-hygiene baseline has an unsupported or malformed schema'); process.exit(1);
   }
   const accepted = new Set(baseline.findings.map((finding) => finding.id));

@@ -2,7 +2,7 @@ import { MeshoptClient } from './meshopt.client.ts';
 import { TextureClient } from './texture.client.ts';
 import { Rpc } from './rpc.ts';
 import { BigContainerAssetLoader, createFetchRangeLoader, createPageDataProvider, getVirtualTextureDimensions, parseBigHeader } from './engine/big-parser.ts';
-import { createWebGPUOnlyRenderer, showWebGPUFailure } from './engine/webgpu-only.ts';
+import { createWebGPUOnlyRenderer, legacyWindowRendererFactory, showWebGPUFailure } from './engine/webgpu-only.ts';
 import { RendererSeal, warmRendererVariants } from './engine/renderer-seal.ts';
 
 const THREE = window.THREE;
@@ -36,7 +36,7 @@ const camera = new THREE.PerspectiveCamera(48, innerWidth / innerHeight, 0.05, 1
 camera.position.set(0, 1.45, 4.1);
 camera.lookAt(0, 1.25, 0);
 camera.layers.enable(MODEL_LAYER);
-const renderer = await createWebGPUOnlyRenderer({ antialias: false, trackTimestamp: false })
+const renderer = await createWebGPUOnlyRenderer({ antialias: false, trackTimestamp: false }, legacyWindowRendererFactory)
   .catch(error => { showWebGPUFailure(error); throw error; });
 renderer.setPixelRatio(devicePixelRatio);
 renderer.setSize(innerWidth, innerHeight);

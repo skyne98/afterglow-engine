@@ -1,7 +1,7 @@
 import { MeshoptClient } from './meshopt.client.ts';
 import { TextureClient } from './texture.client.ts';
 import { AssetStore } from './engine/asset-store.ts';
-import { createWebGPUOnlyRenderer, showWebGPUFailure } from './engine/webgpu-only.ts';
+import { createWebGPUOnlyRenderer, legacyWindowRendererFactory, showWebGPUFailure } from './engine/webgpu-only.ts';
 
 const THREE = window.THREE;
 const loadingEl = document.getElementById('loading');
@@ -13,7 +13,7 @@ scene.background = new THREE.Color(0x0a0c10);
 const camera = new THREE.OrthographicCamera(-7, 7, 5, -5, 0.1, 100);
 camera.position.set(0, 0, 14);
 camera.lookAt(0, 0, 0);
-const renderer = await createWebGPUOnlyRenderer({ antialias: true }).catch(error => {
+const renderer = await createWebGPUOnlyRenderer({ antialias: true }, legacyWindowRendererFactory).catch(error => {
   showWebGPUFailure(error);
   throw error;
 });

@@ -1,4 +1,7 @@
-import type * as THREE_TYPES from 'three';
+import type * as THREE_TYPES from 'three/webgpu';
+import type * as TSL_TYPES from 'three/tsl';
+
+type ThreeWebGpuRuntime = typeof THREE_TYPES & typeof TSL_TYPES;
 import type { VirtualMaterialSet, VirtualTextureEntry, VirtualTextureStore } from './virtual-texture.ts';
 import {
   PAGE_BORDER, PAGE_SIZE, VT_FEEDBACK_WGSL, VT_RESOLVE_MATERIAL_MIP4_WGSL,
@@ -50,7 +53,7 @@ export interface VirtualGltfMaterialPair {
  * exact animated/deformed coverage is required.
  */
 export function createVirtualGltfMaterialPair(
-  three: typeof THREE_TYPES,
+  three: ThreeWebGpuRuntime,
   store: VirtualTextureStore,
   set: VirtualMaterialSet,
   feedbackPixelScale: THREE_TYPES.Vector2,
@@ -108,14 +111,14 @@ export function createVirtualGltfMaterialPair(
       virtualSize: entryVirtualSize, pageGrid: entryPageGrid,
       pageSize: three.float(PAGE_SIZE), pageBorder: three.float(PAGE_BORDER), atlasSize,
       maxMip: three.float(entry.maxMip), resolvedMip: resolve(), addressMode: addressModeNode,
-    });
+    }) as THREE_TYPES.Node<'vec4'>;
     return sampleVirtual({
       pageTable: table(entry), atlas, atlasSampler, uv: three.uv(),
       virtualSize: entryVirtualSize, pageGrid: entryPageGrid,
       pageSize: three.float(PAGE_SIZE), pageBorder: three.float(PAGE_BORDER), atlasSize,
       maxMip: three.float(entry.maxMip), textureMaxMip: three.float(entry.textureMaxMip),
       addressMode: addressModeNode,
-    });
+    }) as THREE_TYPES.Node<'vec4'>;
   };
 
   const material = new three.MeshStandardNodeMaterial({
@@ -125,8 +128,9 @@ export function createVirtualGltfMaterialPair(
   });
   material.colorNode = three.Fn(() => {
     const texel = sample(set.albedo);
+    const linearColor = three.sRGBTransferEOTF(texel.rgb) as THREE_TYPES.Node<'vec3'>;
     return three.vec4(
-      three.sRGBTransferEOTF(texel.rgb).mul(three.vec3(
+      linearColor.mul(three.vec3(
         baseColorFactor[0], baseColorFactor[1], baseColorFactor[2],
       )),
       texel.a.mul(baseColorFactor[3]),
@@ -139,7 +143,8 @@ export function createVirtualGltfMaterialPair(
     );
   }
   if (set.emissive) {
-    material.emissiveNode = three.sRGBTransferEOTF(sample(set.emissive).rgb).mul(three.vec3(
+    const linearEmissive = three.sRGBTransferEOTF(sample(set.emissive).rgb) as THREE_TYPES.Node<'vec3'>;
+    material.emissiveNode = linearEmissive.mul(three.vec3(
       emissiveFactor[0], emissiveFactor[1], emissiveFactor[2],
     ));
   }
@@ -166,9 +171,11 @@ export function createVirtualGltfMaterialPair(
     }))();
     return feedbackMaterial;
   });
+  const feedbackMaterial = feedbackMaterials[0];
+  if (!feedbackMaterial) throw new Error('virtual material requires at least one feedback channel');
   return {
     material,
-    feedbackMaterial: feedbackMaterials[0],
+    feedbackMaterial,
     feedbackMaterials,
     feedbackEntries,
   };

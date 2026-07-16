@@ -3,7 +3,11 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
-import { validateWebContracts, type WebArtifactManifest } from './check-web-contracts.ts';
+import {
+  countBundledThreeCoreCopies,
+  validateWebContracts,
+  type WebArtifactManifest,
+} from './check-web-contracts.ts';
 
 const root = resolve(import.meta.dir, '..');
 const www = join(root, 'crates/afterglow-web/www');
@@ -60,6 +64,13 @@ try {
       '--target', 'browser',
     ], { stdout: 'inherit', stderr: 'inherit' });
     if (await proc.exited !== 0) process.exit(1);
+    const builtSource = await readFile(built, 'utf8');
+    const threeCoreCopies = countBundledThreeCoreCopies(builtSource);
+    if (threeCoreCopies > 1) {
+      console.error(`${source}: bundle contains ${threeCoreCopies} Three.js core identities`);
+      drift = true;
+      continue;
+    }
     const destination = join(www, output);
     if (check) {
       let actual: Uint8Array;

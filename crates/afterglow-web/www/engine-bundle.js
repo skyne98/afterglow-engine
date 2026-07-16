@@ -67707,10 +67707,10 @@ function bytesPerBlock(format) {
 }
 function threeFormat(format) {
   if (format === FORMAT_BC7)
-    return 36492;
+    return RGBA_BPTC_Format;
   if (format === FORMAT_ASTC)
-    return 37808;
-  return RGBAFormat;
+    return RGBA_ASTC_4x4_Format;
+  throw new RangeError(`unsupported compressed texture format ${format}`);
 }
 
 class PageTable {
@@ -68176,6 +68176,7 @@ class VirtualTextureStore {
   rejectedAdmissions = 0;
   scheduleBudgetExhaustions = 0;
   uploadBudgetExhaustions = 0;
+  pageTableUploadScratch = new Uint32Array(1);
   scheduledKeys;
   scheduledRequests;
   scheduledActive;
@@ -68909,7 +68910,11 @@ class VirtualTextureStore {
     entry.pageTable[index] = value;
     const gpuTexture = this.gpuPageTables.get(path);
     if (gpuTexture && this.device) {
-      this.device.queue.writeTexture({ texture: gpuTexture, origin: { x: 1, y: entry.pageTableLayout.mipOffsets[entry.maxMip] } }, entry.pageTable.subarray(index, index + 1), {}, { width: 1, height: 1, depthOrArrayLayers: 1 });
+      const mipOffset = entry.pageTableLayout.mipOffsets[entry.maxMip];
+      if (mipOffset === undefined)
+        throw new RangeError("mip tail offset is outside the packed page table");
+      this.pageTableUploadScratch[0] = value;
+      this.device.queue.writeTexture({ texture: gpuTexture, origin: { x: 1, y: mipOffset } }, this.pageTableUploadScratch, {}, { width: 1, height: 1, depthOrArrayLayers: 1 });
     } else {
       entry.pageTableTexture.needsUpdate = true;
     }
@@ -68925,10 +68930,14 @@ class VirtualTextureStore {
     entry.pageTable[idx] = value;
     const gpuTexture = this.gpuPageTables.get(path);
     if (gpuTexture && this.device) {
+      const mipOffset = entry.pageTableLayout.mipOffsets[req.mip];
+      if (mipOffset === undefined)
+        throw new RangeError("page mip is outside the packed page table");
+      this.pageTableUploadScratch[0] = value;
       this.device.queue.writeTexture({
         texture: gpuTexture,
-        origin: { x: req.x, y: entry.pageTableLayout.mipOffsets[req.mip] + req.y }
-      }, entry.pageTable.subarray(idx, idx + 1), {}, { width: 1, height: 1, depthOrArrayLayers: 1 });
+        origin: { x: req.x, y: mipOffset + req.y }
+      }, this.pageTableUploadScratch, {}, { width: 1, height: 1, depthOrArrayLayers: 1 });
     } else {
       entry.pageTableTexture.needsUpdate = true;
     }
@@ -68980,10 +68989,13 @@ class VirtualTextureStore {
   }
   writePage(slot, data) {
     if (this.gpuAtlasTexture && this.device) {
+      if (!(data.buffer instanceof ArrayBuffer))
+        throw new TypeError("atlas uploads require page bytes backed by an owned ArrayBuffer");
+      const uploadData = data;
       this.device.queue.writeTexture({
         texture: this.gpuAtlasTexture,
         origin: { x: slot.x * SLOT_SIZE, y: slot.y * SLOT_SIZE }
-      }, data, this.format === FORMAT_RGBA ? { bytesPerRow: SLOT_SIZE * 4, rowsPerImage: SLOT_SIZE } : { bytesPerRow: this.cache.slotBytesPerRow, rowsPerImage: SLOT_BLOCKS_Y }, { width: SLOT_SIZE, height: SLOT_SIZE });
+      }, uploadData, this.format === FORMAT_RGBA ? { bytesPerRow: SLOT_SIZE * 4, rowsPerImage: SLOT_SIZE } : { bytesPerRow: this.cache.slotBytesPerRow, rowsPerImage: SLOT_BLOCKS_Y }, { width: SLOT_SIZE, height: SLOT_SIZE });
     } else {
       this.atlasTexture.needsUpdate = true;
     }
@@ -69606,13 +69618,15 @@ function createVirtualGltfMaterialPair(three, store, set, feedbackPixelScale, op
   });
   material.colorNode = three.Fn(() => {
     const texel = sample3(set.albedo);
-    return three.vec4(three.sRGBTransferEOTF(texel.rgb).mul(three.vec3(baseColorFactor[0], baseColorFactor[1], baseColorFactor[2])), texel.a.mul(baseColorFactor[3]));
+    const linearColor = three.sRGBTransferEOTF(texel.rgb);
+    return three.vec4(linearColor.mul(three.vec3(baseColorFactor[0], baseColorFactor[1], baseColorFactor[2])), texel.a.mul(baseColorFactor[3]));
   })();
   if (set.normal) {
     material.normalNode = three.normalMap(sample3(set.normal).xyz, three.vec2(normalScale[0], normalScale[1]));
   }
   if (set.emissive) {
-    material.emissiveNode = three.sRGBTransferEOTF(sample3(set.emissive).rgb).mul(three.vec3(emissiveFactor[0], emissiveFactor[1], emissiveFactor[2]));
+    const linearEmissive = three.sRGBTransferEOTF(sample3(set.emissive).rgb);
+    material.emissiveNode = linearEmissive.mul(three.vec3(emissiveFactor[0], emissiveFactor[1], emissiveFactor[2]));
   }
   if (set.masks) {
     material.roughnessNode = sample3(set.masks).g.mul(roughnessFactor);
@@ -69623,8 +69637,8 @@ function createVirtualGltfMaterialPair(three, store, set, feedbackPixelScale, op
   }
   const feedbackEntries = aligned ? [set.albedo] : entries;
   const feedbackMaterials = feedbackEntries.map((entry) => {
-    const feedbackMaterial = new three.MeshBasicNodeMaterial({ side });
-    feedbackMaterial.fragmentNode = three.Fn(() => feedback({
+    const feedbackMaterial2 = new three.MeshBasicNodeMaterial({ side });
+    feedbackMaterial2.fragmentNode = three.Fn(() => feedback({
       sampleUV: three.uv(),
       gradientUV: three.uv(),
       feedbackPixelScale: three.uniform(feedbackPixelScale),
@@ -69635,11 +69649,14 @@ function createVirtualGltfMaterialPair(three, store, set, feedbackPixelScale, op
       addressMode: addressModeNode,
       textureId: three.uint(entry.textureId)
     }))();
-    return feedbackMaterial;
+    return feedbackMaterial2;
   });
+  const feedbackMaterial = feedbackMaterials[0];
+  if (!feedbackMaterial)
+    throw new Error("virtual material requires at least one feedback channel");
   return {
     material,
-    feedbackMaterial: feedbackMaterials[0],
+    feedbackMaterial,
     feedbackMaterials,
     feedbackEntries
   };

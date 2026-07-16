@@ -17,6 +17,7 @@ export interface ArchitectureFinding {
 }
 interface RawFinding extends Omit<ArchitectureFinding, 'id'> { identity: string }
 interface ArchitectureBaseline { version: number; findings: ArchitectureFinding[] }
+const baselineVersion = 2;
 
 const root = resolve(import.meta.dir, '..');
 const www = join(root, 'crates/afterglow-web/www');
@@ -98,11 +99,13 @@ export function scanTypeScript(sourceText: string, file: string): RawFinding[] {
   const visit = (node: ts.Node): void => {
     if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
       const specifier = node.moduleSpecifier.text;
-      if (specifier.startsWith('./engine/') || specifier.startsWith('../engine/')) add('AG-DEMO-016', node, specifier);
+      const publicBarrel = specifier === './engine/index.ts' || specifier === '../engine/index.ts';
+      if (!publicBarrel && (specifier.startsWith('./engine/') || specifier.startsWith('../engine/')))
+        add('AG-DEMO-016', node, specifier);
       if (specifier.endsWith('/surface-detail.ts') || specifier.endsWith('/virtual-texture-material.ts'))
         add('AG-DEMO-009', node, specifier);
     }
-    if (node.kind === ts.SyntaxKind.AnyKeyword) add('AG-DEMO-015', node, `any@${node.pos}`);
+    if (node.kind === ts.SyntaxKind.AnyKeyword) add('AG-DEMO-015', node, 'explicit-any');
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) {
       if (unboundedNames.test(node.name.text) && node.initializer &&
           (ts.isArrayLiteralExpression(node.initializer) ||
@@ -122,6 +125,31 @@ export function scanTypeScript(sourceText: string, file: string): RawFinding[] {
         const callback = node.arguments[0];
         if (!callback || !hasNoneEffect(source, callback))
           add('AG-DEMO-010', node, `${name}:${compact(callback?.getText(source) ?? '')}`);
+      }
+      if (name === 'start' && ts.isPropertyAccessExpression(node.expression) &&
+          /runtime/i.test(node.expression.expression.getText(source))) {
+        const client = node.arguments[0];
+        let callback: ts.Expression | undefined;
+        if (client && ts.isObjectLiteralExpression(client)) {
+          for (const property of client.properties) {
+            if (ts.isPropertyAssignment(property) && property.name.getText(source) === 'update')
+              callback = property.initializer;
+          }
+        } else if (client && ts.isIdentifier(client)) {
+          for (const statement of source.statements) {
+            if (!ts.isVariableStatement(statement)) continue;
+            for (const declaration of statement.declarationList.declarations) {
+              if (!ts.isIdentifier(declaration.name) || declaration.name.text !== client.text ||
+                  !declaration.initializer || !ts.isObjectLiteralExpression(declaration.initializer)) continue;
+              for (const property of declaration.initializer.properties) {
+                if (ts.isPropertyAssignment(property) && property.name.getText(source) === 'update')
+                  callback = property.initializer;
+              }
+            }
+          }
+        }
+        if (!callback || !hasNoneEffect(source, callback))
+          add('AG-DEMO-010', node, `EngineRuntime.start:${compact(callback?.getText(source) ?? '')}`);
       }
       if (name === 'addEventListener' || name === 'removeEventListener') add('AG-DEMO-013', node, compact(node.getText(source)));
       if (name === 'submit' || name === 'consume' || name === 'mergeFeedbackMaps') {
@@ -192,17 +220,20 @@ function baselineAtRef(ref: string): ArchitectureBaseline | null {
   const path = 'crates/afterglow-web/www/demo-architecture-baseline.json';
   const result = spawnSync('git', ['show', `${ref}:${path}`], { cwd: root, encoding: 'utf8' });
   if (result.status !== 0) return null;
-  try { return JSON.parse(result.stdout) as ArchitectureBaseline; } catch { return null; }
+  try {
+    const baseline = JSON.parse(result.stdout) as ArchitectureBaseline;
+    return baseline.version === baselineVersion ? baseline : null;
+  } catch { return null; }
 }
 
 if (import.meta.main) {
   const findings = await scanArchitecture();
   if (process.argv.includes('--json')) {
-    console.log(JSON.stringify({ version: 1, findings }, null, 2));
+    console.log(JSON.stringify({ version: baselineVersion, findings }, null, 2));
     process.exit(0);
   }
   if (process.argv.includes('--write-baseline')) {
-    const baseline: ArchitectureBaseline = { version: 1, findings };
+    const baseline: ArchitectureBaseline = { version: baselineVersion, findings };
     await writeFile(baselinePath, `${JSON.stringify(baseline, null, 2)}\n`);
     console.log(`wrote ${findings.length} frozen architecture violation(s) to ${relative(root, baselinePath)}`);
     process.exit(0);
@@ -211,7 +242,7 @@ if (import.meta.main) {
   let baseline: ArchitectureBaseline;
   try { baseline = JSON.parse(await readFile(baselinePath, 'utf8')) as ArchitectureBaseline; }
   catch { console.error('architecture baseline is missing; bootstrap it explicitly with --write-baseline'); process.exit(1); }
-  if (baseline.version !== 1 || !Array.isArray(baseline.findings)) {
+  if (baseline.version !== baselineVersion || !Array.isArray(baseline.findings)) {
     console.error('architecture baseline has an unsupported or malformed schema');
     process.exit(1);
   }

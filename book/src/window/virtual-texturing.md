@@ -28,7 +28,10 @@ textures currently form a transitive residency-group union, which safely avoids
 missing PBR channels at the cost of bounded overfetch. A recorded future extension
 would add fixed-capacity material-group IDs to feedback if telemetry proves that
 overfetch significant. After Three.js initializes the textures,
-call `attachRenderer()` so updates become small GPU subregion writes. Each frame,
+call `attachRenderer()` so updates become small GPU subregion writes. Packed
+page-table writes reuse fixed upload scratch instead of creating typed-array
+views. Atlas page bytes must use an owned `ArrayBuffer`; incompatible shared
+views are rejected at the WebGPU boundary. Each frame,
 poll the store and submit the previous globally identified feedback results with
 `processFeedback()`. `VirtualTextureFeedbackPass` provides the reduced-resolution
 `RG32Uint` render target and asynchronous readback. It tracks the exact feedback-

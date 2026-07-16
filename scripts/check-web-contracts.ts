@@ -42,6 +42,10 @@ async function list(directory: string, suffix: string): Promise<string[]> {
     .sort();
 }
 
+export function countBundledThreeCoreCopies(source: string): number {
+  return source.match(/node_modules\/three\/build\/three\.core\.js/g)?.length ?? 0;
+}
+
 function parseExternalScripts(html: string, page: string, errors: string[]): string[] {
   const outputs: string[] = [];
   const tags = html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi);
@@ -129,6 +133,10 @@ export async function validateWebContracts(root = defaultRoot): Promise<string[]
       const pageOwned = artifact.pages?.includes(page) ?? false;
       const shared = artifact.role === 'runtime' || artifact.role === 'legacy-bridge';
       if (!pageOwned && !shared) errors.push(`${page}: may not load ${artifact.role} artifact ${output}`);
+      const owner = manifest.artifacts.find((candidate) => candidate.pages?.includes(page));
+      if (artifact.role === 'legacy-bridge' && owner?.role === 'visual-demo' &&
+          conformance.visualEntrypoints[owner.source] === 'canonical')
+        errors.push(`${page}: canonical visual demo may not load legacy bridge ${output}`);
     }
     const owner = manifest.artifacts.find((artifact) => artifact.pages?.includes(page));
     if (owner && !scripts.includes(owner.output)) errors.push(`${page}: does not load its owned output ${owner.output}`);
@@ -157,6 +165,8 @@ export async function validateWebContracts(root = defaultRoot): Promise<string[]
   if (conformance.releaseStatus === 'conformant') {
     if (legacy.length !== 0) errors.push(`engine-conformance.json: conformant release has legacy demos: ${legacy.join(', ')}`);
     if (baselineExists) errors.push('engine-conformance.json: conformant release may not retain demo-architecture-baseline.json');
+    if (manifest.artifacts.some((artifact) => artifact.role === 'legacy-bridge'))
+      errors.push('engine-conformance.json: conformant release may not retain legacy-bridge artifacts');
   } else if (legacy.length === 0) {
     errors.push('engine-conformance.json: releaseStatus must be conformant when no legacy demos remain');
   }

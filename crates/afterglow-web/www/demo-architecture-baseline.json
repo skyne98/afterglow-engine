@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "findings": [
     {
       "id": "e6feaa286c2a11f816ca",
@@ -23,7 +23,7 @@
       "file": "dungeon.ts",
       "line": 5,
       "column": 1,
-      "excerpt": "import { createWebGPUOnlyRenderer, showWebGPUFailure } from './engine/webgpu-only.ts';"
+      "excerpt": "import { createWebGPUOnlyRenderer, legacyWindowRendererFactory, showWebGPUFailure } from './engine/webgpu-only.ts';"
     },
     {
       "id": "d43f4a7d7ec17859cc6e",
@@ -690,150 +690,6 @@
       "excerpt": "window.AfterglowVT"
     },
     {
-      "id": "305fa0e780267296217f",
-      "rule": "AG-DEMO-016",
-      "file": "engine-demo.ts",
-      "line": 1,
-      "column": 1,
-      "excerpt": "import { createWebGPUOnlyRenderer, showWebGPUFailure } from './engine/webgpu-only.ts';"
-    },
-    {
-      "id": "a7e25260671da01cbcfe",
-      "rule": "AG-DEMO-004",
-      "file": "engine-demo.ts",
-      "line": 3,
-      "column": 15,
-      "excerpt": "window.THREE"
-    },
-    {
-      "id": "b66e6e5855e3c615675e",
-      "rule": "AG-DEMO-004",
-      "file": "engine-demo.ts",
-      "line": 5,
-      "column": 16,
-      "excerpt": "window.bitecsCreateWorld"
-    },
-    {
-      "id": "fce05f5544281a7ce2ff",
-      "rule": "AG-DEMO-004",
-      "file": "engine-demo.ts",
-      "line": 6,
-      "column": 14,
-      "excerpt": "window.bitecsAddEntity"
-    },
-    {
-      "id": "e558b63cb618c7437edc",
-      "rule": "AG-DEMO-004",
-      "file": "engine-demo.ts",
-      "line": 7,
-      "column": 17,
-      "excerpt": "window.bitecsAddComponent"
-    },
-    {
-      "id": "32227984cb0c349c5452",
-      "rule": "AG-DEMO-004",
-      "file": "engine-demo.ts",
-      "line": 8,
-      "column": 10,
-      "excerpt": "window.bitecsQuery"
-    },
-    {
-      "id": "29e924e854a0e89a2d6c",
-      "rule": "AG-DEMO-013",
-      "file": "engine-demo.ts",
-      "line": 27,
-      "column": 1,
-      "excerpt": "addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); })"
-    },
-    {
-      "id": "eb061c84da92b144e453",
-      "rule": "AG-DEMO-014",
-      "file": "engine-demo.ts",
-      "line": 95,
-      "column": 1,
-      "excerpt": "document.getElementById('info').textContent"
-    },
-    {
-      "id": "2f8ee861ee73518a3ab1",
-      "rule": "AG-DEMO-014",
-      "file": "engine-demo.ts",
-      "line": 144,
-      "column": 3,
-      "excerpt": "benchEl.textContent"
-    },
-    {
-      "id": "ce4fcb451b44d5da82af",
-      "rule": "AG-DEMO-014",
-      "file": "engine-demo.ts",
-      "line": 152,
-      "column": 5,
-      "excerpt": "benchEl.textContent"
-    },
-    {
-      "id": "5a5b4c376584261c4ffc",
-      "rule": "AG-DEMO-014",
-      "file": "engine-demo.ts",
-      "line": 165,
-      "column": 5,
-      "excerpt": "benchEl.textContent"
-    },
-    {
-      "id": "8c75d75dd10038bd2b21",
-      "rule": "AG-DEMO-014",
-      "file": "engine-demo.ts",
-      "line": 169,
-      "column": 30,
-      "excerpt": "benchEl.textContent"
-    },
-    {
-      "id": "90f6a532e3a637f0236c",
-      "rule": "AG-DEMO-013",
-      "file": "engine-demo.ts",
-      "line": 175,
-      "column": 1,
-      "excerpt": "addEventListener('keydown', e => { if (e.key === 'b' || e.key === 'B') startBench(); })"
-    },
-    {
-      "id": "546477a7eb1abf55c6fa",
-      "rule": "AG-DEMO-014",
-      "file": "engine-demo.ts",
-      "line": 233,
-      "column": 5,
-      "excerpt": "document.getElementById('info').textContent"
-    },
-    {
-      "id": "1e227d1e2c01286e6a3d",
-      "rule": "AG-DEMO-001",
-      "file": "engine-demo.ts",
-      "line": 237,
-      "column": 3,
-      "excerpt": "requestAnimationFrame(animate)"
-    },
-    {
-      "id": "bead282d816fbda5f6a8",
-      "rule": "AG-DEMO-010",
-      "file": "engine-demo.ts",
-      "line": 237,
-      "column": 3,
-      "excerpt": "requestAnimationFrame(animate)"
-    },
-    {
-      "id": "f7af6272e9cc9ff06ff4",
-      "rule": "AG-DEMO-001",
-      "file": "engine-demo.ts",
-      "line": 241,
-      "column": 1,
-      "excerpt": "requestAnimationFrame(animate)"
-    },
-    {
-      "id": "0aaabb791f6b78c371cb",
-      "rule": "AG-DEMO-010",
-      "file": "engine-demo.ts",
-      "line": 241,
-      "column": 1,
-      "excerpt": "requestAnimationFrame(animate)"
-    },
-    {
       "id": "071a7ecdbe69d6b9606a",
       "rule": "AG-DEMO-016",
       "file": "lod-demo.ts",
@@ -847,7 +703,7 @@
       "file": "lod-demo.ts",
       "line": 4,
       "column": 1,
-      "excerpt": "import { createWebGPUOnlyRenderer, showWebGPUFailure } from './engine/webgpu-only.ts';"
+      "excerpt": "import { createWebGPUOnlyRenderer, legacyWindowRendererFactory, showWebGPUFailure } from './engine/webgpu-only.ts';"
     },
     {
       "id": "3485572c57142c8e3c70",
@@ -959,7 +815,7 @@
       "file": "rigged-vt-demo.ts",
       "line": 5,
       "column": 1,
-      "excerpt": "import { createWebGPUOnlyRenderer, showWebGPUFailure } from './engine/webgpu-only.ts';"
+      "excerpt": "import { createWebGPUOnlyRenderer, legacyWindowRendererFactory, showWebGPUFailure } from './engine/webgpu-only.ts';"
     },
     {
       "id": "f349574cbb79d1e91902",
@@ -1026,7 +882,7 @@
       "excerpt": "errors: string[] = []"
     },
     {
-      "id": "8cd1cc4f6e189bc694a4",
+      "id": "776f1eaed16679ad97cd",
       "rule": "AG-DEMO-015",
       "file": "rigged-vt-demo.ts",
       "line": 21,
@@ -1034,7 +890,7 @@
       "excerpt": "any"
     },
     {
-      "id": "bbd6006a54fdced9e2e7",
+      "id": "b0d7911b73fb963ada3f",
       "rule": "AG-DEMO-015",
       "file": "rigged-vt-demo.ts",
       "line": 22,
@@ -1210,7 +1066,7 @@
       "excerpt": "new VT.VirtualTextureFeedbackPass(0.125)"
     },
     {
-      "id": "f91a457668d9403a26c9",
+      "id": "ebea270b37cb23e8b356",
       "rule": "AG-DEMO-015",
       "file": "rigged-vt-demo.ts",
       "line": 137,
@@ -1218,7 +1074,7 @@
       "excerpt": "any"
     },
     {
-      "id": "210c4f67acfb7be6c8e1",
+      "id": "f56be0b018811e60c127",
       "rule": "AG-DEMO-015",
       "file": "rigged-vt-demo.ts",
       "line": 138,
@@ -1226,7 +1082,7 @@
       "excerpt": "any"
     },
     {
-      "id": "5621f86ef3558e5757e7",
+      "id": "1ab519c443ea2ad68b2e",
       "rule": "AG-DEMO-015",
       "file": "rigged-vt-demo.ts",
       "line": 139,
@@ -1234,7 +1090,7 @@
       "excerpt": "any"
     },
     {
-      "id": "542a872736adc9f42eb2",
+      "id": "8d1661a014c6a6c9ec2c",
       "rule": "AG-DEMO-015",
       "file": "rigged-vt-demo.ts",
       "line": 197,
@@ -1242,7 +1098,7 @@
       "excerpt": "any"
     },
     {
-      "id": "1c97c599ba006a5d4848",
+      "id": "454345db9f1174da902b",
       "rule": "AG-DEMO-015",
       "file": "rigged-vt-demo.ts",
       "line": 233,
@@ -1250,7 +1106,7 @@
       "excerpt": "any"
     },
     {
-      "id": "e6a47fcf57836966df01",
+      "id": "d25f4b9c097c6d3526a2",
       "rule": "AG-DEMO-015",
       "file": "rigged-vt-demo.ts",
       "line": 234,
@@ -1266,7 +1122,7 @@
       "excerpt": "secondLayouts = new Map(secondGltf.materialTextures.map(layout => [layout.name, layout]))"
     },
     {
-      "id": "3db951f755194a9e26cd",
+      "id": "cc15bfde3b6317394de1",
       "rule": "AG-DEMO-015",
       "file": "rigged-vt-demo.ts",
       "line": 254,
@@ -1274,7 +1130,7 @@
       "excerpt": "any"
     },
     {
-      "id": "8215e362b8b79fb3e890",
+      "id": "97a4750e6cd57f8dfe4b",
       "rule": "AG-DEMO-015",
       "file": "rigged-vt-demo.ts",
       "line": 255,
@@ -1282,7 +1138,7 @@
       "excerpt": "any"
     },
     {
-      "id": "e60526bcd661f2aa559a",
+      "id": "d3c6a336cd25d231928d",
       "rule": "AG-DEMO-015",
       "file": "rigged-vt-demo.ts",
       "line": 256,
@@ -1399,7 +1255,7 @@
       "file": "vt-demo.ts",
       "line": 1,
       "column": 139,
-      "excerpt": "import {createWebGPUOnlyRenderer,showWebGPUFailure} from './engine/webgpu-only.ts';"
+      "excerpt": "import {createWebGPUOnlyRenderer,legacyWindowRendererFactory,showWebGPUFailure} from './engine/webgpu-only.ts';"
     },
     {
       "id": "9dd0ebf648aa196aa299",
@@ -1422,7 +1278,7 @@
       "rule": "AG-DEMO-006",
       "file": "vt-demo.ts",
       "line": 3,
-      "column": 207,
+      "column": 235,
       "excerpt": "errors=[]"
     },
     {
@@ -1430,7 +1286,7 @@
       "rule": "AG-DEMO-005",
       "file": "vt-demo.ts",
       "line": 3,
-      "column": 217,
+      "column": 245,
       "excerpt": "renderer.backend"
     },
     {
@@ -1438,7 +1294,7 @@
       "rule": "AG-DEMO-013",
       "file": "vt-demo.ts",
       "line": 3,
-      "column": 217,
+      "column": 245,
       "excerpt": "renderer.backend.device.addEventListener('uncapturederror',e=>errors.push(String(e.error?.message??e.error)))"
     },
     {
@@ -1446,7 +1302,7 @@
       "rule": "AG-DEMO-013",
       "file": "vt-demo.ts",
       "line": 3,
-      "column": 327,
+      "column": 355,
       "excerpt": "addEventListener('error',e=>errors.push(String(e.error?.stack??e.message)))"
     },
     {
@@ -1454,7 +1310,7 @@
       "rule": "AG-DEMO-013",
       "file": "vt-demo.ts",
       "line": 3,
-      "column": 403,
+      "column": 431,
       "excerpt": "addEventListener('unhandledrejection',e=>errors.push(String(e.reason?.stack??e.reason)))"
     },
     {

@@ -16,6 +16,7 @@
     "frame.ts": "none",
     "height-texture.ts": "bootstrap",
     "hierarchy.ts": "pooled",
+    "index.ts": "gameFacing",
     "instance-shard.ts": "pooled",
     "matrix.ts": "none",
     "persistent-blob-cache.ts": "budgeted",

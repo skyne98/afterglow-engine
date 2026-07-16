@@ -7,7 +7,9 @@ import {
   type RenderWorkerInput,
   type VTInput,
 } from './frame.ts';
+import { RenderAdapter } from './render-adapter.ts';
 import { ResourceManifest, defineResource, type Resource } from './resource.ts';
+import type { Scene } from 'three/webgpu';
 import type { RenderFrame } from './types.ts';
 
 export const enum RuntimeState {
@@ -49,8 +51,8 @@ export interface EngineFrameClient {
   update(frame: Readonly<RenderFrame>): void;
 }
 
-export interface EngineRuntimeOptions {
-  adapter: RuntimeRenderAdapter;
+export interface EngineRuntimeOptions<TAdapter extends RuntimeRenderAdapter = RuntimeRenderAdapter> {
+  adapter: TAdapter;
   memory: EngineMemoryConfig;
   frameBudget?: FrameBudgetConfig;
   diagnosticCapacity: number;
@@ -59,6 +61,11 @@ export interface EngineRuntimeOptions {
   scheduler?: AnimationScheduler;
   vt?: VTInput;
   resources?: readonly Resource<unknown>[];
+}
+
+export interface SceneEngineRuntimeOptions extends Omit<EngineRuntimeOptions<RenderAdapter>, 'adapter'> {
+  scene: Scene;
+  entityCapacity: number;
 }
 
 class BrowserAnimationScheduler implements AnimationScheduler {
@@ -117,7 +124,7 @@ class FixedWorkerInputs implements RenderWorkerInput {
 }
 
 /** Owns sealed frame order, fixed registrations, rAF, and runtime disposal. */
-export class EngineRuntime {
+export class EngineRuntime<TAdapter extends RuntimeRenderAdapter = RuntimeRenderAdapter> {
   readonly memory: EngineMemory;
   readonly budget: FrameBudget;
   readonly diagnostics: EngineDiagnostics;
@@ -127,7 +134,7 @@ export class EngineRuntime {
   private readonly passes: Array<EngineRenderPass | null>;
   private readonly scheduler: AnimationScheduler;
   private readonly manifest: ResourceManifest;
-  private readonly adapter: RuntimeRenderAdapter;
+  readonly adapter: TAdapter;
   private readonly vt: VTInput | undefined;
   private readonly onAnimationFrame: (timestamp: number) => void;
   private passCount = 0;
@@ -137,7 +144,12 @@ export class EngineRuntime {
   private elapsedSeconds = 0;
   private mutableState = RuntimeState.Bootstrap;
 
-  constructor(options: EngineRuntimeOptions) {
+  static forScene(options: SceneEngineRuntimeOptions): EngineRuntime<RenderAdapter> {
+    const adapter = new RenderAdapter(options.scene, options.entityCapacity);
+    return new EngineRuntime({ ...options, adapter });
+  }
+
+  constructor(options: EngineRuntimeOptions<TAdapter>) {
     if (!Number.isInteger(options.maxRenderPasses) || options.maxRenderPasses < 1)
       throw new RangeError('render pass capacity must be a positive integer');
     this.adapter = options.adapter;
