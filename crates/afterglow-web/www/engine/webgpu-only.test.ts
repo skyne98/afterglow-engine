@@ -40,13 +40,14 @@ describe('WebGPU-only renderer guard', () => {
     try {
       Object.defineProperty(globalThis, 'navigator', {
         configurable: true,
-        value: { gpu: { requestAdapter: async () => ({}) } },
+        value: { gpu: { requestAdapter: async () => ({ info: { vendor: 'test-vendor', architecture: 'test-arch' } }) } },
       });
       Object.defineProperty(globalThis, 'window', {
         configurable: true,
         value: { THREE: { WebGPURenderer: function () { return candidate; } } },
       });
       await expect(createWebGPUOnlyRenderer()).rejects.toThrow('WebGPU device initialization failed');
+      expect(candidate.afterglowAdapterInfo).toMatchObject({ vendor: 'test-vendor', architecture: 'test-arch' });
       expect(fallbackCalled).toBeFalse();
     } finally {
       if (originalNavigator) Object.defineProperty(globalThis, 'navigator', originalNavigator);

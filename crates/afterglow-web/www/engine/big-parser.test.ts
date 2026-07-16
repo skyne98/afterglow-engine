@@ -12,12 +12,16 @@ describe('browser range loader', () => {
     let range = '';
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
       range = new Headers(init?.headers).get('range') ?? '';
+      if (range === 'bytes=0-0') return new Response(new Uint8Array([1]), {
+        status: 206, headers: { 'Content-Range': 'bytes 0-0/1234', ETag: '"build-7"' },
+      });
       return new Response(new Uint8Array([1, 2, 3, 4]), { status: 206 });
     }) as typeof fetch;
     try {
       const loader = createFetchRangeLoader('afterglow://local/');
       expect(await loader.read('data.big', 10, 4)).toEqual(new Uint8Array([1, 2, 3, 4]));
       expect(range).toBe('bytes=10-13');
+      expect(await loader.identity('data.big')).toEqual({ size: 1234, etag: '"build-7"', lastModified: null });
     } finally {
       globalThis.fetch = original;
     }
@@ -43,6 +47,31 @@ describe('.big v5 compact VT directories', () => {
     expect(second.offset).toBe(110n);
     expect(second.compressedSize).toBe(20n);
     expect(findVTPageChunk(header, 'terrain', 0, 2, 0)).toBeNull();
+  });
+
+  test('returns a persistent GPU-block cache hit without source read or transcode', async () => {
+    const payload = new Uint8Array(34 * 34 * 16).fill(7);
+    let reads = 0;
+    let transcodes = 0;
+    const loader = {
+      async read() { reads++; throw new Error('cache hit must skip source'); },
+      async load() { return new Uint8Array(); }, async size() { return 0; },
+    };
+    const cache = {
+      async get(key: string) { expect(key).toBe('0:0:1:0'); return payload; },
+      async put() { throw new Error('cache hit must not write'); },
+      getStats() { return {
+        entries: 1, bytes: payload.byteLength, queuedWrites: 0, hits: 1, misses: 0, writes: 0,
+        rejectedCapacity: 0, rejectedQueue: 0, corruptEntries: 0, readErrors: 0, writeErrors: 0,
+        averageReadMs: 0, maxReadMs: 0, averageWriteMs: 0, maxWriteMs: 0,
+      }; },
+    };
+    const provider = createPageDataProvider(loader, header, [{
+      async transcode() { transcodes++; return new Uint8Array(); },
+    }], 0, cache as never);
+    expect(await provider('terrain', { mip: 0, x: 1, y: 0 })).toBe(payload);
+    expect(reads).toBe(0);
+    expect(transcodes).toBe(0);
   });
 
   test('expands direct typed-array offsets once for runtime range reads', async () => {

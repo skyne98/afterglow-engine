@@ -109,3 +109,20 @@ failed, or overflowed work. Final stage means were 8.48 ms admission-to-ready,
 6.08 ms range read, 0.66 ms transcode queue, and 1.70 ms transcode across four
 workers. The upload tuner reached four pages / 0.35 ms; one rejected probe
 rolled back and later recovered under its hysteresis policy.
+
+## Follow-up: persistent GPU-block cache
+
+The generic `PersistentBlobCache` was composed into VT with a namespace covering
+source ETag/size, selected format, transcoder/layout versions, and adapter
+identity. CEF 149 rejects OPFS for the secure custom `afterglow://` origin, so
+its automatic persistent IndexedDB backend was exercised.
+
+The cold launch wrote 297 BC7 pages (5,493,312 bytes) with zero cache errors or
+rejections. The following process launch restored the same view with **zero
+`.big` page reads and zero Basis transcodes**. It recorded 365 cache hits, zero
+misses/writes/errors, 8.21 ms average cache read, and 8.22 ms average
+admission-to-ready latency. The cache therefore removes repeat-launch transcode
+CPU work while retaining comparable page latency under IndexedDB. The exact
+chunk fast path reduced the initial generic cursor implementation from 11.42 ms
+to 8.21 ms/page. Three additional independent CEF launches × three viewpoints
+passed GPU validation with the persistent cache enabled.

@@ -168,11 +168,15 @@ sizes. The optional tail stores one offset and size. It does **not** serialize a
 full `ChunkInfo` or repeated mip/x/y/encoding metadata per page.
 
 `parseBigHeader()` admits this directory once. `createFetchRangeLoader(baseUrl?)`
-returns the browser/CEF serving-layer `load`/`size`/`read` implementation;
-`read` requires an exact 206 response. `createPageDataProvider(loader, header,
-textureWorkers, format)` accepts a fixed worker list, expands each compact size
+returns the browser/CEF serving-layer `load`/`size`/`identity`/`read`
+implementation; `read` requires an exact 206 response and `identity` exposes
+size/ETag/Last-Modified for derived-cache namespacing.
+`createPageDataProvider(loader, header, textureWorkers, format, cache?)` accepts
+a fixed worker list plus an optional generic `PersistentBlobCache`, expands each compact size
 vector into fixed `Float64Array` offsets and `Uint32Array` sizes, and exposes a
-stable `getStats()` view for read/transcode stages. Page lookup is direct
+stable `getStats()` view for cache/read/transcode stages. A cache hit returns
+final GPU blocks before source range read or Basis transcode. Miss output is
+published asynchronously and never delays upload. Page lookup is direct
 `y * pagesX + x` indexing. The production nine-channel dungeon header fell from 764,192 bytes in
 v4 to 123,768 bytes in v5, safely below the 1 MiB RPC output limit. v4 is
 rejected; bundled assets were rebuilt rather than retaining compatibility.

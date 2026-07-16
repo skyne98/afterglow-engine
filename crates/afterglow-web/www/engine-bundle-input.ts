@@ -4,6 +4,7 @@ import { createWorld, addEntity, addComponent, query } from 'bitecs';
 import { VirtualTextureFeedbackPass } from './engine/virtual-texture-feedback-pass.ts';
 import { EngineMemory, EnginePhase, FixedIndexPool, LinearArena, defineEngineMemoryResource } from './engine/engine-memory.ts';
 import { BudgetDecision, FrameBudget, FrameBudgetRes, FrameStage } from './engine/frame-budget.ts';
+import { IndexedDbBlobBackend, PersistentBlobCache, OpfsBlobBackend, persistentCacheNamespace } from './engine/persistent-blob-cache.ts';
 import {
   VirtualTextureStore, VirtualTextureTuning, VirtualTextureTuningRes,
   VT_SAMPLE_WGSL, VT_SAMPLE_LEVEL_WGSL,
@@ -21,6 +22,9 @@ window.bitecsQuery = query;
 window.AfterglowMemory = {
   EngineMemory, EnginePhase, FixedIndexPool, LinearArena, defineEngineMemoryResource,
   BudgetDecision, FrameBudget, FrameBudgetRes, FrameStage,
+};
+window.AfterglowStorage = {
+  PersistentBlobCache, OpfsBlobBackend, IndexedDbBlobBackend, persistentCacheNamespace,
 };
 window.AfterglowVT = {
   VirtualTextureStore, VirtualTextureTuning, VirtualTextureTuningRes,

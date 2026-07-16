@@ -14177,6 +14177,7 @@ async function createWebGPUOnlyRenderer(parameters = {}) {
   if (!adapter)
     throw new Error("Unable to acquire a hardware WebGPU adapter. WebGL fallback is disabled.");
   const renderer = new window.THREE.WebGPURenderer({ ...parameters });
+  renderer.afterglowAdapterInfo = adapter.info;
   disableWebGLFallback(renderer);
   try {
     await renderer.init();

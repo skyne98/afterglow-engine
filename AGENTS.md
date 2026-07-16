@@ -193,6 +193,21 @@ CEF native path; the web `SharedArrayBuffer` path has no such issue.
 
 ## Rules
 
+### Development and design philosophy
+
+- Prefer small, generic, composable engine primitives over subsystem-specific
+  infrastructure. If a capability can cache, persist, stream, queue, or store
+  arbitrary bytes/items, keep that primitive policy-free and reusable; texture,
+  mesh, shader, device, and asset semantics belong in thin consumers that build
+  keys/namespaces and interpret values.
+- Keep public primitives KISS: minimal operations, explicit bounded capacities,
+  deterministic failure, stable telemetry, and one clear ownership model. Do
+  not add speculative layers, parallel legacy paths, or convenience APIs that
+  obscure allocation, I/O, synchronization, or invalidation behavior.
+- Separate mechanism from policy. For example, persistent storage provides
+  generic `open/get/put/clear/stats` byte operations; virtual texturing decides
+  adapter/source cache identity, page keys, and when reads/writes are useful.
+
 ### Runtime allocation, complexity, and frame budgets
 
 The canonical migration plan is
@@ -289,6 +304,9 @@ All engine work must move toward these non-negotiable requirements:
   The web worker has separate wasm memory, so calls copy SAB→worker wasm→SAB.
   Historical input→present: 1.16ms median @ 144fps (not rerun). Run
   `cargo run --release --example bench_rpc -p afterglow-rpc-demo`.
+- `docs/research/device-transcoded-texture-cache.md` — Industry comparison of
+  runtime Basis/KTX2 transcoding versus cooked/derived caches, plus Afterglow's
+  generic persistent-cache and device/source namespace design.
 - `docs/research/surface-detail-low-end-fallbacks.md` — Surface-detail/POM
   fallback evaluation: normal maps and one-tap offset-limited parallax are the
   low-end tiers; VT is residency, not a POM loop-speed optimization; measured
@@ -309,6 +327,9 @@ All engine work must move toward these non-negotiable requirements:
   mdbook-mermaid --run "mdbook serve --open"`. Kept in sync with engine changes.
 - `docs/api/engine-memory.md` — sealed runtime phases, fixed arenas/pools,
   resource sealing, TypeScript artifact enforcement, and allocation linting.
+- `docs/api/persistent-blob-cache.md` — generic bounded OPFS byte cache:
+  append-only pack/fixed SHA-256 index, crash semantics, limits, telemetry, and
+  policy-free composition by VT or other systems.
 - `docs/api/ring-buffer.md` — `afterglow-rpc` ring buffer + native transport
   (SPSC framing, owned halves, worker transport, events, poison/timeout).
 - `docs/api/rpc-macro.md` — `afterglow-rpc-macros` `#[rpc]` attribute: server/

@@ -2,6 +2,13 @@
 
 **Investigated:** 2026-07-16
 
+> **Implementation status:** The first production slice is implemented as the
+> generic, policy-free `PersistentBlobCache`: a bounded append-only pack, fixed
+> SHA-256 index, checksums, crash-safe publication order, OPFS with IndexedDB
+> fallback, and stable telemetry. VT composes device/source/format namespaces over it. The initial
+> cache saturates at its hard limit; incremental compaction/eviction remains a
+> future mechanism-level enhancement.
+
 ## Question
 
 Should Afterglow repeatedly transcode portable UASTC/Basis virtual-texture pages
@@ -126,18 +133,16 @@ default, not a hard API decision.
 
 ## Platform backends
 
-### Native CEF
+### CEF and browser
 
-Use a Rust cache worker rooted in the OS user-cache directory. It owns `pread`,
-append, index loading, atomic publication, compaction, byte limits, and metrics.
-The website communicates with it through generated `#[rpc]` calls and bounded
-rings, consistent with Afterglow's communication architecture. It must not write
-inside the confined game asset root.
-
-### Browser
-
-Use OPFS when available, with IndexedDB as a compatibility backend. The logical
-index/pack format and cache identity remain the same. Browser quota/eviction is
+The implemented shared cache prefers OPFS. Chromium rejects OPFS access for
+CEF's secure custom `afterglow://` origin, so CEF automatically uses a
+persistent IndexedDB chunk backend; supporting HTTP(S) browsers use OPFS. Both
+own append/index loading, publication, byte limits, and metrics without
+introducing texture policy. An alternate native
+Rust `PersistentBlobBackend` can be added later without changing the public
+cache or VT consumer. It must not write inside the confined game asset root.
+Browser quota/eviction is
 not guaranteed, so every miss must transparently fall back to UASTC range read
 and transcode. The source `.big` remains authoritative.
 

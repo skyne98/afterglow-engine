@@ -326,6 +326,21 @@ class BoundedTranscoderPool {
 }
 function createFetchRangeLoader(baseUrl = "") {
   const url = (path) => baseUrl + path;
+  const identity = async (path) => {
+    const response = await fetch(url(path), { headers: { Range: "bytes=0-0" } });
+    if (response.status !== 206)
+      throw new Error(`asset identity range expected 206, got ${response.status}: ${path}`);
+    const contentRange = response.headers.get("content-range") ?? "";
+    const separator = contentRange.lastIndexOf("/");
+    const size = Number(separator < 0 ? "" : contentRange.slice(separator + 1));
+    if (!Number.isSafeInteger(size) || size < 1)
+      throw new Error(`asset identity has invalid content-range: ${path}`);
+    return {
+      size,
+      etag: response.headers.get("etag"),
+      lastModified: response.headers.get("last-modified")
+    };
+  };
   return {
     async load(path) {
       const response = await fetch(url(path));
@@ -334,14 +349,9 @@ function createFetchRangeLoader(baseUrl = "") {
       return new Uint8Array(await response.arrayBuffer());
     },
     async size(path) {
-      const response = await fetch(url(path), { method: "HEAD" });
-      if (!response.ok)
-        throw new Error(`asset HEAD ${response.status}: ${path}`);
-      const length = Number(response.headers.get("content-length"));
-      if (!Number.isSafeInteger(length) || length < 0)
-        throw new Error(`asset HEAD has invalid content-length: ${path}`);
-      return length;
+      return (await identity(path)).size;
     },
+    identity,
     async read(path, offset, len) {
       if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(len) || len < 0)
         throw new RangeError("asset range must use non-negative safe integers");
@@ -359,9 +369,10 @@ function createFetchRangeLoader(baseUrl = "") {
     }
   };
 }
-function createPageDataProvider(loader, header, textureWorkers, format) {
+function createPageDataProvider(loader, header, textureWorkers, format, cache) {
   const directories = new Map;
-  for (const asset of header.assets) {
+  for (let assetId = 0;assetId < header.assets.length; assetId++) {
+    const asset = header.assets[assetId];
     const source = asset.virtualTexture;
     if (!source)
       continue;
@@ -380,6 +391,7 @@ function createPageDataProvider(loader, header, textureWorkers, format) {
       mips[mip.mip] = { pagesX: mip.pagesX, pagesY: mip.pagesY, offsets, sizes };
     }
     directories.set(asset.name, {
+      assetId,
       encoding: source.encoding,
       mips,
       tailOffset: source.tail ? Number(source.tail.offset) : 0,
@@ -401,7 +413,21 @@ function createPageDataProvider(loader, header, textureWorkers, format) {
     averageTranscodeQueueMs: 0,
     maxTranscodeQueueMs: 0,
     averageTranscodeMs: 0,
-    maxTranscodeMs: 0
+    maxTranscodeMs: 0,
+    cacheEnabled: cache !== undefined,
+    cacheBackend: "",
+    cacheEntries: 0,
+    cacheBytes: 0,
+    cacheQueuedWrites: 0,
+    cacheHits: 0,
+    cacheMisses: 0,
+    cacheWrites: 0,
+    cacheRejected: 0,
+    cacheErrors: 0,
+    averageCacheReadMs: 0,
+    maxCacheReadMs: 0,
+    averageCacheWriteMs: 0,
+    maxCacheWriteMs: 0
   };
   const provider = async (path, req, signal) => {
     if (signal?.aborted)
@@ -422,6 +448,15 @@ function createPageDataProvider(loader, header, textureWorkers, format) {
     }
     if (!directory || size === 0)
       throw new Error(`VT page not found: ${path} mip=${req.mip} (${req.x},${req.y})`);
+    const cacheKey = `${directory.assetId}:${req.tail ? "t" : req.mip}:${req.x}:${req.y}`;
+    const expectedBytes = format === 4 ? 136 * 136 * 4 : 34 * 34 * 16;
+    if (cache) {
+      const cached = await cache.get(cacheKey);
+      if (signal?.aborted)
+        throw new Error("VT page load canceled after cache read");
+      if (cached && cached.byteLength === expectedBytes)
+        return cached;
+    }
     const readStartedAt = performance.now();
     const pageData = await loader.read(path + ".big", offset, size);
     const readMs = performance.now() - readStartedAt;
@@ -434,6 +469,8 @@ function createPageDataProvider(loader, header, textureWorkers, format) {
       if (format !== 4) {
         throw new Error(`VT page ${path} is raw RGBA8 but GPU format ${format} requires Basis encoding`);
       }
+      if (cache)
+        cache.put(cacheKey, pageData);
       return pageData;
     }
     if (pageData.byteLength < 2 || pageData[0] !== 115 || pageData[1] !== 66)
@@ -450,7 +487,10 @@ function createPageDataProvider(loader, header, textureWorkers, format) {
     const length = view.getUint32(12, true);
     if (count < 1 || width !== 136 || height !== 136 || 16 + length > transcoded.byteLength)
       throw new Error(`invalid transcoded VT page header: count=${count}, size=${width}x${height}, bytes=${length}`);
-    return transcoded.slice(16, 16 + length);
+    const payload = transcoded.slice(16, 16 + length);
+    if (cache)
+      cache.put(cacheKey, payload);
+    return payload;
   };
   provider.getStats = () => {
     const transcode = transcoder.getStats();
@@ -465,6 +505,22 @@ function createPageDataProvider(loader, header, textureWorkers, format) {
     stats.maxTranscodeQueueMs = transcode.maxQueueMs;
     stats.averageTranscodeMs = transcode.averageTranscodeMs;
     stats.maxTranscodeMs = transcode.maxTranscodeMs;
+    const persistent = cache?.getStats();
+    if (persistent) {
+      stats.cacheBackend = persistent.backend;
+      stats.cacheEntries = persistent.entries;
+      stats.cacheBytes = persistent.bytes;
+      stats.cacheQueuedWrites = persistent.queuedWrites;
+      stats.cacheHits = persistent.hits;
+      stats.cacheMisses = persistent.misses;
+      stats.cacheWrites = persistent.writes;
+      stats.cacheRejected = persistent.rejectedCapacity + persistent.rejectedQueue;
+      stats.cacheErrors = persistent.corruptEntries + persistent.readErrors + persistent.writeErrors;
+      stats.averageCacheReadMs = persistent.averageReadMs;
+      stats.maxCacheReadMs = persistent.maxReadMs;
+      stats.averageCacheWriteMs = persistent.averageWriteMs;
+      stats.maxCacheWriteMs = persistent.maxWriteMs;
+    }
     return stats;
   };
   return provider;

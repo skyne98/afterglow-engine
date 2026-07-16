@@ -210,6 +210,20 @@ interface PageDataProviderTelemetry {
   maxTranscodeQueueMs: number;
   averageTranscodeMs: number;
   maxTranscodeMs: number;
+  cacheEnabled: boolean;
+  cacheBackend: string;
+  cacheEntries: number;
+  cacheBytes: number;
+  cacheQueuedWrites: number;
+  cacheHits: number;
+  cacheMisses: number;
+  cacheWrites: number;
+  cacheRejected: number;
+  cacheErrors: number;
+  averageCacheReadMs: number;
+  maxCacheReadMs: number;
+  averageCacheWriteMs: number;
+  maxCacheWriteMs: number;
 }
 
 type PageDataProvider = ((path: string, req: PageRequest, signal?: AbortSignal) => Promise<Uint8Array>) & {
@@ -866,6 +880,10 @@ export class VirtualTextureStore {
     transcodeWorkers: 0, activeTranscodes: 0, queuedTranscodes: 0,
     completedTranscodes: 0, averageTranscodeQueueMs: 0, maxTranscodeQueueMs: 0,
     averageTranscodeMs: 0, maxTranscodeMs: 0,
+    cacheEnabled: false, cacheBackend: '', cacheEntries: 0, cacheBytes: 0, cacheQueuedWrites: 0,
+    cacheHits: 0, cacheMisses: 0, cacheWrites: 0, cacheRejected: 0, cacheErrors: 0,
+    averageCacheReadMs: 0, maxCacheReadMs: 0,
+    averageCacheWriteMs: 0, maxCacheWriteMs: 0,
   };
 
   constructor(
@@ -1854,6 +1872,20 @@ export class VirtualTextureStore {
       stats.maxTranscodeQueueMs = provider.maxTranscodeQueueMs;
       stats.averageTranscodeMs = provider.averageTranscodeMs;
       stats.maxTranscodeMs = provider.maxTranscodeMs;
+      stats.cacheEnabled = provider.cacheEnabled;
+      stats.cacheBackend = provider.cacheBackend;
+      stats.cacheEntries = provider.cacheEntries;
+      stats.cacheBytes = provider.cacheBytes;
+      stats.cacheQueuedWrites = provider.cacheQueuedWrites;
+      stats.cacheHits = provider.cacheHits;
+      stats.cacheMisses = provider.cacheMisses;
+      stats.cacheWrites = provider.cacheWrites;
+      stats.cacheRejected = provider.cacheRejected;
+      stats.cacheErrors = provider.cacheErrors;
+      stats.averageCacheReadMs = provider.averageCacheReadMs;
+      stats.maxCacheReadMs = provider.maxCacheReadMs;
+      stats.averageCacheWriteMs = provider.averageCacheWriteMs;
+      stats.maxCacheWriteMs = provider.maxCacheWriteMs;
     }
     return stats;
   }

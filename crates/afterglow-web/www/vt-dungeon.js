@@ -810,6 +810,21 @@ class BoundedTranscoderPool {
 }
 function createFetchRangeLoader(baseUrl = "") {
   const url = (path) => baseUrl + path;
+  const identity = async (path) => {
+    const response = await fetch(url(path), { headers: { Range: "bytes=0-0" } });
+    if (response.status !== 206)
+      throw new Error(`asset identity range expected 206, got ${response.status}: ${path}`);
+    const contentRange = response.headers.get("content-range") ?? "";
+    const separator = contentRange.lastIndexOf("/");
+    const size = Number(separator < 0 ? "" : contentRange.slice(separator + 1));
+    if (!Number.isSafeInteger(size) || size < 1)
+      throw new Error(`asset identity has invalid content-range: ${path}`);
+    return {
+      size,
+      etag: response.headers.get("etag"),
+      lastModified: response.headers.get("last-modified")
+    };
+  };
   return {
     async load(path) {
       const response = await fetch(url(path));
@@ -818,14 +833,9 @@ function createFetchRangeLoader(baseUrl = "") {
       return new Uint8Array(await response.arrayBuffer());
     },
     async size(path) {
-      const response = await fetch(url(path), { method: "HEAD" });
-      if (!response.ok)
-        throw new Error(`asset HEAD ${response.status}: ${path}`);
-      const length = Number(response.headers.get("content-length"));
-      if (!Number.isSafeInteger(length) || length < 0)
-        throw new Error(`asset HEAD has invalid content-length: ${path}`);
-      return length;
+      return (await identity(path)).size;
     },
+    identity,
     async read(path, offset, len) {
       if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(len) || len < 0)
         throw new RangeError("asset range must use non-negative safe integers");
@@ -843,9 +853,10 @@ function createFetchRangeLoader(baseUrl = "") {
     }
   };
 }
-function createPageDataProvider(loader, header, textureWorkers, format) {
+function createPageDataProvider(loader, header, textureWorkers, format, cache) {
   const directories = new Map;
-  for (const asset of header.assets) {
+  for (let assetId = 0;assetId < header.assets.length; assetId++) {
+    const asset = header.assets[assetId];
     const source = asset.virtualTexture;
     if (!source)
       continue;
@@ -864,6 +875,7 @@ function createPageDataProvider(loader, header, textureWorkers, format) {
       mips[mip.mip] = { pagesX: mip.pagesX, pagesY: mip.pagesY, offsets, sizes };
     }
     directories.set(asset.name, {
+      assetId,
       encoding: source.encoding,
       mips,
       tailOffset: source.tail ? Number(source.tail.offset) : 0,
@@ -885,7 +897,21 @@ function createPageDataProvider(loader, header, textureWorkers, format) {
     averageTranscodeQueueMs: 0,
     maxTranscodeQueueMs: 0,
     averageTranscodeMs: 0,
-    maxTranscodeMs: 0
+    maxTranscodeMs: 0,
+    cacheEnabled: cache !== undefined,
+    cacheBackend: "",
+    cacheEntries: 0,
+    cacheBytes: 0,
+    cacheQueuedWrites: 0,
+    cacheHits: 0,
+    cacheMisses: 0,
+    cacheWrites: 0,
+    cacheRejected: 0,
+    cacheErrors: 0,
+    averageCacheReadMs: 0,
+    maxCacheReadMs: 0,
+    averageCacheWriteMs: 0,
+    maxCacheWriteMs: 0
   };
   const provider = async (path, req, signal) => {
     if (signal?.aborted)
@@ -906,6 +932,15 @@ function createPageDataProvider(loader, header, textureWorkers, format) {
     }
     if (!directory || size === 0)
       throw new Error(`VT page not found: ${path} mip=${req.mip} (${req.x},${req.y})`);
+    const cacheKey = `${directory.assetId}:${req.tail ? "t" : req.mip}:${req.x}:${req.y}`;
+    const expectedBytes = format === 4 ? 136 * 136 * 4 : 34 * 34 * 16;
+    if (cache) {
+      const cached = await cache.get(cacheKey);
+      if (signal?.aborted)
+        throw new Error("VT page load canceled after cache read");
+      if (cached && cached.byteLength === expectedBytes)
+        return cached;
+    }
     const readStartedAt = performance.now();
     const pageData = await loader.read(path + ".big", offset, size);
     const readMs = performance.now() - readStartedAt;
@@ -918,6 +953,8 @@ function createPageDataProvider(loader, header, textureWorkers, format) {
       if (format !== 4) {
         throw new Error(`VT page ${path} is raw RGBA8 but GPU format ${format} requires Basis encoding`);
       }
+      if (cache)
+        cache.put(cacheKey, pageData);
       return pageData;
     }
     if (pageData.byteLength < 2 || pageData[0] !== 115 || pageData[1] !== 66)
@@ -934,7 +971,10 @@ function createPageDataProvider(loader, header, textureWorkers, format) {
     const length = view.getUint32(12, true);
     if (count < 1 || width !== 136 || height !== 136 || 16 + length > transcoded.byteLength)
       throw new Error(`invalid transcoded VT page header: count=${count}, size=${width}x${height}, bytes=${length}`);
-    return transcoded.slice(16, 16 + length);
+    const payload = transcoded.slice(16, 16 + length);
+    if (cache)
+      cache.put(cacheKey, payload);
+    return payload;
   };
   provider.getStats = () => {
     const transcode = transcoder.getStats();
@@ -949,9 +989,532 @@ function createPageDataProvider(loader, header, textureWorkers, format) {
     stats.maxTranscodeQueueMs = transcode.maxQueueMs;
     stats.averageTranscodeMs = transcode.averageTranscodeMs;
     stats.maxTranscodeMs = transcode.maxTranscodeMs;
+    const persistent = cache?.getStats();
+    if (persistent) {
+      stats.cacheBackend = persistent.backend;
+      stats.cacheEntries = persistent.entries;
+      stats.cacheBytes = persistent.bytes;
+      stats.cacheQueuedWrites = persistent.queuedWrites;
+      stats.cacheHits = persistent.hits;
+      stats.cacheMisses = persistent.misses;
+      stats.cacheWrites = persistent.writes;
+      stats.cacheRejected = persistent.rejectedCapacity + persistent.rejectedQueue;
+      stats.cacheErrors = persistent.corruptEntries + persistent.readErrors + persistent.writeErrors;
+      stats.averageCacheReadMs = persistent.averageReadMs;
+      stats.maxCacheReadMs = persistent.maxReadMs;
+      stats.averageCacheWriteMs = persistent.averageWriteMs;
+      stats.maxCacheWriteMs = persistent.maxWriteMs;
+    }
     return stats;
   };
   return provider;
+}
+
+// crates/afterglow-web/www/engine/persistent-blob-cache.ts
+var INDEX_MAGIC = 1128417089;
+var INDEX_VERSION = 1;
+var INDEX_HEADER_BYTES = 16;
+var HASH_WORDS = 8;
+var INDEX_RECORD_BYTES = 48;
+var EMPTY = 0;
+var OCCUPIED = 1;
+var TOMBSTONE = 2;
+function checksum(bytes) {
+  let value = 2166136261;
+  for (let index = 0;index < bytes.length; index++) {
+    value ^= bytes[index];
+    value = Math.imul(value, 16777619);
+  }
+  return value >>> 0;
+}
+async function hashKey(key) {
+  const encoded = new TextEncoder().encode(key);
+  const digest = await crypto.subtle.digest("SHA-256", encoded);
+  return new Uint32Array(digest);
+}
+async function persistentCacheNamespace(parts) {
+  let value = "";
+  for (const part of parts)
+    value += `${part.length}:${part};`;
+  const words = await hashKey(value);
+  let output = "";
+  for (let index = 0;index < words.length; index++)
+    output += words[index].toString(16).padStart(8, "0");
+  return output;
+}
+
+class OpfsBlobBackend {
+  directory;
+  kind = "opfs";
+  constructor(directory) {
+    this.directory = directory;
+  }
+  static async open(namespace) {
+    const storage = navigator.storage;
+    if (!storage?.getDirectory)
+      throw new Error("OPFS is unavailable");
+    const root = await storage.getDirectory();
+    const cacheRoot = await root.getDirectoryHandle("afterglow-cache", { create: true });
+    const directory = await cacheRoot.getDirectoryHandle(namespace, { create: true });
+    return new OpfsBlobBackend(directory);
+  }
+  async file(name) {
+    return this.directory.getFileHandle(name, { create: true });
+  }
+  async size(name) {
+    return (await (await this.file(name)).getFile()).size;
+  }
+  async read(name, offset, length) {
+    const file = await (await this.file(name)).getFile();
+    return new Uint8Array(await file.slice(offset, offset + length).arrayBuffer());
+  }
+  async append(name, data) {
+    const handle = await this.file(name);
+    const size = (await handle.getFile()).size;
+    const writable = await handle.createWritable({ keepExistingData: true });
+    try {
+      await writable.seek(size);
+      await writable.write(data);
+    } finally {
+      await writable.close();
+    }
+  }
+  async replace(name, data) {
+    const writable = await (await this.file(name)).createWritable();
+    try {
+      await writable.write(data);
+    } finally {
+      await writable.close();
+    }
+  }
+}
+function idbRequest(request) {
+  return new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error ?? new Error("IndexedDB request failed"));
+  });
+}
+function idbTransaction(transaction) {
+  return new Promise((resolve, reject) => {
+    transaction.oncomplete = () => resolve();
+    transaction.onabort = () => reject(transaction.error ?? new Error("IndexedDB transaction aborted"));
+    transaction.onerror = () => reject(transaction.error ?? new Error("IndexedDB transaction failed"));
+  });
+}
+
+class IndexedDbBlobBackend {
+  database;
+  kind = "indexeddb";
+  constructor(database) {
+    this.database = database;
+  }
+  static async open(namespace) {
+    if (!globalThis.indexedDB)
+      throw new Error("IndexedDB is unavailable");
+    const request = indexedDB.open(`afterglow-cache-${namespace}`, 1);
+    request.onupgradeneeded = () => {
+      const database = request.result;
+      if (!database.objectStoreNames.contains("chunks"))
+        database.createObjectStore("chunks", { keyPath: ["file", "offset"] });
+      if (!database.objectStoreNames.contains("meta"))
+        database.createObjectStore("meta", { keyPath: "file" });
+    };
+    return new IndexedDbBlobBackend(await idbRequest(request));
+  }
+  async size(name) {
+    const transaction = this.database.transaction("meta", "readonly");
+    const result = await idbRequest(transaction.objectStore("meta").get(name));
+    return result?.size ?? 0;
+  }
+  async predecessor(name, offset) {
+    const transaction = this.database.transaction("chunks", "readonly");
+    const range = IDBKeyRange.bound([name, 0], [name, offset]);
+    const cursor = await idbRequest(transaction.objectStore("chunks").openCursor(range, "prev"));
+    return cursor ? cursor.value : null;
+  }
+  async read(name, offset, length) {
+    if (length === 0)
+      return new Uint8Array(0);
+    const exactTransaction = this.database.transaction("chunks", "readonly");
+    const exact = await idbRequest(exactTransaction.objectStore("chunks").get([name, offset]));
+    if (exact && exact.data.byteLength === length)
+      return exact.data;
+    const predecessor = await this.predecessor(name, offset);
+    const firstOffset = predecessor && predecessor.offset + predecessor.data.byteLength > offset ? predecessor.offset : offset;
+    const output = new Uint8Array(length);
+    const end = offset + length;
+    const transaction = this.database.transaction("chunks", "readonly");
+    const store = transaction.objectStore("chunks");
+    const range = IDBKeyRange.bound([name, firstOffset], [name, end - 1]);
+    await new Promise((resolve, reject) => {
+      const request = store.openCursor(range);
+      request.onerror = () => reject(request.error ?? new Error("IndexedDB cursor failed"));
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) {
+          resolve();
+          return;
+        }
+        const chunk = cursor.value;
+        const copyStart = Math.max(offset, chunk.offset);
+        const copyEnd = Math.min(end, chunk.offset + chunk.data.byteLength);
+        if (copyEnd > copyStart)
+          output.set(chunk.data.subarray(copyStart - chunk.offset, copyEnd - chunk.offset), copyStart - offset);
+        cursor.continue();
+      };
+    });
+    return output;
+  }
+  async append(name, data) {
+    const transaction = this.database.transaction(["chunks", "meta"], "readwrite");
+    const done = idbTransaction(transaction);
+    const meta = transaction.objectStore("meta");
+    const previous = await idbRequest(meta.get(name));
+    const offset = previous?.size ?? 0;
+    transaction.objectStore("chunks").put({ file: name, offset, data: data.slice() });
+    meta.put({ file: name, size: offset + data.byteLength });
+    await done;
+  }
+  async replace(name, data) {
+    const transaction = this.database.transaction(["chunks", "meta"], "readwrite");
+    const done = idbTransaction(transaction);
+    const chunks = transaction.objectStore("chunks");
+    const range = IDBKeyRange.bound([name, 0], [name, Number.MAX_SAFE_INTEGER]);
+    await new Promise((resolve, reject) => {
+      const request = chunks.openCursor(range);
+      request.onerror = () => reject(request.error ?? new Error("IndexedDB cursor failed"));
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) {
+          resolve();
+          return;
+        }
+        cursor.delete();
+        cursor.continue();
+      };
+    });
+    if (data.byteLength !== 0)
+      chunks.put({ file: name, offset: 0, data: data.slice() });
+    transaction.objectStore("meta").put({ file: name, size: data.byteLength });
+    await done;
+  }
+}
+
+class PersistentBlobCache {
+  backend;
+  maxBytes;
+  maxEntries;
+  states;
+  hashes;
+  offsets;
+  lengths;
+  checksums;
+  jobs;
+  stats;
+  head = 0;
+  tail = 0;
+  queued = 0;
+  writing = false;
+  entries = 0;
+  packBytes = 0;
+  totalReadMs = 0;
+  maxReadMs = 0;
+  totalWriteMs = 0;
+  maxWriteMs = 0;
+  constructor(backend, maxBytes, maxEntries, writeQueueCapacity) {
+    this.backend = backend;
+    this.maxBytes = maxBytes;
+    this.maxEntries = maxEntries;
+    this.states = new Uint8Array(maxEntries * 2);
+    this.hashes = new Uint32Array(this.states.length * HASH_WORDS);
+    this.offsets = new Float64Array(this.states.length);
+    this.lengths = new Uint32Array(this.states.length);
+    this.checksums = new Uint32Array(this.states.length);
+    this.jobs = new Array(writeQueueCapacity).fill(null);
+    this.stats = {
+      enabled: true,
+      backend: backend.kind ?? "custom",
+      entries: 0,
+      bytes: 0,
+      maxBytes,
+      maxEntries,
+      queuedWrites: 0,
+      hits: 0,
+      misses: 0,
+      writes: 0,
+      writeBytes: 0,
+      rejectedCapacity: 0,
+      rejectedQueue: 0,
+      corruptEntries: 0,
+      readErrors: 0,
+      writeErrors: 0,
+      averageReadMs: 0,
+      maxReadMs: 0,
+      averageWriteMs: 0,
+      maxWriteMs: 0
+    };
+  }
+  static async open(options, backend) {
+    if (!options.namespace || !Number.isSafeInteger(options.maxBytes) || options.maxBytes < 1 || !Number.isInteger(options.maxEntries) || options.maxEntries < 1)
+      throw new RangeError("invalid persistent blob cache options");
+    const queueCapacity = options.writeQueueCapacity ?? 64;
+    if (!Number.isInteger(queueCapacity) || queueCapacity < 1)
+      throw new RangeError("cache write queue capacity must be positive");
+    let store = backend;
+    if (!store) {
+      try {
+        store = await OpfsBlobBackend.open(options.namespace);
+      } catch {
+        store = await IndexedDbBlobBackend.open(options.namespace);
+      }
+    }
+    const cache = new PersistentBlobCache(store, options.maxBytes, options.maxEntries, queueCapacity);
+    await cache.loadIndex();
+    return cache;
+  }
+  hashStart(slot) {
+    return slot * HASH_WORDS;
+  }
+  hashesEqual(slot, hash) {
+    const start = this.hashStart(slot);
+    for (let word = 0;word < HASH_WORDS; word++)
+      if (this.hashes[start + word] !== hash[word])
+        return false;
+    return true;
+  }
+  hashSlot(hash) {
+    let value = 2654435769;
+    for (let word = 0;word < HASH_WORDS; word++)
+      value = Math.imul(value ^ hash[word], 2246822507);
+    return (value >>> 0) % this.states.length;
+  }
+  find(hash) {
+    let slot = this.hashSlot(hash);
+    for (let probe = 0;probe < this.states.length; probe++) {
+      const state = this.states[slot];
+      if (state === EMPTY)
+        return -1;
+      if (state === OCCUPIED && this.hashesEqual(slot, hash))
+        return slot;
+      slot = (slot + 1) % this.states.length;
+    }
+    return -1;
+  }
+  insert(hash, offset, length, valueChecksum) {
+    let slot = this.hashSlot(hash);
+    let tombstone = -1;
+    for (let probe = 0;probe < this.states.length; probe++) {
+      const state = this.states[slot];
+      if (state === OCCUPIED && this.hashesEqual(slot, hash)) {
+        this.offsets[slot] = offset;
+        this.lengths[slot] = length;
+        this.checksums[slot] = valueChecksum;
+        return true;
+      }
+      if (state === TOMBSTONE && tombstone < 0)
+        tombstone = slot;
+      if (state === EMPTY) {
+        const target = tombstone < 0 ? slot : tombstone;
+        this.states[target] = OCCUPIED;
+        this.hashes.set(hash, this.hashStart(target));
+        this.offsets[target] = offset;
+        this.lengths[target] = length;
+        this.checksums[target] = valueChecksum;
+        this.entries++;
+        return true;
+      }
+      slot = (slot + 1) % this.states.length;
+    }
+    return false;
+  }
+  remove(slot) {
+    if (slot < 0 || this.states[slot] !== OCCUPIED)
+      return;
+    this.states[slot] = TOMBSTONE;
+    this.entries--;
+  }
+  record(hash, offset, length, valueChecksum) {
+    const bytes = new Uint8Array(INDEX_RECORD_BYTES);
+    const view = new DataView(bytes.buffer);
+    for (let word = 0;word < HASH_WORDS; word++)
+      view.setUint32(word * 4, hash[word], true);
+    view.setBigUint64(32, BigInt(offset), true);
+    view.setUint32(40, length, true);
+    view.setUint32(44, valueChecksum, true);
+    return bytes;
+  }
+  async loadIndex() {
+    this.packBytes = await this.backend.size("values.pack");
+    let indexSize = await this.backend.size("values.index");
+    if (this.packBytes > this.maxBytes) {
+      await this.clear();
+      return;
+    }
+    if (indexSize < INDEX_HEADER_BYTES) {
+      await this.backend.replace("values.index", this.indexHeader());
+      return;
+    }
+    const bytes = await this.backend.read("values.index", 0, indexSize);
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    if (view.getUint32(0, true) !== INDEX_MAGIC || view.getUint32(4, true) !== INDEX_VERSION) {
+      await this.clear();
+      return;
+    }
+    indexSize = INDEX_HEADER_BYTES + Math.floor((indexSize - INDEX_HEADER_BYTES) / INDEX_RECORD_BYTES) * INDEX_RECORD_BYTES;
+    const hash = new Uint32Array(HASH_WORDS);
+    for (let offset = INDEX_HEADER_BYTES;offset < indexSize; offset += INDEX_RECORD_BYTES) {
+      for (let word = 0;word < HASH_WORDS; word++)
+        hash[word] = view.getUint32(offset + word * 4, true);
+      const packOffset = Number(view.getBigUint64(offset + 32, true));
+      const length = view.getUint32(offset + 40, true);
+      const valueChecksum = view.getUint32(offset + 44, true);
+      if (length === 0) {
+        this.remove(this.find(hash));
+      } else if (packOffset + length <= this.packBytes && this.entries < this.maxEntries) {
+        this.insert(hash, packOffset, length, valueChecksum);
+      }
+    }
+  }
+  indexHeader() {
+    const bytes = new Uint8Array(INDEX_HEADER_BYTES);
+    const view = new DataView(bytes.buffer);
+    view.setUint32(0, INDEX_MAGIC, true);
+    view.setUint32(4, INDEX_VERSION, true);
+    view.setUint32(8, INDEX_RECORD_BYTES, true);
+    view.setUint32(12, HASH_WORDS, true);
+    return bytes;
+  }
+  async get(key) {
+    const startedAt = performance.now();
+    try {
+      const hash = await hashKey(key);
+      const slot = this.find(hash);
+      if (slot < 0) {
+        this.stats.misses++;
+        return null;
+      }
+      const bytes = await this.backend.read("values.pack", this.offsets[slot], this.lengths[slot]);
+      if (bytes.byteLength !== this.lengths[slot] || checksum(bytes) !== this.checksums[slot]) {
+        this.remove(slot);
+        this.stats.corruptEntries++;
+        this.stats.misses++;
+        return null;
+      }
+      this.stats.hits++;
+      return bytes;
+    } catch {
+      this.stats.readErrors++;
+      this.stats.misses++;
+      return null;
+    } finally {
+      const elapsed = performance.now() - startedAt;
+      this.totalReadMs += elapsed;
+      this.maxReadMs = Math.max(this.maxReadMs, elapsed);
+    }
+  }
+  async put(key, data) {
+    const hash = await hashKey(key);
+    if (this.find(hash) >= 0)
+      return true;
+    if (data.byteLength === 0 || data.byteLength > this.maxBytes || this.entries + this.queued >= this.maxEntries || this.packBytes + data.byteLength > this.maxBytes) {
+      this.stats.rejectedCapacity++;
+      return false;
+    }
+    if (this.queued >= this.jobs.length || this.hasQueued(hash)) {
+      if (this.hasQueued(hash))
+        return true;
+      this.stats.rejectedQueue++;
+      return false;
+    }
+    return new Promise((resolve) => {
+      this.jobs[this.tail] = { hash, data, resolve };
+      this.tail = (this.tail + 1) % this.jobs.length;
+      this.queued++;
+      this.pump();
+    });
+  }
+  hasQueued(hash) {
+    for (let count = 0, index = this.head;count < this.queued; count++, index = (index + 1) % this.jobs.length) {
+      const job = this.jobs[index];
+      if (job) {
+        let equal = true;
+        for (let word = 0;word < HASH_WORDS; word++)
+          if (job.hash[word] !== hash[word]) {
+            equal = false;
+            break;
+          }
+        if (equal)
+          return true;
+      }
+    }
+    return false;
+  }
+  pump() {
+    if (this.writing || this.queued === 0)
+      return;
+    const job = this.jobs[this.head];
+    this.jobs[this.head] = null;
+    this.head = (this.head + 1) % this.jobs.length;
+    this.queued--;
+    this.writing = true;
+    this.write(job);
+  }
+  async write(job) {
+    const startedAt = performance.now();
+    let success = false;
+    try {
+      if (this.find(job.hash) >= 0) {
+        success = true;
+      } else if (this.entries < this.maxEntries && this.packBytes + job.data.byteLength <= this.maxBytes) {
+        const offset = this.packBytes;
+        const valueChecksum = checksum(job.data);
+        await this.backend.append("values.pack", job.data);
+        await this.backend.append("values.index", this.record(job.hash, offset, job.data.byteLength, valueChecksum));
+        this.packBytes += job.data.byteLength;
+        success = this.insert(job.hash, offset, job.data.byteLength, valueChecksum);
+        if (success) {
+          this.stats.writes++;
+          this.stats.writeBytes += job.data.byteLength;
+        }
+      } else {
+        this.stats.rejectedCapacity++;
+      }
+    } catch {
+      this.stats.writeErrors++;
+      try {
+        this.packBytes = await this.backend.size("values.pack");
+      } catch {}
+    } finally {
+      const elapsed = performance.now() - startedAt;
+      this.totalWriteMs += elapsed;
+      this.maxWriteMs = Math.max(this.maxWriteMs, elapsed);
+      this.writing = false;
+      job.resolve(success);
+      this.pump();
+    }
+  }
+  async clear() {
+    if (this.writing || this.queued !== 0)
+      throw new Error("cannot clear persistent cache while writes are pending");
+    await this.backend.replace("values.pack", new Uint8Array(0));
+    await this.backend.replace("values.index", this.indexHeader());
+    this.states.fill(EMPTY);
+    this.entries = 0;
+    this.packBytes = 0;
+  }
+  getStats() {
+    const stats = this.stats;
+    stats.entries = this.entries;
+    stats.bytes = this.packBytes;
+    stats.queuedWrites = this.queued + (this.writing ? 1 : 0);
+    const reads = stats.hits + stats.misses;
+    stats.averageReadMs = reads === 0 ? 0 : this.totalReadMs / reads;
+    stats.maxReadMs = this.maxReadMs;
+    const writes = stats.writes + stats.writeErrors;
+    stats.averageWriteMs = writes === 0 ? 0 : this.totalWriteMs / writes;
+    stats.maxWriteMs = this.maxWriteMs;
+    return stats;
+  }
 }
 
 // crates/afterglow-web/www/engine/webgpu-only.ts
@@ -982,6 +1545,7 @@ async function createWebGPUOnlyRenderer(parameters = {}) {
   if (!adapter)
     throw new Error("Unable to acquire a hardware WebGPU adapter. WebGL fallback is disabled.");
   const renderer = new window.THREE.WebGPURenderer({ ...parameters });
+  renderer.afterglowAdapterInfo = adapter.info;
   disableWebGLFallback(renderer);
   try {
     await renderer.init();
@@ -1106,12 +1670,42 @@ var dataOffset = Number(new DataView(prefix.buffer, prefix.byteOffset + 8, 8).ge
 var headerBytes = await rangeLoader.read("vt-dungeon.big", 0, dataOffset);
 var { header } = parseBigHeader(headerBytes);
 var format = renderer.backend.device.features.has("texture-compression-bc") ? 0 : renderer.backend.device.features.has("texture-compression-astc") ? 1 : VT.FORMAT_RGBA;
+var sourceIdentity = await rangeLoader.identity("vt-dungeon.big");
+var adapterInfo = renderer.afterglowAdapterInfo ?? {};
+var persistentCache = null;
+if (sourceIdentity.etag || sourceIdentity.lastModified) {
+  try {
+    const namespace = await persistentCacheNamespace([
+      "afterglow-cache-v1",
+      "vt-dungeon.big",
+      String(sourceIdentity.size),
+      sourceIdentity.etag ?? "",
+      sourceIdentity.lastModified ?? "",
+      String(format),
+      "basisu-transcoder-v1",
+      "slot-136-border-4",
+      adapterInfo.vendor ?? "",
+      adapterInfo.architecture ?? "",
+      adapterInfo.device ?? "",
+      adapterInfo.description ?? ""
+    ]);
+    persistentCache = await PersistentBlobCache.open({
+      namespace,
+      maxBytes: 1024 * 1024 * 1024,
+      maxEntries: 65536,
+      writeQueueCapacity: 64
+    });
+  } catch (error) {
+    console.warn("[cache] persistent blob cache unavailable:", error);
+  }
+} else
+  console.warn("[cache] source has no ETag/Last-Modified; persistent VT cache disabled");
 var containerLoader = {
   load: (path) => rangeLoader.load(path),
   size: (path) => rangeLoader.size(path),
   read: (_path, offset, len) => rangeLoader.read("vt-dungeon.big", offset, len)
 };
-var pageProvider = createPageDataProvider(containerLoader, header, textureWorkers, format);
+var pageProvider = createPageDataProvider(containerLoader, header, textureWorkers, format, persistentCache ?? undefined);
 var loader = { read: (path, offset, len) => rangeLoader.read(path, offset, len), poll() {} };
 var vtTuning = new VT.VirtualTextureTuning;
 var store = new VT.VirtualTextureStore(loader, pageProvider, format, renderer.backend.device, vtTuning);

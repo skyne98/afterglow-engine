@@ -64890,6 +64890,513 @@ class FrameBudget {
 }
 var FrameBudgetRes = defineResource("frameBudget", () => new FrameBudget);
 
+// crates/afterglow-web/www/engine/persistent-blob-cache.ts
+var INDEX_MAGIC = 1128417089;
+var INDEX_VERSION = 1;
+var INDEX_HEADER_BYTES = 16;
+var HASH_WORDS = 8;
+var INDEX_RECORD_BYTES = 48;
+var EMPTY = 0;
+var OCCUPIED = 1;
+var TOMBSTONE = 2;
+function checksum(bytes) {
+  let value = 2166136261;
+  for (let index = 0;index < bytes.length; index++) {
+    value ^= bytes[index];
+    value = Math.imul(value, 16777619);
+  }
+  return value >>> 0;
+}
+async function hashKey(key) {
+  const encoded = new TextEncoder().encode(key);
+  const digest = await crypto.subtle.digest("SHA-256", encoded);
+  return new Uint32Array(digest);
+}
+async function persistentCacheNamespace(parts) {
+  let value = "";
+  for (const part of parts)
+    value += `${part.length}:${part};`;
+  const words = await hashKey(value);
+  let output3 = "";
+  for (let index = 0;index < words.length; index++)
+    output3 += words[index].toString(16).padStart(8, "0");
+  return output3;
+}
+
+class OpfsBlobBackend {
+  directory;
+  kind = "opfs";
+  constructor(directory) {
+    this.directory = directory;
+  }
+  static async open(namespace) {
+    const storage3 = navigator.storage;
+    if (!storage3?.getDirectory)
+      throw new Error("OPFS is unavailable");
+    const root = await storage3.getDirectory();
+    const cacheRoot = await root.getDirectoryHandle("afterglow-cache", { create: true });
+    const directory = await cacheRoot.getDirectoryHandle(namespace, { create: true });
+    return new OpfsBlobBackend(directory);
+  }
+  async file(name) {
+    return this.directory.getFileHandle(name, { create: true });
+  }
+  async size(name) {
+    return (await (await this.file(name)).getFile()).size;
+  }
+  async read(name, offset, length3) {
+    const file = await (await this.file(name)).getFile();
+    return new Uint8Array(await file.slice(offset, offset + length3).arrayBuffer());
+  }
+  async append(name, data) {
+    const handle = await this.file(name);
+    const size = (await handle.getFile()).size;
+    const writable = await handle.createWritable({ keepExistingData: true });
+    try {
+      await writable.seek(size);
+      await writable.write(data);
+    } finally {
+      await writable.close();
+    }
+  }
+  async replace(name, data) {
+    const writable = await (await this.file(name)).createWritable();
+    try {
+      await writable.write(data);
+    } finally {
+      await writable.close();
+    }
+  }
+}
+function idbRequest(request) {
+  return new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error ?? new Error("IndexedDB request failed"));
+  });
+}
+function idbTransaction(transaction) {
+  return new Promise((resolve, reject) => {
+    transaction.oncomplete = () => resolve();
+    transaction.onabort = () => reject(transaction.error ?? new Error("IndexedDB transaction aborted"));
+    transaction.onerror = () => reject(transaction.error ?? new Error("IndexedDB transaction failed"));
+  });
+}
+
+class IndexedDbBlobBackend {
+  database;
+  kind = "indexeddb";
+  constructor(database) {
+    this.database = database;
+  }
+  static async open(namespace) {
+    if (!globalThis.indexedDB)
+      throw new Error("IndexedDB is unavailable");
+    const request = indexedDB.open(`afterglow-cache-${namespace}`, 1);
+    request.onupgradeneeded = () => {
+      const database = request.result;
+      if (!database.objectStoreNames.contains("chunks"))
+        database.createObjectStore("chunks", { keyPath: ["file", "offset"] });
+      if (!database.objectStoreNames.contains("meta"))
+        database.createObjectStore("meta", { keyPath: "file" });
+    };
+    return new IndexedDbBlobBackend(await idbRequest(request));
+  }
+  async size(name) {
+    const transaction = this.database.transaction("meta", "readonly");
+    const result = await idbRequest(transaction.objectStore("meta").get(name));
+    return result?.size ?? 0;
+  }
+  async predecessor(name, offset) {
+    const transaction = this.database.transaction("chunks", "readonly");
+    const range3 = IDBKeyRange.bound([name, 0], [name, offset]);
+    const cursor = await idbRequest(transaction.objectStore("chunks").openCursor(range3, "prev"));
+    return cursor ? cursor.value : null;
+  }
+  async read(name, offset, length3) {
+    if (length3 === 0)
+      return new Uint8Array(0);
+    const exactTransaction = this.database.transaction("chunks", "readonly");
+    const exact = await idbRequest(exactTransaction.objectStore("chunks").get([name, offset]));
+    if (exact && exact.data.byteLength === length3)
+      return exact.data;
+    const predecessor = await this.predecessor(name, offset);
+    const firstOffset = predecessor && predecessor.offset + predecessor.data.byteLength > offset ? predecessor.offset : offset;
+    const output3 = new Uint8Array(length3);
+    const end = offset + length3;
+    const transaction = this.database.transaction("chunks", "readonly");
+    const store = transaction.objectStore("chunks");
+    const range3 = IDBKeyRange.bound([name, firstOffset], [name, end - 1]);
+    await new Promise((resolve, reject) => {
+      const request = store.openCursor(range3);
+      request.onerror = () => reject(request.error ?? new Error("IndexedDB cursor failed"));
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) {
+          resolve();
+          return;
+        }
+        const chunk = cursor.value;
+        const copyStart = Math.max(offset, chunk.offset);
+        const copyEnd = Math.min(end, chunk.offset + chunk.data.byteLength);
+        if (copyEnd > copyStart)
+          output3.set(chunk.data.subarray(copyStart - chunk.offset, copyEnd - chunk.offset), copyStart - offset);
+        cursor.continue();
+      };
+    });
+    return output3;
+  }
+  async append(name, data) {
+    const transaction = this.database.transaction(["chunks", "meta"], "readwrite");
+    const done = idbTransaction(transaction);
+    const meta = transaction.objectStore("meta");
+    const previous = await idbRequest(meta.get(name));
+    const offset = previous?.size ?? 0;
+    transaction.objectStore("chunks").put({ file: name, offset, data: data.slice() });
+    meta.put({ file: name, size: offset + data.byteLength });
+    await done;
+  }
+  async replace(name, data) {
+    const transaction = this.database.transaction(["chunks", "meta"], "readwrite");
+    const done = idbTransaction(transaction);
+    const chunks = transaction.objectStore("chunks");
+    const range3 = IDBKeyRange.bound([name, 0], [name, Number.MAX_SAFE_INTEGER]);
+    await new Promise((resolve, reject) => {
+      const request = chunks.openCursor(range3);
+      request.onerror = () => reject(request.error ?? new Error("IndexedDB cursor failed"));
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) {
+          resolve();
+          return;
+        }
+        cursor.delete();
+        cursor.continue();
+      };
+    });
+    if (data.byteLength !== 0)
+      chunks.put({ file: name, offset: 0, data: data.slice() });
+    transaction.objectStore("meta").put({ file: name, size: data.byteLength });
+    await done;
+  }
+}
+
+class PersistentBlobCache {
+  backend;
+  maxBytes;
+  maxEntries;
+  states;
+  hashes;
+  offsets;
+  lengths;
+  checksums;
+  jobs;
+  stats;
+  head = 0;
+  tail = 0;
+  queued = 0;
+  writing = false;
+  entries = 0;
+  packBytes = 0;
+  totalReadMs = 0;
+  maxReadMs = 0;
+  totalWriteMs = 0;
+  maxWriteMs = 0;
+  constructor(backend, maxBytes, maxEntries, writeQueueCapacity) {
+    this.backend = backend;
+    this.maxBytes = maxBytes;
+    this.maxEntries = maxEntries;
+    this.states = new Uint8Array(maxEntries * 2);
+    this.hashes = new Uint32Array(this.states.length * HASH_WORDS);
+    this.offsets = new Float64Array(this.states.length);
+    this.lengths = new Uint32Array(this.states.length);
+    this.checksums = new Uint32Array(this.states.length);
+    this.jobs = new Array(writeQueueCapacity).fill(null);
+    this.stats = {
+      enabled: true,
+      backend: backend.kind ?? "custom",
+      entries: 0,
+      bytes: 0,
+      maxBytes,
+      maxEntries,
+      queuedWrites: 0,
+      hits: 0,
+      misses: 0,
+      writes: 0,
+      writeBytes: 0,
+      rejectedCapacity: 0,
+      rejectedQueue: 0,
+      corruptEntries: 0,
+      readErrors: 0,
+      writeErrors: 0,
+      averageReadMs: 0,
+      maxReadMs: 0,
+      averageWriteMs: 0,
+      maxWriteMs: 0
+    };
+  }
+  static async open(options, backend) {
+    if (!options.namespace || !Number.isSafeInteger(options.maxBytes) || options.maxBytes < 1 || !Number.isInteger(options.maxEntries) || options.maxEntries < 1)
+      throw new RangeError("invalid persistent blob cache options");
+    const queueCapacity = options.writeQueueCapacity ?? 64;
+    if (!Number.isInteger(queueCapacity) || queueCapacity < 1)
+      throw new RangeError("cache write queue capacity must be positive");
+    let store = backend;
+    if (!store) {
+      try {
+        store = await OpfsBlobBackend.open(options.namespace);
+      } catch {
+        store = await IndexedDbBlobBackend.open(options.namespace);
+      }
+    }
+    const cache3 = new PersistentBlobCache(store, options.maxBytes, options.maxEntries, queueCapacity);
+    await cache3.loadIndex();
+    return cache3;
+  }
+  hashStart(slot) {
+    return slot * HASH_WORDS;
+  }
+  hashesEqual(slot, hash3) {
+    const start = this.hashStart(slot);
+    for (let word = 0;word < HASH_WORDS; word++)
+      if (this.hashes[start + word] !== hash3[word])
+        return false;
+    return true;
+  }
+  hashSlot(hash3) {
+    let value = 2654435769;
+    for (let word = 0;word < HASH_WORDS; word++)
+      value = Math.imul(value ^ hash3[word], 2246822507);
+    return (value >>> 0) % this.states.length;
+  }
+  find(hash3) {
+    let slot = this.hashSlot(hash3);
+    for (let probe = 0;probe < this.states.length; probe++) {
+      const state = this.states[slot];
+      if (state === EMPTY)
+        return -1;
+      if (state === OCCUPIED && this.hashesEqual(slot, hash3))
+        return slot;
+      slot = (slot + 1) % this.states.length;
+    }
+    return -1;
+  }
+  insert(hash3, offset, length3, valueChecksum) {
+    let slot = this.hashSlot(hash3);
+    let tombstone = -1;
+    for (let probe = 0;probe < this.states.length; probe++) {
+      const state = this.states[slot];
+      if (state === OCCUPIED && this.hashesEqual(slot, hash3)) {
+        this.offsets[slot] = offset;
+        this.lengths[slot] = length3;
+        this.checksums[slot] = valueChecksum;
+        return true;
+      }
+      if (state === TOMBSTONE && tombstone < 0)
+        tombstone = slot;
+      if (state === EMPTY) {
+        const target = tombstone < 0 ? slot : tombstone;
+        this.states[target] = OCCUPIED;
+        this.hashes.set(hash3, this.hashStart(target));
+        this.offsets[target] = offset;
+        this.lengths[target] = length3;
+        this.checksums[target] = valueChecksum;
+        this.entries++;
+        return true;
+      }
+      slot = (slot + 1) % this.states.length;
+    }
+    return false;
+  }
+  remove(slot) {
+    if (slot < 0 || this.states[slot] !== OCCUPIED)
+      return;
+    this.states[slot] = TOMBSTONE;
+    this.entries--;
+  }
+  record(hash3, offset, length3, valueChecksum) {
+    const bytes = new Uint8Array(INDEX_RECORD_BYTES);
+    const view = new DataView(bytes.buffer);
+    for (let word = 0;word < HASH_WORDS; word++)
+      view.setUint32(word * 4, hash3[word], true);
+    view.setBigUint64(32, BigInt(offset), true);
+    view.setUint32(40, length3, true);
+    view.setUint32(44, valueChecksum, true);
+    return bytes;
+  }
+  async loadIndex() {
+    this.packBytes = await this.backend.size("values.pack");
+    let indexSize = await this.backend.size("values.index");
+    if (this.packBytes > this.maxBytes) {
+      await this.clear();
+      return;
+    }
+    if (indexSize < INDEX_HEADER_BYTES) {
+      await this.backend.replace("values.index", this.indexHeader());
+      return;
+    }
+    const bytes = await this.backend.read("values.index", 0, indexSize);
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    if (view.getUint32(0, true) !== INDEX_MAGIC || view.getUint32(4, true) !== INDEX_VERSION) {
+      await this.clear();
+      return;
+    }
+    indexSize = INDEX_HEADER_BYTES + Math.floor((indexSize - INDEX_HEADER_BYTES) / INDEX_RECORD_BYTES) * INDEX_RECORD_BYTES;
+    const hash3 = new Uint32Array(HASH_WORDS);
+    for (let offset = INDEX_HEADER_BYTES;offset < indexSize; offset += INDEX_RECORD_BYTES) {
+      for (let word = 0;word < HASH_WORDS; word++)
+        hash3[word] = view.getUint32(offset + word * 4, true);
+      const packOffset = Number(view.getBigUint64(offset + 32, true));
+      const length3 = view.getUint32(offset + 40, true);
+      const valueChecksum = view.getUint32(offset + 44, true);
+      if (length3 === 0) {
+        this.remove(this.find(hash3));
+      } else if (packOffset + length3 <= this.packBytes && this.entries < this.maxEntries) {
+        this.insert(hash3, packOffset, length3, valueChecksum);
+      }
+    }
+  }
+  indexHeader() {
+    const bytes = new Uint8Array(INDEX_HEADER_BYTES);
+    const view = new DataView(bytes.buffer);
+    view.setUint32(0, INDEX_MAGIC, true);
+    view.setUint32(4, INDEX_VERSION, true);
+    view.setUint32(8, INDEX_RECORD_BYTES, true);
+    view.setUint32(12, HASH_WORDS, true);
+    return bytes;
+  }
+  async get(key) {
+    const startedAt = performance.now();
+    try {
+      const hash3 = await hashKey(key);
+      const slot = this.find(hash3);
+      if (slot < 0) {
+        this.stats.misses++;
+        return null;
+      }
+      const bytes = await this.backend.read("values.pack", this.offsets[slot], this.lengths[slot]);
+      if (bytes.byteLength !== this.lengths[slot] || checksum(bytes) !== this.checksums[slot]) {
+        this.remove(slot);
+        this.stats.corruptEntries++;
+        this.stats.misses++;
+        return null;
+      }
+      this.stats.hits++;
+      return bytes;
+    } catch {
+      this.stats.readErrors++;
+      this.stats.misses++;
+      return null;
+    } finally {
+      const elapsed = performance.now() - startedAt;
+      this.totalReadMs += elapsed;
+      this.maxReadMs = Math.max(this.maxReadMs, elapsed);
+    }
+  }
+  async put(key, data) {
+    const hash3 = await hashKey(key);
+    if (this.find(hash3) >= 0)
+      return true;
+    if (data.byteLength === 0 || data.byteLength > this.maxBytes || this.entries + this.queued >= this.maxEntries || this.packBytes + data.byteLength > this.maxBytes) {
+      this.stats.rejectedCapacity++;
+      return false;
+    }
+    if (this.queued >= this.jobs.length || this.hasQueued(hash3)) {
+      if (this.hasQueued(hash3))
+        return true;
+      this.stats.rejectedQueue++;
+      return false;
+    }
+    return new Promise((resolve) => {
+      this.jobs[this.tail] = { hash: hash3, data, resolve };
+      this.tail = (this.tail + 1) % this.jobs.length;
+      this.queued++;
+      this.pump();
+    });
+  }
+  hasQueued(hash3) {
+    for (let count = 0, index = this.head;count < this.queued; count++, index = (index + 1) % this.jobs.length) {
+      const job = this.jobs[index];
+      if (job) {
+        let equal3 = true;
+        for (let word = 0;word < HASH_WORDS; word++)
+          if (job.hash[word] !== hash3[word]) {
+            equal3 = false;
+            break;
+          }
+        if (equal3)
+          return true;
+      }
+    }
+    return false;
+  }
+  pump() {
+    if (this.writing || this.queued === 0)
+      return;
+    const job = this.jobs[this.head];
+    this.jobs[this.head] = null;
+    this.head = (this.head + 1) % this.jobs.length;
+    this.queued--;
+    this.writing = true;
+    this.write(job);
+  }
+  async write(job) {
+    const startedAt = performance.now();
+    let success = false;
+    try {
+      if (this.find(job.hash) >= 0) {
+        success = true;
+      } else if (this.entries < this.maxEntries && this.packBytes + job.data.byteLength <= this.maxBytes) {
+        const offset = this.packBytes;
+        const valueChecksum = checksum(job.data);
+        await this.backend.append("values.pack", job.data);
+        await this.backend.append("values.index", this.record(job.hash, offset, job.data.byteLength, valueChecksum));
+        this.packBytes += job.data.byteLength;
+        success = this.insert(job.hash, offset, job.data.byteLength, valueChecksum);
+        if (success) {
+          this.stats.writes++;
+          this.stats.writeBytes += job.data.byteLength;
+        }
+      } else {
+        this.stats.rejectedCapacity++;
+      }
+    } catch {
+      this.stats.writeErrors++;
+      try {
+        this.packBytes = await this.backend.size("values.pack");
+      } catch {}
+    } finally {
+      const elapsed = performance.now() - startedAt;
+      this.totalWriteMs += elapsed;
+      this.maxWriteMs = Math.max(this.maxWriteMs, elapsed);
+      this.writing = false;
+      job.resolve(success);
+      this.pump();
+    }
+  }
+  async clear() {
+    if (this.writing || this.queued !== 0)
+      throw new Error("cannot clear persistent cache while writes are pending");
+    await this.backend.replace("values.pack", new Uint8Array(0));
+    await this.backend.replace("values.index", this.indexHeader());
+    this.states.fill(EMPTY);
+    this.entries = 0;
+    this.packBytes = 0;
+  }
+  getStats() {
+    const stats = this.stats;
+    stats.entries = this.entries;
+    stats.bytes = this.packBytes;
+    stats.queuedWrites = this.queued + (this.writing ? 1 : 0);
+    const reads = stats.hits + stats.misses;
+    stats.averageReadMs = reads === 0 ? 0 : this.totalReadMs / reads;
+    stats.maxReadMs = this.maxReadMs;
+    const writes = stats.writes + stats.writeErrors;
+    stats.averageWriteMs = writes === 0 ? 0 : this.totalWriteMs / writes;
+    stats.maxWriteMs = this.maxWriteMs;
+    return stats;
+  }
+}
+
 // crates/afterglow-web/www/engine/asset-handle.ts
 class AssetHandle {
   asset;
@@ -65508,7 +66015,21 @@ class VirtualTextureStore {
     averageTranscodeQueueMs: 0,
     maxTranscodeQueueMs: 0,
     averageTranscodeMs: 0,
-    maxTranscodeMs: 0
+    maxTranscodeMs: 0,
+    cacheEnabled: false,
+    cacheBackend: "",
+    cacheEntries: 0,
+    cacheBytes: 0,
+    cacheQueuedWrites: 0,
+    cacheHits: 0,
+    cacheMisses: 0,
+    cacheWrites: 0,
+    cacheRejected: 0,
+    cacheErrors: 0,
+    averageCacheReadMs: 0,
+    maxCacheReadMs: 0,
+    averageCacheWriteMs: 0,
+    maxCacheWriteMs: 0
   };
   constructor(loader, pageDataProvider, format, device, tuning) {
     this.loader = loader;
@@ -66336,6 +66857,20 @@ class VirtualTextureStore {
       stats.maxTranscodeQueueMs = provider.maxTranscodeQueueMs;
       stats.averageTranscodeMs = provider.averageTranscodeMs;
       stats.maxTranscodeMs = provider.maxTranscodeMs;
+      stats.cacheEnabled = provider.cacheEnabled;
+      stats.cacheBackend = provider.cacheBackend;
+      stats.cacheEntries = provider.cacheEntries;
+      stats.cacheBytes = provider.cacheBytes;
+      stats.cacheQueuedWrites = provider.cacheQueuedWrites;
+      stats.cacheHits = provider.cacheHits;
+      stats.cacheMisses = provider.cacheMisses;
+      stats.cacheWrites = provider.cacheWrites;
+      stats.cacheRejected = provider.cacheRejected;
+      stats.cacheErrors = provider.cacheErrors;
+      stats.averageCacheReadMs = provider.averageCacheReadMs;
+      stats.maxCacheReadMs = provider.maxCacheReadMs;
+      stats.averageCacheWriteMs = provider.averageCacheWriteMs;
+      stats.maxCacheWriteMs = provider.maxCacheWriteMs;
     }
     return stats;
   }
@@ -66635,6 +67170,12 @@ window.AfterglowMemory = {
   FrameBudget,
   FrameBudgetRes,
   FrameStage
+};
+window.AfterglowStorage = {
+  PersistentBlobCache,
+  OpfsBlobBackend,
+  IndexedDbBlobBackend,
+  persistentCacheNamespace
 };
 window.AfterglowVT = {
   VirtualTextureStore,

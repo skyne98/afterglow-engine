@@ -107,7 +107,9 @@ The `vt-dungeon` example is a minimal first-person corridor using three scanned
 and AO PNGs, runs the generic asset pipeline once, and caches the resulting
 Basis `.big` container under `/tmp`. At runtime exact serving-layer
 `fetch + Range` reads and a fixed two-to-four `TextureWorker` pool stream pages
-without the former page-side AssetLoader latency. GPU feedback and linked
+without the former page-side AssetLoader latency. Final GPU blocks are also
+stored through the generic persistent cache under a source/format/adapter
+namespace; warm hits skip both range reads and Basis transcodes. GPU feedback and linked
 material sets keep matching pages resident for all three physical channels while
 `MeshStandardNodeMaterial` retains
 Three.js's PBR shader. The shared atlas expands to the largest whole page grid

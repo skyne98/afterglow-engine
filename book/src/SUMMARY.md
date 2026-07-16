@@ -12,6 +12,7 @@
 - [The AppBuilder API](./window/app-builder.md)
 - [Serving Assets](./window/assets.md)
 - [The Asset System](./window/asset-system.md)
+- [Persistent Cache](./window/persistent-cache.md)
 - [Virtual Texturing](./window/virtual-texturing.md)
 - [Graphics & DevTools](./window/graphics.md)
 

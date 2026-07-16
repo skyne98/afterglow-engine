@@ -1,6 +1,7 @@
 import { TextureClient } from './texture.client.ts';
 import { Rpc } from './rpc.ts';
 import { createFetchRangeLoader, createPageDataProvider, getVirtualTextureDimensions, parseBigHeader } from './engine/big-parser.ts';
+import { PersistentBlobCache, persistentCacheNamespace } from './engine/persistent-blob-cache.ts';
 import { createWebGPUOnlyRenderer, showWebGPUFailure } from './engine/webgpu-only.ts';
 import { RendererSeal, warmRendererVariants } from './engine/renderer-seal.ts';
 const THREE=window.THREE, VT=window.AfterglowVT;
@@ -30,11 +31,27 @@ const dataOffset=Number(new DataView(prefix.buffer,prefix.byteOffset+8,8).getBig
 const headerBytes=await rangeLoader.read('vt-dungeon.big',0,dataOffset);
 const {header}=parseBigHeader(headerBytes);
 const format=renderer.backend.device.features.has('texture-compression-bc')?0:renderer.backend.device.features.has('texture-compression-astc')?1:VT.FORMAT_RGBA;
+const sourceIdentity=await rangeLoader.identity('vt-dungeon.big');
+const adapterInfo=renderer.afterglowAdapterInfo??{};
+let persistentCache=null;
+if(sourceIdentity.etag||sourceIdentity.lastModified){
+  try{
+    const namespace=await persistentCacheNamespace([
+      'afterglow-cache-v1','vt-dungeon.big',String(sourceIdentity.size),
+      sourceIdentity.etag??'',sourceIdentity.lastModified??'',
+      String(format),'basisu-transcoder-v1','slot-136-border-4',
+      adapterInfo.vendor??'',adapterInfo.architecture??'',adapterInfo.device??'',adapterInfo.description??'',
+    ]);
+    persistentCache=await PersistentBlobCache.open({
+      namespace,maxBytes:1024*1024*1024,maxEntries:65536,writeQueueCapacity:64,
+    });
+  }catch(error){console.warn('[cache] persistent blob cache unavailable:',error)}
+}else console.warn('[cache] source has no ETag/Last-Modified; persistent VT cache disabled');
 const containerLoader={
   load:path=>rangeLoader.load(path),size:path=>rangeLoader.size(path),
   read:(_path,offset,len)=>rangeLoader.read('vt-dungeon.big',offset,len),
 };
-const pageProvider=createPageDataProvider(containerLoader,header,textureWorkers,format);
+const pageProvider=createPageDataProvider(containerLoader,header,textureWorkers,format,persistentCache??undefined);
 const loader={read:(path,offset,len)=>rangeLoader.read(path,offset,len),poll(){}};
 // One central bootstrap resource owns bounded admission. It receives rAF
 // intervals below, probes upward only after stable backlog, and rolls a bad

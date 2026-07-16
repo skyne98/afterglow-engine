@@ -15,6 +15,8 @@
 // Virtual textures use one offset + a compact size vector per row-major mip,
 // rather than serializing a full ChunkInfo for every page.
 
+import type { PersistentBlobCache } from './persistent-blob-cache.ts';
+
 // ============================================================================
 // Varint decoder (postcard / LEB128)
 // ============================================================================
@@ -455,29 +457,45 @@ export class BoundedTranscoderPool {
  * @param format The target GPU format (FORMAT_BC7, FORMAT_ASTC, FORMAT_RGBA)
  * @returns A function (path, req) → Promise<Uint8Array> that returns transcoded page data
  */
+export interface AssetIdentity {
+  size: number;
+  etag: string | null;
+  lastModified: string | null;
+}
+
 export interface FetchRangeLoader {
   load(path: string): Promise<Uint8Array>;
   size(path: string): Promise<number>;
+  identity(path: string): Promise<AssetIdentity>;
   read(path: string, offset: number, len: number): Promise<Uint8Array>;
 }
 
 /** Browser/CEF serving-layer loader. Large assets use exact HTTP-style ranges. */
 export function createFetchRangeLoader(baseUrl = ''): FetchRangeLoader {
   const url = (path: string) => baseUrl + path;
+  const identity = async (path: string): Promise<AssetIdentity> => {
+    const response = await fetch(url(path), { headers: { Range: 'bytes=0-0' } });
+    if (response.status !== 206)
+      throw new Error(`asset identity range expected 206, got ${response.status}: ${path}`);
+    const contentRange = response.headers.get('content-range') ?? '';
+    const separator = contentRange.lastIndexOf('/');
+    const size = Number(separator < 0 ? '' : contentRange.slice(separator + 1));
+    if (!Number.isSafeInteger(size) || size < 1)
+      throw new Error(`asset identity has invalid content-range: ${path}`);
+    return {
+      size,
+      etag: response.headers.get('etag'),
+      lastModified: response.headers.get('last-modified'),
+    };
+  };
   return {
     async load(path: string): Promise<Uint8Array> {
       const response = await fetch(url(path));
       if (!response.ok) throw new Error(`asset fetch ${response.status}: ${path}`);
       return new Uint8Array(await response.arrayBuffer());
     },
-    async size(path: string): Promise<number> {
-      const response = await fetch(url(path), { method: 'HEAD' });
-      if (!response.ok) throw new Error(`asset HEAD ${response.status}: ${path}`);
-      const length = Number(response.headers.get('content-length'));
-      if (!Number.isSafeInteger(length) || length < 0)
-        throw new Error(`asset HEAD has invalid content-length: ${path}`);
-      return length;
-    },
+    async size(path: string): Promise<number> { return (await identity(path)).size; },
+    identity,
     async read(path: string, offset: number, len: number): Promise<Uint8Array> {
       if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(len) || len < 0)
         throw new RangeError('asset range must use non-negative safe integers');
@@ -507,6 +525,20 @@ export interface PageProviderStats {
   maxTranscodeQueueMs: number;
   averageTranscodeMs: number;
   maxTranscodeMs: number;
+  cacheEnabled: boolean;
+  cacheBackend: string;
+  cacheEntries: number;
+  cacheBytes: number;
+  cacheQueuedWrites: number;
+  cacheHits: number;
+  cacheMisses: number;
+  cacheWrites: number;
+  cacheRejected: number;
+  cacheErrors: number;
+  averageCacheReadMs: number;
+  maxCacheReadMs: number;
+  averageCacheWriteMs: number;
+  maxCacheWriteMs: number;
 }
 
 export type VirtualTexturePageProvider = ((
@@ -520,6 +552,7 @@ export function createPageDataProvider(
   header: BigHeader,
   textureWorkers: readonly { transcode(data: Uint8Array, targetFormat: number): Promise<Uint8Array> }[],
   format: number,
+  cache?: PersistentBlobCache,
 ): VirtualTexturePageProvider {
   interface RuntimeMipDirectory {
     pagesX: number;
@@ -528,6 +561,7 @@ export function createPageDataProvider(
     sizes: Uint32Array;
   }
   interface RuntimeVTDirectory {
+    assetId: number;
     encoding: TextureEncoding;
     mips: (RuntimeMipDirectory | null)[];
     tailOffset: number;
@@ -536,7 +570,8 @@ export function createPageDataProvider(
   // Expand compact on-disk size vectors once at header admission. Runtime page
   // lookup is direct typed-array indexing with no page objects or hash entries.
   const directories = new Map<string, RuntimeVTDirectory>();
-  for (const asset of header.assets) {
+  for (let assetId = 0; assetId < header.assets.length; assetId++) {
+    const asset = header.assets[assetId];
     const source = asset.virtualTexture;
     if (!source) continue;
     let maxMip = 0;
@@ -553,7 +588,7 @@ export function createPageDataProvider(
       mips[mip.mip] = { pagesX: mip.pagesX, pagesY: mip.pagesY, offsets, sizes };
     }
     directories.set(asset.name, {
-      encoding: source.encoding, mips,
+      assetId, encoding: source.encoding, mips,
       tailOffset: source.tail ? Number(source.tail.offset) : 0,
       tailSize: source.tail?.size ?? 0,
     });
@@ -568,6 +603,11 @@ export function createPageDataProvider(
     workerCount: textureWorkers.length, activeTranscodes: 0, queuedTranscodes: 0,
     completedTranscodes: 0, averageTranscodeQueueMs: 0, maxTranscodeQueueMs: 0,
     averageTranscodeMs: 0, maxTranscodeMs: 0,
+    cacheEnabled: cache !== undefined, cacheBackend: '', cacheEntries: 0, cacheBytes: 0,
+    cacheQueuedWrites: 0, cacheHits: 0, cacheMisses: 0, cacheWrites: 0,
+    cacheRejected: 0, cacheErrors: 0,
+    averageCacheReadMs: 0, maxCacheReadMs: 0,
+    averageCacheWriteMs: 0, maxCacheWriteMs: 0,
   };
 
   const provider = (async (
@@ -593,6 +633,14 @@ export function createPageDataProvider(
     if (!directory || size === 0)
       throw new Error(`VT page not found: ${path} mip=${req.mip} (${req.x},${req.y})`);
 
+    const cacheKey = `${directory.assetId}:${req.tail ? 't' : req.mip}:${req.x}:${req.y}`;
+    const expectedBytes = format === 4 ? 136 * 136 * 4 : 34 * 34 * 16;
+    if (cache) {
+      const cached = await cache.get(cacheKey);
+      if (signal?.aborted) throw new Error('VT page load canceled after cache read');
+      if (cached && cached.byteLength === expectedBytes) return cached;
+    }
+
     const readStartedAt = performance.now();
     const pageData = await loader.read(path + '.big', offset, size);
     const readMs = performance.now() - readStartedAt;
@@ -605,6 +653,7 @@ export function createPageDataProvider(
       if (format !== 4) {
         throw new Error(`VT page ${path} is raw RGBA8 but GPU format ${format} requires Basis encoding`);
       }
+      if (cache) void cache.put(cacheKey, pageData);
       return pageData;
     }
 
@@ -612,9 +661,9 @@ export function createPageDataProvider(
     // consumes only the first image payload, never the serialization header.
     if (pageData.byteLength < 2 || pageData[0] !== 0x73 || pageData[1] !== 0x42)
       throw new Error(`invalid Basis page range for ${path}: bytes=${pageData.byteLength}, magic=${pageData[0]},${pageData[1]}`);
-    // The RPC transport currently permits one in-flight transcode. A fixed
-    // ring serializes dispatch without an unbounded Promise chain and drops
-    // canceled jobs before they reach the worker.
+    // Each SPSC worker permits one in-flight transcode. The fixed pool dispatches
+    // independently without an unbounded Promise chain and drops canceled jobs
+    // before they reach a worker.
     const transcoded = await transcoder.submit(pageData, format, signal);
     if (signal?.aborted) throw new Error('VT page load canceled after transcode');
     if (transcoded.byteLength < 16) throw new Error('truncated transcoded VT page');
@@ -625,7 +674,9 @@ export function createPageDataProvider(
     const length = view.getUint32(12, true);
     if (count < 1 || width !== 136 || height !== 136 || 16 + length > transcoded.byteLength)
       throw new Error(`invalid transcoded VT page header: count=${count}, size=${width}x${height}, bytes=${length}`);
-    return transcoded.slice(16, 16 + length);
+    const payload = transcoded.slice(16, 16 + length);
+    if (cache) void cache.put(cacheKey, payload);
+    return payload;
   }) as VirtualTexturePageProvider;
   provider.getStats = () => {
     const transcode = transcoder.getStats();
@@ -640,6 +691,22 @@ export function createPageDataProvider(
     stats.maxTranscodeQueueMs = transcode.maxQueueMs;
     stats.averageTranscodeMs = transcode.averageTranscodeMs;
     stats.maxTranscodeMs = transcode.maxTranscodeMs;
+    const persistent = cache?.getStats();
+    if (persistent) {
+      stats.cacheBackend = persistent.backend;
+      stats.cacheEntries = persistent.entries;
+      stats.cacheBytes = persistent.bytes;
+      stats.cacheQueuedWrites = persistent.queuedWrites;
+      stats.cacheHits = persistent.hits;
+      stats.cacheMisses = persistent.misses;
+      stats.cacheWrites = persistent.writes;
+      stats.cacheRejected = persistent.rejectedCapacity + persistent.rejectedQueue;
+      stats.cacheErrors = persistent.corruptEntries + persistent.readErrors + persistent.writeErrors;
+      stats.averageCacheReadMs = persistent.averageReadMs;
+      stats.maxCacheReadMs = persistent.maxReadMs;
+      stats.averageCacheWriteMs = persistent.averageWriteMs;
+      stats.maxCacheWriteMs = persistent.maxWriteMs;
+    }
     return stats;
   };
   return provider;

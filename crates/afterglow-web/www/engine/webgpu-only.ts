@@ -8,6 +8,7 @@
 
 export type WebGPUOnlyRenderer = {
   backend: { isWebGPUBackend?: boolean; device?: unknown };
+  afterglowAdapterInfo?: { vendor?: string; architecture?: string; device?: string; description?: string };
   _getFallback: unknown;
   onDeviceLost: (info: { api?: string; message?: string; reason?: string | null }) => void;
   dispose?: () => void;
@@ -48,6 +49,7 @@ export async function createWebGPUOnlyRenderer(parameters: Record<string, unknow
   // enables (for example BC/ASTC texture compression). init() below is still
   // fail-closed because its fallback callback has been cleared.
   const renderer = new window.THREE.WebGPURenderer({ ...parameters }) as WebGPUOnlyRenderer;
+  renderer.afterglowAdapterInfo = adapter.info;
   disableWebGLFallback(renderer);
 
   try {
