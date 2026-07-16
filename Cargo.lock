@@ -64,6 +64,7 @@ dependencies = [
  "postcard",
  "rayon",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

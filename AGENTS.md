@@ -54,9 +54,10 @@ Two backends, same framing and ring layout:
 | `afterglow-rpc-macros` | `#[rpc]` proc macro: generates the server trait, typed Rust client, dispatch, native spawn, thin wasm exports, **and a typed TypeScript client**. Supports both sync (`fn`) and async (`async fn`) methods — async uses the poll model (task_id framing, completion queue, `async-executor`). |
 | `afterglow-rpc-demo` | Demo `Physics` service + `bench_rpc` stress test. |
 | `afterglow-basis-encoder` | Offline-only official Basis Universal C++ UASTC encoder used by `afterglow-pipeline`; never linked into runtime or wasm crates. |
+| `afterglow-pipeline` | Offline cook: confines and embeds external glTF packages, packs self-contained GLBs, extracts images into paged/UASTC VTs, emits R16 displacement, and writes seekable `.big` v5 containers. |
 | `afterglow-assets-worker` | Asset loader worker: `#[rpc(worker = AssetLoaderWorker)]` with `async fn load(path) -> RpcResult<Vec<u8>>`. Uses the async `#[rpc]` poll model + `async-executor`. Native only (reads disk via `FsSource`); web asset loading goes through the serving layer (fetch + Range). |
 | `afterglow-assets` | Shared asset-path/MIME helpers (`AssetRoot`, `decode_url_path`, `guess_mime`, `resolve`) for the CEF scheme handler and web dev server. Plus streaming `AssetSource` trait + `FsSource`/`BytesSource` + `Range` parser. No deps or file-content reads in the confinement module; `FsSource` owns streaming reads via `pread`. The single security boundary for FS asset confinement. |
-| `afterglow-web` | Wasm target: page-side `#[no_mangle]` exports (`write_frame`, `read_response`) over two static rings in shared wasm memory. `worker.js` accesses the opposite halves directly with tested helpers from `ring-buf.js`. No wasm-bindgen. Includes a real worker benchmark + `coep_server` example. |
+| `afterglow-web` | Wasm target + authored TypeScript runtime: shared-ring worker bridge, fixed runtime storage, packed-GLB AssetStore loading with rig-preserving runtime meshopt, VT sampling/feedback/material adapters, and demos. No wasm-bindgen. |
 | `afterglow-cef` | Thin CEF shell: window + WebGPU flags + `afterglow://` scheme (embedded-first / FS-fallback assets via `afterglow-assets`) + COOP/COEP headers. No worker code, no IPC, no input. |
 | `latency-tool` | CDP-based input→present latency measurement. |
 | `xtask` | Build orchestrator: `build`, `wasm`, `check`, `test`, `bench`. |
@@ -160,12 +161,20 @@ fallback.
   Dungeon tier uses official resident 1K, 16-bit displacement, a geometric TBN,
   8–32 layers, scale 0.05, an 8-step point-light self-shadow ray, no radial
   per-fragment fade, and VT coarser-page/tail fallback for all displaced PBR
-  channels. The corrected fixed close-wall run measured 59.87 FPS, p99 16.68 ms,
-  1/600 below 55; the prewarmed base measured 59.77 FPS, p99 16.68 ms, 2/600
-  below 55. Main GPU work was 1.02–1.09 ms and total timestamp work 5.49–7.25 ms,
-  so the isolated missed-vsync events also occur without POM. A 300-frame moving
-  wall run had 0 below 55. Feedback cadence is 8 frames; the prior 4-frame
-  cadence measured 3/300 misses.
+  channels. Displacement must be converted by `afterglow-pipeline height-r16`
+  and uploaded as single-channel `RedFormat + FloatType` / WebGPU `r32float`
+  from exact normalized R16 samples; browser image loading silently truncates it
+  and is forbidden. `r16unorm` is unfilterable and incompatible with Three r185's
+  custom-function binding path, so runtime requires `float32-filterable`. VT
+  feedback converts reduced-pass derivatives with the exact feedback/display
+  pixel-scale vector; quality bias 0 targets 1–2 source texels per physical
+  pixel. POM feedback marches to displaced UV while retaining base-UV gradients.
+  The historical corrected
+  fixed close-wall run measured 59.87 FPS, p99 16.68 ms, 1/600 below 55; the
+  prewarmed base measured 59.77 FPS, p99 16.68 ms, 2/600 below 55. Those runs
+  sampled `rgba8unorm` despite 16-bit source PNGs, so a fresh R16 GPU run is
+  required before citing them for the current runtime path. Feedback cadence is
+  8 frames; the prior 4-frame cadence measured 3/300 misses.
 
 ### SharedArrayBuffer not available
 
@@ -359,7 +368,7 @@ All engine work must move toward these non-negotiable requirements:
 - `docs/api/renderer-sealing.md` — descriptor pools, bounded renderer slices, warm-up, and pipeline seal.
 - `docs/api/virtual-texturing.md` — bounded VT residency, scheduling, shaders,
   linked PBR materials, tuning, telemetry, and demos.
-- `docs/api/pom.md` — bounded low-core POM, resident matching height fields,
+- `docs/api/pom.md` — bounded low-core POM, lossless resident R16 height fields,
   displaced VT fallback, Dungeon controls, and 680M validation.
 - `docs/api/relative-pointer.md` — raw relative pointer events and unadjusted
   pointer-lock fallback.

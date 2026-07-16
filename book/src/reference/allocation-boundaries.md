@@ -2,8 +2,10 @@
 
 Afterglow's frame-owned queues, caches, and typed-array operations are sealed.
 Some boundaries necessarily allocate: browser fetch/readback, worker response
-Promises, Basis output, image/model parsing, Three.js pipeline compilation,
-timestamp resolution, diagnostics, and game-facing reactive callbacks.
+Promises, Basis output, image/model parsing and runtime meshopt during bootstrap,
+resident R16 displacement fetch/texture creation, prewarmed VT material creation,
+Three.js pipeline compilation, timestamp resolution,
+diagnostics, and game-facing reactive callbacks.
 
 These paths are explicitly classified in `engine-allocation-effects.json` and
 bounded by task counts, bytes, loading phases, or diagnostic frequency. Pipeline

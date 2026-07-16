@@ -66,6 +66,27 @@ export interface ModelAsset {
   stats: MeshStats[];
 }
 
+export interface SceneMeshOptimizationStats extends MeshStats {
+  name: string;
+  vertexCount: number;
+  skinned: boolean;
+  preservedAttributes: string[];
+}
+
+export interface GltfMaterialTextureLayout {
+  index: number;
+  name: string;
+  baseColorImage: number | null;
+  metallicRoughnessImage: number | null;
+  normalImage: number | null;
+  emissiveImage: number | null;
+}
+
+export interface OptimizedGltfAsset extends ParsedGLTF {
+  meshOptimization: SceneMeshOptimizationStats[];
+  materialTextures: GltfMaterialTextureLayout[];
+}
+
 // --- parsers -------------------------------------------------------------
 
 export async function parseTexture(bytes: Uint8Array): Promise<THREE.Texture> {
@@ -76,14 +97,50 @@ export async function parseTexture(bytes: Uint8Array): Promise<THREE.Texture> {
   return tex;
 }
 
-export async function parseGLTF(
+export interface ParsedGLTF {
+  scene: THREE.Group;
+  animations: THREE.AnimationClip[];
+}
+
+export async function parseGLTFAsset(
   bytes: Uint8Array,
-  loader?: { parse(data: ArrayBuffer, path: string, onLoad: (r: { scene: THREE.Group }) => void, onError: (e: unknown) => void): void },
-): Promise<THREE.Group> {
+  loader?: { parse(data: ArrayBuffer, path: string, onLoad: (r: ParsedGLTF) => void, onError: (e: unknown) => void): void },
+): Promise<ParsedGLTF> {
   const buf = new ArrayBuffer(bytes.byteLength);
   new Uint8Array(buf).set(bytes);
-  if (!loader) throw new Error('parseGLTF requires an injected Three.js GLTFLoader');
-  return new Promise((res, rej) => loader.parse(buf, '', r => res(r.scene), rej));
+  if (!loader) throw new Error('parseGLTFAsset requires an injected Three.js GLTFLoader');
+  return new Promise((resolve, reject) => loader.parse(buf, '', result => resolve(result), reject));
+}
+
+export function parseGlbMaterialTextures(bytes: Uint8Array): GltfMaterialTextureLayout[] {
+  if (bytes.byteLength < 20 || new DataView(bytes.buffer, bytes.byteOffset, 4).getUint32(0, true) !== 0x46546c67)
+    throw new Error('material metadata requires a GLB payload');
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const jsonLength = view.getUint32(12, true);
+  const jsonType = view.getUint32(16, true);
+  if (jsonType !== 0x4e4f534a || 20 + jsonLength > bytes.byteLength) throw new Error('GLB has no valid JSON chunk');
+  const document = JSON.parse(new TextDecoder().decode(bytes.subarray(20, 20 + jsonLength)).replace(/[\\0 ]+$/, ''));
+  const textures = document.textures ?? [];
+  const image = (info: { index?: number } | undefined): number | null => {
+    if (info?.index === undefined) return null;
+    const source = textures[info.index]?.source;
+    return Number.isSafeInteger(source) && source >= 0 ? source : null;
+  };
+  return (document.materials ?? []).map((material: any, index: number) => ({
+    index,
+    name: material.name ?? `material-${index}`,
+    baseColorImage: image(material.pbrMetallicRoughness?.baseColorTexture),
+    metallicRoughnessImage: image(material.pbrMetallicRoughness?.metallicRoughnessTexture),
+    normalImage: image(material.normalTexture),
+    emissiveImage: image(material.emissiveTexture),
+  }));
+}
+
+export async function parseGLTF(
+  bytes: Uint8Array,
+  loader?: { parse(data: ArrayBuffer, path: string, onLoad: (r: ParsedGLTF) => void, onError: (e: unknown) => void): void },
+): Promise<THREE.Group> {
+  return (await parseGLTFAsset(bytes, loader)).scene;
 }
 
 export function parseJSON<T = unknown>(bytes: Uint8Array): T {
@@ -354,7 +411,85 @@ export class AssetStore {
       this.states[id] === AssetRequestState.Parsing || this.states[id] === AssetRequestState.ReadyToPublish);
   }
 
-  // --- loadModel — the one API for loading 3D models ---
+  // --- model loading and runtime mesh-worker processing ---
+
+  /**
+   * Optimize indexed triangle order in a parsed scene without touching vertex
+   * identity. Every vertex attribute, morph target, skin joint/weight, skeleton,
+   * bind matrix, animation track, and material group therefore remains valid.
+   *
+   * LOD simplification is deliberately not performed here: the current worker
+   * simplifier does not include skin weights in its error metric.
+   */
+  async optimizeGltfScene(scene: THREE.Group): Promise<SceneMeshOptimizationStats[]> {
+    if (!this.meshopt) throw new Error('optimizeGltfScene requires a meshopt worker');
+    const meshes: THREE.Mesh[] = [];
+    scene.traverse(object => { if ((object as THREE.Mesh).isMesh) meshes.push(object as THREE.Mesh); });
+    const stats: SceneMeshOptimizationStats[] = [];
+    for (const mesh of meshes) {
+      const geometry = mesh.geometry;
+      const position = geometry.getAttribute('position');
+      if (!position || position.itemSize < 3) continue;
+      let source: Uint32Array;
+      if (geometry.index) {
+        source = new Uint32Array(geometry.index.count);
+        for (let index = 0; index < source.length; index++) source[index] = geometry.index.getX(index);
+      } else {
+        source = new Uint32Array(position.count);
+        for (let index = 0; index < source.length; index++) source[index] = index;
+      }
+      if (source.length % 3 !== 0) throw new Error(`mesh ${mesh.name} index count is not a triangle list`);
+      const positions = new Float32Array(position.count * 3);
+      for (let index = 0; index < position.count; index++) {
+        const target = index * 3;
+        positions[target] = position.getX(index);
+        positions[target + 1] = position.getY(index);
+        positions[target + 2] = position.getZ(index);
+      }
+      const original = await this.meshopt.analyzeVertexCache(source, position.count);
+      const optimized = source.slice();
+      const groups = geometry.groups.length === 0
+        ? [{ start: 0, count: source.length }]
+        : geometry.groups;
+      for (const group of groups) {
+        if (group.start % 3 !== 0 || group.count % 3 !== 0 || group.start + group.count > source.length)
+          throw new Error(`mesh ${mesh.name} has a non-triangular material group`);
+        const groupIndices = source.slice(group.start, group.start + group.count);
+        const cacheOptimized = await this.meshopt.optimizeVertexCache(groupIndices, position.count);
+        const overdrawOptimized = await this.meshopt.optimizeOverdraw(cacheOptimized, positions, 12, 1.05);
+        optimized.set(overdrawOptimized, group.start);
+      }
+      const optimizedAnalysis = await this.meshopt.analyzeVertexCache(optimized, position.count);
+      const compressed = await this.meshopt.encodeIndexBuffer(optimized, position.count);
+      geometry.setIndex(new THREE.BufferAttribute(optimized, 1));
+      stats.push({
+        name: mesh.name,
+        vertexCount: position.count,
+        skinned: (mesh as THREE.SkinnedMesh).isSkinnedMesh === true,
+        preservedAttributes: Object.keys(geometry.attributes),
+        originalTriangles: source.length / 3,
+        originalAcmr: original[0],
+        optimizedAcmr: optimizedAnalysis[0],
+        compressedIndexBytes: compressed.byteLength,
+        uncompressedIndexBytes: optimized.byteLength,
+      });
+    }
+    return stats;
+  }
+
+  /** Load a packed GLB, preserve its complete scene/rig, and optimize it through the runtime mesh worker. */
+  loadOptimizedGLTF(
+    path: string,
+    loader: Parameters<typeof parseGLTFAsset>[1],
+  ): AssetHandle<OptimizedGltfAsset> {
+    const fallback = { scene: fallbackGroup(), animations: [], meshOptimization: [], materialTextures: [] } as OptimizedGltfAsset;
+    return this.load(path, async bytes => {
+      const materialTextures = parseGlbMaterialTextures(bytes);
+      const parsed = await parseGLTFAsset(bytes, loader);
+      const meshOptimization = await this.optimizeGltfScene(parsed.scene);
+      return { ...parsed, meshOptimization, materialTextures };
+    }, fallback);
+  }
 
   loadModel(path: string): AssetHandle<ModelAsset> {
     return this.load(path, (bytes) => this.processModel(bytes, path));

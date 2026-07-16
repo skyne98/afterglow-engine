@@ -45,6 +45,16 @@ evicted generations cannot publish later.
 The path-based `load()` API remains a game-facing convenience wrapper. It
 registers the path and throws if the configured asset capacity is exhausted.
 
+Self-contained GLBs follow this same path. The offline pipeline stores the
+complete model as a seekable raw `.big` asset and extracts embedded images into
+virtual textures. `BigContainerAssetLoader` exposes packed model chunks through
+the regular loader contract. `AssetStore.loadOptimizedGLTF()` preserves the full
+scene, skeleton, skin attributes, morph targets, and animations while the
+runtime meshopt worker reorders triangle indices for vertex-cache and overdraw
+efficiency. Material groups are processed independently. Skinned meshes are not
+simplified yet because a position/UV-only error metric cannot safely evaluate
+animated bone deformation.
+
 ## Range support
 
 Both serving backends parse the HTTP `Range` header (single-range only):

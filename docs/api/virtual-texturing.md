@@ -25,8 +25,11 @@ fixed per-frame page upload budget.
   the tuner without allocation; `getStats()` exposes active limits and
   downshift/recovery counters.
 - `loadTexture(path, options?) -> AssetHandle<THREE.Texture>`
-- `loadMaterialSet({ albedo, normal?, roughness?, ao? }, options?)` loads aligned
-  PBR channels and expands each albedo feedback page to every linked channel.
+- `loadMaterialSet({ albedo, normal?, masks?, roughness?, ao?, emissive? }, options?)`
+  loads aligned PBR channels and expands each feedback page to every linked channel.
+- `linkMaterialSet(set)` applies the same residency link to already-loaded aligned
+  entries. Overlapping sets are unioned, so materials sharing an albedo cannot
+  orphan another material's normal, mask, or emissive pages.
 - `processFeedback(feedback)` accepts globally identified requests
   `{ path, mip, x, y, screenPriority?, coverage? }` and merges them into a
   fixed persistent priority scheduler. `screenPriority` ranges from 0 at the
@@ -42,9 +45,11 @@ fixed per-frame page upload budget.
   `atlasPagesX`, and `atlasPagesY` report the device-sized physical atlas.
 - `PAGE_SIZE`, `PAGE_BORDER`, `SLOT_SIZE`, `ATLAS_WIDTH`, and `ATLAS_HEIGHT`
   expose shader/layout constants without duplicating them in clients.
-- `VirtualTextureFeedbackPass` renders a supplied feedback-material scene into
-  an `RG32Uint` target at reduced resolution and performs non-blocking readback.
-  `consume()` returns `null` when no newer readback has completed, distinguishing
+- `VirtualTextureFeedbackPass(scale?)` renders a supplied feedback-material scene
+  into an `RG32Uint` target at reduced resolution and performs non-blocking
+  readback. `resize(displayWidth, displayHeight)` updates the target and stable
+  `pixelScale: Vector2` (`feedback pixels / physical display pixels`) used by
+  feedback shaders for exact derivative correction. `consume()` returns `null` when no newer readback has completed, distinguishing
   that state from a completed readback containing zero pages. Readback decoding
   alternates two retained Maps, uses request objects pooled at `resize()`, and
   reuses fixed mip scratch. Duplicate pixels retain the closest-to-center sample
@@ -67,8 +72,34 @@ even when channel completions arrive separately. Clock eviction of one material
 page also removes the same logical page from every resident channel in constant
 group-size work, so mixed residency cannot persist.
 
-`AssetStore.setVirtualTextureStore(store)` enables universal VT;
-`AssetStore.loadTexture()` then delegates to that store.
+`AssetStore.setVirtualTextureStore(store)` routes subsequent `loadTexture()`
+assets into VT storage, but a shared atlas texture is not directly sampleable as
+a conventional `material.map`. Materials must use VT page-table nodes.
+`createVirtualGltfMaterialPair(THREE, store, set, feedbackPixelScale, options)`
+builds matched visible/feedback `MeshStandardNodeMaterial` variants for glTF
+base color plus optional normal and packed metallic/roughness channels. Aligned
+channels share one residency level and feedback stream; differently sized
+channels sample and emit feedback independently. It works with Mesh,
+InstancedMesh, SkinnedMesh, and morph targets because Three retains its normal
+geometry vertex path. Animated/deformed objects must render feedback with the
+same object (temporarily swapping the prewarmed material), not a bind-pose proxy.
+
+### Recorded extension: per-material residency identities
+
+The current feedback identity is a texture ID. Consequently, if one texture is
+shared by several materials, `linkMaterialSet()` computes the transitive union
+of their linked channels. This is deterministic and prevents missing PBR pages,
+but may overfetch channels belonging only to another material using that shared
+texture.
+
+If telemetry shows that this bounded overfetch is material, extend feedback with
+a fixed-capacity **material-group ID** distinct from texture identity. A texture
+may then participate in multiple groups, and feedback expands only the group
+used by the rendered material. Preserve the current constraints: bootstrap-only
+group registration, generational/fixed-capacity IDs, no frame allocation,
+bounded O(1) lookup, deterministic exhaustion, and coordinated group eviction.
+Do not add this protocol complexity without measured residency or bandwidth
+pressure; the connected-component union remains the canonical implementation.
 
 ## Layout and encoding
 
@@ -88,13 +119,22 @@ unused x=1 texel of the terminal page-table row. Atlas sampling
 uses explicit translated gradients and supports clamp, repeat, and mirrored
 repeat addressing.
 
-Feedback derivatives are evaluated directly in the reduced render target and
-accept an explicit additive LOD bias. The dungeon uses `-1.5`, intentionally
-requesting one to two levels finer than the strict screen footprint without the
-old accidental fixed three-level bias. The dungeon submits feedback every four
-frames: at 144 Hz this is still a 36 Hz residency update while avoiding a GPU
-readback and second scene pass on every presented frame. Completed worker jobs
-are committed through the centrally tuned bounded upload queue rather than
+`VirtualTextureFeedbackPass.pixelScale` records the exact feedback-target pixels
+per physical display pixel after every resize, including ceil-rounding and
+non-square dimensions. `VT_FEEDBACK_WGSL` multiplies its reduced-target X/Y
+derivatives by that vector before calculating `floor(log2(texelFootprint))`.
+With quality bias zero, the selected discrete mip retains approximately one to
+two source texels per physical screen pixel regardless of source resolution,
+DPR, feedback scale, or UV tiling. Quality bias is a separate explicit control;
+feedback-scale correction is never hand-tuned into it.
+
+Feedback receives `sampleUV` separately from continuous `gradientUV`. Repeat
+addressing and POM displacement affect page coordinates, while mip derivatives
+remain free of wrap/control-flow discontinuities. Dungeon prewarms matching
+base and POM-aware feedback materials; when POM is active, the reduced pass runs
+the same bounded height march and requests the page actually sampled by the
+visible displaced surface. The pass runs every eight frames. Completed worker
+jobs are committed through the centrally tuned bounded upload queue rather than
 issuing an unbounded burst of atlas and page-table writes between frames.
 
 Feedback uses `RG32Uint`: word zero stores valid, six mip bits, and eleven bits
@@ -183,8 +223,13 @@ published asynchronously and never delays upload. Page lookup is direct
 v4 to 123,768 bytes in v5, safely below the 1 MiB RPC output limit. v4 is
 rejected; bundled assets were rebuilt rather than retaining compatibility.
 
-`afterglow-pipeline process` decodes PNG/JPEG sources, accepts arbitrary
-positive width and height (including rectangular, non-power-of-two, and
+`afterglow-pipeline height-r16 <height.png> <output.r16>` losslessly decodes a
+16-bit displacement source into the engine's versioned, single-channel
+little-endian normalized `u16` runtime payload. This intentionally bypasses
+browser image decoding and is separate from virtual color/PBR processing.
+
+`afterglow-pipeline process` decodes PNG/JPEG sources and embedded GLB images,
+accepts arbitrary positive width and height (including rectangular, non-power-of-two, and
 sub-page dimensions), generates filtered mips, and writes independently
 seekable partial-edge 136x136 bordered pages plus a packed mip tail. The
 offline-only `afterglow-basis-encoder` crate encodes every slot independently as
@@ -194,7 +239,9 @@ each chunk once into a temporary disk spool, encodes each bounded batch in
 parallel, and assembles stream order with a fixed 64 KiB copy buffer instead of
 retaining the complete raw page set or encoded container payload in RAM.
 Runtime `afterglow-texture` transcodes Basis pages to BC7, ASTC, or
-RGBA. Raw RGBA pages remain explicitly tagged and bypass the transcoder.
+RGBA. Raw RGBA pages remain explicitly tagged and bypass the transcoder. A
+self-contained GLB is also packed as a seekable raw model asset. Embedded images
+use deterministic `<model>#image-N` VT names; external image URIs are rejected.
 
 ## Demonstrations
 
@@ -221,13 +268,28 @@ page-table implementation.
 terrain texture (256 GiB logical RGBA). It supports WASD pan, overview and
 one-texel zoom plus deterministic programmatic camera control.
 
+`afterglow-cef --example rigged-vt-demo` loads two unmodified GLBs from the same
+`.big` container as their extracted virtual material channels. **1** selects the
+first animated rig; **2** selects Spooky Iluha's downloaded “Sci-Fi Character -
+Dragon Warrior (Futuristic)” with 18 skinned meshes, an Idle clip, and 45 virtual
+material images from 512² through 4096². The offline cook embeds its external
+`.gltf`/`.bin`/texture package into a self-contained packed GLB. The normal
+`AssetStore` parses both and sends grouped triangle indices through runtime
+meshopt. Visible and feedback materials render the same objects, so requests
+follow current deformation. Both rigs cast animated/self shadows from a bounded
+2048² directional PCF shadow map onto the receiving floor; feedback renders
+explicitly disable redundant shadow passes. **W/S** zoom and **A/D** orbit with
+damped inertia; **B** toggles the active skeleton. Model 1 is KallMor's “Decraniated (Low Poly
+Retro Pixel),” CC BY 4.0; model 2 is CC BY-NC 4.0.
+
 `afterglow-cef --example dungeon` is a first-person corridor dungeon using
 three downloaded 8K PBR sets across twelve wall instances. Two sets are
 8192×8192 and one is natively rectangular at 8192×4096. Albedo, OpenGL normal,
 roughness, and AO pages stream together through linked material feedback while
 all walls share the engine atlas. Official resident 1K, 16-bit displacement
-maps from the same materials drive the 8–32-layer POM + 8-step light self-shadow
-tier; all displaced PBR channels use `VT_SAMPLE_FROM_LEVEL_WGSL` for
+maps from the same materials are expanded losslessly into filterable,
+single-channel WebGPU `r32float` and drive the 8–32-layer POM + 8-step light self-shadow tier; all
+displaced PBR channels use `VT_SAMPLE_FROM_LEVEL_WGSL` for
 coarser-page/tail fallback. Dungeon submits VT feedback every 8 frames; the
 measured 4-frame cadence caused additional missed-vsync events.
 Interactive controls are WASD, Shift sprint, raw pointer-lock mouse look, POM
@@ -238,6 +300,9 @@ Interactive controls are WASD, Shift sprint, raw pointer-lock mouse look, POM
 
 ```sh
 nix-shell shell.nix --run "cargo build --example vt-demo -p afterglow-cef"
+nix-shell shell.nix --run "cargo build --example rigged-vt-demo -p afterglow-cef"
+DISPLAY=:0 ./target/debug/examples/rigged-vt-demo --ozone-platform=x11
+DISPLAY=:0 ./scripts/test-rigged-vt-gpu.sh
 DISPLAY=:0 ./scripts/run-dungeon.sh
 DISPLAY=:0 ./scripts/test-dungeon-gpu.sh
 # With the dungeon already running; writes raw per-second CDP samples:

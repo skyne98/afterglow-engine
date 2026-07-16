@@ -15,6 +15,7 @@ afterglow-meshopt = { path = "../afterglow-meshopt" }
 afterglow-basis-encoder = { path = "../afterglow-basis-encoder" }
 postcard.workspace = true
 serde.workspace = true
+serde_json = "1"
 bytemuck = "1"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 rayon = "1.10"

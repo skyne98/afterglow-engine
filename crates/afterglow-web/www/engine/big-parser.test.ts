@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import {
-  BoundedTranscoderPool, createFetchRangeLoader, createPageDataProvider, findVTPageChunk,
+  BigContainerAssetLoader, BoundedTranscoderPool, createFetchRangeLoader, createPageDataProvider, findVTPageChunk,
   getVirtualTextureDimensions, type BigHeader,
 } from './big-parser.ts';
 
@@ -25,6 +25,31 @@ describe('browser range loader', () => {
     } finally {
       globalThis.fetch = original;
     }
+  });
+});
+
+describe('raw BIG asset loader', () => {
+  test('maps a packed model name to its exact container range', async () => {
+    const reads: Array<[string, number, number]> = [];
+    const source = {
+      async load() { return new Uint8Array(); }, async size() { return 999; },
+      async identity() { return { size: 999, etag: null, lastModified: null }; },
+      async read(path: string, offset: number, length: number) {
+        reads.push([path, offset, length]);
+        return new Uint8Array(length).fill(7);
+      },
+    };
+    const header: BigHeader = { version: 5, dataOffset: 64n, assets: [{
+      name: 'model.glb', assetType: 'Mesh', virtualTexture: null,
+      chunks: [{ offset: 120n, compressedSize: 32n, uncompressedSize: 32n,
+        lodLevel: 0, mipLevel: 0, compression: 'None', meta: { type: 'Raw' } }],
+    }] };
+    const loader = new BigContainerAssetLoader(source, 'scene.big', header);
+    expect(await loader.size('model.glb')).toBe(32);
+    expect(await loader.read('model.glb', 4, 8)).toEqual(new Uint8Array(8).fill(7));
+    expect((await loader.load('model.glb')).byteLength).toBe(32);
+    expect(reads).toEqual([['scene.big', 124, 8], ['scene.big', 120, 32]]);
+    expect(() => loader.read('model.glb', 30, 4)).toThrow(RangeError);
   });
 });
 

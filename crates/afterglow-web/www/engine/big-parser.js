@@ -369,6 +369,47 @@ function createFetchRangeLoader(baseUrl = "") {
     }
   };
 }
+
+class BigContainerAssetLoader {
+  source;
+  containerPath;
+  assets = new Map;
+  constructor(source, containerPath, header) {
+    this.source = source;
+    this.containerPath = containerPath;
+    for (const asset of header.assets) {
+      if (asset.chunks.length !== 1 || asset.chunks[0].meta.type !== "Raw")
+        continue;
+      const chunk = asset.chunks[0];
+      if (chunk.compression !== "None" || chunk.compressedSize !== chunk.uncompressedSize)
+        throw new Error(`raw BIG asset must be uncompressed: ${asset.name}`);
+      if (chunk.uncompressedSize > BigInt(Number.MAX_SAFE_INTEGER))
+        throw new RangeError(`raw BIG asset exceeds browser safe size: ${asset.name}`);
+      this.assets.set(asset.name, chunk);
+    }
+  }
+  chunk(path) {
+    const chunk = this.assets.get(path);
+    if (!chunk)
+      throw new Error(`raw BIG asset not found: ${path}`);
+    return chunk;
+  }
+  load(path) {
+    const chunk = this.chunk(path);
+    return this.source.read(this.containerPath, Number(chunk.offset), Number(chunk.uncompressedSize));
+  }
+  async size(path) {
+    return Number(this.chunk(path).uncompressedSize);
+  }
+  read(path, offset, length) {
+    const chunk = this.chunk(path);
+    const size = Number(chunk.uncompressedSize);
+    if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length < 0 || offset + length > size)
+      throw new RangeError(`raw BIG asset range exceeds ${path}: ${offset}+${length} > ${size}`);
+    return this.source.read(this.containerPath, Number(chunk.offset) + offset, length);
+  }
+  poll() {}
+}
 function createPageDataProvider(loader, header, textureWorkers, format, cache) {
   const directories = new Map;
   for (let assetId = 0;assetId < header.assets.length; assetId++) {
@@ -543,6 +584,7 @@ export {
   createPageDataProvider,
   createFetchRangeLoader,
   BoundedTranscoderPool,
+  BigContainerAssetLoader,
   BIG_VERSION,
   BIG_MAGIC
 };

@@ -1,7 +1,56 @@
 import { describe, expect, test } from 'bun:test';
+import * as THREE from 'three';
 import { AssetAdmission, AssetRequestState, AssetStore } from './asset-store.ts';
 
 const flush = () => new Promise(resolve => setTimeout(resolve, 0));
+
+describe('rig-preserving runtime mesh optimization', () => {
+  test('reorders only triangle indices and retains every skin/morph attribute and skeleton', async () => {
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute([
+      0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0,
+    ], 3));
+    geometry.setAttribute('normal', new THREE.Float32BufferAttribute(new Array(12).fill(0), 3));
+    geometry.setAttribute('uv', new THREE.Float32BufferAttribute(new Array(8).fill(0), 2));
+    geometry.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(new Array(16).fill(0), 4));
+    geometry.setAttribute('skinWeight', new THREE.Float32BufferAttribute([
+      1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0,
+    ], 4));
+    geometry.morphAttributes.position = [new THREE.Float32BufferAttribute(new Array(12).fill(0.1), 3)];
+    geometry.setIndex([0, 1, 2, 0, 2, 3]);
+    const attributes = geometry.attributes;
+    const morph = geometry.morphAttributes.position[0];
+    const root = new THREE.Bone(), child = new THREE.Bone();
+    root.add(child);
+    const skeleton = new THREE.Skeleton([root, child]);
+    const mesh = new THREE.SkinnedMesh(geometry, new THREE.MeshBasicMaterial());
+    mesh.name = 'rig';
+    mesh.add(root);
+    mesh.bind(skeleton);
+    const scene = new THREE.Group();
+    scene.add(mesh);
+    const meshopt = {
+      async optimizeVertexCache(indices: Uint32Array) { return indices.slice().reverse(); },
+      async optimizeOverdraw(indices: Uint32Array) { return indices.slice(); },
+      async simplifyWithUvs() { throw new Error('skinned scene must not be simplified'); },
+      async analyzeVertexCache() { return new Float32Array([0.75]); },
+      async encodeIndexBuffer(indices: Uint32Array) { return new Uint8Array(indices.byteLength / 2); },
+      poll() {},
+    };
+    const loader = { async size() { return 0; }, async load() { return new Uint8Array(); },
+      async read() { return new Uint8Array(); }, poll() {} };
+    const store = new AssetStore(loader, meshopt);
+    const stats = await store.optimizeGltfScene(scene);
+    expect(stats).toHaveLength(1);
+    expect(stats[0].skinned).toBe(true);
+    expect(stats[0].preservedAttributes).toEqual(['position', 'normal', 'uv', 'skinIndex', 'skinWeight']);
+    expect(geometry.attributes).toBe(attributes);
+    expect(geometry.morphAttributes.position[0]).toBe(morph);
+    expect(mesh.skeleton).toBe(skeleton);
+    expect(mesh.skeleton.bones).toEqual([root, child]);
+    expect(Array.from(geometry.index!.array)).toEqual([3, 2, 0, 2, 1, 0]);
+  });
+});
 
 describe('AssetStore structural continuations', () => {
   test('attaches one continuation at load time and deduplicates handles', async () => {

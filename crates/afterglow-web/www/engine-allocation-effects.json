@@ -13,6 +13,7 @@
     "fallback.ts": "bootstrap",
     "frame-budget.ts": "none",
     "frame.ts": "none",
+    "height-texture.ts": "bootstrap",
     "hierarchy.ts": "pooled",
     "instance-shard.ts": "pooled",
     "matrix.ts": "none",
@@ -29,6 +30,7 @@
     "virtual-texture-feedback-pass.ts": "budgeted",
     "virtual-texture-feedback.ts": "gameFacing",
     "virtual-texture-layout.ts": "bootstrap",
+    "virtual-texture-material.ts": "bootstrap",
     "virtual-texture.ts": "budgeted",
     "vt-gpu-test.ts": "diagnostic",
     "webgpu-only.ts": "bootstrap"
@@ -75,6 +77,8 @@
     "AssetStore.observeLoad": "AssetLoad",
     "parseTexture": "BrowserImageDecode",
     "parseGLTF": "ModelParse",
+    "parseGLTFAsset": "ModelParse",
+    "AssetStore.optimizeGltfScene": "ModelWorkerOptimization",
     "createFetchRangeLoader": "AssetFetch",
     "createPageDataProvider": "AssetFetch",
     "VirtualTextureStore.queuePageLoad": "AssetFetch",
@@ -85,6 +89,8 @@
     "AssetStore.registerAsset": "PathInterning",
     "HierarchyState.validateParentChange": "StructuralTopology",
     "HierarchyState.updateCachedParent": "StructuralTopology",
+    "loadHeightTextureR16": "GpuResourceCreation",
+    "createVirtualGltfMaterialPair": "GpuResourceCreation",
     "VirtualTextureStore.loadTexture": "GpuResourceCreation",
     "VirtualTextureStore.loadMaterialSet": "GpuResourceCreation"
   }

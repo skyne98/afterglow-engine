@@ -26,6 +26,7 @@ const targets = [
   ['engine/vt-gpu-test.ts', 'engine/vt-gpu-test.js'],
   ['engine-bundle-input.ts', 'engine-bundle.js'],
   ['dungeon.ts', 'dungeon.js'],
+  ['rigged-vt-demo.ts', 'rigged-vt-demo.js'],
   ['vt-demo.ts', 'vt-demo.js'],
   ['vt-mip-inspector.ts', 'vt-mip-inspector.js'],
   ['engine-demo.ts', 'engine-demo.js'],
@@ -58,8 +59,8 @@ for (const file of await listFiles(www, '**/*.js')) {
 for (const file of await listFiles(www, '**/*.ts')) {
   if (file.startsWith('node_modules/')) continue;
   const source = await readFile(join(www, file), 'utf8');
-  if (/(?:from\s*|import\s*\()\s*['"][^'"]+\.js['"]/.test(source)) {
-    console.error(`TypeScript must not import JavaScript: ${relative(root, join(www, file))}`);
+  if (/(?:from\s*|import\s*\()\s*['"]\.\.?\/[^'"]+\.js['"]/.test(source)) {
+    console.error(`TypeScript must not import generated local JavaScript: ${relative(root, join(www, file))}`);
     process.exit(1);
   }
 }

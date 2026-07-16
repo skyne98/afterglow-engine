@@ -9,6 +9,8 @@ import type { VirtualPageRequest, VirtualTextureStore } from './virtual-texture.
  */
 export class VirtualTextureFeedbackPass {
   readonly scale: number;
+  /** Actual feedback pixels per physical display pixel, updated by resize(). */
+  readonly pixelScale = new THREE.Vector2(1, 1);
   readonly target: THREE.RenderTarget;
   private width = 1;
   private height = 1;
@@ -38,8 +40,10 @@ export class VirtualTextureFeedbackPass {
   }
 
   resize(displayWidth: number, displayHeight: number): void {
+    if (!(displayWidth > 0 && displayHeight > 0)) throw new RangeError('display dimensions must be positive');
     const width = Math.max(1, Math.ceil(displayWidth * this.scale));
     const height = Math.max(1, Math.ceil(displayHeight * this.scale));
+    this.pixelScale.set(width / displayWidth, height / displayHeight);
     if (width === this.width && height === this.height && this.requestPool.length >= width * height) return;
     this.width = width;
     this.height = height;

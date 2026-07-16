@@ -1,11 +1,34 @@
 import { describe, expect, test } from 'bun:test';
 import { VirtualTextureFeedbackPass } from './virtual-texture-feedback-pass.ts';
+import { VT_FEEDBACK_WGSL } from './virtual-texture.ts';
 import { createPackedPageTableLayout } from './virtual-texture-layout.ts';
 import { encodeFeedback } from './virtual-texture-feedback.ts';
 
 const flush = () => new Promise(resolve => setTimeout(resolve, 0));
 
 describe('VirtualTextureFeedbackPass reuse', () => {
+  test('selects mip from physical pixels while addressing a separate displaced UV', () => {
+    expect(VT_FEEDBACK_WGSL).toContain('sampleUV: vec2f');
+    expect(VT_FEEDBACK_WGSL).toContain('gradientUV: vec2f');
+    expect(VT_FEEDBACK_WGSL).toContain('dpdx(gradientUV * virtualSize) * feedbackPixelScale.x');
+    expect(VT_FEEDBACK_WGSL).toContain('dpdy(gradientUV * virtualSize) * feedbackPixelScale.y');
+    expect(VT_FEEDBACK_WGSL).toContain('addressMode: u32');
+    expect(VT_FEEDBACK_WGSL).toContain('addressed_uv = fract(sampleUV)');
+    expect(VT_FEEDBACK_WGSL).not.toContain('dpdx(sampleUV');
+  });
+
+  test('tracks the exact reduced-feedback to physical-pixel derivative scale', () => {
+    const pass = new VirtualTextureFeedbackPass(0.125);
+    pass.resize(1920, 1080);
+    expect(pass.pixelScale.x).toBe(0.125);
+    expect(pass.pixelScale.y).toBeCloseTo(135 / 1080);
+    pass.resize(1919, 1079);
+    expect(pass.pixelScale.x).toBeCloseTo(240 / 1919);
+    expect(pass.pixelScale.y).toBeCloseTo(135 / 1079);
+    expect(() => pass.resize(0, 1080)).toThrow('positive');
+    pass.dispose();
+  });
+
   test('records center proximity and pixel coverage while deduplicating', async () => {
     const pass = new VirtualTextureFeedbackPass(1);
     pass.resize(3, 1);

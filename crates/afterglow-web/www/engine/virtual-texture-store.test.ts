@@ -224,6 +224,24 @@ describe('VirtualTextureStore residency identity', () => {
     expect(new Set(calls)).toEqual(new Set(['color', 'normal', 'masks']));
   });
 
+  test('links already-loaded channels and unions shared material roles', async () => {
+    const calls: string[] = [];
+    const store = new VT.VirtualTextureStore(loader, async path => {
+      calls.push(path);
+      return new Uint8Array(PAGE_BYTES);
+    });
+    for (const path of ['color', 'normal', 'masks', 'emissive'])
+      store.loadTexture(path, { width: 512, height: 512 });
+    await settle(store); calls.length = 0;
+    store.linkMaterialSet({
+      albedo: store.getEntry('color')!, normal: store.getEntry('normal')!, masks: store.getEntry('masks')!,
+    });
+    store.linkMaterialSet({ albedo: store.getEntry('color')!, emissive: store.getEntry('emissive')! });
+    store.processFeedback(new Map([['visible', { path: 'color', mip: 0, x: 0, y: 0 }]]));
+    await settle(store);
+    expect(new Set(calls)).toEqual(new Set(['color', 'normal', 'masks', 'emissive']));
+  });
+
   test('evicts with a bounded second-chance clock at full capacity', async () => {
     const device = { limits: { maxTextureDimension2D: 408 } } as GPUDevice; // 3x3 slots
     const store = new VT.VirtualTextureStore(loader, async () => new Uint8Array(PAGE_BYTES), VT.FORMAT_RGBA, device);

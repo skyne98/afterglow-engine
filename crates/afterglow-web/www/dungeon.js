@@ -853,6 +853,47 @@ function createFetchRangeLoader(baseUrl = "") {
     }
   };
 }
+
+class BigContainerAssetLoader {
+  source;
+  containerPath;
+  assets = new Map;
+  constructor(source, containerPath, header) {
+    this.source = source;
+    this.containerPath = containerPath;
+    for (const asset of header.assets) {
+      if (asset.chunks.length !== 1 || asset.chunks[0].meta.type !== "Raw")
+        continue;
+      const chunk = asset.chunks[0];
+      if (chunk.compression !== "None" || chunk.compressedSize !== chunk.uncompressedSize)
+        throw new Error(`raw BIG asset must be uncompressed: ${asset.name}`);
+      if (chunk.uncompressedSize > BigInt(Number.MAX_SAFE_INTEGER))
+        throw new RangeError(`raw BIG asset exceeds browser safe size: ${asset.name}`);
+      this.assets.set(asset.name, chunk);
+    }
+  }
+  chunk(path) {
+    const chunk = this.assets.get(path);
+    if (!chunk)
+      throw new Error(`raw BIG asset not found: ${path}`);
+    return chunk;
+  }
+  load(path) {
+    const chunk = this.chunk(path);
+    return this.source.read(this.containerPath, Number(chunk.offset), Number(chunk.uncompressedSize));
+  }
+  async size(path) {
+    return Number(this.chunk(path).uncompressedSize);
+  }
+  read(path, offset, length) {
+    const chunk = this.chunk(path);
+    const size = Number(chunk.uncompressedSize);
+    if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length < 0 || offset + length > size)
+      throw new RangeError(`raw BIG asset range exceeds ${path}: ${offset}+${length} > ${size}`);
+    return this.source.read(this.containerPath, Number(chunk.offset) + offset, length);
+  }
+  poll() {}
+}
 function createPageDataProvider(loader, header, textureWorkers, format, cache) {
   const directories = new Map;
   for (let assetId = 0;assetId < header.assets.length; assetId++) {
@@ -1768,6 +1809,65 @@ async function createWebGPUOnlyRenderer(parameters = {}) {
   return renderer;
 }
 
+// crates/afterglow-web/www/engine/height-texture.ts
+var HEIGHT_R16_MAGIC = new Uint8Array([65, 71, 82, 49, 54, 76, 69, 1]);
+var HEIGHT_R16_HEADER_BYTES = 16;
+function parseHeightR16(buffer) {
+  if (buffer.byteLength < HEIGHT_R16_HEADER_BYTES)
+    throw new Error("R16 height payload is truncated");
+  const bytes = new Uint8Array(buffer);
+  for (let index = 0;index < HEIGHT_R16_MAGIC.length; index++) {
+    if (bytes[index] !== HEIGHT_R16_MAGIC[index])
+      throw new Error("R16 height magic/version mismatch");
+  }
+  const header = new DataView(buffer, 8, 8);
+  const width = header.getUint32(0, true);
+  const height = header.getUint32(4, true);
+  if (width === 0 || height === 0)
+    throw new Error("R16 height dimensions must be non-zero");
+  const count = width * height;
+  if (!Number.isSafeInteger(count))
+    throw new Error("R16 height dimensions overflow");
+  const expectedBytes = HEIGHT_R16_HEADER_BYTES + count * 2;
+  if (buffer.byteLength !== expectedBytes) {
+    throw new Error(`R16 height byte length mismatch: expected ${expectedBytes}, got ${buffer.byteLength}`);
+  }
+  const endianProbe = new Uint16Array([258]);
+  if (new Uint8Array(endianProbe.buffer)[0] !== 2)
+    throw new Error("R16 height loading requires a little-endian platform");
+  return { width, height, pixels: new Uint16Array(buffer, HEIGHT_R16_HEADER_BYTES, count) };
+}
+function assertHeightTextureSupport(device) {
+  if (device.features?.has("float32-filterable") !== true) {
+    throw new Error("16-bit displacement requires the WebGPU float32-filterable feature");
+  }
+}
+function assertHeightTextureGpuFormat(backend, texture) {
+  const format = backend.utils?.getTextureFormatGPU(texture);
+  if (format !== "r32float")
+    throw new Error(`displacement GPU format mismatch: expected r32float, got ${format ?? "unavailable"}`);
+}
+async function loadHeightTextureR16(three, device, url) {
+  assertHeightTextureSupport(device);
+  const response = await fetch(url);
+  if (!response.ok)
+    throw new Error(`failed to load R16 height ${url}: HTTP ${response.status}`);
+  const asset = parseHeightR16(await response.arrayBuffer());
+  const normalized = new Float32Array(asset.pixels.length);
+  for (let index = 0;index < asset.pixels.length; index++)
+    normalized[index] = asset.pixels[index] / 65535;
+  const texture = new three.DataTexture(normalized, asset.width, asset.height, three.RedFormat, three.FloatType);
+  texture.name = url;
+  texture.wrapS = texture.wrapT = three.RepeatWrapping;
+  texture.minFilter = texture.magFilter = three.LinearFilter;
+  texture.generateMipmaps = false;
+  texture.flipY = false;
+  texture.colorSpace = three.NoColorSpace;
+  texture.unpackAlignment = 4;
+  texture.needsUpdate = true;
+  return texture;
+}
+
 // crates/afterglow-web/www/engine/renderer-seal.ts
 class RendererSeal {
   backend;
@@ -2014,7 +2114,7 @@ var VT = window.AfterglowVT;
 if (!VT)
   throw new Error("AfterglowVT engine bundle is unavailable");
 var { wgslFn, Fn, texture, sampler, uv, uniform, float, uint } = THREE;
-var VT_LOD_BIAS = -1.5;
+var VT_QUALITY_BIAS = 0;
 var FEEDBACK_INTERVAL = 8;
 var POM_MIN_LAYERS = 8;
 var POM_MAX_LAYERS = 32;
@@ -2130,15 +2230,7 @@ var atlasSampler = sampler(atlasNode);
 var feedbackScene = new THREE.Scene;
 var feedbackPass = new VT.VirtualTextureFeedbackPass(0.125);
 var materialNames = ["Rock064", "Ground103", "PavingStones150"];
-var heightTextures = await Promise.all(materialNames.map((name) => new THREE.TextureLoader().loadAsync(`dungeon-height/${name}_Height.png`)));
-for (const height of heightTextures) {
-  height.wrapS = height.wrapT = THREE.RepeatWrapping;
-  height.minFilter = height.magFilter = THREE.LinearFilter;
-  height.generateMipmaps = false;
-  height.flipY = false;
-  height.colorSpace = THREE.NoColorSpace;
-  height.needsUpdate = true;
-}
+var heightTextures = await Promise.all(materialNames.map((name) => loadHeightTextureR16(THREE, renderer.backend.device, `dungeon-height/${name}_Height.r16`)));
 var materialSets = materialNames.map((name, index) => {
   const paths = { albedo: `${name}_Color.png`, normal: `${name}_NormalGL.png`, masks: `${name}_Masks.png` };
   const dimensions = getVirtualTextureDimensions(header, paths.albedo), set = store.loadMaterialSet(paths, { ...dimensions, mipTail: true });
@@ -2160,9 +2252,12 @@ var segments = [
   [4, 5, 4, 8]
 ];
 var walls = [];
-function feedbackMaterial(entry) {
-  const material = new THREE.MeshBasicNodeMaterial({ side: THREE.DoubleSide });
-  material.fragmentNode = Fn(() => vtFeedback({ uv: uv().fract(), virtualSize: uniform(new THREE.Vector2(entry.width, entry.height)), pageGrid: uniform(new THREE.Vector2(entry.pageGridX, entry.pageGridY)), maxMip: float(entry.maxMip), lodBias: float(VT_LOD_BIAS), textureId: uint(entry.textureId) }))();
+function feedbackMaterial(set, usePom) {
+  const entry = set.albedo, material = new THREE.MeshBasicNodeMaterial({ side: THREE.DoubleSide });
+  material.fragmentNode = Fn(() => {
+    const gradientUV = uv(), sampleUV = usePom ? pomUV(set) : gradientUV;
+    return vtFeedback({ sampleUV, gradientUV, feedbackPixelScale: uniform(feedbackPass.pixelScale), virtualSize: uniform(new THREE.Vector2(entry.width, entry.height)), pageGrid: uniform(new THREE.Vector2(entry.pageGridX, entry.pageGridY)), maxMip: float(entry.maxMip), qualityBias: float(VT_QUALITY_BIAS), addressMode: uint(1), textureId: uint(entry.textureId) });
+  })();
   return material;
 }
 function sampleEntryFromLevel(entry, resolvedMip, sampleUV) {
@@ -2239,16 +2334,16 @@ for (let i = 0;i < segments.length; i++) {
   geometry.setAttribute("tangent", new THREE.BufferAttribute(new Float32Array([1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1]), 4));
   for (let u = 0;u < geometry.attributes.uv.count; u++)
     geometry.attributes.uv.setX(u, geometry.attributes.uv.getX(u) * len / 4);
-  const baseMaterial = wallMaterial(set, false), pomMaterial = wallMaterial(set, true);
+  const baseMaterial = wallMaterial(set, false), pomMaterial = wallMaterial(set, true), baseFeedbackMaterial = feedbackMaterial(set, false), pomFeedbackMaterial = feedbackMaterial(set, true);
   const mesh = new THREE.Mesh(geometry, pomMaterial);
   mesh.position.set((x1 + x2) / 2, 2, (z1 + z2) / 2);
   mesh.rotation.y = Math.atan2(-dz, dx);
   scene.add(mesh);
-  const feedbackMesh = new THREE.Mesh(geometry, feedbackMaterial(entry));
+  const feedbackMesh = new THREE.Mesh(geometry, pomFeedbackMaterial);
   feedbackMesh.position.copy(mesh.position);
   feedbackMesh.rotation.copy(mesh.rotation);
   feedbackScene.add(feedbackMesh);
-  walls.push({ path, entry, x1, z1, x2, z2, len, mesh, feedbackMesh, baseMaterial, pomMaterial });
+  walls.push({ path, entry, x1, z1, x2, z2, len, mesh, feedbackMesh, baseMaterial, pomMaterial, baseFeedbackMaterial, pomFeedbackMaterial });
 }
 var PLAYER_RADIUS = 0.28;
 var pose = { x: -5.5, z: -5.5, yaw: 0, pitch: 0 };
@@ -2340,30 +2435,45 @@ function update(dt) {
 }
 feedbackPass.resize(renderer.domElement.width, renderer.domElement.height);
 var pomShaderContracts = 0;
+var pomFeedbackContracts = 0;
 var gpuDevice = renderer.backend.device;
 var createShaderModule = gpuDevice.createShaderModule.bind(gpuDevice);
 gpuDevice.createShaderModule = (descriptor) => {
   if (descriptor.code.includes("fn pomMarchUV")) {
-    assertPomGeneratedWgsl(descriptor.code);
-    pomShaderContracts++;
+    if (descriptor.code.includes("fn vtSampleFromLevel")) {
+      assertPomGeneratedWgsl(descriptor.code);
+      pomShaderContracts++;
+    } else if (descriptor.code.includes("fn vtFeedback"))
+      pomFeedbackContracts++;
+    else
+      throw new Error("unknown POM shader variant compiled during warm-up");
   }
   return createShaderModule(descriptor);
 };
-for (const wall of walls)
+for (const wall of walls) {
   wall.mesh.material = wall.baseMaterial;
-await warmRendererVariants(renderer, [{ scene, camera }]);
-for (const wall of walls)
-  wall.mesh.material = wall.pomMaterial;
+  wall.feedbackMesh.material = wall.baseFeedbackMaterial;
+}
 await warmRendererVariants(renderer, [{ scene, camera }]);
 var previousTarget = renderer.getRenderTarget();
 renderer.setRenderTarget(feedbackPass.target);
 await warmRendererVariants(renderer, [{ scene: feedbackScene, camera }]);
+for (const wall of walls) {
+  wall.mesh.material = wall.pomMaterial;
+  wall.feedbackMesh.material = wall.pomFeedbackMaterial;
+}
+renderer.setRenderTarget(previousTarget);
+await warmRendererVariants(renderer, [{ scene, camera }]);
+renderer.setRenderTarget(feedbackPass.target);
+await warmRendererVariants(renderer, [{ scene: feedbackScene, camera }]);
 renderer.setRenderTarget(previousTarget);
 gpuDevice.createShaderModule = createShaderModule;
-if (pomShaderContracts < 1)
-  throw new Error("POM shader contract was not compiled during warm-up");
+if (pomShaderContracts < 1 || pomFeedbackContracts < 1)
+  throw new Error("POM render/feedback shader contracts were not compiled during warm-up");
 await new Promise((r) => setTimeout(r, 0));
 renderer.render(scene, camera);
+for (const height of heightTextures)
+  assertHeightTextureGpuFormat(renderer.backend, height);
 renderer.setRenderTarget(feedbackPass.target);
 renderer.render(feedbackScene, camera);
 renderer.setRenderTarget(previousTarget);
@@ -2374,8 +2484,10 @@ var hud = document.getElementById("hud");
 var hudVisible = true;
 function setPomEnabled(enabled) {
   pomEnabled = Boolean(enabled);
-  for (const wall of walls)
+  for (const wall of walls) {
     wall.mesh.material = pomEnabled ? wall.pomMaterial : wall.baseMaterial;
+    wall.feedbackMesh.material = pomEnabled ? wall.pomFeedbackMaterial : wall.baseFeedbackMaterial;
+  }
 }
 renderer.setAnimationLoop((now) => {
   const frameCpuStart = performance.now(), dt = Math.min(0.05, (now - last) / 1000);
@@ -2401,7 +2513,7 @@ renderer.setAnimationLoop((now) => {
     }
   if (hudVisible && frame % 15 === 0) {
     const d = store.getStats(), input = relativePointer.getStatus();
-    hud.innerHTML = `<b>afterglow — Engine Dungeon</b><br>3 × 8K scanned PBR material sets · 12 wall instances<br>Virtual RGBA channels: 1.875 GiB · physical atlas: ${store.atlasWidth}²<br>Position: ${pose.x.toFixed(2)}, ${pose.z.toFixed(2)} · yaw ${(pose.yaw * 180 / Math.PI).toFixed(0)}° · ${(1 / smoothedDt).toFixed(0)} FPS<br>Input: ${input.eventType}${input.unadjustedMovement ? " · unadjusted" : ""}<br>POM: ${pomEnabled ? `${POM_MIN_LAYERS}–${POM_MAX_LAYERS} layers · ${POM_SHADOW_STEPS}-step light self-shadow · no radial fade` : "off"}<br>Textures: ${d.textureCount} · resident ${d.atlasSlotsUsed}/${d.atlasSlotsTotal} · pending ${d.pendingPages}<br>GPU feedback pages: ${lastResult.totalRequests} · mips [${feedbackPass.getLatestMips().join(",")}] · bias ${VT_LOD_BIAS} · budget ${d.budget} · errors ${errors.length}`;
+    hud.innerHTML = `<b>afterglow — Engine Dungeon</b><br>3 × 8K scanned PBR material sets · 12 wall instances<br>Virtual RGBA channels: 1.875 GiB · physical atlas: ${store.atlasWidth}²<br>Position: ${pose.x.toFixed(2)}, ${pose.z.toFixed(2)} · yaw ${(pose.yaw * 180 / Math.PI).toFixed(0)}° · ${(1 / smoothedDt).toFixed(0)} FPS<br>Input: ${input.eventType}${input.unadjustedMovement ? " · unadjusted" : ""}<br>POM: ${pomEnabled ? `${POM_MIN_LAYERS}–${POM_MAX_LAYERS} layers · ${POM_SHADOW_STEPS}-step light self-shadow · no radial fade` : "off"}<br>Textures: ${d.textureCount} · resident ${d.atlasSlotsUsed}/${d.atlasSlotsTotal} · pending ${d.pendingPages}<br>GPU feedback pages: ${lastResult.totalRequests} · mips [${feedbackPass.getLatestMips().join(",")}] · quality ${VT_QUALITY_BIAS} · capacity bias ${d.lodBias} · budget ${d.budget} · errors ${errors.length}`;
   }
 });
 addEventListener("resize", () => {
@@ -2505,7 +2617,7 @@ window.__afterglowDungeon = {
   telemetry: () => store.getStats(),
   timing: () => runtimeTiming,
   inputStatus: () => relativePointer.getStatus(),
-  pomStatus: () => ({ enabled: pomEnabled, minLayers: POM_MIN_LAYERS, maxLayers: POM_MAX_LAYERS, heightScale: POM_HEIGHT_SCALE, maxOffsetRatio: POM_MAX_OFFSET_RATIO, maxDistance: POM_MAX_DISTANCE, selfShadowSteps: POM_SHADOW_STEPS, selfShadowStrength: POM_SHADOW_STRENGTH, heightSource: "resident ambientCG displacement" }),
+  pomStatus: () => ({ enabled: pomEnabled, minLayers: POM_MIN_LAYERS, maxLayers: POM_MAX_LAYERS, heightScale: POM_HEIGHT_SCALE, maxOffsetRatio: POM_MAX_OFFSET_RATIO, maxDistance: POM_MAX_DISTANCE, selfShadowSteps: POM_SHADOW_STEPS, selfShadowStrength: POM_SHADOW_STRENGTH, heightSource: "resident ambientCG displacement", heightFormat: "r32float-from-r16" }),
   setPomEnabled,
   setFeedbackEnabled: (enabled) => {
     feedbackEnabled = Boolean(enabled);

@@ -4,13 +4,23 @@
 
 - CEF 149, Three.js r185 WebGPU, Vulkan/RADV on Radeon 680M (`amd` / `rdna-2`)
 - 1440×900 logical, DPR 2, 2880×1800 physical
-- Official resident ambientCG 1K, 16-bit displacement
+- Official resident ambientCG 1K, 16-bit displacement source; Three's then-current
+  `TextureLoader` uploaded it as runtime `rgba8unorm`
 - Geometric TBN; VT `NormalGL` sampled with `(1,-1)` orientation correction
 - 8–32 view-adaptive POM layers, scale 0.05, ratio-2 offset cap
 - 8-step point-light self-shadow, bias 0.01, strength 0.82
 - No radial per-fragment fade
 - VT feedback every 8 frames
 - Post-warm-up rAF timestamp intervals; pages settled unless marked moving
+
+## Precision caveat
+
+These results validate the corrected POM shader and VT composition, but not
+16-bit runtime sampling. Browser image decoding plus Three's default
+`RGBAFormat + UnsignedByteType` reduced the 16-bit PNG to `rgba8unorm`. The
+engine now uses an offline `.r16` payload expanded losslessly to filterable
+single-channel `r32float`; that path
+requires a fresh Radeon 680M correctness and performance run.
 
 ## Results
 

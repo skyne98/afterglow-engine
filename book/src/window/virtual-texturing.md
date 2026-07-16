@@ -18,17 +18,26 @@ ASTC where available, and RGBA as the compatibility fallback.
 > consolidated worker polling, and bounded admissions; persistent scheduling
 > and the remaining audit items are still in progress.
 
-Enable the path by installing a `VirtualTextureStore` on `AssetStore`; subsequent
-`loadTexture()` calls delegate to it. After Three.js initializes the textures,
+Install a `VirtualTextureStore` on `AssetStore` to route subsequent
+`loadTexture()` calls into VT storage. The returned shared atlas is not a normal
+`material.map`: use a VT-aware node material. `createVirtualGltfMaterialPair`
+provides matched visible/feedback glTF base-color, optional normal, and optional
+metallic/roughness materials for static, instanced, skinned, and morphed
+geometry. Differently sized channels sample and feed back independently. Shared
+textures currently form a transitive residency-group union, which safely avoids
+missing PBR channels at the cost of bounded overfetch. A recorded future extension
+would add fixed-capacity material-group IDs to feedback if telemetry proves that
+overfetch significant. After Three.js initializes the textures,
 call `attachRenderer()` so updates become small GPU subregion writes. Each frame,
 poll the store and submit the previous globally identified feedback results with
 `processFeedback()`. `VirtualTextureFeedbackPass` provides the reduced-resolution
-`RG32Uint` render target and asynchronous readback. Fragment derivatives select
-the mip directly in that target's viewport and supports an explicit quality
-bias (the dungeon uses `-1.5`). The dungeon submits this pass every four frames,
-retaining 36 Hz residency updates on a 144 Hz display without forcing a GPU
-readback every frame. The feedback pass retains each page's nearest-to-center
-sample and pixel coverage. The store adds capacity fitting, progressive quality
+`RG32Uint` render target and asynchronous readback. It tracks the exact feedback-
+to-physical-pixel scale after resize, so shader derivatives are converted back
+to physical screen pixels before mip selection. Quality bias zero therefore
+keeps approximately one to two source texels per screen pixel across arbitrary
+texture dimensions, DPR, UV tiling, and feedback resolution; quality bias no
+longer compensates for pass scale. Dungeon runs feedback every eight frames.
+The pass retains each page's nearest-to-center sample and pixel coverage. The store adds capacity fitting, progressive quality
 selection, priority admission, bounded scheduling/upload budgets, and fixed
 second-chance clock residency.
 Resident lookup/touch is O(1); it does not scan or rebuild an LRU as the atlas
@@ -83,7 +92,23 @@ thread.
 
 ## Demos
 
-Both demos use the production `VirtualTextureStore`, shader, scheduler, and
+The model VT demo cooks two unmodified self-contained GLBs through the normal
+pipeline. Press **1** for the first animated rig or **2** for Spooky Iluha's
+Sci-Fi Dragon Warrior: 18 skinned meshes, an Idle clip, and 45 independent
+virtual material images from 512² through 4096². The cook embeds its external
+`.gltf`/`.bin`/texture package into one self-contained GLB. Each model is
+range-packed into `.big`; images become `<model>#image-N` paged/UASTC textures.
+Runtime `AssetStore` parses both and sends
+each material group's index range through the meshopt cache/overdraw worker. Only triangle order changes: joints, weights,
+normals, tangents, UVs, morph targets, bind matrices, and animation tracks keep
+their original vertex identity. The same animated `SkinnedMesh` is rendered
+with prewarmed visible and feedback materials, so page requests follow the
+current deformation rather than a bind-pose proxy. Animated meshes cast and
+receive a bounded 2048² directional PCF shadow, and the floor receives their
+silhouette; reduced VT-feedback renders skip redundant shadow work. Use **W/S**
+to zoom and **A/D** to orbit with inertia; **B** shows the active skeleton.
+
+All demos use the production `VirtualTextureStore`, shader, scheduler, and
 packed page tables—there is no separate demo cache.
 The `vt-demo` CEF example displays a 262,144×262,144 terrain texture (256 GiB
 logical RGBA), while generating only requested bordered pages:
@@ -109,7 +134,9 @@ and AO PNGs and runs the generic asset pipeline once to produce the ignored
 `fetch + Range` reads and a fixed two-to-four `TextureWorker` pool stream pages
 without the former page-side AssetLoader latency. Final GPU blocks are also
 stored through the generic persistent cache under a source/format/adapter
-namespace; warm hits skip both range reads and Basis transcodes. GPU feedback and linked
+namespace; warm hits skip both range reads and Basis transcodes. Aligned PBR
+channels are residency-linked—even when separately loaded or shared between
+materials—so visible albedo cannot leave normal/mask/emissive pages absent. GPU feedback and linked
 material sets keep matching pages resident for all three physical channels while
 `MeshStandardNodeMaterial` retains
 Three.js's PBR shader. The shared atlas expands to the largest whole page grid
@@ -126,7 +153,12 @@ DISPLAY=:0 ./scripts/test-dungeon-gpu.sh
 Click for raw mouse look; use **WASD**, **Shift**, **P**, **R**, and **1–3** for
 movement, sprint, prewarmed close-range POM toggle, reset, and deterministic
 viewpoints. The POM tier uses official resident 16-bit displacement from the
-same scanned stone materials while the 8K PBR channels remain virtual. Automated clients use
+same scanned stone materials while the 8K PBR channels remain virtual. The
+offline `height-r16` conversion and single-channel `r32float` upload preserve
+all source levels without browser image decoding. Its feedback variant runs the
+same bounded POM march, requesting pages at displaced UVs while deriving mip
+footprints from the original continuous UV. Base/POM feedback pipelines are
+prewarmed and switch with the visible material. Automated clients use
 `window.__afterglowDungeon` for exact poses, collision-aware movement, frame
 stepping, idle waits, allocation-free telemetry reads, snapshots, and named
 scenarios. Soak modes are `stable`, `traverse`, and deliberately hostile

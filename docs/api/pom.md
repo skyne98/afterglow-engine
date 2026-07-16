@@ -29,6 +29,33 @@ LOD must switch whole surfaces rather than vary relief strength per pixel.
 This is the tier measured viable on the Radeon 680M. It intentionally does not
 expose the prototype's expensive evaluation modes.
 
+## Resident R16 displacement API
+
+`engine/height-texture.ts` exposes four bootstrap-only operations:
+
+- `parseHeightR16(buffer)` validates magic/version, non-zero dimensions, exact
+  byte length, and little-endian execution, then returns `{width, height,
+  pixels: Uint16Array}` without copying the texels.
+- `assertHeightTextureSupport(device)` requires WebGPU `float32-filterable`;
+  absence is fatal rather than a precision fallback.
+- `loadHeightTextureR16(three, device, url)` fetches and parses the payload,
+  converts each normalized u16 level to a distinct float32 value, and returns a
+  resident, linearly filtered `RedFormat + FloatType` `DataTexture`. It is
+  repeat-wrapped, no-mipmap, linear-data, `flipY=false`, with four-byte unpack
+  alignment.
+- `assertHeightTextureGpuFormat(backend, texture)` runs after warm-up and asks
+  Three for the actual created GPU format; anything except `r32float` is fatal.
+
+WebGPU classifies `r16unorm` as `unfilterable-float`, and Three r185 cannot bind
+that texture correctly to the custom POM WGSL. A manual bilinear implementation
+would quadruple every height lookup. Filterable single-channel `r32float`
+preserves every R16 level without patching vendored Three.
+
+The offline producer is `afterglow-pipeline height-r16 <height.png>
+<output.r16>`. The format has a 16-byte header (`AGR16LE`, version 1, width,
+height) followed by exactly one little-endian normalized `u16` per texel.
+Loading and GPU creation complete before renderer sealing.
+
 ## Virtual-texture composition
 
 `VT_SAMPLE_FROM_LEVEL_WGSL` in `engine/virtual-texture.ts` samples a displaced
@@ -38,13 +65,30 @@ continuous screen derivatives rather than deriving across POM control-flow or
 physical-atlas page boundaries. A pinned mip tail is the deterministic final
 fallback.
 
-The Dungeon uses the official resident 1K **16-bit displacement maps** from the
-exact ambientCG materials. AO is lighting information, not geometric height;
-using it as pseudo-height was a correctness bug. The 8K albedo, normal,
-roughness, and AO runtime channels remain virtual. Keeping displacement
-resident avoids asynchronous page seams during a non-uniform POM march. The
-resident map uses `flipY=false` to match VT storage; sampled `NormalGL` uses
-normal scale `(1,-1)` because the custom VT upload retains top-left row order.
+Dungeon's reduced-resolution VT feedback has matching prewarmed base and POM
+variants. The POM variant runs the same bounded march and passes its displaced
+UV as `VT_FEEDBACK_WGSL.sampleUV`, so streaming requests the page rendering will
+actually read. The original continuous UV is passed independently as
+`gradientUV`; mip choice therefore reflects physical screen-pixel coverage and
+is not corrupted by POM control flow or repeat seams. Toggling `P` swaps both
+visible and feedback materials together.
+
+The Dungeon uses official resident 1K **16-bit displacement** from the exact
+ambientCG materials. `afterglow-pipeline height-r16` decodes each source PNG
+offline into the versioned `AGR16LE` payload: magic/version, little-endian `u32`
+width/height, then one normalized little-endian `u16` per texel. Runtime
+`loadHeightTextureR16()` validates the payload and creates a single-channel
+Three `DataTexture` with `RedFormat + FloatType`, mapping to filterable WebGPU
+`r32float`. Every normalized u16 level remains distinct. It fails closed unless
+`float32-filterable` is enabled; browser image decoding and silent 8-bit
+conversion are forbidden.
+
+AO is lighting information, not geometric height; using it as pseudo-height was
+a correctness bug. The 8K albedo, normal, roughness, and AO runtime channels
+remain virtual. Keeping displacement resident avoids asynchronous page seams
+during a non-uniform POM march. The resident map uses `flipY=false` to match VT
+storage; sampled `NormalGL` uses normal scale `(1,-1)` because the custom VT
+upload retains top-left row order.
 Without that correction, illumination appeared below features for a light above.
 
 Three r185's built-in `parallaxDirection` contains the material `normalView`.
@@ -78,7 +122,8 @@ all VT reads, and exactly three linked PBR samples.
 - `P`: toggle the prewarmed POM/base material variants.
 - `window.__afterglowDungeon.setPomEnabled(boolean)`
 - `window.__afterglowDungeon.pomStatus()` reports layer bounds, scale, offset
-  cap, fade state, self-shadow samples/strength, height source, and enabled state.
+  cap, fade state, self-shadow samples/strength, height source/`r32float-from-r16` format,
+  and enabled state.
 
 The removed standalone `prototype/pom` and `pom_bench` launcher are superseded
 by this engine primitive and the main Dungeon demo.
@@ -98,7 +143,10 @@ known-working prototype.
 - Natalya Tatarchuk, *Practical Parallax Occlusion Mapping*:
   https://advances.realtimerendering.com/s2006/Tatarchuk-POM.pdf
 
-Corrected Radeon 680M measurements at 2880×1800 physical pixels:
+Historical corrected-shader Radeon 680M measurements at 2880×1800 physical
+pixels are retained below. Despite their 16-bit source PNGs, those runs used
+Three's browser `TextureLoader` and therefore sampled `rgba8unorm`; they do not
+validate the new precision-preserving runtime path. A target-GPU rerun is required.
 
 - fixed close wall, POM + self-shadow: 59.87 FPS, p99 16.68 ms, 1/600 below 55;
 - prewarmed base at the same pose: 59.77 FPS, p99 16.68 ms, 2/600 below 55;

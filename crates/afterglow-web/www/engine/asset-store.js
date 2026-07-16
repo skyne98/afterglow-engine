@@ -13223,12 +13223,40 @@ async function parseTexture(bytes) {
   tex.colorSpace = SRGBColorSpace;
   return tex;
 }
-async function parseGLTF(bytes, loader) {
+async function parseGLTFAsset(bytes, loader) {
   const buf = new ArrayBuffer(bytes.byteLength);
   new Uint8Array(buf).set(bytes);
   if (!loader)
-    throw new Error("parseGLTF requires an injected Three.js GLTFLoader");
-  return new Promise((res, rej) => loader.parse(buf, "", (r) => res(r.scene), rej));
+    throw new Error("parseGLTFAsset requires an injected Three.js GLTFLoader");
+  return new Promise((resolve, reject) => loader.parse(buf, "", (result) => resolve(result), reject));
+}
+function parseGlbMaterialTextures(bytes) {
+  if (bytes.byteLength < 20 || new DataView(bytes.buffer, bytes.byteOffset, 4).getUint32(0, true) !== 1179937895)
+    throw new Error("material metadata requires a GLB payload");
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const jsonLength = view.getUint32(12, true);
+  const jsonType = view.getUint32(16, true);
+  if (jsonType !== 1313821514 || 20 + jsonLength > bytes.byteLength)
+    throw new Error("GLB has no valid JSON chunk");
+  const document2 = JSON.parse(new TextDecoder().decode(bytes.subarray(20, 20 + jsonLength)).replace(/[\\0 ]+$/, ""));
+  const textures = document2.textures ?? [];
+  const image = (info) => {
+    if (info?.index === undefined)
+      return null;
+    const source = textures[info.index]?.source;
+    return Number.isSafeInteger(source) && source >= 0 ? source : null;
+  };
+  return (document2.materials ?? []).map((material, index) => ({
+    index,
+    name: material.name ?? `material-${index}`,
+    baseColorImage: image(material.pbrMetallicRoughness?.baseColorTexture),
+    metallicRoughnessImage: image(material.pbrMetallicRoughness?.metallicRoughnessTexture),
+    normalImage: image(material.normalTexture),
+    emissiveImage: image(material.emissiveTexture)
+  }));
+}
+async function parseGLTF(bytes, loader) {
+  return (await parseGLTFAsset(bytes, loader)).scene;
 }
 function parseJSON(bytes) {
   return JSON.parse(new TextDecoder().decode(bytes));
@@ -13441,6 +13469,76 @@ class AssetStore {
   isLoading(path) {
     const id = this.idsByPath.get(path);
     return id !== undefined && (this.states[id] === 2 /* Reading */ || this.states[id] === 3 /* Parsing */ || this.states[id] === 4 /* ReadyToPublish */);
+  }
+  async optimizeGltfScene(scene) {
+    if (!this.meshopt)
+      throw new Error("optimizeGltfScene requires a meshopt worker");
+    const meshes = [];
+    scene.traverse((object) => {
+      if (object.isMesh)
+        meshes.push(object);
+    });
+    const stats = [];
+    for (const mesh of meshes) {
+      const geometry = mesh.geometry;
+      const position = geometry.getAttribute("position");
+      if (!position || position.itemSize < 3)
+        continue;
+      let source;
+      if (geometry.index) {
+        source = new Uint32Array(geometry.index.count);
+        for (let index = 0;index < source.length; index++)
+          source[index] = geometry.index.getX(index);
+      } else {
+        source = new Uint32Array(position.count);
+        for (let index = 0;index < source.length; index++)
+          source[index] = index;
+      }
+      if (source.length % 3 !== 0)
+        throw new Error(`mesh ${mesh.name} index count is not a triangle list`);
+      const positions = new Float32Array(position.count * 3);
+      for (let index = 0;index < position.count; index++) {
+        const target = index * 3;
+        positions[target] = position.getX(index);
+        positions[target + 1] = position.getY(index);
+        positions[target + 2] = position.getZ(index);
+      }
+      const original = await this.meshopt.analyzeVertexCache(source, position.count);
+      const optimized = source.slice();
+      const groups = geometry.groups.length === 0 ? [{ start: 0, count: source.length }] : geometry.groups;
+      for (const group of groups) {
+        if (group.start % 3 !== 0 || group.count % 3 !== 0 || group.start + group.count > source.length)
+          throw new Error(`mesh ${mesh.name} has a non-triangular material group`);
+        const groupIndices = source.slice(group.start, group.start + group.count);
+        const cacheOptimized = await this.meshopt.optimizeVertexCache(groupIndices, position.count);
+        const overdrawOptimized = await this.meshopt.optimizeOverdraw(cacheOptimized, positions, 12, 1.05);
+        optimized.set(overdrawOptimized, group.start);
+      }
+      const optimizedAnalysis = await this.meshopt.analyzeVertexCache(optimized, position.count);
+      const compressed = await this.meshopt.encodeIndexBuffer(optimized, position.count);
+      geometry.setIndex(new BufferAttribute(optimized, 1));
+      stats.push({
+        name: mesh.name,
+        vertexCount: position.count,
+        skinned: mesh.isSkinnedMesh === true,
+        preservedAttributes: Object.keys(geometry.attributes),
+        originalTriangles: source.length / 3,
+        originalAcmr: original[0],
+        optimizedAcmr: optimizedAnalysis[0],
+        compressedIndexBytes: compressed.byteLength,
+        uncompressedIndexBytes: optimized.byteLength
+      });
+    }
+    return stats;
+  }
+  loadOptimizedGLTF(path, loader) {
+    const fallback = { scene: fallbackGroup(), animations: [], meshOptimization: [], materialTextures: [] };
+    return this.load(path, async (bytes) => {
+      const materialTextures = parseGlbMaterialTextures(bytes);
+      const parsed = await parseGLTFAsset(bytes, loader);
+      const meshOptimization = await this.optimizeGltfScene(parsed.scene);
+      return { ...parsed, meshOptimization, materialTextures };
+    }, fallback);
   }
   loadModel(path) {
     return this.load(path, (bytes) => this.processModel(bytes, path));
@@ -13671,6 +13769,8 @@ var AssetStoreRes = defineResource("assetStore", () => {
 export {
   parseTexture,
   parseJSON,
+  parseGlbMaterialTextures,
+  parseGLTFAsset,
   parseGLTF,
   AssetStoreRes,
   AssetStore,

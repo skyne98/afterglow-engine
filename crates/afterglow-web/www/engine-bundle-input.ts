@@ -1,7 +1,10 @@
 import * as THREE from 'three/webgpu';
 import * as TSL from 'three/tsl';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { AssetStore } from './engine/asset-store.ts';
 import { createWorld, addEntity, addComponent, query } from 'bitecs';
 import { VirtualTextureFeedbackPass } from './engine/virtual-texture-feedback-pass.ts';
+import { createVirtualGltfMaterialPair, VirtualTextureAddressMode } from './engine/virtual-texture-material.ts';
 import { EngineMemory, EnginePhase, FixedIndexPool, LinearArena, defineEngineMemoryResource } from './engine/engine-memory.ts';
 import { BudgetDecision, FrameBudget, FrameBudgetRes, FrameStage } from './engine/frame-budget.ts';
 import { IndexedDbBlobBackend, PersistentBlobCache, OpfsBlobBackend, persistentCacheNamespace } from './engine/persistent-blob-cache.ts';
@@ -29,10 +32,13 @@ window.AfterglowStorage = {
   PersistentBlobCache, OpfsBlobBackend, IndexedDbBlobBackend, persistentCacheNamespace,
 };
 window.AfterglowInput = { RelativePointerInput };
+window.AfterglowLoaders = { GLTFLoader };
+window.AfterglowAssets = { AssetStore };
 window.AfterglowSurfaceDetail = { POM_UV_WGSL };
 window.AfterglowVT = {
   VirtualTextureStore, VirtualTextureTuning, VirtualTextureTuningRes,
-  VirtualTextureFeedbackPass, VT_SAMPLE_WGSL,
+  VirtualTextureFeedbackPass, createVirtualGltfMaterialPair, VirtualTextureAddressMode,
+  VT_SAMPLE_WGSL,
   VT_SAMPLE_LEVEL_WGSL, VT_SAMPLE_FROM_LEVEL_WGSL,
   VT_RESOLVE_MATERIAL_MIP4_WGSL, VT_FEEDBACK_WGSL,
   FORMAT_RGBA, PAGE_SIZE, PAGE_BORDER, SLOT_SIZE, ATLAS_WIDTH, ATLAS_HEIGHT,

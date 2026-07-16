@@ -242,6 +242,7 @@ export interface VirtualMaterialSet {
   masks?: VirtualTextureEntry;
   roughness?: VirtualTextureEntry;
   ao?: VirtualTextureEntry;
+  emissive?: VirtualTextureEntry;
 }
 
 // ============================================================================
@@ -1099,7 +1100,7 @@ export class VirtualTextureStore {
    * All channels must use identical dimensions/page coordinates.
    */
   loadMaterialSet(
-    paths: { albedo: string; normal?: string; masks?: string; roughness?: string; ao?: string },
+    paths: { albedo: string; normal?: string; masks?: string; roughness?: string; ao?: string; emissive?: string },
     options?: { width?: number; height?: number; mipTail?: boolean },
   ): VirtualMaterialSet {
     const load = (path: string): VirtualTextureEntry => {
@@ -1112,20 +1113,36 @@ export class VirtualTextureStore {
       masks: paths.masks ? load(paths.masks) : undefined,
       roughness: paths.roughness ? load(paths.roughness) : undefined,
       ao: paths.ao ? load(paths.ao) : undefined,
+      emissive: paths.emissive ? load(paths.emissive) : undefined,
     };
+    this.linkMaterialSet(set);
+    return set;
+  }
+
+  /** Link an already-loaded aligned PBR set so one feedback request restores every channel. */
+  linkMaterialSet(set: VirtualMaterialSet): void {
     if (set.masks && (set.roughness || set.ao))
       throw new Error('packed masks and separate roughness/AO paths are mutually exclusive');
-    const channels = [set.albedo, set.normal, set.masks, set.roughness, set.ao]
+    const channels = [set.albedo, set.normal, set.masks, set.roughness, set.ao, set.emissive]
       .filter((entry): entry is VirtualTextureEntry => entry !== undefined);
-    if (channels.some(entry => entry.width !== set.albedo.width || entry.height !== set.albedo.height))
-      throw new Error('virtual material channels must have identical dimensions');
-    const groupPaths = channels.map(entry => entry.path);
-    const groupIds = channels.map(entry => entry.textureId);
+    if (channels.some(entry => entry.width !== set.albedo.width || entry.height !== set.albedo.height ||
+        entry.pageGridX !== set.albedo.pageGridX || entry.pageGridY !== set.albedo.pageGridY ||
+        entry.maxMip !== set.albedo.maxMip))
+      throw new Error('linked virtual material channels must have identical page layouts');
+    const groupIds: number[] = [];
+    const addId = (textureId: number): void => {
+      if (!groupIds.includes(textureId)) groupIds.push(textureId);
+    };
     for (const channel of channels) {
-      this.materialGroupByPath.set(channel.path, groupPaths);
-      this.materialGroupIdsById[channel.textureId] = groupIds;
+      addId(channel.textureId);
+      const existing = this.materialGroupIdsById[channel.textureId];
+      if (existing) for (const textureId of existing) addId(textureId);
     }
-    return set;
+    const groupPaths = groupIds.map(textureId => this.entriesById[textureId]!.path);
+    for (let index = 0; index < groupIds.length; index++) {
+      this.materialGroupByPath.set(groupPaths[index], groupPaths);
+      this.materialGroupIdsById[groupIds[index]] = groupIds;
+    }
   }
 
   /** Pre-load pinned (coarsest) pages. */
@@ -2254,22 +2271,37 @@ fn vtSampleFromLevel(
  */
 export const VT_FEEDBACK_WGSL = /* wgsl */ `
 fn vtFeedback(
-  uv: vec2f,
+  sampleUV: vec2f,
+  gradientUV: vec2f,
+  feedbackPixelScale: vec2f,
   virtualSize: vec2f,
   pageGrid: vec2f,
   maxMip: f32,
-  lodBias: f32,
+  qualityBias: f32,
+  addressMode: u32,
   textureId: u32
 ) -> vec2u {
-  let dx = dpdx(uv * virtualSize);
-  let dy = dpdy(uv * virtualSize);
+  // Derivatives are measured per reduced-resolution feedback pixel. Convert
+  // them back to physical display-pixel derivatives before selecting a mip.
+  // Keeping gradientUV separate prevents repeat/POM discontinuities from
+  // corrupting the screen-space footprint.
+  let dx = dpdx(gradientUV * virtualSize) * feedbackPixelScale.x;
+  let dy = dpdy(gradientUV * virtualSize) * feedbackPixelScale.y;
   let texel_footprint = max(dot(dx, dx), dot(dy, dy));
-  let mip_level = u32(clamp(0.5 * log2(max(texel_footprint, 1e-8)) + lodBias, 0.0, maxMip));
+  let mip_level = u32(clamp(0.5 * log2(max(texel_footprint, 1e-8)) + qualityBias, 0.0, maxMip));
 
+  var addressed_uv = clamp(sampleUV, vec2f(0.0), vec2f(0.99999994));
+  if (addressMode == 1u) {
+    addressed_uv = fract(sampleUV);
+  } else if (addressMode == 2u) {
+    let period = sampleUV - floor(sampleUV * 0.5) * 2.0;
+    addressed_uv = select(period, 2.0 - period, period > vec2f(1.0));
+    addressed_uv = clamp(addressed_uv, vec2f(0.0), vec2f(0.99999994));
+  }
   let mip_scale = exp2(-f32(mip_level));
   let curr_page_grid = max(ceil(pageGrid * mip_scale), vec2f(1.0));
   let mip_size = max(floor(virtualSize * mip_scale), vec2f(1.0));
-  let page_coords = min(floor(uv * mip_size / 128.0), curr_page_grid - 1.0);
+  let page_coords = min(floor(addressed_uv * mip_size / 128.0), curr_page_grid - 1.0);
 
   // RG32Uint: word 0 carries valid + 6-bit mip + 11-bit X/Y;
   // word 1 carries the full virtual-texture identity.

@@ -3,3 +3,4 @@ result
 *.log
 /crates/afterglow-web/www/*.wasm
 /crates/afterglow-web/www/dungeon.big
+/crates/afterglow-web/www/rigged-vt.big

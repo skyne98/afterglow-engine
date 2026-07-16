@@ -111,6 +111,36 @@ the middle of rendering. Generation tokens reject evicted/stale reads and
 dispose stale parsed assets. Queue depth, high-water, and overflow counters are
 incremental. `cachedPaths` remains an explicit allocating diagnostic snapshot.
 
+### Packed GLB and runtime mesh optimization
+
+`afterglow-pipeline process` treats a self-contained `.glb` as an ordinary model
+asset. It stores the complete GLB as one uncompressed, seekable `Mesh/Raw`
+chunk—arbitrary container bytes are never incorrectly passed through meshopt's
+vertex-stream codec—and extracts every embedded image into a separately paged,
+UASTC virtual texture named `<model>#image-N`. For `.gltf` packages, the cook
+confines every external buffer/image URI to the source directory and embeds the
+side files into a self-contained GLB before packing; traversal and unsupported
+image types fail closed.
+
+`BigContainerAssetLoader(rangeLoader, containerPath, header)` indexes raw chunks
+once and implements the normal `AssetLoader` `load/size/read` contract with exact
+container range requests. `AssetStore.loadOptimizedGLTF(path, gltfLoader)` then:
+
+1. loads the GLB through that ordinary asset interface;
+2. parses the complete scene, skin, skeleton, morph targets, and animations;
+3. sends each triangle group's indices through the meshopt worker's vertex-cache
+   and overdraw passes;
+4. replaces only the index buffer and publishes `meshOptimization` telemetry;
+5. publishes `materialTextures`, mapping each glTF material's base-color,
+   metallic/roughness, normal, and emissive roles to cooked image indices.
+
+Vertex identity never changes, so `JOINTS_0`, `WEIGHTS_0`, normals, tangents,
+UVs, arbitrary attributes, morph targets, bind matrices, and animation tracks
+remain attached to the same vertices. Material-group ranges are optimized
+independently. Runtime LOD simplification is intentionally disabled for skinned
+scenes until the worker's simplification error metric includes skin weights;
+position/UV-only simplification would be visually unsafe during deformation.
+
 ## Asset loader worker (`afterglow-assets-worker`)
 
 ```rust

@@ -137,7 +137,10 @@ important silhouettes.
 ## Integrated implementation and reference audit (2026-07-16)
 
 The renamed Dungeon combines low-core POM with VT using the official ambientCG
-1K, 16-bit displacement maps. The first integration incorrectly substituted AO
+1K, 16-bit displacement maps. The current path converts them offline and uploads
+single-channel filterable `r32float` from exact R16 values, preserving all source
+levels instead of passing through browser image decoding. WebGPU's `r16unorm` is
+unfilterable and Three r185 cannot bind it correctly for the custom POM WGSL. The first integration incorrectly substituted AO
 for height; AO encodes occluded lighting and produced weak, incorrect relief.
 The corrected path uses adaptive 8–32 layers, scale 0.05, ratio-2 offset
 limiting, and no radial per-fragment fade. The fade was removed because its
@@ -160,11 +163,14 @@ shadow as a bounded 8-sample ray that attenuates direct diffuse/specular at 82%
 strength. A bootstrap generated-WGSL gate requires one march before three linked
 VT samples and rejects a material-normal TBN dependency.
 
-Corrected 680M timing at 2880×1800: fixed POM+self-shadow 59.87 FPS, p99 16.68
-ms, 1/600 below 55; base 59.77 FPS, p99 16.68 ms, 2/600 below 55; moving POM
-59.97 FPS, 0/300 below 55. GPU main work was 1.02–1.09 ms and timestamp total
-5.49–7.25 ms. Isolated misses occur in base too. Changing VT feedback from every
-4 frames (3/300 misses) to every 8 brought POM into the baseline range.
+Historical corrected-shader 680M timing at 2880×1800: fixed POM+self-shadow
+59.87 FPS, p99 16.68 ms, 1/600 below 55; base 59.77 FPS, p99 16.68 ms, 2/600
+below 55; moving POM 59.97 FPS, 0/300 below 55. Those runs used 16-bit source
+PNGs but Three uploaded runtime `rgba8unorm`, so they do not validate the new
+precision-preserving runtime path. GPU main work was 1.02–1.09 ms and timestamp total 5.49–7.25
+ms. Isolated misses occurred in base too. Changing VT feedback from every 4
+frames (3/300 misses) to every 8 brought POM into the baseline range. R16 target
+GPU validation remains pending.
 
 ## What existing engine systems can and cannot do
 

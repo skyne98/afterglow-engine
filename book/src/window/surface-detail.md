@@ -13,6 +13,14 @@ An 8-sample ray toward the point light self-shadows direct diffuse/specular at
 secondary relief/depth pass.
 
 Height comes from the official resident 1K, 16-bit ambientCG displacement maps.
+The offline pipeline converts the source PNGs into versioned, single-channel
+R16 payloads. Runtime expands their exact normalized `u16` levels into a
+single-channel filterable WebGPU `r32float` texture; every source level remains
+distinct and the data never passes through the browser's 8-bit image path. The
+Dungeon fails closed without `float32-filterable`. WebGPU exposes `r16unorm` as
+unfilterable, while manual bilinear sampling would quadruple every POM height
+read and patching vendored Three would be brittle.
+
 AO describes occluded lighting, not geometry; using it as pseudo-height produced
 weak, incorrect relief. Keeping displacement resident prevents page residency
 from changing during the non-uniform march; the 8K color, normal, and packed
@@ -35,7 +43,9 @@ march and three linked PBR samples.
 
 The march equations and sign convention match LearnOpenGL's established POM
 implementation; the direct-light ray comes from the known-working prototype.
-At 2880×1800, corrected fixed POM measured 59.87 FPS and p99 16.68 ms with
-1/600 below 55; base measured 59.77 FPS with 2/600. Moving POM measured 59.97
-FPS with 0/300 below 55. The isolated misses therefore are not POM saturation.
-VT feedback runs every 8 frames; every 4 frames measured 3/300 misses.
+At 2880×1800, the corrected shader previously measured 59.87 FPS and p99
+16.68 ms with 1/600 below 55; base measured 59.77 FPS with 2/600. Moving POM
+measured 59.97 FPS with 0/300 below 55. Those measurements used a 16-bit source
+PNG but Three's old `rgba8unorm` runtime upload, so they are historical shader
+baselines—not validation of the new precision-preserving path. VT feedback runs every 8
+frames; a Radeon 680M correctness/performance rerun is required.

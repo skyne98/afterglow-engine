@@ -3,13 +3,14 @@ import { Rpc } from './rpc.ts';
 import { createFetchRangeLoader, createPageDataProvider, getVirtualTextureDimensions, parseBigHeader } from './engine/big-parser.ts';
 import { PersistentBlobCache, persistentCacheNamespace } from './engine/persistent-blob-cache.ts';
 import { createWebGPUOnlyRenderer, showWebGPUFailure } from './engine/webgpu-only.ts';
+import { assertHeightTextureGpuFormat, loadHeightTextureR16 } from './engine/height-texture.ts';
 import { RendererSeal, warmRendererVariants } from './engine/renderer-seal.ts';
 import { RelativePointerInput } from './engine/relative-pointer.ts';
 import { POM_SELF_SHADOW_WGSL, POM_UV_WGSL, assertPomGeneratedWgsl } from './engine/surface-detail.ts';
 const THREE=window.THREE, VT=window.AfterglowVT;
 if(!VT) throw new Error('AfterglowVT engine bundle is unavailable');
 const {wgslFn,Fn,texture,sampler,uv,uniform,float,uint}=THREE;
-const VT_LOD_BIAS=-1.5, FEEDBACK_INTERVAL=8;
+const VT_QUALITY_BIAS=0, FEEDBACK_INTERVAL=8;
 const POM_MIN_LAYERS=8,POM_MAX_LAYERS=32,POM_HEIGHT_SCALE=.05,POM_MAX_OFFSET_RATIO=2,POM_MAX_DISTANCE=0,POM_SHADOW_STEPS=8,POM_SHADOW_BIAS=.01,POM_SHADOW_STRENGTH=.82;
 let pomEnabled=true;
 const scene=new THREE.Scene();scene.background=new THREE.Color(0x101318);scene.fog=new THREE.Fog(0x101318,7,28);
@@ -65,12 +66,10 @@ const store=new VT.VirtualTextureStore(loader,pageProvider,format,renderer.backe
 const vtSampleLevel=wgslFn(VT.VT_SAMPLE_LEVEL_WGSL),vtSampleFromLevel=wgslFn(VT.VT_SAMPLE_FROM_LEVEL_WGSL),pomMarchUV=wgslFn(POM_UV_WGSL),pomSelfShadow=wgslFn(POM_SELF_SHADOW_WGSL),vtResolveMaterialMip4=wgslFn(VT.VT_RESOLVE_MATERIAL_MIP4_WGSL),vtFeedback=wgslFn(VT.VT_FEEDBACK_WGSL),atlasNode=texture(store.atlasTexture),atlasSampler=sampler(atlasNode);
 const feedbackScene=new THREE.Scene(),feedbackPass=new VT.VirtualTextureFeedbackPass(.125);
 const materialNames=['Rock064','Ground103','PavingStones150'];
-// Compact resident 16-bit displacement maps from the exact ambientCG materials
-// provide stable physical height throughout the non-uniform march; 8K PBR
-// channels remain virtual. AO is lighting data and must never substitute for
-// geometric height.
-const heightTextures=await Promise.all(materialNames.map(name=>new THREE.TextureLoader().loadAsync(`dungeon-height/${name}_Height.png`)));
-for(const height of heightTextures){height.wrapS=height.wrapT=THREE.RepeatWrapping;height.minFilter=height.magFilter=THREE.LinearFilter;height.generateMipmaps=false;height.flipY=false;height.colorSpace=THREE.NoColorSpace;height.needsUpdate=true}
+// Offline-decoded resident R16 source maps are expanded losslessly to
+// filterable single-channel R32F. Every 16-bit source level remains distinct
+// throughout the non-uniform march; browser image decoding is bypassed.
+const heightTextures=await Promise.all(materialNames.map(name=>loadHeightTextureR16(THREE,renderer.backend.device,`dungeon-height/${name}_Height.r16`)));
 const materialSets=materialNames.map((name,index)=>{const paths={albedo:`${name}_Color.png`,normal:`${name}_NormalGL.png`,masks:`${name}_Masks.png`};const dimensions=getVirtualTextureDimensions(header,paths.albedo),set=store.loadMaterialSet(paths,{...dimensions,mipTail:true});set.heightTexture=heightTextures[index];return set});
 const segments=[
   [-8,-8,8,-8], [8,-8,8,8], [8,8,-8,8], [-8,8,-8,-8],
@@ -78,9 +77,9 @@ const segments=[
   [3,-8,3,-1], [-2,-1,3,-1], [-2,-1,-2,5], [-2,5,4,5], [4,5,4,8],
 ];
 const walls=[];
-function feedbackMaterial(entry){
-  const material=new THREE.MeshBasicNodeMaterial({side:THREE.DoubleSide});
-  material.fragmentNode=Fn(()=>vtFeedback({uv:uv().fract(),virtualSize:uniform(new THREE.Vector2(entry.width,entry.height)),pageGrid:uniform(new THREE.Vector2(entry.pageGridX,entry.pageGridY)),maxMip:float(entry.maxMip),lodBias:float(VT_LOD_BIAS),textureId:uint(entry.textureId)}))();
+function feedbackMaterial(set,usePom){
+  const entry=set.albedo,material=new THREE.MeshBasicNodeMaterial({side:THREE.DoubleSide});
+  material.fragmentNode=Fn(()=>{const gradientUV=uv(),sampleUV=usePom?pomUV(set):gradientUV;return vtFeedback({sampleUV,gradientUV,feedbackPixelScale:uniform(feedbackPass.pixelScale),virtualSize:uniform(new THREE.Vector2(entry.width,entry.height)),pageGrid:uniform(new THREE.Vector2(entry.pageGridX,entry.pageGridY)),maxMip:float(entry.maxMip),qualityBias:float(VT_QUALITY_BIAS),addressMode:uint(1),textureId:uint(entry.textureId)})})();
   return material;
 }
 function sampleEntryFromLevel(entry,resolvedMip,sampleUV){const pageTable=texture(entry.pageTableTexture);return vtSampleFromLevel({pageTable,atlas:atlasNode,atlasSampler,sampleUV,gradientUV:uv(),virtualSize:uniform(new THREE.Vector2(entry.width,entry.height)),pageGrid:uniform(new THREE.Vector2(entry.pageGridX,entry.pageGridY)),pageSize:float(VT.PAGE_SIZE),pageBorder:float(VT.PAGE_BORDER),atlasSize:uniform(new THREE.Vector2(store.atlasWidth,store.atlasHeight)),maxMip:float(entry.maxMip),resolvedMip,addressMode:uint(1)})}
@@ -128,11 +127,11 @@ for(let i=0;i<segments.length;i++){
   // Preserve brick proportions: one square virtual-texture repeat per 4 m of
   // wall instead of stretching a square texture across arbitrarily long runs.
   for(let u=0;u<geometry.attributes.uv.count;u++)geometry.attributes.uv.setX(u,geometry.attributes.uv.getX(u)*len/4);
-  const baseMaterial=wallMaterial(set,false),pomMaterial=wallMaterial(set,true);
+  const baseMaterial=wallMaterial(set,false),pomMaterial=wallMaterial(set,true),baseFeedbackMaterial=feedbackMaterial(set,false),pomFeedbackMaterial=feedbackMaterial(set,true);
   const mesh=new THREE.Mesh(geometry,pomMaterial);
   mesh.position.set((x1+x2)/2,2,(z1+z2)/2);mesh.rotation.y=Math.atan2(-dz,dx);scene.add(mesh);
-  const feedbackMesh=new THREE.Mesh(geometry,feedbackMaterial(entry));feedbackMesh.position.copy(mesh.position);feedbackMesh.rotation.copy(mesh.rotation);feedbackScene.add(feedbackMesh);
-  walls.push({path,entry,x1,z1,x2,z2,len,mesh,feedbackMesh,baseMaterial,pomMaterial});
+  const feedbackMesh=new THREE.Mesh(geometry,pomFeedbackMaterial);feedbackMesh.position.copy(mesh.position);feedbackMesh.rotation.copy(mesh.rotation);feedbackScene.add(feedbackMesh);
+  walls.push({path,entry,x1,z1,x2,z2,len,mesh,feedbackMesh,baseMaterial,pomMaterial,baseFeedbackMaterial,pomFeedbackMaterial});
 }
 
 const PLAYER_RADIUS=.28, pose={x:-5.5,z:-5.5,yaw:0,pitch:0}, keys=new Set();let programmatic=false,diagnosticAtlas=false,feedbackEnabled=true,last=performance.now(),smoothedDt=1/60,frame=0,lastResult={loaded:0,evicted:0,totalRequests:0,lodBias:0};
@@ -164,17 +163,18 @@ function update(dt){
 feedbackPass.resize(renderer.domElement.width,renderer.domElement.height);
 // Inspect generated WGSL during bootstrap: Three's lazy normal flow can silently
 // reorder a normal-map-dependent POM ray before UV initialization.
-let pomShaderContracts=0;const gpuDevice=renderer.backend.device,createShaderModule=gpuDevice.createShaderModule.bind(gpuDevice);gpuDevice.createShaderModule=descriptor=>{if(descriptor.code.includes('fn pomMarchUV')){assertPomGeneratedWgsl(descriptor.code);pomShaderContracts++}return createShaderModule(descriptor)};
-// Prewarm both fixed material variants before GameplaySealed; runtime P toggles
-// only swap existing references and never compile a pipeline.
-for(const wall of walls)wall.mesh.material=wall.baseMaterial;
+let pomShaderContracts=0,pomFeedbackContracts=0;const gpuDevice=renderer.backend.device,createShaderModule=gpuDevice.createShaderModule.bind(gpuDevice);gpuDevice.createShaderModule=descriptor=>{if(descriptor.code.includes('fn pomMarchUV')){if(descriptor.code.includes('fn vtSampleFromLevel')){assertPomGeneratedWgsl(descriptor.code);pomShaderContracts++}else if(descriptor.code.includes('fn vtFeedback'))pomFeedbackContracts++;else throw new Error('unknown POM shader variant compiled during warm-up')}return createShaderModule(descriptor)};
+// Prewarm render and POM-aware feedback variants before GameplaySealed; runtime
+// P toggles only swap fixed references and never compile a pipeline.
+for(const wall of walls){wall.mesh.material=wall.baseMaterial;wall.feedbackMesh.material=wall.baseFeedbackMaterial}
 await warmRendererVariants(renderer,[{scene,camera}]);
-for(const wall of walls)wall.mesh.material=wall.pomMaterial;
-await warmRendererVariants(renderer,[{scene,camera}]);const previousTarget=renderer.getRenderTarget();renderer.setRenderTarget(feedbackPass.target);await warmRendererVariants(renderer,[{scene:feedbackScene,camera}]);renderer.setRenderTarget(previousTarget);gpuDevice.createShaderModule=createShaderModule;if(pomShaderContracts<1)throw new Error('POM shader contract was not compiled during warm-up');
-await new Promise(r=>setTimeout(r,0));renderer.render(scene,camera);renderer.setRenderTarget(feedbackPass.target);renderer.render(feedbackScene,camera);renderer.setRenderTarget(previousTarget);store.attachRenderer(renderer);rendererSeal.seal();
+const previousTarget=renderer.getRenderTarget();renderer.setRenderTarget(feedbackPass.target);await warmRendererVariants(renderer,[{scene:feedbackScene,camera}]);
+for(const wall of walls){wall.mesh.material=wall.pomMaterial;wall.feedbackMesh.material=wall.pomFeedbackMaterial}
+renderer.setRenderTarget(previousTarget);await warmRendererVariants(renderer,[{scene,camera}]);renderer.setRenderTarget(feedbackPass.target);await warmRendererVariants(renderer,[{scene:feedbackScene,camera}]);renderer.setRenderTarget(previousTarget);gpuDevice.createShaderModule=createShaderModule;if(pomShaderContracts<1||pomFeedbackContracts<1)throw new Error('POM render/feedback shader contracts were not compiled during warm-up');
+await new Promise(r=>setTimeout(r,0));renderer.render(scene,camera);for(const height of heightTextures)assertHeightTextureGpuFormat(renderer.backend,height);renderer.setRenderTarget(feedbackPass.target);renderer.render(feedbackScene,camera);renderer.setRenderTarget(previousTarget);store.attachRenderer(renderer);rendererSeal.seal();
 const waiters=[],hud=document.getElementById('hud');let hudVisible=true;
-function setPomEnabled(enabled){pomEnabled=Boolean(enabled);for(const wall of walls)wall.mesh.material=pomEnabled?wall.pomMaterial:wall.baseMaterial}
-renderer.setAnimationLoop(now=>{const frameCpuStart=performance.now(),dt=Math.min(.05,(now-last)/1000);last=now;smoothedDt=smoothedDt*.95+dt*.05;store.recordFrameTime(dt*1000);update(dt);const renderStart=performance.now();renderer.render(scene,camera);runtimeTiming.renderSubmitUs=(performance.now()-renderStart)*1000;if(feedbackEnabled&&!diagnosticAtlas&&frame%FEEDBACK_INTERVAL===0){const feedbackStart=performance.now();feedbackPass.submit(renderer,feedbackScene,camera,store);runtimeTiming.feedbackSubmitUs=(performance.now()-feedbackStart)*1000}else runtimeTiming.feedbackSubmitUs=0;runtimeTiming.frameCpuUs=(performance.now()-frameCpuStart)*1000;frame++;for(let i=waiters.length-1;i>=0;i--)if(frame>=waiters[i].target){waiters[i].resolve();waiters.splice(i,1)}if(hudVisible&&frame%15===0){const d=store.getStats(),input=relativePointer.getStatus();hud.innerHTML=`<b>afterglow — Engine Dungeon</b><br>3 × 8K scanned PBR material sets · 12 wall instances<br>Virtual RGBA channels: 1.875 GiB · physical atlas: ${store.atlasWidth}²<br>Position: ${pose.x.toFixed(2)}, ${pose.z.toFixed(2)} · yaw ${(pose.yaw*180/Math.PI).toFixed(0)}° · ${(1/smoothedDt).toFixed(0)} FPS<br>Input: ${input.eventType}${input.unadjustedMovement?' · unadjusted':''}<br>POM: ${pomEnabled?`${POM_MIN_LAYERS}–${POM_MAX_LAYERS} layers · ${POM_SHADOW_STEPS}-step light self-shadow · no radial fade`:'off'}<br>Textures: ${d.textureCount} · resident ${d.atlasSlotsUsed}/${d.atlasSlotsTotal} · pending ${d.pendingPages}<br>GPU feedback pages: ${lastResult.totalRequests} · mips [${feedbackPass.getLatestMips().join(',')}] · bias ${VT_LOD_BIAS} · budget ${d.budget} · errors ${errors.length}`}});
+function setPomEnabled(enabled){pomEnabled=Boolean(enabled);for(const wall of walls){wall.mesh.material=pomEnabled?wall.pomMaterial:wall.baseMaterial;wall.feedbackMesh.material=pomEnabled?wall.pomFeedbackMaterial:wall.baseFeedbackMaterial}}
+renderer.setAnimationLoop(now=>{const frameCpuStart=performance.now(),dt=Math.min(.05,(now-last)/1000);last=now;smoothedDt=smoothedDt*.95+dt*.05;store.recordFrameTime(dt*1000);update(dt);const renderStart=performance.now();renderer.render(scene,camera);runtimeTiming.renderSubmitUs=(performance.now()-renderStart)*1000;if(feedbackEnabled&&!diagnosticAtlas&&frame%FEEDBACK_INTERVAL===0){const feedbackStart=performance.now();feedbackPass.submit(renderer,feedbackScene,camera,store);runtimeTiming.feedbackSubmitUs=(performance.now()-feedbackStart)*1000}else runtimeTiming.feedbackSubmitUs=0;runtimeTiming.frameCpuUs=(performance.now()-frameCpuStart)*1000;frame++;for(let i=waiters.length-1;i>=0;i--)if(frame>=waiters[i].target){waiters[i].resolve();waiters.splice(i,1)}if(hudVisible&&frame%15===0){const d=store.getStats(),input=relativePointer.getStatus();hud.innerHTML=`<b>afterglow — Engine Dungeon</b><br>3 × 8K scanned PBR material sets · 12 wall instances<br>Virtual RGBA channels: 1.875 GiB · physical atlas: ${store.atlasWidth}²<br>Position: ${pose.x.toFixed(2)}, ${pose.z.toFixed(2)} · yaw ${(pose.yaw*180/Math.PI).toFixed(0)}° · ${(1/smoothedDt).toFixed(0)} FPS<br>Input: ${input.eventType}${input.unadjustedMovement?' · unadjusted':''}<br>POM: ${pomEnabled?`${POM_MIN_LAYERS}–${POM_MAX_LAYERS} layers · ${POM_SHADOW_STEPS}-step light self-shadow · no radial fade`:'off'}<br>Textures: ${d.textureCount} · resident ${d.atlasSlotsUsed}/${d.atlasSlotsTotal} · pending ${d.pendingPages}<br>GPU feedback pages: ${lastResult.totalRequests} · mips [${feedbackPass.getLatestMips().join(',')}] · quality ${VT_QUALITY_BIAS} · capacity bias ${d.lodBias} · budget ${d.budget} · errors ${errors.length}`}});
 addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);feedbackPass.resize(renderer.domElement.width,renderer.domElement.height)});
 addEventListener('keydown',e=>{if(programmatic)return;const key=e.key.toLowerCase();keys.add(key);if(key==='r')setPose(-5.5,-5.5,0,0);if(key==='p')setPomEnabled(!pomEnabled);if(e.key==='1')setPose(-5.5,-5.5,0,0);if(e.key==='2')setPose(5.5,-5.5,Math.PI,0);if(e.key==='3')setPose(5.5,6.5,-Math.PI/2,0)});addEventListener('keyup',e=>keys.delete(e.key.toLowerCase()));
 const relativePointer=new RelativePointerInput(renderer.domElement,(movementX,movementY)=>{if(!programmatic){pose.yaw-=movementX*.002;pose.pitch=Math.max(-1.45,Math.min(1.45,pose.pitch-movementY*.002))}});
@@ -224,7 +224,7 @@ async function runAtlasScenario(name,timeout=120000){
   }finally{diagnosticAtlas=false;programmatic=previousProgrammatic}
 }
 window.__afterglowDungeon={
-  ready:()=>true,telemetry:()=>store.getStats(),timing:()=>runtimeTiming,inputStatus:()=>relativePointer.getStatus(),pomStatus:()=>({enabled:pomEnabled,minLayers:POM_MIN_LAYERS,maxLayers:POM_MAX_LAYERS,heightScale:POM_HEIGHT_SCALE,maxOffsetRatio:POM_MAX_OFFSET_RATIO,maxDistance:POM_MAX_DISTANCE,selfShadowSteps:POM_SHADOW_STEPS,selfShadowStrength:POM_SHADOW_STRENGTH,heightSource:'resident ambientCG displacement'}),setPomEnabled,setFeedbackEnabled:enabled=>{feedbackEnabled=Boolean(enabled)},pipelineTelemetry,resolveGpuTimings,setGpuTimingEnabled,errorCount:()=>errors.length,runAtlasScenario,snapshot:()=>({pose:{...pose},...store.getDebugSnapshot(),requests:lastResult.totalRequests,feedbackMips:[...feedbackPass.getLatestMips()],errors:[...errors]}),
+  ready:()=>true,telemetry:()=>store.getStats(),timing:()=>runtimeTiming,inputStatus:()=>relativePointer.getStatus(),pomStatus:()=>({enabled:pomEnabled,minLayers:POM_MIN_LAYERS,maxLayers:POM_MAX_LAYERS,heightScale:POM_HEIGHT_SCALE,maxOffsetRatio:POM_MAX_OFFSET_RATIO,maxDistance:POM_MAX_DISTANCE,selfShadowSteps:POM_SHADOW_STEPS,selfShadowStrength:POM_SHADOW_STRENGTH,heightSource:'resident ambientCG displacement',heightFormat:'r32float-from-r16'}),setPomEnabled,setFeedbackEnabled:enabled=>{feedbackEnabled=Boolean(enabled)},pipelineTelemetry,resolveGpuTimings,setGpuTimingEnabled,errorCount:()=>errors.length,runAtlasScenario,snapshot:()=>({pose:{...pose},...store.getDebugSnapshot(),requests:lastResult.totalRequests,feedbackMips:[...feedbackPass.getLatestMips()],errors:[...errors]}),
   setProgrammatic:enabled=>{programmatic=Boolean(enabled);keys.clear();if(programmatic&&document.pointerLockElement)document.exitPointerLock()},setHudVisible:visible=>{hudVisible=Boolean(visible);hud.style.display=hudVisible?'':'none'},
   setPose,getPose:()=>({...pose}),move,look:(yaw,pitch)=>setPose(pose.x,pose.z,pose.yaw+yaw,pose.pitch+pitch),
   step:n=>new Promise(resolve=>waiters.push({target:frame+Math.max(1,n|0),resolve})),

@@ -8,6 +8,7 @@ import {
   pomLayerCount,
   type PomReferenceResult,
 } from './surface-detail.ts';
+import { parseHeightR16 } from './height-texture.ts';
 
 const out = (): PomReferenceResult => ({ u: 0, v: 0, depth: 0, layers: 0, samples: 0, hit: false });
 const constant = (height: number) => (_u: number, _v: number) => height;
@@ -262,16 +263,23 @@ describe('Dungeon POM integration assets and limits', () => {
     const source = await Bun.file(new URL('../dungeon.ts', import.meta.url)).text();
     expect(source).toContain('POM_MIN_LAYERS=8,POM_MAX_LAYERS=32');
     expect(source).toContain('POM_HEIGHT_SCALE=.05,POM_MAX_OFFSET_RATIO=2,POM_MAX_DISTANCE=0,POM_SHADOW_STEPS=8,POM_SHADOW_BIAS=.01,POM_SHADOW_STRENGTH=.82');
-    expect(source).toContain("heightSource:'resident ambientCG displacement'");
+    expect(source).toContain("heightSource:'resident ambientCG displacement',heightFormat:'r32float-from-r16'");
     expect(source).toContain('function pomTbn(){const side=THREE.faceDirection');
     expect(source).toContain('THREE.normalViewGeometry.mul(side)');
     expect(source).toContain('THREE.positionViewDirection.mul(pomTbn())');
     expect(source).toContain('lightDirection.mul(pomTbn())');
     expect(source).toContain('directDiffuse.mulAssign(visibility)');
     expect(source).toContain('directSpecular.mulAssign(visibility)');
-    expect(source).toContain('height.flipY=false');
+    expect(source).toContain('loadHeightTextureR16(THREE,renderer.backend.device');
+    expect(source).toContain('assertHeightTextureGpuFormat(renderer.backend,height)');
+    expect(source).not.toContain('TextureLoader().loadAsync(`dungeon-height');
     expect(source).toContain('THREE.vec2(1,-1)');
-    expect(source).toContain('FEEDBACK_INTERVAL=8');
+    expect(source).toContain('VT_QUALITY_BIAS=0, FEEDBACK_INTERVAL=8');
+    expect(source).not.toContain('VT_LOD_BIAS');
+    expect(source).toContain('feedbackPixelScale:uniform(feedbackPass.pixelScale)');
+    expect(source).toContain('sampleUV=usePom?pomUV(set):gradientUV');
+    expect(source).toContain('baseFeedbackMaterial=feedbackMaterial(set,false),pomFeedbackMaterial=feedbackMaterial(set,true)');
+    expect(source).toContain('wall.feedbackMesh.material=pomEnabled?wall.pomFeedbackMaterial:wall.baseFeedbackMaterial');
     expect(source).toContain('trackTimestamp:false');
     expect(source).toContain('viewDir:pomViewDirection(),heightScale');
     expect(source).not.toContain('viewDir:THREE.parallaxDirection');
@@ -280,17 +288,19 @@ describe('Dungeon POM integration assets and limits', () => {
     expect(source).toContain('sampleEntryFromLevel(set.masks,resolvedMip,displacedUV)');
   });
 
-  test('ships official 16-bit grayscale displacement at source aspect ratios', async () => {
+  test('ships lossless runtime R16 displacement at source aspect ratios', async () => {
     const expected: Record<string, [number, number]> = {
       Rock064: [1024, 1024], Ground103: [1024, 1024], PavingStones150: [1024, 512],
     };
     for (const [name, dimensions] of Object.entries(expected)) {
-      const bytes = new Uint8Array(await Bun.file(new URL(`../dungeon-height/${name}_Height.png`, import.meta.url)).arrayBuffer());
-      expect(String.fromCharCode(...bytes.subarray(1, 4))).toBe('PNG');
-      const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-      expect([view.getUint32(16), view.getUint32(20)]).toEqual(dimensions);
-      expect(view.getUint8(24)).toBe(16); // PNG IHDR bit depth
-      expect(view.getUint8(25)).toBe(0); // PNG IHDR grayscale color type
+      const buffer = await Bun.file(new URL(`../dungeon-height/${name}_Height.r16`, import.meta.url)).arrayBuffer();
+      const asset = parseHeightR16(buffer);
+      expect([asset.width, asset.height]).toEqual(dimensions);
+      // Expanding an 8-bit source to 16-bit produces only 0xNNNN samples. The
+      // official maps must retain values outside that quantized set.
+      let fullPrecisionSamples = 0;
+      for (const value of asset.pixels) if ((value & 0xff) !== (value >>> 8)) fullPrecisionSamples++;
+      expect(fullPrecisionSamples).toBeGreaterThan(asset.pixels.length / 2);
     }
   });
 });

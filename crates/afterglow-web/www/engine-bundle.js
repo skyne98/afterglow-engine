@@ -1,11 +1,15 @@
 var __defProp = Object.defineProperty;
+var __returnValue = (v) => v;
+function __exportSetter(name, newValue) {
+  this[name] = __returnValue.bind(null, newValue);
+}
 var __export = (target, all) => {
   for (var name in all)
     __defProp(target, name, {
       get: all[name],
       enumerable: true,
       configurable: true,
-      set: (newValue) => all[name] = () => newValue
+      set: __exportSetter.bind(all, name)
     });
 };
 
@@ -58943,501 +58947,6 @@ var workgroupBarrier2 = TSL.workgroupBarrier;
 var workgroupId2 = TSL.workgroupId;
 var workingToColorSpace2 = TSL.workingToColorSpace;
 var xor2 = TSL.xor;
-
-// crates/afterglow-web/www/node_modules/bitecs/dist/core/index.min.mjs
-var A = (e, t, n) => Object.defineProperty(e, t, { value: n, enumerable: false, writable: true, configurable: true });
-var pe = (e, t) => t & e.entityMask;
-var z = (e) => {
-  let t = e ? typeof e == "function" ? e() : e : { versioning: false, versionBits: 8 }, n = t.versionBits ?? 8, o = t.versioning ?? false, r = 32 - n, a = (1 << r) - 1, i = r, s = (1 << n) - 1 << i;
-  return { aliveCount: 0, dense: [], sparse: [], maxId: 0, versioning: o, versionBits: n, entityMask: a, versionShift: i, versionMask: s };
-};
-var ue = (e) => {
-  if (e.aliveCount < e.dense.length) {
-    let n = e.dense[e.aliveCount], o = n;
-    return e.sparse[o] = e.aliveCount, e.aliveCount++, n;
-  }
-  let t = ++e.maxId;
-  return e.dense.push(t), e.sparse[t] = e.aliveCount, e.aliveCount++, t;
-};
-var K = (e, t) => {
-  let n = pe(e, t), o = e.sparse[n];
-  return o !== undefined && o < e.aliveCount && e.dense[o] === t;
-};
-var u = Symbol.for("bitecs_internal");
-var Ye = (e, t) => A(e || {}, u, { entityIndex: t || z(), entityMasks: [[]], entityComponents: new Map, bitflag: 1, componentMap: new Map, componentCount: 0, queries: new Set, queriesHashMap: new Map, notQueries: new Set, dirtyQueries: new Set, entitiesWithRelations: new Set, hierarchyData: new Map, hierarchyActiveRelations: new Set, hierarchyQueryCache: new Map });
-function Je(...e) {
-  let t, n;
-  return e.forEach((o) => {
-    typeof o == "object" && "dense" in o && "sparse" in o && "aliveCount" in o ? t = o : typeof o == "object" && (n = o);
-  }), Ye(n, t);
-}
-var M = () => {
-  let e = [], t = [], n = (s) => e[t[s]] === s;
-  return { add: (s) => {
-    n(s) || (t[s] = e.push(s) - 1);
-  }, remove: (s) => {
-    if (!n(s))
-      return;
-    let p = t[s], c = e.pop();
-    c !== s && (e[p] = c, t[c] = p);
-  }, has: n, sparse: t, dense: e, reset: () => {
-    e.length = 0, t.length = 0;
-  }, sort: (s) => {
-    e.sort(s);
-    for (let p = 0;p < e.length; p++)
-      t[e[p]] = p;
-  } };
-};
-var me = typeof SharedArrayBuffer < "u" ? SharedArrayBuffer : ArrayBuffer;
-var X = (e = 1000) => {
-  let t = [], n = 0, o = new Uint32Array(new me(e * 4)), r = (c) => c < t.length && t[c] < n && o[t[c]] === c;
-  return { add: (c) => {
-    if (!r(c)) {
-      if (n >= o.length) {
-        let f = new Uint32Array(new me(o.length * 2 * 4));
-        f.set(o), o = f;
-      }
-      o[n] = c, t[c] = n, n++;
-    }
-  }, remove: (c) => {
-    if (!r(c))
-      return;
-    n--;
-    let f = t[c], d = o[n];
-    o[f] = d, t[d] = f;
-  }, has: r, sparse: t, get dense() {
-    return new Uint32Array(o.buffer, 0, n);
-  }, reset: () => {
-    n = 0, t.length = 0;
-  }, sort: (c) => {
-    let f = Array.from(o.subarray(0, n));
-    f.sort(c);
-    for (let d = 0;d < f.length; d++)
-      o[d] = f[d];
-    for (let d = 0;d < n; d++)
-      t[o[d]] = d;
-  } };
-};
-var P = () => {
-  let e = new Set;
-  return { subscribe: (o) => (e.add(o), () => {
-    e.delete(o);
-  }), notify: (o, ...r) => Array.from(e).reduce((a, i) => {
-    let s = i(o, ...r);
-    return s && typeof s == "object" ? { ...a, ...s } : a;
-  }, {}) };
-};
-var k = Symbol.for("bitecs-relation");
-var T2 = Symbol.for("bitecs-pairTarget");
-var U = Symbol.for("bitecs-isPairComponent");
-var x = Symbol.for("bitecs-relationData");
-var Y = () => {
-  let e = { pairsMap: new Map, initStore: undefined, exclusiveRelation: false, autoRemoveSubject: false, onTargetRemoved: undefined }, t = (n) => {
-    if (n === undefined)
-      throw Error("Relation target is undefined");
-    let o = n === "*" ? y : n;
-    if (!e.pairsMap.has(o)) {
-      let r = e.initStore ? e.initStore(n) : {};
-      A(r, k, t), A(r, T2, o), A(r, U, true), e.pairsMap.set(o, r);
-    }
-    return e.pairsMap.get(o);
-  };
-  return A(t, x, e), t;
-};
-var b = (e, t) => {
-  if (e === undefined)
-    throw Error("Relation is undefined");
-  return e(t);
-};
-var I = (e, t, n) => {
-  let o = L(e, t), r = [];
-  for (let a of o)
-    a[k] === n && a[T2] !== y && !xe(a[T2]) && r.push(a[T2]);
-  return r;
-};
-var Re = Symbol.for("bitecs-wildcard");
-function rt() {
-  let e = Y();
-  return Object.defineProperty(e, Re, { value: true, enumerable: false, writable: false, configurable: false }), e;
-}
-function at() {
-  let e = Symbol.for("bitecs-global-wildcard");
-  return globalThis[e] || (globalThis[e] = rt()), globalThis[e];
-}
-var y = at();
-function st() {
-  return Y();
-}
-function it() {
-  let e = Symbol.for("bitecs-global-isa");
-  return globalThis[e] || (globalThis[e] = st()), globalThis[e];
-}
-var B2 = it();
-function xe(e) {
-  return e ? Object.getOwnPropertySymbols(e).includes(x) : false;
-}
-var pt = 64;
-var g = 4294967295;
-var ge = 1024;
-function ve(e, t) {
-  let { depths: n } = e;
-  if (t < n.length)
-    return n;
-  let o = Math.max(t + 1, n.length * 2, n.length + ge), r = new Uint32Array(o);
-  return r.fill(g), r.set(n), e.depths = r, r;
-}
-function Ce(e, t, n, o) {
-  let { depthToEntities: r } = e;
-  if (o !== undefined && o !== g) {
-    let a = r.get(o);
-    a && (a.remove(t), a.dense.length === 0 && r.delete(o));
-  }
-  n !== g && (r.has(n) || r.set(n, X()), r.get(n).add(t));
-}
-function ft(e, t) {
-  t > e.maxDepth && (e.maxDepth = t);
-}
-function ne(e, t, n, o) {
-  e.depths[t] = n, Ce(e, t, n, o), ft(e, n);
-}
-function Te(e, t) {
-  e[u].hierarchyQueryCache.delete(t);
-}
-function Z(e, t) {
-  let n = e[u];
-  return n.hierarchyActiveRelations.has(t) || (n.hierarchyActiveRelations.add(t), oe(e, t), ut(e, t)), n.hierarchyData.get(t);
-}
-function ut(e, t) {
-  let n = $(e, [b(t, y)]);
-  for (let r of n)
-    te(e, t, r);
-  let o = new Set;
-  for (let r of n)
-    for (let a of I(e, r, t))
-      o.has(a) || (o.add(a), te(e, t, a));
-}
-function oe(e, t) {
-  let n = e[u];
-  if (!n.hierarchyData.has(t)) {
-    let o = Math.max(ge, n.entityIndex.dense.length * 2), r = new Uint32Array(o);
-    r.fill(g), n.hierarchyData.set(t, { depths: r, dirty: M(), depthToEntities: new Map, maxDepth: 0 });
-  }
-}
-function Ie(e, t, n, o = new Set) {
-  if (o.has(n))
-    return 0;
-  o.add(n);
-  let r = I(e, n, t);
-  if (r.length === 0)
-    return 0;
-  if (r.length === 1)
-    return J(e, t, r[0], o) + 1;
-  let a = 1 / 0;
-  for (let i of r) {
-    let s = J(e, t, i, o);
-    if (s < a && (a = s, a === 0))
-      break;
-  }
-  return a === 1 / 0 ? 0 : a + 1;
-}
-function J(e, t, n, o) {
-  let r = e[u];
-  oe(e, t);
-  let a = r.hierarchyData.get(t), { depths: i } = a;
-  if (i = ve(a, n), i[n] === g) {
-    let s = Ie(e, t, n, o);
-    return ne(a, n, s), s;
-  }
-  return i[n];
-}
-function te(e, t, n) {
-  return J(e, t, n, new Set);
-}
-function Ee(e, t, n, o, r = M()) {
-  if (r.has(n))
-    return;
-  r.add(n);
-  let a = $(e, [t(n)]);
-  for (let i of a)
-    o.add(i), Ee(e, t, i, o, r);
-}
-function We(e, t, n, o, r = new Set) {
-  let a = e[u];
-  if (!a.hierarchyActiveRelations.has(t))
-    return;
-  oe(e, t);
-  let i = a.hierarchyData.get(t);
-  if (r.has(n)) {
-    i.dirty.add(n);
-    return;
-  }
-  r.add(n);
-  let { depths: s, dirty: p } = i, c = o !== undefined ? te(e, t, o) + 1 : 0;
-  if (c > pt)
-    return;
-  let f = s[n];
-  ne(i, n, c, f === g ? undefined : f), f !== c && (Ee(e, t, n, p, M()), Te(e, t));
-}
-function Se(e, t, n) {
-  let o = e[u];
-  if (!o.hierarchyActiveRelations.has(t))
-    return;
-  let r = o.hierarchyData.get(t), { depths: a } = r;
-  a = ve(r, n), Me(e, t, n, a, M()), Te(e, t);
-}
-function Me(e, t, n, o, r) {
-  if (r.has(n))
-    return;
-  r.add(n);
-  let i = e[u].hierarchyData.get(t);
-  if (n < o.length) {
-    let p = o[n];
-    p !== g && (i.depths[n] = g, Ce(i, n, g, p));
-  }
-  let s = $(e, [t(n)]);
-  for (let p of s)
-    Me(e, t, p, o, r);
-}
-function De(e, t) {
-  let o = e[u].hierarchyData.get(t);
-  if (!o)
-    return;
-  let { dirty: r, depths: a } = o;
-  if (r.dense.length !== 0) {
-    for (let i of r.dense)
-      if (a[i] === g) {
-        let s = Ie(e, t, i);
-        ne(o, i, s);
-      }
-    r.reset();
-  }
-}
-function Oe(e, t, n, o = {}) {
-  let r = e[u];
-  Z(e, t);
-  let a = H(e, [t, ...n]), i = r.hierarchyQueryCache.get(t);
-  if (i && i.hash === a)
-    return i.result;
-  De(e, t), re(e, n, o);
-  let s = r.queriesHashMap.get(H(e, n)), p = r.hierarchyData.get(t), { depths: c } = p;
-  s.sort((d, W) => {
-    let l = c[d], R = c[W];
-    return l !== R ? l - R : d - W;
-  });
-  let f = (o.buffered, s.dense);
-  return r.hierarchyQueryCache.set(t, { hash: a, result: f }), f;
-}
-function Qe(e, t, n, o = {}) {
-  let r = Z(e, t);
-  De(e, t);
-  let a = r.depthToEntities.get(n);
-  return a ? (o.buffered, a.dense) : o.buffered ? new Uint32Array(0) : [];
-}
-var v = Symbol.for("bitecs-opType");
-var D = Symbol.for("bitecs-opTerms");
-var se = (e) => (...t) => ({ [v]: e, [D]: t });
-var Ae = se("Or");
-var ke = se("And");
-var He = se("Not");
-var ae = Symbol.for("bitecs-hierarchyType");
-var $e = Symbol.for("bitecs-hierarchyRel");
-var qe = Symbol.for("bitecs-hierarchyDepth");
-var F = Symbol.for("bitecs-modifierType");
-var Rt = { [F]: "buffer" };
-var Pe = { [F]: "nested" };
-var Ue = (e) => (...t) => ({ [v]: e, [D]: t });
-var xt = Ue("add");
-var gt = Ue("remove");
-var H = (e, t) => {
-  let n = e[u], o = (a) => (n.componentMap.has(a) || E(e, a), n.componentMap.get(a).id), r = (a) => (v in a) ? `${a[v].toLowerCase()}(${a[D].map(r).sort().join(",")})` : o(a).toString();
-  return t.map(r).sort().join("-");
-};
-var ee = (e, t, n = {}) => {
-  let o = e[u], r = H(e, t), a = [], i = (m) => {
-    v in m ? m[D].forEach(i) : (o.componentMap.has(m) || E(e, m), a.push(m));
-  };
-  t.forEach(i);
-  let s = [], p = [], c = [], f = (m, h) => {
-    h.forEach((S) => {
-      o.componentMap.has(S) || E(e, S), m.push(S);
-    });
-  };
-  t.forEach((m) => {
-    if (v in m) {
-      let { [v]: h, [D]: S } = m;
-      if (h === "Not")
-        f(p, S);
-      else if (h === "Or")
-        f(c, S);
-      else if (h === "And")
-        f(s, S);
-      else
-        throw new Error(`Nested combinator ${h} not supported yet - use simple queries for best performance`);
-    } else
-      o.componentMap.has(m) || E(e, m), s.push(m);
-  });
-  let d = a.map((m) => o.componentMap.get(m)), W = [...new Set(d.map((m) => m.generationId))], l = (m, h) => (m[h.generationId] = (m[h.generationId] || 0) | h.bitflag, m), R = s.map((m) => o.componentMap.get(m)).reduce(l, {}), _e = p.map((m) => o.componentMap.get(m)).reduce(l, {}), Ge = c.map((m) => o.componentMap.get(m)).reduce(l, {}), ze = d.reduce(l, {}), Q = Object.assign(n.buffered ? X() : M(), { allComponents: a, orComponents: c, notComponents: p, masks: R, notMasks: _e, orMasks: Ge, hasMasks: ze, generations: W, toRemove: M(), addObservable: P(), removeObservable: P(), queues: {} });
-  o.queries.add(Q), o.queriesHashMap.set(r, Q), d.forEach((m) => {
-    m.queries.add(Q);
-  }), p.length && o.notQueries.add(Q);
-  let ce = o.entityIndex;
-  for (let m = 0;m < ce.aliveCount; m++) {
-    let h = ce.dense[m];
-    if (O(e, h, q))
-      continue;
-    V(e, Q, h) && w(Q, h);
-  }
-  return Q;
-};
-function re(e, t, n = {}) {
-  let o = e[u], r = H(e, t), a = o.queriesHashMap.get(r);
-  return a ? n.buffered && !("buffer" in a.dense) && (a = ee(e, t, { buffered: true })) : a = ee(e, t, n), n.buffered, a.dense;
-}
-function $(e, t, ...n) {
-  let o = t.find((p) => p && typeof p == "object" && (ae in p)), r = t.filter((p) => !(p && typeof p == "object" && (ae in p))), a = false, i = true, s = n.some((p) => p && typeof p == "object" && (F in p));
-  for (let p of n)
-    if (s && p && typeof p == "object" && F in p) {
-      let c = p;
-      c[F] === "buffer" && (a = true), c[F] === "nested" && (i = false);
-    } else if (!s) {
-      let c = p;
-      c.buffered !== undefined && (a = c.buffered), c.commit !== undefined && (i = c.commit);
-    }
-  if (o) {
-    let { [$e]: p, [qe]: c } = o;
-    return c !== undefined ? Qe(e, p, c, { buffered: a }) : Oe(e, p, r, { buffered: a });
-  }
-  return i && Be(e), re(e, r, { buffered: a });
-}
-function V(e, t, n) {
-  let o = e[u], { masks: r, notMasks: a, orMasks: i, generations: s } = t, p = Object.keys(i).length === 0;
-  for (let c = 0;c < s.length; c++) {
-    let f = s[c], d = r[f], W = a[f], l = i[f], R = o.entityMasks[f][n];
-    if (W && R & W || d && (R & d) !== d)
-      return false;
-    l && R & l && (p = true);
-  }
-  return p;
-}
-var w = (e, t) => {
-  if (e.toRemove.has(t)) {
-    e.toRemove.remove(t), e.addObservable.notify(t);
-    return;
-  }
-  e.has(t) || (e.add(t), e.addObservable.notify(t));
-};
-var It = (e) => {
-  for (let t = 0;t < e.toRemove.dense.length; t++) {
-    let n = e.toRemove.dense[t];
-    e.remove(n);
-  }
-  e.toRemove.reset();
-};
-var Be = (e) => {
-  let t = e[u];
-  t.dirtyQueries.size && (t.dirtyQueries.forEach(It), t.dirtyQueries.clear());
-};
-var _ = (e, t, n) => {
-  let o = e[u];
-  !t.has(n) || t.toRemove.has(n) || (t.toRemove.add(n), o.dirtyQueries.add(t), t.removeObservable.notify(n));
-};
-var E = (e, t) => {
-  if (!t)
-    throw new Error("bitECS - Cannot register null or undefined component");
-  let n = e[u], o = new Set, r = { id: n.componentCount++, generationId: n.entityMasks.length - 1, bitflag: n.bitflag, ref: t, queries: o, setObservable: P(), getObservable: P() };
-  return n.componentMap.set(t, r), n.bitflag *= 2, n.bitflag >= 2 ** 31 && (n.bitflag = 1, n.entityMasks.push([])), r;
-};
-var O = (e, t, n) => {
-  let o = e[u], r = o.componentMap.get(n);
-  if (!r)
-    return false;
-  let { generationId: a, bitflag: i } = r;
-  return (o.entityMasks[a][t] & i) === i;
-};
-var Fe = (e, t, n) => {
-  let r = e[u].componentMap.get(n);
-  if (r && O(e, t, n))
-    return r.getObservable.notify(t);
-};
-var we = (e, t, n, o, r = new Set) => {
-  if (!r.has(o)) {
-    r.add(o), j(t, n, B2(o));
-    for (let a of L(t, o))
-      if (a !== q && !O(t, n, a)) {
-        j(t, n, a);
-        let i = e.componentMap.get(a);
-        if (i?.setObservable) {
-          let s = Fe(t, o, a);
-          i.setObservable.notify(n, s);
-        }
-      }
-    for (let a of I(t, o, B2))
-      we(e, t, n, a, r);
-  }
-};
-var j = (e, t, n) => {
-  if (!N2(e, t))
-    throw new Error(`Cannot add component - entity ${t} does not exist in the world.`);
-  let o = e[u], r = "component" in n ? n.component : n, a = "data" in n ? n.data : undefined;
-  o.componentMap.has(r) || E(e, r);
-  let i = o.componentMap.get(r);
-  if (O(e, t, r))
-    return a !== undefined && i.setObservable.notify(t, a), false;
-  let { generationId: s, bitflag: p, queries: c } = i;
-  if (o.entityMasks[s][t] |= p, O(e, t, q) || c.forEach((f) => {
-    V(e, f, t) ? w(f, t) : _(e, f, t);
-  }), o.entityComponents.get(t).add(r), a !== undefined && i.setObservable.notify(t, a), r[U]) {
-    let f = r[k], d = r[T2];
-    if (G(e, t, b(f, y), b(y, d)), typeof d == "number" && (G(e, d, b(y, t), b(y, f)), o.entitiesWithRelations.add(d), o.entitiesWithRelations.add(t)), o.entitiesWithRelations.add(d), f[x].exclusiveRelation === true && d !== y) {
-      let l = I(e, t, f)[0];
-      l != null && l !== d && C(e, t, f(l));
-    }
-    if (f === B2) {
-      let l = I(e, t, B2);
-      for (let R of l)
-        we(o, e, t, R);
-    }
-    We(e, f, t, typeof d == "number" ? d : undefined);
-  }
-  return true;
-};
-function G(e, t, ...n) {
-  (Array.isArray(n[0]) ? n[0] : n).forEach((r) => {
-    j(e, t, r);
-  });
-}
-var C = (e, t, ...n) => {
-  let o = e[u];
-  if (!N2(e, t))
-    throw new Error(`Cannot remove component - entity ${t} does not exist in the world.`);
-  n.forEach((r) => {
-    if (!O(e, t, r))
-      return;
-    let a = o.componentMap.get(r), { generationId: i, bitflag: s, queries: p } = a;
-    if (o.entityMasks[i][t] &= ~s, p.forEach((c) => {
-      c.toRemove.remove(t), V(e, c, t) ? w(c, t) : _(e, c, t);
-    }), o.entityComponents.get(t).delete(r), r[U]) {
-      let c = r[T2], f = r[k];
-      Se(e, f, t), C(e, t, b(y, c)), typeof c == "number" && N2(e, c) && (C(e, c, b(y, t)), C(e, c, b(y, f))), I(e, t, f).length === 0 && C(e, t, b(f, y));
-    }
-  });
-};
-var q = {};
-function Ne(e, ...t) {
-  let n = e[u], o = ue(n.entityIndex);
-  return n.notQueries.forEach((r) => {
-    V(e, r, o) && w(r, o);
-  }), n.entityComponents.set(o, new Set), t.length > 0 && G(e, o, t), o;
-}
-var L = (e, t) => {
-  let n = e[u];
-  if (t === undefined)
-    throw new Error("getEntityComponents: entity id is undefined.");
-  if (!K(n.entityIndex, t))
-    throw new Error(`getEntityComponents: entity ${t} does not exist in the world.`);
-  return Array.from(n.entityComponents.get(t));
-};
-var N2 = (e, t) => K(e[u].entityIndex, t);
 // crates/afterglow-web/www/node_modules/three/build/three.module.js
 var alphahash_fragment = `#ifdef USE_ALPHAHASH
 	if ( diffuseColor.a < getAlphaHashThreshold( vPosition ) ) discard;
@@ -64386,6 +63895,3605 @@ var DATA2 = new Uint16Array([
   1183
 ]);
 
+// crates/afterglow-web/www/node_modules/three/examples/jsm/utils/BufferGeometryUtils.js
+function toTrianglesDrawMode(geometry, drawMode) {
+  if (drawMode === TrianglesDrawMode) {
+    console.warn("THREE.BufferGeometryUtils.toTrianglesDrawMode(): Geometry already defined as triangles.");
+    return geometry;
+  }
+  if (drawMode === TriangleFanDrawMode || drawMode === TriangleStripDrawMode) {
+    let index = geometry.getIndex();
+    if (index === null) {
+      const indices = [];
+      const position = geometry.getAttribute("position");
+      if (position !== undefined) {
+        for (let i = 0;i < position.count; i++) {
+          indices.push(i);
+        }
+        geometry.setIndex(indices);
+        index = geometry.getIndex();
+      } else {
+        console.error("THREE.BufferGeometryUtils.toTrianglesDrawMode(): Undefined position attribute. Processing not possible.");
+        return geometry;
+      }
+    }
+    const numberOfTriangles = index.count - 2;
+    const newIndices = [];
+    if (drawMode === TriangleFanDrawMode) {
+      for (let i = 1;i <= numberOfTriangles; i++) {
+        newIndices.push(index.getX(0));
+        newIndices.push(index.getX(i));
+        newIndices.push(index.getX(i + 1));
+      }
+    } else {
+      for (let i = 0;i < numberOfTriangles; i++) {
+        if (i % 2 === 0) {
+          newIndices.push(index.getX(i));
+          newIndices.push(index.getX(i + 1));
+          newIndices.push(index.getX(i + 2));
+        } else {
+          newIndices.push(index.getX(i + 2));
+          newIndices.push(index.getX(i + 1));
+          newIndices.push(index.getX(i));
+        }
+      }
+    }
+    if (newIndices.length / 3 !== numberOfTriangles) {
+      console.error("THREE.BufferGeometryUtils.toTrianglesDrawMode(): Unable to generate correct amount of triangles.");
+    }
+    const newGeometry = geometry.clone();
+    newGeometry.setIndex(newIndices);
+    newGeometry.clearGroups();
+    return newGeometry;
+  } else {
+    console.error("THREE.BufferGeometryUtils.toTrianglesDrawMode(): Unknown draw mode:", drawMode);
+    return geometry;
+  }
+}
+
+// crates/afterglow-web/www/node_modules/three/examples/jsm/utils/SkeletonUtils.js
+function clone(source) {
+  const sourceLookup = new Map;
+  const cloneLookup = new Map;
+  const clone2 = source.clone();
+  parallelTraverse(source, clone2, function(sourceNode, clonedNode) {
+    sourceLookup.set(clonedNode, sourceNode);
+    cloneLookup.set(sourceNode, clonedNode);
+  });
+  clone2.traverse(function(node) {
+    if (!node.isSkinnedMesh)
+      return;
+    const clonedMesh = node;
+    const sourceMesh = sourceLookup.get(node);
+    const sourceBones = sourceMesh.skeleton.bones;
+    clonedMesh.skeleton = sourceMesh.skeleton.clone();
+    clonedMesh.bindMatrix.copy(sourceMesh.bindMatrix);
+    clonedMesh.skeleton.bones = sourceBones.map(function(bone) {
+      return cloneLookup.get(bone);
+    });
+    clonedMesh.bind(clonedMesh.skeleton, clonedMesh.bindMatrix);
+  });
+  return clone2;
+}
+function parallelTraverse(a, b, callback) {
+  callback(a, b);
+  for (let i = 0;i < a.children.length; i++) {
+    parallelTraverse(a.children[i], b.children[i], callback);
+  }
+}
+
+// crates/afterglow-web/www/node_modules/three/examples/jsm/loaders/GLTFLoader.js
+class GLTFLoader extends Loader {
+  constructor(manager) {
+    super(manager);
+    this.dracoLoader = null;
+    this.ktx2Loader = null;
+    this.meshoptDecoder = null;
+    this.pluginCallbacks = [];
+    this.register(function(parser) {
+      return new GLTFMaterialsClearcoatExtension(parser);
+    });
+    this.register(function(parser) {
+      return new GLTFMaterialsDispersionExtension(parser);
+    });
+    this.register(function(parser) {
+      return new GLTFTextureBasisUExtension(parser);
+    });
+    this.register(function(parser) {
+      return new GLTFTextureWebPExtension(parser);
+    });
+    this.register(function(parser) {
+      return new GLTFTextureAVIFExtension(parser);
+    });
+    this.register(function(parser) {
+      return new GLTFMaterialsSheenExtension(parser);
+    });
+    this.register(function(parser) {
+      return new GLTFMaterialsTransmissionExtension(parser);
+    });
+    this.register(function(parser) {
+      return new GLTFMaterialsVolumeExtension(parser);
+    });
+    this.register(function(parser) {
+      return new GLTFMaterialsIorExtension(parser);
+    });
+    this.register(function(parser) {
+      return new GLTFMaterialsEmissiveStrengthExtension(parser);
+    });
+    this.register(function(parser) {
+      return new GLTFMaterialsSpecularExtension(parser);
+    });
+    this.register(function(parser) {
+      return new GLTFMaterialsIridescenceExtension(parser);
+    });
+    this.register(function(parser) {
+      return new GLTFMaterialsAnisotropyExtension(parser);
+    });
+    this.register(function(parser) {
+      return new GLTFMaterialsBumpExtension(parser);
+    });
+    this.register(function(parser) {
+      return new GLTFLightsExtension(parser);
+    });
+    this.register(function(parser) {
+      return new GLTFMeshoptCompression(parser, EXTENSIONS.EXT_MESHOPT_COMPRESSION);
+    });
+    this.register(function(parser) {
+      return new GLTFMeshoptCompression(parser, EXTENSIONS.KHR_MESHOPT_COMPRESSION);
+    });
+    this.register(function(parser) {
+      return new GLTFMeshGpuInstancing(parser);
+    });
+  }
+  load(url, onLoad, onProgress, onError) {
+    const scope = this;
+    let resourcePath;
+    if (this.resourcePath !== "") {
+      resourcePath = this.resourcePath;
+    } else if (this.path !== "") {
+      const relativeUrl = LoaderUtils.extractUrlBase(url);
+      resourcePath = LoaderUtils.resolveURL(relativeUrl, this.path);
+    } else {
+      resourcePath = LoaderUtils.extractUrlBase(url);
+    }
+    this.manager.itemStart(url);
+    const _onError = function(e) {
+      if (onError) {
+        onError(e);
+      } else {
+        console.error(e);
+      }
+      scope.manager.itemError(url);
+      scope.manager.itemEnd(url);
+    };
+    const loader = new FileLoader(this.manager);
+    loader.setPath(this.path);
+    loader.setResponseType("arraybuffer");
+    loader.setRequestHeader(this.requestHeader);
+    loader.setWithCredentials(this.withCredentials);
+    loader.load(url, function(data) {
+      try {
+        scope.parse(data, resourcePath, function(gltf) {
+          onLoad(gltf);
+          scope.manager.itemEnd(url);
+        }, _onError);
+      } catch (e) {
+        _onError(e);
+      }
+    }, onProgress, _onError);
+  }
+  setDRACOLoader(dracoLoader) {
+    this.dracoLoader = dracoLoader;
+    return this;
+  }
+  setKTX2Loader(ktx2Loader) {
+    this.ktx2Loader = ktx2Loader;
+    return this;
+  }
+  setMeshoptDecoder(meshoptDecoder) {
+    this.meshoptDecoder = meshoptDecoder;
+    return this;
+  }
+  register(callback) {
+    if (this.pluginCallbacks.indexOf(callback) === -1) {
+      this.pluginCallbacks.push(callback);
+    }
+    return this;
+  }
+  unregister(callback) {
+    if (this.pluginCallbacks.indexOf(callback) !== -1) {
+      this.pluginCallbacks.splice(this.pluginCallbacks.indexOf(callback), 1);
+    }
+    return this;
+  }
+  parse(data, path, onLoad, onError) {
+    let json;
+    const extensions = {};
+    const plugins = {};
+    const textDecoder = new TextDecoder;
+    if (typeof data === "string") {
+      json = JSON.parse(data);
+    } else if (data instanceof ArrayBuffer) {
+      const magic = textDecoder.decode(new Uint8Array(data, 0, 4));
+      if (magic === BINARY_EXTENSION_HEADER_MAGIC) {
+        try {
+          extensions[EXTENSIONS.KHR_BINARY_GLTF] = new GLTFBinaryExtension(data);
+        } catch (error2) {
+          if (onError)
+            onError(error2);
+          return;
+        }
+        json = JSON.parse(extensions[EXTENSIONS.KHR_BINARY_GLTF].content);
+      } else {
+        json = JSON.parse(textDecoder.decode(data));
+      }
+    } else {
+      json = data;
+    }
+    if (json.asset === undefined || json.asset.version[0] < 2) {
+      if (onError)
+        onError(new Error("THREE.GLTFLoader: Unsupported asset. glTF versions >=2.0 are supported."));
+      return;
+    }
+    const parser = new GLTFParser(json, {
+      path: path || this.resourcePath || "",
+      crossOrigin: this.crossOrigin,
+      requestHeader: this.requestHeader,
+      manager: this.manager,
+      ktx2Loader: this.ktx2Loader,
+      meshoptDecoder: this.meshoptDecoder
+    });
+    parser.fileLoader.setRequestHeader(this.requestHeader);
+    for (let i = 0;i < this.pluginCallbacks.length; i++) {
+      const plugin = this.pluginCallbacks[i](parser);
+      if (!plugin.name)
+        console.error("THREE.GLTFLoader: Invalid plugin found: missing name");
+      plugins[plugin.name] = plugin;
+      extensions[plugin.name] = true;
+    }
+    if (json.extensionsUsed) {
+      for (let i = 0;i < json.extensionsUsed.length; ++i) {
+        const extensionName = json.extensionsUsed[i];
+        const extensionsRequired = json.extensionsRequired || [];
+        switch (extensionName) {
+          case EXTENSIONS.KHR_MATERIALS_UNLIT:
+            extensions[extensionName] = new GLTFMaterialsUnlitExtension;
+            break;
+          case EXTENSIONS.KHR_DRACO_MESH_COMPRESSION:
+            extensions[extensionName] = new GLTFDracoMeshCompressionExtension(json, this.dracoLoader);
+            break;
+          case EXTENSIONS.KHR_TEXTURE_TRANSFORM:
+            extensions[extensionName] = new GLTFTextureTransformExtension;
+            break;
+          case EXTENSIONS.KHR_MESH_QUANTIZATION:
+            extensions[extensionName] = new GLTFMeshQuantizationExtension;
+            break;
+          default:
+            if (extensionsRequired.indexOf(extensionName) >= 0 && plugins[extensionName] === undefined) {
+              console.warn('THREE.GLTFLoader: Unknown extension "' + extensionName + '".');
+            }
+        }
+      }
+    }
+    parser.setExtensions(extensions);
+    parser.setPlugins(plugins);
+    parser.parse(onLoad, onError);
+  }
+  parseAsync(data, path) {
+    const scope = this;
+    return new Promise(function(resolve, reject) {
+      scope.parse(data, path, resolve, reject);
+    });
+  }
+}
+function GLTFRegistry() {
+  let objects = {};
+  return {
+    get: function(key) {
+      return objects[key];
+    },
+    add: function(key, object) {
+      objects[key] = object;
+    },
+    remove: function(key) {
+      delete objects[key];
+    },
+    removeAll: function() {
+      objects = {};
+    }
+  };
+}
+function getMaterialExtension(parser, materialIndex, extensionName) {
+  const materialDef = parser.json.materials[materialIndex];
+  if (materialDef.extensions && materialDef.extensions[extensionName]) {
+    return materialDef.extensions[extensionName];
+  }
+  return null;
+}
+var EXTENSIONS = {
+  KHR_BINARY_GLTF: "KHR_binary_glTF",
+  KHR_DRACO_MESH_COMPRESSION: "KHR_draco_mesh_compression",
+  KHR_LIGHTS_PUNCTUAL: "KHR_lights_punctual",
+  KHR_MATERIALS_CLEARCOAT: "KHR_materials_clearcoat",
+  KHR_MATERIALS_DISPERSION: "KHR_materials_dispersion",
+  KHR_MATERIALS_IOR: "KHR_materials_ior",
+  KHR_MATERIALS_SHEEN: "KHR_materials_sheen",
+  KHR_MATERIALS_SPECULAR: "KHR_materials_specular",
+  KHR_MATERIALS_TRANSMISSION: "KHR_materials_transmission",
+  KHR_MATERIALS_IRIDESCENCE: "KHR_materials_iridescence",
+  KHR_MATERIALS_ANISOTROPY: "KHR_materials_anisotropy",
+  KHR_MATERIALS_UNLIT: "KHR_materials_unlit",
+  KHR_MATERIALS_VOLUME: "KHR_materials_volume",
+  KHR_TEXTURE_BASISU: "KHR_texture_basisu",
+  KHR_TEXTURE_TRANSFORM: "KHR_texture_transform",
+  KHR_MESH_QUANTIZATION: "KHR_mesh_quantization",
+  KHR_MATERIALS_EMISSIVE_STRENGTH: "KHR_materials_emissive_strength",
+  EXT_MATERIALS_BUMP: "EXT_materials_bump",
+  EXT_TEXTURE_WEBP: "EXT_texture_webp",
+  EXT_TEXTURE_AVIF: "EXT_texture_avif",
+  EXT_MESHOPT_COMPRESSION: "EXT_meshopt_compression",
+  KHR_MESHOPT_COMPRESSION: "KHR_meshopt_compression",
+  EXT_MESH_GPU_INSTANCING: "EXT_mesh_gpu_instancing"
+};
+
+class GLTFLightsExtension {
+  constructor(parser) {
+    this.parser = parser;
+    this.name = EXTENSIONS.KHR_LIGHTS_PUNCTUAL;
+    this.cache = { refs: {}, uses: {} };
+  }
+  _markDefs() {
+    const parser = this.parser;
+    const nodeDefs = this.parser.json.nodes || [];
+    for (let nodeIndex = 0, nodeLength = nodeDefs.length;nodeIndex < nodeLength; nodeIndex++) {
+      const nodeDef = nodeDefs[nodeIndex];
+      if (nodeDef.extensions && nodeDef.extensions[this.name] && nodeDef.extensions[this.name].light !== undefined) {
+        parser._addNodeRef(this.cache, nodeDef.extensions[this.name].light);
+      }
+    }
+  }
+  _loadLight(lightIndex) {
+    const parser = this.parser;
+    const cacheKey = "light:" + lightIndex;
+    let dependency = parser.cache.get(cacheKey);
+    if (dependency)
+      return dependency;
+    const json = parser.json;
+    const extensions = json.extensions && json.extensions[this.name] || {};
+    const lightDefs = extensions.lights || [];
+    const lightDef = lightDefs[lightIndex];
+    let lightNode;
+    const color3 = new Color(16777215);
+    if (lightDef.color !== undefined)
+      color3.setRGB(lightDef.color[0], lightDef.color[1], lightDef.color[2], LinearSRGBColorSpace);
+    const range3 = lightDef.range !== undefined ? lightDef.range : 0;
+    switch (lightDef.type) {
+      case "directional":
+        lightNode = new DirectionalLight(color3);
+        lightNode.target.position.set(0, 0, -1);
+        lightNode.add(lightNode.target);
+        break;
+      case "point":
+        lightNode = new PointLight(color3);
+        lightNode.distance = range3;
+        break;
+      case "spot":
+        lightNode = new SpotLight(color3);
+        lightNode.distance = range3;
+        lightDef.spot = lightDef.spot || {};
+        lightDef.spot.innerConeAngle = lightDef.spot.innerConeAngle !== undefined ? lightDef.spot.innerConeAngle : 0;
+        lightDef.spot.outerConeAngle = lightDef.spot.outerConeAngle !== undefined ? lightDef.spot.outerConeAngle : Math.PI / 4;
+        lightNode.angle = lightDef.spot.outerConeAngle;
+        lightNode.penumbra = 1 - lightDef.spot.innerConeAngle / lightDef.spot.outerConeAngle;
+        lightNode.target.position.set(0, 0, -1);
+        lightNode.add(lightNode.target);
+        break;
+      default:
+        throw new Error("THREE.GLTFLoader: Unexpected light type: " + lightDef.type);
+    }
+    lightNode.position.set(0, 0, 0);
+    assignExtrasToUserData(lightNode, lightDef);
+    if (lightDef.intensity !== undefined)
+      lightNode.intensity = lightDef.intensity;
+    lightNode.name = parser.createUniqueName(lightDef.name || "light_" + lightIndex);
+    dependency = Promise.resolve(lightNode);
+    parser.cache.add(cacheKey, dependency);
+    return dependency;
+  }
+  getDependency(type, index) {
+    if (type !== "light")
+      return;
+    return this._loadLight(index);
+  }
+  createNodeAttachment(nodeIndex) {
+    const self2 = this;
+    const parser = this.parser;
+    const json = parser.json;
+    const nodeDef = json.nodes[nodeIndex];
+    const lightDef = nodeDef.extensions && nodeDef.extensions[this.name] || {};
+    const lightIndex = lightDef.light;
+    if (lightIndex === undefined)
+      return null;
+    return this._loadLight(lightIndex).then(function(light) {
+      return parser._getNodeRef(self2.cache, lightIndex, light);
+    });
+  }
+}
+
+class GLTFMaterialsUnlitExtension {
+  constructor() {
+    this.name = EXTENSIONS.KHR_MATERIALS_UNLIT;
+  }
+  getMaterialType() {
+    return MeshBasicMaterial;
+  }
+  extendParams(materialParams, materialDef, parser) {
+    const pending = [];
+    materialParams.color = new Color(1, 1, 1);
+    materialParams.opacity = 1;
+    const metallicRoughness = materialDef.pbrMetallicRoughness;
+    if (metallicRoughness) {
+      if (Array.isArray(metallicRoughness.baseColorFactor)) {
+        const array3 = metallicRoughness.baseColorFactor;
+        materialParams.color.setRGB(array3[0], array3[1], array3[2], LinearSRGBColorSpace);
+        materialParams.opacity = array3[3];
+      }
+      if (metallicRoughness.baseColorTexture !== undefined) {
+        pending.push(parser.assignTexture(materialParams, "map", metallicRoughness.baseColorTexture, SRGBColorSpace));
+      }
+    }
+    return Promise.all(pending);
+  }
+}
+
+class GLTFMaterialsEmissiveStrengthExtension {
+  constructor(parser) {
+    this.parser = parser;
+    this.name = EXTENSIONS.KHR_MATERIALS_EMISSIVE_STRENGTH;
+  }
+  extendMaterialParams(materialIndex, materialParams) {
+    const extension = getMaterialExtension(this.parser, materialIndex, this.name);
+    if (extension === null)
+      return Promise.resolve();
+    if (extension.emissiveStrength !== undefined) {
+      materialParams.emissiveIntensity = extension.emissiveStrength;
+    }
+    return Promise.resolve();
+  }
+}
+
+class GLTFMaterialsClearcoatExtension {
+  constructor(parser) {
+    this.parser = parser;
+    this.name = EXTENSIONS.KHR_MATERIALS_CLEARCOAT;
+  }
+  getMaterialType(materialIndex) {
+    const extension = getMaterialExtension(this.parser, materialIndex, this.name);
+    return extension !== null ? MeshPhysicalMaterial : null;
+  }
+  extendMaterialParams(materialIndex, materialParams) {
+    const extension = getMaterialExtension(this.parser, materialIndex, this.name);
+    if (extension === null)
+      return Promise.resolve();
+    const pending = [];
+    if (extension.clearcoatFactor !== undefined) {
+      materialParams.clearcoat = extension.clearcoatFactor;
+    }
+    if (extension.clearcoatTexture !== undefined) {
+      pending.push(this.parser.assignTexture(materialParams, "clearcoatMap", extension.clearcoatTexture));
+    }
+    if (extension.clearcoatRoughnessFactor !== undefined) {
+      materialParams.clearcoatRoughness = extension.clearcoatRoughnessFactor;
+    }
+    if (extension.clearcoatRoughnessTexture !== undefined) {
+      pending.push(this.parser.assignTexture(materialParams, "clearcoatRoughnessMap", extension.clearcoatRoughnessTexture));
+    }
+    if (extension.clearcoatNormalTexture !== undefined) {
+      pending.push(this.parser.assignTexture(materialParams, "clearcoatNormalMap", extension.clearcoatNormalTexture));
+      if (extension.clearcoatNormalTexture.scale !== undefined) {
+        const scale2 = extension.clearcoatNormalTexture.scale;
+        materialParams.clearcoatNormalScale = new Vector2(scale2, scale2);
+      }
+    }
+    return Promise.all(pending);
+  }
+}
+
+class GLTFMaterialsDispersionExtension {
+  constructor(parser) {
+    this.parser = parser;
+    this.name = EXTENSIONS.KHR_MATERIALS_DISPERSION;
+  }
+  getMaterialType(materialIndex) {
+    const extension = getMaterialExtension(this.parser, materialIndex, this.name);
+    return extension !== null ? MeshPhysicalMaterial : null;
+  }
+  extendMaterialParams(materialIndex, materialParams) {
+    const extension = getMaterialExtension(this.parser, materialIndex, this.name);
+    if (extension === null)
+      return Promise.resolve();
+    materialParams.dispersion = extension.dispersion !== undefined ? extension.dispersion : 0;
+    return Promise.resolve();
+  }
+}
+
+class GLTFMaterialsIridescenceExtension {
+  constructor(parser) {
+    this.parser = parser;
+    this.name = EXTENSIONS.KHR_MATERIALS_IRIDESCENCE;
+  }
+  getMaterialType(materialIndex) {
+    const extension = getMaterialExtension(this.parser, materialIndex, this.name);
+    return extension !== null ? MeshPhysicalMaterial : null;
+  }
+  extendMaterialParams(materialIndex, materialParams) {
+    const extension = getMaterialExtension(this.parser, materialIndex, this.name);
+    if (extension === null)
+      return Promise.resolve();
+    const pending = [];
+    if (extension.iridescenceFactor !== undefined) {
+      materialParams.iridescence = extension.iridescenceFactor;
+    }
+    if (extension.iridescenceTexture !== undefined) {
+      pending.push(this.parser.assignTexture(materialParams, "iridescenceMap", extension.iridescenceTexture));
+    }
+    if (extension.iridescenceIor !== undefined) {
+      materialParams.iridescenceIOR = extension.iridescenceIor;
+    }
+    if (materialParams.iridescenceThicknessRange === undefined) {
+      materialParams.iridescenceThicknessRange = [100, 400];
+    }
+    if (extension.iridescenceThicknessMinimum !== undefined) {
+      materialParams.iridescenceThicknessRange[0] = extension.iridescenceThicknessMinimum;
+    }
+    if (extension.iridescenceThicknessMaximum !== undefined) {
+      materialParams.iridescenceThicknessRange[1] = extension.iridescenceThicknessMaximum;
+    }
+    if (extension.iridescenceThicknessTexture !== undefined) {
+      pending.push(this.parser.assignTexture(materialParams, "iridescenceThicknessMap", extension.iridescenceThicknessTexture));
+    }
+    return Promise.all(pending);
+  }
+}
+
+class GLTFMaterialsSheenExtension {
+  constructor(parser) {
+    this.parser = parser;
+    this.name = EXTENSIONS.KHR_MATERIALS_SHEEN;
+  }
+  getMaterialType(materialIndex) {
+    const extension = getMaterialExtension(this.parser, materialIndex, this.name);
+    return extension !== null ? MeshPhysicalMaterial : null;
+  }
+  extendMaterialParams(materialIndex, materialParams) {
+    const extension = getMaterialExtension(this.parser, materialIndex, this.name);
+    if (extension === null)
+      return Promise.resolve();
+    const pending = [];
+    materialParams.sheenColor = new Color(0, 0, 0);
+    materialParams.sheenRoughness = 0;
+    materialParams.sheen = 1;
+    if (extension.sheenColorFactor !== undefined) {
+      const colorFactor = extension.sheenColorFactor;
+      materialParams.sheenColor.setRGB(colorFactor[0], colorFactor[1], colorFactor[2], LinearSRGBColorSpace);
+    }
+    if (extension.sheenRoughnessFactor !== undefined) {
+      materialParams.sheenRoughness = extension.sheenRoughnessFactor;
+    }
+    if (extension.sheenColorTexture !== undefined) {
+      pending.push(this.parser.assignTexture(materialParams, "sheenColorMap", extension.sheenColorTexture, SRGBColorSpace));
+    }
+    if (extension.sheenRoughnessTexture !== undefined) {
+      pending.push(this.parser.assignTexture(materialParams, "sheenRoughnessMap", extension.sheenRoughnessTexture));
+    }
+    return Promise.all(pending);
+  }
+}
+
+class GLTFMaterialsTransmissionExtension {
+  constructor(parser) {
+    this.parser = parser;
+    this.name = EXTENSIONS.KHR_MATERIALS_TRANSMISSION;
+  }
+  getMaterialType(materialIndex) {
+    const extension = getMaterialExtension(this.parser, materialIndex, this.name);
+    return extension !== null ? MeshPhysicalMaterial : null;
+  }
+  extendMaterialParams(materialIndex, materialParams) {
+    const extension = getMaterialExtension(this.parser, materialIndex, this.name);
+    if (extension === null)
+      return Promise.resolve();
+    const pending = [];
+    if (extension.transmissionFactor !== undefined) {
+      materialParams.transmission = extension.transmissionFactor;
+    }
+    if (extension.transmissionTexture !== undefined) {
+      pending.push(this.parser.assignTexture(materialParams, "transmissionMap", extension.transmissionTexture));
+    }
+    return Promise.all(pending);
+  }
+}
+
+class GLTFMaterialsVolumeExtension {
+  constructor(parser) {
+    this.parser = parser;
+    this.name = EXTENSIONS.KHR_MATERIALS_VOLUME;
+  }
+  getMaterialType(materialIndex) {
+    const extension = getMaterialExtension(this.parser, materialIndex, this.name);
+    return extension !== null ? MeshPhysicalMaterial : null;
+  }
+  extendMaterialParams(materialIndex, materialParams) {
+    const extension = getMaterialExtension(this.parser, materialIndex, this.name);
+    if (extension === null)
+      return Promise.resolve();
+    const pending = [];
+    materialParams.thickness = extension.thicknessFactor !== undefined ? extension.thicknessFactor : 0;
+    if (extension.thicknessTexture !== undefined) {
+      pending.push(this.parser.assignTexture(materialParams, "thicknessMap", extension.thicknessTexture));
+    }
+    materialParams.attenuationDistance = extension.attenuationDistance || Infinity;
+    const colorArray = extension.attenuationColor || [1, 1, 1];
+    materialParams.attenuationColor = new Color().setRGB(colorArray[0], colorArray[1], colorArray[2], LinearSRGBColorSpace);
+    return Promise.all(pending);
+  }
+}
+
+class GLTFMaterialsIorExtension {
+  constructor(parser) {
+    this.parser = parser;
+    this.name = EXTENSIONS.KHR_MATERIALS_IOR;
+  }
+  getMaterialType(materialIndex) {
+    const extension = getMaterialExtension(this.parser, materialIndex, this.name);
+    return extension !== null ? MeshPhysicalMaterial : null;
+  }
+  extendMaterialParams(materialIndex, materialParams) {
+    const extension = getMaterialExtension(this.parser, materialIndex, this.name);
+    if (extension === null)
+      return Promise.resolve();
+    materialParams.ior = extension.ior !== undefined ? extension.ior : 1.5;
+    if (materialParams.ior === 0)
+      materialParams.ior = 1000;
+    return Promise.resolve();
+  }
+}
+
+class GLTFMaterialsSpecularExtension {
+  constructor(parser) {
+    this.parser = parser;
+    this.name = EXTENSIONS.KHR_MATERIALS_SPECULAR;
+  }
+  getMaterialType(materialIndex) {
+    const extension = getMaterialExtension(this.parser, materialIndex, this.name);
+    return extension !== null ? MeshPhysicalMaterial : null;
+  }
+  extendMaterialParams(materialIndex, materialParams) {
+    const extension = getMaterialExtension(this.parser, materialIndex, this.name);
+    if (extension === null)
+      return Promise.resolve();
+    const pending = [];
+    materialParams.specularIntensity = extension.specularFactor !== undefined ? extension.specularFactor : 1;
+    if (extension.specularTexture !== undefined) {
+      pending.push(this.parser.assignTexture(materialParams, "specularIntensityMap", extension.specularTexture));
+    }
+    const colorArray = extension.specularColorFactor || [1, 1, 1];
+    materialParams.specularColor = new Color().setRGB(colorArray[0], colorArray[1], colorArray[2], LinearSRGBColorSpace);
+    if (extension.specularColorTexture !== undefined) {
+      pending.push(this.parser.assignTexture(materialParams, "specularColorMap", extension.specularColorTexture, SRGBColorSpace));
+    }
+    return Promise.all(pending);
+  }
+}
+
+class GLTFMaterialsBumpExtension {
+  constructor(parser) {
+    this.parser = parser;
+    this.name = EXTENSIONS.EXT_MATERIALS_BUMP;
+  }
+  getMaterialType(materialIndex) {
+    const extension = getMaterialExtension(this.parser, materialIndex, this.name);
+    return extension !== null ? MeshPhysicalMaterial : null;
+  }
+  extendMaterialParams(materialIndex, materialParams) {
+    const extension = getMaterialExtension(this.parser, materialIndex, this.name);
+    if (extension === null)
+      return Promise.resolve();
+    const pending = [];
+    materialParams.bumpScale = extension.bumpFactor !== undefined ? extension.bumpFactor : 1;
+    if (extension.bumpTexture !== undefined) {
+      pending.push(this.parser.assignTexture(materialParams, "bumpMap", extension.bumpTexture));
+    }
+    return Promise.all(pending);
+  }
+}
+
+class GLTFMaterialsAnisotropyExtension {
+  constructor(parser) {
+    this.parser = parser;
+    this.name = EXTENSIONS.KHR_MATERIALS_ANISOTROPY;
+  }
+  getMaterialType(materialIndex) {
+    const extension = getMaterialExtension(this.parser, materialIndex, this.name);
+    return extension !== null ? MeshPhysicalMaterial : null;
+  }
+  extendMaterialParams(materialIndex, materialParams) {
+    const extension = getMaterialExtension(this.parser, materialIndex, this.name);
+    if (extension === null)
+      return Promise.resolve();
+    const pending = [];
+    if (extension.anisotropyStrength !== undefined) {
+      materialParams.anisotropy = extension.anisotropyStrength;
+    }
+    if (extension.anisotropyRotation !== undefined) {
+      materialParams.anisotropyRotation = extension.anisotropyRotation;
+    }
+    if (extension.anisotropyTexture !== undefined) {
+      pending.push(this.parser.assignTexture(materialParams, "anisotropyMap", extension.anisotropyTexture));
+    }
+    return Promise.all(pending);
+  }
+}
+
+class GLTFTextureBasisUExtension {
+  constructor(parser) {
+    this.parser = parser;
+    this.name = EXTENSIONS.KHR_TEXTURE_BASISU;
+  }
+  loadTexture(textureIndex) {
+    const parser = this.parser;
+    const json = parser.json;
+    const textureDef = json.textures[textureIndex];
+    if (!textureDef.extensions || !textureDef.extensions[this.name]) {
+      return null;
+    }
+    const extension = textureDef.extensions[this.name];
+    const loader = parser.options.ktx2Loader;
+    if (!loader) {
+      if (json.extensionsRequired && json.extensionsRequired.indexOf(this.name) >= 0) {
+        throw new Error("THREE.GLTFLoader: setKTX2Loader must be called before loading KTX2 textures");
+      } else {
+        return null;
+      }
+    }
+    return parser.loadTextureImage(textureIndex, extension.source, loader);
+  }
+}
+
+class GLTFTextureWebPExtension {
+  constructor(parser) {
+    this.parser = parser;
+    this.name = EXTENSIONS.EXT_TEXTURE_WEBP;
+  }
+  loadTexture(textureIndex) {
+    const name = this.name;
+    const parser = this.parser;
+    const json = parser.json;
+    const textureDef = json.textures[textureIndex];
+    if (!textureDef.extensions || !textureDef.extensions[name]) {
+      return null;
+    }
+    const extension = textureDef.extensions[name];
+    const source = json.images[extension.source];
+    let loader = parser.textureLoader;
+    if (source.uri) {
+      const handler = parser.options.manager.getHandler(source.uri);
+      if (handler !== null)
+        loader = handler;
+    }
+    return parser.loadTextureImage(textureIndex, extension.source, loader);
+  }
+}
+
+class GLTFTextureAVIFExtension {
+  constructor(parser) {
+    this.parser = parser;
+    this.name = EXTENSIONS.EXT_TEXTURE_AVIF;
+  }
+  loadTexture(textureIndex) {
+    const name = this.name;
+    const parser = this.parser;
+    const json = parser.json;
+    const textureDef = json.textures[textureIndex];
+    if (!textureDef.extensions || !textureDef.extensions[name]) {
+      return null;
+    }
+    const extension = textureDef.extensions[name];
+    const source = json.images[extension.source];
+    let loader = parser.textureLoader;
+    if (source.uri) {
+      const handler = parser.options.manager.getHandler(source.uri);
+      if (handler !== null)
+        loader = handler;
+    }
+    return parser.loadTextureImage(textureIndex, extension.source, loader);
+  }
+}
+
+class GLTFMeshoptCompression {
+  constructor(parser, name) {
+    this.name = name;
+    this.parser = parser;
+  }
+  loadBufferView(index) {
+    const json = this.parser.json;
+    const bufferView = json.bufferViews[index];
+    if (bufferView.extensions && bufferView.extensions[this.name]) {
+      const extensionDef = bufferView.extensions[this.name];
+      const buffer3 = this.parser.getDependency("buffer", extensionDef.buffer);
+      const decoder = this.parser.options.meshoptDecoder;
+      if (!decoder || !decoder.supported) {
+        if (json.extensionsRequired && json.extensionsRequired.indexOf(this.name) >= 0) {
+          throw new Error("THREE.GLTFLoader: setMeshoptDecoder must be called before loading compressed files");
+        } else {
+          return null;
+        }
+      }
+      return buffer3.then(function(res) {
+        const byteOffset = extensionDef.byteOffset || 0;
+        const byteLength = extensionDef.byteLength || 0;
+        const count = extensionDef.count;
+        const stride = extensionDef.byteStride;
+        const source = new Uint8Array(res, byteOffset, byteLength);
+        if (decoder.decodeGltfBufferAsync) {
+          return decoder.decodeGltfBufferAsync(count, stride, source, extensionDef.mode, extensionDef.filter).then(function(res2) {
+            return res2.buffer;
+          });
+        } else {
+          return decoder.ready.then(function() {
+            const result = new ArrayBuffer(count * stride);
+            decoder.decodeGltfBuffer(new Uint8Array(result), count, stride, source, extensionDef.mode, extensionDef.filter);
+            return result;
+          });
+        }
+      });
+    } else {
+      return null;
+    }
+  }
+}
+
+class GLTFMeshGpuInstancing {
+  constructor(parser) {
+    this.name = EXTENSIONS.EXT_MESH_GPU_INSTANCING;
+    this.parser = parser;
+  }
+  createNodeMesh(nodeIndex) {
+    const json = this.parser.json;
+    const nodeDef = json.nodes[nodeIndex];
+    if (!nodeDef.extensions || !nodeDef.extensions[this.name] || nodeDef.mesh === undefined) {
+      return null;
+    }
+    const meshDef = json.meshes[nodeDef.mesh];
+    for (const primitive of meshDef.primitives) {
+      if (primitive.mode !== WEBGL_CONSTANTS.TRIANGLES && primitive.mode !== WEBGL_CONSTANTS.TRIANGLE_STRIP && primitive.mode !== WEBGL_CONSTANTS.TRIANGLE_FAN && primitive.mode !== undefined) {
+        return null;
+      }
+    }
+    const extensionDef = nodeDef.extensions[this.name];
+    const attributesDef = extensionDef.attributes;
+    const pending = [];
+    const attributes = {};
+    for (const key in attributesDef) {
+      pending.push(this.parser.getDependency("accessor", attributesDef[key]).then((accessor) => {
+        attributes[key] = accessor;
+        return attributes[key];
+      }));
+    }
+    if (pending.length < 1) {
+      return null;
+    }
+    pending.push(this.parser.createNodeMesh(nodeIndex));
+    return Promise.all(pending).then((results) => {
+      const nodeObject3 = results.pop();
+      const meshes = nodeObject3.isGroup ? nodeObject3.children : [nodeObject3];
+      const count = results[0].count;
+      const instancedMeshes = [];
+      for (const mesh of meshes) {
+        const m = new Matrix4;
+        const p = new Vector3;
+        const q = new Quaternion;
+        const s = new Vector3(1, 1, 1);
+        const instancedMesh3 = new InstancedMesh(mesh.geometry, mesh.material, count);
+        for (let i = 0;i < count; i++) {
+          if (attributes.TRANSLATION) {
+            p.fromBufferAttribute(attributes.TRANSLATION, i);
+          }
+          if (attributes.ROTATION) {
+            q.fromBufferAttribute(attributes.ROTATION, i);
+          }
+          if (attributes.SCALE) {
+            s.fromBufferAttribute(attributes.SCALE, i);
+          }
+          instancedMesh3.setMatrixAt(i, m.compose(p, q, s));
+        }
+        for (const attributeName in attributes) {
+          if (attributeName === "_COLOR_0") {
+            const attr = attributes[attributeName];
+            instancedMesh3.instanceColor = new InstancedBufferAttribute(attr.array, attr.itemSize, attr.normalized);
+          } else if (attributeName !== "TRANSLATION" && attributeName !== "ROTATION" && attributeName !== "SCALE") {
+            mesh.geometry.setAttribute(attributeName, attributes[attributeName]);
+          }
+        }
+        Object3D.prototype.copy.call(instancedMesh3, mesh);
+        this.parser.assignFinalMaterial(instancedMesh3);
+        instancedMeshes.push(instancedMesh3);
+      }
+      if (nodeObject3.isGroup) {
+        nodeObject3.clear();
+        nodeObject3.add(...instancedMeshes);
+        return nodeObject3;
+      }
+      return instancedMeshes[0];
+    });
+  }
+}
+var BINARY_EXTENSION_HEADER_MAGIC = "glTF";
+var BINARY_EXTENSION_HEADER_LENGTH = 12;
+var BINARY_EXTENSION_CHUNK_TYPES = { JSON: 1313821514, BIN: 5130562 };
+
+class GLTFBinaryExtension {
+  constructor(data) {
+    this.name = EXTENSIONS.KHR_BINARY_GLTF;
+    this.content = null;
+    this.body = null;
+    const headerView = new DataView(data, 0, BINARY_EXTENSION_HEADER_LENGTH);
+    const textDecoder = new TextDecoder;
+    this.header = {
+      magic: textDecoder.decode(new Uint8Array(data.slice(0, 4))),
+      version: headerView.getUint32(4, true),
+      length: headerView.getUint32(8, true)
+    };
+    if (this.header.magic !== BINARY_EXTENSION_HEADER_MAGIC) {
+      throw new Error("THREE.GLTFLoader: Unsupported glTF-Binary header.");
+    } else if (this.header.version < 2) {
+      throw new Error("THREE.GLTFLoader: Legacy binary file detected.");
+    }
+    const chunkContentsLength = this.header.length - BINARY_EXTENSION_HEADER_LENGTH;
+    const chunkView = new DataView(data, BINARY_EXTENSION_HEADER_LENGTH);
+    let chunkIndex = 0;
+    while (chunkIndex < chunkContentsLength) {
+      const chunkLength = chunkView.getUint32(chunkIndex, true);
+      chunkIndex += 4;
+      const chunkType = chunkView.getUint32(chunkIndex, true);
+      chunkIndex += 4;
+      if (chunkType === BINARY_EXTENSION_CHUNK_TYPES.JSON) {
+        const contentArray = new Uint8Array(data, BINARY_EXTENSION_HEADER_LENGTH + chunkIndex, chunkLength);
+        this.content = textDecoder.decode(contentArray);
+      } else if (chunkType === BINARY_EXTENSION_CHUNK_TYPES.BIN) {
+        const byteOffset = BINARY_EXTENSION_HEADER_LENGTH + chunkIndex;
+        this.body = data.slice(byteOffset, byteOffset + chunkLength);
+      }
+      chunkIndex += chunkLength;
+    }
+    if (this.content === null) {
+      throw new Error("THREE.GLTFLoader: JSON content not found.");
+    }
+  }
+}
+
+class GLTFDracoMeshCompressionExtension {
+  constructor(json, dracoLoader) {
+    if (!dracoLoader) {
+      throw new Error("THREE.GLTFLoader: No DRACOLoader instance provided.");
+    }
+    this.name = EXTENSIONS.KHR_DRACO_MESH_COMPRESSION;
+    this.json = json;
+    this.dracoLoader = dracoLoader;
+    this.dracoLoader.preload();
+  }
+  decodePrimitive(primitive, parser) {
+    const json = this.json;
+    const dracoLoader = this.dracoLoader;
+    const bufferViewIndex = primitive.extensions[this.name].bufferView;
+    const gltfAttributeMap = primitive.extensions[this.name].attributes;
+    const threeAttributeMap = {};
+    const attributeNormalizedMap = {};
+    const attributeTypeMap = {};
+    for (const attributeName in gltfAttributeMap) {
+      const threeAttributeName = ATTRIBUTES[attributeName] || attributeName.toLowerCase();
+      threeAttributeMap[threeAttributeName] = gltfAttributeMap[attributeName];
+    }
+    for (const attributeName in primitive.attributes) {
+      const threeAttributeName = ATTRIBUTES[attributeName] || attributeName.toLowerCase();
+      if (gltfAttributeMap[attributeName] !== undefined) {
+        const accessorDef = json.accessors[primitive.attributes[attributeName]];
+        const componentType = WEBGL_COMPONENT_TYPES[accessorDef.componentType];
+        attributeTypeMap[threeAttributeName] = componentType.name;
+        attributeNormalizedMap[threeAttributeName] = accessorDef.normalized === true;
+      }
+    }
+    return parser.getDependency("bufferView", bufferViewIndex).then(function(bufferView) {
+      return new Promise(function(resolve, reject) {
+        dracoLoader.decodeDracoFile(bufferView, function(geometry) {
+          for (const attributeName in geometry.attributes) {
+            const attribute3 = geometry.attributes[attributeName];
+            const normalized = attributeNormalizedMap[attributeName];
+            if (normalized !== undefined)
+              attribute3.normalized = normalized;
+          }
+          resolve(geometry);
+        }, threeAttributeMap, attributeTypeMap, LinearSRGBColorSpace, reject);
+      });
+    });
+  }
+}
+
+class GLTFTextureTransformExtension {
+  constructor() {
+    this.name = EXTENSIONS.KHR_TEXTURE_TRANSFORM;
+  }
+  extendTexture(texture3, transform) {
+    if ((transform.texCoord === undefined || transform.texCoord === texture3.channel) && transform.offset === undefined && transform.rotation === undefined && transform.scale === undefined) {
+      return texture3;
+    }
+    texture3 = texture3.clone();
+    if (transform.texCoord !== undefined) {
+      texture3.channel = transform.texCoord;
+    }
+    if (transform.offset !== undefined) {
+      texture3.offset.fromArray(transform.offset);
+    }
+    if (transform.rotation !== undefined) {
+      texture3.rotation = transform.rotation;
+    }
+    if (transform.scale !== undefined) {
+      texture3.repeat.fromArray(transform.scale);
+    }
+    texture3.needsUpdate = true;
+    return texture3;
+  }
+}
+
+class GLTFMeshQuantizationExtension {
+  constructor() {
+    this.name = EXTENSIONS.KHR_MESH_QUANTIZATION;
+  }
+}
+
+class GLTFCubicSplineInterpolant extends Interpolant {
+  constructor(parameterPositions, sampleValues, sampleSize, resultBuffer) {
+    super(parameterPositions, sampleValues, sampleSize, resultBuffer);
+  }
+  copySampleValue_(index) {
+    const result = this.resultBuffer, values = this.sampleValues, valueSize = this.valueSize, offset = index * valueSize * 3 + valueSize;
+    for (let i = 0;i !== valueSize; i++) {
+      result[i] = values[offset + i];
+    }
+    return result;
+  }
+  interpolate_(i1, t0, t, t1) {
+    const result = this.resultBuffer;
+    const values = this.sampleValues;
+    const stride = this.valueSize;
+    const stride2 = stride * 2;
+    const stride3 = stride * 3;
+    const td = t1 - t0;
+    const p = (t - t0) / td;
+    const pp = p * p;
+    const ppp = pp * p;
+    const offset1 = i1 * stride3;
+    const offset0 = offset1 - stride3;
+    const s2 = -2 * ppp + 3 * pp;
+    const s3 = ppp - pp;
+    const s0 = 1 - s2;
+    const s1 = s3 - pp + p;
+    for (let i = 0;i !== stride; i++) {
+      const p0 = values[offset0 + i + stride];
+      const m0 = values[offset0 + i + stride2] * td;
+      const p1 = values[offset1 + i + stride];
+      const m1 = values[offset1 + i] * td;
+      result[i] = s0 * p0 + s1 * m0 + s2 * p1 + s3 * m1;
+    }
+    return result;
+  }
+}
+var _quaternion2 = new Quaternion;
+
+class GLTFCubicSplineQuaternionInterpolant extends GLTFCubicSplineInterpolant {
+  interpolate_(i1, t0, t, t1) {
+    const result = super.interpolate_(i1, t0, t, t1);
+    _quaternion2.fromArray(result).normalize().toArray(result);
+    return result;
+  }
+}
+var WEBGL_CONSTANTS = {
+  FLOAT: 5126,
+  FLOAT_MAT3: 35675,
+  FLOAT_MAT4: 35676,
+  FLOAT_VEC2: 35664,
+  FLOAT_VEC3: 35665,
+  FLOAT_VEC4: 35666,
+  LINEAR: 9729,
+  REPEAT: 10497,
+  SAMPLER_2D: 35678,
+  POINTS: 0,
+  LINES: 1,
+  LINE_LOOP: 2,
+  LINE_STRIP: 3,
+  TRIANGLES: 4,
+  TRIANGLE_STRIP: 5,
+  TRIANGLE_FAN: 6,
+  UNSIGNED_BYTE: 5121,
+  UNSIGNED_SHORT: 5123
+};
+var WEBGL_COMPONENT_TYPES = {
+  5120: Int8Array,
+  5121: Uint8Array,
+  5122: Int16Array,
+  5123: Uint16Array,
+  5125: Uint32Array,
+  5126: Float32Array
+};
+var WEBGL_FILTERS = {
+  9728: NearestFilter,
+  9729: LinearFilter,
+  9984: NearestMipmapNearestFilter,
+  9985: LinearMipmapNearestFilter,
+  9986: NearestMipmapLinearFilter,
+  9987: LinearMipmapLinearFilter
+};
+var WEBGL_WRAPPINGS = {
+  33071: ClampToEdgeWrapping,
+  33648: MirroredRepeatWrapping,
+  10497: RepeatWrapping
+};
+var WEBGL_TYPE_SIZES = {
+  SCALAR: 1,
+  VEC2: 2,
+  VEC3: 3,
+  VEC4: 4,
+  MAT2: 4,
+  MAT3: 9,
+  MAT4: 16
+};
+var ATTRIBUTES = {
+  POSITION: "position",
+  NORMAL: "normal",
+  TANGENT: "tangent",
+  TEXCOORD_0: "uv",
+  TEXCOORD_1: "uv1",
+  TEXCOORD_2: "uv2",
+  TEXCOORD_3: "uv3",
+  COLOR_0: "color",
+  WEIGHTS_0: "skinWeight",
+  JOINTS_0: "skinIndex"
+};
+var PATH_PROPERTIES = {
+  scale: "scale",
+  translation: "position",
+  rotation: "quaternion",
+  weights: "morphTargetInfluences"
+};
+var INTERPOLATION = {
+  CUBICSPLINE: undefined,
+  LINEAR: InterpolateLinear,
+  STEP: InterpolateDiscrete
+};
+var ALPHA_MODES = {
+  OPAQUE: "OPAQUE",
+  MASK: "MASK",
+  BLEND: "BLEND"
+};
+function createDefaultMaterial(cache3) {
+  if (cache3["DefaultMaterial"] === undefined) {
+    cache3["DefaultMaterial"] = new MeshStandardMaterial({
+      color: 16777215,
+      emissive: 0,
+      metalness: 1,
+      roughness: 1,
+      transparent: false,
+      depthTest: true,
+      side: FrontSide
+    });
+  }
+  return cache3["DefaultMaterial"];
+}
+function addUnknownExtensionsToUserData(knownExtensions, object, objectDef) {
+  for (const name in objectDef.extensions) {
+    if (knownExtensions[name] === undefined) {
+      object.userData.gltfExtensions = object.userData.gltfExtensions || {};
+      object.userData.gltfExtensions[name] = objectDef.extensions[name];
+    }
+  }
+}
+function assignExtrasToUserData(object, gltfDef) {
+  if (gltfDef.extras !== undefined) {
+    if (typeof gltfDef.extras === "object") {
+      Object.assign(object.userData, gltfDef.extras);
+    } else {
+      console.warn("THREE.GLTFLoader: Ignoring primitive type .extras, " + gltfDef.extras);
+    }
+  }
+}
+function addMorphTargets(geometry, targets, parser) {
+  let hasMorphPosition = false;
+  let hasMorphNormal = false;
+  let hasMorphColor = false;
+  for (let i = 0, il = targets.length;i < il; i++) {
+    const target = targets[i];
+    if (target.POSITION !== undefined)
+      hasMorphPosition = true;
+    if (target.NORMAL !== undefined)
+      hasMorphNormal = true;
+    if (target.COLOR_0 !== undefined)
+      hasMorphColor = true;
+    if (hasMorphPosition && hasMorphNormal && hasMorphColor)
+      break;
+  }
+  if (!hasMorphPosition && !hasMorphNormal && !hasMorphColor)
+    return Promise.resolve(geometry);
+  const pendingPositionAccessors = [];
+  const pendingNormalAccessors = [];
+  const pendingColorAccessors = [];
+  for (let i = 0, il = targets.length;i < il; i++) {
+    const target = targets[i];
+    if (hasMorphPosition) {
+      const pendingAccessor = target.POSITION !== undefined ? parser.getDependency("accessor", target.POSITION) : geometry.attributes.position;
+      pendingPositionAccessors.push(pendingAccessor);
+    }
+    if (hasMorphNormal) {
+      const pendingAccessor = target.NORMAL !== undefined ? parser.getDependency("accessor", target.NORMAL) : geometry.attributes.normal;
+      pendingNormalAccessors.push(pendingAccessor);
+    }
+    if (hasMorphColor) {
+      const pendingAccessor = target.COLOR_0 !== undefined ? parser.getDependency("accessor", target.COLOR_0) : geometry.attributes.color;
+      pendingColorAccessors.push(pendingAccessor);
+    }
+  }
+  return Promise.all([
+    Promise.all(pendingPositionAccessors),
+    Promise.all(pendingNormalAccessors),
+    Promise.all(pendingColorAccessors)
+  ]).then(function(accessors) {
+    const morphPositions = accessors[0];
+    const morphNormals = accessors[1];
+    const morphColors = accessors[2];
+    if (hasMorphPosition)
+      geometry.morphAttributes.position = morphPositions;
+    if (hasMorphNormal)
+      geometry.morphAttributes.normal = morphNormals;
+    if (hasMorphColor)
+      geometry.morphAttributes.color = morphColors;
+    geometry.morphTargetsRelative = true;
+    return geometry;
+  });
+}
+function updateMorphTargets(mesh, meshDef) {
+  mesh.updateMorphTargets();
+  if (meshDef.weights !== undefined) {
+    for (let i = 0, il = meshDef.weights.length;i < il; i++) {
+      mesh.morphTargetInfluences[i] = meshDef.weights[i];
+    }
+  }
+  if (meshDef.extras && Array.isArray(meshDef.extras.targetNames)) {
+    const targetNames = meshDef.extras.targetNames;
+    if (mesh.morphTargetInfluences.length === targetNames.length) {
+      mesh.morphTargetDictionary = {};
+      for (let i = 0, il = targetNames.length;i < il; i++) {
+        mesh.morphTargetDictionary[targetNames[i]] = i;
+      }
+    } else {
+      console.warn("THREE.GLTFLoader: Invalid extras.targetNames length. Ignoring names.");
+    }
+  }
+}
+function createPrimitiveKey(primitiveDef) {
+  let geometryKey;
+  const dracoExtension = primitiveDef.extensions && primitiveDef.extensions[EXTENSIONS.KHR_DRACO_MESH_COMPRESSION];
+  if (dracoExtension) {
+    geometryKey = "draco:" + dracoExtension.bufferView + ":" + dracoExtension.indices + ":" + createAttributesKey(dracoExtension.attributes);
+  } else {
+    geometryKey = primitiveDef.indices + ":" + createAttributesKey(primitiveDef.attributes) + ":" + primitiveDef.mode;
+  }
+  if (primitiveDef.targets !== undefined) {
+    for (let i = 0, il = primitiveDef.targets.length;i < il; i++) {
+      geometryKey += ":" + createAttributesKey(primitiveDef.targets[i]);
+    }
+  }
+  return geometryKey;
+}
+function createAttributesKey(attributes) {
+  let attributesKey = "";
+  const keys = Object.keys(attributes).sort();
+  for (let i = 0, il = keys.length;i < il; i++) {
+    attributesKey += keys[i] + ":" + attributes[keys[i]] + ";";
+  }
+  return attributesKey;
+}
+function getNormalizedComponentScale(constructor) {
+  switch (constructor) {
+    case Int8Array:
+      return 1 / 127;
+    case Uint8Array:
+      return 1 / 255;
+    case Int16Array:
+      return 1 / 32767;
+    case Uint16Array:
+      return 1 / 65535;
+    default:
+      throw new Error("THREE.GLTFLoader: Unsupported normalized accessor component type.");
+  }
+}
+function getImageURIMimeType(uri) {
+  if (uri.search(/\.jpe?g($|\?)/i) > 0 || uri.search(/^data\:image\/jpeg/) === 0)
+    return "image/jpeg";
+  if (uri.search(/\.webp($|\?)/i) > 0 || uri.search(/^data\:image\/webp/) === 0)
+    return "image/webp";
+  if (uri.search(/\.ktx2($|\?)/i) > 0 || uri.search(/^data\:image\/ktx2/) === 0)
+    return "image/ktx2";
+  return "image/png";
+}
+var _identityMatrix2 = new Matrix4;
+
+class GLTFParser {
+  constructor(json = {}, options = {}) {
+    this.json = json;
+    this.extensions = {};
+    this.plugins = {};
+    this.options = options;
+    this.cache = new GLTFRegistry;
+    this.associations = new Map;
+    this.primitiveCache = {};
+    this.nodeCache = {};
+    this.meshCache = { refs: {}, uses: {} };
+    this.cameraCache = { refs: {}, uses: {} };
+    this.lightCache = { refs: {}, uses: {} };
+    this.sourceCache = {};
+    this.textureCache = {};
+    this.nodeNamesUsed = {};
+    let isSafari = false;
+    let safariVersion = -1;
+    let isFirefox = false;
+    let firefoxVersion = -1;
+    if (typeof navigator !== "undefined" && typeof navigator.userAgent !== "undefined") {
+      const userAgent = navigator.userAgent;
+      isSafari = /^((?!chrome|android).)*safari/i.test(userAgent) === true;
+      const safariMatch = userAgent.match(/Version\/(\d+)/);
+      safariVersion = isSafari && safariMatch ? parseInt(safariMatch[1], 10) : -1;
+      isFirefox = userAgent.indexOf("Firefox") > -1;
+      firefoxVersion = isFirefox ? userAgent.match(/Firefox\/([0-9]+)\./)[1] : -1;
+    }
+    if (typeof createImageBitmap === "undefined" || isSafari && safariVersion < 17 || isFirefox && firefoxVersion < 98) {
+      this.textureLoader = new TextureLoader(this.options.manager);
+    } else {
+      this.textureLoader = new ImageBitmapLoader(this.options.manager);
+    }
+    this.textureLoader.setCrossOrigin(this.options.crossOrigin);
+    this.textureLoader.setRequestHeader(this.options.requestHeader);
+    this.fileLoader = new FileLoader(this.options.manager);
+    this.fileLoader.setResponseType("arraybuffer");
+    if (this.options.crossOrigin === "use-credentials") {
+      this.fileLoader.setWithCredentials(true);
+    }
+  }
+  setExtensions(extensions) {
+    this.extensions = extensions;
+  }
+  setPlugins(plugins) {
+    this.plugins = plugins;
+  }
+  parse(onLoad, onError) {
+    const parser = this;
+    const json = this.json;
+    const extensions = this.extensions;
+    this.cache.removeAll();
+    this.nodeCache = {};
+    this._invokeAll(function(ext) {
+      return ext._markDefs && ext._markDefs();
+    });
+    Promise.all(this._invokeAll(function(ext) {
+      return ext.beforeRoot && ext.beforeRoot();
+    })).then(function() {
+      return Promise.all([
+        parser.getDependencies("scene"),
+        parser.getDependencies("animation"),
+        parser.getDependencies("camera")
+      ]);
+    }).then(function(dependencies) {
+      const result = {
+        scene: dependencies[0][json.scene || 0],
+        scenes: dependencies[0],
+        animations: dependencies[1],
+        cameras: dependencies[2],
+        asset: json.asset,
+        parser,
+        userData: {}
+      };
+      addUnknownExtensionsToUserData(extensions, result, json);
+      assignExtrasToUserData(result, json);
+      return Promise.all(parser._invokeAll(function(ext) {
+        return ext.afterRoot && ext.afterRoot(result);
+      })).then(function() {
+        for (const scene of result.scenes) {
+          scene.updateMatrixWorld();
+        }
+        onLoad(result);
+      });
+    }).catch(onError);
+  }
+  _markDefs() {
+    const nodeDefs = this.json.nodes || [];
+    const skinDefs = this.json.skins || [];
+    const meshDefs = this.json.meshes || [];
+    for (let skinIndex = 0, skinLength = skinDefs.length;skinIndex < skinLength; skinIndex++) {
+      const joints = skinDefs[skinIndex].joints;
+      for (let i = 0, il = joints.length;i < il; i++) {
+        nodeDefs[joints[i]].isBone = true;
+      }
+    }
+    for (let nodeIndex = 0, nodeLength = nodeDefs.length;nodeIndex < nodeLength; nodeIndex++) {
+      const nodeDef = nodeDefs[nodeIndex];
+      if (nodeDef.mesh !== undefined) {
+        this._addNodeRef(this.meshCache, nodeDef.mesh);
+        if (nodeDef.skin !== undefined) {
+          meshDefs[nodeDef.mesh].isSkinnedMesh = true;
+        }
+      }
+      if (nodeDef.camera !== undefined) {
+        this._addNodeRef(this.cameraCache, nodeDef.camera);
+      }
+    }
+  }
+  _addNodeRef(cache3, index) {
+    if (index === undefined)
+      return;
+    if (cache3.refs[index] === undefined) {
+      cache3.refs[index] = cache3.uses[index] = 0;
+    }
+    cache3.refs[index]++;
+  }
+  _getNodeRef(cache3, index, object) {
+    if (cache3.refs[index] <= 1)
+      return object;
+    const ref = object.clone();
+    const updateMappings = (original, clone2) => {
+      const mappings = this.associations.get(original);
+      if (mappings != null) {
+        this.associations.set(clone2, mappings);
+      }
+      for (const [i, child] of original.children.entries()) {
+        updateMappings(child, clone2.children[i]);
+      }
+    };
+    updateMappings(object, ref);
+    ref.name += "_instance_" + cache3.uses[index]++;
+    return ref;
+  }
+  _invokeOne(func) {
+    const extensions = Object.values(this.plugins);
+    extensions.push(this);
+    for (let i = 0;i < extensions.length; i++) {
+      const result = func(extensions[i]);
+      if (result)
+        return result;
+    }
+    return null;
+  }
+  _invokeAll(func) {
+    const extensions = Object.values(this.plugins);
+    extensions.unshift(this);
+    const pending = [];
+    for (let i = 0;i < extensions.length; i++) {
+      const result = func(extensions[i]);
+      if (result)
+        pending.push(result);
+    }
+    return pending;
+  }
+  getDependency(type, index) {
+    const cacheKey = type + ":" + index;
+    let dependency = this.cache.get(cacheKey);
+    if (!dependency) {
+      switch (type) {
+        case "scene":
+          dependency = this.loadScene(index);
+          break;
+        case "node":
+          dependency = this._invokeOne(function(ext) {
+            return ext.loadNode && ext.loadNode(index);
+          });
+          break;
+        case "mesh":
+          dependency = this._invokeOne(function(ext) {
+            return ext.loadMesh && ext.loadMesh(index);
+          });
+          break;
+        case "accessor":
+          dependency = this.loadAccessor(index);
+          break;
+        case "bufferView":
+          dependency = this._invokeOne(function(ext) {
+            return ext.loadBufferView && ext.loadBufferView(index);
+          });
+          break;
+        case "buffer":
+          dependency = this.loadBuffer(index);
+          break;
+        case "material":
+          dependency = this._invokeOne(function(ext) {
+            return ext.loadMaterial && ext.loadMaterial(index);
+          });
+          break;
+        case "texture":
+          dependency = this._invokeOne(function(ext) {
+            return ext.loadTexture && ext.loadTexture(index);
+          });
+          break;
+        case "skin":
+          dependency = this.loadSkin(index);
+          break;
+        case "animation":
+          dependency = this._invokeOne(function(ext) {
+            return ext.loadAnimation && ext.loadAnimation(index);
+          });
+          break;
+        case "camera":
+          dependency = this.loadCamera(index);
+          break;
+        default:
+          dependency = this._invokeOne(function(ext) {
+            return ext != this && ext.getDependency && ext.getDependency(type, index);
+          });
+          if (!dependency) {
+            throw new Error("Unknown type: " + type);
+          }
+          break;
+      }
+      this.cache.add(cacheKey, dependency);
+    }
+    return dependency;
+  }
+  getDependencies(type) {
+    let dependencies = this.cache.get(type);
+    if (!dependencies) {
+      const parser = this;
+      const defs = this.json[type + (type === "mesh" ? "es" : "s")] || [];
+      dependencies = Promise.all(defs.map(function(def, index) {
+        return parser.getDependency(type, index);
+      }));
+      this.cache.add(type, dependencies);
+    }
+    return dependencies;
+  }
+  loadBuffer(bufferIndex) {
+    const bufferDef = this.json.buffers[bufferIndex];
+    const loader = this.fileLoader;
+    if (bufferDef.type && bufferDef.type !== "arraybuffer") {
+      throw new Error("THREE.GLTFLoader: " + bufferDef.type + " buffer type is not supported.");
+    }
+    if (bufferDef.uri === undefined && bufferIndex === 0) {
+      return Promise.resolve(this.extensions[EXTENSIONS.KHR_BINARY_GLTF].body);
+    }
+    const options = this.options;
+    return new Promise(function(resolve, reject) {
+      loader.load(LoaderUtils.resolveURL(bufferDef.uri, options.path), resolve, undefined, function() {
+        reject(new Error('THREE.GLTFLoader: Failed to load buffer "' + bufferDef.uri + '".'));
+      });
+    });
+  }
+  loadBufferView(bufferViewIndex) {
+    const bufferViewDef = this.json.bufferViews[bufferViewIndex];
+    return this.getDependency("buffer", bufferViewDef.buffer).then(function(buffer3) {
+      const byteLength = bufferViewDef.byteLength || 0;
+      const byteOffset = bufferViewDef.byteOffset || 0;
+      return buffer3.slice(byteOffset, byteOffset + byteLength);
+    });
+  }
+  loadAccessor(accessorIndex) {
+    const parser = this;
+    const json = this.json;
+    const accessorDef = this.json.accessors[accessorIndex];
+    if (accessorDef.bufferView === undefined && accessorDef.sparse === undefined) {
+      const itemSize = WEBGL_TYPE_SIZES[accessorDef.type];
+      const TypedArray = WEBGL_COMPONENT_TYPES[accessorDef.componentType];
+      const normalized = accessorDef.normalized === true;
+      const array3 = new TypedArray(accessorDef.count * itemSize);
+      return Promise.resolve(new BufferAttribute(array3, itemSize, normalized));
+    }
+    const pendingBufferViews = [];
+    if (accessorDef.bufferView !== undefined) {
+      pendingBufferViews.push(this.getDependency("bufferView", accessorDef.bufferView));
+    } else {
+      pendingBufferViews.push(null);
+    }
+    if (accessorDef.sparse !== undefined) {
+      pendingBufferViews.push(this.getDependency("bufferView", accessorDef.sparse.indices.bufferView));
+      pendingBufferViews.push(this.getDependency("bufferView", accessorDef.sparse.values.bufferView));
+    }
+    return Promise.all(pendingBufferViews).then(function(bufferViews) {
+      const bufferView = bufferViews[0];
+      const itemSize = WEBGL_TYPE_SIZES[accessorDef.type];
+      const TypedArray = WEBGL_COMPONENT_TYPES[accessorDef.componentType];
+      const elementBytes = TypedArray.BYTES_PER_ELEMENT;
+      const itemBytes = elementBytes * itemSize;
+      const byteOffset = accessorDef.byteOffset || 0;
+      const byteStride = accessorDef.bufferView !== undefined ? json.bufferViews[accessorDef.bufferView].byteStride : undefined;
+      const normalized = accessorDef.normalized === true;
+      let array3, bufferAttribute3;
+      if (byteStride && byteStride !== itemBytes) {
+        const ibSlice = Math.floor(byteOffset / byteStride);
+        const ibCacheKey = "InterleavedBuffer:" + accessorDef.bufferView + ":" + accessorDef.componentType + ":" + ibSlice + ":" + accessorDef.count;
+        let ib = parser.cache.get(ibCacheKey);
+        if (!ib) {
+          array3 = new TypedArray(bufferView, ibSlice * byteStride, accessorDef.count * byteStride / elementBytes);
+          ib = new InterleavedBuffer(array3, byteStride / elementBytes);
+          parser.cache.add(ibCacheKey, ib);
+        }
+        bufferAttribute3 = new InterleavedBufferAttribute(ib, itemSize, byteOffset % byteStride / elementBytes, normalized);
+      } else {
+        if (bufferView === null) {
+          array3 = new TypedArray(accessorDef.count * itemSize);
+        } else {
+          array3 = new TypedArray(bufferView, byteOffset, accessorDef.count * itemSize);
+        }
+        bufferAttribute3 = new BufferAttribute(array3, itemSize, normalized);
+      }
+      if (accessorDef.sparse !== undefined) {
+        const itemSizeIndices = WEBGL_TYPE_SIZES.SCALAR;
+        const TypedArrayIndices = WEBGL_COMPONENT_TYPES[accessorDef.sparse.indices.componentType];
+        const byteOffsetIndices = accessorDef.sparse.indices.byteOffset || 0;
+        const byteOffsetValues = accessorDef.sparse.values.byteOffset || 0;
+        const sparseIndices = new TypedArrayIndices(bufferViews[1], byteOffsetIndices, accessorDef.sparse.count * itemSizeIndices);
+        const sparseValues = new TypedArray(bufferViews[2], byteOffsetValues, accessorDef.sparse.count * itemSize);
+        if (bufferView !== null) {
+          bufferAttribute3 = new BufferAttribute(bufferAttribute3.array.slice(), bufferAttribute3.itemSize, bufferAttribute3.normalized);
+        }
+        bufferAttribute3.normalized = false;
+        for (let i = 0, il = sparseIndices.length;i < il; i++) {
+          const index = sparseIndices[i];
+          bufferAttribute3.setX(index, sparseValues[i * itemSize]);
+          if (itemSize >= 2)
+            bufferAttribute3.setY(index, sparseValues[i * itemSize + 1]);
+          if (itemSize >= 3)
+            bufferAttribute3.setZ(index, sparseValues[i * itemSize + 2]);
+          if (itemSize >= 4)
+            bufferAttribute3.setW(index, sparseValues[i * itemSize + 3]);
+          if (itemSize >= 5)
+            throw new Error("THREE.GLTFLoader: Unsupported itemSize in sparse BufferAttribute.");
+        }
+        bufferAttribute3.normalized = normalized;
+      }
+      return bufferAttribute3;
+    });
+  }
+  loadTexture(textureIndex) {
+    const json = this.json;
+    const options = this.options;
+    const textureDef = json.textures[textureIndex];
+    const sourceIndex = textureDef.source;
+    const sourceDef = json.images[sourceIndex];
+    let loader = this.textureLoader;
+    if (sourceDef.uri) {
+      const handler = options.manager.getHandler(sourceDef.uri);
+      if (handler !== null)
+        loader = handler;
+    }
+    return this.loadTextureImage(textureIndex, sourceIndex, loader);
+  }
+  loadTextureImage(textureIndex, sourceIndex, loader) {
+    const parser = this;
+    const json = this.json;
+    const textureDef = json.textures[textureIndex];
+    const sourceDef = json.images[sourceIndex];
+    const cacheKey = (sourceDef.uri || sourceDef.bufferView) + ":" + textureDef.sampler;
+    if (this.textureCache[cacheKey]) {
+      return this.textureCache[cacheKey];
+    }
+    const promise = this.loadImageSource(sourceIndex, loader).then(function(texture3) {
+      texture3.flipY = false;
+      texture3.name = textureDef.name || sourceDef.name || "";
+      if (texture3.name === "" && typeof sourceDef.uri === "string" && sourceDef.uri.startsWith("data:image/") === false) {
+        texture3.name = sourceDef.uri;
+      }
+      const samplers = json.samplers || {};
+      const sampler3 = samplers[textureDef.sampler] || {};
+      texture3.magFilter = WEBGL_FILTERS[sampler3.magFilter] || LinearFilter;
+      texture3.minFilter = WEBGL_FILTERS[sampler3.minFilter] || LinearMipmapLinearFilter;
+      texture3.wrapS = WEBGL_WRAPPINGS[sampler3.wrapS] || RepeatWrapping;
+      texture3.wrapT = WEBGL_WRAPPINGS[sampler3.wrapT] || RepeatWrapping;
+      texture3.generateMipmaps = !texture3.isCompressedTexture && texture3.minFilter !== NearestFilter && texture3.minFilter !== LinearFilter;
+      parser.associations.set(texture3, { textures: textureIndex });
+      return texture3;
+    }).catch(function() {
+      return null;
+    });
+    this.textureCache[cacheKey] = promise;
+    return promise;
+  }
+  loadImageSource(sourceIndex, loader) {
+    const parser = this;
+    const json = this.json;
+    const options = this.options;
+    if (this.sourceCache[sourceIndex] !== undefined) {
+      return this.sourceCache[sourceIndex].then((texture3) => texture3.clone());
+    }
+    const sourceDef = json.images[sourceIndex];
+    const URL2 = self.URL || self.webkitURL;
+    let sourceURI = sourceDef.uri || "";
+    let isObjectURL = false;
+    if (sourceDef.bufferView !== undefined) {
+      sourceURI = parser.getDependency("bufferView", sourceDef.bufferView).then(function(bufferView) {
+        isObjectURL = true;
+        const blob = new Blob([bufferView], { type: sourceDef.mimeType });
+        sourceURI = URL2.createObjectURL(blob);
+        return sourceURI;
+      });
+    } else if (sourceDef.uri === undefined) {
+      throw new Error("THREE.GLTFLoader: Image " + sourceIndex + " is missing URI and bufferView");
+    }
+    const promise = Promise.resolve(sourceURI).then(function(sourceURI2) {
+      return new Promise(function(resolve, reject) {
+        let onLoad = resolve;
+        if (loader.isImageBitmapLoader === true) {
+          onLoad = function(imageBitmap) {
+            const texture3 = new Texture(imageBitmap);
+            texture3.needsUpdate = true;
+            resolve(texture3);
+          };
+        }
+        loader.load(LoaderUtils.resolveURL(sourceURI2, options.path), onLoad, undefined, reject);
+      });
+    }).then(function(texture3) {
+      if (isObjectURL === true) {
+        URL2.revokeObjectURL(sourceURI);
+      }
+      assignExtrasToUserData(texture3, sourceDef);
+      texture3.userData.mimeType = sourceDef.mimeType || getImageURIMimeType(sourceDef.uri);
+      return texture3;
+    }).catch(function(error2) {
+      console.error("THREE.GLTFLoader: Couldn't load texture", sourceURI);
+      throw error2;
+    });
+    this.sourceCache[sourceIndex] = promise;
+    return promise;
+  }
+  assignTexture(materialParams, mapName, mapDef, colorSpace) {
+    const parser = this;
+    return this.getDependency("texture", mapDef.index).then(function(texture3) {
+      if (!texture3)
+        return null;
+      if (mapDef.texCoord !== undefined && mapDef.texCoord > 0) {
+        texture3 = texture3.clone();
+        texture3.channel = mapDef.texCoord;
+      }
+      if (parser.extensions[EXTENSIONS.KHR_TEXTURE_TRANSFORM]) {
+        const transform = mapDef.extensions !== undefined ? mapDef.extensions[EXTENSIONS.KHR_TEXTURE_TRANSFORM] : undefined;
+        if (transform) {
+          const gltfReference = parser.associations.get(texture3);
+          texture3 = parser.extensions[EXTENSIONS.KHR_TEXTURE_TRANSFORM].extendTexture(texture3, transform);
+          parser.associations.set(texture3, gltfReference);
+        }
+      }
+      if (colorSpace !== undefined) {
+        texture3.colorSpace = colorSpace;
+      }
+      materialParams[mapName] = texture3;
+      return texture3;
+    });
+  }
+  assignFinalMaterial(mesh) {
+    const geometry = mesh.geometry;
+    let material = mesh.material;
+    const useDerivativeTangents = geometry.attributes.tangent === undefined;
+    const useVertexColors = geometry.attributes.color !== undefined;
+    const useFlatShading = geometry.attributes.normal === undefined;
+    if (mesh.isPoints) {
+      const cacheKey = "PointsMaterial:" + material.uuid;
+      let pointsMaterial = this.cache.get(cacheKey);
+      if (!pointsMaterial) {
+        pointsMaterial = new PointsMaterial;
+        Material.prototype.copy.call(pointsMaterial, material);
+        pointsMaterial.color.copy(material.color);
+        pointsMaterial.map = material.map;
+        pointsMaterial.sizeAttenuation = false;
+        this.cache.add(cacheKey, pointsMaterial);
+      }
+      material = pointsMaterial;
+    } else if (mesh.isLine) {
+      const cacheKey = "LineBasicMaterial:" + material.uuid;
+      let lineMaterial = this.cache.get(cacheKey);
+      if (!lineMaterial) {
+        lineMaterial = new LineBasicMaterial;
+        Material.prototype.copy.call(lineMaterial, material);
+        lineMaterial.color.copy(material.color);
+        lineMaterial.map = material.map;
+        this.cache.add(cacheKey, lineMaterial);
+      }
+      material = lineMaterial;
+    }
+    if (useDerivativeTangents || useVertexColors || useFlatShading) {
+      let cacheKey = "ClonedMaterial:" + material.uuid + ":";
+      if (useDerivativeTangents)
+        cacheKey += "derivative-tangents:";
+      if (useVertexColors)
+        cacheKey += "vertex-colors:";
+      if (useFlatShading)
+        cacheKey += "flat-shading:";
+      let cachedMaterial = this.cache.get(cacheKey);
+      if (!cachedMaterial) {
+        cachedMaterial = material.clone();
+        if (useVertexColors)
+          cachedMaterial.vertexColors = true;
+        if (useFlatShading)
+          cachedMaterial.flatShading = true;
+        if (useDerivativeTangents) {
+          if (cachedMaterial.normalScale)
+            cachedMaterial.normalScale.y *= -1;
+          if (cachedMaterial.clearcoatNormalScale)
+            cachedMaterial.clearcoatNormalScale.y *= -1;
+        }
+        this.cache.add(cacheKey, cachedMaterial);
+        this.associations.set(cachedMaterial, this.associations.get(material));
+      }
+      material = cachedMaterial;
+    }
+    mesh.material = material;
+  }
+  getMaterialType() {
+    return MeshStandardMaterial;
+  }
+  loadMaterial(materialIndex) {
+    const parser = this;
+    const json = this.json;
+    const extensions = this.extensions;
+    const materialDef = json.materials[materialIndex];
+    let materialType;
+    const materialParams = {};
+    const materialExtensions = materialDef.extensions || {};
+    const pending = [];
+    if (materialExtensions[EXTENSIONS.KHR_MATERIALS_UNLIT]) {
+      const kmuExtension = extensions[EXTENSIONS.KHR_MATERIALS_UNLIT];
+      materialType = kmuExtension.getMaterialType();
+      pending.push(kmuExtension.extendParams(materialParams, materialDef, parser));
+    } else {
+      const metallicRoughness = materialDef.pbrMetallicRoughness || {};
+      materialParams.color = new Color(1, 1, 1);
+      materialParams.opacity = 1;
+      if (Array.isArray(metallicRoughness.baseColorFactor)) {
+        const array3 = metallicRoughness.baseColorFactor;
+        materialParams.color.setRGB(array3[0], array3[1], array3[2], LinearSRGBColorSpace);
+        materialParams.opacity = array3[3];
+      }
+      if (metallicRoughness.baseColorTexture !== undefined) {
+        pending.push(parser.assignTexture(materialParams, "map", metallicRoughness.baseColorTexture, SRGBColorSpace));
+      }
+      materialParams.metalness = metallicRoughness.metallicFactor !== undefined ? metallicRoughness.metallicFactor : 1;
+      materialParams.roughness = metallicRoughness.roughnessFactor !== undefined ? metallicRoughness.roughnessFactor : 1;
+      if (metallicRoughness.metallicRoughnessTexture !== undefined) {
+        pending.push(parser.assignTexture(materialParams, "metalnessMap", metallicRoughness.metallicRoughnessTexture));
+        pending.push(parser.assignTexture(materialParams, "roughnessMap", metallicRoughness.metallicRoughnessTexture));
+      }
+      materialType = this._invokeOne(function(ext) {
+        return ext.getMaterialType && ext.getMaterialType(materialIndex);
+      });
+      pending.push(Promise.all(this._invokeAll(function(ext) {
+        return ext.extendMaterialParams && ext.extendMaterialParams(materialIndex, materialParams);
+      })));
+    }
+    if (materialDef.doubleSided === true) {
+      materialParams.side = DoubleSide;
+    }
+    const alphaMode = materialDef.alphaMode || ALPHA_MODES.OPAQUE;
+    if (alphaMode === ALPHA_MODES.BLEND) {
+      materialParams.transparent = true;
+      materialParams.depthWrite = false;
+    } else {
+      materialParams.transparent = false;
+      if (alphaMode === ALPHA_MODES.MASK) {
+        materialParams.alphaTest = materialDef.alphaCutoff !== undefined ? materialDef.alphaCutoff : 0.5;
+      }
+    }
+    if (materialDef.normalTexture !== undefined && materialType !== MeshBasicMaterial) {
+      pending.push(parser.assignTexture(materialParams, "normalMap", materialDef.normalTexture));
+      materialParams.normalScale = new Vector2(1, 1);
+      if (materialDef.normalTexture.scale !== undefined) {
+        const scale2 = materialDef.normalTexture.scale;
+        materialParams.normalScale.set(scale2, scale2);
+      }
+    }
+    if (materialDef.occlusionTexture !== undefined && materialType !== MeshBasicMaterial) {
+      pending.push(parser.assignTexture(materialParams, "aoMap", materialDef.occlusionTexture));
+      if (materialDef.occlusionTexture.strength !== undefined) {
+        materialParams.aoMapIntensity = materialDef.occlusionTexture.strength;
+      }
+    }
+    if (materialDef.emissiveFactor !== undefined && materialType !== MeshBasicMaterial) {
+      const emissiveFactor = materialDef.emissiveFactor;
+      materialParams.emissive = new Color().setRGB(emissiveFactor[0], emissiveFactor[1], emissiveFactor[2], LinearSRGBColorSpace);
+    }
+    if (materialDef.emissiveTexture !== undefined && materialType !== MeshBasicMaterial) {
+      pending.push(parser.assignTexture(materialParams, "emissiveMap", materialDef.emissiveTexture, SRGBColorSpace));
+    }
+    return Promise.all(pending).then(function() {
+      const material = new materialType(materialParams);
+      if (materialDef.name)
+        material.name = materialDef.name;
+      assignExtrasToUserData(material, materialDef);
+      parser.associations.set(material, { materials: materialIndex });
+      if (materialDef.extensions)
+        addUnknownExtensionsToUserData(extensions, material, materialDef);
+      return material;
+    });
+  }
+  createUniqueName(originalName) {
+    const sanitizedName = PropertyBinding.sanitizeNodeName(originalName || "");
+    if (sanitizedName in this.nodeNamesUsed) {
+      return sanitizedName + "_" + ++this.nodeNamesUsed[sanitizedName];
+    } else {
+      this.nodeNamesUsed[sanitizedName] = 0;
+      return sanitizedName;
+    }
+  }
+  loadGeometries(primitives) {
+    const parser = this;
+    const extensions = this.extensions;
+    const cache3 = this.primitiveCache;
+    function createDracoPrimitive(primitive) {
+      return extensions[EXTENSIONS.KHR_DRACO_MESH_COMPRESSION].decodePrimitive(primitive, parser).then(function(geometry) {
+        return addPrimitiveAttributes(geometry, primitive, parser);
+      });
+    }
+    const pending = [];
+    for (let i = 0, il = primitives.length;i < il; i++) {
+      const primitive = primitives[i];
+      const cacheKey = createPrimitiveKey(primitive);
+      const cached = cache3[cacheKey];
+      if (cached) {
+        pending.push(cached.promise);
+      } else {
+        let geometryPromise;
+        if (primitive.extensions && primitive.extensions[EXTENSIONS.KHR_DRACO_MESH_COMPRESSION]) {
+          geometryPromise = createDracoPrimitive(primitive);
+        } else {
+          geometryPromise = addPrimitiveAttributes(new BufferGeometry, primitive, parser);
+        }
+        cache3[cacheKey] = { primitive, promise: geometryPromise };
+        pending.push(geometryPromise);
+      }
+    }
+    return Promise.all(pending);
+  }
+  loadMesh(meshIndex) {
+    const parser = this;
+    const json = this.json;
+    const extensions = this.extensions;
+    const meshDef = json.meshes[meshIndex];
+    const primitives = meshDef.primitives;
+    const pending = [];
+    for (let i = 0, il = primitives.length;i < il; i++) {
+      const material = primitives[i].material === undefined ? createDefaultMaterial(this.cache) : this.getDependency("material", primitives[i].material);
+      pending.push(material);
+    }
+    pending.push(parser.loadGeometries(primitives));
+    return Promise.all(pending).then(function(results) {
+      const materials = results.slice(0, results.length - 1);
+      const geometries = results[results.length - 1];
+      const meshes = [];
+      for (let i = 0, il = geometries.length;i < il; i++) {
+        const geometry = geometries[i];
+        const primitive = primitives[i];
+        let mesh;
+        const material = materials[i];
+        if (primitive.mode === WEBGL_CONSTANTS.TRIANGLES || primitive.mode === WEBGL_CONSTANTS.TRIANGLE_STRIP || primitive.mode === WEBGL_CONSTANTS.TRIANGLE_FAN || primitive.mode === undefined) {
+          mesh = meshDef.isSkinnedMesh === true ? new SkinnedMesh(geometry, material) : new Mesh(geometry, material);
+          if (mesh.isSkinnedMesh === true) {
+            mesh.normalizeSkinWeights();
+          }
+          if (primitive.mode === WEBGL_CONSTANTS.TRIANGLE_STRIP) {
+            mesh.geometry = toTrianglesDrawMode(mesh.geometry, TriangleStripDrawMode);
+          } else if (primitive.mode === WEBGL_CONSTANTS.TRIANGLE_FAN) {
+            mesh.geometry = toTrianglesDrawMode(mesh.geometry, TriangleFanDrawMode);
+          }
+        } else if (primitive.mode === WEBGL_CONSTANTS.LINES) {
+          mesh = new LineSegments(geometry, material);
+        } else if (primitive.mode === WEBGL_CONSTANTS.LINE_STRIP) {
+          mesh = new Line(geometry, material);
+        } else if (primitive.mode === WEBGL_CONSTANTS.LINE_LOOP) {
+          mesh = new LineLoop(geometry, material);
+        } else if (primitive.mode === WEBGL_CONSTANTS.POINTS) {
+          mesh = new Points(geometry, material);
+        } else {
+          throw new Error("THREE.GLTFLoader: Primitive mode unsupported: " + primitive.mode);
+        }
+        if (Object.keys(mesh.geometry.morphAttributes).length > 0) {
+          updateMorphTargets(mesh, meshDef);
+        }
+        mesh.name = parser.createUniqueName(meshDef.name || "mesh_" + meshIndex);
+        assignExtrasToUserData(mesh, meshDef);
+        if (primitive.extensions)
+          addUnknownExtensionsToUserData(extensions, mesh, primitive);
+        parser.assignFinalMaterial(mesh);
+        meshes.push(mesh);
+      }
+      for (let i = 0, il = meshes.length;i < il; i++) {
+        parser.associations.set(meshes[i], {
+          meshes: meshIndex,
+          primitives: i
+        });
+      }
+      if (meshes.length === 1) {
+        if (meshDef.extensions)
+          addUnknownExtensionsToUserData(extensions, meshes[0], meshDef);
+        return meshes[0];
+      }
+      const group = new Group;
+      if (meshDef.extensions)
+        addUnknownExtensionsToUserData(extensions, group, meshDef);
+      parser.associations.set(group, { meshes: meshIndex });
+      for (let i = 0, il = meshes.length;i < il; i++) {
+        group.add(meshes[i]);
+      }
+      return group;
+    });
+  }
+  loadCamera(cameraIndex3) {
+    let camera;
+    const cameraDef = this.json.cameras[cameraIndex3];
+    const params = cameraDef[cameraDef.type];
+    if (!params) {
+      console.warn("THREE.GLTFLoader: Missing camera parameters.");
+      return;
+    }
+    if (cameraDef.type === "perspective") {
+      camera = new PerspectiveCamera(MathUtils.radToDeg(params.yfov), params.aspectRatio || 1, params.znear || 1, params.zfar || 2000000);
+    } else if (cameraDef.type === "orthographic") {
+      camera = new OrthographicCamera(-params.xmag, params.xmag, params.ymag, -params.ymag, params.znear, params.zfar);
+    }
+    if (cameraDef.name)
+      camera.name = this.createUniqueName(cameraDef.name);
+    assignExtrasToUserData(camera, cameraDef);
+    return Promise.resolve(camera);
+  }
+  loadSkin(skinIndex) {
+    const skinDef = this.json.skins[skinIndex];
+    const pending = [];
+    for (let i = 0, il = skinDef.joints.length;i < il; i++) {
+      pending.push(this._loadNodeShallow(skinDef.joints[i]));
+    }
+    if (skinDef.inverseBindMatrices !== undefined) {
+      pending.push(this.getDependency("accessor", skinDef.inverseBindMatrices));
+    } else {
+      pending.push(null);
+    }
+    return Promise.all(pending).then(function(results) {
+      const inverseBindMatrices = results.pop();
+      const jointNodes = results;
+      const bones = [];
+      const boneInverses = [];
+      for (let i = 0, il = jointNodes.length;i < il; i++) {
+        const jointNode = jointNodes[i];
+        if (jointNode) {
+          bones.push(jointNode);
+          const mat = new Matrix4;
+          if (inverseBindMatrices !== null) {
+            mat.fromArray(inverseBindMatrices.array, i * 16);
+          }
+          boneInverses.push(mat);
+        } else {
+          console.warn('THREE.GLTFLoader: Joint "%s" could not be found.', skinDef.joints[i]);
+        }
+      }
+      return new Skeleton(bones, boneInverses);
+    });
+  }
+  loadAnimation(animationIndex) {
+    const json = this.json;
+    const parser = this;
+    const animationDef = json.animations[animationIndex];
+    const animationName = animationDef.name ? animationDef.name : "animation_" + animationIndex;
+    const pendingNodes = [];
+    const pendingInputAccessors = [];
+    const pendingOutputAccessors = [];
+    const pendingSamplers = [];
+    const pendingTargets = [];
+    for (let i = 0, il = animationDef.channels.length;i < il; i++) {
+      const channel = animationDef.channels[i];
+      const sampler3 = animationDef.samplers[channel.sampler];
+      const target = channel.target;
+      const name = target.node;
+      const input = animationDef.parameters !== undefined ? animationDef.parameters[sampler3.input] : sampler3.input;
+      const output3 = animationDef.parameters !== undefined ? animationDef.parameters[sampler3.output] : sampler3.output;
+      if (target.node === undefined)
+        continue;
+      pendingNodes.push(this.getDependency("node", name));
+      pendingInputAccessors.push(this.getDependency("accessor", input));
+      pendingOutputAccessors.push(this.getDependency("accessor", output3));
+      pendingSamplers.push(sampler3);
+      pendingTargets.push(target);
+    }
+    return Promise.all([
+      Promise.all(pendingNodes),
+      Promise.all(pendingInputAccessors),
+      Promise.all(pendingOutputAccessors),
+      Promise.all(pendingSamplers),
+      Promise.all(pendingTargets)
+    ]).then(function(dependencies) {
+      const nodes = dependencies[0];
+      const inputAccessors = dependencies[1];
+      const outputAccessors = dependencies[2];
+      const samplers = dependencies[3];
+      const targets = dependencies[4];
+      const tracks = [];
+      for (let i = 0, il = nodes.length;i < il; i++) {
+        const node = nodes[i];
+        const inputAccessor = inputAccessors[i];
+        const outputAccessor = outputAccessors[i];
+        const sampler3 = samplers[i];
+        const target = targets[i];
+        if (node === undefined)
+          continue;
+        if (node.updateMatrix) {
+          node.updateMatrix();
+        }
+        const createdTracks = parser._createAnimationTracks(node, inputAccessor, outputAccessor, sampler3, target);
+        if (createdTracks) {
+          for (let k = 0;k < createdTracks.length; k++) {
+            tracks.push(createdTracks[k]);
+          }
+        }
+      }
+      const animation = new AnimationClip(animationName, undefined, tracks);
+      assignExtrasToUserData(animation, animationDef);
+      return animation;
+    });
+  }
+  createNodeMesh(nodeIndex) {
+    const json = this.json;
+    const parser = this;
+    const nodeDef = json.nodes[nodeIndex];
+    if (nodeDef.mesh === undefined)
+      return null;
+    return parser.getDependency("mesh", nodeDef.mesh).then(function(mesh) {
+      const node = parser._getNodeRef(parser.meshCache, nodeDef.mesh, mesh);
+      if (nodeDef.weights !== undefined) {
+        node.traverse(function(o) {
+          if (!o.isMesh)
+            return;
+          for (let i = 0, il = nodeDef.weights.length;i < il; i++) {
+            o.morphTargetInfluences[i] = nodeDef.weights[i];
+          }
+        });
+      }
+      return node;
+    });
+  }
+  loadNode(nodeIndex) {
+    const json = this.json;
+    const parser = this;
+    const nodeDef = json.nodes[nodeIndex];
+    const nodePending = parser._loadNodeShallow(nodeIndex);
+    const childPending = [];
+    const childrenDef = nodeDef.children || [];
+    for (let i = 0, il = childrenDef.length;i < il; i++) {
+      childPending.push(parser.getDependency("node", childrenDef[i]));
+    }
+    const skeletonPending = nodeDef.skin === undefined ? Promise.resolve(null) : parser.getDependency("skin", nodeDef.skin);
+    return Promise.all([
+      nodePending,
+      Promise.all(childPending),
+      skeletonPending
+    ]).then(function(results) {
+      const node = results[0];
+      const children = results[1];
+      const skeleton = results[2];
+      if (skeleton !== null) {
+        node.traverse(function(mesh) {
+          if (!mesh.isSkinnedMesh)
+            return;
+          mesh.bind(skeleton, _identityMatrix2);
+        });
+      }
+      for (let i = 0, il = children.length;i < il; i++) {
+        node.add(children[i]);
+      }
+      if (node.userData.pivot !== undefined && children.length > 0) {
+        const pivot = node.userData.pivot;
+        const pivotChild = children[0];
+        node.pivot = new Vector3().fromArray(pivot);
+        node.position.x -= pivot[0];
+        node.position.y -= pivot[1];
+        node.position.z -= pivot[2];
+        pivotChild.position.set(0, 0, 0);
+        delete node.userData.pivot;
+      }
+      return node;
+    });
+  }
+  _loadNodeShallow(nodeIndex) {
+    const json = this.json;
+    const extensions = this.extensions;
+    const parser = this;
+    if (this.nodeCache[nodeIndex] !== undefined) {
+      return this.nodeCache[nodeIndex];
+    }
+    const nodeDef = json.nodes[nodeIndex];
+    const nodeName = nodeDef.name ? parser.createUniqueName(nodeDef.name) : "";
+    const pending = [];
+    const meshPromise = parser._invokeOne(function(ext) {
+      return ext.createNodeMesh && ext.createNodeMesh(nodeIndex);
+    });
+    if (meshPromise) {
+      pending.push(meshPromise);
+    }
+    if (nodeDef.camera !== undefined) {
+      pending.push(parser.getDependency("camera", nodeDef.camera).then(function(camera) {
+        return parser._getNodeRef(parser.cameraCache, nodeDef.camera, camera);
+      }));
+    }
+    parser._invokeAll(function(ext) {
+      return ext.createNodeAttachment && ext.createNodeAttachment(nodeIndex);
+    }).forEach(function(promise) {
+      pending.push(promise);
+    });
+    this.nodeCache[nodeIndex] = Promise.all(pending).then(function(objects) {
+      let node;
+      if (nodeDef.isBone === true) {
+        node = new Bone;
+      } else if (objects.length > 1) {
+        node = new Group;
+      } else if (objects.length === 1) {
+        node = objects[0];
+      } else {
+        node = new Object3D;
+      }
+      if (node !== objects[0]) {
+        for (let i = 0, il = objects.length;i < il; i++) {
+          node.add(objects[i]);
+        }
+      }
+      if (nodeDef.name) {
+        node.userData.name = nodeDef.name;
+        node.name = nodeName;
+      }
+      assignExtrasToUserData(node, nodeDef);
+      if (nodeDef.extensions)
+        addUnknownExtensionsToUserData(extensions, node, nodeDef);
+      if (nodeDef.matrix !== undefined) {
+        const matrix = new Matrix4;
+        matrix.fromArray(nodeDef.matrix);
+        node.applyMatrix4(matrix);
+      } else {
+        if (nodeDef.translation !== undefined) {
+          node.position.fromArray(nodeDef.translation);
+        }
+        if (nodeDef.rotation !== undefined) {
+          node.quaternion.fromArray(nodeDef.rotation);
+        }
+        if (nodeDef.scale !== undefined) {
+          node.scale.fromArray(nodeDef.scale);
+        }
+      }
+      if (!parser.associations.has(node)) {
+        parser.associations.set(node, {});
+      } else if (nodeDef.mesh !== undefined && parser.meshCache.refs[nodeDef.mesh] > 1) {
+        const mapping = parser.associations.get(node);
+        parser.associations.set(node, { ...mapping });
+      }
+      parser.associations.get(node).nodes = nodeIndex;
+      return node;
+    });
+    return this.nodeCache[nodeIndex];
+  }
+  loadScene(sceneIndex) {
+    const extensions = this.extensions;
+    const sceneDef = this.json.scenes[sceneIndex];
+    const parser = this;
+    const scene = new Group;
+    if (sceneDef.name)
+      scene.name = parser.createUniqueName(sceneDef.name);
+    assignExtrasToUserData(scene, sceneDef);
+    if (sceneDef.extensions)
+      addUnknownExtensionsToUserData(extensions, scene, sceneDef);
+    const nodeIds = sceneDef.nodes || [];
+    const pending = [];
+    for (let i = 0, il = nodeIds.length;i < il; i++) {
+      pending.push(parser.getDependency("node", nodeIds[i]));
+    }
+    return Promise.all(pending).then(function(nodes) {
+      for (let i = 0, il = nodes.length;i < il; i++) {
+        const node = nodes[i];
+        if (node.parent !== null) {
+          scene.add(clone(node));
+        } else {
+          scene.add(node);
+        }
+      }
+      const reduceAssociations = (node) => {
+        const reducedAssociations = new Map;
+        for (const [key, value] of parser.associations) {
+          if (key instanceof Material || key instanceof Texture) {
+            reducedAssociations.set(key, value);
+          }
+        }
+        node.traverse((node2) => {
+          const mappings = parser.associations.get(node2);
+          if (mappings != null) {
+            reducedAssociations.set(node2, mappings);
+          }
+        });
+        return reducedAssociations;
+      };
+      parser.associations = reduceAssociations(scene);
+      return scene;
+    });
+  }
+  _createAnimationTracks(node, inputAccessor, outputAccessor, sampler3, target) {
+    const tracks = [];
+    const targetName = node.name ? node.name : node.uuid;
+    const targetNames = [];
+    function collectMorphTargets(object) {
+      if (object.morphTargetInfluences) {
+        targetNames.push(object.name ? object.name : object.uuid);
+      }
+    }
+    if (PATH_PROPERTIES[target.path] === PATH_PROPERTIES.weights) {
+      collectMorphTargets(node);
+      if (node.isGroup) {
+        node.children.forEach(collectMorphTargets);
+      }
+    } else {
+      targetNames.push(targetName);
+    }
+    let TypedKeyframeTrack;
+    switch (PATH_PROPERTIES[target.path]) {
+      case PATH_PROPERTIES.weights:
+        TypedKeyframeTrack = NumberKeyframeTrack;
+        break;
+      case PATH_PROPERTIES.rotation:
+        TypedKeyframeTrack = QuaternionKeyframeTrack;
+        break;
+      case PATH_PROPERTIES.translation:
+      case PATH_PROPERTIES.scale:
+        TypedKeyframeTrack = VectorKeyframeTrack;
+        break;
+      default:
+        switch (outputAccessor.itemSize) {
+          case 1:
+            TypedKeyframeTrack = NumberKeyframeTrack;
+            break;
+          case 2:
+          case 3:
+          default:
+            TypedKeyframeTrack = VectorKeyframeTrack;
+            break;
+        }
+        break;
+    }
+    const interpolation = sampler3.interpolation !== undefined ? INTERPOLATION[sampler3.interpolation] : InterpolateLinear;
+    const outputArray = this._getArrayFromAccessor(outputAccessor);
+    for (let j = 0, jl = targetNames.length;j < jl; j++) {
+      const track = new TypedKeyframeTrack(targetNames[j] + "." + PATH_PROPERTIES[target.path], inputAccessor.array, outputArray, interpolation);
+      if (sampler3.interpolation === "CUBICSPLINE") {
+        this._createCubicSplineTrackInterpolant(track);
+      }
+      tracks.push(track);
+    }
+    return tracks;
+  }
+  _getArrayFromAccessor(accessor) {
+    let outputArray = accessor.array;
+    if (accessor.normalized) {
+      const scale2 = getNormalizedComponentScale(outputArray.constructor);
+      const scaled = new Float32Array(outputArray.length);
+      for (let j = 0, jl = outputArray.length;j < jl; j++) {
+        scaled[j] = outputArray[j] * scale2;
+      }
+      outputArray = scaled;
+    }
+    return outputArray;
+  }
+  _createCubicSplineTrackInterpolant(track) {
+    track.createInterpolant = function InterpolantFactoryMethodGLTFCubicSpline(result) {
+      const interpolantType = this instanceof QuaternionKeyframeTrack ? GLTFCubicSplineQuaternionInterpolant : GLTFCubicSplineInterpolant;
+      return new interpolantType(this.times, this.values, this.getValueSize() / 3, result);
+    };
+    track.createInterpolant.isInterpolantFactoryMethodGLTFCubicSpline = true;
+  }
+}
+function computeBounds(geometry, primitiveDef, parser) {
+  const attributes = primitiveDef.attributes;
+  const box = new Box3;
+  if (attributes.POSITION !== undefined) {
+    const accessor = parser.json.accessors[attributes.POSITION];
+    const min3 = accessor.min;
+    const max3 = accessor.max;
+    if (min3 !== undefined && max3 !== undefined) {
+      box.set(new Vector3(min3[0], min3[1], min3[2]), new Vector3(max3[0], max3[1], max3[2]));
+      if (accessor.normalized) {
+        const boxScale = getNormalizedComponentScale(WEBGL_COMPONENT_TYPES[accessor.componentType]);
+        box.min.multiplyScalar(boxScale);
+        box.max.multiplyScalar(boxScale);
+      }
+    } else {
+      console.warn("THREE.GLTFLoader: Missing min/max properties for accessor POSITION.");
+      return;
+    }
+  } else {
+    return;
+  }
+  const targets = primitiveDef.targets;
+  if (targets !== undefined) {
+    const maxDisplacement = new Vector3;
+    const vector = new Vector3;
+    for (let i = 0, il = targets.length;i < il; i++) {
+      const target = targets[i];
+      if (target.POSITION !== undefined) {
+        const accessor = parser.json.accessors[target.POSITION];
+        const min3 = accessor.min;
+        const max3 = accessor.max;
+        if (min3 !== undefined && max3 !== undefined) {
+          vector.setX(Math.max(Math.abs(min3[0]), Math.abs(max3[0])));
+          vector.setY(Math.max(Math.abs(min3[1]), Math.abs(max3[1])));
+          vector.setZ(Math.max(Math.abs(min3[2]), Math.abs(max3[2])));
+          if (accessor.normalized) {
+            const boxScale = getNormalizedComponentScale(WEBGL_COMPONENT_TYPES[accessor.componentType]);
+            vector.multiplyScalar(boxScale);
+          }
+          maxDisplacement.max(vector);
+        } else {
+          console.warn("THREE.GLTFLoader: Missing min/max properties for accessor POSITION.");
+        }
+      }
+    }
+    box.expandByVector(maxDisplacement);
+  }
+  geometry.boundingBox = box;
+  const sphere = new Sphere;
+  box.getCenter(sphere.center);
+  sphere.radius = box.min.distanceTo(box.max) / 2;
+  geometry.boundingSphere = sphere;
+}
+function addPrimitiveAttributes(geometry, primitiveDef, parser) {
+  const attributes = primitiveDef.attributes;
+  const pending = [];
+  function assignAttributeAccessor(accessorIndex, attributeName) {
+    return parser.getDependency("accessor", accessorIndex).then(function(accessor) {
+      geometry.setAttribute(attributeName, accessor);
+    });
+  }
+  for (const gltfAttributeName in attributes) {
+    const threeAttributeName = ATTRIBUTES[gltfAttributeName] || gltfAttributeName.toLowerCase();
+    if (threeAttributeName in geometry.attributes)
+      continue;
+    pending.push(assignAttributeAccessor(attributes[gltfAttributeName], threeAttributeName));
+  }
+  if (primitiveDef.indices !== undefined && !geometry.index) {
+    const accessor = parser.getDependency("accessor", primitiveDef.indices).then(function(accessor2) {
+      geometry.setIndex(accessor2);
+    });
+    pending.push(accessor);
+  }
+  if (ColorManagement.workingColorSpace !== LinearSRGBColorSpace && "COLOR_0" in attributes) {
+    console.warn(`THREE.GLTFLoader: Converting vertex colors from "srgb-linear" to "${ColorManagement.workingColorSpace}" not supported.`);
+  }
+  assignExtrasToUserData(geometry, primitiveDef);
+  computeBounds(geometry, primitiveDef, parser);
+  return Promise.all(pending).then(function() {
+    return primitiveDef.targets !== undefined ? addMorphTargets(geometry, primitiveDef.targets, parser) : geometry;
+  });
+}
+
+// crates/afterglow-web/www/engine/resource.ts
+var RESOURCES = Symbol.for("afterglow-resources");
+var RESOURCES_SEALED = Symbol.for("afterglow-resources-sealed");
+function ensureStore(world) {
+  const w = world;
+  if (!w[RESOURCES])
+    w[RESOURCES] = {};
+  return w[RESOURCES];
+}
+
+class Resource {
+  name;
+  factory;
+  constructor(name, factory) {
+    this.name = name;
+    this.factory = factory;
+  }
+  get(world) {
+    const store = ensureStore(world);
+    if (!(this.name in store)) {
+      if (world[RESOURCES_SEALED] === true)
+        throw new Error(`resource ${this.name} was not initialized before gameplay seal`);
+      store[this.name] = this.factory();
+    }
+    return store[this.name];
+  }
+  set(world, value) {
+    ensureStore(world)[this.name] = value;
+  }
+  has(world) {
+    return this.name in ensureStore(world);
+  }
+  remove(world) {
+    delete ensureStore(world)[this.name];
+  }
+}
+function defineResource(name, factory) {
+  return new Resource(name, factory);
+}
+
+// crates/afterglow-web/www/engine/asset-handle.ts
+class AssetHandle {
+  asset;
+  generation = 0;
+  state = "loading";
+  path;
+  constructor(path, fallback) {
+    this.path = path;
+    this.asset = fallback;
+  }
+  get isReady() {
+    return this.state === "ready";
+  }
+  get isError() {
+    return this.state === "error";
+  }
+  lod = -1;
+}
+
+// crates/afterglow-web/www/engine/fallback.ts
+var _fallbackGeometry = null;
+var _fallbackMaterial = null;
+var _fallbackGroup = null;
+function fallbackGeometry() {
+  if (!_fallbackGeometry) {
+    _fallbackGeometry = new BoxGeometry(2, 2, 2);
+  }
+  return _fallbackGeometry;
+}
+function fallbackMaterial() {
+  if (!_fallbackMaterial) {
+    _fallbackMaterial = new MeshBasicMaterial({ color: 16711935 });
+  }
+  return _fallbackMaterial;
+}
+function fallbackGroup() {
+  if (!_fallbackGroup) {
+    _fallbackGroup = new Group;
+    const mesh = new Mesh(fallbackGeometry(), fallbackMaterial());
+    _fallbackGroup.add(mesh);
+    _fallbackGroup.name = "__afterglow_fallback__";
+  }
+  return _fallbackGroup.clone(true);
+}
+
+// crates/afterglow-web/www/engine/asset-store.ts
+var MAX_SINGLE_LOAD = 1 << 20;
+var CHUNK_SIZE = 512 * 1024;
+var DEFAULT_LOD_RATIOS = [1, 0.5, 0.25, 0.1];
+var DEFAULT_TARGET_ERROR = 0.02;
+var DEFAULT_ASSET_CAPACITY = 1024;
+async function parseTexture(bytes) {
+  const bitmap = await createImageBitmap(new Blob([bytes]));
+  const tex = new Texture(bitmap);
+  tex.needsUpdate = true;
+  tex.colorSpace = SRGBColorSpace;
+  return tex;
+}
+async function parseGLTFAsset(bytes, loader) {
+  const buf = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(buf).set(bytes);
+  if (!loader)
+    throw new Error("parseGLTFAsset requires an injected Three.js GLTFLoader");
+  return new Promise((resolve, reject) => loader.parse(buf, "", (result) => resolve(result), reject));
+}
+function parseGlbMaterialTextures(bytes) {
+  if (bytes.byteLength < 20 || new DataView(bytes.buffer, bytes.byteOffset, 4).getUint32(0, true) !== 1179937895)
+    throw new Error("material metadata requires a GLB payload");
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const jsonLength = view.getUint32(12, true);
+  const jsonType = view.getUint32(16, true);
+  if (jsonType !== 1313821514 || 20 + jsonLength > bytes.byteLength)
+    throw new Error("GLB has no valid JSON chunk");
+  const document2 = JSON.parse(new TextDecoder().decode(bytes.subarray(20, 20 + jsonLength)).replace(/[\\0 ]+$/, ""));
+  const textures = document2.textures ?? [];
+  const image = (info) => {
+    if (info?.index === undefined)
+      return null;
+    const source = textures[info.index]?.source;
+    return Number.isSafeInteger(source) && source >= 0 ? source : null;
+  };
+  return (document2.materials ?? []).map((material, index) => ({
+    index,
+    name: material.name ?? `material-${index}`,
+    baseColorImage: image(material.pbrMetallicRoughness?.baseColorTexture),
+    metallicRoughnessImage: image(material.pbrMetallicRoughness?.metallicRoughnessTexture),
+    normalImage: image(material.normalTexture),
+    emissiveImage: image(material.emissiveTexture)
+  }));
+}
+async function parseGLTF(bytes, loader) {
+  return (await parseGLTFAsset(bytes, loader)).scene;
+}
+function parseJSON(bytes) {
+  return JSON.parse(new TextDecoder().decode(bytes));
+}
+class AssetStore {
+  maxCompletionsPerPoll;
+  idsByPath = new Map;
+  paths;
+  handles;
+  states;
+  requestTokens;
+  completionIds;
+  completionTokens;
+  completionKinds;
+  completionValues;
+  completionHead = 0;
+  completionTail = 0;
+  completionCount = 0;
+  completionHighWater = 0;
+  completionOverflows = 0;
+  assetCount = 0;
+  readyCount = 0;
+  meshopt;
+  loader;
+  vtStore = null;
+  constructor(loader, meshopt, capacity = DEFAULT_ASSET_CAPACITY, maxCompletionsPerPoll = 32) {
+    this.maxCompletionsPerPoll = maxCompletionsPerPoll;
+    if (!Number.isInteger(capacity) || capacity <= 0)
+      throw new RangeError("asset capacity must be positive");
+    if (!Number.isInteger(maxCompletionsPerPoll) || maxCompletionsPerPoll <= 0)
+      throw new RangeError("asset completion limit must be positive");
+    this.loader = loader;
+    this.meshopt = meshopt;
+    this.paths = new Array(capacity).fill(null);
+    this.handles = new Array(capacity).fill(null);
+    this.states = new Uint8Array(capacity);
+    this.requestTokens = new Uint32Array(capacity);
+    this.completionIds = new Int32Array(capacity);
+    this.completionTokens = new Uint32Array(capacity);
+    this.completionKinds = new Uint8Array(capacity);
+    this.completionValues = new Array(capacity).fill(null);
+  }
+  get assetLoader() {
+    return this.loader;
+  }
+  setVirtualTextureStore(vt) {
+    this.vtStore = vt;
+  }
+  get virtualTextureStore() {
+    return this.vtStore;
+  }
+  poll() {
+    this.loader.poll();
+    this.meshopt?.poll();
+    this.drainCompletions(this.maxCompletionsPerPoll);
+  }
+  enqueueCompletion(id, token, kind, value) {
+    if (this.requestTokens[id] !== token || this.handles[id] === null) {
+      if (kind === 1)
+        value?.dispose?.();
+      return;
+    }
+    if (this.completionCount === this.completionIds.length) {
+      this.completionOverflows++;
+      if (kind === 1)
+        value?.dispose?.();
+      this.handles[id].state = "error";
+      this.states[id] = 6 /* Error */;
+      return;
+    }
+    const slot = this.completionTail;
+    this.completionIds[slot] = id;
+    this.completionTokens[slot] = token;
+    this.completionKinds[slot] = kind;
+    this.completionValues[slot] = value;
+    this.completionTail = (slot + 1) % this.completionIds.length;
+    this.completionCount++;
+    if (this.completionCount > this.completionHighWater)
+      this.completionHighWater = this.completionCount;
+    this.states[id] = 4 /* ReadyToPublish */;
+  }
+  drainCompletions(limit) {
+    let drained = 0;
+    while (drained < limit && this.completionCount !== 0) {
+      const slot = this.completionHead;
+      const id = this.completionIds[slot];
+      const token = this.completionTokens[slot];
+      const kind = this.completionKinds[slot];
+      const value = this.completionValues[slot];
+      this.completionValues[slot] = null;
+      this.completionHead = (slot + 1) % this.completionIds.length;
+      this.completionCount--;
+      drained++;
+      const handle = this.handles[id];
+      if (this.requestTokens[id] !== token || handle === null) {
+        if (kind === 1)
+          value?.dispose?.();
+        continue;
+      }
+      if (kind === 1) {
+        handle.asset = value;
+        handle.generation++;
+        handle.state = "ready";
+        handle.lod = 0;
+        this.states[id] = 5 /* Ready */;
+        this.readyCount++;
+      } else {
+        handle.state = "error";
+        this.states[id] = 6 /* Error */;
+        this.reportCompletionError(kind, id, value);
+      }
+    }
+    return drained;
+  }
+  reportCompletionError(kind, id, value) {
+    const path = this.paths[id];
+    console.error(kind === 2 ? `[afterglow] parse failed: ${path}` : `[afterglow] load failed: ${path}`, value);
+  }
+  registerAsset(path) {
+    const existing = this.idsByPath.get(path);
+    if (existing !== undefined)
+      return existing;
+    if (this.assetCount === this.states.length)
+      return -1;
+    const id = this.assetCount++;
+    this.idsByPath.set(path, id);
+    this.paths[id] = path;
+    this.states[id] = 1 /* Idle */;
+    return id;
+  }
+  observeLoad(id, handle, parser) {
+    const path = this.paths[id];
+    const token = ++this.requestTokens[id];
+    this.states[id] = 2 /* Reading */;
+    this.startLoad(path).then(async (bytes) => {
+      if (this.requestTokens[id] !== token || this.handles[id] !== handle)
+        return;
+      this.states[id] = 3 /* Parsing */;
+      try {
+        const asset = await parser(bytes);
+        if (this.requestTokens[id] !== token || this.handles[id] !== handle) {
+          asset?.dispose?.();
+          return;
+        }
+        this.enqueueCompletion(id, token, 1, asset);
+      } catch (err) {
+        this.enqueueCompletion(id, token, 2, err);
+      }
+    }, (err) => {
+      this.enqueueCompletion(id, token, 3, err);
+    });
+  }
+  tryLoad(path, parser, fallback) {
+    const id = this.registerAsset(path);
+    if (id < 0)
+      return { status: 2 /* CapacityExceeded */, id, handle: null };
+    return this.tryLoadAsset(id, parser, fallback);
+  }
+  tryLoadAsset(id, parser, fallback) {
+    if (!Number.isInteger(id) || id < 0 || id >= this.assetCount)
+      return { status: 2 /* CapacityExceeded */, id: -1, handle: null };
+    const existing = this.handles[id];
+    const state = this.states[id];
+    if (existing && state !== 1 /* Idle */ && state !== 6 /* Error */)
+      return { status: 1 /* Existing */, id, handle: existing };
+    if (state === 5 /* Ready */)
+      return { status: 1 /* Existing */, id, handle: existing };
+    const path = this.paths[id];
+    const handle = new AssetHandle(path, fallback);
+    this.handles[id] = handle;
+    this.observeLoad(id, handle, parser);
+    return { status: 0 /* Started */, id, handle };
+  }
+  load(path, parser, fallback) {
+    const result = this.tryLoad(path, parser, fallback);
+    if (!result.handle)
+      throw new RangeError(`asset capacity exceeded while registering ${path}`);
+    return result.handle;
+  }
+  getHandleById(id) {
+    if (id < 0 || id >= this.assetCount || this.states[id] !== 5 /* Ready */)
+      return;
+    return this.handles[id];
+  }
+  getHandle(path) {
+    const id = this.idsByPath.get(path);
+    return id === undefined ? undefined : this.getHandleById(id);
+  }
+  has(path) {
+    const id = this.idsByPath.get(path);
+    return id !== undefined && this.states[id] === 5 /* Ready */;
+  }
+  isLoading(path) {
+    const id = this.idsByPath.get(path);
+    return id !== undefined && (this.states[id] === 2 /* Reading */ || this.states[id] === 3 /* Parsing */ || this.states[id] === 4 /* ReadyToPublish */);
+  }
+  async optimizeGltfScene(scene) {
+    if (!this.meshopt)
+      throw new Error("optimizeGltfScene requires a meshopt worker");
+    const meshes = [];
+    scene.traverse((object) => {
+      if (object.isMesh)
+        meshes.push(object);
+    });
+    const stats = [];
+    for (const mesh of meshes) {
+      const geometry = mesh.geometry;
+      const position = geometry.getAttribute("position");
+      if (!position || position.itemSize < 3)
+        continue;
+      let source;
+      if (geometry.index) {
+        source = new Uint32Array(geometry.index.count);
+        for (let index = 0;index < source.length; index++)
+          source[index] = geometry.index.getX(index);
+      } else {
+        source = new Uint32Array(position.count);
+        for (let index = 0;index < source.length; index++)
+          source[index] = index;
+      }
+      if (source.length % 3 !== 0)
+        throw new Error(`mesh ${mesh.name} index count is not a triangle list`);
+      const positions = new Float32Array(position.count * 3);
+      for (let index = 0;index < position.count; index++) {
+        const target = index * 3;
+        positions[target] = position.getX(index);
+        positions[target + 1] = position.getY(index);
+        positions[target + 2] = position.getZ(index);
+      }
+      const original = await this.meshopt.analyzeVertexCache(source, position.count);
+      const optimized = source.slice();
+      const groups = geometry.groups.length === 0 ? [{ start: 0, count: source.length }] : geometry.groups;
+      for (const group of groups) {
+        if (group.start % 3 !== 0 || group.count % 3 !== 0 || group.start + group.count > source.length)
+          throw new Error(`mesh ${mesh.name} has a non-triangular material group`);
+        const groupIndices = source.slice(group.start, group.start + group.count);
+        const cacheOptimized = await this.meshopt.optimizeVertexCache(groupIndices, position.count);
+        const overdrawOptimized = await this.meshopt.optimizeOverdraw(cacheOptimized, positions, 12, 1.05);
+        optimized.set(overdrawOptimized, group.start);
+      }
+      const optimizedAnalysis = await this.meshopt.analyzeVertexCache(optimized, position.count);
+      const compressed = await this.meshopt.encodeIndexBuffer(optimized, position.count);
+      geometry.setIndex(new BufferAttribute(optimized, 1));
+      stats.push({
+        name: mesh.name,
+        vertexCount: position.count,
+        skinned: mesh.isSkinnedMesh === true,
+        preservedAttributes: Object.keys(geometry.attributes),
+        originalTriangles: source.length / 3,
+        originalAcmr: original[0],
+        optimizedAcmr: optimizedAnalysis[0],
+        compressedIndexBytes: compressed.byteLength,
+        uncompressedIndexBytes: optimized.byteLength
+      });
+    }
+    return stats;
+  }
+  loadOptimizedGLTF(path, loader) {
+    const fallback = { scene: fallbackGroup(), animations: [], meshOptimization: [], materialTextures: [] };
+    return this.load(path, async (bytes) => {
+      const materialTextures = parseGlbMaterialTextures(bytes);
+      const parsed = await parseGLTFAsset(bytes, loader);
+      const meshOptimization = await this.optimizeGltfScene(parsed.scene);
+      return { ...parsed, meshOptimization, materialTextures };
+    }, fallback);
+  }
+  loadModel(path) {
+    return this.load(path, (bytes) => this.processModel(bytes, path));
+  }
+  async processModel(bytes, path) {
+    let meshes = [];
+    let textures = new Map;
+    try {
+      const scene = await parseGLTF(bytes);
+      scene.traverse((obj) => {
+        if (obj.isMesh && obj.geometry?.index) {
+          const geo = obj.geometry;
+          meshes.push({
+            indices: new Uint32Array(geo.index.array),
+            positions: new Float32Array(geo.attributes.position.array),
+            uvs: geo.attributes.uv ? new Float32Array(geo.attributes.uv.array) : new Float32Array(0)
+          });
+        }
+        if (obj.isMesh && obj.material?.map)
+          textures.set("diffuse", obj.material.map);
+      });
+    } catch {
+      meshes = this.parseMinimalGLB(bytes);
+    }
+    const stats = [];
+    const meshLods = [];
+    for (const mesh of meshes) {
+      const { lods, stat } = await this.optimizeMesh(mesh.indices, mesh.positions, mesh.uvs);
+      meshLods.push(lods);
+      if (stat)
+        stats.push(stat);
+    }
+    return { meshes: meshLods, textures, stats };
+  }
+  parseMinimalGLB(bytes) {
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    if (view.getUint32(0, true) !== 1179937895)
+      throw new Error("not a GLB");
+    const totalLen = view.getUint32(8, true);
+    let off = 12;
+    let json = null;
+    let bin = null;
+    while (off < totalLen) {
+      const len = view.getUint32(off, true);
+      off += 4;
+      const type = view.getUint32(off, true);
+      off += 4;
+      if (type === 1313821514)
+        json = JSON.parse(new TextDecoder().decode(bytes.subarray(off, off + len)));
+      else if (type === 5130562)
+        bin = bytes.subarray(off, off + len);
+      off += len;
+    }
+    if (!json || !bin)
+      throw new Error("GLB missing JSON or BIN");
+    const accs = json.accessors || [];
+    const bvs = json.bufferViews || [];
+    const prims = json.meshes?.[0]?.primitives || [];
+    const meshes = [];
+    for (const prim of prims) {
+      const read = (aIdx, T2) => {
+        if (aIdx === undefined)
+          return new T2(0);
+        const a = accs[aIdx];
+        const bv = bvs[a.bufferView];
+        const o = (bv.byteOffset || 0) + (a.byteOffset || 0);
+        const comps = a.type === "VEC3" ? 3 : a.type === "VEC2" ? 2 : 1;
+        return new T2(bin.buffer, bin.byteOffset + o, a.count * comps).slice();
+      };
+      meshes.push({
+        indices: read(prim.indices, Uint32Array),
+        positions: read(prim.attributes.POSITION, Float32Array),
+        uvs: prim.attributes.TEXCOORD_0 !== undefined ? read(prim.attributes.TEXCOORD_0, Float32Array) : new Float32Array(0)
+      });
+    }
+    return meshes;
+  }
+  async optimizeMesh(indices, positions, uvs) {
+    const vertexCount = positions.length / 3;
+    const originalTriangles = indices.length / 3;
+    const stride = 12;
+    const uvStride = 8;
+    if (!this.meshopt) {
+      return {
+        lods: [{ indices, positions, uvs, triangleCount: originalTriangles }]
+      };
+    }
+    const origStats = await this.meshopt.analyzeVertexCache(indices, vertexCount);
+    const originalAcmr = origStats[0];
+    let optimized = await this.meshopt.optimizeVertexCache(indices, vertexCount);
+    optimized = await this.meshopt.optimizeOverdraw(optimized, positions, stride, 1.05);
+    const optStats = await this.meshopt.analyzeVertexCache(optimized, vertexCount);
+    const optimizedAcmr = optStats[0];
+    const compressed = await this.meshopt.encodeIndexBuffer(optimized, vertexCount);
+    const lods = [];
+    for (const ratio of DEFAULT_LOD_RATIOS) {
+      if (ratio >= 1) {
+        lods.push({
+          indices: optimized,
+          positions,
+          uvs,
+          triangleCount: optimized.length / 3,
+          stats: ratio === 1 ? {
+            originalTriangles,
+            originalAcmr,
+            optimizedAcmr,
+            compressedIndexBytes: compressed.length,
+            uncompressedIndexBytes: optimized.length * 4
+          } : undefined
+        });
+      } else {
+        const targetTris = Math.max(4, Math.floor(originalTriangles * ratio));
+        const targetIndexCount = targetTris * 3;
+        const simplified = await this.meshopt.simplifyWithUvs(optimized, positions, stride, uvs, uvStride, 0.5, targetIndexCount, DEFAULT_TARGET_ERROR);
+        lods.push({ indices: simplified, positions, uvs, triangleCount: simplified.length / 3 });
+      }
+    }
+    return {
+      lods,
+      stat: {
+        originalTriangles,
+        originalAcmr,
+        optimizedAcmr,
+        compressedIndexBytes: compressed.length,
+        uncompressedIndexBytes: optimized.length * 4
+      }
+    };
+  }
+  loadTexture(path) {
+    if (this.vtStore) {
+      return this.vtStore.loadTexture(path);
+    }
+    return this.load(path, parseTexture, undefined);
+  }
+  loadGLTF(path, loader) {
+    return this.load(path, (bytes) => parseGLTF(bytes, loader), fallbackGroup());
+  }
+  loadJSON(path) {
+    return this.load(path, parseJSON, null);
+  }
+  async startLoad(path) {
+    const total = await this.loader.size(path);
+    if (total > MAX_SINGLE_LOAD)
+      return this.loadChunked(path, total);
+    return this.loader.load(path);
+  }
+  async loadChunked(path, total) {
+    const chunks = [];
+    let offset = 0;
+    while (offset < total) {
+      const len = Math.min(CHUNK_SIZE, total - offset);
+      chunks.push(await this.loader.read(path, offset, len));
+      offset += chunks[chunks.length - 1].byteLength;
+    }
+    const bytes = new Uint8Array(total);
+    let pos = 0;
+    for (const c of chunks) {
+      bytes.set(c, pos);
+      pos += c.byteLength;
+    }
+    return bytes;
+  }
+  evict(path) {
+    const id = this.idsByPath.get(path);
+    if (id === undefined)
+      return;
+    if (this.states[id] === 5 /* Ready */)
+      this.readyCount--;
+    this.requestTokens[id]++;
+    this.handles[id] = null;
+    this.states[id] = 1 /* Idle */;
+  }
+  get size() {
+    return this.readyCount;
+  }
+  get cachedPaths() {
+    const result = [];
+    for (let id = 0;id < this.assetCount; id++)
+      if (this.states[id] === 5 /* Ready */)
+        result.push(this.paths[id]);
+    return result;
+  }
+  get capacity() {
+    return this.states.length;
+  }
+  get registeredAssetCount() {
+    return this.assetCount;
+  }
+  get stateTable() {
+    return this.states;
+  }
+  get pendingCompletionCount() {
+    return this.completionCount;
+  }
+  get completionQueueHighWater() {
+    return this.completionHighWater;
+  }
+  get completionQueueOverflows() {
+    return this.completionOverflows;
+  }
+  dispose() {
+    while (this.completionCount !== 0) {
+      const slot = this.completionHead;
+      if (this.completionKinds[slot] === 1)
+        this.completionValues[slot]?.dispose?.();
+      this.completionValues[slot] = null;
+      this.completionHead = (slot + 1) % this.completionIds.length;
+      this.completionCount--;
+    }
+    this.completionHead = 0;
+    this.completionTail = 0;
+    for (let id = 0;id < this.assetCount; id++) {
+      const handle = this.handles[id];
+      handle?.asset?.dispose?.();
+      this.requestTokens[id]++;
+      this.handles[id] = null;
+      this.paths[id] = null;
+      this.states[id] = 0 /* Free */;
+    }
+    this.idsByPath.clear();
+    this.assetCount = 0;
+    this.readyCount = 0;
+  }
+}
+var AssetStoreRes = defineResource("assetStore", () => {
+  throw new Error("AssetStore not initialized. Call AssetStoreRes.set(world, new AssetStore(loader, meshopt)).");
+});
+
+// crates/afterglow-web/www/node_modules/bitecs/dist/core/index.min.mjs
+var A = (e, t, n) => Object.defineProperty(e, t, { value: n, enumerable: false, writable: true, configurable: true });
+var pe = (e, t) => t & e.entityMask;
+var z = (e) => {
+  let t = e ? typeof e == "function" ? e() : e : { versioning: false, versionBits: 8 }, n = t.versionBits ?? 8, o = t.versioning ?? false, r = 32 - n, a = (1 << r) - 1, i = r, s = (1 << n) - 1 << i;
+  return { aliveCount: 0, dense: [], sparse: [], maxId: 0, versioning: o, versionBits: n, entityMask: a, versionShift: i, versionMask: s };
+};
+var ue = (e) => {
+  if (e.aliveCount < e.dense.length) {
+    let n = e.dense[e.aliveCount], o = n;
+    return e.sparse[o] = e.aliveCount, e.aliveCount++, n;
+  }
+  let t = ++e.maxId;
+  return e.dense.push(t), e.sparse[t] = e.aliveCount, e.aliveCount++, t;
+};
+var K = (e, t) => {
+  let n = pe(e, t), o = e.sparse[n];
+  return o !== undefined && o < e.aliveCount && e.dense[o] === t;
+};
+var u = Symbol.for("bitecs_internal");
+var Ye = (e, t) => A(e || {}, u, { entityIndex: t || z(), entityMasks: [[]], entityComponents: new Map, bitflag: 1, componentMap: new Map, componentCount: 0, queries: new Set, queriesHashMap: new Map, notQueries: new Set, dirtyQueries: new Set, entitiesWithRelations: new Set, hierarchyData: new Map, hierarchyActiveRelations: new Set, hierarchyQueryCache: new Map });
+function Je(...e) {
+  let t, n;
+  return e.forEach((o) => {
+    typeof o == "object" && "dense" in o && "sparse" in o && "aliveCount" in o ? t = o : typeof o == "object" && (n = o);
+  }), Ye(n, t);
+}
+var M = () => {
+  let e = [], t = [], n = (s) => e[t[s]] === s;
+  return { add: (s) => {
+    n(s) || (t[s] = e.push(s) - 1);
+  }, remove: (s) => {
+    if (!n(s))
+      return;
+    let p = t[s], c = e.pop();
+    c !== s && (e[p] = c, t[c] = p);
+  }, has: n, sparse: t, dense: e, reset: () => {
+    e.length = 0, t.length = 0;
+  }, sort: (s) => {
+    e.sort(s);
+    for (let p = 0;p < e.length; p++)
+      t[e[p]] = p;
+  } };
+};
+var me = typeof SharedArrayBuffer < "u" ? SharedArrayBuffer : ArrayBuffer;
+var X = (e = 1000) => {
+  let t = [], n = 0, o = new Uint32Array(new me(e * 4)), r = (c) => c < t.length && t[c] < n && o[t[c]] === c;
+  return { add: (c) => {
+    if (!r(c)) {
+      if (n >= o.length) {
+        let f = new Uint32Array(new me(o.length * 2 * 4));
+        f.set(o), o = f;
+      }
+      o[n] = c, t[c] = n, n++;
+    }
+  }, remove: (c) => {
+    if (!r(c))
+      return;
+    n--;
+    let f = t[c], d = o[n];
+    o[f] = d, t[d] = f;
+  }, has: r, sparse: t, get dense() {
+    return new Uint32Array(o.buffer, 0, n);
+  }, reset: () => {
+    n = 0, t.length = 0;
+  }, sort: (c) => {
+    let f = Array.from(o.subarray(0, n));
+    f.sort(c);
+    for (let d = 0;d < f.length; d++)
+      o[d] = f[d];
+    for (let d = 0;d < n; d++)
+      t[o[d]] = d;
+  } };
+};
+var P = () => {
+  let e = new Set;
+  return { subscribe: (o) => (e.add(o), () => {
+    e.delete(o);
+  }), notify: (o, ...r) => Array.from(e).reduce((a, i) => {
+    let s = i(o, ...r);
+    return s && typeof s == "object" ? { ...a, ...s } : a;
+  }, {}) };
+};
+var k = Symbol.for("bitecs-relation");
+var T2 = Symbol.for("bitecs-pairTarget");
+var U = Symbol.for("bitecs-isPairComponent");
+var x = Symbol.for("bitecs-relationData");
+var Y = () => {
+  let e = { pairsMap: new Map, initStore: undefined, exclusiveRelation: false, autoRemoveSubject: false, onTargetRemoved: undefined }, t = (n) => {
+    if (n === undefined)
+      throw Error("Relation target is undefined");
+    let o = n === "*" ? y : n;
+    if (!e.pairsMap.has(o)) {
+      let r = e.initStore ? e.initStore(n) : {};
+      A(r, k, t), A(r, T2, o), A(r, U, true), e.pairsMap.set(o, r);
+    }
+    return e.pairsMap.get(o);
+  };
+  return A(t, x, e), t;
+};
+var b = (e, t) => {
+  if (e === undefined)
+    throw Error("Relation is undefined");
+  return e(t);
+};
+var I = (e, t, n) => {
+  let o = L(e, t), r = [];
+  for (let a of o)
+    a[k] === n && a[T2] !== y && !xe(a[T2]) && r.push(a[T2]);
+  return r;
+};
+var Re = Symbol.for("bitecs-wildcard");
+function rt() {
+  let e = Y();
+  return Object.defineProperty(e, Re, { value: true, enumerable: false, writable: false, configurable: false }), e;
+}
+function at() {
+  let e = Symbol.for("bitecs-global-wildcard");
+  return globalThis[e] || (globalThis[e] = rt()), globalThis[e];
+}
+var y = at();
+function st() {
+  return Y();
+}
+function it() {
+  let e = Symbol.for("bitecs-global-isa");
+  return globalThis[e] || (globalThis[e] = st()), globalThis[e];
+}
+var B2 = it();
+function xe(e) {
+  return e ? Object.getOwnPropertySymbols(e).includes(x) : false;
+}
+var pt = 64;
+var g = 4294967295;
+var ge = 1024;
+function ve(e, t) {
+  let { depths: n } = e;
+  if (t < n.length)
+    return n;
+  let o = Math.max(t + 1, n.length * 2, n.length + ge), r = new Uint32Array(o);
+  return r.fill(g), r.set(n), e.depths = r, r;
+}
+function Ce(e, t, n, o) {
+  let { depthToEntities: r } = e;
+  if (o !== undefined && o !== g) {
+    let a = r.get(o);
+    a && (a.remove(t), a.dense.length === 0 && r.delete(o));
+  }
+  n !== g && (r.has(n) || r.set(n, X()), r.get(n).add(t));
+}
+function ft(e, t) {
+  t > e.maxDepth && (e.maxDepth = t);
+}
+function ne(e, t, n, o) {
+  e.depths[t] = n, Ce(e, t, n, o), ft(e, n);
+}
+function Te(e, t) {
+  e[u].hierarchyQueryCache.delete(t);
+}
+function Z(e, t) {
+  let n = e[u];
+  return n.hierarchyActiveRelations.has(t) || (n.hierarchyActiveRelations.add(t), oe(e, t), ut(e, t)), n.hierarchyData.get(t);
+}
+function ut(e, t) {
+  let n = $(e, [b(t, y)]);
+  for (let r of n)
+    te(e, t, r);
+  let o = new Set;
+  for (let r of n)
+    for (let a of I(e, r, t))
+      o.has(a) || (o.add(a), te(e, t, a));
+}
+function oe(e, t) {
+  let n = e[u];
+  if (!n.hierarchyData.has(t)) {
+    let o = Math.max(ge, n.entityIndex.dense.length * 2), r = new Uint32Array(o);
+    r.fill(g), n.hierarchyData.set(t, { depths: r, dirty: M(), depthToEntities: new Map, maxDepth: 0 });
+  }
+}
+function Ie(e, t, n, o = new Set) {
+  if (o.has(n))
+    return 0;
+  o.add(n);
+  let r = I(e, n, t);
+  if (r.length === 0)
+    return 0;
+  if (r.length === 1)
+    return J(e, t, r[0], o) + 1;
+  let a = 1 / 0;
+  for (let i of r) {
+    let s = J(e, t, i, o);
+    if (s < a && (a = s, a === 0))
+      break;
+  }
+  return a === 1 / 0 ? 0 : a + 1;
+}
+function J(e, t, n, o) {
+  let r = e[u];
+  oe(e, t);
+  let a = r.hierarchyData.get(t), { depths: i } = a;
+  if (i = ve(a, n), i[n] === g) {
+    let s = Ie(e, t, n, o);
+    return ne(a, n, s), s;
+  }
+  return i[n];
+}
+function te(e, t, n) {
+  return J(e, t, n, new Set);
+}
+function Ee(e, t, n, o, r = M()) {
+  if (r.has(n))
+    return;
+  r.add(n);
+  let a = $(e, [t(n)]);
+  for (let i of a)
+    o.add(i), Ee(e, t, i, o, r);
+}
+function We(e, t, n, o, r = new Set) {
+  let a = e[u];
+  if (!a.hierarchyActiveRelations.has(t))
+    return;
+  oe(e, t);
+  let i = a.hierarchyData.get(t);
+  if (r.has(n)) {
+    i.dirty.add(n);
+    return;
+  }
+  r.add(n);
+  let { depths: s, dirty: p } = i, c = o !== undefined ? te(e, t, o) + 1 : 0;
+  if (c > pt)
+    return;
+  let f = s[n];
+  ne(i, n, c, f === g ? undefined : f), f !== c && (Ee(e, t, n, p, M()), Te(e, t));
+}
+function Se(e, t, n) {
+  let o = e[u];
+  if (!o.hierarchyActiveRelations.has(t))
+    return;
+  let r = o.hierarchyData.get(t), { depths: a } = r;
+  a = ve(r, n), Me(e, t, n, a, M()), Te(e, t);
+}
+function Me(e, t, n, o, r) {
+  if (r.has(n))
+    return;
+  r.add(n);
+  let i = e[u].hierarchyData.get(t);
+  if (n < o.length) {
+    let p = o[n];
+    p !== g && (i.depths[n] = g, Ce(i, n, g, p));
+  }
+  let s = $(e, [t(n)]);
+  for (let p of s)
+    Me(e, t, p, o, r);
+}
+function De(e, t) {
+  let o = e[u].hierarchyData.get(t);
+  if (!o)
+    return;
+  let { dirty: r, depths: a } = o;
+  if (r.dense.length !== 0) {
+    for (let i of r.dense)
+      if (a[i] === g) {
+        let s = Ie(e, t, i);
+        ne(o, i, s);
+      }
+    r.reset();
+  }
+}
+function Oe(e, t, n, o = {}) {
+  let r = e[u];
+  Z(e, t);
+  let a = H(e, [t, ...n]), i = r.hierarchyQueryCache.get(t);
+  if (i && i.hash === a)
+    return i.result;
+  De(e, t), re(e, n, o);
+  let s = r.queriesHashMap.get(H(e, n)), p = r.hierarchyData.get(t), { depths: c } = p;
+  s.sort((d, W) => {
+    let l = c[d], R = c[W];
+    return l !== R ? l - R : d - W;
+  });
+  let f = (o.buffered, s.dense);
+  return r.hierarchyQueryCache.set(t, { hash: a, result: f }), f;
+}
+function Qe(e, t, n, o = {}) {
+  let r = Z(e, t);
+  De(e, t);
+  let a = r.depthToEntities.get(n);
+  return a ? (o.buffered, a.dense) : o.buffered ? new Uint32Array(0) : [];
+}
+var v = Symbol.for("bitecs-opType");
+var D = Symbol.for("bitecs-opTerms");
+var se = (e) => (...t) => ({ [v]: e, [D]: t });
+var Ae = se("Or");
+var ke = se("And");
+var He = se("Not");
+var ae = Symbol.for("bitecs-hierarchyType");
+var $e = Symbol.for("bitecs-hierarchyRel");
+var qe = Symbol.for("bitecs-hierarchyDepth");
+var F = Symbol.for("bitecs-modifierType");
+var Rt = { [F]: "buffer" };
+var Pe = { [F]: "nested" };
+var Ue = (e) => (...t) => ({ [v]: e, [D]: t });
+var xt = Ue("add");
+var gt = Ue("remove");
+var H = (e, t) => {
+  let n = e[u], o = (a) => (n.componentMap.has(a) || E(e, a), n.componentMap.get(a).id), r = (a) => (v in a) ? `${a[v].toLowerCase()}(${a[D].map(r).sort().join(",")})` : o(a).toString();
+  return t.map(r).sort().join("-");
+};
+var ee = (e, t, n = {}) => {
+  let o = e[u], r = H(e, t), a = [], i = (m) => {
+    v in m ? m[D].forEach(i) : (o.componentMap.has(m) || E(e, m), a.push(m));
+  };
+  t.forEach(i);
+  let s = [], p = [], c = [], f = (m, h) => {
+    h.forEach((S) => {
+      o.componentMap.has(S) || E(e, S), m.push(S);
+    });
+  };
+  t.forEach((m) => {
+    if (v in m) {
+      let { [v]: h, [D]: S } = m;
+      if (h === "Not")
+        f(p, S);
+      else if (h === "Or")
+        f(c, S);
+      else if (h === "And")
+        f(s, S);
+      else
+        throw new Error(`Nested combinator ${h} not supported yet - use simple queries for best performance`);
+    } else
+      o.componentMap.has(m) || E(e, m), s.push(m);
+  });
+  let d = a.map((m) => o.componentMap.get(m)), W = [...new Set(d.map((m) => m.generationId))], l = (m, h) => (m[h.generationId] = (m[h.generationId] || 0) | h.bitflag, m), R = s.map((m) => o.componentMap.get(m)).reduce(l, {}), _e = p.map((m) => o.componentMap.get(m)).reduce(l, {}), Ge = c.map((m) => o.componentMap.get(m)).reduce(l, {}), ze = d.reduce(l, {}), Q = Object.assign(n.buffered ? X() : M(), { allComponents: a, orComponents: c, notComponents: p, masks: R, notMasks: _e, orMasks: Ge, hasMasks: ze, generations: W, toRemove: M(), addObservable: P(), removeObservable: P(), queues: {} });
+  o.queries.add(Q), o.queriesHashMap.set(r, Q), d.forEach((m) => {
+    m.queries.add(Q);
+  }), p.length && o.notQueries.add(Q);
+  let ce = o.entityIndex;
+  for (let m = 0;m < ce.aliveCount; m++) {
+    let h = ce.dense[m];
+    if (O(e, h, q))
+      continue;
+    V(e, Q, h) && w(Q, h);
+  }
+  return Q;
+};
+function re(e, t, n = {}) {
+  let o = e[u], r = H(e, t), a = o.queriesHashMap.get(r);
+  return a ? n.buffered && !("buffer" in a.dense) && (a = ee(e, t, { buffered: true })) : a = ee(e, t, n), n.buffered, a.dense;
+}
+function $(e, t, ...n) {
+  let o = t.find((p) => p && typeof p == "object" && (ae in p)), r = t.filter((p) => !(p && typeof p == "object" && (ae in p))), a = false, i = true, s = n.some((p) => p && typeof p == "object" && (F in p));
+  for (let p of n)
+    if (s && p && typeof p == "object" && F in p) {
+      let c = p;
+      c[F] === "buffer" && (a = true), c[F] === "nested" && (i = false);
+    } else if (!s) {
+      let c = p;
+      c.buffered !== undefined && (a = c.buffered), c.commit !== undefined && (i = c.commit);
+    }
+  if (o) {
+    let { [$e]: p, [qe]: c } = o;
+    return c !== undefined ? Qe(e, p, c, { buffered: a }) : Oe(e, p, r, { buffered: a });
+  }
+  return i && Be(e), re(e, r, { buffered: a });
+}
+function V(e, t, n) {
+  let o = e[u], { masks: r, notMasks: a, orMasks: i, generations: s } = t, p = Object.keys(i).length === 0;
+  for (let c = 0;c < s.length; c++) {
+    let f = s[c], d = r[f], W = a[f], l = i[f], R = o.entityMasks[f][n];
+    if (W && R & W || d && (R & d) !== d)
+      return false;
+    l && R & l && (p = true);
+  }
+  return p;
+}
+var w = (e, t) => {
+  if (e.toRemove.has(t)) {
+    e.toRemove.remove(t), e.addObservable.notify(t);
+    return;
+  }
+  e.has(t) || (e.add(t), e.addObservable.notify(t));
+};
+var It = (e) => {
+  for (let t = 0;t < e.toRemove.dense.length; t++) {
+    let n = e.toRemove.dense[t];
+    e.remove(n);
+  }
+  e.toRemove.reset();
+};
+var Be = (e) => {
+  let t = e[u];
+  t.dirtyQueries.size && (t.dirtyQueries.forEach(It), t.dirtyQueries.clear());
+};
+var _ = (e, t, n) => {
+  let o = e[u];
+  !t.has(n) || t.toRemove.has(n) || (t.toRemove.add(n), o.dirtyQueries.add(t), t.removeObservable.notify(n));
+};
+var E = (e, t) => {
+  if (!t)
+    throw new Error("bitECS - Cannot register null or undefined component");
+  let n = e[u], o = new Set, r = { id: n.componentCount++, generationId: n.entityMasks.length - 1, bitflag: n.bitflag, ref: t, queries: o, setObservable: P(), getObservable: P() };
+  return n.componentMap.set(t, r), n.bitflag *= 2, n.bitflag >= 2 ** 31 && (n.bitflag = 1, n.entityMasks.push([])), r;
+};
+var O = (e, t, n) => {
+  let o = e[u], r = o.componentMap.get(n);
+  if (!r)
+    return false;
+  let { generationId: a, bitflag: i } = r;
+  return (o.entityMasks[a][t] & i) === i;
+};
+var Fe = (e, t, n) => {
+  let r = e[u].componentMap.get(n);
+  if (r && O(e, t, n))
+    return r.getObservable.notify(t);
+};
+var we = (e, t, n, o, r = new Set) => {
+  if (!r.has(o)) {
+    r.add(o), j(t, n, B2(o));
+    for (let a of L(t, o))
+      if (a !== q && !O(t, n, a)) {
+        j(t, n, a);
+        let i = e.componentMap.get(a);
+        if (i?.setObservable) {
+          let s = Fe(t, o, a);
+          i.setObservable.notify(n, s);
+        }
+      }
+    for (let a of I(t, o, B2))
+      we(e, t, n, a, r);
+  }
+};
+var j = (e, t, n) => {
+  if (!N2(e, t))
+    throw new Error(`Cannot add component - entity ${t} does not exist in the world.`);
+  let o = e[u], r = "component" in n ? n.component : n, a = "data" in n ? n.data : undefined;
+  o.componentMap.has(r) || E(e, r);
+  let i = o.componentMap.get(r);
+  if (O(e, t, r))
+    return a !== undefined && i.setObservable.notify(t, a), false;
+  let { generationId: s, bitflag: p, queries: c } = i;
+  if (o.entityMasks[s][t] |= p, O(e, t, q) || c.forEach((f) => {
+    V(e, f, t) ? w(f, t) : _(e, f, t);
+  }), o.entityComponents.get(t).add(r), a !== undefined && i.setObservable.notify(t, a), r[U]) {
+    let f = r[k], d = r[T2];
+    if (G(e, t, b(f, y), b(y, d)), typeof d == "number" && (G(e, d, b(y, t), b(y, f)), o.entitiesWithRelations.add(d), o.entitiesWithRelations.add(t)), o.entitiesWithRelations.add(d), f[x].exclusiveRelation === true && d !== y) {
+      let l = I(e, t, f)[0];
+      l != null && l !== d && C(e, t, f(l));
+    }
+    if (f === B2) {
+      let l = I(e, t, B2);
+      for (let R of l)
+        we(o, e, t, R);
+    }
+    We(e, f, t, typeof d == "number" ? d : undefined);
+  }
+  return true;
+};
+function G(e, t, ...n) {
+  (Array.isArray(n[0]) ? n[0] : n).forEach((r) => {
+    j(e, t, r);
+  });
+}
+var C = (e, t, ...n) => {
+  let o = e[u];
+  if (!N2(e, t))
+    throw new Error(`Cannot remove component - entity ${t} does not exist in the world.`);
+  n.forEach((r) => {
+    if (!O(e, t, r))
+      return;
+    let a = o.componentMap.get(r), { generationId: i, bitflag: s, queries: p } = a;
+    if (o.entityMasks[i][t] &= ~s, p.forEach((c) => {
+      c.toRemove.remove(t), V(e, c, t) ? w(c, t) : _(e, c, t);
+    }), o.entityComponents.get(t).delete(r), r[U]) {
+      let c = r[T2], f = r[k];
+      Se(e, f, t), C(e, t, b(y, c)), typeof c == "number" && N2(e, c) && (C(e, c, b(y, t)), C(e, c, b(y, f))), I(e, t, f).length === 0 && C(e, t, b(f, y));
+    }
+  });
+};
+var q = {};
+function Ne(e, ...t) {
+  let n = e[u], o = ue(n.entityIndex);
+  return n.notQueries.forEach((r) => {
+    V(e, r, o) && w(r, o);
+  }), n.entityComponents.set(o, new Set), t.length > 0 && G(e, o, t), o;
+}
+var L = (e, t) => {
+  let n = e[u];
+  if (t === undefined)
+    throw new Error("getEntityComponents: entity id is undefined.");
+  if (!K(n.entityIndex, t))
+    throw new Error(`getEntityComponents: entity ${t} does not exist in the world.`);
+  return Array.from(n.entityComponents.get(t));
+};
+var N2 = (e, t) => K(e[u].entityIndex, t);
+
 // crates/afterglow-web/www/engine/virtual-texture-layout.ts
 function assertVirtualTextureDimensions(width, height) {
   for (const [name, value] of [["width", width], ["height", height]])
@@ -64426,6 +67534,7 @@ function packedMipTailIndex(layout) {
 // crates/afterglow-web/www/engine/virtual-texture-feedback-pass.ts
 class VirtualTextureFeedbackPass {
   scale;
+  pixelScale = new Vector2(1, 1);
   target;
   width = 1;
   height = 1;
@@ -64454,8 +67563,11 @@ class VirtualTextureFeedbackPass {
     this.target.texture.name = "afterglow-vt-feedback-rg32uint";
   }
   resize(displayWidth, displayHeight) {
+    if (!(displayWidth > 0 && displayHeight > 0))
+      throw new RangeError("display dimensions must be positive");
     const width = Math.max(1, Math.ceil(displayWidth * this.scale));
     const height = Math.max(1, Math.ceil(displayHeight * this.scale));
+    this.pixelScale.set(width / displayWidth, height / displayHeight);
     if (width === this.width && height === this.height && this.requestPool.length >= width * height)
       return;
     this.width = width;
@@ -64557,44 +67669,1980 @@ class VirtualTextureFeedbackPass {
   }
 }
 
-// crates/afterglow-web/www/engine/resource.ts
-var RESOURCES = Symbol.for("afterglow-resources");
-var RESOURCES_SEALED = Symbol.for("afterglow-resources-sealed");
-function ensureStore(world) {
-  const w4 = world;
-  if (!w4[RESOURCES])
-    w4[RESOURCES] = {};
-  return w4[RESOURCES];
+// crates/afterglow-web/www/engine/virtual-texture.ts
+var PAGE_SIZE = 128;
+var PAGE_BORDER = 4;
+var SLOT_SIZE = PAGE_SIZE + PAGE_BORDER * 2;
+var ATLAS_PAGES_X = 15;
+var ATLAS_PAGES_Y = 15;
+var ATLAS_WIDTH = ATLAS_PAGES_X * SLOT_SIZE;
+var ATLAS_HEIGHT = ATLAS_PAGES_Y * SLOT_SIZE;
+var MAX_MIP = 10;
+var PRIORITY_LANE_COUNT = (MAX_MIP + 1) * 2;
+function packedPageCoordinates(textureId, mip, x2, y2, tail = false) {
+  const local = tail ? 268435456 : (mip & 63 | (x2 & 2047) << 6 | (y2 & 2047) << 17) >>> 0;
+  return textureId * 536870912 + local;
+}
+function packedPageIdentity(textureId, req) {
+  return packedPageCoordinates(textureId, req.mip, req.x, req.y, req.tail);
+}
+function packEntry(resident, physX, physY) {
+  return (resident ? 1 : 0) | (physX & 255) << 1 | (physY & 255) << 9;
+}
+function isResident(entry) {
+  return (entry & 1) !== 0;
+}
+var BLOCK_SIZE = 4;
+var BC7_BYTES_PER_BLOCK = 16;
+var RGBA_BYTES_PER_BLOCK = BLOCK_SIZE * BLOCK_SIZE * 4;
+var SLOT_BLOCKS_X = SLOT_SIZE / BLOCK_SIZE;
+var SLOT_BLOCKS_Y = SLOT_SIZE / BLOCK_SIZE;
+var FORMAT_BC7 = 0;
+var FORMAT_ASTC = 1;
+var FORMAT_RGBA = 4;
+function bytesPerBlock(format) {
+  if (format === FORMAT_BC7 || format === FORMAT_ASTC)
+    return BC7_BYTES_PER_BLOCK;
+  return RGBA_BYTES_PER_BLOCK;
+}
+function threeFormat(format) {
+  if (format === FORMAT_BC7)
+    return 36492;
+  if (format === FORMAT_ASTC)
+    return 37808;
+  return RGBAFormat;
 }
 
-class Resource {
-  name;
-  factory;
-  constructor(name, factory) {
-    this.name = name;
-    this.factory = factory;
+class PageTable {
+  layout;
+  entries;
+  count = 0;
+  constructor(layout, entries) {
+    this.layout = layout;
+    this.entries = entries;
   }
-  get(world) {
-    const store = ensureStore(world);
-    if (!(this.name in store)) {
-      if (world[RESOURCES_SEALED] === true)
-        throw new Error(`resource ${this.name} was not initialized before gameplay seal`);
-      store[this.name] = this.factory();
-    }
-    return store[this.name];
+  index(req) {
+    return packedPageTableIndex(this.layout, req.mip, req.x, req.y);
   }
-  set(world, value) {
-    ensureStore(world)[this.name] = value;
+  get(req) {
+    return this.entries[this.index(req)];
   }
-  has(world) {
-    return this.name in ensureStore(world);
+  setResident(req, slot) {
+    const index = this.index(req);
+    if (!isResident(this.entries[index]))
+      this.count++;
+    this.entries[index] = packEntry(true, slot.x, slot.y);
   }
-  remove(world) {
-    delete ensureStore(world)[this.name];
+  setEvicted(req) {
+    const index = this.index(req);
+    if (isResident(this.entries[index]))
+      this.count--;
+    this.entries[index] = 0;
+  }
+  isResident(req) {
+    return isResident(this.get(req));
+  }
+  isResidentAt(mip, x2, y2) {
+    return isResident(this.entries[packedPageTableIndex(this.layout, mip, x2, y2)]);
+  }
+  get residentCount() {
+    return this.count;
   }
 }
-function defineResource(name, factory) {
-  return new Resource(name, factory);
+
+class FixedPageSlotMap {
+  keys;
+  values;
+  states;
+  mask;
+  constructor(minCapacity) {
+    let capacity = 1;
+    while (capacity < minCapacity * 2)
+      capacity <<= 1;
+    this.keys = new Float64Array(capacity);
+    this.values = new Uint32Array(capacity);
+    this.states = new Uint8Array(capacity);
+    this.mask = capacity - 1;
+  }
+  hash(key) {
+    return (key >>> 0 ^ Math.floor(key / 4294967296)) * 2654435761 >>> 0;
+  }
+  get(key) {
+    let index = this.hash(key) & this.mask;
+    for (let probe = 0;probe <= this.mask; probe++) {
+      const state = this.states[index];
+      if (state === 0)
+        return;
+      if (state === 1 && this.keys[index] === key)
+        return this.values[index];
+      index = index + 1 & this.mask;
+    }
+    return;
+  }
+  set(key, value) {
+    let index = this.hash(key) & this.mask;
+    let tombstone = -1;
+    for (let probe = 0;probe <= this.mask; probe++) {
+      const state = this.states[index];
+      if (state === 1 && this.keys[index] === key) {
+        this.values[index] = value;
+        return;
+      }
+      if (state === 2 && tombstone < 0)
+        tombstone = index;
+      if (state === 0) {
+        const target = tombstone < 0 ? index : tombstone;
+        this.keys[target] = key;
+        this.values[target] = value;
+        this.states[target] = 1;
+        return;
+      }
+      index = index + 1 & this.mask;
+    }
+    if (tombstone >= 0) {
+      this.keys[tombstone] = key;
+      this.values[tombstone] = value;
+      this.states[tombstone] = 1;
+      return;
+    }
+    throw new Error("fixed VT page map capacity exceeded");
+  }
+  clear() {
+    for (let index = 0;index < this.states.length; index++)
+      this.states[index] = 0;
+  }
+  delete(key) {
+    let index = this.hash(key) & this.mask;
+    for (let probe = 0;probe <= this.mask; probe++) {
+      const state = this.states[index];
+      if (state === 0)
+        return false;
+      if (state === 1 && this.keys[index] === key) {
+        this.states[index] = 2;
+        return true;
+      }
+      index = index + 1 & this.mask;
+    }
+    return false;
+  }
+}
+
+class PageCache {
+  format;
+  pagesX;
+  pagesY;
+  width;
+  height;
+  atlas;
+  atlasBytesPerRow;
+  slotBytesPerRow;
+  slotDataSize;
+  slots = [];
+  slotActive;
+  slotCoords = [];
+  slotByKey;
+  reserved;
+  referenced;
+  clockHand = 0;
+  freeSlots;
+  freeTop = 0;
+  usedCount = 0;
+  pinnedCount = 0;
+  acquireResult;
+  constructor(format = FORMAT_RGBA, maxTextureDimension = ATLAS_WIDTH) {
+    this.format = format;
+    this.pagesX = Math.max(1, Math.floor(maxTextureDimension / SLOT_SIZE));
+    this.pagesY = this.pagesX;
+    this.width = this.pagesX * SLOT_SIZE;
+    this.height = this.pagesY * SLOT_SIZE;
+    const blocksX = this.width / BLOCK_SIZE, blocksY = this.height / BLOCK_SIZE;
+    const bpb = bytesPerBlock(format);
+    if (format === FORMAT_RGBA) {
+      this.atlasBytesPerRow = this.width * 4;
+      this.slotBytesPerRow = SLOT_SIZE * 4;
+      this.slotDataSize = SLOT_SIZE * SLOT_SIZE * 4;
+      this.atlas = new Uint8Array(this.width * this.height * 4);
+    } else {
+      this.atlasBytesPerRow = blocksX * bpb;
+      this.slotBytesPerRow = SLOT_BLOCKS_X * bpb;
+      this.slotDataSize = SLOT_BLOCKS_X * SLOT_BLOCKS_Y * bpb;
+      this.atlas = new Uint8Array(blocksX * blocksY * bpb);
+    }
+    this.slotByKey = new FixedPageSlotMap(this.pagesX * this.pagesY);
+    this.reserved = new Uint8Array(this.pagesX * this.pagesY);
+    this.referenced = new Uint8Array(this.pagesX * this.pagesY);
+    this.slotActive = new Uint8Array(this.pagesX * this.pagesY);
+    this.freeSlots = new Uint32Array(this.pagesX * this.pagesY);
+    for (let y2 = 0;y2 < this.pagesY; y2++) {
+      for (let x2 = 0;x2 < this.pagesX; x2++) {
+        this.slots.push({ path: "", mip: 0, x: 0, y: 0, pinned: false, cacheKey: 0 });
+        this.slotCoords.push({ x: x2, y: y2 });
+        this.freeSlots[this.freeTop++] = y2 * this.pagesX + x2;
+      }
+    }
+    this.acquireResult = { slot: this.slotCoords[0], evicted: null };
+  }
+  touch(cacheKey) {
+    const slot = this.slotByKey.get(cacheKey);
+    if (slot !== undefined)
+      this.referenced[slot] = 1;
+  }
+  acquire(req) {
+    let slotIdx = this.freeTop === 0 ? undefined : this.freeSlots[--this.freeTop];
+    let evicted = null;
+    if (slotIdx === undefined) {
+      const limit = this.slots.length * 2;
+      for (let scanned = 0;scanned < limit; scanned++) {
+        const candidate = this.clockHand;
+        this.clockHand = (this.clockHand + 1) % this.slots.length;
+        const page = this.slots[candidate];
+        if (this.slotActive[candidate] === 0 || this.reserved[candidate] !== 0 || page.pinned)
+          continue;
+        if (this.referenced[candidate] !== 0) {
+          this.referenced[candidate] = 0;
+          continue;
+        }
+        slotIdx = candidate;
+        evicted = page;
+        this.slotByKey.delete(page.cacheKey);
+        this.slotActive[candidate] = 0;
+        this.usedCount--;
+        break;
+      }
+    }
+    if (slotIdx === undefined)
+      throw new Error("No evictable VT atlas slot");
+    this.reserved[slotIdx] = 1;
+    this.acquireResult.slot = this.slotCoords[slotIdx];
+    this.acquireResult.evicted = evicted;
+    return this.acquireResult;
+  }
+  commit(req, slot, data) {
+    const rows = this.format === FORMAT_RGBA ? SLOT_SIZE : SLOT_BLOCKS_Y;
+    const dstXBytes = this.format === FORMAT_RGBA ? slot.x * SLOT_SIZE * 4 : slot.x * SLOT_BLOCKS_X * (this.slotBytesPerRow / SLOT_BLOCKS_X);
+    const dstY = this.format === FORMAT_RGBA ? slot.y * SLOT_SIZE : slot.y * SLOT_BLOCKS_Y;
+    for (let row = 0;row < rows; row++) {
+      const srcOffset = row * this.slotBytesPerRow;
+      const dstOffset = (dstY + row) * this.atlasBytesPerRow + dstXBytes;
+      this.atlas.set(data.subarray(srcOffset, srcOffset + this.slotBytesPerRow), dstOffset);
+    }
+    const slotIdx = slot.y * this.pagesX + slot.x;
+    if (this.reserved[slotIdx] === 0 || this.slotActive[slotIdx] !== 0)
+      throw new Error("VT slot commit without a unique reservation");
+    this.reserved[slotIdx] = 0;
+    this.referenced[slotIdx] = 1;
+    const resident = this.slots[slotIdx];
+    resident.textureId = req.textureId;
+    resident.path = req.path;
+    resident.mip = req.mip;
+    resident.x = req.x;
+    resident.y = req.y;
+    resident.tail = req.tail;
+    resident.pinned = req.pinned;
+    resident.cacheKey = req.cacheKey;
+    this.slotActive[slotIdx] = 1;
+    this.slotByKey.set(req.cacheKey, slotIdx);
+    this.usedCount++;
+    if (req.pinned)
+      this.pinnedCount++;
+  }
+  evictByKey(cacheKey) {
+    const index = this.slotByKey.get(cacheKey);
+    if (index === undefined)
+      return null;
+    const page = this.slots[index];
+    if (this.slotActive[index] === 0 || page.pinned || this.reserved[index] !== 0)
+      return null;
+    this.slotByKey.delete(cacheKey);
+    this.slotActive[index] = 0;
+    this.referenced[index] = 0;
+    this.usedCount--;
+    this.freeSlots[this.freeTop++] = index;
+    return page;
+  }
+  removeTexture(path) {
+    for (let index = 0;index < this.slots.length; index++) {
+      const page = this.slots[index];
+      if (this.slotActive[index] === 0 || page.path !== path)
+        continue;
+      this.slotByKey.delete(page.cacheKey);
+      this.slotActive[index] = 0;
+      this.referenced[index] = 0;
+      this.usedCount--;
+      if (page.pinned)
+        this.pinnedCount--;
+      this.freeSlots[this.freeTop++] = index;
+    }
+  }
+  get usedSlots() {
+    return this.usedCount;
+  }
+  get pinnedSlots() {
+    return this.pinnedCount;
+  }
+  get freeSlotCount() {
+    return this.freeTop;
+  }
+  get totalSlots() {
+    return this.pagesX * this.pagesY;
+  }
+}
+var DEFAULT_VIRTUAL_TEXTURE_TUNING = {
+  minUploadsPerPoll: 1,
+  baselineUploadsPerPoll: 2,
+  maxUploadsPerPoll: 4,
+  minUploadBudgetMs: 0.1,
+  baselineUploadBudgetMs: 0.2,
+  maxUploadBudgetMs: 0.35,
+  uploadBudgetStepMs: 0.05,
+  targetFrameMs: 1000 / 60,
+  overloadMultiplier: 1.25,
+  overloadSamples: 2,
+  sampleWindow: 15,
+  stableWindowsBeforeProbe: 1,
+  probeCooldownWindows: 60
+};
+
+class VirtualTextureTuning {
+  minUploadsPerPoll;
+  baselineUploadsPerPoll;
+  maxUploadsPerPoll;
+  minUploadBudgetMs;
+  baselineUploadBudgetMs;
+  maxUploadBudgetMs;
+  uploadBudgetStepMs;
+  targetFrameMs;
+  overloadFrameMs;
+  overloadSamples;
+  sampleWindow;
+  stableWindowsBeforeProbe;
+  probeCooldownWindows;
+  uploadsPerPoll;
+  uploadBudgetMs;
+  bestSafeUploadsPerPoll;
+  bestSafeUploadBudgetMs;
+  samples = 0;
+  overloaded = 0;
+  stableWindows = 0;
+  cooldownWindows = 0;
+  probing = false;
+  downshifts = 0;
+  recoveries = 0;
+  probes = 0;
+  probeRejections = 0;
+  constructor(config = DEFAULT_VIRTUAL_TEXTURE_TUNING) {
+    const integers = [
+      config.minUploadsPerPoll,
+      config.baselineUploadsPerPoll,
+      config.maxUploadsPerPoll,
+      config.overloadSamples,
+      config.sampleWindow,
+      config.stableWindowsBeforeProbe,
+      config.probeCooldownWindows
+    ];
+    if (integers.some((value) => !Number.isInteger(value) || value < 1) || config.minUploadsPerPoll > config.baselineUploadsPerPoll || config.baselineUploadsPerPoll > config.maxUploadsPerPoll || !Number.isFinite(config.minUploadBudgetMs) || !Number.isFinite(config.baselineUploadBudgetMs) || !Number.isFinite(config.maxUploadBudgetMs) || config.minUploadBudgetMs <= 0 || config.minUploadBudgetMs > config.baselineUploadBudgetMs || config.baselineUploadBudgetMs > config.maxUploadBudgetMs || !Number.isFinite(config.uploadBudgetStepMs) || config.uploadBudgetStepMs <= 0 || !Number.isFinite(config.targetFrameMs) || config.targetFrameMs <= 0 || !Number.isFinite(config.overloadMultiplier) || config.overloadMultiplier <= 1)
+      throw new RangeError("invalid virtual-texture tuning configuration");
+    this.minUploadsPerPoll = config.minUploadsPerPoll;
+    this.baselineUploadsPerPoll = config.baselineUploadsPerPoll;
+    this.maxUploadsPerPoll = config.maxUploadsPerPoll;
+    this.minUploadBudgetMs = config.minUploadBudgetMs;
+    this.baselineUploadBudgetMs = config.baselineUploadBudgetMs;
+    this.maxUploadBudgetMs = config.maxUploadBudgetMs;
+    this.uploadBudgetStepMs = config.uploadBudgetStepMs;
+    this.targetFrameMs = config.targetFrameMs;
+    this.overloadFrameMs = config.targetFrameMs * config.overloadMultiplier;
+    this.overloadSamples = config.overloadSamples;
+    this.sampleWindow = config.sampleWindow;
+    this.stableWindowsBeforeProbe = config.stableWindowsBeforeProbe;
+    this.probeCooldownWindows = config.probeCooldownWindows;
+    this.uploadsPerPoll = config.baselineUploadsPerPoll;
+    this.uploadBudgetMs = config.baselineUploadBudgetMs;
+    this.bestSafeUploadsPerPoll = config.baselineUploadsPerPoll;
+    this.bestSafeUploadBudgetMs = config.baselineUploadBudgetMs;
+  }
+  resetWindow() {
+    this.samples = 0;
+    this.overloaded = 0;
+  }
+  lowerOneStep() {
+    if (this.uploadsPerPoll > this.minUploadsPerPoll) {
+      this.uploadsPerPoll--;
+    } else {
+      this.uploadBudgetMs = Math.max(this.minUploadBudgetMs, this.uploadBudgetMs - this.uploadBudgetStepMs);
+    }
+    this.bestSafeUploadsPerPoll = this.uploadsPerPoll;
+    this.bestSafeUploadBudgetMs = this.uploadBudgetMs;
+    this.downshifts++;
+  }
+  probeOneStep() {
+    if (this.uploadsPerPoll < this.maxUploadsPerPoll) {
+      this.uploadsPerPoll++;
+    } else if (this.uploadBudgetMs < this.maxUploadBudgetMs) {
+      this.uploadBudgetMs = Math.min(this.maxUploadBudgetMs, this.uploadBudgetMs + this.uploadBudgetStepMs);
+    } else {
+      return false;
+    }
+    this.probing = true;
+    this.probes++;
+    return true;
+  }
+  recordFrameTime(frameMs, backlog) {
+    if (!Number.isFinite(frameMs) || frameMs <= 0) {
+      this.stableWindows = 0;
+      this.resetWindow();
+      return;
+    }
+    if (backlog <= 0)
+      return;
+    this.samples++;
+    if (frameMs > this.overloadFrameMs)
+      this.overloaded++;
+    if (this.samples < this.sampleWindow)
+      return;
+    if (this.overloaded >= this.overloadSamples) {
+      if (this.probing || this.uploadsPerPoll > this.baselineUploadsPerPoll || this.uploadBudgetMs > this.baselineUploadBudgetMs) {
+        this.uploadsPerPoll = this.baselineUploadsPerPoll;
+        this.uploadBudgetMs = this.baselineUploadBudgetMs;
+        this.bestSafeUploadsPerPoll = this.baselineUploadsPerPoll;
+        this.bestSafeUploadBudgetMs = this.baselineUploadBudgetMs;
+        this.probing = false;
+        this.probeRejections++;
+      } else {
+        this.lowerOneStep();
+      }
+      this.stableWindows = 0;
+      this.cooldownWindows = this.probeCooldownWindows;
+    } else if (this.overloaded === 0) {
+      if (this.probing) {
+        this.bestSafeUploadsPerPoll = this.uploadsPerPoll;
+        this.bestSafeUploadBudgetMs = this.uploadBudgetMs;
+        this.probing = false;
+        this.recoveries++;
+        this.stableWindows = 0;
+      } else if (this.cooldownWindows > 0) {
+        this.cooldownWindows--;
+        this.stableWindows = 0;
+      } else {
+        this.stableWindows++;
+        if (this.stableWindows >= this.stableWindowsBeforeProbe) {
+          this.probeOneStep();
+          this.stableWindows = 0;
+        }
+      }
+    } else {
+      this.stableWindows = 0;
+    }
+    this.resetWindow();
+  }
+}
+var VirtualTextureTuningRes = defineResource("virtualTextureTuning", () => new VirtualTextureTuning);
+
+class VirtualTextureStore {
+  atlasTexture;
+  atlasWidth;
+  atlasHeight;
+  atlasPagesX;
+  atlasPagesY;
+  gpuAtlasTexture = null;
+  gpuPageTables = new Map;
+  format;
+  device = null;
+  entries = new Map;
+  entriesById = [null];
+  pageTablesById = [null];
+  materialGroupIdsById = [null];
+  materialGroupByPath = new Map;
+  nextTextureId = 1;
+  pageTables = new Map;
+  cache;
+  loader;
+  pageDataProvider;
+  pendingRecords;
+  pendingActive;
+  pendingFree;
+  pendingFreeTop = 0;
+  pendingByKey;
+  pendingCount = 0;
+  readyUploads;
+  readyUploadHead = 0;
+  readyUploadTail = 0;
+  readyUploadCount = 0;
+  loadGeneration = 0;
+  tuning;
+  maxPendingPages = 64;
+  maxPendingBytes = 8 * 1024 * 1024;
+  pendingBytes = 0;
+  scheduleBudgetMs = 0.25;
+  rejectedAdmissions = 0;
+  scheduleBudgetExhaustions = 0;
+  uploadBudgetExhaustions = 0;
+  scheduledKeys;
+  scheduledRequests;
+  scheduledActive;
+  scheduledLastSeen;
+  scheduledSince;
+  scheduledPriority;
+  scheduledNext;
+  scheduledPrevious;
+  priorityHeads = new Int32Array(PRIORITY_LANE_COUNT);
+  priorityTails = new Int32Array(PRIORITY_LANE_COUNT);
+  scheduledFree;
+  scheduledFreeTop = 0;
+  scheduledByKey;
+  scheduledCount = 0;
+  feedbackEpoch = 0;
+  staleFeedbackEpochs = 2;
+  staleCancellations = 0;
+  priorityPreemptions = 0;
+  schedulerOverflows = 0;
+  feedbackScratch;
+  feedbackScratchKeys;
+  feedbackScratchCount = 0;
+  cacheHits = 0;
+  cacheMisses = 0;
+  cacheEvictions = 0;
+  completedLoads = 0;
+  failedLoads = 0;
+  totalLoadMs = 0;
+  maxLoadMs = 0;
+  completedUploads = 0;
+  totalUploadMs = 0;
+  maxUploadMs = 0;
+  capacityLodBias = 0;
+  pageBudget = 8;
+  debugPaused = false;
+  debugPageBudget = null;
+  feedbackResult = {
+    loaded: 0,
+    evicted: 0,
+    totalRequests: 0,
+    queuedRequests: 0,
+    lodBias: 0
+  };
+  stats = {
+    textureCount: 0,
+    atlasSlotsUsed: 0,
+    atlasSlotsTotal: 0,
+    trackedPages: 0,
+    pendingPages: 0,
+    lodBias: 0,
+    budget: 0,
+    readyUploads: 0,
+    maxPendingPages: 0,
+    pendingBytes: 0,
+    maxPendingBytes: 0,
+    scheduledRequests: 0,
+    schedulerCapacity: 0,
+    schedulerOverflows: 0,
+    staleCancellations: 0,
+    priorityPreemptions: 0,
+    rejectedAdmissions: 0,
+    cacheHits: 0,
+    cacheMisses: 0,
+    cacheEvictions: 0,
+    completedLoads: 0,
+    failedLoads: 0,
+    averageLoadMs: 0,
+    maxLoadMs: 0,
+    completedUploads: 0,
+    averageUploadMs: 0,
+    maxUploadMs: 0,
+    scheduleBudgetMs: 0,
+    uploadBudgetMs: 0,
+    uploadsPerPoll: 0,
+    tuningDownshifts: 0,
+    tuningRecoveries: 0,
+    tuningProbes: 0,
+    tuningProbeRejections: 0,
+    tuningBestSafeUploadsPerPoll: 0,
+    tuningBestSafeUploadBudgetMs: 0,
+    scheduleBudgetExhaustions: 0,
+    uploadBudgetExhaustions: 0,
+    pageReads: 0,
+    averagePageReadMs: 0,
+    maxPageReadMs: 0,
+    transcodeWorkers: 0,
+    activeTranscodes: 0,
+    queuedTranscodes: 0,
+    completedTranscodes: 0,
+    averageTranscodeQueueMs: 0,
+    maxTranscodeQueueMs: 0,
+    averageTranscodeMs: 0,
+    maxTranscodeMs: 0,
+    cacheEnabled: false,
+    cacheBackend: "",
+    cacheEntries: 0,
+    cacheBytes: 0,
+    cacheLiveBytes: 0,
+    cacheQueuedWrites: 0,
+    cacheEvictions: 0,
+    cacheCompactions: 0,
+    cacheReclaimedBytes: 0,
+    cacheMaintenance: false,
+    cacheHits: 0,
+    cacheMisses: 0,
+    cacheWrites: 0,
+    cacheRejected: 0,
+    cacheErrors: 0,
+    averageCacheReadMs: 0,
+    maxCacheReadMs: 0,
+    averageCacheWriteMs: 0,
+    maxCacheWriteMs: 0
+  };
+  constructor(loader, pageDataProvider, format, device, tuning) {
+    this.loader = loader;
+    this.pageDataProvider = pageDataProvider;
+    this.format = format ?? FORMAT_RGBA;
+    this.device = device ?? null;
+    this.tuning = tuning ?? new VirtualTextureTuning;
+    this.cache = new PageCache(this.format, device?.limits.maxTextureDimension2D ?? ATLAS_WIDTH);
+    this.atlasWidth = this.cache.width;
+    this.atlasHeight = this.cache.height;
+    this.atlasPagesX = this.cache.pagesX;
+    this.atlasPagesY = this.cache.pagesY;
+    const schedulerCapacity = this.cache.totalSlots;
+    this.scheduledKeys = new Float64Array(schedulerCapacity);
+    this.scheduledRequests = new Array(schedulerCapacity);
+    this.scheduledActive = new Uint8Array(schedulerCapacity);
+    this.scheduledLastSeen = new Uint32Array(schedulerCapacity);
+    this.scheduledSince = new Uint32Array(schedulerCapacity);
+    this.scheduledPriority = new Uint8Array(schedulerCapacity);
+    this.scheduledNext = new Int32Array(schedulerCapacity);
+    this.scheduledPrevious = new Int32Array(schedulerCapacity);
+    this.priorityHeads.fill(-1);
+    this.priorityTails.fill(-1);
+    this.scheduledFree = new Uint32Array(schedulerCapacity);
+    this.scheduledByKey = new FixedPageSlotMap(schedulerCapacity);
+    this.pendingRecords = new Array(this.maxPendingPages);
+    this.pendingActive = new Uint8Array(this.maxPendingPages);
+    this.pendingFree = new Uint32Array(this.maxPendingPages);
+    this.pendingByKey = new FixedPageSlotMap(this.maxPendingPages);
+    for (let index = this.maxPendingPages - 1;index >= 0; index--) {
+      this.pendingRecords[index] = {
+        generation: 0,
+        page: { path: "", mip: 0, x: 0, y: 0, pinned: false, cacheKey: 0 },
+        lastSeen: 0,
+        startedAt: 0,
+        priorityTier: 7,
+        controller: null,
+        canceled: false
+      };
+      this.pendingFree[this.pendingFreeTop++] = index;
+    }
+    this.readyUploads = new Array(64);
+    for (let index = 0;index < this.readyUploads.length; index++) {
+      const page = { path: "", mip: 0, x: 0, y: 0, pinned: false, cacheKey: 0 };
+      this.readyUploads[index] = { key: 0, generation: 0, page, req: page, data: new Uint8Array(0) };
+    }
+    this.feedbackScratch = new Array(schedulerCapacity + 1);
+    this.feedbackScratchKeys = new FixedPageSlotMap(schedulerCapacity + 1);
+    for (let index = schedulerCapacity;index >= 0; index--)
+      this.feedbackScratch[index] = { path: "", mip: 0, x: 0, y: 0 };
+    for (let index = schedulerCapacity - 1;index >= 0; index--) {
+      this.scheduledRequests[index] = { path: "", mip: 0, x: 0, y: 0 };
+      this.scheduledNext[index] = -1;
+      this.scheduledPrevious[index] = -1;
+      this.scheduledFree[this.scheduledFreeTop++] = index;
+    }
+    if (this.format === FORMAT_RGBA) {
+      this.atlasTexture = new DataTexture(this.cache.atlas, this.atlasWidth, this.atlasHeight, RGBAFormat);
+      this.atlasTexture.minFilter = LinearFilter;
+      this.atlasTexture.magFilter = LinearFilter;
+      this.atlasTexture.generateMipmaps = false;
+      this.atlasTexture.needsUpdate = true;
+    } else {
+      const tex = new CompressedTexture([{ data: this.cache.atlas, width: this.atlasWidth, height: this.atlasHeight }], this.atlasWidth, this.atlasHeight, threeFormat(this.format));
+      tex.minFilter = LinearFilter;
+      tex.magFilter = LinearFilter;
+      tex.generateMipmaps = false;
+      tex.needsUpdate = true;
+      this.atlasTexture = tex;
+    }
+  }
+  attachRenderer(renderer) {
+    const atlas = renderer.backend.get(this.atlasTexture).texture;
+    if (!atlas)
+      throw new Error("VT atlas has not been initialized by Three.js; render once before attachRenderer()");
+    this.device = renderer.backend.device;
+    const limit = this.device.limits.maxTextureDimension2D;
+    if (this.atlasWidth > limit || this.atlasHeight > limit)
+      throw new RangeError(`VT atlas ${this.atlasWidth}x${this.atlasHeight} exceeds GPU limit ${limit}`);
+    this.gpuAtlasTexture = atlas;
+    this.gpuPageTables.clear();
+    for (const [path, entry] of this.entries) {
+      if (entry.pageTableLayout.width > limit || entry.pageTableLayout.height > limit)
+        throw new RangeError(`VT page table ${path} exceeds GPU 2D texture limit ${limit}`);
+      const texture3 = renderer.backend.get(entry.pageTableTexture).texture;
+      if (texture3)
+        this.gpuPageTables.set(path, texture3);
+    }
+  }
+  getLodBias() {
+    return this.capacityLodBias;
+  }
+  getBudget() {
+    return this.pageBudget;
+  }
+  loadTexture(path, options) {
+    const width = options?.width ?? 4096;
+    const height = options?.height ?? 4096;
+    assertVirtualTextureDimensions(width, height);
+    const pageGridX = Math.ceil(width / PAGE_SIZE);
+    const pageGridY = Math.ceil(height / PAGE_SIZE);
+    const pageTableLayout = createPackedPageTableLayout(pageGridX, pageGridY);
+    const maxMip = pageTableLayout.maxMip;
+    const pageTableData = new Uint32Array(pageTableLayout.storageWidth * pageTableLayout.height);
+    const pageTable = new PageTable(pageTableLayout, pageTableData);
+    this.pageTables.set(path, pageTable);
+    const pageTableTexture = new DataTexture(pageTableData, pageTableLayout.storageWidth, pageTableLayout.height, RedIntegerFormat, UnsignedIntType);
+    pageTableTexture.minFilter = NearestFilter;
+    pageTableTexture.magFilter = NearestFilter;
+    pageTableTexture.generateMipmaps = false;
+    pageTableTexture.needsUpdate = true;
+    const textureId = this.nextTextureId++;
+    if (textureId > 4294967295)
+      throw new Error("virtual texture ID space exhausted");
+    const entry = {
+      textureId,
+      path,
+      width,
+      height,
+      pageGridX,
+      pageGridY,
+      maxMip,
+      textureMaxMip: Math.floor(Math.log2(Math.max(width, height))),
+      tailFirstMip: options?.mipTail ? maxMip + 1 : null,
+      tailEntry: 0,
+      pageTableLayout,
+      pageTable: pageTableData,
+      pageTableTexture
+    };
+    this.entries.set(path, entry);
+    this.entriesById[textureId] = entry;
+    this.pageTablesById[textureId] = pageTable;
+    this.materialGroupIdsById[textureId] = null;
+    this.loadPinnedPages(path, entry);
+    if (entry.tailFirstMip !== null) {
+      this.loadPage(path, { mip: entry.tailFirstMip, x: 0, y: 0, tail: true }, pageTable, true);
+    }
+    const handle = new AssetHandle(path, this.atlasTexture);
+    handle.generation++;
+    handle.state = "loading";
+    return handle;
+  }
+  loadMaterialSet(paths, options) {
+    const load = (path) => {
+      if (!this.entries.has(path))
+        this.loadTexture(path, options);
+      return this.entries.get(path);
+    };
+    const set = {
+      albedo: load(paths.albedo),
+      normal: paths.normal ? load(paths.normal) : undefined,
+      masks: paths.masks ? load(paths.masks) : undefined,
+      roughness: paths.roughness ? load(paths.roughness) : undefined,
+      ao: paths.ao ? load(paths.ao) : undefined,
+      emissive: paths.emissive ? load(paths.emissive) : undefined
+    };
+    this.linkMaterialSet(set);
+    return set;
+  }
+  linkMaterialSet(set) {
+    if (set.masks && (set.roughness || set.ao))
+      throw new Error("packed masks and separate roughness/AO paths are mutually exclusive");
+    const channels = [set.albedo, set.normal, set.masks, set.roughness, set.ao, set.emissive].filter((entry) => entry !== undefined);
+    if (channels.some((entry) => entry.width !== set.albedo.width || entry.height !== set.albedo.height || entry.pageGridX !== set.albedo.pageGridX || entry.pageGridY !== set.albedo.pageGridY || entry.maxMip !== set.albedo.maxMip))
+      throw new Error("linked virtual material channels must have identical page layouts");
+    const groupIds = [];
+    const addId = (textureId) => {
+      if (!groupIds.includes(textureId))
+        groupIds.push(textureId);
+    };
+    for (const channel of channels) {
+      addId(channel.textureId);
+      const existing = this.materialGroupIdsById[channel.textureId];
+      if (existing)
+        for (const textureId of existing)
+          addId(textureId);
+    }
+    const groupPaths = groupIds.map((textureId) => this.entriesById[textureId].path);
+    for (let index = 0;index < groupIds.length; index++) {
+      this.materialGroupByPath.set(groupPaths[index], groupPaths);
+      this.materialGroupIdsById[groupIds[index]] = groupIds;
+    }
+  }
+  loadPinnedPages(path, entry) {
+    const pageTable = this.pageTables.get(path);
+    const pinnedMips = entry.maxMip === 0 ? [0] : [entry.maxMip, entry.maxMip - 1];
+    for (const mip of pinnedMips) {
+      const grid = pageGridAtMip(entry.pageTableLayout, mip);
+      for (let y2 = 0;y2 < grid.height; y2++) {
+        for (let x2 = 0;x2 < grid.width; x2++) {
+          const req = { mip, x: x2, y: y2 };
+          this.loadPage(path, req, pageTable, true);
+        }
+      }
+    }
+  }
+  pageKey(req) {
+    return req.textureId ? packedPageIdentity(req.textureId, req) : 0;
+  }
+  isValidRequest(path, req) {
+    const entry = this.entries.get(path);
+    return entry ? this.isValidEntryRequest(entry, req) : false;
+  }
+  isValidEntryRequest(entry, req) {
+    if (!Number.isInteger(req.mip) || !Number.isInteger(req.x) || !Number.isInteger(req.y))
+      return false;
+    if (req.tail)
+      return entry.tailFirstMip === req.mip && req.x === 0 && req.y === 0;
+    if (req.mip < 0 || req.mip > entry.maxMip)
+      return false;
+    const grid = pageGridAtMip(entry.pageTableLayout, req.mip);
+    return req.x >= 0 && req.y >= 0 && req.x < grid.width && req.y < grid.height;
+  }
+  isRequestResident(path, req, pageTable) {
+    if (req.tail)
+      return isResident(this.entries.get(path)?.tailEntry ?? 0);
+    return pageTable.isResident(req);
+  }
+  getPending(key) {
+    const slot = this.pendingByKey.get(key);
+    return slot === undefined || this.pendingActive[slot] === 0 ? undefined : this.pendingRecords[slot];
+  }
+  deletePending(key) {
+    const slot = this.pendingByKey.get(key);
+    if (slot === undefined || this.pendingActive[slot] === 0)
+      return;
+    const pending = this.pendingRecords[slot];
+    this.pendingByKey.delete(key);
+    this.pendingActive[slot] = 0;
+    this.pendingFree[this.pendingFreeTop++] = slot;
+    this.pendingCount--;
+    this.pendingBytes -= this.cache.slotDataSize;
+    return pending;
+  }
+  preemptWorstPending(priorityTier) {
+    let candidate = -1;
+    let worstTier = priorityTier;
+    for (let slot = 0;slot < this.pendingRecords.length; slot++) {
+      if (this.pendingActive[slot] === 0)
+        continue;
+      const pending2 = this.pendingRecords[slot];
+      if (pending2.page.pinned || pending2.canceled || pending2.priorityTier <= worstTier)
+        continue;
+      candidate = slot;
+      worstTier = pending2.priorityTier;
+    }
+    if (candidate < 0)
+      return false;
+    const pending = this.pendingRecords[candidate];
+    pending.canceled = true;
+    pending.controller?.abort("VT load preempted by a higher-priority visible page");
+    this.priorityPreemptions++;
+    return true;
+  }
+  queuePageLoad(entry, req, pageTable, pinned = false, priorityTier = 7) {
+    const path = entry.path;
+    if (!this.pageDataProvider || (req.tail ? isResident(entry.tailEntry) : pageTable.isResident(req)) || !this.isValidEntryRequest(entry, req))
+      return false;
+    if (this.pendingCount >= this.maxPendingPages || this.pendingBytes + this.cache.slotDataSize > this.maxPendingBytes) {
+      if (!this.preemptWorstPending(priorityTier))
+        this.rejectedAdmissions++;
+      return false;
+    }
+    const key = packedPageIdentity(entry.textureId, req);
+    if (this.pendingByKey.get(key) !== undefined)
+      return false;
+    const generation = ++this.loadGeneration;
+    const controller = new AbortController;
+    const slot = this.pendingFree[--this.pendingFreeTop];
+    const pendingRecord = this.pendingRecords[slot];
+    const page = pendingRecord.page;
+    page.textureId = entry.textureId;
+    page.path = path;
+    page.mip = req.mip;
+    page.x = req.x;
+    page.y = req.y;
+    page.tail = req.tail;
+    page.pinned = pinned;
+    page.cacheKey = key;
+    pendingRecord.generation = generation;
+    pendingRecord.lastSeen = this.feedbackEpoch;
+    pendingRecord.startedAt = performance.now();
+    pendingRecord.priorityTier = priorityTier;
+    pendingRecord.controller = controller;
+    pendingRecord.canceled = false;
+    this.pendingActive[slot] = 1;
+    this.pendingByKey.set(key, slot);
+    this.pendingCount++;
+    this.pendingBytes += this.cache.slotDataSize;
+    this.pageDataProvider(path, page, controller.signal).then((data) => {
+      if (data.byteLength !== this.cache.slotDataSize) {
+        throw new RangeError(`VT page ${key} has ${data.byteLength} bytes; expected ${this.cache.slotDataSize}`);
+      }
+      const pending = this.getPending(key);
+      if (!pending || pending.generation !== generation)
+        return;
+      if (pending.canceled) {
+        this.deletePending(key);
+        return;
+      }
+      const loadMs = performance.now() - pending.startedAt;
+      this.completedLoads++;
+      this.totalLoadMs += loadMs;
+      this.maxLoadMs = Math.max(this.maxLoadMs, loadMs);
+      if (!pending.page.pinned && this.feedbackEpoch - pending.lastSeen >= this.staleFeedbackEpochs) {
+        this.deletePending(key);
+        this.staleCancellations++;
+        return;
+      }
+      if (this.readyUploadCount >= this.readyUploads.length)
+        throw new Error("VT ready-upload ring capacity exceeded");
+      const ready = this.readyUploads[this.readyUploadTail];
+      ready.key = key;
+      ready.generation = generation;
+      ready.page = page;
+      ready.req = page;
+      ready.data = data;
+      this.readyUploadTail = (this.readyUploadTail + 1) % this.readyUploads.length;
+      this.readyUploadCount++;
+    }).catch((error2) => {
+      const pending = this.getPending(key);
+      const canceled = controller.signal.aborted || pending?.generation === generation && pending.canceled;
+      if (pending?.generation === generation)
+        this.deletePending(key);
+      if (canceled)
+        return;
+      this.failedLoads++;
+      console.error(`[VT] Failed to load page ${path} mip=${page.mip} (${page.x},${page.y}):`, error2);
+    });
+    return true;
+  }
+  loadPage(path, req, pageTable, pinned = false) {
+    const entry = this.entries.get(path);
+    if (entry)
+      this.queuePageLoad(entry, req, pageTable, pinned);
+  }
+  addFeedbackPage(textureId, entry, source, mip, x2, y2, tail, capacity) {
+    const key = packedPageCoordinates(entry.textureId, mip, x2, y2, tail);
+    const existing = this.feedbackScratchKeys.get(key);
+    if (existing !== undefined) {
+      const request2 = this.feedbackScratch[existing];
+      request2.screenPriority = Math.min(request2.screenPriority ?? 255, source.screenPriority ?? 0);
+      request2.coverage = Math.min(65535, (request2.coverage ?? 1) + (source.coverage ?? 1));
+      if (request2.screenPriority <= 96 || request2.coverage >= 4)
+        request2.priorityTier = (request2.priorityTier ?? 1) & ~1;
+      return true;
+    }
+    if (this.feedbackScratchCount >= capacity)
+      return false;
+    const index = this.feedbackScratchCount++;
+    const request = this.feedbackScratch[index];
+    const qualityDepth = tail ? 0 : Math.min(MAX_MIP, entry.maxMip - mip);
+    const centralOrLarge = (source.screenPriority ?? 0) <= 96 || (source.coverage ?? 1) >= 4;
+    request.textureId = textureId;
+    request.path = entry.path;
+    request.mip = mip;
+    request.x = x2;
+    request.y = y2;
+    request.tail = tail ? true : undefined;
+    request.screenPriority = source.screenPriority ?? 0;
+    request.coverage = source.coverage ?? 1;
+    request.priorityTier = qualityDepth * 2 + (centralOrLarge ? 0 : 1);
+    this.feedbackScratchKeys.set(key, index);
+    return true;
+  }
+  addFeedbackRequest(textureId, source, bias, capacity) {
+    const entry = this.entriesById[textureId];
+    const pageTable = this.pageTablesById[textureId];
+    if (!entry || !pageTable || !this.isValidEntryRequest(entry, source))
+      return true;
+    if (source.tail === true)
+      return this.addFeedbackPage(textureId, entry, source, source.mip, 0, 0, true, capacity);
+    const desiredMip = Math.min(entry.maxMip, source.mip + bias);
+    const desiredX = source.x >> desiredMip - source.mip;
+    const desiredY = source.y >> desiredMip - source.mip;
+    if (pageTable.isResidentAt(desiredMip, desiredX, desiredY))
+      return this.addFeedbackPage(textureId, entry, source, desiredMip, desiredX, desiredY, false, capacity);
+    let fallbackMip = desiredMip + 1;
+    while (fallbackMip <= entry.maxMip && !pageTable.isResidentAt(fallbackMip, desiredX >> fallbackMip - desiredMip, desiredY >> fallbackMip - desiredMip))
+      fallbackMip++;
+    for (let mip = Math.min(entry.maxMip, fallbackMip - 1);mip >= desiredMip; mip--) {
+      const shift = mip - desiredMip;
+      if (!this.addFeedbackPage(textureId, entry, source, mip, desiredX >> shift, desiredY >> shift, false, capacity))
+        return false;
+    }
+    return true;
+  }
+  buildEffectiveFeedback(feedback) {
+    const capacity = Math.max(1, this.cache.totalSlots - this.cache.pinnedSlots);
+    for (let bias = 0;bias <= MAX_MIP; bias++) {
+      this.feedbackScratchKeys.clear();
+      this.feedbackScratchCount = 0;
+      let fits = true;
+      outer:
+        for (const source of feedback.values()) {
+          const textureId = source.textureId ?? this.entries.get(source.path)?.textureId ?? 0;
+          const group = this.materialGroupIdsById[textureId];
+          if (group) {
+            for (const channelId of group) {
+              if (!this.addFeedbackRequest(channelId, source, bias, capacity)) {
+                fits = false;
+                break outer;
+              }
+            }
+          } else if (!this.addFeedbackRequest(textureId, source, bias, capacity)) {
+            fits = false;
+            break;
+          }
+        }
+      if (fits || bias === MAX_MIP) {
+        this.capacityLodBias = bias;
+        if (!fits)
+          this.schedulerOverflows++;
+        return this.feedbackScratchCount;
+      }
+    }
+    return 0;
+  }
+  copyRequest(target, source) {
+    target.textureId = source.textureId;
+    target.path = source.path;
+    target.mip = source.mip;
+    target.x = source.x;
+    target.y = source.y;
+    target.tail = source.tail;
+    target.screenPriority = source.screenPriority;
+    target.coverage = source.coverage;
+    target.priorityTier = source.priorityTier;
+  }
+  linkScheduledTail(index, priority) {
+    const tail = this.priorityTails[priority];
+    this.scheduledPriority[index] = priority;
+    this.scheduledPrevious[index] = tail;
+    this.scheduledNext[index] = -1;
+    if (tail < 0)
+      this.priorityHeads[priority] = index;
+    else
+      this.scheduledNext[tail] = index;
+    this.priorityTails[priority] = index;
+  }
+  unlinkScheduled(index) {
+    const priority = this.scheduledPriority[index];
+    const previous = this.scheduledPrevious[index];
+    const next = this.scheduledNext[index];
+    if (previous < 0)
+      this.priorityHeads[priority] = next;
+    else
+      this.scheduledNext[previous] = next;
+    if (next < 0)
+      this.priorityTails[priority] = previous;
+    else
+      this.scheduledPrevious[next] = previous;
+    this.scheduledPrevious[index] = -1;
+    this.scheduledNext[index] = -1;
+  }
+  moveScheduled(index, priority) {
+    if (this.scheduledPriority[index] === priority)
+      return;
+    this.unlinkScheduled(index);
+    this.linkScheduledTail(index, priority);
+  }
+  removeScheduled(index) {
+    if (this.scheduledActive[index] === 0)
+      return;
+    this.unlinkScheduled(index);
+    this.scheduledByKey.delete(this.scheduledKeys[index]);
+    this.scheduledActive[index] = 0;
+    this.scheduledFree[this.scheduledFreeTop++] = index;
+    this.scheduledCount--;
+  }
+  rememberRequest(request) {
+    const textureId = request.textureId ?? 0;
+    const entry = this.entriesById[textureId];
+    const pageTable = this.pageTablesById[textureId];
+    if (!entry || !pageTable || !this.isValidEntryRequest(entry, request))
+      return;
+    const key = this.pageKey(request);
+    if (request.tail ? isResident(entry.tailEntry) : pageTable.isResident(request)) {
+      this.cacheHits++;
+      this.cache.touch(key);
+      const scheduled = this.scheduledByKey.get(key);
+      if (scheduled !== undefined)
+        this.removeScheduled(scheduled);
+      return;
+    }
+    this.cacheMisses++;
+    const pending = this.getPending(key);
+    if (pending) {
+      pending.lastSeen = this.feedbackEpoch;
+      pending.priorityTier = Math.min(pending.priorityTier, request.priorityTier ?? 7);
+      return;
+    }
+    const existing = this.scheduledByKey.get(key);
+    if (existing !== undefined) {
+      this.copyRequest(this.scheduledRequests[existing], request);
+      const agePromotion = this.feedbackEpoch - this.scheduledSince[existing] >> 2;
+      const priority = Math.max(0, (request.priorityTier ?? 7) - agePromotion);
+      this.moveScheduled(existing, priority);
+      this.scheduledLastSeen[existing] = this.feedbackEpoch;
+      return;
+    }
+    if (this.scheduledFreeTop === 0) {
+      this.schedulerOverflows++;
+      return;
+    }
+    const index = this.scheduledFree[--this.scheduledFreeTop];
+    this.scheduledKeys[index] = key;
+    this.copyRequest(this.scheduledRequests[index], request);
+    this.scheduledActive[index] = 1;
+    this.scheduledLastSeen[index] = this.feedbackEpoch;
+    this.scheduledSince[index] = this.feedbackEpoch;
+    this.linkScheduledTail(index, request.priorityTier ?? 7);
+    this.scheduledByKey.set(key, index);
+    this.scheduledCount++;
+  }
+  schedulePendingRequests() {
+    const operationBudget = this.debugPaused ? 0 : this.debugPageBudget ?? this.pageBudget;
+    if (operationBudget === 0 || this.scheduledCount === 0)
+      return;
+    const deadline = performance.now() + this.scheduleBudgetMs;
+    const inspectionLimit = this.scheduledCount;
+    let loaded = 0;
+    let inspected = 0;
+    while (inspected < inspectionLimit && loaded < operationBudget) {
+      if ((inspected & 3) === 0 && performance.now() >= deadline) {
+        this.scheduleBudgetExhaustions++;
+        break;
+      }
+      let priority = 0;
+      while (priority < this.priorityHeads.length && this.priorityHeads[priority] < 0)
+        priority++;
+      if (priority === this.priorityHeads.length)
+        break;
+      const index = this.priorityHeads[priority];
+      inspected++;
+      const request = this.scheduledRequests[index];
+      if (this.feedbackEpoch - this.scheduledLastSeen[index] >= this.staleFeedbackEpochs) {
+        this.removeScheduled(index);
+        this.staleCancellations++;
+        continue;
+      }
+      const textureId = request.textureId ?? 0;
+      const entry = this.entriesById[textureId];
+      const pageTable = this.pageTablesById[textureId];
+      if (!entry || !pageTable || (request.tail ? isResident(entry.tailEntry) : pageTable.isResident(request))) {
+        this.removeScheduled(index);
+        continue;
+      }
+      this.cache.touch(this.scheduledKeys[index]);
+      if (this.queuePageLoad(entry, request, pageTable, false, priority)) {
+        this.removeScheduled(index);
+        loaded++;
+      } else {
+        break;
+      }
+    }
+  }
+  cancelStalePending() {
+    for (let slot = 0;slot < this.pendingRecords.length; slot++) {
+      if (this.pendingActive[slot] === 0)
+        continue;
+      const pending = this.pendingRecords[slot];
+      if (pending.page.pinned || pending.canceled || this.feedbackEpoch - pending.lastSeen < this.staleFeedbackEpochs)
+        continue;
+      pending.canceled = true;
+      pending.controller?.abort("VT request left the visibility window");
+      this.staleCancellations++;
+    }
+  }
+  processFeedback(feedback) {
+    this.feedbackEpoch++;
+    const effectiveCount = this.buildEffectiveFeedback(feedback);
+    for (let index = 0;index < effectiveCount; index++)
+      this.rememberRequest(this.feedbackScratch[index]);
+    this.cancelStalePending();
+    const result = this.feedbackResult;
+    result.loaded = 0;
+    result.evicted = 0;
+    result.totalRequests = effectiveCount;
+    result.queuedRequests = this.scheduledCount;
+    result.lodBias = this.capacityLodBias;
+    return result;
+  }
+  clearEvictedPage(page) {
+    if (page.tail) {
+      this.writeMipTailEntry(page.path, 0);
+      return;
+    }
+    this.pageTables.get(page.path)?.setEvicted(page);
+    this.writePageTableEntry(page.path, page, 0);
+  }
+  evictPage(page) {
+    this.clearEvictedPage(page);
+    if (page.pinned || page.tail)
+      return;
+    const group = this.materialGroupByPath.get(page.path);
+    if (!group)
+      return;
+    for (const path of group) {
+      if (path === page.path)
+        continue;
+      const entry = this.entries.get(path);
+      if (!entry)
+        continue;
+      const key = packedPageCoordinates(entry.textureId, page.mip, page.x, page.y);
+      const sibling = this.cache.evictByKey(key);
+      if (!sibling)
+        continue;
+      this.clearEvictedPage(sibling);
+      this.cacheEvictions++;
+    }
+  }
+  writeMipTailEntry(path, value) {
+    const entry = this.entries.get(path);
+    if (!entry)
+      return;
+    const index = packedMipTailIndex(entry.pageTableLayout);
+    entry.tailEntry = value;
+    entry.pageTable[index] = value;
+    const gpuTexture = this.gpuPageTables.get(path);
+    if (gpuTexture && this.device) {
+      this.device.queue.writeTexture({ texture: gpuTexture, origin: { x: 1, y: entry.pageTableLayout.mipOffsets[entry.maxMip] } }, entry.pageTable.subarray(index, index + 1), {}, { width: 1, height: 1, depthOrArrayLayers: 1 });
+    } else {
+      entry.pageTableTexture.needsUpdate = true;
+    }
+  }
+  updateMipTailEntry(path, slot) {
+    this.writeMipTailEntry(path, packEntry(true, slot.x, slot.y));
+  }
+  writePageTableEntry(path, req, value) {
+    const entry = this.entries.get(path);
+    if (!entry)
+      return;
+    const idx = packedPageTableIndex(entry.pageTableLayout, req.mip, req.x, req.y);
+    entry.pageTable[idx] = value;
+    const gpuTexture = this.gpuPageTables.get(path);
+    if (gpuTexture && this.device) {
+      this.device.queue.writeTexture({
+        texture: gpuTexture,
+        origin: { x: req.x, y: entry.pageTableLayout.mipOffsets[req.mip] + req.y }
+      }, entry.pageTable.subarray(idx, idx + 1), {}, { width: 1, height: 1, depthOrArrayLayers: 1 });
+    } else {
+      entry.pageTableTexture.needsUpdate = true;
+    }
+  }
+  updatePageTableTexture(path, req, slot) {
+    this.writePageTableEntry(path, req, packEntry(true, slot.x, slot.y));
+  }
+  unloadTexture(path) {
+    const materialGroup = this.materialGroupByPath.get(path);
+    if (materialGroup) {
+      for (const channelPath of materialGroup) {
+        const channel = this.entries.get(channelPath);
+        if (channel)
+          this.materialGroupIdsById[channel.textureId] = null;
+        this.materialGroupByPath.delete(channelPath);
+      }
+    }
+    for (let index = 0;index < this.scheduledRequests.length; index++) {
+      if (this.scheduledActive[index] !== 0 && this.scheduledRequests[index].path === path)
+        this.removeScheduled(index);
+    }
+    for (let slot = 0;slot < this.pendingRecords.length; slot++) {
+      if (this.pendingActive[slot] === 0)
+        continue;
+      const pending = this.pendingRecords[slot];
+      if (pending.page.path !== path)
+        continue;
+      pending.canceled = true;
+      pending.controller?.abort("virtual texture unloaded");
+      this.deletePending(pending.page.cacheKey);
+    }
+    this.cache.removeTexture(path);
+    const entry = this.entries.get(path);
+    if (entry) {
+      this.entriesById[entry.textureId] = null;
+      this.pageTablesById[entry.textureId] = null;
+      this.materialGroupIdsById[entry.textureId] = null;
+      entry.pageTableTexture.dispose();
+    }
+    this.entries.delete(path);
+    this.pageTables.delete(path);
+    this.gpuPageTables.delete(path);
+  }
+  getEntry(path) {
+    return this.entries.get(path);
+  }
+  getEntryById(textureId) {
+    return this.entriesById[textureId >>> 0] ?? undefined;
+  }
+  writePage(slot, data) {
+    if (this.gpuAtlasTexture && this.device) {
+      this.device.queue.writeTexture({
+        texture: this.gpuAtlasTexture,
+        origin: { x: slot.x * SLOT_SIZE, y: slot.y * SLOT_SIZE }
+      }, data, this.format === FORMAT_RGBA ? { bytesPerRow: SLOT_SIZE * 4, rowsPerImage: SLOT_SIZE } : { bytesPerRow: this.cache.slotBytesPerRow, rowsPerImage: SLOT_BLOCKS_Y }, { width: SLOT_SIZE, height: SLOT_SIZE });
+    } else {
+      this.atlasTexture.needsUpdate = true;
+    }
+  }
+  recordFrameTime(frameMs) {
+    this.tuning.recordFrameTime(frameMs, this.pendingCount + this.readyUploadCount + this.scheduledCount);
+  }
+  poll() {
+    this.loader.poll();
+    const deadline = performance.now() + this.tuning.uploadBudgetMs;
+    for (let count = 0;count < this.tuning.uploadsPerPoll && this.readyUploadCount !== 0; count++) {
+      if (count !== 0 && performance.now() >= deadline) {
+        this.uploadBudgetExhaustions++;
+        break;
+      }
+      const ready = this.readyUploads[this.readyUploadHead];
+      this.readyUploadHead = (this.readyUploadHead + 1) % this.readyUploads.length;
+      this.readyUploadCount--;
+      const pending = this.getPending(ready.key);
+      if (!pending || pending.generation !== ready.generation)
+        continue;
+      if (pending.canceled) {
+        this.deletePending(ready.key);
+        continue;
+      }
+      this.deletePending(ready.key);
+      const textureId = ready.page.textureId ?? 0;
+      const entry = this.entriesById[textureId];
+      const pageTable = this.pageTablesById[textureId];
+      if (!entry || !pageTable || (ready.req.tail ? isResident(entry.tailEntry) : pageTable.isResident(ready.req)))
+        continue;
+      const uploadStartedAt = performance.now();
+      let slot;
+      try {
+        const acquired = this.cache.acquire(ready.page);
+        slot = acquired.slot;
+        if (acquired.evicted) {
+          this.evictPage(acquired.evicted);
+          this.cacheEvictions++;
+        }
+      } catch {
+        this.rejectedAdmissions++;
+        continue;
+      }
+      this.cache.commit(ready.page, slot, ready.data);
+      this.writePage(slot, ready.data);
+      if (ready.req.tail) {
+        this.updateMipTailEntry(ready.page.path, slot);
+      } else {
+        pageTable.setResident(ready.req, slot);
+        this.updatePageTableTexture(ready.page.path, ready.req, slot);
+      }
+      const uploadMs = performance.now() - uploadStartedAt;
+      this.completedUploads++;
+      this.totalUploadMs += uploadMs;
+      this.maxUploadMs = Math.max(this.maxUploadMs, uploadMs);
+    }
+    this.schedulePendingRequests();
+  }
+  setDebugPaused(paused) {
+    this.debugPaused = paused;
+  }
+  setDebugPageBudget(pages) {
+    if (pages !== null && (!Number.isInteger(pages) || pages < 0))
+      throw new RangeError("debug page budget must be a non-negative integer or null");
+    this.debugPageBudget = pages;
+  }
+  debugPendingForPath(path) {
+    let count = 0;
+    for (let slot = 0;slot < this.pendingRecords.length; slot++)
+      if (this.pendingActive[slot] !== 0 && this.pendingRecords[slot].page.path === path)
+        count++;
+    return count;
+  }
+  getDebugSnapshot() {
+    return {
+      ...this.getStats(),
+      paused: this.debugPaused,
+      debugPageBudget: this.debugPageBudget,
+      atlasTexture: this.atlasTexture,
+      textures: [...this.entries.values()].map((entry) => ({
+        textureId: entry.textureId,
+        path: entry.path,
+        width: entry.width,
+        height: entry.height,
+        pageGridX: entry.pageGridX,
+        pageGridY: entry.pageGridY,
+        maxMip: entry.maxMip,
+        residentPages: this.pageTables.get(entry.path)?.residentCount ?? 0,
+        pendingPages: this.debugPendingForPath(entry.path)
+      }))
+    };
+  }
+  getStats() {
+    const stats = this.stats;
+    stats.textureCount = this.entries.size;
+    stats.atlasSlotsUsed = this.cache.usedSlots;
+    stats.atlasSlotsTotal = this.cache.totalSlots;
+    stats.trackedPages = this.cache.usedSlots;
+    stats.pendingPages = this.pendingCount;
+    stats.lodBias = this.capacityLodBias;
+    stats.budget = this.pageBudget;
+    stats.readyUploads = this.readyUploadCount;
+    stats.maxPendingPages = this.maxPendingPages;
+    stats.pendingBytes = this.pendingBytes;
+    stats.maxPendingBytes = this.maxPendingBytes;
+    stats.scheduledRequests = this.scheduledCount;
+    stats.schedulerCapacity = this.scheduledRequests.length;
+    stats.schedulerOverflows = this.schedulerOverflows;
+    stats.staleCancellations = this.staleCancellations;
+    stats.priorityPreemptions = this.priorityPreemptions;
+    stats.rejectedAdmissions = this.rejectedAdmissions;
+    stats.cacheHits = this.cacheHits;
+    stats.cacheMisses = this.cacheMisses;
+    stats.cacheEvictions = this.cacheEvictions;
+    stats.completedLoads = this.completedLoads;
+    stats.failedLoads = this.failedLoads;
+    stats.averageLoadMs = this.completedLoads === 0 ? 0 : this.totalLoadMs / this.completedLoads;
+    stats.maxLoadMs = this.maxLoadMs;
+    stats.completedUploads = this.completedUploads;
+    stats.averageUploadMs = this.completedUploads === 0 ? 0 : this.totalUploadMs / this.completedUploads;
+    stats.maxUploadMs = this.maxUploadMs;
+    stats.scheduleBudgetMs = this.scheduleBudgetMs;
+    stats.uploadBudgetMs = this.tuning.uploadBudgetMs;
+    stats.uploadsPerPoll = this.tuning.uploadsPerPoll;
+    stats.tuningDownshifts = this.tuning.downshifts;
+    stats.tuningRecoveries = this.tuning.recoveries;
+    stats.tuningProbes = this.tuning.probes;
+    stats.tuningProbeRejections = this.tuning.probeRejections;
+    stats.tuningBestSafeUploadsPerPoll = this.tuning.bestSafeUploadsPerPoll;
+    stats.tuningBestSafeUploadBudgetMs = this.tuning.bestSafeUploadBudgetMs;
+    stats.scheduleBudgetExhaustions = this.scheduleBudgetExhaustions;
+    stats.uploadBudgetExhaustions = this.uploadBudgetExhaustions;
+    const provider = this.pageDataProvider?.getStats?.();
+    if (provider) {
+      stats.pageReads = provider.reads;
+      stats.averagePageReadMs = provider.averageReadMs;
+      stats.maxPageReadMs = provider.maxReadMs;
+      stats.transcodeWorkers = provider.workerCount;
+      stats.activeTranscodes = provider.activeTranscodes;
+      stats.queuedTranscodes = provider.queuedTranscodes;
+      stats.completedTranscodes = provider.completedTranscodes;
+      stats.averageTranscodeQueueMs = provider.averageTranscodeQueueMs;
+      stats.maxTranscodeQueueMs = provider.maxTranscodeQueueMs;
+      stats.averageTranscodeMs = provider.averageTranscodeMs;
+      stats.maxTranscodeMs = provider.maxTranscodeMs;
+      stats.cacheEnabled = provider.cacheEnabled;
+      stats.cacheBackend = provider.cacheBackend;
+      stats.cacheEntries = provider.cacheEntries;
+      stats.cacheBytes = provider.cacheBytes;
+      stats.cacheLiveBytes = provider.cacheLiveBytes;
+      stats.cacheQueuedWrites = provider.cacheQueuedWrites;
+      stats.cacheEvictions = provider.cacheEvictions;
+      stats.cacheCompactions = provider.cacheCompactions;
+      stats.cacheReclaimedBytes = provider.cacheReclaimedBytes;
+      stats.cacheMaintenance = provider.cacheMaintenance;
+      stats.cacheHits = provider.cacheHits;
+      stats.cacheMisses = provider.cacheMisses;
+      stats.cacheWrites = provider.cacheWrites;
+      stats.cacheRejected = provider.cacheRejected;
+      stats.cacheErrors = provider.cacheErrors;
+      stats.averageCacheReadMs = provider.averageCacheReadMs;
+      stats.maxCacheReadMs = provider.maxCacheReadMs;
+      stats.averageCacheWriteMs = provider.averageCacheWriteMs;
+      stats.maxCacheWriteMs = provider.maxCacheWriteMs;
+    }
+    return stats;
+  }
+}
+var VirtualTextureRes = defineResource("virtualTexture", () => {
+  throw new Error("VirtualTextureStore not initialized. Call VirtualTextureRes.set(world, new VirtualTextureStore(loader)).");
+});
+var VT_SAMPLE_WGSL = `
+fn vtSample(
+  pageTable: texture_2d<u32>,
+  atlas: texture_2d<f32>,
+  atlasSampler: sampler,
+  uv: vec2f,
+  virtualSize: vec2f,
+  pageGrid: vec2f,
+  pageSize: f32,
+  pageBorder: f32,
+  atlasSize: vec2f,
+  maxMip: f32,
+  textureMaxMip: f32,
+  addressMode: u32
+) -> vec4f {
+  // 0 = clamp, 1 = repeat, 2 = mirrored repeat.
+  var addressed_uv = clamp(uv, vec2f(0.0), vec2f(0.99999994));
+  if (addressMode == 1u) {
+    addressed_uv = fract(uv);
+  } else if (addressMode == 2u) {
+    let period = uv - floor(uv * 0.5) * 2.0;
+    addressed_uv = select(period, 2.0 - period, period > vec2f(1.0));
+    addressed_uv = clamp(addressed_uv, vec2f(0.0), vec2f(0.99999994));
+  }
+
+  // Compute desired mip level from the original continuous derivatives.
+  let dx = dpdx(uv * virtualSize);
+  let dy = dpdy(uv * virtualSize);
+  let texel_footprint = max(dot(dx, dx), dot(dy, dy));
+  let mip_float = clamp(0.5 * log2(max(texel_footprint, 1e-8)), 0.0, textureMaxMip);
+  let desired_level = i32(mip_float);
+
+  // Mips below 128x128 share one pinned physical slot. The entry is stored in
+  // the otherwise-unused x=1 texel of the terminal page-table row.
+  if (desired_level > i32(maxMip)) {
+    var tail_offset = 0.0;
+    for (var level = 0; level < i32(maxMip); level = level + 1) {
+      tail_offset += max(1.0, ceil(pageGrid.y / exp2(f32(level))));
+    }
+    let tail_entry = textureLoad(pageTable, vec2i(1, i32(tail_offset)), 0).r;
+    if ((tail_entry & 1u) != 0u) {
+      let delta = desired_level - i32(maxMip);
+      var rect_origin = vec2f(0.0);
+      if (delta == 2) { rect_origin = vec2f(72.0, 0.0); }
+      else if (delta == 3) { rect_origin = vec2f(112.0, 0.0); }
+      else if (delta == 4) { rect_origin = vec2f(72.0, 40.0); }
+      else if (delta == 5) { rect_origin = vec2f(88.0, 40.0); }
+      else if (delta == 6) { rect_origin = vec2f(100.0, 40.0); }
+      else if (delta >= 7) { rect_origin = vec2f(110.0, 40.0); }
+      let tail_size = max(vec2f(1.0), floor(virtualSize / exp2(f32(desired_level))));
+      let tail_x = (tail_entry >> 1) & 0xFFu;
+      let tail_y = (tail_entry >> 9) & 0xFFu;
+      let slot_origin = vec2f(f32(tail_x), f32(tail_y)) * (pageSize + pageBorder * 2.0);
+      let tail_texel = slot_origin + rect_origin + pageBorder + addressed_uv * tail_size;
+      let tail_uv = tail_texel / atlasSize;
+      let tail_scale = tail_size / atlasSize;
+      return textureSampleGrad(atlas, atlasSampler, tail_uv, dpdx(uv) * tail_scale, dpdy(uv) * tail_scale);
+    }
+  }
+
+  var mip_level = min(desired_level, i32(maxMip));
+  let max_level = i32(maxMip);
+
+  // Walk from desired mip up, looking for resident page
+  var is_resident = false;
+  var entry = 0u;
+  var curr_page_grid = vec2f(0.0);
+  var curr_mip_size = virtualSize;
+  var page_coords = vec2i(0);
+
+  for (var m = mip_level; m <= max_level; m = m + 1) {
+    let mip_scale = exp2(-f32(m));
+    curr_page_grid = max(ceil(pageGrid * mip_scale), vec2f(1.0));
+    curr_mip_size = max(floor(virtualSize * mip_scale), vec2f(1.0));
+    page_coords = vec2i(min(floor(addressed_uv * curr_mip_size / pageSize), curr_page_grid - 1.0));
+    var mip_offset = 0.0;
+    for (var level = 0; level < m; level = level + 1) {
+      mip_offset += max(1.0, ceil(pageGrid.y / exp2(f32(level))));
+    }
+    entry = textureLoad(pageTable, vec2i(page_coords.x, page_coords.y + i32(mip_offset)), 0).r;
+    if ((entry & 1u) != 0u) {
+      is_resident = true;
+      mip_level = m;
+      break;
+    }
+  }
+
+  if (!is_resident) {
+    return vec4f(0.5, 0.5, 0.5, 1.0);
+  }
+
+  // Compute physical atlas UV
+  let physX = (entry >> 1) & 0xFFu;
+  let physY = (entry >> 9) & 0xFFu;
+  let local_texel = addressed_uv * curr_mip_size - vec2f(page_coords) * pageSize;
+  let page_origin = vec2f(f32(physX), f32(physY)) * (pageSize + pageBorder * 2.0);
+  let sample_texel = page_origin + pageBorder + local_texel;
+  let atlas_uv = sample_texel / atlasSize;
+
+  // Atlas-space gradients preserve anisotropy without allowing the GPU to
+  // derive across an unrelated neighboring physical slot.
+  let gradient_scale = curr_mip_size / atlasSize;
+  let atlas_dx = dpdx(uv) * gradient_scale;
+  let atlas_dy = dpdy(uv) * gradient_scale;
+  return textureSampleGrad(atlas, atlasSampler, atlas_uv, atlas_dx, atlas_dy);
+}
+`;
+var VT_RESOLVE_MATERIAL_MIP4_WGSL = `
+fn vtResolveMaterialMip4(
+  pageTable0: texture_2d<u32>,
+  pageTable1: texture_2d<u32>,
+  pageTable2: texture_2d<u32>,
+  pageTable3: texture_2d<u32>,
+  uv: vec2f,
+  virtualSize: vec2f,
+  pageGrid: vec2f,
+  pageSize: f32,
+  maxMip: f32,
+  textureMaxMip: f32,
+  addressMode: u32
+) -> f32 {
+  var addressed_uv = clamp(uv, vec2f(0.0), vec2f(0.99999994));
+  if (addressMode == 1u) {
+    addressed_uv = fract(uv);
+  } else if (addressMode == 2u) {
+    let period = uv - floor(uv * 0.5) * 2.0;
+    addressed_uv = select(period, 2.0 - period, period > vec2f(1.0));
+    addressed_uv = clamp(addressed_uv, vec2f(0.0), vec2f(0.99999994));
+  }
+
+  let dx = dpdx(uv * virtualSize);
+  let dy = dpdy(uv * virtualSize);
+  let footprint = max(dot(dx, dx), dot(dy, dy));
+  let desired = i32(clamp(0.5 * log2(max(footprint, 1e-8)), 0.0, textureMaxMip));
+  let max_level = i32(maxMip);
+
+  if (desired > max_level) {
+    var tail_offset = 0.0;
+    for (var level = 0; level < max_level; level = level + 1) {
+      tail_offset += max(1.0, ceil(pageGrid.y / exp2(f32(level))));
+    }
+    let coord = vec2i(1, i32(tail_offset));
+    let e0 = textureLoad(pageTable0, coord, 0).r;
+    let e1 = textureLoad(pageTable1, coord, 0).r;
+    let e2 = textureLoad(pageTable2, coord, 0).r;
+    let e3 = textureLoad(pageTable3, coord, 0).r;
+    if ((e0 & 1u) != 0u && (e1 & 1u) != 0u &&
+        (e2 & 1u) != 0u && (e3 & 1u) != 0u) {
+      return f32(desired);
+    }
+  }
+
+  for (var mip = min(desired, max_level); mip <= max_level; mip = mip + 1) {
+    let scale = exp2(-f32(mip));
+    let grid = max(ceil(pageGrid * scale), vec2f(1.0));
+    let mip_size = max(floor(virtualSize * scale), vec2f(1.0));
+    let page = vec2i(min(floor(addressed_uv * mip_size / pageSize), grid - 1.0));
+    var offset = 0.0;
+    for (var level = 0; level < mip; level = level + 1) {
+      offset += max(1.0, ceil(pageGrid.y / exp2(f32(level))));
+    }
+    let coord = vec2i(page.x, page.y + i32(offset));
+    let e0 = textureLoad(pageTable0, coord, 0).r;
+    let e1 = textureLoad(pageTable1, coord, 0).r;
+    let e2 = textureLoad(pageTable2, coord, 0).r;
+    let e3 = textureLoad(pageTable3, coord, 0).r;
+    if ((e0 & 1u) != 0u && (e1 & 1u) != 0u &&
+        (e2 & 1u) != 0u && (e3 & 1u) != 0u) {
+      return f32(mip);
+    }
+  }
+  return maxMip;
+}
+`;
+var VT_SAMPLE_LEVEL_WGSL = `
+fn vtSampleLevel(
+  pageTable: texture_2d<u32>,
+  atlas: texture_2d<f32>,
+  atlasSampler: sampler,
+  uv: vec2f,
+  virtualSize: vec2f,
+  pageGrid: vec2f,
+  pageSize: f32,
+  pageBorder: f32,
+  atlasSize: vec2f,
+  maxMip: f32,
+  resolvedMip: f32,
+  addressMode: u32
+) -> vec4f {
+  var addressed_uv = clamp(uv, vec2f(0.0), vec2f(0.99999994));
+  if (addressMode == 1u) {
+    addressed_uv = fract(uv);
+  } else if (addressMode == 2u) {
+    let period = uv - floor(uv * 0.5) * 2.0;
+    addressed_uv = select(period, 2.0 - period, period > vec2f(1.0));
+    addressed_uv = clamp(addressed_uv, vec2f(0.0), vec2f(0.99999994));
+  }
+
+  let mip = i32(resolvedMip);
+  if (mip > i32(maxMip)) {
+    var tail_offset = 0.0;
+    for (var level = 0; level < i32(maxMip); level = level + 1) {
+      tail_offset += max(1.0, ceil(pageGrid.y / exp2(f32(level))));
+    }
+    let entry = textureLoad(pageTable, vec2i(1, i32(tail_offset)), 0).r;
+    if ((entry & 1u) == 0u) { return vec4f(0.5, 0.5, 0.5, 1.0); }
+    let delta = mip - i32(maxMip);
+    var rect_origin = vec2f(0.0);
+    if (delta == 2) { rect_origin = vec2f(72.0, 0.0); }
+    else if (delta == 3) { rect_origin = vec2f(112.0, 0.0); }
+    else if (delta == 4) { rect_origin = vec2f(72.0, 40.0); }
+    else if (delta == 5) { rect_origin = vec2f(88.0, 40.0); }
+    else if (delta == 6) { rect_origin = vec2f(100.0, 40.0); }
+    else if (delta >= 7) { rect_origin = vec2f(110.0, 40.0); }
+    let tail_size = max(vec2f(1.0), floor(virtualSize / exp2(f32(mip))));
+    let px = (entry >> 1) & 0xFFu;
+    let py = (entry >> 9) & 0xFFu;
+    let slot = vec2f(f32(px), f32(py)) * (pageSize + pageBorder * 2.0);
+    let texel = slot + rect_origin + pageBorder + addressed_uv * tail_size;
+    let scale = tail_size / atlasSize;
+    return textureSampleGrad(atlas, atlasSampler, texel / atlasSize, dpdx(uv) * scale, dpdy(uv) * scale);
+  }
+
+  let mip_scale = exp2(-f32(mip));
+  let grid = max(ceil(pageGrid * mip_scale), vec2f(1.0));
+  let mip_size = max(floor(virtualSize * mip_scale), vec2f(1.0));
+  let page = vec2i(min(floor(addressed_uv * mip_size / pageSize), grid - 1.0));
+  var offset = 0.0;
+  for (var level = 0; level < mip; level = level + 1) {
+    offset += max(1.0, ceil(pageGrid.y / exp2(f32(level))));
+  }
+  let entry = textureLoad(pageTable, vec2i(page.x, page.y + i32(offset)), 0).r;
+  if ((entry & 1u) == 0u) { return vec4f(0.5, 0.5, 0.5, 1.0); }
+  let px = (entry >> 1) & 0xFFu;
+  let py = (entry >> 9) & 0xFFu;
+  let local = addressed_uv * mip_size - vec2f(page) * pageSize;
+  let origin = vec2f(f32(px), f32(py)) * (pageSize + pageBorder * 2.0);
+  let atlas_uv = (origin + pageBorder + local) / atlasSize;
+  let gradient_scale = mip_size / atlasSize;
+  return textureSampleGrad(
+    atlas, atlasSampler, atlas_uv,
+    dpdx(uv) * gradient_scale,
+    dpdy(uv) * gradient_scale
+  );
+}
+`;
+var VT_SAMPLE_FROM_LEVEL_WGSL = `
+fn vtSampleFromLevel(
+  pageTable: texture_2d<u32>, atlas: texture_2d<f32>, atlasSampler: sampler,
+  sampleUV: vec2f, gradientUV: vec2f,
+  virtualSize: vec2f, pageGrid: vec2f, pageSize: f32, pageBorder: f32,
+  atlasSize: vec2f, maxMip: f32, resolvedMip: f32, addressMode: u32
+) -> vec4f {
+  var addressedUV = clamp(sampleUV, vec2f(0.0), vec2f(0.99999994));
+  if (addressMode == 1u) {
+    addressedUV = fract(sampleUV);
+  } else if (addressMode == 2u) {
+    let period = sampleUV - floor(sampleUV * 0.5) * 2.0;
+    addressedUV = select(period, 2.0 - period, period > vec2f(1.0));
+    addressedUV = clamp(addressedUV, vec2f(0.0), vec2f(0.99999994));
+  }
+
+  let requested = i32(resolvedMip);
+  let maxLevel = i32(maxMip);
+  var entry = 0u;
+  var selected = -1;
+  var selectedPage = vec2i(0);
+  var selectedSize = vec2f(1.0);
+  if (requested <= maxLevel) {
+    for (var mip = max(0, requested); mip <= maxLevel; mip = mip + 1) {
+      let scale = exp2(-f32(mip));
+      let grid = max(ceil(pageGrid * scale), vec2f(1.0));
+      let mipSize = max(floor(virtualSize * scale), vec2f(1.0));
+      let page = vec2i(min(floor(addressedUV * mipSize / pageSize), grid - 1.0));
+      var offset = 0.0;
+      for (var level = 0; level < mip; level = level + 1) {
+        offset += max(1.0, ceil(pageGrid.y / exp2(f32(level))));
+      }
+      let candidate = textureLoad(pageTable, vec2i(page.x, page.y + i32(offset)), 0).r;
+      if ((candidate & 1u) != 0u) {
+        entry = candidate; selected = mip; selectedPage = page; selectedSize = mipSize;
+        break;
+      }
+    }
+  }
+
+  if (selected >= 0) {
+    let local = addressedUV * selectedSize - vec2f(selectedPage) * pageSize;
+    let origin = vec2f(f32((entry >> 1) & 0xFFu), f32((entry >> 9) & 0xFFu)) * (pageSize + pageBorder * 2.0);
+    let atlasUV = (origin + pageBorder + local) / atlasSize;
+    let gradientScale = selectedSize / atlasSize;
+    return textureSampleGrad(atlas, atlasSampler, atlasUV,
+      dpdx(gradientUV) * gradientScale, dpdy(gradientUV) * gradientScale);
+  }
+
+  var tailOffset = 0.0;
+  for (var level = 0; level < maxLevel; level = level + 1) {
+    tailOffset += max(1.0, ceil(pageGrid.y / exp2(f32(level))));
+  }
+  let tailEntry = textureLoad(pageTable, vec2i(1, i32(tailOffset)), 0).r;
+  if ((tailEntry & 1u) == 0u) { return vec4f(0.5, 0.5, 0.5, 1.0); }
+  let tailMip = max(maxLevel + 1, requested);
+  let delta = tailMip - maxLevel;
+  var rectOrigin = vec2f(0.0);
+  if (delta == 2) { rectOrigin = vec2f(72.0, 0.0); }
+  else if (delta == 3) { rectOrigin = vec2f(112.0, 0.0); }
+  else if (delta == 4) { rectOrigin = vec2f(72.0, 40.0); }
+  else if (delta == 5) { rectOrigin = vec2f(88.0, 40.0); }
+  else if (delta == 6) { rectOrigin = vec2f(100.0, 40.0); }
+  else if (delta >= 7) { rectOrigin = vec2f(110.0, 40.0); }
+  let tailSize = max(vec2f(1.0), floor(virtualSize / exp2(f32(tailMip))));
+  let slot = vec2f(f32((tailEntry >> 1) & 0xFFu), f32((tailEntry >> 9) & 0xFFu)) * (pageSize + pageBorder * 2.0);
+  let atlasUV = (slot + rectOrigin + pageBorder + addressedUV * tailSize) / atlasSize;
+  let gradientScale = tailSize / atlasSize;
+  return textureSampleGrad(atlas, atlasSampler, atlasUV,
+    dpdx(gradientUV) * gradientScale, dpdy(gradientUV) * gradientScale);
+}
+`;
+var VT_FEEDBACK_WGSL = `
+fn vtFeedback(
+  sampleUV: vec2f,
+  gradientUV: vec2f,
+  feedbackPixelScale: vec2f,
+  virtualSize: vec2f,
+  pageGrid: vec2f,
+  maxMip: f32,
+  qualityBias: f32,
+  addressMode: u32,
+  textureId: u32
+) -> vec2u {
+  // Derivatives are measured per reduced-resolution feedback pixel. Convert
+  // them back to physical display-pixel derivatives before selecting a mip.
+  // Keeping gradientUV separate prevents repeat/POM discontinuities from
+  // corrupting the screen-space footprint.
+  let dx = dpdx(gradientUV * virtualSize) * feedbackPixelScale.x;
+  let dy = dpdy(gradientUV * virtualSize) * feedbackPixelScale.y;
+  let texel_footprint = max(dot(dx, dx), dot(dy, dy));
+  let mip_level = u32(clamp(0.5 * log2(max(texel_footprint, 1e-8)) + qualityBias, 0.0, maxMip));
+
+  var addressed_uv = clamp(sampleUV, vec2f(0.0), vec2f(0.99999994));
+  if (addressMode == 1u) {
+    addressed_uv = fract(sampleUV);
+  } else if (addressMode == 2u) {
+    let period = sampleUV - floor(sampleUV * 0.5) * 2.0;
+    addressed_uv = select(period, 2.0 - period, period > vec2f(1.0));
+    addressed_uv = clamp(addressed_uv, vec2f(0.0), vec2f(0.99999994));
+  }
+  let mip_scale = exp2(-f32(mip_level));
+  let curr_page_grid = max(ceil(pageGrid * mip_scale), vec2f(1.0));
+  let mip_size = max(floor(virtualSize * mip_scale), vec2f(1.0));
+  let page_coords = min(floor(addressed_uv * mip_size / 128.0), curr_page_grid - 1.0);
+
+  // RG32Uint: word 0 carries valid + 6-bit mip + 11-bit X/Y;
+  // word 1 carries the full virtual-texture identity.
+  let packed = 0x80000000u |
+               (mip_level & 0x3Fu) |
+               ((u32(page_coords.x) & 0x7FFu) << 6) |
+               ((u32(page_coords.y) & 0x7FFu) << 17);
+  return vec2u(packed, textureId);
+}
+`;
+
+// crates/afterglow-web/www/engine/virtual-texture-material.ts
+var VirtualTextureAddressMode;
+((VirtualTextureAddressMode2) => {
+  VirtualTextureAddressMode2[VirtualTextureAddressMode2["Clamp"] = 0] = "Clamp";
+  VirtualTextureAddressMode2[VirtualTextureAddressMode2["Repeat"] = 1] = "Repeat";
+  VirtualTextureAddressMode2[VirtualTextureAddressMode2["MirrorRepeat"] = 2] = "MirrorRepeat";
+})(VirtualTextureAddressMode ||= {});
+function createVirtualGltfMaterialPair(three, store, set, feedbackPixelScale, options = {}) {
+  const addressMode = options.addressMode ?? 1 /* Repeat */;
+  const qualityBias = options.qualityBias ?? 0;
+  const baseColorFactor = options.baseColorFactor ?? [1, 1, 1, 1];
+  const roughnessFactor = options.roughnessFactor ?? 1;
+  const metalnessFactor = options.metalnessFactor ?? 1;
+  const normalScale = options.normalScale ?? [1, -1];
+  const emissiveFactor = options.emissiveFactor ?? [1, 1, 1];
+  const side = options.side ?? three.FrontSide;
+  const atlas = three.texture(store.atlasTexture);
+  const atlasSampler = three.sampler(atlas);
+  const resolveMaterialMip = three.wgslFn(VT_RESOLVE_MATERIAL_MIP4_WGSL);
+  const sampleLevel = three.wgslFn(VT_SAMPLE_LEVEL_WGSL);
+  const sampleVirtual = three.wgslFn(VT_SAMPLE_WGSL);
+  const feedback = three.wgslFn(VT_FEEDBACK_WGSL);
+  const virtualSize = three.uniform(new three.Vector2(set.albedo.width, set.albedo.height));
+  const pageGrid = three.uniform(new three.Vector2(set.albedo.pageGridX, set.albedo.pageGridY));
+  const atlasSize = three.uniform(new three.Vector2(store.atlasWidth, store.atlasHeight));
+  const addressModeNode = three.uint(addressMode);
+  const entries = [set.albedo, set.normal, set.masks, set.emissive].filter((entry) => entry !== undefined);
+  const aligned = entries.every((entry) => entry.width === set.albedo.width && entry.height === set.albedo.height && entry.pageGridX === set.albedo.pageGridX && entry.pageGridY === set.albedo.pageGridY && entry.maxMip === set.albedo.maxMip);
+  if (aligned)
+    store.linkMaterialSet(set);
+  const table = (entry) => three.texture(entry.pageTableTexture);
+  const albedoTable = table(set.albedo);
+  const normalTable = table(set.normal ?? set.albedo);
+  const masksTable = table(set.masks ?? set.albedo);
+  const fourthTable = table(set.emissive ?? set.masks ?? set.albedo);
+  const resolve = () => resolveMaterialMip({
+    pageTable0: albedoTable,
+    pageTable1: normalTable,
+    pageTable2: masksTable,
+    pageTable3: fourthTable,
+    uv: three.uv(),
+    virtualSize,
+    pageGrid,
+    pageSize: three.float(PAGE_SIZE),
+    maxMip: three.float(set.albedo.maxMip),
+    textureMaxMip: three.float(set.albedo.textureMaxMip),
+    addressMode: addressModeNode
+  });
+  const sample3 = (entry) => {
+    const entryVirtualSize = aligned ? virtualSize : three.uniform(new three.Vector2(entry.width, entry.height));
+    const entryPageGrid = aligned ? pageGrid : three.uniform(new three.Vector2(entry.pageGridX, entry.pageGridY));
+    if (aligned)
+      return sampleLevel({
+        pageTable: table(entry),
+        atlas,
+        atlasSampler,
+        uv: three.uv(),
+        virtualSize: entryVirtualSize,
+        pageGrid: entryPageGrid,
+        pageSize: three.float(PAGE_SIZE),
+        pageBorder: three.float(PAGE_BORDER),
+        atlasSize,
+        maxMip: three.float(entry.maxMip),
+        resolvedMip: resolve(),
+        addressMode: addressModeNode
+      });
+    return sampleVirtual({
+      pageTable: table(entry),
+      atlas,
+      atlasSampler,
+      uv: three.uv(),
+      virtualSize: entryVirtualSize,
+      pageGrid: entryPageGrid,
+      pageSize: three.float(PAGE_SIZE),
+      pageBorder: three.float(PAGE_BORDER),
+      atlasSize,
+      maxMip: three.float(entry.maxMip),
+      textureMaxMip: three.float(entry.textureMaxMip),
+      addressMode: addressModeNode
+    });
+  };
+  const material = new three.MeshStandardNodeMaterial({
+    side,
+    transparent: options.transparent ?? false,
+    depthWrite: options.depthWrite ?? !(options.transparent ?? false)
+  });
+  material.colorNode = three.Fn(() => {
+    const texel = sample3(set.albedo);
+    return three.vec4(three.sRGBTransferEOTF(texel.rgb).mul(three.vec3(baseColorFactor[0], baseColorFactor[1], baseColorFactor[2])), texel.a.mul(baseColorFactor[3]));
+  })();
+  if (set.normal) {
+    material.normalNode = three.normalMap(sample3(set.normal).xyz, three.vec2(normalScale[0], normalScale[1]));
+  }
+  if (set.emissive) {
+    material.emissiveNode = three.sRGBTransferEOTF(sample3(set.emissive).rgb).mul(three.vec3(emissiveFactor[0], emissiveFactor[1], emissiveFactor[2]));
+  }
+  if (set.masks) {
+    material.roughnessNode = sample3(set.masks).g.mul(roughnessFactor);
+    material.metalnessNode = sample3(set.masks).b.mul(metalnessFactor);
+  } else {
+    material.roughness = roughnessFactor;
+    material.metalness = metalnessFactor;
+  }
+  const feedbackEntries = aligned ? [set.albedo] : entries;
+  const feedbackMaterials = feedbackEntries.map((entry) => {
+    const feedbackMaterial = new three.MeshBasicNodeMaterial({ side });
+    feedbackMaterial.fragmentNode = three.Fn(() => feedback({
+      sampleUV: three.uv(),
+      gradientUV: three.uv(),
+      feedbackPixelScale: three.uniform(feedbackPixelScale),
+      virtualSize: three.uniform(new three.Vector2(entry.width, entry.height)),
+      pageGrid: three.uniform(new three.Vector2(entry.pageGridX, entry.pageGridY)),
+      maxMip: three.float(entry.maxMip),
+      qualityBias: three.float(qualityBias),
+      addressMode: addressModeNode,
+      textureId: three.uint(entry.textureId)
+    }))();
+    return feedbackMaterial;
+  });
+  return {
+    material,
+    feedbackMaterial: feedbackMaterials[0],
+    feedbackMaterials,
+    feedbackEntries
+  };
 }
 
 // crates/afterglow-web/www/engine/engine-memory.ts
@@ -65730,1844 +70778,6 @@ fn pomMarchUV(
 }
 `;
 
-// crates/afterglow-web/www/engine/asset-handle.ts
-class AssetHandle {
-  asset;
-  generation = 0;
-  state = "loading";
-  path;
-  constructor(path, fallback) {
-    this.path = path;
-    this.asset = fallback;
-  }
-  get isReady() {
-    return this.state === "ready";
-  }
-  get isError() {
-    return this.state === "error";
-  }
-  lod = -1;
-}
-
-// crates/afterglow-web/www/engine/virtual-texture.ts
-var PAGE_SIZE = 128;
-var PAGE_BORDER = 4;
-var SLOT_SIZE = PAGE_SIZE + PAGE_BORDER * 2;
-var ATLAS_PAGES_X = 15;
-var ATLAS_PAGES_Y = 15;
-var ATLAS_WIDTH = ATLAS_PAGES_X * SLOT_SIZE;
-var ATLAS_HEIGHT = ATLAS_PAGES_Y * SLOT_SIZE;
-var MAX_MIP = 10;
-var PRIORITY_LANE_COUNT = (MAX_MIP + 1) * 2;
-function packedPageCoordinates(textureId, mip, x2, y2, tail = false) {
-  const local = tail ? 268435456 : (mip & 63 | (x2 & 2047) << 6 | (y2 & 2047) << 17) >>> 0;
-  return textureId * 536870912 + local;
-}
-function packedPageIdentity(textureId, req) {
-  return packedPageCoordinates(textureId, req.mip, req.x, req.y, req.tail);
-}
-function packEntry(resident, physX, physY) {
-  return (resident ? 1 : 0) | (physX & 255) << 1 | (physY & 255) << 9;
-}
-function isResident(entry) {
-  return (entry & 1) !== 0;
-}
-var BLOCK_SIZE = 4;
-var BC7_BYTES_PER_BLOCK = 16;
-var RGBA_BYTES_PER_BLOCK = BLOCK_SIZE * BLOCK_SIZE * 4;
-var SLOT_BLOCKS_X = SLOT_SIZE / BLOCK_SIZE;
-var SLOT_BLOCKS_Y = SLOT_SIZE / BLOCK_SIZE;
-var FORMAT_BC7 = 0;
-var FORMAT_ASTC = 1;
-var FORMAT_RGBA = 4;
-function bytesPerBlock(format) {
-  if (format === FORMAT_BC7 || format === FORMAT_ASTC)
-    return BC7_BYTES_PER_BLOCK;
-  return RGBA_BYTES_PER_BLOCK;
-}
-function threeFormat(format) {
-  if (format === FORMAT_BC7)
-    return 36492;
-  if (format === FORMAT_ASTC)
-    return 37808;
-  return RGBAFormat;
-}
-
-class PageTable {
-  layout;
-  entries;
-  count = 0;
-  constructor(layout, entries) {
-    this.layout = layout;
-    this.entries = entries;
-  }
-  index(req) {
-    return packedPageTableIndex(this.layout, req.mip, req.x, req.y);
-  }
-  get(req) {
-    return this.entries[this.index(req)];
-  }
-  setResident(req, slot) {
-    const index = this.index(req);
-    if (!isResident(this.entries[index]))
-      this.count++;
-    this.entries[index] = packEntry(true, slot.x, slot.y);
-  }
-  setEvicted(req) {
-    const index = this.index(req);
-    if (isResident(this.entries[index]))
-      this.count--;
-    this.entries[index] = 0;
-  }
-  isResident(req) {
-    return isResident(this.get(req));
-  }
-  isResidentAt(mip, x2, y2) {
-    return isResident(this.entries[packedPageTableIndex(this.layout, mip, x2, y2)]);
-  }
-  get residentCount() {
-    return this.count;
-  }
-}
-
-class FixedPageSlotMap {
-  keys;
-  values;
-  states;
-  mask;
-  constructor(minCapacity) {
-    let capacity = 1;
-    while (capacity < minCapacity * 2)
-      capacity <<= 1;
-    this.keys = new Float64Array(capacity);
-    this.values = new Uint32Array(capacity);
-    this.states = new Uint8Array(capacity);
-    this.mask = capacity - 1;
-  }
-  hash(key) {
-    return (key >>> 0 ^ Math.floor(key / 4294967296)) * 2654435761 >>> 0;
-  }
-  get(key) {
-    let index = this.hash(key) & this.mask;
-    for (let probe = 0;probe <= this.mask; probe++) {
-      const state = this.states[index];
-      if (state === 0)
-        return;
-      if (state === 1 && this.keys[index] === key)
-        return this.values[index];
-      index = index + 1 & this.mask;
-    }
-    return;
-  }
-  set(key, value) {
-    let index = this.hash(key) & this.mask;
-    let tombstone = -1;
-    for (let probe = 0;probe <= this.mask; probe++) {
-      const state = this.states[index];
-      if (state === 1 && this.keys[index] === key) {
-        this.values[index] = value;
-        return;
-      }
-      if (state === 2 && tombstone < 0)
-        tombstone = index;
-      if (state === 0) {
-        const target = tombstone < 0 ? index : tombstone;
-        this.keys[target] = key;
-        this.values[target] = value;
-        this.states[target] = 1;
-        return;
-      }
-      index = index + 1 & this.mask;
-    }
-    if (tombstone >= 0) {
-      this.keys[tombstone] = key;
-      this.values[tombstone] = value;
-      this.states[tombstone] = 1;
-      return;
-    }
-    throw new Error("fixed VT page map capacity exceeded");
-  }
-  clear() {
-    for (let index = 0;index < this.states.length; index++)
-      this.states[index] = 0;
-  }
-  delete(key) {
-    let index = this.hash(key) & this.mask;
-    for (let probe = 0;probe <= this.mask; probe++) {
-      const state = this.states[index];
-      if (state === 0)
-        return false;
-      if (state === 1 && this.keys[index] === key) {
-        this.states[index] = 2;
-        return true;
-      }
-      index = index + 1 & this.mask;
-    }
-    return false;
-  }
-}
-
-class PageCache {
-  format;
-  pagesX;
-  pagesY;
-  width;
-  height;
-  atlas;
-  atlasBytesPerRow;
-  slotBytesPerRow;
-  slotDataSize;
-  slots = [];
-  slotActive;
-  slotCoords = [];
-  slotByKey;
-  reserved;
-  referenced;
-  clockHand = 0;
-  freeSlots;
-  freeTop = 0;
-  usedCount = 0;
-  pinnedCount = 0;
-  acquireResult;
-  constructor(format = FORMAT_RGBA, maxTextureDimension = ATLAS_WIDTH) {
-    this.format = format;
-    this.pagesX = Math.max(1, Math.floor(maxTextureDimension / SLOT_SIZE));
-    this.pagesY = this.pagesX;
-    this.width = this.pagesX * SLOT_SIZE;
-    this.height = this.pagesY * SLOT_SIZE;
-    const blocksX = this.width / BLOCK_SIZE, blocksY = this.height / BLOCK_SIZE;
-    const bpb = bytesPerBlock(format);
-    if (format === FORMAT_RGBA) {
-      this.atlasBytesPerRow = this.width * 4;
-      this.slotBytesPerRow = SLOT_SIZE * 4;
-      this.slotDataSize = SLOT_SIZE * SLOT_SIZE * 4;
-      this.atlas = new Uint8Array(this.width * this.height * 4);
-    } else {
-      this.atlasBytesPerRow = blocksX * bpb;
-      this.slotBytesPerRow = SLOT_BLOCKS_X * bpb;
-      this.slotDataSize = SLOT_BLOCKS_X * SLOT_BLOCKS_Y * bpb;
-      this.atlas = new Uint8Array(blocksX * blocksY * bpb);
-    }
-    this.slotByKey = new FixedPageSlotMap(this.pagesX * this.pagesY);
-    this.reserved = new Uint8Array(this.pagesX * this.pagesY);
-    this.referenced = new Uint8Array(this.pagesX * this.pagesY);
-    this.slotActive = new Uint8Array(this.pagesX * this.pagesY);
-    this.freeSlots = new Uint32Array(this.pagesX * this.pagesY);
-    for (let y2 = 0;y2 < this.pagesY; y2++) {
-      for (let x2 = 0;x2 < this.pagesX; x2++) {
-        this.slots.push({ path: "", mip: 0, x: 0, y: 0, pinned: false, cacheKey: 0 });
-        this.slotCoords.push({ x: x2, y: y2 });
-        this.freeSlots[this.freeTop++] = y2 * this.pagesX + x2;
-      }
-    }
-    this.acquireResult = { slot: this.slotCoords[0], evicted: null };
-  }
-  touch(cacheKey) {
-    const slot = this.slotByKey.get(cacheKey);
-    if (slot !== undefined)
-      this.referenced[slot] = 1;
-  }
-  acquire(req) {
-    let slotIdx = this.freeTop === 0 ? undefined : this.freeSlots[--this.freeTop];
-    let evicted = null;
-    if (slotIdx === undefined) {
-      const limit = this.slots.length * 2;
-      for (let scanned = 0;scanned < limit; scanned++) {
-        const candidate = this.clockHand;
-        this.clockHand = (this.clockHand + 1) % this.slots.length;
-        const page = this.slots[candidate];
-        if (this.slotActive[candidate] === 0 || this.reserved[candidate] !== 0 || page.pinned)
-          continue;
-        if (this.referenced[candidate] !== 0) {
-          this.referenced[candidate] = 0;
-          continue;
-        }
-        slotIdx = candidate;
-        evicted = page;
-        this.slotByKey.delete(page.cacheKey);
-        this.slotActive[candidate] = 0;
-        this.usedCount--;
-        break;
-      }
-    }
-    if (slotIdx === undefined)
-      throw new Error("No evictable VT atlas slot");
-    this.reserved[slotIdx] = 1;
-    this.acquireResult.slot = this.slotCoords[slotIdx];
-    this.acquireResult.evicted = evicted;
-    return this.acquireResult;
-  }
-  commit(req, slot, data) {
-    const rows = this.format === FORMAT_RGBA ? SLOT_SIZE : SLOT_BLOCKS_Y;
-    const dstXBytes = this.format === FORMAT_RGBA ? slot.x * SLOT_SIZE * 4 : slot.x * SLOT_BLOCKS_X * (this.slotBytesPerRow / SLOT_BLOCKS_X);
-    const dstY = this.format === FORMAT_RGBA ? slot.y * SLOT_SIZE : slot.y * SLOT_BLOCKS_Y;
-    for (let row = 0;row < rows; row++) {
-      const srcOffset = row * this.slotBytesPerRow;
-      const dstOffset = (dstY + row) * this.atlasBytesPerRow + dstXBytes;
-      this.atlas.set(data.subarray(srcOffset, srcOffset + this.slotBytesPerRow), dstOffset);
-    }
-    const slotIdx = slot.y * this.pagesX + slot.x;
-    if (this.reserved[slotIdx] === 0 || this.slotActive[slotIdx] !== 0)
-      throw new Error("VT slot commit without a unique reservation");
-    this.reserved[slotIdx] = 0;
-    this.referenced[slotIdx] = 1;
-    const resident = this.slots[slotIdx];
-    resident.textureId = req.textureId;
-    resident.path = req.path;
-    resident.mip = req.mip;
-    resident.x = req.x;
-    resident.y = req.y;
-    resident.tail = req.tail;
-    resident.pinned = req.pinned;
-    resident.cacheKey = req.cacheKey;
-    this.slotActive[slotIdx] = 1;
-    this.slotByKey.set(req.cacheKey, slotIdx);
-    this.usedCount++;
-    if (req.pinned)
-      this.pinnedCount++;
-  }
-  evictByKey(cacheKey) {
-    const index = this.slotByKey.get(cacheKey);
-    if (index === undefined)
-      return null;
-    const page = this.slots[index];
-    if (this.slotActive[index] === 0 || page.pinned || this.reserved[index] !== 0)
-      return null;
-    this.slotByKey.delete(cacheKey);
-    this.slotActive[index] = 0;
-    this.referenced[index] = 0;
-    this.usedCount--;
-    this.freeSlots[this.freeTop++] = index;
-    return page;
-  }
-  removeTexture(path) {
-    for (let index = 0;index < this.slots.length; index++) {
-      const page = this.slots[index];
-      if (this.slotActive[index] === 0 || page.path !== path)
-        continue;
-      this.slotByKey.delete(page.cacheKey);
-      this.slotActive[index] = 0;
-      this.referenced[index] = 0;
-      this.usedCount--;
-      if (page.pinned)
-        this.pinnedCount--;
-      this.freeSlots[this.freeTop++] = index;
-    }
-  }
-  get usedSlots() {
-    return this.usedCount;
-  }
-  get pinnedSlots() {
-    return this.pinnedCount;
-  }
-  get freeSlotCount() {
-    return this.freeTop;
-  }
-  get totalSlots() {
-    return this.pagesX * this.pagesY;
-  }
-}
-var DEFAULT_VIRTUAL_TEXTURE_TUNING = {
-  minUploadsPerPoll: 1,
-  baselineUploadsPerPoll: 2,
-  maxUploadsPerPoll: 4,
-  minUploadBudgetMs: 0.1,
-  baselineUploadBudgetMs: 0.2,
-  maxUploadBudgetMs: 0.35,
-  uploadBudgetStepMs: 0.05,
-  targetFrameMs: 1000 / 60,
-  overloadMultiplier: 1.25,
-  overloadSamples: 2,
-  sampleWindow: 15,
-  stableWindowsBeforeProbe: 1,
-  probeCooldownWindows: 60
-};
-
-class VirtualTextureTuning {
-  minUploadsPerPoll;
-  baselineUploadsPerPoll;
-  maxUploadsPerPoll;
-  minUploadBudgetMs;
-  baselineUploadBudgetMs;
-  maxUploadBudgetMs;
-  uploadBudgetStepMs;
-  targetFrameMs;
-  overloadFrameMs;
-  overloadSamples;
-  sampleWindow;
-  stableWindowsBeforeProbe;
-  probeCooldownWindows;
-  uploadsPerPoll;
-  uploadBudgetMs;
-  bestSafeUploadsPerPoll;
-  bestSafeUploadBudgetMs;
-  samples = 0;
-  overloaded = 0;
-  stableWindows = 0;
-  cooldownWindows = 0;
-  probing = false;
-  downshifts = 0;
-  recoveries = 0;
-  probes = 0;
-  probeRejections = 0;
-  constructor(config = DEFAULT_VIRTUAL_TEXTURE_TUNING) {
-    const integers = [
-      config.minUploadsPerPoll,
-      config.baselineUploadsPerPoll,
-      config.maxUploadsPerPoll,
-      config.overloadSamples,
-      config.sampleWindow,
-      config.stableWindowsBeforeProbe,
-      config.probeCooldownWindows
-    ];
-    if (integers.some((value) => !Number.isInteger(value) || value < 1) || config.minUploadsPerPoll > config.baselineUploadsPerPoll || config.baselineUploadsPerPoll > config.maxUploadsPerPoll || !Number.isFinite(config.minUploadBudgetMs) || !Number.isFinite(config.baselineUploadBudgetMs) || !Number.isFinite(config.maxUploadBudgetMs) || config.minUploadBudgetMs <= 0 || config.minUploadBudgetMs > config.baselineUploadBudgetMs || config.baselineUploadBudgetMs > config.maxUploadBudgetMs || !Number.isFinite(config.uploadBudgetStepMs) || config.uploadBudgetStepMs <= 0 || !Number.isFinite(config.targetFrameMs) || config.targetFrameMs <= 0 || !Number.isFinite(config.overloadMultiplier) || config.overloadMultiplier <= 1)
-      throw new RangeError("invalid virtual-texture tuning configuration");
-    this.minUploadsPerPoll = config.minUploadsPerPoll;
-    this.baselineUploadsPerPoll = config.baselineUploadsPerPoll;
-    this.maxUploadsPerPoll = config.maxUploadsPerPoll;
-    this.minUploadBudgetMs = config.minUploadBudgetMs;
-    this.baselineUploadBudgetMs = config.baselineUploadBudgetMs;
-    this.maxUploadBudgetMs = config.maxUploadBudgetMs;
-    this.uploadBudgetStepMs = config.uploadBudgetStepMs;
-    this.targetFrameMs = config.targetFrameMs;
-    this.overloadFrameMs = config.targetFrameMs * config.overloadMultiplier;
-    this.overloadSamples = config.overloadSamples;
-    this.sampleWindow = config.sampleWindow;
-    this.stableWindowsBeforeProbe = config.stableWindowsBeforeProbe;
-    this.probeCooldownWindows = config.probeCooldownWindows;
-    this.uploadsPerPoll = config.baselineUploadsPerPoll;
-    this.uploadBudgetMs = config.baselineUploadBudgetMs;
-    this.bestSafeUploadsPerPoll = config.baselineUploadsPerPoll;
-    this.bestSafeUploadBudgetMs = config.baselineUploadBudgetMs;
-  }
-  resetWindow() {
-    this.samples = 0;
-    this.overloaded = 0;
-  }
-  lowerOneStep() {
-    if (this.uploadsPerPoll > this.minUploadsPerPoll) {
-      this.uploadsPerPoll--;
-    } else {
-      this.uploadBudgetMs = Math.max(this.minUploadBudgetMs, this.uploadBudgetMs - this.uploadBudgetStepMs);
-    }
-    this.bestSafeUploadsPerPoll = this.uploadsPerPoll;
-    this.bestSafeUploadBudgetMs = this.uploadBudgetMs;
-    this.downshifts++;
-  }
-  probeOneStep() {
-    if (this.uploadsPerPoll < this.maxUploadsPerPoll) {
-      this.uploadsPerPoll++;
-    } else if (this.uploadBudgetMs < this.maxUploadBudgetMs) {
-      this.uploadBudgetMs = Math.min(this.maxUploadBudgetMs, this.uploadBudgetMs + this.uploadBudgetStepMs);
-    } else {
-      return false;
-    }
-    this.probing = true;
-    this.probes++;
-    return true;
-  }
-  recordFrameTime(frameMs, backlog) {
-    if (!Number.isFinite(frameMs) || frameMs <= 0) {
-      this.stableWindows = 0;
-      this.resetWindow();
-      return;
-    }
-    if (backlog <= 0)
-      return;
-    this.samples++;
-    if (frameMs > this.overloadFrameMs)
-      this.overloaded++;
-    if (this.samples < this.sampleWindow)
-      return;
-    if (this.overloaded >= this.overloadSamples) {
-      if (this.probing || this.uploadsPerPoll > this.baselineUploadsPerPoll || this.uploadBudgetMs > this.baselineUploadBudgetMs) {
-        this.uploadsPerPoll = this.baselineUploadsPerPoll;
-        this.uploadBudgetMs = this.baselineUploadBudgetMs;
-        this.bestSafeUploadsPerPoll = this.baselineUploadsPerPoll;
-        this.bestSafeUploadBudgetMs = this.baselineUploadBudgetMs;
-        this.probing = false;
-        this.probeRejections++;
-      } else {
-        this.lowerOneStep();
-      }
-      this.stableWindows = 0;
-      this.cooldownWindows = this.probeCooldownWindows;
-    } else if (this.overloaded === 0) {
-      if (this.probing) {
-        this.bestSafeUploadsPerPoll = this.uploadsPerPoll;
-        this.bestSafeUploadBudgetMs = this.uploadBudgetMs;
-        this.probing = false;
-        this.recoveries++;
-        this.stableWindows = 0;
-      } else if (this.cooldownWindows > 0) {
-        this.cooldownWindows--;
-        this.stableWindows = 0;
-      } else {
-        this.stableWindows++;
-        if (this.stableWindows >= this.stableWindowsBeforeProbe) {
-          this.probeOneStep();
-          this.stableWindows = 0;
-        }
-      }
-    } else {
-      this.stableWindows = 0;
-    }
-    this.resetWindow();
-  }
-}
-var VirtualTextureTuningRes = defineResource("virtualTextureTuning", () => new VirtualTextureTuning);
-
-class VirtualTextureStore {
-  atlasTexture;
-  atlasWidth;
-  atlasHeight;
-  atlasPagesX;
-  atlasPagesY;
-  gpuAtlasTexture = null;
-  gpuPageTables = new Map;
-  format;
-  device = null;
-  entries = new Map;
-  entriesById = [null];
-  pageTablesById = [null];
-  materialGroupIdsById = [null];
-  materialGroupByPath = new Map;
-  nextTextureId = 1;
-  pageTables = new Map;
-  cache;
-  loader;
-  pageDataProvider;
-  pendingRecords;
-  pendingActive;
-  pendingFree;
-  pendingFreeTop = 0;
-  pendingByKey;
-  pendingCount = 0;
-  readyUploads;
-  readyUploadHead = 0;
-  readyUploadTail = 0;
-  readyUploadCount = 0;
-  loadGeneration = 0;
-  tuning;
-  maxPendingPages = 64;
-  maxPendingBytes = 8 * 1024 * 1024;
-  pendingBytes = 0;
-  scheduleBudgetMs = 0.25;
-  rejectedAdmissions = 0;
-  scheduleBudgetExhaustions = 0;
-  uploadBudgetExhaustions = 0;
-  scheduledKeys;
-  scheduledRequests;
-  scheduledActive;
-  scheduledLastSeen;
-  scheduledSince;
-  scheduledPriority;
-  scheduledNext;
-  scheduledPrevious;
-  priorityHeads = new Int32Array(PRIORITY_LANE_COUNT);
-  priorityTails = new Int32Array(PRIORITY_LANE_COUNT);
-  scheduledFree;
-  scheduledFreeTop = 0;
-  scheduledByKey;
-  scheduledCount = 0;
-  feedbackEpoch = 0;
-  staleFeedbackEpochs = 2;
-  staleCancellations = 0;
-  priorityPreemptions = 0;
-  schedulerOverflows = 0;
-  feedbackScratch;
-  feedbackScratchKeys;
-  feedbackScratchCount = 0;
-  cacheHits = 0;
-  cacheMisses = 0;
-  cacheEvictions = 0;
-  completedLoads = 0;
-  failedLoads = 0;
-  totalLoadMs = 0;
-  maxLoadMs = 0;
-  completedUploads = 0;
-  totalUploadMs = 0;
-  maxUploadMs = 0;
-  capacityLodBias = 0;
-  pageBudget = 8;
-  debugPaused = false;
-  debugPageBudget = null;
-  feedbackResult = {
-    loaded: 0,
-    evicted: 0,
-    totalRequests: 0,
-    queuedRequests: 0,
-    lodBias: 0
-  };
-  stats = {
-    textureCount: 0,
-    atlasSlotsUsed: 0,
-    atlasSlotsTotal: 0,
-    trackedPages: 0,
-    pendingPages: 0,
-    lodBias: 0,
-    budget: 0,
-    readyUploads: 0,
-    maxPendingPages: 0,
-    pendingBytes: 0,
-    maxPendingBytes: 0,
-    scheduledRequests: 0,
-    schedulerCapacity: 0,
-    schedulerOverflows: 0,
-    staleCancellations: 0,
-    priorityPreemptions: 0,
-    rejectedAdmissions: 0,
-    cacheHits: 0,
-    cacheMisses: 0,
-    cacheEvictions: 0,
-    completedLoads: 0,
-    failedLoads: 0,
-    averageLoadMs: 0,
-    maxLoadMs: 0,
-    completedUploads: 0,
-    averageUploadMs: 0,
-    maxUploadMs: 0,
-    scheduleBudgetMs: 0,
-    uploadBudgetMs: 0,
-    uploadsPerPoll: 0,
-    tuningDownshifts: 0,
-    tuningRecoveries: 0,
-    tuningProbes: 0,
-    tuningProbeRejections: 0,
-    tuningBestSafeUploadsPerPoll: 0,
-    tuningBestSafeUploadBudgetMs: 0,
-    scheduleBudgetExhaustions: 0,
-    uploadBudgetExhaustions: 0,
-    pageReads: 0,
-    averagePageReadMs: 0,
-    maxPageReadMs: 0,
-    transcodeWorkers: 0,
-    activeTranscodes: 0,
-    queuedTranscodes: 0,
-    completedTranscodes: 0,
-    averageTranscodeQueueMs: 0,
-    maxTranscodeQueueMs: 0,
-    averageTranscodeMs: 0,
-    maxTranscodeMs: 0,
-    cacheEnabled: false,
-    cacheBackend: "",
-    cacheEntries: 0,
-    cacheBytes: 0,
-    cacheLiveBytes: 0,
-    cacheQueuedWrites: 0,
-    cacheEvictions: 0,
-    cacheCompactions: 0,
-    cacheReclaimedBytes: 0,
-    cacheMaintenance: false,
-    cacheHits: 0,
-    cacheMisses: 0,
-    cacheWrites: 0,
-    cacheRejected: 0,
-    cacheErrors: 0,
-    averageCacheReadMs: 0,
-    maxCacheReadMs: 0,
-    averageCacheWriteMs: 0,
-    maxCacheWriteMs: 0
-  };
-  constructor(loader, pageDataProvider, format, device, tuning) {
-    this.loader = loader;
-    this.pageDataProvider = pageDataProvider;
-    this.format = format ?? FORMAT_RGBA;
-    this.device = device ?? null;
-    this.tuning = tuning ?? new VirtualTextureTuning;
-    this.cache = new PageCache(this.format, device?.limits.maxTextureDimension2D ?? ATLAS_WIDTH);
-    this.atlasWidth = this.cache.width;
-    this.atlasHeight = this.cache.height;
-    this.atlasPagesX = this.cache.pagesX;
-    this.atlasPagesY = this.cache.pagesY;
-    const schedulerCapacity = this.cache.totalSlots;
-    this.scheduledKeys = new Float64Array(schedulerCapacity);
-    this.scheduledRequests = new Array(schedulerCapacity);
-    this.scheduledActive = new Uint8Array(schedulerCapacity);
-    this.scheduledLastSeen = new Uint32Array(schedulerCapacity);
-    this.scheduledSince = new Uint32Array(schedulerCapacity);
-    this.scheduledPriority = new Uint8Array(schedulerCapacity);
-    this.scheduledNext = new Int32Array(schedulerCapacity);
-    this.scheduledPrevious = new Int32Array(schedulerCapacity);
-    this.priorityHeads.fill(-1);
-    this.priorityTails.fill(-1);
-    this.scheduledFree = new Uint32Array(schedulerCapacity);
-    this.scheduledByKey = new FixedPageSlotMap(schedulerCapacity);
-    this.pendingRecords = new Array(this.maxPendingPages);
-    this.pendingActive = new Uint8Array(this.maxPendingPages);
-    this.pendingFree = new Uint32Array(this.maxPendingPages);
-    this.pendingByKey = new FixedPageSlotMap(this.maxPendingPages);
-    for (let index = this.maxPendingPages - 1;index >= 0; index--) {
-      this.pendingRecords[index] = {
-        generation: 0,
-        page: { path: "", mip: 0, x: 0, y: 0, pinned: false, cacheKey: 0 },
-        lastSeen: 0,
-        startedAt: 0,
-        priorityTier: 7,
-        controller: null,
-        canceled: false
-      };
-      this.pendingFree[this.pendingFreeTop++] = index;
-    }
-    this.readyUploads = new Array(64);
-    for (let index = 0;index < this.readyUploads.length; index++) {
-      const page = { path: "", mip: 0, x: 0, y: 0, pinned: false, cacheKey: 0 };
-      this.readyUploads[index] = { key: 0, generation: 0, page, req: page, data: new Uint8Array(0) };
-    }
-    this.feedbackScratch = new Array(schedulerCapacity + 1);
-    this.feedbackScratchKeys = new FixedPageSlotMap(schedulerCapacity + 1);
-    for (let index = schedulerCapacity;index >= 0; index--)
-      this.feedbackScratch[index] = { path: "", mip: 0, x: 0, y: 0 };
-    for (let index = schedulerCapacity - 1;index >= 0; index--) {
-      this.scheduledRequests[index] = { path: "", mip: 0, x: 0, y: 0 };
-      this.scheduledNext[index] = -1;
-      this.scheduledPrevious[index] = -1;
-      this.scheduledFree[this.scheduledFreeTop++] = index;
-    }
-    if (this.format === FORMAT_RGBA) {
-      this.atlasTexture = new DataTexture(this.cache.atlas, this.atlasWidth, this.atlasHeight, RGBAFormat);
-      this.atlasTexture.minFilter = LinearFilter;
-      this.atlasTexture.magFilter = LinearFilter;
-      this.atlasTexture.generateMipmaps = false;
-      this.atlasTexture.needsUpdate = true;
-    } else {
-      const tex = new CompressedTexture([{ data: this.cache.atlas, width: this.atlasWidth, height: this.atlasHeight }], this.atlasWidth, this.atlasHeight, threeFormat(this.format));
-      tex.minFilter = LinearFilter;
-      tex.magFilter = LinearFilter;
-      tex.generateMipmaps = false;
-      tex.needsUpdate = true;
-      this.atlasTexture = tex;
-    }
-  }
-  attachRenderer(renderer) {
-    const atlas = renderer.backend.get(this.atlasTexture).texture;
-    if (!atlas)
-      throw new Error("VT atlas has not been initialized by Three.js; render once before attachRenderer()");
-    this.device = renderer.backend.device;
-    const limit = this.device.limits.maxTextureDimension2D;
-    if (this.atlasWidth > limit || this.atlasHeight > limit)
-      throw new RangeError(`VT atlas ${this.atlasWidth}x${this.atlasHeight} exceeds GPU limit ${limit}`);
-    this.gpuAtlasTexture = atlas;
-    this.gpuPageTables.clear();
-    for (const [path, entry] of this.entries) {
-      if (entry.pageTableLayout.width > limit || entry.pageTableLayout.height > limit)
-        throw new RangeError(`VT page table ${path} exceeds GPU 2D texture limit ${limit}`);
-      const texture3 = renderer.backend.get(entry.pageTableTexture).texture;
-      if (texture3)
-        this.gpuPageTables.set(path, texture3);
-    }
-  }
-  getLodBias() {
-    return this.capacityLodBias;
-  }
-  getBudget() {
-    return this.pageBudget;
-  }
-  loadTexture(path, options) {
-    const width = options?.width ?? 4096;
-    const height = options?.height ?? 4096;
-    assertVirtualTextureDimensions(width, height);
-    const pageGridX = Math.ceil(width / PAGE_SIZE);
-    const pageGridY = Math.ceil(height / PAGE_SIZE);
-    const pageTableLayout = createPackedPageTableLayout(pageGridX, pageGridY);
-    const maxMip = pageTableLayout.maxMip;
-    const pageTableData = new Uint32Array(pageTableLayout.storageWidth * pageTableLayout.height);
-    const pageTable = new PageTable(pageTableLayout, pageTableData);
-    this.pageTables.set(path, pageTable);
-    const pageTableTexture = new DataTexture(pageTableData, pageTableLayout.storageWidth, pageTableLayout.height, RedIntegerFormat, UnsignedIntType);
-    pageTableTexture.minFilter = NearestFilter;
-    pageTableTexture.magFilter = NearestFilter;
-    pageTableTexture.generateMipmaps = false;
-    pageTableTexture.needsUpdate = true;
-    const textureId = this.nextTextureId++;
-    if (textureId > 4294967295)
-      throw new Error("virtual texture ID space exhausted");
-    const entry = {
-      textureId,
-      path,
-      width,
-      height,
-      pageGridX,
-      pageGridY,
-      maxMip,
-      textureMaxMip: Math.floor(Math.log2(Math.max(width, height))),
-      tailFirstMip: options?.mipTail ? maxMip + 1 : null,
-      tailEntry: 0,
-      pageTableLayout,
-      pageTable: pageTableData,
-      pageTableTexture
-    };
-    this.entries.set(path, entry);
-    this.entriesById[textureId] = entry;
-    this.pageTablesById[textureId] = pageTable;
-    this.materialGroupIdsById[textureId] = null;
-    this.loadPinnedPages(path, entry);
-    if (entry.tailFirstMip !== null) {
-      this.loadPage(path, { mip: entry.tailFirstMip, x: 0, y: 0, tail: true }, pageTable, true);
-    }
-    const handle = new AssetHandle(path, this.atlasTexture);
-    handle.generation++;
-    handle.state = "loading";
-    return handle;
-  }
-  loadMaterialSet(paths, options) {
-    const load = (path) => {
-      if (!this.entries.has(path))
-        this.loadTexture(path, options);
-      return this.entries.get(path);
-    };
-    const set = {
-      albedo: load(paths.albedo),
-      normal: paths.normal ? load(paths.normal) : undefined,
-      masks: paths.masks ? load(paths.masks) : undefined,
-      roughness: paths.roughness ? load(paths.roughness) : undefined,
-      ao: paths.ao ? load(paths.ao) : undefined
-    };
-    if (set.masks && (set.roughness || set.ao))
-      throw new Error("packed masks and separate roughness/AO paths are mutually exclusive");
-    const channels = [set.albedo, set.normal, set.masks, set.roughness, set.ao].filter((entry) => entry !== undefined);
-    if (channels.some((entry) => entry.width !== set.albedo.width || entry.height !== set.albedo.height))
-      throw new Error("virtual material channels must have identical dimensions");
-    const groupPaths = channels.map((entry) => entry.path);
-    const groupIds = channels.map((entry) => entry.textureId);
-    for (const channel of channels) {
-      this.materialGroupByPath.set(channel.path, groupPaths);
-      this.materialGroupIdsById[channel.textureId] = groupIds;
-    }
-    return set;
-  }
-  loadPinnedPages(path, entry) {
-    const pageTable = this.pageTables.get(path);
-    const pinnedMips = entry.maxMip === 0 ? [0] : [entry.maxMip, entry.maxMip - 1];
-    for (const mip of pinnedMips) {
-      const grid = pageGridAtMip(entry.pageTableLayout, mip);
-      for (let y2 = 0;y2 < grid.height; y2++) {
-        for (let x2 = 0;x2 < grid.width; x2++) {
-          const req = { mip, x: x2, y: y2 };
-          this.loadPage(path, req, pageTable, true);
-        }
-      }
-    }
-  }
-  pageKey(req) {
-    return req.textureId ? packedPageIdentity(req.textureId, req) : 0;
-  }
-  isValidRequest(path, req) {
-    const entry = this.entries.get(path);
-    return entry ? this.isValidEntryRequest(entry, req) : false;
-  }
-  isValidEntryRequest(entry, req) {
-    if (!Number.isInteger(req.mip) || !Number.isInteger(req.x) || !Number.isInteger(req.y))
-      return false;
-    if (req.tail)
-      return entry.tailFirstMip === req.mip && req.x === 0 && req.y === 0;
-    if (req.mip < 0 || req.mip > entry.maxMip)
-      return false;
-    const grid = pageGridAtMip(entry.pageTableLayout, req.mip);
-    return req.x >= 0 && req.y >= 0 && req.x < grid.width && req.y < grid.height;
-  }
-  isRequestResident(path, req, pageTable) {
-    if (req.tail)
-      return isResident(this.entries.get(path)?.tailEntry ?? 0);
-    return pageTable.isResident(req);
-  }
-  getPending(key) {
-    const slot = this.pendingByKey.get(key);
-    return slot === undefined || this.pendingActive[slot] === 0 ? undefined : this.pendingRecords[slot];
-  }
-  deletePending(key) {
-    const slot = this.pendingByKey.get(key);
-    if (slot === undefined || this.pendingActive[slot] === 0)
-      return;
-    const pending = this.pendingRecords[slot];
-    this.pendingByKey.delete(key);
-    this.pendingActive[slot] = 0;
-    this.pendingFree[this.pendingFreeTop++] = slot;
-    this.pendingCount--;
-    this.pendingBytes -= this.cache.slotDataSize;
-    return pending;
-  }
-  preemptWorstPending(priorityTier) {
-    let candidate = -1;
-    let worstTier = priorityTier;
-    for (let slot = 0;slot < this.pendingRecords.length; slot++) {
-      if (this.pendingActive[slot] === 0)
-        continue;
-      const pending2 = this.pendingRecords[slot];
-      if (pending2.page.pinned || pending2.canceled || pending2.priorityTier <= worstTier)
-        continue;
-      candidate = slot;
-      worstTier = pending2.priorityTier;
-    }
-    if (candidate < 0)
-      return false;
-    const pending = this.pendingRecords[candidate];
-    pending.canceled = true;
-    pending.controller?.abort("VT load preempted by a higher-priority visible page");
-    this.priorityPreemptions++;
-    return true;
-  }
-  queuePageLoad(entry, req, pageTable, pinned = false, priorityTier = 7) {
-    const path = entry.path;
-    if (!this.pageDataProvider || (req.tail ? isResident(entry.tailEntry) : pageTable.isResident(req)) || !this.isValidEntryRequest(entry, req))
-      return false;
-    if (this.pendingCount >= this.maxPendingPages || this.pendingBytes + this.cache.slotDataSize > this.maxPendingBytes) {
-      if (!this.preemptWorstPending(priorityTier))
-        this.rejectedAdmissions++;
-      return false;
-    }
-    const key = packedPageIdentity(entry.textureId, req);
-    if (this.pendingByKey.get(key) !== undefined)
-      return false;
-    const generation = ++this.loadGeneration;
-    const controller = new AbortController;
-    const slot = this.pendingFree[--this.pendingFreeTop];
-    const pendingRecord = this.pendingRecords[slot];
-    const page = pendingRecord.page;
-    page.textureId = entry.textureId;
-    page.path = path;
-    page.mip = req.mip;
-    page.x = req.x;
-    page.y = req.y;
-    page.tail = req.tail;
-    page.pinned = pinned;
-    page.cacheKey = key;
-    pendingRecord.generation = generation;
-    pendingRecord.lastSeen = this.feedbackEpoch;
-    pendingRecord.startedAt = performance.now();
-    pendingRecord.priorityTier = priorityTier;
-    pendingRecord.controller = controller;
-    pendingRecord.canceled = false;
-    this.pendingActive[slot] = 1;
-    this.pendingByKey.set(key, slot);
-    this.pendingCount++;
-    this.pendingBytes += this.cache.slotDataSize;
-    this.pageDataProvider(path, page, controller.signal).then((data) => {
-      if (data.byteLength !== this.cache.slotDataSize) {
-        throw new RangeError(`VT page ${key} has ${data.byteLength} bytes; expected ${this.cache.slotDataSize}`);
-      }
-      const pending = this.getPending(key);
-      if (!pending || pending.generation !== generation)
-        return;
-      if (pending.canceled) {
-        this.deletePending(key);
-        return;
-      }
-      const loadMs = performance.now() - pending.startedAt;
-      this.completedLoads++;
-      this.totalLoadMs += loadMs;
-      this.maxLoadMs = Math.max(this.maxLoadMs, loadMs);
-      if (!pending.page.pinned && this.feedbackEpoch - pending.lastSeen >= this.staleFeedbackEpochs) {
-        this.deletePending(key);
-        this.staleCancellations++;
-        return;
-      }
-      if (this.readyUploadCount >= this.readyUploads.length)
-        throw new Error("VT ready-upload ring capacity exceeded");
-      const ready = this.readyUploads[this.readyUploadTail];
-      ready.key = key;
-      ready.generation = generation;
-      ready.page = page;
-      ready.req = page;
-      ready.data = data;
-      this.readyUploadTail = (this.readyUploadTail + 1) % this.readyUploads.length;
-      this.readyUploadCount++;
-    }).catch((error2) => {
-      const pending = this.getPending(key);
-      const canceled = controller.signal.aborted || pending?.generation === generation && pending.canceled;
-      if (pending?.generation === generation)
-        this.deletePending(key);
-      if (canceled)
-        return;
-      this.failedLoads++;
-      console.error(`[VT] Failed to load page ${path} mip=${page.mip} (${page.x},${page.y}):`, error2);
-    });
-    return true;
-  }
-  loadPage(path, req, pageTable, pinned = false) {
-    const entry = this.entries.get(path);
-    if (entry)
-      this.queuePageLoad(entry, req, pageTable, pinned);
-  }
-  addFeedbackPage(textureId, entry, source, mip, x2, y2, tail, capacity) {
-    const key = packedPageCoordinates(entry.textureId, mip, x2, y2, tail);
-    const existing = this.feedbackScratchKeys.get(key);
-    if (existing !== undefined) {
-      const request2 = this.feedbackScratch[existing];
-      request2.screenPriority = Math.min(request2.screenPriority ?? 255, source.screenPriority ?? 0);
-      request2.coverage = Math.min(65535, (request2.coverage ?? 1) + (source.coverage ?? 1));
-      if (request2.screenPriority <= 96 || request2.coverage >= 4)
-        request2.priorityTier = (request2.priorityTier ?? 1) & ~1;
-      return true;
-    }
-    if (this.feedbackScratchCount >= capacity)
-      return false;
-    const index = this.feedbackScratchCount++;
-    const request = this.feedbackScratch[index];
-    const qualityDepth = tail ? 0 : Math.min(MAX_MIP, entry.maxMip - mip);
-    const centralOrLarge = (source.screenPriority ?? 0) <= 96 || (source.coverage ?? 1) >= 4;
-    request.textureId = textureId;
-    request.path = entry.path;
-    request.mip = mip;
-    request.x = x2;
-    request.y = y2;
-    request.tail = tail ? true : undefined;
-    request.screenPriority = source.screenPriority ?? 0;
-    request.coverage = source.coverage ?? 1;
-    request.priorityTier = qualityDepth * 2 + (centralOrLarge ? 0 : 1);
-    this.feedbackScratchKeys.set(key, index);
-    return true;
-  }
-  addFeedbackRequest(textureId, source, bias, capacity) {
-    const entry = this.entriesById[textureId];
-    const pageTable = this.pageTablesById[textureId];
-    if (!entry || !pageTable || !this.isValidEntryRequest(entry, source))
-      return true;
-    if (source.tail === true)
-      return this.addFeedbackPage(textureId, entry, source, source.mip, 0, 0, true, capacity);
-    const desiredMip = Math.min(entry.maxMip, source.mip + bias);
-    const desiredX = source.x >> desiredMip - source.mip;
-    const desiredY = source.y >> desiredMip - source.mip;
-    if (pageTable.isResidentAt(desiredMip, desiredX, desiredY))
-      return this.addFeedbackPage(textureId, entry, source, desiredMip, desiredX, desiredY, false, capacity);
-    let fallbackMip = desiredMip + 1;
-    while (fallbackMip <= entry.maxMip && !pageTable.isResidentAt(fallbackMip, desiredX >> fallbackMip - desiredMip, desiredY >> fallbackMip - desiredMip))
-      fallbackMip++;
-    for (let mip = Math.min(entry.maxMip, fallbackMip - 1);mip >= desiredMip; mip--) {
-      const shift = mip - desiredMip;
-      if (!this.addFeedbackPage(textureId, entry, source, mip, desiredX >> shift, desiredY >> shift, false, capacity))
-        return false;
-    }
-    return true;
-  }
-  buildEffectiveFeedback(feedback) {
-    const capacity = Math.max(1, this.cache.totalSlots - this.cache.pinnedSlots);
-    for (let bias = 0;bias <= MAX_MIP; bias++) {
-      this.feedbackScratchKeys.clear();
-      this.feedbackScratchCount = 0;
-      let fits = true;
-      outer:
-        for (const source of feedback.values()) {
-          const textureId = source.textureId ?? this.entries.get(source.path)?.textureId ?? 0;
-          const group = this.materialGroupIdsById[textureId];
-          if (group) {
-            for (const channelId of group) {
-              if (!this.addFeedbackRequest(channelId, source, bias, capacity)) {
-                fits = false;
-                break outer;
-              }
-            }
-          } else if (!this.addFeedbackRequest(textureId, source, bias, capacity)) {
-            fits = false;
-            break;
-          }
-        }
-      if (fits || bias === MAX_MIP) {
-        this.capacityLodBias = bias;
-        if (!fits)
-          this.schedulerOverflows++;
-        return this.feedbackScratchCount;
-      }
-    }
-    return 0;
-  }
-  copyRequest(target, source) {
-    target.textureId = source.textureId;
-    target.path = source.path;
-    target.mip = source.mip;
-    target.x = source.x;
-    target.y = source.y;
-    target.tail = source.tail;
-    target.screenPriority = source.screenPriority;
-    target.coverage = source.coverage;
-    target.priorityTier = source.priorityTier;
-  }
-  linkScheduledTail(index, priority) {
-    const tail = this.priorityTails[priority];
-    this.scheduledPriority[index] = priority;
-    this.scheduledPrevious[index] = tail;
-    this.scheduledNext[index] = -1;
-    if (tail < 0)
-      this.priorityHeads[priority] = index;
-    else
-      this.scheduledNext[tail] = index;
-    this.priorityTails[priority] = index;
-  }
-  unlinkScheduled(index) {
-    const priority = this.scheduledPriority[index];
-    const previous = this.scheduledPrevious[index];
-    const next = this.scheduledNext[index];
-    if (previous < 0)
-      this.priorityHeads[priority] = next;
-    else
-      this.scheduledNext[previous] = next;
-    if (next < 0)
-      this.priorityTails[priority] = previous;
-    else
-      this.scheduledPrevious[next] = previous;
-    this.scheduledPrevious[index] = -1;
-    this.scheduledNext[index] = -1;
-  }
-  moveScheduled(index, priority) {
-    if (this.scheduledPriority[index] === priority)
-      return;
-    this.unlinkScheduled(index);
-    this.linkScheduledTail(index, priority);
-  }
-  removeScheduled(index) {
-    if (this.scheduledActive[index] === 0)
-      return;
-    this.unlinkScheduled(index);
-    this.scheduledByKey.delete(this.scheduledKeys[index]);
-    this.scheduledActive[index] = 0;
-    this.scheduledFree[this.scheduledFreeTop++] = index;
-    this.scheduledCount--;
-  }
-  rememberRequest(request) {
-    const textureId = request.textureId ?? 0;
-    const entry = this.entriesById[textureId];
-    const pageTable = this.pageTablesById[textureId];
-    if (!entry || !pageTable || !this.isValidEntryRequest(entry, request))
-      return;
-    const key = this.pageKey(request);
-    if (request.tail ? isResident(entry.tailEntry) : pageTable.isResident(request)) {
-      this.cacheHits++;
-      this.cache.touch(key);
-      const scheduled = this.scheduledByKey.get(key);
-      if (scheduled !== undefined)
-        this.removeScheduled(scheduled);
-      return;
-    }
-    this.cacheMisses++;
-    const pending = this.getPending(key);
-    if (pending) {
-      pending.lastSeen = this.feedbackEpoch;
-      pending.priorityTier = Math.min(pending.priorityTier, request.priorityTier ?? 7);
-      return;
-    }
-    const existing = this.scheduledByKey.get(key);
-    if (existing !== undefined) {
-      this.copyRequest(this.scheduledRequests[existing], request);
-      const agePromotion = this.feedbackEpoch - this.scheduledSince[existing] >> 2;
-      const priority = Math.max(0, (request.priorityTier ?? 7) - agePromotion);
-      this.moveScheduled(existing, priority);
-      this.scheduledLastSeen[existing] = this.feedbackEpoch;
-      return;
-    }
-    if (this.scheduledFreeTop === 0) {
-      this.schedulerOverflows++;
-      return;
-    }
-    const index = this.scheduledFree[--this.scheduledFreeTop];
-    this.scheduledKeys[index] = key;
-    this.copyRequest(this.scheduledRequests[index], request);
-    this.scheduledActive[index] = 1;
-    this.scheduledLastSeen[index] = this.feedbackEpoch;
-    this.scheduledSince[index] = this.feedbackEpoch;
-    this.linkScheduledTail(index, request.priorityTier ?? 7);
-    this.scheduledByKey.set(key, index);
-    this.scheduledCount++;
-  }
-  schedulePendingRequests() {
-    const operationBudget = this.debugPaused ? 0 : this.debugPageBudget ?? this.pageBudget;
-    if (operationBudget === 0 || this.scheduledCount === 0)
-      return;
-    const deadline = performance.now() + this.scheduleBudgetMs;
-    const inspectionLimit = this.scheduledCount;
-    let loaded = 0;
-    let inspected = 0;
-    while (inspected < inspectionLimit && loaded < operationBudget) {
-      if ((inspected & 3) === 0 && performance.now() >= deadline) {
-        this.scheduleBudgetExhaustions++;
-        break;
-      }
-      let priority = 0;
-      while (priority < this.priorityHeads.length && this.priorityHeads[priority] < 0)
-        priority++;
-      if (priority === this.priorityHeads.length)
-        break;
-      const index = this.priorityHeads[priority];
-      inspected++;
-      const request = this.scheduledRequests[index];
-      if (this.feedbackEpoch - this.scheduledLastSeen[index] >= this.staleFeedbackEpochs) {
-        this.removeScheduled(index);
-        this.staleCancellations++;
-        continue;
-      }
-      const textureId = request.textureId ?? 0;
-      const entry = this.entriesById[textureId];
-      const pageTable = this.pageTablesById[textureId];
-      if (!entry || !pageTable || (request.tail ? isResident(entry.tailEntry) : pageTable.isResident(request))) {
-        this.removeScheduled(index);
-        continue;
-      }
-      this.cache.touch(this.scheduledKeys[index]);
-      if (this.queuePageLoad(entry, request, pageTable, false, priority)) {
-        this.removeScheduled(index);
-        loaded++;
-      } else {
-        break;
-      }
-    }
-  }
-  cancelStalePending() {
-    for (let slot = 0;slot < this.pendingRecords.length; slot++) {
-      if (this.pendingActive[slot] === 0)
-        continue;
-      const pending = this.pendingRecords[slot];
-      if (pending.page.pinned || pending.canceled || this.feedbackEpoch - pending.lastSeen < this.staleFeedbackEpochs)
-        continue;
-      pending.canceled = true;
-      pending.controller?.abort("VT request left the visibility window");
-      this.staleCancellations++;
-    }
-  }
-  processFeedback(feedback) {
-    this.feedbackEpoch++;
-    const effectiveCount = this.buildEffectiveFeedback(feedback);
-    for (let index = 0;index < effectiveCount; index++)
-      this.rememberRequest(this.feedbackScratch[index]);
-    this.cancelStalePending();
-    const result = this.feedbackResult;
-    result.loaded = 0;
-    result.evicted = 0;
-    result.totalRequests = effectiveCount;
-    result.queuedRequests = this.scheduledCount;
-    result.lodBias = this.capacityLodBias;
-    return result;
-  }
-  clearEvictedPage(page) {
-    if (page.tail) {
-      this.writeMipTailEntry(page.path, 0);
-      return;
-    }
-    this.pageTables.get(page.path)?.setEvicted(page);
-    this.writePageTableEntry(page.path, page, 0);
-  }
-  evictPage(page) {
-    this.clearEvictedPage(page);
-    if (page.pinned || page.tail)
-      return;
-    const group = this.materialGroupByPath.get(page.path);
-    if (!group)
-      return;
-    for (const path of group) {
-      if (path === page.path)
-        continue;
-      const entry = this.entries.get(path);
-      if (!entry)
-        continue;
-      const key = packedPageCoordinates(entry.textureId, page.mip, page.x, page.y);
-      const sibling = this.cache.evictByKey(key);
-      if (!sibling)
-        continue;
-      this.clearEvictedPage(sibling);
-      this.cacheEvictions++;
-    }
-  }
-  writeMipTailEntry(path, value) {
-    const entry = this.entries.get(path);
-    if (!entry)
-      return;
-    const index = packedMipTailIndex(entry.pageTableLayout);
-    entry.tailEntry = value;
-    entry.pageTable[index] = value;
-    const gpuTexture = this.gpuPageTables.get(path);
-    if (gpuTexture && this.device) {
-      this.device.queue.writeTexture({ texture: gpuTexture, origin: { x: 1, y: entry.pageTableLayout.mipOffsets[entry.maxMip] } }, entry.pageTable.subarray(index, index + 1), {}, { width: 1, height: 1, depthOrArrayLayers: 1 });
-    } else {
-      entry.pageTableTexture.needsUpdate = true;
-    }
-  }
-  updateMipTailEntry(path, slot) {
-    this.writeMipTailEntry(path, packEntry(true, slot.x, slot.y));
-  }
-  writePageTableEntry(path, req, value) {
-    const entry = this.entries.get(path);
-    if (!entry)
-      return;
-    const idx = packedPageTableIndex(entry.pageTableLayout, req.mip, req.x, req.y);
-    entry.pageTable[idx] = value;
-    const gpuTexture = this.gpuPageTables.get(path);
-    if (gpuTexture && this.device) {
-      this.device.queue.writeTexture({
-        texture: gpuTexture,
-        origin: { x: req.x, y: entry.pageTableLayout.mipOffsets[req.mip] + req.y }
-      }, entry.pageTable.subarray(idx, idx + 1), {}, { width: 1, height: 1, depthOrArrayLayers: 1 });
-    } else {
-      entry.pageTableTexture.needsUpdate = true;
-    }
-  }
-  updatePageTableTexture(path, req, slot) {
-    this.writePageTableEntry(path, req, packEntry(true, slot.x, slot.y));
-  }
-  unloadTexture(path) {
-    const materialGroup = this.materialGroupByPath.get(path);
-    if (materialGroup) {
-      for (const channelPath of materialGroup) {
-        const channel = this.entries.get(channelPath);
-        if (channel)
-          this.materialGroupIdsById[channel.textureId] = null;
-        this.materialGroupByPath.delete(channelPath);
-      }
-    }
-    for (let index = 0;index < this.scheduledRequests.length; index++) {
-      if (this.scheduledActive[index] !== 0 && this.scheduledRequests[index].path === path)
-        this.removeScheduled(index);
-    }
-    for (let slot = 0;slot < this.pendingRecords.length; slot++) {
-      if (this.pendingActive[slot] === 0)
-        continue;
-      const pending = this.pendingRecords[slot];
-      if (pending.page.path !== path)
-        continue;
-      pending.canceled = true;
-      pending.controller?.abort("virtual texture unloaded");
-      this.deletePending(pending.page.cacheKey);
-    }
-    this.cache.removeTexture(path);
-    const entry = this.entries.get(path);
-    if (entry) {
-      this.entriesById[entry.textureId] = null;
-      this.pageTablesById[entry.textureId] = null;
-      this.materialGroupIdsById[entry.textureId] = null;
-      entry.pageTableTexture.dispose();
-    }
-    this.entries.delete(path);
-    this.pageTables.delete(path);
-    this.gpuPageTables.delete(path);
-  }
-  getEntry(path) {
-    return this.entries.get(path);
-  }
-  getEntryById(textureId) {
-    return this.entriesById[textureId >>> 0] ?? undefined;
-  }
-  writePage(slot, data) {
-    if (this.gpuAtlasTexture && this.device) {
-      this.device.queue.writeTexture({
-        texture: this.gpuAtlasTexture,
-        origin: { x: slot.x * SLOT_SIZE, y: slot.y * SLOT_SIZE }
-      }, data, this.format === FORMAT_RGBA ? { bytesPerRow: SLOT_SIZE * 4, rowsPerImage: SLOT_SIZE } : { bytesPerRow: this.cache.slotBytesPerRow, rowsPerImage: SLOT_BLOCKS_Y }, { width: SLOT_SIZE, height: SLOT_SIZE });
-    } else {
-      this.atlasTexture.needsUpdate = true;
-    }
-  }
-  recordFrameTime(frameMs) {
-    this.tuning.recordFrameTime(frameMs, this.pendingCount + this.readyUploadCount + this.scheduledCount);
-  }
-  poll() {
-    this.loader.poll();
-    const deadline = performance.now() + this.tuning.uploadBudgetMs;
-    for (let count = 0;count < this.tuning.uploadsPerPoll && this.readyUploadCount !== 0; count++) {
-      if (count !== 0 && performance.now() >= deadline) {
-        this.uploadBudgetExhaustions++;
-        break;
-      }
-      const ready = this.readyUploads[this.readyUploadHead];
-      this.readyUploadHead = (this.readyUploadHead + 1) % this.readyUploads.length;
-      this.readyUploadCount--;
-      const pending = this.getPending(ready.key);
-      if (!pending || pending.generation !== ready.generation)
-        continue;
-      if (pending.canceled) {
-        this.deletePending(ready.key);
-        continue;
-      }
-      this.deletePending(ready.key);
-      const textureId = ready.page.textureId ?? 0;
-      const entry = this.entriesById[textureId];
-      const pageTable = this.pageTablesById[textureId];
-      if (!entry || !pageTable || (ready.req.tail ? isResident(entry.tailEntry) : pageTable.isResident(ready.req)))
-        continue;
-      const uploadStartedAt = performance.now();
-      let slot;
-      try {
-        const acquired = this.cache.acquire(ready.page);
-        slot = acquired.slot;
-        if (acquired.evicted) {
-          this.evictPage(acquired.evicted);
-          this.cacheEvictions++;
-        }
-      } catch {
-        this.rejectedAdmissions++;
-        continue;
-      }
-      this.cache.commit(ready.page, slot, ready.data);
-      this.writePage(slot, ready.data);
-      if (ready.req.tail) {
-        this.updateMipTailEntry(ready.page.path, slot);
-      } else {
-        pageTable.setResident(ready.req, slot);
-        this.updatePageTableTexture(ready.page.path, ready.req, slot);
-      }
-      const uploadMs = performance.now() - uploadStartedAt;
-      this.completedUploads++;
-      this.totalUploadMs += uploadMs;
-      this.maxUploadMs = Math.max(this.maxUploadMs, uploadMs);
-    }
-    this.schedulePendingRequests();
-  }
-  setDebugPaused(paused) {
-    this.debugPaused = paused;
-  }
-  setDebugPageBudget(pages) {
-    if (pages !== null && (!Number.isInteger(pages) || pages < 0))
-      throw new RangeError("debug page budget must be a non-negative integer or null");
-    this.debugPageBudget = pages;
-  }
-  debugPendingForPath(path) {
-    let count = 0;
-    for (let slot = 0;slot < this.pendingRecords.length; slot++)
-      if (this.pendingActive[slot] !== 0 && this.pendingRecords[slot].page.path === path)
-        count++;
-    return count;
-  }
-  getDebugSnapshot() {
-    return {
-      ...this.getStats(),
-      paused: this.debugPaused,
-      debugPageBudget: this.debugPageBudget,
-      atlasTexture: this.atlasTexture,
-      textures: [...this.entries.values()].map((entry) => ({
-        textureId: entry.textureId,
-        path: entry.path,
-        width: entry.width,
-        height: entry.height,
-        pageGridX: entry.pageGridX,
-        pageGridY: entry.pageGridY,
-        maxMip: entry.maxMip,
-        residentPages: this.pageTables.get(entry.path)?.residentCount ?? 0,
-        pendingPages: this.debugPendingForPath(entry.path)
-      }))
-    };
-  }
-  getStats() {
-    const stats = this.stats;
-    stats.textureCount = this.entries.size;
-    stats.atlasSlotsUsed = this.cache.usedSlots;
-    stats.atlasSlotsTotal = this.cache.totalSlots;
-    stats.trackedPages = this.cache.usedSlots;
-    stats.pendingPages = this.pendingCount;
-    stats.lodBias = this.capacityLodBias;
-    stats.budget = this.pageBudget;
-    stats.readyUploads = this.readyUploadCount;
-    stats.maxPendingPages = this.maxPendingPages;
-    stats.pendingBytes = this.pendingBytes;
-    stats.maxPendingBytes = this.maxPendingBytes;
-    stats.scheduledRequests = this.scheduledCount;
-    stats.schedulerCapacity = this.scheduledRequests.length;
-    stats.schedulerOverflows = this.schedulerOverflows;
-    stats.staleCancellations = this.staleCancellations;
-    stats.priorityPreemptions = this.priorityPreemptions;
-    stats.rejectedAdmissions = this.rejectedAdmissions;
-    stats.cacheHits = this.cacheHits;
-    stats.cacheMisses = this.cacheMisses;
-    stats.cacheEvictions = this.cacheEvictions;
-    stats.completedLoads = this.completedLoads;
-    stats.failedLoads = this.failedLoads;
-    stats.averageLoadMs = this.completedLoads === 0 ? 0 : this.totalLoadMs / this.completedLoads;
-    stats.maxLoadMs = this.maxLoadMs;
-    stats.completedUploads = this.completedUploads;
-    stats.averageUploadMs = this.completedUploads === 0 ? 0 : this.totalUploadMs / this.completedUploads;
-    stats.maxUploadMs = this.maxUploadMs;
-    stats.scheduleBudgetMs = this.scheduleBudgetMs;
-    stats.uploadBudgetMs = this.tuning.uploadBudgetMs;
-    stats.uploadsPerPoll = this.tuning.uploadsPerPoll;
-    stats.tuningDownshifts = this.tuning.downshifts;
-    stats.tuningRecoveries = this.tuning.recoveries;
-    stats.tuningProbes = this.tuning.probes;
-    stats.tuningProbeRejections = this.tuning.probeRejections;
-    stats.tuningBestSafeUploadsPerPoll = this.tuning.bestSafeUploadsPerPoll;
-    stats.tuningBestSafeUploadBudgetMs = this.tuning.bestSafeUploadBudgetMs;
-    stats.scheduleBudgetExhaustions = this.scheduleBudgetExhaustions;
-    stats.uploadBudgetExhaustions = this.uploadBudgetExhaustions;
-    const provider = this.pageDataProvider?.getStats?.();
-    if (provider) {
-      stats.pageReads = provider.reads;
-      stats.averagePageReadMs = provider.averageReadMs;
-      stats.maxPageReadMs = provider.maxReadMs;
-      stats.transcodeWorkers = provider.workerCount;
-      stats.activeTranscodes = provider.activeTranscodes;
-      stats.queuedTranscodes = provider.queuedTranscodes;
-      stats.completedTranscodes = provider.completedTranscodes;
-      stats.averageTranscodeQueueMs = provider.averageTranscodeQueueMs;
-      stats.maxTranscodeQueueMs = provider.maxTranscodeQueueMs;
-      stats.averageTranscodeMs = provider.averageTranscodeMs;
-      stats.maxTranscodeMs = provider.maxTranscodeMs;
-      stats.cacheEnabled = provider.cacheEnabled;
-      stats.cacheBackend = provider.cacheBackend;
-      stats.cacheEntries = provider.cacheEntries;
-      stats.cacheBytes = provider.cacheBytes;
-      stats.cacheLiveBytes = provider.cacheLiveBytes;
-      stats.cacheQueuedWrites = provider.cacheQueuedWrites;
-      stats.cacheEvictions = provider.cacheEvictions;
-      stats.cacheCompactions = provider.cacheCompactions;
-      stats.cacheReclaimedBytes = provider.cacheReclaimedBytes;
-      stats.cacheMaintenance = provider.cacheMaintenance;
-      stats.cacheHits = provider.cacheHits;
-      stats.cacheMisses = provider.cacheMisses;
-      stats.cacheWrites = provider.cacheWrites;
-      stats.cacheRejected = provider.cacheRejected;
-      stats.cacheErrors = provider.cacheErrors;
-      stats.averageCacheReadMs = provider.averageCacheReadMs;
-      stats.maxCacheReadMs = provider.maxCacheReadMs;
-      stats.averageCacheWriteMs = provider.averageCacheWriteMs;
-      stats.maxCacheWriteMs = provider.maxCacheWriteMs;
-    }
-    return stats;
-  }
-}
-var VirtualTextureRes = defineResource("virtualTexture", () => {
-  throw new Error("VirtualTextureStore not initialized. Call VirtualTextureRes.set(world, new VirtualTextureStore(loader)).");
-});
-var VT_SAMPLE_WGSL = `
-fn vtSample(
-  pageTable: texture_2d<u32>,
-  atlas: texture_2d<f32>,
-  atlasSampler: sampler,
-  uv: vec2f,
-  virtualSize: vec2f,
-  pageGrid: vec2f,
-  pageSize: f32,
-  pageBorder: f32,
-  atlasSize: vec2f,
-  maxMip: f32,
-  textureMaxMip: f32,
-  addressMode: u32
-) -> vec4f {
-  // 0 = clamp, 1 = repeat, 2 = mirrored repeat.
-  var addressed_uv = clamp(uv, vec2f(0.0), vec2f(0.99999994));
-  if (addressMode == 1u) {
-    addressed_uv = fract(uv);
-  } else if (addressMode == 2u) {
-    let period = uv - floor(uv * 0.5) * 2.0;
-    addressed_uv = select(period, 2.0 - period, period > vec2f(1.0));
-    addressed_uv = clamp(addressed_uv, vec2f(0.0), vec2f(0.99999994));
-  }
-
-  // Compute desired mip level from the original continuous derivatives.
-  let dx = dpdx(uv * virtualSize);
-  let dy = dpdy(uv * virtualSize);
-  let texel_footprint = max(dot(dx, dx), dot(dy, dy));
-  let mip_float = clamp(0.5 * log2(max(texel_footprint, 1e-8)), 0.0, textureMaxMip);
-  let desired_level = i32(mip_float);
-
-  // Mips below 128x128 share one pinned physical slot. The entry is stored in
-  // the otherwise-unused x=1 texel of the terminal page-table row.
-  if (desired_level > i32(maxMip)) {
-    var tail_offset = 0.0;
-    for (var level = 0; level < i32(maxMip); level = level + 1) {
-      tail_offset += max(1.0, ceil(pageGrid.y / exp2(f32(level))));
-    }
-    let tail_entry = textureLoad(pageTable, vec2i(1, i32(tail_offset)), 0).r;
-    if ((tail_entry & 1u) != 0u) {
-      let delta = desired_level - i32(maxMip);
-      var rect_origin = vec2f(0.0);
-      if (delta == 2) { rect_origin = vec2f(72.0, 0.0); }
-      else if (delta == 3) { rect_origin = vec2f(112.0, 0.0); }
-      else if (delta == 4) { rect_origin = vec2f(72.0, 40.0); }
-      else if (delta == 5) { rect_origin = vec2f(88.0, 40.0); }
-      else if (delta == 6) { rect_origin = vec2f(100.0, 40.0); }
-      else if (delta >= 7) { rect_origin = vec2f(110.0, 40.0); }
-      let tail_size = max(vec2f(1.0), floor(virtualSize / exp2(f32(desired_level))));
-      let tail_x = (tail_entry >> 1) & 0xFFu;
-      let tail_y = (tail_entry >> 9) & 0xFFu;
-      let slot_origin = vec2f(f32(tail_x), f32(tail_y)) * (pageSize + pageBorder * 2.0);
-      let tail_texel = slot_origin + rect_origin + pageBorder + addressed_uv * tail_size;
-      let tail_uv = tail_texel / atlasSize;
-      let tail_scale = tail_size / atlasSize;
-      return textureSampleGrad(atlas, atlasSampler, tail_uv, dpdx(uv) * tail_scale, dpdy(uv) * tail_scale);
-    }
-  }
-
-  var mip_level = min(desired_level, i32(maxMip));
-  let max_level = i32(maxMip);
-
-  // Walk from desired mip up, looking for resident page
-  var is_resident = false;
-  var entry = 0u;
-  var curr_page_grid = vec2f(0.0);
-  var curr_mip_size = virtualSize;
-  var page_coords = vec2i(0);
-
-  for (var m = mip_level; m <= max_level; m = m + 1) {
-    let mip_scale = exp2(-f32(m));
-    curr_page_grid = max(ceil(pageGrid * mip_scale), vec2f(1.0));
-    curr_mip_size = max(floor(virtualSize * mip_scale), vec2f(1.0));
-    page_coords = vec2i(min(floor(addressed_uv * curr_mip_size / pageSize), curr_page_grid - 1.0));
-    var mip_offset = 0.0;
-    for (var level = 0; level < m; level = level + 1) {
-      mip_offset += max(1.0, ceil(pageGrid.y / exp2(f32(level))));
-    }
-    entry = textureLoad(pageTable, vec2i(page_coords.x, page_coords.y + i32(mip_offset)), 0).r;
-    if ((entry & 1u) != 0u) {
-      is_resident = true;
-      mip_level = m;
-      break;
-    }
-  }
-
-  if (!is_resident) {
-    return vec4f(0.5, 0.5, 0.5, 1.0);
-  }
-
-  // Compute physical atlas UV
-  let physX = (entry >> 1) & 0xFFu;
-  let physY = (entry >> 9) & 0xFFu;
-  let local_texel = addressed_uv * curr_mip_size - vec2f(page_coords) * pageSize;
-  let page_origin = vec2f(f32(physX), f32(physY)) * (pageSize + pageBorder * 2.0);
-  let sample_texel = page_origin + pageBorder + local_texel;
-  let atlas_uv = sample_texel / atlasSize;
-
-  // Atlas-space gradients preserve anisotropy without allowing the GPU to
-  // derive across an unrelated neighboring physical slot.
-  let gradient_scale = curr_mip_size / atlasSize;
-  let atlas_dx = dpdx(uv) * gradient_scale;
-  let atlas_dy = dpdy(uv) * gradient_scale;
-  return textureSampleGrad(atlas, atlasSampler, atlas_uv, atlas_dx, atlas_dy);
-}
-`;
-var VT_RESOLVE_MATERIAL_MIP4_WGSL = `
-fn vtResolveMaterialMip4(
-  pageTable0: texture_2d<u32>,
-  pageTable1: texture_2d<u32>,
-  pageTable2: texture_2d<u32>,
-  pageTable3: texture_2d<u32>,
-  uv: vec2f,
-  virtualSize: vec2f,
-  pageGrid: vec2f,
-  pageSize: f32,
-  maxMip: f32,
-  textureMaxMip: f32,
-  addressMode: u32
-) -> f32 {
-  var addressed_uv = clamp(uv, vec2f(0.0), vec2f(0.99999994));
-  if (addressMode == 1u) {
-    addressed_uv = fract(uv);
-  } else if (addressMode == 2u) {
-    let period = uv - floor(uv * 0.5) * 2.0;
-    addressed_uv = select(period, 2.0 - period, period > vec2f(1.0));
-    addressed_uv = clamp(addressed_uv, vec2f(0.0), vec2f(0.99999994));
-  }
-
-  let dx = dpdx(uv * virtualSize);
-  let dy = dpdy(uv * virtualSize);
-  let footprint = max(dot(dx, dx), dot(dy, dy));
-  let desired = i32(clamp(0.5 * log2(max(footprint, 1e-8)), 0.0, textureMaxMip));
-  let max_level = i32(maxMip);
-
-  if (desired > max_level) {
-    var tail_offset = 0.0;
-    for (var level = 0; level < max_level; level = level + 1) {
-      tail_offset += max(1.0, ceil(pageGrid.y / exp2(f32(level))));
-    }
-    let coord = vec2i(1, i32(tail_offset));
-    let e0 = textureLoad(pageTable0, coord, 0).r;
-    let e1 = textureLoad(pageTable1, coord, 0).r;
-    let e2 = textureLoad(pageTable2, coord, 0).r;
-    let e3 = textureLoad(pageTable3, coord, 0).r;
-    if ((e0 & 1u) != 0u && (e1 & 1u) != 0u &&
-        (e2 & 1u) != 0u && (e3 & 1u) != 0u) {
-      return f32(desired);
-    }
-  }
-
-  for (var mip = min(desired, max_level); mip <= max_level; mip = mip + 1) {
-    let scale = exp2(-f32(mip));
-    let grid = max(ceil(pageGrid * scale), vec2f(1.0));
-    let mip_size = max(floor(virtualSize * scale), vec2f(1.0));
-    let page = vec2i(min(floor(addressed_uv * mip_size / pageSize), grid - 1.0));
-    var offset = 0.0;
-    for (var level = 0; level < mip; level = level + 1) {
-      offset += max(1.0, ceil(pageGrid.y / exp2(f32(level))));
-    }
-    let coord = vec2i(page.x, page.y + i32(offset));
-    let e0 = textureLoad(pageTable0, coord, 0).r;
-    let e1 = textureLoad(pageTable1, coord, 0).r;
-    let e2 = textureLoad(pageTable2, coord, 0).r;
-    let e3 = textureLoad(pageTable3, coord, 0).r;
-    if ((e0 & 1u) != 0u && (e1 & 1u) != 0u &&
-        (e2 & 1u) != 0u && (e3 & 1u) != 0u) {
-      return f32(mip);
-    }
-  }
-  return maxMip;
-}
-`;
-var VT_SAMPLE_LEVEL_WGSL = `
-fn vtSampleLevel(
-  pageTable: texture_2d<u32>,
-  atlas: texture_2d<f32>,
-  atlasSampler: sampler,
-  uv: vec2f,
-  virtualSize: vec2f,
-  pageGrid: vec2f,
-  pageSize: f32,
-  pageBorder: f32,
-  atlasSize: vec2f,
-  maxMip: f32,
-  resolvedMip: f32,
-  addressMode: u32
-) -> vec4f {
-  var addressed_uv = clamp(uv, vec2f(0.0), vec2f(0.99999994));
-  if (addressMode == 1u) {
-    addressed_uv = fract(uv);
-  } else if (addressMode == 2u) {
-    let period = uv - floor(uv * 0.5) * 2.0;
-    addressed_uv = select(period, 2.0 - period, period > vec2f(1.0));
-    addressed_uv = clamp(addressed_uv, vec2f(0.0), vec2f(0.99999994));
-  }
-
-  let mip = i32(resolvedMip);
-  if (mip > i32(maxMip)) {
-    var tail_offset = 0.0;
-    for (var level = 0; level < i32(maxMip); level = level + 1) {
-      tail_offset += max(1.0, ceil(pageGrid.y / exp2(f32(level))));
-    }
-    let entry = textureLoad(pageTable, vec2i(1, i32(tail_offset)), 0).r;
-    if ((entry & 1u) == 0u) { return vec4f(0.5, 0.5, 0.5, 1.0); }
-    let delta = mip - i32(maxMip);
-    var rect_origin = vec2f(0.0);
-    if (delta == 2) { rect_origin = vec2f(72.0, 0.0); }
-    else if (delta == 3) { rect_origin = vec2f(112.0, 0.0); }
-    else if (delta == 4) { rect_origin = vec2f(72.0, 40.0); }
-    else if (delta == 5) { rect_origin = vec2f(88.0, 40.0); }
-    else if (delta == 6) { rect_origin = vec2f(100.0, 40.0); }
-    else if (delta >= 7) { rect_origin = vec2f(110.0, 40.0); }
-    let tail_size = max(vec2f(1.0), floor(virtualSize / exp2(f32(mip))));
-    let px = (entry >> 1) & 0xFFu;
-    let py = (entry >> 9) & 0xFFu;
-    let slot = vec2f(f32(px), f32(py)) * (pageSize + pageBorder * 2.0);
-    let texel = slot + rect_origin + pageBorder + addressed_uv * tail_size;
-    let scale = tail_size / atlasSize;
-    return textureSampleGrad(atlas, atlasSampler, texel / atlasSize, dpdx(uv) * scale, dpdy(uv) * scale);
-  }
-
-  let mip_scale = exp2(-f32(mip));
-  let grid = max(ceil(pageGrid * mip_scale), vec2f(1.0));
-  let mip_size = max(floor(virtualSize * mip_scale), vec2f(1.0));
-  let page = vec2i(min(floor(addressed_uv * mip_size / pageSize), grid - 1.0));
-  var offset = 0.0;
-  for (var level = 0; level < mip; level = level + 1) {
-    offset += max(1.0, ceil(pageGrid.y / exp2(f32(level))));
-  }
-  let entry = textureLoad(pageTable, vec2i(page.x, page.y + i32(offset)), 0).r;
-  if ((entry & 1u) == 0u) { return vec4f(0.5, 0.5, 0.5, 1.0); }
-  let px = (entry >> 1) & 0xFFu;
-  let py = (entry >> 9) & 0xFFu;
-  let local = addressed_uv * mip_size - vec2f(page) * pageSize;
-  let origin = vec2f(f32(px), f32(py)) * (pageSize + pageBorder * 2.0);
-  let atlas_uv = (origin + pageBorder + local) / atlasSize;
-  let gradient_scale = mip_size / atlasSize;
-  return textureSampleGrad(
-    atlas, atlasSampler, atlas_uv,
-    dpdx(uv) * gradient_scale,
-    dpdy(uv) * gradient_scale
-  );
-}
-`;
-var VT_SAMPLE_FROM_LEVEL_WGSL = `
-fn vtSampleFromLevel(
-  pageTable: texture_2d<u32>, atlas: texture_2d<f32>, atlasSampler: sampler,
-  sampleUV: vec2f, gradientUV: vec2f,
-  virtualSize: vec2f, pageGrid: vec2f, pageSize: f32, pageBorder: f32,
-  atlasSize: vec2f, maxMip: f32, resolvedMip: f32, addressMode: u32
-) -> vec4f {
-  var addressedUV = clamp(sampleUV, vec2f(0.0), vec2f(0.99999994));
-  if (addressMode == 1u) {
-    addressedUV = fract(sampleUV);
-  } else if (addressMode == 2u) {
-    let period = sampleUV - floor(sampleUV * 0.5) * 2.0;
-    addressedUV = select(period, 2.0 - period, period > vec2f(1.0));
-    addressedUV = clamp(addressedUV, vec2f(0.0), vec2f(0.99999994));
-  }
-
-  let requested = i32(resolvedMip);
-  let maxLevel = i32(maxMip);
-  var entry = 0u;
-  var selected = -1;
-  var selectedPage = vec2i(0);
-  var selectedSize = vec2f(1.0);
-  if (requested <= maxLevel) {
-    for (var mip = max(0, requested); mip <= maxLevel; mip = mip + 1) {
-      let scale = exp2(-f32(mip));
-      let grid = max(ceil(pageGrid * scale), vec2f(1.0));
-      let mipSize = max(floor(virtualSize * scale), vec2f(1.0));
-      let page = vec2i(min(floor(addressedUV * mipSize / pageSize), grid - 1.0));
-      var offset = 0.0;
-      for (var level = 0; level < mip; level = level + 1) {
-        offset += max(1.0, ceil(pageGrid.y / exp2(f32(level))));
-      }
-      let candidate = textureLoad(pageTable, vec2i(page.x, page.y + i32(offset)), 0).r;
-      if ((candidate & 1u) != 0u) {
-        entry = candidate; selected = mip; selectedPage = page; selectedSize = mipSize;
-        break;
-      }
-    }
-  }
-
-  if (selected >= 0) {
-    let local = addressedUV * selectedSize - vec2f(selectedPage) * pageSize;
-    let origin = vec2f(f32((entry >> 1) & 0xFFu), f32((entry >> 9) & 0xFFu)) * (pageSize + pageBorder * 2.0);
-    let atlasUV = (origin + pageBorder + local) / atlasSize;
-    let gradientScale = selectedSize / atlasSize;
-    return textureSampleGrad(atlas, atlasSampler, atlasUV,
-      dpdx(gradientUV) * gradientScale, dpdy(gradientUV) * gradientScale);
-  }
-
-  var tailOffset = 0.0;
-  for (var level = 0; level < maxLevel; level = level + 1) {
-    tailOffset += max(1.0, ceil(pageGrid.y / exp2(f32(level))));
-  }
-  let tailEntry = textureLoad(pageTable, vec2i(1, i32(tailOffset)), 0).r;
-  if ((tailEntry & 1u) == 0u) { return vec4f(0.5, 0.5, 0.5, 1.0); }
-  let tailMip = max(maxLevel + 1, requested);
-  let delta = tailMip - maxLevel;
-  var rectOrigin = vec2f(0.0);
-  if (delta == 2) { rectOrigin = vec2f(72.0, 0.0); }
-  else if (delta == 3) { rectOrigin = vec2f(112.0, 0.0); }
-  else if (delta == 4) { rectOrigin = vec2f(72.0, 40.0); }
-  else if (delta == 5) { rectOrigin = vec2f(88.0, 40.0); }
-  else if (delta == 6) { rectOrigin = vec2f(100.0, 40.0); }
-  else if (delta >= 7) { rectOrigin = vec2f(110.0, 40.0); }
-  let tailSize = max(vec2f(1.0), floor(virtualSize / exp2(f32(tailMip))));
-  let slot = vec2f(f32((tailEntry >> 1) & 0xFFu), f32((tailEntry >> 9) & 0xFFu)) * (pageSize + pageBorder * 2.0);
-  let atlasUV = (slot + rectOrigin + pageBorder + addressedUV * tailSize) / atlasSize;
-  let gradientScale = tailSize / atlasSize;
-  return textureSampleGrad(atlas, atlasSampler, atlasUV,
-    dpdx(gradientUV) * gradientScale, dpdy(gradientUV) * gradientScale);
-}
-`;
-var VT_FEEDBACK_WGSL = `
-fn vtFeedback(
-  uv: vec2f,
-  virtualSize: vec2f,
-  pageGrid: vec2f,
-  maxMip: f32,
-  lodBias: f32,
-  textureId: u32
-) -> vec2u {
-  let dx = dpdx(uv * virtualSize);
-  let dy = dpdy(uv * virtualSize);
-  let texel_footprint = max(dot(dx, dx), dot(dy, dy));
-  let mip_level = u32(clamp(0.5 * log2(max(texel_footprint, 1e-8)) + lodBias, 0.0, maxMip));
-
-  let mip_scale = exp2(-f32(mip_level));
-  let curr_page_grid = max(ceil(pageGrid * mip_scale), vec2f(1.0));
-  let mip_size = max(floor(virtualSize * mip_scale), vec2f(1.0));
-  let page_coords = min(floor(uv * mip_size / 128.0), curr_page_grid - 1.0);
-
-  // RG32Uint: word 0 carries valid + 6-bit mip + 11-bit X/Y;
-  // word 1 carries the full virtual-texture identity.
-  let packed = 0x80000000u |
-               (mip_level & 0x3Fu) |
-               ((u32(page_coords.x) & 0x7FFu) << 6) |
-               ((u32(page_coords.y) & 0x7FFu) << 17);
-  return vec2u(packed, textureId);
-}
-`;
-
 // crates/afterglow-web/www/engine-bundle-input.ts
 window.THREE = exports_three_webgpu;
 Object.assign(window.THREE, exports_three_tsl);
@@ -67593,12 +70803,16 @@ window.AfterglowStorage = {
   persistentCacheNamespace
 };
 window.AfterglowInput = { RelativePointerInput };
+window.AfterglowLoaders = { GLTFLoader };
+window.AfterglowAssets = { AssetStore };
 window.AfterglowSurfaceDetail = { POM_UV_WGSL };
 window.AfterglowVT = {
   VirtualTextureStore,
   VirtualTextureTuning,
   VirtualTextureTuningRes,
   VirtualTextureFeedbackPass,
+  createVirtualGltfMaterialPair,
+  VirtualTextureAddressMode,
   VT_SAMPLE_WGSL,
   VT_SAMPLE_LEVEL_WGSL,
   VT_SAMPLE_FROM_LEVEL_WGSL,
