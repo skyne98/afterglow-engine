@@ -529,7 +529,12 @@ export interface PageProviderStats {
   cacheBackend: string;
   cacheEntries: number;
   cacheBytes: number;
+  cacheLiveBytes: number;
   cacheQueuedWrites: number;
+  cacheEvictions: number;
+  cacheCompactions: number;
+  cacheReclaimedBytes: number;
+  cacheMaintenance: boolean;
   cacheHits: number;
   cacheMisses: number;
   cacheWrites: number;
@@ -604,7 +609,9 @@ export function createPageDataProvider(
     completedTranscodes: 0, averageTranscodeQueueMs: 0, maxTranscodeQueueMs: 0,
     averageTranscodeMs: 0, maxTranscodeMs: 0,
     cacheEnabled: cache !== undefined, cacheBackend: '', cacheEntries: 0, cacheBytes: 0,
-    cacheQueuedWrites: 0, cacheHits: 0, cacheMisses: 0, cacheWrites: 0,
+    cacheLiveBytes: 0, cacheQueuedWrites: 0, cacheEvictions: 0, cacheCompactions: 0,
+    cacheReclaimedBytes: 0, cacheMaintenance: false,
+    cacheHits: 0, cacheMisses: 0, cacheWrites: 0,
     cacheRejected: 0, cacheErrors: 0,
     averageCacheReadMs: 0, maxCacheReadMs: 0,
     averageCacheWriteMs: 0, maxCacheWriteMs: 0,
@@ -696,7 +703,12 @@ export function createPageDataProvider(
       stats.cacheBackend = persistent.backend;
       stats.cacheEntries = persistent.entries;
       stats.cacheBytes = persistent.bytes;
+      stats.cacheLiveBytes = persistent.liveBytes;
       stats.cacheQueuedWrites = persistent.queuedWrites;
+      stats.cacheEvictions = persistent.evictions;
+      stats.cacheCompactions = persistent.compactions;
+      stats.cacheReclaimedBytes = persistent.reclaimedBytes;
+      stats.cacheMaintenance = persistent.maintenance;
       stats.cacheHits = persistent.hits;
       stats.cacheMisses = persistent.misses;
       stats.cacheWrites = persistent.writes;

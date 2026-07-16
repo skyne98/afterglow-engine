@@ -5,7 +5,8 @@
 // fixed-record index, avoiding one filesystem file per cached value.
 
 const INDEX_MAGIC = 0x43424741; // "AGBC" LE
-const INDEX_VERSION = 1;
+const MANIFEST_MAGIC = 0x4d424741; // "AGBM" LE
+const INDEX_VERSION = 2;
 const INDEX_HEADER_BYTES = 16;
 const HASH_WORDS = 8; // complete SHA-256 key; collisions are cryptographically negligible
 const INDEX_RECORD_BYTES = 48;
@@ -25,6 +26,7 @@ export interface PersistentBlobCacheStats {
   backend: string;
   entries: number;
   bytes: number;
+  liveBytes: number;
   maxBytes: number;
   maxEntries: number;
   queuedWrites: number;
@@ -37,6 +39,10 @@ export interface PersistentBlobCacheStats {
   corruptEntries: number;
   readErrors: number;
   writeErrors: number;
+  evictions: number;
+  compactions: number;
+  reclaimedBytes: number;
+  maintenance: boolean;
   averageReadMs: number;
   maxReadMs: number;
   averageWriteMs: number;
@@ -261,14 +267,25 @@ export class PersistentBlobCache {
   private readonly offsets: Float64Array;
   private readonly lengths: Uint32Array;
   private readonly checksums: Uint32Array;
+  private readonly lruPrevious: Int32Array;
+  private readonly lruNext: Int32Array;
+  private readonly compactionOffsets: Float64Array;
   private readonly jobs: (WriteJob | null)[];
   private readonly stats: PersistentBlobCacheStats;
   private head = 0;
   private tail = 0;
   private queued = 0;
+  private queuedBytes = 0;
+  private writingBytes = 0;
   private writing = false;
   private entries = 0;
   private packBytes = 0;
+  private liveBytes = 0;
+  private lruHead = -1;
+  private lruTail = -1;
+  private activeGeneration = 0;
+  private maintenancePromise: Promise<void> | null = null;
+  private readonly idleResolvers: Array<() => void> = [];
   private totalReadMs = 0;
   private maxReadMs = 0;
   private totalWriteMs = 0;
@@ -285,13 +302,19 @@ export class PersistentBlobCache {
     this.offsets = new Float64Array(this.states.length);
     this.lengths = new Uint32Array(this.states.length);
     this.checksums = new Uint32Array(this.states.length);
+    this.lruPrevious = new Int32Array(this.states.length);
+    this.lruNext = new Int32Array(this.states.length);
+    this.lruPrevious.fill(-1);
+    this.lruNext.fill(-1);
+    this.compactionOffsets = new Float64Array(this.states.length);
     this.jobs = new Array(writeQueueCapacity).fill(null);
     this.stats = {
       enabled: true, backend: backend.kind ?? 'custom',
-      entries: 0, bytes: 0, maxBytes, maxEntries, queuedWrites: 0,
+      entries: 0, bytes: 0, liveBytes: 0, maxBytes, maxEntries, queuedWrites: 0,
       hits: 0, misses: 0, writes: 0, writeBytes: 0,
       rejectedCapacity: 0, rejectedQueue: 0, corruptEntries: 0,
-      readErrors: 0, writeErrors: 0,
+      readErrors: 0, writeErrors: 0, evictions: 0, compactions: 0,
+      reclaimedBytes: 0, maintenance: false,
       averageReadMs: 0, maxReadMs: 0, averageWriteMs: 0, maxWriteMs: 0,
     };
   }
@@ -352,9 +375,11 @@ export class PersistentBlobCache {
     for (let probe = 0; probe < this.states.length; probe++) {
       const state = this.states[slot];
       if (state === OCCUPIED && this.hashesEqual(slot, hash)) {
+        this.liveBytes += length - this.lengths[slot];
         this.offsets[slot] = offset;
         this.lengths[slot] = length;
         this.checksums[slot] = valueChecksum;
+        this.touch(slot);
         return true;
       }
       if (state === TOMBSTONE && tombstone < 0) tombstone = slot;
@@ -366,6 +391,8 @@ export class PersistentBlobCache {
         this.lengths[target] = length;
         this.checksums[target] = valueChecksum;
         this.entries++;
+        this.liveBytes += length;
+        this.linkLruTail(target);
         return true;
       }
       slot = (slot + 1) % this.states.length;
@@ -373,8 +400,35 @@ export class PersistentBlobCache {
     return false;
   }
 
+  private linkLruTail(slot: number): void {
+    this.lruPrevious[slot] = this.lruTail;
+    this.lruNext[slot] = -1;
+    if (this.lruTail < 0) this.lruHead = slot;
+    else this.lruNext[this.lruTail] = slot;
+    this.lruTail = slot;
+  }
+
+  private unlinkLru(slot: number): void {
+    const previous = this.lruPrevious[slot];
+    const next = this.lruNext[slot];
+    if (previous < 0) this.lruHead = next;
+    else this.lruNext[previous] = next;
+    if (next < 0) this.lruTail = previous;
+    else this.lruPrevious[next] = previous;
+    this.lruPrevious[slot] = -1;
+    this.lruNext[slot] = -1;
+  }
+
+  private touch(slot: number): void {
+    if (slot === this.lruTail) return;
+    this.unlinkLru(slot);
+    this.linkLruTail(slot);
+  }
+
   private remove(slot: number): void {
     if (slot < 0 || this.states[slot] !== OCCUPIED) return;
+    this.unlinkLru(slot);
+    this.liveBytes -= this.lengths[slot];
     this.states[slot] = TOMBSTONE;
     this.entries--;
   }
@@ -389,18 +443,37 @@ export class PersistentBlobCache {
     return bytes;
   }
 
+  private packName(generation = this.activeGeneration): string { return `values-${generation}.pack`; }
+  private indexName(generation = this.activeGeneration): string { return `values-${generation}.index`; }
+
+  private manifest(generation: number): Uint8Array {
+    const bytes = new Uint8Array(8);
+    const view = new DataView(bytes.buffer);
+    view.setUint32(0, MANIFEST_MAGIC, true);
+    view.setUint32(4, generation, true);
+    return bytes;
+  }
+
   private async loadIndex(): Promise<void> {
-    this.packBytes = await this.backend.size('values.pack');
-    let indexSize = await this.backend.size('values.index');
+    const manifestSize = await this.backend.size('manifest');
+    if (manifestSize >= 8) {
+      const manifest = await this.backend.read('manifest', 0, 8);
+      const view = new DataView(manifest.buffer, manifest.byteOffset, manifest.byteLength);
+      if (view.getUint32(0, true) === MANIFEST_MAGIC) this.activeGeneration = view.getUint32(4, true) & 1;
+    } else {
+      await this.backend.replace('manifest', this.manifest(0));
+    }
+    this.packBytes = await this.backend.size(this.packName());
+    let indexSize = await this.backend.size(this.indexName());
     if (this.packBytes > this.maxBytes) {
       await this.clear();
       return;
     }
     if (indexSize < INDEX_HEADER_BYTES) {
-      await this.backend.replace('values.index', this.indexHeader());
+      await this.backend.replace(this.indexName(), this.indexHeader());
       return;
     }
-    const bytes = await this.backend.read('values.index', 0, indexSize);
+    const bytes = await this.backend.read(this.indexName(), 0, indexSize);
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     if (view.getUint32(0, true) !== INDEX_MAGIC || view.getUint32(4, true) !== INDEX_VERSION) {
       await this.clear();
@@ -434,19 +507,21 @@ export class PersistentBlobCache {
   async get(key: string): Promise<Uint8Array | null> {
     const startedAt = performance.now();
     try {
+      if (this.maintenancePromise) await this.maintenancePromise;
       const hash = await hashKey(key);
       const slot = this.find(hash);
       if (slot < 0) {
         this.stats.misses++;
         return null;
       }
-      const bytes = await this.backend.read('values.pack', this.offsets[slot], this.lengths[slot]);
+      const bytes = await this.backend.read(this.packName(), this.offsets[slot], this.lengths[slot]);
       if (bytes.byteLength !== this.lengths[slot] || checksum(bytes) !== this.checksums[slot]) {
         this.remove(slot);
         this.stats.corruptEntries++;
         this.stats.misses++;
         return null;
       }
+      this.touch(slot);
       this.stats.hits++;
       return bytes;
     } catch {
@@ -461,16 +536,30 @@ export class PersistentBlobCache {
   }
 
   async put(key: string, data: Uint8Array): Promise<boolean> {
-    const hash = await hashKey(key);
-    if (this.find(hash) >= 0) return true;
-    if (data.byteLength === 0 || data.byteLength > this.maxBytes ||
-        this.entries + this.queued >= this.maxEntries ||
-        this.packBytes + data.byteLength > this.maxBytes) {
+    if (data.byteLength === 0 || data.byteLength > this.maxBytes) {
       this.stats.rejectedCapacity++;
       return false;
     }
-    if (this.queued >= this.jobs.length || this.hasQueued(hash)) {
-      if (this.hasQueued(hash)) return true;
+    if (this.maintenancePromise) await this.maintenancePromise;
+    const hash = await hashKey(key);
+    if (this.find(hash) >= 0) return true;
+    if (this.hasQueued(hash)) return true;
+    if (this.entries + this.queued + (this.writing ? 1 : 0) >= this.maxEntries ||
+        this.packBytes + this.queuedBytes + this.writingBytes + data.byteLength > this.maxBytes) {
+      try {
+        await this.ensureCapacity(data.byteLength);
+      } catch {
+        this.stats.writeErrors++;
+        return false;
+      }
+      if (this.find(hash) >= 0) return true;
+    }
+    if (this.entries + this.queued + (this.writing ? 1 : 0) >= this.maxEntries ||
+        this.packBytes + this.queuedBytes + this.writingBytes + data.byteLength > this.maxBytes) {
+      this.stats.rejectedCapacity++;
+      return false;
+    }
+    if (this.queued >= this.jobs.length) {
       this.stats.rejectedQueue++;
       return false;
     }
@@ -478,6 +567,7 @@ export class PersistentBlobCache {
       this.jobs[this.tail] = { hash, data, resolve };
       this.tail = (this.tail + 1) % this.jobs.length;
       this.queued++;
+      this.queuedBytes += data.byteLength;
       this.pump();
     });
   }
@@ -501,7 +591,9 @@ export class PersistentBlobCache {
     this.jobs[this.head] = null;
     this.head = (this.head + 1) % this.jobs.length;
     this.queued--;
+    this.queuedBytes -= job.data.byteLength;
     this.writing = true;
+    this.writingBytes = job.data.byteLength;
     void this.write(job);
   }
 
@@ -514,8 +606,8 @@ export class PersistentBlobCache {
       } else if (this.entries < this.maxEntries && this.packBytes + job.data.byteLength <= this.maxBytes) {
         const offset = this.packBytes;
         const valueChecksum = checksum(job.data);
-        await this.backend.append('values.pack', job.data);
-        await this.backend.append('values.index', this.record(job.hash, offset, job.data.byteLength, valueChecksum));
+        await this.backend.append(this.packName(), job.data);
+        await this.backend.append(this.indexName(), this.record(job.hash, offset, job.data.byteLength, valueChecksum));
         this.packBytes += job.data.byteLength;
         success = this.insert(job.hash, offset, job.data.byteLength, valueChecksum);
         if (success) {
@@ -529,23 +621,129 @@ export class PersistentBlobCache {
       this.stats.writeErrors++;
       // Payload append may have succeeded before index publication failed.
       // Resynchronize so the next append never publishes an orphan's offset.
-      try { this.packBytes = await this.backend.size('values.pack'); } catch { /* retain last known bound */ }
+      try { this.packBytes = await this.backend.size(this.packName()); } catch { /* retain last known bound */ }
     } finally {
       const elapsed = performance.now() - startedAt;
       this.totalWriteMs += elapsed;
       this.maxWriteMs = Math.max(this.maxWriteMs, elapsed);
       this.writing = false;
+      this.writingBytes = 0;
       job.resolve(success);
       this.pump();
+      this.resolveIdle();
+    }
+  }
+
+  private waitForIdle(): Promise<void> {
+    if (!this.writing && this.queued === 0) return Promise.resolve();
+    return new Promise(resolve => this.idleResolvers.push(resolve));
+  }
+
+  private resolveIdle(): void {
+    if (this.writing || this.queued !== 0) return;
+    while (this.idleResolvers.length !== 0) this.idleResolvers.pop()!();
+  }
+
+  private resetIndexState(): void {
+    this.states.fill(EMPTY);
+    this.lruPrevious.fill(-1);
+    this.lruNext.fill(-1);
+    this.entries = 0;
+    this.liveBytes = 0;
+    this.lruHead = -1;
+    this.lruTail = -1;
+  }
+
+  private async ensureCapacity(incomingBytes: number): Promise<void> {
+    if (this.maintenancePromise) {
+      await this.maintenancePromise;
+      return;
+    }
+    const maintenance = this.compact(incomingBytes).finally(() => {
+      if (this.maintenancePromise === maintenance) this.maintenancePromise = null;
+    });
+    this.maintenancePromise = maintenance;
+    await maintenance;
+  }
+
+  private async compact(incomingBytes: number): Promise<void> {
+    await this.waitForIdle();
+    const oldGeneration = this.activeGeneration;
+    const nextGeneration = oldGeneration ^ 1;
+    const oldPackBytes = this.packBytes;
+    const targetBytes = Math.min(
+      Math.floor(this.maxBytes * 0.75),
+      Math.max(0, this.maxBytes - incomingBytes),
+    );
+    const targetEntries = Math.min(
+      Math.floor(this.maxEntries * 0.75),
+      Math.max(0, this.maxEntries - 1),
+    );
+    let evicted = 0;
+    while (this.lruHead >= 0 && (this.liveBytes > targetBytes || this.entries > targetEntries)) {
+      this.remove(this.lruHead);
+      evicted++;
+    }
+
+    let published = false;
+    try {
+      await this.backend.replace(this.packName(nextGeneration), new Uint8Array(0));
+      await this.backend.replace(this.indexName(nextGeneration), this.indexHeader());
+      let nextOffset = 0;
+      let slot = this.lruHead;
+      while (slot >= 0) {
+        const following = this.lruNext[slot];
+        const bytes = await this.backend.read(this.packName(oldGeneration), this.offsets[slot], this.lengths[slot]);
+        if (bytes.byteLength !== this.lengths[slot] || checksum(bytes) !== this.checksums[slot]) {
+          this.remove(slot);
+          this.stats.corruptEntries++;
+        } else {
+          const hash = this.hashes.subarray(this.hashStart(slot), this.hashStart(slot) + HASH_WORDS);
+          await this.backend.append(this.packName(nextGeneration), bytes);
+          await this.backend.append(
+            this.indexName(nextGeneration),
+            this.record(hash, nextOffset, bytes.byteLength, this.checksums[slot]),
+          );
+          this.compactionOffsets[slot] = nextOffset;
+          nextOffset += bytes.byteLength;
+        }
+        slot = following;
+      }
+      await this.backend.replace('manifest', this.manifest(nextGeneration));
+      this.activeGeneration = nextGeneration;
+      published = true;
+      for (let index = 0; index < this.states.length; index++)
+        if (this.states[index] === OCCUPIED) this.offsets[index] = this.compactionOffsets[index];
+      this.packBytes = nextOffset;
+      this.stats.evictions += evicted;
+      this.stats.compactions++;
+      this.stats.reclaimedBytes += Math.max(0, oldPackBytes - nextOffset);
+      // Old generation is unreachable after manifest publication. Cleanup is
+      // best-effort and cannot invalidate the newly active cache.
+      try {
+        await this.backend.replace(this.packName(oldGeneration), new Uint8Array(0));
+        await this.backend.replace(this.indexName(oldGeneration), this.indexHeader());
+      } catch { /* quota cleanup will retry on a later compaction */ }
+    } catch (error) {
+      if (!published) {
+        this.activeGeneration = oldGeneration;
+        this.resetIndexState();
+        await this.loadIndex();
+      }
+      throw error;
     }
   }
 
   async clear(): Promise<void> {
-    if (this.writing || this.queued !== 0) throw new Error('cannot clear persistent cache while writes are pending');
-    await this.backend.replace('values.pack', new Uint8Array(0));
-    await this.backend.replace('values.index', this.indexHeader());
-    this.states.fill(EMPTY);
-    this.entries = 0;
+    if (this.writing || this.queued !== 0 || this.maintenancePromise)
+      throw new Error('cannot clear persistent cache while writes or maintenance are pending');
+    await this.backend.replace(this.packName(0), new Uint8Array(0));
+    await this.backend.replace(this.indexName(0), this.indexHeader());
+    await this.backend.replace(this.packName(1), new Uint8Array(0));
+    await this.backend.replace(this.indexName(1), this.indexHeader());
+    await this.backend.replace('manifest', this.manifest(0));
+    this.activeGeneration = 0;
+    this.resetIndexState();
     this.packBytes = 0;
   }
 
@@ -553,7 +751,9 @@ export class PersistentBlobCache {
     const stats = this.stats;
     stats.entries = this.entries;
     stats.bytes = this.packBytes;
+    stats.liveBytes = this.liveBytes;
     stats.queuedWrites = this.queued + (this.writing ? 1 : 0);
+    stats.maintenance = this.maintenancePromise !== null;
     const reads = stats.hits + stats.misses;
     stats.averageReadMs = reads === 0 ? 0 : this.totalReadMs / reads;
     stats.maxReadMs = this.maxReadMs;

@@ -14,7 +14,7 @@ class MemoryBackend implements PersistentBlobBackend {
     return (this.files.get(name) ?? new Uint8Array()).slice(offset, offset + length);
   }
   async append(name: string, data: Uint8Array): Promise<void> {
-    if (name === 'values.index' && this.failNextIndexAppend) {
+    if (name.endsWith('.index') && this.failNextIndexAppend) {
       this.failNextIndexAppend = false;
       throw new Error('injected index append failure');
     }
@@ -46,7 +46,7 @@ describe('PersistentBlobCache', () => {
     const backend = new MemoryBackend();
     const cache = await open(backend);
     await cache.put('valid', new Uint8Array([7, 8]));
-    await backend.append('values.pack', new Uint8Array([99, 100, 101]));
+    await backend.append('values-0.pack', new Uint8Array([99, 100, 101]));
 
     const reopened = await open(backend);
     expect(await reopened.get('valid')).toEqual(new Uint8Array([7, 8]));
@@ -68,19 +68,49 @@ describe('PersistentBlobCache', () => {
     const backend = new MemoryBackend();
     const cache = await open(backend);
     await cache.put('page', new Uint8Array([4, 5, 6]));
-    backend.files.get('values.pack')![1] ^= 0xff;
+    backend.files.get('values-0.pack')![1] ^= 0xff;
     expect(await cache.get('page')).toBeNull();
     expect(cache.getStats().corruptEntries).toBe(1);
   });
 
-  test('enforces byte and entry limits deterministically', async () => {
+  test('evicts least-recently-used values and compacts at hard limits', async () => {
     const backend = new MemoryBackend();
     const cache = await open(backend, 5, 2);
     expect(await cache.put('a', new Uint8Array([1, 2, 3]))).toBe(true);
-    expect(await cache.put('b', new Uint8Array([4, 5, 6]))).toBe(false);
-    expect(await cache.put('c', new Uint8Array([4, 5]))).toBe(true);
-    expect(await cache.put('d', new Uint8Array([7]))).toBe(false);
-    expect(cache.getStats()).toMatchObject({ entries: 2, bytes: 5, rejectedCapacity: 2 });
+    expect(await cache.put('b', new Uint8Array([4, 5]))).toBe(true);
+    expect(await cache.get('a')).toEqual(new Uint8Array([1, 2, 3])); // a becomes MRU
+    expect(await cache.put('c', new Uint8Array([6, 7]))).toBe(true);
+    expect(await cache.get('a')).toEqual(new Uint8Array([1, 2, 3]));
+    expect(await cache.get('b')).toBeNull();
+    expect(await cache.get('c')).toEqual(new Uint8Array([6, 7]));
+    expect(cache.getStats()).toMatchObject({
+      entries: 2, bytes: 5, liveBytes: 5, evictions: 1, compactions: 1, reclaimedBytes: 2,
+    });
+    const reopened = await open(backend, 5, 2);
+    expect(await reopened.get('a')).toEqual(new Uint8Array([1, 2, 3]));
+    expect(await reopened.get('b')).toBeNull();
+    expect(await reopened.get('c')).toEqual(new Uint8Array([6, 7]));
+  });
+
+  test('keeps the active generation valid when compaction publication fails', async () => {
+    const backend = new MemoryBackend();
+    const cache = await open(backend, 5, 2);
+    await cache.put('a', new Uint8Array([1, 2, 3]));
+    await cache.put('b', new Uint8Array([4, 5]));
+    backend.failNextIndexAppend = true;
+    expect(await cache.put('c', new Uint8Array([6, 7]))).toBe(false);
+    expect(await cache.get('a')).toEqual(new Uint8Array([1, 2, 3]));
+    expect(await cache.get('b')).toEqual(new Uint8Array([4, 5]));
+    const reopened = await open(backend, 5, 2);
+    expect(await reopened.get('a')).toEqual(new Uint8Array([1, 2, 3]));
+    expect(await reopened.get('b')).toEqual(new Uint8Array([4, 5]));
+    expect(await reopened.get('c')).toBeNull();
+  });
+
+  test('rejects a single value larger than the hard byte capacity', async () => {
+    const cache = await open(new MemoryBackend(), 2, 2);
+    expect(await cache.put('large', new Uint8Array([1, 2, 3]))).toBe(false);
+    expect(cache.getStats().rejectedCapacity).toBe(1);
   });
 
   test('namespaces length-prefixed identity parts', async () => {

@@ -30,10 +30,13 @@ one append-only value pack and one fixed-record index, rather than a file per va
 are published before index records, checksums detect corruption, partial index
 records are ignored, and all capacities are hard limits.
 
-`getStats()` reports cache size, queue depth, hits/misses, writes, rejection and
-corruption counts, and read/write latency. `clear()` resets a namespace when no
-writes are pending. At capacity the initial implementation rejects new writes;
-it never starts an unbounded or frame-time eviction pass.
+`getStats()` reports physical/live size, queue depth, hits/misses, writes, LRU
+evictions, compactions/reclaimed bytes, maintenance, rejection/corruption, and
+I/O latency. `clear()` resets a namespace when no writes or maintenance are
+pending. At capacity, fixed-array O(1) LRU eviction reduces live data to 75%
+low water and one asynchronous maintenance task compacts into an inactive
+pack/index generation. An atomic manifest switch publishes it only after
+completion; no frame callback scans, sorts, evicts, or compacts.
 
 ## Virtual textures
 

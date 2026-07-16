@@ -19,8 +19,10 @@ const cache = await PersistentBlobCache.open({
 });
 ```
 
-Options are hard limits. A cache never grows past `maxBytes` or `maxEntries`;
-`put()` returns `false` on capacity or queue exhaustion. Supplying `backend` is
+Options are hard limits. A cache never grows past `maxBytes` or `maxEntries`.
+At high water, `put()` waits for bounded maintenance that evicts LRU entries to
+75% low water and compacts live values; it returns `false` only for an oversized
+single value, queue exhaustion, or I/O/maintenance failure. Supplying `backend` is
 primarily useful for tests or alternate platform storage.
 
 ### `get(key) -> Promise<Uint8Array | null>`
@@ -37,13 +39,15 @@ block use of the bytes on cache publication.
 
 ### `clear() -> Promise<void>`
 
-Truncates pack/index state. It rejects while writes are pending.
+Truncates both pack/index generations. It rejects while writes or maintenance
+are pending.
 
 ### `getStats() -> Readonly<PersistentBlobCacheStats>`
 
 Updates and returns one stable telemetry object. It reports entries/bytes,
-queue depth, hit/miss/write counts, capacity/queue rejection, corruption and
-I/O errors, and read/write latency.
+queue depth, hit/miss/write counts, physical/live bytes, LRU evictions,
+compactions/reclaimed bytes, maintenance state, rejection, corruption/I/O
+errors, and read/write latency.
 
 ### `persistentCacheNamespace(parts) -> Promise<string>`
 
@@ -73,10 +77,14 @@ The in-memory index is preallocated at `2 × maxEntries` and uses open addressin
 with tombstones. Cache operations are budgeted slow paths; no cache API belongs
 inside sealed frame computation.
 
-The initial implementation is bounded and saturating: it rejects new values at
-its hard limits rather than running frame-time eviction or compaction. `clear()`
-or a new namespace performs deterministic replacement. Incremental compaction
-and eviction can be added behind the same generic API without texture policy.
+The cache maintains an O(1) intrusive LRU in fixed arrays. Capacity pressure
+removes oldest values to a 75% low-water mark, then asynchronously rewrites live
+entries into the inactive generation. Reads and new writes await the single
+maintenance promise; presentation/frame code never performs compaction.
+Publication atomically switches an eight-byte manifest only after the new pack
+and index are complete. A crash before publication leaves the old generation;
+a crash after publication leaves the new one. The unreachable generation is
+then cleared best-effort.
 
 ## Virtual-texture composition
 

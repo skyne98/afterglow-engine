@@ -10,7 +10,7 @@ hard transport bounds are listed below.
 | Wasm worker completion queue | 256 outstanding | Export returns `-2`; no queue growth |
 | JS completion drain | 32/poll | Remaining completions stay in worker queue |
 | Browser fetch slots | 256 | Fetch registration returns `0` |
-| Generic persistent cache | caller-configured; dungeon = 1 GiB / 65,536 entries / 64 writes | New writes return `false`; reads remain available |
+| Generic persistent cache | caller-configured; dungeon = 1 GiB / 65,536 entries / 64 writes | LRU evicts to 75% low water; one async two-generation compaction; oversized values/failures return `false` |
 | Persistent cache index | `2 × maxEntries` fixed slots | Open rejects invalid configuration; no growth |
 | AssetStore IDs | 1,024 default | `AssetAdmission.CapacityExceeded` / path wrapper throws |
 | AssetStore publication | ring = asset capacity; 32/poll | Deferred suffix remains queued; counters record high-water/overflow |

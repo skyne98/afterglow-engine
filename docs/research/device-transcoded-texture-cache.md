@@ -5,9 +5,9 @@
 > **Implementation status:** The first production slice is implemented as the
 > generic, policy-free `PersistentBlobCache`: a bounded append-only pack, fixed
 > SHA-256 index, checksums, crash-safe publication order, OPFS with IndexedDB
-> fallback, and stable telemetry. VT composes device/source/format namespaces over it. The initial
-> cache saturates at its hard limit; incremental compaction/eviction remains a
-> future mechanism-level enhancement.
+> fallback, and stable telemetry. VT composes device/source/format namespaces
+> over it. Fixed-array O(1) LRU eviction and crash-safe two-generation
+> asynchronous compaction maintain hard limits without frame-time work.
 
 ## Question
 

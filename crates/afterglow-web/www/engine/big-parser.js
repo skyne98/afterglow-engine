@@ -418,7 +418,12 @@ function createPageDataProvider(loader, header, textureWorkers, format, cache) {
     cacheBackend: "",
     cacheEntries: 0,
     cacheBytes: 0,
+    cacheLiveBytes: 0,
     cacheQueuedWrites: 0,
+    cacheEvictions: 0,
+    cacheCompactions: 0,
+    cacheReclaimedBytes: 0,
+    cacheMaintenance: false,
     cacheHits: 0,
     cacheMisses: 0,
     cacheWrites: 0,
@@ -510,7 +515,12 @@ function createPageDataProvider(loader, header, textureWorkers, format, cache) {
       stats.cacheBackend = persistent.backend;
       stats.cacheEntries = persistent.entries;
       stats.cacheBytes = persistent.bytes;
+      stats.cacheLiveBytes = persistent.liveBytes;
       stats.cacheQueuedWrites = persistent.queuedWrites;
+      stats.cacheEvictions = persistent.evictions;
+      stats.cacheCompactions = persistent.compactions;
+      stats.cacheReclaimedBytes = persistent.reclaimedBytes;
+      stats.cacheMaintenance = persistent.maintenance;
       stats.cacheHits = persistent.hits;
       stats.cacheMisses = persistent.misses;
       stats.cacheWrites = persistent.writes;

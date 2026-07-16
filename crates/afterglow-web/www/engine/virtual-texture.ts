@@ -214,7 +214,12 @@ interface PageDataProviderTelemetry {
   cacheBackend: string;
   cacheEntries: number;
   cacheBytes: number;
+  cacheLiveBytes: number;
   cacheQueuedWrites: number;
+  cacheEvictions: number;
+  cacheCompactions: number;
+  cacheReclaimedBytes: number;
+  cacheMaintenance: boolean;
   cacheHits: number;
   cacheMisses: number;
   cacheWrites: number;
@@ -880,7 +885,9 @@ export class VirtualTextureStore {
     transcodeWorkers: 0, activeTranscodes: 0, queuedTranscodes: 0,
     completedTranscodes: 0, averageTranscodeQueueMs: 0, maxTranscodeQueueMs: 0,
     averageTranscodeMs: 0, maxTranscodeMs: 0,
-    cacheEnabled: false, cacheBackend: '', cacheEntries: 0, cacheBytes: 0, cacheQueuedWrites: 0,
+    cacheEnabled: false, cacheBackend: '', cacheEntries: 0, cacheBytes: 0,
+    cacheLiveBytes: 0, cacheQueuedWrites: 0, cacheEvictions: 0, cacheCompactions: 0,
+    cacheReclaimedBytes: 0, cacheMaintenance: false,
     cacheHits: 0, cacheMisses: 0, cacheWrites: 0, cacheRejected: 0, cacheErrors: 0,
     averageCacheReadMs: 0, maxCacheReadMs: 0,
     averageCacheWriteMs: 0, maxCacheWriteMs: 0,
@@ -1876,7 +1883,12 @@ export class VirtualTextureStore {
       stats.cacheBackend = provider.cacheBackend;
       stats.cacheEntries = provider.cacheEntries;
       stats.cacheBytes = provider.cacheBytes;
+      stats.cacheLiveBytes = provider.cacheLiveBytes;
       stats.cacheQueuedWrites = provider.cacheQueuedWrites;
+      stats.cacheEvictions = provider.cacheEvictions;
+      stats.cacheCompactions = provider.cacheCompactions;
+      stats.cacheReclaimedBytes = provider.cacheReclaimedBytes;
+      stats.cacheMaintenance = provider.cacheMaintenance;
       stats.cacheHits = provider.cacheHits;
       stats.cacheMisses = provider.cacheMisses;
       stats.cacheWrites = provider.cacheWrites;
