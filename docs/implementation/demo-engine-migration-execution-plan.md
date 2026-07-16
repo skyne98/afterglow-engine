@@ -81,6 +81,8 @@ Implemented on 2026-07-17:
   implemented and tested;
 - DME-021 mechanism: `BigAssetSession` now owns bounded header admission,
   transcoder startup/rollback, raw assets, one VT store, and reverse shutdown;
+- DME-025: fixed model collection, exact deformed bounds, pivot normalization,
+  bounded animation actions, and disposable skeleton diagnostics are implemented;
   dungeon/rigged demo migrations remain DME-030–032.
 
 The machine-readable source of truth remains `engine-conformance.json`; this

@@ -44,6 +44,7 @@
 - [Frame Budgets](./reference/frame-budgets.md)
 - [Incremental Hierarchy](./reference/hierarchy.md)
 - [Renderer Sealing](./reference/renderer-sealing.md)
+- [Model Presentation](./reference/model-presentation.md)
 - [Allocation Boundaries](./reference/allocation-boundaries.md)
 - [Runtime Capacities](./reference/runtime-capacities.md)
 - [Crate Map](./reference/crate-map.md)
