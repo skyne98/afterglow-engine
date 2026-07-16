@@ -11,7 +11,7 @@
 // The API is designed to be ergonomic and discoverable:
 //
 // ```ts
-// import { ref, effect, computed, flushEffects } from './reactive.js';
+// import { ref, effect, computed, flushEffects } from './reactive.ts';
 //
 // // Create a reactive ref — starts with a fallback value.
 // const texture = ref<Texture | null>(null);

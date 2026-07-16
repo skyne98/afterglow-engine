@@ -1,0 +1,22 @@
+import { Rpc, concat, encodeF32Vec, encodeF32, decodeF32Vec } from './rpc.ts';
+const out = document.getElementById('out');
+const log = m => { out.textContent += m + '\n'; };
+const finish = (ok, msg) => { document.title = ok ? 'PASS' : 'FAIL'; out.textContent += (ok ? 'PASS: ' : 'FAIL: ') + msg + '\n'; };
+try {
+  log('=== afterglow worker round-trip test (Physics.step) ===');
+  const rpc = await Rpc.create({
+    mainWasmUrl: 'afterglow_web.wasm', workerJsUrl: 'worker.js', workerWasmUrl: 'physics_worker.wasm',
+  });
+  // step(Vec<f32>, f32): method 0. step([0,1,2], 0.5) -> [0.5,1.5,2.5].
+  const args = concat(encodeF32Vec([0, 1, 2]), encodeF32(0.5));
+  const payload = await rpc.call(0, args);
+  const vec = decodeF32Vec(payload);
+  log('Got [' + [...vec].map(v => v.toFixed(3)).join(', ') + ']');
+  const exp = [0.5, 1.5, 2.5];
+  const ok = vec.length === 3 && [...vec].every((v, i) => Math.abs(v - exp[i]) < 1e-6);
+  rpc.terminate();
+  finish(ok, 'Physics.step([0,1,2], 0.5) == [0.5,1.5,2.5]');
+} catch (e) {
+  log(String((e && e.stack) || e));
+  finish(false, e.message || String(e));
+}

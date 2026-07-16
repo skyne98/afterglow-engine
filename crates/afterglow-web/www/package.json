@@ -1,6 +1,9 @@
 {
+  "name": "afterglow-web-runtime",
+  "private": true,
+  "type": "module",
   "dependencies": {
-    "bitecs": "^0.4.0",
-    "three": "^0.185.1"
+    "bitecs": "0.4.0",
+    "three": "0.185.1"
   }
 }

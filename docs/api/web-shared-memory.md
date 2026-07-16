@@ -1,6 +1,6 @@
 # `afterglow-web` API — shared-memory worker transport
 
-> Status: working; API checked against the 2026-07-10 source.
+> Status: working; API checked against the 2026-07-15 source.
 
 ## Architecture
 
@@ -16,6 +16,15 @@ response into the SAB response ring.
 
 `postMessage` is wake-up only (`"wake"`); it never carries request, response, or
 event payloads.
+
+The page-side `AsyncWorker` uses 256 preallocated task slots indexed by
+`task_id`, rather than a dynamically growing pending-call `Map`. Its browser
+fetch imports use a separate 256-slot fixed table with bounded probing and slot
+generation IDs. Calls fail with a deterministic capacity error before dispatch
+if all slots are occupied. Generated wasm services reserve a matching 256-entry
+completion queue and reject a 257th outstanding export call. One shared polling
+pump remains active while the fixed pending count is nonzero and drains at most
+32 completions per invocation.
 
 ## Required page headers
 
@@ -108,10 +117,13 @@ afterglow_wasm_output_ptr() -> usize
 afterglow_wasm_output_size() -> usize  # 1 MiB
 ```
 
-`afterglow_wasm_init` constructs `WorkerType::default()`. `serve_frame`
-decodes/dispatches the method through the generated server trait and always
-writes a postcard `Response` envelope. It returns the encoded byte count, or
-`-1` if even a compact oversized-response error cannot fit.
+`afterglow_wasm_init` constructs `WorkerType::default()`. Sync services use
+`serve_frame`, which writes a postcard `Response` envelope. For generated async
+services, `worker.js` detects `afterglow_wasm_serve_async`, drives
+`afterglow_wasm_tick` inside the Web Worker, drains the task-ID completion, and
+publishes only its response envelope to the SAB response ring. Thus CPU-heavy
+methods such as Basis transcoding stay off the page thread while retaining the
+same payload transport.
 
 ## JavaScript client (`www/rpc.js`)
 

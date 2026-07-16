@@ -28,9 +28,22 @@ Positional reads — no shared cursor, so concurrent range requests share one
 open `File` via `pread`. Two impls:
 
 - **`FsSource`** (native) — a file on disk, read via `pread` (no mutex, no
-  whole-file load).
+  whole-file load). The asset worker retains a fixed round-robin cache of 16
+  open sources for repeated container ranges.
 - **`BytesSource`** — an in-memory `&'static [u8]` (the one embedded asset,
   `index.html`).
+
+## Fixed engine asset states
+
+`AssetStore` defaults to 1,024 registered assets. Register manifest paths during
+bootstrap to obtain numeric `AssetId`s, then use `tryLoadAsset`. Reads and parses
+advance through fixed numeric state tables. Completed promises enter a
+preallocated ring, and `poll()` publishes at most 32 per frame by default.
+Capacity exhaustion is explicit rather than growing an engine queue; stale or
+evicted generations cannot publish later.
+
+The path-based `load()` API remains a game-facing convenience wrapper. It
+registers the path and throws if the configured asset capacity is exhausted.
 
 ## Range support
 
@@ -49,7 +62,7 @@ Asset serving code is split across 5 places, each with a distinct role:
 | `afterglow-cef/src/resources.rs` | **CEF scheme adapter.** Resolves a path to an `AssetSource`, drives CEF's `ResourceHandler` (`open`/`skip`/`read`/`response_headers`). Sets COOP/COEP + `Accept-Ranges`. |
 | `afterglow-web/src/dev_server.rs` | **HTTP adapter.** Parses `Range` → `206`/`Content-Range`, streams via `stream_body()`. The `coep_server` example wraps this in a TCP server. |
 | `afterglow-assets-worker/src/` (`lib.rs`, `fetch.rs`) | **The portable asset loader.** `#[rpc]` async worker that works on both backends. Native: `FsSource`/`pread`. Web: JS-imported `fetch` (the `fetch.rs` bridge). The render thread uses the generated `AssetLoaderClient` TS client on both. |
-| `afterglow-web/www/async-worker.js` | **Web async worker driver.** JS glue that drives the wasm async worker's executor (`tick` + `drain_completion`) and provides the `ag_fetch_start`/`ag_fetch_poll` imports the worker uses to fetch. |
+| `afterglow-web/www/async-worker.ts` | **Web async worker driver.** Authored TypeScript that drives the wasm async worker executor (`tick` + bounded `drain_completion`) and provides the `ag_fetch_start`/`ag_fetch_poll` imports. |
 
 **The principle:** the *what* (streaming reads, ranges, confinement, MIME) lives
 in `afterglow-assets`; the *how to deliver it* (CEF vs HTTP vs RPC) lives in

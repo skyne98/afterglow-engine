@@ -6,9 +6,9 @@
 // InstancedMesh's Float32Array buffers — no setMatrixAt() calls.
 
 import * as THREE from 'three';
-import { NONE_U32, type EntityId, type RenderDescriptorId } from './types.js';
-import type { InstancedRenderDescriptor } from './descriptors.js';
-import { DirtySlotRanges } from './dirty-ranges.js';
+import { NONE_U32, type EntityId, type RenderDescriptorId } from './types.ts';
+import type { InstancedRenderDescriptor } from './descriptors.ts';
+import { DirtySlotRanges } from './dirty-ranges.ts';
 
 export class InstanceShard {
   readonly mesh: THREE.InstancedMesh;
@@ -72,6 +72,7 @@ export class InstanceShard {
     return this.count < this.slotToEntity.length;
   }
 
+  // @hot-no-alloc-begin InstanceShard.allocate
   allocate(entity: EntityId): number {
     if (!this.hasCapacity()) throw new Error('Instance shard full');
     const slot = this.count++;
@@ -81,7 +82,9 @@ export class InstanceShard {
     this.appearanceDirty.mark(slot);
     return slot;
   }
+  // @hot-no-alloc-end InstanceShard.allocate
 
+  // @hot-no-alloc-begin InstanceShard.remove
   remove(slot: number, entityToSlot: Uint32Array, entityToHandle: Uint32Array): void {
     const lastSlot = this.count - 1;
     const movedEntity = this.slotToEntity[lastSlot];
@@ -102,6 +105,7 @@ export class InstanceShard {
 
     this.slotToEntity[lastSlot] = NONE_U32;
   }
+  // @hot-no-alloc-end InstanceShard.remove
 
   markMatrix(slot: number): void {
     this.matrixDirty.mark(slot);
@@ -111,8 +115,10 @@ export class InstanceShard {
     this.appearanceDirty.mark(slot);
   }
 
+  // @hot-no-alloc-begin InstanceShard.flushUploads
   flushUploads(): void {
     this.matrixDirty.flush(this.mesh.instanceMatrix, 16, this.count);
     this.appearanceDirty.flush(this.tintOpacityAttribute, 4, this.count);
   }
+  // @hot-no-alloc-end InstanceShard.flushUploads
 }

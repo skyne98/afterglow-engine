@@ -1,6 +1,6 @@
 import * as THREE from 'three';
-import { decodeFeedback } from './virtual-texture-feedback.js';
-import type { VirtualPageRequest, VirtualTextureStore } from './virtual-texture.js';
+import { pagesAtMipAxis } from './virtual-texture-layout.ts';
+import type { VirtualPageRequest, VirtualTextureStore } from './virtual-texture.ts';
 
 /**
  * Reduced-resolution RG32Uint feedback renderer with asynchronous readback.
@@ -13,7 +13,15 @@ export class VirtualTextureFeedbackPass {
   private width = 1;
   private height = 1;
   private pending = false;
-  private completed = new Map<string, VirtualPageRequest>();
+  private readonly feedbackMaps = [
+    new Map<number, VirtualPageRequest>(),
+    new Map<number, VirtualPageRequest>(),
+  ];
+  private buildMapIndex = 0;
+  private completed: Map<number, VirtualPageRequest> | null = null;
+  private requestPool: VirtualPageRequest[] = [];
+  private readonly seenMips = new Uint8Array(64);
+  private readonly latestMips: number[] = [];
 
   constructor(scale = 0.125) {
     if (!(scale > 0 && scale <= 1)) throw new RangeError('feedback scale must be in (0, 1]');
@@ -32,10 +40,17 @@ export class VirtualTextureFeedbackPass {
   resize(displayWidth: number, displayHeight: number): void {
     const width = Math.max(1, Math.ceil(displayWidth * this.scale));
     const height = Math.max(1, Math.ceil(displayHeight * this.scale));
-    if (width === this.width && height === this.height) return;
+    if (width === this.width && height === this.height && this.requestPool.length >= width * height) return;
     this.width = width;
     this.height = height;
     this.target.setSize(width, height);
+    const capacity = width * height;
+    if (this.requestPool.length < capacity) {
+      const previous = this.requestPool.length;
+      this.requestPool.length = capacity;
+      for (let index = previous; index < capacity; index++)
+        this.requestPool[index] = { path: '', mip: 0, x: 0, y: 0 };
+    }
   }
 
   /** Submit a pass and start readback unless the previous read is still pending. */
@@ -52,7 +67,7 @@ export class VirtualTextureFeedbackPass {
     camera: THREE.Camera,
     store: VirtualTextureStore,
   ): boolean {
-    if (this.pending) return false;
+    if (this.pending || this.completed !== null) return false;
     const previous = renderer.getRenderTarget();
     renderer.setRenderTarget(this.target);
     renderer.render(feedbackScene, camera);
@@ -64,37 +79,65 @@ export class VirtualTextureFeedbackPass {
         const words = raw instanceof Uint32Array
           ? raw
           : new Uint32Array(raw.buffer, raw.byteOffset, Math.floor(raw.byteLength / 4));
-        const requests = new Map<string, VirtualPageRequest>();
+        const requests = this.feedbackMaps[this.buildMapIndex];
+        requests.clear();
+        for (let mip = 0; mip < this.seenMips.length; mip++) this.seenMips[mip] = 0;
+        let requestCount = 0;
         for (let index = 0; index + 1 < words.length; index += 2) {
-          const decoded = decodeFeedback(words[index], words[index + 1]);
-          if (!decoded) continue;
-          const entry = store.getEntryById(decoded.textureId);
-          if (!entry) continue;
-          if (decoded.mip > entry.textureMaxMip) continue;
-          const tail = decoded.mip > entry.maxMip;
-          const pages = tail ? 1 : Math.max(1, entry.pageGrid >> decoded.mip);
-          if (decoded.x >= pages || decoded.y >= pages) continue;
-          const request = tail
-            ? { path: entry.path, mip: entry.tailFirstMip!, x: 0, y: 0, tail: true }
-            : { path: entry.path, mip: decoded.mip, x: decoded.x, y: decoded.y };
-          requests.set(`${request.path}:${request.mip}:${request.x}:${request.y}`, request);
+          const packed = words[index];
+          if ((packed & 0x80000000) === 0) continue;
+          const mip = packed & 0x3f;
+          const x = (packed >>> 6) & 0x7ff;
+          const y = (packed >>> 17) & 0x7ff;
+          const entry = store.getEntryById(words[index + 1]);
+          if (!entry || mip > entry.textureMaxMip) continue;
+          const tail = mip > entry.maxMip;
+          const gridWidth = tail ? 1 : pagesAtMipAxis(entry.pageTableLayout.width, mip);
+          const gridHeight = tail ? 1 : pagesAtMipAxis(entry.pageTableLayout.baseHeight, mip);
+          if (x >= gridWidth || y >= gridHeight) continue;
+          const requestMip = tail ? entry.tailFirstMip! : mip;
+          const requestX = tail ? 0 : x;
+          const requestY = tail ? 0 : y;
+          const local = tail
+            ? 0x10000000
+            : ((requestMip & 0x3f) | ((requestX & 0x7ff) << 6) | ((requestY & 0x7ff) << 17)) >>> 0;
+          const key = entry.textureId * 0x20000000 + local;
+          if (requests.has(key)) continue;
+          const request = this.requestPool[requestCount++];
+          request.textureId = entry.textureId;
+          request.path = entry.path;
+          request.mip = requestMip;
+          request.x = requestX;
+          request.y = requestY;
+          request.tail = tail ? true : undefined;
+          requests.set(key, request);
+          this.seenMips[mip] = 1;
         }
+        this.latestMips.length = 0;
+        for (let mip = 0; mip < this.seenMips.length; mip++)
+          if (this.seenMips[mip] !== 0) this.latestMips.push(mip);
         this.completed = requests;
+        this.buildMapIndex ^= 1;
       })
       .catch(error => console.error('[VT] feedback readback failed:', error))
       .finally(() => { this.pending = false; });
     return true;
   }
 
-  /** Consume the newest completed readback; subsequent calls return an empty map. */
-  consume(): Map<string, VirtualPageRequest> {
+  getLatestMips(): readonly number[] { return this.latestMips; }
+
+  /** Consume the newest completed readback; returns null until another readback completes. */
+  consume(): Map<number, VirtualPageRequest> | null {
     const result = this.completed;
-    this.completed = new Map();
+    this.completed = null;
     return result;
   }
 
   dispose(): void {
     this.target.dispose();
-    this.completed.clear();
+    this.feedbackMaps[0].clear();
+    this.feedbackMaps[1].clear();
+    this.completed = null;
+    this.requestPool.length = 0;
   }
 }

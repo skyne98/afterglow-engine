@@ -13,21 +13,33 @@ import {
 } from 'bitecs';
 
 import {
-  type EntityId, type RenderDescriptorId, type RenderFrame, type RenderDirty,
-  NULL_ENTITY, NONE_U32, RenderTier,
-} from './types.js';
+  type EntityId, type RenderDescriptorId, type RenderFrame,
+  NULL_ENTITY, NONE_U32, RenderDirty, RenderTier,
+} from './types.ts';
 import {
   MAX_ENTITIES, type TransformStore, type AppearanceStore, type RenderRefStore,
   createTransformStore, createAppearanceStore, createRenderRefStore,
-} from './components.js';
+} from './components.ts';
 import {
-  type RenderDescriptor, type InstancedRenderDescriptor, type UniqueRenderDescriptor,
   RenderResourceRegistry,
-} from './descriptors.js';
-import { EntityDirtyQueue } from './dirty-queue.js';
-import { InstanceShard } from './instance-shard.js';
-import { composeTransformInto, multiplyMatricesInto } from './matrix.js';
-import { HierarchyState, ChildOf } from './hierarchy.js';
+} from './descriptors.ts';
+import { EntityDirtyQueue } from './dirty-queue.ts';
+import { InstanceShard } from './instance-shard.ts';
+import { composeTransformInto, multiplyMatricesInto } from './matrix.ts';
+import { HierarchyState, ChildOf } from './hierarchy.ts';
+
+const HIERARCHY_REBUILD_OPERATIONS = 512;
+const HIERARCHY_REBUILD_BUDGET_MS = 0.2;
+const MAX_STRUCTURAL_CHANGES_PER_FRAME = 256;
+const MAX_DIRTY_ENTITIES_PER_FRAME = 4096;
+const MAX_HIERARCHY_SYNCS_PER_FRAME = 4096;
+const MAX_UNIQUE_SYNCS_PER_FRAME = 512;
+
+export enum RenderAttachStatus {
+  Attached = 0,
+  DescriptorNotWarmed = 1,
+  CapacityExceeded = 2,
+}
 
 export class RenderAdapter {
   readonly world: ReturnType<typeof createWorld>;
@@ -52,9 +64,15 @@ export class RenderAdapter {
   // Instance shards (shard id → InstanceShard)
   private readonly shards: (InstanceShard | null)[] = [];
   private nextShardId = 0;
+  private readonly warmedDescriptors = new Set<RenderDescriptorId>();
 
   // Unique Object3D proxies (entity → Object3D)
   private readonly uniqueObjects: (THREE.Object3D | null)[] = [];
+  private readonly uniquePools: (THREE.Object3D[] | null)[] = [];
+  private readonly uniqueEntityIds: Uint32Array;
+  private readonly uniqueIndexByEntity: Uint32Array;
+  private uniqueEntityCount = 0;
+  private uniqueSyncCursor = 0;
 
   // Hierarchy
   readonly hierarchy: HierarchyState;
@@ -68,9 +86,21 @@ export class RenderAdapter {
   // Scratch: compact lists for branch-free processing (gather → compute)
   private readonly instancedRootIds: Uint32Array;
   private instancedRootCount = 0;
+  private hierarchySyncCursor = 0;
+  readonly workStats = {
+    deferredStructural: 0,
+    deferredDirty: 0,
+    deferredHierarchy: 0,
+    deferredUnique: 0,
+    structuralOverflows: 0,
+    dirtyOverflows: 0,
+    attachCapacityExceeded: 0,
+    descriptorNotWarmed: 0,
+  };
 
   private unsubscribe: (() => void)[] = [];
   private currentFrame: RenderFrame = { frameId: 0, deltaSeconds: 0, elapsedSeconds: 0 };
+  private gameplaySealed = false;
 
   constructor(scene: THREE.Scene, capacity: number = MAX_ENTITIES) {
     this.world = createWorld();
@@ -93,10 +123,56 @@ export class RenderAdapter {
     this.worldChangedFrame = new Uint32Array(capacity).fill(NONE_U32);
     this.localMatrixScratch = new Float32Array(16);
     this.instancedRootIds = new Uint32Array(capacity);
+    this.uniqueEntityIds = new Uint32Array(capacity);
+    this.uniqueIndexByEntity = new Uint32Array(capacity).fill(NONE_U32);
 
     this.hierarchy = new HierarchyState(capacity);
     this.installObservers();
   }
+
+  // --- Bootstrap renderer warm-up ---
+
+  /** Allocate every proxy owned by one descriptor before gameplay seal. */
+  warmDescriptor(descriptorId: RenderDescriptorId): void {
+    const descriptor = this.registry.get(descriptorId);
+    if (this.warmedDescriptors.has(descriptorId)) return;
+    if (descriptor.tier === RenderTier.Instanced) {
+      if (!Number.isInteger(descriptor.maxShards) || descriptor.maxShards <= 0)
+        throw new RangeError('instanced descriptor maxShards must be positive');
+      for (let index = 0; index < descriptor.maxShards; index++) {
+        const id = this.nextShardId++;
+        this.shards[id] = new InstanceShard(id, descriptorId, descriptor, this.scene);
+      }
+    } else if (descriptor.tier === RenderTier.Unique) {
+      if (!Number.isInteger(descriptor.poolCapacity) || descriptor.poolCapacity <= 0)
+        throw new RangeError('unique descriptor poolCapacity must be positive');
+      const pool = new Array<THREE.Object3D>(descriptor.poolCapacity);
+      for (let index = 0; index < pool.length; index++) {
+        const object = descriptor.instantiate();
+        object.matrixAutoUpdate = false;
+        pool[index] = object;
+      }
+      this.uniquePools[descriptorId] = pool;
+    }
+    this.warmedDescriptors.add(descriptorId);
+  }
+
+  warmAllDescriptors(): void {
+    for (let id = 1; id <= this.registry.size; id++) this.warmDescriptor(id);
+  }
+
+  sealGameplay(): void {
+    for (let id = 1; id <= this.registry.size; id++) {
+      const descriptor = this.registry.get(id);
+      if (descriptor.tier === RenderTier.Instanced && !this.warmedDescriptors.has(id))
+        throw new Error(`instanced descriptor ${id} was not warmed before seal`);
+      if (descriptor.tier === RenderTier.Unique && !this.warmedDescriptors.has(id))
+        throw new Error(`unique descriptor ${id} was not warmed before seal`);
+    }
+    this.gameplaySealed = true;
+  }
+
+  get isGameplaySealed(): boolean { return this.gameplaySealed; }
 
   // --- Entity creation ---
 
@@ -128,6 +204,7 @@ export class RenderAdapter {
   setParent(child: EntityId, newParent: EntityId): void {
     const oldParent = this.hierarchy.parentByEntity[child];
     if (oldParent === newParent) return;
+    this.hierarchy.validateParentChange(child, oldParent, newParent);
 
     if (oldParent !== NULL_ENTITY) {
       removeComponent(this.world, child, ChildOf(oldParent));
@@ -147,18 +224,23 @@ export class RenderAdapter {
   // --- Frame logic ---
 
   prepareFrame(frame: RenderFrame): void {
+    if (!this.gameplaySealed) throw new Error('RenderAdapter must be warmed and sealed before prepareFrame');
     this.currentFrame = frame;
 
     // 1. Flush structural changes (attach/detach proxies).
-    this.flushStructuralChanges();
+    this.flushStructuralChanges(MAX_STRUCTURAL_CHANGES_PER_FRAME);
 
-    // 2. Rebuild hierarchy if topology changed.
+    // 2. Incrementally rebuild hierarchy into a second fixed buffer. Child
+    // matrices remain stable while rebuilding; commit forces one full child sync.
     if (this.hierarchy.topologyDirty) {
-      this.hierarchy.rebuild(this.world, this.transform);
+      this.hierarchy.stepRebuild(
+        HIERARCHY_REBUILD_OPERATIONS,
+        performance.now() + HIERARCHY_REBUILD_BUDGET_MS,
+      );
     }
 
     // 3. Sync transforms (the hot path).
-    this.syncTransforms(frame);
+    this.syncTransforms(frame, MAX_DIRTY_ENTITIES_PER_FRAME);
 
     // 4. Sync unique proxies (lights, skinned meshes — hundreds, cheap).
     this.syncUniqueProxies(frame);
@@ -166,15 +248,22 @@ export class RenderAdapter {
     // 5. Flush coalesced GPU uploads.
     this.flushUploads();
 
-    // 6. Clear dirty queue.
-    this.dirty.clear();
+    // 6. Remove only the processed prefix; deferred dirty work retains flags.
+    this.workStats.deferredStructural = this.structuralDirty.count;
+    this.workStats.deferredDirty = this.dirty.count;
+    this.workStats.deferredHierarchy = Math.max(0, this.hierarchy.hierarchyCount - MAX_HIERARCHY_SYNCS_PER_FRAME);
+    this.workStats.deferredUnique = Math.max(0, this.uniqueEntityCount - MAX_UNIQUE_SYNCS_PER_FRAME);
+    this.workStats.structuralOverflows = this.structuralDirty.overflows;
+    this.workStats.dirtyOverflows = this.dirty.overflows;
+    this.hierarchy.finishFrame();
   }
 
   // --- Structural changes (deferred from observers) ---
 
-  private flushStructuralChanges(): void {
-    for (let i = 0; i < this.structuralDirty.count; i++) {
-      const entity = this.structuralDirty.entities[i];
+  private flushStructuralChanges(maxOperations: number): void {
+    const count = Math.min(this.structuralDirty.count, maxOperations);
+    for (let i = 0; i < count; i++) {
+      const entity = this.structuralDirty.entityAt(i);
       const shouldHaveProxy =
         entityExists(this.world, entity) &&
         hasComponent(this.world, entity, this.transform) &&
@@ -197,16 +286,21 @@ export class RenderAdapter {
         this.attachProxy(entity, descriptorId);
       }
     }
-    this.structuralDirty.clear();
+    this.structuralDirty.clearPrefix(count);
   }
 
-  private attachProxy(entity: EntityId, descriptorId: RenderDescriptorId): void {
+  private attachProxy(entity: EntityId, descriptorId: RenderDescriptorId): RenderAttachStatus {
     const descriptor = this.registry.get(descriptorId);
-    this.proxyDescriptorId[entity] = descriptorId;
 
     switch (descriptor.tier) {
       case RenderTier.Instanced: {
-        const shard = this.obtainShard(descriptorId, descriptor);
+        const shard = this.obtainShard(descriptorId);
+        if (!shard) {
+          const warmed = this.warmedDescriptors.has(descriptorId);
+          if (warmed) this.workStats.attachCapacityExceeded++;
+          else this.workStats.descriptorNotWarmed++;
+          return warmed ? RenderAttachStatus.CapacityExceeded : RenderAttachStatus.DescriptorNotWarmed;
+        }
         const slot = shard.allocate(entity);
         this.proxyTier[entity] = RenderTier.Instanced;
         this.proxyHandle[entity] = shard.id;
@@ -214,10 +308,20 @@ export class RenderAdapter {
         break;
       }
       case RenderTier.Unique: {
-        const object = descriptor.instantiate();
-        object.matrixAutoUpdate = false;
+        const pool = this.uniquePools[descriptorId];
+        if (!pool) {
+          this.workStats.descriptorNotWarmed++;
+          return RenderAttachStatus.DescriptorNotWarmed;
+        }
+        const object = pool.pop();
+        if (!object) {
+          this.workStats.attachCapacityExceeded++;
+          return RenderAttachStatus.CapacityExceeded;
+        }
         this.scene.add(object);
         this.uniqueObjects[entity] = object;
+        this.uniqueIndexByEntity[entity] = this.uniqueEntityCount;
+        this.uniqueEntityIds[this.uniqueEntityCount++] = entity;
         this.proxyTier[entity] = RenderTier.Unique;
         this.proxyHandle[entity] = entity;
         this.proxySlot[entity] = 0;
@@ -225,8 +329,10 @@ export class RenderAdapter {
       }
     }
 
+    this.proxyDescriptorId[entity] = descriptorId;
     // Mark dirty so the first frame writes the matrix.
     this.dirty.mark(entity, RenderDirty.Transform | RenderDirty.Appearance);
+    return RenderAttachStatus.Attached;
   }
 
   private detachProxy(entity: EntityId): void {
@@ -240,6 +346,13 @@ export class RenderAdapter {
       if (obj) {
         this.scene.remove(obj);
         this.uniqueObjects[entity] = null;
+        this.uniquePools[this.proxyDescriptorId[entity]]?.push(obj);
+        const index = this.uniqueIndexByEntity[entity];
+        const last = this.uniqueEntityIds[--this.uniqueEntityCount];
+        this.uniqueEntityIds[index] = last;
+        this.uniqueIndexByEntity[last] = index;
+        this.uniqueIndexByEntity[entity] = NONE_U32;
+        if (this.uniqueSyncCursor > this.uniqueEntityCount) this.uniqueSyncCursor = 0;
       }
     }
 
@@ -249,28 +362,21 @@ export class RenderAdapter {
     this.proxyDescriptorId[entity] = 0;
   }
 
-  private obtainShard(
-    descriptorId: RenderDescriptorId,
-    descriptor: InstancedRenderDescriptor,
-  ): InstanceShard {
+  private obtainShard(descriptorId: RenderDescriptorId): InstanceShard | null {
     // Try to find an existing shard with capacity.
     for (const shard of this.shards) {
       if (shard && shard.descriptorId === descriptorId && shard.hasCapacity()) {
         return shard;
       }
     }
-    // Create a new shard.
-    const id = this.nextShardId++;
-    const shard = new InstanceShard(id, descriptorId, descriptor, this.scene);
-    this.shards[id] = shard;
-    return shard;
+    return null;
   }
 
   // --- Transform sync (the hot path) ---
 
-  private syncTransforms(frame: RenderFrame): void {
+  private syncTransforms(frame: RenderFrame, maxDirtyEntities: number): void {
     const changedFrame = frame.frameId;
-    const dirtyEntities = this.dirty.entities;
+    const dirtyCount = Math.min(this.dirty.count, maxDirtyEntities);
     const dirtyFlags = this.dirty.flags;
 
     // --- Pass 1: instanced roots (no parent, no children, instanced tier) ---
@@ -282,8 +388,8 @@ export class RenderAdapter {
     this.instancedRootCount = 0;
     const instancedRootIds = this.instancedRootIds;
 
-    for (let i = 0; i < this.dirty.count; i++) {
-      const entity = dirtyEntities[i];
+    for (let i = 0; i < dirtyCount; i++) {
+      const entity = this.dirty.entityAt(i);
       const flags = dirtyFlags[entity];
 
       // Skip: has parent (child), not instanced, has children, or no transform change.
@@ -363,8 +469,8 @@ export class RenderAdapter {
 
     // --- Pass 1b: non-instanced roots (unique, has children) ---
     // These are hundreds, not millions — process with the original branchy loop.
-    for (let i = 0; i < this.dirty.count; i++) {
-      const entity = dirtyEntities[i];
+    for (let i = 0; i < dirtyCount; i++) {
+      const entity = this.dirty.entityAt(i);
       const flags = dirtyFlags[entity];
 
       if (this.hierarchy.parentByEntity[entity] !== NULL_ENTITY) continue;
@@ -383,20 +489,17 @@ export class RenderAdapter {
       }
     }
 
-    // Pass 2: children in hierarchy order (parents before children).
-    for (let i = 0; i < this.hierarchy.hierarchyCount; i++) {
-      const entity = this.hierarchy.hierarchyOrder[i];
-      const parent = this.hierarchy.parentByEntity[entity];
-      const flags = dirtyFlags[entity];
-
-      const matrixChanged =
-        (flags & RenderDirty.Transform) !== 0 ||
-        (flags & RenderDirty.WorldOnly) !== 0 ||
-        this.worldChangedFrame[parent] === changedFrame ||
-        this.worldMatrixValid[entity] === 0;
-
-      if (matrixChanged) {
-        // Compose local matrix, then multiply by parent's world matrix.
+    // Pass 2: bounded rotating hierarchy slice. Every visited child is
+    // recomputed unconditionally, so parent changes propagate even when a
+    // large hierarchy spans multiple frames and dirty flags have been drained.
+    if (!this.hierarchy.rebuilding && this.hierarchy.hierarchyCount !== 0) {
+      if (this.hierarchy.justCommitted) this.hierarchySyncCursor = 0;
+      const hierarchyCount = this.hierarchy.hierarchyCount;
+      const hierarchyOperations = Math.min(hierarchyCount, MAX_HIERARCHY_SYNCS_PER_FRAME);
+      for (let operation = 0; operation < hierarchyOperations; operation++) {
+        const index = (this.hierarchySyncCursor + operation) % hierarchyCount;
+        const entity = this.hierarchy.hierarchyOrder[index];
+        const parent = this.hierarchy.parentByEntity[entity];
         composeTransformInto(this.localMatrixScratch, 0, this.transform, entity);
         const worldOffset = entity * 16;
         multiplyMatricesInto(
@@ -407,12 +510,11 @@ export class RenderAdapter {
         this.worldMatrixValid[entity] = 1;
         this.worldChangedFrame[entity] = changedFrame;
         this.writeWorldMatrixToProxy(entity, worldOffset);
-      }
-
-      if ((flags & RenderDirty.Appearance) !== 0) {
         this.writeAppearanceToProxy(entity);
       }
+      this.hierarchySyncCursor = (this.hierarchySyncCursor + hierarchyOperations) % hierarchyCount;
     }
+    this.dirty.clearPrefix(dirtyCount);
   }
 
   private writeWorldMatrixToProxy(entity: EntityId, worldOffset: number): void {
@@ -452,13 +554,17 @@ export class RenderAdapter {
   // --- Unique proxies (lights, skinned meshes) ---
 
   private syncUniqueProxies(frame: RenderFrame): void {
-    // Iterate only entities with unique proxies (hundreds — cheap).
-    // For now, we don't have a fast index; in production this would be
-    // a query or a compact list. This is a placeholder.
-    for (const obj of this.uniqueObjects) {
-      if (!obj) continue;
-      // Unique descriptor.sync() would be called here if continuous.
+    if (this.uniqueEntityCount === 0) return;
+    const operations = Math.min(this.uniqueEntityCount, MAX_UNIQUE_SYNCS_PER_FRAME);
+    for (let operation = 0; operation < operations; operation++) {
+      const index = (this.uniqueSyncCursor + operation) % this.uniqueEntityCount;
+      const entity = this.uniqueEntityIds[index];
+      const object = this.uniqueObjects[entity]!;
+      const descriptor = this.registry.get(this.proxyDescriptorId[entity]);
+      if (descriptor.tier === RenderTier.Unique && descriptor.continuous)
+        descriptor.sync?.(object, entity, RenderDirty.Transform | RenderDirty.Appearance, frame);
     }
+    this.uniqueSyncCursor = (this.uniqueSyncCursor + operations) % this.uniqueEntityCount;
   }
 
   // --- GPU uploads ---

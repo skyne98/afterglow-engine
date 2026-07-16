@@ -2,3 +2,4 @@
 result
 *.log
 /crates/afterglow-web/www/*.wasm
+/crates/afterglow-web/www/vt-dungeon.big

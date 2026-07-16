@@ -4,8 +4,8 @@
 // any Three.js object allocation or method calls. This is the batched approach
 // that benchmarks at 1.4ms for 100K entities (vs 39ms for Object3D sync).
 
-import type { TransformStore } from './components.js';
-import type { EntityId } from './types.js';
+import type { TransformStore } from './components.ts';
+import type { EntityId } from './types.ts';
 
 /**
  * Compose a TRS (translation, rotation, scale) into a 4x4 column-major matrix,
@@ -14,6 +14,7 @@ import type { EntityId } from './types.js';
  * This is the exact equivalent of `THREE.Matrix4.compose()` but with zero
  * object allocation and zero method calls — one tight loop of raw float math.
  */
+// @hot-no-alloc-begin composeTransformInto
 export function composeTransformInto(
   output: Float32Array,
   offset: number,
@@ -63,11 +64,13 @@ export function composeTransformInto(
   output[offset + 14] = transform.positionZ[entity];
   output[offset + 15] = 1;
 }
+// @hot-no-alloc-end composeTransformInto
 
 /**
  * Multiply two 4x4 column-major matrices: output = left × right.
  * All offsets are in Float32 elements (not bytes).
  */
+// @hot-no-alloc-begin multiplyMatricesInto
 export function multiplyMatricesInto(
   output: Float32Array,
   outputOffset: number,
@@ -130,3 +133,4 @@ export function multiplyMatricesInto(
   output[outputOffset + 11] = a41 * b13 + a42 * b23 + a43 * b33 + a44 * b43;
   output[outputOffset + 15] = a41 * b14 + a42 * b24 + a43 * b34 + a44 * b44;
 }
+// @hot-no-alloc-end multiplyMatricesInto

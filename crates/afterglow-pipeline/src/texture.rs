@@ -31,30 +31,129 @@ pub const VT_MIP_TAIL_RECTS: [(u32, u32, u32); 7] = [
     (88, 40, 4), (100, 40, 2), (110, 40, 1),
 ];
 
+/// Pack two RGBA grayscale masks into the R and G channels of one texture.
+pub fn pack_mask_channels(red: &[u8], green: &[u8]) -> Result<Vec<u8>, String> {
+    if red.len() != green.len() || red.len() % 4 != 0 {
+        return Err("mask inputs must have equal RGBA byte lengths".into());
+    }
+    let mut packed = vec![0; red.len()];
+    for pixel in 0..red.len() / 4 {
+        let offset = pixel * 4;
+        packed[offset] = red[offset];
+        packed[offset + 1] = green[offset];
+        packed[offset + 2] = 0;
+        packed[offset + 3] = 255;
+    }
+    Ok(packed)
+}
+
+pub fn virtual_mip_tail_first_mip(mut width: u32, mut height: u32) -> Result<u8, String> {
+    if width == 0 || height == 0 { return Err("virtual texture dimensions must be non-zero".into()); }
+    let mut mip = 0u8;
+    while width.max(height) > 64 {
+        width = (width / 2).max(1);
+        height = (height / 2).max(1);
+        mip = mip.checked_add(1).ok_or("virtual texture has too many mip levels")?;
+    }
+    Ok(mip)
+}
+
+/// Consume one source image while retaining only the current mip and at most
+/// 64 bordered pages. The callback can parallel-encode and immediately spool
+/// each batch; the packed tail is produced from the same mip walk.
+pub fn stream_virtual_texture<F>(
+    mut pixels: Vec<u8>,
+    mut width: u32,
+    mut height: u32,
+    mut consume_batch: F,
+) -> Result<PackedMipTail, String>
+where
+    F: FnMut(Vec<TiledVirtualPage>) -> Result<(), String>,
+{
+    if pixels.len() != width as usize * height as usize * 4 || width == 0 || height == 0 {
+        return Err("RGBA byte length does not match dimensions".into());
+    }
+    let first_mip = virtual_mip_tail_first_mip(width, height)?;
+    let mut tail = vec![0; (VT_SLOT_SIZE * VT_SLOT_SIZE * 4) as usize];
+    let mut mip = 0u8;
+    loop {
+        if mip < first_mip {
+            let grid_x = width.div_ceil(VT_PAGE_SIZE);
+            let grid_y = height.div_ceil(VT_PAGE_SIZE);
+            let mut batch = Vec::with_capacity(64);
+            for page_y in 0..grid_y {
+                for page_x in 0..grid_x {
+                    let mut page = vec![0; (VT_SLOT_SIZE * VT_SLOT_SIZE * 4) as usize];
+                    for slot_y in 0..VT_SLOT_SIZE {
+                        for slot_x in 0..VT_SLOT_SIZE {
+                            let source_x = (page_x as i64 * VT_PAGE_SIZE as i64 + slot_x as i64 - VT_PAGE_BORDER as i64)
+                                .clamp(0, width as i64 - 1) as u32;
+                            let source_y = (page_y as i64 * VT_PAGE_SIZE as i64 + slot_y as i64 - VT_PAGE_BORDER as i64)
+                                .clamp(0, height as i64 - 1) as u32;
+                            let source = ((source_y * width + source_x) * 4) as usize;
+                            let target = ((slot_y * VT_SLOT_SIZE + slot_x) * 4) as usize;
+                            page[target..target + 4].copy_from_slice(&pixels[source..source + 4]);
+                        }
+                    }
+                    batch.push(TiledVirtualPage { mip, page_x, page_y, data: page });
+                    if batch.len() == 64 { consume_batch(std::mem::take(&mut batch))?; }
+                }
+            }
+            if !batch.is_empty() { consume_batch(batch)?; }
+        } else {
+            let tail_level = (mip - first_mip) as usize;
+            if tail_level < VT_MIP_TAIL_RECTS.len() {
+                let (origin_x, origin_y, capacity) = VT_MIP_TAIL_RECTS[tail_level];
+                if width > capacity || height > capacity { return Err("mip-tail level exceeds rectangle".into()); }
+                for rect_y in 0..height + VT_PAGE_BORDER * 2 {
+                    for rect_x in 0..width + VT_PAGE_BORDER * 2 {
+                        let source_x = (rect_x as i64 - VT_PAGE_BORDER as i64).clamp(0, width as i64 - 1) as u32;
+                        let source_y = (rect_y as i64 - VT_PAGE_BORDER as i64).clamp(0, height as i64 - 1) as u32;
+                        let source = ((source_y * width + source_x) * 4) as usize;
+                        let target = (((origin_y + rect_y) * VT_SLOT_SIZE + origin_x + rect_x) * 4) as usize;
+                        tail[target..target + 4].copy_from_slice(&pixels[source..source + 4]);
+                    }
+                }
+            }
+        }
+        if width == 1 && height == 1 { break; }
+        let next_width = (width / 2).max(1);
+        let next_height = (height / 2).max(1);
+        pixels = downscale_box(&pixels, width, height, next_width, next_height);
+        width = next_width;
+        height = next_height;
+        mip += 1;
+    }
+    Ok(PackedMipTail { first_mip, data: tail })
+}
+
 pub fn pack_virtual_mip_tail(data: &[u8], width: u32, height: u32) -> Result<PackedMipTail, String> {
-    if width != height || width < VT_PAGE_SIZE || !width.is_power_of_two() {
-        return Err("mip tails require a square power-of-two texture of at least 128 texels".into());
+    if width == 0 || height == 0 {
+        return Err("mip-tail dimensions must be non-zero".into());
     }
     if data.len() != width as usize * height as usize * 4 {
         return Err("RGBA byte length does not match dimensions".into());
     }
     let mips = generate_mip_chain(data, width, height);
-    let first_mip = width.ilog2() - 6; // first level is 64x64
+    let first_mip = mips.iter().position(|(w, h, _)| (*w).max(*h) <= 64)
+        .ok_or("mip chain has no tail")?;
     let mut tail = vec![0; (VT_SLOT_SIZE * VT_SLOT_SIZE * 4) as usize];
-    for (tail_level, &(origin_x, origin_y, expected_size)) in VT_MIP_TAIL_RECTS.iter().enumerate() {
-        let mip = first_mip as usize + tail_level;
+    for (tail_level, &(origin_x, origin_y, rect_capacity)) in VT_MIP_TAIL_RECTS.iter().enumerate() {
+        let mip = first_mip + tail_level;
+        if mip >= mips.len() { break; }
         let (mip_width, mip_height, pixels) = &mips[mip];
-        if *mip_width != expected_size || *mip_height != expected_size {
-            return Err("unexpected mip-tail dimensions".into());
+        if *mip_width > rect_capacity || *mip_height > rect_capacity {
+            return Err("mip-tail level exceeds its packed rectangle".into());
         }
-        let rect_size = expected_size + VT_PAGE_BORDER * 2;
-        for rect_y in 0..rect_size {
-            for rect_x in 0..rect_size {
+        let rect_width = *mip_width + VT_PAGE_BORDER * 2;
+        let rect_height = *mip_height + VT_PAGE_BORDER * 2;
+        for rect_y in 0..rect_height {
+            for rect_x in 0..rect_width {
                 let source_x = (rect_x as i64 - VT_PAGE_BORDER as i64)
-                    .clamp(0, expected_size as i64 - 1) as u32;
+                    .clamp(0, *mip_width as i64 - 1) as u32;
                 let source_y = (rect_y as i64 - VT_PAGE_BORDER as i64)
-                    .clamp(0, expected_size as i64 - 1) as u32;
-                let source = ((source_y * expected_size + source_x) * 4) as usize;
+                    .clamp(0, *mip_height as i64 - 1) as u32;
+                let source = ((source_y * *mip_width + source_x) * 4) as usize;
                 let target_x = origin_x + rect_x;
                 let target_y = origin_y + rect_y;
                 let target = ((target_y * VT_SLOT_SIZE + target_x) * 4) as usize;
@@ -68,9 +167,8 @@ pub fn pack_virtual_mip_tail(data: &[u8], width: u32, height: u32) -> Result<Pac
 /// Build every paged mip down through the 128×128 terminal page.
 /// Borders sample neighboring virtual texels and clamp only at image edges.
 pub fn tile_virtual_texture(data: &[u8], width: u32, height: u32) -> Result<Vec<TiledVirtualPage>, String> {
-    if width != height { return Err("virtual textures must currently be square".into()); }
-    if width < VT_PAGE_SIZE || !width.is_power_of_two() {
-        return Err(format!("virtual texture size {width} must be a power of two >= {VT_PAGE_SIZE}"));
+    if width == 0 || height == 0 {
+        return Err("virtual texture dimensions must be non-zero".into());
     }
     if data.len() != width as usize * height as usize * 4 {
         return Err("RGBA byte length does not match dimensions".into());
@@ -78,9 +176,9 @@ pub fn tile_virtual_texture(data: &[u8], width: u32, height: u32) -> Result<Vec<
 
     let mut pages = Vec::new();
     for (mip, (mip_width, mip_height, mip_data)) in generate_mip_chain(data, width, height).into_iter().enumerate() {
-        if mip_width < VT_PAGE_SIZE || mip_height < VT_PAGE_SIZE { break; }
-        let grid_x = mip_width / VT_PAGE_SIZE;
-        let grid_y = mip_height / VT_PAGE_SIZE;
+        if mip_width.max(mip_height) <= VT_PAGE_SIZE / 2 { break; }
+        let grid_x = mip_width.div_ceil(VT_PAGE_SIZE);
+        let grid_y = mip_height.div_ceil(VT_PAGE_SIZE);
         for page_y in 0..grid_y {
             for page_x in 0..grid_x {
                 let mut page = vec![0; (VT_SLOT_SIZE * VT_SLOT_SIZE * 4) as usize];
@@ -189,6 +287,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn packs_two_masks_into_rg_without_cross_channel_conversion() {
+        let red = [12, 12, 12, 255, 34, 34, 34, 255];
+        let green = [56, 56, 56, 255, 78, 78, 78, 255];
+        let packed = pack_mask_channels(&red, &green).unwrap();
+        assert_eq!(packed, [12, 56, 0, 255, 34, 78, 0, 255]);
+        assert!(pack_mask_channels(&red, &green[..4]).is_err());
+    }
+
+    #[test]
     fn packs_all_sub_page_mips_into_one_tail_slot() {
         let mut source = vec![0; 256 * 256 * 4];
         for y in 0..256usize { for x in 0..256usize {
@@ -227,9 +334,39 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unsupported_virtual_texture_dimensions() {
-        assert!(tile_virtual_texture(&vec![0; 128 * 64 * 4], 128, 64).is_err());
-        assert!(tile_virtual_texture(&vec![0; 192 * 192 * 4], 192, 192).is_err());
+    fn supports_rectangular_and_non_power_of_two_dimensions() {
+        let rectangular = tile_virtual_texture(&vec![0; 192 * 65 * 4], 192, 65).unwrap();
+        assert_eq!(rectangular.iter().filter(|page| page.mip == 0).count(), 2);
+        assert!(rectangular.iter().any(|page| page.mip == 1));
+        let tail = pack_virtual_mip_tail(&vec![0; 192 * 65 * 4], 192, 65).unwrap();
+        assert_eq!(tail.first_mip, 2); // 192x65 -> 96x32 -> 48x16
+        assert!(tile_virtual_texture(&[], 0, 1).is_err());
+    }
+
+    #[test]
+    fn streaming_pages_and_tail_match_materialized_pipeline_with_bounded_batches() {
+        let mut source = vec![0; 256 * 192 * 4];
+        for (index, byte) in source.iter_mut().enumerate() { *byte = index as u8; }
+        let expected_pages = tile_virtual_texture(&source, 256, 192).unwrap();
+        let expected_tail = pack_virtual_mip_tail(&source, 256, 192).unwrap();
+        let mut actual_pages = Vec::new();
+        let mut max_batch = 0;
+        let actual_tail = stream_virtual_texture(source, 256, 192, |batch| {
+            max_batch = max_batch.max(batch.len());
+            actual_pages.extend(batch);
+            Ok(())
+        }).unwrap();
+        assert!(max_batch <= 64);
+        assert_eq!(actual_pages, expected_pages);
+        assert_eq!(actual_tail, expected_tail);
+    }
+
+    #[test]
+    fn offline_uastc_pages_transcode_in_the_runtime_codec() {
+        let rgba = vec![127; (VT_SLOT_SIZE * VT_SLOT_SIZE * 4) as usize];
+        let basis = afterglow_basis_encoder::encode_uastc_rgba(&rgba, VT_SLOT_SIZE, VT_SLOT_SIZE).unwrap();
+        let transcoded = afterglow_texture::safe::transcode(&basis, 0).unwrap();
+        assert!(!transcoded.is_empty());
     }
 
     #[test]

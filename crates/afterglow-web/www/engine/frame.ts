@@ -2,9 +2,11 @@
 // worker polling, structural changes, transform sync, and GPU uploads
 // in a fixed order so promise/microtask timing never affects the render phase.
 
-import type { RenderAdapter } from './render-adapter.js';
-import type { RenderFrame } from './types.js';
-import type { VirtualPageRequest, VirtualTextureStore } from './virtual-texture.js';
+import type { RenderAdapter } from './render-adapter.ts';
+import type { RenderFrame } from './types.ts';
+import type { VirtualPageRequest, VirtualTextureStore } from './virtual-texture.ts';
+import { EnginePhase, type EngineMemory } from './engine-memory.ts';
+import { BudgetDecision, FrameBudget, FrameStage } from './frame-budget.ts';
 
 /**
  * A worker input interface — the render adapter doesn't depend on the
@@ -24,13 +26,8 @@ export interface VTInput {
   /** The virtual texture store. */
   store: VirtualTextureStore;
   /** Feedback from the previous frame's feedback pass (page requests). */
-  feedback: Map<string, VirtualPageRequest>;
-  /** Camera position for prediction. */
-  cameraPos?: [number, number];
-  /** Camera zoom for prediction. */
-  cameraZoom?: number;
-  /** Measured frame time in ms (for adaptive quality). */
-  frameTime?: number;
+  feedback: ReadonlyMap<unknown, VirtualPageRequest>;
+
 }
 
 /**
@@ -56,25 +53,37 @@ export function prepareAfterglowFrame(
   workerInput: RenderWorkerInput | null,
   adapter: RenderAdapter,
   vtInput?: VTInput,
+  memory?: EngineMemory,
+  budget?: FrameBudget,
 ): void {
+  // Rewind fixed frame scratch and establish cumulative stage deadlines before
+  // any engine system can consume frame capacity.
+  if (memory && memory.phase !== EnginePhase.GameplaySealed && memory.phase !== EnginePhase.LoadingScreen)
+    throw new Error('EngineMemory must be sealed before frame orchestration');
+  memory?.beginFrame();
+  budget?.beginFrame(frame.frameId, frame.deltaSeconds * 1000);
+
   // 1. Make completed worker data visible.
   if (workerInput) {
+    budget?.beginStage(FrameStage.WorkerPoll, true);
     workerInput.poll();
+    budget?.endStage(FrameStage.WorkerPoll);
   }
 
   // 2. VT: process feedback from previous frame (1-frame latency).
   //    [IDTECH] Section 3.4: "it is typically fine to use a frame old data"
   if (vtInput) {
+    budget?.beginStage(FrameStage.VirtualTexture, true);
+    vtInput.store.processFeedback(vtInput.feedback);
     vtInput.store.poll();
-    if (vtInput.frameTime !== undefined) {
-      vtInput.store.recordFrameTime(vtInput.frameTime);
-    }
-    vtInput.store.processFeedback(vtInput.feedback, vtInput.cameraPos, vtInput.cameraZoom);
+    budget?.endStage(FrameStage.VirtualTexture);
   }
 
   // 2. Apply structural worker commands on the ECS/main thread.
-  if (workerInput?.drainStructuralCommands) {
+  if (workerInput?.drainStructuralCommands &&
+      (!budget || budget.beginStage(FrameStage.StructuralCommands) === BudgetDecision.Run)) {
     workerInput.drainStructuralCommands(adapter);
+    budget?.endStage(FrameStage.StructuralCommands);
   }
 
   // 3. Resolve bitECS deferred query removals once.
@@ -82,11 +91,16 @@ export function prepareAfterglowFrame(
   // commitRemovals is called inside adapter.prepareFrame().
 
   // 4. Ingest worker value outputs.
-  if (workerInput?.drainPoseBatches) {
+  if (workerInput?.drainPoseBatches &&
+      (!budget || budget.beginStage(FrameStage.PoseBatches) === BudgetDecision.Run)) {
     workerInput.drainPoseBatches(adapter);
+    budget?.endStage(FrameStage.PoseBatches);
   }
 
   // 5-9. Structural reconciliation, hierarchy rebuild, transform sync,
-  // unique proxy sync, GPU upload flush.
+  // unique proxy sync, GPU upload flush. Rendering preparation is required;
+  // overruns are recorded but never leave GPU state half-committed.
+  budget?.beginStage(FrameStage.RenderPrepare, true);
   adapter.prepareFrame(frame);
+  budget?.endStage(FrameStage.RenderPrepare);
 }

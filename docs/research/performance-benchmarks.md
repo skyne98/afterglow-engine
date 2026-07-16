@@ -153,3 +153,23 @@ missed one vsync; normal panning and streaming missed none.
 RG32Uint feedback pixels, nine byte-verified RGBA writes, nine BC7 writes, three
 opposed/rotated feedback directions, and three camera/LOD trajectories, with no
 WebGPU validation errors.
+
+## Sealed VT atlas and soak validation (2026-07-16)
+
+On fox-laptop (Radeon 680M/RADV, 1440×900 logical CEF window at 144 Hz), the
+`.big` v5 dungeon filled its 3,600-slot atlas in 9.33 seconds while maintaining
+a 6.955 ms maximum rAF interval. A disjoint full-cache replacement produced
+1,014 cumulative material-group evictions in 4.92 seconds; mean/max were
+6.970/20.850 ms with one interval above 17 ms. Failed loads, scheduler overflow,
+long tasks, and GPU errors were zero. Full-state WebGPU timestamps measured
+0.149 ms main, 0.018 ms feedback, and 0.465 ms aggregate render work.
+
+Corrected long soaks (timestamp tracking disabled to avoid Three r185's
+per-frame diagnostic-key retention) covered 863,264 frames: 10-minute stable,
+30-minute traversal, and 60-minute eight-way teleport-every-frame. Every mode
+averaged 6.950 ms. They recorded 1, 2, and 0 intervals above 17 ms respectively,
+zero long tasks, failed loads, queue overflow, GPU errors, pending work, and
+post-seal pipeline creation. Sixty-second GC-floor samples repeatedly returned
+to roughly 77–79 MiB; 60-minute floor drift was approximately 0.85 MiB/hour.
+See `docs/benchmarks/vt-atlas-baseline-2026-07-16.md` and
+`docs/benchmarks/vt-soak-2026-07-16.md`.

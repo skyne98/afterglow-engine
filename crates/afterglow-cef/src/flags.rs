@@ -27,6 +27,9 @@ pub fn apply(cl: &CommandLine) {
     // --- WebGPU on the real GPU (Dawn -> Vulkan) ---
     sw(cl, "enable-unsafe-webgpu");
     sw(cl, "ignore-gpu-blocklist");
+    // WebGPU is a hard engine requirement. Keep Chromium from providing a
+    // WebGL backend if page-side initialization ever regresses.
+    sw(cl, "disable-webgl");
     sv(cl, "enable-features", "Vulkan");
     sv(cl, "use-angle", "vulkan");
 

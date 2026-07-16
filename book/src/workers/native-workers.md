@@ -65,6 +65,14 @@ assert!(evs.iter().any(|e| e == b"stepped:3"));
 > **Events are native-only.** The web transport has request and response rings
 > only — see [Lifecycle & Errors](./lifecycle.md).
 
+## Allocation regression tests
+
+Native executables can wrap `System` with
+`afterglow_rpc::allocation::TrackingAllocator` and use `assert_no_alloc` in
+sealed hot-path tests. Tracking is thread-local and opt-in. After ring storage
+is constructed, `RingBuffer::write` plus `read_into` is covered by a zero-
+allocation regression test.
+
 ## Singleton workers
 
 For workers that are inherently global (an asset loader, an audio mixer), use

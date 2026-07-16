@@ -1,0 +1,78 @@
+// crates/afterglow-web/www/engine/vt-gpu-test.ts
+async function testRawFeedback(device, direction) {
+  const transform = direction === "west" ? "vec2f(1.0-in.uv.x,in.uv.y)" : direction === "rotated" ? "vec2f(in.uv.y,1.0-in.uv.x)" : "in.uv";
+  const shader = device.createShaderModule({ code: `struct Out{@builtin(position) position:vec4f,@location(0) uv:vec2f};@vertex fn vs(@builtin(vertex_index)i:u32)->Out{var p=array<vec2f,3>(vec2f(-1,-1),vec2f(3,-1),vec2f(-1,3));var o:Out;o.position=vec4f(p[i],0,1);o.uv=p[i]*.5+.5;return o;}@fragment fn fs(in:Out)->@location(0) vec2u{let q=${transform};let x=u32(clamp(floor(q.x*2048.),0.,2047.));let y=u32(clamp(floor(q.y*2048.),0.,2047.));return vec2u(0x80000000u|(x<<6)|(y<<17),0x12345678u);}` });
+  const info = await shader.getCompilationInfo(), errors = info.messages.filter((x) => x.type === "error");
+  if (errors.length)
+    throw new Error(errors.map((x) => x.message).join(`
+`));
+  const pipeline = device.createRenderPipeline({ layout: "auto", vertex: { module: shader, entryPoint: "vs" }, fragment: { module: shader, entryPoint: "fs", targets: [{ format: "rg32uint" }] }, primitive: { topology: "triangle-list" } });
+  const tex = device.createTexture({ size: [32, 32], format: "rg32uint", usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC }), buffer = device.createBuffer({ size: 8192, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ }), encoder = device.createCommandEncoder(), pass = encoder.beginRenderPass({ colorAttachments: [{ view: tex.createView(), loadOp: "clear", storeOp: "store", clearValue: { r: 0, g: 0, b: 0, a: 0 } }] });
+  pass.setPipeline(pipeline);
+  pass.draw(3);
+  pass.end();
+  encoder.copyTextureToBuffer({ texture: tex }, { buffer, bytesPerRow: 256 }, [32, 32]);
+  device.queue.submit([encoder.finish()]);
+  await buffer.mapAsync(GPUMapMode.READ);
+  const words = new Uint32Array(buffer.getMappedRange());
+  let valid = 0, minX = 2048, maxX = -1, minY = 2048, maxY = -1;
+  const xs = new Set, ys = new Set;
+  for (let i = 0;i < words.length; i += 2)
+    if (words[i] & 2147483648 && words[i + 1] === 305419896) {
+      valid++;
+      const x = words[i] >>> 6 & 2047, y = words[i] >>> 17 & 2047;
+      xs.add(x);
+      ys.add(y);
+      minX = Math.min(minX, x);
+      maxX = Math.max(maxX, x);
+      minY = Math.min(minY, y);
+      maxY = Math.max(maxY, y);
+    }
+  buffer.unmap();
+  buffer.destroy();
+  tex.destroy();
+  if (valid !== 1024 || xs.size !== 32 || ys.size !== 32)
+    throw new Error(`feedback ${direction} mismatch`);
+  return { direction, valid, range: [minX, maxX, minY, maxY] };
+}
+async function testUploadLocations(device, atlasWidth, atlasHeight, slotSize) {
+  const result = { rgba: 0, compressed: 0, compressedFormat: "unsupported" }, tex = device.createTexture({ size: [64, 64], format: "rgba8unorm", usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.COPY_SRC }), origins = [[0, 0], [60, 60], [24, 36]];
+  for (let n = 0;n < 3; n++) {
+    const color = [17 + n, 83, 201, 255], pixels = new Uint8Array(64);
+    for (let i = 0;i < 64; i += 4)
+      pixels.set(color, i);
+    device.queue.writeTexture({ texture: tex, origin: origins[n] }, pixels, { bytesPerRow: 16, rowsPerImage: 4 }, [4, 4]);
+    const b = device.createBuffer({ size: 1024, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ }), e = device.createCommandEncoder();
+    e.copyTextureToBuffer({ texture: tex, origin: origins[n] }, { buffer: b, bytesPerRow: 256 }, [4, 4]);
+    device.queue.submit([e.finish()]);
+    await b.mapAsync(GPUMapMode.READ);
+    const bytes = new Uint8Array(b.getMappedRange());
+    for (let y = 0;y < 4; y++)
+      for (let x = 0;x < 4; x++)
+        for (let c = 0;c < 4; c++)
+          if (bytes[y * 256 + x * 4 + c] !== color[c])
+            throw new Error(`RGBA mismatch ${n}/${x}/${y}/${c}`);
+    b.unmap();
+    b.destroy();
+    result.rgba++;
+  }
+  tex.destroy();
+  const compressed = device.features.has("texture-compression-bc") ? ["bc7", "bc7-rgba-unorm"] : device.features.has("texture-compression-astc") ? ["astc", "astc-4x4-unorm"] : null;
+  if (compressed) {
+    const t = device.createTexture({ size: [atlasWidth, atlasHeight], format: compressed[1], usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING }), o = [[0, 0], [atlasWidth - slotSize, atlasHeight - slotSize], [Math.floor(atlasWidth / slotSize / 2) * slotSize, Math.floor(atlasHeight / slotSize / 2) * slotSize]];
+    for (let n = 0;n < 3; n++) {
+      const blocks = new Uint8Array(34 * 34 * 16);
+      blocks.fill(31 + n);
+      device.queue.writeTexture({ texture: t, origin: o[n] }, blocks, { bytesPerRow: 544, rowsPerImage: 34 }, [slotSize, slotSize]);
+      result.compressed++;
+    }
+    t.destroy();
+    result.compressedFormat = compressed[0];
+  }
+  await device.queue.onSubmittedWorkDone();
+  return result;
+}
+export {
+  testUploadLocations,
+  testRawFeedback
+};

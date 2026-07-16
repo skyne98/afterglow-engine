@@ -1,4 +1,4 @@
-// codec.js
+// crates/afterglow-web/www/codec.ts
 function encodeVarint(n) {
   const b = [];
   do {
@@ -56,11 +56,11 @@ function unwrapResponse(bytes) {
   const [mlen, eoff] = decodeVarint(bytes, moff);
   if (eoff + mlen > bytes.length)
     throw new Error("RPC error truncated");
-  const msg = new TextDecoder().decode(bytes.subarray(eoff, eoff + mlen));
+  const msg = new TextDecoder().decode(Uint8Array.from(bytes.subarray(eoff, eoff + mlen)));
   throw new Error(`RPC ${variant === 1 ? "server" : "decode"} error (method ${method}): ${msg}`);
 }
 
-// async-worker.js
+// crates/afterglow-web/www/async-worker.ts
 class PendingFetch {
   constructor(url) {
     this.promise = fetch(url);
@@ -104,8 +104,9 @@ class HeadFetch {
 
 class RangeFetch {
   constructor(url, offset, len) {
-    const end = offset + len - 1;
-    this.promise = fetch(url, { headers: { Range: `bytes=${offset}-${end}` } });
+    const start = Number(offset);
+    const end = start + Number(len) - 1;
+    this.promise = fetch(url, { headers: { Range: `bytes=${start}-${end}` } });
     this.resolved = false;
     this.bytes = null;
     this.error = null;
@@ -129,27 +130,55 @@ class AsyncWorker {
     this.baseUrl = baseUrl;
     this._memory = null;
     this.nextFetchId = 1;
-    this.pendingFetches = new Map;
-    this._pendingCalls = new Map;
+    this._fetchCapacity = 256;
+    this._fetchIds = new Float64Array(this._fetchCapacity);
+    this._fetchIds.fill(-1);
+    this._fetches = new Array(this._fetchCapacity).fill(null);
+    this._pendingFetchCount = 0;
+    this._callCapacity = 256;
+    this._callIds = new Float64Array(this._callCapacity);
+    this._callIds.fill(-1);
+    this._callResolves = new Array(this._callCapacity).fill(null);
+    this._callRejects = new Array(this._callCapacity).fill(null);
+    this._pendingCallCount = 0;
     this._taskIdCounter = 0;
+    this._pumpScheduled = false;
+    this._completionLimit = 32;
+    this._lastPollCompletions = 0;
+    this._totalCompletions = 0;
+    this._completionLimitHits = 0;
   }
   async call(method, args) {
-    const taskId = this.serveAsync(method, args);
-    if (taskId < 0)
-      throw new Error("async worker: serveAsync failed");
+    const taskId = this._nextTaskId();
+    const slot = taskId % this._callCapacity;
+    if (this._callIds[slot] !== -1)
+      throw new Error("async worker: fixed task capacity exhausted");
     return new Promise((resolve, reject) => {
-      this._pendingCalls.set(taskId, { resolve, reject });
-      const poll = () => {
-        this.poll();
-        if (this._pendingCalls.has(taskId)) {
-          setTimeout(poll, 0);
-        }
-      };
-      setTimeout(poll, 0);
+      this._callIds[slot] = taskId;
+      this._callResolves[slot] = resolve;
+      this._callRejects[slot] = reject;
+      this._pendingCallCount++;
+      if (this.serveAsync(method, args, taskId) < 0) {
+        this._releaseCallSlot(slot);
+        reject(new Error("async worker: serveAsync failed"));
+        return;
+      }
+      this._schedulePump();
     });
   }
-  serveAsync(method, args) {
-    const taskId = this._nextTaskId();
+  _schedulePump() {
+    if (this._pumpScheduled || this._pendingCallCount === 0)
+      return;
+    this._pumpScheduled = true;
+    setTimeout(() => {
+      this._pumpScheduled = false;
+      if (this._pendingCallCount === 0)
+        return;
+      this.poll();
+      this._schedulePump();
+    }, 0);
+  }
+  serveAsync(method, args, taskId = this._nextTaskId()) {
     const inPtr = this.w.afterglow_wasm_input_ptr();
     const inSize = this.w.afterglow_wasm_input_size();
     if (args.length + 12 > inSize) {
@@ -165,46 +194,51 @@ class AsyncWorker {
       return -1;
     return taskId;
   }
-  poll() {
+  poll(maxCompletions = this._completionLimit) {
     this.w.afterglow_wasm_tick();
-    const completions = [];
     const outPtr = this.w.afterglow_wasm_output_ptr();
     const outSize = this.w.afterglow_wasm_output_size();
-    for (;; ) {
+    const memory = this._memory || this.w.memory;
+    let drained = 0;
+    while (drained < maxCompletions) {
       const n = this.w.afterglow_wasm_drain_completion(outPtr, outSize);
       if (n < 0)
         break;
-      const bytes = new Uint8Array((this._memory || this.w.memory).buffer, outPtr, n).slice();
-      const dv = new DataView(bytes.buffer, bytes.byteOffset, 8);
-      const taskId = Number(dv.getBigUint64(0, true));
-      const responseBytes = bytes.subarray(8);
-      completions.push({ taskId, response: responseBytes });
-      const pending = this._pendingCalls.get(taskId);
-      if (pending) {
-        this._pendingCalls.delete(taskId);
+      if (n < 8)
+        continue;
+      const taskId = Number(new DataView(memory.buffer, outPtr, 8).getBigUint64(0, true));
+      const responseBytes = new Uint8Array(memory.buffer, outPtr + 8, n - 8).slice();
+      drained++;
+      const slot = taskId % this._callCapacity;
+      if (this._callIds[slot] === taskId) {
+        const resolve = this._callResolves[slot];
+        const reject = this._callRejects[slot];
+        this._releaseCallSlot(slot);
         try {
-          pending.resolve(unwrapResponse(responseBytes));
+          resolve(unwrapResponse(responseBytes));
         } catch (e) {
-          pending.reject(e);
+          reject(e);
         }
       }
     }
-    return completions;
+    this._lastPollCompletions = drained;
+    this._totalCompletions += drained;
+    if (drained === maxCompletions)
+      this._completionLimitHits++;
+    return drained;
   }
   fetchStart(urlPtr, urlLen) {
-    const url = new TextDecoder().decode(new Uint8Array((this._memory || this.w.memory).buffer, urlPtr, urlLen));
+    const url = new TextDecoder().decode(Uint8Array.from(new Uint8Array((this._memory || this.w.memory).buffer, urlPtr, urlLen)));
     const fullUrl = this._resolveUrl(url);
-    const id = this.nextFetchId++;
-    this.pendingFetches.set(id, new PendingFetch(fullUrl));
-    return id;
+    return this._registerFetch(new PendingFetch(fullUrl));
   }
   fetchPoll(fetchId, outPtr, outMax) {
-    const pending = this.pendingFetches.get(fetchId);
+    const pending = this._getFetch(fetchId);
     if (!pending)
       return -1;
     if (!pending.resolved)
       return -1;
-    this.pendingFetches.delete(fetchId);
+    this._releaseFetch(fetchId);
     if (pending.error) {
       return 0;
     }
@@ -214,32 +248,57 @@ class AsyncWorker {
     return pending.bytes.length;
   }
   headStart(urlPtr, urlLen) {
-    const url = new TextDecoder().decode(new Uint8Array((this._memory || this.w.memory).buffer, urlPtr, urlLen));
+    const url = new TextDecoder().decode(Uint8Array.from(new Uint8Array((this._memory || this.w.memory).buffer, urlPtr, urlLen)));
     const fullUrl = this._resolveUrl(url);
-    const id = this.nextFetchId++;
-    this.pendingFetches.set(id, new HeadFetch(fullUrl));
-    return id;
+    return this._registerFetch(new HeadFetch(fullUrl));
   }
   headPoll(fetchId, outPtr, outMax) {
-    const pending = this.pendingFetches.get(fetchId);
+    const pending = this._getFetch(fetchId);
     if (!pending)
       return -2;
     if (!pending.resolved)
       return -1;
-    this.pendingFetches.delete(fetchId);
-    if (pending.error || pending.contentLength === null)
+    this._releaseFetch(fetchId);
+    if (pending.error || pending.contentLength === null || outMax < 8)
       return -2;
-    const buf = new ArrayBuffer(8);
-    new DataView(buf).setBigUint64(0, BigInt(pending.contentLength), true);
-    new Uint8Array((this._memory || this.w.memory).buffer, outPtr, 8).set(new Uint8Array(buf));
+    new DataView((this._memory || this.w.memory).buffer, outPtr, 8).setBigUint64(0, BigInt(pending.contentLength), true);
     return 8;
   }
   rangeStart(urlPtr, urlLen, offset, len) {
-    const url = new TextDecoder().decode(new Uint8Array((this._memory || this.w.memory).buffer, urlPtr, urlLen));
+    const url = new TextDecoder().decode(Uint8Array.from(new Uint8Array((this._memory || this.w.memory).buffer, urlPtr, urlLen)));
     const fullUrl = this._resolveUrl(url);
-    const id = this.nextFetchId++;
-    this.pendingFetches.set(id, new RangeFetch(fullUrl, offset, len));
-    return id;
+    return this._registerFetch(new RangeFetch(fullUrl, offset, len));
+  }
+  _registerFetch(fetch2) {
+    for (let probe = 0;probe < this._fetchCapacity; probe++) {
+      const id = this.nextFetchId++;
+      const slot = id % this._fetchCapacity;
+      if (this._fetchIds[slot] !== -1)
+        continue;
+      this._fetchIds[slot] = id;
+      this._fetches[slot] = fetch2;
+      this._pendingFetchCount++;
+      return id;
+    }
+    return 0;
+  }
+  _getFetch(id) {
+    const slot = id % this._fetchCapacity;
+    return this._fetchIds[slot] === id ? this._fetches[slot] : null;
+  }
+  _releaseFetch(id) {
+    const slot = id % this._fetchCapacity;
+    if (this._fetchIds[slot] !== id)
+      return;
+    this._fetchIds[slot] = -1;
+    this._fetches[slot] = null;
+    this._pendingFetchCount--;
+  }
+  _releaseCallSlot(slot) {
+    this._callIds[slot] = -1;
+    this._callResolves[slot] = null;
+    this._callRejects[slot] = null;
+    this._pendingCallCount--;
   }
   _nextTaskId() {
     return ++this._taskIdCounter;
@@ -268,7 +327,7 @@ function asyncWorkerImports(driver, memory) {
   };
 }
 
-// texture.client.ts
+// crates/afterglow-web/www/texture.client.ts
 class TextureClient {
   rpc;
   static async spawn(workerWasmUrl = "texture.wasm", baseUrl = "") {

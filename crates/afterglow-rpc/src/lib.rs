@@ -29,6 +29,8 @@ use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 #[cfg(not(target_arch = "wasm32"))]
+pub mod allocation;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod native;
 
 /// Shared support for the thin service ABI emitted by `#[rpc(worker = ...)]`.
@@ -583,6 +585,20 @@ mod tests {
                     .expect("AlignedBuf invariant: constructed ring buffer")
             }
         }
+    }
+
+    #[test]
+    fn ring_write_and_read_into_are_allocation_free() {
+        let mut buf = AlignedBuf::<76>::new();
+        let rb = buf.ring();
+        let payload = [7_u8; 24];
+        let mut output = [0_u8; 24];
+        let read = crate::allocation::assert_no_alloc(|| {
+            rb.write(&payload).unwrap();
+            rb.read_into(&mut output).unwrap()
+        });
+        assert_eq!(read, payload.len());
+        assert_eq!(output, payload);
     }
 
     #[test]

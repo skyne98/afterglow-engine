@@ -21,6 +21,27 @@ nix-shell shell.nix --run "./target/debug/examples/minimal --ozone-platform=x11"
 `--ozone-platform=x11` is required on CEF 149 (Wayland + Vulkan are
 incompatible) — see [Graphics & DevTools](../window/graphics.md).
 
+### Verify real WebGPU
+
+Use the devshell unchanged. It selects a coherent Vulkan loader/ICD rather than
+CEF's bundled SwiftShader; on non-NixOS hosts it defaults to Nix Mesa. This is
+required on fox-laptop (Radeon 680M), where host Mesa 26.1.4 crashes CEF's GPU
+process and silently makes Three.js fall back to WebGL2.
+
+With the example open (DevTools port 9222), verify the real adapter from another
+terminal:
+
+```sh
+./target/release/latency-tool eval \
+  '(async()=>{const a=await navigator.gpu.requestAdapter();return JSON.stringify(a&&a.info)})()' \
+  127.0.0.1:9222
+```
+
+It must report `amd` / `rdna-2` on fox-laptop. Also reject a run if its CEF log
+contains `GPU process exited` or `WebGPU is not available`: visible simple
+meshes alone can be the WebGL2 fallback. The complete launch and validation
+procedure is in [AGENTS.md](../../AGENTS.md#fox-laptop-radeon-680m-cefwebgpu-validation).
+
 ## Build your own app
 
 Add `afterglow-cef` as a dependency and write a `main` that calls `AppBuilder`:

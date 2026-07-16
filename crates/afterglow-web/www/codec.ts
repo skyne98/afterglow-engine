@@ -167,7 +167,9 @@ export function decodeString(bytes: Uint8Array, off: number): [string, number] {
   const [len, o] = decodeVarint(bytes, off);
   const end = o + len;
   if (end > bytes.length) throw new Error('postcard string truncated');
-  return [new TextDecoder().decode(bytes.subarray(o, end)), end];
+  // TextDecoder rejects SharedArrayBuffer-backed views in Chromium. RPC rings
+  // use shared memory, so decode from an owned ArrayBuffer copy.
+  return [new TextDecoder().decode(Uint8Array.from(bytes.subarray(o, end))), end];
 }
 
 // --- typed arrays (Vec<u8>, Vec<f32>, Vec<f64>) ------------------------
@@ -250,6 +252,6 @@ export function unwrapResponse(bytes: Uint8Array): Uint8Array {
   const [method, moff] = decodeVarint(bytes, off);
   const [mlen, eoff] = decodeVarint(bytes, moff);
   if (eoff + mlen > bytes.length) throw new Error('RPC error truncated');
-  const msg = new TextDecoder().decode(bytes.subarray(eoff, eoff + mlen));
+  const msg = new TextDecoder().decode(Uint8Array.from(bytes.subarray(eoff, eoff + mlen)));
   throw new Error(`RPC ${variant === 1 ? 'server' : 'decode'} error (method ${method}): ${msg}`);
 }

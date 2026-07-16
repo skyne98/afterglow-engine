@@ -9,7 +9,7 @@
 // the world, lazily initialized on first access.
 //
 // Usage:
-//   import { defineResource } from './resource.js';
+//   import { defineResource } from './resource.ts';
 //
 //   const AssetStoreRes = defineResource<AssetStore>('assetStore', () => new AssetStore(...));
 //
@@ -22,6 +22,7 @@
 
 /** Symbol under which resources are stored on the bitECS world. */
 const RESOURCES = Symbol.for('afterglow-resources');
+const RESOURCES_SEALED = Symbol.for('afterglow-resources-sealed');
 
 /** Internal storage on the world: a plain object keyed by resource name. */
 type ResourceStore = Record<string, unknown>;
@@ -50,7 +51,11 @@ export class Resource<T> {
   /** Get the resource from the world, creating it on first access. */
   get(world: object): T {
     const store = ensureStore(world);
-    if (!(this.name in store)) store[this.name] = this.factory();
+    if (!(this.name in store)) {
+      if ((world as Record<symbol, unknown>)[RESOURCES_SEALED] === true)
+        throw new Error(`resource ${this.name} was not initialized before gameplay seal`);
+      store[this.name] = this.factory();
+    }
     return store[this.name] as T;
   }
 
@@ -87,4 +92,46 @@ export function defineResource<T>(
  */
 export function initResources(world: object): void {
   ensureStore(world);
+}
+
+/** Bootstrap manifest: eagerly creates every declared resource before sealing. */
+export class ResourceManifest {
+  private readonly resources: readonly Resource<unknown>[];
+
+  constructor(...resources: Resource<unknown>[]) {
+    const names = new Set<string>();
+    for (const resource of resources) {
+      if (names.has(resource.name)) throw new Error(`duplicate resource manifest entry ${resource.name}`);
+      names.add(resource.name);
+    }
+    this.resources = resources;
+  }
+
+  initialize(world: object): void {
+    initResources(world);
+    for (const resource of this.resources) resource.get(world);
+  }
+
+  seal(world: object): void {
+    const missing: string[] = [];
+    for (const resource of this.resources) if (!resource.has(world)) missing.push(resource.name);
+    if (missing.length !== 0)
+      throw new Error(`resources missing before gameplay seal: ${missing.join(', ')}`);
+    sealResources(world);
+  }
+
+  initializeAndSeal(world: object): void {
+    this.initialize(world);
+    this.seal(world);
+  }
+}
+
+/** Forbid lazy resource construction after bootstrap/warm-up. */
+export function sealResources(world: object): void {
+  ensureStore(world);
+  (world as Record<symbol, unknown>)[RESOURCES_SEALED] = true;
+}
+
+export function resourcesAreSealed(world: object): boolean {
+  return (world as Record<symbol, unknown>)[RESOURCES_SEALED] === true;
 }

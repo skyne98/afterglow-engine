@@ -1,0 +1,47 @@
+import { describe, expect, test } from 'bun:test';
+import { VirtualTextureFeedbackPass } from './virtual-texture-feedback-pass.ts';
+import { createPackedPageTableLayout } from './virtual-texture-layout.ts';
+import { encodeFeedback } from './virtual-texture-feedback.ts';
+
+const flush = () => new Promise(resolve => setTimeout(resolve, 0));
+
+describe('VirtualTextureFeedbackPass reuse', () => {
+  test('reuses two maps and pooled request records across readbacks', async () => {
+    const pass = new VirtualTextureFeedbackPass(1);
+    pass.resize(2, 1);
+    const layout = createPackedPageTableLayout(4, 4);
+    const entry = {
+      textureId: 3, path: 'page', textureMaxMip: 2, maxMip: 2,
+      tailFirstMip: null, pageTableLayout: layout,
+    };
+    let words = new Uint32Array([...encodeFeedback(3, 0, 1, 2), 0, 0]);
+    const renderer = {
+      getRenderTarget: () => null,
+      setRenderTarget() {}, render() {},
+      async readRenderTargetPixelsAsync() { return words; },
+    };
+    const store = { getEntryById: (id: number) => id === 3 ? entry : undefined };
+
+    expect(pass.submit(renderer as never, {} as never, {} as never, store as never)).toBe(true);
+    await flush();
+    expect(pass.submit(renderer as never, {} as never, {} as never, store as never)).toBe(false);
+    const first = pass.consume()!;
+    const firstRequest = first.values().next().value;
+    expect(firstRequest).toMatchObject({ path: 'page', mip: 0, x: 1, y: 2 });
+
+    words = new Uint32Array([...encodeFeedback(3, 1, 0, 1), 0, 0]);
+    pass.submit(renderer as never, {} as never, {} as never, store as never);
+    await flush();
+    const second = pass.consume()!;
+    expect(second).not.toBe(first);
+
+    words = new Uint32Array([...encodeFeedback(3, 0, 2, 3), 0, 0]);
+    pass.submit(renderer as never, {} as never, {} as never, store as never);
+    await flush();
+    const third = pass.consume()!;
+    expect(third).toBe(first);
+    expect(third.values().next().value).toBe(firstRequest);
+    expect(firstRequest).toMatchObject({ path: 'page', mip: 0, x: 2, y: 3 });
+    pass.dispose();
+  });
+});

@@ -4,10 +4,12 @@
 // 2. FULLY PARTIAL SEEKABLE — index has absolute offsets for every chunk.
 // 3. COMPRESSED BY DEFAULT — all chunk data is meshopt-compressed.
 
-use std::io::{self, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 pub const MAGIC: &[u8; 4] = b"BIG1";
-pub const VERSION: u32 = 3;
+pub const VERSION: u32 = 5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum AssetType { Texture, Mesh, VirtualTexture }
@@ -33,20 +35,34 @@ pub struct ChunkInfo {
 pub enum ChunkMeta {
     Texture { width: u32, height: u32 },
     Mesh { index_count: u32, vertex_count: u32, position_stride: u32, uv_stride: u32 },
-    /// A virtual texture page — 128×128 texels (+ 4px border per side).
-    /// Stored as a chunk in the .big file, seekable by offset.
-    VirtualTexturePage {
-        mip: u8,
-        page_x: u32,
-        page_y: u32,
-        encoding: TextureEncoding,
-    },
     Raw,
-    /// All sub-128 mips packed into one permanently resident 136×136 slot.
-    VirtualTextureMipTail {
-        first_mip: u8,
-        encoding: TextureEncoding,
-    },
+}
+
+/// One contiguous row-major mip block. Per-page sizes are enough to reconstruct
+/// direct absolute offsets while avoiding a full ChunkInfo per VT page.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct VirtualTextureMipDirectory {
+    pub mip: u8,
+    pub pages_x: u32,
+    pub pages_y: u32,
+    pub offset: u64,
+    pub page_sizes: Vec<u32>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct VirtualTextureTailDirectory {
+    pub first_mip: u8,
+    pub offset: u64,
+    pub size: u32,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct VirtualTextureDirectory {
+    pub width: u32,
+    pub height: u32,
+    pub encoding: TextureEncoding,
+    pub mips: Vec<VirtualTextureMipDirectory>,
+    pub tail: Option<VirtualTextureTailDirectory>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -54,6 +70,7 @@ pub struct AssetEntry {
     pub name: String,
     pub asset_type: AssetType,
     pub chunks: Vec<ChunkInfo>,
+    pub virtual_texture: Option<VirtualTextureDirectory>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -81,28 +98,73 @@ impl BigHeader {
 
 // --- helper ---
 
-fn compress_chunk(data: &[u8], compression: Compression) -> Vec<u8> {
+fn compress_chunk(mut data: Vec<u8>, compression: Compression) -> Vec<u8> {
     match compression {
         Compression::Meshopt => {
             let padded_len = (data.len() + 3) & !3;
-            let mut padded = data.to_vec();
-            padded.resize(padded_len, 0);
-            afterglow_meshopt::safe::encode_vertex_buffer(&padded, 4)
+            data.resize(padded_len, 0);
+            afterglow_meshopt::safe::encode_vertex_buffer(&data, 4)
         }
-        Compression::None => data.to_vec(),
+        Compression::None => data,
     }
 }
 
 // --- writer ---
 
+#[derive(Clone, Copy)]
+enum PendingChunkKind {
+    Regular { chunk: usize },
+    VirtualTexturePage { mip: usize, page: usize },
+    VirtualTextureTail,
+}
+
+struct PendingChunk {
+    asset: usize,
+    spool_offset: u64,
+    size: u32,
+    compression: Compression,
+    stream_level: u8,
+    order_in_level: usize,
+    kind: PendingChunkKind,
+}
+
 pub struct BigWriter {
     assets: Vec<AssetEntry>,
-    chunks: Vec<(usize, usize, Vec<u8>, Compression)>,
+    chunks: Vec<PendingChunk>,
+    spool: Option<std::fs::File>,
+    spool_path: PathBuf,
 }
 
 impl BigWriter {
     pub fn new() -> Self {
-        Self { assets: Vec::new(), chunks: Vec::new() }
+        static NEXT_SPOOL: AtomicU64 = AtomicU64::new(0);
+        let id = NEXT_SPOOL.fetch_add(1, Ordering::Relaxed);
+        let spool_path = std::env::temp_dir().join(format!(
+            "afterglow-big-{}-{id}.spool", std::process::id(),
+        ));
+        let spool = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(true)
+            .open(&spool_path)
+            .unwrap_or_else(|error| panic!("failed to create BIG spool {}: {error}", spool_path.display()));
+        Self { assets: Vec::new(), chunks: Vec::new(), spool: Some(spool), spool_path }
+    }
+
+    fn push_chunk(
+        &mut self,
+        asset: usize,
+        data: Vec<u8>,
+        compression: Compression,
+        stream_level: u8,
+        order_in_level: usize,
+        kind: PendingChunkKind,
+    ) {
+        let data = compress_chunk(data, compression);
+        let size = u32::try_from(data.len()).expect("BIG chunks must fit u32");
+        let spool = self.spool.as_mut().unwrap();
+        let spool_offset = spool.seek(SeekFrom::End(0)).expect("seek BIG spool");
+        spool.write_all(&data).expect("write BIG spool");
+        self.chunks.push(PendingChunk {
+            asset, spool_offset, size, compression, stream_level, order_in_level, kind,
+        });
     }
 
     pub fn add_texture(&mut self, name: &str, mips: Vec<(u32, u32, Vec<u8>)>) {
@@ -110,7 +172,8 @@ impl BigWriter {
         let mut chunks_meta = Vec::new();
         for (mip_level, (width, height, data)) in mips.into_iter().enumerate() {
             let uncompressed_size = data.len() as u64;
-            self.chunks.push((asset_idx, mip_level, data, Compression::Meshopt));
+            self.push_chunk(asset_idx, data, Compression::Meshopt, mip_level as u8,
+                mip_level, PendingChunkKind::Regular { chunk: mip_level });
             chunks_meta.push(ChunkInfo {
                 offset: 0, compressed_size: 0, uncompressed_size,
                 lod_level: 0, mip_level: mip_level as u8,
@@ -118,57 +181,123 @@ impl BigWriter {
                 meta: ChunkMeta::Texture { width, height },
             });
         }
-        self.assets.push(AssetEntry { name: name.to_string(), asset_type: AssetType::Texture, chunks: chunks_meta });
+        self.assets.push(AssetEntry { name: name.to_string(), asset_type: AssetType::Texture, chunks: chunks_meta, virtual_texture: None });
+    }
+
+    /// Begin a VT whose regular mip range is known from its packed tail.
+    /// Pages may then be encoded and admitted in bounded batches.
+    pub fn begin_virtual_texture(
+        &mut self,
+        name: &str,
+        width: u32,
+        height: u32,
+        first_tail_mip: u8,
+        encoding: TextureEncoding,
+    ) -> usize {
+        let asset = self.assets.len();
+        let mut mips = Vec::with_capacity(first_tail_mip as usize);
+        for mip in 0..first_tail_mip {
+            let span = 128u64 << mip;
+            let pages_x = ((width as u64 + span - 1) / span).max(1) as u32;
+            let pages_y = ((height as u64 + span - 1) / span).max(1) as u32;
+            mips.push(VirtualTextureMipDirectory {
+                mip, pages_x, pages_y, offset: 0,
+                page_sizes: vec![0; (pages_x * pages_y) as usize],
+            });
+        }
+        self.assets.push(AssetEntry {
+            name: name.to_owned(), asset_type: AssetType::VirtualTexture, chunks: Vec::new(),
+            virtual_texture: Some(VirtualTextureDirectory {
+                width, height, encoding, mips,
+                tail: Some(VirtualTextureTailDirectory { first_mip: first_tail_mip, offset: 0, size: 0 }),
+            }),
+        });
+        asset
+    }
+
+    pub fn push_virtual_texture_page(&mut self, asset: usize, page: VirtualTexturePageData) {
+        let directory = self.assets.get_mut(asset).and_then(|entry| entry.virtual_texture.as_mut())
+            .expect("invalid virtual texture asset");
+        assert_eq!(page.encoding, directory.encoding, "one VT must use one encoding");
+        let mip_index = page.mip as usize;
+        let mip = directory.mips.get_mut(mip_index).expect("VT page mip is in the packed tail");
+        let page_index = (page.page_y * mip.pages_x + page.page_x) as usize;
+        assert!(page.page_x < mip.pages_x && page.page_y < mip.pages_y, "VT page outside directory");
+        assert_eq!(mip.page_sizes[page_index], 0, "duplicate VT page");
+        mip.page_sizes[page_index] = u32::MAX;
+        self.push_chunk(asset, page.data, Compression::None, page.mip, page_index,
+            PendingChunkKind::VirtualTexturePage { mip: mip_index, page: page_index });
+    }
+
+    pub fn finish_virtual_texture(&mut self, asset: usize, tail: VirtualTextureMipTailData) {
+        let directory = self.assets.get_mut(asset).and_then(|entry| entry.virtual_texture.as_mut())
+            .expect("invalid virtual texture asset");
+        assert_eq!(tail.encoding, directory.encoding, "VT tail encoding must match pages");
+        assert_eq!(directory.tail.as_ref().unwrap().first_mip, tail.first_mip);
+        assert!(directory.mips.iter().all(|mip| mip.page_sizes.iter().all(|size| *size != 0)),
+            "VT directories require every row-major page");
+        self.push_chunk(asset, tail.data, Compression::None, tail.first_mip, 0,
+            PendingChunkKind::VirtualTextureTail);
     }
 
     /// Add a virtual texture as a set of page chunks.
     /// Each page is 128×128 texels (+ 4px border per side = 136×136 slot).
-    /// Pages are stored as individual seekable chunks in the .big file.
-    pub fn add_virtual_texture(&mut self, name: &str, virtual_size: u32, pages: Vec<VirtualTexturePageData>) {
-        self.add_virtual_texture_with_tail(name, virtual_size, pages, None);
+    pub fn add_virtual_texture(&mut self, name: &str, width: u32, height: u32, pages: Vec<VirtualTexturePageData>) {
+        self.add_virtual_texture_with_tail(name, width, height, pages, None);
     }
 
     pub fn add_virtual_texture_with_tail(
         &mut self,
         name: &str,
-        _virtual_size: u32,
+        width: u32,
+        height: u32,
         pages: Vec<VirtualTexturePageData>,
         tail: Option<VirtualTextureMipTailData>,
     ) {
         let asset_idx = self.assets.len();
-        let mut chunks_meta = Vec::new();
-        for page in &pages {
-            let uncompressed_size = page.data.len() as u64;
-            self.chunks.push((asset_idx, chunks_meta.len(), page.data.clone(), Compression::None));
-            chunks_meta.push(ChunkInfo {
-                offset: 0, compressed_size: 0, uncompressed_size,
-                lod_level: 0, mip_level: page.mip,
-                compression: Compression::None,
-                meta: ChunkMeta::VirtualTexturePage {
-                    mip: page.mip,
-                    page_x: page.page_x,
-                    page_y: page.page_y,
-                    encoding: page.encoding,
-                },
-            });
+        let encoding = pages.first().map(|page| page.encoding)
+            .or_else(|| tail.as_ref().map(|tail| tail.encoding))
+            .expect("virtual texture requires a page or mip tail");
+        let max_mip = pages.iter().map(|page| page.mip).max();
+        let mut mips = Vec::new();
+        if let Some(max_mip) = max_mip {
+            for mip in 0..=max_mip {
+                if !pages.iter().any(|page| page.mip == mip) { continue; }
+                let span = 128u64 << mip;
+                let pages_x = ((width as u64 + span - 1) / span).max(1) as u32;
+                let pages_y = ((height as u64 + span - 1) / span).max(1) as u32;
+                mips.push(VirtualTextureMipDirectory {
+                    mip, pages_x, pages_y, offset: 0,
+                    page_sizes: vec![0; (pages_x * pages_y) as usize],
+                });
+            }
         }
-        if let Some(tail) = tail {
-            let uncompressed_size = tail.data.len() as u64;
-            self.chunks.push((asset_idx, chunks_meta.len(), tail.data, Compression::None));
-            chunks_meta.push(ChunkInfo {
-                offset: 0, compressed_size: 0, uncompressed_size,
-                lod_level: 0, mip_level: tail.first_mip,
-                compression: Compression::None,
-                meta: ChunkMeta::VirtualTextureMipTail {
-                    first_mip: tail.first_mip,
-                    encoding: tail.encoding,
-                },
-            });
+        for page in pages {
+            assert_eq!(page.encoding, encoding, "one VT must use one encoding");
+            let mip_index = mips.iter().position(|directory| directory.mip == page.mip)
+                .expect("VT mip directory missing");
+            let directory = &mut mips[mip_index];
+            assert!(page.page_x < directory.pages_x && page.page_y < directory.pages_y,
+                "VT page coordinates outside directory");
+            let page_index = (page.page_y * directory.pages_x + page.page_x) as usize;
+            assert_eq!(directory.page_sizes[page_index], 0, "duplicate VT page");
+            directory.page_sizes[page_index] = u32::MAX;
+            self.push_chunk(asset_idx, page.data, Compression::None, page.mip, page_index,
+                PendingChunkKind::VirtualTexturePage { mip: mip_index, page: page_index });
         }
+        assert!(mips.iter().all(|mip| mip.page_sizes.iter().all(|size| *size != 0)),
+            "VT directories require every row-major page");
+        let tail_directory = tail.map(|tail| {
+            assert_eq!(tail.encoding, encoding, "VT tail encoding must match pages");
+            self.push_chunk(asset_idx, tail.data, Compression::None, tail.first_mip, 0,
+                PendingChunkKind::VirtualTextureTail);
+            VirtualTextureTailDirectory { first_mip: tail.first_mip, offset: 0, size: 0 }
+        });
         self.assets.push(AssetEntry {
             name: name.to_string(),
             asset_type: AssetType::VirtualTexture,
-            chunks: chunks_meta,
+            chunks: Vec::new(),
+            virtual_texture: Some(VirtualTextureDirectory { width, height, encoding, mips, tail: tail_directory }),
         });
     }
 
@@ -185,7 +314,8 @@ impl BigWriter {
             }
             let uncompressed_size = data.len() as u64;
             let vertex_count = (lod.positions.len() / (lod.position_stride as usize / 4)) as u32;
-            self.chunks.push((asset_idx, lod_level, data, Compression::Meshopt));
+            self.push_chunk(asset_idx, data, Compression::Meshopt, lod_level as u8,
+                lod_level, PendingChunkKind::Regular { chunk: lod_level });
             chunks_meta.push(ChunkInfo {
                 offset: 0, compressed_size: 0, uncompressed_size,
                 lod_level: lod_level as u8, mip_level: 0,
@@ -196,44 +326,96 @@ impl BigWriter {
                 },
             });
         }
-        self.assets.push(AssetEntry { name: name.to_string(), asset_type: AssetType::Mesh, chunks: chunks_meta });
+        self.assets.push(AssetEntry { name: name.to_string(), asset_type: AssetType::Mesh, chunks: chunks_meta, virtual_texture: None });
     }
 
     pub fn finish(mut self, writer: &mut impl Write) -> io::Result<()> {
-        let mut header = BigHeader { version: VERSION, data_offset: 0, assets: self.assets.clone() };
-        let order = header.streaming_order();
+        let mut header = BigHeader {
+            version: VERSION, data_offset: 0, assets: std::mem::take(&mut self.assets),
+        };
+        let mut chunks = std::mem::take(&mut self.chunks);
+        chunks.sort_by(|left, right| right.stream_level.cmp(&left.stream_level)
+            .then(left.asset.cmp(&right.asset))
+            .then(left.order_in_level.cmp(&right.order_in_level)));
 
-        // Solve header size + chunk offsets. Iterate 3 times — always enough
-        // for postcard varints (offset changes shift data_offset by ≤2 bytes,
-        // which rarely changes varint encoding, and 3 passes converges).
-        let mut header_bytes = Vec::new();
-        for _ in 0..3 {
-            header_bytes = postcard::to_allocvec(&header).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-            let data_offset = 4 + 4 + 8 + header_bytes.len() as u64;
+        for chunk in &chunks {
+            match chunk.kind {
+                PendingChunkKind::Regular { chunk: chunk_index } => {
+                    let metadata = &mut header.assets[chunk.asset].chunks[chunk_index];
+                    metadata.compressed_size = chunk.size as u64;
+                    metadata.compression = chunk.compression;
+                }
+                PendingChunkKind::VirtualTexturePage { mip, page } => {
+                    header.assets[chunk.asset].virtual_texture.as_mut().unwrap()
+                        .mips[mip].page_sizes[page] = chunk.size;
+                }
+                PendingChunkKind::VirtualTextureTail => {
+                    header.assets[chunk.asset].virtual_texture.as_mut().unwrap()
+                        .tail.as_mut().unwrap().size = chunk.size;
+                }
+            }
+        }
+
+        // Solve the postcard varint fixed point for header size and absolute
+        // block offsets. Only one offset per VT mip is serialized.
+        let mut previous_data_offset = u64::MAX;
+        for _ in 0..16 {
+            let bytes = postcard::to_allocvec(&header)
+                .map_err(|error| io::Error::new(io::ErrorKind::Other, error))?;
+            let data_offset = 16 + bytes.len() as u64;
             let mut offset = data_offset;
-            for &(ai, ci) in &order {
-                let (_, _, data, comp) = self.chunks.iter().find(|(a, c, _, _)| *a == ai && *c == ci).unwrap();
-                let compressed = compress_chunk(data, *comp);
-                let chunk = &mut header.assets[ai].chunks[ci];
-                chunk.offset = offset;
-                chunk.compressed_size = compressed.len() as u64;
-                chunk.compression = *comp;
-                offset += chunk.compressed_size;
+            for chunk in &chunks {
+                match chunk.kind {
+                    PendingChunkKind::Regular { chunk: index } => header.assets[chunk.asset].chunks[index].offset = offset,
+                    PendingChunkKind::VirtualTexturePage { mip, page: 0 } => {
+                        header.assets[chunk.asset].virtual_texture.as_mut().unwrap().mips[mip].offset = offset;
+                    }
+                    PendingChunkKind::VirtualTexturePage { .. } => {}
+                    PendingChunkKind::VirtualTextureTail => {
+                        header.assets[chunk.asset].virtual_texture.as_mut().unwrap().tail.as_mut().unwrap().offset = offset;
+                    }
+                }
+                offset += chunk.size as u64;
             }
             header.data_offset = data_offset;
+            if data_offset == previous_data_offset { break; }
+            previous_data_offset = data_offset;
         }
-        // Final serialization with stable offsets.
-        header_bytes = postcard::to_allocvec(&header).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let header_bytes = postcard::to_allocvec(&header)
+            .map_err(|error| io::Error::new(io::ErrorKind::Other, error))?;
+        if header.data_offset != 16 + header_bytes.len() as u64 {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "container header offsets did not converge"));
+        }
 
         writer.write_all(MAGIC)?;
         writer.write_all(&VERSION.to_le_bytes())?;
         writer.write_all(&header.data_offset.to_le_bytes())?;
         writer.write_all(&header_bytes)?;
-        for &(ai, ci) in &order {
-            let (_, _, data, comp) = self.chunks.iter().find(|(a, c, _, _)| *a == ai && *c == ci).unwrap();
-            writer.write_all(&compress_chunk(data, *comp))?;
+        let mut spool = self.spool.take().unwrap();
+        let mut scratch = [0u8; 64 * 1024];
+        for chunk in chunks {
+            spool.seek(SeekFrom::Start(chunk.spool_offset))?;
+            let mut remaining = chunk.size as usize;
+            while remaining != 0 {
+                let count = remaining.min(scratch.len());
+                spool.read_exact(&mut scratch[..count])?;
+                writer.write_all(&scratch[..count])?;
+                remaining -= count;
+            }
         }
+        drop(spool);
+        std::fs::remove_file(&self.spool_path)?;
+        self.spool_path = PathBuf::new();
         Ok(())
+    }
+}
+
+impl Drop for BigWriter {
+    fn drop(&mut self) {
+        self.spool.take();
+        if !self.spool_path.as_os_str().is_empty() {
+            let _ = std::fs::remove_file(&self.spool_path);
+        }
     }
 }
 
@@ -298,7 +480,7 @@ mod tests {
     fn roundtrip_virtual_texture_pages() {
         let mut writer = BigWriter::new();
         let page_data = vec![0xAB; 136 * 136 * 4]; // SLOT_SIZE × SLOT_SIZE × 4
-        writer.add_virtual_texture_with_tail("terrain", 4096, vec![
+        writer.add_virtual_texture_with_tail("terrain", 128, 128, vec![
             VirtualTexturePageData { mip: 0, page_x: 0, page_y: 0, encoding: TextureEncoding::RawRgba8, data: page_data.clone() },
             VirtualTexturePageData { mip: 1, page_x: 0, page_y: 0, encoding: TextureEncoding::RawRgba8, data: vec![0xCD; 136 * 136 * 4] },
         ], Some(VirtualTextureMipTailData {
@@ -310,25 +492,37 @@ mod tests {
         let (header, _) = parse_header(&buf).unwrap();
         assert_eq!(header.assets.len(), 1);
         assert_eq!(header.assets[0].asset_type, AssetType::VirtualTexture);
-        assert_eq!(header.assets[0].chunks.len(), 3);
-        // Verify page metadata
-        match &header.assets[0].chunks[0].meta {
-            ChunkMeta::VirtualTexturePage { mip, page_x, page_y, encoding } => {
-                assert_eq!(*mip, 0);
-                assert_eq!(*page_x, 0);
-                assert_eq!(*page_y, 0);
-                assert_eq!(*encoding, TextureEncoding::RawRgba8);
-            }
-            _ => panic!("expected VirtualTexturePage"),
-        }
-        // Verify data roundtrip (Compression::None for VT pages)
-        let c0 = &header.assets[0].chunks[0];
-        assert_eq!(c0.compression, Compression::None);
-        let decoded = read_chunk_decompressed(&buf, c0);
+        assert!(header.assets[0].chunks.is_empty());
+        let directory = header.assets[0].virtual_texture.as_ref().unwrap();
+        assert_eq!((directory.width, directory.height), (128, 128));
+        assert_eq!(directory.encoding, TextureEncoding::RawRgba8);
+        assert_eq!(directory.mips.len(), 2);
+        let mip0 = &directory.mips[0];
+        assert_eq!((mip0.mip, mip0.pages_x, mip0.pages_y), (0, 1, 1));
+        let decoded = &buf[mip0.offset as usize..mip0.offset as usize + mip0.page_sizes[0] as usize];
         assert_eq!(decoded, page_data);
-        let tail = header.assets[0].chunks.iter().find(|chunk| matches!(chunk.meta, ChunkMeta::VirtualTextureMipTail { .. })).unwrap();
-        assert!(matches!(tail.meta, ChunkMeta::VirtualTextureMipTail { first_mip: 6, encoding: TextureEncoding::RawRgba8 }));
-        assert_eq!(read_chunk_decompressed(&buf, tail), vec![0xEF; 136 * 136 * 4]);
+        let tail = directory.tail.as_ref().unwrap();
+        assert_eq!(tail.first_mip, 6);
+        assert_eq!(&buf[tail.offset as usize..tail.offset as usize + tail.size as usize],
+            vec![0xEF; 136 * 136 * 4]);
+    }
+
+    #[test]
+    fn compact_vt_directory_does_not_serialize_per_page_metadata() {
+        let mut writer = BigWriter::new();
+        let pages = (0..32).flat_map(|y| (0..32).map(move |x| VirtualTexturePageData {
+            mip: 0, page_x: x, page_y: y, encoding: TextureEncoding::Basis, data: vec![x as u8],
+        })).collect();
+        writer.add_virtual_texture("large", 4096, 4096, pages);
+        let spool_path = writer.spool_path.clone();
+        assert!(spool_path.exists());
+        let mut bytes = Vec::new();
+        writer.finish(&mut bytes).unwrap();
+        assert!(!spool_path.exists());
+        let (header, data_offset) = parse_header(&bytes).unwrap();
+        let directory = header.assets[0].virtual_texture.as_ref().unwrap();
+        assert_eq!(directory.mips[0].page_sizes.len(), 1024);
+        assert!(data_offset < 1200, "compact header was {data_offset} bytes");
     }
 
     #[test]

@@ -2,8 +2,7 @@
 //!
 //! Commands:
 //!   build   — build the native CEF host + examples
-//!   wasm    — build afterglow-web + afterglow-rpc-demo to wasm and copy the
-//!             artifacts deterministically into `crates/afterglow-web/www/`
+//!   wasm [--release] — build wasm services and copy artifacts into `www/`
 //!   check   — cargo check the whole workspace
 //!   test    — run all tests
 //!   bench   — run the native ring buffer stress test
@@ -13,7 +12,7 @@ use std::process::Command;
 
 fn main() {
     let cmd = std::env::args().nth(1).unwrap_or_else(|| {
-        eprintln!("usage: cargo run -p xtask <build|wasm|check|test|bench>");
+        eprintln!("usage: cargo run -p xtask <build|wasm [--release]|check|test|bench>");
         std::process::exit(2);
     });
     let r = match cmd.as_str() {
@@ -21,8 +20,8 @@ fn main() {
             "cargo",
             &["build", "--example", "minimal", "-p", "afterglow-cef"],
         ),
-        "wasm" => wasm(),
-        "check" => sh("cargo", &["check", "--workspace"]),
+        "wasm" => wasm(std::env::args().any(|arg| arg == "--release")),
+        "check" => check_all(),
         "test" => test_all(),
         "bench" => sh(
             "cargo",
@@ -44,7 +43,6 @@ fn main() {
 }
 
 const WASM_TARGET: &str = "wasm32-unknown-unknown";
-const WASM_PROFILE: &str = "wasm-dev";
 const WASM_STD: &str = "-Zbuild-std=core,alloc,std,panic_abort";
 
 /// Build all wasm artifacts and copy them into `crates/afterglow-web/www/`.
@@ -53,7 +51,8 @@ const WASM_STD: &str = "-Zbuild-std=core,alloc,std,panic_abort";
 /// - Each worker crate (any crate with a `ts/` dir) -> `www/<trait>.wasm`
 ///
 /// Copies are deterministic (byte-identical to the `target/` artifacts).
-fn wasm() -> i32 {
+fn wasm(release: bool) -> i32 {
+    let profile = if release { "wasm-release" } else { "wasm-dev" };
     let mut pkgs: Vec<String> = vec!["afterglow-web".into(), "afterglow-rpc-demo".into()];
     let crates_dir = workspace_root().join("crates");
     if let Ok(entries) = std::fs::read_dir(&crates_dir) {
@@ -78,7 +77,7 @@ fn wasm() -> i32 {
                 WASM_TARGET,
                 WASM_STD,
                 "--profile",
-                WASM_PROFILE,
+                profile,
             ],
         );
         if r != 0 {
@@ -88,7 +87,7 @@ fn wasm() -> i32 {
     }
 
     let target_dir = target_dir();
-    let src = target_dir.join(WASM_TARGET).join(WASM_PROFILE);
+    let src = target_dir.join(WASM_TARGET).join(profile);
     let www = workspace_root().join("crates/afterglow-web/www");
 
     // Copy the transport wasm (afterglow-web) + JS glue.
@@ -160,8 +159,8 @@ fn wasm() -> i32 {
         }
     }
 
-    // Copy generated TS clients (#[rpc] writes to <crate>/ts/*.client.ts) and
-    // transpile them to .js so browsers can import them directly.
+    // Copy generated TS clients (#[rpc] writes to <crate>/ts/*.client.ts).
+    // scripts/build-web.ts emits every browser .js artifact from TypeScript.
     let crates = workspace_root().join("crates");
     if let Ok(entries) = std::fs::read_dir(&crates) {
         for entry in entries.flatten() {
@@ -178,38 +177,37 @@ fn wasm() -> i32 {
                             return 1;
                         }
                         eprintln!("copied {} -> {}", path.display(), to.display());
-                        // Transpile .ts -> .js (browsers can't import .ts directly).
-                        let js_name = name.to_string_lossy().replace(".ts", ".js");
-                        let js_to = www.join(&js_name);
-                        match std::process::Command::new("bun")
-                            .args([
-                                "build",
-                                &path.to_string_lossy(),
-                                "--outfile",
-                                &js_to.to_string_lossy(),
-                                "--target",
-                                "browser",
-                            ])
-                            .output()
-                        {
-                            Ok(o) if o.status.success() => {
-                                eprintln!("transpiled {} -> {}", path.display(), js_to.display());
-                            }
-                            _ => {
-                                // bun not available: leave the .ts; users can compile manually.
-                                eprintln!(
-                                    "warn: bun not available; {} left as .ts",
-                                    path.display()
-                                );
-                            }
-                        }
+                        // All browser JavaScript is generated together below
+                        // from the canonical TypeScript source graph.
                     }
                 }
             }
         }
     }
 
+    let web = Command::new("bun")
+        .args(["scripts/build-web.ts"])
+        .current_dir(workspace_root())
+        .status();
+    if !matches!(web, Ok(status) if status.success()) {
+        eprintln!("failed to generate browser JavaScript from TypeScript");
+        return 1;
+    }
+
     eprintln!("wasm artifacts updated in {}", www.display());
+    0
+}
+
+fn check_all() -> i32 {
+    let rust = sh("cargo", &["check", "--workspace"]);
+    if rust != 0 { return rust; }
+    for args in [
+        &["scripts/lint-hot-allocations.ts"][..],
+        &["scripts/build-web.ts", "--check"][..],
+    ] {
+        let status = Command::new("bun").args(args).current_dir(workspace_root()).status();
+        if !matches!(status, Ok(value) if value.success()) { return 1; }
+    }
     0
 }
 
@@ -218,10 +216,18 @@ fn test_all() -> i32 {
     if rust != 0 {
         return rust;
     }
-    sh(
-        "node",
-        &["--test", "crates/afterglow-web/tests/rpc.test.mjs"],
-    )
+    let rpc = sh("node", &["--test", "crates/afterglow-web/tests/rpc.test.mjs"]);
+    if rpc != 0 { return rpc; }
+    let lint = Command::new("bun").args(["scripts/lint-hot-allocations.ts"])
+        .current_dir(workspace_root()).status();
+    if !matches!(lint, Ok(value) if value.success()) { return 1; }
+    let web = Command::new("bun").args([
+        "test",
+        "crates/afterglow-web/www/engine",
+        "crates/afterglow-web/www/async-worker.test.ts",
+    ])
+        .current_dir(workspace_root()).status();
+    if matches!(web, Ok(value) if value.success()) { 0 } else { 1 }
 }
 
 fn workspace_root() -> PathBuf {

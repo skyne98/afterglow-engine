@@ -19,6 +19,7 @@
 //! (source/mime/status/offset).
 
 use afterglow_assets::source::AssetSource;
+use afterglow_assets::range::{RangeSpec, parse_range};
 use afterglow_assets::{AssetRoot, BytesSource, decode_url_path, guess_mime};
 use cef::*;
 use std::borrow::Cow;
@@ -90,7 +91,10 @@ struct ResponseState {
     mime: String,
     status: i32,
     offset: u64,
+    /** Exclusive source end offset. */
     len: u64,
+    response_len: u64,
+    content_range: Option<String>,
     etag: Option<String>,
 }
 
@@ -102,6 +106,8 @@ impl Default for ResponseState {
             status: 0,
             offset: 0,
             len: 0,
+            response_len: 0,
+            content_range: None,
             etag: None,
         }
     }
@@ -114,20 +120,25 @@ wrap_resource_handler! {
 
     impl ResourceHandler {
         fn open(&self, request: Option<&mut Request>, handle_request: Option<&mut ::std::os::raw::c_int>, _callback: Option<&mut Callback>) -> ::std::os::raw::c_int {
-            let (source, mime, status, len, etag) = match request {
+            let (source, mime, mut status, total_len, etag, range_header) = match request {
                 Some(req) => {
                     let cfg = CONFIG.get().expect("afterglow-cef config not set");
                     let url = CefString::from(&req.url()).to_string();
                     match resolve_scheme_path(&path_of(&url), &cfg.embedded, cfg.asset_root.as_ref()) {
                         Resolved::Found { source, mime, etag } => {
                             let len = source.len();
-                            (Some(source), mime, 200, len, etag)
+                            let mut headers = CefStringMultimap::new();
+                            req.header_map(Some(&mut headers));
+                            let range = headers.into_iter().find(|(key, _)| key.eq_ignore_ascii_case("range"))
+                                .and_then(|(_, values)| values.into_iter().next());
+                            (Some(source), mime, 200, len, etag, range)
                         }
                         Resolved::NotFound => (
                             Some(Box::new(BytesSource(&b"404 not found"[..])) as BoxedSource),
                             "text/plain".to_string(),
                             404,
                             13,
+                            None,
                             None,
                         ),
                     }
@@ -138,14 +149,32 @@ wrap_resource_handler! {
                     400,
                     11,
                     None,
+                    None,
                 ),
+            };
+            let range = parse_range(range_header.as_deref(), total_len);
+            let (offset, end, response_len, content_range) = match range {
+                RangeSpec::Range { start, end } => {
+                    status = 206;
+                    // Chromium calls ResourceHandler::skip(start) for a 206
+                    // custom-scheme response; begin at zero so the skip is
+                    // applied exactly once.
+                    (0, end + 1, end - start + 1, Some(format!("bytes {start}-{end}/{total_len}")))
+                }
+                RangeSpec::Unsatisfiable => {
+                    status = 416;
+                    (0, 0, 0, Some(format!("bytes */{total_len}")))
+                }
+                RangeSpec::Full => (0, total_len, total_len, None),
             };
             let mut st = self.state.lock().expect("state lock");
             st.source = source;
             st.mime = mime;
             st.status = status;
-            st.offset = 0;
-            st.len = len;
+            st.offset = offset;
+            st.len = end;
+            st.response_len = response_len;
+            st.content_range = content_range;
             st.etag = etag;
             if let Some(hr) = handle_request { *hr = 1; }
             1
@@ -167,6 +196,9 @@ wrap_resource_handler! {
                 ] {
                     r.set_header_by_name(Some(&CefString::from(k)), Some(&CefString::from(v)), 1);
                 }
+                if let Some(content_range) = &st.content_range {
+                    r.set_header_by_name(Some(&CefString::from("Content-Range")), Some(&CefString::from(content_range.as_str())), 1);
+                }
                 if let Some(etag) = &st.etag {
                     r.set_header_by_name(
                         Some(&CefString::from("ETag")),
@@ -175,7 +207,7 @@ wrap_resource_handler! {
                     );
                 }
             }
-            if let Some(rl) = response_length { *rl = st.len as i64; }
+            if let Some(rl) = response_length { *rl = st.response_len as i64; }
         }
 
         fn skip(&self, bytes_to_skip: i64, bytes_skipped: Option<&mut i64>, _callback: Option<&mut ResourceSkipCallback>) -> ::std::os::raw::c_int {

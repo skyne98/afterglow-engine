@@ -16,8 +16,10 @@ What it sets up:
 
 - **Windowed** rendering (Views framework; lowest structural input→present
   latency — no OSR texture copies).
-- **WebGPU + Vulkan on the real GPU**: `--enable-unsafe-webgpu`,
-  `--ignore-gpu-blocklist`, `--enable-features=Vulkan`, `--use-angle=vulkan`.
+- **WebGPU + Vulkan on the real GPU, fail-closed**:
+  `--enable-unsafe-webgpu`, `--ignore-gpu-blocklist`,
+  `--enable-features=Vulkan`, `--use-angle=vulkan`, and `--disable-webgl`.
+  Engine pages never silently render under WebGL2.
 - **X11/XWayland** (`--ozone-platform=x11`): Wayland+Vulkan is incompatible in
   CEF 149 (native Wayland + WebGPU isn't available yet). Overridable via CLI.
 - **`afterglow://local/` custom scheme** (standard + secure + CORS + fetch +
@@ -140,14 +142,18 @@ inline scripts work on `afterglow://` URLs. The factory is registered for
    bytes with its configured MIME (200).
 3. **FS fallback**: else if `fs_root` is set, delegate to
    [`afterglow_assets::resolve`](assets.md) (lexically + canonically confined —
-   traversal/symlink escapes rejected) and `std::fs::read` the result; MIME from
-   [`afterglow_assets::guess_mime`](assets.md).
+   traversal/symlink escapes rejected) and stream it through `FsSource`; MIME
+   comes from [`afterglow_assets::guess_mime`](assets.md).
 4. Anything else (missing, escaped, unreadable, or no FS root) → `404 not found`
    as `text/plain`. A malformed request (no `Request`) → `400 bad request`.
 
 Each response resets a single mutex-protected `ResponseState`
 (body/mime/status/offset) on `open`, so a reused handler can never leak a prior
-response. `read` copies body bytes with offset tracking; `cancel` is a no-op.
+response. `read` uses `AssetSource::read_at` with offset tracking; `cancel` is
+a no-op. Single byte-range requests return `206` with `Content-Range`. CEF then
+calls `skip(start)`, so the handler starts range responses at source offset zero
+and applies that skip exactly once. This keeps `.big` page fetches bounded
+instead of buffering the whole multi-gigabyte container.
 
 ## COOP/COEP (SharedArrayBuffer)
 
@@ -178,6 +184,7 @@ so `--ozone-platform=wayland` or `--disable-gpu-vsync` override the defaults.
 |---|---|
 | `--enable-unsafe-webgpu` | enable WebGPU |
 | `--ignore-gpu-blocklist` | use the real GPU even if "unsupported" |
+| `--disable-webgl` | forbid Chromium WebGL; WebGPU is required, never a fallback |
 | `--enable-features=Vulkan` | Dawn → Vulkan backend |
 | `--use-angle=vulkan` | ANGLE over Vulkan |
 | `--ozone-platform=x11` | Wayland+Vulkan incompatible in CEF 149 → XWayland |
@@ -190,6 +197,27 @@ and
 [`docs/research/cef-games-latency-footprint-debugging.md`](../research/cef-games-latency-footprint-debugging.md)
 for the empirical basis, and the debugging notes in
 [`AGENTS.md`](../../AGENTS.md) for `CEF_PATH` / `shell.nix` wiring.
+
+### Linux Vulkan-stack requirement
+
+`shell.nix` deliberately selects one coherent real Vulkan stack before CEF's
+resource directory, which contains CEF's unusable SwiftShader loader. NixOS uses
+`/run/opengl-driver/lib` and its matching ICDs. Other Linux distributions use
+the Nix `vulkan-loader` + Mesa ICD by default; set
+`AFTERGLOW_VULKAN_STACK=host` only to diagnose a host driver.
+
+This distinction is operationally important on fox-laptop (Radeon 680M): host
+Fedora 44 Mesa 26.1.4 RADV crashes CEF 149's GPU process with `SIGFPE` in
+`radv_clear_dcc_comp_to_single`. Historically CEF then silently fell back to
+WebGL2. This is now prevented twice: CEF disables WebGL and authored pages use
+`engine/webgpu-only.ts`, which clears Three r185's fallback callback before
+`init()`, validates `isWebGPUBackend`, and replaces the page with a fatal error
+on startup failure or device loss. The default Nix Mesa 25.3.4 stack is
+validated on that machine. A successful test must
+confirm an `amd` / `rdna-2` `navigator.gpu.requestAdapter()` result and contain
+neither `GPU process exited` nor `WebGPU is not available` in the CEF log. The
+reproducible command sequence and performance boundary are canonical in
+[`AGENTS.md`](../../AGENTS.md#fox-laptop-radeon-680m-cefwebgpu-validation).
 
 ## Process / thread startup caveat
 

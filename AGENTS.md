@@ -110,6 +110,54 @@ won't work.
 4. Check `shell.nix` is sourced (provides libvulkan etc.)
 5. Check `libudev` version warning is harmless (libudev-zero)
 
+### fox-laptop (Radeon 680M) CEF/WebGPU validation
+
+**Never accept WebGL fallback.** `afterglow-cef` passes `--disable-webgl`, and
+all authored renderer startup paths use `engine/webgpu-only.ts`: it clears
+Three r185's internal fallback callback before `init()`, requires a live WebGPU
+backend, and displays a fatal error after startup failure or device loss. A
+visible window/cubes plus a failure panel is a failed run, not an acceptable
+fallback.
+
+- **Validated stack:** on this Fedora 44 laptop `shell.nix` must use the
+  default Nix Vulkan loader + Mesa 25.3.4 RADV ICD. The host Mesa 26.1.4 RADV
+  crashes CEF 149's GPU process with `SIGFPE` in
+  `radv_clear_dcc_comp_to_single` during a Skia Vulkan clear. Do not set
+  `AFTERGLOW_VULKAN_STACK=host` except to investigate that driver regression.
+  NixOS instead uses `/run/opengl-driver/lib` and its matching ICDs.
+- **Build and launch:**
+
+  ```sh
+  cd ~/dev/afterglow-engine
+  nix-shell shell.nix --run "cargo build --release --example minimal -p afterglow-cef"
+  XA=$(ls /run/user/1000/.mutter-Xwaylandauth.* | head -1)
+  setsid env DISPLAY=:0 XAUTHORITY="$XA" nix-shell shell.nix --run \
+    "./target/release/examples/minimal --ozone-platform=x11" \
+    </dev/null >/tmp/cef-minimal.log 2>&1 &
+  ```
+
+- **Prove hardware WebGPU after launch** (the minimal example exposes DevTools
+  on 9222); require `amd` / `rdna-2`, no fallback/crash log lines, and visible
+  cubes:
+
+  ```sh
+  ./target/release/latency-tool eval \
+    '(async()=>{const a=await navigator.gpu.requestAdapter();return JSON.stringify(a&&a.info)})()' \
+    127.0.0.1:9222
+  ! grep -E 'GPU process exited|WebGPU is not available' /tmp/cef-minimal.log
+  ```
+
+  A null/non-AMD adapter, `GPU process exited unexpectedly: exit_code=136`, or
+  `WebGPU is not available, running under WebGL2 backend` is a failed run;
+  stop and fix the Vulkan stack before accepting any FPS result.
+- **POM evaluation result (2026-07-16, 1440×900 logical at DPR 2 =
+  2880×1800 physical):** low core POM (8–32 layers; no silhouette,
+  self-shadow, or relief shadow pass) held **60.0 FPS, p99 16.68 ms,
+  0/300 below 60**. Full low POM was 51.6 FPS; medium was 36.1 FPS; high was
+  22.2 FPS. Therefore only low core POM is viable as a strict, distance/coverage
+  LOD tier on the 680M; medium/high/full-POM are evaluation modes, not an engine
+  frame-budget candidate without a different rendering strategy.
+
 ### SharedArrayBuffer not available
 
 - Page must be served with COOP/COEP headers:
@@ -144,6 +192,44 @@ CEF native path; the web `SharedArrayBuffer` path has no such issue.
 - Navigate via `latency-tool nav <url>` or `latency-tool eval 'location.href=...'`
 
 ## Rules
+
+### Runtime allocation, complexity, and frame budgets
+
+The canonical migration plan is
+`docs/implementation/no-runtime-allocation-constant-time-budget-plan.md`.
+All engine work must move toward these non-negotiable requirements:
+
+- After bootstrap/warm-up enters `GameplaySealed`, engine-authored hot paths
+  must not perform general-purpose runtime allocation. Only game code may
+  allocate freely. Unavoidable browser/Three.js/Fetch allocation must occur
+  behind an explicit, tracked, budgeted slow-path permit.
+- All intentional engine memory must come through the single logical
+  `EngineMemory` ECS resource: fixed-capacity arenas, pools, rings, generational
+  handles, byte/item limits, high-water metrics, and deterministic overflow.
+  Each worker has a corresponding tracked memory domain because workers do not
+  share an address space.
+- All authored web engine, runtime, RPC, worker, and demo source must be
+  TypeScript. HTML contains markup/style and external generated-script tags,
+  never inline authored JavaScript. JavaScript under `www/` is generated
+  deployment output or vendored Three.js; never edit generated `.js` directly.
+  Authored `.ts` files must import authored modules via `.ts` specifiers, never
+  via generated `.js` artifact paths; `scripts/build-web.ts` enforces this. Run `bun scripts/build-web.ts` and enforce
+  drift with `bun scripts/build-web.ts --check`.
+- Maintain allocation hygiene with mandatory custom linting for hot TypeScript
+  paths and tracked-global-allocator/no-allocation tests for sealed Rust worker
+  loops. Ban hidden frame allocations such as promises, closures, object/array
+  literals, dynamic strings, growing Map/Set entries, array transforms, and new
+  typed-array views in hot paths.
+- Hot lookup, cache, queue, handle, and free-list operations must be O(1)
+  worst-case where practical, otherwise fixed-capacity bounded O(1) amortized.
+  Do not use frame-time scans, sorts, array shifts/splices, linear searches, or
+  rebuilt indexes whose cost grows with world/cache age or occupancy.
+- Potentially stalling work must be lazy, incremental, cancelable, stale-aware,
+  and controlled by explicit per-stage time, operation-count, and byte budgets.
+  Every queue has a hard capacity; no async stage may accumulate unbounded work.
+- Long-running sealed-mode soak tests must prove that heap usage, queue depths,
+  timers, pending tasks, cache cost, and frame/GPU timings plateau. Short rAF
+  tests are not evidence of presentation stability.
 
 - Use semver for crate versions
 - Use semantic commits (feat, fix, chore, refactor, docs, test, etc.)
@@ -203,6 +289,10 @@ CEF native path; the web `SharedArrayBuffer` path has no such issue.
   The web worker has separate wasm memory, so calls copy SAB→worker wasm→SAB.
   Historical input→present: 1.16ms median @ 144fps (not rerun). Run
   `cargo run --release --example bench_rpc -p afterglow-rpc-demo`.
+- `docs/research/surface-detail-low-end-fallbacks.md` — Surface-detail/POM
+  fallback evaluation: normal maps and one-tap offset-limited parallax are the
+  low-end tiers; VT is residency, not a POM loop-speed optimization; measured
+  680M boundary and a no-implementation evaluation plan.
 - `docs/research/steam-overlay-cef.md` — How the Steam Overlay works (hooks
   Present/SwapBuffers/vkQueuePresentKHR in the game process), why it doesn't
   work with CEF multi-process GPU, and how to fix it (`--in-process-gpu` flag
@@ -217,6 +307,8 @@ CEF native path; the web `SharedArrayBuffer` path has no such issue.
 - `book/` — the user-facing mdBook (introductory front door). `book/src/SUMMARY.md`
   is the table of contents; build/serve with `cd book && nix-shell -p mdbook
   mdbook-mermaid --run "mdbook serve --open"`. Kept in sync with engine changes.
+- `docs/api/engine-memory.md` — sealed runtime phases, fixed arenas/pools,
+  resource sealing, TypeScript artifact enforcement, and allocation linting.
 - `docs/api/ring-buffer.md` — `afterglow-rpc` ring buffer + native transport
   (SPSC framing, owned halves, worker transport, events, poison/timeout).
 - `docs/api/rpc-macro.md` — `afterglow-rpc-macros` `#[rpc]` attribute: server/
@@ -232,6 +324,11 @@ CEF native path; the web `SharedArrayBuffer` path has no such issue.
 - `docs/api/cef-shell.md` — `afterglow-cef` game-window shell: `AppBuilder`,
   `afterglow://` scheme, WebGPU/X11 flags, COOP/COEP, console, startup caveat.
 - `docs/api/latency-tool.md` — CDP diagnostic CLI commands and measurement semantics.
+- `docs/api/frame-budget.md` — staged frame admission, timing, and deferral counters.
+- `docs/api/hierarchy.md` — fixed linked topology and incremental double-buffered rebuild.
+- `docs/api/renderer-sealing.md` — descriptor pools, bounded renderer slices, warm-up, and pipeline seal.
+- `docs/api/allocation-boundaries.md` — unavoidable browser/Three/codec boundaries.
+- `docs/api/runtime-capacities.md` — canonical capacities and degradation behavior.
 
 ## Benchmarks
 
@@ -328,3 +425,18 @@ Normal rendering and streaming had zero dropped frames. Deliberately impossible
 camera teleport/thrash workloads each missed one vsync out of 600 while retaining
 p99 at 16.68 ms and producing no GPU validation errors. Run the validation with
 `DISPLAY=:0 ./scripts/test-vt-gpu.sh` while the session is unlocked.
+
+### Sealed VT runtime validation (2026-07-16)
+
+The `.big` v5 dungeon header is 123,768 bytes (v4: 764,192). Atlas baselines at
+144 Hz reached 1,896/3,600 half occupancy and 3,600/3,600 full occupancy in
+~9.3 seconds each. Full-cache replacement produced 1,014 cumulative evictions
+in 4.92 seconds; mean/max rAF were 6.970/20.850 ms with one interval above
+17 ms, zero failed loads/queue overflow/long tasks/GPU errors. Full-state GPU
+timestamps: 0.149 ms main, 0.018 ms feedback, 0.465 ms aggregate render.
+
+Corrected 10/30/60-minute stable/traverse/eight-way-teleport soaks covered
+863,264 frames and averaged 6.950 ms in every mode. They ended with zero
+pending work, failed loads, queue overflow, long tasks, GPU errors, or post-seal
+pipelines. Sixty-second GC-floor heap samples repeatedly returned to ~77–79 MiB.
+Raw traces and methodology are in `docs/benchmarks/`.

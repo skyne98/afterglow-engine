@@ -3,7 +3,7 @@
 // geometry, material, render tier, and how the proxy is created/synced.
 
 import * as THREE from 'three';
-import type { EntityId, RenderDescriptorId, RenderTier, RenderFrame, RenderDirty } from './types.js';
+import type { EntityId, RenderDescriptorId, RenderTier, RenderFrame, RenderDirty } from './types.ts';
 
 export type BoundsPolicy =
   | 'static-compute-once'
@@ -15,6 +15,8 @@ export interface InstancedRenderDescriptor {
   readonly geometry: THREE.BufferGeometry;
   readonly createMaterial: (tintOpacity: THREE.InstancedBufferAttribute) => THREE.Material;
   readonly shardCapacity: number;
+  /** Number of shards allocated during renderer warm-up. */
+  readonly maxShards: number;
   readonly boundsPolicy: BoundsPolicy;
   readonly castShadow?: boolean;
   readonly receiveShadow?: boolean;
@@ -26,6 +28,8 @@ export interface InstancedRenderDescriptor {
 export interface UniqueRenderDescriptor {
   readonly tier: RenderTier.Unique;
   readonly instantiate: () => THREE.Object3D;
+  /** Number of detached objects instantiated during renderer warm-up. */
+  readonly poolCapacity: number;
   readonly sync?: (object: THREE.Object3D, entity: EntityId, dirty: RenderDirty, frame: RenderFrame) => void;
   readonly continuous?: boolean;
 }
@@ -60,6 +64,8 @@ export class RenderResourceRegistry {
     this.descriptors.push(descriptor);
     return id;
   }
+
+  get size(): number { return this.descriptors.length - 1; }
 
   get(id: RenderDescriptorId): RenderDescriptor {
     const descriptor = this.descriptors[id];

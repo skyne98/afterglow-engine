@@ -1,4 +1,4 @@
-import type { VirtualTextureStore } from './virtual-texture.js';
+import type { VirtualTextureStore } from './virtual-texture.ts';
 
 /** Stable diagnostic color for a sampled virtual mip. */
 export const VT_MIP_DEBUG_WGSL = /* wgsl */ `

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { decodeFeedback, encodeFeedback } from './virtual-texture-feedback.js';
+import { decodeFeedback, encodeFeedback } from './virtual-texture-feedback.ts';
 
 describe('RG32Uint VT feedback encoding', () => {
   test('round trips 256K texture page coordinates', () => {

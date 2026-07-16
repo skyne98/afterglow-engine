@@ -112,6 +112,16 @@ generated server trait and always writes a postcard `Response` envelope to
 oversized-response error envelope cannot fit. See
 [`web-shared-memory.md`](web-shared-memory.md) for how `worker.js` calls these.
 
+### Async wasm exports
+
+For an `async fn` service the macro emits `afterglow_wasm_serve_async`,
+`afterglow_wasm_tick`, and `afterglow_wasm_drain_completion`. Web clients own
+256 fixed task slots. The wasm worker reserves a 256-entry `VecDeque` at init
+and rejects growth past that capacity; `AsyncWorker.poll()` drains at most 32
+responses per invocation. Promise-returning generated methods are convenience
+adapters over these bounded numeric slots, not owners of an unbounded engine
+queue.
+
 ## One worker service per wasm cdylib
 
 The wasm exports use fixed `#[no_mangle]` names (`afterglow_wasm_*`), so **at
@@ -122,9 +132,11 @@ emit wasm symbols. (The demo's `multi_trait` test module exercises two
 non-worker traits dispatching through the real native worker loop in one
 module.)
 
-## JavaScript boundary
+## TypeScript boundary
 
-The browser client is intentionally a low-level byte API:
-`call(method_id, postcard_args)`. The macro does not claim to translate
-arbitrary serde-enabled Rust types into TypeScript. Applications provide their
-own browser-side value codecs; `www/rpc.js` includes only the demo's helpers.
+The macro emits a typed `.client.ts` alongside each service. Generated clients
+import authored runtime modules through `.ts` specifiers (`codec.ts`,
+`async-worker.ts`, or `rpc.ts`); they never import generated JavaScript
+artifacts. `scripts/build-web.ts` bundles deployment `.js` output and rejects
+JavaScript specifiers in authored TypeScript. Unsupported Rust type shapes are
+rejected during generation rather than silently falling back to untyped values.

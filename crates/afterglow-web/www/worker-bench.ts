@@ -1,0 +1,38 @@
+import { Rpc, concat, encodeF32Vec, encodeF32, decodeF32Vec } from './rpc.ts';
+const out = document.getElementById('out');
+const p = m => { out.textContent += m + '\n'; };
+p('=== Cross-Thread Worker Benchmark (Web Worker + SAB ring) ===');
+p('Async notification latency is the honest cross-thread RPC metric.\n');
+const rpc = await Rpc.create({
+  mainWasmUrl: 'afterglow_web.wasm', workerJsUrl: 'worker.js', workerWasmUrl: 'physics_worker.wasm',
+});
+// Sizes include >127 (256/1024) to exercise 2-byte LEB128 lengths.
+const SIZES = [1, 4, 16, 64, 256, 1024, 4096, 16384], N = 1000, dt = 0.016;
+// The worker adds f32(dt) to each f32 element; validate against the f32-rounded
+// expected value (a plain double `input[j] + dt` rejects large magnitudes due
+// to f32 rounding, e.g. 4095.016 -> 4095.01611328125).
+const dtF = Math.fround(dt);
+// Warm the JS/Wasm/worker path before timing so the first payload does not
+// absorb tier-up and one-time message-loop costs.
+const warmupInput = Array.from({ length: 64 }, (_, i) => i);
+const warmupArgs = concat(encodeF32Vec(warmupInput), encodeF32(dt));
+for (let i = 0; i < 100; i++) decodeF32Vec(await rpc.call(0, warmupArgs));
+p('  f32 count   payload   latency    bandwidth    valid/total');
+for (const count of SIZES) {
+  const input = Array.from({ length: count }, (_, i) => i);
+  const args = concat(encodeF32Vec(input), encodeF32(dt));
+  let el = 0, ok = 0;
+  for (let i = 0; i < N; i++) {
+    // Match native: time transport, worker dispatch, and result decode. Validate
+    // every result outside the timer with allocation-free TypedArray.every().
+    const started = performance.now();
+    const vec = decodeF32Vec(await rpc.call(0, args));
+    el += performance.now() - started;
+    if (vec.length === count && vec.every((v, j) => Math.abs(v - Math.fround(input[j] + dtF)) < 1e-6)) ok++;
+  }
+  const lat = el * 1000 / N;
+  const mbps = (count * 4 * N * 2) / (el / 1000) / 1048576; // round-trip = 2x
+  p(`  ${String(count).padStart(9)}  ${String(count * 4).padStart(6)} B  ${lat.toFixed(1).padStart(7)} µs  ${mbps.toFixed(1).padStart(8)} MiB/s  ${ok}/${N} ${ok === N ? 'OK' : 'PARTIAL'}`);
+}
+rpc.terminate();
+p('\nDone.');

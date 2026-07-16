@@ -297,6 +297,7 @@ pub fn rpc(attr: TokenStream, item: TokenStream) -> TokenStream {
 
                     const IN_SIZE: usize = 1 << 20;
                     const OUT_SIZE: usize = 1 << 20;
+                    const COMPLETION_CAPACITY: usize = 256;
 
                     static INPUT: Scratch<{ IN_SIZE }> = Scratch::new();
                     static OUTPUT: Scratch<{ OUT_SIZE }> = Scratch::new();
@@ -304,7 +305,8 @@ pub fn rpc(attr: TokenStream, item: TokenStream) -> TokenStream {
                     thread_local! {
                         static WORKER: RefCell<Option<#wt>> = const { RefCell::new(None) };
                         static EXECUTOR: RefCell<Option<async_executor::LocalExecutor<'static>>> = const { RefCell::new(None) };
-                        static COMPLETIONS: RefCell<std::collections::VecDeque<Vec<u8>>> = const { RefCell::new(std::collections::VecDeque::new()) };
+                        static COMPLETIONS: RefCell<Option<std::collections::VecDeque<Vec<u8>>>> = const { RefCell::new(None) };
+                        static OUTSTANDING: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
                     }
 
                     /// Construct the worker impl + executor. JS calls this once.
@@ -313,6 +315,8 @@ pub fn rpc(attr: TokenStream, item: TokenStream) -> TokenStream {
                     pub extern "C" fn afterglow_wasm_init() {
                         WORKER.with(|w| *w.borrow_mut() = Some(#wt::default()));
                         EXECUTOR.with(|e| *e.borrow_mut() = Some(async_executor::LocalExecutor::new()));
+                        COMPLETIONS.with(|c| *c.borrow_mut() = Some(std::collections::VecDeque::with_capacity(COMPLETION_CAPACITY)));
+                        OUTSTANDING.with(|count| count.set(0));
                     }
 
                     /// Spawn an async task for `(method, args)` with the given `task_id`.
@@ -325,6 +329,11 @@ pub fn rpc(attr: TokenStream, item: TokenStream) -> TokenStream {
                         args_len: usize,
                         task_id: u64,
                     ) -> i32 {
+                        let admitted = OUTSTANDING.with(|count| {
+                            if count.get() >= COMPLETION_CAPACITY { false }
+                            else { count.set(count.get() + 1); true }
+                        });
+                        if !admitted { return -2; }
                         // SAFETY: caller upholds pointer validity.
                         let args = unsafe { std::slice::from_raw_parts(args_ptr, args_len) };
                         let args_owned = args.to_vec();
@@ -341,14 +350,24 @@ pub fn rpc(attr: TokenStream, item: TokenStream) -> TokenStream {
                                         let mut completion = Vec::with_capacity(8 + env_bytes.len());
                                         completion.extend_from_slice(&task_id.to_le_bytes());
                                         completion.extend_from_slice(&env_bytes);
-                                        COMPLETIONS.with(|c| c.borrow_mut().push_back(completion));
+                                        COMPLETIONS.with(|c| {
+                                            let mut cell = c.borrow_mut();
+                                            let queue = cell.as_mut().expect("async worker completion queue not initialized");
+                                            // JS admits at most COMPLETION_CAPACITY task slots, so
+                                            // every in-flight task has one fixed completion slot.
+                                            assert!(queue.len() < COMPLETION_CAPACITY, "async worker completion capacity exceeded");
+                                            queue.push_back(completion);
+                                        });
                                     });
                                     task.detach();
                                 }
                             });
                             true
                         });
-                        if worker_ok { 0 } else { -1 }
+                        if worker_ok { 0 } else {
+                            OUTSTANDING.with(|count| count.set(count.get().saturating_sub(1)));
+                            -1
+                        }
                     }
 
                     /// Drive the executor: poll pending tasks once. Returns the
@@ -360,7 +379,7 @@ pub fn rpc(attr: TokenStream, item: TokenStream) -> TokenStream {
                                 exec.try_tick();
                             }
                         });
-                        COMPLETIONS.with(|c| c.borrow().len() as i32)
+                        COMPLETIONS.with(|c| c.borrow().as_ref().map_or(0, |queue| queue.len() as i32))
                     }
 
                     /// Pop one completion `[task_id][Response]` into `out`.
@@ -377,14 +396,16 @@ pub fn rpc(attr: TokenStream, item: TokenStream) -> TokenStream {
                         let out = unsafe { std::slice::from_raw_parts_mut(out_ptr, out_max) };
                         COMPLETIONS.with(|c| {
                             let mut cell = c.borrow_mut();
-                            match cell.pop_front() {
+                            let Some(queue) = cell.as_mut() else { return -1; };
+                            match queue.pop_front() {
                                 Some(comp) if comp.len() <= out.len() => {
                                     out[..comp.len()].copy_from_slice(&comp);
+                                    OUTSTANDING.with(|count| count.set(count.get().saturating_sub(1)));
                                     comp.len() as i32
                                 }
                                 Some(comp) => {
                                     // Doesn't fit — push it back. Caller retries with a larger buffer.
-                                    cell.push_front(comp);
+                                    queue.push_front(comp);
                                     -2
                                 }
                                 None => -1,

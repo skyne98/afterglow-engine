@@ -1,4 +1,4 @@
-// codec.ts
+// crates/afterglow-web/www/codec.ts
 function encodeVarint(n) {
   const b = [];
   do {
@@ -127,7 +127,7 @@ function decodeString(bytes, off) {
   const end = o + len;
   if (end > bytes.length)
     throw new Error("postcard string truncated");
-  return [new TextDecoder().decode(bytes.subarray(o, end)), end];
+  return [new TextDecoder().decode(Uint8Array.from(bytes.subarray(o, end))), end];
 }
 function encodeBytes(b) {
   return concat(encodeVarint(b.length), b);
@@ -208,7 +208,7 @@ function unwrapResponse(bytes) {
   const [mlen, eoff] = decodeVarint(bytes, moff);
   if (eoff + mlen > bytes.length)
     throw new Error("RPC error truncated");
-  const msg = new TextDecoder().decode(bytes.subarray(eoff, eoff + mlen));
+  const msg = new TextDecoder().decode(Uint8Array.from(bytes.subarray(eoff, eoff + mlen)));
   throw new Error(`RPC ${variant === 1 ? "server" : "decode"} error (method ${method}): ${msg}`);
 }
 export {

@@ -6,7 +6,7 @@
 // or >maxRanges), falls back to one bounding range.
 
 import * as THREE from 'three';
-import { NONE_U32 } from './types.js';
+import { NONE_U32 } from './types.ts';
 
 interface UpdateRange {
   start: number;
@@ -28,6 +28,7 @@ export class DirtySlotRanges {
     this.rangePool = Array.from({ length: maximumRanges }, () => ({ start: 0, count: 0 }));
   }
 
+  // @hot-no-alloc-begin DirtySlotRanges.mark
   mark(slot: number): void {
     const wordIndex = slot >>> 5;
     const bit = 1 << (slot & 31);
@@ -38,11 +39,13 @@ export class DirtySlotRanges {
     if (slot < this.minimumSlot) this.minimumSlot = slot;
     if (slot > this.maximumSlot) this.maximumSlot = slot;
   }
+  // @hot-no-alloc-end DirtySlotRanges.mark
 
+  // @hot-no-alloc-begin DirtySlotRanges.flush
   flush(attribute: THREE.BufferAttribute, stride: number, activeCount: number): void {
     if (this.dirtyCount === 0 || activeCount === 0) return;
 
-    const updateRanges = (attribute.updateRanges as UpdateRange[]) ?? [];
+    const updateRanges = attribute.updateRanges as UpdateRange[];
     updateRanges.length = 0;
 
     const dirtyRatio = this.dirtyCount / activeCount;
@@ -95,6 +98,7 @@ export class DirtySlotRanges {
     this.minimumSlot = NONE_U32;
     this.maximumSlot = 0;
   }
+  // @hot-no-alloc-end DirtySlotRanges.flush
 
   private isDirty(slot: number): boolean {
     return (this.bits[slot >>> 5] & (1 << (slot & 31))) !== 0;

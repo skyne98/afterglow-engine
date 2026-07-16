@@ -13,6 +13,7 @@ flags win**, so you can override from the command line.
 |---|---|---|
 | `--enable-unsafe-webgpu` | Enable WebGPU. | always |
 | `--ignore-gpu-blocklist` | Use the real GPU even if "unsupported." | always |
+| `--disable-webgl` | WebGPU is required; forbid a WebGL fallback. | always |
 | `--enable-features=Vulkan` | Dawn → Vulkan backend. | always |
 | `--use-angle=vulkan` | ANGLE over Vulkan. | always |
 | `--ozone-platform=x11` | Wayland + Vulkan incompatible in CEF 149 → XWayland. | always (CLI-overridable) |
@@ -26,7 +27,9 @@ WebGPU adapter: amd/rdna-2
 ```
 
 If you see SwiftShader or a software adapter, the Vulkan loader wiring is wrong
-— see [Debugging](../reference/debugging.md).
+— see [Debugging](../reference/debugging.md). Engine pages fail closed: their
+WebGPU bootstrap rejects a missing adapter, initialization failure, or device
+loss and shows an error rather than silently rendering through Three.js WebGL2.
 
 ## Vsync
 

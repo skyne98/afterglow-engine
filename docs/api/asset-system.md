@@ -88,10 +88,28 @@ multipart). Whitespace-tolerant.
 ## JS asset loader — via the worker client (both backends)
 
 The render thread uses the generated `AssetLoaderClient` TS client on **both**
-backends. On native, the worker reads from disk via `FsSource`/`pread`; on web,
-the worker fetches via JS-imported `ag_fetch_start`/`ag_fetch_poll` (the
+backends. On native, the worker reads from disk via `FsSource`/`pread` and
+retains up to 16 open sources in a fixed round-robin cache; repeated container
+ranges therefore reuse descriptors without unbounded path growth. On web, the
+worker fetches via JS-imported `ag_fetch_start`/`ag_fetch_poll` (the
 `fetch.rs` bridge), driven by `async-worker.js`'s tick loop. No separate JS
 fetch glue in user code — the worker is the single entry point.
+
+## Engine `AssetStore`
+
+`AssetStore` has a fixed capacity (1,024 by default). `registerAsset(path)`
+interns a path during manifest/bootstrap and returns a numeric `AssetId`; it
+returns `-1` rather than growing past capacity. `tryLoadAsset(id, parser)` uses
+direct `Uint8Array` state and object-handle tables. The game-facing `load(path,
+parser)` wrapper performs registration and throws on capacity exhaustion.
+
+States are `Free → Idle → Reading → Parsing → ReadyToPublish → Ready`, with an
+`Error` terminal/retry state. Promise callbacks only place `(id, token, kind,
+value)` into a preallocated completion ring. `poll()` publishes at most 32
+completions by default, so microtask timing cannot mutate visible asset state in
+the middle of rendering. Generation tokens reject evicted/stale reads and
+dispose stale parsed assets. Queue depth, high-water, and overflow counters are
+incremental. `cachedPaths` remains an explicit allocating diagnostic snapshot.
 
 ## Asset loader worker (`afterglow-assets-worker`)
 
@@ -101,9 +119,9 @@ pub trait AssetLoader {
     async fn load(path: String) -> RpcResult<Vec<u8>>;
 }
 
-pub struct AssetLoaderWorker { root: AssetRoot }
+pub struct AssetLoaderWorker { /* singleton root + 16-source native cache */ }
 impl AssetLoaderWorker {
-    pub fn new(root: AssetRoot) -> Self;
+    pub fn set_asset_root(root: AssetRoot);
 }
 ```
 

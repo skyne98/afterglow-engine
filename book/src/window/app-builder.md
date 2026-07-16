@@ -87,8 +87,10 @@ should go through a worker ring buffer, not through the shell.
 You don't configure these — they're internal defaults:
 
 - **Windowed rendering** (CEF Views; no off-screen texture copies).
-- **WebGPU + Vulkan on the real GPU** (`--enable-unsafe-webgpu`,
-  `--ignore-gpu-blocklist`, `--enable-features=Vulkan`, `--use-angle=vulkan`).
+- **WebGPU + Vulkan on the real GPU, fail-closed** (`--enable-unsafe-webgpu`,
+  `--ignore-gpu-blocklist`, `--enable-features=Vulkan`, `--use-angle=vulkan`,
+  `--disable-webgl`). A failed WebGPU startup/device never silently becomes
+  Three.js WebGL2 rendering.
 - **X11/XWayland** (`--ozone-platform=x11`); CLI-overridable.
 - **`afterglow://local/` scheme** (standard + secure + CORS + fetch +
   CSP-bypass) serving the embedded `index.html` + FS assets — see

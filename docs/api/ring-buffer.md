@@ -1,6 +1,12 @@
 # `afterglow-rpc` API — ring buffer and native transport
 
-> Status: working; API checked against the 2026-07-10 source.
+> Status: working; API checked against the 2026-07-15 source.
+
+Native binaries may install `allocation::TrackingAllocator<System>` as their
+`#[global_allocator]` and use `allocation::assert_no_alloc(|| ...)` around
+sealed hot-path regression tests. Tracking is opt-in and thread-local, avoiding
+noise from parallel test threads. The ring `write` + `read_into` path has a
+regression test proving zero allocations after storage construction.
 
 ## Purpose
 

@@ -5,9 +5,10 @@
 //   afterglow-pipeline inspect assets.big
 
 use std::path::PathBuf;
+use rayon::prelude::*;
 use afterglow_pipeline::{
     BigWriter, TextureEncoding, VirtualTextureMipTailData, VirtualTexturePageData,
-    pack_virtual_mip_tail, parse_header, tile_virtual_texture,
+    pack_mask_channels, parse_header, stream_virtual_texture, virtual_mip_tail_first_mip,
 };
 
 fn main() {
@@ -17,12 +18,14 @@ fn main() {
     match cmd {
         "process" => process(&args[2..]),
         "inspect" => inspect(&args[2..]),
+        "pack-masks" => pack_masks(&args[2..]),
         "help" | "--help" | "-h" | _ => {
             eprintln!("afterglow-pipeline — offline asset processor");
             eprintln!();
             eprintln!("Usage:");
             eprintln!("  afterglow-pipeline process <input_dir> <output.big> [--texture-mips] [--mesh-lods N]");
             eprintln!("  afterglow-pipeline inspect <file.big>");
+            eprintln!("  afterglow-pipeline pack-masks <red.png> <green.png> <output.png>");
             eprintln!();
             eprintln!("Options:");
             eprintln!("  --texture-mips    Generate mip chains for textures (default: on)");
@@ -31,6 +34,20 @@ fn main() {
             eprintln!("  --compress        Compress mesh chunks with meshopt encode (default: on)");
         }
     }
+}
+
+fn pack_masks(args: &[String]) {
+    if args.len() != 3 {
+        eprintln!("usage: afterglow-pipeline pack-masks <red.png> <green.png> <output.png>");
+        std::process::exit(1);
+    }
+    let red = image::open(&args[0]).unwrap_or_else(|error| panic!("failed to read {}: {error}", args[0])).into_rgba8();
+    let green = image::open(&args[1]).unwrap_or_else(|error| panic!("failed to read {}: {error}", args[1])).into_rgba8();
+    assert_eq!(red.dimensions(), green.dimensions(), "mask dimensions must match");
+    let (width, height) = red.dimensions();
+    let packed = pack_mask_channels(red.as_raw(), green.as_raw()).expect("validated mask dimensions");
+    let output = image::RgbaImage::from_raw(width, height, packed).expect("packed mask byte length");
+    output.save(&args[2]).unwrap_or_else(|error| panic!("failed to write {}: {error}", args[2]));
 }
 
 fn process(args: &[String]) {
@@ -72,31 +89,30 @@ fn process(args: &[String]) {
                     }
                 };
                 let (width, height) = image.dimensions();
-                let pages = match tile_virtual_texture(image.as_raw(), width, height) {
-                    Ok(pages) => pages,
-                    Err(error) => {
-                        eprintln!("error: unsupported virtual texture {name}: {error}");
-                        std::process::exit(1);
-                    }
-                };
-                let page_count = pages.len();
-                let tail = pack_virtual_mip_tail(image.as_raw(), width, height)
+                let first_tail_mip = virtual_mip_tail_first_mip(width, height)
                     .expect("validated VT dimensions must produce a mip tail");
-                let encoded_pages: Vec<_> = pages.into_iter().map(|page| {
-                    let data = afterglow_basis_encoder::encode_uastc_rgba(&page.data, 136, 136)
-                        .unwrap_or_else(|error| panic!("failed to encode {name} mip {} ({},{}): {error}", page.mip, page.page_x, page.page_y));
-                    VirtualTexturePageData {
-                        mip: page.mip, page_x: page.page_x, page_y: page.page_y,
-                        encoding: TextureEncoding::Basis, data,
-                    }
-                }).collect();
+                let asset = writer.begin_virtual_texture(
+                    &name, width, height, first_tail_mip, TextureEncoding::Basis,
+                );
+                let mut page_count = 0usize;
+                let tail = stream_virtual_texture(image.into_raw(), width, height, |batch| {
+                    page_count += batch.len();
+                    let encoded: Vec<_> = batch.par_iter().map(|page| {
+                        let data = afterglow_basis_encoder::encode_uastc_rgba(&page.data, 136, 136)
+                            .map_err(|error| format!("failed to encode {name} mip {} ({},{}): {error}", page.mip, page.page_x, page.page_y))?;
+                        Ok(VirtualTexturePageData {
+                            mip: page.mip, page_x: page.page_x, page_y: page.page_y,
+                            encoding: TextureEncoding::Basis, data,
+                        })
+                    }).collect::<Result<Vec<_>, String>>()?;
+                    for page in encoded { writer.push_virtual_texture_page(asset, page); }
+                    Ok(())
+                }).unwrap_or_else(|error| panic!("failed to stream {name}: {error}"));
                 let encoded_tail = afterglow_basis_encoder::encode_uastc_rgba(&tail.data, 136, 136)
                     .unwrap_or_else(|error| panic!("failed to encode {name} mip tail: {error}"));
-                writer.add_virtual_texture_with_tail(&name, width, encoded_pages, Some(VirtualTextureMipTailData {
-                    first_mip: tail.first_mip,
-                    encoding: TextureEncoding::Basis,
-                    data: encoded_tail,
-                }));
+                writer.finish_virtual_texture(asset, VirtualTextureMipTailData {
+                    first_mip: tail.first_mip, encoding: TextureEncoding::Basis, data: encoded_tail,
+                });
                 eprintln!("  → {width}×{height}, {page_count} bordered pages");
                 asset_count += 1;
             }
@@ -131,6 +147,11 @@ fn inspect(args: &[String]) {
     println!("{} assets:", header.assets.len());
     for asset in &header.assets {
         println!("  {} ({:?}): {} chunks", asset.name, asset.asset_type, asset.chunks.len());
+        if let Some(vt) = &asset.virtual_texture {
+            let pages: usize = vt.mips.iter().map(|mip| mip.page_sizes.len()).sum();
+            println!("    VT {}×{} {:?}: {} mips, {} pages, tail={}",
+                vt.width, vt.height, vt.encoding, vt.mips.len(), pages, vt.tail.is_some());
+        }
         for chunk in &asset.chunks {
             let detail = match &chunk.meta {
                 afterglow_pipeline::ChunkMeta::Texture { width, height } => {
@@ -140,12 +161,6 @@ fn inspect(args: &[String]) {
                     format!("{index_count} indices, {vertex_count} verts")
                 }
                 afterglow_pipeline::ChunkMeta::Raw => "raw".to_string(),
-                afterglow_pipeline::ChunkMeta::VirtualTextureMipTail { first_mip, encoding } => {
-                    format!("VT mip tail first_mip={first_mip} {encoding:?}")
-                }
-                afterglow_pipeline::ChunkMeta::VirtualTexturePage { mip, page_x, page_y, encoding } => {
-                    format!("VT page mip={mip} ({page_x},{page_y}) {encoding:?}")
-                }
             };
             println!("    LOD{} MIP{} {:?} {} ({}→{} bytes at offset {})",
                 chunk.lod_level, chunk.mip_level, chunk.compression, detail, chunk.uncompressed_size, chunk.compressed_size, chunk.offset);

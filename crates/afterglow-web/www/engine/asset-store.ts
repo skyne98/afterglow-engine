@@ -14,10 +14,10 @@
 
 import * as THREE from 'three';
 
-import { Resource, defineResource } from './resource.js';
-import { AssetHandle } from './asset-handle.js';
-import { fallbackGroup } from './fallback.js';
-import type { VirtualTextureStore } from './virtual-texture.js';
+import { Resource, defineResource } from './resource.ts';
+import { AssetHandle } from './asset-handle.ts';
+import { fallbackGroup } from './fallback.ts';
+import type { VirtualTextureStore } from './virtual-texture.ts';
 
 // --- interfaces (match the generated client APIs) -----------------------
 
@@ -36,6 +36,7 @@ const MAX_SINGLE_LOAD = 1 << 20;
 const CHUNK_SIZE = 512 * 1024;
 const DEFAULT_LOD_RATIOS = [1.0, 0.5, 0.25, 0.1];
 const DEFAULT_TARGET_ERROR = 0.02;
+const DEFAULT_ASSET_CAPACITY = 1024;
 
 // --- model asset types ---------------------------------------------------
 
@@ -81,25 +82,41 @@ export async function parseGLTF(
 ): Promise<THREE.Group> {
   const buf = new ArrayBuffer(bytes.byteLength);
   new Uint8Array(buf).set(bytes);
-  if (loader) return new Promise((res, rej) => loader.parse(buf, '', r => res(r.scene), rej));
-  const GLTFLoader = (THREE as unknown as Record<string, unknown>).GLTFLoader as
-    | (new () => { parse(d: ArrayBuffer, p: string, l: (r: { scene: THREE.Group }) => void, e: (e: unknown) => void): void }) | undefined;
-  if (!GLTFLoader) throw new Error('GLTFLoader not available');
-  const gl = new GLTFLoader();
-  return new Promise((res, rej) => gl.parse(buf, '', r => res(r.scene), rej));
+  if (!loader) throw new Error('parseGLTF requires an injected Three.js GLTFLoader');
+  return new Promise((res, rej) => loader.parse(buf, '', r => res(r.scene), rej));
 }
 
 export function parseJSON<T = unknown>(bytes: Uint8Array): T {
   return JSON.parse(new TextDecoder().decode(bytes)) as T;
 }
 
-// --- internal types ------------------------------------------------------
+// --- fixed asset state ---------------------------------------------------
 
-interface PendingLoad<T> {
-  handle: AssetHandle<T>;
-  promise: Promise<Uint8Array>;
-  parser: AssetParser<T>;
+export type AssetId = number;
+
+export enum AssetRequestState {
+  Free = 0,
+  Idle = 1,
+  Reading = 2,
+  Parsing = 3,
+  ReadyToPublish = 4,
+  Ready = 5,
+  Error = 6,
 }
+
+export enum AssetAdmission {
+  Started = 0,
+  Existing = 1,
+  CapacityExceeded = 2,
+}
+
+export interface AssetLoadResult<T> {
+  status: AssetAdmission;
+  id: AssetId;
+  handle: AssetHandle<T> | null;
+}
+
+interface DisposableAsset { dispose?(): void; }
 
 // --- AssetStore ----------------------------------------------------------
 
@@ -111,8 +128,23 @@ interface PendingLoad<T> {
  * If no meshopt worker is provided, meshes load without optimization.
  */
 export class AssetStore {
-  private readonly cache = new Map<string, AssetHandle<unknown>>();
-  private readonly pending = new Map<string, PendingLoad<unknown>>();
+  /** String lookup is confined to registration/game-facing wrappers. */
+  private readonly idsByPath = new Map<string, AssetId>();
+  private readonly paths: (string | null)[];
+  private readonly handles: (AssetHandle<unknown> | null)[];
+  private readonly states: Uint8Array;
+  private readonly requestTokens: Uint32Array;
+  private readonly completionIds: Int32Array;
+  private readonly completionTokens: Uint32Array;
+  private readonly completionKinds: Uint8Array;
+  private readonly completionValues: unknown[];
+  private completionHead = 0;
+  private completionTail = 0;
+  private completionCount = 0;
+  private completionHighWater = 0;
+  private completionOverflows = 0;
+  private assetCount = 0;
+  private readyCount = 0;
 
   /** The meshopt worker (structural type — matches MeshoptClient). */
   private readonly meshopt?: {
@@ -137,9 +169,22 @@ export class AssetStore {
       encodeIndexBuffer(indices: Uint32Array, vertexCount: number): Promise<Uint8Array>;
       poll(): void;
     },
+    capacity = DEFAULT_ASSET_CAPACITY,
+    private readonly maxCompletionsPerPoll = 32,
   ) {
+    if (!Number.isInteger(capacity) || capacity <= 0) throw new RangeError('asset capacity must be positive');
+    if (!Number.isInteger(maxCompletionsPerPoll) || maxCompletionsPerPoll <= 0)
+      throw new RangeError('asset completion limit must be positive');
     this.loader = loader;
     this.meshopt = meshopt;
+    this.paths = new Array(capacity).fill(null);
+    this.handles = new Array(capacity).fill(null);
+    this.states = new Uint8Array(capacity);
+    this.requestTokens = new Uint32Array(capacity);
+    this.completionIds = new Int32Array(capacity);
+    this.completionTokens = new Uint32Array(capacity);
+    this.completionKinds = new Uint8Array(capacity);
+    this.completionValues = new Array(capacity).fill(null);
   }
 
   get assetLoader(): AssetLoader { return this.loader; }
@@ -150,84 +195,169 @@ export class AssetStore {
   /** Get the VirtualTextureStore (if set). */
   get virtualTextureStore(): VirtualTextureStore | null { return this.vtStore; }
 
-  /** Drive all workers + process pending loads. Call each frame. */
+  /** Drive workers and publish a bounded number of numeric completions. */
   poll(): void {
     this.loader.poll();
     this.meshopt?.poll();
-    this.processPendingLoads();
+    this.drainCompletions(this.maxCompletionsPerPoll);
   }
 
-  private processPendingLoads(): void {
-    for (const [path, pending] of this.pending) {
-      Promise.resolve(pending.promise).then(
-        (bytes) => {
-          Promise.resolve(pending.parser(bytes)).then(
-            (asset) => {
-              pending.handle.asset = asset;
-              pending.handle.generation++;
-              pending.handle.state = 'ready';
-              pending.handle.lod = 0;
-              this.cache.set(path, pending.handle);
-              this.pending.delete(path);
-            },
-            (err) => {
-              pending.handle.state = 'error';
-              console.error(`[afterglow] parse failed: ${path}`, err);
-              this.pending.delete(path);
-            },
-          );
-        },
-        (err) => {
-          pending.handle.state = 'error';
-          console.error(`[afterglow] load failed: ${path}`, err);
-          this.pending.delete(path);
-        },
-      );
+  private enqueueCompletion(id: AssetId, token: number, kind: number, value: unknown): void {
+    if (this.requestTokens[id] !== token || this.handles[id] === null) {
+      if (kind === 1) (value as { dispose?: () => void })?.dispose?.();
+      return;
     }
+    if (this.completionCount === this.completionIds.length) {
+      this.completionOverflows++;
+      if (kind === 1) (value as { dispose?: () => void })?.dispose?.();
+      this.handles[id]!.state = 'error';
+      this.states[id] = AssetRequestState.Error;
+      return;
+    }
+    const slot = this.completionTail;
+    this.completionIds[slot] = id;
+    this.completionTokens[slot] = token;
+    this.completionKinds[slot] = kind;
+    this.completionValues[slot] = value;
+    this.completionTail = (slot + 1) % this.completionIds.length;
+    this.completionCount++;
+    if (this.completionCount > this.completionHighWater) this.completionHighWater = this.completionCount;
+    this.states[id] = AssetRequestState.ReadyToPublish;
   }
 
-  /** Load an asset with a custom parser. Returns handle immediately. */
-  load<T>(path: string, parser: AssetParser<T>, fallback?: T): AssetHandle<T> {
-    const cached = this.cache.get(path);
-    if (cached) return cached as AssetHandle<T>;
-    const inflight = this.pending.get(path);
-    if (inflight) return inflight.handle as AssetHandle<T>;
+  // @hot-no-alloc-begin AssetStore.drainCompletions
+  drainCompletions(limit: number): number {
+    let drained = 0;
+    while (drained < limit && this.completionCount !== 0) {
+      const slot = this.completionHead;
+      const id = this.completionIds[slot];
+      const token = this.completionTokens[slot];
+      const kind = this.completionKinds[slot];
+      const value = this.completionValues[slot];
+      this.completionValues[slot] = null;
+      this.completionHead = (slot + 1) % this.completionIds.length;
+      this.completionCount--;
+      drained++;
+      const handle = this.handles[id];
+      if (this.requestTokens[id] !== token || handle === null) {
+        if (kind === 1) (value as DisposableAsset)?.dispose?.();
+        continue;
+      }
+      if (kind === 1) {
+        handle.asset = value;
+        handle.generation++;
+        handle.state = 'ready';
+        handle.lod = 0;
+        this.states[id] = AssetRequestState.Ready;
+        this.readyCount++;
+      } else {
+        handle.state = 'error';
+        this.states[id] = AssetRequestState.Error;
+        this.reportCompletionError(kind, id, value); // @alloc-allowed reason=DiagnosticFailure
+      }
+    }
+    return drained;
+  }
+  // @hot-no-alloc-end AssetStore.drainCompletions
+
+  /** Allocation-permitted diagnostic boundary for exceptional failures. */
+  private reportCompletionError(kind: number, id: AssetId, value: unknown): void {
+    const path = this.paths[id]!;
+    console.error(kind === 2 ? `[afterglow] parse failed: ${path}` : `[afterglow] load failed: ${path}`, value);
+  }
+
+  /** Register paths during manifest/bootstrap; gameplay can then use AssetId. */
+  registerAsset(path: string): AssetId {
+    const existing = this.idsByPath.get(path);
+    if (existing !== undefined) return existing;
+    if (this.assetCount === this.states.length) return -1;
+    const id = this.assetCount++;
+    this.idsByPath.set(path, id);
+    this.paths[id] = path;
+    this.states[id] = AssetRequestState.Idle;
+    return id;
+  }
+
+  private observeLoad<T>(id: AssetId, handle: AssetHandle<T>, parser: AssetParser<T>): void {
+    const path = this.paths[id]!;
+    const token = ++this.requestTokens[id];
+    this.states[id] = AssetRequestState.Reading;
+    this.startLoad(path).then(
+      async (bytes) => {
+        if (this.requestTokens[id] !== token || this.handles[id] !== handle) return;
+        this.states[id] = AssetRequestState.Parsing;
+        try {
+          const asset = await parser(bytes);
+          if (this.requestTokens[id] !== token || this.handles[id] !== handle) {
+            (asset as { dispose?: () => void })?.dispose?.();
+            return;
+          }
+          this.enqueueCompletion(id, token, 1, asset);
+        } catch (err) {
+          this.enqueueCompletion(id, token, 2, err);
+        }
+      },
+      (err) => {
+        this.enqueueCompletion(id, token, 3, err);
+      },
+    );
+  }
+
+  /** Fixed-table admission. Returns CapacityExceeded instead of growing. */
+  tryLoad<T>(path: string, parser: AssetParser<T>, fallback?: T): AssetLoadResult<T> {
+    const id = this.registerAsset(path);
+    if (id < 0) return { status: AssetAdmission.CapacityExceeded, id, handle: null };
+    return this.tryLoadAsset(id, parser, fallback);
+  }
+
+  /** Numeric hot-owner API; `id` must have been registered during bootstrap. */
+  tryLoadAsset<T>(id: AssetId, parser: AssetParser<T>, fallback?: T): AssetLoadResult<T> {
+    if (!Number.isInteger(id) || id < 0 || id >= this.assetCount)
+      return { status: AssetAdmission.CapacityExceeded, id: -1, handle: null };
+    const existing = this.handles[id] as AssetHandle<T> | null;
+    const state = this.states[id];
+    if (existing && state !== AssetRequestState.Idle && state !== AssetRequestState.Error)
+      return { status: AssetAdmission.Existing, id, handle: existing };
+    if (state === AssetRequestState.Ready)
+      return { status: AssetAdmission.Existing, id, handle: existing };
+    const path = this.paths[id]!;
     const handle = new AssetHandle<T>(path, fallback);
-    const promise = this.startLoad(path);
-    this.pending.set(path, { handle, promise, parser } as PendingLoad<unknown>);
-    return handle;
+    this.handles[id] = handle as AssetHandle<unknown>;
+    this.observeLoad(id, handle, parser);
+    return { status: AssetAdmission.Started, id, handle };
+  }
+
+  /** Game-facing convenience wrapper. Prefer registration + `tryLoadAsset`. */
+  load<T>(path: string, parser: AssetParser<T>, fallback?: T): AssetHandle<T> {
+    const result = this.tryLoad(path, parser, fallback);
+    if (!result.handle) throw new RangeError(`asset capacity exceeded while registering ${path}`);
+    return result.handle;
+  }
+
+  getHandleById<T>(id: AssetId): AssetHandle<T> | undefined {
+    if (id < 0 || id >= this.assetCount || this.states[id] !== AssetRequestState.Ready) return undefined;
+    return this.handles[id] as AssetHandle<T> | undefined;
   }
 
   getHandle<T>(path: string): AssetHandle<T> | undefined {
-    return this.cache.get(path) as AssetHandle<T> | undefined;
+    const id = this.idsByPath.get(path);
+    return id === undefined ? undefined : this.getHandleById<T>(id);
   }
 
-  has(path: string): boolean { return this.cache.has(path); }
-  isLoading(path: string): boolean { return this.pending.has(path); }
+  has(path: string): boolean {
+    const id = this.idsByPath.get(path);
+    return id !== undefined && this.states[id] === AssetRequestState.Ready;
+  }
+  isLoading(path: string): boolean {
+    const id = this.idsByPath.get(path);
+    return id !== undefined && (this.states[id] === AssetRequestState.Reading ||
+      this.states[id] === AssetRequestState.Parsing || this.states[id] === AssetRequestState.ReadyToPublish);
+  }
 
   // --- loadModel — the one API for loading 3D models ---
 
   loadModel(path: string): AssetHandle<ModelAsset> {
-    const cached = this.cache.get(path);
-    if (cached) return cached as AssetHandle<ModelAsset>;
-
-    const handle = new AssetHandle<ModelAsset>(path, undefined);
-
-    const promise = this.startLoad(path);
-    promise.then(async (bytes) => {
-      try {
-        const asset = await this.processModel(bytes, path);
-        handle.asset = asset;
-        handle.generation++;
-        handle.state = 'ready';
-        this.cache.set(path, handle);
-      } catch (err) {
-        handle.state = 'error';
-        console.error(`[afterglow] loadModel failed: ${path}`, err);
-      }
-    });
-
-    return handle;
+    return this.load(path, (bytes) => this.processModel(bytes, path));
   }
 
   /** @internal — parse GLTF + optimize meshes + generate LODs. */
@@ -396,14 +526,51 @@ export class AssetStore {
     return bytes;
   }
 
-  evict(path: string): void { this.cache.delete(path); }
-  get size(): number { return this.cache.size; }
-  get cachedPaths(): string[] { return [...this.cache.keys()]; }
+  evict(path: string): void {
+    const id = this.idsByPath.get(path);
+    if (id === undefined) return;
+    if (this.states[id] === AssetRequestState.Ready) this.readyCount--;
+    this.requestTokens[id]++;
+    this.handles[id] = null;
+    this.states[id] = AssetRequestState.Idle;
+  }
+  get size(): number { return this.readyCount; }
+  /** Explicit diagnostic snapshot; allocates by design. */
+  get cachedPaths(): string[] {
+    const result: string[] = [];
+    for (let id = 0; id < this.assetCount; id++)
+      if (this.states[id] === AssetRequestState.Ready) result.push(this.paths[id]!);
+    return result;
+  }
+  get capacity(): number { return this.states.length; }
+  get registeredAssetCount(): number { return this.assetCount; }
+  get stateTable(): Uint8Array { return this.states; }
+  get pendingCompletionCount(): number { return this.completionCount; }
+  get completionQueueHighWater(): number { return this.completionHighWater; }
+  get completionQueueOverflows(): number { return this.completionOverflows; }
 
   dispose(): void {
-    for (const h of this.cache.values()) (h.asset as { dispose?: () => void })?.dispose?.();
-    this.cache.clear();
-    this.pending.clear();
+    while (this.completionCount !== 0) {
+      const slot = this.completionHead;
+      if (this.completionKinds[slot] === 1)
+        (this.completionValues[slot] as { dispose?: () => void })?.dispose?.();
+      this.completionValues[slot] = null;
+      this.completionHead = (slot + 1) % this.completionIds.length;
+      this.completionCount--;
+    }
+    this.completionHead = 0;
+    this.completionTail = 0;
+    for (let id = 0; id < this.assetCount; id++) {
+      const handle = this.handles[id];
+      (handle?.asset as { dispose?: () => void })?.dispose?.();
+      this.requestTokens[id]++;
+      this.handles[id] = null;
+      this.paths[id] = null;
+      this.states[id] = AssetRequestState.Free;
+    }
+    this.idsByPath.clear();
+    this.assetCount = 0;
+    this.readyCount = 0;
   }
 }
 

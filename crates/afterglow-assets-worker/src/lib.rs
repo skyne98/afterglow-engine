@@ -69,6 +69,40 @@ pub trait AssetLoader {
 pub struct AssetLoaderWorker {
     #[cfg(not(target_arch = "wasm32"))]
     root: Option<AssetRoot>,
+    #[cfg(not(target_arch = "wasm32"))]
+    sources: std::sync::Arc<std::sync::Mutex<NativeSourceCache>>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+const NATIVE_SOURCE_CACHE_CAPACITY: usize = 16;
+
+/// Fixed-capacity round-robin cache of open positional-read handles. Container
+/// page reads reuse the same file descriptor instead of reopening per range.
+#[cfg(not(target_arch = "wasm32"))]
+struct NativeSourceCache {
+    entries: Vec<Option<(String, std::sync::Arc<afterglow_assets::FsSource>)>>,
+    next: usize,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl NativeSourceCache {
+    fn new() -> Self {
+        let mut entries = Vec::with_capacity(NATIVE_SOURCE_CACHE_CAPACITY);
+        entries.resize_with(NATIVE_SOURCE_CACHE_CAPACITY, || None);
+        Self { entries, next: 0 }
+    }
+
+    fn open(&mut self, root: &AssetRoot, path: &str) -> Option<std::sync::Arc<afterglow_assets::FsSource>> {
+        for entry in &self.entries {
+            if let Some((cached_path, source)) = entry {
+                if cached_path == path { return Some(source.clone()); }
+            }
+        }
+        let source = std::sync::Arc::new(root.open_source(path)?);
+        self.entries[self.next] = Some((path.to_owned(), source.clone()));
+        self.next = (self.next + 1) % self.entries.len();
+        Some(source)
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -90,6 +124,7 @@ impl Default for AssetLoaderWorker {
     fn default() -> Self {
         Self {
             root: ASSET_ROOT.get().cloned(),
+            sources: std::sync::Arc::new(std::sync::Mutex::new(NativeSourceCache::new())),
         }
     }
 }
@@ -106,13 +141,15 @@ impl AssetLoaderServer for AssetLoaderWorker {
         // can't borrow `self`. Clone what each path needs.
         #[cfg(not(target_arch = "wasm32"))]
         let root = self.root.clone();
+        #[cfg(not(target_arch = "wasm32"))]
+        let sources = self.sources.clone();
         Box::pin(async move {
             #[cfg(not(target_arch = "wasm32"))]
             {
                 let root = root.ok_or_else(|| {
                     afterglow_rpc::RpcError::Server("asset worker has no root".into())
                 })?;
-                let src = root.open_source(&path).ok_or_else(|| {
+                let src = sources.lock().unwrap().open(&root, &path).ok_or_else(|| {
                     afterglow_rpc::RpcError::Server(format!("asset not found: {path}"))
                 })?;
                 let mut buf = vec![0u8; src.len() as usize];
@@ -130,13 +167,15 @@ impl AssetLoaderServer for AssetLoaderWorker {
     fn size(&self, path: String) -> ServeFuture {
         #[cfg(not(target_arch = "wasm32"))]
         let root = self.root.clone();
+        #[cfg(not(target_arch = "wasm32"))]
+        let sources = self.sources.clone();
         Box::pin(async move {
             #[cfg(not(target_arch = "wasm32"))]
             {
                 let root = root.ok_or_else(|| {
                     afterglow_rpc::RpcError::Server("asset worker has no root".into())
                 })?;
-                let src = root.open_source(&path).ok_or_else(|| {
+                let src = sources.lock().unwrap().open(&root, &path).ok_or_else(|| {
                     afterglow_rpc::RpcError::Server(format!("asset not found: {path}"))
                 })?;
                 use afterglow_assets::AssetSource;
@@ -152,13 +191,15 @@ impl AssetLoaderServer for AssetLoaderWorker {
     fn read(&self, path: String, offset: u64, len: u32) -> ServeFuture {
         #[cfg(not(target_arch = "wasm32"))]
         let root = self.root.clone();
+        #[cfg(not(target_arch = "wasm32"))]
+        let sources = self.sources.clone();
         Box::pin(async move {
             #[cfg(not(target_arch = "wasm32"))]
             {
                 let root = root.ok_or_else(|| {
                     afterglow_rpc::RpcError::Server("asset worker has no root".into())
                 })?;
-                let src = root.open_source(&path).ok_or_else(|| {
+                let src = sources.lock().unwrap().open(&root, &path).ok_or_else(|| {
                     afterglow_rpc::RpcError::Server(format!("asset not found: {path}"))
                 })?;
                 use afterglow_assets::AssetSource;
@@ -198,6 +239,28 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn native_source_cache_reuses_handles_and_stays_fixed_capacity() {
+        let dir = std::env::temp_dir().join(format!("ag-source-cache-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for index in 0..=NATIVE_SOURCE_CACHE_CAPACITY {
+            std::fs::write(dir.join(format!("{index}.bin")), [index as u8]).unwrap();
+        }
+        let root = AssetRoot::new(&dir).unwrap();
+        let mut cache = NativeSourceCache::new();
+        let first = cache.open(&root, "0.bin").unwrap();
+        let same = cache.open(&root, "0.bin").unwrap();
+        assert!(std::sync::Arc::ptr_eq(&first, &same));
+        for index in 1..=NATIVE_SOURCE_CACHE_CAPACITY {
+            cache.open(&root, &format!("{index}.bin")).unwrap();
+        }
+        assert_eq!(cache.entries.len(), NATIVE_SOURCE_CACHE_CAPACITY);
+        let reopened = cache.open(&root, "0.bin").unwrap();
+        assert!(!std::sync::Arc::ptr_eq(&first, &reopened));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

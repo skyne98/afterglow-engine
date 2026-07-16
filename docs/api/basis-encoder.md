@@ -25,10 +25,13 @@ of game runtime, worker, CEF, or wasm crates.
 
 1. PNG/JPEG decode to RGBA8.
 2. Full-image filtered mip generation.
-3. 128x128 page extraction with four-texel neighbor borders.
+3. One-mip-at-a-time 128x128 page extraction with four-texel neighbor borders,
+   retaining at most 64 pages per parallel encoding batch.
 4. Packing 64x64 through 1x1 levels into one bordered mip-tail slot.
 5. Independent UASTC encoding of every 136x136 page/tail slot.
-6. Seekable `.big` chunks tagged `TextureEncoding::Basis`.
+6. Immediate disk spooling into seekable `.big` v5 mip blocks indexed by
+   compact page-size directories and tagged once per virtual texture with
+   `TextureEncoding::Basis`.
 
 At runtime, `afterglow-texture` transcodes each requested UASTC page to BC7,
 ASTC, or RGBA according to adapter support.

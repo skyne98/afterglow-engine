@@ -53,6 +53,15 @@ const args = concat(encodeF32Vec([0, 1, 2]), encodeF32(0.5));
 const result = decodeF32Vec(await rpc.call(0, args));   // Float32Array [0.5, 1.5, 2.5]
 ```
 
+## Bounded async tasks
+
+`AsyncWorker` has 256 preallocated task slots keyed by `task_id` and a separate
+256-slot browser-fetch table with bounded probing. Exhaustion is reported before
+dispatch instead of growing pending maps. The wasm service reserves 256
+completion entries during initialization, while each JS `poll()` drains at most
+32. All task slots share one polling pump, so call count does not create one
+timer loop per RPC or an unbounded per-frame completion burst.
+
 ## The `Rpc` API
 
 ```js
