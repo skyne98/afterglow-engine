@@ -2294,10 +2294,11 @@ class PomSelfShadowLightingModel extends THREE.PhysicalLightingModel {
     this.visibility = visibility;
   }
   direct(lightData, builder) {
+    const diffuseBefore = lightData.reflectedLight.directDiffuse.toVar(), specularBefore = lightData.reflectedLight.directSpecular.toVar();
     super.direct(lightData, builder);
-    const visibility = this.visibility(lightData.lightDirection);
-    lightData.reflectedLight.directDiffuse.mulAssign(visibility);
-    lightData.reflectedLight.directSpecular.mulAssign(visibility);
+    const visibility = this.visibility(lightData.lightDirection), diffuseContribution = lightData.reflectedLight.directDiffuse.sub(diffuseBefore), specularContribution = lightData.reflectedLight.directSpecular.sub(specularBefore);
+    lightData.reflectedLight.directDiffuse.assign(diffuseBefore.add(diffuseContribution.mul(visibility)));
+    lightData.reflectedLight.directSpecular.assign(specularBefore.add(specularContribution.mul(visibility)));
   }
 }
 function wallMaterial(set, usePom) {

@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   POM_SELF_SHADOW_WGSL,
   POM_UV_WGSL,
+  applyDirectLightVisibility,
   assertPomGeneratedWgsl,
   marchPomReference,
   pomDistanceFade,
@@ -70,6 +71,23 @@ describe('low-core POM shader contract', () => {
     expect(() => assertPomGeneratedWgsl('fn pomMarchUV() {}')).toThrow('fragment entry');
     expect(() => assertPomGeneratedWgsl(generated(samples))).toThrow('march invocation');
     expect(() => assertPomGeneratedWgsl(generated('uv = pomMarchUV(x * mat3x3(t,b,n));\na = vtSampleFromLevel();'))).toThrow('expected 3');
+  });
+});
+
+describe('per-light POM visibility', () => {
+  test('attenuates only the current light contribution', () => {
+    let accumulated = 0;
+    const lightA = 10;
+    const lightB = 4;
+    accumulated = applyDirectLightVisibility(accumulated, accumulated + lightA, 0.25);
+    accumulated = applyDirectLightVisibility(accumulated, accumulated + lightB, 0.5);
+    expect(accumulated).toBe(4.5);
+    expect(accumulated).not.toBe((lightA * 0.25 + lightB) * 0.5);
+  });
+
+  test('preserves prior light energy at zero visibility', () => {
+    expect(applyDirectLightVisibility(7, 12, 0)).toBe(7);
+    expect(applyDirectLightVisibility(7, 12, 1)).toBe(12);
   });
 });
 
@@ -268,8 +286,12 @@ describe('Dungeon POM integration assets and limits', () => {
     expect(source).toContain('THREE.normalViewGeometry.mul(side)');
     expect(source).toContain('THREE.positionViewDirection.mul(pomTbn())');
     expect(source).toContain('lightDirection.mul(pomTbn())');
-    expect(source).toContain('directDiffuse.mulAssign(visibility)');
-    expect(source).toContain('directSpecular.mulAssign(visibility)');
+    expect(source).toContain('diffuseBefore=lightData.reflectedLight.directDiffuse.toVar()');
+    expect(source).toContain('diffuseContribution=lightData.reflectedLight.directDiffuse.sub(diffuseBefore)');
+    expect(source).toContain('directDiffuse.assign(diffuseBefore.add(diffuseContribution.mul(visibility)))');
+    expect(source).toContain('directSpecular.assign(specularBefore.add(specularContribution.mul(visibility)))');
+    expect(source).not.toContain('directDiffuse.mulAssign(visibility)');
+    expect(source).not.toContain('directSpecular.mulAssign(visibility)');
     expect(source).toContain('loadHeightTextureR16(THREE,renderer.backend.device');
     expect(source).toContain('assertHeightTextureGpuFormat(renderer.backend,height)');
     expect(source).not.toContain('TextureLoader().loadAsync(`dungeon-height');

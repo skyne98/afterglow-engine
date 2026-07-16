@@ -8,9 +8,11 @@ intersection refinement. Physical height (`1` exposed, `0` recessed) is
 converted to ray depth with `1 - height`; a ratio-2 offset limit prevents
 exploding UVs at grazing angles. Dungeon uses scale 0.05 and intentionally has
 no radial per-fragment fade—the moving contour was visible as a flattening wave.
-An 8-sample ray toward the point light self-shadows direct diffuse/specular at
-82% strength. Hemisphere fill remains unshadowed. There is no silhouette or
-secondary relief/depth pass.
+An 8-sample ray toward each direct light self-shadows direct diffuse/specular at
+82% strength. Visibility multiplies only the diffuse/specular contribution added
+by the current light; accumulated energy from earlier lights is preserved.
+Hemisphere fill remains unshadowed. There is no silhouette or secondary
+relief/depth pass.
 
 Height comes from the official resident 1K, 16-bit ambientCG displacement maps.
 The offline pipeline converts the source PNGs into versioned, single-channel

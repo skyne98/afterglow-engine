@@ -127,6 +127,15 @@ export function pomLayerCount(viewZ: number, minLayers: number, maxLayers: numbe
   return Math.max(low, Math.min(high, Math.floor(high + (low - high) * Math.abs(viewZ) + 0.5)));
 }
 
+/** Apply visibility to only the contribution added by the current light. */
+export function applyDirectLightVisibility(
+  accumulatedBefore: number,
+  accumulatedAfter: number,
+  visibility: number,
+): number {
+  return accumulatedBefore + (accumulatedAfter - accumulatedBefore) * visibility;
+}
+
 export function pomDistanceFade(distance: number, maxDistance: number): number {
   if (!(maxDistance > 0)) return 1;
   if (distance >= maxDistance) return 0;

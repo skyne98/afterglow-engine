@@ -104,8 +104,13 @@ pipeline creation.
 
 `POM_SELF_SHADOW_WGSL` traces from the physical-height hit toward each direct
 light. Dungeon uses 8 bounded samples, ratio-2 offset limiting, bias 0.01, and
-82% strength. A custom `PhysicalLightingModel` attenuates direct diffuse and
-specular only; hemisphere/indirect fill is not incorrectly multiplied.
+82% strength. A custom `PhysicalLightingModel` snapshots accumulated direct
+light before each `super.direct()` call, computes only that light's newly added
+diffuse/specular delta, and applies visibility to the delta before restoring the
+accumulator. Later lights therefore cannot attenuate earlier lights.
+Hemisphere/indirect fill is not multiplied. `applyDirectLightVisibility()` is
+the numeric oracle for the same accumulator-delta rule and includes a two-light
+regression.
 
 `marchPomReference(...)` is an allocation-free CPU oracle matching the WGSL
 march. Unit coverage uses analytically predictable fields: fully raised,

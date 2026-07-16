@@ -90,7 +90,7 @@ function pomUV(set){const heightNode=texture(set.heightTexture);return pomMarchU
 function pomVisibility(set,hitUV,lightDirection){const heightNode=texture(set.heightTexture),shadow=pomSelfShadow({heightTexture:heightNode,heightSampler:sampler(heightNode),hitUV,lightDir:lightDirection.mul(pomTbn()),heightScale:float(POM_HEIGHT_SCALE),maxOffsetRatio:float(POM_MAX_OFFSET_RATIO),requestedSteps:uint(POM_SHADOW_STEPS),bias:float(POM_SHADOW_BIAS)});return THREE.mix(float(1),shadow,float(POM_SHADOW_STRENGTH))}
 class PomSelfShadowLightingModel extends THREE.PhysicalLightingModel{
   constructor(visibility){super();this.visibility=visibility}
-  direct(lightData,builder){super.direct(lightData,builder);const visibility=this.visibility(lightData.lightDirection);lightData.reflectedLight.directDiffuse.mulAssign(visibility);lightData.reflectedLight.directSpecular.mulAssign(visibility)}
+  direct(lightData,builder){const diffuseBefore=lightData.reflectedLight.directDiffuse.toVar(),specularBefore=lightData.reflectedLight.directSpecular.toVar();super.direct(lightData,builder);const visibility=this.visibility(lightData.lightDirection),diffuseContribution=lightData.reflectedLight.directDiffuse.sub(diffuseBefore),specularContribution=lightData.reflectedLight.directSpecular.sub(specularBefore);lightData.reflectedLight.directDiffuse.assign(diffuseBefore.add(diffuseContribution.mul(visibility)));lightData.reflectedLight.directSpecular.assign(specularBefore.add(specularContribution.mul(visibility)))}
 }
 function wallMaterial(set,usePom){
   if(!set.normal||!set.masks)throw new Error('dungeon PBR material set requires albedo, normal, and packed masks');
