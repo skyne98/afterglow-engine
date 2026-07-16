@@ -39,15 +39,6 @@
       "source": "return new AssetLoaderClient(driver);"
     },
     {
-      "id": "4f99c90d537afd7fbde2",
-      "file": "async-worker.test.ts",
-      "line": 1,
-      "column": 40,
-      "code": 2307,
-      "message": "Cannot find module 'bun:test' or its corresponding type declarations.",
-      "source": "import { describe, expect, test } from 'bun:test';"
-    },
-    {
       "id": "57b36514a3a2e2b0351a",
       "file": "async-worker.test.ts",
       "line": 13,
@@ -1884,6 +1875,42 @@
       "source": "const rendererSeal=new RendererSeal(renderer.backend),rendererSealStats={renderPipelines:0,computePipelines:0,renderPipelineViolations:0,computePipelineViolations:0};function pipelineTelemetry(){rendererSealStats.renderPipelines=rendererSeal.renderPipelines;rendererSealStats.computePipelines=rendererSeal.computePipelines;rendererSealStats.renderPipelineViolations=rendererSeal.renderPipelineViolations;rendererSealStats.computePipelineViolations=rendererSeal.computePipelineViolations;return rendererSealStats}const errors=[];renderer.backend.device.addEventListener('uncapturederror',e=>errors.push(String(e.error?.message??e.error)));addEventListener('error',e=>errors.push(String(e.error?.stack??e.message)));addEventListener('unhandledrejection',e=>errors.push(String(e.reason?.stack??e.reason)));"
     },
     {
+      "id": "0555eab6d77185d318c7",
+      "file": "dungeon.ts",
+      "line": 22,
+      "column": 688,
+      "code": 2339,
+      "message": "Property 'error' does not exist on type 'Event'.",
+      "source": "const rendererSeal=new RendererSeal(renderer.backend),rendererSealStats={renderPipelines:0,computePipelines:0,renderPipelineViolations:0,computePipelineViolations:0};function pipelineTelemetry(){rendererSealStats.renderPipelines=rendererSeal.renderPipelines;rendererSealStats.computePipelines=rendererSeal.computePipelines;rendererSealStats.renderPipelineViolations=rendererSeal.renderPipelineViolations;rendererSealStats.computePipelineViolations=rendererSeal.computePipelineViolations;return rendererSealStats}const errors=[];renderer.backend.device.addEventListener('uncapturederror',e=>errors.push(String(e.error?.message??e.error)));addEventListener('error',e=>errors.push(String(e.error?.stack??e.message)));addEventListener('unhandledrejection',e=>errors.push(String(e.reason?.stack??e.reason)));"
+    },
+    {
+      "id": "e383a8cd74eb7e15eb4c",
+      "file": "dungeon.ts",
+      "line": 22,
+      "column": 704,
+      "code": 2339,
+      "message": "Property 'message' does not exist on type 'Event'.",
+      "source": "const rendererSeal=new RendererSeal(renderer.backend),rendererSealStats={renderPipelines:0,computePipelines:0,renderPipelineViolations:0,computePipelineViolations:0};function pipelineTelemetry(){rendererSealStats.renderPipelines=rendererSeal.renderPipelines;rendererSealStats.computePipelines=rendererSeal.computePipelines;rendererSealStats.renderPipelineViolations=rendererSeal.renderPipelineViolations;rendererSealStats.computePipelineViolations=rendererSeal.computePipelineViolations;return rendererSealStats}const errors=[];renderer.backend.device.addEventListener('uncapturederror',e=>errors.push(String(e.error?.message??e.error)));addEventListener('error',e=>errors.push(String(e.error?.stack??e.message)));addEventListener('unhandledrejection',e=>errors.push(String(e.reason?.stack??e.reason)));"
+    },
+    {
+      "id": "bcec2eeb0e1cfc722391",
+      "file": "dungeon.ts",
+      "line": 22,
+      "column": 777,
+      "code": 2339,
+      "message": "Property 'reason' does not exist on type 'Event'.",
+      "source": "const rendererSeal=new RendererSeal(renderer.backend),rendererSealStats={renderPipelines:0,computePipelines:0,renderPipelineViolations:0,computePipelineViolations:0};function pipelineTelemetry(){rendererSealStats.renderPipelines=rendererSeal.renderPipelines;rendererSealStats.computePipelines=rendererSeal.computePipelines;rendererSealStats.renderPipelineViolations=rendererSeal.renderPipelineViolations;rendererSealStats.computePipelineViolations=rendererSeal.computePipelineViolations;return rendererSealStats}const errors=[];renderer.backend.device.addEventListener('uncapturederror',e=>errors.push(String(e.error?.message??e.error)));addEventListener('error',e=>errors.push(String(e.error?.stack??e.message)));addEventListener('unhandledrejection',e=>errors.push(String(e.reason?.stack??e.reason)));"
+    },
+    {
+      "id": "1fbd700e62a2613fcd4f",
+      "file": "dungeon.ts",
+      "line": 22,
+      "column": 794,
+      "code": 2339,
+      "message": "Property 'reason' does not exist on type 'Event'.",
+      "source": "const rendererSeal=new RendererSeal(renderer.backend),rendererSealStats={renderPipelines:0,computePipelines:0,renderPipelineViolations:0,computePipelineViolations:0};function pipelineTelemetry(){rendererSealStats.renderPipelines=rendererSeal.renderPipelines;rendererSealStats.computePipelines=rendererSeal.computePipelines;rendererSealStats.renderPipelineViolations=rendererSeal.renderPipelineViolations;rendererSealStats.computePipelineViolations=rendererSeal.computePipelineViolations;return rendererSealStats}const errors=[];renderer.backend.device.addEventListener('uncapturederror',e=>errors.push(String(e.error?.message??e.error)));addEventListener('error',e=>errors.push(String(e.error?.stack??e.message)));addEventListener('unhandledrejection',e=>errors.push(String(e.reason?.stack??e.reason)));"
+    },
+    {
       "id": "1f3be83a83042ab6ea9f",
       "file": "dungeon.ts",
       "line": 32,
@@ -3675,15 +3702,6 @@
       "source": "document.getElementById('info').textContent ="
     },
     {
-      "id": "52f89801676bfc7524aa",
-      "file": "engine/asset-store.test.ts",
-      "line": 1,
-      "column": 40,
-      "code": 2307,
-      "message": "Cannot find module 'bun:test' or its corresponding type declarations.",
-      "source": "import { describe, expect, test } from 'bun:test';"
-    },
-    {
       "id": "7176395cfd27db475055",
       "file": "engine/asset-store.test.ts",
       "line": 2,
@@ -3709,6 +3727,15 @@
       "code": 2532,
       "message": "Object is possibly 'undefined'.",
       "source": "expect(stats[0].preservedAttributes).toEqual(['position', 'normal', 'uv', 'skinIndex', 'skinWeight']);"
+    },
+    {
+      "id": "d0bdd02cd44412cff7bb",
+      "file": "engine/asset-store.test.ts",
+      "line": 76,
+      "column": 25,
+      "code": 2769,
+      "message": "No overload matches this call. Overload 1 of 2, '(expected: AssetHandle<number>): void', gave the following error. Argument of type 'AssetHandle<number | undefined>' is not assignable to parameter of type 'AssetHandle<number>'. Type 'number | undefined' is not assignable to type 'number'. Type 'undefined' is not assignable to type 'number'. Overload 2 of 2, '(expected: NoInfer<AssetHandle<number>>): void', gave the following error. Argument of type 'AssetHandle<number | undefined>' is not assignable to parameter of type 'AssetHandle<number>'. Type 'number | undefined' is not assignable to type 'number'. Type 'undefined' is not assignable to type 'number'.",
+      "source": "expect(second).toBe(first);"
     },
     {
       "id": "f2410de11fddeb86daef",
@@ -3738,12 +3765,12 @@
       "source": "import * as THREE from 'three';"
     },
     {
-      "id": "b91d72bf38410b5ed76e",
+      "id": "6c169ea1ff9c81b28d2c",
       "file": "engine/asset-store.ts",
       "line": 93,
       "column": 52,
       "code": 2322,
-      "message": "Type 'Uint8Array<ArrayBufferLike>' is not assignable to type 'BlobPart'. Type 'Uint8Array<ArrayBufferLike>' is not assignable to type 'ArrayBufferView<ArrayBuffer>'. Types of property 'buffer' are incompatible. Type 'ArrayBufferLike' is not assignable to type 'ArrayBuffer'. Type 'SharedArrayBuffer' is not assignable to type 'ArrayBuffer'. Types of property '[Symbol.toStringTag]' are incompatible. Type '\"SharedArrayBuffer\"' is not assignable to type '\"ArrayBuffer\"'.",
+      "message": "Type 'Uint8Array<ArrayBufferLike>' is not assignable to type 'BlobPart'. Type 'Uint8Array<ArrayBufferLike>' is not assignable to type 'ArrayBufferView<ArrayBuffer>'. Types of property 'buffer' are incompatible. Type 'ArrayBufferLike' is not assignable to type 'ArrayBuffer'. Property 'resize' is missing in type 'SharedArrayBuffer' but required in type 'ArrayBuffer'.",
       "source": "const bitmap = await createImageBitmap(new Blob([bytes]));"
     },
     {
@@ -3963,15 +3990,6 @@
       "source": "maxFps: 1000 / max,"
     },
     {
-      "id": "2c2df8ca664e670c705b",
-      "file": "engine/big-parser.test.ts",
-      "line": 1,
-      "column": 40,
-      "code": 2307,
-      "message": "Cannot find module 'bun:test' or its corresponding type declarations.",
-      "source": "import { describe, expect, test } from 'bun:test';"
-    },
-    {
       "id": "f9bf4356e53e2248a2e4",
       "file": "engine/big-parser.ts",
       "line": 29,
@@ -4170,15 +4188,6 @@
       "source": "import * as THREE from 'three';"
     },
     {
-      "id": "d05a733d29b6c49ff6cd",
-      "file": "engine/dirty-queue.test.ts",
-      "line": 1,
-      "column": 40,
-      "code": 2307,
-      "message": "Cannot find module 'bun:test' or its corresponding type declarations.",
-      "source": "import { describe, expect, test } from 'bun:test';"
-    },
-    {
       "id": "1bf5615b01b06ecb1f22",
       "file": "engine/dirty-queue.ts",
       "line": 36,
@@ -4332,15 +4341,6 @@
       "source": "return (this.bits[slot >>> 5] & (1 << (slot & 31))) !== 0;"
     },
     {
-      "id": "517e3a7bc35a5a306ddc",
-      "file": "engine/engine-memory.test.ts",
-      "line": 1,
-      "column": 40,
-      "code": 2307,
-      "message": "Cannot find module 'bun:test' or its corresponding type declarations.",
-      "source": "import { describe, expect, test } from 'bun:test';"
-    },
-    {
       "id": "c75b4eb7850503f78666",
       "file": "engine/engine-memory.ts",
       "line": 100,
@@ -4366,15 +4366,6 @@
       "code": 7016,
       "message": "Could not find a declaration file for module 'three'. '/home/fox/Project/afterglow-engine/crates/afterglow-web/www/node_modules/three/build/three.module.js' implicitly has an 'any' type. Try `npm i --save-dev @types/three` if it exists or add a new declaration (.d.ts) file containing `declare module 'three';`",
       "source": "import * as THREE from 'three';"
-    },
-    {
-      "id": "9694ee754c1e1b1e5f3a",
-      "file": "engine/frame-budget.test.ts",
-      "line": 1,
-      "column": 40,
-      "code": 2307,
-      "message": "Cannot find module 'bun:test' or its corresponding type declarations.",
-      "source": "import { describe, expect, test } from 'bun:test';"
     },
     {
       "id": "6c68837595d48eed0036",
@@ -4566,15 +4557,6 @@
       "source": "if (now > this.deadlines[stage]) this.overruns[stage]++;"
     },
     {
-      "id": "b787f09576e4f5de7582",
-      "file": "engine/height-texture.test.ts",
-      "line": 1,
-      "column": 40,
-      "code": 2307,
-      "message": "Cannot find module 'bun:test' or its corresponding type declarations.",
-      "source": "import { describe, expect, test } from 'bun:test';"
-    },
-    {
       "id": "cf55b562e752dccf8b20",
       "file": "engine/height-texture.test.ts",
       "line": 11,
@@ -4584,6 +4566,15 @@
       "source": "for (let index = 0; index < pixels.length; index++) view.setUint16(16 + index * 2, pixels[index], true);"
     },
     {
+      "id": "5865ad2ba7ee1329e3f5",
+      "file": "engine/height-texture.test.ts",
+      "line": 78,
+      "column": 24,
+      "code": 2352,
+      "message": "Conversion of type '() => Promise<Response>' to type 'typeof fetch' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first. Property 'preconnect' is missing in type '() => Promise<Response>' but required in type 'typeof fetch'.",
+      "source": "globalThis.fetch = (async () => new Response(encode(2, 1, [1, 65535]))) as typeof fetch;"
+    },
+    {
       "id": "e6999708e67c9c591bd7",
       "file": "engine/height-texture.ts",
       "line": 87,
@@ -4591,15 +4582,6 @@
       "code": 2532,
       "message": "Object is possibly 'undefined'.",
       "source": "for (let index = 0; index < asset.pixels.length; index++) normalized[index] = asset.pixels[index] / 65535;"
-    },
-    {
-      "id": "3c8539c7429b94145556",
-      "file": "engine/hierarchy.test.ts",
-      "line": 1,
-      "column": 40,
-      "code": 2307,
-      "message": "Cannot find module 'bun:test' or its corresponding type declarations.",
-      "source": "import { describe, expect, test } from 'bun:test';"
     },
     {
       "id": "8a484a76dc0b756c33ba",
@@ -6159,15 +6141,6 @@
       "source": "output[outputOffset + 15] = a41 * b14 + a42 * b24 + a43 * b34 + a44 * b44;"
     },
     {
-      "id": "6d44aa5709cb82fec2a8",
-      "file": "engine/persistent-blob-cache.test.ts",
-      "line": 1,
-      "column": 40,
-      "code": 2307,
-      "message": "Cannot find module 'bun:test' or its corresponding type declarations.",
-      "source": "import { describe, expect, test } from 'bun:test';"
-    },
-    {
       "id": "698ba3d992e2992f9932",
       "file": "engine/persistent-blob-cache.test.ts",
       "line": 71,
@@ -6328,15 +6301,6 @@
       "code": 2322,
       "message": "Type 'number | undefined' is not assignable to type 'number'. Type 'undefined' is not assignable to type 'number'.",
       "source": "if (this.states[index] === OCCUPIED) this.offsets[index] = this.compactionOffsets[index];"
-    },
-    {
-      "id": "15e623f2a172a1d57518",
-      "file": "engine/procedural-vt.test.ts",
-      "line": 1,
-      "column": 40,
-      "code": 2307,
-      "message": "Cannot find module 'bun:test' or its corresponding type declarations.",
-      "source": "import { describe, expect, test } from 'bun:test';"
     },
     {
       "id": "4e5cce9defcb1c417d6e",
@@ -6861,24 +6825,6 @@
       "source": "export function pageFromStoneMipChain(chain,mip,pageX,pageY) {"
     },
     {
-      "id": "d152c5b1513228c96264",
-      "file": "engine/relative-pointer.test.ts",
-      "line": 1,
-      "column": 40,
-      "code": 2307,
-      "message": "Cannot find module 'bun:test' or its corresponding type declarations.",
-      "source": "import { describe, expect, test } from 'bun:test';"
-    },
-    {
-      "id": "4a61784bf5e97a76e28c",
-      "file": "engine/render-adapter-pool.test.ts",
-      "line": 1,
-      "column": 40,
-      "code": 2307,
-      "message": "Cannot find module 'bun:test' or its corresponding type declarations.",
-      "source": "import { describe, expect, test } from 'bun:test';"
-    },
-    {
       "id": "57dbd321ba997343c614",
       "file": "engine/render-adapter.ts",
       "line": 8,
@@ -7284,15 +7230,6 @@
       "source": "descriptor.sync?.(object, entity, RenderDirty.Transform | RenderDirty.Appearance, frame);"
     },
     {
-      "id": "5c207f0e1d6dd44f14d7",
-      "file": "engine/renderer-seal.test.ts",
-      "line": 1,
-      "column": 40,
-      "code": 2307,
-      "message": "Cannot find module 'bun:test' or its corresponding type declarations.",
-      "source": "import { describe, expect, test } from 'bun:test';"
-    },
-    {
       "id": "df4d44ec7ec6594927b0",
       "file": "engine/renderer-seal.test.ts",
       "line": 13,
@@ -7327,33 +7264,6 @@
       "code": 7016,
       "message": "Could not find a declaration file for module 'three'. '/home/fox/Project/afterglow-engine/crates/afterglow-web/www/node_modules/three/build/three.module.js' implicitly has an 'any' type. Try `npm i --save-dev @types/three` if it exists or add a new declaration (.d.ts) file containing `declare module 'three';`",
       "source": "import type * as THREE from 'three';"
-    },
-    {
-      "id": "1e7a229e059674353756",
-      "file": "engine/resource.test.ts",
-      "line": 1,
-      "column": 40,
-      "code": 2307,
-      "message": "Cannot find module 'bun:test' or its corresponding type declarations.",
-      "source": "import { describe, expect, test } from 'bun:test';"
-    },
-    {
-      "id": "3bc2b54ca703c50ef264",
-      "file": "engine/rigged-vt-demo.test.ts",
-      "line": 1,
-      "column": 40,
-      "code": 2307,
-      "message": "Cannot find module 'bun:test' or its corresponding type declarations.",
-      "source": "import { describe, expect, test } from 'bun:test';"
-    },
-    {
-      "id": "c8cbf0173447d0cf1ec2",
-      "file": "engine/rigged-vt-demo.test.ts",
-      "line": 8,
-      "column": 18,
-      "code": 2867,
-      "message": "Cannot find name 'Bun'. Do you need to install type definitions for Bun? Try `npm i --save-dev @types/bun`.",
-      "source": "const file = Bun.file(new URL('../rigged-vt.big', import.meta.url));"
     },
     {
       "id": "f0184dde72e3e0afcfe4",
@@ -7408,69 +7318,6 @@
       "code": 2532,
       "message": "Object is possibly 'undefined'.",
       "source": "expect([dragonTextures[0].virtualTexture!.width, dragonTextures[0].virtualTexture!.height]).toEqual([4096, 4096]);"
-    },
-    {
-      "id": "80c851b19d0a11ae746e",
-      "file": "engine/rigged-vt-demo.test.ts",
-      "line": 35,
-      "column": 26,
-      "code": 2867,
-      "message": "Cannot find name 'Bun'. Do you need to install type definitions for Bun? Try `npm i --save-dev @types/bun`.",
-      "source": "const source = await Bun.file(new URL('../rigged-vt-demo.ts', import.meta.url)).text();"
-    },
-    {
-      "id": "ec500314696438b93ea9",
-      "file": "engine/rigged-vt-demo.test.ts",
-      "line": 56,
-      "column": 27,
-      "code": 2867,
-      "message": "Cannot find name 'Bun'. Do you need to install type definitions for Bun? Try `npm i --save-dev @types/bun`.",
-      "source": "const license = await Bun.file(new URL('../../../assets/rigged-vt/LICENSE.txt', root)).text();"
-    },
-    {
-      "id": "cb1569674487f764a3ad",
-      "file": "engine/rigged-vt-demo.test.ts",
-      "line": 59,
-      "column": 33,
-      "code": 2867,
-      "message": "Cannot find name 'Bun'. Do you need to install type definitions for Bun? Try `npm i --save-dev @types/bun`.",
-      "source": "const dragonLicense = await Bun.file(new URL('../../../assets/rigged-vt/LICENSE-DRAGON.txt', root)).text();"
-    },
-    {
-      "id": "477146aa47b2243be3df",
-      "file": "engine/surface-detail.test.ts",
-      "line": 1,
-      "column": 40,
-      "code": 2307,
-      "message": "Cannot find module 'bun:test' or its corresponding type declarations.",
-      "source": "import { describe, expect, test } from 'bun:test';"
-    },
-    {
-      "id": "bb0ba7283cdbc061d074",
-      "file": "engine/surface-detail.test.ts",
-      "line": 263,
-      "column": 26,
-      "code": 2867,
-      "message": "Cannot find name 'Bun'. Do you need to install type definitions for Bun? Try `npm i --save-dev @types/bun`.",
-      "source": "const source = await Bun.file(new URL('../dungeon.ts', import.meta.url)).text();"
-    },
-    {
-      "id": "9916144f5b6aa79568c5",
-      "file": "engine/surface-detail.test.ts",
-      "line": 296,
-      "column": 28,
-      "code": 2867,
-      "message": "Cannot find name 'Bun'. Do you need to install type definitions for Bun? Try `npm i --save-dev @types/bun`.",
-      "source": "const buffer = await Bun.file(new URL(`../dungeon-height/${name}_Height.r16`, import.meta.url)).arrayBuffer();"
-    },
-    {
-      "id": "fdc57872506343ab457f",
-      "file": "engine/virtual-texture-feedback-pass.test.ts",
-      "line": 1,
-      "column": 40,
-      "code": 2307,
-      "message": "Cannot find module 'bun:test' or its corresponding type declarations.",
-      "source": "import { describe, expect, test } from 'bun:test';"
     },
     {
       "id": "6c6d0713da2bc77443e6",
@@ -7689,24 +7536,6 @@
       "source": "this.feedbackMaps[1].clear();"
     },
     {
-      "id": "91b6fd8803e9918ef89a",
-      "file": "engine/virtual-texture-feedback.test.ts",
-      "line": 1,
-      "column": 40,
-      "code": 2307,
-      "message": "Cannot find module 'bun:test' or its corresponding type declarations.",
-      "source": "import { describe, expect, test } from 'bun:test';"
-    },
-    {
-      "id": "61ebc36c46c4111b5c46",
-      "file": "engine/virtual-texture-layout.test.ts",
-      "line": 1,
-      "column": 40,
-      "code": 2307,
-      "message": "Cannot find module 'bun:test' or its corresponding type declarations.",
-      "source": "import { describe, expect, test } from 'bun:test';"
-    },
-    {
       "id": "f6d2bc42c1b308806ba8",
       "file": "engine/virtual-texture-layout.ts",
       "line": 45,
@@ -7732,15 +7561,6 @@
       "code": 7016,
       "message": "Could not find a declaration file for module 'three'. '/home/fox/Project/afterglow-engine/crates/afterglow-web/www/node_modules/three/build/three.module.js' implicitly has an 'any' type. Try `npm i --save-dev @types/three` if it exists or add a new declaration (.d.ts) file containing `declare module 'three';`",
       "source": "import type * as THREE_TYPES from 'three';"
-    },
-    {
-      "id": "2ead4ee029c219dc66bd",
-      "file": "engine/virtual-texture-store.test.ts",
-      "line": 1,
-      "column": 57,
-      "code": 2307,
-      "message": "Cannot find module 'bun:test' or its corresponding type declarations.",
-      "source": "import { beforeAll, describe, expect, mock, test } from 'bun:test';"
     },
     {
       "id": "1ff51c77d12ce035633e",
@@ -9210,15 +9030,6 @@
       "source": "const compressed=device.features.has('texture-compression-bc')?['bc7','bc7-rgba-unorm']:device.features.has('texture-compression-astc')?['astc','astc-4x4-unorm']:null;if(compressed){const t=device.createTexture({size:[atlasWidth,atlasHeight],format:compressed[1],usage:GPUTextureUsage.COPY_DST|GPUTextureUsage.TEXTURE_BINDING}),o=[[0,0],[atlasWidth-slotSize,atlasHeight-slotSize],[Math.floor(atlasWidth/slotSize/2)*slotSize,Math.floor(atlasHeight/slotSize/2)*slotSize]];for(let n=0;n<3;n++){const blocks=new Uint8Array(34*34*16);blocks.fill(31+n);device.queue.writeTexture({texture:t,origin:o[n]},blocks,{bytesPerRow:544,rowsPerImage:34},[slotSize,slotSize]);result.compressed++}t.destroy();result.compressedFormat=compressed[0]}await device.queue.onSubmittedWorkDone();return result;"
     },
     {
-      "id": "15564ded8c4f9cf56bff",
-      "file": "engine/webgpu-only.test.ts",
-      "line": 1,
-      "column": 40,
-      "code": 2307,
-      "message": "Cannot find module 'bun:test' or its corresponding type declarations.",
-      "source": "import { describe, expect, test } from 'bun:test';"
-    },
-    {
       "id": "726c774a1a6f062f2b27",
       "file": "engine/webgpu-only.ts",
       "line": 42,
@@ -9730,6 +9541,42 @@
       "code": 7006,
       "message": "Parameter 'event' implicitly has an 'any' type.",
       "source": "renderer.backend.device.addEventListener('uncapturederror', event => errors.push(String(event.error?.message ?? event.error)));"
+    },
+    {
+      "id": "18949bb7522d70d82b5f",
+      "file": "rigged-vt-demo.ts",
+      "line": 48,
+      "column": 61,
+      "code": 2339,
+      "message": "Property 'error' does not exist on type 'Event'.",
+      "source": "addEventListener('error', event => errors.push(String(event.error?.stack ?? event.message)));"
+    },
+    {
+      "id": "0ef6dcb1ea878dfa4d57",
+      "file": "rigged-vt-demo.ts",
+      "line": 48,
+      "column": 83,
+      "code": 2339,
+      "message": "Property 'message' does not exist on type 'Event'.",
+      "source": "addEventListener('error', event => errors.push(String(event.error?.stack ?? event.message)));"
+    },
+    {
+      "id": "f76c7db0513fa9cd27e0",
+      "file": "rigged-vt-demo.ts",
+      "line": 49,
+      "column": 74,
+      "code": 2339,
+      "message": "Property 'reason' does not exist on type 'Event'.",
+      "source": "addEventListener('unhandledrejection', event => errors.push(String(event.reason?.stack ?? event.reason)));"
+    },
+    {
+      "id": "9111336e74dddb576d68",
+      "file": "rigged-vt-demo.ts",
+      "line": 49,
+      "column": 97,
+      "code": 2339,
+      "message": "Property 'reason' does not exist on type 'Event'.",
+      "source": "addEventListener('unhandledrejection', event => errors.push(String(event.reason?.stack ?? event.reason)));"
     },
     {
       "id": "3c660352a7c0667d0010",
@@ -11133,6 +10980,42 @@
       "column": 276,
       "code": 7006,
       "message": "Parameter 'e' implicitly has an 'any' type.",
+      "source": "const renderer=await createWebGPUOnlyRenderer({antialias:true}).catch(error=>{showWebGPUFailure(error);throw error});renderer.setSize(innerWidth,innerHeight);document.body.append(renderer.domElement);const errors=[];renderer.backend.device.addEventListener('uncapturederror',e=>errors.push(String(e.error?.message??e.error)));addEventListener('error',e=>errors.push(String(e.error?.stack??e.message)));addEventListener('unhandledrejection',e=>errors.push(String(e.reason?.stack??e.reason)));"
+    },
+    {
+      "id": "852aba343ca7b352415e",
+      "file": "vt-demo.ts",
+      "line": 3,
+      "column": 376,
+      "code": 2339,
+      "message": "Property 'error' does not exist on type 'Event'.",
+      "source": "const renderer=await createWebGPUOnlyRenderer({antialias:true}).catch(error=>{showWebGPUFailure(error);throw error});renderer.setSize(innerWidth,innerHeight);document.body.append(renderer.domElement);const errors=[];renderer.backend.device.addEventListener('uncapturederror',e=>errors.push(String(e.error?.message??e.error)));addEventListener('error',e=>errors.push(String(e.error?.stack??e.message)));addEventListener('unhandledrejection',e=>errors.push(String(e.reason?.stack??e.reason)));"
+    },
+    {
+      "id": "915a86ad0e1f5bfc8303",
+      "file": "vt-demo.ts",
+      "line": 3,
+      "column": 392,
+      "code": 2339,
+      "message": "Property 'message' does not exist on type 'Event'.",
+      "source": "const renderer=await createWebGPUOnlyRenderer({antialias:true}).catch(error=>{showWebGPUFailure(error);throw error});renderer.setSize(innerWidth,innerHeight);document.body.append(renderer.domElement);const errors=[];renderer.backend.device.addEventListener('uncapturederror',e=>errors.push(String(e.error?.message??e.error)));addEventListener('error',e=>errors.push(String(e.error?.stack??e.message)));addEventListener('unhandledrejection',e=>errors.push(String(e.reason?.stack??e.reason)));"
+    },
+    {
+      "id": "c81a6fa64c68a4fbe401",
+      "file": "vt-demo.ts",
+      "line": 3,
+      "column": 465,
+      "code": 2339,
+      "message": "Property 'reason' does not exist on type 'Event'.",
+      "source": "const renderer=await createWebGPUOnlyRenderer({antialias:true}).catch(error=>{showWebGPUFailure(error);throw error});renderer.setSize(innerWidth,innerHeight);document.body.append(renderer.domElement);const errors=[];renderer.backend.device.addEventListener('uncapturederror',e=>errors.push(String(e.error?.message??e.error)));addEventListener('error',e=>errors.push(String(e.error?.stack??e.message)));addEventListener('unhandledrejection',e=>errors.push(String(e.reason?.stack??e.reason)));"
+    },
+    {
+      "id": "1fc46be382adf300295f",
+      "file": "vt-demo.ts",
+      "line": 3,
+      "column": 482,
+      "code": 2339,
+      "message": "Property 'reason' does not exist on type 'Event'.",
       "source": "const renderer=await createWebGPUOnlyRenderer({antialias:true}).catch(error=>{showWebGPUFailure(error);throw error});renderer.setSize(innerWidth,innerHeight);document.body.append(renderer.domElement);const errors=[];renderer.backend.device.addEventListener('uncapturederror',e=>errors.push(String(e.error?.message??e.error)));addEventListener('error',e=>errors.push(String(e.error?.stack??e.message)));addEventListener('unhandledrejection',e=>errors.push(String(e.reason?.stack??e.reason)));"
     },
     {

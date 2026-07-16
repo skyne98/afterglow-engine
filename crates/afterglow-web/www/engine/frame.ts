@@ -2,11 +2,14 @@
 // worker polling, structural changes, transform sync, and GPU uploads
 // in a fixed order so promise/microtask timing never affects the render phase.
 
-import type { RenderAdapter } from './render-adapter.ts';
 import type { RenderFrame } from './types.ts';
-import type { VirtualPageRequest, VirtualTextureStore } from './virtual-texture.ts';
+import type { VirtualPageRequest } from './virtual-texture.ts';
 import { EnginePhase, type EngineMemory } from './engine-memory.ts';
 import { BudgetDecision, FrameBudget, FrameStage } from './frame-budget.ts';
+
+export interface FrameRenderAdapter {
+  prepareFrame(frame: RenderFrame): void;
+}
 
 /**
  * A worker input interface — the render adapter doesn't depend on the
@@ -16,15 +19,21 @@ export interface RenderWorkerInput {
   /** Poll for completed async worker calls (resolves pending promises). */
   poll(): void;
   /** Drain any structural commands (spawn/despawn/reparent) from workers. */
-  drainStructuralCommands?(adapter: RenderAdapter): void;
+  drainStructuralCommands?(adapter: FrameRenderAdapter): void;
   /** Drain physics pose batches and apply to ECS. */
-  drainPoseBatches?(adapter: RenderAdapter): void;
+  drainPoseBatches?(adapter: FrameRenderAdapter): void;
+}
+
+export interface FrameVirtualTextureStore {
+  recordFrameTime(frameTimeMs: number): void;
+  processFeedback(feedback: ReadonlyMap<unknown, VirtualPageRequest>): void;
+  poll(): void;
 }
 
 /** Optional VT input — if present, VT feedback is processed each frame. */
 export interface VTInput {
   /** The virtual texture store. */
-  store: VirtualTextureStore;
+  store: FrameVirtualTextureStore;
   /** Feedback from the previous frame's feedback pass (page requests). */
   feedback: ReadonlyMap<unknown, VirtualPageRequest>;
   /** Latest rAF presentation interval in milliseconds, for VT auto-tuning. */
@@ -53,7 +62,7 @@ export interface VTInput {
 export function prepareAfterglowFrame(
   frame: RenderFrame,
   workerInput: RenderWorkerInput | null,
-  adapter: RenderAdapter,
+  adapter: FrameRenderAdapter,
   vtInput?: VTInput,
   memory?: EngineMemory,
   budget?: FrameBudget,
