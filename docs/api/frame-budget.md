@@ -50,3 +50,13 @@ a typed deferred status. Rendering is never left half-committed.
 `FrameBudgetRes` exposes the default resource. The default cumulative deadline
 fractions are 15%, 35%, 45%, 55%, and 95% of the measured frame interval, with
 one top-level invocation per stage.
+
+## Diagnostic frame capture
+
+`engine/bench.ts` provides `FrameBench`. Construction reserves two fixed
+`Float64Array` buffers at the declared capacity. `start(sampleCount)` returns a
+typed invalid-count status instead of growing. `tick(timestamp)` only records a
+numeric interval and marks results pending when full. Sorting, percentile
+calculation, callbacks, and formatting happen only when diagnostic code calls
+`finish()` outside the frame hot path. One caller-visible result object is
+reused across runs.

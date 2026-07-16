@@ -42,6 +42,7 @@
     "FrameBudget.beginFrame": "frame-budget.ts",
     "FrameBudget.beginStage": "frame-budget.ts",
     "FrameBudget.endStage": "frame-budget.ts",
+    "FrameBench.tick": "bench.ts",
     "LinearArena.allocate": "engine-memory.ts",
     "LinearArena.reset": "engine-memory.ts",
     "FixedIndexPool.acquire": "engine-memory.ts",

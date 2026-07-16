@@ -1,7 +1,16 @@
 # Benchmarking & Latency
 
-Two benchmarks measure the worker transports; the `latency-tool` measures
-input→present on a running CEF app.
+Two benchmarks measure the worker transports; `FrameBench` measures rAF
+production intervals; the `latency-tool` measures input→present on a running CEF
+app.
+
+## Frame production benchmark
+
+`FrameBench` reserves fixed timestamp and sorting buffers at construction.
+`tick(timestamp)` only records intervals in the frame path. Once capture is
+complete, diagnostic code calls `finish()` to sort and calculate
+p50/p90/p99/max outside the hot path. Invalid sample counts return a typed status
+instead of growing storage, and one result object is reused across runs.
 
 ## Native service-RPC benchmark
 
