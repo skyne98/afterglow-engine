@@ -1,6 +1,10 @@
 import * as THREE from 'three';
 import { pagesAtMipAxis } from './virtual-texture-layout.ts';
-import type { VirtualPageRequest, VirtualTextureStore } from './virtual-texture.ts';
+import type { VirtualPageRequest, VirtualTextureEntry } from './virtual-texture.ts';
+
+export interface FeedbackTextureStore {
+  getEntryById(textureId: number): VirtualTextureEntry | undefined;
+}
 
 /**
  * Reduced-resolution RG32Uint feedback renderer with asynchronous readback.
@@ -57,6 +61,8 @@ export class VirtualTextureFeedbackPass {
     }
   }
 
+  get canSubmit(): boolean { return !this.pending && this.completed === null; }
+
   /** Submit a pass and start readback unless the previous read is still pending. */
   submit(
     renderer: {
@@ -69,13 +75,16 @@ export class VirtualTextureFeedbackPass {
     },
     feedbackScene: THREE.Scene,
     camera: THREE.Camera,
-    store: VirtualTextureStore,
+    store: FeedbackTextureStore,
   ): boolean {
-    if (this.pending || this.completed !== null) return false;
+    if (!this.canSubmit) return false;
     const previous = renderer.getRenderTarget();
-    renderer.setRenderTarget(this.target);
-    renderer.render(feedbackScene, camera);
-    renderer.setRenderTarget(previous);
+    try {
+      renderer.setRenderTarget(this.target);
+      renderer.render(feedbackScene, camera);
+    } finally {
+      renderer.setRenderTarget(previous);
+    }
 
     this.pending = true;
     renderer.readRenderTargetPixelsAsync(this.target, 0, 0, this.width, this.height)

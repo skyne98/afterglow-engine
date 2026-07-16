@@ -67581,13 +67581,19 @@ class VirtualTextureFeedbackPass {
         this.requestPool[index] = { path: "", mip: 0, x: 0, y: 0 };
     }
   }
+  get canSubmit() {
+    return !this.pending && this.completed === null;
+  }
   submit(renderer, feedbackScene, camera, store) {
-    if (this.pending || this.completed !== null)
+    if (!this.canSubmit)
       return false;
     const previous = renderer.getRenderTarget();
-    renderer.setRenderTarget(this.target);
-    renderer.render(feedbackScene, camera);
-    renderer.setRenderTarget(previous);
+    try {
+      renderer.setRenderTarget(this.target);
+      renderer.render(feedbackScene, camera);
+    } finally {
+      renderer.setRenderTarget(previous);
+    }
     this.pending = true;
     renderer.readRenderTargetPixelsAsync(this.target, 0, 0, this.width, this.height).then((raw) => {
       const words = raw instanceof Uint32Array ? raw : new Uint32Array(raw.buffer, raw.byteOffset, Math.floor(raw.byteLength / 4));
@@ -68707,6 +68713,43 @@ class VirtualTextureStore {
     }
     return 0;
   }
+  buildEffectiveFeedbackBatch(feedbackMaps, mapCount) {
+    const capacity = Math.max(1, this.cache.totalSlots - this.cache.pinnedSlots);
+    const count = Math.min(mapCount, feedbackMaps.length);
+    for (let bias = 0;bias <= MAX_MIP; bias++) {
+      this.feedbackScratchKeys.clear();
+      this.feedbackScratchCount = 0;
+      let fits = true;
+      outer:
+        for (let mapIndex = 0;mapIndex < count; mapIndex++) {
+          const feedback = feedbackMaps[mapIndex];
+          if (feedback === null || feedback === undefined)
+            continue;
+          for (const source of feedback.values()) {
+            const textureId = source.textureId ?? this.entries.get(source.path)?.textureId ?? 0;
+            const group = this.materialGroupIdsById[textureId];
+            if (group) {
+              for (const channelId of group) {
+                if (!this.addFeedbackRequest(channelId, source, bias, capacity)) {
+                  fits = false;
+                  break outer;
+                }
+              }
+            } else if (!this.addFeedbackRequest(textureId, source, bias, capacity)) {
+              fits = false;
+              break outer;
+            }
+          }
+        }
+      if (fits || bias === MAX_MIP) {
+        this.capacityLodBias = bias;
+        if (!fits)
+          this.schedulerOverflows++;
+        return this.feedbackScratchCount;
+      }
+    }
+    return 0;
+  }
   copyRequest(target, source) {
     target.textureId = source.textureId;
     target.path = source.path;
@@ -68860,7 +68903,13 @@ class VirtualTextureStore {
   }
   processFeedback(feedback) {
     this.feedbackEpoch++;
-    const effectiveCount = this.buildEffectiveFeedback(feedback);
+    return this.commitEffectiveFeedback(this.buildEffectiveFeedback(feedback));
+  }
+  processFeedbackBatch(feedbackMaps, mapCount) {
+    this.feedbackEpoch++;
+    return this.commitEffectiveFeedback(this.buildEffectiveFeedbackBatch(feedbackMaps, mapCount));
+  }
+  commitEffectiveFeedback(effectiveCount) {
     for (let index = 0;index < effectiveCount; index++)
       this.rememberRequest(this.feedbackScratch[index]);
     this.cancelStalePending();

@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, mock, test } from 'bun:test';
+import * as RealThree from 'three/webgpu';
 import { packedPageTableIndex } from './virtual-texture-layout.ts';
 import type { PageRequest, VirtualPageRequest } from './virtual-texture.ts';
 
@@ -15,6 +16,7 @@ class RenderTarget {
   dispose() {}
 }
 const threeMock = {
+  ...RealThree,
   Texture, DataTexture, CompressedTexture, RenderTarget,
   RGBAFormat: 1, RedIntegerFormat: 2, UnsignedIntType: 3, RGIntegerFormat: 6,
   RGBA_BPTC_Format: 36492, RGBA_ASTC_4x4_Format: 37808,
@@ -279,6 +281,27 @@ describe('VirtualTextureStore residency identity', () => {
         .map(entry => entry.pageTable[index] & 1);
       expect(new Set(states).size).toBe(1);
     }
+  });
+
+  test('merges several feedback passes into one visibility epoch', async () => {
+    const calls: string[] = [];
+    const store = new VT.VirtualTextureStore(loader, async (path) => {
+      calls.push(path);
+      return new Uint8Array(PAGE_BYTES);
+    });
+    store.loadTexture('batch-a', { width: 512, height: 512 });
+    store.loadTexture('batch-b', { width: 512, height: 512 });
+    await settle(store);
+    calls.length = 0;
+    const maps = [
+      new Map([['a', { path: 'batch-a', mip: 0, x: 0, y: 0 }]]),
+      new Map([['b', { path: 'batch-b', mip: 0, x: 1, y: 0 }]]),
+    ];
+    const result = store.processFeedbackBatch(maps, maps.length);
+    expect(result.totalRequests).toBeGreaterThan(1);
+    await settle(store);
+    expect(calls).toContain('batch-a');
+    expect(calls).toContain('batch-b');
   });
 
   test('owns async page coordinates when scheduler scratch slots are reused', async () => {

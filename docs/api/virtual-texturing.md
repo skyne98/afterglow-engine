@@ -49,17 +49,34 @@ fixed per-frame page upload budget.
   `atlasPagesX`, and `atlasPagesY` report the device-sized physical atlas.
 - `PAGE_SIZE`, `PAGE_BORDER`, `SLOT_SIZE`, `ATLAS_WIDTH`, and `ATLAS_HEIGHT`
   expose shader/layout constants without duplicating them in clients.
-- `VirtualTextureFeedbackPass(scale?)` renders a supplied feedback-material scene
-  into an `RG32Uint` target at reduced resolution and performs non-blocking
-  readback. `resize(displayWidth, displayHeight)` updates the target and stable
+- `VirtualTextureFeedbackCoordinator(renderer, store, capacities)` is the
+  application-facing feedback owner. Capacities explicitly bound registered
+  renderables, total channel passes, cadence, and target count. A
+  `FeedbackRenderable` supplies its scene/camera, fixed pass count, active state,
+  and begin/end material hooks. The coordinator preallocates all low-level
+  passes, owns resize/warm/seal/disposal, disables and restores shadows, and
+  restores render targets/material state with `try/finally`. It implements both
+  `EngineRenderPass` and `RenderWorkerInput`: rendering submits one logical
+  snapshot and worker polling publishes it only after every asynchronous channel
+  readback completes. Partial snapshots are discarded, never used to cancel
+  another channel's pages. Registration returns explicit invalid-count,
+  capacity, or sealed statuses. Stable telemetry reports submitted, completed,
+  discarded, deferred, and active-pass counts.
+- `VirtualTextureStore.processFeedbackBatch(maps, count)` merges several maps as
+  one visibility epoch using preallocated expansion/deduplication scratch. It
+  does not build a transient merged `Map`.
+- `VirtualTextureFeedbackPass(scale?)` is the low-level target/readback primitive
+  used by the coordinator. It renders a supplied feedback-material scene into an
+  `RG32Uint` target and performs non-blocking readback.
+  `resize(displayWidth, displayHeight)` updates the target and stable
   `pixelScale: Vector2` (`feedback pixels / physical display pixels`) used by
-  feedback shaders for exact derivative correction. `consume()` returns `null` when no newer readback has completed, distinguishing
-  that state from a completed readback containing zero pages. Readback decoding
-  alternates two retained Maps, uses request objects pooled at `resize()`, and
-  reuses fixed mip scratch. Duplicate pixels retain the closest-to-center sample
-  and accumulate bounded screen coverage for admission priority; a second submit
-  is deferred until the previous map
-  is consumed so pooled records cannot be mutated under a consumer.
+  feedback shaders for exact derivative correction. `consume()` returns `null`
+  when no newer readback has completed, distinguishing that state from a
+  completed readback containing zero pages. Readback decoding alternates two
+  retained Maps, uses request objects pooled at `resize()`, and reuses fixed mip
+  scratch. Duplicate pixels retain the closest-to-center sample and accumulate
+  bounded screen coverage. `canSubmit` supports atomic preflight, and render
+  target restoration is exception-safe.
 - `getDebugSnapshot()`, `setDebugPaused()`, `setDebugPageBudget()`, and
   `VirtualTextureDebugController` support reusable atlas and slow-residency UIs.
   Stats include ready uploads, rejected admissions, queue capacity, stage time

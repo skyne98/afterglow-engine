@@ -33,8 +33,13 @@ page-table writes reuse fixed upload scratch instead of creating typed-array
 views. Atlas page bytes must use an owned `ArrayBuffer`; incompatible shared
 views are rejected at the WebGPU boundary. Each frame,
 poll the store and submit the previous globally identified feedback results with
-`processFeedback()`. `VirtualTextureFeedbackPass` provides the reduced-resolution
-`RG32Uint` render target and asynchronous readback. It tracks the exact feedback-
+`processFeedback()`. Applications register fixed `FeedbackRenderable` records
+with `VirtualTextureFeedbackCoordinator`, which owns target capacity, cadence,
+warm-up, renderer-state restoration, and disposal. Multi-channel readbacks are
+published atomically through `processFeedbackBatch()` only after every pass in
+the logical snapshot completes, so one late channel cannot cancel another.
+`VirtualTextureFeedbackPass` is the coordinator's low-level reduced-resolution
+`RG32Uint` target and asynchronous readback primitive. It tracks the exact feedback-
 to-physical-pixel scale after resize, so shader derivatives are converted back
 to physical screen pixels before mip selection. Quality bias zero therefore
 keeps approximately one to two source texels per screen pixel across arbitrary

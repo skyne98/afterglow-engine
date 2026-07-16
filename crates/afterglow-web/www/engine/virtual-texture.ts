@@ -1421,6 +1421,47 @@ export class VirtualTextureStore {
   }
   // @hot-no-alloc-end VirtualTextureStore.buildEffectiveFeedback
 
+  /** Atomic multi-pass variant: all maps form one visibility epoch. */
+  // @hot-no-alloc-begin VirtualTextureStore.buildEffectiveFeedbackBatch
+  private buildEffectiveFeedbackBatch(
+    feedbackMaps: ReadonlyArray<ReadonlyMap<unknown, VirtualPageRequest> | null>,
+    mapCount: number,
+  ): number {
+    const capacity = Math.max(1, this.cache.totalSlots - this.cache.pinnedSlots);
+    const count = Math.min(mapCount, feedbackMaps.length);
+    for (let bias = 0; bias <= MAX_MIP; bias++) {
+      this.feedbackScratchKeys.clear();
+      this.feedbackScratchCount = 0;
+      let fits = true;
+      outer: for (let mapIndex = 0; mapIndex < count; mapIndex++) {
+        const feedback = feedbackMaps[mapIndex];
+        if (feedback === null || feedback === undefined) continue;
+        for (const source of feedback.values()) {
+          const textureId = source.textureId ?? this.entries.get(source.path)?.textureId ?? 0;
+          const group = this.materialGroupIdsById[textureId];
+          if (group) {
+            for (const channelId of group) {
+              if (!this.addFeedbackRequest(channelId, source, bias, capacity)) {
+                fits = false;
+                break outer;
+              }
+            }
+          } else if (!this.addFeedbackRequest(textureId, source, bias, capacity)) {
+            fits = false;
+            break outer;
+          }
+        }
+      }
+      if (fits || bias === MAX_MIP) {
+        this.capacityLodBias = bias;
+        if (!fits) this.schedulerOverflows++;
+        return this.feedbackScratchCount;
+      }
+    }
+    return 0;
+  }
+  // @hot-no-alloc-end VirtualTextureStore.buildEffectiveFeedbackBatch
+
   // @hot-no-alloc-begin VirtualTextureStore.schedulePriority
   private copyRequest(target: VirtualPageRequest, source: VirtualPageRequest): void {
     target.textureId = source.textureId;
@@ -1577,7 +1618,19 @@ export class VirtualTextureStore {
   /** Merge one feedback frame into the persistent bounded request scheduler. */
   processFeedback(feedback: ReadonlyMap<unknown, VirtualPageRequest>) {
     this.feedbackEpoch++;
-    const effectiveCount = this.buildEffectiveFeedback(feedback);
+    return this.commitEffectiveFeedback(this.buildEffectiveFeedback(feedback));
+  }
+
+  /** Commit several completed feedback passes as one visibility epoch. */
+  processFeedbackBatch(
+    feedbackMaps: ReadonlyArray<ReadonlyMap<unknown, VirtualPageRequest> | null>,
+    mapCount: number,
+  ) {
+    this.feedbackEpoch++;
+    return this.commitEffectiveFeedback(this.buildEffectiveFeedbackBatch(feedbackMaps, mapCount));
+  }
+
+  private commitEffectiveFeedback(effectiveCount: number) {
     for (let index = 0; index < effectiveCount; index++)
       this.rememberRequest(this.feedbackScratch[index]);
     this.cancelStalePending();

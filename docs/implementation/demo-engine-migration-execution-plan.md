@@ -74,7 +74,10 @@ Implemented on 2026-07-17:
 - DME-012: `engine-demo.ts` is the first `canonical` visual entrypoint and uses
   the runtime, render adapter, renderer host, explicit capacities, and one Three
   module identity;
-- DME-013: fixed-capacity `FrameBench` capture with explicit diagnostic finish.
+- DME-013: fixed-capacity `FrameBench` capture with explicit diagnostic finish;
+- DME-020 mechanism: fixed-capacity `VirtualTextureFeedbackCoordinator`,
+  exception-safe renderer state, and atomic multi-pass feedback publication are
+  implemented and tested; demo migrations remain DME-030–032.
 
 The machine-readable source of truth remains `engine-conformance.json`; this
 progress note does not override its gates.
