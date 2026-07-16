@@ -25,7 +25,7 @@ const targets = [
   ['engine/procedural-vt.ts', 'engine/procedural-vt.js'],
   ['engine/vt-gpu-test.ts', 'engine/vt-gpu-test.js'],
   ['engine-bundle-input.ts', 'engine-bundle.js'],
-  ['vt-dungeon.ts', 'vt-dungeon.js'],
+  ['dungeon.ts', 'dungeon.js'],
   ['vt-demo.ts', 'vt-demo.js'],
   ['vt-mip-inspector.ts', 'vt-mip-inspector.js'],
   ['engine-demo.ts', 'engine-demo.js'],

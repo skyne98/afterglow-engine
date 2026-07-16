@@ -65674,6 +65674,52 @@ class RelativePointerInput {
   }
 }
 
+// crates/afterglow-web/www/engine/surface-detail.ts
+var POM_UV_WGSL = `
+fn pomMarchUV(
+  heightTexture: texture_2d<f32>, heightSampler: sampler,
+  baseUV: vec2f, viewDir: vec3f, heightScale: f32,
+  minLayers: u32, maxLayers: u32, maxDistance: f32, viewDistance: f32
+) -> vec2f {
+  if (heightScale <= 0.0 || maxDistance <= 0.0 || viewDistance >= maxDistance) {
+    return baseUV;
+  }
+  let fade = 1.0 - smoothstep(maxDistance * 0.65, maxDistance, viewDistance);
+  let scale = heightScale * fade;
+  if (scale <= 0.00001) { return baseUV; }
+
+  let v = normalize(viewDir);
+  let vz = max(abs(v.z), 0.001);
+  let low = max(1u, min(minLayers, maxLayers));
+  let high = max(low, maxLayers);
+  let layerCount = max(low, min(high, u32(mix(f32(high), f32(low), abs(v.z)) + 0.5)));
+  let layerDepth = 1.0 / f32(layerCount);
+  let deltaUV = v.xy * scale / (vz * f32(layerCount));
+
+  var currentUV = baseUV;
+  var currentDepth = 0.0;
+  var previousUV = baseUV;
+  var previousDepth = 0.0;
+  var previousHeight = textureSampleLevel(heightTexture, heightSampler, baseUV, 0.0).r;
+  for (var i = 0u; i < layerCount; i = i + 1u) {
+    currentUV = currentUV - deltaUV;
+    currentDepth = currentDepth + layerDepth;
+    let sampledHeight = textureSampleLevel(heightTexture, heightSampler, currentUV, 0.0).r;
+    if (sampledHeight < currentDepth) {
+      let afterDepth = sampledHeight - currentDepth;
+      let beforeDepth = previousHeight - previousDepth;
+      let denominator = afterDepth - beforeDepth;
+      let weight = select(0.5, clamp(afterDepth / denominator, 0.0, 1.0), abs(denominator) > 0.00001);
+      return mix(currentUV, previousUV, weight);
+    }
+    previousUV = currentUV;
+    previousDepth = currentDepth;
+    previousHeight = sampledHeight;
+  }
+  return currentUV;
+}
+`;
+
 // crates/afterglow-web/www/engine/asset-handle.ts
 class AssetHandle {
   asset;
@@ -67411,6 +67457,78 @@ fn vtSampleLevel(
   );
 }
 `;
+var VT_SAMPLE_FROM_LEVEL_WGSL = `
+fn vtSampleFromLevel(
+  pageTable: texture_2d<u32>, atlas: texture_2d<f32>, atlasSampler: sampler,
+  sampleUV: vec2f, gradientUV: vec2f,
+  virtualSize: vec2f, pageGrid: vec2f, pageSize: f32, pageBorder: f32,
+  atlasSize: vec2f, maxMip: f32, resolvedMip: f32, addressMode: u32
+) -> vec4f {
+  var addressedUV = clamp(sampleUV, vec2f(0.0), vec2f(0.99999994));
+  if (addressMode == 1u) {
+    addressedUV = fract(sampleUV);
+  } else if (addressMode == 2u) {
+    let period = sampleUV - floor(sampleUV * 0.5) * 2.0;
+    addressedUV = select(period, 2.0 - period, period > vec2f(1.0));
+    addressedUV = clamp(addressedUV, vec2f(0.0), vec2f(0.99999994));
+  }
+
+  let requested = i32(resolvedMip);
+  let maxLevel = i32(maxMip);
+  var entry = 0u;
+  var selected = -1;
+  var selectedPage = vec2i(0);
+  var selectedSize = vec2f(1.0);
+  if (requested <= maxLevel) {
+    for (var mip = max(0, requested); mip <= maxLevel; mip = mip + 1) {
+      let scale = exp2(-f32(mip));
+      let grid = max(ceil(pageGrid * scale), vec2f(1.0));
+      let mipSize = max(floor(virtualSize * scale), vec2f(1.0));
+      let page = vec2i(min(floor(addressedUV * mipSize / pageSize), grid - 1.0));
+      var offset = 0.0;
+      for (var level = 0; level < mip; level = level + 1) {
+        offset += max(1.0, ceil(pageGrid.y / exp2(f32(level))));
+      }
+      let candidate = textureLoad(pageTable, vec2i(page.x, page.y + i32(offset)), 0).r;
+      if ((candidate & 1u) != 0u) {
+        entry = candidate; selected = mip; selectedPage = page; selectedSize = mipSize;
+        break;
+      }
+    }
+  }
+
+  if (selected >= 0) {
+    let local = addressedUV * selectedSize - vec2f(selectedPage) * pageSize;
+    let origin = vec2f(f32((entry >> 1) & 0xFFu), f32((entry >> 9) & 0xFFu)) * (pageSize + pageBorder * 2.0);
+    let atlasUV = (origin + pageBorder + local) / atlasSize;
+    let gradientScale = selectedSize / atlasSize;
+    return textureSampleGrad(atlas, atlasSampler, atlasUV,
+      dpdx(gradientUV) * gradientScale, dpdy(gradientUV) * gradientScale);
+  }
+
+  var tailOffset = 0.0;
+  for (var level = 0; level < maxLevel; level = level + 1) {
+    tailOffset += max(1.0, ceil(pageGrid.y / exp2(f32(level))));
+  }
+  let tailEntry = textureLoad(pageTable, vec2i(1, i32(tailOffset)), 0).r;
+  if ((tailEntry & 1u) == 0u) { return vec4f(0.5, 0.5, 0.5, 1.0); }
+  let tailMip = max(maxLevel + 1, requested);
+  let delta = tailMip - maxLevel;
+  var rectOrigin = vec2f(0.0);
+  if (delta == 2) { rectOrigin = vec2f(72.0, 0.0); }
+  else if (delta == 3) { rectOrigin = vec2f(112.0, 0.0); }
+  else if (delta == 4) { rectOrigin = vec2f(72.0, 40.0); }
+  else if (delta == 5) { rectOrigin = vec2f(88.0, 40.0); }
+  else if (delta == 6) { rectOrigin = vec2f(100.0, 40.0); }
+  else if (delta >= 7) { rectOrigin = vec2f(110.0, 40.0); }
+  let tailSize = max(vec2f(1.0), floor(virtualSize / exp2(f32(tailMip))));
+  let slot = vec2f(f32((tailEntry >> 1) & 0xFFu), f32((tailEntry >> 9) & 0xFFu)) * (pageSize + pageBorder * 2.0);
+  let atlasUV = (slot + rectOrigin + pageBorder + addressedUV * tailSize) / atlasSize;
+  let gradientScale = tailSize / atlasSize;
+  return textureSampleGrad(atlas, atlasSampler, atlasUV,
+    dpdx(gradientUV) * gradientScale, dpdy(gradientUV) * gradientScale);
+}
+`;
 var VT_FEEDBACK_WGSL = `
 fn vtFeedback(
   uv: vec2f,
@@ -67465,6 +67583,7 @@ window.AfterglowStorage = {
   persistentCacheNamespace
 };
 window.AfterglowInput = { RelativePointerInput };
+window.AfterglowSurfaceDetail = { POM_UV_WGSL };
 window.AfterglowVT = {
   VirtualTextureStore,
   VirtualTextureTuning,
@@ -67472,6 +67591,7 @@ window.AfterglowVT = {
   VirtualTextureFeedbackPass,
   VT_SAMPLE_WGSL,
   VT_SAMPLE_LEVEL_WGSL,
+  VT_SAMPLE_FROM_LEVEL_WGSL,
   VT_RESOLVE_MATERIAL_MIP4_WGSL,
   VT_FEEDBACK_WGSL,
   FORMAT_RGBA,

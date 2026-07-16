@@ -60,7 +60,9 @@ fixed per-frame page upload budget.
 - `VT_SAMPLE_WGSL` and `VT_FEEDBACK_WGSL` contain the sampling and feedback
   shader functions. `VT_RESOLVE_MATERIAL_MIP4_WGSL` resolves one level that is
 resident in all four PBR page tables; `VT_SAMPLE_LEVEL_WGSL` samples each
-channel exactly at that shared level. This provides atomic material visibility
+channel exactly at that shared level. `VT_SAMPLE_FROM_LEVEL_WGSL` starts a
+displaced sample at that level, walks to coarser resident pages, then uses the
+pinned tail while retaining gradients from a separate continuous base UV. This provides atomic material visibility
 even when channel completions arrive separately. Clock eviction of one material
 page also removes the same logical page from every resident channel in constant
 group-size work, so mixed residency cannot persist.
@@ -219,23 +221,26 @@ page-table implementation.
 terrain texture (256 GiB logical RGBA). It supports WASD pan, overview and
 one-texel zoom plus deterministic programmatic camera control.
 
-`afterglow-cef --example vt-dungeon` is a first-person corridor dungeon using
+`afterglow-cef --example dungeon` is a first-person corridor dungeon using
 three downloaded 8K PBR sets across twelve wall instances. Two sets are
 8192×8192 and one is natively rectangular at 8192×4096. Albedo, OpenGL normal,
 roughness, and AO pages stream together through linked material feedback while
-all walls share the engine atlas. Interactive
-controls are WASD, Shift sprint, pointer-lock mouse look, reset, and three test
-poses. `window.__afterglowVtDungeon` exposes `setProgrammatic`, `setPose`,
-`getPose`, `move`, `look`, `step`, `waitForIdle`, allocation-free `telemetry`,
-`errorCount`, `snapshot`, and `runScenario`.
+all walls share the engine atlas. Compact resident 1K AO maps from the same
+materials drive the 8–32-layer, 3.25 m distance-faded POM tier; displaced
+albedo uses `VT_SAMPLE_FROM_LEVEL_WGSL` for coarser-page/tail fallback.
+Interactive controls are WASD, Shift sprint, raw pointer-lock mouse look, POM
+(**P**), reset, and three test poses. `window.__afterglowDungeon` exposes
+`setProgrammatic`, `setPomEnabled`, `pomStatus`, `setPose`, `getPose`, `move`,
+`look`, `step`, `waitForIdle`, allocation-free `telemetry`, `errorCount`,
+`snapshot`, and `runScenario`.
 
 ```sh
 nix-shell shell.nix --run "cargo build --example vt-demo -p afterglow-cef"
-DISPLAY=:0 ./scripts/run-vt-dungeon.sh
-DISPLAY=:0 ./scripts/test-vt-dungeon-gpu.sh
+DISPLAY=:0 ./scripts/run-dungeon.sh
+DISPLAY=:0 ./scripts/test-dungeon-gpu.sh
 # With the dungeon already running; writes raw per-second CDP samples:
-./scripts/soak-vt-dungeon.sh 600 traverse vt-traverse-10m.log
-./scripts/soak-vt-dungeon.sh 600 thrash vt-thrash-10m.log
+./scripts/soak-dungeon.sh 600 traverse vt-traverse-10m.log
+./scripts/soak-dungeon.sh 600 thrash vt-thrash-10m.log
 # Deterministic occupancy states (run cold → half → full → churn in one process):
 ./scripts/baseline-vt-atlas.sh half vt-atlas-half.log
 ```

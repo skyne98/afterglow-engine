@@ -85,7 +85,7 @@ The first KISS pass has landed:
   enforces artifact drift, 21 marked hot regions, fixed browser storage tests,
   and Rust tracked-allocation regressions. A machine-checked effect manifest
   classifies all marked regions and budgeted/bootstrap boundaries.
-- `soak-vt-dungeon.sh` captures stable/traversal/thrash frame buckets and VT
+- `soak-dungeon.sh` captures stable/traversal/thrash frame buckets and VT
   queue/cache counters to raw CDP logs without per-frame debug snapshots.
 - Hierarchy updates maintain fixed linked siblings and rebuild into a second
   typed order buffer at 512 operations / 0.2 ms per frame; commit forces child
@@ -191,11 +191,11 @@ This audit follows data from offline source files to final Three.js PBR shading.
 - `crates/afterglow-web/www/engine/virtual-texture-feedback.ts`
 - `crates/afterglow-web/www/engine/virtual-texture-feedback-pass.ts`
 - `crates/afterglow-web/www/engine/virtual-texture.ts`
-- `crates/afterglow-web/www/vt-dungeon.html`
+- `crates/afterglow-web/www/dungeon.html`
 
 ### Concrete audited asset
 
-`/tmp/afterglow-vt-dungeon-materials-v1/vt-dungeon.big`:
+`/tmp/afterglow-dungeon-materials-v1/dungeon.big`:
 
 | Property | Value |
 |---|---:|
@@ -434,7 +434,7 @@ and reads back only unique requests plus coverage counts.
 
 #### VT-A08: Four independent shader fallback walks per PBR fragment
 
-**Code:** `VT_SAMPLE_WGSL` plus `sampleEntry()` in `vt-dungeon.html`.
+**Code:** `VT_SAMPLE_WGSL` plus `sampleEntry()` in `dungeon.html`.
 
 Albedo, normal, roughness, and AO each recompute derivatives and independently
 walk from desired mip toward a resident ancestor. In a fully resident view this

@@ -10,7 +10,7 @@ admission budget, four uploads per poll, a 0.25 ms scheduler budget, and a
 ## Method
 
 `baseline-vt-atlas.sh` invokes deterministic diagnostic feedback through
-`window.__afterglowVtDungeon.runAtlasScenario()`:
+`window.__afterglowDungeon.runAtlasScenario()`:
 
 - **cold:** wait for pinned mip tails and startup feedback to settle;
 - **half:** request unique mip-0 material groups until at least 50% occupancy;

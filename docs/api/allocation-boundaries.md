@@ -10,6 +10,7 @@ game-facing APIs necessarily allocate.
 | Worker RPC convenience Promise | `gameFacing` | JS Promise and owned response envelope | 256 task slots; 32 completions/poll; capacity rejection |
 | Persistent blob cache | `budgeted` | SHA-256, OPFS/IndexedDB I/O, value buffers, maintenance Promise | Caller hard byte/item limits; fixed LRU/index, bounded write queue, 75% low-water two-generation compaction |
 | Relative pointer input | `budgeted` | Browser event objects and pointer-lock permission Promise | One prebound passive handler; authored movement callback allocates nothing; raw event with deterministic fallback |
+| Surface detail / POM | `none` hot path | GPU fragment work only; resident height textures allocated at bootstrap | 8–32 bounded layers, 3.25 m fade/cutoff; prewarmed base/POM material references |
 | Basis transcode | `budgeted` | Codec output and postcard response vectors | Shared 64-job ring over 2–4 independent one-in-flight workers; output bytes counted by VT admission |
 | Image/model parse | `budgeted` | `Blob`, `createImageBitmap`, GLTF/Three objects | Fixed AssetStore IDs and completion ring; loading/warm-up only |
 | Feedback readback | `budgeted` | Three/WebGPU asynchronous readback buffer | One outstanding readback; two retained maps and pooled requests |

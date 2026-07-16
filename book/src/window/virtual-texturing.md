@@ -102,10 +102,10 @@ extreme per-frame teleport/cache-thrash tests dropped one frame per 600.
 Use **WASD** to pan, the mouse wheel to zoom, **P** for a one-texel view, and
 **O** for the full overview.
 
-The `vt-dungeon` example is a minimal first-person corridor using three scanned
+The `dungeon` example is a minimal first-person corridor using three scanned
 8K PBR materials. A demo script extracts their albedo, OpenGL normal, roughness,
-and AO PNGs, runs the generic asset pipeline once, and caches the resulting
-Basis `.big` container under `/tmp`. At runtime exact serving-layer
+and AO PNGs and runs the generic asset pipeline once to produce the ignored
+`www/dungeon.big` deployment asset. At runtime exact serving-layer
 `fetch + Range` reads and a fixed two-to-four `TextureWorker` pool stream pages
 without the former page-side AssetLoader latency. Final GPU blocks are also
 stored through the generic persistent cache under a source/format/adapter
@@ -116,16 +116,18 @@ Three.js's PBR shader. The shared atlas expands to the largest whole page grid
 supported by the active GPU:
 
 ```sh
-DISPLAY=:0 ./scripts/run-vt-dungeon.sh
-DISPLAY=:0 ./scripts/test-vt-dungeon-gpu.sh
+DISPLAY=:0 ./scripts/run-dungeon.sh
+DISPLAY=:0 ./scripts/test-dungeon-gpu.sh
 # With the dungeon running, capture per-second telemetry and frame timing:
-./scripts/soak-vt-dungeon.sh 600 traverse vt-traverse-10m.log
+./scripts/soak-dungeon.sh 600 traverse vt-traverse-10m.log
 ./scripts/baseline-vt-atlas.sh full vt-atlas-full.log
 ```
 
-Click for mouse look; use **WASD**, **Shift**, **R**, and **1–3** for movement,
-sprint, reset, and deterministic viewpoints. Automated clients use
-`window.__afterglowVtDungeon` for exact poses, collision-aware movement, frame
+Click for raw mouse look; use **WASD**, **Shift**, **P**, **R**, and **1–3** for
+movement, sprint, prewarmed close-range POM toggle, reset, and deterministic
+viewpoints. The POM tier uses compact resident AO height from the same scanned
+stone materials while the 8K PBR channels remain virtual. Automated clients use
+`window.__afterglowDungeon` for exact poses, collision-aware movement, frame
 stepping, idle waits, allocation-free telemetry reads, snapshots, and named
 scenarios. Soak modes are `stable`, `traverse`, and deliberately hostile
 `thrash`; atlas baselines are `cold`, `half`, `full`, and `churn`. The desktop

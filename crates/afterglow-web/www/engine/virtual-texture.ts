@@ -2173,6 +2173,80 @@ fn vtSampleLevel(
 }
 `;
 
+/** Sample a displaced UV from a resolved level, walking to coarser pages. */
+export const VT_SAMPLE_FROM_LEVEL_WGSL = /* wgsl */ `
+fn vtSampleFromLevel(
+  pageTable: texture_2d<u32>, atlas: texture_2d<f32>, atlasSampler: sampler,
+  sampleUV: vec2f, gradientUV: vec2f,
+  virtualSize: vec2f, pageGrid: vec2f, pageSize: f32, pageBorder: f32,
+  atlasSize: vec2f, maxMip: f32, resolvedMip: f32, addressMode: u32
+) -> vec4f {
+  var addressedUV = clamp(sampleUV, vec2f(0.0), vec2f(0.99999994));
+  if (addressMode == 1u) {
+    addressedUV = fract(sampleUV);
+  } else if (addressMode == 2u) {
+    let period = sampleUV - floor(sampleUV * 0.5) * 2.0;
+    addressedUV = select(period, 2.0 - period, period > vec2f(1.0));
+    addressedUV = clamp(addressedUV, vec2f(0.0), vec2f(0.99999994));
+  }
+
+  let requested = i32(resolvedMip);
+  let maxLevel = i32(maxMip);
+  var entry = 0u;
+  var selected = -1;
+  var selectedPage = vec2i(0);
+  var selectedSize = vec2f(1.0);
+  if (requested <= maxLevel) {
+    for (var mip = max(0, requested); mip <= maxLevel; mip = mip + 1) {
+      let scale = exp2(-f32(mip));
+      let grid = max(ceil(pageGrid * scale), vec2f(1.0));
+      let mipSize = max(floor(virtualSize * scale), vec2f(1.0));
+      let page = vec2i(min(floor(addressedUV * mipSize / pageSize), grid - 1.0));
+      var offset = 0.0;
+      for (var level = 0; level < mip; level = level + 1) {
+        offset += max(1.0, ceil(pageGrid.y / exp2(f32(level))));
+      }
+      let candidate = textureLoad(pageTable, vec2i(page.x, page.y + i32(offset)), 0).r;
+      if ((candidate & 1u) != 0u) {
+        entry = candidate; selected = mip; selectedPage = page; selectedSize = mipSize;
+        break;
+      }
+    }
+  }
+
+  if (selected >= 0) {
+    let local = addressedUV * selectedSize - vec2f(selectedPage) * pageSize;
+    let origin = vec2f(f32((entry >> 1) & 0xFFu), f32((entry >> 9) & 0xFFu)) * (pageSize + pageBorder * 2.0);
+    let atlasUV = (origin + pageBorder + local) / atlasSize;
+    let gradientScale = selectedSize / atlasSize;
+    return textureSampleGrad(atlas, atlasSampler, atlasUV,
+      dpdx(gradientUV) * gradientScale, dpdy(gradientUV) * gradientScale);
+  }
+
+  var tailOffset = 0.0;
+  for (var level = 0; level < maxLevel; level = level + 1) {
+    tailOffset += max(1.0, ceil(pageGrid.y / exp2(f32(level))));
+  }
+  let tailEntry = textureLoad(pageTable, vec2i(1, i32(tailOffset)), 0).r;
+  if ((tailEntry & 1u) == 0u) { return vec4f(0.5, 0.5, 0.5, 1.0); }
+  let tailMip = max(maxLevel + 1, requested);
+  let delta = tailMip - maxLevel;
+  var rectOrigin = vec2f(0.0);
+  if (delta == 2) { rectOrigin = vec2f(72.0, 0.0); }
+  else if (delta == 3) { rectOrigin = vec2f(112.0, 0.0); }
+  else if (delta == 4) { rectOrigin = vec2f(72.0, 40.0); }
+  else if (delta == 5) { rectOrigin = vec2f(88.0, 40.0); }
+  else if (delta == 6) { rectOrigin = vec2f(100.0, 40.0); }
+  else if (delta >= 7) { rectOrigin = vec2f(110.0, 40.0); }
+  let tailSize = max(vec2f(1.0), floor(virtualSize / exp2(f32(tailMip))));
+  let slot = vec2f(f32((tailEntry >> 1) & 0xFFu), f32((tailEntry >> 9) & 0xFFu)) * (pageSize + pageBorder * 2.0);
+  let atlasUV = (slot + rectOrigin + pageBorder + addressedUV * tailSize) / atlasSize;
+  let gradientScale = tailSize / atlasSize;
+  return textureSampleGrad(atlas, atlasSampler, atlasUV,
+    dpdx(gradientUV) * gradientScale, dpdy(gradientUV) * gradientScale);
+}
+`;
+
 /**
  * The feedback shader. Renders to a low-res target, writing page IDs.
  *

@@ -6,9 +6,10 @@ import { EngineMemory, EnginePhase, FixedIndexPool, LinearArena, defineEngineMem
 import { BudgetDecision, FrameBudget, FrameBudgetRes, FrameStage } from './engine/frame-budget.ts';
 import { IndexedDbBlobBackend, PersistentBlobCache, OpfsBlobBackend, persistentCacheNamespace } from './engine/persistent-blob-cache.ts';
 import { RelativePointerInput } from './engine/relative-pointer.ts';
+import { POM_UV_WGSL } from './engine/surface-detail.ts';
 import {
   VirtualTextureStore, VirtualTextureTuning, VirtualTextureTuningRes,
-  VT_SAMPLE_WGSL, VT_SAMPLE_LEVEL_WGSL,
+  VT_SAMPLE_WGSL, VT_SAMPLE_LEVEL_WGSL, VT_SAMPLE_FROM_LEVEL_WGSL,
   VT_RESOLVE_MATERIAL_MIP4_WGSL, VT_FEEDBACK_WGSL,
   FORMAT_RGBA, PAGE_SIZE, PAGE_BORDER, SLOT_SIZE,
   ATLAS_WIDTH, ATLAS_HEIGHT,
@@ -28,9 +29,11 @@ window.AfterglowStorage = {
   PersistentBlobCache, OpfsBlobBackend, IndexedDbBlobBackend, persistentCacheNamespace,
 };
 window.AfterglowInput = { RelativePointerInput };
+window.AfterglowSurfaceDetail = { POM_UV_WGSL };
 window.AfterglowVT = {
   VirtualTextureStore, VirtualTextureTuning, VirtualTextureTuningRes,
   VirtualTextureFeedbackPass, VT_SAMPLE_WGSL,
-  VT_SAMPLE_LEVEL_WGSL, VT_RESOLVE_MATERIAL_MIP4_WGSL, VT_FEEDBACK_WGSL,
+  VT_SAMPLE_LEVEL_WGSL, VT_SAMPLE_FROM_LEVEL_WGSL,
+  VT_RESOLVE_MATERIAL_MIP4_WGSL, VT_FEEDBACK_WGSL,
   FORMAT_RGBA, PAGE_SIZE, PAGE_BORDER, SLOT_SIZE, ATLAS_WIDTH, ATLAS_HEIGHT,
 };

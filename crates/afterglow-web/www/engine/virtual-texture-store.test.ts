@@ -35,6 +35,12 @@ const settle = async (store: { poll(): void }) => {
 };
 
 describe('VirtualTextureStore residency identity', () => {
+  test('displaced samples walk coarser pages with stable base gradients', () => {
+    expect(VT.VT_SAMPLE_FROM_LEVEL_WGSL).toContain('mip <= maxLevel');
+    expect(VT.VT_SAMPLE_FROM_LEVEL_WGSL).toContain('dpdx(gradientUV) * gradientScale');
+    expect(VT.VT_SAMPLE_FROM_LEVEL_WGSL).toContain('tailEntry');
+  });
+
   test('central tuning probes upward only after stability and rolls back a bad probe', () => {
     const tuning = new VT.VirtualTextureTuning({
       minUploadsPerPoll: 1,

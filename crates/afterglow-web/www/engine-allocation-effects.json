@@ -23,6 +23,7 @@
     "render-adapter.ts": "pooled",
     "renderer-seal.ts": "bootstrap",
     "resource.ts": "bootstrap",
+    "surface-detail.ts": "none",
     "types.ts": "none",
     "virtual-texture-debug.ts": "diagnostic",
     "virtual-texture-feedback-pass.ts": "budgeted",

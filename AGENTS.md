@@ -156,7 +156,11 @@ fallback.
   0/300 below 60**. Full low POM was 51.6 FPS; medium was 36.1 FPS; high was
   22.2 FPS. Therefore only low core POM is viable as a strict, distance/coverage
   LOD tier on the 680M; medium/high/full-POM are evaluation modes, not an engine
-  frame-budget candidate without a different rendering strategy.
+  frame-budget candidate without a different rendering strategy. The integrated
+  Dungeon tier uses resident 1K matching AO height, 8–32 layers, scale 0.012,
+  a 3.25 m fade/cutoff, and VT coarser-page/tail fallback for displaced albedo;
+  at a close angled wall it held 59.97 FPS, p99 16.675 ms, 0/300 below 55, with
+  real texture pixels verified by compositor screenshots.
 
 ### SharedArrayBuffer not available
 
@@ -308,9 +312,9 @@ All engine work must move toward these non-negotiable requirements:
   runtime Basis/KTX2 transcoding versus cooked/derived caches, plus Afterglow's
   generic persistent-cache and device/source namespace design.
 - `docs/research/surface-detail-low-end-fallbacks.md` — Surface-detail/POM
-  fallback evaluation: normal maps and one-tap offset-limited parallax are the
-  low-end tiers; VT is residency, not a POM loop-speed optimization; measured
-  680M boundary and a no-implementation evaluation plan.
+  fallback evaluation and integrated result: normal/one-tap fallback tiers,
+  measured low-core 680M boundary, resident matching height, and bounded VT
+  displaced-page composition.
 - `docs/research/steam-overlay-cef.md` — How the Steam Overlay works (hooks
   Present/SwapBuffers/vkQueuePresentKHR in the game process), why it doesn't
   work with CEF multi-process GPU, and how to fix it (`--in-process-gpu` flag
@@ -348,6 +352,12 @@ All engine work must move toward these non-negotiable requirements:
 - `docs/api/frame-budget.md` — staged frame admission, timing, and deferral counters.
 - `docs/api/hierarchy.md` — fixed linked topology and incremental double-buffered rebuild.
 - `docs/api/renderer-sealing.md` — descriptor pools, bounded renderer slices, warm-up, and pipeline seal.
+- `docs/api/virtual-texturing.md` — bounded VT residency, scheduling, shaders,
+  linked PBR materials, tuning, telemetry, and demos.
+- `docs/api/pom.md` — bounded low-core POM, resident matching height fields,
+  displaced VT fallback, Dungeon controls, and 680M validation.
+- `docs/api/relative-pointer.md` — raw relative pointer events and unadjusted
+  pointer-lock fallback.
 - `docs/api/allocation-boundaries.md` — unavoidable browser/Three/codec boundaries.
 - `docs/api/runtime-capacities.md` — canonical capacities and degradation behavior.
 

@@ -134,6 +134,22 @@ shader: normal map → one-tap parallax → low-core POM or a measured hierarchi
 method only while projected coverage warrants it → authored geometry for
 important silhouettes.
 
+## Integrated result (2026-07-16)
+
+The renamed Dungeon demo now combines the measured low-core tier with the VT
+runtime. It uses the exact ambientCG material AO at resident 1K as a conservative
+height field, adaptive 8–32 layers, scale 0.012, and a smooth cutoff at 3.25 m.
+The 8K PBR channels remain virtual. Displaced albedo walks from the material's
+resolved mip to coarser resident pages and the pinned tail using undisplaced
+gradients, preventing page seams. A prewarmed base material remains available
+for comparison with **P**.
+
+At 2880×1800 physical pixels, a close angled-wall run held 59.97 FPS, p99
+16.675 ms, and 0/300 below 55 FPS with no GPU errors or post-seal pipeline
+creation. CDP compositor captures proved that both variants retained real VT
+pixels and differed across 78% of the validation frame. The standalone POM
+prototype is superseded and removed.
+
 ## What existing engine systems can and cannot do
 
 ### Mesh LOD
@@ -141,34 +157,35 @@ important silhouettes.
 `AssetStore` currently creates 100/50/25/10-percent mesh LOD data, but
 `RenderAdapter` has no automatic distance/projected-size material-LOD selector.
 Mesh LOD can lower vertex, draw, and shadow cost. It does not remove POM cost on
-a wall that occupies the same pixels. A future material policy would need to
-select normal, one-tap parallax, or low-core POM based on bounded screen-space
-criteria; no such change is proposed here.
+a wall that occupies the same pixels. The current bounded policy selects a
+prewarmed low-core POM material within 3.25 m and fades before the cutoff; a
+future generic material policy can additionally use projected coverage.
 
 ### Virtual texturing
 
 The VT system selects resident texture mips/pages and bounds streaming work. It
-does not reduce a POM loop's number of ray-height samples. Its shader performs
-page-table lookup and resident-mip fallback before an atlas sample; using it at
-each dynamic marched UV could add work. Current material-set support is PBR
-(albedo, normal, roughness, AO), not a POM height-intersection integration.
+does not reduce a POM loop's number of ray-height samples. Marching directly
+through an asynchronously resident height VT produced page-boundary instability,
+so the integrated tier keeps a compact matching height field resident. The
+final displaced albedo lookup remains virtual and uses bounded coarser-page/tail
+fallback with stable base-UV gradients.
 
-VT may make huge textures feasible and can supply appropriate coarse mips for
-far material LODs, but it is not a direct POM FPS optimization. The existing VT
-60-FPS regressions cover conventional virtual-textured PBR, not POM.
+VT makes the 8K materials feasible but is not itself a POM loop optimization.
+The integrated hardware result above validates the composition rather than
+assuming the independent POM and VT results add linearly.
 
-## Evaluation plan before any implementation
+## Completed evaluation plan
 
-1. Benchmark an identical close-wall scene with normal mapping, one-tap
-   offset-limited parallax, and low-core POM at the target physical resolution.
-2. Measure 600 post-warm-up frames, p50/p90/p99/max, dropped frames, and GPU
-   validation/device-loss state on the 680M; do not accept WebGL fallback.
-3. Test distance and projected-coverage transitions for temporal stability
-   (including rapid camera movement) before considering a material LOD policy.
-4. Only if the single-sample tier fails visual review should RCS/distance-map
-   preprocessing be prototyped and compared under the same test.
-5. Keep VT and POM tests separate initially; combine them only after both have
-   a fixed frame-budget and a height-channel design.
+1. **Complete:** compared normal, one-tap, low-core POM, and optional contact
+   shadow modes at target physical resolution.
+2. **Complete:** measured post-warm-up p50/p99/max/drop counts and fail-closed
+   WebGPU state on the 680M.
+3. **Complete for distance:** integrated a smooth 65–100% fade over the bounded
+   3.25 m tier; generic projected-coverage policy remains future work.
+4. **Not pursued:** low-core POM passed visual/performance review, so RCS
+   preprocessing is unnecessary.
+5. **Complete:** VT and POM were first measured separately, then combined using
+   a resident matching height field and bounded displaced-page fallback.
 
 ## Sources
 

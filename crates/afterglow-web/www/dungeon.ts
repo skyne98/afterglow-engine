@@ -5,10 +5,13 @@ import { PersistentBlobCache, persistentCacheNamespace } from './engine/persiste
 import { createWebGPUOnlyRenderer, showWebGPUFailure } from './engine/webgpu-only.ts';
 import { RendererSeal, warmRendererVariants } from './engine/renderer-seal.ts';
 import { RelativePointerInput } from './engine/relative-pointer.ts';
+import { POM_UV_WGSL } from './engine/surface-detail.ts';
 const THREE=window.THREE, VT=window.AfterglowVT;
 if(!VT) throw new Error('AfterglowVT engine bundle is unavailable');
 const {wgslFn,Fn,texture,sampler,uv,uniform,float,uint}=THREE;
 const VT_LOD_BIAS=-1.5, FEEDBACK_INTERVAL=4;
+const POM_MIN_LAYERS=8,POM_MAX_LAYERS=32,POM_HEIGHT_SCALE=.012,POM_MAX_DISTANCE=3.25;
+let pomEnabled=true;
 const scene=new THREE.Scene();scene.background=new THREE.Color(0x101318);scene.fog=new THREE.Fog(0x101318,7,28);
 const camera=new THREE.PerspectiveCamera(70,innerWidth/innerHeight,.05,60);camera.rotation.order='YXZ';
 // Four VT-backed PBR channels are substantially more expensive under 4x MSAA.
@@ -27,18 +30,18 @@ const textureRpcs=await Promise.all(Array.from({length:TEXTURE_WORKER_COUNT},()=
 })));
 const textureWorkers=textureRpcs.map(rpc=>new TextureClient(rpc));
 addEventListener('beforeunload',()=>{for(const rpc of textureRpcs)rpc.terminate()},{once:true});
-const prefix=await rangeLoader.read('vt-dungeon.big',0,16);
+const prefix=await rangeLoader.read('dungeon.big',0,16);
 const dataOffset=Number(new DataView(prefix.buffer,prefix.byteOffset+8,8).getBigUint64(0,true));
-const headerBytes=await rangeLoader.read('vt-dungeon.big',0,dataOffset);
+const headerBytes=await rangeLoader.read('dungeon.big',0,dataOffset);
 const {header}=parseBigHeader(headerBytes);
 const format=renderer.backend.device.features.has('texture-compression-bc')?0:renderer.backend.device.features.has('texture-compression-astc')?1:VT.FORMAT_RGBA;
-const sourceIdentity=await rangeLoader.identity('vt-dungeon.big');
+const sourceIdentity=await rangeLoader.identity('dungeon.big');
 const adapterInfo=renderer.afterglowAdapterInfo??{};
 let persistentCache=null;
 if(sourceIdentity.etag||sourceIdentity.lastModified){
   try{
     const namespace=await persistentCacheNamespace([
-      'afterglow-cache-v1','vt-dungeon.big',String(sourceIdentity.size),
+      'afterglow-cache-v1','dungeon.big',String(sourceIdentity.size),
       sourceIdentity.etag??'',sourceIdentity.lastModified??'',
       String(format),'basisu-transcoder-v1','slot-136-border-4',
       adapterInfo.vendor??'',adapterInfo.architecture??'',adapterInfo.device??'',adapterInfo.description??'',
@@ -50,7 +53,7 @@ if(sourceIdentity.etag||sourceIdentity.lastModified){
 }else console.warn('[cache] source has no ETag/Last-Modified; persistent VT cache disabled');
 const containerLoader={
   load:path=>rangeLoader.load(path),size:path=>rangeLoader.size(path),
-  read:(_path,offset,len)=>rangeLoader.read('vt-dungeon.big',offset,len),
+  read:(_path,offset,len)=>rangeLoader.read('dungeon.big',offset,len),
 };
 const pageProvider=createPageDataProvider(containerLoader,header,textureWorkers,format,persistentCache??undefined);
 const loader={read:(path,offset,len)=>rangeLoader.read(path,offset,len),poll(){}};
@@ -59,10 +62,15 @@ const loader={read:(path,offset,len)=>rangeLoader.read(path,offset,len),poll(){}
 // promoted cap back to the independently validated two-page baseline.
 const vtTuning=new VT.VirtualTextureTuning();
 const store=new VT.VirtualTextureStore(loader,pageProvider,format,renderer.backend.device,vtTuning);
-const vtSampleLevel=wgslFn(VT.VT_SAMPLE_LEVEL_WGSL),vtResolveMaterialMip4=wgslFn(VT.VT_RESOLVE_MATERIAL_MIP4_WGSL),vtFeedback=wgslFn(VT.VT_FEEDBACK_WGSL),atlasNode=texture(store.atlasTexture),atlasSampler=sampler(atlasNode);
+const vtSampleLevel=wgslFn(VT.VT_SAMPLE_LEVEL_WGSL),vtSampleFromLevel=wgslFn(VT.VT_SAMPLE_FROM_LEVEL_WGSL),pomMarchUV=wgslFn(POM_UV_WGSL),vtResolveMaterialMip4=wgslFn(VT.VT_RESOLVE_MATERIAL_MIP4_WGSL),vtFeedback=wgslFn(VT.VT_FEEDBACK_WGSL),atlasNode=texture(store.atlasTexture),atlasSampler=sampler(atlasNode);
 const feedbackScene=new THREE.Scene(),feedbackPass=new VT.VirtualTextureFeedbackPass(.125);
 const materialNames=['Rock064','Ground103','PavingStones150'];
-const materialSets=materialNames.map(name=>{const paths={albedo:`${name}_Color.png`,normal:`${name}_NormalGL.png`,masks:`${name}_Masks.png`};const dimensions=getVirtualTextureDimensions(header,paths.albedo);return store.loadMaterialSet(paths,{...dimensions,mipTail:true})});
+// Compact resident AO maps from the same ambientCG materials provide stable
+// height access throughout the non-uniform march; 8K color/normal/masks remain
+// virtual. This avoids page-boundary feedback seams inside the POM loop.
+const heightTextures=await Promise.all(materialNames.map(name=>new THREE.TextureLoader().loadAsync(`dungeon-height/${name}_Height.png`)));
+for(const height of heightTextures){height.wrapS=height.wrapT=THREE.RepeatWrapping;height.minFilter=height.magFilter=THREE.LinearFilter;height.generateMipmaps=false;height.colorSpace=THREE.NoColorSpace;height.needsUpdate=true}
+const materialSets=materialNames.map((name,index)=>{const paths={albedo:`${name}_Color.png`,normal:`${name}_NormalGL.png`,masks:`${name}_Masks.png`};const dimensions=getVirtualTextureDimensions(header,paths.albedo),set=store.loadMaterialSet(paths,{...dimensions,mipTail:true});set.heightTexture=heightTextures[index];return set});
 const segments=[
   [-8,-8,8,-8], [8,-8,8,8], [8,8,-8,8], [-8,8,-8,-8],
   [-3,-8,-3,1], [-3,1,2,1], [2,1,2,8],
@@ -74,30 +82,49 @@ function feedbackMaterial(entry){
   material.fragmentNode=Fn(()=>vtFeedback({uv:uv().fract(),virtualSize:uniform(new THREE.Vector2(entry.width,entry.height)),pageGrid:uniform(new THREE.Vector2(entry.pageGridX,entry.pageGridY)),maxMip:float(entry.maxMip),lodBias:float(VT_LOD_BIAS),textureId:uint(entry.textureId)}))();
   return material;
 }
-function sampleEntryAtMip(entry,resolvedMip){const pageTable=texture(entry.pageTableTexture);return vtSampleLevel({pageTable,atlas:atlasNode,atlasSampler,uv:uv(),virtualSize:uniform(new THREE.Vector2(entry.width,entry.height)),pageGrid:uniform(new THREE.Vector2(entry.pageGridX,entry.pageGridY)),pageSize:float(VT.PAGE_SIZE),pageBorder:float(VT.PAGE_BORDER),atlasSize:uniform(new THREE.Vector2(store.atlasWidth,store.atlasHeight)),maxMip:float(entry.maxMip),resolvedMip,addressMode:uint(1)})}
-function wallMaterial(set){
+function sampleEntryFromLevel(entry,resolvedMip,sampleUV){const pageTable=texture(entry.pageTableTexture);return vtSampleFromLevel({pageTable,atlas:atlasNode,atlasSampler,sampleUV,gradientUV:uv(),virtualSize:uniform(new THREE.Vector2(entry.width,entry.height)),pageGrid:uniform(new THREE.Vector2(entry.pageGridX,entry.pageGridY)),pageSize:float(VT.PAGE_SIZE),pageBorder:float(VT.PAGE_BORDER),atlasSize:uniform(new THREE.Vector2(store.atlasWidth,store.atlasHeight)),maxMip:float(entry.maxMip),resolvedMip,addressMode:uint(1)})}
+function sampleEntryAtMip(entry,resolvedMip,sampleUV=uv()){const pageTable=texture(entry.pageTableTexture);return vtSampleLevel({pageTable,atlas:atlasNode,atlasSampler,uv:sampleUV,virtualSize:uniform(new THREE.Vector2(entry.width,entry.height)),pageGrid:uniform(new THREE.Vector2(entry.pageGridX,entry.pageGridY)),pageSize:float(VT.PAGE_SIZE),pageBorder:float(VT.PAGE_BORDER),atlasSize:uniform(new THREE.Vector2(store.atlasWidth,store.atlasHeight)),maxMip:float(entry.maxMip),resolvedMip,addressMode:uint(1)})}
+function pomUV(set){const heightNode=texture(set.heightTexture);return pomMarchUV({heightTexture:heightNode,heightSampler:sampler(heightNode),baseUV:uv(),viewDir:THREE.parallaxDirection.negate(),heightScale:float(POM_HEIGHT_SCALE),minLayers:uint(POM_MIN_LAYERS),maxLayers:uint(POM_MAX_LAYERS),maxDistance:float(POM_MAX_DISTANCE),viewDistance:THREE.positionView.length()})}
+function wallMaterial(set,usePom){
   if(!set.normal||!set.masks)throw new Error('dungeon PBR material set requires albedo, normal, and packed masks');
   const material=new THREE.MeshStandardNodeMaterial({metalness:0,side:THREE.DoubleSide});
-  const resolvedMip=Fn(()=>vtResolveMaterialMip4({pageTable0:texture(set.albedo.pageTableTexture),pageTable1:texture(set.normal.pageTableTexture),pageTable2:texture(set.masks.pageTableTexture),pageTable3:texture(set.masks.pageTableTexture),uv:uv(),virtualSize:uniform(new THREE.Vector2(set.albedo.width,set.albedo.height)),pageGrid:uniform(new THREE.Vector2(set.albedo.pageGridX,set.albedo.pageGridY)),pageSize:float(VT.PAGE_SIZE),maxMip:float(set.albedo.maxMip),textureMaxMip:float(set.albedo.textureMaxMip),addressMode:uint(1)}))().toVar();
-  // Resolve one level across all PBR page tables, then sample every channel at
-  // that level. Independent residency can no longer mix material mip levels.
-  material.colorNode=Fn(()=>{const color=sampleEntryAtMip(set.albedo,resolvedMip);return THREE.vec4(THREE.sRGBTransferEOTF(color.rgb),color.a)})();
+  const resolveArgs={pageTable0:texture(set.albedo.pageTableTexture),pageTable1:texture(set.normal.pageTableTexture),pageTable2:texture(set.masks.pageTableTexture),pageTable3:texture(set.masks.pageTableTexture),uv:uv(),virtualSize:uniform(new THREE.Vector2(set.albedo.width,set.albedo.height)),pageGrid:uniform(new THREE.Vector2(set.albedo.pageGridX,set.albedo.pageGridY)),pageSize:float(VT.PAGE_SIZE),maxMip:float(set.albedo.maxMip),textureMaxMip:float(set.albedo.textureMaxMip),addressMode:uint(1)};
+  if(!usePom){
+    // Keep the established non-POM graph byte-for-byte equivalent so the
+    // diagnostic baseline can never be affected by displaced control flow.
+    const resolvedMip=Fn(()=>vtResolveMaterialMip4(resolveArgs))().toVar();
+    material.colorNode=Fn(()=>{const color=sampleEntryAtMip(set.albedo,resolvedMip);return THREE.vec4(THREE.sRGBTransferEOTF(color.rgb),color.a)})();
+    const masks=Fn(()=>sampleEntryAtMip(set.masks,resolvedMip))().toVar();
+    material.normalNode=Fn(()=>THREE.normalMap(sampleEntryAtMip(set.normal,resolvedMip).xyz))();
+    material.roughnessNode=Fn(()=>masks.r)();material.aoNode=Fn(()=>masks.g)();
+    return material;
+  }
+  // Three r185 cannot safely carry a fragment-local marched UV between its
+  // independently generated material-output flows. Apply the one bounded POM
+  // march to albedo; retain the original normal/mask flow so every fallback is
+  // valid and the existing high-frequency normal detail remains stable.
+  const resolvedMip=Fn(()=>vtResolveMaterialMip4(resolveArgs))().toVar();
+  material.colorNode=Fn(()=>{const mip=vtResolveMaterialMip4(resolveArgs).toVar(),sampleUV=pomUV(set).toVar(),color=sampleEntryFromLevel(set.albedo,mip,sampleUV);return THREE.vec4(THREE.sRGBTransferEOTF(color.rgb),color.a)})();
   const masks=Fn(()=>sampleEntryAtMip(set.masks,resolvedMip))().toVar();
   material.normalNode=Fn(()=>THREE.normalMap(sampleEntryAtMip(set.normal,resolvedMip).xyz))();
-  material.roughnessNode=Fn(()=>masks.r)();
-  material.aoNode=Fn(()=>masks.g)();
+  material.roughnessNode=Fn(()=>masks.r)();material.aoNode=Fn(()=>masks.g)();
   return material;
 }
 for(let i=0;i<segments.length;i++){
   const [x1,z1,x2,z2]=segments[i],set=materialSets[i%materialSets.length],entry=set.albedo,path=entry.path;
   const dx=x2-x1,dz=z2-z1,len=Math.hypot(dx,dz),geometry=new THREE.PlaneGeometry(len,4,1,1);
+  // `parallaxDirection` needs the same explicit local +X tangent used by the
+  // validated prototype; derivative TBN fallback is sufficient for normalMap
+  // but does not provide a stable tangent-space view ray for POM.
+  geometry.setAttribute('tangent',new THREE.BufferAttribute(new Float32Array([1,0,0,1,1,0,0,1,1,0,0,1,1,0,0,1]),4));
   // Preserve brick proportions: one square virtual-texture repeat per 4 m of
   // wall instead of stretching a square texture across arbitrarily long runs.
   for(let u=0;u<geometry.attributes.uv.count;u++)geometry.attributes.uv.setX(u,geometry.attributes.uv.getX(u)*len/4);
-  const mesh=new THREE.Mesh(geometry,wallMaterial(set));
+  const baseMaterial=wallMaterial(set,false),pomMaterial=wallMaterial(set,true);
+  const mesh=new THREE.Mesh(geometry,pomMaterial);
   mesh.position.set((x1+x2)/2,2,(z1+z2)/2);mesh.rotation.y=Math.atan2(-dz,dx);scene.add(mesh);
   const feedbackMesh=new THREE.Mesh(geometry,feedbackMaterial(entry));feedbackMesh.position.copy(mesh.position);feedbackMesh.rotation.copy(mesh.rotation);feedbackScene.add(feedbackMesh);
-  walls.push({path,entry,x1,z1,x2,z2,len,mesh,feedbackMesh});
+  walls.push({path,entry,x1,z1,x2,z2,len,mesh,feedbackMesh,baseMaterial,pomMaterial});
 }
 
 const PLAYER_RADIUS=.28, pose={x:-5.5,z:-5.5,yaw:0,pitch:0}, keys=new Set();let programmatic=false,diagnosticAtlas=false,last=performance.now(),smoothedDt=1/60,frame=0,lastResult={loaded:0,evicted:0,totalRequests:0,lodBias:0};
@@ -127,12 +154,18 @@ function update(dt){
   const stageStart=performance.now();const feedback=feedbackPass.consume();if(feedback&&!diagnosticAtlas)lastResult=store.processFeedback(feedback);store.poll();runtimeTiming.vtCpuUs=(performance.now()-stageStart)*1000;
 }
 feedbackPass.resize(renderer.domElement.width,renderer.domElement.height);
+// Prewarm both fixed material variants before GameplaySealed; runtime P toggles
+// only swap existing references and never compile a pipeline.
+for(const wall of walls)wall.mesh.material=wall.baseMaterial;
+await warmRendererVariants(renderer,[{scene,camera}]);
+for(const wall of walls)wall.mesh.material=wall.pomMaterial;
 await warmRendererVariants(renderer,[{scene,camera}]);const previousTarget=renderer.getRenderTarget();renderer.setRenderTarget(feedbackPass.target);await warmRendererVariants(renderer,[{scene:feedbackScene,camera}]);renderer.setRenderTarget(previousTarget);
 await new Promise(r=>setTimeout(r,0));renderer.render(scene,camera);renderer.setRenderTarget(feedbackPass.target);renderer.render(feedbackScene,camera);renderer.setRenderTarget(previousTarget);store.attachRenderer(renderer);rendererSeal.seal();
 const waiters=[],hud=document.getElementById('hud');let hudVisible=true;
-renderer.setAnimationLoop(now=>{const frameCpuStart=performance.now(),dt=Math.min(.05,(now-last)/1000);last=now;smoothedDt=smoothedDt*.95+dt*.05;store.recordFrameTime(dt*1000);update(dt);const renderStart=performance.now();renderer.render(scene,camera);runtimeTiming.renderSubmitUs=(performance.now()-renderStart)*1000;if(!diagnosticAtlas&&frame%FEEDBACK_INTERVAL===0){const feedbackStart=performance.now();feedbackPass.submit(renderer,feedbackScene,camera,store);runtimeTiming.feedbackSubmitUs=(performance.now()-feedbackStart)*1000}else runtimeTiming.feedbackSubmitUs=0;runtimeTiming.frameCpuUs=(performance.now()-frameCpuStart)*1000;frame++;for(let i=waiters.length-1;i>=0;i--)if(frame>=waiters[i].target){waiters[i].resolve();waiters.splice(i,1)}if(hudVisible&&frame%15===0){const d=store.getStats(),input=relativePointer.getStatus();hud.innerHTML=`<b>afterglow — Engine VT Dungeon</b><br>3 × 8K scanned PBR material sets · 12 wall instances<br>Virtual RGBA channels: 1.875 GiB · physical atlas: ${store.atlasWidth}²<br>Position: ${pose.x.toFixed(2)}, ${pose.z.toFixed(2)} · yaw ${(pose.yaw*180/Math.PI).toFixed(0)}° · ${(1/smoothedDt).toFixed(0)} FPS<br>Input: ${input.eventType}${input.unadjustedMovement?' · unadjusted':''}<br>Textures: ${d.textureCount} · resident ${d.atlasSlotsUsed}/${d.atlasSlotsTotal} · pending ${d.pendingPages}<br>GPU feedback pages: ${lastResult.totalRequests} · mips [${feedbackPass.getLatestMips().join(',')}] · bias ${VT_LOD_BIAS} · budget ${d.budget} · errors ${errors.length}`}});
+function setPomEnabled(enabled){pomEnabled=Boolean(enabled);for(const wall of walls)wall.mesh.material=pomEnabled?wall.pomMaterial:wall.baseMaterial}
+renderer.setAnimationLoop(now=>{const frameCpuStart=performance.now(),dt=Math.min(.05,(now-last)/1000);last=now;smoothedDt=smoothedDt*.95+dt*.05;store.recordFrameTime(dt*1000);update(dt);const renderStart=performance.now();renderer.render(scene,camera);runtimeTiming.renderSubmitUs=(performance.now()-renderStart)*1000;if(!diagnosticAtlas&&frame%FEEDBACK_INTERVAL===0){const feedbackStart=performance.now();feedbackPass.submit(renderer,feedbackScene,camera,store);runtimeTiming.feedbackSubmitUs=(performance.now()-feedbackStart)*1000}else runtimeTiming.feedbackSubmitUs=0;runtimeTiming.frameCpuUs=(performance.now()-frameCpuStart)*1000;frame++;for(let i=waiters.length-1;i>=0;i--)if(frame>=waiters[i].target){waiters[i].resolve();waiters.splice(i,1)}if(hudVisible&&frame%15===0){const d=store.getStats(),input=relativePointer.getStatus();hud.innerHTML=`<b>afterglow — Engine Dungeon</b><br>3 × 8K scanned PBR material sets · 12 wall instances<br>Virtual RGBA channels: 1.875 GiB · physical atlas: ${store.atlasWidth}²<br>Position: ${pose.x.toFixed(2)}, ${pose.z.toFixed(2)} · yaw ${(pose.yaw*180/Math.PI).toFixed(0)}° · ${(1/smoothedDt).toFixed(0)} FPS<br>Input: ${input.eventType}${input.unadjustedMovement?' · unadjusted':''}<br>POM: ${pomEnabled?`${POM_MIN_LAYERS}–${POM_MAX_LAYERS} layers · AO height · ≤${POM_MAX_DISTANCE}m`:'off'}<br>Textures: ${d.textureCount} · resident ${d.atlasSlotsUsed}/${d.atlasSlotsTotal} · pending ${d.pendingPages}<br>GPU feedback pages: ${lastResult.totalRequests} · mips [${feedbackPass.getLatestMips().join(',')}] · bias ${VT_LOD_BIAS} · budget ${d.budget} · errors ${errors.length}`}});
 addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);feedbackPass.resize(renderer.domElement.width,renderer.domElement.height)});
-addEventListener('keydown',e=>{if(programmatic)return;keys.add(e.key.toLowerCase());if(e.key.toLowerCase()==='r')setPose(-5.5,-5.5,0,0);if(e.key==='1')setPose(-5.5,-5.5,0,0);if(e.key==='2')setPose(5.5,-5.5,Math.PI,0);if(e.key==='3')setPose(5.5,6.5,-Math.PI/2,0)});addEventListener('keyup',e=>keys.delete(e.key.toLowerCase()));
+addEventListener('keydown',e=>{if(programmatic)return;const key=e.key.toLowerCase();keys.add(key);if(key==='r')setPose(-5.5,-5.5,0,0);if(key==='p')setPomEnabled(!pomEnabled);if(e.key==='1')setPose(-5.5,-5.5,0,0);if(e.key==='2')setPose(5.5,-5.5,Math.PI,0);if(e.key==='3')setPose(5.5,6.5,-Math.PI/2,0)});addEventListener('keyup',e=>keys.delete(e.key.toLowerCase()));
 const relativePointer=new RelativePointerInput(renderer.domElement,(movementX,movementY)=>{if(!programmatic){pose.yaw-=movementX*.002;pose.pitch=Math.max(-1.45,Math.min(1.45,pose.pitch-movementY*.002))}});
 renderer.domElement.addEventListener('click',()=>{if(!programmatic)relativePointer.requestLock()});
 const scenarios={forward:()=>setPose(-5.5,-5.5,0,0),reverse:()=>setPose(5.5,-5.5,Math.PI,0),corner:()=>setPose(5.8,6.4,-Math.PI/2,-.2)};
@@ -150,7 +183,7 @@ async function waitForAtlas(target,timeout,feedback=null){
     const stats=store.getStats();
     if(stats.atlasSlotsUsed>=target&&!stats.pendingPages&&!stats.scheduledRequests&&!stats.readyUploads)return true;
     if(feedback&&steps%FEEDBACK_INTERVAL===0)store.processFeedback(feedback);
-    steps++;await window.__afterglowVtDungeon.step(1);
+    steps++;await window.__afterglowDungeon.step(1);
   }
   return false;
 }
@@ -173,17 +206,17 @@ async function runAtlasScenario(name,timeout=120000){
       const end=performance.now()+timeout;let steps=0;
       while(performance.now()<end&&(store.getStats().cacheEvictions===before||store.getStats().pendingPages||store.getStats().scheduledRequests||store.getStats().readyUploads)){
         if(steps%FEEDBACK_INTERVAL===0)store.processFeedback(replacement);
-        steps++;await window.__afterglowVtDungeon.step(1);
+        steps++;await window.__afterglowDungeon.step(1);
       }
     }
     return {name,target,...store.getStats(),timing:{...runtimeTiming},errors:errors.length};
   }finally{diagnosticAtlas=false;programmatic=previousProgrammatic}
 }
-window.__afterglowVtDungeon={
-  ready:()=>true,telemetry:()=>store.getStats(),timing:()=>runtimeTiming,inputStatus:()=>relativePointer.getStatus(),pipelineTelemetry,resolveGpuTimings,setGpuTimingEnabled,errorCount:()=>errors.length,runAtlasScenario,snapshot:()=>({pose:{...pose},...store.getDebugSnapshot(),requests:lastResult.totalRequests,feedbackMips:[...feedbackPass.getLatestMips()],errors:[...errors]}),
+window.__afterglowDungeon={
+  ready:()=>true,telemetry:()=>store.getStats(),timing:()=>runtimeTiming,inputStatus:()=>relativePointer.getStatus(),pomStatus:()=>({enabled:pomEnabled,minLayers:POM_MIN_LAYERS,maxLayers:POM_MAX_LAYERS,heightScale:POM_HEIGHT_SCALE,maxDistance:POM_MAX_DISTANCE,heightSource:'resident ambientCG AO'}),setPomEnabled,pipelineTelemetry,resolveGpuTimings,setGpuTimingEnabled,errorCount:()=>errors.length,runAtlasScenario,snapshot:()=>({pose:{...pose},...store.getDebugSnapshot(),requests:lastResult.totalRequests,feedbackMips:[...feedbackPass.getLatestMips()],errors:[...errors]}),
   setProgrammatic:enabled=>{programmatic=Boolean(enabled);keys.clear();if(programmatic&&document.pointerLockElement)document.exitPointerLock()},setHudVisible:visible=>{hudVisible=Boolean(visible);hud.style.display=hudVisible?'':'none'},
   setPose,getPose:()=>({...pose}),move,look:(yaw,pitch)=>setPose(pose.x,pose.z,pose.yaw+yaw,pose.pitch+pitch),
   step:n=>new Promise(resolve=>waiters.push({target:frame+Math.max(1,n|0),resolve})),
-  waitForIdle:async(timeout=5000)=>{const end=performance.now()+timeout;while((store.getStats().pendingPages||store.getStats().scheduledRequests||store.getStats().readyUploads)&&performance.now()<end)await window.__afterglowVtDungeon.step(1);return store.getStats().pendingPages===0&&store.getStats().scheduledRequests===0&&store.getStats().readyUploads===0},
-  runScenario:async name=>{if(!scenarios[name])throw new Error(`unknown scenario ${name}`);programmatic=true;keys.clear();scenarios[name]();await window.__afterglowVtDungeon.step(90);await window.__afterglowVtDungeon.waitForIdle();return window.__afterglowVtDungeon.snapshot()},
+  waitForIdle:async(timeout=5000)=>{const end=performance.now()+timeout;while((store.getStats().pendingPages||store.getStats().scheduledRequests||store.getStats().readyUploads)&&performance.now()<end)await window.__afterglowDungeon.step(1);return store.getStats().pendingPages===0&&store.getStats().scheduledRequests===0&&store.getStats().readyUploads===0},
+  runScenario:async name=>{if(!scenarios[name])throw new Error(`unknown scenario ${name}`);programmatic=true;keys.clear();scenarios[name]();await window.__afterglowDungeon.step(90);await window.__afterglowDungeon.waitForIdle();return window.__afterglowDungeon.snapshot()},
 };
