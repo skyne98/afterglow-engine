@@ -2,6 +2,14 @@
 
 Date: 2026-07-12
 
+> **2026-07-16 correction:** The universal-VT decision remains current, but
+> claims below that pages are offline-pretranscoded and that `texture.wasm` is
+> absent are obsolete. `.big` v5 stores portable per-page UASTC Basis; runtime
+> selects BC7/ASTC/RGBA and transcodes through a fixed worker pool. The next
+> step is a persistent per-device derived cache so warm launches reuse the
+> selected GPU blocks. See `docs/api/virtual-texturing.md` and
+> `docs/research/device-transcoded-texture-cache.md`.
+
 ## Decision
 
 **ALL sampled textures are virtual textures.** No exceptions. Every texture
