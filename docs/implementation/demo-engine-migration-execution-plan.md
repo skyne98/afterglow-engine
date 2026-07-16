@@ -81,6 +81,11 @@ Implemented on 2026-07-17:
   implemented and tested;
 - DME-021 mechanism: `BigAssetSession` now owns bounded header admission,
   transcoder startup/rollback, raw assets, one VT store, and reverse shutdown;
+- DME-022 foundation: `parseGLTFAsset` retains stable parser material indices;
+  `VirtualGltfBinding` owns fixed-capacity replacement, factor preservation,
+  imported-image release, feedback swaps, and rollback. Texture-transform and
+  sampler metadata still need to be carried through the cooked layout before
+  DME-022 is complete;
 - DME-025: fixed model collection, exact deformed bounds, pivot normalization,
   bounded animation actions, and disposable skeleton diagnostics are implemented;
   dungeon/rigged demo migrations remain DME-030–032.
@@ -703,7 +708,8 @@ Update relative-pointer/input docs and book.
 
 ### DME-040 — Remove global bundle bridge
 
-- Add typed `www/engine/index.ts` public exports.
+- Add typed `www/engine/index.ts` core exports plus tree-shakeable
+  `model-api.ts` and `virtual-texturing-api.ts` subsystem barrels.
 - Bundle each entrypoint with exactly one Three module graph.
 - Delete `engine-bundle-input.ts`, `engine-bundle.js`, all `window.Afterglow*`
   writes, and redundant HTML script tags.

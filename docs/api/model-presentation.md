@@ -1,6 +1,6 @@
 # Model presentation utilities
 
-`afterglow-web/www/engine/model-utils.ts` provides focused bootstrap ownership
+The public browser entrypoint `engine/model-api.ts` exports focused bootstrap ownership
 primitives for static, morphed, and skinned glTF scenes. It deliberately does
 not define character, camera, clip-selection, grounding, or lighting policy.
 

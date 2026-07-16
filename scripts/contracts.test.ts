@@ -107,6 +107,14 @@ describe('demo architecture scanner', () => {
     ]) expect(rules.has(rule)).toBe(true);
   });
 
+  test('allows explicit subsystem API barrels but rejects implementation modules', () => {
+    const findings = scanTypeScript(`
+      import { ModelPrimitives } from './engine/model-api.ts';
+      import { VirtualGltfBinding } from './engine/virtual-texturing-api.ts';
+    `, 'barrels.ts');
+    expect(findings.some((finding) => finding.rule === 'AG-DEMO-016')).toBe(false);
+  });
+
   test('rejects an EngineRuntime client whose update is not allocation-effect declared', () => {
     const findings = scanTypeScript(`
       function updateFrame(): void {}

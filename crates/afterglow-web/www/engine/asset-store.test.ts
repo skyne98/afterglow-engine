@@ -1,8 +1,28 @@
 import { describe, expect, test } from 'bun:test';
 import * as THREE from 'three';
-import { AssetAdmission, AssetRequestState, AssetStore } from './asset-store.ts';
+import { AssetAdmission, AssetRequestState, AssetStore, parseGLTFAsset } from './asset-store.ts';
 
 const flush = () => new Promise(resolve => setTimeout(resolve, 0));
+
+describe('stable glTF material identity', () => {
+  test('recovers parser material indices independent of names', async () => {
+    const scene = new THREE.Group();
+    const first = new THREE.MeshStandardMaterial({ name: 'duplicate' });
+    const second = new THREE.MeshStandardMaterial({ name: 'duplicate' });
+    scene.add(
+      new THREE.Mesh(new THREE.BoxGeometry(), first),
+      new THREE.Mesh(new THREE.BoxGeometry(), second),
+    );
+    const associations = new Map<object, { materials?: number }>([
+      [first, { materials: 4 }], [second, { materials: 9 }],
+    ]);
+    const parsed = await parseGLTFAsset(new Uint8Array(8), {
+      parse(_data, _path, onLoad) { onLoad({ scene, animations: [], parser: { associations } }); },
+    });
+    expect(parsed.materialIndices.get(first)).toBe(4);
+    expect(parsed.materialIndices.get(second)).toBe(9);
+  });
+});
 
 describe('rig-preserving runtime mesh optimization', () => {
   test('reorders only triangle indices and retains every skin/morph attribute and skeleton', async () => {

@@ -13228,7 +13228,20 @@ async function parseGLTFAsset(bytes, loader) {
   new Uint8Array(buf).set(bytes);
   if (!loader)
     throw new Error("parseGLTFAsset requires an injected Three.js GLTFLoader");
-  return new Promise((resolve, reject) => loader.parse(buf, "", (result) => resolve(result), reject));
+  return new Promise((resolve, reject) => loader.parse(buf, "", (result) => {
+    const materialIndices = new Map;
+    result.scene.traverse((object) => {
+      if (!(object instanceof Mesh))
+        return;
+      const materials = Array.isArray(object.material) ? object.material : [object.material];
+      for (const material of materials) {
+        const index = result.parser?.associations?.get(material)?.materials;
+        if (index !== undefined)
+          materialIndices.set(material, index);
+      }
+    });
+    resolve({ scene: result.scene, animations: result.animations, materialIndices });
+  }, reject));
 }
 function parseGlbMaterialTextures(bytes) {
   if (bytes.byteLength < 20 || new DataView(bytes.buffer, bytes.byteOffset, 4).getUint32(0, true) !== 1179937895)
@@ -13532,7 +13545,13 @@ class AssetStore {
     return stats;
   }
   loadOptimizedGLTF(path, loader) {
-    const fallback = { scene: fallbackGroup(), animations: [], meshOptimization: [], materialTextures: [] };
+    const fallback = {
+      scene: fallbackGroup(),
+      animations: [],
+      materialIndices: new Map,
+      meshOptimization: [],
+      materialTextures: []
+    };
     return this.load(path, async (bytes) => {
       const materialTextures = parseGlbMaterialTextures(bytes);
       const parsed = await parseGLTFAsset(bytes, loader);

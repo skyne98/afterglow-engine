@@ -23,7 +23,10 @@ Install a `VirtualTextureStore` on `AssetStore` to route subsequent
 `material.map`: use a VT-aware node material. `createVirtualGltfMaterialPair`
 provides matched visible/feedback glTF base-color, optional normal, and optional
 metallic/roughness materials for static, instanced, skinned, and morphed
-geometry. Differently sized channels sample and feed back independently. Shared
+geometry. `VirtualGltfBinding` joins cooked layouts by stable material indices
+retained from `GLTFParser`, not names, and owns bounded replacement, imported
+texture disposal, and feedback material/visibility restoration. Differently
+sized channels sample and feed back independently. Shared
 textures currently form a transitive residency-group union, which safely avoids
 missing PBR channels at the cost of bounded overfetch. A recorded future extension
 would add fixed-capacity material-group IDs to feedback if telemetry proves that

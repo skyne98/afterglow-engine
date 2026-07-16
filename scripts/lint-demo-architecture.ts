@@ -99,7 +99,7 @@ export function scanTypeScript(sourceText: string, file: string): RawFinding[] {
   const visit = (node: ts.Node): void => {
     if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
       const specifier = node.moduleSpecifier.text;
-      const publicBarrel = specifier === './engine/index.ts' || specifier === '../engine/index.ts';
+      const publicBarrel = /^(?:\.\/|\.\.\/)engine\/(?:index|[a-z0-9-]+-api)\.ts$/.test(specifier);
       if (!publicBarrel && (specifier.startsWith('./engine/') || specifier.startsWith('../engine/')))
         add('AG-DEMO-016', node, specifier);
       if (specifier.endsWith('/surface-detail.ts') || specifier.endsWith('/virtual-texture-material.ts'))

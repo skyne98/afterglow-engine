@@ -100,16 +100,35 @@ export async function parseTexture(bytes: Uint8Array): Promise<THREE.Texture> {
 export interface ParsedGLTF {
   scene: THREE.Group;
   animations: THREE.AnimationClip[];
+  /** Stable glTF material indices recovered from GLTFParser associations. */
+  materialIndices: ReadonlyMap<THREE.Material, number>;
+}
+
+interface LoaderGLTFResult {
+  scene: THREE.Group;
+  animations: THREE.AnimationClip[];
+  parser?: { associations?: Map<object, { materials?: number }> };
 }
 
 export async function parseGLTFAsset(
   bytes: Uint8Array,
-  loader?: { parse(data: ArrayBuffer, path: string, onLoad: (r: ParsedGLTF) => void, onError: (e: unknown) => void): void },
+  loader?: { parse(data: ArrayBuffer, path: string, onLoad: (r: LoaderGLTFResult) => void, onError: (e: unknown) => void): void },
 ): Promise<ParsedGLTF> {
   const buf = new ArrayBuffer(bytes.byteLength);
   new Uint8Array(buf).set(bytes);
   if (!loader) throw new Error('parseGLTFAsset requires an injected Three.js GLTFLoader');
-  return new Promise((resolve, reject) => loader.parse(buf, '', result => resolve(result), reject));
+  return new Promise((resolve, reject) => loader.parse(buf, '', result => {
+    const materialIndices = new Map<THREE.Material, number>();
+    result.scene.traverse((object) => {
+      if (!(object instanceof THREE.Mesh)) return;
+      const materials = Array.isArray(object.material) ? object.material : [object.material];
+      for (const material of materials) {
+        const index = result.parser?.associations?.get(material)?.materials;
+        if (index !== undefined) materialIndices.set(material, index);
+      }
+    });
+    resolve({ scene: result.scene, animations: result.animations, materialIndices });
+  }, reject));
 }
 
 export function parseGlbMaterialTextures(bytes: Uint8Array): GltfMaterialTextureLayout[] {
@@ -138,7 +157,7 @@ export function parseGlbMaterialTextures(bytes: Uint8Array): GltfMaterialTexture
 
 export async function parseGLTF(
   bytes: Uint8Array,
-  loader?: { parse(data: ArrayBuffer, path: string, onLoad: (r: ParsedGLTF) => void, onError: (e: unknown) => void): void },
+  loader?: Parameters<typeof parseGLTFAsset>[1],
 ): Promise<THREE.Group> {
   return (await parseGLTFAsset(bytes, loader)).scene;
 }
@@ -482,7 +501,10 @@ export class AssetStore {
     path: string,
     loader: Parameters<typeof parseGLTFAsset>[1],
   ): AssetHandle<OptimizedGltfAsset> {
-    const fallback = { scene: fallbackGroup(), animations: [], meshOptimization: [], materialTextures: [] } as OptimizedGltfAsset;
+    const fallback = {
+      scene: fallbackGroup(), animations: [], materialIndices: new Map(),
+      meshOptimization: [], materialTextures: [],
+    } as OptimizedGltfAsset;
     return this.load(path, async bytes => {
       const materialTextures = parseGlbMaterialTextures(bytes);
       const parsed = await parseGLTFAsset(bytes, loader);

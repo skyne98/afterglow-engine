@@ -105,6 +105,18 @@ InstancedMesh, SkinnedMesh, and morph targets because Three retains its normal
 geometry vertex path. Animated/deformed objects must render feedback with the
 same object (temporarily swapping the prewarmed material), not a bind-pose proxy.
 
+The tree-shakeable public barrel is `engine/virtual-texturing-api.ts`.
+`parseGLTFAsset()` records `GLTFParser.associations` as a stable
+`materialIndices` map. `VirtualGltfBinding.create(asset, store, options)` uses
+those indices—not material names—to join primitives to cooked texture layouts.
+It has an explicit primitive capacity, creates one pair per source material,
+preserves standard scalar/color/alpha/side factors, disposes replaced imported
+textures and materials, and atomically restores primitive visibility/materials
+around every feedback pass. Materials without virtual base color remain visible
+normally and are hidden only during feedback. Missing indices, duplicate
+layouts, unsupported material arrays, unavailable images, and capacity overflow
+fail during bootstrap with rollback.
+
 ### Recorded extension: per-material residency identities
 
 The current feedback identity is a texture ID. Consequently, if one texture is
