@@ -5,6 +5,7 @@ import { VirtualTextureFeedbackPass } from './engine/virtual-texture-feedback-pa
 import { EngineMemory, EnginePhase, FixedIndexPool, LinearArena, defineEngineMemoryResource } from './engine/engine-memory.ts';
 import { BudgetDecision, FrameBudget, FrameBudgetRes, FrameStage } from './engine/frame-budget.ts';
 import { IndexedDbBlobBackend, PersistentBlobCache, OpfsBlobBackend, persistentCacheNamespace } from './engine/persistent-blob-cache.ts';
+import { RelativePointerInput } from './engine/relative-pointer.ts';
 import {
   VirtualTextureStore, VirtualTextureTuning, VirtualTextureTuningRes,
   VT_SAMPLE_WGSL, VT_SAMPLE_LEVEL_WGSL,
@@ -26,6 +27,7 @@ window.AfterglowMemory = {
 window.AfterglowStorage = {
   PersistentBlobCache, OpfsBlobBackend, IndexedDbBlobBackend, persistentCacheNamespace,
 };
+window.AfterglowInput = { RelativePointerInput };
 window.AfterglowVT = {
   VirtualTextureStore, VirtualTextureTuning, VirtualTextureTuningRes,
   VirtualTextureFeedbackPass, VT_SAMPLE_WGSL,

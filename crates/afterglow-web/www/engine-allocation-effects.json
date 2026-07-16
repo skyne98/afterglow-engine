@@ -19,6 +19,7 @@
     "persistent-blob-cache.ts": "budgeted",
     "procedural-vt.ts": "budgeted",
     "reactive.ts": "gameFacing",
+    "relative-pointer.ts": "budgeted",
     "render-adapter.ts": "pooled",
     "renderer-seal.ts": "bootstrap",
     "resource.ts": "bootstrap",
@@ -76,7 +77,8 @@
     "createFetchRangeLoader": "AssetFetch",
     "createPageDataProvider": "AssetFetch",
     "VirtualTextureStore.queuePageLoad": "AssetFetch",
-    "BoundedTranscoderPool.submit": "WorkerPromise"
+    "BoundedTranscoderPool.submit": "WorkerPromise",
+    "RelativePointerInput.requestLock": "BrowserInputPermission"
   },
   "bootstrapOnly": {
     "AssetStore.registerAsset": "PathInterning",

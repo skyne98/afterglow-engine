@@ -10,6 +10,7 @@
 # The Game Window
 
 - [The AppBuilder API](./window/app-builder.md)
+- [Low-latency Mouse Input](./window/input.md)
 - [Serving Assets](./window/assets.md)
 - [The Asset System](./window/asset-system.md)
 - [Persistent Cache](./window/persistent-cache.md)

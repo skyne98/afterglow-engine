@@ -1813,6 +1813,87 @@ async function warmRendererVariants(renderer, variants) {
     await renderer.compileAsync(variant.scene, variant.camera);
 }
 
+// crates/afterglow-web/www/engine/relative-pointer.ts
+class RelativePointerInput {
+  element;
+  sink;
+  ownerDocument;
+  status;
+  requestedUnadjustedMovement = false;
+  onMovement = (event) => {
+    if (this.ownerDocument.pointerLockElement !== this.element)
+      return;
+    const movement = event;
+    this.sink(movement.movementX, movement.movementY);
+  };
+  onPointerLockChange = () => {
+    this.status.locked = this.ownerDocument.pointerLockElement === this.element;
+    this.status.unadjustedMovement = this.status.locked && this.requestedUnadjustedMovement;
+    if (!this.status.locked)
+      this.requestedUnadjustedMovement = false;
+  };
+  onRawLockAcquired = () => {
+    this.status.locked = this.ownerDocument.pointerLockElement === this.element;
+    this.status.unadjustedMovement = this.status.locked;
+  };
+  onRawLockRejected = () => {
+    this.requestedUnadjustedMovement = false;
+    this.requestFallbackLock();
+  };
+  onFallbackLockAcquired = () => {
+    this.status.locked = this.ownerDocument.pointerLockElement === this.element;
+    this.status.unadjustedMovement = false;
+  };
+  onFallbackLockRejected = () => {
+    this.status.locked = false;
+    this.status.unadjustedMovement = false;
+  };
+  constructor(element, sink, options = {}) {
+    this.element = element;
+    this.sink = sink;
+    this.ownerDocument = options.document ?? element.ownerDocument;
+    const view = this.ownerDocument.defaultView;
+    const rawEventSupported = options.rawEventSupported ?? (view !== null && ("onpointerrawupdate" in view));
+    this.status = {
+      eventType: rawEventSupported ? "pointerrawupdate" : "mousemove",
+      locked: false,
+      unadjustedMovement: false
+    };
+    this.element.addEventListener(this.status.eventType, this.onMovement, { passive: true });
+    this.ownerDocument.addEventListener("pointerlockchange", this.onPointerLockChange, { passive: true });
+  }
+  requestLock() {
+    if (this.ownerDocument.pointerLockElement === this.element)
+      return;
+    this.requestedUnadjustedMovement = true;
+    try {
+      const pending = this.element.requestPointerLock({ unadjustedMovement: true });
+      if (pending)
+        pending.then(this.onRawLockAcquired, this.onRawLockRejected);
+    } catch {
+      this.requestedUnadjustedMovement = false;
+      this.requestFallbackLock();
+    }
+  }
+  requestFallbackLock() {
+    this.requestedUnadjustedMovement = false;
+    try {
+      const pending = this.element.requestPointerLock();
+      if (pending)
+        pending.then(this.onFallbackLockAcquired, this.onFallbackLockRejected);
+    } catch {
+      this.onFallbackLockRejected();
+    }
+  }
+  getStatus() {
+    return this.status;
+  }
+  dispose() {
+    this.element.removeEventListener(this.status.eventType, this.onMovement);
+    this.ownerDocument.removeEventListener("pointerlockchange", this.onPointerLockChange);
+  }
+}
+
 // crates/afterglow-web/www/vt-dungeon.ts
 var THREE = window.THREE;
 var VT = window.AfterglowVT;
@@ -2108,8 +2189,8 @@ renderer.setAnimationLoop((now) => {
       waiters.splice(i, 1);
     }
   if (hudVisible && frame % 15 === 0) {
-    const d = store.getStats();
-    hud.innerHTML = `<b>afterglow — Engine VT Dungeon</b><br>3 × 8K scanned PBR material sets · 12 wall instances<br>Virtual RGBA channels: 1.875 GiB · physical atlas: ${store.atlasWidth}²<br>Position: ${pose.x.toFixed(2)}, ${pose.z.toFixed(2)} · yaw ${(pose.yaw * 180 / Math.PI).toFixed(0)}° · ${(1 / smoothedDt).toFixed(0)} FPS<br>Textures: ${d.textureCount} · resident ${d.atlasSlotsUsed}/${d.atlasSlotsTotal} · pending ${d.pendingPages}<br>GPU feedback pages: ${lastResult.totalRequests} · mips [${feedbackPass.getLatestMips().join(",")}] · bias ${VT_LOD_BIAS} · budget ${d.budget} · errors ${errors.length}`;
+    const d = store.getStats(), input = relativePointer.getStatus();
+    hud.innerHTML = `<b>afterglow — Engine VT Dungeon</b><br>3 × 8K scanned PBR material sets · 12 wall instances<br>Virtual RGBA channels: 1.875 GiB · physical atlas: ${store.atlasWidth}²<br>Position: ${pose.x.toFixed(2)}, ${pose.z.toFixed(2)} · yaw ${(pose.yaw * 180 / Math.PI).toFixed(0)}° · ${(1 / smoothedDt).toFixed(0)} FPS<br>Input: ${input.eventType}${input.unadjustedMovement ? " · unadjusted" : ""}<br>Textures: ${d.textureCount} · resident ${d.atlasSlotsUsed}/${d.atlasSlotsTotal} · pending ${d.pendingPages}<br>GPU feedback pages: ${lastResult.totalRequests} · mips [${feedbackPass.getLatestMips().join(",")}] · bias ${VT_LOD_BIAS} · budget ${d.budget} · errors ${errors.length}`;
   }
 });
 addEventListener("resize", () => {
@@ -2132,15 +2213,15 @@ addEventListener("keydown", (e) => {
     setPose(5.5, 6.5, -Math.PI / 2, 0);
 });
 addEventListener("keyup", (e) => keys.delete(e.key.toLowerCase()));
+var relativePointer = new RelativePointerInput(renderer.domElement, (movementX, movementY) => {
+  if (!programmatic) {
+    pose.yaw -= movementX * 0.002;
+    pose.pitch = Math.max(-1.45, Math.min(1.45, pose.pitch - movementY * 0.002));
+  }
+});
 renderer.domElement.addEventListener("click", () => {
   if (!programmatic)
-    renderer.domElement.requestPointerLock();
-});
-addEventListener("mousemove", (e) => {
-  if (!programmatic && document.pointerLockElement === renderer.domElement) {
-    pose.yaw -= e.movementX * 0.002;
-    pose.pitch = Math.max(-1.45, Math.min(1.45, pose.pitch - e.movementY * 0.002));
-  }
+    relativePointer.requestLock();
 });
 var scenarios = { forward: () => setPose(-5.5, -5.5, 0, 0), reverse: () => setPose(5.5, -5.5, Math.PI, 0), corner: () => setPose(5.8, 6.4, -Math.PI / 2, -0.2) };
 function atlasFeedback(groupCount, startPage = 0) {
@@ -2209,6 +2290,7 @@ window.__afterglowVtDungeon = {
   ready: () => true,
   telemetry: () => store.getStats(),
   timing: () => runtimeTiming,
+  inputStatus: () => relativePointer.getStatus(),
   pipelineTelemetry,
   resolveGpuTimings,
   setGpuTimingEnabled,

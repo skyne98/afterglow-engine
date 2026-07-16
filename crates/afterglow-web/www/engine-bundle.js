@@ -65593,6 +65593,87 @@ class PersistentBlobCache {
   }
 }
 
+// crates/afterglow-web/www/engine/relative-pointer.ts
+class RelativePointerInput {
+  element;
+  sink;
+  ownerDocument;
+  status;
+  requestedUnadjustedMovement = false;
+  onMovement = (event) => {
+    if (this.ownerDocument.pointerLockElement !== this.element)
+      return;
+    const movement = event;
+    this.sink(movement.movementX, movement.movementY);
+  };
+  onPointerLockChange = () => {
+    this.status.locked = this.ownerDocument.pointerLockElement === this.element;
+    this.status.unadjustedMovement = this.status.locked && this.requestedUnadjustedMovement;
+    if (!this.status.locked)
+      this.requestedUnadjustedMovement = false;
+  };
+  onRawLockAcquired = () => {
+    this.status.locked = this.ownerDocument.pointerLockElement === this.element;
+    this.status.unadjustedMovement = this.status.locked;
+  };
+  onRawLockRejected = () => {
+    this.requestedUnadjustedMovement = false;
+    this.requestFallbackLock();
+  };
+  onFallbackLockAcquired = () => {
+    this.status.locked = this.ownerDocument.pointerLockElement === this.element;
+    this.status.unadjustedMovement = false;
+  };
+  onFallbackLockRejected = () => {
+    this.status.locked = false;
+    this.status.unadjustedMovement = false;
+  };
+  constructor(element3, sink, options = {}) {
+    this.element = element3;
+    this.sink = sink;
+    this.ownerDocument = options.document ?? element3.ownerDocument;
+    const view = this.ownerDocument.defaultView;
+    const rawEventSupported = options.rawEventSupported ?? (view !== null && ("onpointerrawupdate" in view));
+    this.status = {
+      eventType: rawEventSupported ? "pointerrawupdate" : "mousemove",
+      locked: false,
+      unadjustedMovement: false
+    };
+    this.element.addEventListener(this.status.eventType, this.onMovement, { passive: true });
+    this.ownerDocument.addEventListener("pointerlockchange", this.onPointerLockChange, { passive: true });
+  }
+  requestLock() {
+    if (this.ownerDocument.pointerLockElement === this.element)
+      return;
+    this.requestedUnadjustedMovement = true;
+    try {
+      const pending = this.element.requestPointerLock({ unadjustedMovement: true });
+      if (pending)
+        pending.then(this.onRawLockAcquired, this.onRawLockRejected);
+    } catch {
+      this.requestedUnadjustedMovement = false;
+      this.requestFallbackLock();
+    }
+  }
+  requestFallbackLock() {
+    this.requestedUnadjustedMovement = false;
+    try {
+      const pending = this.element.requestPointerLock();
+      if (pending)
+        pending.then(this.onFallbackLockAcquired, this.onFallbackLockRejected);
+    } catch {
+      this.onFallbackLockRejected();
+    }
+  }
+  getStatus() {
+    return this.status;
+  }
+  dispose() {
+    this.element.removeEventListener(this.status.eventType, this.onMovement);
+    this.ownerDocument.removeEventListener("pointerlockchange", this.onPointerLockChange);
+  }
+}
+
 // crates/afterglow-web/www/engine/asset-handle.ts
 class AssetHandle {
   asset;
@@ -67383,6 +67464,7 @@ window.AfterglowStorage = {
   IndexedDbBlobBackend,
   persistentCacheNamespace
 };
+window.AfterglowInput = { RelativePointerInput };
 window.AfterglowVT = {
   VirtualTextureStore,
   VirtualTextureTuning,
