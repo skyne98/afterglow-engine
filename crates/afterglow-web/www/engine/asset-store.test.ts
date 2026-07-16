@@ -22,6 +22,14 @@ describe('stable glTF material identity', () => {
     expect(parsed.materialIndices.get(first)).toBe(4);
     expect(parsed.materialIndices.get(second)).toBe(9);
   });
+
+  test('rejects mesh results when loader associations are unavailable', async () => {
+    const scene = new THREE.Group();
+    scene.add(new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshStandardMaterial()));
+    await expect(parseGLTFAsset(new Uint8Array(8), {
+      parse(_data, _path, onLoad) { onLoad({ scene, animations: [] }); },
+    })).rejects.toThrow('stable material indices');
+  });
 });
 
 describe('rig-preserving runtime mesh optimization', () => {

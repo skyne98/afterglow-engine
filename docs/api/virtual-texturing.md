@@ -114,8 +114,13 @@ preserves standard scalar/color/alpha/side factors, disposes replaced imported
 textures and materials, and atomically restores primitive visibility/materials
 around every feedback pass. Materials without virtual base color remain visible
 normally and are hidden only during feedback. Missing indices, duplicate
-layouts, unsupported material arrays, unavailable images, and capacity overflow
-fail during bootstrap with rollback.
+layouts, unsupported/non-PBR material replacement, unavailable images, and
+capacity overflow fail during bootstrap with rollback. Imported textures shared
+with an unreplaced material remain owned by that live material; only exclusive
+replaced images are released. Disposing a binding hides its replaced meshes
+before disposing their VT materials, so no visible object retains a disposed
+material. A metadata-free fallback scene remains renderable and contributes no
+feedback.
 
 ### Recorded extension: per-material residency identities
 

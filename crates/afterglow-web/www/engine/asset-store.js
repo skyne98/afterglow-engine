@@ -13229,18 +13229,26 @@ async function parseGLTFAsset(bytes, loader) {
   if (!loader)
     throw new Error("parseGLTFAsset requires an injected Three.js GLTFLoader");
   return new Promise((resolve, reject) => loader.parse(buf, "", (result) => {
-    const materialIndices = new Map;
-    result.scene.traverse((object) => {
-      if (!(object instanceof Mesh))
-        return;
-      const materials = Array.isArray(object.material) ? object.material : [object.material];
-      for (const material of materials) {
-        const index = result.parser?.associations?.get(material)?.materials;
-        if (index !== undefined)
-          materialIndices.set(material, index);
-      }
-    });
-    resolve({ scene: result.scene, animations: result.animations, materialIndices });
+    try {
+      const materialIndices = new Map;
+      let materialCount = 0;
+      result.scene.traverse((object) => {
+        if (!(object instanceof Mesh))
+          return;
+        const materials = Array.isArray(object.material) ? object.material : [object.material];
+        for (const material of materials) {
+          materialCount++;
+          const index = result.parser?.associations?.get(material)?.materials;
+          if (index !== undefined)
+            materialIndices.set(material, index);
+        }
+      });
+      if (materialCount > 0 && materialIndices.size === 0)
+        throw new Error("GLTFLoader parser associations did not expose stable material indices");
+      resolve({ scene: result.scene, animations: result.animations, materialIndices });
+    } catch (error2) {
+      reject(error2);
+    }
   }, reject));
 }
 function parseGlbMaterialTextures(bytes) {

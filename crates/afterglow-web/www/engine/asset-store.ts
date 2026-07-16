@@ -118,16 +118,24 @@ export async function parseGLTFAsset(
   new Uint8Array(buf).set(bytes);
   if (!loader) throw new Error('parseGLTFAsset requires an injected Three.js GLTFLoader');
   return new Promise((resolve, reject) => loader.parse(buf, '', result => {
-    const materialIndices = new Map<THREE.Material, number>();
+    try {
+      const materialIndices = new Map<THREE.Material, number>();
+    let materialCount = 0;
     result.scene.traverse((object) => {
       if (!(object instanceof THREE.Mesh)) return;
       const materials = Array.isArray(object.material) ? object.material : [object.material];
       for (const material of materials) {
+        materialCount++;
         const index = result.parser?.associations?.get(material)?.materials;
         if (index !== undefined) materialIndices.set(material, index);
       }
     });
-    resolve({ scene: result.scene, animations: result.animations, materialIndices });
+      if (materialCount > 0 && materialIndices.size === 0)
+        throw new Error('GLTFLoader parser associations did not expose stable material indices');
+      resolve({ scene: result.scene, animations: result.animations, materialIndices });
+    } catch (error) {
+      reject(error);
+    }
   }, reject));
 }
 

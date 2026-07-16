@@ -10,9 +10,17 @@ import {
 } from './virtual-texture-material.ts';
 import type { VirtualMaterialSet, VirtualTextureEntry, VirtualTextureStore } from './virtual-texture.ts';
 
-const textureProperties = [
-  'map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap', 'emissiveMap',
-] as const;
+function collectMaterialTextures(material: THREE.Material, output: Set<THREE.Texture>): void {
+  if (material instanceof THREE.MeshStandardMaterial) {
+    for (const texture of [
+      material.map, material.normalMap, material.roughnessMap, material.metalnessMap,
+      material.aoMap, material.emissiveMap, material.alphaMap, material.lightMap,
+    ]) if (texture) output.add(texture);
+  } else if (material instanceof THREE.MeshBasicMaterial) {
+    for (const texture of [material.map, material.alphaMap, material.aoMap, material.lightMap])
+      if (texture) output.add(texture);
+  }
+}
 
 interface BindingRecord {
   mesh: THREE.Mesh;
@@ -37,16 +45,7 @@ export interface VirtualGltfBindingOptions {
   ) => VirtualGltfMaterialPair;
 }
 
-function materialOptions(source: THREE.Material, options: VirtualGltfBindingOptions): VirtualGltfMaterialOptions {
-  if (!(source instanceof THREE.MeshStandardMaterial)) {
-    return {
-      addressMode: options.addressMode ?? VirtualTextureAddressMode.Repeat,
-      qualityBias: options.qualityBias ?? 0,
-      transparent: source.transparent,
-      depthWrite: source.depthWrite,
-      side: source.side,
-    };
-  }
+function materialOptions(source: THREE.MeshStandardMaterial, options: VirtualGltfBindingOptions): VirtualGltfMaterialOptions {
   return {
     addressMode: options.addressMode ?? VirtualTextureAddressMode.Repeat,
     qualityBias: options.qualityBias ?? 0,
@@ -92,7 +91,6 @@ export class VirtualGltfBinding implements FeedbackRenderable {
   private disposed = false;
 
   private constructor(
-    asset: OptimizedGltfAsset,
     scene: THREE.Scene,
     records: Array<BindingRecord | null>,
     recordCount: number,
@@ -142,12 +140,19 @@ export class VirtualGltfBinding implements FeedbackRenderable {
           throw new Error('virtual glTF binding requires one material per primitive');
         const source = object.material;
         const materialIndex = asset.materialIndices.get(source);
-        if (materialIndex === undefined)
+        if (materialIndex === undefined) {
+          if (asset.materialIndices.size === 0 && asset.materialTextures.length === 0) {
+            records[recordCount++] = { mesh: object, sourceMaterial: source, pair: null, visible: object.visible };
+            return;
+          }
           throw new Error(`glTF material has no stable parser index: ${source.name}`);
+        }
         const layout = layouts[materialIndex];
         if (!layout) throw new Error(`glTF material layout ${materialIndex} is unavailable`);
         let pair = pairs[materialIndex] ?? null;
         if (!pair && layout.baseColorImage !== null) {
+          if (!(source instanceof THREE.MeshStandardMaterial))
+            throw new Error(`virtual glTF material ${materialIndex} is not a standard PBR material`);
           const set = imageSet(layout, options.resolveImage);
           if (!set) throw new Error(`glTF material ${materialIndex} lost its base-color image`);
           pair = pairFactory(store, set, options.feedbackPixelScale, materialOptions(source, options));
@@ -171,14 +176,14 @@ export class VirtualGltfBinding implements FeedbackRenderable {
     }
 
     const importedTextures = new Set<THREE.Texture>();
-    for (const source of sources) {
-      if (!(source instanceof THREE.MeshStandardMaterial)) continue;
-      for (const property of textureProperties) {
-        const texture = source[property];
-        if (texture) importedTextures.add(texture);
-      }
+    const retainedTextures = new Set<THREE.Texture>();
+    for (const source of sources) if (source) collectMaterialTextures(source, importedTextures);
+    for (let index = 0; index < recordCount; index++) {
+      const record = records[index];
+      if (record && !record.pair) collectMaterialTextures(record.sourceMaterial, retainedTextures);
     }
     for (const texture of importedTextures) {
+      if (retainedTextures.has(texture)) continue;
       texture.dispose();
       const data = texture.source.data;
       if (typeof ImageBitmap !== 'undefined' && data instanceof ImageBitmap) data.close();
@@ -186,12 +191,14 @@ export class VirtualGltfBinding implements FeedbackRenderable {
     for (const source of sources) source?.dispose();
 
     return new VirtualGltfBinding(
-      asset, options.feedbackScene, records, recordCount, pairs, passCount, options.feedbackCamera,
+      options.feedbackScene, records, recordCount, pairs, passCount, options.feedbackCamera,
     );
   }
 
+  /** @alloc-effect none */
   isFeedbackActive(): boolean { return !this.disposed && this.feedbackScene.visible; }
 
+  /** @alloc-effect none */
   beginFeedbackPass(localPass: number): void {
     for (let index = 0; index < this.recordCount; index++) {
       const record = this.records[index];
@@ -207,6 +214,7 @@ export class VirtualGltfBinding implements FeedbackRenderable {
     }
   }
 
+  /** @alloc-effect none */
   endFeedbackPass(): void {
     for (let index = 0; index < this.recordCount; index++) {
       const record = this.records[index];
@@ -219,6 +227,10 @@ export class VirtualGltfBinding implements FeedbackRenderable {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    for (let index = 0; index < this.recordCount; index++) {
+      const record = this.records[index];
+      if (record?.pair) record.mesh.visible = false;
+    }
     for (const pair of this.pairs) {
       pair?.material.dispose();
       for (const feedback of pair?.feedbackMaterials ?? []) feedback.dispose();

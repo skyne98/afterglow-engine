@@ -85,6 +85,45 @@ describe('VirtualGltfBinding', () => {
     expect(second.visible).toBe(true);
     expect(unbound.visible).toBe(true);
     binding.dispose();
+    expect(first.visible).toBe(false);
+    expect(second.visible).toBe(false);
+    expect(unbound.visible).toBe(true);
+  });
+
+  test('does not dispose a replaced material texture retained by an unbound material', () => {
+    const scene = new THREE.Group();
+    const shared = new THREE.Texture();
+    let disposed = 0;
+    shared.dispose = (): void => { disposed++; };
+    const bound = new THREE.MeshStandardMaterial({ normalMap: shared });
+    const retained = new THREE.MeshStandardMaterial({ normalMap: shared });
+    scene.add(new THREE.Mesh(new THREE.BoxGeometry(), bound), new THREE.Mesh(new THREE.BoxGeometry(), retained));
+    const vt = makeStore();
+    vt.loadTexture('0', { width: 128, height: 128 });
+    const binding = VirtualGltfBinding.create(
+      asset(scene, [layout(0, 0), layout(1, null)], new Map([[bound, 0], [retained, 1]])), vt,
+      {
+        primitiveCapacity: 2, feedbackScene: new THREE.Scene(), feedbackCamera: new THREE.Camera(),
+        feedbackPixelScale: new THREE.Vector2(1, 1), resolveImage() { return vt.getEntry('0'); },
+        pairFactory() { return pair(); },
+      },
+    );
+    expect(disposed).toBe(0);
+    binding.dispose();
+  });
+
+  test('accepts a mesh-bearing fallback asset without material metadata', () => {
+    const scene = new THREE.Group();
+    scene.add(new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshBasicMaterial()));
+    const binding = VirtualGltfBinding.create(asset(scene, [], new Map()), makeStore(), {
+      primitiveCapacity: 1, feedbackScene: new THREE.Scene(), feedbackCamera: new THREE.Camera(),
+      feedbackPixelScale: new THREE.Vector2(1, 1), resolveImage() { return undefined; },
+    });
+    binding.beginFeedbackPass(0);
+    expect(scene.children[0]?.visible).toBe(false);
+    binding.endFeedbackPass();
+    expect(scene.children[0]?.visible).toBe(true);
+    binding.dispose();
   });
 
   test('rejects missing indices and rolls back prior replacements', () => {

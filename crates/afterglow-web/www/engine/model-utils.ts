@@ -146,6 +146,7 @@ export class AnimationSet {
     }
   }
 
+  /** @alloc-effect none */
   update(deltaSeconds: number): void {
     if (!this.disposed && this.enabled && this.activeIndex >= 0)
       this.mixer.update(deltaSeconds);
