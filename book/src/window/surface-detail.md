@@ -6,16 +6,19 @@ parallax occlusion mapping tier.
 The engine's `POM_UV_WGSL` performs an adaptive 8–32-layer march with linear
 intersection refinement. Physical height (`1` exposed, `0` recessed) is
 converted to ray depth with `1 - height`; a ratio-2 offset limit prevents
-exploding UVs at grazing angles. Its effect fades after 65% of the configured
-range and is completely disabled beyond 3.25 m. It does not include silhouettes,
-self-shadowing, or a second relief pass—the measured low-core tier is the only
-variant enabled for normal gameplay on the Radeon 680M.
+exploding UVs at grazing angles. Dungeon uses scale 0.05 and intentionally has
+no radial per-fragment fade—the moving contour was visible as a flattening wave.
+An 8-sample ray toward the point light self-shadows direct diffuse/specular at
+82% strength. Hemisphere fill remains unshadowed. There is no silhouette or
+secondary relief/depth pass.
 
-Height comes from compact resident 1K ambient-occlusion maps belonging to the
-same ambientCG materials. Exposed stone is light and cracks/mortar are dark,
-which provides a conservative pseudo-height field. Keeping this small field
-resident prevents page residency from changing during the non-uniform march;
-the 8K color, normal, and packed mask channels remain virtual.
+Height comes from the official resident 1K, 16-bit ambientCG displacement maps.
+AO describes occluded lighting, not geometry; using it as pseudo-height produced
+weak, incorrect relief. Keeping displacement resident prevents page residency
+from changing during the non-uniform march; the 8K color, normal, and packed
+mask channels remain virtual. Resident displacement uses `flipY=false` to match
+VT storage, and the virtual `NormalGL` green channel is inverted at sampling to
+correct the custom uploader's top-left row orientation.
 
 Displaced PBR channels use `VT_SAMPLE_FROM_LEVEL_WGSL`: each begins at the
 material's resolved mip, walks to a coarser resident page when the coordinate
@@ -23,11 +26,16 @@ crosses a missing page, and finally uses the pinned mip tail. Gradients come
 from the undisplaced UV, avoiding physical-atlas seams.
 
 Press **P** in the Dungeon to switch between two prewarmed materials. The swap
-never compiles a gameplay pipeline. Three r185 builds diffuse color before AO
-and lazy lighting normals, so the Dungeon marches once there, publishes one
-shader-local UV, and consumes it for albedo, normal, roughness, and AO. This
-keeps moss/stone color registered with its normal and mask detail without
-tripling the march.
+never compiles a gameplay pipeline. The tangent-space ray uses the geometric
+normal rather than Three's normal-map-dependent `parallaxDirection`, avoiding a
+cycle where the normal needs the displaced UV that the normal itself influences.
+The first material flow publishes one marched UV for albedo, normal, roughness,
+and AO. Generated WGSL is checked during warm-up for one correctly ordered
+march and three linked PBR samples.
 
-On the 680M at 2880×1800 physical pixels, the close angled-wall validation held
-59.97 FPS, p99 16.675 ms, and 0/300 frames below 55 FPS with POM enabled.
+The march equations and sign convention match LearnOpenGL's established POM
+implementation; the direct-light ray comes from the known-working prototype.
+At 2880×1800, corrected fixed POM measured 59.87 FPS and p99 16.68 ms with
+1/600 below 55; base measured 59.77 FPS with 2/600. Moving POM measured 59.97
+FPS with 0/300 below 55. The isolated misses therefore are not POM saturation.
+VT feedback runs every 8 frames; every 4 frames measured 3/300 misses.

@@ -125,8 +125,8 @@ DISPLAY=:0 ./scripts/test-dungeon-gpu.sh
 
 Click for raw mouse look; use **WASD**, **Shift**, **P**, **R**, and **1–3** for
 movement, sprint, prewarmed close-range POM toggle, reset, and deterministic
-viewpoints. The POM tier uses compact resident AO height from the same scanned
-stone materials while the 8K PBR channels remain virtual. Automated clients use
+viewpoints. The POM tier uses official resident 16-bit displacement from the
+same scanned stone materials while the 8K PBR channels remain virtual. Automated clients use
 `window.__afterglowDungeon` for exact poses, collision-aware movement, frame
 stepping, idle waits, allocation-free telemetry reads, snapshots, and named
 scenarios. Soak modes are `stable`, `traverse`, and deliberately hostile

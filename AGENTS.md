@@ -156,11 +156,16 @@ fallback.
   0/300 below 60**. Full low POM was 51.6 FPS; medium was 36.1 FPS; high was
   22.2 FPS. Therefore only low core POM is viable as a strict, distance/coverage
   LOD tier on the 680M; medium/high/full-POM are evaluation modes, not an engine
-  frame-budget candidate without a different rendering strategy. The integrated
-  Dungeon tier uses resident 1K matching AO height, 8–32 layers, scale 0.012,
-  a 3.25 m fade/cutoff, and VT coarser-page/tail fallback for displaced albedo;
-  at a close angled wall it held 59.97 FPS, p99 16.675 ms, 0/300 below 55, with
-  real texture pixels verified by compositor screenshots.
+  frame-budget candidate without a different rendering strategy. The corrected
+  Dungeon tier uses official resident 1K, 16-bit displacement, a geometric TBN,
+  8–32 layers, scale 0.05, an 8-step point-light self-shadow ray, no radial
+  per-fragment fade, and VT coarser-page/tail fallback for all displaced PBR
+  channels. The corrected fixed close-wall run measured 59.87 FPS, p99 16.68 ms,
+  1/600 below 55; the prewarmed base measured 59.77 FPS, p99 16.68 ms, 2/600
+  below 55. Main GPU work was 1.02–1.09 ms and total timestamp work 5.49–7.25 ms,
+  so the isolated missed-vsync events also occur without POM. A 300-frame moving
+  wall run had 0 below 55. Feedback cadence is 8 frames; the prior 4-frame
+  cadence measured 3/300 misses.
 
 ### SharedArrayBuffer not available
 

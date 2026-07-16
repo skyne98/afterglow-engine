@@ -1901,10 +1901,14 @@ fn pomMarchUV(
   baseUV: vec2f, viewDir: vec3f, heightScale: f32, maxOffsetRatio: f32,
   minLayers: u32, maxLayers: u32, maxDistance: f32, viewDistance: f32
 ) -> vec2f {
-  if (heightScale <= 0.0 || maxDistance <= 0.0 || viewDistance >= maxDistance) {
+  if (heightScale <= 0.0) {
     return baseUV;
   }
-  let fade = 1.0 - smoothstep(maxDistance * 0.65, maxDistance, viewDistance);
+  var fade = 1.0;
+  if (maxDistance > 0.0) {
+    if (viewDistance >= maxDistance) { return baseUV; }
+    fade = 1.0 - smoothstep(maxDistance * 0.65, maxDistance, viewDistance);
+  }
   let scale = heightScale * fade;
   if (scale <= 0.00001) { return baseUV; }
 
@@ -1945,6 +1949,64 @@ fn pomMarchUV(
   return currentUV;
 }
 `;
+var POM_SELF_SHADOW_WGSL = `
+fn pomSelfShadow(
+  heightTexture: texture_2d<f32>, heightSampler: sampler,
+  hitUV: vec2f, lightDir: vec3f, heightScale: f32, maxOffsetRatio: f32,
+  requestedSteps: u32, bias: f32
+) -> f32 {
+  let l = normalize(lightDir);
+  if (l.z <= 0.001 || heightScale <= 0.0) { return 1.0; }
+  let hitHeight = clamp(textureSampleLevel(heightTexture, heightSampler, hitUV, 0.0).r, 0.0, 1.0);
+  let remainingHeight = 1.0 - hitHeight;
+  if (remainingHeight <= bias) { return 1.0; }
+  let steps = max(1u, min(requestedSteps, 16u));
+  let rawSlope = l.xy / max(l.z, 0.001);
+  let slopeLength = length(rawSlope);
+  let boundedSlope = rawSlope * min(1.0, max(0.0, maxOffsetRatio) / max(slopeLength, 0.00001));
+  let uvStep = boundedSlope * heightScale * remainingHeight / f32(steps);
+  let heightStep = remainingHeight / f32(steps);
+  var rayUV = hitUV;
+  var rayHeight = hitHeight;
+  for (var i = 0u; i < steps; i = i + 1u) {
+    rayUV = rayUV + uvStep;
+    rayHeight = rayHeight + heightStep;
+    let terrainHeight = textureSampleLevel(heightTexture, heightSampler, rayUV, 0.0).r;
+    if (terrainHeight > rayHeight + bias) { return 0.0; }
+  }
+  return 1.0;
+}
+`;
+function assertPomGeneratedWgsl(source) {
+  const fragment = source.lastIndexOf("@fragment");
+  if (fragment < 0)
+    throw new Error("POM shader contract: fragment entry point missing");
+  const body = source.slice(fragment);
+  const firstMarch = body.indexOf("pomMarchUV(");
+  if (firstMarch < 0)
+    throw new Error("POM shader contract: march invocation missing");
+  if (body.indexOf("pomMarchUV(", firstMarch + 1) >= 0) {
+    throw new Error("POM shader contract: march must execute exactly once");
+  }
+  const firstSample = body.indexOf("vtSampleFromLevel(");
+  if (firstSample < 0 || firstMarch > firstSample) {
+    throw new Error("POM shader contract: VT sampled before displaced UV initialization");
+  }
+  const marchLineEnd = body.indexOf(`
+`, firstMarch);
+  const marchLine = body.slice(body.lastIndexOf(`
+`, firstMarch) + 1, marchLineEnd < 0 ? body.length : marchLineEnd);
+  if (!marchLine.includes("mat3x3") || marchLine.includes("TBNViewMatrix")) {
+    throw new Error("POM shader contract: view ray must use geometric TBN without normal-map dependency");
+  }
+  let samples = 0, cursor = 0;
+  while ((cursor = body.indexOf("vtSampleFromLevel(", cursor)) >= 0) {
+    samples++;
+    cursor += 18;
+  }
+  if (samples !== 3)
+    throw new Error(`POM shader contract: expected 3 linked PBR samples, got ${samples}`);
+}
 
 // crates/afterglow-web/www/dungeon.ts
 var THREE = window.THREE;
@@ -1953,19 +2015,22 @@ if (!VT)
   throw new Error("AfterglowVT engine bundle is unavailable");
 var { wgslFn, Fn, texture, sampler, uv, uniform, float, uint } = THREE;
 var VT_LOD_BIAS = -1.5;
-var FEEDBACK_INTERVAL = 4;
+var FEEDBACK_INTERVAL = 8;
 var POM_MIN_LAYERS = 8;
 var POM_MAX_LAYERS = 32;
-var POM_HEIGHT_SCALE = 0.012;
+var POM_HEIGHT_SCALE = 0.05;
 var POM_MAX_OFFSET_RATIO = 2;
-var POM_MAX_DISTANCE = 3.25;
+var POM_MAX_DISTANCE = 0;
+var POM_SHADOW_STEPS = 8;
+var POM_SHADOW_BIAS = 0.01;
+var POM_SHADOW_STRENGTH = 0.82;
 var pomEnabled = true;
 var scene = new THREE.Scene;
 scene.background = new THREE.Color(1053464);
 scene.fog = new THREE.Fog(1053464, 7, 28);
 var camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.05, 60);
 camera.rotation.order = "YXZ";
-var renderer = await createWebGPUOnlyRenderer({ antialias: false, trackTimestamp: true }).catch((error) => {
+var renderer = await createWebGPUOnlyRenderer({ antialias: false, trackTimestamp: false }).catch((error) => {
   showWebGPUFailure(error);
   throw error;
 });
@@ -2057,6 +2122,7 @@ var store = new VT.VirtualTextureStore(loader, pageProvider, format, renderer.ba
 var vtSampleLevel = wgslFn(VT.VT_SAMPLE_LEVEL_WGSL);
 var vtSampleFromLevel = wgslFn(VT.VT_SAMPLE_FROM_LEVEL_WGSL);
 var pomMarchUV = wgslFn(POM_UV_WGSL);
+var pomSelfShadow = wgslFn(POM_SELF_SHADOW_WGSL);
 var vtResolveMaterialMip4 = wgslFn(VT.VT_RESOLVE_MATERIAL_MIP4_WGSL);
 var vtFeedback = wgslFn(VT.VT_FEEDBACK_WGSL);
 var atlasNode = texture(store.atlasTexture);
@@ -2069,6 +2135,7 @@ for (const height of heightTextures) {
   height.wrapS = height.wrapT = THREE.RepeatWrapping;
   height.minFilter = height.magFilter = THREE.LinearFilter;
   height.generateMipmaps = false;
+  height.flipY = false;
   height.colorSpace = THREE.NoColorSpace;
   height.needsUpdate = true;
 }
@@ -2106,38 +2173,64 @@ function sampleEntryAtMip(entry, resolvedMip, sampleUV = uv()) {
   const pageTable = texture(entry.pageTableTexture);
   return vtSampleLevel({ pageTable, atlas: atlasNode, atlasSampler, uv: sampleUV, virtualSize: uniform(new THREE.Vector2(entry.width, entry.height)), pageGrid: uniform(new THREE.Vector2(entry.pageGridX, entry.pageGridY)), pageSize: float(VT.PAGE_SIZE), pageBorder: float(VT.PAGE_BORDER), atlasSize: uniform(new THREE.Vector2(store.atlasWidth, store.atlasHeight)), maxMip: float(entry.maxMip), resolvedMip, addressMode: uint(1) });
 }
+function pomTbn() {
+  const side = THREE.faceDirection, n = THREE.normalViewGeometry.mul(side), t = THREE.tangentView.mul(side), b = n.cross(t).mul(THREE.tangentGeometry.w).normalize();
+  return THREE.mat3(t, b, n);
+}
+function pomViewDirection() {
+  return THREE.positionViewDirection.mul(pomTbn());
+}
 function pomUV(set) {
   const heightNode = texture(set.heightTexture);
-  return pomMarchUV({ heightTexture: heightNode, heightSampler: sampler(heightNode), baseUV: uv(), viewDir: THREE.parallaxDirection.negate(), heightScale: float(POM_HEIGHT_SCALE), maxOffsetRatio: float(POM_MAX_OFFSET_RATIO), minLayers: uint(POM_MIN_LAYERS), maxLayers: uint(POM_MAX_LAYERS), maxDistance: float(POM_MAX_DISTANCE), viewDistance: THREE.positionView.length() });
+  return pomMarchUV({ heightTexture: heightNode, heightSampler: sampler(heightNode), baseUV: uv(), viewDir: pomViewDirection(), heightScale: float(POM_HEIGHT_SCALE), maxOffsetRatio: float(POM_MAX_OFFSET_RATIO), minLayers: uint(POM_MIN_LAYERS), maxLayers: uint(POM_MAX_LAYERS), maxDistance: float(POM_MAX_DISTANCE), viewDistance: THREE.positionView.length() });
+}
+function pomVisibility(set, hitUV, lightDirection) {
+  const heightNode = texture(set.heightTexture), shadow = pomSelfShadow({ heightTexture: heightNode, heightSampler: sampler(heightNode), hitUV, lightDir: lightDirection.mul(pomTbn()), heightScale: float(POM_HEIGHT_SCALE), maxOffsetRatio: float(POM_MAX_OFFSET_RATIO), requestedSteps: uint(POM_SHADOW_STEPS), bias: float(POM_SHADOW_BIAS) });
+  return THREE.mix(float(1), shadow, float(POM_SHADOW_STRENGTH));
+}
+
+class PomSelfShadowLightingModel extends THREE.PhysicalLightingModel {
+  constructor(visibility) {
+    super();
+    this.visibility = visibility;
+  }
+  direct(lightData, builder) {
+    super.direct(lightData, builder);
+    const visibility = this.visibility(lightData.lightDirection);
+    lightData.reflectedLight.directDiffuse.mulAssign(visibility);
+    lightData.reflectedLight.directSpecular.mulAssign(visibility);
+  }
 }
 function wallMaterial(set, usePom) {
   if (!set.normal || !set.masks)
     throw new Error("dungeon PBR material set requires albedo, normal, and packed masks");
-  const material = new THREE.MeshStandardNodeMaterial({ metalness: 0, side: THREE.DoubleSide });
   const resolveArgs = { pageTable0: texture(set.albedo.pageTableTexture), pageTable1: texture(set.normal.pageTableTexture), pageTable2: texture(set.masks.pageTableTexture), pageTable3: texture(set.masks.pageTableTexture), uv: uv(), virtualSize: uniform(new THREE.Vector2(set.albedo.width, set.albedo.height)), pageGrid: uniform(new THREE.Vector2(set.albedo.pageGridX, set.albedo.pageGridY)), pageSize: float(VT.PAGE_SIZE), maxMip: float(set.albedo.maxMip), textureMaxMip: float(set.albedo.textureMaxMip), addressMode: uint(1) };
   if (!usePom) {
+    const material2 = new THREE.MeshStandardNodeMaterial({ metalness: 0, side: THREE.DoubleSide });
     const resolvedMip2 = Fn(() => vtResolveMaterialMip4(resolveArgs))().toVar();
-    material.colorNode = Fn(() => {
+    material2.colorNode = Fn(() => {
       const color = sampleEntryAtMip(set.albedo, resolvedMip2);
       return THREE.vec4(THREE.sRGBTransferEOTF(color.rgb), color.a);
     })();
     const masks2 = Fn(() => sampleEntryAtMip(set.masks, resolvedMip2))().toVar();
-    material.normalNode = Fn(() => THREE.normalMap(sampleEntryAtMip(set.normal, resolvedMip2).xyz))();
-    material.roughnessNode = Fn(() => masks2.r)();
-    material.aoNode = Fn(() => masks2.g)();
-    return material;
+    material2.normalNode = Fn(() => THREE.normalMap(sampleEntryAtMip(set.normal, resolvedMip2).xyz, THREE.vec2(1, -1)))();
+    material2.roughnessNode = Fn(() => masks2.r)();
+    material2.aoNode = Fn(() => masks2.g)();
+    return material2;
   }
-  const resolvedMip = Fn(() => vtResolveMaterialMip4(resolveArgs))().toVar();
-  const displacedUV = THREE.property("vec2");
+  const material = new THREE.MeshStandardNodeMaterial({ metalness: 0, side: THREE.DoubleSide });
+  const displacedUV = THREE.property("vec2"), resolvedMip = THREE.property("float");
   material.colorNode = Fn(() => {
-    const mip = vtResolveMaterialMip4(resolveArgs).toVar(), sampleUV = pomUV(set).toVar(), color = sampleEntryFromLevel(set.albedo, mip, sampleUV);
+    const sampleUV = pomUV(set).toVar(), mip = vtResolveMaterialMip4(resolveArgs).toVar(), color = sampleEntryFromLevel(set.albedo, mip, sampleUV);
     displacedUV.assign(sampleUV);
+    resolvedMip.assign(mip);
     return THREE.vec4(THREE.sRGBTransferEOTF(color.rgb), color.a);
   })();
-  const masks = Fn(() => sampleEntryFromLevel(set.masks, resolvedMip, displacedUV))().toVar();
-  material.normalNode = Fn(() => THREE.normalMap(sampleEntryFromLevel(set.normal, resolvedMip, displacedUV).xyz))();
-  material.roughnessNode = Fn(() => masks.r)();
-  material.aoNode = Fn(() => masks.g)();
+  const masks = sampleEntryFromLevel(set.masks, resolvedMip, displacedUV);
+  material.normalNode = THREE.normalMap(sampleEntryFromLevel(set.normal, resolvedMip, displacedUV).xyz, THREE.vec2(1, -1));
+  material.roughnessNode = masks.r;
+  material.aoNode = masks.g;
+  material.setupLightingModel = () => new PomSelfShadowLightingModel((lightDirection) => pomVisibility(set, displacedUV, lightDirection));
   return material;
 }
 for (let i = 0;i < segments.length; i++) {
@@ -2162,6 +2255,7 @@ var pose = { x: -5.5, z: -5.5, yaw: 0, pitch: 0 };
 var keys = new Set;
 var programmatic = false;
 var diagnosticAtlas = false;
+var feedbackEnabled = true;
 var last = performance.now();
 var smoothedDt = 1 / 60;
 var frame = 0;
@@ -2245,6 +2339,16 @@ function update(dt) {
   runtimeTiming.vtCpuUs = (performance.now() - stageStart) * 1000;
 }
 feedbackPass.resize(renderer.domElement.width, renderer.domElement.height);
+var pomShaderContracts = 0;
+var gpuDevice = renderer.backend.device;
+var createShaderModule = gpuDevice.createShaderModule.bind(gpuDevice);
+gpuDevice.createShaderModule = (descriptor) => {
+  if (descriptor.code.includes("fn pomMarchUV")) {
+    assertPomGeneratedWgsl(descriptor.code);
+    pomShaderContracts++;
+  }
+  return createShaderModule(descriptor);
+};
 for (const wall of walls)
   wall.mesh.material = wall.baseMaterial;
 await warmRendererVariants(renderer, [{ scene, camera }]);
@@ -2255,6 +2359,9 @@ var previousTarget = renderer.getRenderTarget();
 renderer.setRenderTarget(feedbackPass.target);
 await warmRendererVariants(renderer, [{ scene: feedbackScene, camera }]);
 renderer.setRenderTarget(previousTarget);
+gpuDevice.createShaderModule = createShaderModule;
+if (pomShaderContracts < 1)
+  throw new Error("POM shader contract was not compiled during warm-up");
 await new Promise((r) => setTimeout(r, 0));
 renderer.render(scene, camera);
 renderer.setRenderTarget(feedbackPass.target);
@@ -2279,7 +2386,7 @@ renderer.setAnimationLoop((now) => {
   const renderStart = performance.now();
   renderer.render(scene, camera);
   runtimeTiming.renderSubmitUs = (performance.now() - renderStart) * 1000;
-  if (!diagnosticAtlas && frame % FEEDBACK_INTERVAL === 0) {
+  if (feedbackEnabled && !diagnosticAtlas && frame % FEEDBACK_INTERVAL === 0) {
     const feedbackStart = performance.now();
     feedbackPass.submit(renderer, feedbackScene, camera, store);
     runtimeTiming.feedbackSubmitUs = (performance.now() - feedbackStart) * 1000;
@@ -2294,7 +2401,7 @@ renderer.setAnimationLoop((now) => {
     }
   if (hudVisible && frame % 15 === 0) {
     const d = store.getStats(), input = relativePointer.getStatus();
-    hud.innerHTML = `<b>afterglow — Engine Dungeon</b><br>3 × 8K scanned PBR material sets · 12 wall instances<br>Virtual RGBA channels: 1.875 GiB · physical atlas: ${store.atlasWidth}²<br>Position: ${pose.x.toFixed(2)}, ${pose.z.toFixed(2)} · yaw ${(pose.yaw * 180 / Math.PI).toFixed(0)}° · ${(1 / smoothedDt).toFixed(0)} FPS<br>Input: ${input.eventType}${input.unadjustedMovement ? " · unadjusted" : ""}<br>POM: ${pomEnabled ? `${POM_MIN_LAYERS}–${POM_MAX_LAYERS} layers · AO height · ≤${POM_MAX_DISTANCE}m` : "off"}<br>Textures: ${d.textureCount} · resident ${d.atlasSlotsUsed}/${d.atlasSlotsTotal} · pending ${d.pendingPages}<br>GPU feedback pages: ${lastResult.totalRequests} · mips [${feedbackPass.getLatestMips().join(",")}] · bias ${VT_LOD_BIAS} · budget ${d.budget} · errors ${errors.length}`;
+    hud.innerHTML = `<b>afterglow — Engine Dungeon</b><br>3 × 8K scanned PBR material sets · 12 wall instances<br>Virtual RGBA channels: 1.875 GiB · physical atlas: ${store.atlasWidth}²<br>Position: ${pose.x.toFixed(2)}, ${pose.z.toFixed(2)} · yaw ${(pose.yaw * 180 / Math.PI).toFixed(0)}° · ${(1 / smoothedDt).toFixed(0)} FPS<br>Input: ${input.eventType}${input.unadjustedMovement ? " · unadjusted" : ""}<br>POM: ${pomEnabled ? `${POM_MIN_LAYERS}–${POM_MAX_LAYERS} layers · ${POM_SHADOW_STEPS}-step light self-shadow · no radial fade` : "off"}<br>Textures: ${d.textureCount} · resident ${d.atlasSlotsUsed}/${d.atlasSlotsTotal} · pending ${d.pendingPages}<br>GPU feedback pages: ${lastResult.totalRequests} · mips [${feedbackPass.getLatestMips().join(",")}] · bias ${VT_LOD_BIAS} · budget ${d.budget} · errors ${errors.length}`;
   }
 });
 addEventListener("resize", () => {
@@ -2398,8 +2505,11 @@ window.__afterglowDungeon = {
   telemetry: () => store.getStats(),
   timing: () => runtimeTiming,
   inputStatus: () => relativePointer.getStatus(),
-  pomStatus: () => ({ enabled: pomEnabled, minLayers: POM_MIN_LAYERS, maxLayers: POM_MAX_LAYERS, heightScale: POM_HEIGHT_SCALE, maxOffsetRatio: POM_MAX_OFFSET_RATIO, maxDistance: POM_MAX_DISTANCE, heightSource: "resident ambientCG AO" }),
+  pomStatus: () => ({ enabled: pomEnabled, minLayers: POM_MIN_LAYERS, maxLayers: POM_MAX_LAYERS, heightScale: POM_HEIGHT_SCALE, maxOffsetRatio: POM_MAX_OFFSET_RATIO, maxDistance: POM_MAX_DISTANCE, selfShadowSteps: POM_SHADOW_STEPS, selfShadowStrength: POM_SHADOW_STRENGTH, heightSource: "resident ambientCG displacement" }),
   setPomEnabled,
+  setFeedbackEnabled: (enabled) => {
+    feedbackEnabled = Boolean(enabled);
+  },
   pipelineTelemetry,
   resolveGpuTimings,
   setGpuTimingEnabled,
@@ -2433,8 +2543,10 @@ window.__afterglowDungeon = {
     programmatic = true;
     keys.clear();
     scenarios[name]();
-    await window.__afterglowDungeon.step(90);
-    await window.__afterglowDungeon.waitForIdle();
+    await window.__afterglowDungeon.step(120);
+    await window.__afterglowDungeon.waitForIdle(15000);
+    await window.__afterglowDungeon.step(16);
+    await window.__afterglowDungeon.waitForIdle(15000);
     return window.__afterglowDungeon.snapshot();
   }
 };

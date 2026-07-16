@@ -65681,10 +65681,14 @@ fn pomMarchUV(
   baseUV: vec2f, viewDir: vec3f, heightScale: f32, maxOffsetRatio: f32,
   minLayers: u32, maxLayers: u32, maxDistance: f32, viewDistance: f32
 ) -> vec2f {
-  if (heightScale <= 0.0 || maxDistance <= 0.0 || viewDistance >= maxDistance) {
+  if (heightScale <= 0.0) {
     return baseUV;
   }
-  let fade = 1.0 - smoothstep(maxDistance * 0.65, maxDistance, viewDistance);
+  var fade = 1.0;
+  if (maxDistance > 0.0) {
+    if (viewDistance >= maxDistance) { return baseUV; }
+    fade = 1.0 - smoothstep(maxDistance * 0.65, maxDistance, viewDistance);
+  }
   let scale = heightScale * fade;
   if (scale <= 0.00001) { return baseUV; }
 

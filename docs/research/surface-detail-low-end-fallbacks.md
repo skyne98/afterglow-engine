@@ -134,23 +134,37 @@ shader: normal map → one-tap parallax → low-core POM or a measured hierarchi
 method only while projected coverage warrants it → authored geometry for
 important silhouettes.
 
-## Integrated result (2026-07-16)
+## Integrated implementation and reference audit (2026-07-16)
 
-The renamed Dungeon demo now combines the measured low-core tier with the VT
-runtime. It uses the exact ambientCG material AO at resident 1K as a conservative
-physical-height field, adaptive 8–32 layers, scale 0.012, ratio-2 offset
-limiting, and a smooth cutoff at 3.25 m. Ray depth intersects `1-height`, so
-white exposed stone does not move while dark recesses receive parallax. The 8K
-PBR channels remain virtual. Albedo, normal, roughness, and AO share one marched
-UV and walk from the material's resolved mip to coarser resident pages and the
-pinned tail using undisplaced gradients, preventing page seams. A prewarmed base material remains available
-for comparison with **P**.
+The renamed Dungeon combines low-core POM with VT using the official ambientCG
+1K, 16-bit displacement maps. The first integration incorrectly substituted AO
+for height; AO encodes occluded lighting and produced weak, incorrect relief.
+The corrected path uses adaptive 8–32 layers, scale 0.05, ratio-2 offset
+limiting, and no radial per-fragment fade. The fade was removed because its
+moving contour was plainly visible as a wave of flattening. Ray depth intersects
+`1-height`.
 
-At 2880×1800 physical pixels, a close angled-wall run held 59.97 FPS, p99
-16.675 ms, and 0/300 below 55 FPS with no GPU errors or post-seal pipeline
-creation. CDP compositor captures proved that both variants retained real VT
-pixels and differed across 78% of the validation frame. The standalone POM
-prototype is superseded and removed.
+The equations now match LearnOpenGL's known-working implementation: geometric
+tangent-space view ray, `view.xy/view.z`, subtracting the layer delta, first
+height crossing, then before/after linear refinement. Three's official
+`parallaxUV` confirms the un-negated direction convention. Three r185's
+`parallaxDirection` cannot be used directly here because it includes the
+normal-mapped `normalView`, while that normal map itself requires the POM UV.
+That cycle previously sampled uninitialized normal/AO state and darkened the
+wall as the distance fade enabled.
+
+The corrected graph computes its ray from the geometric TBN, marches once in
+the first material flow, and publishes initialized UV/mip values for albedo,
+normal, roughness, and AO. It also restores the prototype's light-source relief
+shadow as a bounded 8-sample ray that attenuates direct diffuse/specular at 82%
+strength. A bootstrap generated-WGSL gate requires one march before three linked
+VT samples and rejects a material-normal TBN dependency.
+
+Corrected 680M timing at 2880×1800: fixed POM+self-shadow 59.87 FPS, p99 16.68
+ms, 1/600 below 55; base 59.77 FPS, p99 16.68 ms, 2/600 below 55; moving POM
+59.97 FPS, 0/300 below 55. GPU main work was 1.02–1.09 ms and timestamp total
+5.49–7.25 ms. Isolated misses occur in base too. Changing VT feedback from every
+4 frames (3/300 misses) to every 8 brought POM into the baseline range.
 
 ## What existing engine systems can and cannot do
 
@@ -159,9 +173,10 @@ prototype is superseded and removed.
 `AssetStore` currently creates 100/50/25/10-percent mesh LOD data, but
 `RenderAdapter` has no automatic distance/projected-size material-LOD selector.
 Mesh LOD can lower vertex, draw, and shadow cost. It does not remove POM cost on
-a wall that occupies the same pixels. The current bounded policy selects a
-prewarmed low-core POM material within 3.25 m and fades before the cutoff; a
-future generic material policy can additionally use projected coverage.
+a wall that occupies the same pixels. Radial per-fragment fading was rejected
+because it made a moving flattening wave. A future policy must select or blend
+whole materials using object bounds/projected coverage without a screen-visible
+per-pixel distance contour.
 
 ### Virtual texturing
 
@@ -173,7 +188,7 @@ final displaced PBR lookups remain virtual and use bounded coarser-page/tail
 fallback with stable base-UV gradients.
 
 VT makes the 8K materials feasible but is not itself a POM loop optimization.
-The integrated hardware result above validates the composition rather than
+Corrected hardware validation must validate the composition rather than
 assuming the independent POM and VT results add linearly.
 
 ## Completed evaluation plan
@@ -182,8 +197,9 @@ assuming the independent POM and VT results add linearly.
    shadow modes at target physical resolution.
 2. **Complete:** measured post-warm-up p50/p99/max/drop counts and fail-closed
    WebGPU state on the 680M.
-3. **Complete for distance:** integrated a smooth 65–100% fade over the bounded
-   3.25 m tier; generic projected-coverage policy remains future work.
+3. **Rejected after integration:** radial 65–100% distance fade produced a
+   visible moving flattening wave. Whole-surface projected-coverage policy
+   remains future work.
 4. **Not pursued:** low-core POM passed visual/performance review, so RCS
    preprocessing is unnecessary.
 5. **Complete:** VT and POM were first measured separately, then combined using
@@ -191,19 +207,25 @@ assuming the independent POM and VT results add linearly.
 
 ## Sources
 
-1. William Donnelly, **GPU Gems 2, Chapter 8: Per-Pixel Displacement Mapping
+1. Joey de Vries, **LearnOpenGL: Parallax Mapping** (known-working adaptive
+   POM loop and linear intersection refinement):
+   https://learnopengl.com/Advanced-Lighting/Parallax-Mapping
+2. Natalya Tatarchuk, **Practical Parallax Occlusion Mapping for Highly
+   Detailed Surface Rendering**:
+   https://advances.realtimerendering.com/s2006/Tatarchuk-POM.pdf
+3. William Donnelly, **GPU Gems 2, Chapter 8: Per-Pixel Displacement Mapping
    with Distance Functions** (parallax mapping as one height-sample UV offset;
    its cost and limitations):
    https://developer.nvidia.com/gpugems/gpugems2/part-i-geometric-complexity/chapter-8-pixel-displacement-mapping-distance-functions
-2. Fabio Policarpo and Manuel M. Oliveira, **GPU Gems 3, Chapter 18: Relaxed
+4. Fabio Policarpo and Manuel M. Oliveira, **GPU Gems 3, Chapter 18: Relaxed
    Cone Stepping for Relief Mapping** (precomputed cone-map ray acceleration,
    benefits and costs):
    https://developer.nvidia.com/gpugems/gpugems3/part-iii-rendering/chapter-18-relaxed-cone-stepping-relief-mapping
-3. Art Tevs, Ivo Ihrke, and Hans-Peter Seidel, **Maximum Mipmaps for Fast,
+5. Art Tevs, Ivo Ihrke, and Hans-Peter Seidel, **Maximum Mipmaps for Fast,
    Accurate, and Scalable Dynamic Height Field Rendering** (hierarchical height
    traversal and view-dependent termination):
    https://pure.mpg.de/rest/items/item_1325622_5/component/file_3590464/content
-4. Engine API: [`../api/virtual-texturing.md`](../api/virtual-texturing.md)
+6. Engine API: [`../api/virtual-texturing.md`](../api/virtual-texturing.md)
    (VT page-table/fallback behavior and current scope).
-5. Engine VT audit:
+7. Engine VT audit:
    [`../audits/virtual-texture-vertical-slice-2026-07-15.md`](../audits/virtual-texture-vertical-slice-2026-07-15.md).

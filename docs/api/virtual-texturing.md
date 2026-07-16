@@ -225,9 +225,11 @@ one-texel zoom plus deterministic programmatic camera control.
 three downloaded 8K PBR sets across twelve wall instances. Two sets are
 8192×8192 and one is natively rectangular at 8192×4096. Albedo, OpenGL normal,
 roughness, and AO pages stream together through linked material feedback while
-all walls share the engine atlas. Compact resident 1K AO maps from the same
-materials drive the 8–32-layer, 3.25 m distance-faded POM tier; displaced
-albedo uses `VT_SAMPLE_FROM_LEVEL_WGSL` for coarser-page/tail fallback.
+all walls share the engine atlas. Official resident 1K, 16-bit displacement
+maps from the same materials drive the 8–32-layer POM + 8-step light self-shadow
+tier; all displaced PBR channels use `VT_SAMPLE_FROM_LEVEL_WGSL` for
+coarser-page/tail fallback. Dungeon submits VT feedback every 8 frames; the
+measured 4-frame cadence caused additional missed-vsync events.
 Interactive controls are WASD, Shift sprint, raw pointer-lock mouse look, POM
 (**P**), reset, and three test poses. `window.__afterglowDungeon` exposes
 `setProgrammatic`, `setPomEnabled`, `pomStatus`, `setPose`, `getPose`, `move`,

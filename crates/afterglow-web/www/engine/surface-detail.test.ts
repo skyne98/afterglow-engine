@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  POM_SELF_SHADOW_WGSL,
   POM_UV_WGSL,
+  assertPomGeneratedWgsl,
   marchPomReference,
   pomDistanceFade,
   pomLayerCount,
@@ -36,10 +38,37 @@ describe('low-core POM shader contract', () => {
     expect(POM_UV_WGSL).not.toContain('selfShadow');
   });
 
+  test('bounds a physical-height light ray and rejects back-facing lights', () => {
+    expect(POM_SELF_SHADOW_WGSL).toContain('l.z <= 0.001');
+    expect(POM_SELF_SHADOW_WGSL).toContain('min(requestedSteps, 16u)');
+    expect(POM_SELF_SHADOW_WGSL).toContain('remainingHeight = 1.0 - hitHeight');
+    expect(POM_SELF_SHADOW_WGSL).toContain('terrainHeight > rayHeight + bias');
+    expect(POM_SELF_SHADOW_WGSL).toContain('boundedSlope');
+  });
+
   test('converts physical height to ray depth instead of treating white as deep', () => {
     expect(POM_UV_WGSL).toContain('surfaceDepth = 1.0 - textureSampleLevel');
     expect(POM_UV_WGSL).toContain('previousSurfaceDepth = 1.0 - textureSampleLevel');
     expect(POM_UV_WGSL).toContain('if (surfaceDepth < currentDepth)');
+  });
+
+  const generated = (main: string) => `fn pomMarchUV() {}\n@fragment\nfn main() {\n${main}\n}`;
+  const samples = 'a = vtSampleFromLevel();\nb = vtSampleFromLevel();\nc = vtSampleFromLevel();';
+
+  test('accepts one geometric-TBN march before all three linked PBR samples', () => {
+    expect(() => assertPomGeneratedWgsl(generated(`uv = pomMarchUV(positionViewDirection * mat3x3(t,b,n));\n${samples}`))).not.toThrow();
+  });
+
+  test('rejects duplicate marches, late initialization, and a normal-mapped TBN cycle', () => {
+    expect(() => assertPomGeneratedWgsl(generated(`uv = pomMarchUV(x * mat3x3(t,b,n));\nuv2 = pomMarchUV(x * mat3x3(t,b,n));\n${samples}`))).toThrow('exactly once');
+    expect(() => assertPomGeneratedWgsl(generated(`${samples}\nuv = pomMarchUV(x * mat3x3(t,b,n));`))).toThrow('before displaced UV');
+    expect(() => assertPomGeneratedWgsl(generated(`uv = pomMarchUV(x * TBNViewMatrix);\n${samples}`))).toThrow('geometric TBN');
+  });
+
+  test('rejects missing or unlinked PBR samples', () => {
+    expect(() => assertPomGeneratedWgsl('fn pomMarchUV() {}')).toThrow('fragment entry');
+    expect(() => assertPomGeneratedWgsl(generated(samples))).toThrow('march invocation');
+    expect(() => assertPomGeneratedWgsl(generated('uv = pomMarchUV(x * mat3x3(t,b,n));\na = vtSampleFromLevel();'))).toThrow('expected 3');
   });
 });
 
@@ -62,7 +91,7 @@ describe('POM layer and distance math', () => {
     expect(pomDistanceFade(3.3, 4)).toBeCloseTo(0.5, 12);
     expect(pomDistanceFade(4, 4)).toBe(0);
     expect(pomDistanceFade(5, 4)).toBe(0);
-    expect(pomDistanceFade(0, 0)).toBe(0);
+    expect(pomDistanceFade(0, 0)).toBe(1); // nonpositive cutoff disables radial fading
   });
 
   test('fade decreases monotonically through its transition', () => {
@@ -232,14 +261,26 @@ describe('Dungeon POM integration assets and limits', () => {
   test('constants remain inside the measured 680M tier', async () => {
     const source = await Bun.file(new URL('../dungeon.ts', import.meta.url)).text();
     expect(source).toContain('POM_MIN_LAYERS=8,POM_MAX_LAYERS=32');
-    expect(source).toContain('POM_HEIGHT_SCALE=.012,POM_MAX_OFFSET_RATIO=2,POM_MAX_DISTANCE=3.25');
-    expect(source).toContain("heightSource:'resident ambientCG AO'");
-    expect(source).toContain('displacedUV.assign(sampleUV)');
+    expect(source).toContain('POM_HEIGHT_SCALE=.05,POM_MAX_OFFSET_RATIO=2,POM_MAX_DISTANCE=0,POM_SHADOW_STEPS=8,POM_SHADOW_BIAS=.01,POM_SHADOW_STRENGTH=.82');
+    expect(source).toContain("heightSource:'resident ambientCG displacement'");
+    expect(source).toContain('function pomTbn(){const side=THREE.faceDirection');
+    expect(source).toContain('THREE.normalViewGeometry.mul(side)');
+    expect(source).toContain('THREE.positionViewDirection.mul(pomTbn())');
+    expect(source).toContain('lightDirection.mul(pomTbn())');
+    expect(source).toContain('directDiffuse.mulAssign(visibility)');
+    expect(source).toContain('directSpecular.mulAssign(visibility)');
+    expect(source).toContain('height.flipY=false');
+    expect(source).toContain('THREE.vec2(1,-1)');
+    expect(source).toContain('FEEDBACK_INTERVAL=8');
+    expect(source).toContain('trackTimestamp:false');
+    expect(source).toContain('viewDir:pomViewDirection(),heightScale');
+    expect(source).not.toContain('viewDir:THREE.parallaxDirection');
+    expect(source).toContain('displacedUV.assign(sampleUV);resolvedMip.assign(mip)');
     expect(source).toContain('sampleEntryFromLevel(set.normal,resolvedMip,displacedUV)');
     expect(source).toContain('sampleEntryFromLevel(set.masks,resolvedMip,displacedUV)');
   });
 
-  test('ships matching resident height assets at their source aspect ratios', async () => {
+  test('ships official 16-bit grayscale displacement at source aspect ratios', async () => {
     const expected: Record<string, [number, number]> = {
       Rock064: [1024, 1024], Ground103: [1024, 1024], PavingStones150: [1024, 512],
     };
@@ -248,6 +289,8 @@ describe('Dungeon POM integration assets and limits', () => {
       expect(String.fromCharCode(...bytes.subarray(1, 4))).toBe('PNG');
       const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
       expect([view.getUint32(16), view.getUint32(20)]).toEqual(dimensions);
+      expect(view.getUint8(24)).toBe(16); // PNG IHDR bit depth
+      expect(view.getUint8(25)).toBe(0); // PNG IHDR grayscale color type
     }
   });
 });

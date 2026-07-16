@@ -5,19 +5,19 @@ import { PersistentBlobCache, persistentCacheNamespace } from './engine/persiste
 import { createWebGPUOnlyRenderer, showWebGPUFailure } from './engine/webgpu-only.ts';
 import { RendererSeal, warmRendererVariants } from './engine/renderer-seal.ts';
 import { RelativePointerInput } from './engine/relative-pointer.ts';
-import { POM_UV_WGSL } from './engine/surface-detail.ts';
+import { POM_SELF_SHADOW_WGSL, POM_UV_WGSL, assertPomGeneratedWgsl } from './engine/surface-detail.ts';
 const THREE=window.THREE, VT=window.AfterglowVT;
 if(!VT) throw new Error('AfterglowVT engine bundle is unavailable');
 const {wgslFn,Fn,texture,sampler,uv,uniform,float,uint}=THREE;
-const VT_LOD_BIAS=-1.5, FEEDBACK_INTERVAL=4;
-const POM_MIN_LAYERS=8,POM_MAX_LAYERS=32,POM_HEIGHT_SCALE=.012,POM_MAX_OFFSET_RATIO=2,POM_MAX_DISTANCE=3.25;
+const VT_LOD_BIAS=-1.5, FEEDBACK_INTERVAL=8;
+const POM_MIN_LAYERS=8,POM_MAX_LAYERS=32,POM_HEIGHT_SCALE=.05,POM_MAX_OFFSET_RATIO=2,POM_MAX_DISTANCE=0,POM_SHADOW_STEPS=8,POM_SHADOW_BIAS=.01,POM_SHADOW_STRENGTH=.82;
 let pomEnabled=true;
 const scene=new THREE.Scene();scene.background=new THREE.Color(0x101318);scene.fog=new THREE.Fog(0x101318,7,28);
 const camera=new THREE.PerspectiveCamera(70,innerWidth/innerHeight,.05,60);camera.rotation.order='YXZ';
 // Four VT-backed PBR channels are substantially more expensive under 4x MSAA.
 // The engine demo renders one sample per pixel; production AA should be a
 // temporal/post-process pass rather than multiplying all VT lookups.
-const renderer=await createWebGPUOnlyRenderer({antialias:false,trackTimestamp:true}).catch(error=>{showWebGPUFailure(error);throw error});renderer.setSize(innerWidth,innerHeight);renderer.setPixelRatio(devicePixelRatio);document.body.append(renderer.domElement);
+const renderer=await createWebGPUOnlyRenderer({antialias:false,trackTimestamp:false}).catch(error=>{showWebGPUFailure(error);throw error});renderer.setSize(innerWidth,innerHeight);renderer.setPixelRatio(devicePixelRatio);document.body.append(renderer.domElement);
 const rendererSeal=new RendererSeal(renderer.backend),rendererSealStats={renderPipelines:0,computePipelines:0,renderPipelineViolations:0,computePipelineViolations:0};function pipelineTelemetry(){rendererSealStats.renderPipelines=rendererSeal.renderPipelines;rendererSealStats.computePipelines=rendererSeal.computePipelines;rendererSealStats.renderPipelineViolations=rendererSeal.renderPipelineViolations;rendererSealStats.computePipelineViolations=rendererSeal.computePipelineViolations;return rendererSealStats}const errors=[];renderer.backend.device.addEventListener('uncapturederror',e=>errors.push(String(e.error?.message??e.error)));addEventListener('error',e=>errors.push(String(e.error?.stack??e.message)));addEventListener('unhandledrejection',e=>errors.push(String(e.reason?.stack??e.reason)));
 scene.add(new THREE.HemisphereLight(0xb9c8e8,0x241b15,1.6));const lamp=new THREE.PointLight(0xffc985,30,18,2);lamp.position.set(0,3.2,0);scene.add(lamp);
 const floor=new THREE.Mesh(new THREE.PlaneGeometry(16,16),new THREE.MeshStandardMaterial({color:0x292722,roughness:1}));floor.rotation.x=-Math.PI/2;scene.add(floor);
@@ -62,14 +62,15 @@ const loader={read:(path,offset,len)=>rangeLoader.read(path,offset,len),poll(){}
 // promoted cap back to the independently validated two-page baseline.
 const vtTuning=new VT.VirtualTextureTuning();
 const store=new VT.VirtualTextureStore(loader,pageProvider,format,renderer.backend.device,vtTuning);
-const vtSampleLevel=wgslFn(VT.VT_SAMPLE_LEVEL_WGSL),vtSampleFromLevel=wgslFn(VT.VT_SAMPLE_FROM_LEVEL_WGSL),pomMarchUV=wgslFn(POM_UV_WGSL),vtResolveMaterialMip4=wgslFn(VT.VT_RESOLVE_MATERIAL_MIP4_WGSL),vtFeedback=wgslFn(VT.VT_FEEDBACK_WGSL),atlasNode=texture(store.atlasTexture),atlasSampler=sampler(atlasNode);
+const vtSampleLevel=wgslFn(VT.VT_SAMPLE_LEVEL_WGSL),vtSampleFromLevel=wgslFn(VT.VT_SAMPLE_FROM_LEVEL_WGSL),pomMarchUV=wgslFn(POM_UV_WGSL),pomSelfShadow=wgslFn(POM_SELF_SHADOW_WGSL),vtResolveMaterialMip4=wgslFn(VT.VT_RESOLVE_MATERIAL_MIP4_WGSL),vtFeedback=wgslFn(VT.VT_FEEDBACK_WGSL),atlasNode=texture(store.atlasTexture),atlasSampler=sampler(atlasNode);
 const feedbackScene=new THREE.Scene(),feedbackPass=new VT.VirtualTextureFeedbackPass(.125);
 const materialNames=['Rock064','Ground103','PavingStones150'];
-// Compact resident AO maps from the same ambientCG materials provide stable
-// height access throughout the non-uniform march; 8K color/normal/masks remain
-// virtual. This avoids page-boundary feedback seams inside the POM loop.
+// Compact resident 16-bit displacement maps from the exact ambientCG materials
+// provide stable physical height throughout the non-uniform march; 8K PBR
+// channels remain virtual. AO is lighting data and must never substitute for
+// geometric height.
 const heightTextures=await Promise.all(materialNames.map(name=>new THREE.TextureLoader().loadAsync(`dungeon-height/${name}_Height.png`)));
-for(const height of heightTextures){height.wrapS=height.wrapT=THREE.RepeatWrapping;height.minFilter=height.magFilter=THREE.LinearFilter;height.generateMipmaps=false;height.colorSpace=THREE.NoColorSpace;height.needsUpdate=true}
+for(const height of heightTextures){height.wrapS=height.wrapT=THREE.RepeatWrapping;height.minFilter=height.magFilter=THREE.LinearFilter;height.generateMipmaps=false;height.flipY=false;height.colorSpace=THREE.NoColorSpace;height.needsUpdate=true}
 const materialSets=materialNames.map((name,index)=>{const paths={albedo:`${name}_Color.png`,normal:`${name}_NormalGL.png`,masks:`${name}_Masks.png`};const dimensions=getVirtualTextureDimensions(header,paths.albedo),set=store.loadMaterialSet(paths,{...dimensions,mipTail:true});set.heightTexture=heightTextures[index];return set});
 const segments=[
   [-8,-8,8,-8], [8,-8,8,8], [8,8,-8,8], [-8,8,-8,-8],
@@ -84,31 +85,37 @@ function feedbackMaterial(entry){
 }
 function sampleEntryFromLevel(entry,resolvedMip,sampleUV){const pageTable=texture(entry.pageTableTexture);return vtSampleFromLevel({pageTable,atlas:atlasNode,atlasSampler,sampleUV,gradientUV:uv(),virtualSize:uniform(new THREE.Vector2(entry.width,entry.height)),pageGrid:uniform(new THREE.Vector2(entry.pageGridX,entry.pageGridY)),pageSize:float(VT.PAGE_SIZE),pageBorder:float(VT.PAGE_BORDER),atlasSize:uniform(new THREE.Vector2(store.atlasWidth,store.atlasHeight)),maxMip:float(entry.maxMip),resolvedMip,addressMode:uint(1)})}
 function sampleEntryAtMip(entry,resolvedMip,sampleUV=uv()){const pageTable=texture(entry.pageTableTexture);return vtSampleLevel({pageTable,atlas:atlasNode,atlasSampler,uv:sampleUV,virtualSize:uniform(new THREE.Vector2(entry.width,entry.height)),pageGrid:uniform(new THREE.Vector2(entry.pageGridX,entry.pageGridY)),pageSize:float(VT.PAGE_SIZE),pageBorder:float(VT.PAGE_BORDER),atlasSize:uniform(new THREE.Vector2(store.atlasWidth,store.atlasHeight)),maxMip:float(entry.maxMip),resolvedMip,addressMode:uint(1)})}
-function pomUV(set){const heightNode=texture(set.heightTexture);return pomMarchUV({heightTexture:heightNode,heightSampler:sampler(heightNode),baseUV:uv(),viewDir:THREE.parallaxDirection.negate(),heightScale:float(POM_HEIGHT_SCALE),maxOffsetRatio:float(POM_MAX_OFFSET_RATIO),minLayers:uint(POM_MIN_LAYERS),maxLayers:uint(POM_MAX_LAYERS),maxDistance:float(POM_MAX_DISTANCE),viewDistance:THREE.positionView.length()})}
+function pomTbn(){const side=THREE.faceDirection,n=THREE.normalViewGeometry.mul(side),t=THREE.tangentView.mul(side),b=n.cross(t).mul(THREE.tangentGeometry.w).normalize();return THREE.mat3(t,b,n)}
+function pomViewDirection(){return THREE.positionViewDirection.mul(pomTbn())}
+function pomUV(set){const heightNode=texture(set.heightTexture);return pomMarchUV({heightTexture:heightNode,heightSampler:sampler(heightNode),baseUV:uv(),viewDir:pomViewDirection(),heightScale:float(POM_HEIGHT_SCALE),maxOffsetRatio:float(POM_MAX_OFFSET_RATIO),minLayers:uint(POM_MIN_LAYERS),maxLayers:uint(POM_MAX_LAYERS),maxDistance:float(POM_MAX_DISTANCE),viewDistance:THREE.positionView.length()})}
+function pomVisibility(set,hitUV,lightDirection){const heightNode=texture(set.heightTexture),shadow=pomSelfShadow({heightTexture:heightNode,heightSampler:sampler(heightNode),hitUV,lightDir:lightDirection.mul(pomTbn()),heightScale:float(POM_HEIGHT_SCALE),maxOffsetRatio:float(POM_MAX_OFFSET_RATIO),requestedSteps:uint(POM_SHADOW_STEPS),bias:float(POM_SHADOW_BIAS)});return THREE.mix(float(1),shadow,float(POM_SHADOW_STRENGTH))}
+class PomSelfShadowLightingModel extends THREE.PhysicalLightingModel{
+  constructor(visibility){super();this.visibility=visibility}
+  direct(lightData,builder){super.direct(lightData,builder);const visibility=this.visibility(lightData.lightDirection);lightData.reflectedLight.directDiffuse.mulAssign(visibility);lightData.reflectedLight.directSpecular.mulAssign(visibility)}
+}
 function wallMaterial(set,usePom){
   if(!set.normal||!set.masks)throw new Error('dungeon PBR material set requires albedo, normal, and packed masks');
-  const material=new THREE.MeshStandardNodeMaterial({metalness:0,side:THREE.DoubleSide});
   const resolveArgs={pageTable0:texture(set.albedo.pageTableTexture),pageTable1:texture(set.normal.pageTableTexture),pageTable2:texture(set.masks.pageTableTexture),pageTable3:texture(set.masks.pageTableTexture),uv:uv(),virtualSize:uniform(new THREE.Vector2(set.albedo.width,set.albedo.height)),pageGrid:uniform(new THREE.Vector2(set.albedo.pageGridX,set.albedo.pageGridY)),pageSize:float(VT.PAGE_SIZE),maxMip:float(set.albedo.maxMip),textureMaxMip:float(set.albedo.textureMaxMip),addressMode:uint(1)};
   if(!usePom){
+    const material=new THREE.MeshStandardNodeMaterial({metalness:0,side:THREE.DoubleSide});
     // Keep the established non-POM graph byte-for-byte equivalent so the
     // diagnostic baseline can never be affected by displaced control flow.
     const resolvedMip=Fn(()=>vtResolveMaterialMip4(resolveArgs))().toVar();
     material.colorNode=Fn(()=>{const color=sampleEntryAtMip(set.albedo,resolvedMip);return THREE.vec4(THREE.sRGBTransferEOTF(color.rgb),color.a)})();
     const masks=Fn(()=>sampleEntryAtMip(set.masks,resolvedMip))().toVar();
-    material.normalNode=Fn(()=>THREE.normalMap(sampleEntryAtMip(set.normal,resolvedMip).xyz))();
+    material.normalNode=Fn(()=>THREE.normalMap(sampleEntryAtMip(set.normal,resolvedMip).xyz,THREE.vec2(1,-1)))();
     material.roughnessNode=Fn(()=>masks.r)();material.aoNode=Fn(()=>masks.g)();
     return material;
   }
-  // Three builds diffuse color before AO and lazy lighting normals. March once
-  // in that ordered flow, publish the UV to one shader-local property, and use
-  // it for every PBR channel. The resident height texture makes the assignment
-  // independent of VT residency while final samples retain bounded fallback.
-  const resolvedMip=Fn(()=>vtResolveMaterialMip4(resolveArgs))().toVar();
-  const displacedUV=THREE.property('vec2');
-  material.colorNode=Fn(()=>{const mip=vtResolveMaterialMip4(resolveArgs).toVar(),sampleUV=pomUV(set).toVar(),color=sampleEntryFromLevel(set.albedo,mip,sampleUV);displacedUV.assign(sampleUV);return THREE.vec4(THREE.sRGBTransferEOTF(color.rgb),color.a)})();
-  const masks=Fn(()=>sampleEntryFromLevel(set.masks,resolvedMip,displacedUV))().toVar();
-  material.normalNode=Fn(()=>THREE.normalMap(sampleEntryFromLevel(set.normal,resolvedMip,displacedUV).xyz))();
-  material.roughnessNode=Fn(()=>masks.r)();material.aoNode=Fn(()=>masks.g)();
+  // Publish the one marched UV from diffuse color's first material flow. The
+  // geometric TBN above avoids a dependency cycle through the displaced normal;
+  // normal, roughness, and AO can therefore consume initialized properties.
+  const material=new THREE.MeshStandardNodeMaterial({metalness:0,side:THREE.DoubleSide});
+  const displacedUV=THREE.property('vec2'),resolvedMip=THREE.property('float');
+  material.colorNode=Fn(()=>{const sampleUV=pomUV(set).toVar(),mip=vtResolveMaterialMip4(resolveArgs).toVar(),color=sampleEntryFromLevel(set.albedo,mip,sampleUV);displacedUV.assign(sampleUV);resolvedMip.assign(mip);return THREE.vec4(THREE.sRGBTransferEOTF(color.rgb),color.a)})();
+  const masks=sampleEntryFromLevel(set.masks,resolvedMip,displacedUV);
+  material.normalNode=THREE.normalMap(sampleEntryFromLevel(set.normal,resolvedMip,displacedUV).xyz,THREE.vec2(1,-1));material.roughnessNode=masks.r;material.aoNode=masks.g;
+  material.setupLightingModel=()=>new PomSelfShadowLightingModel(lightDirection=>pomVisibility(set,displacedUV,lightDirection));
   return material;
 }
 for(let i=0;i<segments.length;i++){
@@ -128,7 +135,7 @@ for(let i=0;i<segments.length;i++){
   walls.push({path,entry,x1,z1,x2,z2,len,mesh,feedbackMesh,baseMaterial,pomMaterial});
 }
 
-const PLAYER_RADIUS=.28, pose={x:-5.5,z:-5.5,yaw:0,pitch:0}, keys=new Set();let programmatic=false,diagnosticAtlas=false,last=performance.now(),smoothedDt=1/60,frame=0,lastResult={loaded:0,evicted:0,totalRequests:0,lodBias:0};
+const PLAYER_RADIUS=.28, pose={x:-5.5,z:-5.5,yaw:0,pitch:0}, keys=new Set();let programmatic=false,diagnosticAtlas=false,feedbackEnabled=true,last=performance.now(),smoothedDt=1/60,frame=0,lastResult={loaded:0,evicted:0,totalRequests:0,lodBias:0};
 const runtimeTiming={vtCpuUs:0,renderSubmitUs:0,feedbackSubmitUs:0,frameCpuUs:0,gpuMainMs:0,gpuFeedbackMs:0,gpuTotalMs:0,gpuTimestampSupported:Boolean(renderer.backend.hasTimestamp)};let resolvingGpuTimestamps=false;
 async function resolveGpuTimings(){
   if(!runtimeTiming.gpuTimestampSupported||resolvingGpuTimestamps)return runtimeTiming;
@@ -155,16 +162,19 @@ function update(dt){
   const stageStart=performance.now();const feedback=feedbackPass.consume();if(feedback&&!diagnosticAtlas)lastResult=store.processFeedback(feedback);store.poll();runtimeTiming.vtCpuUs=(performance.now()-stageStart)*1000;
 }
 feedbackPass.resize(renderer.domElement.width,renderer.domElement.height);
+// Inspect generated WGSL during bootstrap: Three's lazy normal flow can silently
+// reorder a normal-map-dependent POM ray before UV initialization.
+let pomShaderContracts=0;const gpuDevice=renderer.backend.device,createShaderModule=gpuDevice.createShaderModule.bind(gpuDevice);gpuDevice.createShaderModule=descriptor=>{if(descriptor.code.includes('fn pomMarchUV')){assertPomGeneratedWgsl(descriptor.code);pomShaderContracts++}return createShaderModule(descriptor)};
 // Prewarm both fixed material variants before GameplaySealed; runtime P toggles
 // only swap existing references and never compile a pipeline.
 for(const wall of walls)wall.mesh.material=wall.baseMaterial;
 await warmRendererVariants(renderer,[{scene,camera}]);
 for(const wall of walls)wall.mesh.material=wall.pomMaterial;
-await warmRendererVariants(renderer,[{scene,camera}]);const previousTarget=renderer.getRenderTarget();renderer.setRenderTarget(feedbackPass.target);await warmRendererVariants(renderer,[{scene:feedbackScene,camera}]);renderer.setRenderTarget(previousTarget);
+await warmRendererVariants(renderer,[{scene,camera}]);const previousTarget=renderer.getRenderTarget();renderer.setRenderTarget(feedbackPass.target);await warmRendererVariants(renderer,[{scene:feedbackScene,camera}]);renderer.setRenderTarget(previousTarget);gpuDevice.createShaderModule=createShaderModule;if(pomShaderContracts<1)throw new Error('POM shader contract was not compiled during warm-up');
 await new Promise(r=>setTimeout(r,0));renderer.render(scene,camera);renderer.setRenderTarget(feedbackPass.target);renderer.render(feedbackScene,camera);renderer.setRenderTarget(previousTarget);store.attachRenderer(renderer);rendererSeal.seal();
 const waiters=[],hud=document.getElementById('hud');let hudVisible=true;
 function setPomEnabled(enabled){pomEnabled=Boolean(enabled);for(const wall of walls)wall.mesh.material=pomEnabled?wall.pomMaterial:wall.baseMaterial}
-renderer.setAnimationLoop(now=>{const frameCpuStart=performance.now(),dt=Math.min(.05,(now-last)/1000);last=now;smoothedDt=smoothedDt*.95+dt*.05;store.recordFrameTime(dt*1000);update(dt);const renderStart=performance.now();renderer.render(scene,camera);runtimeTiming.renderSubmitUs=(performance.now()-renderStart)*1000;if(!diagnosticAtlas&&frame%FEEDBACK_INTERVAL===0){const feedbackStart=performance.now();feedbackPass.submit(renderer,feedbackScene,camera,store);runtimeTiming.feedbackSubmitUs=(performance.now()-feedbackStart)*1000}else runtimeTiming.feedbackSubmitUs=0;runtimeTiming.frameCpuUs=(performance.now()-frameCpuStart)*1000;frame++;for(let i=waiters.length-1;i>=0;i--)if(frame>=waiters[i].target){waiters[i].resolve();waiters.splice(i,1)}if(hudVisible&&frame%15===0){const d=store.getStats(),input=relativePointer.getStatus();hud.innerHTML=`<b>afterglow — Engine Dungeon</b><br>3 × 8K scanned PBR material sets · 12 wall instances<br>Virtual RGBA channels: 1.875 GiB · physical atlas: ${store.atlasWidth}²<br>Position: ${pose.x.toFixed(2)}, ${pose.z.toFixed(2)} · yaw ${(pose.yaw*180/Math.PI).toFixed(0)}° · ${(1/smoothedDt).toFixed(0)} FPS<br>Input: ${input.eventType}${input.unadjustedMovement?' · unadjusted':''}<br>POM: ${pomEnabled?`${POM_MIN_LAYERS}–${POM_MAX_LAYERS} layers · AO height · ≤${POM_MAX_DISTANCE}m`:'off'}<br>Textures: ${d.textureCount} · resident ${d.atlasSlotsUsed}/${d.atlasSlotsTotal} · pending ${d.pendingPages}<br>GPU feedback pages: ${lastResult.totalRequests} · mips [${feedbackPass.getLatestMips().join(',')}] · bias ${VT_LOD_BIAS} · budget ${d.budget} · errors ${errors.length}`}});
+renderer.setAnimationLoop(now=>{const frameCpuStart=performance.now(),dt=Math.min(.05,(now-last)/1000);last=now;smoothedDt=smoothedDt*.95+dt*.05;store.recordFrameTime(dt*1000);update(dt);const renderStart=performance.now();renderer.render(scene,camera);runtimeTiming.renderSubmitUs=(performance.now()-renderStart)*1000;if(feedbackEnabled&&!diagnosticAtlas&&frame%FEEDBACK_INTERVAL===0){const feedbackStart=performance.now();feedbackPass.submit(renderer,feedbackScene,camera,store);runtimeTiming.feedbackSubmitUs=(performance.now()-feedbackStart)*1000}else runtimeTiming.feedbackSubmitUs=0;runtimeTiming.frameCpuUs=(performance.now()-frameCpuStart)*1000;frame++;for(let i=waiters.length-1;i>=0;i--)if(frame>=waiters[i].target){waiters[i].resolve();waiters.splice(i,1)}if(hudVisible&&frame%15===0){const d=store.getStats(),input=relativePointer.getStatus();hud.innerHTML=`<b>afterglow — Engine Dungeon</b><br>3 × 8K scanned PBR material sets · 12 wall instances<br>Virtual RGBA channels: 1.875 GiB · physical atlas: ${store.atlasWidth}²<br>Position: ${pose.x.toFixed(2)}, ${pose.z.toFixed(2)} · yaw ${(pose.yaw*180/Math.PI).toFixed(0)}° · ${(1/smoothedDt).toFixed(0)} FPS<br>Input: ${input.eventType}${input.unadjustedMovement?' · unadjusted':''}<br>POM: ${pomEnabled?`${POM_MIN_LAYERS}–${POM_MAX_LAYERS} layers · ${POM_SHADOW_STEPS}-step light self-shadow · no radial fade`:'off'}<br>Textures: ${d.textureCount} · resident ${d.atlasSlotsUsed}/${d.atlasSlotsTotal} · pending ${d.pendingPages}<br>GPU feedback pages: ${lastResult.totalRequests} · mips [${feedbackPass.getLatestMips().join(',')}] · bias ${VT_LOD_BIAS} · budget ${d.budget} · errors ${errors.length}`}});
 addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);feedbackPass.resize(renderer.domElement.width,renderer.domElement.height)});
 addEventListener('keydown',e=>{if(programmatic)return;const key=e.key.toLowerCase();keys.add(key);if(key==='r')setPose(-5.5,-5.5,0,0);if(key==='p')setPomEnabled(!pomEnabled);if(e.key==='1')setPose(-5.5,-5.5,0,0);if(e.key==='2')setPose(5.5,-5.5,Math.PI,0);if(e.key==='3')setPose(5.5,6.5,-Math.PI/2,0)});addEventListener('keyup',e=>keys.delete(e.key.toLowerCase()));
 const relativePointer=new RelativePointerInput(renderer.domElement,(movementX,movementY)=>{if(!programmatic){pose.yaw-=movementX*.002;pose.pitch=Math.max(-1.45,Math.min(1.45,pose.pitch-movementY*.002))}});
@@ -214,10 +224,10 @@ async function runAtlasScenario(name,timeout=120000){
   }finally{diagnosticAtlas=false;programmatic=previousProgrammatic}
 }
 window.__afterglowDungeon={
-  ready:()=>true,telemetry:()=>store.getStats(),timing:()=>runtimeTiming,inputStatus:()=>relativePointer.getStatus(),pomStatus:()=>({enabled:pomEnabled,minLayers:POM_MIN_LAYERS,maxLayers:POM_MAX_LAYERS,heightScale:POM_HEIGHT_SCALE,maxOffsetRatio:POM_MAX_OFFSET_RATIO,maxDistance:POM_MAX_DISTANCE,heightSource:'resident ambientCG AO'}),setPomEnabled,pipelineTelemetry,resolveGpuTimings,setGpuTimingEnabled,errorCount:()=>errors.length,runAtlasScenario,snapshot:()=>({pose:{...pose},...store.getDebugSnapshot(),requests:lastResult.totalRequests,feedbackMips:[...feedbackPass.getLatestMips()],errors:[...errors]}),
+  ready:()=>true,telemetry:()=>store.getStats(),timing:()=>runtimeTiming,inputStatus:()=>relativePointer.getStatus(),pomStatus:()=>({enabled:pomEnabled,minLayers:POM_MIN_LAYERS,maxLayers:POM_MAX_LAYERS,heightScale:POM_HEIGHT_SCALE,maxOffsetRatio:POM_MAX_OFFSET_RATIO,maxDistance:POM_MAX_DISTANCE,selfShadowSteps:POM_SHADOW_STEPS,selfShadowStrength:POM_SHADOW_STRENGTH,heightSource:'resident ambientCG displacement'}),setPomEnabled,setFeedbackEnabled:enabled=>{feedbackEnabled=Boolean(enabled)},pipelineTelemetry,resolveGpuTimings,setGpuTimingEnabled,errorCount:()=>errors.length,runAtlasScenario,snapshot:()=>({pose:{...pose},...store.getDebugSnapshot(),requests:lastResult.totalRequests,feedbackMips:[...feedbackPass.getLatestMips()],errors:[...errors]}),
   setProgrammatic:enabled=>{programmatic=Boolean(enabled);keys.clear();if(programmatic&&document.pointerLockElement)document.exitPointerLock()},setHudVisible:visible=>{hudVisible=Boolean(visible);hud.style.display=hudVisible?'':'none'},
   setPose,getPose:()=>({...pose}),move,look:(yaw,pitch)=>setPose(pose.x,pose.z,pose.yaw+yaw,pose.pitch+pitch),
   step:n=>new Promise(resolve=>waiters.push({target:frame+Math.max(1,n|0),resolve})),
   waitForIdle:async(timeout=5000)=>{const end=performance.now()+timeout;while((store.getStats().pendingPages||store.getStats().scheduledRequests||store.getStats().readyUploads)&&performance.now()<end)await window.__afterglowDungeon.step(1);return store.getStats().pendingPages===0&&store.getStats().scheduledRequests===0&&store.getStats().readyUploads===0},
-  runScenario:async name=>{if(!scenarios[name])throw new Error(`unknown scenario ${name}`);programmatic=true;keys.clear();scenarios[name]();await window.__afterglowDungeon.step(90);await window.__afterglowDungeon.waitForIdle();return window.__afterglowDungeon.snapshot()},
+  runScenario:async name=>{if(!scenarios[name])throw new Error(`unknown scenario ${name}`);programmatic=true;keys.clear();scenarios[name]();await window.__afterglowDungeon.step(120);await window.__afterglowDungeon.waitForIdle(15000);await window.__afterglowDungeon.step(16);await window.__afterglowDungeon.waitForIdle(15000);return window.__afterglowDungeon.snapshot()},
 };

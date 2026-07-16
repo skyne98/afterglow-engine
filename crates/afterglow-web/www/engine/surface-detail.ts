@@ -10,10 +10,14 @@ fn pomMarchUV(
   baseUV: vec2f, viewDir: vec3f, heightScale: f32, maxOffsetRatio: f32,
   minLayers: u32, maxLayers: u32, maxDistance: f32, viewDistance: f32
 ) -> vec2f {
-  if (heightScale <= 0.0 || maxDistance <= 0.0 || viewDistance >= maxDistance) {
+  if (heightScale <= 0.0) {
     return baseUV;
   }
-  let fade = 1.0 - smoothstep(maxDistance * 0.65, maxDistance, viewDistance);
+  var fade = 1.0;
+  if (maxDistance > 0.0) {
+    if (viewDistance >= maxDistance) { return baseUV; }
+    fade = 1.0 - smoothstep(maxDistance * 0.65, maxDistance, viewDistance);
+  }
   let scale = heightScale * fade;
   if (scale <= 0.00001) { return baseUV; }
 
@@ -55,6 +59,59 @@ fn pomMarchUV(
 }
 `;
 
+/** Bounded direct-light visibility ray from the POM hit toward one light. */
+export const POM_SELF_SHADOW_WGSL = /* wgsl */ `
+fn pomSelfShadow(
+  heightTexture: texture_2d<f32>, heightSampler: sampler,
+  hitUV: vec2f, lightDir: vec3f, heightScale: f32, maxOffsetRatio: f32,
+  requestedSteps: u32, bias: f32
+) -> f32 {
+  let l = normalize(lightDir);
+  if (l.z <= 0.001 || heightScale <= 0.0) { return 1.0; }
+  let hitHeight = clamp(textureSampleLevel(heightTexture, heightSampler, hitUV, 0.0).r, 0.0, 1.0);
+  let remainingHeight = 1.0 - hitHeight;
+  if (remainingHeight <= bias) { return 1.0; }
+  let steps = max(1u, min(requestedSteps, 16u));
+  let rawSlope = l.xy / max(l.z, 0.001);
+  let slopeLength = length(rawSlope);
+  let boundedSlope = rawSlope * min(1.0, max(0.0, maxOffsetRatio) / max(slopeLength, 0.00001));
+  let uvStep = boundedSlope * heightScale * remainingHeight / f32(steps);
+  let heightStep = remainingHeight / f32(steps);
+  var rayUV = hitUV;
+  var rayHeight = hitHeight;
+  for (var i = 0u; i < steps; i = i + 1u) {
+    rayUV = rayUV + uvStep;
+    rayHeight = rayHeight + heightStep;
+    let terrainHeight = textureSampleLevel(heightTexture, heightSampler, rayUV, 0.0).r;
+    if (terrainHeight > rayHeight + bias) { return 0.0; }
+  }
+  return 1.0;
+}
+`;
+
+export function assertPomGeneratedWgsl(source: string): void {
+  const fragment = source.lastIndexOf('@fragment');
+  if (fragment < 0) throw new Error('POM shader contract: fragment entry point missing');
+  const body = source.slice(fragment);
+  const firstMarch = body.indexOf('pomMarchUV(');
+  if (firstMarch < 0) throw new Error('POM shader contract: march invocation missing');
+  if (body.indexOf('pomMarchUV(', firstMarch + 1) >= 0) {
+    throw new Error('POM shader contract: march must execute exactly once');
+  }
+  const firstSample = body.indexOf('vtSampleFromLevel(');
+  if (firstSample < 0 || firstMarch > firstSample) {
+    throw new Error('POM shader contract: VT sampled before displaced UV initialization');
+  }
+  const marchLineEnd = body.indexOf('\n', firstMarch);
+  const marchLine = body.slice(body.lastIndexOf('\n', firstMarch) + 1, marchLineEnd < 0 ? body.length : marchLineEnd);
+  if (!marchLine.includes('mat3x3') || marchLine.includes('TBNViewMatrix')) {
+    throw new Error('POM shader contract: view ray must use geometric TBN without normal-map dependency');
+  }
+  let samples = 0, cursor = 0;
+  while ((cursor = body.indexOf('vtSampleFromLevel(', cursor)) >= 0) { samples++; cursor += 18; }
+  if (samples !== 3) throw new Error(`POM shader contract: expected 3 linked PBR samples, got ${samples}`);
+}
+
 export interface PomReferenceResult {
   u: number;
   v: number;
@@ -71,7 +128,8 @@ export function pomLayerCount(viewZ: number, minLayers: number, maxLayers: numbe
 }
 
 export function pomDistanceFade(distance: number, maxDistance: number): number {
-  if (!(maxDistance > 0) || distance >= maxDistance) return 0;
+  if (!(maxDistance > 0)) return 1;
+  if (distance >= maxDistance) return 0;
   const start = maxDistance * 0.65;
   if (distance <= start) return 1;
   const x = Math.max(0, Math.min(1, (distance - start) / (maxDistance - start)));
