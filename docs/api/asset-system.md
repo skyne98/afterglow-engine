@@ -1,6 +1,36 @@
 # `afterglow-assets` + `afterglow-assets-worker` API — streaming assets + async loader
 
-> Status: working; API checked against the 2026-07-12 source.
+> Status: working; API checked against the 2026-07-17 source.
+
+## Browser BIG asset session
+
+`afterglow-web/www/engine/big-asset-session.ts` provides `BigAssetSession`, the
+bootstrap owner for one seekable `.big` source. `open()` requires explicit
+`workerCount`, `transcodeQueueCapacity`, `maxHeaderBytes`, target GPU format, and
+a worker factory. It validates the 16-byte prefix and configured header bound
+before starting workers, parses the header once, constructs the direct raw-asset
+loader and VT page provider, and rolls workers back in reverse order after any
+startup failure.
+
+A session creates at most one `VirtualTextureStore`; a second request or a
+request after shutdown fails deterministically. `close()` is idempotent, closes
+all workers in reverse order even when one close fails, and reports stable
+started/close-error/closed telemetry. The optional persistent blob cache remains
+a generic caller-supplied byte store. The session applies the configured
+transcode queue capacity instead of an implicit provider default.
+
+```ts
+const session = await BigAssetSession.open({
+  containerPath: 'world.big',
+  format,
+  workerCount: 4,
+  transcodeQueueCapacity: 64,
+  maxHeaderBytes: 2 * 1024 * 1024,
+  createWorker,
+  cache,
+});
+const store = session.createVirtualTextureStore(device, tuning);
+```
 
 ## Streaming sources (`afterglow-assets::source`)
 

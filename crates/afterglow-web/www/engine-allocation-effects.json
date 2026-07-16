@@ -4,6 +4,7 @@
     "asset-handle.ts": "gameFacing",
     "asset-store.ts": "budgeted",
     "bench.ts": "diagnostic",
+    "big-asset-session.ts": "bootstrap",
     "big-parser.ts": "budgeted",
     "components.ts": "bootstrap",
     "descriptors.ts": "bootstrap",

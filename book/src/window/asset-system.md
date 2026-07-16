@@ -45,6 +45,13 @@ evicted generations cannot publish later.
 The path-based `load()` API remains a game-facing convenience wrapper. It
 registers the path and throws if the configured asset capacity is exhausted.
 
+`BigAssetSession.open()` is the browser bootstrap owner for one `.big`
+container. It requires explicit worker count, transcode-queue capacity, and
+maximum header bytes; validates the header bound before spawning workers; owns
+the raw loader and VT page provider; and rolls partial startup back in reverse
+order. It creates at most one `VirtualTextureStore`. Idempotent shutdown closes
+all workers even if one close fails, with stable error telemetry.
+
 Self-contained GLBs follow this same path. The offline pipeline stores the
 complete model as a seekable raw `.big` asset and extracts embedded images into
 virtual textures. `BigContainerAssetLoader` exposes packed model chunks through

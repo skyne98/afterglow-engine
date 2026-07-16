@@ -606,6 +606,7 @@ export function createPageDataProvider(
   textureWorkers: readonly { transcode(data: Uint8Array, targetFormat: number): Promise<Uint8Array> }[],
   format: number,
   cache?: PersistentBlobCache,
+  transcodeQueueCapacity = 64,
 ): VirtualTexturePageProvider {
   interface RuntimeMipDirectory {
     pagesX: number;
@@ -647,7 +648,7 @@ export function createPageDataProvider(
     });
   }
 
-  const transcoder = new BoundedTranscoderPool(textureWorkers, 64);
+  const transcoder = new BoundedTranscoderPool(textureWorkers, transcodeQueueCapacity);
   let reads = 0;
   let totalReadMs = 0;
   let maxReadMs = 0;

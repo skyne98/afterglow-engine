@@ -1028,7 +1028,7 @@ class BigContainerAssetLoader {
   }
   poll() {}
 }
-function createPageDataProvider(loader, header, textureWorkers, format, cache) {
+function createPageDataProvider(loader, header, textureWorkers, format, cache, transcodeQueueCapacity = 64) {
   const directories = new Map;
   for (let assetId = 0;assetId < header.assets.length; assetId++) {
     const asset = header.assets[assetId];
@@ -1057,7 +1057,7 @@ function createPageDataProvider(loader, header, textureWorkers, format, cache) {
       tailSize: source.tail?.size ?? 0
     });
   }
-  const transcoder = new BoundedTranscoderPool(textureWorkers, 64);
+  const transcoder = new BoundedTranscoderPool(textureWorkers, transcodeQueueCapacity);
   let reads = 0;
   let totalReadMs = 0;
   let maxReadMs = 0;
