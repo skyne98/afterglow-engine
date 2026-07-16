@@ -1898,7 +1898,7 @@ class RelativePointerInput {
 var POM_UV_WGSL = `
 fn pomMarchUV(
   heightTexture: texture_2d<f32>, heightSampler: sampler,
-  baseUV: vec2f, viewDir: vec3f, heightScale: f32,
+  baseUV: vec2f, viewDir: vec3f, heightScale: f32, maxOffsetRatio: f32,
   minLayers: u32, maxLayers: u32, maxDistance: f32, viewDistance: f32
 ) -> vec2f {
   if (heightScale <= 0.0 || maxDistance <= 0.0 || viewDistance >= maxDistance) {
@@ -1914,27 +1914,33 @@ fn pomMarchUV(
   let high = max(low, maxLayers);
   let layerCount = max(low, min(high, u32(mix(f32(high), f32(low), abs(v.z)) + 0.5)));
   let layerDepth = 1.0 / f32(layerCount);
-  let deltaUV = v.xy * scale / (vz * f32(layerCount));
+  let rawSlope = v.xy / vz;
+  let slopeLength = length(rawSlope);
+  let boundedSlope = rawSlope * min(1.0, max(0.0, maxOffsetRatio) / max(slopeLength, 0.00001));
+  let deltaUV = boundedSlope * scale / f32(layerCount);
 
   var currentUV = baseUV;
   var currentDepth = 0.0;
   var previousUV = baseUV;
   var previousDepth = 0.0;
-  var previousHeight = textureSampleLevel(heightTexture, heightSampler, baseUV, 0.0).r;
+  // Input is physical height: white/exposed=1, black/recessed=0. Ray depth is
+  // measured downward from the top of the relief volume, so intersect against
+  // surfaceDepth = 1-height (not height itself).
+  var previousSurfaceDepth = 1.0 - textureSampleLevel(heightTexture, heightSampler, baseUV, 0.0).r;
   for (var i = 0u; i < layerCount; i = i + 1u) {
     currentUV = currentUV - deltaUV;
     currentDepth = currentDepth + layerDepth;
-    let sampledHeight = textureSampleLevel(heightTexture, heightSampler, currentUV, 0.0).r;
-    if (sampledHeight < currentDepth) {
-      let afterDepth = sampledHeight - currentDepth;
-      let beforeDepth = previousHeight - previousDepth;
+    let surfaceDepth = 1.0 - textureSampleLevel(heightTexture, heightSampler, currentUV, 0.0).r;
+    if (surfaceDepth < currentDepth) {
+      let afterDepth = surfaceDepth - currentDepth;
+      let beforeDepth = previousSurfaceDepth - previousDepth;
       let denominator = afterDepth - beforeDepth;
       let weight = select(0.5, clamp(afterDepth / denominator, 0.0, 1.0), abs(denominator) > 0.00001);
       return mix(currentUV, previousUV, weight);
     }
     previousUV = currentUV;
     previousDepth = currentDepth;
-    previousHeight = sampledHeight;
+    previousSurfaceDepth = surfaceDepth;
   }
   return currentUV;
 }
@@ -1951,6 +1957,7 @@ var FEEDBACK_INTERVAL = 4;
 var POM_MIN_LAYERS = 8;
 var POM_MAX_LAYERS = 32;
 var POM_HEIGHT_SCALE = 0.012;
+var POM_MAX_OFFSET_RATIO = 2;
 var POM_MAX_DISTANCE = 3.25;
 var pomEnabled = true;
 var scene = new THREE.Scene;
@@ -2101,7 +2108,7 @@ function sampleEntryAtMip(entry, resolvedMip, sampleUV = uv()) {
 }
 function pomUV(set) {
   const heightNode = texture(set.heightTexture);
-  return pomMarchUV({ heightTexture: heightNode, heightSampler: sampler(heightNode), baseUV: uv(), viewDir: THREE.parallaxDirection.negate(), heightScale: float(POM_HEIGHT_SCALE), minLayers: uint(POM_MIN_LAYERS), maxLayers: uint(POM_MAX_LAYERS), maxDistance: float(POM_MAX_DISTANCE), viewDistance: THREE.positionView.length() });
+  return pomMarchUV({ heightTexture: heightNode, heightSampler: sampler(heightNode), baseUV: uv(), viewDir: THREE.parallaxDirection.negate(), heightScale: float(POM_HEIGHT_SCALE), maxOffsetRatio: float(POM_MAX_OFFSET_RATIO), minLayers: uint(POM_MIN_LAYERS), maxLayers: uint(POM_MAX_LAYERS), maxDistance: float(POM_MAX_DISTANCE), viewDistance: THREE.positionView.length() });
 }
 function wallMaterial(set, usePom) {
   if (!set.normal || !set.masks)
@@ -2121,12 +2128,14 @@ function wallMaterial(set, usePom) {
     return material;
   }
   const resolvedMip = Fn(() => vtResolveMaterialMip4(resolveArgs))().toVar();
+  const displacedUV = THREE.property("vec2");
   material.colorNode = Fn(() => {
     const mip = vtResolveMaterialMip4(resolveArgs).toVar(), sampleUV = pomUV(set).toVar(), color = sampleEntryFromLevel(set.albedo, mip, sampleUV);
+    displacedUV.assign(sampleUV);
     return THREE.vec4(THREE.sRGBTransferEOTF(color.rgb), color.a);
   })();
-  const masks = Fn(() => sampleEntryAtMip(set.masks, resolvedMip))().toVar();
-  material.normalNode = Fn(() => THREE.normalMap(sampleEntryAtMip(set.normal, resolvedMip).xyz))();
+  const masks = Fn(() => sampleEntryFromLevel(set.masks, resolvedMip, displacedUV))().toVar();
+  material.normalNode = Fn(() => THREE.normalMap(sampleEntryFromLevel(set.normal, resolvedMip, displacedUV).xyz))();
   material.roughnessNode = Fn(() => masks.r)();
   material.aoNode = Fn(() => masks.g)();
   return material;
@@ -2389,7 +2398,7 @@ window.__afterglowDungeon = {
   telemetry: () => store.getStats(),
   timing: () => runtimeTiming,
   inputStatus: () => relativePointer.getStatus(),
-  pomStatus: () => ({ enabled: pomEnabled, minLayers: POM_MIN_LAYERS, maxLayers: POM_MAX_LAYERS, heightScale: POM_HEIGHT_SCALE, maxDistance: POM_MAX_DISTANCE, heightSource: "resident ambientCG AO" }),
+  pomStatus: () => ({ enabled: pomEnabled, minLayers: POM_MIN_LAYERS, maxLayers: POM_MAX_LAYERS, heightScale: POM_HEIGHT_SCALE, maxOffsetRatio: POM_MAX_OFFSET_RATIO, maxDistance: POM_MAX_DISTANCE, heightSource: "resident ambientCG AO" }),
   setPomEnabled,
   pipelineTelemetry,
   resolveGpuTimings,

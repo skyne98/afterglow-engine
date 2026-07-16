@@ -65678,7 +65678,7 @@ class RelativePointerInput {
 var POM_UV_WGSL = `
 fn pomMarchUV(
   heightTexture: texture_2d<f32>, heightSampler: sampler,
-  baseUV: vec2f, viewDir: vec3f, heightScale: f32,
+  baseUV: vec2f, viewDir: vec3f, heightScale: f32, maxOffsetRatio: f32,
   minLayers: u32, maxLayers: u32, maxDistance: f32, viewDistance: f32
 ) -> vec2f {
   if (heightScale <= 0.0 || maxDistance <= 0.0 || viewDistance >= maxDistance) {
@@ -65694,27 +65694,33 @@ fn pomMarchUV(
   let high = max(low, maxLayers);
   let layerCount = max(low, min(high, u32(mix(f32(high), f32(low), abs(v.z)) + 0.5)));
   let layerDepth = 1.0 / f32(layerCount);
-  let deltaUV = v.xy * scale / (vz * f32(layerCount));
+  let rawSlope = v.xy / vz;
+  let slopeLength = length(rawSlope);
+  let boundedSlope = rawSlope * min(1.0, max(0.0, maxOffsetRatio) / max(slopeLength, 0.00001));
+  let deltaUV = boundedSlope * scale / f32(layerCount);
 
   var currentUV = baseUV;
   var currentDepth = 0.0;
   var previousUV = baseUV;
   var previousDepth = 0.0;
-  var previousHeight = textureSampleLevel(heightTexture, heightSampler, baseUV, 0.0).r;
+  // Input is physical height: white/exposed=1, black/recessed=0. Ray depth is
+  // measured downward from the top of the relief volume, so intersect against
+  // surfaceDepth = 1-height (not height itself).
+  var previousSurfaceDepth = 1.0 - textureSampleLevel(heightTexture, heightSampler, baseUV, 0.0).r;
   for (var i = 0u; i < layerCount; i = i + 1u) {
     currentUV = currentUV - deltaUV;
     currentDepth = currentDepth + layerDepth;
-    let sampledHeight = textureSampleLevel(heightTexture, heightSampler, currentUV, 0.0).r;
-    if (sampledHeight < currentDepth) {
-      let afterDepth = sampledHeight - currentDepth;
-      let beforeDepth = previousHeight - previousDepth;
+    let surfaceDepth = 1.0 - textureSampleLevel(heightTexture, heightSampler, currentUV, 0.0).r;
+    if (surfaceDepth < currentDepth) {
+      let afterDepth = surfaceDepth - currentDepth;
+      let beforeDepth = previousSurfaceDepth - previousDepth;
       let denominator = afterDepth - beforeDepth;
       let weight = select(0.5, clamp(afterDepth / denominator, 0.0, 1.0), abs(denominator) > 0.00001);
       return mix(currentUV, previousUV, weight);
     }
     previousUV = currentUV;
     previousDepth = currentDepth;
-    previousHeight = sampledHeight;
+    previousSurfaceDepth = surfaceDepth;
   }
   return currentUV;
 }

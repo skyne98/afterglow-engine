@@ -1,7 +1,7 @@
 # Low-end fallbacks for parallax / relief surface detail
 
 **Date:** 2026-07-15  
-**Status:** evaluation only — no engine integration or adoption decision  
+**Status:** low-core tier integrated and hardware-validated in Dungeon
 **Verdict:** A material-LOD chain ending in **normal mapping**, with an optional
 **single-height-sample, offset-limited parallax** tier, is the only clearly
 low-cost fallback path worth evaluating first. Precomputed ray-intersection
@@ -138,10 +138,12 @@ important silhouettes.
 
 The renamed Dungeon demo now combines the measured low-core tier with the VT
 runtime. It uses the exact ambientCG material AO at resident 1K as a conservative
-height field, adaptive 8–32 layers, scale 0.012, and a smooth cutoff at 3.25 m.
-The 8K PBR channels remain virtual. Displaced albedo walks from the material's
-resolved mip to coarser resident pages and the pinned tail using undisplaced
-gradients, preventing page seams. A prewarmed base material remains available
+physical-height field, adaptive 8–32 layers, scale 0.012, ratio-2 offset
+limiting, and a smooth cutoff at 3.25 m. Ray depth intersects `1-height`, so
+white exposed stone does not move while dark recesses receive parallax. The 8K
+PBR channels remain virtual. Albedo, normal, roughness, and AO share one marched
+UV and walk from the material's resolved mip to coarser resident pages and the
+pinned tail using undisplaced gradients, preventing page seams. A prewarmed base material remains available
 for comparison with **P**.
 
 At 2880×1800 physical pixels, a close angled-wall run held 59.97 FPS, p99
@@ -167,7 +169,7 @@ The VT system selects resident texture mips/pages and bounds streaming work. It
 does not reduce a POM loop's number of ray-height samples. Marching directly
 through an asynchronously resident height VT produced page-boundary instability,
 so the integrated tier keeps a compact matching height field resident. The
-final displaced albedo lookup remains virtual and uses bounded coarser-page/tail
+final displaced PBR lookups remain virtual and use bounded coarser-page/tail
 fallback with stable base-UV gradients.
 
 VT makes the 8K materials feasible but is not itself a POM loop optimization.

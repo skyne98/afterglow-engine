@@ -10,7 +10,7 @@ const THREE=window.THREE, VT=window.AfterglowVT;
 if(!VT) throw new Error('AfterglowVT engine bundle is unavailable');
 const {wgslFn,Fn,texture,sampler,uv,uniform,float,uint}=THREE;
 const VT_LOD_BIAS=-1.5, FEEDBACK_INTERVAL=4;
-const POM_MIN_LAYERS=8,POM_MAX_LAYERS=32,POM_HEIGHT_SCALE=.012,POM_MAX_DISTANCE=3.25;
+const POM_MIN_LAYERS=8,POM_MAX_LAYERS=32,POM_HEIGHT_SCALE=.012,POM_MAX_OFFSET_RATIO=2,POM_MAX_DISTANCE=3.25;
 let pomEnabled=true;
 const scene=new THREE.Scene();scene.background=new THREE.Color(0x101318);scene.fog=new THREE.Fog(0x101318,7,28);
 const camera=new THREE.PerspectiveCamera(70,innerWidth/innerHeight,.05,60);camera.rotation.order='YXZ';
@@ -84,7 +84,7 @@ function feedbackMaterial(entry){
 }
 function sampleEntryFromLevel(entry,resolvedMip,sampleUV){const pageTable=texture(entry.pageTableTexture);return vtSampleFromLevel({pageTable,atlas:atlasNode,atlasSampler,sampleUV,gradientUV:uv(),virtualSize:uniform(new THREE.Vector2(entry.width,entry.height)),pageGrid:uniform(new THREE.Vector2(entry.pageGridX,entry.pageGridY)),pageSize:float(VT.PAGE_SIZE),pageBorder:float(VT.PAGE_BORDER),atlasSize:uniform(new THREE.Vector2(store.atlasWidth,store.atlasHeight)),maxMip:float(entry.maxMip),resolvedMip,addressMode:uint(1)})}
 function sampleEntryAtMip(entry,resolvedMip,sampleUV=uv()){const pageTable=texture(entry.pageTableTexture);return vtSampleLevel({pageTable,atlas:atlasNode,atlasSampler,uv:sampleUV,virtualSize:uniform(new THREE.Vector2(entry.width,entry.height)),pageGrid:uniform(new THREE.Vector2(entry.pageGridX,entry.pageGridY)),pageSize:float(VT.PAGE_SIZE),pageBorder:float(VT.PAGE_BORDER),atlasSize:uniform(new THREE.Vector2(store.atlasWidth,store.atlasHeight)),maxMip:float(entry.maxMip),resolvedMip,addressMode:uint(1)})}
-function pomUV(set){const heightNode=texture(set.heightTexture);return pomMarchUV({heightTexture:heightNode,heightSampler:sampler(heightNode),baseUV:uv(),viewDir:THREE.parallaxDirection.negate(),heightScale:float(POM_HEIGHT_SCALE),minLayers:uint(POM_MIN_LAYERS),maxLayers:uint(POM_MAX_LAYERS),maxDistance:float(POM_MAX_DISTANCE),viewDistance:THREE.positionView.length()})}
+function pomUV(set){const heightNode=texture(set.heightTexture);return pomMarchUV({heightTexture:heightNode,heightSampler:sampler(heightNode),baseUV:uv(),viewDir:THREE.parallaxDirection.negate(),heightScale:float(POM_HEIGHT_SCALE),maxOffsetRatio:float(POM_MAX_OFFSET_RATIO),minLayers:uint(POM_MIN_LAYERS),maxLayers:uint(POM_MAX_LAYERS),maxDistance:float(POM_MAX_DISTANCE),viewDistance:THREE.positionView.length()})}
 function wallMaterial(set,usePom){
   if(!set.normal||!set.masks)throw new Error('dungeon PBR material set requires albedo, normal, and packed masks');
   const material=new THREE.MeshStandardNodeMaterial({metalness:0,side:THREE.DoubleSide});
@@ -99,14 +99,15 @@ function wallMaterial(set,usePom){
     material.roughnessNode=Fn(()=>masks.r)();material.aoNode=Fn(()=>masks.g)();
     return material;
   }
-  // Three r185 cannot safely carry a fragment-local marched UV between its
-  // independently generated material-output flows. Apply the one bounded POM
-  // march to albedo; retain the original normal/mask flow so every fallback is
-  // valid and the existing high-frequency normal detail remains stable.
+  // Three builds diffuse color before AO and lazy lighting normals. March once
+  // in that ordered flow, publish the UV to one shader-local property, and use
+  // it for every PBR channel. The resident height texture makes the assignment
+  // independent of VT residency while final samples retain bounded fallback.
   const resolvedMip=Fn(()=>vtResolveMaterialMip4(resolveArgs))().toVar();
-  material.colorNode=Fn(()=>{const mip=vtResolveMaterialMip4(resolveArgs).toVar(),sampleUV=pomUV(set).toVar(),color=sampleEntryFromLevel(set.albedo,mip,sampleUV);return THREE.vec4(THREE.sRGBTransferEOTF(color.rgb),color.a)})();
-  const masks=Fn(()=>sampleEntryAtMip(set.masks,resolvedMip))().toVar();
-  material.normalNode=Fn(()=>THREE.normalMap(sampleEntryAtMip(set.normal,resolvedMip).xyz))();
+  const displacedUV=THREE.property('vec2');
+  material.colorNode=Fn(()=>{const mip=vtResolveMaterialMip4(resolveArgs).toVar(),sampleUV=pomUV(set).toVar(),color=sampleEntryFromLevel(set.albedo,mip,sampleUV);displacedUV.assign(sampleUV);return THREE.vec4(THREE.sRGBTransferEOTF(color.rgb),color.a)})();
+  const masks=Fn(()=>sampleEntryFromLevel(set.masks,resolvedMip,displacedUV))().toVar();
+  material.normalNode=Fn(()=>THREE.normalMap(sampleEntryFromLevel(set.normal,resolvedMip,displacedUV).xyz))();
   material.roughnessNode=Fn(()=>masks.r)();material.aoNode=Fn(()=>masks.g)();
   return material;
 }
@@ -213,7 +214,7 @@ async function runAtlasScenario(name,timeout=120000){
   }finally{diagnosticAtlas=false;programmatic=previousProgrammatic}
 }
 window.__afterglowDungeon={
-  ready:()=>true,telemetry:()=>store.getStats(),timing:()=>runtimeTiming,inputStatus:()=>relativePointer.getStatus(),pomStatus:()=>({enabled:pomEnabled,minLayers:POM_MIN_LAYERS,maxLayers:POM_MAX_LAYERS,heightScale:POM_HEIGHT_SCALE,maxDistance:POM_MAX_DISTANCE,heightSource:'resident ambientCG AO'}),setPomEnabled,pipelineTelemetry,resolveGpuTimings,setGpuTimingEnabled,errorCount:()=>errors.length,runAtlasScenario,snapshot:()=>({pose:{...pose},...store.getDebugSnapshot(),requests:lastResult.totalRequests,feedbackMips:[...feedbackPass.getLatestMips()],errors:[...errors]}),
+  ready:()=>true,telemetry:()=>store.getStats(),timing:()=>runtimeTiming,inputStatus:()=>relativePointer.getStatus(),pomStatus:()=>({enabled:pomEnabled,minLayers:POM_MIN_LAYERS,maxLayers:POM_MAX_LAYERS,heightScale:POM_HEIGHT_SCALE,maxOffsetRatio:POM_MAX_OFFSET_RATIO,maxDistance:POM_MAX_DISTANCE,heightSource:'resident ambientCG AO'}),setPomEnabled,pipelineTelemetry,resolveGpuTimings,setGpuTimingEnabled,errorCount:()=>errors.length,runAtlasScenario,snapshot:()=>({pose:{...pose},...store.getDebugSnapshot(),requests:lastResult.totalRequests,feedbackMips:[...feedbackPass.getLatestMips()],errors:[...errors]}),
   setProgrammatic:enabled=>{programmatic=Boolean(enabled);keys.clear();if(programmatic&&document.pointerLockElement)document.exitPointerLock()},setHudVisible:visible=>{hudVisible=Boolean(visible);hud.style.display=hudVisible?'':'none'},
   setPose,getPose:()=>({...pose}),move,look:(yaw,pitch)=>setPose(pose.x,pose.z,pose.yaw+yaw,pose.pitch+pitch),
   step:n=>new Promise(resolve=>waiters.push({target:frame+Math.max(1,n|0),resolve})),
