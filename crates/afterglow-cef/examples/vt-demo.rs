@@ -10,7 +10,7 @@ fn main() {
         .title("afterglow-engine — Virtual Texturing")
         .size(1440, 900)
         .devtools(9222)
-        .index_html(b"<script>location.href='/vt-demo.html'</script>")
+        .root("/vt-demo.html")
         .fs_root("crates/afterglow-web/www")
         .run();
 }

@@ -1,13 +1,22 @@
 # Allocation-disciplined, constant-time, frame-budgeted engine plan
 
-**Status:** implemented and release-gated; all sequence items complete (2026-07-16)  
+**Status:** fixed-runtime foundations implemented; whole-demo release gate reopened (2026-07-16)
 **Date:** 2026-07-15  
 **Motivation:** sustained VT movement exposed progressively increasing cache,
 queue, event-loop, and GPU costs. The policy in this document applies to the
 whole engine, not only virtual texturing.
 
-Related audit:
-[`../audits/virtual-texture-vertical-slice-2026-07-15.md`](../audits/virtual-texture-vertical-slice-2026-07-15.md).
+The checked sequence items below record the fixed primitives and VT vertical
+slice that were completed. A whole-demo audit subsequently found that visual
+entrypoints bypass those primitives, so they do **not** prove complete runtime
+conformance. Full release status now requires the demo migration and permanent
+conformance gates in the execution plan.
+
+Related documents:
+
+- [`../audits/virtual-texture-vertical-slice-2026-07-15.md`](../audits/virtual-texture-vertical-slice-2026-07-15.md)
+- [`demo-to-engine-feature-audit.md`](demo-to-engine-feature-audit.md)
+- [`demo-engine-migration-execution-plan.md`](demo-engine-migration-execution-plan.md)
 
 ---
 
@@ -667,11 +676,17 @@ No engine array grows because game code spawned more objects than configured.
 
 ### Phase 7 — enforcement and rollout
 
-- [x] Enforce module effect classification plus no-allocation lint errors for all sealed hot primitives in CI.
-- [x] Require sealed EngineMemory and warmed/sealed RenderAdapter before frame preparation.
-- [x] Run corrected 10/30/60-minute real-GPU stable/traverse/teleport soak tests with raw traces.
+- [x] Enforce module effect classification plus no-allocation lint errors for explicitly marked sealed hot primitives in CI.
+- [x] Require sealed EngineMemory and warmed/sealed RenderAdapter when callers use `prepareAfterglowFrame`.
+- [x] Run corrected 10/30/60-minute real-GPU stable/traverse/teleport VT soak tests with raw traces.
 - [x] Remove array LRU and dynamic engine queues; VT pending/scheduler/cache identity is fixed numeric, with string maps confined to structural APIs.
-- [x] Update canonical API docs and mdBook with final capacities, statuses, boundaries, and release evidence.
+- [x] Update canonical API docs and mdBook with the fixed-primitives capacities, statuses, boundaries, and VT release evidence.
+- [ ] Make every first-party visual demo use the canonical sealed runtime.
+- [ ] Replace optional marker coverage with transitive allocation-effect coverage from the owned frame loop.
+- [ ] Enforce zero legacy demo architecture violations and current browser/GPU evidence through one release gate.
+
+The remaining items are specified by
+[`demo-engine-migration-execution-plan.md`](demo-engine-migration-execution-plan.md).
 
 ---
 

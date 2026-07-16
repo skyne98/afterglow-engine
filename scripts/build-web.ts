@@ -3,39 +3,24 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
+import { validateWebContracts, type WebArtifactManifest } from './check-web-contracts.ts';
 
 const root = resolve(import.meta.dir, '..');
 const www = join(root, 'crates/afterglow-web/www');
 const check = process.argv.includes('--check');
 
-const targets = [
-  // Authored module specifiers point to TypeScript. Bun resolves and bundles
-  // them; emitted JavaScript exists only as a deployment artifact.
-  ['codec.ts', 'codec.js'],
-  ['async-worker.ts', 'async-worker.js'],
-  ['ring-buf.ts', 'ring-buf.js'],
-  ['assetloader.client.ts', 'assetloader.client.js'],
-  ['meshopt.client.ts', 'meshopt.client.js'],
-  ['texture.client.ts', 'texture.client.js'],
-  ['rpc.ts', 'rpc.js'],
-  ['worker.ts', 'worker.js'],
-  ['engine/asset-store.ts', 'engine/asset-store.js'],
-  ['engine/engine-memory.ts', 'engine/engine-memory.js'],
-  ['engine/big-parser.ts', 'engine/big-parser.js'],
-  ['engine/procedural-vt.ts', 'engine/procedural-vt.js'],
-  ['engine/vt-gpu-test.ts', 'engine/vt-gpu-test.js'],
-  ['engine-bundle-input.ts', 'engine-bundle.js'],
-  ['dungeon.ts', 'dungeon.js'],
-  ['rigged-vt-demo.ts', 'rigged-vt-demo.js'],
-  ['vt-demo.ts', 'vt-demo.js'],
-  ['vt-mip-inspector.ts', 'vt-mip-inspector.js'],
-  ['engine-demo.ts', 'engine-demo.js'],
-  ['lod-demo.ts', 'lod-demo.js'],
-  ['worker-bench.ts', 'worker-bench.js'],
-  ['worker-test.ts', 'worker-test.js'],
-] as const;
-
-const generated = new Set(targets.map(([, output]) => output));
+const contractErrors = await validateWebContracts(root);
+if (contractErrors.length !== 0) {
+  for (const error of contractErrors) console.error(`web-contract: ${error}`);
+  process.exit(1);
+}
+const manifest = JSON.parse(
+  await readFile(join(www, 'web-artifacts.json'), 'utf8'),
+) as WebArtifactManifest;
+// Authored module specifiers point to TypeScript. Bun resolves and bundles
+// them; emitted JavaScript exists only as a deployment artifact.
+const targets = manifest.artifacts;
+const generated = new Set(targets.map((artifact) => artifact.output));
 const vendor = new Set([
   'three.core.js', 'three.js', 'three.module.js', 'three.webgpu.js',
   'three.webgpu.min.js',
@@ -68,7 +53,7 @@ for (const file of await listFiles(www, '**/*.ts')) {
 const temporary = await mkdtemp(join(tmpdir(), 'afterglow-web-build-'));
 try {
   let drift = false;
-  for (const [source, output] of targets) {
+  for (const { source, output } of targets) {
     const built = join(temporary, output);
     const proc = Bun.spawn([
       process.execPath, 'build', join(www, source), '--outfile', built,

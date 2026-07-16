@@ -45,11 +45,28 @@ or vendored:
 bun install --cwd crates/afterglow-web/www --frozen-lockfile
 bun scripts/build-web.ts
 bun scripts/build-web.ts --check
-bun scripts/lint-hot-allocations.ts
+cargo run -p xtask conformance
 ```
+
+The conformance command runs several independent gates:
+
+- the authoritative browser artifact/page inventory;
+- visual-demo architecture checks and canonical/legacy status validation;
+- a strict TypeScript diagnostic ratchet;
+- a no-new-escape-hatches ratchet for explicit `any`, suppressions, unchecked
+  assertions, swallowed errors, and deferred TODO/FIXME/HACK markers;
+- hot allocation-effect checks;
+- generated JavaScript drift checks.
+
+The architecture checker rejects new demo-owned frame loops, renderer/runtime
+construction, worker/BIG/VT/POM/glTF infrastructure, engine globals, private
+Three access, unbounded control collections, direct diagnostic UI, and untyped
+frame callbacks. Existing findings are frozen by fingerprint and may only be
+removed. Strict TypeScript diagnostics use the same merge-base-monotonic rule.
+A release cannot claim conformance while any visual entrypoint remains legacy.
 
 The allocation lint covers explicitly marked hot regions and cross-checks them
 against `engine-allocation-effects.json`. Budgeted-boundary calls require an
 inline reason permit; stale or missing effect entries fail CI. Coverage expands
-as systems migrate. Browser, Three.js, and game allocations require separate profiling;
-the policy specifically controls engine-authored code.
+as systems migrate. Browser, Three.js, and game allocations require separate
+profiling; the policy specifically controls engine-authored code.

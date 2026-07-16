@@ -11,7 +11,7 @@ fn main() {
         .title("afterglow-engine — Dungeon")
         .size(1440, 900)
         .devtools(9222)
-        .index_html(b"<script>location.href='/dungeon.html'</script>")
+        .root("/dungeon.html")
         .fs_root("crates/afterglow-web/www")
         .run();
 }

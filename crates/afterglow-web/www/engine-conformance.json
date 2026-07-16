@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "releaseStatus": "migration",
+  "visualEntrypoints": {
+    "dungeon.ts": "legacy",
+    "engine-demo.ts": "legacy",
+    "lod-demo.ts": "legacy",
+    "rigged-vt-demo.ts": "legacy",
+    "vt-demo.ts": "legacy"
+  }
+}

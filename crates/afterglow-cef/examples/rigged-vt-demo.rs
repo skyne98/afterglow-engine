@@ -11,7 +11,7 @@ fn main() {
         .title("afterglow-engine — Rigged Virtual Texture")
         .size(1440, 900)
         .devtools(9222)
-        .index_html(b"<script>location.href='/rigged-vt-demo.html'</script>")
+        .root("/rigged-vt-demo.html")
         .fs_root("crates/afterglow-web/www")
         .run();
 }

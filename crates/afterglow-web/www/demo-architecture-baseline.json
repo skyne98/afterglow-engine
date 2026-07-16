@@ -1,0 +1,1581 @@
+{
+  "version": 1,
+  "findings": [
+    {
+      "id": "e6feaa286c2a11f816ca",
+      "rule": "AG-DEMO-016",
+      "file": "dungeon.ts",
+      "line": 3,
+      "column": 1,
+      "excerpt": "import { createFetchRangeLoader, createPageDataProvider, getVirtualTextureDimensions, parseBigHeader } from './engine/big-parser.ts';"
+    },
+    {
+      "id": "c2d284e7909eb21c155d",
+      "rule": "AG-DEMO-016",
+      "file": "dungeon.ts",
+      "line": 4,
+      "column": 1,
+      "excerpt": "import { PersistentBlobCache, persistentCacheNamespace } from './engine/persistent-blob-cache.ts';"
+    },
+    {
+      "id": "dd9ec2be9efaa340a0d6",
+      "rule": "AG-DEMO-016",
+      "file": "dungeon.ts",
+      "line": 5,
+      "column": 1,
+      "excerpt": "import { createWebGPUOnlyRenderer, showWebGPUFailure } from './engine/webgpu-only.ts';"
+    },
+    {
+      "id": "d43f4a7d7ec17859cc6e",
+      "rule": "AG-DEMO-016",
+      "file": "dungeon.ts",
+      "line": 6,
+      "column": 1,
+      "excerpt": "import { assertHeightTextureGpuFormat, loadHeightTextureR16 } from './engine/height-texture.ts';"
+    },
+    {
+      "id": "d95d80f02e886ed8f3b8",
+      "rule": "AG-DEMO-016",
+      "file": "dungeon.ts",
+      "line": 7,
+      "column": 1,
+      "excerpt": "import { RendererSeal, warmRendererVariants } from './engine/renderer-seal.ts';"
+    },
+    {
+      "id": "239fdd1148318991c6ce",
+      "rule": "AG-DEMO-016",
+      "file": "dungeon.ts",
+      "line": 8,
+      "column": 1,
+      "excerpt": "import { RelativePointerInput } from './engine/relative-pointer.ts';"
+    },
+    {
+      "id": "240d2f03ea8b090e7333",
+      "rule": "AG-DEMO-009",
+      "file": "dungeon.ts",
+      "line": 9,
+      "column": 1,
+      "excerpt": "import { POM_SELF_SHADOW_WGSL, POM_UV_WGSL, assertPomGeneratedWgsl } from './engine/surface-detail.ts';"
+    },
+    {
+      "id": "598148780a9d6a13b87a",
+      "rule": "AG-DEMO-016",
+      "file": "dungeon.ts",
+      "line": 9,
+      "column": 1,
+      "excerpt": "import { POM_SELF_SHADOW_WGSL, POM_UV_WGSL, assertPomGeneratedWgsl } from './engine/surface-detail.ts';"
+    },
+    {
+      "id": "3ab5b2e29254bd048489",
+      "rule": "AG-DEMO-009",
+      "file": "dungeon.ts",
+      "line": 9,
+      "column": 10,
+      "excerpt": "POM_SELF_SHADOW_WGSL"
+    },
+    {
+      "id": "19bf98305dec62d8115e",
+      "rule": "AG-DEMO-009",
+      "file": "dungeon.ts",
+      "line": 9,
+      "column": 32,
+      "excerpt": "POM_UV_WGSL"
+    },
+    {
+      "id": "a32b88e691fae7281e00",
+      "rule": "AG-DEMO-004",
+      "file": "dungeon.ts",
+      "line": 10,
+      "column": 13,
+      "excerpt": "window.THREE"
+    },
+    {
+      "id": "fbabfba61eae47ba1747",
+      "rule": "AG-DEMO-004",
+      "file": "dungeon.ts",
+      "line": 10,
+      "column": 30,
+      "excerpt": "window.AfterglowVT"
+    },
+    {
+      "id": "07d400ffc4367ae81003",
+      "rule": "AG-DEMO-002",
+      "file": "dungeon.ts",
+      "line": 22,
+      "column": 20,
+      "excerpt": "new RendererSeal(renderer.backend)"
+    },
+    {
+      "id": "ee5fb8db3cb2220b36a5",
+      "rule": "AG-DEMO-005",
+      "file": "dungeon.ts",
+      "line": 22,
+      "column": 37,
+      "excerpt": "renderer.backend"
+    },
+    {
+      "id": "8235a7e4c56083d90a9a",
+      "rule": "AG-DEMO-006",
+      "file": "dungeon.ts",
+      "line": 22,
+      "column": 519,
+      "excerpt": "errors=[]"
+    },
+    {
+      "id": "a785d47338c3add80a5b",
+      "rule": "AG-DEMO-005",
+      "file": "dungeon.ts",
+      "line": 22,
+      "column": 529,
+      "excerpt": "renderer.backend"
+    },
+    {
+      "id": "e253160538600cf8c5d3",
+      "rule": "AG-DEMO-013",
+      "file": "dungeon.ts",
+      "line": 22,
+      "column": 529,
+      "excerpt": "renderer.backend.device.addEventListener('uncapturederror',e=>errors.push(String(e.error?.message??e.error)))"
+    },
+    {
+      "id": "4f1593f3e09ff899dda8",
+      "rule": "AG-DEMO-013",
+      "file": "dungeon.ts",
+      "line": 22,
+      "column": 639,
+      "excerpt": "addEventListener('error',e=>errors.push(String(e.error?.stack??e.message)))"
+    },
+    {
+      "id": "eebca1250cff0ce2a9a5",
+      "rule": "AG-DEMO-013",
+      "file": "dungeon.ts",
+      "line": 22,
+      "column": 715,
+      "excerpt": "addEventListener('unhandledrejection',e=>errors.push(String(e.reason?.stack??e.reason)))"
+    },
+    {
+      "id": "90ac3ad1565d9e6ad3ab",
+      "rule": "AG-DEMO-007",
+      "file": "dungeon.ts",
+      "line": 27,
+      "column": 19,
+      "excerpt": "createFetchRangeLoader()"
+    },
+    {
+      "id": "4c41059266b9a4e08644",
+      "rule": "AG-DEMO-013",
+      "file": "dungeon.ts",
+      "line": 33,
+      "column": 1,
+      "excerpt": "addEventListener('beforeunload',()=>{for(const rpc of textureRpcs)rpc.terminate()},{once:true})"
+    },
+    {
+      "id": "433220d4d155b6e19886",
+      "rule": "AG-DEMO-007",
+      "file": "dungeon.ts",
+      "line": 37,
+      "column": 16,
+      "excerpt": "parseBigHeader(headerBytes)"
+    },
+    {
+      "id": "e0e9736e24ff1e7ae709",
+      "rule": "AG-DEMO-005",
+      "file": "dungeon.ts",
+      "line": 38,
+      "column": 14,
+      "excerpt": "renderer.backend"
+    },
+    {
+      "id": "f2799b400e4df4a66071",
+      "rule": "AG-DEMO-005",
+      "file": "dungeon.ts",
+      "line": 38,
+      "column": 79,
+      "excerpt": "renderer.backend"
+    },
+    {
+      "id": "e5ba85df07aed92d6f6b",
+      "rule": "AG-DEMO-007",
+      "file": "dungeon.ts",
+      "line": 59,
+      "column": 20,
+      "excerpt": "createPageDataProvider(containerLoader,header,textureWorkers,format,persistentCache??undefined)"
+    },
+    {
+      "id": "5a3afee936b2c888dace",
+      "rule": "AG-DEMO-002",
+      "file": "dungeon.ts",
+      "line": 65,
+      "column": 13,
+      "excerpt": "new VT.VirtualTextureStore(loader,pageProvider,format,renderer.backend.device,vtTuning)"
+    },
+    {
+      "id": "515a3496712e557e957f",
+      "rule": "AG-DEMO-005",
+      "file": "dungeon.ts",
+      "line": 65,
+      "column": 67,
+      "excerpt": "renderer.backend"
+    },
+    {
+      "id": "2f8acfc8d8910921c8b7",
+      "rule": "AG-DEMO-009",
+      "file": "dungeon.ts",
+      "line": 66,
+      "column": 126,
+      "excerpt": "POM_UV_WGSL"
+    },
+    {
+      "id": "2216ee2aed9ce60b054f",
+      "rule": "AG-DEMO-009",
+      "file": "dungeon.ts",
+      "line": 66,
+      "column": 160,
+      "excerpt": "POM_SELF_SHADOW_WGSL"
+    },
+    {
+      "id": "282c17147f63695bee07",
+      "rule": "AG-DEMO-002",
+      "file": "dungeon.ts",
+      "line": 67,
+      "column": 52,
+      "excerpt": "new VT.VirtualTextureFeedbackPass(.125)"
+    },
+    {
+      "id": "7c22f1c7a616a8b9dd05",
+      "rule": "AG-DEMO-003",
+      "file": "dungeon.ts",
+      "line": 67,
+      "column": 52,
+      "excerpt": "new VT.VirtualTextureFeedbackPass(.125)"
+    },
+    {
+      "id": "1104201796c162fd552b",
+      "rule": "AG-DEMO-005",
+      "file": "dungeon.ts",
+      "line": 72,
+      "column": 91,
+      "excerpt": "renderer.backend"
+    },
+    {
+      "id": "b0e7daf8a8040493836b",
+      "rule": "AG-DEMO-006",
+      "file": "dungeon.ts",
+      "line": 137,
+      "column": 62,
+      "excerpt": "keys=new Set()"
+    },
+    {
+      "id": "59c2ae8b59b38a482cc0",
+      "rule": "AG-DEMO-005",
+      "file": "dungeon.ts",
+      "line": 138,
+      "column": 152,
+      "excerpt": "renderer.backend"
+    },
+    {
+      "id": "1e0f27de07d436ff571c",
+      "rule": "AG-DEMO-005",
+      "file": "dungeon.ts",
+      "line": 144,
+      "column": 20,
+      "excerpt": "renderer._renderContexts"
+    },
+    {
+      "id": "6fe5109280127d37c309",
+      "rule": "AG-DEMO-005",
+      "file": "dungeon.ts",
+      "line": 144,
+      "column": 50,
+      "excerpt": "renderer.backend"
+    },
+    {
+      "id": "06d0fb010cb09be2d316",
+      "rule": "AG-DEMO-005",
+      "file": "dungeon.ts",
+      "line": 153,
+      "column": 106,
+      "excerpt": "renderer.backend"
+    },
+    {
+      "id": "f942d2a367893a654032",
+      "rule": "AG-DEMO-005",
+      "file": "dungeon.ts",
+      "line": 153,
+      "column": 177,
+      "excerpt": "renderer.backend"
+    },
+    {
+      "id": "c053a463dbd9af9d4cce",
+      "rule": "AG-DEMO-003",
+      "file": "dungeon.ts",
+      "line": 161,
+      "column": 53,
+      "excerpt": "feedbackPass.consume()"
+    },
+    {
+      "id": "709b8db554571337e096",
+      "rule": "AG-DEMO-005",
+      "file": "dungeon.ts",
+      "line": 166,
+      "column": 65,
+      "excerpt": "renderer.backend"
+    },
+    {
+      "id": "abb13573b752628e47b0",
+      "rule": "AG-DEMO-005",
+      "file": "dungeon.ts",
+      "line": 174,
+      "column": 133,
+      "excerpt": "renderer.backend"
+    },
+    {
+      "id": "f7ab3d4cc61230a322d0",
+      "rule": "AG-DEMO-006",
+      "file": "dungeon.ts",
+      "line": 175,
+      "column": 7,
+      "excerpt": "waiters=[]"
+    },
+    {
+      "id": "cedbe2364aef167be823",
+      "rule": "AG-DEMO-001",
+      "file": "dungeon.ts",
+      "line": 177,
+      "column": 1,
+      "excerpt": "renderer.setAnimationLoop(now=>{const frameCpuStart=performance.now(),dt=Math.min(.05,(now-last)/1000);last=now;smoothedDt=smoothedDt*.95+dt*.05;store.recordFrameTime(dt*1000);upda"
+    },
+    {
+      "id": "ab4dcc7d1e2f96844ded",
+      "rule": "AG-DEMO-010",
+      "file": "dungeon.ts",
+      "line": 177,
+      "column": 1,
+      "excerpt": "renderer.setAnimationLoop(now=>{const frameCpuStart=performance.now(),dt=Math.min(.05,(now-last)/1000);last=now;smoothedDt=smoothedDt*.95+dt*.05;store.recordFrameTime(dt*1000);upda"
+    },
+    {
+      "id": "7c1882cb6f725e0cc370",
+      "rule": "AG-DEMO-003",
+      "file": "dungeon.ts",
+      "line": 177,
+      "column": 425,
+      "excerpt": "feedbackPass.submit(renderer,feedbackScene,camera,store)"
+    },
+    {
+      "id": "348f68abeab7c67af3ea",
+      "rule": "AG-DEMO-014",
+      "file": "dungeon.ts",
+      "line": 177,
+      "column": 856,
+      "excerpt": "hud.innerHTML"
+    },
+    {
+      "id": "f5eb6cd6408ea1bdb506",
+      "rule": "AG-DEMO-013",
+      "file": "dungeon.ts",
+      "line": 178,
+      "column": 1,
+      "excerpt": "addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);feedbackPass.resize(renderer.domElement"
+    },
+    {
+      "id": "aa5a2d514077cb64635d",
+      "rule": "AG-DEMO-013",
+      "file": "dungeon.ts",
+      "line": 179,
+      "column": 1,
+      "excerpt": "addEventListener('keydown',e=>{if(programmatic)return;const key=e.key.toLowerCase();keys.add(key);if(key==='r')setPose(-5.5,-5.5,0,0);if(key==='p')setPomEnabled(!pomEnabled);if(e.k"
+    },
+    {
+      "id": "cef5e6af168dd3785d1a",
+      "rule": "AG-DEMO-013",
+      "file": "dungeon.ts",
+      "line": 179,
+      "column": 303,
+      "excerpt": "addEventListener('keyup',e=>keys.delete(e.key.toLowerCase()))"
+    },
+    {
+      "id": "ccc5f4cd2b68e918003b",
+      "rule": "AG-DEMO-013",
+      "file": "dungeon.ts",
+      "line": 181,
+      "column": 1,
+      "excerpt": "renderer.domElement.addEventListener('click',()=>{if(!programmatic)relativePointer.requestLock()})"
+    },
+    {
+      "id": "e5bc578908c84b89e725",
+      "rule": "AG-DEMO-005",
+      "file": "dungeon.ts",
+      "line": 197,
+      "column": 19,
+      "excerpt": "window.__afterglowDungeon"
+    },
+    {
+      "id": "b99ac89cd992d160632f",
+      "rule": "AG-DEMO-003",
+      "file": "dungeon.ts",
+      "line": 204,
+      "column": 55,
+      "excerpt": "feedbackPass.consume()"
+    },
+    {
+      "id": "6f024e3816de6519b592",
+      "rule": "AG-DEMO-005",
+      "file": "dungeon.ts",
+      "line": 220,
+      "column": 23,
+      "excerpt": "window.__afterglowDungeon"
+    },
+    {
+      "id": "65e2eb26782b85c7551a",
+      "rule": "AG-DEMO-005",
+      "file": "dungeon.ts",
+      "line": 226,
+      "column": 1,
+      "excerpt": "window.__afterglowDungeon"
+    },
+    {
+      "id": "e21edbe090d7a6eb8968",
+      "rule": "AG-DEMO-005",
+      "file": "dungeon.ts",
+      "line": 231,
+      "column": 207,
+      "excerpt": "window.__afterglowDungeon"
+    },
+    {
+      "id": "8e648277f0416efc3d67",
+      "rule": "AG-DEMO-005",
+      "file": "dungeon.ts",
+      "line": 232,
+      "column": 147,
+      "excerpt": "window.__afterglowDungeon"
+    },
+    {
+      "id": "fa1bb457204006768dbd",
+      "rule": "AG-DEMO-005",
+      "file": "dungeon.ts",
+      "line": 232,
+      "column": 189,
+      "excerpt": "window.__afterglowDungeon"
+    },
+    {
+      "id": "4004c4c59bfd17a52ee1",
+      "rule": "AG-DEMO-005",
+      "file": "dungeon.ts",
+      "line": 232,
+      "column": 240,
+      "excerpt": "window.__afterglowDungeon"
+    },
+    {
+      "id": "85d45389c23a6a604c82",
+      "rule": "AG-DEMO-005",
+      "file": "dungeon.ts",
+      "line": 232,
+      "column": 281,
+      "excerpt": "window.__afterglowDungeon"
+    },
+    {
+      "id": "2e1539090ca1be44b37c",
+      "rule": "AG-DEMO-005",
+      "file": "dungeon.ts",
+      "line": 232,
+      "column": 333,
+      "excerpt": "window.__afterglowDungeon"
+    },
+    {
+      "id": "07493c0758bfc9c95837",
+      "rule": "AG-DEMO-016",
+      "file": "engine-bundle-input.ts",
+      "line": 4,
+      "column": 1,
+      "excerpt": "import { AssetStore } from './engine/asset-store.ts';"
+    },
+    {
+      "id": "b5daeeeb21247e961c7b",
+      "rule": "AG-DEMO-016",
+      "file": "engine-bundle-input.ts",
+      "line": 6,
+      "column": 1,
+      "excerpt": "import { VirtualTextureFeedbackPass } from './engine/virtual-texture-feedback-pass.ts';"
+    },
+    {
+      "id": "734f4a46c81309cbca6b",
+      "rule": "AG-DEMO-009",
+      "file": "engine-bundle-input.ts",
+      "line": 7,
+      "column": 1,
+      "excerpt": "import { createVirtualGltfMaterialPair, VirtualTextureAddressMode } from './engine/virtual-texture-material.ts';"
+    },
+    {
+      "id": "76429ffc5239492f2ff8",
+      "rule": "AG-DEMO-016",
+      "file": "engine-bundle-input.ts",
+      "line": 7,
+      "column": 1,
+      "excerpt": "import { createVirtualGltfMaterialPair, VirtualTextureAddressMode } from './engine/virtual-texture-material.ts';"
+    },
+    {
+      "id": "378631a4edb688be234b",
+      "rule": "AG-DEMO-016",
+      "file": "engine-bundle-input.ts",
+      "line": 8,
+      "column": 1,
+      "excerpt": "import { EngineMemory, EnginePhase, FixedIndexPool, LinearArena, defineEngineMemoryResource } from './engine/engine-memory.ts';"
+    },
+    {
+      "id": "ede11880c12fe0a251cb",
+      "rule": "AG-DEMO-016",
+      "file": "engine-bundle-input.ts",
+      "line": 9,
+      "column": 1,
+      "excerpt": "import { BudgetDecision, FrameBudget, FrameBudgetRes, FrameStage } from './engine/frame-budget.ts';"
+    },
+    {
+      "id": "5679c1a27be71740187c",
+      "rule": "AG-DEMO-016",
+      "file": "engine-bundle-input.ts",
+      "line": 10,
+      "column": 1,
+      "excerpt": "import { IndexedDbBlobBackend, PersistentBlobCache, OpfsBlobBackend, persistentCacheNamespace } from './engine/persistent-blob-cache.ts';"
+    },
+    {
+      "id": "adf9f7613ea39d1a6148",
+      "rule": "AG-DEMO-016",
+      "file": "engine-bundle-input.ts",
+      "line": 11,
+      "column": 1,
+      "excerpt": "import { RelativePointerInput } from './engine/relative-pointer.ts';"
+    },
+    {
+      "id": "96b8fe6d4337aac31378",
+      "rule": "AG-DEMO-009",
+      "file": "engine-bundle-input.ts",
+      "line": 12,
+      "column": 1,
+      "excerpt": "import { POM_UV_WGSL } from './engine/surface-detail.ts';"
+    },
+    {
+      "id": "ed88f6b0b0476ffaa882",
+      "rule": "AG-DEMO-016",
+      "file": "engine-bundle-input.ts",
+      "line": 12,
+      "column": 1,
+      "excerpt": "import { POM_UV_WGSL } from './engine/surface-detail.ts';"
+    },
+    {
+      "id": "f8f0a25a290451af9a03",
+      "rule": "AG-DEMO-009",
+      "file": "engine-bundle-input.ts",
+      "line": 12,
+      "column": 10,
+      "excerpt": "POM_UV_WGSL"
+    },
+    {
+      "id": "44329d8e7285df411cdd",
+      "rule": "AG-DEMO-016",
+      "file": "engine-bundle-input.ts",
+      "line": 13,
+      "column": 1,
+      "excerpt": "import { VirtualTextureStore, VirtualTextureTuning, VirtualTextureTuningRes, VT_SAMPLE_WGSL, VT_SAMPLE_LEVEL_WGSL, VT_SAMPLE_FROM_LEVEL_WGSL, VT_RESOLVE_MATERIAL_MIP4_WGSL, VT_FEED"
+    },
+    {
+      "id": "fed48b7be1260bfa59ae",
+      "rule": "AG-DEMO-004",
+      "file": "engine-bundle-input.ts",
+      "line": 21,
+      "column": 1,
+      "excerpt": "window.THREE"
+    },
+    {
+      "id": "b8aca26546e9ac5605fd",
+      "rule": "AG-DEMO-004",
+      "file": "engine-bundle-input.ts",
+      "line": 22,
+      "column": 15,
+      "excerpt": "window.THREE"
+    },
+    {
+      "id": "afa056164cb7477ba90f",
+      "rule": "AG-DEMO-004",
+      "file": "engine-bundle-input.ts",
+      "line": 23,
+      "column": 1,
+      "excerpt": "window.bitecsCreateWorld"
+    },
+    {
+      "id": "321e95be0af3b1d55ea6",
+      "rule": "AG-DEMO-004",
+      "file": "engine-bundle-input.ts",
+      "line": 24,
+      "column": 1,
+      "excerpt": "window.bitecsAddEntity"
+    },
+    {
+      "id": "14f9463e244222550cbc",
+      "rule": "AG-DEMO-004",
+      "file": "engine-bundle-input.ts",
+      "line": 25,
+      "column": 1,
+      "excerpt": "window.bitecsAddComponent"
+    },
+    {
+      "id": "1f9854cde5dbe864be73",
+      "rule": "AG-DEMO-004",
+      "file": "engine-bundle-input.ts",
+      "line": 26,
+      "column": 1,
+      "excerpt": "window.bitecsQuery"
+    },
+    {
+      "id": "f539d92de002101d691f",
+      "rule": "AG-DEMO-004",
+      "file": "engine-bundle-input.ts",
+      "line": 27,
+      "column": 1,
+      "excerpt": "window.AfterglowMemory"
+    },
+    {
+      "id": "ffecf377a78c8557fb67",
+      "rule": "AG-DEMO-004",
+      "file": "engine-bundle-input.ts",
+      "line": 31,
+      "column": 1,
+      "excerpt": "window.AfterglowStorage"
+    },
+    {
+      "id": "27d124afaf465b834006",
+      "rule": "AG-DEMO-004",
+      "file": "engine-bundle-input.ts",
+      "line": 34,
+      "column": 1,
+      "excerpt": "window.AfterglowInput"
+    },
+    {
+      "id": "e0f055c111b2c8f12c2c",
+      "rule": "AG-DEMO-004",
+      "file": "engine-bundle-input.ts",
+      "line": 35,
+      "column": 1,
+      "excerpt": "window.AfterglowLoaders"
+    },
+    {
+      "id": "f773651cccb3b070eb7a",
+      "rule": "AG-DEMO-004",
+      "file": "engine-bundle-input.ts",
+      "line": 36,
+      "column": 1,
+      "excerpt": "window.AfterglowAssets"
+    },
+    {
+      "id": "59a23bda7b0dddd9c5a3",
+      "rule": "AG-DEMO-004",
+      "file": "engine-bundle-input.ts",
+      "line": 37,
+      "column": 1,
+      "excerpt": "window.AfterglowSurfaceDetail"
+    },
+    {
+      "id": "39d1b909d2fa9a6071f5",
+      "rule": "AG-DEMO-009",
+      "file": "engine-bundle-input.ts",
+      "line": 37,
+      "column": 35,
+      "excerpt": "POM_UV_WGSL"
+    },
+    {
+      "id": "efaa1fc2cac5d6c1c1a1",
+      "rule": "AG-DEMO-004",
+      "file": "engine-bundle-input.ts",
+      "line": 38,
+      "column": 1,
+      "excerpt": "window.AfterglowVT"
+    },
+    {
+      "id": "305fa0e780267296217f",
+      "rule": "AG-DEMO-016",
+      "file": "engine-demo.ts",
+      "line": 1,
+      "column": 1,
+      "excerpt": "import { createWebGPUOnlyRenderer, showWebGPUFailure } from './engine/webgpu-only.ts';"
+    },
+    {
+      "id": "a7e25260671da01cbcfe",
+      "rule": "AG-DEMO-004",
+      "file": "engine-demo.ts",
+      "line": 3,
+      "column": 15,
+      "excerpt": "window.THREE"
+    },
+    {
+      "id": "b66e6e5855e3c615675e",
+      "rule": "AG-DEMO-004",
+      "file": "engine-demo.ts",
+      "line": 5,
+      "column": 16,
+      "excerpt": "window.bitecsCreateWorld"
+    },
+    {
+      "id": "fce05f5544281a7ce2ff",
+      "rule": "AG-DEMO-004",
+      "file": "engine-demo.ts",
+      "line": 6,
+      "column": 14,
+      "excerpt": "window.bitecsAddEntity"
+    },
+    {
+      "id": "e558b63cb618c7437edc",
+      "rule": "AG-DEMO-004",
+      "file": "engine-demo.ts",
+      "line": 7,
+      "column": 17,
+      "excerpt": "window.bitecsAddComponent"
+    },
+    {
+      "id": "32227984cb0c349c5452",
+      "rule": "AG-DEMO-004",
+      "file": "engine-demo.ts",
+      "line": 8,
+      "column": 10,
+      "excerpt": "window.bitecsQuery"
+    },
+    {
+      "id": "29e924e854a0e89a2d6c",
+      "rule": "AG-DEMO-013",
+      "file": "engine-demo.ts",
+      "line": 27,
+      "column": 1,
+      "excerpt": "addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); })"
+    },
+    {
+      "id": "eb061c84da92b144e453",
+      "rule": "AG-DEMO-014",
+      "file": "engine-demo.ts",
+      "line": 95,
+      "column": 1,
+      "excerpt": "document.getElementById('info').textContent"
+    },
+    {
+      "id": "2f8ee861ee73518a3ab1",
+      "rule": "AG-DEMO-014",
+      "file": "engine-demo.ts",
+      "line": 144,
+      "column": 3,
+      "excerpt": "benchEl.textContent"
+    },
+    {
+      "id": "ce4fcb451b44d5da82af",
+      "rule": "AG-DEMO-014",
+      "file": "engine-demo.ts",
+      "line": 152,
+      "column": 5,
+      "excerpt": "benchEl.textContent"
+    },
+    {
+      "id": "5a5b4c376584261c4ffc",
+      "rule": "AG-DEMO-014",
+      "file": "engine-demo.ts",
+      "line": 165,
+      "column": 5,
+      "excerpt": "benchEl.textContent"
+    },
+    {
+      "id": "8c75d75dd10038bd2b21",
+      "rule": "AG-DEMO-014",
+      "file": "engine-demo.ts",
+      "line": 169,
+      "column": 30,
+      "excerpt": "benchEl.textContent"
+    },
+    {
+      "id": "90f6a532e3a637f0236c",
+      "rule": "AG-DEMO-013",
+      "file": "engine-demo.ts",
+      "line": 175,
+      "column": 1,
+      "excerpt": "addEventListener('keydown', e => { if (e.key === 'b' || e.key === 'B') startBench(); })"
+    },
+    {
+      "id": "546477a7eb1abf55c6fa",
+      "rule": "AG-DEMO-014",
+      "file": "engine-demo.ts",
+      "line": 233,
+      "column": 5,
+      "excerpt": "document.getElementById('info').textContent"
+    },
+    {
+      "id": "1e227d1e2c01286e6a3d",
+      "rule": "AG-DEMO-001",
+      "file": "engine-demo.ts",
+      "line": 237,
+      "column": 3,
+      "excerpt": "requestAnimationFrame(animate)"
+    },
+    {
+      "id": "bead282d816fbda5f6a8",
+      "rule": "AG-DEMO-010",
+      "file": "engine-demo.ts",
+      "line": 237,
+      "column": 3,
+      "excerpt": "requestAnimationFrame(animate)"
+    },
+    {
+      "id": "f7af6272e9cc9ff06ff4",
+      "rule": "AG-DEMO-001",
+      "file": "engine-demo.ts",
+      "line": 241,
+      "column": 1,
+      "excerpt": "requestAnimationFrame(animate)"
+    },
+    {
+      "id": "0aaabb791f6b78c371cb",
+      "rule": "AG-DEMO-010",
+      "file": "engine-demo.ts",
+      "line": 241,
+      "column": 1,
+      "excerpt": "requestAnimationFrame(animate)"
+    },
+    {
+      "id": "071a7ecdbe69d6b9606a",
+      "rule": "AG-DEMO-016",
+      "file": "lod-demo.ts",
+      "line": 3,
+      "column": 1,
+      "excerpt": "import { AssetStore } from './engine/asset-store.ts';"
+    },
+    {
+      "id": "bfcc8c64df6d14ebaff2",
+      "rule": "AG-DEMO-016",
+      "file": "lod-demo.ts",
+      "line": 4,
+      "column": 1,
+      "excerpt": "import { createWebGPUOnlyRenderer, showWebGPUFailure } from './engine/webgpu-only.ts';"
+    },
+    {
+      "id": "3485572c57142c8e3c70",
+      "rule": "AG-DEMO-004",
+      "file": "lod-demo.ts",
+      "line": 6,
+      "column": 15,
+      "excerpt": "window.THREE"
+    },
+    {
+      "id": "f91fdd461e6d4ab50a62",
+      "rule": "AG-DEMO-013",
+      "file": "lod-demo.ts",
+      "line": 22,
+      "column": 1,
+      "excerpt": "addEventListener('resize', () => { const aspect = innerWidth / innerHeight; camera.left = -7 * aspect; camera.right = 7 * aspect; camera.top = 5; camera.bottom = -5; camera.updateP"
+    },
+    {
+      "id": "14b407fe6ab74cc9630d",
+      "rule": "AG-DEMO-014",
+      "file": "lod-demo.ts",
+      "line": 103,
+      "column": 1,
+      "excerpt": "loadingEl.textContent"
+    },
+    {
+      "id": "70d29418614e64a951ab",
+      "rule": "AG-DEMO-014",
+      "file": "lod-demo.ts",
+      "line": 113,
+      "column": 1,
+      "excerpt": "loadingEl.textContent"
+    },
+    {
+      "id": "17da0b553f4a65847e11",
+      "rule": "AG-DEMO-002",
+      "file": "lod-demo.ts",
+      "line": 125,
+      "column": 15,
+      "excerpt": "new AssetStore(loader, meshopt, texture)"
+    },
+    {
+      "id": "b12726754c4207f23b45",
+      "rule": "AG-DEMO-014",
+      "file": "lod-demo.ts",
+      "line": 128,
+      "column": 1,
+      "excerpt": "loadingEl.textContent"
+    },
+    {
+      "id": "50d8e871a5cdff33bb11",
+      "rule": "AG-DEMO-014",
+      "file": "lod-demo.ts",
+      "line": 195,
+      "column": 3,
+      "excerpt": "infoEl.innerHTML"
+    },
+    {
+      "id": "adb5934e35dda46ebc41",
+      "rule": "AG-DEMO-013",
+      "file": "lod-demo.ts",
+      "line": 250,
+      "column": 1,
+      "excerpt": "addEventListener('keydown', e => { if (e.key === 'w' || e.key === 'W') { wireframesVisible = !wireframesVisible; for (const lod of lodGroups) { lod.wire.visible = wireframesVisible"
+    },
+    {
+      "id": "444c99a96dddc06c2794",
+      "rule": "AG-DEMO-001",
+      "file": "lod-demo.ts",
+      "line": 293,
+      "column": 3,
+      "excerpt": "requestAnimationFrame(animate)"
+    },
+    {
+      "id": "80e2d12b5ee6a03bf408",
+      "rule": "AG-DEMO-010",
+      "file": "lod-demo.ts",
+      "line": 293,
+      "column": 3,
+      "excerpt": "requestAnimationFrame(animate)"
+    },
+    {
+      "id": "b46fd77cba236464b49f",
+      "rule": "AG-DEMO-001",
+      "file": "lod-demo.ts",
+      "line": 296,
+      "column": 1,
+      "excerpt": "requestAnimationFrame(animate)"
+    },
+    {
+      "id": "98cfde29c493b7f2ac68",
+      "rule": "AG-DEMO-010",
+      "file": "lod-demo.ts",
+      "line": 296,
+      "column": 1,
+      "excerpt": "requestAnimationFrame(animate)"
+    },
+    {
+      "id": "a3338891f49acd42d377",
+      "rule": "AG-DEMO-016",
+      "file": "rigged-vt-demo.ts",
+      "line": 4,
+      "column": 1,
+      "excerpt": "import { BigContainerAssetLoader, createFetchRangeLoader, createPageDataProvider, getVirtualTextureDimensions, parseBigHeader } from './engine/big-parser.ts';"
+    },
+    {
+      "id": "e56de1880233053ec7ff",
+      "rule": "AG-DEMO-016",
+      "file": "rigged-vt-demo.ts",
+      "line": 5,
+      "column": 1,
+      "excerpt": "import { createWebGPUOnlyRenderer, showWebGPUFailure } from './engine/webgpu-only.ts';"
+    },
+    {
+      "id": "f349574cbb79d1e91902",
+      "rule": "AG-DEMO-016",
+      "file": "rigged-vt-demo.ts",
+      "line": 6,
+      "column": 1,
+      "excerpt": "import { RendererSeal, warmRendererVariants } from './engine/renderer-seal.ts';"
+    },
+    {
+      "id": "b8517a1423de628a3ce0",
+      "rule": "AG-DEMO-004",
+      "file": "rigged-vt-demo.ts",
+      "line": 8,
+      "column": 15,
+      "excerpt": "window.THREE"
+    },
+    {
+      "id": "d2de5f9d6bff8977ae10",
+      "rule": "AG-DEMO-004",
+      "file": "rigged-vt-demo.ts",
+      "line": 9,
+      "column": 12,
+      "excerpt": "window.AfterglowVT"
+    },
+    {
+      "id": "390544f5bc6e78f4ca0d",
+      "rule": "AG-DEMO-004",
+      "file": "rigged-vt-demo.ts",
+      "line": 10,
+      "column": 20,
+      "excerpt": "window.AfterglowLoaders?.GLTFLoader"
+    },
+    {
+      "id": "20a33bd6d81342362301",
+      "rule": "AG-DEMO-004",
+      "file": "rigged-vt-demo.ts",
+      "line": 10,
+      "column": 20,
+      "excerpt": "window.AfterglowLoaders"
+    },
+    {
+      "id": "29cc0cdee616b9e51b0c",
+      "rule": "AG-DEMO-004",
+      "file": "rigged-vt-demo.ts",
+      "line": 11,
+      "column": 20,
+      "excerpt": "window.AfterglowAssets?.AssetStore"
+    },
+    {
+      "id": "b151c8d8f677fa70ef37",
+      "rule": "AG-DEMO-004",
+      "file": "rigged-vt-demo.ts",
+      "line": 11,
+      "column": 20,
+      "excerpt": "window.AfterglowAssets"
+    },
+    {
+      "id": "7fca7540a67f7fafecdf",
+      "rule": "AG-DEMO-006",
+      "file": "rigged-vt-demo.ts",
+      "line": 16,
+      "column": 7,
+      "excerpt": "errors: string[] = []"
+    },
+    {
+      "id": "8cd1cc4f6e189bc694a4",
+      "rule": "AG-DEMO-015",
+      "file": "rigged-vt-demo.ts",
+      "line": 21,
+      "column": 37,
+      "excerpt": "any"
+    },
+    {
+      "id": "bbd6006a54fdced9e2e7",
+      "rule": "AG-DEMO-015",
+      "file": "rigged-vt-demo.ts",
+      "line": 22,
+      "column": 40,
+      "excerpt": "any"
+    },
+    {
+      "id": "85c9669e7e182d204ab0",
+      "rule": "AG-DEMO-006",
+      "file": "rigged-vt-demo.ts",
+      "line": 30,
+      "column": 7,
+      "excerpt": "keys = new Set<string>()"
+    },
+    {
+      "id": "2e8e4b7cc0f0294f42f3",
+      "rule": "AG-DEMO-006",
+      "file": "rigged-vt-demo.ts",
+      "line": 31,
+      "column": 7,
+      "excerpt": "waiters: { target: number; resolve: () => void }[] = []"
+    },
+    {
+      "id": "5a8aa029f9ae7955d5f1",
+      "rule": "AG-DEMO-002",
+      "file": "rigged-vt-demo.ts",
+      "line": 46,
+      "column": 22,
+      "excerpt": "new RendererSeal(renderer.backend)"
+    },
+    {
+      "id": "f6f054c8b9266dfcc087",
+      "rule": "AG-DEMO-005",
+      "file": "rigged-vt-demo.ts",
+      "line": 46,
+      "column": 39,
+      "excerpt": "renderer.backend"
+    },
+    {
+      "id": "1b3adc3e02cbad0a15f6",
+      "rule": "AG-DEMO-005",
+      "file": "rigged-vt-demo.ts",
+      "line": 47,
+      "column": 1,
+      "excerpt": "renderer.backend"
+    },
+    {
+      "id": "7fed841bf553fc7a9b2b",
+      "rule": "AG-DEMO-013",
+      "file": "rigged-vt-demo.ts",
+      "line": 47,
+      "column": 1,
+      "excerpt": "renderer.backend.device.addEventListener('uncapturederror', event => errors.push(String(event.error?.message ?? event.error)))"
+    },
+    {
+      "id": "49c87f78e53eac7a15d4",
+      "rule": "AG-DEMO-013",
+      "file": "rigged-vt-demo.ts",
+      "line": 48,
+      "column": 1,
+      "excerpt": "addEventListener('error', event => errors.push(String(event.error?.stack ?? event.message)))"
+    },
+    {
+      "id": "71161be7c79822052225",
+      "rule": "AG-DEMO-013",
+      "file": "rigged-vt-demo.ts",
+      "line": 49,
+      "column": 1,
+      "excerpt": "addEventListener('unhandledrejection', event => errors.push(String(event.reason?.stack ?? event.reason)))"
+    },
+    {
+      "id": "685a35177f3bf731e4e6",
+      "rule": "AG-DEMO-007",
+      "file": "rigged-vt-demo.ts",
+      "line": 81,
+      "column": 21,
+      "excerpt": "createFetchRangeLoader()"
+    },
+    {
+      "id": "191c0496d7ea0965ff3d",
+      "rule": "AG-DEMO-013",
+      "file": "rigged-vt-demo.ts",
+      "line": 88,
+      "column": 1,
+      "excerpt": "addEventListener('beforeunload', () => { for (const rpc of textureRpcs) rpc.terminate(); }, { once: true })"
+    },
+    {
+      "id": "293ffa3bbec17388fc0e",
+      "rule": "AG-DEMO-007",
+      "file": "rigged-vt-demo.ts",
+      "line": 92,
+      "column": 20,
+      "excerpt": "parseBigHeader(headerBytes)"
+    },
+    {
+      "id": "7efcb03742aebde1b181",
+      "rule": "AG-DEMO-005",
+      "file": "rigged-vt-demo.ts",
+      "line": 93,
+      "column": 16,
+      "excerpt": "renderer.backend"
+    },
+    {
+      "id": "4023dbc95c11f898e958",
+      "rule": "AG-DEMO-005",
+      "file": "rigged-vt-demo.ts",
+      "line": 94,
+      "column": 5,
+      "excerpt": "renderer.backend"
+    },
+    {
+      "id": "619157a73541dbc67258",
+      "rule": "AG-DEMO-007",
+      "file": "rigged-vt-demo.ts",
+      "line": 100,
+      "column": 22,
+      "excerpt": "createPageDataProvider(containerLoader, header, textureWorkers, format)"
+    },
+    {
+      "id": "f2fea18d2516ce9900f4",
+      "rule": "AG-DEMO-002",
+      "file": "rigged-vt-demo.ts",
+      "line": 102,
+      "column": 20,
+      "excerpt": "new AssetStore(packedAssets, meshopt)"
+    },
+    {
+      "id": "5287992e4f9bc140ad03",
+      "rule": "AG-DEMO-001",
+      "file": "rigged-vt-demo.ts",
+      "line": 107,
+      "column": 38,
+      "excerpt": "requestAnimationFrame(() => resolve())"
+    },
+    {
+      "id": "f86d7dc9747534d306a1",
+      "rule": "AG-DEMO-010",
+      "file": "rigged-vt-demo.ts",
+      "line": 107,
+      "column": 38,
+      "excerpt": "requestAnimationFrame(() => resolve())"
+    },
+    {
+      "id": "731bec162d97f5845966",
+      "rule": "AG-DEMO-002",
+      "file": "rigged-vt-demo.ts",
+      "line": 111,
+      "column": 15,
+      "excerpt": "new VT.VirtualTextureStore( { read: (path: string, offset: number, length: number) => rangeLoader.read(path, offset, length), poll() {} }, pageProvider, format, renderer.backend.de"
+    },
+    {
+      "id": "1bb87142500871995abf",
+      "rule": "AG-DEMO-005",
+      "file": "rigged-vt-demo.ts",
+      "line": 113,
+      "column": 25,
+      "excerpt": "renderer.backend"
+    },
+    {
+      "id": "7d948f9053524ebfd64e",
+      "rule": "AG-DEMO-002",
+      "file": "rigged-vt-demo.ts",
+      "line": 130,
+      "column": 56,
+      "excerpt": "new VT.VirtualTextureFeedbackPass(0.125)"
+    },
+    {
+      "id": "375ca29e5366a638f59d",
+      "rule": "AG-DEMO-003",
+      "file": "rigged-vt-demo.ts",
+      "line": 130,
+      "column": 56,
+      "excerpt": "new VT.VirtualTextureFeedbackPass(0.125)"
+    },
+    {
+      "id": "f91a457668d9403a26c9",
+      "rule": "AG-DEMO-015",
+      "file": "rigged-vt-demo.ts",
+      "line": 137,
+      "column": 22,
+      "excerpt": "any"
+    },
+    {
+      "id": "210c4f67acfb7be6c8e1",
+      "rule": "AG-DEMO-015",
+      "file": "rigged-vt-demo.ts",
+      "line": 138,
+      "column": 21,
+      "excerpt": "any"
+    },
+    {
+      "id": "5621f86ef3558e5757e7",
+      "rule": "AG-DEMO-015",
+      "file": "rigged-vt-demo.ts",
+      "line": 139,
+      "column": 25,
+      "excerpt": "any"
+    },
+    {
+      "id": "542a872736adc9f42eb2",
+      "rule": "AG-DEMO-015",
+      "file": "rigged-vt-demo.ts",
+      "line": 197,
+      "column": 34,
+      "excerpt": "any"
+    },
+    {
+      "id": "1c97c599ba006a5d4848",
+      "rule": "AG-DEMO-015",
+      "file": "rigged-vt-demo.ts",
+      "line": 233,
+      "column": 21,
+      "excerpt": "any"
+    },
+    {
+      "id": "e6a47fcf57836966df01",
+      "rule": "AG-DEMO-015",
+      "file": "rigged-vt-demo.ts",
+      "line": 234,
+      "column": 31,
+      "excerpt": "any"
+    },
+    {
+      "id": "77b5d359a72c962bbd32",
+      "rule": "AG-DEMO-008",
+      "file": "rigged-vt-demo.ts",
+      "line": 253,
+      "column": 7,
+      "excerpt": "secondLayouts = new Map(secondGltf.materialTextures.map(layout => [layout.name, layout]))"
+    },
+    {
+      "id": "3db951f755194a9e26cd",
+      "rule": "AG-DEMO-015",
+      "file": "rigged-vt-demo.ts",
+      "line": 254,
+      "column": 22,
+      "excerpt": "any"
+    },
+    {
+      "id": "8215e362b8b79fb3e890",
+      "rule": "AG-DEMO-015",
+      "file": "rigged-vt-demo.ts",
+      "line": 255,
+      "column": 40,
+      "excerpt": "any"
+    },
+    {
+      "id": "e60526bcd661f2aa559a",
+      "rule": "AG-DEMO-015",
+      "file": "rigged-vt-demo.ts",
+      "line": 256,
+      "column": 41,
+      "excerpt": "any"
+    },
+    {
+      "id": "74c51cf3f7e47fc93330",
+      "rule": "AG-DEMO-003",
+      "file": "rigged-vt-demo.ts",
+      "line": 384,
+      "column": 5,
+      "excerpt": "feedbackPass.submit(renderer, scene, camera, store)"
+    },
+    {
+      "id": "2e0bb36d317eea78c2ee",
+      "rule": "AG-DEMO-003",
+      "file": "rigged-vt-demo.ts",
+      "line": 389,
+      "column": 7,
+      "excerpt": "feedbackPasses[index].submit(renderer, scene, camera, store)"
+    },
+    {
+      "id": "af014a13fc7a31ce778a",
+      "rule": "AG-DEMO-001",
+      "file": "rigged-vt-demo.ts",
+      "line": 408,
+      "column": 1,
+      "excerpt": "renderer.setAnimationLoop(now => { const dt = Math.min(0.05, (now - last) / 1000); last = now; smoothedDt = smoothedDt * 0.95 + dt * 0.05; store.recordFrameTime(dt * 1000); if (ani"
+    },
+    {
+      "id": "136941a7d913bf7035a3",
+      "rule": "AG-DEMO-010",
+      "file": "rigged-vt-demo.ts",
+      "line": 408,
+      "column": 1,
+      "excerpt": "renderer.setAnimationLoop(now => { const dt = Math.min(0.05, (now - last) / 1000); last = now; smoothedDt = smoothedDt * 0.95 + dt * 0.05; store.recordFrameTime(dt * 1000); if (ani"
+    },
+    {
+      "id": "c2296daeb0a4f24b4835",
+      "rule": "AG-DEMO-003",
+      "file": "rigged-vt-demo.ts",
+      "line": 428,
+      "column": 23,
+      "excerpt": "feedbackPasses[index].consume()"
+    },
+    {
+      "id": "ebe90e91b2a450b63777",
+      "rule": "AG-DEMO-014",
+      "file": "rigged-vt-demo.ts",
+      "line": 458,
+      "column": 5,
+      "excerpt": "hud.innerHTML"
+    },
+    {
+      "id": "2954f28f96dd5d8c9485",
+      "rule": "AG-DEMO-013",
+      "file": "rigged-vt-demo.ts",
+      "line": 469,
+      "column": 1,
+      "excerpt": "addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); for (const pass of feedback"
+    },
+    {
+      "id": "f48505737e336508c830",
+      "rule": "AG-DEMO-013",
+      "file": "rigged-vt-demo.ts",
+      "line": 475,
+      "column": 1,
+      "excerpt": "addEventListener('keydown', event => { if (programmatic) return; const keyName = event.key.toLowerCase(); keys.add(keyName); if (event.repeat) return; if (keyName === '1') setActiv"
+    },
+    {
+      "id": "eb69c9d0fd2bfa76ccf9",
+      "rule": "AG-DEMO-013",
+      "file": "rigged-vt-demo.ts",
+      "line": 487,
+      "column": 1,
+      "excerpt": "addEventListener('keyup', event => keys.delete(event.key.toLowerCase()))"
+    },
+    {
+      "id": "0ad894a205c4bc9303fd",
+      "rule": "AG-DEMO-013",
+      "file": "rigged-vt-demo.ts",
+      "line": 488,
+      "column": 1,
+      "excerpt": "addEventListener('blur', () => keys.clear())"
+    },
+    {
+      "id": "1b3a441d59f5d5521c40",
+      "rule": "AG-DEMO-005",
+      "file": "rigged-vt-demo.ts",
+      "line": 490,
+      "column": 1,
+      "excerpt": "window.__afterglowRiggedVT"
+    },
+    {
+      "id": "b67c31f996d107cce428",
+      "rule": "AG-DEMO-016",
+      "file": "vt-demo.ts",
+      "line": 1,
+      "column": 1,
+      "excerpt": "import {generateTerrainPage} from './engine/procedural-vt.ts';"
+    },
+    {
+      "id": "636bdb031ea251e03388",
+      "rule": "AG-DEMO-016",
+      "file": "vt-demo.ts",
+      "line": 1,
+      "column": 63,
+      "excerpt": "import {testRawFeedback,testUploadLocations} from './engine/vt-gpu-test.ts';"
+    },
+    {
+      "id": "8484c4f307256cef3d02",
+      "rule": "AG-DEMO-016",
+      "file": "vt-demo.ts",
+      "line": 1,
+      "column": 139,
+      "excerpt": "import {createWebGPUOnlyRenderer,showWebGPUFailure} from './engine/webgpu-only.ts';"
+    },
+    {
+      "id": "9dd0ebf648aa196aa299",
+      "rule": "AG-DEMO-004",
+      "file": "vt-demo.ts",
+      "line": 2,
+      "column": 13,
+      "excerpt": "window.THREE"
+    },
+    {
+      "id": "42b53744d74829aee618",
+      "rule": "AG-DEMO-004",
+      "file": "vt-demo.ts",
+      "line": 2,
+      "column": 29,
+      "excerpt": "window.AfterglowVT"
+    },
+    {
+      "id": "102154618f29c30b4285",
+      "rule": "AG-DEMO-006",
+      "file": "vt-demo.ts",
+      "line": 3,
+      "column": 207,
+      "excerpt": "errors=[]"
+    },
+    {
+      "id": "514b4630b6a1aaf41cfb",
+      "rule": "AG-DEMO-005",
+      "file": "vt-demo.ts",
+      "line": 3,
+      "column": 217,
+      "excerpt": "renderer.backend"
+    },
+    {
+      "id": "8bdf35b18a5a4cc155c4",
+      "rule": "AG-DEMO-013",
+      "file": "vt-demo.ts",
+      "line": 3,
+      "column": 217,
+      "excerpt": "renderer.backend.device.addEventListener('uncapturederror',e=>errors.push(String(e.error?.message??e.error)))"
+    },
+    {
+      "id": "a8297b53138b63435a01",
+      "rule": "AG-DEMO-013",
+      "file": "vt-demo.ts",
+      "line": 3,
+      "column": 327,
+      "excerpt": "addEventListener('error',e=>errors.push(String(e.error?.stack??e.message)))"
+    },
+    {
+      "id": "b9f5c1312a0c54213dbc",
+      "rule": "AG-DEMO-013",
+      "file": "vt-demo.ts",
+      "line": 3,
+      "column": 403,
+      "excerpt": "addEventListener('unhandledrejection',e=>errors.push(String(e.reason?.stack??e.reason)))"
+    },
+    {
+      "id": "945ab21de7e4adb922f8",
+      "rule": "AG-DEMO-002",
+      "file": "vt-demo.ts",
+      "line": 4,
+      "column": 90,
+      "excerpt": "new VT.VirtualTextureStore(loader,async(_,req)=>generateTerrainPage(req.mip,req.x,req.y,VIRTUAL_SIZE),VT.FORMAT_RGBA,renderer.backend.device)"
+    },
+    {
+      "id": "c728e307b78702cf16e5",
+      "rule": "AG-DEMO-005",
+      "file": "vt-demo.ts",
+      "line": 4,
+      "column": 207,
+      "excerpt": "renderer.backend"
+    },
+    {
+      "id": "6bb4ffc1845afd82d6e7",
+      "rule": "AG-DEMO-006",
+      "file": "vt-demo.ts",
+      "line": 5,
+      "column": 368,
+      "excerpt": "keys=new Set()"
+    },
+    {
+      "id": "62b4b9cee31254bd4871",
+      "rule": "AG-DEMO-006",
+      "file": "vt-demo.ts",
+      "line": 5,
+      "column": 383,
+      "excerpt": "waiters=[]"
+    },
+    {
+      "id": "62dbb34da3cc48aa375b",
+      "rule": "AG-DEMO-001",
+      "file": "vt-demo.ts",
+      "line": 8,
+      "column": 1,
+      "excerpt": "renderer.setAnimationLoop(async now=>{const dt=Math.min(.05,(now-last)/1000);last=now;if(!programmatic){const speed=1.4/zoom*dt;camX=Math.max(0,Math.min(1,camX+((keys.has('d')?1:0)"
+    },
+    {
+      "id": "c51be267a2c8d4e76a7b",
+      "rule": "AG-DEMO-010",
+      "file": "vt-demo.ts",
+      "line": 8,
+      "column": 1,
+      "excerpt": "renderer.setAnimationLoop(async now=>{const dt=Math.min(.05,(now-last)/1000);last=now;if(!programmatic){const speed=1.4/zoom*dt;camX=Math.max(0,Math.min(1,camX+((keys.has('d')?1:0)"
+    },
+    {
+      "id": "a0563b157555cc696487",
+      "rule": "AG-DEMO-014",
+      "file": "vt-demo.ts",
+      "line": 8,
+      "column": 723,
+      "excerpt": "document.getElementById('info').innerHTML"
+    },
+    {
+      "id": "463573e4fd9dcf5152ab",
+      "rule": "AG-DEMO-013",
+      "file": "vt-demo.ts",
+      "line": 9,
+      "column": 1,
+      "excerpt": "addEventListener('keydown',e=>{if(programmatic)return;keys.add(e.key.toLowerCase());if(e.key.toLowerCase()==='o')zoom=.5;if(e.key.toLowerCase()==='p')zoom=VIRTUAL_SIZE})"
+    },
+    {
+      "id": "af4da19a613e0fc00716",
+      "rule": "AG-DEMO-013",
+      "file": "vt-demo.ts",
+      "line": 9,
+      "column": 171,
+      "excerpt": "addEventListener('keyup',e=>keys.delete(e.key.toLowerCase()))"
+    },
+    {
+      "id": "7075014d986231e3b6ce",
+      "rule": "AG-DEMO-013",
+      "file": "vt-demo.ts",
+      "line": 9,
+      "column": 233,
+      "excerpt": "addEventListener('wheel',e=>{if(!programmatic)zoom=Math.max(.5,Math.min(VIRTUAL_SIZE,zoom*Math.exp(e.deltaY*.001)))})"
+    },
+    {
+      "id": "8035a8107dcc7a87e3db",
+      "rule": "AG-DEMO-013",
+      "file": "vt-demo.ts",
+      "line": 9,
+      "column": 351,
+      "excerpt": "addEventListener('resize',()=>renderer.setSize(innerWidth,innerHeight))"
+    },
+    {
+      "id": "f2f9739e1da447a2b4be",
+      "rule": "AG-DEMO-005",
+      "file": "vt-demo.ts",
+      "line": 10,
+      "column": 90,
+      "excerpt": "window.__afterglowVtGpuTest"
+    },
+    {
+      "id": "602568bfdbee3b6f6123",
+      "rule": "AG-DEMO-005",
+      "file": "vt-demo.ts",
+      "line": 10,
+      "column": 697,
+      "excerpt": "renderer.backend"
+    },
+    {
+      "id": "f3ff3c1bfbc68ed473f7",
+      "rule": "AG-DEMO-005",
+      "file": "vt-demo.ts",
+      "line": 10,
+      "column": 1421,
+      "excerpt": "renderer.backend"
+    },
+    {
+      "id": "1d226f8d9ed7c246f330",
+      "rule": "AG-DEMO-005",
+      "file": "vt-demo.ts",
+      "line": 10,
+      "column": 1500,
+      "excerpt": "renderer.backend"
+    }
+  ]
+}

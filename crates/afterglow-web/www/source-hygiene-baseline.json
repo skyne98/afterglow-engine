@@ -1,0 +1,573 @@
+{
+  "version": 1,
+  "findings": [
+    {
+      "id": "0545923f17ae49e57907",
+      "rule": "AG-TS-006",
+      "file": "engine/asset-store.test.ts",
+      "line": 51,
+      "column": 23,
+      "excerpt": "geometry.index!"
+    },
+    {
+      "id": "d5fbc0bc2288cf401235",
+      "rule": "AG-TS-001",
+      "file": "engine/asset-store.ts",
+      "line": 129,
+      "column": 52,
+      "excerpt": "any"
+    },
+    {
+      "id": "e3b162e2e32a83d1cb87",
+      "rule": "AG-TS-006",
+      "file": "engine/asset-store.ts",
+      "line": 270,
+      "column": 7,
+      "excerpt": "this.handles[id]!"
+    },
+    {
+      "id": "00922619fbff3a7ce800",
+      "rule": "AG-TS-007",
+      "file": "engine/asset-store.ts",
+      "line": 313,
+      "column": 57,
+      "excerpt": "this.reportCompletionError(kind, id, value); // @alloc-allowed reason=DiagnosticFailure"
+    },
+    {
+      "id": "319e37f5da2ab74c49d4",
+      "rule": "AG-TS-006",
+      "file": "engine/asset-store.ts",
+      "line": 322,
+      "column": 18,
+      "excerpt": "this.paths[id]!"
+    },
+    {
+      "id": "42a9c967e963761a878f",
+      "rule": "AG-TS-006",
+      "file": "engine/asset-store.ts",
+      "line": 339,
+      "column": 18,
+      "excerpt": "this.paths[id]!"
+    },
+    {
+      "id": "c7498d15749759960d74",
+      "rule": "AG-TS-006",
+      "file": "engine/asset-store.ts",
+      "line": 380,
+      "column": 18,
+      "excerpt": "this.paths[id]!"
+    },
+    {
+      "id": "c52401479a03b2e20795",
+      "rule": "AG-TS-001",
+      "file": "engine/asset-store.ts",
+      "line": 505,
+      "column": 28,
+      "excerpt": "any"
+    },
+    {
+      "id": "dffc26151fab5e839cef",
+      "rule": "AG-TS-001",
+      "file": "engine/asset-store.ts",
+      "line": 536,
+      "column": 15,
+      "excerpt": "any"
+    },
+    {
+      "id": "338cf53e4e42a8abe25e",
+      "rule": "AG-TS-001",
+      "file": "engine/asset-store.ts",
+      "line": 552,
+      "column": 38,
+      "excerpt": "any"
+    },
+    {
+      "id": "bd91ed0158fed911303c",
+      "rule": "AG-TS-006",
+      "file": "engine/asset-store.ts",
+      "line": 677,
+      "column": 68,
+      "excerpt": "this.paths[id]!"
+    },
+    {
+      "id": "852c3c95f71b4303d402",
+      "rule": "AG-TS-006",
+      "file": "engine/big-parser.test.ts",
+      "line": 71,
+      "column": 20,
+      "excerpt": "findVTPageChunk(header, 'terrain', 0, 1, 0)!"
+    },
+    {
+      "id": "3a24b30e5d37914ac998",
+      "rule": "AG-TS-006",
+      "file": "engine/big-parser.test.ts",
+      "line": 148,
+      "column": 5,
+      "excerpt": "resolvers.shift()!"
+    },
+    {
+      "id": "27c9dc629feac7b6a53f",
+      "rule": "AG-TS-006",
+      "file": "engine/big-parser.test.ts",
+      "line": 173,
+      "column": 5,
+      "excerpt": "resolvers.shift()!"
+    },
+    {
+      "id": "b7dd57b4b874f4f2f86d",
+      "rule": "AG-TS-006",
+      "file": "engine/big-parser.test.ts",
+      "line": 174,
+      "column": 5,
+      "excerpt": "resolvers.shift()!"
+    },
+    {
+      "id": "df17c580c11d1422be73",
+      "rule": "AG-TS-006",
+      "file": "engine/big-parser.test.ts",
+      "line": 207,
+      "column": 5,
+      "excerpt": "resolvers.shift()!"
+    },
+    {
+      "id": "960d12e078af71fcac54",
+      "rule": "AG-TS-006",
+      "file": "engine/big-parser.test.ts",
+      "line": 210,
+      "column": 5,
+      "excerpt": "resolvers.shift()!"
+    },
+    {
+      "id": "93a8198f6940ac1edd91",
+      "rule": "AG-TS-006",
+      "file": "engine/big-parser.ts",
+      "line": 397,
+      "column": 19,
+      "excerpt": "this.jobs[this.head]!"
+    },
+    {
+      "id": "bb789a3cdf47e776caee",
+      "rule": "AG-TS-006",
+      "file": "engine/fallback.ts",
+      "line": 36,
+      "column": 15,
+      "excerpt": "canvas.getContext('2d')!"
+    },
+    {
+      "id": "faf4a59f6ab9021bba01",
+      "rule": "AG-TS-006",
+      "file": "engine/persistent-blob-cache.test.ts",
+      "line": 71,
+      "column": 5,
+      "excerpt": "backend.files.get('values-0.pack')!"
+    },
+    {
+      "id": "6a6ae67bbd29e91982f0",
+      "rule": "AG-TS-006",
+      "file": "engine/persistent-blob-cache.ts",
+      "line": 590,
+      "column": 17,
+      "excerpt": "this.jobs[this.head]!"
+    },
+    {
+      "id": "7b488e4c0378b9439a22",
+      "rule": "AG-TS-004",
+      "file": "engine/persistent-blob-cache.ts",
+      "line": 624,
+      "column": 74,
+      "excerpt": "catch { /* retain last known bound */ }"
+    },
+    {
+      "id": "53a1b9b63865672d2ae0",
+      "rule": "AG-TS-006",
+      "file": "engine/persistent-blob-cache.ts",
+      "line": 644,
+      "column": 45,
+      "excerpt": "this.idleResolvers.pop()!"
+    },
+    {
+      "id": "68cdb2ef858af5b2c41c",
+      "rule": "AG-TS-004",
+      "file": "engine/persistent-blob-cache.ts",
+      "line": 726,
+      "column": 9,
+      "excerpt": "catch { /* quota cleanup will retry on a later compaction */ }"
+    },
+    {
+      "id": "c9533734cde422a50e41",
+      "rule": "AG-TS-006",
+      "file": "engine/procedural-vt.test.ts",
+      "line": 28,
+      "column": 52,
+      "excerpt": "chain.levels.get(3)!"
+    },
+    {
+      "id": "2fb5dc5b976b12cccd05",
+      "rule": "AG-TS-006",
+      "file": "engine/procedural-vt.test.ts",
+      "line": 28,
+      "column": 80,
+      "excerpt": "chain.levels.get(4)!"
+    },
+    {
+      "id": "b53fe1d428726640d837",
+      "rule": "AG-TS-006",
+      "file": "engine/render-adapter.ts",
+      "line": 420,
+      "column": 21,
+      "excerpt": "shards[proxyHandle[entity]]!"
+    },
+    {
+      "id": "f821c267363ddcab7b69",
+      "rule": "AG-TS-006",
+      "file": "engine/render-adapter.ts",
+      "line": 523,
+      "column": 21,
+      "excerpt": "this.shards[this.proxyHandle[entity]]!"
+    },
+    {
+      "id": "ef50851501eaa404f4f5",
+      "rule": "AG-TS-006",
+      "file": "engine/render-adapter.ts",
+      "line": 544,
+      "column": 19,
+      "excerpt": "this.shards[this.proxyHandle[entity]]!"
+    },
+    {
+      "id": "fd7fc6a97357a6fc0f24",
+      "rule": "AG-TS-006",
+      "file": "engine/render-adapter.ts",
+      "line": 562,
+      "column": 22,
+      "excerpt": "this.uniqueObjects[entity]!"
+    },
+    {
+      "id": "e14a3b15148c30d72d1d",
+      "rule": "AG-TS-006",
+      "file": "engine/rigged-vt-demo.test.ts",
+      "line": 13,
+      "column": 19,
+      "excerpt": "header.assets.find(asset => asset.name === 'model.glb')!"
+    },
+    {
+      "id": "ed9a463dc7dc7321a702",
+      "rule": "AG-TS-006",
+      "file": "engine/rigged-vt-demo.test.ts",
+      "line": 20,
+      "column": 23,
+      "excerpt": "header.assets.find(asset => asset.name === `model.glb#image-${image}`)!"
+    },
+    {
+      "id": "e930b21f39331147495f",
+      "rule": "AG-TS-006",
+      "file": "engine/rigged-vt-demo.test.ts",
+      "line": 22,
+      "column": 15,
+      "excerpt": "texture.virtualTexture!"
+    },
+    {
+      "id": "72fba71dfd1c555e30be",
+      "rule": "AG-TS-006",
+      "file": "engine/rigged-vt-demo.test.ts",
+      "line": 22,
+      "column": 46,
+      "excerpt": "texture.virtualTexture!"
+    },
+    {
+      "id": "bd16b4177ab056f7682a",
+      "rule": "AG-TS-006",
+      "file": "engine/rigged-vt-demo.test.ts",
+      "line": 23,
+      "column": 14,
+      "excerpt": "texture.virtualTexture!"
+    },
+    {
+      "id": "6051c1499225bd4b3d00",
+      "rule": "AG-TS-006",
+      "file": "engine/rigged-vt-demo.test.ts",
+      "line": 24,
+      "column": 14,
+      "excerpt": "texture.virtualTexture!"
+    },
+    {
+      "id": "6e796aed186c42368930",
+      "rule": "AG-TS-006",
+      "file": "engine/rigged-vt-demo.test.ts",
+      "line": 26,
+      "column": 20,
+      "excerpt": "header.assets.find(asset => asset.name === 'model-2.glb')!"
+    },
+    {
+      "id": "fdd1034e0a435c5c4100",
+      "rule": "AG-TS-006",
+      "file": "engine/rigged-vt-demo.test.ts",
+      "line": 31,
+      "column": 13,
+      "excerpt": "dragonTextures[0].virtualTexture!"
+    },
+    {
+      "id": "cbd0b15b9f62b1c63c5e",
+      "rule": "AG-TS-006",
+      "file": "engine/rigged-vt-demo.test.ts",
+      "line": 31,
+      "column": 54,
+      "excerpt": "dragonTextures[0].virtualTexture!"
+    },
+    {
+      "id": "79a3269093b75fd3c7ba",
+      "rule": "AG-TS-006",
+      "file": "engine/virtual-texture-feedback-pass.test.ts",
+      "line": 50,
+      "column": 21,
+      "excerpt": "pass.consume()!"
+    },
+    {
+      "id": "924c02e2a4b1b6224e4b",
+      "rule": "AG-TS-006",
+      "file": "engine/virtual-texture-feedback-pass.test.ts",
+      "line": 74,
+      "column": 19,
+      "excerpt": "pass.consume()!"
+    },
+    {
+      "id": "8565081074bf499be7ed",
+      "rule": "AG-TS-006",
+      "file": "engine/virtual-texture-feedback-pass.test.ts",
+      "line": 81,
+      "column": 20,
+      "excerpt": "pass.consume()!"
+    },
+    {
+      "id": "8f1533eb516ee9372925",
+      "rule": "AG-TS-006",
+      "file": "engine/virtual-texture-feedback-pass.test.ts",
+      "line": 87,
+      "column": 19,
+      "excerpt": "pass.consume()!"
+    },
+    {
+      "id": "aae587db8acb4a19366e",
+      "rule": "AG-TS-006",
+      "file": "engine/virtual-texture-feedback-pass.ts",
+      "line": 102,
+      "column": 37,
+      "excerpt": "entry.tailFirstMip!"
+    },
+    {
+      "id": "40b1e9cc602b6552671b",
+      "rule": "AG-TS-006",
+      "file": "engine/virtual-texture-store.test.ts",
+      "line": 124,
+      "column": 20,
+      "excerpt": "store.getEntry('a')!"
+    },
+    {
+      "id": "20b0f698cad4f5ff38b4",
+      "rule": "AG-TS-006",
+      "file": "engine/virtual-texture-store.test.ts",
+      "line": 125,
+      "column": 20,
+      "excerpt": "store.getEntry('b')!"
+    },
+    {
+      "id": "c02df1f25592b21d32ff",
+      "rule": "AG-TS-006",
+      "file": "engine/virtual-texture-store.test.ts",
+      "line": 165,
+      "column": 19,
+      "excerpt": "store.getEntry('tail')!"
+    },
+    {
+      "id": "212b124b3d50dab4deb8",
+      "rule": "AG-TS-006",
+      "file": "engine/virtual-texture-store.test.ts",
+      "line": 237,
+      "column": 15,
+      "excerpt": "store.getEntry('color')!"
+    },
+    {
+      "id": "d003f26b3e58900f1255",
+      "rule": "AG-TS-006",
+      "file": "engine/virtual-texture-store.test.ts",
+      "line": 237,
+      "column": 49,
+      "excerpt": "store.getEntry('normal')!"
+    },
+    {
+      "id": "2163957102cbd3eb822f",
+      "rule": "AG-TS-006",
+      "file": "engine/virtual-texture-store.test.ts",
+      "line": 237,
+      "column": 83,
+      "excerpt": "store.getEntry('masks')!"
+    },
+    {
+      "id": "8c28df645c3ee0ec6fcc",
+      "rule": "AG-TS-006",
+      "file": "engine/virtual-texture-store.test.ts",
+      "line": 239,
+      "column": 37,
+      "excerpt": "store.getEntry('color')!"
+    },
+    {
+      "id": "d174186b8b3b544a593a",
+      "rule": "AG-TS-006",
+      "file": "engine/virtual-texture-store.test.ts",
+      "line": 239,
+      "column": 73,
+      "excerpt": "store.getEntry('emissive')!"
+    },
+    {
+      "id": "f5f16977df161acd1aa1",
+      "rule": "AG-TS-006",
+      "file": "engine/virtual-texture-store.test.ts",
+      "line": 275,
+      "column": 40,
+      "excerpt": "material.normal!"
+    },
+    {
+      "id": "e029327ed4594baa0c96",
+      "rule": "AG-TS-006",
+      "file": "engine/virtual-texture-store.test.ts",
+      "line": 275,
+      "column": 58,
+      "excerpt": "material.masks!"
+    },
+    {
+      "id": "126e92ee9d37920569b8",
+      "rule": "AG-TS-006",
+      "file": "engine/virtual-texture.ts",
+      "line": 1108,
+      "column": 14,
+      "excerpt": "this.entries.get(path)!"
+    },
+    {
+      "id": "dce5b74c912c66b5c145",
+      "rule": "AG-TS-006",
+      "file": "engine/virtual-texture.ts",
+      "line": 1141,
+      "column": 50,
+      "excerpt": "this.entriesById[textureId]!"
+    },
+    {
+      "id": "056fa54deb4f3ac55ed0",
+      "rule": "AG-TS-006",
+      "file": "engine/virtual-texture.ts",
+      "line": 1150,
+      "column": 23,
+      "excerpt": "this.pageTables.get(path)!"
+    },
+    {
+      "id": "7aca353e6c45dd192239",
+      "rule": "AG-TS-007",
+      "file": "engine/virtual-texture.ts",
+      "line": 1550,
+      "column": 80,
+      "excerpt": "if (this.queuePageLoad(entry, request, pageTable, false, priority)) { // @alloc-allowed reason=AssetFetch"
+    },
+    {
+      "id": "80bb393699d6ec1a105d",
+      "rule": "AG-TS-001",
+      "file": "rigged-vt-demo.ts",
+      "line": 21,
+      "column": 37,
+      "excerpt": "any"
+    },
+    {
+      "id": "98c33e93cedde1bdf79e",
+      "rule": "AG-TS-001",
+      "file": "rigged-vt-demo.ts",
+      "line": 22,
+      "column": 40,
+      "excerpt": "any"
+    },
+    {
+      "id": "024fa3c386bd8f526ef0",
+      "rule": "AG-TS-001",
+      "file": "rigged-vt-demo.ts",
+      "line": 137,
+      "column": 22,
+      "excerpt": "any"
+    },
+    {
+      "id": "7a08f6da6cc72fe6a9a7",
+      "rule": "AG-TS-001",
+      "file": "rigged-vt-demo.ts",
+      "line": 138,
+      "column": 21,
+      "excerpt": "any"
+    },
+    {
+      "id": "699ab4670648c8622282",
+      "rule": "AG-TS-001",
+      "file": "rigged-vt-demo.ts",
+      "line": 139,
+      "column": 25,
+      "excerpt": "any"
+    },
+    {
+      "id": "cf756e189f14da0e533c",
+      "rule": "AG-TS-001",
+      "file": "rigged-vt-demo.ts",
+      "line": 197,
+      "column": 34,
+      "excerpt": "any"
+    },
+    {
+      "id": "dd321b082b0fa76231b3",
+      "rule": "AG-TS-001",
+      "file": "rigged-vt-demo.ts",
+      "line": 233,
+      "column": 21,
+      "excerpt": "any"
+    },
+    {
+      "id": "961bc9cf10937a9a594a",
+      "rule": "AG-TS-001",
+      "file": "rigged-vt-demo.ts",
+      "line": 234,
+      "column": 31,
+      "excerpt": "any"
+    },
+    {
+      "id": "a6e22c3a704a2c33a126",
+      "rule": "AG-TS-001",
+      "file": "rigged-vt-demo.ts",
+      "line": 254,
+      "column": 22,
+      "excerpt": "any"
+    },
+    {
+      "id": "cd8b97bdece98ffbba8f",
+      "rule": "AG-TS-001",
+      "file": "rigged-vt-demo.ts",
+      "line": 255,
+      "column": 40,
+      "excerpt": "any"
+    },
+    {
+      "id": "d1c70994d3b37ef681f1",
+      "rule": "AG-TS-001",
+      "file": "rigged-vt-demo.ts",
+      "line": 256,
+      "column": 41,
+      "excerpt": "any"
+    },
+    {
+      "id": "21585ea912151c07b98a",
+      "rule": "AG-TS-006",
+      "file": "rigged-vt-demo.ts",
+      "line": 407,
+      "column": 13,
+      "excerpt": "document.getElementById('hud')!"
+    },
+    {
+      "id": "1007101e69607eda40f4",
+      "rule": "AG-TS-006",
+      "file": "rigged-vt-demo.ts",
+      "line": 437,
+      "column": 36,
+      "excerpt": "feedbackResults[index]!"
+    }
+  ]
+}

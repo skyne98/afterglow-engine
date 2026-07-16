@@ -91,12 +91,44 @@ common allocation constructs. `engine-allocation-effects.json` must classify
 every marked region as `none`; it separately names budgeted boundaries and
 bootstrap-only APIs. Calls from a `none` region into a budgeted boundary require
 an inline `@alloc-allowed reason=...` permit, and stale/missing manifest entries
-fail CI. `.github/workflows/engine-contract.yml` runs the
-lint, artifact drift check, fixed-storage browser tests, and Rust tracked-
-allocator regressions on pushes and pull requests. Coverage is intentionally
-incremental: only
-annotated regions are currently enforced. It is a hygiene guard, not proof that
-V8, Three.js, or browser APIs allocate nothing.
+fail CI. Coverage is intentionally incremental: only annotated regions are
+currently enforced. It is a hygiene guard, not proof that V8, Three.js, or
+browser APIs allocate nothing.
+
+Additional repository contracts prevent uninspected demo/runtime code from
+bypassing that partial coverage:
+
+- `web-artifacts.json` is the only browser artifact/page inventory. The build
+  rejects missing/stale entries, unknown JavaScript, inline authored scripts,
+  unsafe paths, duplicate outputs, and false conformance claims.
+- `engine-conformance.json` records every visual entrypoint as `legacy` or
+  `canonical`; a conformant release cannot contain legacy entries or a debt
+  baseline.
+- `lint-demo-architecture.ts` checks direct frame-loop ownership, lifecycle
+  construction, VT feedback/BIG/POM/glTF replacement code, engine globals,
+  private Three access, unbounded control collections, untyped callbacks, raw
+  listeners, direct HUD writes, and implementation-module imports. Its exact
+  legacy findings are frozen; candidate changes may only delete findings.
+- `typecheck-ratchet.ts` runs `tsconfig.harsh.json` with strict indexed access,
+  exact optionals, implicit-return/fallthrough checks, and other strict flags.
+  Existing diagnostics are frozen by semantic fingerprint. CI rejects additions
+  relative to both the checked-in baseline and the protected-branch merge base.
+- `lint-source-hygiene.ts` independently forbids new explicit `any`, TypeScript
+  or linter suppressions, dynamic evaluation, empty catches, non-null/definite
+  assignment assertions, untracked allocation permits, and deferred
+  TODO/FIXME/HACK markers. Existing instances are also a monotonic baseline.
+
+Run the complete local contract:
+
+```sh
+cargo run -p xtask conformance
+```
+
+`.github/workflows/engine-contract.yml` runs these inventory, architecture,
+type, allocation, generated-artifact, browser-storage, and Rust tracked-
+allocator checks on pushes and pull requests. The temporary architecture and
+TypeScript baselines expose existing debt; they are ratchets, not waivers. They
+must only shrink and are deleted when migration reaches zero.
 
 ## Current migration status
 

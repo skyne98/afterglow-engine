@@ -3,16 +3,19 @@
 //! Commands:
 //!   build   — build the native CEF host + examples
 //!   wasm [--release] — build wasm services and copy artifacts into `www/`
-//!   check   — cargo check the whole workspace
-//!   test    — run all tests
-//!   bench   — run the native ring buffer stress test
+//!   conformance — run harsh authored-web architecture/type/allocation gates
+//!   check       — cargo check the workspace + conformance gates
+//!   test        — run all tests + conformance gates
+//!   bench       — run the native ring buffer stress test
 
 use std::path::PathBuf;
 use std::process::Command;
 
 fn main() {
     let cmd = std::env::args().nth(1).unwrap_or_else(|| {
-        eprintln!("usage: cargo run -p xtask <build|wasm [--release]|check|test|bench>");
+        eprintln!(
+            "usage: cargo run -p xtask <build|wasm [--release]|conformance|check|test|bench>"
+        );
         std::process::exit(2);
     });
     let r = match cmd.as_str() {
@@ -21,6 +24,7 @@ fn main() {
             &["build", "--example", "minimal", "-p", "afterglow-cef"],
         ),
         "wasm" => wasm(std::env::args().any(|arg| arg == "--release")),
+        "conformance" => conformance(),
         "check" => check_all(),
         "test" => test_all(),
         "bench" => sh(
@@ -198,17 +202,32 @@ fn wasm(release: bool) -> i32 {
     0
 }
 
-fn check_all() -> i32 {
-    let rust = sh("cargo", &["check", "--workspace"]);
-    if rust != 0 { return rust; }
+fn conformance() -> i32 {
     for args in [
+        &["scripts/check-web-contracts.ts"][..],
+        &["scripts/lint-demo-architecture.ts"][..],
+        &["scripts/typecheck-ratchet.ts"][..],
+        &["scripts/lint-source-hygiene.ts"][..],
         &["scripts/lint-hot-allocations.ts"][..],
         &["scripts/build-web.ts", "--check"][..],
     ] {
-        let status = Command::new("bun").args(args).current_dir(workspace_root()).status();
-        if !matches!(status, Ok(value) if value.success()) { return 1; }
+        let status = Command::new("bun")
+            .args(args)
+            .current_dir(workspace_root())
+            .status();
+        if !matches!(status, Ok(value) if value.success()) {
+            return 1;
+        }
     }
     0
+}
+
+fn check_all() -> i32 {
+    let rust = sh("cargo", &["check", "--workspace"]);
+    if rust != 0 {
+        return rust;
+    }
+    conformance()
 }
 
 fn test_all() -> i32 {
@@ -216,18 +235,36 @@ fn test_all() -> i32 {
     if rust != 0 {
         return rust;
     }
-    let rpc = sh("node", &["--test", "crates/afterglow-web/tests/rpc.test.mjs"]);
-    if rpc != 0 { return rpc; }
-    let lint = Command::new("bun").args(["scripts/lint-hot-allocations.ts"])
-        .current_dir(workspace_root()).status();
-    if !matches!(lint, Ok(value) if value.success()) { return 1; }
-    let web = Command::new("bun").args([
-        "test",
-        "crates/afterglow-web/www/engine",
-        "crates/afterglow-web/www/async-worker.test.ts",
-    ])
-        .current_dir(workspace_root()).status();
-    if matches!(web, Ok(value) if value.success()) { 0 } else { 1 }
+    let rpc = sh(
+        "node",
+        &["--test", "crates/afterglow-web/tests/rpc.test.mjs"],
+    );
+    if rpc != 0 {
+        return rpc;
+    }
+    if conformance() != 0 {
+        return 1;
+    }
+    let contract_tools = Command::new("bun")
+        .args(["test", "scripts/contracts.test.ts"])
+        .current_dir(workspace_root())
+        .status();
+    if !matches!(contract_tools, Ok(value) if value.success()) {
+        return 1;
+    }
+    let web = Command::new("bun")
+        .args([
+            "test",
+            "crates/afterglow-web/www/engine",
+            "crates/afterglow-web/www/async-worker.test.ts",
+        ])
+        .current_dir(workspace_root())
+        .status();
+    if matches!(web, Ok(value) if value.success()) {
+        0
+    } else {
+        1
+    }
 }
 
 fn workspace_root() -> PathBuf {

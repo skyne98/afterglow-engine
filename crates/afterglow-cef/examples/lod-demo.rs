@@ -11,7 +11,7 @@ fn main() {
         .title("afterglow-engine — LOD Demo")
         .size(1440, 900)
         .devtools(9222)
-        .index_html(b"<script>location.href='/lod-demo.html'</script>")
+        .root("/lod-demo.html")
         .fs_root("crates/afterglow-web/www")
         .run();
 }

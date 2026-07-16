@@ -5,5 +5,8 @@
   "dependencies": {
     "bitecs": "0.4.0",
     "three": "0.185.1"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
   }
 }

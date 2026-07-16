@@ -9,16 +9,34 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.13
       - name: Install authored web dependencies
         run: bun install --cwd crates/afterglow-web/www --frozen-lockfile
+      - name: Validate authored web inventory and conformance claims
+        run: bun scripts/check-web-contracts.ts
+      - name: Reject new demo architecture debt
+        env:
+          COMPARE_REF: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.before }}
+        run: bun scripts/lint-demo-architecture.ts --compare-ref "$COMPARE_REF"
+      - name: Reject new strict TypeScript errors
+        env:
+          COMPARE_REF: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.before }}
+        run: bun scripts/typecheck-ratchet.ts --compare-ref "$COMPARE_REF"
+      - name: Reject new TypeScript escape hatches and deferred debt
+        env:
+          COMPARE_REF: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.before }}
+        run: bun scripts/lint-source-hygiene.ts --compare-ref "$COMPARE_REF"
       - name: Enforce hot-path allocation policy
         run: bun scripts/lint-hot-allocations.ts
       - name: Verify generated web artifacts
         run: bun scripts/build-web.ts --check
+      - name: Test contract tooling
+        run: bun test scripts/contracts.test.ts
       - name: Test fixed browser storage and queues
         run: bun test crates/afterglow-web/www/async-worker.test.ts crates/afterglow-web/www/engine
       - name: Test sealed Rust ring paths
