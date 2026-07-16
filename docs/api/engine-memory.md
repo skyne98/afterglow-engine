@@ -113,6 +113,11 @@ bypassing that partial coverage:
   exact optionals, implicit-return/fallthrough checks, and other strict flags.
   Existing diagnostics are frozen by semantic fingerprint. CI rejects additions
   relative to both the checked-in baseline and the protected-branch merge base.
+- `lint-hot-allocations.ts` checks both legacy marked regions and complete
+  JSDoc `@alloc-effect none` functions across engine and demo sources. For the
+  latter it resolves authored callees through the TypeScript checker and rejects
+  calls into diagnostic, budgeted, bootstrap, game-facing, or unknown effects
+  unless the call line has a reason/issue/expiry permit.
 - `lint-source-hygiene.ts` independently forbids new explicit `any`, TypeScript
   or linter suppressions, dynamic evaluation, empty catches, non-null/definite
   assignment assertions, untracked allocation permits, and deferred

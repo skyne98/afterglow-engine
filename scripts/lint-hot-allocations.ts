@@ -101,11 +101,43 @@ for await (const path of glob.scan({ cwd: engine, onlyFiles: true })) {
 // Every authored function declaring @alloc-effect none is scanned as a whole,
 // including demo entrypoints outside engine/.
 let effectFunctions = 0;
+const configPath = join(www, 'tsconfig.harsh.json');
+const loadedConfig = ts.readConfigFile(configPath, ts.sys.readFile);
+if (loadedConfig.error) throw new Error(ts.flattenDiagnosticMessageText(loadedConfig.error.messageText, '\n'));
+const parsedConfig = ts.parseJsonConfigFileContent(loadedConfig.config, ts.sys, www, undefined, configPath);
+const effectProgram = ts.createProgram(parsedConfig.fileNames, parsedConfig.options);
+const effectChecker = effectProgram.getTypeChecker();
+
+function declaredEffect(call: ts.CallExpression): string | null {
+  const target = ts.isPropertyAccessExpression(call.expression) ? call.expression.name : call.expression;
+  let symbol = effectChecker.getSymbolAtLocation(target);
+  if (!symbol) return null;
+  if ((symbol.flags & ts.SymbolFlags.Alias) !== 0) symbol = effectChecker.getAliasedSymbol(symbol);
+  const declaration = symbol.valueDeclaration ?? symbol.declarations?.[0];
+  if (!declaration) return null;
+  const declarationFile = declaration.getSourceFile().fileName;
+  if (!declarationFile.startsWith(www) || declarationFile.includes('/node_modules/')) return null;
+  const file = relative(engine, declarationFile).replaceAll('\\', '/');
+  let qualified = symbol.getName();
+  if ((ts.isMethodDeclaration(declaration) || ts.isMethodSignature(declaration)) &&
+      declaration.parent && ts.isClassDeclaration(declaration.parent) && declaration.parent.name)
+    qualified = `${declaration.parent.name.text}.${symbol.getName()}`;
+  if (effects.none[qualified]) return 'none';
+  if (effects.budgetedBoundaries[qualified]) return 'budgeted';
+  if (effects.bootstrapOnly[qualified]) return 'bootstrap';
+  const leading = declaration.getSourceFile().text.slice(declaration.getFullStart(), declaration.getStart());
+  const explicit = leading.match(/@alloc-effect\s+(none|pooled|budgeted|bootstrap|gameFacing|diagnostic)\b/)?.[1];
+  if (explicit) return explicit;
+  return effects.moduleEffects[file] ?? 'unknown';
+}
+
 const authoredGlob = new Bun.Glob('**/*.ts');
 for await (const path of authoredGlob.scan({ cwd: www, onlyFiles: true })) {
   if (path.startsWith('node_modules/') || path.endsWith('.test.ts') || path.endsWith('.d.ts')) continue;
-  const sourceText = await readFile(join(www, path), 'utf8');
-  const source = ts.createSourceFile(path, sourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const absolutePath = join(www, path);
+  const sourceText = await readFile(absolutePath, 'utf8');
+  const source = effectProgram.getSourceFile(absolutePath) ??
+    ts.createSourceFile(path, sourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   const visit = (node: ts.Node): void => {
     if (ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node) ||
         ts.isFunctionExpression(node) || ts.isArrowFunction(node)) {
@@ -123,6 +155,23 @@ for await (const path of authoredGlob.scan({ cwd: www, onlyFiles: true })) {
             failures++;
           }
         }
+        const inspectCalls = (child: ts.Node): void => {
+          if (ts.isCallExpression(child)) {
+            const effect = declaredEffect(child);
+            if (effect !== null && effect !== 'none' && effect !== 'pooled') {
+              const position = source.getLineAndCharacterOfPosition(child.getStart(source));
+              const line = sourceText.split(/\r?\n/)[position.line] ?? '';
+              const permit = line.match(/@alloc-allowed\s+reason=\S+\s+issue=DME-\d+\s+expires=(\d{4}-\d{2}-\d{2})/);
+              const permitted = permit?.[1] !== undefined && permit[1] >= new Date().toISOString().slice(0, 10);
+              if (!permitted) {
+                console.error(`${relative(root, absolutePath)}:${position.line + 1}: @alloc-effect none calls authored ${effect} function ${child.expression.getText(source)}`);
+                failures++;
+              }
+            }
+          }
+          ts.forEachChild(child, inspectCalls);
+        };
+        if (node.body) inspectCalls(node.body);
       }
     }
     ts.forEachChild(node, visit);
