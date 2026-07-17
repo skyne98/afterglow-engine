@@ -138,6 +138,7 @@ export class AnimationSet {
     return true;
   }
 
+  /** @alloc-effect none */
   setEnabled(enabled: boolean): void {
     this.enabled = enabled;
     if (this.activeIndex >= 0) {
@@ -152,6 +153,7 @@ export class AnimationSet {
       this.mixer.update(deltaSeconds);
   }
 
+  /** @alloc-effect none */
   setTime(seconds: number): void {
     if (!this.disposed && this.activeIndex >= 0) this.mixer.setTime(seconds);
   }
@@ -177,6 +179,7 @@ export class SkeletonDebugAdapter {
     scene.add(this.helper);
   }
 
+  /** @alloc-effect none */
   setVisible(visible: boolean): void {
     if (!this.disposed) this.helper.visible = visible;
   }

@@ -84,14 +84,20 @@ Implemented on 2026-07-17:
 - DME-022: `parseGLTFAsset` retains stable parser material indices;
   `VirtualGltfBinding` owns fixed-capacity replacement, factors/alpha/depth,
   imported-image release, UV channels/KHR texture transforms, sampler address
-  modes, feedback swaps, and rollback. Unrepresentable nearest/asymmetric
-  sampler state fails during bootstrap;
+  modes, linear/all-nearest filtering, feedback swaps, and rollback. Mixed
+  filtering or asymmetric sampler state fails during bootstrap;
 - DME-023: the cook moves material texture metadata into
   `AFTERGLOW_virtual_textures`, strips image buffer views from runtime GLBs,
   remaps remaining references, and compacts BIN bytes before `.big` packing;
 - DME-025: fixed model collection, exact deformed bounds, pivot normalization,
   bounded animation actions, and disposable skeleton diagnostics are implemented;
-  dungeon/rigged demo migrations remain DME-030–032.
+- DME-031: `rigged-vt-demo.ts` is canonical on `EngineRuntime`, `RendererHost`,
+  `BigAssetSession`, stable-index bindings, model utilities, and the atomic
+  feedback coordinator. Its image-free 463,702,085-byte `.big` cook and both
+  animated models pass the real-GPU regression with zero post-seal pipelines;
+- DME-034 foundation: fixed action input, frame-step automation, bounded browser
+  diagnostics, HUD ownership, and page-shutdown listener ownership are reusable
+  public primitives. Dungeon/VT/LOD migrations remain DME-030/032/033.
 
 The machine-readable source of truth remains `engine-conformance.json`; this
 progress note does not override its gates.

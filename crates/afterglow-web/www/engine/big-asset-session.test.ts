@@ -45,6 +45,9 @@ describe('BigAssetSession', () => {
     });
     expect(session.header.version).toBe(5);
     expect(session.stats.workersStarted).toBe(2);
+    const assets = session.createAssetStore(undefined, 3, 2);
+    expect(assets.assetLoader).toBe(session.rawAssets);
+    expect(() => session.createAssetStore()).toThrow('already created');
     const store = session.createVirtualTextureStore();
     expect(store).toBeDefined();
     expect(() => session.createVirtualTextureStore()).toThrow('already created');

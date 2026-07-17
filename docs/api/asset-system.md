@@ -12,9 +12,13 @@ before starting workers, parses the header once, constructs the direct raw-asset
 loader and VT page provider, and rolls workers back in reverse order after any
 startup failure.
 
-A session creates at most one `VirtualTextureStore`; a second request or a
-request after shutdown fails deterministically. `close()` is idempotent, closes
-all workers in reverse order even when one close fails, and reports stable
+The public browser barrel is `engine/asset-api.ts`.
+`createAssetStore(meshopt, capacity, completionsPerPoll)` binds a fixed-capacity
+`AssetStore` to the session's raw loader, so demos do not reconstruct container
+ownership. A session creates at most one `VirtualTextureStore`; a second request or a
+request after shutdown fails deterministically. Only one session-owned
+`AssetStore` is allowed. `close()` first disposes its asset and VT stores, is
+idempotent, closes all workers in reverse order even when one close fails, and reports stable
 started/close-error/closed telemetry. The optional persistent blob cache remains
 a generic caller-supplied byte store. The session applies the configured
 transcode queue capacity instead of an implicit provider default.
@@ -29,6 +33,7 @@ const session = await BigAssetSession.open({
   createWorker,
   cache,
 });
+const assets = session.createAssetStore(meshopt, 64, 8);
 const store = session.createVirtualTextureStore(device, tuning);
 ```
 
@@ -150,8 +155,10 @@ from the runtime GLB. Material texture infos, UV sets, KHR transforms, and
 samplers move into the ignored `AFTERGLOW_virtual_textures` JSON extension;
 material factors remain in the standard material. Image buffer views are removed,
 remaining references are remapped, and the BIN chunk is compacted. Occlusion,
-material extensions, or non-base virtual channels that the current binding
-cannot reproduce fail the cook rather than silently losing shading. The resulting
+unsupported material extensions, textured transmission, or non-base virtual
+channels that the current binding cannot reproduce fail the cook rather than
+silently losing shading. Factor-only `KHR_materials_transmission` is retained.
+The resulting
 image-free GLB is stored as one uncompressed, seekable `Mesh/Raw` chunk—arbitrary
 container bytes are never passed through meshopt's vertex-stream codec. For
 `.gltf` packages, the cook

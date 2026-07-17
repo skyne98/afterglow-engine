@@ -8,8 +8,9 @@ timestamps outside the frame hot path.
 
 `RendererHost` is the canonical renderer owner used as an `EngineRuntime`
 render pass. It creates a fail-closed WebGPU renderer from the typed module
-graph, owns canvas/resize/GPU-error listener lifetime, applies the configured
-pixel-ratio ceiling, compiles during warm-up, seals with the runtime, and rolls
+graph, owns canvas/resize/GPU-error listener lifetime, exposes the validated GPU
+device, and confines VT native-texture attachment behind a host method. It
+applies the configured pixel-ratio ceiling, compiles during warm-up, seals with the runtime, and rolls
 back partial initialization. Disposal is idempotent.
 
 Render descriptors declare fixed capacity:

@@ -43,6 +43,8 @@ fixed per-frame page upload budget.
   `ArrayBuffer`; a `SharedArrayBuffer` view is rejected rather than passed to an
   incompatible WebGPU queue boundary.
 - `unloadTexture(path)` cancels pending generations and releases owned slots.
+- `dispose()` idempotently unloads every texture, disposes page-table/atlas
+  textures, and clears native GPU references; `BigAssetSession.close()` owns it.
 - `poll()` advances asynchronous page work.
 - `getEntry(path)` exposes the read-only per-texture descriptor needed to bind
   its page table in engine materials. `atlasWidth`, `atlasHeight`,
@@ -110,12 +112,14 @@ The tree-shakeable public barrel is `engine/virtual-texturing-api.ts`.
 `materialIndices` map. `VirtualGltfBinding.create(asset, store, options)` uses
 those indices—not material names—to join primitives to cooked texture layouts.
 It has an explicit primitive capacity, creates one pair per source material,
-and preserves standard scalar/color/alpha/depth/side factors. Source texture UV
+and preserves standard scalar/color/alpha/depth/side factors plus factor-only
+KHR material transmission through a physical node material. Source texture UV
 channels, Three's glTF/KHR texture matrix, and repeat/clamp/mirror address modes
-are applied identically in visible sampling and feedback derivatives. Because a
-shared VT atlas cannot preserve nearest filtering or asymmetric S/T wrapping,
-those sampler configurations fail during bootstrap instead of rendering
-approximately. The binding disposes replaced imported textures and materials
+are applied identically in visible sampling and feedback derivatives. Linear
+sampling uses explicit gradients; all-nearest glTF samplers use integer atlas
+loads. Mixed min/mag modes and asymmetric S/T wrapping cannot be represented by
+the shared atlas and fail during bootstrap instead of rendering approximately.
+The binding disposes replaced imported textures and materials
 and atomically restores primitive visibility/materials around every feedback
 pass. Materials without virtual base color remain visible
 normally and are hidden only during feedback. Missing indices, duplicate
@@ -311,18 +315,25 @@ page-table implementation.
 terrain texture (256 GiB logical RGBA). It supports WASD pan, overview and
 one-texel zoom plus deterministic programmatic camera control.
 
-`afterglow-cef --example rigged-vt-demo` loads two unmodified GLBs from the same
-`.big` container as their extracted virtual material channels. **1** selects the
+`afterglow-cef --example rigged-vt-demo` is a canonical `EngineRuntime`
+consumer. `BigAssetSession` loads two image-free GLBs from the same `.big`
+container as their extracted virtual material channels; the cook reduced the
+current container from roughly 633 MiB to 463,702,085 bytes. Stable parser
+indices drive `VirtualGltfBinding`, and one coordinator publishes atomic
+multi-pass feedback. **1** selects the
 first animated rig; **2** selects Spooky Iluha's downloaded “Sci-Fi Character -
 Dragon Warrior (Futuristic)” with 18 skinned meshes, an Idle clip, and 45 virtual
 material images from 512² through 4096². The offline cook embeds its external
-`.gltf`/`.bin`/texture package into a self-contained packed GLB. The normal
+`.gltf`/`.bin`/texture package, moves texture metadata into the Afterglow
+extension, and strips imported image bytes before packing. The session-owned
 `AssetStore` parses both and sends grouped triangle indices through runtime
 meshopt. Visible and feedback materials render the same objects, so requests
 follow current deformation. Both rigs cast animated/self shadows from a bounded
 2048² directional PCF shadow map onto the receiving floor; feedback renders
 explicitly disable redundant shadow passes. **W/S** zoom and **A/D** orbit with
-damped inertia; **B** toggles the active skeleton. Model 1 is KallMor's “Decraniated (Low Poly
+damped inertia; **B** toggles the active skeleton. The GPU regression validates
+both models, grounding, inertia, required page residency, zero errors, and zero
+post-seal pipelines. Model 1 is KallMor's “Decraniated (Low Poly
 Retro Pixel),” CC BY 4.0; model 2 is CC BY-NC 4.0.
 
 `afterglow-cef --example dungeon` is a first-person corridor dungeon using

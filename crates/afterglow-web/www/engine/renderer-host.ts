@@ -2,6 +2,7 @@ import { WebGPURenderer } from 'three/webgpu';
 import { EngineDiagnostics, DiagnosticCode, DiagnosticSource } from './diagnostics.ts';
 import { RendererSeal } from './renderer-seal.ts';
 import type { EngineRenderPass } from './runtime.ts';
+import type { VirtualTextureStore } from './virtual-texture.ts';
 import {
   createWebGPUOnlyRenderer,
   showWebGPUFailure,
@@ -52,6 +53,12 @@ export interface RendererHostOptions {
   showFailure?: boolean;
 }
 
+function requireGpuDevice(renderer: WebGPUOnlyRenderer): GPUDevice {
+  if (typeof renderer.backend.device !== 'object' || renderer.backend.device === null)
+    throw new Error('Three WebGPU renderer has no live GPU device');
+  return renderer.backend.device as GPUDevice;
+}
+
 function requirePipelineBackend(renderer: WebGPUOnlyRenderer): PipelineBackend {
   const backend = renderer.backend;
   return backend as PipelineBackend;
@@ -66,6 +73,7 @@ function gpuErrorTarget(device: unknown): GpuErrorTarget | null {
 /** Owns one WebGPU-only Three renderer, viewport listeners, warmup, and seal. */
 export class RendererHost implements EngineRenderPass {
   readonly renderer: WebGPUOnlyRenderer;
+  readonly device: GPUDevice;
   readonly sealMonitor: RendererSeal;
   renderSubmissions = 0;
 
@@ -87,6 +95,7 @@ export class RendererHost implements EngineRenderPass {
         !renderer.compileAsync || !renderer.render)
       throw new Error('Three WebGPU renderer is missing a required host method');
     this.renderer = renderer;
+    this.device = requireGpuDevice(renderer);
     this.scene = options.scene;
     this.camera = options.camera;
     this.diagnostics = options.diagnostics;
@@ -139,6 +148,18 @@ export class RendererHost implements EngineRenderPass {
     this.renderer.setPixelRatio(ratio);
     this.renderer.setSize(width, height);
     this.resizeClient?.(width, height);
+  }
+
+  attachVirtualTextureStore(store: VirtualTextureStore): void {
+    const backend = this.renderer.backend as unknown as { // @unsafe-cast reason=ThreePrivateTextureLookup issue=DME-040 expires=2026-10-01
+      get(texture: unknown): { texture?: GPUTexture };
+    };
+    store.attachRenderer({
+      backend: {
+        device: this.device,
+        get: (texture) => backend.get(texture),
+      },
+    });
   }
 
   async warm(): Promise<void> {

@@ -40,6 +40,15 @@ const settle = async (store: { poll(): void }) => {
 };
 
 describe('VirtualTextureStore residency identity', () => {
+  test('disposes loaded texture tables and atlas idempotently', () => {
+    const store = new VT.VirtualTextureStore(loader);
+    store.loadTexture('dispose', { width: 128, height: 128 });
+    expect(store.getEntry('dispose')).toBeDefined();
+    store.dispose();
+    store.dispose();
+    expect(store.getEntry('dispose')).toBeUndefined();
+  });
+
   test('displaced samples walk coarser pages with stable base gradients', () => {
     expect(VT.VT_SAMPLE_FROM_LEVEL_WGSL).toContain('mip <= maxLevel');
     expect(VT.VT_SAMPLE_FROM_LEVEL_WGSL).toContain('dpdx(gradientUV) * gradientScale');

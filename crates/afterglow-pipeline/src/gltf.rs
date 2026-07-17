@@ -321,14 +321,19 @@ pub fn strip_glb_images_for_virtual_texturing(bytes: &[u8]) -> Result<Vec<u8>, S
                     "GLB material {index} uses unsupported occlusionTexture"
                 ));
             }
-            if material
-                .get("extensions")
-                .and_then(Value::as_object)
-                .is_some_and(|extensions| !extensions.is_empty())
-            {
-                return Err(format!(
-                    "GLB material {index} uses unsupported material extensions"
-                ));
+            if let Some(extensions) = material.get("extensions").and_then(Value::as_object) {
+                for (name, extension) in extensions {
+                    if name != "KHR_materials_transmission" {
+                        return Err(format!(
+                            "GLB material {index} uses unsupported material extension {name}"
+                        ));
+                    }
+                    if extension.get("transmissionTexture").is_some() {
+                        return Err(format!(
+                            "GLB material {index} uses unsupported transmissionTexture"
+                        ));
+                    }
+                }
             }
             let pbr = material
                 .get("pbrMetallicRoughness")
@@ -562,7 +567,7 @@ mod tests {
     #[test]
     fn strips_runtime_images_and_retains_virtual_texture_metadata() {
         let source = glb(
-            r#"{"buffers":[{"byteLength":8}],"bufferViews":[{"buffer":0,"byteOffset":4,"byteLength":4},{"buffer":0,"byteOffset":0,"byteLength":4}],"accessors":[{"bufferView":1,"componentType":5121,"count":4,"type":"SCALAR"}],"images":[{"bufferView":0,"mimeType":"image/png"}],"textures":[{"source":0,"sampler":0}],"samplers":[{"wrapS":33648,"wrapT":33648}],"materials":[{"pbrMetallicRoughness":{"baseColorTexture":{"index":0,"extensions":{"KHR_texture_transform":{"offset":[0.2,0.3]}}}}}]}"#,
+            r#"{"buffers":[{"byteLength":8}],"bufferViews":[{"buffer":0,"byteOffset":4,"byteLength":4},{"buffer":0,"byteOffset":0,"byteLength":4}],"accessors":[{"bufferView":1,"componentType":5121,"count":4,"type":"SCALAR"}],"images":[{"bufferView":0,"mimeType":"image/png"}],"textures":[{"source":0,"sampler":0}],"samplers":[{"wrapS":33648,"wrapT":33648}],"materials":[{"pbrMetallicRoughness":{"baseColorTexture":{"index":0,"extensions":{"KHR_texture_transform":{"offset":[0.2,0.3]}}}},"extensions":{"KHR_materials_transmission":{"transmissionFactor":0.35}}}]}"#,
             &[1, 2, 3, 4, 90, 91, 92, 93],
         );
         let stripped = strip_glb_images_for_virtual_texturing(&source).unwrap();
@@ -578,6 +583,11 @@ mod tests {
             document["extensions"]["AFTERGLOW_virtual_textures"]["materials"][0]
                 ["pbrMetallicRoughness"]["baseColorTexture"]["index"],
             0,
+        );
+        assert_eq!(
+            document["materials"][0]["extensions"]["KHR_materials_transmission"]
+                ["transmissionFactor"],
+            0.35,
         );
         assert_eq!(document["bufferViews"].as_array().unwrap().len(), 1);
         assert_eq!(document["accessors"][0]["bufferView"], 0);

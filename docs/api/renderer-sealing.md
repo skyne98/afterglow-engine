@@ -15,10 +15,12 @@ steady-state count is six render pipelines with zero post-seal creation.
 
 `renderer-host.ts` is the canonical owner of a WebGPU-only renderer. It creates
 the renderer through `createWebGPUOnlyRenderer`, validates the methods required
-by the host, appends/removes the canvas, applies a bounded pixel ratio, owns the
-resize and uncaptured-GPU-error listeners, compiles its scene/camera during
-runtime warm-up, implements `EngineRenderPass`, and seals its `RendererSeal`
-when `EngineRuntime` seals registered passes. Initialization failure disposes
+by the host, exposes the validated typed GPU device, appends/removes the canvas,
+applies a bounded pixel ratio, owns the resize and uncaptured-GPU-error listeners,
+compiles its scene/camera during runtime warm-up, implements `EngineRenderPass`,
+and seals its `RendererSeal` when `EngineRuntime` seals registered passes.
+`attachVirtualTextureStore()` confines Three's private native-texture lookup to
+the host after one warm-up render. Initialization failure disposes
 the partially created renderer; `dispose()` is idempotent.
 
 `webgpu-only.ts` imports Three's WebGPU renderer from the module graph instead

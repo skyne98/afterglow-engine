@@ -72,11 +72,14 @@ function nodeName(node: ts.Node): string {
 function hasNoneEffect(source: ts.SourceFile, callback: ts.Expression): boolean {
   if (!ts.isIdentifier(callback)) return false;
   let declaration: ts.Node | undefined;
-  for (const statement of source.statements) {
-    if (ts.isFunctionDeclaration(statement) && statement.name?.text === callback.text) declaration = statement;
-    if (ts.isVariableStatement(statement)) for (const item of statement.declarationList.declarations)
-      if (ts.isIdentifier(item.name) && item.name.text === callback.text) declaration = item;
-  }
+  const find = (node: ts.Node): void => {
+    if (declaration) return;
+    if (ts.isFunctionDeclaration(node) && node.name?.text === callback.text) declaration = node;
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === callback.text)
+      declaration = node;
+    ts.forEachChild(node, find);
+  };
+  find(source);
   if (!declaration) return false;
   const full = source.text.slice(declaration.getFullStart(), declaration.getStart(source));
   return /@alloc-effect\s+none\b/.test(full);

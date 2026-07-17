@@ -1,3 +1,5 @@
+import type { RenderTarget } from 'three/webgpu';
+
 /**
  * WebGPU-only renderer bootstrap.
  *
@@ -19,6 +21,12 @@ export type WebGPUOnlyRenderer = {
   init: () => Promise<void>;
   compileAsync: (scene: unknown, camera: unknown) => Promise<unknown>;
   render: (scene: unknown, camera: unknown) => void;
+  shadowMap: { enabled: boolean; type: number };
+  getRenderTarget: () => RenderTarget | null;
+  setRenderTarget: (target: RenderTarget | null) => void;
+  readRenderTargetPixelsAsync: (
+    target: RenderTarget, x: number, y: number, width: number, height: number,
+  ) => Promise<ArrayBufferView>;
   /** Legacy demos only; canonical RendererHost uses render() after init. */
   renderAsync: (scene: unknown, camera: unknown) => Promise<unknown>;
   setPixelRatio: (ratio: number) => void;

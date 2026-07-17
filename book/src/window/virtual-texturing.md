@@ -28,7 +28,8 @@ retained from `GLTFParser`, not names, and owns bounded replacement, exclusive
 imported-texture disposal, shared-texture retention, and feedback
 material/visibility restoration. UV channels, KHR texture transforms, and
 repeat/clamp/mirror sampling are shared by visible and feedback materials;
-unsupported nearest or asymmetric wrapping fails at bootstrap. Differently
+linear and all-nearest samplers are supported, while mixed filtering or
+asymmetric wrapping fails at bootstrap. Differently
 sized channels sample and feed back independently. Shared
 textures currently form a transitive residency-group union, which safely avoids
 missing PBR channels at the cost of bounded overfetch. A recorded future extension
@@ -106,13 +107,17 @@ thread.
 
 ## Demos
 
-The model VT demo cooks two unmodified self-contained GLBs through the normal
-pipeline. Press **1** for the first animated rig or **2** for Spooky Iluha's
+The canonical model VT demo runs on `EngineRuntime`, `RendererHost`,
+`BigAssetSession`, stable-index material bindings, and atomic feedback. Its cook
+extracts image pages, preserves sampling metadata in an ignored extension, and
+removes browser image payloads from the runtime GLBs; the current `.big` shrank
+from roughly 633 MiB to 463,702,085 bytes. Press **1** for the first animated rig
+or **2** for Spooky Iluha's
 Sci-Fi Dragon Warrior: 18 skinned meshes, an Idle clip, and 45 independent
 virtual material images from 512² through 4096². The cook embeds its external
-`.gltf`/`.bin`/texture package into one self-contained GLB. Each model is
+`.gltf`/`.bin`/texture package before stripping image buffer views. Each model is
 range-packed into `.big`; images become `<model>#image-N` paged/UASTC textures.
-Runtime `AssetStore` parses both and sends
+The session-owned `AssetStore` parses both and sends
 each material group's index range through the meshopt cache/overdraw worker. Only triangle order changes: joints, weights,
 normals, tangents, UVs, morph targets, bind matrices, and animation tracks keep
 their original vertex identity. The same animated `SkinnedMesh` is rendered
@@ -121,6 +126,7 @@ current deformation rather than a bind-pose proxy. Animated meshes cast and
 receive a bounded 2048² directional PCF shadow, and the floor receives their
 silhouette; reduced VT-feedback renders skip redundant shadow work. Use **W/S**
 to zoom and **A/D** to orbit with inertia; **B** shows the active skeleton.
+The real-GPU regression covers both rigs and reports zero post-seal pipelines.
 
 All demos use the production `VirtualTextureStore`, shader, scheduler, and
 packed page tables—there is no separate demo cache.

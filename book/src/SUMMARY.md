@@ -45,6 +45,7 @@
 - [Incremental Hierarchy](./reference/hierarchy.md)
 - [Renderer Sealing](./reference/renderer-sealing.md)
 - [Model Presentation](./reference/model-presentation.md)
+- [Demo Input and Automation](./reference/demo-input-harness.md)
 - [Allocation Boundaries](./reference/allocation-boundaries.md)
 - [Runtime Capacities](./reference/runtime-capacities.md)
 - [Crate Map](./reference/crate-map.md)

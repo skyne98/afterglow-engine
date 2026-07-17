@@ -43804,6 +43804,11 @@ class BrowserRendererViewport {
   }
 }
 var moduleRendererFactory = (parameters) => new WebGPURenderer(parameters);
+function requireGpuDevice(renderer) {
+  if (typeof renderer.backend.device !== "object" || renderer.backend.device === null)
+    throw new Error("Three WebGPU renderer has no live GPU device");
+  return renderer.backend.device;
+}
 function requirePipelineBackend(renderer) {
   const backend = renderer.backend;
   return backend;
@@ -43817,6 +43822,7 @@ function gpuErrorTarget(device) {
 
 class RendererHost {
   renderer;
+  device;
   sealMonitor;
   renderSubmissions = 0;
   scene;
@@ -43835,6 +43841,7 @@ class RendererHost {
     if (!renderer.domElement || !renderer.setPixelRatio || !renderer.setSize || !renderer.compileAsync || !renderer.render)
       throw new Error("Three WebGPU renderer is missing a required host method");
     this.renderer = renderer;
+    this.device = requireGpuDevice(renderer);
     this.scene = options.scene;
     this.camera = options.camera;
     this.diagnostics = options.diagnostics;
@@ -43883,6 +43890,15 @@ class RendererHost {
     this.renderer.setPixelRatio(ratio);
     this.renderer.setSize(width, height);
     this.resizeClient?.(width, height);
+  }
+  attachVirtualTextureStore(store) {
+    const backend = this.renderer.backend;
+    store.attachRenderer({
+      backend: {
+        device: this.device,
+        get: (texture2) => backend.get(texture2)
+      }
+    });
   }
   async warm() {
     if (this.disposed)

@@ -816,6 +816,7 @@ export class VirtualTextureStore {
   private readyUploadTail = 0;
   private readyUploadCount = 0;
   private loadGeneration = 0;
+  private disposed = false;
   /** Shared central policy; created during bootstrap and sampled each frame. */
   readonly tuning: VirtualTextureTuning;
   private readonly maxPendingPages = 64;
@@ -1763,6 +1764,19 @@ export class VirtualTextureStore {
     this.gpuPageTables.delete(path);
   }
 
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    for (const path of this.entries.keys()) this.unloadTexture(path);
+    this.atlasTexture.dispose();
+    this.gpuPageTables.clear();
+    this.gpuAtlasTexture = null;
+    this.device = null;
+    this.readyUploadCount = 0;
+    this.readyUploadHead = 0;
+    this.readyUploadTail = 0;
+  }
+
   /** Get a virtual texture entry by path. */
   getEntry(path: string): VirtualTextureEntry | undefined {
     return this.entries.get(path);
@@ -2015,6 +2029,7 @@ fn vtSample(
   atlasSize: vec2f,
   maxMip: f32,
   textureMaxMip: f32,
+  filterMode: u32,
   addressMode: u32
 ) -> vec4f {
   // 0 = clamp, 1 = repeat, 2 = mirrored repeat.
@@ -2058,6 +2073,9 @@ fn vtSample(
       let tail_texel = slot_origin + rect_origin + pageBorder + addressed_uv * tail_size;
       let tail_uv = tail_texel / atlasSize;
       let tail_scale = tail_size / atlasSize;
+      if (filterMode == 1u) {
+        return textureLoad(atlas, vec2i(clamp(floor(tail_texel), vec2f(0.0), atlasSize - 1.0)), 0);
+      }
       return textureSampleGrad(atlas, atlasSampler, tail_uv, dpdx(uv) * tail_scale, dpdy(uv) * tail_scale);
     }
   }
@@ -2106,6 +2124,9 @@ fn vtSample(
   let gradient_scale = curr_mip_size / atlasSize;
   let atlas_dx = dpdx(uv) * gradient_scale;
   let atlas_dy = dpdy(uv) * gradient_scale;
+  if (filterMode == 1u) {
+    return textureLoad(atlas, vec2i(clamp(floor(sample_texel), vec2f(0.0), atlasSize - 1.0)), 0);
+  }
   return textureSampleGrad(atlas, atlasSampler, atlas_uv, atlas_dx, atlas_dy);
 }
 `;
@@ -2193,6 +2214,7 @@ fn vtSampleLevel(
   atlasSize: vec2f,
   maxMip: f32,
   resolvedMip: f32,
+  filterMode: u32,
   addressMode: u32
 ) -> vec4f {
   var addressed_uv = clamp(uv, vec2f(0.0), vec2f(0.99999994));
@@ -2226,6 +2248,9 @@ fn vtSampleLevel(
     let slot = vec2f(f32(px), f32(py)) * (pageSize + pageBorder * 2.0);
     let texel = slot + rect_origin + pageBorder + addressed_uv * tail_size;
     let scale = tail_size / atlasSize;
+    if (filterMode == 1u) {
+      return textureLoad(atlas, vec2i(clamp(floor(texel), vec2f(0.0), atlasSize - 1.0)), 0);
+    }
     return textureSampleGrad(atlas, atlasSampler, texel / atlasSize, dpdx(uv) * scale, dpdy(uv) * scale);
   }
 
@@ -2245,6 +2270,9 @@ fn vtSampleLevel(
   let origin = vec2f(f32(px), f32(py)) * (pageSize + pageBorder * 2.0);
   let atlas_uv = (origin + pageBorder + local) / atlasSize;
   let gradient_scale = mip_size / atlasSize;
+  if (filterMode == 1u) {
+    return textureLoad(atlas, vec2i(clamp(floor(origin + pageBorder + local), vec2f(0.0), atlasSize - 1.0)), 0);
+  }
   return textureSampleGrad(
     atlas, atlasSampler, atlas_uv,
     dpdx(uv) * gradient_scale,

@@ -18,7 +18,10 @@ const layout = (index: number, image: number | null): GltfMaterialTextureLayout 
   metallicRoughnessSampling: null, normalSampling: null, emissiveSampling: null,
 });
 function asset(scene: THREE.Group, layouts: GltfMaterialTextureLayout[], indices: ReadonlyMap<THREE.Material, number>): OptimizedGltfAsset {
-  return { scene, animations: [], materialIndices: indices, materialTextures: layouts, meshOptimization: [] };
+  return {
+    scene, animations: [], materialIndices: indices, materialTextures: layouts,
+    meshOptimization: [], dispose() {},
+  };
 }
 function pair(passCount = 1): VirtualGltfMaterialPair {
   const feedbackMaterials = Array.from({ length: passCount }, () => new THREE.MeshBasicNodeMaterial());
@@ -48,12 +51,12 @@ describe('VirtualGltfBinding', () => {
     const redLayout = layout(0, 0);
     redLayout.baseColorSampling = {
       image: 0, texCoord: 1, offset: [0.25, 0.5], rotation: 0.2, scale: [2, 3],
-      wrapS: 33648, wrapT: 33648, minFilter: 9987, magFilter: 9729,
+      wrapS: 33648, wrapT: 33648, minFilter: 9728, magFilter: 9728,
     };
     const binding = VirtualGltfBinding.create(
       asset(scene, [redLayout, layout(1, 1)], new Map([[red, 0], [green, 1]])), vt,
       {
-        primitiveCapacity: 2, feedbackScene: new THREE.Scene(), feedbackCamera: new THREE.PerspectiveCamera(),
+        primitiveCapacity: 2, feedbackScene: new THREE.Scene(), feedbackRoot: scene, feedbackCamera: new THREE.PerspectiveCamera(),
         feedbackPixelScale: new THREE.Vector2(1, 1),
         resolveImage(index) { images.push(index); return vt.getEntry(String(index)); },
         pairFactory(_store, _set, _pixel, options) {
@@ -65,12 +68,34 @@ describe('VirtualGltfBinding', () => {
     expect(colors).toEqual([1, 0]);
     expect(captured[0]?.sampling?.albedo?.channel).toBe(1);
     expect(captured[0]?.sampling?.albedo?.addressMode).toBe(2);
+    expect(captured[0]?.sampling?.albedo?.filterMode).toBe(1);
     const cosine = Math.cos(0.2), sine = Math.sin(0.2);
     expect(captured[0]?.sampling?.albedo?.matrix).toEqual([
       2 * cosine, 2 * sine, 0, -3 * sine, 3 * cosine, 0, 0.25, 0.5, 1,
     ]);
     expect(captured[0]?.alphaTest).toBe(0.4);
     expect(first.material).not.toBe(second.material);
+    binding.dispose();
+  });
+
+  test('preserves factor-only physical transmission', () => {
+    const scene = new THREE.Group();
+    const source = new THREE.MeshPhysicalMaterial({ transmission: 0.35, thickness: 0.2, ior: 1.4 });
+    scene.add(new THREE.Mesh(new THREE.BoxGeometry(), source));
+    const vt = makeStore();
+    vt.loadTexture('0', { width: 128, height: 128 });
+    const captured: VirtualGltfMaterialOptions[] = [];
+    const binding = VirtualGltfBinding.create(
+      asset(scene, [layout(0, 0)], new Map([[source, 0]])), vt,
+      {
+        primitiveCapacity: 1, feedbackScene: new THREE.Scene(), feedbackRoot: scene, feedbackCamera: new THREE.Camera(),
+        feedbackPixelScale: new THREE.Vector2(1, 1), resolveImage() { return vt.getEntry('0'); },
+        pairFactory(_store, _set, _pixel, options) { captured.push(options); return pair(); },
+      },
+    );
+    expect(captured[0]?.transmissionFactor).toBe(0.35);
+    expect(captured[0]?.thicknessFactor).toBe(0.2);
+    expect(captured[0]?.ior).toBe(1.4);
     binding.dispose();
   });
 
@@ -88,7 +113,7 @@ describe('VirtualGltfBinding', () => {
     const binding = VirtualGltfBinding.create(
       asset(scene, [layout(0, 0), layout(1, null)], new Map([[source, 0], [unbound.material, 1]])), vt,
       {
-        primitiveCapacity: 3, feedbackScene: new THREE.Scene(), feedbackCamera: new THREE.Camera(), feedbackPixelScale: new THREE.Vector2(1, 1),
+        primitiveCapacity: 3, feedbackScene: new THREE.Scene(), feedbackRoot: scene, feedbackCamera: new THREE.Camera(), feedbackPixelScale: new THREE.Vector2(1, 1),
         resolveImage() { return vt.getEntry('0'); }, pairFactory() { factories++; return pair(2); },
       },
     );
@@ -122,7 +147,7 @@ describe('VirtualGltfBinding', () => {
     const binding = VirtualGltfBinding.create(
       asset(scene, [layout(0, 0), layout(1, null)], new Map([[bound, 0], [retained, 1]])), vt,
       {
-        primitiveCapacity: 2, feedbackScene: new THREE.Scene(), feedbackCamera: new THREE.Camera(),
+        primitiveCapacity: 2, feedbackScene: new THREE.Scene(), feedbackRoot: scene, feedbackCamera: new THREE.Camera(),
         feedbackPixelScale: new THREE.Vector2(1, 1), resolveImage() { return vt.getEntry('0'); },
         pairFactory() { return pair(); },
       },
@@ -135,7 +160,7 @@ describe('VirtualGltfBinding', () => {
     const scene = new THREE.Group();
     scene.add(new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshBasicMaterial()));
     const binding = VirtualGltfBinding.create(asset(scene, [], new Map()), makeStore(), {
-      primitiveCapacity: 1, feedbackScene: new THREE.Scene(), feedbackCamera: new THREE.Camera(),
+      primitiveCapacity: 1, feedbackScene: new THREE.Scene(), feedbackRoot: scene, feedbackCamera: new THREE.Camera(),
       feedbackPixelScale: new THREE.Vector2(1, 1), resolveImage() { return undefined; },
     });
     binding.beginFeedbackPass(0);
@@ -156,7 +181,7 @@ describe('VirtualGltfBinding', () => {
     expect(() => VirtualGltfBinding.create(
       asset(scene, [layout(0, 0)], new Map([[indexed, 0]])), vt,
       {
-        primitiveCapacity: 2, feedbackScene: new THREE.Scene(), feedbackCamera: new THREE.Camera(), feedbackPixelScale: new THREE.Vector2(1, 1),
+        primitiveCapacity: 2, feedbackScene: new THREE.Scene(), feedbackRoot: scene, feedbackCamera: new THREE.Camera(), feedbackPixelScale: new THREE.Vector2(1, 1),
         resolveImage() { return vt.getEntry('0'); }, pairFactory() { return pair(); },
       },
     )).toThrow('no stable parser index');
@@ -176,7 +201,7 @@ describe('VirtualGltfBinding', () => {
     expect(() => VirtualGltfBinding.create(
       asset(scene, [invalidLayout], new Map([[material, 0]])), vt,
       {
-        primitiveCapacity: 1, feedbackScene: new THREE.Scene(), feedbackCamera: new THREE.Camera(),
+        primitiveCapacity: 1, feedbackScene: new THREE.Scene(), feedbackRoot: scene, feedbackCamera: new THREE.Camera(),
         feedbackPixelScale: new THREE.Vector2(1, 1), resolveImage() { return vt.getEntry('0'); },
         pairFactory() { return pair(); },
       },
@@ -190,7 +215,7 @@ describe('VirtualGltfBinding', () => {
     expect(() => VirtualGltfBinding.create(
       asset(scene, [layout(0, null)], new Map([[material, 0]])), makeStore(),
       {
-        primitiveCapacity: 1, feedbackScene: new THREE.Scene(), feedbackCamera: new THREE.Camera(), feedbackPixelScale: new THREE.Vector2(1, 1),
+        primitiveCapacity: 1, feedbackScene: new THREE.Scene(), feedbackRoot: scene, feedbackCamera: new THREE.Camera(), feedbackPixelScale: new THREE.Vector2(1, 1),
         resolveImage() { return undefined; }, pairFactory() { return pair(); },
       },
     )).toThrow('capacity exceeded');

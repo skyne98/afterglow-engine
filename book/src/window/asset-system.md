@@ -49,7 +49,8 @@ registers the path and throws if the configured asset capacity is exhausted.
 container. It requires explicit worker count, transcode-queue capacity, and
 maximum header bytes; validates the header bound before spawning workers; owns
 the raw loader and VT page provider; and rolls partial startup back in reverse
-order. It creates at most one `VirtualTextureStore`. Idempotent shutdown closes
+order. `createAssetStore()` binds fixed asset/completion capacities to that raw
+loader. It creates at most one `VirtualTextureStore`. Idempotent shutdown closes
 all workers even if one close fails, with stable error telemetry.
 
 Self-contained GLBs follow this same path. The offline pipeline extracts

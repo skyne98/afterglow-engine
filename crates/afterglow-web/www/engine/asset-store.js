@@ -13245,7 +13245,21 @@ async function parseGLTFAsset(bytes, loader) {
       });
       if (materialCount > 0 && materialIndices.size === 0)
         throw new Error("GLTFLoader parser associations did not expose stable material indices");
-      resolve({ scene: result.scene, animations: result.animations, materialIndices });
+      resolve({
+        scene: result.scene,
+        animations: result.animations,
+        materialIndices,
+        dispose() {
+          result.scene.traverse((object) => {
+            if (!(object instanceof Mesh))
+              return;
+            object.geometry.dispose();
+            const materials = Array.isArray(object.material) ? object.material : [object.material];
+            for (const material of materials)
+              material.dispose();
+          });
+        }
+      });
     } catch (error2) {
       reject(error2);
     }
@@ -13588,7 +13602,8 @@ class AssetStore {
       animations: [],
       materialIndices: new Map,
       meshOptimization: [],
-      materialTextures: []
+      materialTextures: [],
+      dispose() {}
     };
     return this.load(path, async (bytes) => {
       const materialTextures = parseGlbMaterialTextures(bytes);

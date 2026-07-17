@@ -36,6 +36,7 @@ interface FeedbackRenderer {
 }
 
 interface CoordinatedFeedbackStore extends FeedbackTextureStore {
+  /** @alloc-effect none */
   recordFrameTime(frameTimeMs: number): void;
   processFeedbackBatch(
     feedbackMaps: ReadonlyArray<ReadonlyMap<unknown, VirtualPageRequest> | null>,
@@ -154,6 +155,7 @@ export class VirtualTextureFeedbackCoordinator implements EngineRenderPass, Rend
 
   seal(): void { this.sealed = true; }
 
+  /** @alloc-effect none */
   recordFrameTime(frameTimeMs: number): void { this.store.recordFrameTime(frameTimeMs); }
 
   /** Worker-stage hook: publish only complete logical snapshots, then advance VT. */

@@ -5,7 +5,7 @@
       "id": "0545923f17ae49e57907",
       "rule": "AG-TS-006",
       "file": "engine/asset-store.test.ts",
-      "line": 51,
+      "line": 114,
       "column": 23,
       "excerpt": "geometry.index!"
     },
@@ -13,15 +13,15 @@
       "id": "295d34d2df712dd3284b",
       "rule": "AG-TS-001",
       "file": "engine/asset-store.ts",
-      "line": 129,
-      "column": 52,
+      "line": 198,
+      "column": 35,
       "excerpt": "any"
     },
     {
       "id": "e3b162e2e32a83d1cb87",
       "rule": "AG-TS-006",
       "file": "engine/asset-store.ts",
-      "line": 270,
+      "line": 349,
       "column": 7,
       "excerpt": "this.handles[id]!"
     },
@@ -29,7 +29,7 @@
       "id": "00922619fbff3a7ce800",
       "rule": "AG-TS-007",
       "file": "engine/asset-store.ts",
-      "line": 313,
+      "line": 392,
       "column": 57,
       "excerpt": "this.reportCompletionError(kind, id, value); // @alloc-allowed reason=DiagnosticFailure"
     },
@@ -37,7 +37,7 @@
       "id": "319e37f5da2ab74c49d4",
       "rule": "AG-TS-006",
       "file": "engine/asset-store.ts",
-      "line": 322,
+      "line": 401,
       "column": 18,
       "excerpt": "this.paths[id]!"
     },
@@ -45,7 +45,7 @@
       "id": "42a9c967e963761a878f",
       "rule": "AG-TS-006",
       "file": "engine/asset-store.ts",
-      "line": 339,
+      "line": 418,
       "column": 18,
       "excerpt": "this.paths[id]!"
     },
@@ -53,7 +53,7 @@
       "id": "c7498d15749759960d74",
       "rule": "AG-TS-006",
       "file": "engine/asset-store.ts",
-      "line": 380,
+      "line": 459,
       "column": 18,
       "excerpt": "this.paths[id]!"
     },
@@ -61,7 +61,7 @@
       "id": "688a3fd327247b49a9e2",
       "rule": "AG-TS-001",
       "file": "engine/asset-store.ts",
-      "line": 505,
+      "line": 587,
       "column": 28,
       "excerpt": "any"
     },
@@ -69,7 +69,7 @@
       "id": "a8055fd882baf3b3eae2",
       "rule": "AG-TS-001",
       "file": "engine/asset-store.ts",
-      "line": 536,
+      "line": 618,
       "column": 15,
       "excerpt": "any"
     },
@@ -77,7 +77,7 @@
       "id": "07557860b649a4ec8595",
       "rule": "AG-TS-001",
       "file": "engine/asset-store.ts",
-      "line": 552,
+      "line": 634,
       "column": 38,
       "excerpt": "any"
     },
@@ -85,7 +85,7 @@
       "id": "bd91ed0158fed911303c",
       "rule": "AG-TS-006",
       "file": "engine/asset-store.ts",
-      "line": 677,
+      "line": 759,
       "column": 68,
       "excerpt": "this.paths[id]!"
     },
@@ -341,7 +341,7 @@
       "id": "70dcfd247be2c65238ae",
       "rule": "AG-TS-009",
       "file": "engine/renderer-host.test.ts",
-      "line": 78,
+      "line": 83,
       "column": 25,
       "excerpt": "{ appendChild(child: unknown) { children.push(child); (child as { parentNode: unknown }).parentNode = container; }, removeChild(child: unknown) { const index = children.indexOf(chi"
     },
@@ -349,7 +349,7 @@
       "id": "311ea2c27802073c058d",
       "rule": "AG-TS-009",
       "file": "engine/renderer-host.test.ts",
-      "line": 119,
+      "line": 124,
       "column": 20,
       "excerpt": "{ appendChild() {} } as unknown as HTMLElement"
     },
@@ -461,7 +461,7 @@
       "id": "aae587db8acb4a19366e",
       "rule": "AG-TS-006",
       "file": "engine/virtual-texture-feedback-pass.ts",
-      "line": 102,
+      "line": 111,
       "column": 37,
       "excerpt": "entry.tailFirstMip!"
     },
@@ -469,7 +469,7 @@
       "id": "40b1e9cc602b6552671b",
       "rule": "AG-TS-006",
       "file": "engine/virtual-texture-store.test.ts",
-      "line": 124,
+      "line": 129,
       "column": 20,
       "excerpt": "store.getEntry('a')!"
     },
@@ -477,7 +477,7 @@
       "id": "20b0f698cad4f5ff38b4",
       "rule": "AG-TS-006",
       "file": "engine/virtual-texture-store.test.ts",
-      "line": 125,
+      "line": 130,
       "column": 20,
       "excerpt": "store.getEntry('b')!"
     },
@@ -485,7 +485,7 @@
       "id": "c02df1f25592b21d32ff",
       "rule": "AG-TS-006",
       "file": "engine/virtual-texture-store.test.ts",
-      "line": 165,
+      "line": 170,
       "column": 19,
       "excerpt": "store.getEntry('tail')!"
     },
@@ -493,7 +493,7 @@
       "id": "c471ef5ab525df51b8be",
       "rule": "AG-TS-009",
       "file": "engine/virtual-texture-store.test.ts",
-      "line": 177,
+      "line": 182,
       "column": 20,
       "excerpt": "store.atlasTexture as unknown as DataTexture"
     },
@@ -501,7 +501,7 @@
       "id": "a4d1e6c82269c39c9afc",
       "rule": "AG-TS-009",
       "file": "engine/virtual-texture-store.test.ts",
-      "line": 186,
+      "line": 191,
       "column": 20,
       "excerpt": "{ limits: { maxTextureDimension2D: 8192 }, queue: { writeTexture(_dst: unknown, _data: unknown, layout: { bytesPerRow?: number; rowsPerImage?: number }) { layouts.push(layout); } }"
     },
@@ -509,7 +509,7 @@
       "id": "212b124b3d50dab4deb8",
       "rule": "AG-TS-006",
       "file": "engine/virtual-texture-store.test.ts",
-      "line": 237,
+      "line": 242,
       "column": 15,
       "excerpt": "store.getEntry('color')!"
     },
@@ -517,7 +517,7 @@
       "id": "d003f26b3e58900f1255",
       "rule": "AG-TS-006",
       "file": "engine/virtual-texture-store.test.ts",
-      "line": 237,
+      "line": 242,
       "column": 49,
       "excerpt": "store.getEntry('normal')!"
     },
@@ -525,7 +525,7 @@
       "id": "2163957102cbd3eb822f",
       "rule": "AG-TS-006",
       "file": "engine/virtual-texture-store.test.ts",
-      "line": 237,
+      "line": 242,
       "column": 83,
       "excerpt": "store.getEntry('masks')!"
     },
@@ -533,7 +533,7 @@
       "id": "8c28df645c3ee0ec6fcc",
       "rule": "AG-TS-006",
       "file": "engine/virtual-texture-store.test.ts",
-      "line": 239,
+      "line": 244,
       "column": 37,
       "excerpt": "store.getEntry('color')!"
     },
@@ -541,7 +541,7 @@
       "id": "d174186b8b3b544a593a",
       "rule": "AG-TS-006",
       "file": "engine/virtual-texture-store.test.ts",
-      "line": 239,
+      "line": 244,
       "column": 73,
       "excerpt": "store.getEntry('emissive')!"
     },
@@ -549,7 +549,7 @@
       "id": "f5f16977df161acd1aa1",
       "rule": "AG-TS-006",
       "file": "engine/virtual-texture-store.test.ts",
-      "line": 275,
+      "line": 280,
       "column": 40,
       "excerpt": "material.normal!"
     },
@@ -557,7 +557,7 @@
       "id": "e029327ed4594baa0c96",
       "rule": "AG-TS-006",
       "file": "engine/virtual-texture-store.test.ts",
-      "line": 275,
+      "line": 280,
       "column": 58,
       "excerpt": "material.masks!"
     },
@@ -589,7 +589,7 @@
       "id": "7aca353e6c45dd192239",
       "rule": "AG-TS-007",
       "file": "engine/virtual-texture.ts",
-      "line": 1551,
+      "line": 1592,
       "column": 80,
       "excerpt": "if (this.queuePageLoad(entry, request, pageTable, false, priority)) { // @alloc-allowed reason=AssetFetch"
     },
@@ -597,113 +597,9 @@
       "id": "32c0bcb3de7521eda2c9",
       "rule": "AG-TS-009",
       "file": "engine/webgpu-only.ts",
-      "line": 55,
+      "line": 65,
       "column": 24,
       "excerpt": "window as unknown as { THREE: { WebGPURenderer: new (options: Record<string, unknown>) => WebGPUOnlyRenderer }; }"
-    },
-    {
-      "id": "38a79a8ab6caee63e912",
-      "rule": "AG-TS-001",
-      "file": "rigged-vt-demo.ts",
-      "line": 21,
-      "column": 37,
-      "excerpt": "any"
-    },
-    {
-      "id": "d91baf58bf2cbd4325ba",
-      "rule": "AG-TS-001",
-      "file": "rigged-vt-demo.ts",
-      "line": 22,
-      "column": 40,
-      "excerpt": "any"
-    },
-    {
-      "id": "f8d8f04097247f63cd9d",
-      "rule": "AG-TS-001",
-      "file": "rigged-vt-demo.ts",
-      "line": 137,
-      "column": 22,
-      "excerpt": "any"
-    },
-    {
-      "id": "a5215d7d73e6917dc810",
-      "rule": "AG-TS-001",
-      "file": "rigged-vt-demo.ts",
-      "line": 138,
-      "column": 21,
-      "excerpt": "any"
-    },
-    {
-      "id": "342af9b579a6a96042d2",
-      "rule": "AG-TS-001",
-      "file": "rigged-vt-demo.ts",
-      "line": 139,
-      "column": 25,
-      "excerpt": "any"
-    },
-    {
-      "id": "f97f5e6b24eea5921710",
-      "rule": "AG-TS-001",
-      "file": "rigged-vt-demo.ts",
-      "line": 197,
-      "column": 34,
-      "excerpt": "any"
-    },
-    {
-      "id": "60176e809e319e8e97ef",
-      "rule": "AG-TS-001",
-      "file": "rigged-vt-demo.ts",
-      "line": 233,
-      "column": 21,
-      "excerpt": "any"
-    },
-    {
-      "id": "29f282b2ae94908e9524",
-      "rule": "AG-TS-001",
-      "file": "rigged-vt-demo.ts",
-      "line": 234,
-      "column": 31,
-      "excerpt": "any"
-    },
-    {
-      "id": "289acc03b02b08740f2b",
-      "rule": "AG-TS-001",
-      "file": "rigged-vt-demo.ts",
-      "line": 254,
-      "column": 22,
-      "excerpt": "any"
-    },
-    {
-      "id": "d091338a5679bb9898ca",
-      "rule": "AG-TS-001",
-      "file": "rigged-vt-demo.ts",
-      "line": 255,
-      "column": 40,
-      "excerpt": "any"
-    },
-    {
-      "id": "1446aa9560b6ae25bea8",
-      "rule": "AG-TS-001",
-      "file": "rigged-vt-demo.ts",
-      "line": 256,
-      "column": 41,
-      "excerpt": "any"
-    },
-    {
-      "id": "21585ea912151c07b98a",
-      "rule": "AG-TS-006",
-      "file": "rigged-vt-demo.ts",
-      "line": 407,
-      "column": 13,
-      "excerpt": "document.getElementById('hud')!"
-    },
-    {
-      "id": "1007101e69607eda40f4",
-      "rule": "AG-TS-006",
-      "file": "rigged-vt-demo.ts",
-      "line": 437,
-      "column": 36,
-      "excerpt": "feedbackResults[index]!"
     }
   ]
 }

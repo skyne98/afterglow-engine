@@ -229,7 +229,7 @@ var atlas = texture(store.atlasTexture);
 var pageTable = texture(entry.pageTableTexture);
 var sample = wgslFn(VT.VT_SAMPLE_WGSL);
 var material = new THREE.MeshStandardNodeMaterial({ roughness: 0.9, metalness: 0 });
-material.colorNode = Fn(() => sample({ pageTable, atlas, atlasSampler: sampler(atlas), uv: uv(), virtualSize: uniform(new THREE.Vector2(VIRTUAL_SIZE, VIRTUAL_SIZE)), pageGrid: uniform(new THREE.Vector2(PAGE_GRID, PAGE_GRID)), pageSize: float(VT.PAGE_SIZE), pageBorder: float(VT.PAGE_BORDER), atlasSize: uniform(new THREE.Vector2(store.atlasWidth, store.atlasHeight)), maxMip: float(entry.maxMip), textureMaxMip: float(entry.textureMaxMip), addressMode: uint(0) }))();
+material.colorNode = Fn(() => sample({ pageTable, atlas, atlasSampler: sampler(atlas), uv: uv(), virtualSize: uniform(new THREE.Vector2(VIRTUAL_SIZE, VIRTUAL_SIZE)), pageGrid: uniform(new THREE.Vector2(PAGE_GRID, PAGE_GRID)), pageSize: float(VT.PAGE_SIZE), pageBorder: float(VT.PAGE_BORDER), atlasSize: uniform(new THREE.Vector2(store.atlasWidth, store.atlasHeight)), maxMip: float(entry.maxMip), textureMaxMip: float(entry.textureMaxMip), filterMode: uint(0), addressMode: uint(0) }))();
 var scene = new THREE.Scene;
 scene.background = new THREE.Color(658448);
 scene.add(new THREE.AmbientLight(8425632, 1.5));

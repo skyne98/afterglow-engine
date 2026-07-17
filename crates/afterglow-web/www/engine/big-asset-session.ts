@@ -9,6 +9,7 @@ import {
   type FetchRangeLoader,
   type VirtualTexturePageProvider,
 } from './big-parser.ts';
+import { AssetStore } from './asset-store.ts';
 import type { PersistentBlobCache } from './persistent-blob-cache.ts';
 import { VirtualTextureStore, VirtualTextureTuning } from './virtual-texture.ts';
 
@@ -39,7 +40,8 @@ export class BigAssetSession {
   readonly stats = { workersStarted: 0, closeErrors: 0, closed: false };
 
   private closed = false;
-  private storeCreated = false;
+  private assetStore: AssetStore | null = null;
+  private store: VirtualTextureStore | null = null;
 
   private constructor(
     readonly source: FetchRangeLoader,
@@ -109,27 +111,42 @@ export class BigAssetSession {
     }
   }
 
+  createAssetStore(
+    meshopt?: ConstructorParameters<typeof AssetStore>[1],
+    capacity = 64,
+    maxCompletionsPerPoll = 32,
+  ): AssetStore {
+    if (this.closed) throw new Error('cannot create an asset store from a closed BIG session');
+    if (this.assetStore) throw new Error('BIG session already created its asset store');
+    this.assetStore = new AssetStore(this.rawAssets, meshopt, capacity, maxCompletionsPerPoll);
+    return this.assetStore;
+  }
+
   createVirtualTextureStore(device?: GPUDevice, tuning?: VirtualTextureTuning): VirtualTextureStore {
     if (this.closed) throw new Error('cannot create a VT store from a closed BIG session');
-    if (this.storeCreated) throw new Error('BIG session already created its VT store');
-    this.storeCreated = true;
+    if (this.store) throw new Error('BIG session already created its VT store');
     const loader = {
       read: (_path: string, offset: number, length: number): Promise<Uint8Array> =>
         this.source.read(this.containerPath, offset, length),
       poll(): void {},
     };
-    return new VirtualTextureStore(
+    this.store = new VirtualTextureStore(
       loader,
       this.pageProvider,
       this.format,
       device,
       tuning ?? new VirtualTextureTuning(),
     );
+    return this.store;
   }
 
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    this.assetStore?.dispose();
+    this.assetStore = null;
+    this.store?.dispose();
+    this.store = null;
     let firstError: unknown = null;
     for (let index = this.workers.length - 1; index >= 0; index--) {
       try { await this.workers[index]?.close(); }

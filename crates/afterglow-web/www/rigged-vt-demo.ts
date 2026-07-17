@@ -1,34 +1,30 @@
+import * as THREE from 'three/webgpu';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MeshoptClient } from './meshopt.client.ts';
 import { TextureClient } from './texture.client.ts';
 import { Rpc } from './rpc.ts';
-import { BigContainerAssetLoader, createFetchRangeLoader, createPageDataProvider, getVirtualTextureDimensions, parseBigHeader } from './engine/big-parser.ts';
-import { createWebGPUOnlyRenderer, legacyWindowRendererFactory, showWebGPUFailure } from './engine/webgpu-only.ts';
-import { RendererSeal, warmRendererVariants } from './engine/renderer-seal.ts';
-
-const THREE = window.THREE;
-const VT = window.AfterglowVT;
-const GLTFLoader = window.AfterglowLoaders?.GLTFLoader;
-const AssetStore = window.AfterglowAssets?.AssetStore;
-if (!VT || !GLTFLoader || !AssetStore) throw new Error('Afterglow VT/asset/loader bundle is unavailable');
+import {
+  EngineRuntime, RegistrationStatus, RendererHost, type RenderFrame,
+} from './engine/index.ts';
+import { BigAssetSession, getVirtualTextureDimensions } from './engine/asset-api.ts';
+import {
+  AnimationSet, ModelCollectionStatus, ModelPrimitives, SkeletonDebugAdapter,
+  computeDeformedBoundsInto, groundDeformedModel, normalizeModelPivot,
+} from './engine/model-api.ts';
+import {
+  FeedbackRegistrationStatus, FORMAT_RGBA, VirtualGltfBinding,
+  VirtualTextureFeedbackCoordinator,
+} from './engine/virtual-texturing-api.ts';
+import { BoundedKeyboardInput, DemoInputAction } from './engine/input-api.ts';
+import {
+  BootstrapGuard, BrowserErrorCapture, FrameStepHarness, PageShutdown, TextHud,
+  publishDevHarness,
+} from './engine/dev-harness-api.ts';
 
 const FEEDBACK_INTERVAL = 8;
 const MODEL_LAYER = 1;
-const errors: string[] = [];
-let frame = 0;
-let last = performance.now();
-let smoothedDt = 1 / 60;
-let lastResult = { totalRequests: 0 };
-const feedbackResults: (Map<number, any> | null)[] = [null, null, null, null];
-const mergedFeedback = new Map<number, any>();
-let animationEnabled = true;
-let feedbackEnabled = true;
-let programmatic = false;
-let orbitAngle = 0;
-let orbitVelocity = 0;
-let cameraDistance = 4.1;
-let zoomVelocity = 0;
-const keys = new Set<string>();
-const waiters: { target: number; resolve: () => void }[] = [];
+const MODEL_HEIGHT = 2.55;
+const MODEL_CAPACITY = 32;
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x11141a);
@@ -36,37 +32,26 @@ const camera = new THREE.PerspectiveCamera(48, innerWidth / innerHeight, 0.05, 1
 camera.position.set(0, 1.45, 4.1);
 camera.lookAt(0, 1.25, 0);
 camera.layers.enable(MODEL_LAYER);
-const renderer = await createWebGPUOnlyRenderer({ antialias: false, trackTimestamp: false }, legacyWindowRendererFactory)
-  .catch(error => { showWebGPUFailure(error); throw error; });
-renderer.setPixelRatio(devicePixelRatio);
-renderer.setSize(innerWidth, innerHeight);
-renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFShadowMap;
-document.body.append(renderer.domElement);
-const rendererSeal = new RendererSeal(renderer.backend);
-renderer.backend.device.addEventListener('uncapturederror', event => errors.push(String(event.error?.message ?? event.error)));
-addEventListener('error', event => errors.push(String(event.error?.stack ?? event.message)));
-addEventListener('unhandledrejection', event => errors.push(String(event.reason?.stack ?? event.reason)));
 
 scene.add(new THREE.HemisphereLight(0xc8d8ff, 0x231d1a, 2.1));
-const key = new THREE.DirectionalLight(0xffead0, 3.5);
-key.position.set(3, 5, 4);
-key.layers.enable(MODEL_LAYER);
-key.castShadow = true;
-key.shadow.mapSize.set(2048, 2048);
-key.shadow.camera.left = -3.5;
-key.shadow.camera.right = 3.5;
-key.shadow.camera.top = 3.5;
-key.shadow.camera.bottom = -3.5;
-key.shadow.camera.near = 0.1;
-key.shadow.camera.far = 12;
-key.shadow.bias = -0.0004;
-key.shadow.normalBias = 0.025;
-scene.add(key);
-const rim = new THREE.DirectionalLight(0x7799ff, 2.2);
-rim.position.set(-4, 3, -3);
-rim.layers.enable(MODEL_LAYER);
-scene.add(rim);
+const keyLight = new THREE.DirectionalLight(0xffead0, 3.5);
+keyLight.position.set(3, 5, 4);
+keyLight.layers.enable(MODEL_LAYER);
+keyLight.castShadow = true;
+keyLight.shadow.mapSize.set(2048, 2048);
+keyLight.shadow.camera.left = -3.5;
+keyLight.shadow.camera.right = 3.5;
+keyLight.shadow.camera.top = 3.5;
+keyLight.shadow.camera.bottom = -3.5;
+keyLight.shadow.camera.near = 0.1;
+keyLight.shadow.camera.far = 12;
+keyLight.shadow.bias = -0.0004;
+keyLight.shadow.normalBias = 0.025;
+scene.add(keyLight);
+const rimLight = new THREE.DirectionalLight(0x7799ff, 2.2);
+rimLight.position.set(-4, 3, -3);
+rimLight.layers.enable(MODEL_LAYER);
+scene.add(rimLight);
 const floor = new THREE.Mesh(
   new THREE.CircleGeometry(3.2, 64),
   new THREE.MeshStandardMaterial({ color: 0x242830, roughness: 0.9, metalness: 0 }),
@@ -78,341 +63,281 @@ const grid = new THREE.GridHelper(6, 12, 0x536072, 0x303640);
 grid.position.y = 0.002;
 scene.add(grid);
 
-const rangeLoader = createFetchRangeLoader();
+const runtime = EngineRuntime.forScene({
+  scene,
+  entityCapacity: 1,
+  memory: {
+    frameScratchBytes: 32 * 1024,
+    renderScratchBytes: 32 * 1024,
+    structuralCommands: 16,
+    workerCompletions: 32,
+    assetRequests: 64,
+    vtRequests: 512,
+  },
+  diagnosticCapacity: 64,
+  maxWorkerInputs: 1,
+  maxRenderPasses: 2,
+});
+let feedbackCoordinator: VirtualTextureFeedbackCoordinator | null = null;
+function resizeCamera(width: number, height: number): void {
+  camera.aspect = width / height;
+  camera.updateProjectionMatrix();
+  const ratio = Math.min(2, Math.max(0.1, devicePixelRatio));
+  feedbackCoordinator?.resize(width * ratio, height * ratio);
+}
+const rendererHost = await RendererHost.create({
+  scene,
+  camera,
+  diagnostics: runtime.diagnostics,
+  parameters: { antialias: false, trackTimestamp: false },
+  onResize: resizeCamera,
+}).catch((error: unknown) => { runtime.dispose(); throw error; });
+rendererHost.renderer.shadowMap.enabled = true;
+rendererHost.renderer.shadowMap.type = THREE.PCFShadowMap;
+const bootstrap = new BootstrapGuard(16);
+bootstrap.defer(() => rendererHost.dispose());
+bootstrap.defer(() => runtime.dispose());
+try {
+const device = rendererHost.device;
+const format = device.features.has('texture-compression-bc') ? 0
+  : device.features.has('texture-compression-astc') ? 1 : FORMAT_RGBA;
 const workerCount = Math.max(2, Math.min(4, Math.floor((navigator.hardwareConcurrency || 4) / 2)));
-const textureRpcs = await Promise.all(Array.from({ length: workerCount }, () => Rpc.create({
-  mainWasmUrl: 'afterglow_web.wasm', workerJsUrl: 'worker.js', workerWasmUrl: 'texture.wasm', timeoutMs: 10000,
-})));
-const textureWorkers = textureRpcs.map(rpc => new TextureClient(rpc));
+const session = await BigAssetSession.open({
+  containerPath: 'rigged-vt.big',
+  format,
+  workerCount,
+  transcodeQueueCapacity: 64,
+  maxHeaderBytes: 2 * 1024 * 1024,
+  async createWorker() {
+    const rpc = await Rpc.create({
+      mainWasmUrl: 'afterglow_web.wasm', workerJsUrl: 'worker.js',
+      workerWasmUrl: 'texture.wasm', timeoutMs: 10_000,
+    });
+    return { worker: new TextureClient(rpc), close(): void { rpc.terminate(); } };
+  },
+});
+bootstrap.defer(() => session.close());
 const meshopt = await MeshoptClient.spawn('meshopt.wasm');
-addEventListener('beforeunload', () => { for (const rpc of textureRpcs) rpc.terminate(); }, { once: true });
-const prefix = await rangeLoader.read('rigged-vt.big', 0, 16);
-const dataOffset = Number(new DataView(prefix.buffer, prefix.byteOffset + 8, 8).getBigUint64(0, true));
-const headerBytes = await rangeLoader.read('rigged-vt.big', 0, dataOffset);
-const { header } = parseBigHeader(headerBytes);
-const format = renderer.backend.device.features.has('texture-compression-bc') ? 0
-  : renderer.backend.device.features.has('texture-compression-astc') ? 1 : VT.FORMAT_RGBA;
-const containerLoader = {
-  load: (path: string) => rangeLoader.load(path),
-  size: (path: string) => rangeLoader.size(path),
-  read: (_path: string, offset: number, length: number) => rangeLoader.read('rigged-vt.big', offset, length),
-};
-const pageProvider = createPageDataProvider(containerLoader, header, textureWorkers, format);
-const packedAssets = new BigContainerAssetLoader(rangeLoader, 'rigged-vt.big', header);
-const assetStore = new AssetStore(packedAssets, meshopt);
-const modelHandle = assetStore.loadOptimizedGLTF('model.glb', new GLTFLoader());
-const secondModelHandle = assetStore.loadOptimizedGLTF('model-2.glb', new GLTFLoader());
-while (modelHandle.state === 'loading' || secondModelHandle.state === 'loading') {
+const assetStore = session.createAssetStore(meshopt, 4, 4);
+const firstHandle = assetStore.loadOptimizedGLTF('model.glb', new GLTFLoader());
+const secondHandle = assetStore.loadOptimizedGLTF('model-2.glb', new GLTFLoader());
+while (firstHandle.state === 'loading' || secondHandle.state === 'loading') {
   assetStore.poll();
-  await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
 }
-if (modelHandle.state !== 'ready' || secondModelHandle.state !== 'ready')
+if (firstHandle.state !== 'ready' || secondHandle.state !== 'ready')
   throw new Error('packed models failed GLTF parsing or runtime mesh optimization');
-const store = new VT.VirtualTextureStore(
-  { read: (path: string, offset: number, length: number) => rangeLoader.read(path, offset, length), poll() {} },
-  pageProvider, format, renderer.backend.device, new VT.VirtualTextureTuning(),
+function requireReadyAsset<T>(asset: T | undefined): T {
+  if (!asset) throw new Error('ready packed model has no asset');
+  return asset;
+}
+const firstAsset = requireReadyAsset(firstHandle.asset);
+const secondAsset = requireReadyAsset(secondHandle.asset);
+const store = session.createVirtualTextureStore(device);
+feedbackCoordinator = new VirtualTextureFeedbackCoordinator(
+  rendererHost.renderer, store, { renderables: 2, passes: 8, cadence: FEEDBACK_INTERVAL, scale: 0.125 },
 );
-const paths = {
-  albedo: 'model.glb#image-0',
-  normal: 'model.glb#image-2',
-  masks: 'model.glb#image-1',
-};
-const dimensions = getVirtualTextureDimensions(header, paths.albedo);
-const materialSet = store.loadMaterialSet(paths, { ...dimensions, mipTail: true });
-function loadIndependentTexture(path: string) {
-  const existing = store.getEntry(path);
-  if (existing) return existing;
-  const size = getVirtualTextureDimensions(header, path);
-  store.loadTexture(path, { ...size, mipTail: true });
-  return store.getEntry(path);
-}
-const secondDimensions = getVirtualTextureDimensions(header, 'model-2.glb#image-0');
-const feedbackPasses = Array.from({ length: 4 }, () => new VT.VirtualTextureFeedbackPass(0.125));
-const feedbackPass = feedbackPasses[0];
-for (const pass of feedbackPasses)
-  pass.resize(renderer.domElement.width, renderer.domElement.height);
+feedbackCoordinator.resize(rendererHost.renderer.domElement.width, rendererHost.renderer.domElement.height);
 
-const gltf = modelHandle.asset;
-const model = gltf.scene;
-const skinnedMeshes: any[] = [];
-let sourceMaterial: any = null;
-model.traverse((object: any) => {
-  if (!object.isMesh) return;
-  object.layers.set(MODEL_LAYER);
-  object.castShadow = true;
-  object.receiveShadow = true;
-  if (!object.isSkinnedMesh) throw new Error(`rigged VT demo found a non-skinned render mesh: ${object.name}`);
-  if (Array.isArray(object.material)) throw new Error('rigged VT demo requires one material per primitive');
-  sourceMaterial ??= object.material;
-  skinnedMeshes.push(object);
-});
-if (skinnedMeshes.length === 0) throw new Error('model contains no SkinnedMesh');
-if (gltf.animations.length === 0) throw new Error('model contains no animation clips');
-const deformedBounds = new THREE.Box3();
-const deformedVertex = new THREE.Vector3();
-function measureDeformedBounds() {
-  deformedBounds.makeEmpty();
-  modelPivot.updateMatrixWorld(true);
-  for (const mesh of skinnedMeshes) {
-    const count = mesh.geometry.getAttribute('position').count;
-    for (let index = 0; index < count; index++) {
-      mesh.getVertexPosition(index, deformedVertex);
-      deformedVertex.applyMatrix4(mesh.matrixWorld);
-      deformedBounds.expandByPoint(deformedVertex);
-    }
-  }
-  return deformedBounds;
-}
-
-// Keep normalization and grounding on an engine-owned parent that animation
-// tracks cannot overwrite.
-const modelPivot = new THREE.Group();
-modelPivot.add(model);
-const box = new THREE.Box3().setFromObject(model);
-const size = box.getSize(new THREE.Vector3());
-modelPivot.scale.setScalar(2.55 / size.y);
-box.setFromObject(modelPivot);
-const center = box.getCenter(new THREE.Vector3());
-modelPivot.position.set(-center.x, -box.min.y, -center.z);
-scene.add(modelPivot);
-
-const pair = VT.createVirtualGltfMaterialPair(THREE, store, materialSet, feedbackPass.pixelScale, {
-  addressMode: VT.VirtualTextureAddressMode.Repeat,
-  qualityBias: 0,
-  baseColorFactor: [sourceMaterial.color.r, sourceMaterial.color.g, sourceMaterial.color.b, sourceMaterial.opacity],
-  roughnessFactor: sourceMaterial.roughness,
-  metalnessFactor: sourceMaterial.metalness,
-  normalScale: [1, -1],
-  side: sourceMaterial.side,
-});
-const visibleMaterials = skinnedMeshes.map(mesh => mesh.material);
-for (let index = 0; index < skinnedMeshes.length; index++) {
-  visibleMaterials[index] = pair.material;
-  skinnedMeshes[index].material = pair.material;
-}
-// GLTFLoader must parse the unmodified packed model, including its original
-// material references. Once the VT replacement owns sampling, release those
-// resident browser images so the demo proves one texture path rather than
-// silently keeping a duplicate resident material alive.
-const importedTextures = new Set<any>();
-for (const property of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap', 'emissiveMap']) {
-  const imported = sourceMaterial[property];
-  if (imported) importedTextures.add(imported);
-}
-for (const imported of importedTextures) {
-  imported.dispose();
-  imported.source?.data?.close?.();
-}
-sourceMaterial.dispose();
-function useFeedbackMaterial(enabled: boolean): void {
-  for (let index = 0; index < skinnedMeshes.length; index++)
-    skinnedMeshes[index].material = enabled ? pair.feedbackMaterial : visibleMaterials[index];
-}
-
-const mixer = new THREE.AnimationMixer(model);
-const action = mixer.clipAction(gltf.animations[0]);
-action.play();
-// The bind pose and first animation pose need not share the same root height.
-// Evaluate the actual first frame, then ground its skinned bounds exactly.
-mixer.setTime(0);
-modelPivot.updateMatrixWorld(true);
-let animatedBounds = measureDeformedBounds();
-modelPivot.position.y -= animatedBounds.min.y;
-modelPivot.updateMatrixWorld(true);
-animatedBounds = measureDeformedBounds();
-const groundedMinY = animatedBounds.min.y;
-const skeleton = new THREE.SkeletonHelper(model);
-skeleton.visible = false;
-scene.add(skeleton);
-
-// The latest downloaded GLB follows the exact same packed-model/runtime-
-// meshopt path. Its differently sized base-color and normal VTs sample and
-// feedback independently rather than relying on aligned material pages.
-const secondGltf = secondModelHandle.asset;
-const secondModel = secondGltf.scene;
-const secondMeshes: any[] = [];
-secondModel.traverse((object: any) => {
-  if (!object.isMesh) return;
-  object.layers.set(MODEL_LAYER);
-  object.castShadow = true;
-  object.receiveShadow = true;
-  if (Array.isArray(object.material)) throw new Error('model 2 requires one material per primitive');
-  secondMeshes.push(object);
-});
-if (secondMeshes.length === 0) throw new Error('model 2 contains no render meshes');
-const secondSkinnedMeshes = secondMeshes.filter(mesh => mesh.isSkinnedMesh);
+const firstPivot = new THREE.Group();
 const secondPivot = new THREE.Group();
-secondPivot.add(secondModel);
-const secondBox = new THREE.Box3().setFromObject(secondModel);
-const secondSize = secondBox.getSize(new THREE.Vector3());
-secondPivot.scale.setScalar(2.55 / secondSize.y);
-secondBox.setFromObject(secondPivot);
-const secondCenter = secondBox.getCenter(new THREE.Vector3());
-secondPivot.position.set(-secondCenter.x, -secondBox.min.y, -secondCenter.z);
-scene.add(secondPivot);
-const secondLayouts = new Map(secondGltf.materialTextures.map(layout => [layout.name, layout]));
-const secondRecords: any[] = [];
-const secondImportedTextures = new Set<any>();
-const replacedSourceMaterials = new Set<any>();
-let secondMaxFeedbackChannels = 1;
-for (const mesh of secondMeshes) {
-  const source = mesh.material;
-  const layout = secondLayouts.get(source.name);
-  if (!layout || layout.baseColorImage === null) {
-    secondRecords.push({ mesh, pair: null, visibleMaterial: source, wasVisible: mesh.visible });
-    continue;
+firstPivot.add(firstAsset.scene);
+secondPivot.add(secondAsset.scene);
+scene.add(firstPivot, secondPivot);
+const firstPrimitives = new ModelPrimitives(MODEL_CAPACITY);
+const secondPrimitives = new ModelPrimitives(MODEL_CAPACITY);
+if (firstPrimitives.collect(firstAsset.scene) !== ModelCollectionStatus.Complete ||
+    secondPrimitives.collect(secondAsset.scene) !== ModelCollectionStatus.Complete)
+  throw new Error('model primitive capacity exceeded');
+if (firstPrimitives.count === 0 || secondPrimitives.count === 0)
+  throw new Error('packed model has no render primitives');
+let firstSkinnedCount = 0, secondSkinnedCount = 0;
+function configurePrimitives(primitives: ModelPrimitives, requireSkinned: boolean): number {
+  let skinned = 0;
+  for (let index = 0; index < primitives.count; index++) {
+    const mesh = primitives.items[index];
+    if (!mesh) continue;
+    mesh.layers.set(MODEL_LAYER);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    if (mesh instanceof THREE.SkinnedMesh) skinned++;
+    else if (requireSkinned) throw new Error(`model contains non-skinned primitive ${mesh.name}`);
   }
-  const entry = (image: number | null) => image === null ? undefined :
-    loadIndependentTexture(`model-2.glb#image-${image}`);
-  const set = {
-    albedo: entry(layout.baseColorImage),
-    normal: entry(layout.normalImage),
-    masks: entry(layout.metallicRoughnessImage),
-    emissive: entry(layout.emissiveImage),
-  };
-  const pair = VT.createVirtualGltfMaterialPair(THREE, store, set, feedbackPass.pixelScale, {
-    addressMode: VT.VirtualTextureAddressMode.Repeat,
-    qualityBias: 0,
-    baseColorFactor: [source.color.r, source.color.g, source.color.b, source.opacity],
-    roughnessFactor: source.roughness,
-    metalnessFactor: source.metalness,
-    normalScale: [1, -1],
-    emissiveFactor: [source.emissive.r, source.emissive.g, source.emissive.b],
-    transparent: source.transparent,
-    depthWrite: source.depthWrite,
-    side: source.side,
-  });
-  secondMaxFeedbackChannels = Math.max(secondMaxFeedbackChannels, pair.feedbackMaterials.length);
-  mesh.material = pair.material;
-  secondRecords.push({ mesh, pair, visibleMaterial: pair.material, wasVisible: mesh.visible });
-  replacedSourceMaterials.add(source);
-  for (const property of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap', 'emissiveMap']) {
-    const imported = source[property];
-    if (imported) secondImportedTextures.add(imported);
-  }
+  return skinned;
 }
-for (const imported of secondImportedTextures) { imported.dispose(); imported.source?.data?.close?.(); }
-for (const material of replacedSourceMaterials) material.dispose();
-const secondClip = secondGltf.animations.find(clip => clip.name === 'Idle') ?? secondGltf.animations[0];
-const secondMixer = new THREE.AnimationMixer(secondModel);
-const secondAction = secondMixer.clipAction(secondClip);
-secondAction.play();
-secondMixer.setTime(0);
-const secondSkeleton = new THREE.SkeletonHelper(secondModel);
-secondSkeleton.visible = false;
-scene.add(secondSkeleton);
-const secondVertex = new THREE.Vector3(), secondBounds = new THREE.Box3();
-function measureSecondBounds() {
-  secondBounds.makeEmpty(); secondPivot.updateMatrixWorld(true);
-  for (const mesh of secondMeshes) for (let index = 0; index < mesh.geometry.getAttribute('position').count; index++) {
-    mesh.getVertexPosition(index, secondVertex); secondVertex.applyMatrix4(mesh.matrixWorld); secondBounds.expandByPoint(secondVertex);
-  }
-  return secondBounds;
+firstSkinnedCount = configurePrimitives(firstPrimitives, true);
+secondSkinnedCount = configurePrimitives(secondPrimitives, false);
+if (firstAsset.animations.length === 0 || secondAsset.animations.length === 0)
+  throw new Error('packed model has no animation clips');
+normalizeModelPivot(firstPivot, MODEL_HEIGHT, new THREE.Box3(), new THREE.Vector3(), new THREE.Vector3());
+normalizeModelPivot(secondPivot, MODEL_HEIGHT, new THREE.Box3(), new THREE.Vector3(), new THREE.Vector3());
+const firstAnimations = new AnimationSet(firstAsset.scene, firstAsset.animations, firstAsset.animations.length);
+bootstrap.defer(() => firstAnimations.dispose());
+const secondAnimations = new AnimationSet(secondAsset.scene, secondAsset.animations, secondAsset.animations.length);
+bootstrap.defer(() => secondAnimations.dispose());
+const firstClipIndex = 0;
+let secondClipIndex = secondAsset.animations.findIndex((clip) => clip.name === 'Idle');
+if (secondClipIndex < 0) secondClipIndex = 0;
+firstAnimations.play(firstClipIndex);
+secondAnimations.play(secondClipIndex);
+firstAnimations.setTime(0);
+secondAnimations.setTime(0);
+groundDeformedModel(firstPivot, firstPrimitives, new THREE.Box3(), new THREE.Vector3());
+groundDeformedModel(secondPivot, secondPrimitives, new THREE.Box3(), new THREE.Vector3());
+const firstSkeleton = new SkeletonDebugAdapter(scene, firstAsset.scene);
+bootstrap.defer(() => firstSkeleton.dispose());
+const secondSkeleton = new SkeletonDebugAdapter(scene, secondAsset.scene);
+bootstrap.defer(() => secondSkeleton.dispose());
+
+function resolveImage(modelPath: string, imageIndex: number) {
+  const path = `${modelPath}#image-${imageIndex}`;
+  let entry = store.getEntry(path);
+  if (entry) return entry;
+  const dimensions = getVirtualTextureDimensions(session.header, path);
+  store.loadTexture(path, { ...dimensions, mipTail: true });
+  entry = store.getEntry(path);
+  return entry;
 }
-let measuredSecond = measureSecondBounds();
-secondPivot.position.y -= measuredSecond.min.y;
-secondPivot.updateMatrixWorld(true);
-measuredSecond = measureSecondBounds();
-const secondGroundedMinY = measuredSecond.min.y;
+const firstBinding = VirtualGltfBinding.create(firstAsset, store, {
+  primitiveCapacity: MODEL_CAPACITY,
+  feedbackScene: scene,
+  feedbackRoot: firstPivot,
+  exclusiveRoots: [secondPivot, floor, grid, firstSkeleton.helper, secondSkeleton.helper],
+  feedbackCamera: camera,
+  feedbackPixelScale: feedbackCoordinator.pixelScale,
+  resolveImage: (index) => resolveImage('model.glb', index),
+});
+bootstrap.defer(() => firstBinding.dispose());
+const secondBinding = VirtualGltfBinding.create(secondAsset, store, {
+  primitiveCapacity: MODEL_CAPACITY,
+  feedbackScene: scene,
+  feedbackRoot: secondPivot,
+  exclusiveRoots: [firstPivot, floor, grid, firstSkeleton.helper, secondSkeleton.helper],
+  feedbackCamera: camera,
+  feedbackPixelScale: feedbackCoordinator.pixelScale,
+  resolveImage: (index) => resolveImage('model-2.glb', index),
+});
+bootstrap.defer(() => secondBinding.dispose());
+if (feedbackCoordinator.register(firstBinding) !== FeedbackRegistrationStatus.Registered ||
+    feedbackCoordinator.register(secondBinding) !== FeedbackRegistrationStatus.Registered)
+  throw new Error('feedback coordinator capacity exceeded');
+if (runtime.registerWorker(feedbackCoordinator) !== RegistrationStatus.Registered ||
+    runtime.registerRenderPass(rendererHost) !== RegistrationStatus.Registered ||
+    runtime.registerRenderPass(feedbackCoordinator) !== RegistrationStatus.Registered)
+  throw new Error('runtime registration capacity exceeded');
+
+const firstBaseImage = firstAsset.materialTextures.find((layout) => layout.baseColorImage !== null)?.baseColorImage;
+const secondBaseImage = secondAsset.materialTextures.find((layout) => layout.baseColorImage !== null)?.baseColorImage;
+if (firstBaseImage === undefined || firstBaseImage === null || secondBaseImage === undefined || secondBaseImage === null)
+  throw new Error('packed model has no virtual base color');
+const firstDimensions = getVirtualTextureDimensions(session.header, `model.glb#image-${firstBaseImage}`);
+const secondDimensions = getVirtualTextureDimensions(session.header, `model-2.glb#image-${secondBaseImage}`);
+const firstBounds = new THREE.Box3(), secondBounds = new THREE.Box3();
+const firstVertex = new THREE.Vector3(), secondVertex = new THREE.Vector3();
+function measureFirstBounds(): THREE.Box3 {
+  firstPivot.updateMatrixWorld(true);
+  return computeDeformedBoundsInto(firstPrimitives, firstBounds, firstVertex);
+}
+function measureSecondBounds(): THREE.Box3 {
+  secondPivot.updateMatrixWorld(true);
+  return computeDeformedBoundsInto(secondPrimitives, secondBounds, secondVertex);
+}
+const firstGroundedMinY = measureFirstBounds().min.y;
+const secondGroundedMinY = measureSecondBounds().min.y;
+
 let activeModel = 0;
+let animationEnabled = true;
+let feedbackEnabled = true;
 let skeletonRequested = false;
-secondPivot.visible = false;
+let orbitAngle = 0;
+let orbitVelocity = 0;
+let cameraDistance = 4.1;
+let zoomVelocity = 0;
+let smoothedDt = 1 / 60;
+const input = new BoundedKeyboardInput();
+const frameSteps = new FrameStepHarness(32);
+bootstrap.defer(() => input.dispose());
+const errorCapture = new BrowserErrorCapture(runtime.diagnostics);
+bootstrap.defer(() => errorCapture.dispose());
+const hud = new TextHud(document.getElementById('hud'));
+
+/** @alloc-effect none */
 function setActiveModel(modelNumber: number): void {
   activeModel = modelNumber === 2 ? 1 : 0;
-  modelPivot.visible = activeModel === 0;
+  firstPivot.visible = activeModel === 0;
   secondPivot.visible = activeModel === 1;
-  skeleton.visible = activeModel === 0 && skeletonRequested;
-  secondSkeleton.visible = activeModel === 1 && skeletonRequested;
-  for (let index = 0; index < feedbackResults.length; index++) feedbackResults[index] = null;
-  orbitAngle = 0; orbitVelocity = 0; cameraDistance = 4.1; zoomVelocity = 0;
+  firstSkeleton.setVisible(activeModel === 0 && skeletonRequested);
+  secondSkeleton.setVisible(activeModel === 1 && skeletonRequested);
+  orbitAngle = 0;
+  orbitVelocity = 0;
+  cameraDistance = 4.1;
+  zoomVelocity = 0;
 }
-function useSecondFeedbackMaterial(index: number, enabled: boolean): void {
-  for (const record of secondRecords) {
-    if (!record.pair) { record.mesh.visible = enabled ? false : record.wasVisible; continue; }
-    const feedbackIndex = Math.min(index, record.pair.feedbackMaterials.length - 1);
-    record.mesh.material = enabled ? record.pair.feedbackMaterials[feedbackIndex] : record.visibleMaterial;
-  }
-}
-
-// Compile visible and integer feedback variants against the exact same
-// SkinnedMesh. No bind-pose proxy can drift from the animated feedback shape.
-await warmRendererVariants(renderer, [{ scene, camera }]);
-skeleton.visible = true;
-await warmRendererVariants(renderer, [{ scene, camera }]);
-skeleton.visible = false;
-modelPivot.visible = false; secondPivot.visible = true;
-await warmRendererVariants(renderer, [{ scene, camera }]);
-renderer.render(scene, camera);
-secondSkeleton.visible = true;
-await warmRendererVariants(renderer, [{ scene, camera }]);
-renderer.render(scene, camera);
-secondSkeleton.visible = false;
-const previousTarget = renderer.getRenderTarget();
-const previousMask = camera.layers.mask;
-const previousShadows = renderer.shadowMap.enabled;
-renderer.shadowMap.enabled = false;
-camera.layers.set(MODEL_LAYER);
-modelPivot.visible = true; secondPivot.visible = false;
-useFeedbackMaterial(true);
-renderer.setRenderTarget(feedbackPass.target);
-await warmRendererVariants(renderer, [{ scene, camera }]);
-renderer.render(scene, camera);
-useFeedbackMaterial(false);
-modelPivot.visible = false; secondPivot.visible = true;
-for (let index = 0; index < secondMaxFeedbackChannels; index++) {
-  useSecondFeedbackMaterial(index, true);
-  renderer.setRenderTarget(feedbackPasses[index].target);
-  await warmRendererVariants(renderer, [{ scene, camera }]);
-  renderer.render(scene, camera);
-  useSecondFeedbackMaterial(index, false);
-}
-renderer.setRenderTarget(previousTarget);
-camera.layers.mask = previousMask;
-renderer.shadowMap.enabled = previousShadows;
-modelPivot.visible = true; secondPivot.visible = false;
-renderer.render(scene, camera);
-store.attachRenderer(renderer);
-rendererSeal.seal();
-
-function submitFeedback(): void {
-  const mask = camera.layers.mask;
-  const shadows = renderer.shadowMap.enabled;
-  renderer.shadowMap.enabled = false;
-  camera.layers.set(MODEL_LAYER);
-  if (activeModel === 0) {
-    useFeedbackMaterial(true);
-    feedbackPass.submit(renderer, scene, camera, store);
-    useFeedbackMaterial(false);
-  } else {
-    for (let index = 0; index < secondMaxFeedbackChannels; index++) {
-      useSecondFeedbackMaterial(index, true);
-      feedbackPasses[index].submit(renderer, scene, camera, store);
-      useSecondFeedbackMaterial(index, false);
-    }
-  }
-  camera.layers.mask = mask;
-  renderer.shadowMap.enabled = shadows;
-}
+/** @alloc-effect none */
 function setAnimationEnabled(enabled: boolean): void {
-  animationEnabled = Boolean(enabled);
-  action.paused = !animationEnabled;
-  secondAction.paused = !animationEnabled;
+  animationEnabled = enabled;
+  firstAnimations.setEnabled(enabled);
+  secondAnimations.setEnabled(enabled);
 }
+/** @alloc-effect none */
 function setSkeletonVisible(visible: boolean): void {
-  skeletonRequested = Boolean(visible);
-  skeleton.visible = activeModel === 0 && skeletonRequested;
-  secondSkeleton.visible = activeModel === 1 && skeletonRequested;
+  skeletonRequested = visible;
+  firstSkeleton.setVisible(activeModel === 0 && visible);
+  secondSkeleton.setVisible(activeModel === 1 && visible);
+}
+/** @alloc-effect none */
+function setFeedbackEnabled(enabled: boolean): void {
+  feedbackEnabled = enabled;
+  firstBinding.setFeedbackEnabled(enabled);
+  secondBinding.setFeedbackEnabled(enabled);
+}
+/** @alloc-effect none */
+function resetView(): void {
+  orbitAngle = 0;
+  orbitVelocity = 0;
+  cameraDistance = 4.1;
+  zoomVelocity = 0;
 }
 
-const hud = document.getElementById('hud')!;
-renderer.setAnimationLoop(now => {
-  const dt = Math.min(0.05, (now - last) / 1000);
-  last = now;
+/** @alloc-effect diagnostic */
+function updateHud(): void {
+  const stats = store.getStats();
+  const activeAsset = activeModel === 0 ? firstAsset : secondAsset;
+  const activeClip = activeModel === 0 ? firstAsset.animations[firstClipIndex] : secondAsset.animations[secondClipIndex];
+  const activeDimensions = activeModel === 0 ? firstDimensions : secondDimensions;
+  const activeMeshes = activeModel === 0 ? firstPrimitives.count : secondPrimitives.count;
+  const activeSkinned = activeModel === 0 ? firstSkinnedCount : secondSkinnedCount;
+  const optimization = activeAsset.meshOptimization[0];
+  hud.setText(
+    `afterglow — Model VT · model ${activeModel + 1}/2\n` +
+    `Meshes: ${activeMeshes} · ${activeSkinned} skinned\n` +
+    `Animation: ${activeClip?.name ?? 'none'} · ${(activeClip?.duration ?? 0).toFixed(2)} s · ${animationEnabled ? 'playing' : 'paused'}\n` +
+    `Pipeline: image-free GLB · runtime meshopt ACMR ${(optimization?.originalAcmr ?? 0).toFixed(2)}→${(optimization?.optimizedAcmr ?? 0).toFixed(2)}\n` +
+    `Base color: ${activeDimensions.width}×${activeDimensions.height} · atlas: ${store.atlasWidth}² · ${format === 0 ? 'BC7' : format === 1 ? 'ASTC' : 'RGBA'}\n` +
+    `Resident: ${stats.atlasSlotsUsed}/${stats.atlasSlotsTotal} · pending: ${stats.pendingPages}\n` +
+    `Feedback passes: ${activeModel === 0 ? firstBinding.feedbackPassCount : secondBinding.feedbackPassCount} · FPS: ${(1 / smoothedDt).toFixed(0)} · errors: ${runtime.diagnostics.count}`,
+  );
+}
+
+/** @alloc-effect none */
+function updateFrame(frame: Readonly<RenderFrame>): void {
+  const dt = Math.min(0.05, frame.deltaSeconds);
   smoothedDt = smoothedDt * 0.95 + dt * 0.05;
-  store.recordFrameTime(dt * 1000);
-  if (animationEnabled) { mixer.update(dt); secondMixer.update(dt); }
-  const rotateInput = programmatic ? 0 : (keys.has('d') ? 1 : 0) - (keys.has('a') ? 1 : 0);
-  const zoomInput = programmatic ? 0 : (keys.has('s') ? 1 : 0) - (keys.has('w') ? 1 : 0);
+  feedbackCoordinator?.recordFrameTime(dt * 1000);
+  if (animationEnabled) {
+    firstAnimations.update(dt);
+    secondAnimations.update(dt);
+  }
+  if (input.consumePressed(DemoInputAction.ModelOne)) setActiveModel(1);
+  if (input.consumePressed(DemoInputAction.ModelTwo)) setActiveModel(2);
+  if (input.consumePressed(DemoInputAction.ToggleAnimation)) setAnimationEnabled(!animationEnabled);
+  if (input.consumePressed(DemoInputAction.ToggleSkeleton)) setSkeletonVisible(!skeletonRequested);
+  if (input.consumePressed(DemoInputAction.ToggleFeedback)) setFeedbackEnabled(!feedbackEnabled);
+  if (input.consumePressed(DemoInputAction.ResetView)) resetView();
+  const rotateInput = input.programmatic ? 0 :
+    (input.isDown(DemoInputAction.OrbitRight) ? 1 : 0) - (input.isDown(DemoInputAction.OrbitLeft) ? 1 : 0);
+  const zoomInput = input.programmatic ? 0 :
+    (input.isDown(DemoInputAction.ZoomOut) ? 1 : 0) - (input.isDown(DemoInputAction.ZoomIn) ? 1 : 0);
   orbitVelocity += rotateInput * 7.5 * dt;
   zoomVelocity += zoomInput * 8 * dt;
   const damping = Math.exp(-7 * dt);
@@ -423,122 +348,129 @@ renderer.setAnimationLoop(now => {
   if ((cameraDistance === 1.35 && zoomVelocity < 0) || (cameraDistance === 8 && zoomVelocity > 0)) zoomVelocity = 0;
   camera.position.set(Math.sin(orbitAngle) * cameraDistance, 1.45, Math.cos(orbitAngle) * cameraDistance);
   camera.lookAt(0, 1.25, 0);
-  const expectedFeedback = activeModel === 0 ? 1 : secondMaxFeedbackChannels;
-  for (let index = 0; index < feedbackPasses.length; index++) {
-    const completed = feedbackPasses[index].consume();
-    if (completed && index < expectedFeedback) feedbackResults[index] = completed;
-  }
-  let feedbackBatchReady = true;
-  for (let index = 0; index < expectedFeedback; index++)
-    if (feedbackResults[index] === null) feedbackBatchReady = false;
-  if (feedbackBatchReady) {
-    mergedFeedback.clear();
-    for (let index = 0; index < expectedFeedback; index++) {
-      for (const [key, request] of feedbackResults[index]!) mergedFeedback.set(key, request);
-      feedbackResults[index] = null;
-    }
-    lastResult = store.processFeedback(mergedFeedback);
-  }
-  store.poll();
-  renderer.render(scene, camera);
-  if (feedbackEnabled && frame % FEEDBACK_INTERVAL === 0) submitFeedback();
-  frame++;
-  for (let index = waiters.length - 1; index >= 0; index--) {
-    if (frame < waiters[index].target) continue;
-    waiters[index].resolve();
-    waiters.splice(index, 1);
-  }
-  if (frame % 15 === 0) {
-    const stats = store.getStats();
-    const activeGltf = activeModel === 0 ? gltf : secondGltf;
-    const activeDimensions = activeModel === 0 ? dimensions : secondDimensions;
-    const activeMeshes = activeModel === 0 ? skinnedMeshes : secondMeshes;
-    const activeMips = activeModel === 0 ? feedbackPass.getLatestMips() :
-      feedbackPasses.slice(0, secondMaxFeedbackChannels).flatMap(pass => pass.getLatestMips());
-    hud.innerHTML = `<b>afterglow — Model VT</b> · model ${activeModel + 1}/2<br>` +
-      `Meshes: ${activeMeshes.length} · ${activeModel === 0 ? skinnedMeshes.length : secondSkinnedMeshes.length} skinned<br>` +
-      `Animation: ${activeModel === 0 ? gltf.animations[0].name : secondClip.name} · ${(activeModel === 0 ? gltf.animations[0].duration : secondClip.duration).toFixed(2)} s · ${animationEnabled ? 'playing' : 'paused'}<br>` +
-      `Pipeline: GLB from .big · runtime meshopt ACMR ${activeGltf.meshOptimization[0].originalAcmr.toFixed(2)}→${activeGltf.meshOptimization[0].optimizedAcmr.toFixed(2)}<br>` +
-      `Material: extracted glTF channels through VT<br>` +
-      `Base color: ${activeDimensions.width}×${activeDimensions.height} · atlas: ${store.atlasWidth}² · ${format === 0 ? 'BC7' : format === 1 ? 'ASTC' : 'RGBA'}<br>` +
-      `Resident: ${stats.atlasSlotsUsed}/${stats.atlasSlotsTotal} · pending: ${stats.pendingPages} · requests: ${lastResult.totalRequests}<br>` +
-      `Feedback mips: [${activeMips.join(',')}] · FPS: ${(1 / smoothedDt).toFixed(0)} · errors: ${errors.length}`;
-  }
-});
+  frameSteps.poll(frame.frameId);
+  if (frame.frameId % 15 === 0)
+    updateHud(); // @alloc-allowed reason=DiagnosticHud issue=DME-034 expires=2026-10-01
+}
 
-addEventListener('resize', () => {
-  camera.aspect = innerWidth / innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth, innerHeight);
-  for (const pass of feedbackPasses) pass.resize(renderer.domElement.width, renderer.domElement.height);
+runtime.enterWarmup();
+firstPivot.visible = true;
+secondPivot.visible = true;
+firstSkeleton.setVisible(true);
+secondSkeleton.setVisible(true);
+runtime.adapter.warmAllDescriptors();
+await runtime.warm();
+rendererHost.renderer.render(scene, camera);
+firstSkeleton.setVisible(false);
+secondSkeleton.setVisible(false);
+await rendererHost.renderer.compileAsync(scene, camera);
+rendererHost.renderer.render(scene, camera);
+setActiveModel(1);
+rendererHost.renderer.render(scene, camera);
+setActiveModel(2);
+rendererHost.renderer.render(scene, camera);
+setActiveModel(1);
+rendererHost.attachVirtualTextureStore(store);
+runtime.sealGameplay();
+const shutdown = new PageShutdown(() => {
+  runtime.stop();
+  firstBinding.dispose();
+  secondBinding.dispose();
+  firstAnimations.dispose();
+  secondAnimations.dispose();
+  firstSkeleton.dispose();
+  secondSkeleton.dispose();
+  input.dispose();
+  errorCapture.dispose();
+  void session.close();
+  runtime.dispose();
 });
-addEventListener('keydown', event => {
-  if (programmatic) return;
-  const keyName = event.key.toLowerCase();
-  keys.add(keyName);
-  if (event.repeat) return;
-  if (keyName === '1') setActiveModel(1);
-  else if (keyName === '2') setActiveModel(2);
-  else if (event.code === 'Space') setAnimationEnabled(!animationEnabled);
-  else if (keyName === 'b') setSkeletonVisible(!skeletonRequested);
-  else if (keyName === 'f') feedbackEnabled = !feedbackEnabled;
-  else if (keyName === 'r') { keys.clear(); orbitAngle = 0; orbitVelocity = 0; cameraDistance = 4.1; zoomVelocity = 0; }
-});
-addEventListener('keyup', event => keys.delete(event.key.toLowerCase()));
-addEventListener('blur', () => keys.clear());
+bootstrap.defer(() => shutdown.dispose());
+runtime.start({ update: updateFrame });
 
-window.__afterglowRiggedVT = {
-  setProgrammatic(enabled: boolean) { programmatic = Boolean(enabled); },
+function activeBoneCount(): number {
+  const primitives = activeModel === 0 ? firstPrimitives : secondPrimitives;
+  for (let index = 0; index < primitives.count; index++) {
+    const mesh = primitives.items[index];
+    if (mesh instanceof THREE.SkinnedMesh) return mesh.skeleton.bones.length;
+  }
+  return 0;
+}
+function setAnimationTime(seconds: number): void {
+  if (activeModel === 0) {
+    const duration = firstAsset.animations[firstClipIndex]?.duration ?? 1;
+    firstAnimations.setTime(Math.max(0, seconds) % duration);
+  } else {
+    const duration = secondAsset.animations[secondClipIndex]?.duration ?? 1;
+    secondAnimations.setTime(Math.max(0, seconds) % duration);
+  }
+}
+function status() {
+  const activeAsset = activeModel === 0 ? firstAsset : secondAsset;
+  const activePrimitives = activeModel === 0 ? firstPrimitives : secondPrimitives;
+  const activeDimensions = activeModel === 0 ? firstDimensions : secondDimensions;
+  const activeClip = activeModel === 0 ? firstAsset.animations[firstClipIndex] : secondAsset.animations[secondClipIndex];
+  const optimization = activeAsset.meshOptimization[0];
+  return {
+    activeModel: activeModel + 1,
+    meshes: activePrimitives.count,
+    skinnedMeshes: activeModel === 0 ? firstSkinnedCount : secondSkinnedCount,
+    bones: activeBoneCount(),
+    clip: activeClip?.name ?? '',
+    clipDuration: activeClip?.duration ?? 0,
+    animationEnabled,
+    feedbackEnabled,
+    skeletonVisible: activeModel === 0 ? firstSkeleton.helper.visible : secondSkeleton.helper.visible,
+    groundedMinY: activeModel === 0 ? firstGroundedMinY : secondGroundedMinY,
+    orbitAngle,
+    cameraDistance,
+    sourceWidth: activeDimensions.width,
+    sourceHeight: activeDimensions.height,
+    material: 'virtual-gltf-metallic-roughness',
+    packedAsset: activeModel === 0 ? 'model.glb' : 'model-2.glb',
+    meshOptimized: activeAsset.meshOptimization.length === activePrimitives.count,
+    originalAcmr: optimization?.originalAcmr ?? 0,
+    optimizedAcmr: optimization?.optimizedAcmr ?? 0,
+    preservedAttributes: optimization?.preservedAttributes ?? [],
+    sameMeshFeedback: true,
+    feedbackChannels: activeModel === 0 ? firstBinding.feedbackPassCount : secondBinding.feedbackPassCount,
+    shadows: rendererHost.renderer.shadowMap.enabled && keyLight.castShadow && floor.receiveShadow,
+    shadowMapSize: keyLight.shadow.mapSize.x,
+    rendererSealed: rendererHost.sealMonitor.isSealed,
+    pipelineViolations: rendererHost.sealMonitor.violations,
+  };
+}
+
+publishDevHarness('__afterglowRiggedVT', {
+  setProgrammatic(enabled: boolean) { input.programmatic = enabled; },
   setAnimationEnabled,
-  setAnimationTime(seconds: number) {
-    if (activeModel === 0) mixer.setTime(Math.max(0, seconds) % gltf.animations[0].duration);
-    else secondMixer.setTime(Math.max(0, seconds) % secondClip.duration);
-  },
+  setAnimationTime,
   measureBounds() {
-    const bounds = activeModel === 0 ? measureDeformedBounds() : measureSecondBounds();
+    const bounds = activeModel === 0 ? measureFirstBounds() : measureSecondBounds();
     return { minY: bounds.min.y, maxY: bounds.max.y };
   },
   setActiveModel,
-  setFeedbackEnabled(enabled: boolean) { feedbackEnabled = Boolean(enabled); },
+  setFeedbackEnabled,
   setSkeletonVisible,
   setView(angle: number, distance: number) {
-    orbitAngle = angle; orbitVelocity = 0;
-    cameraDistance = Math.max(1.35, Math.min(8, distance)); zoomVelocity = 0;
+    orbitAngle = angle;
+    orbitVelocity = 0;
+    cameraDistance = Math.max(1.35, Math.min(8, distance));
+    zoomVelocity = 0;
   },
-  step(count = 1) { return new Promise<void>(resolve => waiters.push({ target: frame + count, resolve })); },
+  step(count = 1) { return frameSteps.wait(runtime.frame.frameId, count); },
   telemetry: () => store.getStats(),
   debugSnapshot: () => store.getDebugSnapshot(),
-  feedbackMips: () => feedbackPass.getLatestMips(),
-  errorCount: () => errors.length,
-  errors: () => errors.slice(),
-  status: () => {
-    const activeGltf = activeModel === 0 ? gltf : secondGltf;
-    const activeMeshes = activeModel === 0 ? skinnedMeshes : secondMeshes;
-    const activeDimensions = activeModel === 0 ? dimensions : secondDimensions;
-    const optimization = activeGltf.meshOptimization[0];
-    return {
-      activeModel: activeModel + 1,
-      meshes: activeMeshes.length,
-      skinnedMeshes: activeModel === 0 ? skinnedMeshes.length : secondSkinnedMeshes.length,
-      bones: activeModel === 0 ? skinnedMeshes[0].skeleton.bones.length : (secondSkinnedMeshes[0]?.skeleton.bones.length ?? 0),
-      clip: activeModel === 0 ? gltf.animations[0].name : secondClip.name,
-      clipDuration: activeModel === 0 ? gltf.animations[0].duration : secondClip.duration,
-      animationEnabled, feedbackEnabled, skeletonVisible: skeleton.visible,
-      groundedMinY: activeModel === 0 ? groundedMinY : secondGroundedMinY,
-      orbitAngle, cameraDistance,
-      sourceWidth: activeDimensions.width, sourceHeight: activeDimensions.height,
-      material: 'virtual-gltf-metallic-roughness',
-      packedAsset: activeModel === 0 ? 'model.glb' : 'model-2.glb',
-      meshOptimized: activeGltf.meshOptimization.length === activeMeshes.length,
-      originalAcmr: optimization.originalAcmr,
-      optimizedAcmr: optimization.optimizedAcmr,
-      preservedAttributes: optimization.preservedAttributes,
-      sameMeshFeedback: true,
-      feedbackChannels: activeModel === 0 ? 1 : secondMaxFeedbackChannels,
-      shadows: renderer.shadowMap.enabled && key.castShadow && floor.receiveShadow,
-      shadowMapSize: key.shadow.mapSize.x,
-      rendererSealed: rendererSeal.isSealed,
-      pipelineViolations: rendererSeal.violations,
-    };
-  },
-};
+  feedbackMips: () => [],
+  errorCount: () => runtime.diagnostics.count,
+  errors: () => errorCapture.snapshot(),
+  status,
+});
+bootstrap.release();
+} catch (error) {
+  try { await bootstrap.rollback(); }
+  catch (cleanupError) {
+    if (error instanceof Error && error.cause === undefined) error.cause = cleanupError;
+  }
+  throw error;
+}

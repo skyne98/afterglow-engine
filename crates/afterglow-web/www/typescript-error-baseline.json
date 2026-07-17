@@ -2130,7 +2130,7 @@
       "id": "8dc425b3584ab1847bdb",
       "file": "dungeon.ts",
       "line": 93,
-      "column": 83,
+      "column": 213,
       "code": 2339,
       "message": "Property 'visibility' does not exist on type 'PomSelfShadowLightingModel'.",
       "source": "visibility"
@@ -2370,51 +2370,6 @@
       "source": "descriptor"
     },
     {
-      "id": "a59bb07bca30cd954227",
-      "file": "dungeon.ts",
-      "line": 171,
-      "column": 31,
-      "code": 2339,
-      "message": "Property 'getRenderTarget' does not exist on type 'WebGPUOnlyRenderer'.",
-      "source": "getRenderTarget"
-    },
-    {
-      "id": "1947f982a9e9a323785c",
-      "file": "dungeon.ts",
-      "line": 171,
-      "column": 58,
-      "code": 2339,
-      "message": "Property 'setRenderTarget' does not exist on type 'WebGPUOnlyRenderer'.",
-      "source": "setRenderTarget"
-    },
-    {
-      "id": "6b7b1ac8ee4bf916e966",
-      "file": "dungeon.ts",
-      "line": 173,
-      "column": 10,
-      "code": 2339,
-      "message": "Property 'setRenderTarget' does not exist on type 'WebGPUOnlyRenderer'.",
-      "source": "setRenderTarget"
-    },
-    {
-      "id": "4b6a088e459848158a10",
-      "file": "dungeon.ts",
-      "line": 173,
-      "column": 105,
-      "code": 2339,
-      "message": "Property 'setRenderTarget' does not exist on type 'WebGPUOnlyRenderer'.",
-      "source": "setRenderTarget"
-    },
-    {
-      "id": "8769081c689577d56c66",
-      "file": "dungeon.ts",
-      "line": 173,
-      "column": 219,
-      "code": 2339,
-      "message": "Property 'setRenderTarget' does not exist on type 'WebGPUOnlyRenderer'.",
-      "source": "setRenderTarget"
-    },
-    {
       "id": "e9a54e0348e83c81638f",
       "file": "dungeon.ts",
       "line": 173,
@@ -2431,24 +2386,6 @@
       "code": 2559,
       "message": "Type '{ isWebGPUBackend?: boolean; device?: unknown; createRenderPipeline: (renderObject: unknown, promises: Promise<unknown>[]) => void; createComputePipeline: (computePipeline: unknown, bindings: unknown) => void; }' has no properties in common with type '{ utils?: { getTextureFormatGPU(texture: HeightTexture): string | undefined; }; }'.",
       "source": "renderer.backend"
-    },
-    {
-      "id": "40b4e3b8d86b5b362bde",
-      "file": "dungeon.ts",
-      "line": 174,
-      "column": 167,
-      "code": 2339,
-      "message": "Property 'setRenderTarget' does not exist on type 'WebGPUOnlyRenderer'.",
-      "source": "setRenderTarget"
-    },
-    {
-      "id": "89d9a84f92eea1d55ff0",
-      "file": "dungeon.ts",
-      "line": 174,
-      "column": 251,
-      "code": 2339,
-      "message": "Property 'setRenderTarget' does not exist on type 'WebGPUOnlyRenderer'.",
-      "source": "setRenderTarget"
     },
     {
       "id": "749f245bffce3899f618",
@@ -2921,7 +2858,7 @@
     {
       "id": "cf4d840d18602fb65887",
       "file": "engine/asset-store.test.ts",
-      "line": 45,
+      "line": 108,
       "column": 12,
       "code": 2532,
       "message": "Object is possibly 'undefined'.",
@@ -2930,7 +2867,7 @@
     {
       "id": "209698ac8b03833e0953",
       "file": "engine/asset-store.test.ts",
-      "line": 46,
+      "line": 109,
       "column": 12,
       "code": 2532,
       "message": "Object is possibly 'undefined'.",
@@ -2939,7 +2876,7 @@
     {
       "id": "5c5a692228fa24cbb2dd",
       "file": "engine/asset-store.test.ts",
-      "line": 76,
+      "line": 139,
       "column": 25,
       "code": 2769,
       "message": "No overload matches this call. Overload 1 of 2, '(expected: AssetHandle<number>): void', gave the following error. Argument of type 'AssetHandle<number | undefined>' is not assignable to parameter of type 'AssetHandle<number>'. Type 'number | undefined' is not assignable to type 'number'. Type 'undefined' is not assignable to type 'number'. Overload 2 of 2, '(expected: NoInfer<AssetHandle<number>>): void', gave the following error. Argument of type 'AssetHandle<number | undefined>' is not assignable to parameter of type 'AssetHandle<number>'. Type 'number | undefined' is not assignable to type 'number'. Type 'undefined' is not assignable to type 'number'.",
@@ -2948,7 +2885,7 @@
     {
       "id": "31602662097adcf1a329",
       "file": "engine/asset-store.test.ts",
-      "line": 154,
+      "line": 217,
       "column": 5,
       "code": 2722,
       "message": "Cannot invoke an object which is possibly 'undefined'.",
@@ -2957,7 +2894,7 @@
     {
       "id": "982439edf15be95444be",
       "file": "engine/asset-store.test.ts",
-      "line": 155,
+      "line": 218,
       "column": 5,
       "code": 2722,
       "message": "Cannot invoke an object which is possibly 'undefined'.",
@@ -2966,7 +2903,7 @@
     {
       "id": "a103ad4b834813dde23e",
       "file": "engine/asset-store.ts",
-      "line": 93,
+      "line": 109,
       "column": 52,
       "code": 2322,
       "message": "Type 'Uint8Array<ArrayBufferLike>' is not assignable to type 'BlobPart'. Type 'Uint8Array<ArrayBufferLike>' is not assignable to type 'ArrayBufferView<ArrayBuffer>'. Types of property 'buffer' are incompatible. Type 'ArrayBufferLike' is not assignable to type 'ArrayBuffer'. Property 'resize' is missing in type 'SharedArrayBuffer' but required in type 'ArrayBuffer'.",
@@ -2975,7 +2912,7 @@
     {
       "id": "82c1d45698c3546934f4",
       "file": "engine/asset-store.ts",
-      "line": 236,
+      "line": 315,
       "column": 5,
       "code": 2412,
       "message": "Type '{ optimizeVertexCache(indices: Uint32Array<ArrayBufferLike>, vertexCount: number): Promise<Uint32Array<ArrayBufferLike>>; ... 4 more ...; poll(): void; } | undefined' is not assignable to type '{ optimizeVertexCache(indices: Uint32Array<ArrayBufferLike>, vertexCount: number): Promise<Uint32Array<ArrayBufferLike>>; ... 4 more ...; poll(): void; }' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the type of the target. Type 'undefined' is not assignable to type '{ optimizeVertexCache(indices: Uint32Array<ArrayBufferLike>, vertexCount: number): Promise<Uint32Array<ArrayBufferLike>>; ... 4 more ...; poll(): void; }'.",
@@ -2984,7 +2921,7 @@
     {
       "id": "d2a7fc7f103f6d2eddce",
       "file": "engine/asset-store.ts",
-      "line": 298,
+      "line": 377,
       "column": 35,
       "code": 2538,
       "message": "Type 'undefined' cannot be used as an index type.",
@@ -2993,7 +2930,7 @@
     {
       "id": "39782949d293d30a56ff",
       "file": "engine/asset-store.ts",
-      "line": 299,
+      "line": 378,
       "column": 30,
       "code": 2538,
       "message": "Type 'undefined' cannot be used as an index type.",
@@ -3002,7 +2939,7 @@
     {
       "id": "02d50ff19ecd739f867b",
       "file": "engine/asset-store.ts",
-      "line": 308,
+      "line": 387,
       "column": 21,
       "code": 2538,
       "message": "Type 'undefined' cannot be used as an index type.",
@@ -3011,7 +2948,7 @@
     {
       "id": "b9625d16b89193f1d32a",
       "file": "engine/asset-store.ts",
-      "line": 312,
+      "line": 391,
       "column": 21,
       "code": 2538,
       "message": "Type 'undefined' cannot be used as an index type.",
@@ -3020,7 +2957,7 @@
     {
       "id": "6e8aa87cec9b04a486d3",
       "file": "engine/asset-store.ts",
-      "line": 313,
+      "line": 392,
       "column": 36,
       "code": 2345,
       "message": "Argument of type 'number | undefined' is not assignable to parameter of type 'number'. Type 'undefined' is not assignable to type 'number'.",
@@ -3029,7 +2966,7 @@
     {
       "id": "522ef5bf48c0cfb43c43",
       "file": "engine/asset-store.ts",
-      "line": 340,
+      "line": 419,
       "column": 21,
       "code": 2532,
       "message": "Object is possibly 'undefined'.",
@@ -3038,7 +2975,7 @@
     {
       "id": "91491218b12c15e625c2",
       "file": "engine/asset-store.ts",
-      "line": 471,
+      "line": 550,
       "column": 9,
       "code": 2322,
       "message": "Type 'number | undefined' is not assignable to type 'number'. Type 'undefined' is not assignable to type 'number'.",
@@ -3047,7 +2984,7 @@
     {
       "id": "24de02c7c2309a49fcd4",
       "file": "engine/asset-store.ts",
-      "line": 472,
+      "line": 551,
       "column": 9,
       "code": 2322,
       "message": "Type 'number | undefined' is not assignable to type 'number'. Type 'undefined' is not assignable to type 'number'.",
@@ -3056,7 +2993,7 @@
     {
       "id": "9d740842ccf4bc421d4a",
       "file": "engine/asset-store.ts",
-      "line": 603,
+      "line": 685,
       "column": 11,
       "code": 2412,
       "message": "Type '{ originalTriangles: number; originalAcmr: number | undefined; optimizedAcmr: number | undefined; compressedIndexBytes: number; uncompressedIndexBytes: number; } | undefined' is not assignable to type 'MeshStats | undefined' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the type of the target.",
@@ -3065,7 +3002,7 @@
     {
       "id": "681aa7972dff1619330b",
       "file": "engine/asset-store.ts",
-      "line": 621,
+      "line": 703,
       "column": 34,
       "code": 2322,
       "message": "Type 'number | undefined' is not assignable to type 'number'. Type 'undefined' is not assignable to type 'number'.",
@@ -3074,7 +3011,7 @@
     {
       "id": "da0c92f5f14c0a4b28a1",
       "file": "engine/asset-store.ts",
-      "line": 621,
+      "line": 703,
       "column": 48,
       "code": 2322,
       "message": "Type 'number | undefined' is not assignable to type 'number'. Type 'undefined' is not assignable to type 'number'.",
@@ -3083,7 +3020,7 @@
     {
       "id": "a3cde88cfe59935c29da",
       "file": "engine/asset-store.ts",
-      "line": 656,
+      "line": 738,
       "column": 17,
       "code": 2532,
       "message": "Object is possibly 'undefined'.",
@@ -3092,7 +3029,7 @@
     {
       "id": "aa6574b552674a08d4a1",
       "file": "engine/asset-store.ts",
-      "line": 668,
+      "line": 750,
       "column": 5,
       "code": 2532,
       "message": "Object is possibly 'undefined'.",
@@ -3101,7 +3038,7 @@
     {
       "id": "07c49c6ad5048e817b4d",
       "file": "engine/asset-store.ts",
-      "line": 701,
+      "line": 783,
       "column": 7,
       "code": 2532,
       "message": "Object is possibly 'undefined'.",
@@ -3254,7 +3191,7 @@
     {
       "id": "b357c58a37a6c77c9f97",
       "file": "engine/big-parser.ts",
-      "line": 628,
+      "line": 629,
       "column": 20,
       "code": 18048,
       "message": "'asset' is possibly 'undefined'.",
@@ -3263,7 +3200,7 @@
     {
       "id": "e59ee2ebccb55d324586",
       "file": "engine/big-parser.ts",
-      "line": 639,
+      "line": 640,
       "column": 19,
       "code": 2532,
       "message": "Object is possibly 'undefined'.",
@@ -3272,7 +3209,7 @@
     {
       "id": "64c65831c4dc0d5e7f8d",
       "file": "engine/big-parser.ts",
-      "line": 643,
+      "line": 644,
       "column": 21,
       "code": 18048,
       "message": "'asset' is possibly 'undefined'.",
@@ -3281,7 +3218,7 @@
     {
       "id": "e6fd36498459b26c7b1f",
       "file": "engine/big-parser.ts",
-      "line": 684,
+      "line": 685,
       "column": 9,
       "code": 2322,
       "message": "Type 'number | undefined' is not assignable to type 'number'. Type 'undefined' is not assignable to type 'number'.",
@@ -3290,7 +3227,7 @@
     {
       "id": "c87c69bd5bf260289762",
       "file": "engine/big-parser.ts",
-      "line": 685,
+      "line": 686,
       "column": 9,
       "code": 2322,
       "message": "Type 'number | undefined' is not assignable to type 'number'. Type 'undefined' is not assignable to type 'number'.",
@@ -6330,36 +6267,9 @@
       "source": "{}, []"
     },
     {
-      "id": "279548189cef83985e66",
-      "file": "engine/rigged-vt-demo.test.ts",
-      "line": 16,
-      "column": 12,
-      "code": 2532,
-      "message": "Object is possibly 'undefined'.",
-      "source": "model.chunks[0]"
-    },
-    {
-      "id": "f10081abd67c9a165a37",
-      "file": "engine/rigged-vt-demo.test.ts",
-      "line": 17,
-      "column": 12,
-      "code": 2532,
-      "message": "Object is possibly 'undefined'.",
-      "source": "model.chunks[0]"
-    },
-    {
-      "id": "1bab7cb91c662960f13b",
-      "file": "engine/rigged-vt-demo.test.ts",
-      "line": 18,
-      "column": 12,
-      "code": 2532,
-      "message": "Object is possibly 'undefined'.",
-      "source": "model.chunks[0]"
-    },
-    {
       "id": "a370391c8fc7110be909",
       "file": "engine/rigged-vt-demo.test.ts",
-      "line": 28,
+      "line": 39,
       "column": 12,
       "code": 2532,
       "message": "Object is possibly 'undefined'.",
@@ -6368,7 +6278,7 @@
     {
       "id": "8194d95f79bb50cce896",
       "file": "engine/rigged-vt-demo.test.ts",
-      "line": 31,
+      "line": 42,
       "column": 13,
       "code": 2532,
       "message": "Object is possibly 'undefined'.",
@@ -6377,7 +6287,7 @@
     {
       "id": "7d7211da44f2da6fe912",
       "file": "engine/rigged-vt-demo.test.ts",
-      "line": 31,
+      "line": 42,
       "column": 54,
       "code": 2532,
       "message": "Object is possibly 'undefined'.",
@@ -6386,7 +6296,7 @@
     {
       "id": "82b222b1493340ae8d41",
       "file": "engine/virtual-texture-feedback-pass.ts",
-      "line": 87,
+      "line": 96,
       "column": 9,
       "code": 18048,
       "message": "'requests' is possibly 'undefined'.",
@@ -6395,7 +6305,7 @@
     {
       "id": "d6e89e7e5fe4217c6605",
       "file": "engine/virtual-texture-feedback-pass.ts",
-      "line": 92,
+      "line": 101,
       "column": 16,
       "code": 18048,
       "message": "'packed' is possibly 'undefined'.",
@@ -6404,7 +6314,7 @@
     {
       "id": "1f01cddd31810423023e",
       "file": "engine/virtual-texture-feedback-pass.ts",
-      "line": 93,
+      "line": 102,
       "column": 23,
       "code": 18048,
       "message": "'packed' is possibly 'undefined'.",
@@ -6413,7 +6323,7 @@
     {
       "id": "ebece55d80a04e00f056",
       "file": "engine/virtual-texture-feedback-pass.ts",
-      "line": 94,
+      "line": 103,
       "column": 22,
       "code": 18048,
       "message": "'packed' is possibly 'undefined'.",
@@ -6422,7 +6332,7 @@
     {
       "id": "5d51602e4ff605394fee",
       "file": "engine/virtual-texture-feedback-pass.ts",
-      "line": 95,
+      "line": 104,
       "column": 22,
       "code": 18048,
       "message": "'packed' is possibly 'undefined'.",
@@ -6431,7 +6341,7 @@
     {
       "id": "0947c29939c5c151f35c",
       "file": "engine/virtual-texture-feedback-pass.ts",
-      "line": 96,
+      "line": 105,
       "column": 44,
       "code": 2345,
       "message": "Argument of type 'number | undefined' is not assignable to parameter of type 'number'. Type 'undefined' is not assignable to type 'number'.",
@@ -6440,7 +6350,7 @@
     {
       "id": "0b2114ca399e7b549429",
       "file": "engine/virtual-texture-feedback-pass.ts",
-      "line": 117,
+      "line": 126,
       "column": 28,
       "code": 18048,
       "message": "'requests' is possibly 'undefined'.",
@@ -6449,7 +6359,7 @@
     {
       "id": "f1da4dfcdd8735d08679",
       "file": "engine/virtual-texture-feedback-pass.ts",
-      "line": 124,
+      "line": 133,
       "column": 11,
       "code": 18048,
       "message": "'request' is possibly 'undefined'.",
@@ -6458,7 +6368,7 @@
     {
       "id": "797b656ee57f4e1be5da",
       "file": "engine/virtual-texture-feedback-pass.ts",
-      "line": 125,
+      "line": 134,
       "column": 11,
       "code": 18048,
       "message": "'request' is possibly 'undefined'.",
@@ -6467,7 +6377,7 @@
     {
       "id": "8fe19d9920276cb9322a",
       "file": "engine/virtual-texture-feedback-pass.ts",
-      "line": 126,
+      "line": 135,
       "column": 11,
       "code": 18048,
       "message": "'request' is possibly 'undefined'.",
@@ -6476,7 +6386,7 @@
     {
       "id": "eaa1a5da4ad8c9550b34",
       "file": "engine/virtual-texture-feedback-pass.ts",
-      "line": 127,
+      "line": 136,
       "column": 11,
       "code": 18048,
       "message": "'request' is possibly 'undefined'.",
@@ -6485,7 +6395,7 @@
     {
       "id": "6a0fc562240f869cb865",
       "file": "engine/virtual-texture-feedback-pass.ts",
-      "line": 128,
+      "line": 137,
       "column": 11,
       "code": 18048,
       "message": "'request' is possibly 'undefined'.",
@@ -6494,7 +6404,7 @@
     {
       "id": "673514e2b62c83382147",
       "file": "engine/virtual-texture-feedback-pass.ts",
-      "line": 129,
+      "line": 138,
       "column": 11,
       "code": 2322,
       "message": "Type 'boolean | undefined' is not assignable to type 'boolean'. Type 'undefined' is not assignable to type 'boolean'.",
@@ -6503,7 +6413,7 @@
     {
       "id": "451dca3e16b53f00658f",
       "file": "engine/virtual-texture-feedback-pass.ts",
-      "line": 129,
+      "line": 138,
       "column": 11,
       "code": 18048,
       "message": "'request' is possibly 'undefined'.",
@@ -6512,7 +6422,7 @@
     {
       "id": "9d29003af2acdfdf1a83",
       "file": "engine/virtual-texture-feedback-pass.ts",
-      "line": 130,
+      "line": 139,
       "column": 11,
       "code": 18048,
       "message": "'request' is possibly 'undefined'.",
@@ -6521,7 +6431,7 @@
     {
       "id": "cd0f029a394b6ad610af",
       "file": "engine/virtual-texture-feedback-pass.ts",
-      "line": 131,
+      "line": 140,
       "column": 11,
       "code": 18048,
       "message": "'request' is possibly 'undefined'.",
@@ -6530,7 +6440,7 @@
     {
       "id": "6da6ffb6f8e4fe243278",
       "file": "engine/virtual-texture-feedback-pass.ts",
-      "line": 132,
+      "line": 141,
       "column": 11,
       "code": 2322,
       "message": "Type 'undefined' is not assignable to type 'number'.",
@@ -6539,7 +6449,7 @@
     {
       "id": "bdcd70389b99ad1e85f2",
       "file": "engine/virtual-texture-feedback-pass.ts",
-      "line": 132,
+      "line": 141,
       "column": 11,
       "code": 18048,
       "message": "'request' is possibly 'undefined'.",
@@ -6548,7 +6458,7 @@
     {
       "id": "5ed80bb78d359b5ba263",
       "file": "engine/virtual-texture-feedback-pass.ts",
-      "line": 133,
+      "line": 142,
       "column": 11,
       "code": 18048,
       "message": "'requests' is possibly 'undefined'.",
@@ -6557,7 +6467,7 @@
     {
       "id": "9712ccc5d2664235e660",
       "file": "engine/virtual-texture-feedback-pass.ts",
-      "line": 133,
+      "line": 142,
       "column": 29,
       "code": 2345,
       "message": "Argument of type 'VirtualPageRequest | undefined' is not assignable to parameter of type 'VirtualPageRequest'. Type 'undefined' is not assignable to type 'VirtualPageRequest'.",
@@ -6566,7 +6476,7 @@
     {
       "id": "a01cd63ce69dac736f1d",
       "file": "engine/virtual-texture-feedback-pass.ts",
-      "line": 139,
+      "line": 148,
       "column": 9,
       "code": 2322,
       "message": "Type 'Map<number, VirtualPageRequest> | undefined' is not assignable to type 'Map<number, VirtualPageRequest> | null'. Type 'undefined' is not assignable to type 'Map<number, VirtualPageRequest> | null'.",
@@ -6575,7 +6485,7 @@
     {
       "id": "6951cea8cd0c9083449e",
       "file": "engine/virtual-texture-feedback-pass.ts",
-      "line": 158,
+      "line": 167,
       "column": 5,
       "code": 2532,
       "message": "Object is possibly 'undefined'.",
@@ -6584,7 +6494,7 @@
     {
       "id": "dec5e0ed4c173b46c3a5",
       "file": "engine/virtual-texture-feedback-pass.ts",
-      "line": 159,
+      "line": 168,
       "column": 5,
       "code": 2532,
       "message": "Object is possibly 'undefined'.",
@@ -6611,7 +6521,7 @@
     {
       "id": "4f3af8dfa604efb9a3ab",
       "file": "engine/virtual-texture-store.test.ts",
-      "line": 129,
+      "line": 131,
       "column": 12,
       "code": 2532,
       "message": "Object is possibly 'undefined'.",
@@ -6620,7 +6530,7 @@
     {
       "id": "1f5e2efd0db2a7f37c05",
       "file": "engine/virtual-texture-store.test.ts",
-      "line": 130,
+      "line": 132,
       "column": 12,
       "code": 2532,
       "message": "Object is possibly 'undefined'.",
@@ -6629,7 +6539,7 @@
     {
       "id": "f300844d4dc186e7b1d2",
       "file": "engine/virtual-texture-store.test.ts",
-      "line": 260,
+      "line": 262,
       "column": 12,
       "code": 2532,
       "message": "Object is possibly 'undefined'.",
@@ -6638,7 +6548,7 @@
     {
       "id": "33e92e7fc945d8f4df43",
       "file": "engine/virtual-texture-store.test.ts",
-      "line": 279,
+      "line": 281,
       "column": 23,
       "code": 2532,
       "message": "Object is possibly 'undefined'.",
@@ -7214,7 +7124,7 @@
     {
       "id": "18731628d30577b39dd9",
       "file": "engine/virtual-texture.ts",
-      "line": 1426,
+      "line": 1467,
       "column": 5,
       "code": 2412,
       "message": "Type 'number | undefined' is not assignable to type 'number' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the type of the target. Type 'undefined' is not assignable to type 'number'.",
@@ -7223,7 +7133,7 @@
     {
       "id": "ef8aed51bb2bde419c87",
       "file": "engine/virtual-texture.ts",
-      "line": 1431,
+      "line": 1472,
       "column": 5,
       "code": 2412,
       "message": "Type 'boolean | undefined' is not assignable to type 'boolean' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the type of the target. Type 'undefined' is not assignable to type 'boolean'.",
@@ -7232,7 +7142,7 @@
     {
       "id": "25a028a9a57faac83ad9",
       "file": "engine/virtual-texture.ts",
-      "line": 1432,
+      "line": 1473,
       "column": 5,
       "code": 2412,
       "message": "Type 'number | undefined' is not assignable to type 'number' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the type of the target. Type 'undefined' is not assignable to type 'number'.",
@@ -7241,7 +7151,7 @@
     {
       "id": "181299ab9a025f5ef409",
       "file": "engine/virtual-texture.ts",
-      "line": 1433,
+      "line": 1474,
       "column": 5,
       "code": 2412,
       "message": "Type 'number | undefined' is not assignable to type 'number' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the type of the target. Type 'undefined' is not assignable to type 'number'.",
@@ -7250,7 +7160,7 @@
     {
       "id": "f4e262019e0a4ad79748",
       "file": "engine/virtual-texture.ts",
-      "line": 1434,
+      "line": 1475,
       "column": 5,
       "code": 2412,
       "message": "Type 'number | undefined' is not assignable to type 'number' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the type of the target. Type 'undefined' is not assignable to type 'number'.",
@@ -7259,7 +7169,7 @@
     {
       "id": "57e051adcb7b4d662e04",
       "file": "engine/virtual-texture.ts",
-      "line": 1440,
+      "line": 1481,
       "column": 5,
       "code": 2322,
       "message": "Type 'number | undefined' is not assignable to type 'number'. Type 'undefined' is not assignable to type 'number'.",
@@ -7268,7 +7178,7 @@
     {
       "id": "84f313ca818748dd25f1",
       "file": "engine/virtual-texture.ts",
-      "line": 1442,
+      "line": 1483,
       "column": 9,
       "code": 18048,
       "message": "'tail' is possibly 'undefined'.",
@@ -7277,7 +7187,7 @@
     {
       "id": "b8b1e0843af1aba38fce",
       "file": "engine/virtual-texture.ts",
-      "line": 1443,
+      "line": 1484,
       "column": 29,
       "code": 2538,
       "message": "Type 'undefined' cannot be used as an index type.",
@@ -7286,7 +7196,7 @@
     {
       "id": "0bc91626e1941290aed1",
       "file": "engine/virtual-texture.ts",
-      "line": 1451,
+      "line": 1492,
       "column": 9,
       "code": 18048,
       "message": "'previous' is possibly 'undefined'.",
@@ -7295,7 +7205,7 @@
     {
       "id": "dcb8db27720742b6d7a9",
       "file": "engine/virtual-texture.ts",
-      "line": 1451,
+      "line": 1492,
       "column": 42,
       "code": 2538,
       "message": "Type 'undefined' cannot be used as an index type.",
@@ -7304,7 +7214,7 @@
     {
       "id": "a1ac2a6ddcbe109443af",
       "file": "engine/virtual-texture.ts",
-      "line": 1452,
+      "line": 1493,
       "column": 29,
       "code": 2538,
       "message": "Type 'undefined' cannot be used as an index type.",
@@ -7313,7 +7223,7 @@
     {
       "id": "f4795828bc5d1af612e8",
       "file": "engine/virtual-texture.ts",
-      "line": 1453,
+      "line": 1494,
       "column": 9,
       "code": 18048,
       "message": "'next' is possibly 'undefined'.",
@@ -7322,7 +7232,7 @@
     {
       "id": "fc2342ed0c15bbb6016a",
       "file": "engine/virtual-texture.ts",
-      "line": 1453,
+      "line": 1494,
       "column": 38,
       "code": 2538,
       "message": "Type 'undefined' cannot be used as an index type.",
@@ -7331,7 +7241,7 @@
     {
       "id": "80b14c773963c02d9856",
       "file": "engine/virtual-texture.ts",
-      "line": 1454,
+      "line": 1495,
       "column": 33,
       "code": 2538,
       "message": "Type 'undefined' cannot be used as an index type.",
@@ -7340,7 +7250,7 @@
     {
       "id": "b48feb56cc4021cf23b6",
       "file": "engine/virtual-texture.ts",
-      "line": 1468,
+      "line": 1509,
       "column": 32,
       "code": 2345,
       "message": "Argument of type 'number | undefined' is not assignable to parameter of type 'number'. Type 'undefined' is not assignable to type 'number'.",
@@ -7349,7 +7259,7 @@
     {
       "id": "9de30ad64c57d443d7f1",
       "file": "engine/virtual-texture.ts",
-      "line": 1496,
+      "line": 1537,
       "column": 24,
       "code": 2345,
       "message": "Argument of type 'VirtualPageRequest | undefined' is not assignable to parameter of type 'VirtualPageRequest'. Type 'undefined' is not assignable to type 'VirtualPageRequest'.",
@@ -7358,7 +7268,7 @@
     {
       "id": "5b492359e70c82f78562",
       "file": "engine/virtual-texture.ts",
-      "line": 1497,
+      "line": 1538,
       "column": 50,
       "code": 2532,
       "message": "Object is possibly 'undefined'.",
@@ -7367,7 +7277,7 @@
     {
       "id": "34f5f5863eac3f1c5a29",
       "file": "engine/virtual-texture.ts",
-      "line": 1508,
+      "line": 1549,
       "column": 24,
       "code": 2538,
       "message": "Type 'undefined' cannot be used as an index type.",
@@ -7376,7 +7286,7 @@
     {
       "id": "f77e3f4eda9961248c83",
       "file": "engine/virtual-texture.ts",
-      "line": 1509,
+      "line": 1550,
       "column": 45,
       "code": 2538,
       "message": "Type 'undefined' cannot be used as an index type.",
@@ -7385,7 +7295,7 @@
     {
       "id": "54fbe64e09fbc90e760c",
       "file": "engine/virtual-texture.ts",
-      "line": 1510,
+      "line": 1551,
       "column": 26,
       "code": 2538,
       "message": "Type 'undefined' cannot be used as an index type.",
@@ -7394,7 +7304,7 @@
     {
       "id": "a3921e09ad56371d4c70",
       "file": "engine/virtual-texture.ts",
-      "line": 1511,
+      "line": 1552,
       "column": 28,
       "code": 2538,
       "message": "Type 'undefined' cannot be used as an index type.",
@@ -7403,7 +7313,7 @@
     {
       "id": "4acff335fb295e1bd260",
       "file": "engine/virtual-texture.ts",
-      "line": 1512,
+      "line": 1553,
       "column": 25,
       "code": 2538,
       "message": "Type 'undefined' cannot be used as an index type.",
@@ -7412,7 +7322,7 @@
     {
       "id": "759f83b74b943ca46f99",
       "file": "engine/virtual-texture.ts",
-      "line": 1513,
+      "line": 1554,
       "column": 28,
       "code": 2345,
       "message": "Argument of type 'number | undefined' is not assignable to parameter of type 'number'. Type 'undefined' is not assignable to type 'number'.",
@@ -7421,7 +7331,7 @@
     {
       "id": "ecd6e84adde6d83d61d7",
       "file": "engine/virtual-texture.ts",
-      "line": 1514,
+      "line": 1555,
       "column": 34,
       "code": 2345,
       "message": "Argument of type 'number | undefined' is not assignable to parameter of type 'number'. Type 'undefined' is not assignable to type 'number'.",
@@ -7430,7 +7340,7 @@
     {
       "id": "1277f8517e0d886ab549",
       "file": "engine/virtual-texture.ts",
-      "line": 1533,
+      "line": 1574,
       "column": 54,
       "code": 2532,
       "message": "Object is possibly 'undefined'.",
@@ -7439,7 +7349,7 @@
     {
       "id": "3d03e2bfd08b005f72c2",
       "file": "engine/virtual-texture.ts",
-      "line": 1537,
+      "line": 1578,
       "column": 46,
       "code": 2538,
       "message": "Type 'undefined' cannot be used as an index type.",
@@ -7448,7 +7358,7 @@
     {
       "id": "f50919ce03542f234aeb",
       "file": "engine/virtual-texture.ts",
-      "line": 1538,
+      "line": 1579,
       "column": 55,
       "code": 2538,
       "message": "Type 'undefined' cannot be used as an index type.",
@@ -7457,7 +7367,7 @@
     {
       "id": "2ed8f59e29ec80495d4f",
       "file": "engine/virtual-texture.ts",
-      "line": 1539,
+      "line": 1580,
       "column": 30,
       "code": 2345,
       "message": "Argument of type 'number | undefined' is not assignable to parameter of type 'number'. Type 'undefined' is not assignable to type 'number'.",
@@ -7466,7 +7376,7 @@
     {
       "id": "8acb4eae309e030bcc6f",
       "file": "engine/virtual-texture.ts",
-      "line": 1547,
+      "line": 1588,
       "column": 30,
       "code": 2345,
       "message": "Argument of type 'number | undefined' is not assignable to parameter of type 'number'. Type 'undefined' is not assignable to type 'number'.",
@@ -7475,7 +7385,7 @@
     {
       "id": "481a30a3baf16f972907",
       "file": "engine/virtual-texture.ts",
-      "line": 1550,
+      "line": 1591,
       "column": 43,
       "code": 2538,
       "message": "Type 'undefined' cannot be used as an index type.",
@@ -7484,7 +7394,7 @@
     {
       "id": "620b4a3d5ebc3185b20d",
       "file": "engine/virtual-texture.ts",
-      "line": 1552,
+      "line": 1593,
       "column": 30,
       "code": 2345,
       "message": "Argument of type 'number | undefined' is not assignable to parameter of type 'number'. Type 'undefined' is not assignable to type 'number'.",
@@ -7493,7 +7403,7 @@
     {
       "id": "14bed7d5758a45716510",
       "file": "engine/virtual-texture.ts",
-      "line": 1568,
+      "line": 1609,
       "column": 11,
       "code": 18048,
       "message": "'pending' is possibly 'undefined'.",
@@ -7502,7 +7412,7 @@
     {
       "id": "2cbb6de92bada5c6a226",
       "file": "engine/virtual-texture.ts",
-      "line": 1568,
+      "line": 1609,
       "column": 34,
       "code": 18048,
       "message": "'pending' is possibly 'undefined'.",
@@ -7511,7 +7421,7 @@
     {
       "id": "3bab9637f4d4ed3320ad",
       "file": "engine/virtual-texture.ts",
-      "line": 1569,
+      "line": 1610,
       "column": 32,
       "code": 18048,
       "message": "'pending' is possibly 'undefined'.",
@@ -7520,7 +7430,7 @@
     {
       "id": "1eee71f5f35f03abcc2f",
       "file": "engine/virtual-texture.ts",
-      "line": 1570,
+      "line": 1611,
       "column": 7,
       "code": 18048,
       "message": "'pending' is possibly 'undefined'.",
@@ -7529,7 +7439,7 @@
     {
       "id": "58a147eacd741d84ff7c",
       "file": "engine/virtual-texture.ts",
-      "line": 1571,
+      "line": 1612,
       "column": 7,
       "code": 18048,
       "message": "'pending' is possibly 'undefined'.",
@@ -7538,7 +7448,7 @@
     {
       "id": "d9f592c0e26ac3687d8e",
       "file": "engine/virtual-texture.ts",
-      "line": 1582,
+      "line": 1635,
       "column": 28,
       "code": 2345,
       "message": "Argument of type 'VirtualPageRequest | undefined' is not assignable to parameter of type 'VirtualPageRequest'. Type 'undefined' is not assignable to type 'VirtualPageRequest'.",
@@ -7547,7 +7457,7 @@
     {
       "id": "b9cb5741718d7edd515b",
       "file": "engine/virtual-texture.ts",
-      "line": 1689,
+      "line": 1742,
       "column": 48,
       "code": 2532,
       "message": "Object is possibly 'undefined'.",
@@ -7556,7 +7466,7 @@
     {
       "id": "8fda39cf4845fb4ed6f7",
       "file": "engine/virtual-texture.ts",
-      "line": 1695,
+      "line": 1748,
       "column": 11,
       "code": 18048,
       "message": "'pending' is possibly 'undefined'.",
@@ -7565,7 +7475,7 @@
     {
       "id": "989f98dbfd9b9a86002e",
       "file": "engine/virtual-texture.ts",
-      "line": 1696,
+      "line": 1749,
       "column": 7,
       "code": 18048,
       "message": "'pending' is possibly 'undefined'.",
@@ -7574,7 +7484,7 @@
     {
       "id": "40d513b123ed8e0f00e3",
       "file": "engine/virtual-texture.ts",
-      "line": 1697,
+      "line": 1750,
       "column": 7,
       "code": 18048,
       "message": "'pending' is possibly 'undefined'.",
@@ -7583,7 +7493,7 @@
     {
       "id": "fc1ae415876572d6a364",
       "file": "engine/virtual-texture.ts",
-      "line": 1698,
+      "line": 1751,
       "column": 26,
       "code": 18048,
       "message": "'pending' is possibly 'undefined'.",
@@ -7592,7 +7502,7 @@
     {
       "id": "ec76b99e2690d429a38f",
       "file": "engine/virtual-texture.ts",
-      "line": 1774,
+      "line": 1827,
       "column": 39,
       "code": 18048,
       "message": "'ready' is possibly 'undefined'.",
@@ -7601,7 +7511,7 @@
     {
       "id": "8a80eaf5a224851a4208",
       "file": "engine/virtual-texture.ts",
-      "line": 1775,
+      "line": 1828,
       "column": 46,
       "code": 18048,
       "message": "'ready' is possibly 'undefined'.",
@@ -7610,7 +7520,7 @@
     {
       "id": "2e454e5516110f58d8b8",
       "file": "engine/virtual-texture.ts",
-      "line": 1777,
+      "line": 1830,
       "column": 28,
       "code": 18048,
       "message": "'ready' is possibly 'undefined'.",
@@ -7619,7 +7529,7 @@
     {
       "id": "6909f0f3639c2914be7a",
       "file": "engine/virtual-texture.ts",
-      "line": 1780,
+      "line": 1833,
       "column": 26,
       "code": 18048,
       "message": "'ready' is possibly 'undefined'.",
@@ -7628,7 +7538,7 @@
     {
       "id": "bb347c7e36bd44767376",
       "file": "engine/virtual-texture.ts",
-      "line": 1781,
+      "line": 1834,
       "column": 25,
       "code": 18048,
       "message": "'ready' is possibly 'undefined'.",
@@ -7637,7 +7547,7 @@
     {
       "id": "8b6f882d15507a725043",
       "file": "engine/virtual-texture.ts",
-      "line": 1784,
+      "line": 1837,
       "column": 36,
       "code": 18048,
       "message": "'ready' is possibly 'undefined'.",
@@ -7646,7 +7556,7 @@
     {
       "id": "6964b41e8c06f20ae7bf",
       "file": "engine/virtual-texture.ts",
-      "line": 1784,
+      "line": 1837,
       "column": 104,
       "code": 18048,
       "message": "'ready' is possibly 'undefined'.",
@@ -7655,7 +7565,7 @@
     {
       "id": "993991cb468d3f1c45fd",
       "file": "engine/virtual-texture.ts",
-      "line": 1789,
+      "line": 1842,
       "column": 45,
       "code": 18048,
       "message": "'ready' is possibly 'undefined'.",
@@ -7664,7 +7574,7 @@
     {
       "id": "41960c0a4f06bdd415b3",
       "file": "engine/virtual-texture.ts",
-      "line": 1800,
+      "line": 1853,
       "column": 25,
       "code": 18048,
       "message": "'ready' is possibly 'undefined'.",
@@ -7673,7 +7583,7 @@
     {
       "id": "8342d41e2f9e29df6efa",
       "file": "engine/virtual-texture.ts",
-      "line": 1800,
+      "line": 1853,
       "column": 43,
       "code": 18048,
       "message": "'ready' is possibly 'undefined'.",
@@ -7682,7 +7592,7 @@
     {
       "id": "707821998cff4845e20a",
       "file": "engine/virtual-texture.ts",
-      "line": 1801,
+      "line": 1854,
       "column": 28,
       "code": 18048,
       "message": "'ready' is possibly 'undefined'.",
@@ -7691,7 +7601,7 @@
     {
       "id": "7c957031e229100effd8",
       "file": "engine/virtual-texture.ts",
-      "line": 1802,
+      "line": 1855,
       "column": 11,
       "code": 18048,
       "message": "'ready' is possibly 'undefined'.",
@@ -7700,7 +7610,7 @@
     {
       "id": "68e46e441bf38d50504c",
       "file": "engine/virtual-texture.ts",
-      "line": 1803,
+      "line": 1856,
       "column": 33,
       "code": 18048,
       "message": "'ready' is possibly 'undefined'.",
@@ -7709,7 +7619,7 @@
     {
       "id": "1a497e21c4a8ddb9ebd0",
       "file": "engine/virtual-texture.ts",
-      "line": 1805,
+      "line": 1858,
       "column": 31,
       "code": 18048,
       "message": "'ready' is possibly 'undefined'.",
@@ -7718,7 +7628,7 @@
     {
       "id": "497360e00d9cb19f51f8",
       "file": "engine/virtual-texture.ts",
-      "line": 1806,
+      "line": 1859,
       "column": 37,
       "code": 18048,
       "message": "'ready' is possibly 'undefined'.",
@@ -7727,7 +7637,7 @@
     {
       "id": "dfa0cc1b4222f1c78b0c",
       "file": "engine/virtual-texture.ts",
-      "line": 1806,
+      "line": 1859,
       "column": 54,
       "code": 18048,
       "message": "'ready' is possibly 'undefined'.",
@@ -7736,7 +7646,7 @@
     {
       "id": "e9799d5377d7e5fccfd6",
       "file": "engine/virtual-texture.ts",
-      "line": 1829,
+      "line": 1882,
       "column": 45,
       "code": 2532,
       "message": "Object is possibly 'undefined'.",
@@ -8202,382 +8112,13 @@
       "source": "rpc"
     },
     {
-      "id": "e70cc2373e680df383bc",
-      "file": "rigged-vt-demo.ts",
-      "line": 8,
-      "column": 22,
-      "code": 2339,
-      "message": "Property 'THREE' does not exist on type 'Window & typeof globalThis'.",
-      "source": "THREE"
-    },
-    {
-      "id": "49ff32e6abe4b370e024",
-      "file": "rigged-vt-demo.ts",
-      "line": 9,
-      "column": 19,
-      "code": 2339,
-      "message": "Property 'AfterglowVT' does not exist on type 'Window & typeof globalThis'.",
-      "source": "AfterglowVT"
-    },
-    {
-      "id": "e5f427e0964b68b62e8d",
-      "file": "rigged-vt-demo.ts",
-      "line": 10,
-      "column": 27,
-      "code": 2339,
-      "message": "Property 'AfterglowLoaders' does not exist on type 'Window & typeof globalThis'.",
-      "source": "AfterglowLoaders"
-    },
-    {
-      "id": "9902ee5fd04d4827593f",
-      "file": "rigged-vt-demo.ts",
-      "line": 11,
-      "column": 27,
-      "code": 2339,
-      "message": "Property 'AfterglowAssets' does not exist on type 'Window & typeof globalThis'.",
-      "source": "AfterglowAssets"
-    },
-    {
-      "id": "d33d379922659b951dbd",
-      "file": "rigged-vt-demo.ts",
-      "line": 43,
-      "column": 10,
-      "code": 2339,
-      "message": "Property 'shadowMap' does not exist on type 'WebGPUOnlyRenderer'.",
-      "source": "shadowMap"
-    },
-    {
-      "id": "4d321004c1035266637e",
-      "file": "rigged-vt-demo.ts",
-      "line": 44,
-      "column": 10,
-      "code": 2339,
-      "message": "Property 'shadowMap' does not exist on type 'WebGPUOnlyRenderer'.",
-      "source": "shadowMap"
-    },
-    {
-      "id": "81912be9e8e7e0d4c7ef",
-      "file": "rigged-vt-demo.ts",
-      "line": 47,
-      "column": 1,
-      "code": 18046,
-      "message": "'renderer.backend.device' is of type 'unknown'.",
-      "source": "renderer.backend.device"
-    },
-    {
-      "id": "23725285d4475cafbc45",
-      "file": "rigged-vt-demo.ts",
-      "line": 47,
-      "column": 61,
-      "code": 7006,
-      "message": "Parameter 'event' implicitly has an 'any' type.",
-      "source": "event"
-    },
-    {
-      "id": "017c15fbbb15fa080775",
-      "file": "rigged-vt-demo.ts",
-      "line": 48,
-      "column": 61,
-      "code": 2339,
-      "message": "Property 'error' does not exist on type 'Event'.",
-      "source": "error"
-    },
-    {
-      "id": "2d4a73dd426efd62f813",
-      "file": "rigged-vt-demo.ts",
-      "line": 48,
-      "column": 83,
-      "code": 2339,
-      "message": "Property 'message' does not exist on type 'Event'.",
-      "source": "message"
-    },
-    {
-      "id": "e81d847d22e9b3b96a8d",
-      "file": "rigged-vt-demo.ts",
-      "line": 49,
-      "column": 74,
-      "code": 2339,
-      "message": "Property 'reason' does not exist on type 'Event'.",
-      "source": "reason"
-    },
-    {
-      "id": "988e3201b8103757f1de",
-      "file": "rigged-vt-demo.ts",
-      "line": 49,
-      "column": 97,
-      "code": 2339,
-      "message": "Property 'reason' does not exist on type 'Event'.",
-      "source": "reason"
-    },
-    {
       "id": "fd72e883e5d706e62174",
       "file": "rigged-vt-demo.ts",
-      "line": 86,
-      "column": 65,
+      "line": 112,
+      "column": 40,
       "code": 2345,
       "message": "Argument of type 'Rpc' is not assignable to parameter of type 'RpcTransport'. The types returned by 'call(...)' are incompatible between these types. Type 'Promise<unknown>' is not assignable to type 'Promise<Uint8Array<ArrayBufferLike>>'. Type 'unknown' is not assignable to type 'Uint8Array<ArrayBufferLike>'.",
       "source": "rpc"
-    },
-    {
-      "id": "eed186414528537e7459",
-      "file": "rigged-vt-demo.ts",
-      "line": 93,
-      "column": 16,
-      "code": 18046,
-      "message": "'renderer.backend.device' is of type 'unknown'.",
-      "source": "renderer.backend.device"
-    },
-    {
-      "id": "b0a8068d0bfd459f959a",
-      "file": "rigged-vt-demo.ts",
-      "line": 94,
-      "column": 5,
-      "code": 18046,
-      "message": "'renderer.backend.device' is of type 'unknown'.",
-      "source": "renderer.backend.device"
-    },
-    {
-      "id": "ed609f59dd4ec552a686",
-      "file": "rigged-vt-demo.ts",
-      "line": 253,
-      "column": 63,
-      "code": 7006,
-      "message": "Parameter 'layout' implicitly has an 'any' type.",
-      "source": "layout"
-    },
-    {
-      "id": "7a1deeb7b3675f9728bc",
-      "file": "rigged-vt-demo.ts",
-      "line": 261,
-      "column": 25,
-      "code": 2339,
-      "message": "Property 'baseColorImage' does not exist on type '{}'.",
-      "source": "baseColorImage"
-    },
-    {
-      "id": "c800367f79edc93e0b2b",
-      "file": "rigged-vt-demo.ts",
-      "line": 268,
-      "column": 26,
-      "code": 2339,
-      "message": "Property 'baseColorImage' does not exist on type '{}'.",
-      "source": "baseColorImage"
-    },
-    {
-      "id": "81c70fb5f1d46bd0aaeb",
-      "file": "rigged-vt-demo.ts",
-      "line": 269,
-      "column": 26,
-      "code": 2339,
-      "message": "Property 'normalImage' does not exist on type '{}'.",
-      "source": "normalImage"
-    },
-    {
-      "id": "a31e72d43cf88469c773",
-      "file": "rigged-vt-demo.ts",
-      "line": 270,
-      "column": 25,
-      "code": 2339,
-      "message": "Property 'metallicRoughnessImage' does not exist on type '{}'.",
-      "source": "metallicRoughnessImage"
-    },
-    {
-      "id": "75292f79b52d021867ed",
-      "file": "rigged-vt-demo.ts",
-      "line": 271,
-      "column": 28,
-      "code": 2339,
-      "message": "Property 'emissiveImage' does not exist on type '{}'.",
-      "source": "emissiveImage"
-    },
-    {
-      "id": "4cba1d5e5ac7b2d24824",
-      "file": "rigged-vt-demo.ts",
-      "line": 296,
-      "column": 47,
-      "code": 7006,
-      "message": "Parameter 'clip' implicitly has an 'any' type.",
-      "source": "clip"
-    },
-    {
-      "id": "09a284d57323260c4af2",
-      "file": "rigged-vt-demo.ts",
-      "line": 350,
-      "column": 33,
-      "code": 2339,
-      "message": "Property 'getRenderTarget' does not exist on type 'WebGPUOnlyRenderer'.",
-      "source": "getRenderTarget"
-    },
-    {
-      "id": "c3329595ae4ebd858ece",
-      "file": "rigged-vt-demo.ts",
-      "line": 352,
-      "column": 34,
-      "code": 2339,
-      "message": "Property 'shadowMap' does not exist on type 'WebGPUOnlyRenderer'.",
-      "source": "shadowMap"
-    },
-    {
-      "id": "1bb698b4d727e06656b5",
-      "file": "rigged-vt-demo.ts",
-      "line": 353,
-      "column": 10,
-      "code": 2339,
-      "message": "Property 'shadowMap' does not exist on type 'WebGPUOnlyRenderer'.",
-      "source": "shadowMap"
-    },
-    {
-      "id": "ccd0db9db77f4ffe235e",
-      "file": "rigged-vt-demo.ts",
-      "line": 357,
-      "column": 10,
-      "code": 2339,
-      "message": "Property 'setRenderTarget' does not exist on type 'WebGPUOnlyRenderer'.",
-      "source": "setRenderTarget"
-    },
-    {
-      "id": "c26960d62b6afab79118",
-      "file": "rigged-vt-demo.ts",
-      "line": 364,
-      "column": 12,
-      "code": 2339,
-      "message": "Property 'setRenderTarget' does not exist on type 'WebGPUOnlyRenderer'.",
-      "source": "setRenderTarget"
-    },
-    {
-      "id": "bc07179baa342c031b60",
-      "file": "rigged-vt-demo.ts",
-      "line": 369,
-      "column": 10,
-      "code": 2339,
-      "message": "Property 'setRenderTarget' does not exist on type 'WebGPUOnlyRenderer'.",
-      "source": "setRenderTarget"
-    },
-    {
-      "id": "718b9a95c2129558d0a4",
-      "file": "rigged-vt-demo.ts",
-      "line": 371,
-      "column": 10,
-      "code": 2339,
-      "message": "Property 'shadowMap' does not exist on type 'WebGPUOnlyRenderer'.",
-      "source": "shadowMap"
-    },
-    {
-      "id": "e9a76e6326887b2d6731",
-      "file": "rigged-vt-demo.ts",
-      "line": 379,
-      "column": 28,
-      "code": 2339,
-      "message": "Property 'shadowMap' does not exist on type 'WebGPUOnlyRenderer'.",
-      "source": "shadowMap"
-    },
-    {
-      "id": "11a3b6c9e3b362d6d442",
-      "file": "rigged-vt-demo.ts",
-      "line": 380,
-      "column": 12,
-      "code": 2339,
-      "message": "Property 'shadowMap' does not exist on type 'WebGPUOnlyRenderer'.",
-      "source": "shadowMap"
-    },
-    {
-      "id": "6c57e1608330ddb90470",
-      "file": "rigged-vt-demo.ts",
-      "line": 394,
-      "column": 12,
-      "code": 2339,
-      "message": "Property 'shadowMap' does not exist on type 'WebGPUOnlyRenderer'.",
-      "source": "shadowMap"
-    },
-    {
-      "id": "f245f16ac922292d2cc6",
-      "file": "rigged-vt-demo.ts",
-      "line": 408,
-      "column": 10,
-      "code": 2339,
-      "message": "Property 'setAnimationLoop' does not exist on type 'WebGPUOnlyRenderer'.",
-      "source": "setAnimationLoop"
-    },
-    {
-      "id": "812121a01d2a302720d6",
-      "file": "rigged-vt-demo.ts",
-      "line": 408,
-      "column": 27,
-      "code": 7006,
-      "message": "Parameter 'now' implicitly has an 'any' type.",
-      "source": "now"
-    },
-    {
-      "id": "5950b8b66e32f1b9513e",
-      "file": "rigged-vt-demo.ts",
-      "line": 447,
-      "column": 17,
-      "code": 2532,
-      "message": "Object is possibly 'undefined'.",
-      "source": "waiters[index]"
-    },
-    {
-      "id": "e0f415e6a78be97c29ed",
-      "file": "rigged-vt-demo.ts",
-      "line": 448,
-      "column": 5,
-      "code": 2532,
-      "message": "Object is possibly 'undefined'.",
-      "source": "waiters[index]"
-    },
-    {
-      "id": "f39cc55020780f14fa48",
-      "file": "rigged-vt-demo.ts",
-      "line": 477,
-      "column": 25,
-      "code": 2339,
-      "message": "Property 'key' does not exist on type 'Event'.",
-      "source": "key"
-    },
-    {
-      "id": "ec79b55319aa2157f8d1",
-      "file": "rigged-vt-demo.ts",
-      "line": 479,
-      "column": 13,
-      "code": 2339,
-      "message": "Property 'repeat' does not exist on type 'Event'.",
-      "source": "repeat"
-    },
-    {
-      "id": "0a133f930005b57df976",
-      "file": "rigged-vt-demo.ts",
-      "line": 482,
-      "column": 18,
-      "code": 2339,
-      "message": "Property 'code' does not exist on type 'Event'.",
-      "source": "code"
-    },
-    {
-      "id": "257688c25d17284e1ed0",
-      "file": "rigged-vt-demo.ts",
-      "line": 487,
-      "column": 54,
-      "code": 2339,
-      "message": "Property 'key' does not exist on type 'Event'.",
-      "source": "key"
-    },
-    {
-      "id": "8c955cb10b8f57cbcb26",
-      "file": "rigged-vt-demo.ts",
-      "line": 490,
-      "column": 8,
-      "code": 2339,
-      "message": "Property '__afterglowRiggedVT' does not exist on type 'Window & typeof globalThis'.",
-      "source": "__afterglowRiggedVT"
-    },
-    {
-      "id": "968a51c467f3c7b049c9",
-      "file": "rigged-vt-demo.ts",
-      "line": 538,
-      "column": 25,
-      "code": 2339,
-      "message": "Property 'shadowMap' does not exist on type 'WebGPUOnlyRenderer'.",
-      "source": "shadowMap"
     },
     {
       "id": "65b4d5c06ef141ac8739",

@@ -1,6 +1,7 @@
 {
   "version": 1,
   "moduleEffects": {
+    "asset-api.ts": "bootstrap",
     "asset-handle.ts": "gameFacing",
     "asset-store.ts": "budgeted",
     "bench.ts": "diagnostic",
@@ -8,6 +9,8 @@
     "big-parser.ts": "budgeted",
     "components.ts": "bootstrap",
     "descriptors.ts": "bootstrap",
+    "dev-harness-api.ts": "diagnostic",
+    "dev-harness.ts": "diagnostic",
     "diagnostics.ts": "pooled",
     "dirty-queue.ts": "none",
     "dirty-ranges.ts": "none",
@@ -17,6 +20,8 @@
     "frame.ts": "none",
     "height-texture.ts": "bootstrap",
     "hierarchy.ts": "pooled",
+    "input-api.ts": "bootstrap",
+    "input.ts": "pooled",
     "index.ts": "gameFacing",
     "instance-shard.ts": "pooled",
     "matrix.ts": "none",

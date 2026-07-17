@@ -13,9 +13,20 @@ describe('pipeline-packed rigged VT demo', () => {
     const model = header.assets.find(asset => asset.name === 'model.glb')!;
     expect(model.assetType).toBe('Mesh');
     expect(model.chunks).toHaveLength(1);
-    expect(model.chunks[0].meta.type).toBe('Raw');
-    expect(model.chunks[0].compression).toBe('None');
-    expect(model.chunks[0].uncompressedSize).toBeGreaterThan(2_000_000n);
+    const modelChunk = model.chunks[0];
+    if (!modelChunk) throw new Error('packed model has no raw chunk');
+    expect(modelChunk.meta.type).toBe('Raw');
+    expect(modelChunk.compression).toBe('None');
+    expect(modelChunk.uncompressedSize).toBeGreaterThan(2_000_000n);
+    const modelBytes = new Uint8Array(await file.slice(
+      Number(modelChunk.offset),
+      Number(modelChunk.offset + modelChunk.uncompressedSize),
+    ).arrayBuffer());
+    const jsonLength = new DataView(modelBytes.buffer).getUint32(12, true);
+    const document = JSON.parse(new TextDecoder().decode(modelBytes.subarray(20, 20 + jsonLength)));
+    expect(document.images).toEqual([]);
+    expect(document.textures).toEqual([]);
+    expect(document.extensions.AFTERGLOW_virtual_textures.materials).toHaveLength(1);
     for (let image = 0; image < 3; image++) {
       const texture = header.assets.find(asset => asset.name === `model.glb#image-${image}`)!;
       expect(texture.assetType).toBe('VirtualTexture');
@@ -31,28 +42,28 @@ describe('pipeline-packed rigged VT demo', () => {
     expect([dragonTextures[0].virtualTexture!.width, dragonTextures[0].virtualTexture!.height]).toEqual([4096, 4096]);
   });
 
-  test('uses ordinary packed loading, runtime meshopt, exact animated feedback, and inertial controls', async () => {
+  test('uses canonical ownership, stable material indices, exact animated feedback, and inertial controls', async () => {
     const source = await Bun.file(new URL('../rigged-vt-demo.ts', import.meta.url)).text();
-    expect(source).toContain("new BigContainerAssetLoader(rangeLoader, 'rigged-vt.big', header)");
+    expect(source).toContain('EngineRuntime.forScene({');
+    expect(source).toContain('await BigAssetSession.open({');
+    expect(source).toContain('session.createAssetStore(meshopt, 4, 4)');
     expect(source).toContain("assetStore.loadOptimizedGLTF('model.glb', new GLTFLoader())");
     expect(source).toContain("assetStore.loadOptimizedGLTF('model-2.glb', new GLTFLoader())");
-    expect(source).toContain("albedo: 'model.glb#image-0'");
-    expect(source).toContain('secondGltf.materialTextures.map(layout => [layout.name, layout])');
-    expect(source).toContain('secondMaxFeedbackChannels');
-    expect(source).toContain("if (keyName === '1') setActiveModel(1)");
-    expect(source).toContain("else if (keyName === '2') setActiveModel(2)");
-    expect(source).toContain('skinnedMeshes[index].material = enabled ? pair.feedbackMaterial : visibleMaterials[index]');
-    expect(source).toContain('camera.layers.set(MODEL_LAYER)');
-    expect(source).toContain('mesh.getVertexPosition(index, deformedVertex)');
-    expect(source).toContain('modelPivot.position.y -= animatedBounds.min.y');
-    expect(source).toContain("keys.has('d') ? 1 : 0");
-    expect(source).toContain("keys.has('s') ? 1 : 0");
+    expect(source).toContain('VirtualTextureFeedbackCoordinator(');
+    expect(source).toContain('VirtualGltfBinding.create(firstAsset');
+    expect(source).toContain('VirtualGltfBinding.create(secondAsset');
+    expect(source).toContain('new ModelPrimitives(MODEL_CAPACITY)');
+    expect(source).toContain('groundDeformedModel(firstPivot');
+    expect(source).toContain('BoundedKeyboardInput');
+    expect(source).toContain('DemoInputAction.OrbitRight');
     expect(source).toContain('Math.exp(-7 * dt)');
-    expect(source).toContain('renderer.shadowMap.enabled = true');
-    expect(source).toContain('key.castShadow = true');
+    expect(source).toContain('rendererHost.renderer.shadowMap.enabled = true');
+    expect(source).toContain('keyLight.castShadow = true');
     expect(source).toContain('floor.receiveShadow = true');
-    expect(source).toContain('object.castShadow = true');
-    expect(source).toContain('renderer.shadowMap.enabled = false');
+    expect(source).toContain('mesh.castShadow = true');
+    expect(source).not.toContain('window.THREE');
+    expect(source).not.toContain('new BigContainerAssetLoader');
+    expect(source).not.toContain('new VirtualTextureFeedbackPass');
     const license = await Bun.file(new URL('../../../assets/rigged-vt/LICENSE.txt', root)).text();
     expect(license).toContain('CC-BY-4.0');
     expect(license).toContain('KallMor');

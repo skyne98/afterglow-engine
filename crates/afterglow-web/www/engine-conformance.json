@@ -5,7 +5,7 @@
     "dungeon.ts": "legacy",
     "engine-demo.ts": "canonical",
     "lod-demo.ts": "legacy",
-    "rigged-vt-demo.ts": "legacy",
+    "rigged-vt-demo.ts": "canonical",
     "vt-demo.ts": "legacy"
   }
 }

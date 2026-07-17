@@ -66494,7 +66494,21 @@ async function parseGLTFAsset(bytes, loader) {
       });
       if (materialCount > 0 && materialIndices.size === 0)
         throw new Error("GLTFLoader parser associations did not expose stable material indices");
-      resolve({ scene: result.scene, animations: result.animations, materialIndices });
+      resolve({
+        scene: result.scene,
+        animations: result.animations,
+        materialIndices,
+        dispose() {
+          result.scene.traverse((object) => {
+            if (!(object instanceof Mesh))
+              return;
+            object.geometry.dispose();
+            const materials = Array.isArray(object.material) ? object.material : [object.material];
+            for (const material of materials)
+              material.dispose();
+          });
+        }
+      });
     } catch (error2) {
       reject(error2);
     }
@@ -66820,7 +66834,8 @@ class AssetStore {
       animations: [],
       materialIndices: new Map,
       meshOptimization: [],
-      materialTextures: []
+      materialTextures: [],
+      dispose() {}
     };
     return this.load(path, async (bytes) => {
       const materialTextures = parseGlbMaterialTextures(bytes);
@@ -68231,6 +68246,7 @@ class VirtualTextureStore {
   readyUploadTail = 0;
   readyUploadCount = 0;
   loadGeneration = 0;
+  disposed = false;
   tuning;
   maxPendingPages = 64;
   maxPendingBytes = 8 * 1024 * 1024;
@@ -69087,6 +69103,20 @@ class VirtualTextureStore {
     this.pageTables.delete(path);
     this.gpuPageTables.delete(path);
   }
+  dispose() {
+    if (this.disposed)
+      return;
+    this.disposed = true;
+    for (const path of this.entries.keys())
+      this.unloadTexture(path);
+    this.atlasTexture.dispose();
+    this.gpuPageTables.clear();
+    this.gpuAtlasTexture = null;
+    this.device = null;
+    this.readyUploadCount = 0;
+    this.readyUploadHead = 0;
+    this.readyUploadTail = 0;
+  }
   getEntry(path) {
     return this.entries.get(path);
   }
@@ -69287,6 +69317,7 @@ fn vtSample(
   atlasSize: vec2f,
   maxMip: f32,
   textureMaxMip: f32,
+  filterMode: u32,
   addressMode: u32
 ) -> vec4f {
   // 0 = clamp, 1 = repeat, 2 = mirrored repeat.
@@ -69330,6 +69361,9 @@ fn vtSample(
       let tail_texel = slot_origin + rect_origin + pageBorder + addressed_uv * tail_size;
       let tail_uv = tail_texel / atlasSize;
       let tail_scale = tail_size / atlasSize;
+      if (filterMode == 1u) {
+        return textureLoad(atlas, vec2i(clamp(floor(tail_texel), vec2f(0.0), atlasSize - 1.0)), 0);
+      }
       return textureSampleGrad(atlas, atlasSampler, tail_uv, dpdx(uv) * tail_scale, dpdy(uv) * tail_scale);
     }
   }
@@ -69378,6 +69412,9 @@ fn vtSample(
   let gradient_scale = curr_mip_size / atlasSize;
   let atlas_dx = dpdx(uv) * gradient_scale;
   let atlas_dy = dpdy(uv) * gradient_scale;
+  if (filterMode == 1u) {
+    return textureLoad(atlas, vec2i(clamp(floor(sample_texel), vec2f(0.0), atlasSize - 1.0)), 0);
+  }
   return textureSampleGrad(atlas, atlasSampler, atlas_uv, atlas_dx, atlas_dy);
 }
 `;
@@ -69461,6 +69498,7 @@ fn vtSampleLevel(
   atlasSize: vec2f,
   maxMip: f32,
   resolvedMip: f32,
+  filterMode: u32,
   addressMode: u32
 ) -> vec4f {
   var addressed_uv = clamp(uv, vec2f(0.0), vec2f(0.99999994));
@@ -69494,6 +69532,9 @@ fn vtSampleLevel(
     let slot = vec2f(f32(px), f32(py)) * (pageSize + pageBorder * 2.0);
     let texel = slot + rect_origin + pageBorder + addressed_uv * tail_size;
     let scale = tail_size / atlasSize;
+    if (filterMode == 1u) {
+      return textureLoad(atlas, vec2i(clamp(floor(texel), vec2f(0.0), atlasSize - 1.0)), 0);
+    }
     return textureSampleGrad(atlas, atlasSampler, texel / atlasSize, dpdx(uv) * scale, dpdy(uv) * scale);
   }
 
@@ -69513,6 +69554,9 @@ fn vtSampleLevel(
   let origin = vec2f(f32(px), f32(py)) * (pageSize + pageBorder * 2.0);
   let atlas_uv = (origin + pageBorder + local) / atlasSize;
   let gradient_scale = mip_size / atlasSize;
+  if (filterMode == 1u) {
+    return textureLoad(atlas, vec2i(clamp(floor(origin + pageBorder + local), vec2f(0.0), atlasSize - 1.0)), 0);
+  }
   return textureSampleGrad(
     atlas, atlasSampler, atlas_uv,
     dpdx(uv) * gradient_scale,
@@ -69648,6 +69692,7 @@ function createVirtualGltfMaterialPair(three, store, set, feedbackPixelScale, op
   const qualityBias = options.qualityBias ?? 0;
   const roleSampling = (role) => options.sampling?.[role];
   const roleAddress = (role) => three.uint(roleSampling(role)?.addressMode ?? addressMode);
+  const roleFilter = (role) => three.uint(roleSampling(role)?.filterMode ?? 0);
   const roleUv = (role) => {
     const sampling = roleSampling(role);
     const uv3 = three.uv(sampling?.channel ?? 0);
@@ -69732,6 +69777,7 @@ function createVirtualGltfMaterialPair(three, store, set, feedbackPixelScale, op
         atlasSize,
         maxMip: three.float(entry.maxMip),
         resolvedMip: resolve(),
+        filterMode: roleFilter(role),
         addressMode: roleAddress(role)
       });
     return sampleVirtual({
@@ -69746,14 +69792,24 @@ function createVirtualGltfMaterialPair(three, store, set, feedbackPixelScale, op
       atlasSize,
       maxMip: three.float(entry.maxMip),
       textureMaxMip: three.float(entry.textureMaxMip),
+      filterMode: roleFilter(role),
       addressMode: roleAddress(role)
     });
   };
-  const material = new three.MeshStandardNodeMaterial({
+  const material = (options.transmissionFactor ?? 0) > 0 ? new three.MeshPhysicalNodeMaterial({
+    side,
+    transparent: options.transparent ?? false,
+    depthWrite: options.depthWrite ?? !(options.transparent ?? false)
+  }) : new three.MeshStandardNodeMaterial({
     side,
     transparent: options.transparent ?? false,
     depthWrite: options.depthWrite ?? !(options.transparent ?? false)
   });
+  if (material instanceof three.MeshPhysicalNodeMaterial) {
+    material.transmission = options.transmissionFactor ?? 0;
+    material.thickness = options.thicknessFactor ?? 0;
+    material.ior = options.ior ?? 1.5;
+  }
   material.alphaTest = options.alphaTest ?? 0;
   material.depthTest = options.depthTest ?? true;
   material.blending = options.blending ?? three.NormalBlending;

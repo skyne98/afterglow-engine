@@ -20,6 +20,8 @@ export interface VirtualTextureSampling {
   /** Column-major Three.js Matrix3 elements applied after selecting the UV channel. */
   matrix?: readonly [number, number, number, number, number, number, number, number, number];
   addressMode?: VirtualTextureAddressMode;
+  /** 0 = linear atlas sampling, 1 = nearest texel sampling. */
+  filterMode?: number;
 }
 
 export interface VirtualGltfTextureSampling {
@@ -38,6 +40,9 @@ export interface VirtualGltfMaterialOptions {
   metalnessFactor?: number;
   normalScale?: readonly [number, number];
   emissiveFactor?: readonly [number, number, number];
+  transmissionFactor?: number;
+  thicknessFactor?: number;
+  ior?: number;
   transparent?: boolean;
   alphaTest?: number;
   depthWrite?: boolean;
@@ -84,6 +89,7 @@ export function createVirtualGltfMaterialPair(
     options.sampling?.[role];
   const roleAddress = (role: TextureRole) =>
     three.uint(roleSampling(role)?.addressMode ?? addressMode);
+  const roleFilter = (role: TextureRole) => three.uint(roleSampling(role)?.filterMode ?? 0);
   const roleUv = (role: TextureRole): THREE_TYPES.Node<'vec2'> => {
     const sampling = roleSampling(role);
     const uv = three.uv(sampling?.channel ?? 0);
@@ -158,22 +164,34 @@ export function createVirtualGltfMaterialPair(
       pageTable: table(entry), atlas, atlasSampler, uv: roleUv(role),
       virtualSize: entryVirtualSize, pageGrid: entryPageGrid,
       pageSize: three.float(PAGE_SIZE), pageBorder: three.float(PAGE_BORDER), atlasSize,
-      maxMip: three.float(entry.maxMip), resolvedMip: resolve(), addressMode: roleAddress(role),
+      maxMip: three.float(entry.maxMip), resolvedMip: resolve(),
+      filterMode: roleFilter(role), addressMode: roleAddress(role),
     }) as THREE_TYPES.Node<'vec4'>;
     return sampleVirtual({
       pageTable: table(entry), atlas, atlasSampler, uv: roleUv(role),
       virtualSize: entryVirtualSize, pageGrid: entryPageGrid,
       pageSize: three.float(PAGE_SIZE), pageBorder: three.float(PAGE_BORDER), atlasSize,
       maxMip: three.float(entry.maxMip), textureMaxMip: three.float(entry.textureMaxMip),
-      addressMode: roleAddress(role),
+      filterMode: roleFilter(role), addressMode: roleAddress(role),
     }) as THREE_TYPES.Node<'vec4'>;
   };
 
-  const material = new three.MeshStandardNodeMaterial({
-    side,
-    transparent: options.transparent ?? false,
-    depthWrite: options.depthWrite ?? !(options.transparent ?? false),
-  });
+  const material = (options.transmissionFactor ?? 0) > 0
+    ? new three.MeshPhysicalNodeMaterial({
+      side,
+      transparent: options.transparent ?? false,
+      depthWrite: options.depthWrite ?? !(options.transparent ?? false),
+    })
+    : new three.MeshStandardNodeMaterial({
+      side,
+      transparent: options.transparent ?? false,
+      depthWrite: options.depthWrite ?? !(options.transparent ?? false),
+    });
+  if (material instanceof three.MeshPhysicalNodeMaterial) {
+    material.transmission = options.transmissionFactor ?? 0;
+    material.thickness = options.thicknessFactor ?? 0;
+    material.ior = options.ior ?? 1.5;
+  }
   material.alphaTest = options.alphaTest ?? 0;
   material.depthTest = options.depthTest ?? true;
   material.blending = options.blending ?? three.NormalBlending;

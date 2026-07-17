@@ -36,6 +36,9 @@ interface BindingRecord {
 export interface VirtualGltfBindingOptions {
   primitiveCapacity: number;
   feedbackScene: THREE.Scene;
+  feedbackRoot: THREE.Object3D;
+  /** Roots hidden while this binding renders feedback in a shared scene. */
+  exclusiveRoots?: readonly THREE.Object3D[];
   feedbackCamera: THREE.Camera;
   feedbackPixelScale: THREE.Vector2;
   resolveImage(imageIndex: number): VirtualTextureEntry | undefined;
@@ -56,9 +59,10 @@ function textureSampling(
   if (!layout) return undefined;
   if (layout.wrapS !== layout.wrapT)
     throw new Error('virtual glTF textures require identical S/T address modes');
-  if (layout.magFilter === 9728 || layout.minFilter === 9728 ||
-      layout.minFilter === 9984 || layout.minFilter === 9986)
-    throw new Error('virtual glTF textures require linear filtering');
+  let filterMode = 0;
+  if (layout.magFilter === 9728 && layout.minFilter === 9728) filterMode = 1;
+  else if (layout.magFilter !== 9729 || ![9729, 9985, 9987].includes(layout.minFilter))
+    throw new Error('virtual glTF texture uses an unsupported mixed filter mode');
   let addressMode = VirtualTextureAddressMode.Repeat;
   if (layout.wrapS === 33071) addressMode = VirtualTextureAddressMode.Clamp;
   else if (layout.wrapS === 33648) addressMode = VirtualTextureAddressMode.MirrorRepeat;
@@ -73,6 +77,7 @@ function textureSampling(
       layout.offset[0], layout.offset[1], 1,
     ],
     addressMode: override ?? addressMode,
+    filterMode,
   };
 }
 
@@ -90,6 +95,7 @@ function materialOptions(
   if (normal) sampling.normal = normal;
   if (masks) sampling.masks = masks;
   if (emissive) sampling.emissive = emissive;
+  const physical = source instanceof THREE.MeshPhysicalMaterial ? source : null;
   return {
     addressMode: options.addressMode ?? VirtualTextureAddressMode.Repeat,
     qualityBias: options.qualityBias ?? 0,
@@ -99,6 +105,11 @@ function materialOptions(
     metalnessFactor: source.metalness,
     normalScale: [source.normalScale.x, source.normalScale.y],
     emissiveFactor: [source.emissive.r, source.emissive.g, source.emissive.b],
+    ...(physical ? {
+      transmissionFactor: physical.transmission,
+      thicknessFactor: physical.thickness,
+      ior: physical.ior,
+    } : {}),
     transparent: source.transparent,
     alphaTest: source.alphaTest,
     depthWrite: source.depthWrite,
@@ -136,10 +147,15 @@ export class VirtualGltfBinding implements FeedbackRenderable {
   private readonly records: Array<BindingRecord | null>;
   private readonly pairs: Array<VirtualGltfMaterialPair | null>;
   private recordCount = 0;
+  private enabled = true;
+  private rootWasVisible = true;
   private disposed = false;
 
   private constructor(
     scene: THREE.Scene,
+    private readonly feedbackRoot: THREE.Object3D,
+    private readonly exclusiveRoots: readonly THREE.Object3D[],
+    private readonly exclusiveVisibility: Uint8Array,
     records: Array<BindingRecord | null>,
     recordCount: number,
     pairs: Array<VirtualGltfMaterialPair | null>,
@@ -238,16 +254,32 @@ export class VirtualGltfBinding implements FeedbackRenderable {
     }
     for (const source of sources) source?.dispose();
 
+    const exclusiveRoots = options.exclusiveRoots ? Array.from(options.exclusiveRoots) : [];
     return new VirtualGltfBinding(
-      options.feedbackScene, records, recordCount, pairs, passCount, options.feedbackCamera,
+      options.feedbackScene, options.feedbackRoot, exclusiveRoots,
+      new Uint8Array(exclusiveRoots.length), records, recordCount, pairs, passCount,
+      options.feedbackCamera,
     );
   }
 
   /** @alloc-effect none */
-  isFeedbackActive(): boolean { return !this.disposed && this.feedbackScene.visible; }
+  setFeedbackEnabled(enabled: boolean): void { this.enabled = enabled; }
+
+  /** @alloc-effect none */
+  isFeedbackActive(): boolean {
+    return this.enabled && !this.disposed && this.feedbackScene.visible && this.feedbackRoot.visible;
+  }
 
   /** @alloc-effect none */
   beginFeedbackPass(localPass: number): void {
+    this.rootWasVisible = this.feedbackRoot.visible;
+    this.feedbackRoot.visible = true;
+    for (let index = 0; index < this.exclusiveRoots.length; index++) {
+      const root = this.exclusiveRoots[index];
+      if (!root) continue;
+      this.exclusiveVisibility[index] = root.visible ? 1 : 0;
+      root.visible = false;
+    }
     for (let index = 0; index < this.recordCount; index++) {
       const record = this.records[index];
       if (!record) continue;
@@ -270,6 +302,11 @@ export class VirtualGltfBinding implements FeedbackRenderable {
       record.mesh.visible = record.visible;
       if (record.pair) record.mesh.material = record.pair.material;
     }
+    for (let index = 0; index < this.exclusiveRoots.length; index++) {
+      const root = this.exclusiveRoots[index];
+      if (root) root.visible = this.exclusiveVisibility[index] !== 0;
+    }
+    this.feedbackRoot.visible = this.rootWasVisible;
   }
 
   dispose(): void {

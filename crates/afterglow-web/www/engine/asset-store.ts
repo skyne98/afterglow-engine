@@ -118,6 +118,7 @@ export interface ParsedGLTF {
   animations: THREE.AnimationClip[];
   /** Stable glTF material indices recovered from GLTFParser associations. */
   materialIndices: ReadonlyMap<THREE.Material, number>;
+  dispose(): void;
 }
 
 interface LoaderGLTFResult {
@@ -148,7 +149,19 @@ export async function parseGLTFAsset(
       });
       if (materialCount > 0 && materialIndices.size === 0)
         throw new Error('GLTFLoader parser associations did not expose stable material indices');
-      resolve({ scene: result.scene, animations: result.animations, materialIndices });
+      resolve({
+        scene: result.scene,
+        animations: result.animations,
+        materialIndices,
+        dispose(): void {
+          result.scene.traverse((object) => {
+            if (!(object instanceof THREE.Mesh)) return;
+            object.geometry.dispose();
+            const materials = Array.isArray(object.material) ? object.material : [object.material];
+            for (const material of materials) material.dispose();
+          });
+        },
+      });
     } catch (error) {
       reject(error);
     }
@@ -563,7 +576,7 @@ export class AssetStore {
   ): AssetHandle<OptimizedGltfAsset> {
     const fallback = {
       scene: fallbackGroup(), animations: [], materialIndices: new Map(),
-      meshOptimization: [], materialTextures: [],
+      meshOptimization: [], materialTextures: [], dispose() {},
     } as OptimizedGltfAsset;
     return this.load(path, async bytes => {
       const materialTextures = parseGlbMaterialTextures(bytes);
