@@ -215,7 +215,7 @@ export class VirtualGltfBinding implements FeedbackRenderable {
   }
 
   /** @alloc-effect none */
-  endFeedbackPass(): void {
+  endFeedbackPass(_localPass: number): void {
     for (let index = 0; index < this.recordCount; index++) {
       const record = this.records[index];
       if (!record) continue;

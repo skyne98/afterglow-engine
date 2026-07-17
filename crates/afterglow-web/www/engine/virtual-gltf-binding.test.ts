@@ -80,7 +80,7 @@ describe('VirtualGltfBinding', () => {
     expect(first.visible).toBe(false);
     expect(unbound.visible).toBe(false);
     expect(first.material).toBe(second.material);
-    binding.endFeedbackPass();
+    binding.endFeedbackPass(1);
     expect(first.visible).toBe(false);
     expect(second.visible).toBe(true);
     expect(unbound.visible).toBe(true);
@@ -121,7 +121,7 @@ describe('VirtualGltfBinding', () => {
     });
     binding.beginFeedbackPass(0);
     expect(scene.children[0]?.visible).toBe(false);
-    binding.endFeedbackPass();
+    binding.endFeedbackPass(0);
     expect(scene.children[0]?.visible).toBe(true);
     binding.dispose();
   });
