@@ -81,11 +81,14 @@ Implemented on 2026-07-17:
   implemented and tested;
 - DME-021 mechanism: `BigAssetSession` now owns bounded header admission,
   transcoder startup/rollback, raw assets, one VT store, and reverse shutdown;
-- DME-022 foundation: `parseGLTFAsset` retains stable parser material indices;
-  `VirtualGltfBinding` owns fixed-capacity replacement, factor preservation,
-  imported-image release, feedback swaps, and rollback. Texture-transform and
-  sampler metadata still need to be carried through the cooked layout before
-  DME-022 is complete;
+- DME-022: `parseGLTFAsset` retains stable parser material indices;
+  `VirtualGltfBinding` owns fixed-capacity replacement, factors/alpha/depth,
+  imported-image release, UV channels/KHR texture transforms, sampler address
+  modes, feedback swaps, and rollback. Unrepresentable nearest/asymmetric
+  sampler state fails during bootstrap;
+- DME-023: the cook moves material texture metadata into
+  `AFTERGLOW_virtual_textures`, strips image buffer views from runtime GLBs,
+  remaps remaining references, and compacts BIN bytes before `.big` packing;
 - DME-025: fixed model collection, exact deformed bounds, pivot normalization,
   bounded animation actions, and disposable skeleton diagnostics are implemented;
   dungeon/rigged demo migrations remain DME-030–032.

@@ -13260,21 +13260,51 @@ function parseGlbMaterialTextures(bytes) {
   if (jsonType !== 1313821514 || 20 + jsonLength > bytes.byteLength)
     throw new Error("GLB has no valid JSON chunk");
   const document2 = JSON.parse(new TextDecoder().decode(bytes.subarray(20, 20 + jsonLength)).replace(/[\\0 ]+$/, ""));
-  const textures = document2.textures ?? [];
-  const image = (info) => {
+  const virtualMetadata = document2.extensions?.AFTERGLOW_virtual_textures;
+  const textures = virtualMetadata?.textures ?? document2.textures ?? [];
+  const samplers = virtualMetadata?.samplers ?? document2.samplers ?? [];
+  const materials = virtualMetadata?.materials ?? document2.materials ?? [];
+  const sampling = (info) => {
     if (info?.index === undefined)
       return null;
-    const source = textures[info.index]?.source;
-    return Number.isSafeInteger(source) && source >= 0 ? source : null;
+    const texture = textures[info.index];
+    const source = texture?.source;
+    if (!Number.isSafeInteger(source) || source < 0)
+      return null;
+    const sampler = samplers[texture.sampler] ?? {};
+    const transform = info.extensions?.KHR_texture_transform ?? {};
+    const offset = transform.offset ?? [0, 0];
+    const scale = transform.scale ?? [1, 1];
+    return {
+      image: source,
+      texCoord: transform.texCoord ?? info.texCoord ?? 0,
+      offset: [offset[0] ?? 0, offset[1] ?? 0],
+      rotation: transform.rotation ?? 0,
+      scale: [scale[0] ?? 1, scale[1] ?? 1],
+      wrapS: sampler.wrapS ?? 10497,
+      wrapT: sampler.wrapT ?? 10497,
+      minFilter: sampler.minFilter ?? 9987,
+      magFilter: sampler.magFilter ?? 9729
+    };
   };
-  return (document2.materials ?? []).map((material, index) => ({
-    index,
-    name: material.name ?? `material-${index}`,
-    baseColorImage: image(material.pbrMetallicRoughness?.baseColorTexture),
-    metallicRoughnessImage: image(material.pbrMetallicRoughness?.metallicRoughnessTexture),
-    normalImage: image(material.normalTexture),
-    emissiveImage: image(material.emissiveTexture)
-  }));
+  return materials.map((material, index) => {
+    const baseColorSampling = sampling(material.pbrMetallicRoughness?.baseColorTexture);
+    const metallicRoughnessSampling = sampling(material.pbrMetallicRoughness?.metallicRoughnessTexture);
+    const normalSampling = sampling(material.normalTexture);
+    const emissiveSampling = sampling(material.emissiveTexture);
+    return {
+      index,
+      name: material.name ?? `material-${index}`,
+      baseColorImage: baseColorSampling?.image ?? null,
+      metallicRoughnessImage: metallicRoughnessSampling?.image ?? null,
+      normalImage: normalSampling?.image ?? null,
+      emissiveImage: emissiveSampling?.image ?? null,
+      baseColorSampling,
+      metallicRoughnessSampling,
+      normalSampling,
+      emissiveSampling
+    };
+  });
 }
 async function parseGLTF(bytes, loader) {
   return (await parseGLTFAsset(bytes, loader)).scene;

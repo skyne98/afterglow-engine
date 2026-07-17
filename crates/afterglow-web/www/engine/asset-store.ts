@@ -73,6 +73,18 @@ export interface SceneMeshOptimizationStats extends MeshStats {
   preservedAttributes: string[];
 }
 
+export interface GltfTextureSamplingLayout {
+  image: number;
+  texCoord: number;
+  offset: readonly [number, number];
+  rotation: number;
+  scale: readonly [number, number];
+  wrapS: number;
+  wrapT: number;
+  minFilter: number;
+  magFilter: number;
+}
+
 export interface GltfMaterialTextureLayout {
   index: number;
   name: string;
@@ -80,6 +92,10 @@ export interface GltfMaterialTextureLayout {
   metallicRoughnessImage: number | null;
   normalImage: number | null;
   emissiveImage: number | null;
+  baseColorSampling: GltfTextureSamplingLayout | null;
+  metallicRoughnessSampling: GltfTextureSamplingLayout | null;
+  normalSampling: GltfTextureSamplingLayout | null;
+  emissiveSampling: GltfTextureSamplingLayout | null;
 }
 
 export interface OptimizedGltfAsset extends ParsedGLTF {
@@ -147,20 +163,56 @@ export function parseGlbMaterialTextures(bytes: Uint8Array): GltfMaterialTexture
   const jsonType = view.getUint32(16, true);
   if (jsonType !== 0x4e4f534a || 20 + jsonLength > bytes.byteLength) throw new Error('GLB has no valid JSON chunk');
   const document = JSON.parse(new TextDecoder().decode(bytes.subarray(20, 20 + jsonLength)).replace(/[\\0 ]+$/, ''));
-  const textures = document.textures ?? [];
-  const image = (info: { index?: number } | undefined): number | null => {
-    if (info?.index === undefined) return null;
-    const source = textures[info.index]?.source;
-    return Number.isSafeInteger(source) && source >= 0 ? source : null;
+  type TextureInfoDocument = {
+    index?: number;
+    texCoord?: number;
+    extensions?: { KHR_texture_transform?: {
+      texCoord?: number; offset?: number[]; rotation?: number; scale?: number[];
+    } };
   };
-  return (document.materials ?? []).map((material: any, index: number) => ({
-    index,
-    name: material.name ?? `material-${index}`,
-    baseColorImage: image(material.pbrMetallicRoughness?.baseColorTexture),
-    metallicRoughnessImage: image(material.pbrMetallicRoughness?.metallicRoughnessTexture),
-    normalImage: image(material.normalTexture),
-    emissiveImage: image(material.emissiveTexture),
-  }));
+  const virtualMetadata = document.extensions?.AFTERGLOW_virtual_textures;
+  const textures = virtualMetadata?.textures ?? document.textures ?? [];
+  const samplers = virtualMetadata?.samplers ?? document.samplers ?? [];
+  const materials = virtualMetadata?.materials ?? document.materials ?? [];
+  const sampling = (info: TextureInfoDocument | undefined): GltfTextureSamplingLayout | null => {
+    if (info?.index === undefined) return null;
+    const texture = textures[info.index];
+    const source = texture?.source;
+    if (!Number.isSafeInteger(source) || source < 0) return null;
+    const sampler = samplers[texture.sampler] ?? {};
+    const transform = info.extensions?.KHR_texture_transform ?? {};
+    const offset = transform.offset ?? [0, 0];
+    const scale = transform.scale ?? [1, 1];
+    return {
+      image: source,
+      texCoord: transform.texCoord ?? info.texCoord ?? 0,
+      offset: [offset[0] ?? 0, offset[1] ?? 0],
+      rotation: transform.rotation ?? 0,
+      scale: [scale[0] ?? 1, scale[1] ?? 1],
+      wrapS: sampler.wrapS ?? 10497,
+      wrapT: sampler.wrapT ?? 10497,
+      minFilter: sampler.minFilter ?? 9987,
+      magFilter: sampler.magFilter ?? 9729,
+    };
+  };
+  return materials.map((material: any, index: number) => {
+    const baseColorSampling = sampling(material.pbrMetallicRoughness?.baseColorTexture);
+    const metallicRoughnessSampling = sampling(material.pbrMetallicRoughness?.metallicRoughnessTexture);
+    const normalSampling = sampling(material.normalTexture);
+    const emissiveSampling = sampling(material.emissiveTexture);
+    return {
+      index,
+      name: material.name ?? `material-${index}`,
+      baseColorImage: baseColorSampling?.image ?? null,
+      metallicRoughnessImage: metallicRoughnessSampling?.image ?? null,
+      normalImage: normalSampling?.image ?? null,
+      emissiveImage: emissiveSampling?.image ?? null,
+      baseColorSampling,
+      metallicRoughnessSampling,
+      normalSampling,
+      emissiveSampling,
+    };
+  });
 }
 
 export async function parseGLTF(

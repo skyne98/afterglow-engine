@@ -110,9 +110,14 @@ The tree-shakeable public barrel is `engine/virtual-texturing-api.ts`.
 `materialIndices` map. `VirtualGltfBinding.create(asset, store, options)` uses
 those indices—not material names—to join primitives to cooked texture layouts.
 It has an explicit primitive capacity, creates one pair per source material,
-preserves standard scalar/color/alpha/side factors, disposes replaced imported
-textures and materials, and atomically restores primitive visibility/materials
-around every feedback pass. Materials without virtual base color remain visible
+and preserves standard scalar/color/alpha/depth/side factors. Source texture UV
+channels, Three's glTF/KHR texture matrix, and repeat/clamp/mirror address modes
+are applied identically in visible sampling and feedback derivatives. Because a
+shared VT atlas cannot preserve nearest filtering or asymmetric S/T wrapping,
+those sampler configurations fail during bootstrap instead of rendering
+approximately. The binding disposes replaced imported textures and materials
+and atomically restores primitive visibility/materials around every feedback
+pass. Materials without virtual base color remain visible
 normally and are hidden only during feedback. Missing indices, duplicate
 layouts, unsupported/non-PBR material replacement, unavailable images, and
 capacity overflow fail during bootstrap with rollback. Imported textures shared

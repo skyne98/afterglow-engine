@@ -1,10 +1,45 @@
 import { describe, expect, test } from 'bun:test';
 import * as THREE from 'three';
-import { AssetAdmission, AssetRequestState, AssetStore, parseGLTFAsset } from './asset-store.ts';
+import {
+  AssetAdmission, AssetRequestState, AssetStore, parseGLTFAsset, parseGlbMaterialTextures,
+} from './asset-store.ts';
 
 const flush = () => new Promise(resolve => setTimeout(resolve, 0));
 
+function metadataGlb(document: object): Uint8Array {
+  const json = new TextEncoder().encode(JSON.stringify(document));
+  const paddedLength = (json.length + 3) & ~3;
+  const bytes = new Uint8Array(20 + paddedLength);
+  const view = new DataView(bytes.buffer);
+  view.setUint32(0, 0x46546c67, true);
+  view.setUint32(4, 2, true);
+  view.setUint32(8, bytes.length, true);
+  view.setUint32(12, paddedLength, true);
+  view.setUint32(16, 0x4e4f534a, true);
+  bytes.fill(0x20, 20);
+  bytes.set(json, 20);
+  return bytes;
+}
+
 describe('stable glTF material identity', () => {
+  test('retains sampler and KHR texture-transform metadata without browser images', () => {
+    const layouts = parseGlbMaterialTextures(metadataGlb({
+      textures: [], samplers: [], materials: [{ pbrMetallicRoughness: {} }],
+      extensions: { AFTERGLOW_virtual_textures: {
+        textures: [{ source: 3, sampler: 0 }],
+        samplers: [{ wrapS: 33648, wrapT: 33648, minFilter: 9985, magFilter: 9729 }],
+        materials: [{ pbrMetallicRoughness: { baseColorTexture: {
+          index: 0, texCoord: 0,
+          extensions: { KHR_texture_transform: { texCoord: 1, offset: [0.2, 0.3], rotation: 0.4, scale: [2, 3] } },
+        } } }],
+      } },
+    }));
+    expect(layouts[0]?.baseColorSampling).toEqual({
+      image: 3, texCoord: 1, offset: [0.2, 0.3], rotation: 0.4, scale: [2, 3],
+      wrapS: 33648, wrapT: 33648, minFilter: 9985, magFilter: 9729,
+    });
+  });
+
   test('recovers parser material indices independent of names', async () => {
     const scene = new THREE.Group();
     const first = new THREE.MeshStandardMaterial({ name: 'duplicate' });

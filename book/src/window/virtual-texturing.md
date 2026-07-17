@@ -26,7 +26,9 @@ metallic/roughness materials for static, instanced, skinned, and morphed
 geometry. `VirtualGltfBinding` joins cooked layouts by stable material indices
 retained from `GLTFParser`, not names, and owns bounded replacement, exclusive
 imported-texture disposal, shared-texture retention, and feedback
-material/visibility restoration. Differently
+material/visibility restoration. UV channels, KHR texture transforms, and
+repeat/clamp/mirror sampling are shared by visible and feedback materials;
+unsupported nearest or asymmetric wrapping fails at bootstrap. Differently
 sized channels sample and feed back independently. Shared
 textures currently form a transitive residency-group union, which safely avoids
 missing PBR channels at the cost of bounded overfetch. A recorded future extension

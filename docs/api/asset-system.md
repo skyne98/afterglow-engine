@@ -144,10 +144,17 @@ incremental. `cachedPaths` remains an explicit allocating diagnostic snapshot.
 ### Packed GLB and runtime mesh optimization
 
 `afterglow-pipeline process` treats a self-contained `.glb` as an ordinary model
-asset. It stores the complete GLB as one uncompressed, seekable `Mesh/Raw`
-chunk—arbitrary container bytes are never incorrectly passed through meshopt's
-vertex-stream codec—and extracts every embedded image into a separately paged,
-UASTC virtual texture named `<model>#image-N`. For `.gltf` packages, the cook
+asset. It extracts every embedded image into a separately paged UASTC virtual
+texture named `<model>#image-N`, then removes those browser-decodable payloads
+from the runtime GLB. Material texture infos, UV sets, KHR transforms, and
+samplers move into the ignored `AFTERGLOW_virtual_textures` JSON extension;
+material factors remain in the standard material. Image buffer views are removed,
+remaining references are remapped, and the BIN chunk is compacted. Occlusion,
+material extensions, or non-base virtual channels that the current binding
+cannot reproduce fail the cook rather than silently losing shading. The resulting
+image-free GLB is stored as one uncompressed, seekable `Mesh/Raw` chunk—arbitrary
+container bytes are never passed through meshopt's vertex-stream codec. For
+`.gltf` packages, the cook
 confines every external buffer/image URI to the source directory and embeds the
 side files into a self-contained GLB before packing; traversal and unsupported
 image types fail closed.
@@ -161,8 +168,10 @@ container range requests. `AssetStore.loadOptimizedGLTF(path, gltfLoader)` then:
 3. sends each triangle group's indices through the meshopt worker's vertex-cache
    and overdraw passes;
 4. replaces only the index buffer and publishes `meshOptimization` telemetry;
-5. publishes `materialTextures`, mapping each glTF material's base-color,
-   metallic/roughness, normal, and emissive roles to cooked image indices.
+5. publishes `materialTextures` from standard or
+   `AFTERGLOW_virtual_textures` metadata, mapping each glTF material's roles,
+   image indices, UV channels, transforms, and sampler state without decoding
+   an imported browser image.
 
 Vertex identity never changes, so `JOINTS_0`, `WEIGHTS_0`, normals, tangents,
 UVs, arbitrary attributes, morph targets, bind matrices, and animation tracks

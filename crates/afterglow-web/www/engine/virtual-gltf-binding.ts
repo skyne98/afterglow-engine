@@ -1,12 +1,16 @@
 import * as THREE from 'three/webgpu';
 import * as TSL from 'three/tsl';
-import type { OptimizedGltfAsset, GltfMaterialTextureLayout } from './asset-store.ts';
+import type {
+  OptimizedGltfAsset, GltfMaterialTextureLayout, GltfTextureSamplingLayout,
+} from './asset-store.ts';
 import type { FeedbackRenderable } from './virtual-texture-feedback-coordinator.ts';
 import {
   createVirtualGltfMaterialPair,
   VirtualTextureAddressMode,
   type VirtualGltfMaterialOptions,
   type VirtualGltfMaterialPair,
+  type VirtualGltfTextureSampling,
+  type VirtualTextureSampling,
 } from './virtual-texture-material.ts';
 import type { VirtualMaterialSet, VirtualTextureEntry, VirtualTextureStore } from './virtual-texture.ts';
 
@@ -45,17 +49,61 @@ export interface VirtualGltfBindingOptions {
   ) => VirtualGltfMaterialPair;
 }
 
-function materialOptions(source: THREE.MeshStandardMaterial, options: VirtualGltfBindingOptions): VirtualGltfMaterialOptions {
+function textureSampling(
+  layout: GltfTextureSamplingLayout | null,
+  override: VirtualTextureAddressMode | undefined,
+): VirtualTextureSampling | undefined {
+  if (!layout) return undefined;
+  if (layout.wrapS !== layout.wrapT)
+    throw new Error('virtual glTF textures require identical S/T address modes');
+  if (layout.magFilter === 9728 || layout.minFilter === 9728 ||
+      layout.minFilter === 9984 || layout.minFilter === 9986)
+    throw new Error('virtual glTF textures require linear filtering');
+  let addressMode = VirtualTextureAddressMode.Repeat;
+  if (layout.wrapS === 33071) addressMode = VirtualTextureAddressMode.Clamp;
+  else if (layout.wrapS === 33648) addressMode = VirtualTextureAddressMode.MirrorRepeat;
+  else if (layout.wrapS !== 10497)
+    throw new Error(`unsupported virtual glTF wrapping ${layout.wrapS}`);
+  const cosine = Math.cos(layout.rotation), sine = Math.sin(layout.rotation);
+  return {
+    channel: layout.texCoord,
+    matrix: [
+      layout.scale[0] * cosine, layout.scale[0] * sine, 0,
+      -layout.scale[1] * sine, layout.scale[1] * cosine, 0,
+      layout.offset[0], layout.offset[1], 1,
+    ],
+    addressMode: override ?? addressMode,
+  };
+}
+
+function materialOptions(
+  source: THREE.MeshStandardMaterial,
+  layout: GltfMaterialTextureLayout,
+  options: VirtualGltfBindingOptions,
+): VirtualGltfMaterialOptions {
+  const sampling: VirtualGltfTextureSampling = {};
+  const albedo = textureSampling(layout.baseColorSampling, options.addressMode);
+  const normal = textureSampling(layout.normalSampling, options.addressMode);
+  const masks = textureSampling(layout.metallicRoughnessSampling, options.addressMode);
+  const emissive = textureSampling(layout.emissiveSampling, options.addressMode);
+  if (albedo) sampling.albedo = albedo;
+  if (normal) sampling.normal = normal;
+  if (masks) sampling.masks = masks;
+  if (emissive) sampling.emissive = emissive;
   return {
     addressMode: options.addressMode ?? VirtualTextureAddressMode.Repeat,
     qualityBias: options.qualityBias ?? 0,
+    sampling,
     baseColorFactor: [source.color.r, source.color.g, source.color.b, source.opacity],
     roughnessFactor: source.roughness,
     metalnessFactor: source.metalness,
     normalScale: [source.normalScale.x, source.normalScale.y],
     emissiveFactor: [source.emissive.r, source.emissive.g, source.emissive.b],
     transparent: source.transparent,
+    alphaTest: source.alphaTest,
     depthWrite: source.depthWrite,
+    depthTest: source.depthTest,
+    blending: source.blending,
     side: source.side,
   };
 }
@@ -155,7 +203,7 @@ export class VirtualGltfBinding implements FeedbackRenderable {
             throw new Error(`virtual glTF material ${materialIndex} is not a standard PBR material`);
           const set = imageSet(layout, options.resolveImage);
           if (!set) throw new Error(`glTF material ${materialIndex} lost its base-color image`);
-          pair = pairFactory(store, set, options.feedbackPixelScale, materialOptions(source, options));
+          pair = pairFactory(store, set, options.feedbackPixelScale, materialOptions(source, layout, options));
           pairs[materialIndex] = pair;
           sources[materialIndex] = source;
           passCount = Math.max(passCount, pair.feedbackMaterials.length);

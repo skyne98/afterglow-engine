@@ -5,9 +5,10 @@
 //   afterglow-pipeline inspect assets.big
 
 use afterglow_pipeline::{
-    BigWriter, TextureEncoding, VirtualTextureMipTailData, VirtualTexturePageData,
     embed_external_gltf, encode_height_r16_image, extract_glb_images, pack_mask_channels,
-    parse_header, stream_virtual_texture, virtual_mip_tail_first_mip,
+    parse_header, stream_virtual_texture, strip_glb_images_for_virtual_texturing,
+    virtual_mip_tail_first_mip, BigWriter, TextureEncoding, VirtualTextureMipTailData,
+    VirtualTexturePageData,
 };
 use rayon::prelude::*;
 use std::path::PathBuf;
@@ -190,8 +191,17 @@ fn process(args: &[String]) {
                 } else {
                     format!("{}.glb", path.file_stem().unwrap().to_string_lossy())
                 };
-                eprintln!("[model] {model_name} — packing GLB for runtime mesh optimization");
-                writer.add_raw_mesh(&model_name, bytes);
+                let runtime_glb =
+                    strip_glb_images_for_virtual_texturing(&bytes).unwrap_or_else(|error| {
+                        panic!(
+                            "failed to strip runtime images from {}: {error}",
+                            path.display()
+                        )
+                    });
+                eprintln!(
+                    "[model] {model_name} — packing image-free GLB for runtime mesh optimization"
+                );
+                writer.add_raw_mesh(&model_name, runtime_glb);
                 asset_count += 1;
                 for embedded in images {
                     let vt_name = format!("{model_name}#image-{}", embedded.index);

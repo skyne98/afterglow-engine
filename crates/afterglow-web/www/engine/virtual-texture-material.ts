@@ -15,16 +15,34 @@ export enum VirtualTextureAddressMode {
   MirrorRepeat = 2,
 }
 
+export interface VirtualTextureSampling {
+  channel?: number;
+  /** Column-major Three.js Matrix3 elements applied after selecting the UV channel. */
+  matrix?: readonly [number, number, number, number, number, number, number, number, number];
+  addressMode?: VirtualTextureAddressMode;
+}
+
+export interface VirtualGltfTextureSampling {
+  albedo?: VirtualTextureSampling;
+  normal?: VirtualTextureSampling;
+  masks?: VirtualTextureSampling;
+  emissive?: VirtualTextureSampling;
+}
+
 export interface VirtualGltfMaterialOptions {
   addressMode?: VirtualTextureAddressMode;
   qualityBias?: number;
+  sampling?: Readonly<VirtualGltfTextureSampling>;
   baseColorFactor?: readonly [number, number, number, number];
   roughnessFactor?: number;
   metalnessFactor?: number;
   normalScale?: readonly [number, number];
   emissiveFactor?: readonly [number, number, number];
   transparent?: boolean;
+  alphaTest?: number;
   depthWrite?: boolean;
+  depthTest?: boolean;
+  blending?: THREE_TYPES.Blending;
   side?: THREE_TYPES.Side;
 }
 
@@ -61,6 +79,31 @@ export function createVirtualGltfMaterialPair(
 ): VirtualGltfMaterialPair {
   const addressMode = options.addressMode ?? VirtualTextureAddressMode.Repeat;
   const qualityBias = options.qualityBias ?? 0;
+  type TextureRole = keyof VirtualGltfTextureSampling;
+  const roleSampling = (role: TextureRole): Readonly<VirtualTextureSampling> | undefined =>
+    options.sampling?.[role];
+  const roleAddress = (role: TextureRole) =>
+    three.uint(roleSampling(role)?.addressMode ?? addressMode);
+  const roleUv = (role: TextureRole): THREE_TYPES.Node<'vec2'> => {
+    const sampling = roleSampling(role);
+    const uv = three.uv(sampling?.channel ?? 0);
+    const matrix = sampling?.matrix;
+    if (!matrix) return uv;
+    return three.vec2(
+      uv.x.mul(matrix[0]).add(uv.y.mul(matrix[3])).add(matrix[6]),
+      uv.x.mul(matrix[1]).add(uv.y.mul(matrix[4])).add(matrix[7]),
+    );
+  };
+  const sameSampling = (first: TextureRole, second: TextureRole): boolean => {
+    const a = roleSampling(first), b = roleSampling(second);
+    if ((a?.channel ?? 0) !== (b?.channel ?? 0) ||
+        (a?.addressMode ?? addressMode) !== (b?.addressMode ?? addressMode)) return false;
+    const am = a?.matrix, bm = b?.matrix;
+    if (!am && !bm) return true;
+    if (!am || !bm) return false;
+    for (let index = 0; index < 9; index++) if (am[index] !== bm[index]) return false;
+    return true;
+  };
   const baseColorFactor = options.baseColorFactor ?? [1, 1, 1, 1];
   const roughnessFactor = options.roughnessFactor ?? 1;
   const metalnessFactor = options.metalnessFactor ?? 1;
@@ -77,13 +120,18 @@ export function createVirtualGltfMaterialPair(
   const virtualSize = three.uniform(new three.Vector2(set.albedo.width, set.albedo.height));
   const pageGrid = three.uniform(new three.Vector2(set.albedo.pageGridX, set.albedo.pageGridY));
   const atlasSize = three.uniform(new three.Vector2(store.atlasWidth, store.atlasHeight));
-  const addressModeNode = three.uint(addressMode);
 
-  const entries = [set.albedo, set.normal, set.masks, set.emissive]
-    .filter((entry): entry is VirtualTextureEntry => entry !== undefined);
-  const aligned = entries.every(entry => entry.width === set.albedo.width && entry.height === set.albedo.height &&
-    entry.pageGridX === set.albedo.pageGridX && entry.pageGridY === set.albedo.pageGridY &&
-    entry.maxMip === set.albedo.maxMip);
+  const descriptors: Array<{ entry: VirtualTextureEntry; role: TextureRole }> = [
+    { entry: set.albedo, role: 'albedo' },
+  ];
+  if (set.normal) descriptors.push({ entry: set.normal, role: 'normal' });
+  if (set.masks) descriptors.push({ entry: set.masks, role: 'masks' });
+  if (set.emissive) descriptors.push({ entry: set.emissive, role: 'emissive' });
+  const entries = descriptors.map(descriptor => descriptor.entry);
+  const aligned = descriptors.every(descriptor =>
+    descriptor.entry.width === set.albedo.width && descriptor.entry.height === set.albedo.height &&
+    descriptor.entry.pageGridX === set.albedo.pageGridX && descriptor.entry.pageGridY === set.albedo.pageGridY &&
+    descriptor.entry.maxMip === set.albedo.maxMip && sameSampling('albedo', descriptor.role));
   if (aligned) store.linkMaterialSet(set);
   const table = (entry: VirtualTextureEntry) => three.texture(entry.pageTableTexture);
   const albedoTable = table(set.albedo);
@@ -95,29 +143,29 @@ export function createVirtualGltfMaterialPair(
     pageTable1: normalTable,
     pageTable2: masksTable,
     pageTable3: fourthTable,
-    uv: three.uv(),
+    uv: roleUv('albedo'),
     virtualSize,
     pageGrid,
     pageSize: three.float(PAGE_SIZE),
     maxMip: three.float(set.albedo.maxMip),
     textureMaxMip: three.float(set.albedo.textureMaxMip),
-    addressMode: addressModeNode,
+    addressMode: roleAddress('albedo'),
   });
-  const sample = (entry: VirtualTextureEntry) => {
+  const sample = (entry: VirtualTextureEntry, role: TextureRole) => {
     const entryVirtualSize = aligned ? virtualSize : three.uniform(new three.Vector2(entry.width, entry.height));
     const entryPageGrid = aligned ? pageGrid : three.uniform(new three.Vector2(entry.pageGridX, entry.pageGridY));
     if (aligned) return sampleLevel({
-      pageTable: table(entry), atlas, atlasSampler, uv: three.uv(),
+      pageTable: table(entry), atlas, atlasSampler, uv: roleUv(role),
       virtualSize: entryVirtualSize, pageGrid: entryPageGrid,
       pageSize: three.float(PAGE_SIZE), pageBorder: three.float(PAGE_BORDER), atlasSize,
-      maxMip: three.float(entry.maxMip), resolvedMip: resolve(), addressMode: addressModeNode,
+      maxMip: three.float(entry.maxMip), resolvedMip: resolve(), addressMode: roleAddress(role),
     }) as THREE_TYPES.Node<'vec4'>;
     return sampleVirtual({
-      pageTable: table(entry), atlas, atlasSampler, uv: three.uv(),
+      pageTable: table(entry), atlas, atlasSampler, uv: roleUv(role),
       virtualSize: entryVirtualSize, pageGrid: entryPageGrid,
       pageSize: three.float(PAGE_SIZE), pageBorder: three.float(PAGE_BORDER), atlasSize,
       maxMip: three.float(entry.maxMip), textureMaxMip: three.float(entry.textureMaxMip),
-      addressMode: addressModeNode,
+      addressMode: roleAddress(role),
     }) as THREE_TYPES.Node<'vec4'>;
   };
 
@@ -126,8 +174,11 @@ export function createVirtualGltfMaterialPair(
     transparent: options.transparent ?? false,
     depthWrite: options.depthWrite ?? !(options.transparent ?? false),
   });
+  material.alphaTest = options.alphaTest ?? 0;
+  material.depthTest = options.depthTest ?? true;
+  material.blending = options.blending ?? three.NormalBlending;
   material.colorNode = three.Fn(() => {
-    const texel = sample(set.albedo);
+    const texel = sample(set.albedo, 'albedo');
     const linearColor = three.sRGBTransferEOTF(texel.rgb) as THREE_TYPES.Node<'vec3'>;
     return three.vec4(
       linearColor.mul(three.vec3(
@@ -138,12 +189,12 @@ export function createVirtualGltfMaterialPair(
   })();
   if (set.normal) {
     material.normalNode = three.normalMap(
-      sample(set.normal).xyz,
+      sample(set.normal, 'normal').xyz,
       three.vec2(normalScale[0], normalScale[1]),
     );
   }
   if (set.emissive) {
-    const linearEmissive = three.sRGBTransferEOTF(sample(set.emissive).rgb) as THREE_TYPES.Node<'vec3'>;
+    const linearEmissive = three.sRGBTransferEOTF(sample(set.emissive, 'emissive').rgb) as THREE_TYPES.Node<'vec3'>;
     material.emissiveNode = linearEmissive.mul(three.vec3(
       emissiveFactor[0], emissiveFactor[1], emissiveFactor[2],
     ));
@@ -151,23 +202,26 @@ export function createVirtualGltfMaterialPair(
   if (set.masks) {
     // Independent reads avoid ordering assumptions between Three's roughness
     // and metalness node flows. Both resolve the same linked-material mip.
-    material.roughnessNode = sample(set.masks).g.mul(roughnessFactor);
-    material.metalnessNode = sample(set.masks).b.mul(metalnessFactor);
+    material.roughnessNode = sample(set.masks, 'masks').g.mul(roughnessFactor);
+    material.metalnessNode = sample(set.masks, 'masks').b.mul(metalnessFactor);
   } else {
     material.roughness = roughnessFactor;
     material.metalness = metalnessFactor;
   }
 
-  const feedbackEntries = aligned ? [set.albedo] : entries;
-  const feedbackMaterials = feedbackEntries.map(entry => {
+  const albedoDescriptor = descriptors[0];
+  if (!albedoDescriptor) throw new Error('virtual material requires albedo feedback');
+  const feedbackDescriptors = aligned ? [albedoDescriptor] : descriptors;
+  const feedbackEntries = feedbackDescriptors.map(descriptor => descriptor.entry);
+  const feedbackMaterials = feedbackDescriptors.map(descriptor => {
     const feedbackMaterial = new three.MeshBasicNodeMaterial({ side });
     feedbackMaterial.fragmentNode = three.Fn(() => feedback({
-      sampleUV: three.uv(), gradientUV: three.uv(),
+      sampleUV: roleUv(descriptor.role), gradientUV: roleUv(descriptor.role),
       feedbackPixelScale: three.uniform(feedbackPixelScale),
-      virtualSize: three.uniform(new three.Vector2(entry.width, entry.height)),
-      pageGrid: three.uniform(new three.Vector2(entry.pageGridX, entry.pageGridY)),
-      maxMip: three.float(entry.maxMip), qualityBias: three.float(qualityBias),
-      addressMode: addressModeNode, textureId: three.uint(entry.textureId),
+      virtualSize: three.uniform(new three.Vector2(descriptor.entry.width, descriptor.entry.height)),
+      pageGrid: three.uniform(new three.Vector2(descriptor.entry.pageGridX, descriptor.entry.pageGridY)),
+      maxMip: three.float(descriptor.entry.maxMip), qualityBias: three.float(qualityBias),
+      addressMode: roleAddress(descriptor.role), textureId: three.uint(descriptor.entry.textureId),
     }))();
     return feedbackMaterial;
   });

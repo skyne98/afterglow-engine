@@ -1,5 +1,6 @@
 use serde::Deserialize;
 use serde_json::{Map, Value};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 const GLB_MAGIC: u32 = 0x46546c67;
@@ -248,6 +249,257 @@ pub fn extract_glb_images(bytes: &[u8]) -> Result<Vec<GlbImage>, String> {
     Ok(result)
 }
 
+fn remap_buffer_view_references(
+    value: &mut Value,
+    mapping: &[Option<usize>],
+) -> Result<(), String> {
+    match value {
+        Value::Array(values) => {
+            for value in values {
+                remap_buffer_view_references(value, mapping)?;
+            }
+        }
+        Value::Object(object) => {
+            if let Some(index) = object.get("bufferView").and_then(Value::as_u64) {
+                let mapped = mapping
+                    .get(index as usize)
+                    .and_then(|entry| *entry)
+                    .ok_or("GLB content references a stripped image bufferView")?;
+                object.insert("bufferView".into(), Value::from(mapped));
+            }
+            for value in object.values_mut() {
+                remap_buffer_view_references(value, mapping)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Remove browser-decodable image payloads from a runtime GLB after they have
+/// been cooked into VT pages. Texture/material sampling metadata is retained in
+/// an ignored custom extension for the web runtime's stable-index binding.
+pub fn strip_glb_images_for_virtual_texturing(bytes: &[u8]) -> Result<Vec<u8>, String> {
+    if bytes.len() < 12 || u32_at(bytes, 0)? != GLB_MAGIC || u32_at(bytes, 4)? != 2 {
+        return Err("invalid GLB header".into());
+    }
+    if u32_at(bytes, 8)? as usize != bytes.len() {
+        return Err("GLB declared length does not match payload".into());
+    }
+    let mut json_chunk = None;
+    let mut binary_chunk = None;
+    let mut cursor = 12usize;
+    while cursor < bytes.len() {
+        let length = u32_at(bytes, cursor)? as usize;
+        let kind = u32_at(bytes, cursor + 4)?;
+        cursor = cursor.checked_add(8).ok_or("GLB chunk offset overflow")?;
+        let end = cursor
+            .checked_add(length)
+            .ok_or("GLB chunk length overflow")?;
+        let chunk = bytes.get(cursor..end).ok_or("truncated GLB chunk")?;
+        if kind == JSON_CHUNK {
+            json_chunk = Some(chunk);
+        }
+        if kind == BIN_CHUNK {
+            binary_chunk = Some(chunk);
+        }
+        cursor = end;
+    }
+    let mut document: Value = serde_json::from_slice(json_chunk.ok_or("GLB has no JSON chunk")?)
+        .map_err(|error| format!("invalid GLB JSON: {error}"))?;
+    let binary = binary_chunk.ok_or("GLB has no BIN chunk")?;
+    let object = document
+        .as_object_mut()
+        .ok_or("GLB JSON must be an object")?;
+    if let Some(materials) = object.get("materials").and_then(Value::as_array) {
+        for (index, material) in materials.iter().enumerate() {
+            let material = material
+                .as_object()
+                .ok_or_else(|| format!("GLB material {index} must be an object"))?;
+            if material.contains_key("occlusionTexture") {
+                return Err(format!(
+                    "GLB material {index} uses unsupported occlusionTexture"
+                ));
+            }
+            if material
+                .get("extensions")
+                .and_then(Value::as_object)
+                .is_some_and(|extensions| !extensions.is_empty())
+            {
+                return Err(format!(
+                    "GLB material {index} uses unsupported material extensions"
+                ));
+            }
+            let pbr = material
+                .get("pbrMetallicRoughness")
+                .and_then(Value::as_object);
+            let has_base = pbr.is_some_and(|value| value.contains_key("baseColorTexture"));
+            let has_other = pbr.is_some_and(|value| value.contains_key("metallicRoughnessTexture"))
+                || material.contains_key("normalTexture")
+                || material.contains_key("emissiveTexture");
+            if has_other && !has_base {
+                return Err(format!(
+                    "GLB material {index} has virtual channels without base color"
+                ));
+            }
+        }
+    }
+    let image_views: HashSet<usize> = object
+        .get("images")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|image| image.get("bufferView").and_then(Value::as_u64))
+        .map(|index| index as usize)
+        .collect();
+
+    let mut metadata = Map::new();
+    metadata.insert(
+        "textures".into(),
+        object
+            .get("textures")
+            .cloned()
+            .unwrap_or_else(|| Value::Array(Vec::new())),
+    );
+    metadata.insert(
+        "samplers".into(),
+        object
+            .get("samplers")
+            .cloned()
+            .unwrap_or_else(|| Value::Array(Vec::new())),
+    );
+    metadata.insert(
+        "materials".into(),
+        object
+            .get("materials")
+            .cloned()
+            .unwrap_or_else(|| Value::Array(Vec::new())),
+    );
+    let extensions = object
+        .entry("extensions")
+        .or_insert_with(|| Value::Object(Map::new()))
+        .as_object_mut()
+        .ok_or("GLB extensions must be an object")?;
+    extensions.insert("AFTERGLOW_virtual_textures".into(), Value::Object(metadata));
+    let used = object
+        .entry("extensionsUsed")
+        .or_insert_with(|| Value::Array(Vec::new()))
+        .as_array_mut()
+        .ok_or("GLB extensionsUsed must be an array")?;
+    if !used
+        .iter()
+        .any(|value| value.as_str() == Some("AFTERGLOW_virtual_textures"))
+    {
+        used.push(Value::from("AFTERGLOW_virtual_textures"));
+    }
+
+    if let Some(materials) = object.get_mut("materials").and_then(Value::as_array_mut) {
+        for material in materials {
+            let Some(material) = material.as_object_mut() else {
+                continue;
+            };
+            if let Some(pbr) = material
+                .get_mut("pbrMetallicRoughness")
+                .and_then(Value::as_object_mut)
+            {
+                pbr.remove("baseColorTexture");
+                pbr.remove("metallicRoughnessTexture");
+            }
+            material.remove("normalTexture");
+            material.remove("occlusionTexture");
+            material.remove("emissiveTexture");
+        }
+    }
+    object.insert("images".into(), Value::Array(Vec::new()));
+    object.insert("textures".into(), Value::Array(Vec::new()));
+    object.insert("samplers".into(), Value::Array(Vec::new()));
+
+    let view_count = object
+        .get("bufferViews")
+        .and_then(Value::as_array)
+        .ok_or("GLB bufferViews must be an array")?
+        .len();
+    let mut mapping = vec![None; view_count];
+    let mut retained_count = 0usize;
+    for (index, target) in mapping.iter_mut().enumerate() {
+        if !image_views.contains(&index) {
+            *target = Some(retained_count);
+            retained_count += 1;
+        }
+    }
+    remap_buffer_view_references(&mut document, &mapping)?;
+    let object = document
+        .as_object_mut()
+        .ok_or("GLB JSON must be an object")?;
+    let views = object
+        .remove("bufferViews")
+        .and_then(|views| views.as_array().cloned())
+        .ok_or("GLB bufferViews must be an array")?;
+    let mut retained_views = Vec::with_capacity(retained_count);
+    let mut compact = Vec::new();
+    for (index, mut view) in views.into_iter().enumerate() {
+        if image_views.contains(&index) {
+            continue;
+        }
+        let view_object = view
+            .as_object_mut()
+            .ok_or("GLB bufferView must be an object")?;
+        let offset = view_object
+            .get("byteOffset")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as usize;
+        let length = view_object
+            .get("byteLength")
+            .and_then(Value::as_u64)
+            .ok_or("GLB bufferView has no byteLength")? as usize;
+        while compact.len() % 4 != 0 {
+            compact.push(0);
+        }
+        view_object.insert("byteOffset".into(), Value::from(compact.len()));
+        let end = offset
+            .checked_add(length)
+            .ok_or("GLB bufferView range overflow")?;
+        compact.extend_from_slice(
+            binary
+                .get(offset..end)
+                .ok_or("GLB bufferView exceeds BIN chunk")?,
+        );
+        retained_views.push(view);
+    }
+    object.insert("bufferViews".into(), Value::Array(retained_views));
+    let buffer = object
+        .get_mut("buffers")
+        .and_then(Value::as_array_mut)
+        .and_then(|buffers| buffers.first_mut())
+        .and_then(Value::as_object_mut)
+        .ok_or("GLB buffer must be an object")?;
+    buffer.insert("byteLength".into(), Value::from(compact.len()));
+
+    let mut json = serde_json::to_vec(&document)
+        .map_err(|error| format!("serialize stripped GLB: {error}"))?;
+    while json.len() % 4 != 0 {
+        json.push(b' ');
+    }
+    while compact.len() % 4 != 0 {
+        compact.push(0);
+    }
+    let total = 12usize
+        .checked_add(8 + json.len())
+        .and_then(|n| n.checked_add(8 + compact.len()))
+        .ok_or("stripped GLB size overflow")?;
+    let mut output = Vec::with_capacity(total);
+    output.extend_from_slice(&GLB_MAGIC.to_le_bytes());
+    output.extend_from_slice(&2u32.to_le_bytes());
+    output.extend_from_slice(&(total as u32).to_le_bytes());
+    output.extend_from_slice(&(json.len() as u32).to_le_bytes());
+    output.extend_from_slice(&JSON_CHUNK.to_le_bytes());
+    output.extend_from_slice(&json);
+    output.extend_from_slice(&(compact.len() as u32).to_le_bytes());
+    output.extend_from_slice(&BIN_CHUNK.to_le_bytes());
+    output.extend_from_slice(&compact);
+    Ok(output)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -308,21 +560,54 @@ mod tests {
     }
 
     #[test]
+    fn strips_runtime_images_and_retains_virtual_texture_metadata() {
+        let source = glb(
+            r#"{"buffers":[{"byteLength":8}],"bufferViews":[{"buffer":0,"byteOffset":4,"byteLength":4},{"buffer":0,"byteOffset":0,"byteLength":4}],"accessors":[{"bufferView":1,"componentType":5121,"count":4,"type":"SCALAR"}],"images":[{"bufferView":0,"mimeType":"image/png"}],"textures":[{"source":0,"sampler":0}],"samplers":[{"wrapS":33648,"wrapT":33648}],"materials":[{"pbrMetallicRoughness":{"baseColorTexture":{"index":0,"extensions":{"KHR_texture_transform":{"offset":[0.2,0.3]}}}}}]}"#,
+            &[1, 2, 3, 4, 90, 91, 92, 93],
+        );
+        let stripped = strip_glb_images_for_virtual_texturing(&source).unwrap();
+        assert!(extract_glb_images(&stripped).unwrap().is_empty());
+        assert!(!stripped.windows(4).any(|window| window == [90, 91, 92, 93]));
+        let json_len = u32_at(&stripped, 12).unwrap() as usize;
+        let document: Value = serde_json::from_slice(&stripped[20..20 + json_len]).unwrap();
+        assert_eq!(document["images"].as_array().unwrap().len(), 0);
+        assert!(document["materials"][0]["pbrMetallicRoughness"]
+            .get("baseColorTexture")
+            .is_none());
+        assert_eq!(
+            document["extensions"]["AFTERGLOW_virtual_textures"]["materials"][0]
+                ["pbrMetallicRoughness"]["baseColorTexture"]["index"],
+            0,
+        );
+        assert_eq!(document["bufferViews"].as_array().unwrap().len(), 1);
+        assert_eq!(document["accessors"][0]["bufferView"], 0);
+        let bin_offset = 20 + json_len + 8;
+        assert_eq!(&stripped[bin_offset..bin_offset + 4], &[1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn rejects_material_channels_the_runtime_binding_cannot_preserve() {
+        let unsupported = glb(
+            r#"{"buffers":[{"byteLength":4}],"bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":4}],"images":[{"bufferView":0,"mimeType":"image/png"}],"textures":[{"source":0}],"materials":[{"occlusionTexture":{"index":0}}]}"#,
+            &[1, 2, 3, 4],
+        );
+        assert!(strip_glb_images_for_virtual_texturing(&unsupported)
+            .unwrap_err()
+            .contains("unsupported occlusionTexture"));
+    }
+
+    #[test]
     fn rejects_external_or_out_of_bounds_images() {
         let external = glb(r#"{"images":[{"uri":"texture.png"}]}"#, &[]);
-        assert!(
-            extract_glb_images(&external)
-                .unwrap_err()
-                .contains("external URI")
-        );
+        assert!(extract_glb_images(&external)
+            .unwrap_err()
+            .contains("external URI"));
         let truncated = glb(
             r#"{"bufferViews":[{"buffer":0,"byteOffset":3,"byteLength":8}],"images":[{"bufferView":0,"mimeType":"image/png"}]}"#,
             &[1, 2, 3, 4],
         );
-        assert!(
-            extract_glb_images(&truncated)
-                .unwrap_err()
-                .contains("exceeds BIN")
-        );
+        assert!(extract_glb_images(&truncated)
+            .unwrap_err()
+            .contains("exceeds BIN"));
     }
 }
