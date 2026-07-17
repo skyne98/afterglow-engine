@@ -9,7 +9,9 @@ export const enum DemoInputAction {
   ToggleSkeleton = 7,
   ToggleFeedback = 8,
   ResetView = 9,
-  Count = 10,
+  Overview = 10,
+  PixelView = 11,
+  Count = 12,
 }
 
 function actionFor(event: KeyboardEvent): DemoInputAction | -1 {
@@ -24,6 +26,8 @@ function actionFor(event: KeyboardEvent): DemoInputAction | -1 {
     case 'KeyB': case 'b': case 'B': return DemoInputAction.ToggleSkeleton;
     case 'KeyF': case 'f': case 'F': return DemoInputAction.ToggleFeedback;
     case 'KeyR': case 'r': case 'R': return DemoInputAction.ResetView;
+    case 'KeyO': case 'o': case 'O': return DemoInputAction.Overview;
+    case 'KeyP': case 'p': case 'P': return DemoInputAction.PixelView;
     default: return -1;
   }
 }
@@ -35,6 +39,8 @@ export class BoundedKeyboardInput {
   private readonly onKeyDown: (event: KeyboardEvent) => void;
   private readonly onKeyUp: (event: KeyboardEvent) => void;
   private readonly onBlur: () => void;
+  private readonly onWheel: (event: WheelEvent) => void;
+  private wheelDelta = 0;
   private disposed = false;
   programmatic = false;
 
@@ -51,9 +57,11 @@ export class BoundedKeyboardInput {
       if (action >= 0) this.down[action] = 0;
     };
     this.onBlur = (): void => { this.down.fill(0); this.pressed.fill(0); };
+    this.onWheel = (event): void => { if (!this.programmatic) this.wheelDelta += event.deltaY; };
     target.addEventListener('keydown', this.onKeyDown);
     target.addEventListener('keyup', this.onKeyUp);
     target.addEventListener('blur', this.onBlur);
+    target.addEventListener('wheel', this.onWheel);
   }
 
   /** @alloc-effect none */
@@ -67,7 +75,14 @@ export class BoundedKeyboardInput {
   }
 
   /** @alloc-effect none */
-  clear(): void { this.down.fill(0); this.pressed.fill(0); }
+  consumeWheelDelta(): number {
+    const delta = this.wheelDelta;
+    this.wheelDelta = 0;
+    return delta;
+  }
+
+  /** @alloc-effect none */
+  clear(): void { this.down.fill(0); this.pressed.fill(0); this.wheelDelta = 0; }
 
   dispose(): void {
     if (this.disposed) return;
@@ -75,6 +90,7 @@ export class BoundedKeyboardInput {
     this.target.removeEventListener('keydown', this.onKeyDown);
     this.target.removeEventListener('keyup', this.onKeyUp);
     this.target.removeEventListener('blur', this.onBlur);
+    this.target.removeEventListener('wheel', this.onWheel);
     this.clear();
   }
 }

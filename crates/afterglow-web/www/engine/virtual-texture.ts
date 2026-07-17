@@ -231,7 +231,7 @@ interface PageDataProviderTelemetry {
   maxCacheWriteMs: number;
 }
 
-type PageDataProvider = ((path: string, req: PageRequest, signal?: AbortSignal) => Promise<Uint8Array>) & {
+export type PageDataProvider = ((path: string, req: PageRequest, signal?: AbortSignal) => Promise<Uint8Array>) & {
   getStats?(): Readonly<PageDataProviderTelemetry>;
 };
 

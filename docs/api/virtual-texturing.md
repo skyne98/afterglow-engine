@@ -122,7 +122,12 @@ the shared atlas and fail during bootstrap instead of rendering approximately.
 The binding disposes replaced imported textures and materials
 and atomically restores primitive visibility/materials around every feedback
 pass. Materials without virtual base color remain visible
-normally and are hidden only during feedback. Missing indices, duplicate
+normally and are hidden only during feedback. `VirtualMaterialBinding` provides the same prewarmed visible/feedback ownership
+for one procedural mesh without inventing a glTF asset. The public procedural
+store factory likewise keeps direct `VirtualTextureStore` construction out of
+visual entrypoints.
+
+Missing indices, duplicate
 layouts, unsupported/non-PBR material replacement, unavailable images, and
 capacity overflow fail during bootstrap with rollback. Imported textures shared
 with an unreplaced material remain owned by that live material; only exclusive
@@ -311,9 +316,12 @@ atlas sized to the largest whole 136×136-slot grid allowed by the GPU's reporte
 3,600 slots, approximately 254 MiB RGBA8). Neither demo has a private cache or
 page-table implementation.
 
-`afterglow-cef --example vt-demo` displays one procedural 262,144×262,144
-terrain texture (256 GiB logical RGBA). It supports WASD pan, overview and
-one-texel zoom plus deterministic programmatic camera control.
+`afterglow-cef --example vt-demo` is a canonical `EngineRuntime` consumer using
+the procedural store factory, generic `VirtualMaterialBinding`, renderer host,
+and feedback coordinator. It displays one procedural 262,144×262,144 terrain
+texture (256 GiB logical RGBA), with WASD pan, overview, one-texel zoom, and
+deterministic programmatic control. Three independent real-GPU launches pass
+all raw-feedback, compressed/uncompressed upload, and residency trajectories.
 
 `afterglow-cef --example rigged-vt-demo` is a canonical `EngineRuntime`
 consumer. `BigAssetSession` loads two image-free GLBs from the same `.big`

@@ -73652,6 +73652,14 @@ function actionFor(event) {
     case "r":
     case "R":
       return 9 /* ResetView */;
+    case "KeyO":
+    case "o":
+    case "O":
+      return 10 /* Overview */;
+    case "KeyP":
+    case "p":
+    case "P":
+      return 11 /* PixelView */;
     default:
       return -1;
   }
@@ -73659,11 +73667,13 @@ function actionFor(event) {
 
 class BoundedKeyboardInput {
   target;
-  down = new Uint8Array(10 /* Count */);
-  pressed = new Uint8Array(10 /* Count */);
+  down = new Uint8Array(12 /* Count */);
+  pressed = new Uint8Array(12 /* Count */);
   onKeyDown;
   onKeyUp;
   onBlur;
+  onWheel;
+  wheelDelta = 0;
   disposed = false;
   programmatic = false;
   constructor(target = window) {
@@ -73687,9 +73697,14 @@ class BoundedKeyboardInput {
       this.down.fill(0);
       this.pressed.fill(0);
     };
+    this.onWheel = (event) => {
+      if (!this.programmatic)
+        this.wheelDelta += event.deltaY;
+    };
     target.addEventListener("keydown", this.onKeyDown);
     target.addEventListener("keyup", this.onKeyUp);
     target.addEventListener("blur", this.onBlur);
+    target.addEventListener("wheel", this.onWheel);
   }
   isDown(action) {
     return this.down[action] !== 0;
@@ -73699,9 +73714,15 @@ class BoundedKeyboardInput {
     this.pressed[action] = 0;
     return value;
   }
+  consumeWheelDelta() {
+    const delta = this.wheelDelta;
+    this.wheelDelta = 0;
+    return delta;
+  }
   clear() {
     this.down.fill(0);
     this.pressed.fill(0);
+    this.wheelDelta = 0;
   }
   dispose() {
     if (this.disposed)
@@ -73710,6 +73731,7 @@ class BoundedKeyboardInput {
     this.target.removeEventListener("keydown", this.onKeyDown);
     this.target.removeEventListener("keyup", this.onKeyUp);
     this.target.removeEventListener("blur", this.onBlur);
+    this.target.removeEventListener("wheel", this.onWheel);
     this.clear();
   }
 }

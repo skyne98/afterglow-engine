@@ -97,7 +97,11 @@ Implemented on 2026-07-17:
   animated models pass the real-GPU regression with zero post-seal pipelines;
 - DME-034 foundation: fixed action input, frame-step automation, bounded browser
   diagnostics, HUD ownership, and page-shutdown listener ownership are reusable
-  public primitives. Dungeon/VT/LOD migrations remain DME-030/032/033.
+  public primitives;
+- DME-032: `vt-demo.ts` is canonical on the runtime, renderer host, procedural
+  store factory, generic `VirtualMaterialBinding`, and feedback coordinator. The
+  three-launch real-GPU regression passes all feedback, upload, and residency
+  trajectories. Dungeon/LOD migrations remain DME-030/033.
 
 The machine-readable source of truth remains `engine-conformance.json`; this
 progress note does not override its gates.

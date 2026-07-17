@@ -129,8 +129,10 @@ to zoom and **A/D** to orbit with inertia; **B** shows the active skeleton.
 The real-GPU regression covers both rigs and reports zero post-seal pipelines.
 
 All demos use the production `VirtualTextureStore`, shader, scheduler, and
-packed page tables—there is no separate demo cache.
-The `vt-demo` CEF example displays a 262,144×262,144 terrain texture (256 GiB
+packed page tables—there is no separate demo cache. The canonical `vt-demo`
+uses `EngineRuntime`, `RendererHost`, `VirtualMaterialBinding`, and the feedback
+coordinator, and its three-launch GPU regression passes every trajectory.
+It displays a 262,144×262,144 terrain texture (256 GiB
 logical RGBA), while generating only requested bordered pages:
 
 ```sh
