@@ -35,8 +35,8 @@ nix-shell prototype/steam-audio-wasm/toolchain.nix --run \
 
 The argument is Steam Audio's reflection-simulation thread count. The benchmark
 itself always runs inside one outer `std::thread`, matching a native engine
-worker. To download, cook, and build the real Amazon Lumberyard Bistro interior
-geometry benchmark:
+worker. To download, cook, and build all three scenes in the real Amazon
+Lumberyard Bistro package:
 
 ```sh
 nix-shell prototype/steam-audio-wasm/toolchain.nix --run \
@@ -233,43 +233,47 @@ simulation p99, and roughly 283 MiB process peak RSS, so it remains rejected.
 Raw evidence:
 `docs/benchmarks/steam-audio-native-many-sources-fox-laptop-2026-07-18.json`.
 
-## Real Amazon Lumberyard Bistro geometry
+## Full Amazon Lumberyard Bistro package
 
-The synthetic 10K scene was not a representative geometry-scaling test because
-most filler triangles were distant. A separate native benchmark now uses the
-official **Amazon Lumberyard BistroInterior v5.2** FBX: 813,360 joined vertices
-and all **1,046,609 real render triangles** after flattening node transforms.
-The scene is Amazon Lumberyard's ORCA asset, licensed CC-BY 4.0. Render material
-names are mapped into six plausible acoustic categories; no baked acoustics or
-textures are used. The listener starts at the authored camera.
+The synthetic 10K scene was not representative because most filler triangles
+were distant. The native benchmark now cooks and tests every distinct FBX in the
+official CC-BY 4.0 Bistro v5.2 package. Interior and Interior-with-wine are tested
+separately because they are overlapping variants, not geometry to merge:
 
-Five fox-laptop launches per thread count measured 64 sources, two bounces, and
-a 500 ms parametric tail:
+| Scene | Cooked vertices | Cooked triangles |
+|---|---:|---:|
+| Exterior | 2,883,704 | 2,832,120 |
+| Interior | 813,360 | 1,046,609 |
+| Interior with wine | 1,067,322 | 1,320,323 |
 
-| Steam simulation threads | 512-ray mean / worst p99 | 1,024-ray mean / worst p99 |
-|---:|---:|---:|
-| 2 | 39.79 / 42.36 ms | 73.68 / 78.58 ms |
-| **4** | **23.24 / 25.56 ms** | 42.36 / 45.76 ms |
-| 8 | 15.46 / 17.52 ms | 30.00 / 33.54 ms |
+Assimp triangulates and flattens node transforms, all resulting render triangles
+are retained, and render material names map to six acoustic categories. Each
+scene uses its authored camera, 64 sources, two bounces, a 500 ms parametric tail,
+and no baked data. Five fox-laptop launches measured each cell:
 
-The full render mesh therefore does **not** sustain 60 Hz reflections on the
-6800U. Four threads support the selected 512×2 tier at 30 Hz; eight threads only
-approach 60 Hz while occupying every physical core. At four threads, Bistro was
-about 4× slower than the synthetic 10K scene's 6.44 ms p99—not 100× slower for
-100× more triangles, demonstrating useful BVH scaling but substantial local
-geometry cost.
+| Scene | 4 threads, 512×2 p99 | 8 threads, 512×2 p99 | 4 threads, 1,024×2 p99 | 8 threads, 1,024×2 p99 |
+|---|---:|---:|---:|---:|
+| Exterior | 34.82 ms | 24.24 ms | 59.19 ms | 48.93 ms |
+| Interior | 26.77 ms | 18.33 ms | 46.96 ms | 33.58 ms |
+| Interior with wine | 32.05 ms | 22.29 ms | 67.51 ms | 43.94 ms |
 
-The compact geometry loaded in 32 ms. Steam Audio's static-mesh/BVH creation
-averaged 2.48 s at bootstrap, scene RSS reached about 152 MiB, and process peak
-RSS was about 207 MiB. This is evidence against feeding render geometry directly
-to acoustics. Production should cook a structural proxy that retains walls,
-floors, ceilings, large furniture, and portals while removing tableware,
-fixtures, bevels, and other acoustically insignificant detail. Proxy quality and
-triangle-count scaling still need measurement.
+No full render scene sustains strict 60 Hz p99, even on eight simulation threads.
+The package-wide safe full-geometry tier is **eight threads, 512×2, 30 Hz**.
+Four threads support 30 Hz for both interior variants, but the exterior's 34.82
+ms p99 requires about 20 Hz. This does not alter the separately measured DSP
+cap: 128 direct+HRTF sources with 64 reflected sources remains the endpoint.
+
+The exterior is also the bootstrap/memory bound: static-mesh/BVH creation
+averaged **7.81 s**, scene RSS reached **375 MiB**, and process peak RSS reached
+**569 MiB**. Interior-with-wine required 3.25 s/~191 MiB scene RSS; Interior
+required 2.53 s/~152 MiB. Full render meshes are therefore stress bounds, not
+production acoustic geometry. Cook structural proxies retaining walls, floors,
+ceilings, large furniture, doors, and portals while removing tableware, bevels,
+fixtures, vegetation detail, and other acoustically insignificant triangles.
 
 Attribution: *Amazon Lumberyard Bistro, Open Research Content Archive (ORCA)*,
 Amazon Lumberyard, July 2017,
 [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/), from
 [NVIDIA ORCA](https://developer.nvidia.com/orca/amazon-lumberyard-bistro).
 Raw evidence:
-`docs/benchmarks/steam-audio-native-bistro-fox-laptop-2026-07-18.json`.
+`docs/benchmarks/steam-audio-native-bistro-full-package-fox-laptop-2026-07-18.json`.

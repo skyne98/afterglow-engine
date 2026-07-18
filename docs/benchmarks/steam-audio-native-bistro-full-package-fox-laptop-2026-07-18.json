@@ -1,0 +1,2208 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-07-18",
+  "package": {
+    "title": "Amazon Lumberyard Bistro v5.2",
+    "author": "Amazon Lumberyard",
+    "source": "https://developer.nvidia.com/orca/amazon-lumberyard-bistro",
+    "download": "https://developer.nvidia.com/bistro",
+    "license": "CC-BY 4.0",
+    "licenseUrl": "https://creativecommons.org/licenses/by/4.0/",
+    "citation": "Amazon Lumberyard Bistro, Open Research Content Archive (ORCA), Amazon Lumberyard, July 2017",
+    "note": "All three package scene files are tested separately. BistroInterior and BistroInterior_Wine are overlapping variants and are intentionally not merged."
+  },
+  "assets": [
+    {
+      "name": "BistroExterior",
+      "fbxSha256": "471991629c7e35a88338c48f3565390ad19cc5d1d7c7e067fc2a60b4f3b5f195",
+      "cookedSha256": "ac04df2b5eb3edfe17efe189b358496d70fa64063e0a71a59331fc45ba6703d2",
+      "vertices": 2883704,
+      "triangles": 2832120
+    },
+    {
+      "name": "BistroInterior",
+      "fbxSha256": "f18aea42854112e59752f14596e557c3d011e3526caf6a1bd55ce0e51881c11e",
+      "cookedSha256": "d77fda71fcbf931ce144d3cd214c7cccfccabce987eb3d9a313cad8498e98fc7",
+      "vertices": 813360,
+      "triangles": 1046609
+    },
+    {
+      "name": "BistroInterior_Wine",
+      "fbxSha256": "e5f4549548b0ec05c1f534551dcc7053d5286e0b48c9798c985ac1a7fa87cb1c",
+      "cookedSha256": "375c7181c9bc0b17de023bd2d69cc428a0b0526a019afaa92c16174db943d969",
+      "vertices": 1067322,
+      "triangles": 1320323,
+      "note": "Assimp triangulation yields 1,320,323 triangles; NVIDIA page reports 1,293,691 source polygons/triangles."
+    }
+  ],
+  "host": {
+    "name": "fox-laptop",
+    "cpu": "AMD Ryzen 7 6800U with Radeon Graphics",
+    "os": "Fedora 44 (Linux 7.1.3-201.fc44.x86_64)"
+  },
+  "software": {
+    "steamAudio": "4.8.1 released Linux x64 libphonon.so",
+    "harnessCompiler": "GCC 15.2.0",
+    "harnessOptimization": "-O3 -march=x86-64-v3",
+    "steamAudioSimd": "AVX2",
+    "assimp": "6.0.2"
+  },
+  "method": {
+    "outerWorker": "one std::thread; main thread only joins",
+    "steamAudioSimulationThreadCounts": [
+      4,
+      8
+    ],
+    "launchesPerSceneAndThreadCount": 5,
+    "sources": 64,
+    "globalRayCounts": [
+      512,
+      1024
+    ],
+    "bounces": 2,
+    "durationMs": 500,
+    "order": 0,
+    "type": "parametric",
+    "numDiffuseSamples": 32,
+    "rayBatchSize": 1,
+    "samplesPerScenario": 30,
+    "motion": "listener moves 5 cm per sample around each authored camera; static full render geometry remains committed",
+    "dynamicAcousticData": "none baked",
+    "cook": "Assimp triangulate + join identical vertices + pretransform nodes; retain all geometry; classify render material names into six acoustic categories",
+    "dsp": "not repeated because scene geometry does not affect per-source reflection/HRTF effect cost"
+  },
+  "conclusion": {
+    "strict30HzBudgetMs": 33.333333333333336,
+    "strict60HzBudgetMs": 16.666666666666668,
+    "fullPackageSafeTier": "eight simulation threads, 512 global rays x 2 bounces, 30Hz",
+    "fourThreadTier": "20Hz globally; 30Hz only for the two interior variants",
+    "sixtyHz": "none of the full render scenes sustain strict 60Hz p99 even with eight simulation threads",
+    "production": "cook structural acoustic proxies; full render geometry is a stress bound"
+  },
+  "sceneThreadSets": [
+    {
+      "scene": "BistroExterior",
+      "steamAudioSimulationThreads": 4,
+      "runs": [
+        {
+          "worker": "std::thread",
+          "steamAudioThreads": 4,
+          "asset": "Amazon Lumberyard BistroExterior.acoustic.bin v5.2",
+          "vertices": 2883704,
+          "triangles": 2832120,
+          "bounds": {
+            "min": [
+              -62.4582481384,
+              -7.56187295914,
+              -87.9369888306
+            ],
+            "max": [
+              111.301956177,
+              43.5323524475,
+              96.4814834595
+            ]
+          },
+          "geometryLoadMs": 95.552643,
+          "staticMeshCreateMs": 7724.598292,
+          "sceneCommitMs": 0.002685,
+          "simulatorCreateMs": 0.449613,
+          "sceneRssKiB": 383708,
+          "peakRssKiB": 582192,
+          "scenarios": [
+            {
+              "rays": 512,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 30.5119,
+                "p50": 30.4744,
+                "p90": 32.085,
+                "p99": 33.4213,
+                "max": 33.4213
+              },
+              "reverbLowRange": [
+                0.370527,
+                0.90635
+              ],
+              "irValid": true
+            },
+            {
+              "rays": 1024,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 54.6409,
+                "p50": 54.8106,
+                "p90": 56.1362,
+                "p99": 57.6871,
+                "max": 57.6871
+              },
+              "reverbLowRange": [
+                0.313194,
+                0.52396
+              ],
+              "irValid": true
+            }
+          ]
+        },
+        {
+          "worker": "std::thread",
+          "steamAudioThreads": 4,
+          "asset": "Amazon Lumberyard BistroExterior.acoustic.bin v5.2",
+          "vertices": 2883704,
+          "triangles": 2832120,
+          "bounds": {
+            "min": [
+              -62.4582481384,
+              -7.56187295914,
+              -87.9369888306
+            ],
+            "max": [
+              111.301956177,
+              43.5323524475,
+              96.4814834595
+            ]
+          },
+          "geometryLoadMs": 93.58418,
+          "staticMeshCreateMs": 7767.78825,
+          "sceneCommitMs": 0.003276,
+          "simulatorCreateMs": 0.472246,
+          "sceneRssKiB": 383704,
+          "peakRssKiB": 582404,
+          "scenarios": [
+            {
+              "rays": 512,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 29.9849,
+                "p50": 30.0163,
+                "p90": 31.7171,
+                "p99": 32.6726,
+                "max": 32.6726
+              },
+              "reverbLowRange": [
+                0.383131,
+                0.992255
+              ],
+              "irValid": true
+            },
+            {
+              "rays": 1024,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 55.0445,
+                "p50": 55.0731,
+                "p90": 56.6024,
+                "p99": 59.1875,
+                "max": 59.1875
+              },
+              "reverbLowRange": [
+                0.305991,
+                0.667222
+              ],
+              "irValid": true
+            }
+          ]
+        },
+        {
+          "worker": "std::thread",
+          "steamAudioThreads": 4,
+          "asset": "Amazon Lumberyard BistroExterior.acoustic.bin v5.2",
+          "vertices": 2883704,
+          "triangles": 2832120,
+          "bounds": {
+            "min": [
+              -62.4582481384,
+              -7.56187295914,
+              -87.9369888306
+            ],
+            "max": [
+              111.301956177,
+              43.5323524475,
+              96.4814834595
+            ]
+          },
+          "geometryLoadMs": 95.292635,
+          "staticMeshCreateMs": 7984.69449,
+          "sceneCommitMs": 0.002695,
+          "simulatorCreateMs": 0.466185,
+          "sceneRssKiB": 383704,
+          "peakRssKiB": 582328,
+          "scenarios": [
+            {
+              "rays": 512,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 30.9159,
+                "p50": 30.6085,
+                "p90": 32.7631,
+                "p99": 34.8201,
+                "max": 34.8201
+              },
+              "reverbLowRange": [
+                0.378683,
+                0.564592
+              ],
+              "irValid": true
+            },
+            {
+              "rays": 1024,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 56.5762,
+                "p50": 56.6962,
+                "p90": 58.5329,
+                "p99": 58.7295,
+                "max": 58.7295
+              },
+              "reverbLowRange": [
+                0.338818,
+                0.651499
+              ],
+              "irValid": true
+            }
+          ]
+        },
+        {
+          "worker": "std::thread",
+          "steamAudioThreads": 4,
+          "asset": "Amazon Lumberyard BistroExterior.acoustic.bin v5.2",
+          "vertices": 2883704,
+          "triangles": 2832120,
+          "bounds": {
+            "min": [
+              -62.4582481384,
+              -7.56187295914,
+              -87.9369888306
+            ],
+            "max": [
+              111.301956177,
+              43.5323524475,
+              96.4814834595
+            ]
+          },
+          "geometryLoadMs": 96.984188,
+          "staticMeshCreateMs": 7757.046838,
+          "sceneCommitMs": 0.002675,
+          "simulatorCreateMs": 0.44824,
+          "sceneRssKiB": 383708,
+          "peakRssKiB": 582520,
+          "scenarios": [
+            {
+              "rays": 512,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 30.1124,
+                "p50": 29.9472,
+                "p90": 31.4002,
+                "p99": 33.7127,
+                "max": 33.7127
+              },
+              "reverbLowRange": [
+                0.393464,
+                0.592167
+              ],
+              "irValid": true
+            },
+            {
+              "rays": 1024,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 54.5781,
+                "p50": 54.627,
+                "p90": 56.538,
+                "p99": 56.7328,
+                "max": 56.7328
+              },
+              "reverbLowRange": [
+                0.321452,
+                0.722877
+              ],
+              "irValid": true
+            }
+          ]
+        },
+        {
+          "worker": "std::thread",
+          "steamAudioThreads": 4,
+          "asset": "Amazon Lumberyard BistroExterior.acoustic.bin v5.2",
+          "vertices": 2883704,
+          "triangles": 2832120,
+          "bounds": {
+            "min": [
+              -62.4582481384,
+              -7.56187295914,
+              -87.9369888306
+            ],
+            "max": [
+              111.301956177,
+              43.5323524475,
+              96.4814834595
+            ]
+          },
+          "geometryLoadMs": 92.577963,
+          "staticMeshCreateMs": 7792.120839,
+          "sceneCommitMs": 0.002405,
+          "simulatorCreateMs": 0.476083,
+          "sceneRssKiB": 383704,
+          "peakRssKiB": 582520,
+          "scenarios": [
+            {
+              "rays": 512,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 30.2066,
+                "p50": 30.1207,
+                "p90": 31.3739,
+                "p99": 32.1566,
+                "max": 32.1566
+              },
+              "reverbLowRange": [
+                0.372244,
+                0.726812
+              ],
+              "irValid": true
+            },
+            {
+              "rays": 1024,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 54.4137,
+                "p50": 54.3629,
+                "p90": 55.7249,
+                "p99": 56.701,
+                "max": 56.701
+              },
+              "reverbLowRange": [
+                0.345906,
+                0.733006
+              ],
+              "irValid": true
+            }
+          ]
+        }
+      ],
+      "aggregate": {
+        "scene": "Amazon Lumberyard BistroExterior.acoustic.bin v5.2",
+        "threads": 4,
+        "vertices": 2883704,
+        "triangles": 2832120,
+        "bounds": {
+          "min": [
+            -62.4582481384,
+            -7.56187295914,
+            -87.9369888306
+          ],
+          "max": [
+            111.301956177,
+            43.5323524475,
+            96.4814834595
+          ]
+        },
+        "geometryLoadMeanMs": 94.79832180000001,
+        "staticMeshCreateMeanMs": 7805.249741800001,
+        "staticMeshCreateWorstMs": 7984.69449,
+        "sceneRssKiB": 383708,
+        "peakRssKiB": 582520,
+        "scenarios": [
+          {
+            "rays": 512,
+            "simulationMeanMs": 30.346340000000005,
+            "simulationWorstP99Ms": 34.8201,
+            "simulationWorstMaxMs": 34.8201,
+            "reverbLowMin": 0.370527,
+            "reverbLowMax": 0.992255,
+            "allIrValid": true
+          },
+          {
+            "rays": 1024,
+            "simulationMeanMs": 55.05068,
+            "simulationWorstP99Ms": 59.1875,
+            "simulationWorstMaxMs": 59.1875,
+            "reverbLowMin": 0.305991,
+            "reverbLowMax": 0.733006,
+            "allIrValid": true
+          }
+        ]
+      }
+    },
+    {
+      "scene": "BistroExterior",
+      "steamAudioSimulationThreads": 8,
+      "runs": [
+        {
+          "worker": "std::thread",
+          "steamAudioThreads": 8,
+          "asset": "Amazon Lumberyard BistroExterior.acoustic.bin v5.2",
+          "vertices": 2883704,
+          "triangles": 2832120,
+          "bounds": {
+            "min": [
+              -62.4582481384,
+              -7.56187295914,
+              -87.9369888306
+            ],
+            "max": [
+              111.301956177,
+              43.5323524475,
+              96.4814834595
+            ]
+          },
+          "geometryLoadMs": 93.185562,
+          "staticMeshCreateMs": 7812.123353,
+          "sceneCommitMs": 0.002726,
+          "simulatorCreateMs": 0.816061,
+          "sceneRssKiB": 383704,
+          "peakRssKiB": 582416,
+          "scenarios": [
+            {
+              "rays": 512,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 20.1052,
+                "p50": 20.081,
+                "p90": 21.3297,
+                "p99": 24.11,
+                "max": 24.11
+              },
+              "reverbLowRange": [
+                0.387823,
+                0.892947
+              ],
+              "irValid": true
+            },
+            {
+              "rays": 1024,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 36.8549,
+                "p50": 36.6116,
+                "p90": 38.7185,
+                "p99": 39.3399,
+                "max": 39.3399
+              },
+              "reverbLowRange": [
+                0.316394,
+                0.684336
+              ],
+              "irValid": true
+            }
+          ]
+        },
+        {
+          "worker": "std::thread",
+          "steamAudioThreads": 8,
+          "asset": "Amazon Lumberyard BistroExterior.acoustic.bin v5.2",
+          "vertices": 2883704,
+          "triangles": 2832120,
+          "bounds": {
+            "min": [
+              -62.4582481384,
+              -7.56187295914,
+              -87.9369888306
+            ],
+            "max": [
+              111.301956177,
+              43.5323524475,
+              96.4814834595
+            ]
+          },
+          "geometryLoadMs": 93.487063,
+          "staticMeshCreateMs": 7865.670273,
+          "sceneCommitMs": 0.002575,
+          "simulatorCreateMs": 0.747893,
+          "sceneRssKiB": 383704,
+          "peakRssKiB": 582464,
+          "scenarios": [
+            {
+              "rays": 512,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 20.4788,
+                "p50": 20.4935,
+                "p90": 22.5018,
+                "p99": 22.9587,
+                "max": 22.9587
+              },
+              "reverbLowRange": [
+                0.335497,
+                0.962535
+              ],
+              "irValid": true
+            },
+            {
+              "rays": 1024,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 37.1131,
+                "p50": 36.886,
+                "p90": 38.5252,
+                "p99": 39.5902,
+                "max": 39.5902
+              },
+              "reverbLowRange": [
+                0.31419,
+                0.487864
+              ],
+              "irValid": true
+            }
+          ]
+        },
+        {
+          "worker": "std::thread",
+          "steamAudioThreads": 8,
+          "asset": "Amazon Lumberyard BistroExterior.acoustic.bin v5.2",
+          "vertices": 2883704,
+          "triangles": 2832120,
+          "bounds": {
+            "min": [
+              -62.4582481384,
+              -7.56187295914,
+              -87.9369888306
+            ],
+            "max": [
+              111.301956177,
+              43.5323524475,
+              96.4814834595
+            ]
+          },
+          "geometryLoadMs": 95.659509,
+          "staticMeshCreateMs": 7899.008268,
+          "sceneCommitMs": 0.002986,
+          "simulatorCreateMs": 0.739938,
+          "sceneRssKiB": 383704,
+          "peakRssKiB": 582520,
+          "scenarios": [
+            {
+              "rays": 512,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 20.8528,
+                "p50": 20.7678,
+                "p90": 22.3163,
+                "p99": 23.0634,
+                "max": 23.0634
+              },
+              "reverbLowRange": [
+                0.377803,
+                0.890226
+              ],
+              "irValid": true
+            },
+            {
+              "rays": 1024,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 36.9769,
+                "p50": 36.7118,
+                "p90": 38.7043,
+                "p99": 39.8884,
+                "max": 39.8884
+              },
+              "reverbLowRange": [
+                0.285347,
+                0.590988
+              ],
+              "irValid": true
+            }
+          ]
+        },
+        {
+          "worker": "std::thread",
+          "steamAudioThreads": 8,
+          "asset": "Amazon Lumberyard BistroExterior.acoustic.bin v5.2",
+          "vertices": 2883704,
+          "triangles": 2832120,
+          "bounds": {
+            "min": [
+              -62.4582481384,
+              -7.56187295914,
+              -87.9369888306
+            ],
+            "max": [
+              111.301956177,
+              43.5323524475,
+              96.4814834595
+            ]
+          },
+          "geometryLoadMs": 94.749992,
+          "staticMeshCreateMs": 7893.091859,
+          "sceneCommitMs": 0.002625,
+          "simulatorCreateMs": 0.758052,
+          "sceneRssKiB": 383708,
+          "peakRssKiB": 582432,
+          "scenarios": [
+            {
+              "rays": 512,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 20.7297,
+                "p50": 20.363,
+                "p90": 23.1978,
+                "p99": 24.2426,
+                "max": 24.2426
+              },
+              "reverbLowRange": [
+                0.381939,
+                0.995322
+              ],
+              "irValid": true
+            },
+            {
+              "rays": 1024,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 38.211,
+                "p50": 37.4306,
+                "p90": 43.2903,
+                "p99": 48.9312,
+                "max": 48.9312
+              },
+              "reverbLowRange": [
+                0.307974,
+                0.617693
+              ],
+              "irValid": true
+            }
+          ]
+        },
+        {
+          "worker": "std::thread",
+          "steamAudioThreads": 8,
+          "asset": "Amazon Lumberyard BistroExterior.acoustic.bin v5.2",
+          "vertices": 2883704,
+          "triangles": 2832120,
+          "bounds": {
+            "min": [
+              -62.4582481384,
+              -7.56187295914,
+              -87.9369888306
+            ],
+            "max": [
+              111.301956177,
+              43.5323524475,
+              96.4814834595
+            ]
+          },
+          "geometryLoadMs": 99.439751,
+          "staticMeshCreateMs": 8075.460104,
+          "sceneCommitMs": 0.003026,
+          "simulatorCreateMs": 0.907933,
+          "sceneRssKiB": 383704,
+          "peakRssKiB": 582448,
+          "scenarios": [
+            {
+              "rays": 512,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 20.5767,
+                "p50": 20.4685,
+                "p90": 23.3883,
+                "p99": 23.8697,
+                "max": 23.8697
+              },
+              "reverbLowRange": [
+                0.330959,
+                1.01379
+              ],
+              "irValid": true
+            },
+            {
+              "rays": 1024,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 37.7312,
+                "p50": 37.8847,
+                "p90": 39.997,
+                "p99": 40.2276,
+                "max": 40.2276
+              },
+              "reverbLowRange": [
+                0.323225,
+                0.837097
+              ],
+              "irValid": true
+            }
+          ]
+        }
+      ],
+      "aggregate": {
+        "scene": "Amazon Lumberyard BistroExterior.acoustic.bin v5.2",
+        "threads": 8,
+        "vertices": 2883704,
+        "triangles": 2832120,
+        "bounds": {
+          "min": [
+            -62.4582481384,
+            -7.56187295914,
+            -87.9369888306
+          ],
+          "max": [
+            111.301956177,
+            43.5323524475,
+            96.4814834595
+          ]
+        },
+        "geometryLoadMeanMs": 95.3043754,
+        "staticMeshCreateMeanMs": 7909.070771399999,
+        "staticMeshCreateWorstMs": 8075.460104,
+        "sceneRssKiB": 383708,
+        "peakRssKiB": 582520,
+        "scenarios": [
+          {
+            "rays": 512,
+            "simulationMeanMs": 20.548640000000002,
+            "simulationWorstP99Ms": 24.2426,
+            "simulationWorstMaxMs": 24.2426,
+            "reverbLowMin": 0.330959,
+            "reverbLowMax": 1.01379,
+            "allIrValid": true
+          },
+          {
+            "rays": 1024,
+            "simulationMeanMs": 37.37742,
+            "simulationWorstP99Ms": 48.9312,
+            "simulationWorstMaxMs": 48.9312,
+            "reverbLowMin": 0.285347,
+            "reverbLowMax": 0.837097,
+            "allIrValid": true
+          }
+        ]
+      }
+    },
+    {
+      "scene": "BistroInterior",
+      "steamAudioSimulationThreads": 4,
+      "runs": [
+        {
+          "worker": "std::thread",
+          "steamAudioThreads": 4,
+          "asset": "Amazon Lumberyard BistroInterior.acoustic.bin v5.2",
+          "vertices": 813360,
+          "triangles": 1046609,
+          "bounds": {
+            "min": [
+              -2.06215429306,
+              0.226773262024,
+              -13.9418201447
+            ],
+            "max": [
+              13.5626935959,
+              7.51110076904,
+              5.47057676315
+            ]
+          },
+          "geometryLoadMs": 32.024311,
+          "staticMeshCreateMs": 2531.30359,
+          "sceneCommitMs": 0.002665,
+          "simulatorCreateMs": 0.286718,
+          "sceneRssKiB": 155120,
+          "peakRssKiB": 211920,
+          "scenarios": [
+            {
+              "rays": 512,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 24.1499,
+                "p50": 24.1773,
+                "p90": 24.8254,
+                "p99": 26.7693,
+                "max": 26.7693
+              },
+              "reverbLowRange": [
+                0.164779,
+                0.261497
+              ],
+              "irValid": true
+            },
+            {
+              "rays": 1024,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 44.3695,
+                "p50": 44.2713,
+                "p90": 45.4514,
+                "p99": 46.058,
+                "max": 46.058
+              },
+              "reverbLowRange": [
+                0.159729,
+                0.317261
+              ],
+              "irValid": true
+            }
+          ]
+        },
+        {
+          "worker": "std::thread",
+          "steamAudioThreads": 4,
+          "asset": "Amazon Lumberyard BistroInterior.acoustic.bin v5.2",
+          "vertices": 813360,
+          "triangles": 1046609,
+          "bounds": {
+            "min": [
+              -2.06215429306,
+              0.226773262024,
+              -13.9418201447
+            ],
+            "max": [
+              13.5626935959,
+              7.51110076904,
+              5.47057676315
+            ]
+          },
+          "geometryLoadMs": 32.86025,
+          "staticMeshCreateMs": 2531.502031,
+          "sceneCommitMs": 0.002725,
+          "simulatorCreateMs": 0.290755,
+          "sceneRssKiB": 155120,
+          "peakRssKiB": 211964,
+          "scenarios": [
+            {
+              "rays": 512,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 24.0263,
+                "p50": 23.8911,
+                "p90": 25.3394,
+                "p99": 25.9585,
+                "max": 25.9585
+              },
+              "reverbLowRange": [
+                0.144641,
+                0.401954
+              ],
+              "irValid": true
+            },
+            {
+              "rays": 1024,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 43.979,
+                "p50": 44.0868,
+                "p90": 46.0064,
+                "p99": 46.9599,
+                "max": 46.9599
+              },
+              "reverbLowRange": [
+                0.168994,
+                0.377695
+              ],
+              "irValid": true
+            }
+          ]
+        },
+        {
+          "worker": "std::thread",
+          "steamAudioThreads": 4,
+          "asset": "Amazon Lumberyard BistroInterior.acoustic.bin v5.2",
+          "vertices": 813360,
+          "triangles": 1046609,
+          "bounds": {
+            "min": [
+              -2.06215429306,
+              0.226773262024,
+              -13.9418201447
+            ],
+            "max": [
+              13.5626935959,
+              7.51110076904,
+              5.47057676315
+            ]
+          },
+          "geometryLoadMs": 32.39647,
+          "staticMeshCreateMs": 2539.180818,
+          "sceneCommitMs": 0.002545,
+          "simulatorCreateMs": 0.297548,
+          "sceneRssKiB": 155120,
+          "peakRssKiB": 211820,
+          "scenarios": [
+            {
+              "rays": 512,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 24.138,
+                "p50": 24.0955,
+                "p90": 24.99,
+                "p99": 25.7786,
+                "max": 25.7786
+              },
+              "reverbLowRange": [
+                0.168322,
+                0.426539
+              ],
+              "irValid": true
+            },
+            {
+              "rays": 1024,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 43.9435,
+                "p50": 43.7904,
+                "p90": 45.8919,
+                "p99": 46.5237,
+                "max": 46.5237
+              },
+              "reverbLowRange": [
+                0.159381,
+                0.251828
+              ],
+              "irValid": true
+            }
+          ]
+        },
+        {
+          "worker": "std::thread",
+          "steamAudioThreads": 4,
+          "asset": "Amazon Lumberyard BistroInterior.acoustic.bin v5.2",
+          "vertices": 813360,
+          "triangles": 1046609,
+          "bounds": {
+            "min": [
+              -2.06215429306,
+              0.226773262024,
+              -13.9418201447
+            ],
+            "max": [
+              13.5626935959,
+              7.51110076904,
+              5.47057676315
+            ]
+          },
+          "geometryLoadMs": 32.557262,
+          "staticMeshCreateMs": 2528.121429,
+          "sceneCommitMs": 0.002414,
+          "simulatorCreateMs": 0.290325,
+          "sceneRssKiB": 155124,
+          "peakRssKiB": 211980,
+          "scenarios": [
+            {
+              "rays": 512,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 24.2212,
+                "p50": 24.3434,
+                "p90": 25.2801,
+                "p99": 25.6298,
+                "max": 25.6298
+              },
+              "reverbLowRange": [
+                0.173948,
+                0.267695
+              ],
+              "irValid": true
+            },
+            {
+              "rays": 1024,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 44.5038,
+                "p50": 44.3809,
+                "p90": 45.8069,
+                "p99": 46.2064,
+                "max": 46.2064
+              },
+              "reverbLowRange": [
+                0.139069,
+                0.285538
+              ],
+              "irValid": true
+            }
+          ]
+        },
+        {
+          "worker": "std::thread",
+          "steamAudioThreads": 4,
+          "asset": "Amazon Lumberyard BistroInterior.acoustic.bin v5.2",
+          "vertices": 813360,
+          "triangles": 1046609,
+          "bounds": {
+            "min": [
+              -2.06215429306,
+              0.226773262024,
+              -13.9418201447
+            ],
+            "max": [
+              13.5626935959,
+              7.51110076904,
+              5.47057676315
+            ]
+          },
+          "geometryLoadMs": 32.411037,
+          "staticMeshCreateMs": 2518.473969,
+          "sceneCommitMs": 0.002615,
+          "simulatorCreateMs": 0.28797,
+          "sceneRssKiB": 155120,
+          "peakRssKiB": 212024,
+          "scenarios": [
+            {
+              "rays": 512,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 24.1028,
+                "p50": 24.0369,
+                "p90": 25.0899,
+                "p99": 25.7893,
+                "max": 25.7893
+              },
+              "reverbLowRange": [
+                0.147756,
+                0.257277
+              ],
+              "irValid": true
+            },
+            {
+              "rays": 1024,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 44.3291,
+                "p50": 44.2747,
+                "p90": 45.8958,
+                "p99": 46.7365,
+                "max": 46.7365
+              },
+              "reverbLowRange": [
+                0.164961,
+                0.351718
+              ],
+              "irValid": true
+            }
+          ]
+        }
+      ],
+      "aggregate": {
+        "scene": "Amazon Lumberyard BistroInterior.acoustic.bin v5.2",
+        "threads": 4,
+        "vertices": 813360,
+        "triangles": 1046609,
+        "bounds": {
+          "min": [
+            -2.06215429306,
+            0.226773262024,
+            -13.9418201447
+          ],
+          "max": [
+            13.5626935959,
+            7.51110076904,
+            5.47057676315
+          ]
+        },
+        "geometryLoadMeanMs": 32.449866,
+        "staticMeshCreateMeanMs": 2529.7163674,
+        "staticMeshCreateWorstMs": 2539.180818,
+        "sceneRssKiB": 155124,
+        "peakRssKiB": 212024,
+        "scenarios": [
+          {
+            "rays": 512,
+            "simulationMeanMs": 24.12764,
+            "simulationWorstP99Ms": 26.7693,
+            "simulationWorstMaxMs": 26.7693,
+            "reverbLowMin": 0.144641,
+            "reverbLowMax": 0.426539,
+            "allIrValid": true
+          },
+          {
+            "rays": 1024,
+            "simulationMeanMs": 44.224979999999995,
+            "simulationWorstP99Ms": 46.9599,
+            "simulationWorstMaxMs": 46.9599,
+            "reverbLowMin": 0.139069,
+            "reverbLowMax": 0.377695,
+            "allIrValid": true
+          }
+        ]
+      }
+    },
+    {
+      "scene": "BistroInterior",
+      "steamAudioSimulationThreads": 8,
+      "runs": [
+        {
+          "worker": "std::thread",
+          "steamAudioThreads": 8,
+          "asset": "Amazon Lumberyard BistroInterior.acoustic.bin v5.2",
+          "vertices": 813360,
+          "triangles": 1046609,
+          "bounds": {
+            "min": [
+              -2.06215429306,
+              0.226773262024,
+              -13.9418201447
+            ],
+            "max": [
+              13.5626935959,
+              7.51110076904,
+              5.47057676315
+            ]
+          },
+          "geometryLoadMs": 33.870335,
+          "staticMeshCreateMs": 2528.28216,
+          "sceneCommitMs": 0.002274,
+          "simulatorCreateMs": 0.461886,
+          "sceneRssKiB": 155184,
+          "peakRssKiB": 211960,
+          "scenarios": [
+            {
+              "rays": 512,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 15.7314,
+                "p50": 15.6807,
+                "p90": 16.6835,
+                "p99": 17.097,
+                "max": 17.097
+              },
+              "reverbLowRange": [
+                0.163132,
+                0.272992
+              ],
+              "irValid": true
+            },
+            {
+              "rays": 1024,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 30.5925,
+                "p50": 30.6092,
+                "p90": 32.1829,
+                "p99": 32.6481,
+                "max": 32.6481
+              },
+              "reverbLowRange": [
+                0.172342,
+                0.247998
+              ],
+              "irValid": true
+            }
+          ]
+        },
+        {
+          "worker": "std::thread",
+          "steamAudioThreads": 8,
+          "asset": "Amazon Lumberyard BistroInterior.acoustic.bin v5.2",
+          "vertices": 813360,
+          "triangles": 1046609,
+          "bounds": {
+            "min": [
+              -2.06215429306,
+              0.226773262024,
+              -13.9418201447
+            ],
+            "max": [
+              13.5626935959,
+              7.51110076904,
+              5.47057676315
+            ]
+          },
+          "geometryLoadMs": 33.376358,
+          "staticMeshCreateMs": 2534.404417,
+          "sceneCommitMs": 0.002705,
+          "simulatorCreateMs": 0.44214,
+          "sceneRssKiB": 155124,
+          "peakRssKiB": 212024,
+          "scenarios": [
+            {
+              "rays": 512,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 15.5589,
+                "p50": 15.6367,
+                "p90": 16.2569,
+                "p99": 16.9521,
+                "max": 16.9521
+              },
+              "reverbLowRange": [
+                0.141969,
+                0.35183
+              ],
+              "irValid": true
+            },
+            {
+              "rays": 1024,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 30.4428,
+                "p50": 30.1728,
+                "p90": 31.5364,
+                "p99": 31.7347,
+                "max": 31.7347
+              },
+              "reverbLowRange": [
+                0.170714,
+                0.265167
+              ],
+              "irValid": true
+            }
+          ]
+        },
+        {
+          "worker": "std::thread",
+          "steamAudioThreads": 8,
+          "asset": "Amazon Lumberyard BistroInterior.acoustic.bin v5.2",
+          "vertices": 813360,
+          "triangles": 1046609,
+          "bounds": {
+            "min": [
+              -2.06215429306,
+              0.226773262024,
+              -13.9418201447
+            ],
+            "max": [
+              13.5626935959,
+              7.51110076904,
+              5.47057676315
+            ]
+          },
+          "geometryLoadMs": 33.293523,
+          "staticMeshCreateMs": 2530.577147,
+          "sceneCommitMs": 0.002575,
+          "simulatorCreateMs": 0.457047,
+          "sceneRssKiB": 155120,
+          "peakRssKiB": 212024,
+          "scenarios": [
+            {
+              "rays": 512,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 15.7776,
+                "p50": 15.7757,
+                "p90": 16.7767,
+                "p99": 17.0459,
+                "max": 17.0459
+              },
+              "reverbLowRange": [
+                0.16244,
+                0.258017
+              ],
+              "irValid": true
+            },
+            {
+              "rays": 1024,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 30.9774,
+                "p50": 31.1376,
+                "p90": 32.4788,
+                "p99": 32.6002,
+                "max": 32.6002
+              },
+              "reverbLowRange": [
+                0.161924,
+                0.367429
+              ],
+              "irValid": true
+            }
+          ]
+        },
+        {
+          "worker": "std::thread",
+          "steamAudioThreads": 8,
+          "asset": "Amazon Lumberyard BistroInterior.acoustic.bin v5.2",
+          "vertices": 813360,
+          "triangles": 1046609,
+          "bounds": {
+            "min": [
+              -2.06215429306,
+              0.226773262024,
+              -13.9418201447
+            ],
+            "max": [
+              13.5626935959,
+              7.51110076904,
+              5.47057676315
+            ]
+          },
+          "geometryLoadMs": 33.079381,
+          "staticMeshCreateMs": 2530.083229,
+          "sceneCommitMs": 0.002535,
+          "simulatorCreateMs": 0.451497,
+          "sceneRssKiB": 155120,
+          "peakRssKiB": 211852,
+          "scenarios": [
+            {
+              "rays": 512,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 15.7336,
+                "p50": 15.602,
+                "p90": 16.9122,
+                "p99": 18.3268,
+                "max": 18.3268
+              },
+              "reverbLowRange": [
+                0.170628,
+                0.3274
+              ],
+              "irValid": true
+            },
+            {
+              "rays": 1024,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 30.6909,
+                "p50": 30.8606,
+                "p90": 32.5683,
+                "p99": 33.269,
+                "max": 33.269
+              },
+              "reverbLowRange": [
+                0.1611,
+                0.255884
+              ],
+              "irValid": true
+            }
+          ]
+        },
+        {
+          "worker": "std::thread",
+          "steamAudioThreads": 8,
+          "asset": "Amazon Lumberyard BistroInterior.acoustic.bin v5.2",
+          "vertices": 813360,
+          "triangles": 1046609,
+          "bounds": {
+            "min": [
+              -2.06215429306,
+              0.226773262024,
+              -13.9418201447
+            ],
+            "max": [
+              13.5626935959,
+              7.51110076904,
+              5.47057676315
+            ]
+          },
+          "geometryLoadMs": 33.944033,
+          "staticMeshCreateMs": 2528.987073,
+          "sceneCommitMs": 0.002414,
+          "simulatorCreateMs": 0.457609,
+          "sceneRssKiB": 155124,
+          "peakRssKiB": 211932,
+          "scenarios": [
+            {
+              "rays": 512,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 15.796,
+                "p50": 15.8149,
+                "p90": 16.91,
+                "p99": 17.3893,
+                "max": 17.3893
+              },
+              "reverbLowRange": [
+                0.165414,
+                0.251419
+              ],
+              "irValid": true
+            },
+            {
+              "rays": 1024,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 30.8077,
+                "p50": 30.9363,
+                "p90": 32.2995,
+                "p99": 33.5786,
+                "max": 33.5786
+              },
+              "reverbLowRange": [
+                0.163868,
+                0.342527
+              ],
+              "irValid": true
+            }
+          ]
+        }
+      ],
+      "aggregate": {
+        "scene": "Amazon Lumberyard BistroInterior.acoustic.bin v5.2",
+        "threads": 8,
+        "vertices": 813360,
+        "triangles": 1046609,
+        "bounds": {
+          "min": [
+            -2.06215429306,
+            0.226773262024,
+            -13.9418201447
+          ],
+          "max": [
+            13.5626935959,
+            7.51110076904,
+            5.47057676315
+          ]
+        },
+        "geometryLoadMeanMs": 33.512726,
+        "staticMeshCreateMeanMs": 2530.4668052,
+        "staticMeshCreateWorstMs": 2534.404417,
+        "sceneRssKiB": 155184,
+        "peakRssKiB": 212024,
+        "scenarios": [
+          {
+            "rays": 512,
+            "simulationMeanMs": 15.7195,
+            "simulationWorstP99Ms": 18.3268,
+            "simulationWorstMaxMs": 18.3268,
+            "reverbLowMin": 0.141969,
+            "reverbLowMax": 0.35183,
+            "allIrValid": true
+          },
+          {
+            "rays": 1024,
+            "simulationMeanMs": 30.702260000000003,
+            "simulationWorstP99Ms": 33.5786,
+            "simulationWorstMaxMs": 33.5786,
+            "reverbLowMin": 0.1611,
+            "reverbLowMax": 0.367429,
+            "allIrValid": true
+          }
+        ]
+      }
+    },
+    {
+      "scene": "BistroInterior_Wine",
+      "steamAudioSimulationThreads": 4,
+      "runs": [
+        {
+          "worker": "std::thread",
+          "steamAudioThreads": 4,
+          "asset": "Amazon Lumberyard BistroInterior_Wine.acoustic.bin v5.2",
+          "vertices": 1067322,
+          "triangles": 1320323,
+          "bounds": {
+            "min": [
+              -2.94780755043,
+              0.298315733671,
+              -20.3479995728
+            ],
+            "max": [
+              19.8800964355,
+              10.9407186508,
+              8.01351356506
+            ]
+          },
+          "geometryLoadMs": 43.81385,
+          "staticMeshCreateMs": 3249.383286,
+          "sceneCommitMs": 0.002485,
+          "simulatorCreateMs": 0.296566,
+          "sceneRssKiB": 195208,
+          "peakRssKiB": 267072,
+          "scenarios": [
+            {
+              "rays": 512,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 29.941,
+                "p50": 29.925,
+                "p90": 31.1023,
+                "p99": 32.0456,
+                "max": 32.0456
+              },
+              "reverbLowRange": [
+                0.22992,
+                0.31166
+              ],
+              "irValid": true
+            },
+            {
+              "rays": 1024,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 62.8817,
+                "p50": 63.0864,
+                "p90": 65.2858,
+                "p99": 65.8756,
+                "max": 65.8756
+              },
+              "reverbLowRange": [
+                0.211658,
+                0.322844
+              ],
+              "irValid": true
+            }
+          ]
+        },
+        {
+          "worker": "std::thread",
+          "steamAudioThreads": 4,
+          "asset": "Amazon Lumberyard BistroInterior_Wine.acoustic.bin v5.2",
+          "vertices": 1067322,
+          "triangles": 1320323,
+          "bounds": {
+            "min": [
+              -2.94780755043,
+              0.298315733671,
+              -20.3479995728
+            ],
+            "max": [
+              19.8800964355,
+              10.9407186508,
+              8.01351356506
+            ]
+          },
+          "geometryLoadMs": 43.13157,
+          "staticMeshCreateMs": 3256.876084,
+          "sceneCommitMs": 0.002314,
+          "simulatorCreateMs": 0.300925,
+          "sceneRssKiB": 195212,
+          "peakRssKiB": 267132,
+          "scenarios": [
+            {
+              "rays": 512,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 30.1126,
+                "p50": 30.1824,
+                "p90": 31.2456,
+                "p99": 31.3431,
+                "max": 31.3431
+              },
+              "reverbLowRange": [
+                0.231191,
+                0.376815
+              ],
+              "irValid": true
+            },
+            {
+              "rays": 1024,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 62.8216,
+                "p50": 62.6091,
+                "p90": 65.2461,
+                "p99": 67.513,
+                "max": 67.513
+              },
+              "reverbLowRange": [
+                0.210831,
+                0.278944
+              ],
+              "irValid": true
+            }
+          ]
+        },
+        {
+          "worker": "std::thread",
+          "steamAudioThreads": 4,
+          "asset": "Amazon Lumberyard BistroInterior_Wine.acoustic.bin v5.2",
+          "vertices": 1067322,
+          "triangles": 1320323,
+          "bounds": {
+            "min": [
+              -2.94780755043,
+              0.298315733671,
+              -20.3479995728
+            ],
+            "max": [
+              19.8800964355,
+              10.9407186508,
+              8.01351356506
+            ]
+          },
+          "geometryLoadMs": 44.876945,
+          "staticMeshCreateMs": 3249.310599,
+          "sceneCommitMs": 0.002505,
+          "simulatorCreateMs": 0.299272,
+          "sceneRssKiB": 195212,
+          "peakRssKiB": 267048,
+          "scenarios": [
+            {
+              "rays": 512,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 30.112,
+                "p50": 30.1947,
+                "p90": 31.3952,
+                "p99": 31.6985,
+                "max": 31.6985
+              },
+              "reverbLowRange": [
+                0.217904,
+                0.318348
+              ],
+              "irValid": true
+            },
+            {
+              "rays": 1024,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 62.7314,
+                "p50": 62.6979,
+                "p90": 64.6059,
+                "p99": 65.6449,
+                "max": 65.6449
+              },
+              "reverbLowRange": [
+                0.208914,
+                0.313451
+              ],
+              "irValid": true
+            }
+          ]
+        },
+        {
+          "worker": "std::thread",
+          "steamAudioThreads": 4,
+          "asset": "Amazon Lumberyard BistroInterior_Wine.acoustic.bin v5.2",
+          "vertices": 1067322,
+          "triangles": 1320323,
+          "bounds": {
+            "min": [
+              -2.94780755043,
+              0.298315733671,
+              -20.3479995728
+            ],
+            "max": [
+              19.8800964355,
+              10.9407186508,
+              8.01351356506
+            ]
+          },
+          "geometryLoadMs": 42.876281,
+          "staticMeshCreateMs": 3246.491681,
+          "sceneCommitMs": 0.002545,
+          "simulatorCreateMs": 0.293641,
+          "sceneRssKiB": 195208,
+          "peakRssKiB": 267036,
+          "scenarios": [
+            {
+              "rays": 512,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 30.5384,
+                "p50": 30.4682,
+                "p90": 31.6931,
+                "p99": 32.0363,
+                "max": 32.0363
+              },
+              "reverbLowRange": [
+                0.229037,
+                0.31575
+              ],
+              "irValid": true
+            },
+            {
+              "rays": 1024,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 62.8292,
+                "p50": 63.1344,
+                "p90": 65.6411,
+                "p99": 66.0838,
+                "max": 66.0838
+              },
+              "reverbLowRange": [
+                0.203867,
+                0.27738
+              ],
+              "irValid": true
+            }
+          ]
+        },
+        {
+          "worker": "std::thread",
+          "steamAudioThreads": 4,
+          "asset": "Amazon Lumberyard BistroInterior_Wine.acoustic.bin v5.2",
+          "vertices": 1067322,
+          "triangles": 1320323,
+          "bounds": {
+            "min": [
+              -2.94780755043,
+              0.298315733671,
+              -20.3479995728
+            ],
+            "max": [
+              19.8800964355,
+              10.9407186508,
+              8.01351356506
+            ]
+          },
+          "geometryLoadMs": 42.807222,
+          "staticMeshCreateMs": 3252.854037,
+          "sceneCommitMs": 0.002805,
+          "simulatorCreateMs": 0.2983,
+          "sceneRssKiB": 195212,
+          "peakRssKiB": 267096,
+          "scenarios": [
+            {
+              "rays": 512,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 30.1784,
+                "p50": 30.2128,
+                "p90": 31.8593,
+                "p99": 32.0506,
+                "max": 32.0506
+              },
+              "reverbLowRange": [
+                0.217938,
+                0.292443
+              ],
+              "irValid": true
+            },
+            {
+              "rays": 1024,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 62.9529,
+                "p50": 63.0952,
+                "p90": 65.0707,
+                "p99": 65.4763,
+                "max": 65.4763
+              },
+              "reverbLowRange": [
+                0.2076,
+                0.26224
+              ],
+              "irValid": true
+            }
+          ]
+        }
+      ],
+      "aggregate": {
+        "scene": "Amazon Lumberyard BistroInterior_Wine.acoustic.bin v5.2",
+        "threads": 4,
+        "vertices": 1067322,
+        "triangles": 1320323,
+        "bounds": {
+          "min": [
+            -2.94780755043,
+            0.298315733671,
+            -20.3479995728
+          ],
+          "max": [
+            19.8800964355,
+            10.9407186508,
+            8.01351356506
+          ]
+        },
+        "geometryLoadMeanMs": 43.5011736,
+        "staticMeshCreateMeanMs": 3250.9831374,
+        "staticMeshCreateWorstMs": 3256.876084,
+        "sceneRssKiB": 195212,
+        "peakRssKiB": 267132,
+        "scenarios": [
+          {
+            "rays": 512,
+            "simulationMeanMs": 30.176479999999998,
+            "simulationWorstP99Ms": 32.0506,
+            "simulationWorstMaxMs": 32.0506,
+            "reverbLowMin": 0.217904,
+            "reverbLowMax": 0.376815,
+            "allIrValid": true
+          },
+          {
+            "rays": 1024,
+            "simulationMeanMs": 62.84336,
+            "simulationWorstP99Ms": 67.513,
+            "simulationWorstMaxMs": 67.513,
+            "reverbLowMin": 0.203867,
+            "reverbLowMax": 0.322844,
+            "allIrValid": true
+          }
+        ]
+      }
+    },
+    {
+      "scene": "BistroInterior_Wine",
+      "steamAudioSimulationThreads": 8,
+      "runs": [
+        {
+          "worker": "std::thread",
+          "steamAudioThreads": 8,
+          "asset": "Amazon Lumberyard BistroInterior_Wine.acoustic.bin v5.2",
+          "vertices": 1067322,
+          "triangles": 1320323,
+          "bounds": {
+            "min": [
+              -2.94780755043,
+              0.298315733671,
+              -20.3479995728
+            ],
+            "max": [
+              19.8800964355,
+              10.9407186508,
+              8.01351356506
+            ]
+          },
+          "geometryLoadMs": 44.281598,
+          "staticMeshCreateMs": 3245.444156,
+          "sceneCommitMs": 0.002084,
+          "simulatorCreateMs": 0.437991,
+          "sceneRssKiB": 195160,
+          "peakRssKiB": 267180,
+          "scenarios": [
+            {
+              "rays": 512,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 19.3621,
+                "p50": 19.5317,
+                "p90": 20.2936,
+                "p99": 20.6037,
+                "max": 20.6037
+              },
+              "reverbLowRange": [
+                0.192076,
+                0.475546
+              ],
+              "irValid": true
+            },
+            {
+              "rays": 1024,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 39.8972,
+                "p50": 39.6753,
+                "p90": 41.9543,
+                "p99": 42.7543,
+                "max": 42.7543
+              },
+              "reverbLowRange": [
+                0.211632,
+                0.331496
+              ],
+              "irValid": true
+            }
+          ]
+        },
+        {
+          "worker": "std::thread",
+          "steamAudioThreads": 8,
+          "asset": "Amazon Lumberyard BistroInterior_Wine.acoustic.bin v5.2",
+          "vertices": 1067322,
+          "triangles": 1320323,
+          "bounds": {
+            "min": [
+              -2.94780755043,
+              0.298315733671,
+              -20.3479995728
+            ],
+            "max": [
+              19.8800964355,
+              10.9407186508,
+              8.01351356506
+            ]
+          },
+          "geometryLoadMs": 43.734071,
+          "staticMeshCreateMs": 3250.912615,
+          "sceneCommitMs": 0.002375,
+          "simulatorCreateMs": 0.448371,
+          "sceneRssKiB": 195208,
+          "peakRssKiB": 266984,
+          "scenarios": [
+            {
+              "rays": 512,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 19.6399,
+                "p50": 19.6554,
+                "p90": 20.9094,
+                "p99": 21.1827,
+                "max": 21.1827
+              },
+              "reverbLowRange": [
+                0.235362,
+                0.389977
+              ],
+              "irValid": true
+            },
+            {
+              "rays": 1024,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 40.1979,
+                "p50": 40.2434,
+                "p90": 41.6772,
+                "p99": 43.1644,
+                "max": 43.1644
+              },
+              "reverbLowRange": [
+                0.216555,
+                0.267647
+              ],
+              "irValid": true
+            }
+          ]
+        },
+        {
+          "worker": "std::thread",
+          "steamAudioThreads": 8,
+          "asset": "Amazon Lumberyard BistroInterior_Wine.acoustic.bin v5.2",
+          "vertices": 1067322,
+          "triangles": 1320323,
+          "bounds": {
+            "min": [
+              -2.94780755043,
+              0.298315733671,
+              -20.3479995728
+            ],
+            "max": [
+              19.8800964355,
+              10.9407186508,
+              8.01351356506
+            ]
+          },
+          "geometryLoadMs": 43.753707,
+          "staticMeshCreateMs": 3268.562258,
+          "sceneCommitMs": 0.002515,
+          "simulatorCreateMs": 0.489288,
+          "sceneRssKiB": 195212,
+          "peakRssKiB": 267048,
+          "scenarios": [
+            {
+              "rays": 512,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 19.5546,
+                "p50": 19.7106,
+                "p90": 20.3366,
+                "p99": 20.9888,
+                "max": 20.9888
+              },
+              "reverbLowRange": [
+                0.209537,
+                0.314717
+              ],
+              "irValid": true
+            },
+            {
+              "rays": 1024,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 39.7294,
+                "p50": 39.7969,
+                "p90": 41.0347,
+                "p99": 42.2405,
+                "max": 42.2405
+              },
+              "reverbLowRange": [
+                0.223102,
+                0.26314
+              ],
+              "irValid": true
+            }
+          ]
+        },
+        {
+          "worker": "std::thread",
+          "steamAudioThreads": 8,
+          "asset": "Amazon Lumberyard BistroInterior_Wine.acoustic.bin v5.2",
+          "vertices": 1067322,
+          "triangles": 1320323,
+          "bounds": {
+            "min": [
+              -2.94780755043,
+              0.298315733671,
+              -20.3479995728
+            ],
+            "max": [
+              19.8800964355,
+              10.9407186508,
+              8.01351356506
+            ]
+          },
+          "geometryLoadMs": 43.128725,
+          "staticMeshCreateMs": 3261.487264,
+          "sceneCommitMs": 0.002545,
+          "simulatorCreateMs": 0.478798,
+          "sceneRssKiB": 195208,
+          "peakRssKiB": 266920,
+          "scenarios": [
+            {
+              "rays": 512,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 19.677,
+                "p50": 19.7232,
+                "p90": 20.463,
+                "p99": 20.6539,
+                "max": 20.6539
+              },
+              "reverbLowRange": [
+                0.213996,
+                0.305805
+              ],
+              "irValid": true
+            },
+            {
+              "rays": 1024,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 39.9931,
+                "p50": 40.0805,
+                "p90": 41.5544,
+                "p99": 41.8726,
+                "max": 41.8726
+              },
+              "reverbLowRange": [
+                0.204547,
+                0.276778
+              ],
+              "irValid": true
+            }
+          ]
+        },
+        {
+          "worker": "std::thread",
+          "steamAudioThreads": 8,
+          "asset": "Amazon Lumberyard BistroInterior_Wine.acoustic.bin v5.2",
+          "vertices": 1067322,
+          "triangles": 1320323,
+          "bounds": {
+            "min": [
+              -2.94780755043,
+              0.298315733671,
+              -20.3479995728
+            ],
+            "max": [
+              19.8800964355,
+              10.9407186508,
+              8.01351356506
+            ]
+          },
+          "geometryLoadMs": 44.177983,
+          "staticMeshCreateMs": 3253.194816,
+          "sceneCommitMs": 0.003426,
+          "simulatorCreateMs": 0.493827,
+          "sceneRssKiB": 195212,
+          "peakRssKiB": 267012,
+          "scenarios": [
+            {
+              "rays": 512,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 19.9729,
+                "p50": 19.9363,
+                "p90": 21.09,
+                "p99": 22.2926,
+                "max": 22.2926
+              },
+              "reverbLowRange": [
+                0.234694,
+                0.328294
+              ],
+              "irValid": true
+            },
+            {
+              "rays": 1024,
+              "bounces": 2,
+              "samples": 30,
+              "reflectionSimulation": {
+                "mean": 40.1873,
+                "p50": 40.1374,
+                "p90": 41.5563,
+                "p99": 43.9406,
+                "max": 43.9406
+              },
+              "reverbLowRange": [
+                0.212926,
+                0.30605
+              ],
+              "irValid": true
+            }
+          ]
+        }
+      ],
+      "aggregate": {
+        "scene": "Amazon Lumberyard BistroInterior_Wine.acoustic.bin v5.2",
+        "threads": 8,
+        "vertices": 1067322,
+        "triangles": 1320323,
+        "bounds": {
+          "min": [
+            -2.94780755043,
+            0.298315733671,
+            -20.3479995728
+          ],
+          "max": [
+            19.8800964355,
+            10.9407186508,
+            8.01351356506
+          ]
+        },
+        "geometryLoadMeanMs": 43.815216799999995,
+        "staticMeshCreateMeanMs": 3255.9202218,
+        "staticMeshCreateWorstMs": 3268.562258,
+        "sceneRssKiB": 195212,
+        "peakRssKiB": 267180,
+        "scenarios": [
+          {
+            "rays": 512,
+            "simulationMeanMs": 19.641299999999998,
+            "simulationWorstP99Ms": 22.2926,
+            "simulationWorstMaxMs": 22.2926,
+            "reverbLowMin": 0.192076,
+            "reverbLowMax": 0.475546,
+            "allIrValid": true
+          },
+          {
+            "rays": 1024,
+            "simulationMeanMs": 40.00098,
+            "simulationWorstP99Ms": 43.9406,
+            "simulationWorstMaxMs": 43.9406,
+            "reverbLowMin": 0.204547,
+            "reverbLowMax": 0.331496,
+            "allIrValid": true
+          }
+        ]
+      }
+    }
+  ]
+}

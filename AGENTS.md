@@ -360,11 +360,12 @@ All engine work must move toward these non-negotiable requirements:
   sweep selected two Steam simulation threads: 64-source 512×2 reflections were
   9.27 ms mean / 10.74 ms p99, with projected 1.433/2.667 ms DSP for 64
   reflections + 128 HRTFs. Four simulation threads reached 6.44 ms p99 or fit
-  1,024×2 at 12.52 ms p99; per-source DSP remains serial. The official
-  1,046,609-triangle Amazon Lumberyard Bistro interior moved 64-source 512×2 to
-  25.56 ms p99 on four threads (17.52 ms on eight), with 2.48 s BVH bootstrap
-  and ~207 MiB peak RSS. Full render meshes are forbidden as production acoustic
-  geometry; cook structural proxies. Render-loaded and actual device-callback
+  1,024×2 at 12.52 ms p99; per-source DSP remains serial. All official Bistro
+  package scenes were tested: 512×2 p99 on four/eight threads was 34.82/24.24 ms
+  Exterior, 26.77/18.33 ms Interior, and 32.05/22.29 ms Interior-with-wine. The
+  package-wide full-render tier needs eight threads at 30 Hz; Exterior BVH
+  bootstrap was 7.81 s and peak RSS ~569 MiB. Full render meshes are forbidden
+  as production acoustic geometry; cook structural proxies. Render-loaded and actual device-callback
   validation remain open.
 
 ## API docs

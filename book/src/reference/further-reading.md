@@ -31,7 +31,7 @@ The research notes are the canonical record of *why* each choice was made.
 | `docs/research/performance-benchmarks.md` | Optimized communication results (full tables + methodology). |
 | `docs/research/steam-overlay-cef.md` | How the Steam Overlay works with CEF. |
 | `docs/research/steamworks-native-worker.md` | Steamworks as a native Rust worker via `#[rpc(worker = SteamWorker)]`. |
-| `docs/research/steam-audio-browser.md` | Dynamic Steam Audio on the 6800U: Web Worker and native OS-worker comparisons. Native balance uses two simulation threads and 64 reflection slots; the real million-triangle Bistro stress scene requires four threads/30 Hz and proves structural acoustic proxies are mandatory. |
+| `docs/research/steam-audio-browser.md` | Dynamic Steam Audio on the 6800U: Web Worker and native OS-worker comparisons. Native balance uses two simulation threads and 64 reflection slots; the full Bistro package needs eight threads for a package-wide 512×2/30 Hz render-mesh tier, proving structural acoustic proxies are mandatory. |
 
 ## `AGENTS.md`
 

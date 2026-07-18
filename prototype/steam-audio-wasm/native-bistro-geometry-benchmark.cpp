@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdint>
 #include <exception>
+#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -260,9 +261,10 @@ void runWorker(const char* path, int simulationThreads) {
                       << ",\"irValid\":" << (allIrValid ? "true" : "false") << '}';
         }
         scenarios << ']';
+        const auto asset = std::filesystem::path(path).filename().string();
         std::cout << std::setprecision(12)
                   << "BISTRO_RESULTS {\"worker\":\"std::thread\",\"steamAudioThreads\":" << simulationThreads
-                  << ",\"asset\":\"Amazon Lumberyard BistroInterior v5.2\",\"vertices\":" << geometry.header.vertexCount
+                  << ",\"asset\":\"Amazon Lumberyard " << asset << " v5.2\",\"vertices\":" << geometry.header.vertexCount
                   << ",\"triangles\":" << geometry.header.triangleCount
                   << ",\"bounds\":{\"min\":[" << geometry.header.minimum[0] << ',' << geometry.header.minimum[1] << ',' << geometry.header.minimum[2]
                   << "],\"max\":[" << geometry.header.maximum[0] << ',' << geometry.header.maximum[1] << ',' << geometry.header.maximum[2] << "]}"

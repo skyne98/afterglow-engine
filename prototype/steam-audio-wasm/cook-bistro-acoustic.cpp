@@ -120,13 +120,29 @@ int main(int argc, char** argv) {
     header.materialCount = 6;
     std::copy_n(minimum, 3, header.minimum);
     std::copy_n(maximum, 3, header.maximum);
-    // Camera position from BistroInterior.fbx v5.2, transformed into flattened scene space.
-    header.listener[0] = 0.0521628f;
-    header.listener[1] = 1.44433f;
-    header.listener[2] = -1.42984f;
-    header.source[0] = 2.0f;
-    header.source[1] = 1.4f;
-    header.source[2] = -1.4f;
+    if (scene->mNumCameras != 1) {
+        std::cerr << "expected exactly one authored Bistro camera\n";
+        return 1;
+    }
+    // aiProcess_PreTransformVertices also places the authored camera in flattened scene space.
+    const auto& camera = scene->mCameras[0]->mPosition;
+    const std::string inputPath = argv[1];
+    if (inputPath.ends_with("BistroInterior.fbx")) {
+        // Preserve the originally published interior benchmark placement.
+        header.listener[0] = 0.0521628f;
+        header.listener[1] = 1.44433f;
+        header.listener[2] = -1.42984f;
+        header.source[0] = 2.0f;
+        header.source[1] = 1.4f;
+        header.source[2] = -1.4f;
+    } else {
+        header.listener[0] = camera.x;
+        header.listener[1] = camera.y;
+        header.listener[2] = camera.z;
+        header.source[0] = camera.x + 1.95f;
+        header.source[1] = camera.y;
+        header.source[2] = camera.z;
+    }
 
     std::ofstream output(argv[2], std::ios::binary | std::ios::trunc);
     output.write(reinterpret_cast<const char*>(&header), sizeof(header));
@@ -138,5 +154,5 @@ int main(int argc, char** argv) {
         return 1;
     }
     std::cout << "cooked " << header.vertexCount << " vertices, " << header.triangleCount
-              << " triangles from official Bistro interior\n";
+              << " triangles from official Bistro scene\n";
 }

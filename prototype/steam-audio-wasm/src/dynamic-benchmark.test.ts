@@ -14,6 +14,7 @@ const evidence = await Bun.file(new URL('../../../docs/benchmarks/steam-audio-wa
 const manySourceEvidence = await Bun.file(new URL('../../../docs/benchmarks/steam-audio-wasm-many-sources-fox-laptop-2026-07-18.json', import.meta.url)).json();
 const nativeEvidence = await Bun.file(new URL('../../../docs/benchmarks/steam-audio-native-many-sources-fox-laptop-2026-07-18.json', import.meta.url)).json();
 const bistroEvidence = await Bun.file(new URL('../../../docs/benchmarks/steam-audio-native-bistro-fox-laptop-2026-07-18.json', import.meta.url)).json();
+const bistroPackageEvidence = await Bun.file(new URL('../../../docs/benchmarks/steam-audio-native-bistro-full-package-fox-laptop-2026-07-18.json', import.meta.url)).json();
 
 describe('fully dynamic Steam Audio WASM prototype', () => {
   test('uses runtime geometry and explicitly disables baked reflection data', () => {
@@ -75,7 +76,9 @@ describe('fully dynamic Steam Audio WASM prototype', () => {
 
   test('cooks the official Bistro scene into runtime acoustic geometry', () => {
     expect(bistroBuild).toContain('https://developer.nvidia.com/bistro');
+    expect(bistroBuild).toContain('BistroExterior.fbx');
     expect(bistroBuild).toContain('BistroInterior.fbx');
+    expect(bistroBuild).toContain('BistroInterior_Wine.fbx');
     expect(bistroCooker).toContain('aiProcess_PreTransformVertices');
     expect(bistroCooker).toContain('acousticCategory');
     expect(bistroRunner).toContain('inputs[index].baked = IPL_FALSE');
@@ -106,5 +109,24 @@ describe('fully dynamic Steam Audio WASM prototype', () => {
     expect(bistroEvidence.threadSets.every((set: { aggregate: { scenarios: Array<{ allIrValid: boolean }> } }) =>
       set.aggregate.scenarios.every(scenario => scenario.allIrValid))).toBe(true);
     expect(readme).toContain('Amazon Lumberyard Bistro, Open Research Content Archive (ORCA)');
+  });
+
+  test('covers every distinct scene in the full Bistro package', () => {
+    expect(bistroPackageEvidence.assets.map((asset: { name: string }) => asset.name))
+      .toEqual(['BistroExterior', 'BistroInterior', 'BistroInterior_Wine']);
+    expect(bistroPackageEvidence.assets.map((asset: { triangles: number }) => asset.triangles))
+      .toEqual([2_832_120, 1_046_609, 1_320_323]);
+    expect(bistroPackageEvidence.sceneThreadSets).toHaveLength(6);
+    expect(bistroPackageEvidence.sceneThreadSets.every((value: { runs: unknown[] }) => value.runs.length === 5)).toBe(true);
+    const exteriorFour = bistroPackageEvidence.sceneThreadSets.find((value: {
+      scene: string; steamAudioSimulationThreads: number;
+    }) => value.scene === 'BistroExterior' && value.steamAudioSimulationThreads === 4);
+    const exteriorEight = bistroPackageEvidence.sceneThreadSets.find((value: {
+      scene: string; steamAudioSimulationThreads: number;
+    }) => value.scene === 'BistroExterior' && value.steamAudioSimulationThreads === 8);
+    expect(exteriorFour.aggregate.scenarios[0].simulationWorstP99Ms).toBeCloseTo(34.8201, 3);
+    expect(exteriorEight.aggregate.scenarios[0].simulationWorstP99Ms).toBeCloseTo(24.2426, 3);
+    expect(bistroPackageEvidence.package.note).toContain('intentionally not merged');
+    expect(readme).toContain('## Full Amazon Lumberyard Bistro package');
   });
 });

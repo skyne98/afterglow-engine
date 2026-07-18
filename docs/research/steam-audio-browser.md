@@ -215,42 +215,44 @@ simulation p99, and pushed process peak RSS to roughly 283 MiB. Reflecting all
 Raw evidence:
 `docs/benchmarks/steam-audio-native-many-sources-fox-laptop-2026-07-18.json`.
 
-## Real-world geometry: Amazon Lumberyard Bistro
+## Real-world geometry: full Amazon Lumberyard Bistro package
 
-The synthetic scene's distant filler triangles made it unsuitable for predicting
-world-geometry scaling. The native benchmark therefore cooked the official
-CC-BY 4.0 Amazon Lumberyard BistroInterior v5.2 FBX into one Steam Audio static
-mesh, retaining all 1,046,609 real render triangles and mapping render material
-names into six acoustic categories. The listener uses the authored camera; no
-baked acoustic data is loaded.
+The native benchmark cooks all three distinct FBX scenes in the official CC-BY
+4.0 Bistro v5.2 package. The overlapping Interior and Interior-with-wine variants
+are tested separately rather than incorrectly merged. Assimp triangulation and
+node flattening retain 2,832,120 Exterior, 1,046,609 Interior, and 1,320,323
+Interior-with-wine triangles. Render material names map into six acoustic
+categories; listeners use each authored camera and no baked data is loaded.
 
-Five Ryzen 7 6800U launches per thread count measured 64 sources:
+Five Ryzen 7 6800U launches measured every cell with 64 sources:
 
-| Simulation threads | 512 rays × 2 p99 | 1,024 rays × 2 p99 |
-|---:|---:|---:|
-| 2 | 42.36 ms | 78.58 ms |
-| **4** | **25.56 ms** | 45.76 ms |
-| 8 | 17.52 ms | 33.54 ms |
+| Scene | 4 threads, 512×2 p99 | 8 threads, 512×2 p99 | 4 threads, 1,024×2 p99 | 8 threads, 1,024×2 p99 |
+|---|---:|---:|---:|---:|
+| Exterior | 34.82 ms | 24.24 ms | 59.19 ms | 48.93 ms |
+| Interior | 26.77 ms | 18.33 ms | 46.96 ms | 33.58 ms |
+| Interior with wine | 32.05 ms | 22.29 ms | 67.51 ms | 43.94 ms |
 
-At four threads, the real million-triangle interior was about 4× slower than the
-synthetic 10K scene's 6.44 ms p99. This is far better than linear triangle
-scaling, but it moves the 512×2 tier from 60 Hz to 30 Hz. Eight threads still
-missed a strict 16.67 ms p99 and would occupy all physical cores.
+No full render scene sustains strict 60 Hz, even with eight simulation threads.
+The package-wide safe full-geometry tier is eight threads, 512×2, 30 Hz. Four
+threads support 30 Hz for both interiors but require about 20 Hz for the
+Exterior. The approximately 4× Interior slowdown versus the 100× smaller
+synthetic scene shows useful sublinear BVH scaling, but render detail remains too
+costly for the production acoustic representation.
 
-Input loading averaged 32 ms; static mesh/BVH creation averaged 2.48 s during
-bootstrap. Scene RSS was about 152 MiB and process peak RSS about 207 MiB. The
-full render mesh is therefore a stress bound, not a production acoustic mesh.
-The pipeline should cook structural proxies preserving walls, floors, ceilings,
-large furniture, and portals while removing tableware, fixtures, bevels, and
-other small details. Proxy triangle-count and acoustic-error tiers remain to be
-measured.
+The Exterior is the bootstrap/memory bound: static mesh/BVH construction
+averaged 7.81 s, scene RSS reached 375 MiB, and process peak reached 569 MiB.
+Interior-with-wine required 3.25 s/~191 MiB scene RSS; Interior required 2.53
+s/~152 MiB. Cook structural proxies preserving walls, floors, ceilings, large
+furniture, and portals while removing tableware, fixtures, bevels, vegetation
+detail, and other small triangles. Proxy triangle-count and acoustic-error tiers
+remain to be measured.
 
 Asset attribution: *Amazon Lumberyard Bistro, Open Research Content Archive
 (ORCA)*, Amazon Lumberyard, July 2017, CC-BY 4.0,
 https://developer.nvidia.com/orca/amazon-lumberyard-bistro.
 
 Raw evidence:
-`docs/benchmarks/steam-audio-native-bistro-fox-laptop-2026-07-18.json`.
+`docs/benchmarks/steam-audio-native-bistro-full-package-fox-laptop-2026-07-18.json`.
 
 ## Recommendation
 
@@ -266,7 +268,7 @@ Use a zero-baked-acoustics baseline:
 5. retain and smoothly crossfade the latest dynamic result when a source misses
    its update budget;
 6. cook a structural acoustic proxy instead of submitting render geometry—the
-   full million-triangle Bistro interior reduced the native 512×2 tier to 30 Hz.
+   full Bistro package required eight threads for a package-wide 512×2/30 Hz tier.
 
 For native CEF, use the measured two-simulation-thread `libphonon` tier in an
 Afterglow native worker; reserve four simulation threads for a higher-quality
