@@ -31,6 +31,7 @@ The research notes are the canonical record of *why* each choice was made.
 | `docs/research/performance-benchmarks.md` | Optimized communication results (full tables + methodology). |
 | `docs/research/steam-overlay-cef.md` | How the Steam Overlay works with CEF. |
 | `docs/research/steamworks-native-worker.md` | Steamworks as a native Rust worker via `#[rpc(worker = SteamWorker)]`. |
+| `docs/research/steam-audio-browser.md` | Steam Audio's experimental WASM target and the Worker + AudioWorklet integration boundary. |
 
 ## `AGENTS.md`
 

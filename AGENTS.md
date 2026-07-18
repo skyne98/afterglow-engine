@@ -346,6 +346,10 @@ All engine work must move toward these non-negotiable requirements:
   worker via `#[rpc(worker = SteamWorker)]`. `Client::init()` before CEF,
   `run_callbacks()` in the worker loop, overlay events via `push_event`,
   `--in-process-gpu` flag, `steam_appid.txt`.
+- `docs/research/steam-audio-browser.md` — Steam Audio has an experimental
+  Emscripten/WASM target, but no supported Web Audio integration and incomplete
+  prebuilt dependency packaging. Prototype HRTF/direct sound/occlusion in a
+  Worker + AudioWorklet before considering dynamic reflections.
 
 ## API docs
 
