@@ -348,8 +348,9 @@ All engine work must move toward these non-negotiable requirements:
   `--in-process-gpu` flag, `steam_appid.txt`.
 - `docs/research/steam-audio-browser.md` — Steam Audio has an experimental
   Emscripten/WASM target, but no supported Web Audio integration and incomplete
-  prebuilt dependency packaging. Prototype HRTF/direct sound/occlusion in a
-  Worker + AudioWorklet before considering dynamic reflections.
+  prebuilt dependency packaging. The real WASM direct-ray prototype measured
+  20–30 µs worst p99 worker-ring round trips (up to 100K triangles / 128 sources)
+  on the 6800U; rendering load, AudioWorklet DSP, and reflections remain open.
 
 ## API docs
 

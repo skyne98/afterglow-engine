@@ -31,7 +31,7 @@ The research notes are the canonical record of *why* each choice was made.
 | `docs/research/performance-benchmarks.md` | Optimized communication results (full tables + methodology). |
 | `docs/research/steam-overlay-cef.md` | How the Steam Overlay works with CEF. |
 | `docs/research/steamworks-native-worker.md` | Steamworks as a native Rust worker via `#[rpc(worker = SteamWorker)]`. |
-| `docs/research/steam-audio-browser.md` | Steam Audio's experimental WASM target and the Worker + AudioWorklet integration boundary. |
+| `docs/research/steam-audio-browser.md` | Steam Audio's experimental WASM target; direct-ray worker prototype measured 20–30 µs worst p99 ring round trips on the 6800U. |
 
 ## `AGENTS.md`
 

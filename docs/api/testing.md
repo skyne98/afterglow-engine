@@ -12,9 +12,9 @@ cargo run -p xtask -- release-gate
 ```
 
 `xtask test` runs the Rust workspace, the generated-deployment RPC transport
-tests, focused conformance contracts, and `bun test crates/afterglow-web/web/src`.
-The recursive Bun invocation discovers every colocated `*.test.ts`; no test path
-allowlist is maintained.
+tests, focused conformance contracts, and recursive Bun tests under
+`crates/afterglow-web/web/src` plus the Steam Audio WASM prototype. Every
+colocated web `*.test.ts` is discovered without a subsystem/demo path allowlist.
 
 ## Test levels
 

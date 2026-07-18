@@ -75,6 +75,32 @@ in its callback. The worklet is a renderer endpoint fed by bounded rings, not a
 second game-facing service. Native builds use the corresponding real-time audio
 callback endpoint.
 
+## Measured direct-path prototype
+
+A real Steam Audio 4.8.1 Emscripten prototype now runs the built-in ray tracer
+in a CEF Web Worker. It uses WASM SIMD128, fixed 64 MiB memory, the Afterglow
+SPSC ring layout, and payload-free wake messages. Occlusion and material
+transmission outputs were validated against a wall before timing.
+
+On fox-laptop (Ryzen 7 6800U, Chromium 149), five launches × 2,000 measured calls
+per scenario produced:
+
+| Geometry / active sources | Direct compute, occluded | Ring+wake mean | Worst p99 | Worst observed |
+|---|---:|---:|---:|---:|
+| 24 triangles / 1 | 0.094 µs | 11.37 µs | 25 µs | 0.520 ms |
+| 10K triangles / 1 | 0.074 µs | 8.97 µs | 20 µs | 0.175 ms |
+| 100K triangles / 1 | 0.078 µs | 9.10 µs | 20 µs | 0.690 ms |
+| 10K triangles / 32 | 2.12 µs | 12.37 µs | 25 µs | 0.255 ms |
+| 10K triangles / 128 | 8.53 µs | 17.47 µs | 30 µs | 0.560 ms |
+
+Therefore a fresh single-ray direct result does not itself require a 10–30 ms
+lookahead on this hardware. One 128-frame 48 kHz quantum (2.67 ms) is ample in
+the measured idle case. This is not yet a shipping bound: rendering load,
+volumetric occlusion, adversarial BVHs, scene commits, reflections, AudioWorklet
+scheduling, and device buffering remain unmeasured. Source and methodology are
+in `prototype/steam-audio-wasm/`; raw data is in
+`docs/benchmarks/steam-audio-wasm-direct-2026-07-18.json`.
+
 ## Recommendation
 
 For the web target, prototype these tiers in order:

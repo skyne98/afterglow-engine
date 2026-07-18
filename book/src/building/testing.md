@@ -7,9 +7,9 @@ cargo run -p xtask -- test
 ```
 
 This runs the Rust workspace, generated RPC deployment tests, conformance-tool
-tests, and every `*.test.ts` under `crates/afterglow-web/web/src/`. Test discovery
-is recursive, so a newly added subsystem, worker, or demo test is included without
-editing the build orchestrator.
+tests, every `*.test.ts` under `crates/afterglow-web/web/src/`, and the Steam
+Audio WASM prototype tests. Web test discovery is recursive, so a newly added
+subsystem, worker, or demo test is included without editing the orchestrator.
 
 Tests are organized in four levels:
 

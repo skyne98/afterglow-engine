@@ -265,7 +265,11 @@ fn test_all() -> i32 {
     // Discover every authored unit and vertical-integration test. New subsystem,
     // demo, and worker tests participate without maintaining a path allowlist.
     let web = Command::new("bun")
-        .args(["test", "crates/afterglow-web/web/src"])
+        .args([
+            "test",
+            "crates/afterglow-web/web/src",
+            "prototype/steam-audio-wasm/src",
+        ])
         .current_dir(workspace_root())
         .status();
     if matches!(web, Ok(value) if value.success()) {
