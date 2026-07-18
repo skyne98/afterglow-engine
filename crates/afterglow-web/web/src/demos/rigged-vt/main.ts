@@ -108,14 +108,20 @@ const session = await BigAssetSession.open({
 });
 bootstrap.defer(() => session.close());
 const assetStore = await session.createAssetStore(4, 4);
-const firstHandle = assetStore.loadOptimizedGLTF('model.glb', new GLTFLoader());
-const secondHandle = assetStore.loadOptimizedGLTF('model-2.glb', new GLTFLoader());
-while (firstHandle.state === 'loading' || secondHandle.state === 'loading') {
-  assetStore.poll();
-  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+async function waitForPackedModel(path: string) {
+  const handle = assetStore.loadOptimizedGLTF(path, new GLTFLoader());
+  while (handle.state === 'loading') {
+    assetStore.poll();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  }
+  if (handle.state !== 'ready')
+    throw new Error(`${path} failed GLTF parsing or runtime mesh optimization`);
+  return handle;
 }
-if (firstHandle.state !== 'ready' || secondHandle.state !== 'ready')
-  throw new Error('packed models failed GLTF parsing or runtime mesh optimization');
+// The shared-ring mesh optimizer is intentionally one-in-flight. Bootstrap
+// models serially instead of racing calls through its SPSC transport.
+const firstHandle = await waitForPackedModel('model.glb');
+const secondHandle = await waitForPackedModel('model-2.glb');
 function requireReadyAsset<T>(asset: T | undefined): T {
   if (!asset) throw new Error('ready packed model has no asset');
   return asset;

@@ -51,8 +51,9 @@ describe('pipeline-packed rigged VT demo', () => {
     expect(source).not.toContain('Rpc.create(');
     expect(source).toContain('await session.createAssetStore(4, 4)');
     expect(source).not.toContain('MeshoptClient');
-    expect(source).toContain("assetStore.loadOptimizedGLTF('model.glb', new GLTFLoader())");
-    expect(source).toContain("assetStore.loadOptimizedGLTF('model-2.glb', new GLTFLoader())");
+    expect(source).toContain('assetStore.loadOptimizedGLTF(path, new GLTFLoader())');
+    expect(source).toContain("await waitForPackedModel('model.glb')");
+    expect(source).toContain("await waitForPackedModel('model-2.glb')");
     expect(source).toContain('VirtualTextureFeedbackCoordinator(');
     expect(source).toContain('VirtualGltfBinding.create(firstAsset');
     expect(source).toContain('VirtualGltfBinding.create(secondAsset');

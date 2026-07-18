@@ -74706,14 +74706,18 @@ try {
   });
   bootstrap.defer(() => session.close());
   const assetStore = await session.createAssetStore(4, 4);
-  const firstHandle = assetStore.loadOptimizedGLTF("model.glb", new GLTFLoader);
-  const secondHandle = assetStore.loadOptimizedGLTF("model-2.glb", new GLTFLoader);
-  while (firstHandle.state === "loading" || secondHandle.state === "loading") {
-    assetStore.poll();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+  async function waitForPackedModel(path) {
+    const handle = assetStore.loadOptimizedGLTF(path, new GLTFLoader);
+    while (handle.state === "loading") {
+      assetStore.poll();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    if (handle.state !== "ready")
+      throw new Error(`${path} failed GLTF parsing or runtime mesh optimization`);
+    return handle;
   }
-  if (firstHandle.state !== "ready" || secondHandle.state !== "ready")
-    throw new Error("packed models failed GLTF parsing or runtime mesh optimization");
+  const firstHandle = await waitForPackedModel("model.glb");
+  const secondHandle = await waitForPackedModel("model-2.glb");
   const firstAsset = requireReadyAsset(firstHandle.asset);
   const secondAsset = requireReadyAsset(secondHandle.asset);
   const store = session.createVirtualTextureStore(device);
