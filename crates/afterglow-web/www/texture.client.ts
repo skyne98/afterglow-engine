@@ -5,6 +5,7 @@ import { AsyncWorker, asyncWorkerImports } from './async-worker.ts';
 
 export class TextureClient {
   private rpc: RpcTransport;
+  private closed = false;
 
   /// Spawn the async worker. Instantiates the wasm module, wires the
   /// fetch imports, and returns a ready-to-use client. Call poll()
@@ -25,6 +26,9 @@ export class TextureClient {
   poll(): void { (this.rpc as AsyncWorker).poll(); }
 
   constructor(rpc: RpcTransport) { this.rpc = rpc; }
+
+  /// Idempotently stop an owned worker transport when supported.
+  close(): void { if (this.closed) return; this.closed = true; this.rpc.terminate?.(); }
 
   async transcode(data: Uint8Array, targetFormat: number): Promise<Uint8Array> {
     const args = concat(encodeBytes(data), encodeU32(targetFormat));

@@ -57,7 +57,7 @@ for (const file of await listFiles(www, '**/*.ts')) {
 const temporary = await mkdtemp(join(tmpdir(), 'afterglow-web-build-'));
 try {
   let drift = false;
-  for (const { source, output } of targets) {
+  for (const { source, output, role } of targets) {
     const built = join(temporary, output);
     const proc = Bun.spawn([
       process.execPath, 'build', join(www, source), '--outfile', built,
@@ -66,8 +66,8 @@ try {
     if (await proc.exited !== 0) process.exit(1);
     const builtSource = await readFile(built, 'utf8');
     const threeCoreCopies = countBundledThreeCoreCopies(builtSource);
-    if (threeCoreCopies > 1) {
-      console.error(`${source}: bundle contains ${threeCoreCopies} Three.js core identities`);
+    if (threeCoreCopies > 1 || (role === 'visual-demo' && threeCoreCopies !== 1)) {
+      console.error(`${source}: ${role === 'visual-demo' ? 'visual bundle requires exactly one' : 'bundle contains'} ${threeCoreCopies} Three.js core identities`);
       drift = true;
       continue;
     }

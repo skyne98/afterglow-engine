@@ -15,6 +15,7 @@
 /// A transport with a typed `call` — the low-level ring-buffer RPC.
 export type RpcTransport = {
   call(method: number, args: Uint8Array): Promise<Uint8Array>;
+  terminate?(): void;
 };
 
 // --- varint (unsigned LEB128) -------------------------------------------

@@ -260,6 +260,7 @@ pub fn generate_client(tr: &ItemTrait, is_async: bool) -> syn::Result<String> {
     lines.push(String::new());
     lines.push(format!("export class {client_name} {{"));
     lines.push("  private rpc: RpcTransport;".to_string());
+    lines.push("  private closed = false;".to_string());
     lines.push(String::new());
 
     if is_async {
@@ -309,6 +310,12 @@ pub fn generate_client(tr: &ItemTrait, is_async: bool) -> syn::Result<String> {
     lines.push(format!(
         "  constructor(rpc: RpcTransport) {{ this.rpc = rpc; }}"
     ));
+    lines.push(String::new());
+    lines.push("  /// Idempotently stop an owned worker transport when supported.".to_string());
+    lines.push(
+        "  close(): void { if (this.closed) return; this.closed = true; this.rpc.terminate?.(); }"
+            .to_string(),
+    );
     if !methods.is_empty() {
         lines.push(String::new());
         lines.push(methods.join("\n\n"));

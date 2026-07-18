@@ -69,10 +69,11 @@ Cross-Origin-Resource-Policy: same-origin
 ### Dev server
 
 ```sh
-nix-shell shell.nix --run "cargo run -p afterglow-web --example coep_server"
+nix-shell shell.nix --run "cargo run -p xtask -- serve"
 ```
 
-Serves `crates/afterglow-web/www/` on <http://localhost:8787> with the headers.
+Serves `crates/afterglow-web/www/` on <http://localhost:8787> with the headers,
+four fixed workers, and sixteen bounded queued connections per worker.
 Open <http://localhost:8787/worker-test.html> to verify the round trip. Check
 in the console: `self.crossOriginIsolated === true`.
 

@@ -1715,7 +1715,7 @@
     {
       "id": "fd738fb113a95ab36904",
       "file": "codec.ts",
-      "line": 38,
+      "line": 39,
       "column": 11,
       "code": 18048,
       "message": "'b' is possibly 'undefined'.",
@@ -1724,7 +1724,7 @@
     {
       "id": "b20c23f5a38fbd205be2",
       "file": "codec.ts",
-      "line": 39,
+      "line": 40,
       "column": 11,
       "code": 18048,
       "message": "'b' is possibly 'undefined'.",
@@ -1733,7 +1733,7 @@
     {
       "id": "8a6f4da9871c56081f25",
       "file": "codec.ts",
-      "line": 73,
+      "line": 74,
       "column": 11,
       "code": 2322,
       "message": "Type 'number | undefined' is not assignable to type 'number'. Type 'undefined' is not assignable to type 'number'.",
@@ -1742,7 +1742,7 @@
     {
       "id": "d079557a90f496cd237c",
       "file": "codec.ts",
-      "line": 105,
+      "line": 106,
       "column": 7,
       "code": 18048,
       "message": "'v' is possibly 'undefined'.",
@@ -1751,7 +1751,7 @@
     {
       "id": "09e23761740f09f03e0a",
       "file": "codec.ts",
-      "line": 105,
+      "line": 106,
       "column": 16,
       "code": 18048,
       "message": "'v' is possibly 'undefined'.",
@@ -1760,7 +1760,7 @@
     {
       "id": "6fb698044c07992c3bf8",
       "file": "codec.ts",
-      "line": 106,
+      "line": 107,
       "column": 11,
       "code": 2322,
       "message": "Type 'number | undefined' is not assignable to type 'number'. Type 'undefined' is not assignable to type 'number'.",
@@ -1769,7 +1769,7 @@
     {
       "id": "230613d65aa60310d5e5",
       "file": "codec.ts",
-      "line": 192,
+      "line": 193,
       "column": 61,
       "code": 2345,
       "message": "Argument of type 'number | undefined' is not assignable to parameter of type 'number'. Type 'undefined' is not assignable to type 'number'.",
@@ -1778,7 +1778,7 @@
     {
       "id": "46aa3a3d51017d9f9e1a",
       "file": "codec.ts",
-      "line": 210,
+      "line": 211,
       "column": 61,
       "code": 2345,
       "message": "Argument of type 'number | undefined' is not assignable to parameter of type 'number'. Type 'undefined' is not assignable to type 'number'.",
@@ -1787,7 +1787,7 @@
     {
       "id": "bfe43fabf41b2d85fa9f",
       "file": "codec.ts",
-      "line": 228,
+      "line": 229,
       "column": 64,
       "code": 2345,
       "message": "Argument of type 'number | undefined' is not assignable to parameter of type 'number'. Type 'undefined' is not assignable to type 'number'.",
@@ -7723,123 +7723,6 @@
       "code": 18047,
       "message": "'grid' is possibly 'null'.",
       "source": "grid"
-    },
-    {
-      "id": "a33f076ba2712980e50b",
-      "file": "worker-bench.ts",
-      "line": 3,
-      "column": 11,
-      "code": 7006,
-      "message": "Parameter 'm' implicitly has an 'any' type.",
-      "source": "m"
-    },
-    {
-      "id": "9fd41f1fb9db8ff618c4",
-      "file": "worker-bench.ts",
-      "line": 3,
-      "column": 18,
-      "code": 18047,
-      "message": "'out' is possibly 'null'.",
-      "source": "out"
-    },
-    {
-      "id": "54f97bc4c339f0d32336",
-      "file": "worker-bench.ts",
-      "line": 6,
-      "column": 30,
-      "code": 2345,
-      "message": "Argument of type '{ mainWasmUrl: string; workerJsUrl: string; workerWasmUrl: string; }' is not assignable to parameter of type '{ mainWasmUrl: any; workerJsUrl: any; workerWasmUrl: any; timeoutMs: any; }'. Property 'timeoutMs' is missing in type '{ mainWasmUrl: string; workerJsUrl: string; workerWasmUrl: string; }' but required in type '{ mainWasmUrl: any; workerJsUrl: any; workerWasmUrl: any; timeoutMs: any; }'.",
-      "source": "{ mainWasmUrl: 'afterglow_web.wasm', workerJsUrl: 'worker.js', workerWasmUrl: 'physics_worker.wasm', }"
-    },
-    {
-      "id": "42569bf8f159672873cb",
-      "file": "worker-bench.ts",
-      "line": 31,
-      "column": 78,
-      "code": 2532,
-      "message": "Object is possibly 'undefined'.",
-      "source": "input[j]"
-    },
-    {
-      "id": "feeda024f6662749239f",
-      "file": "worker-test.ts",
-      "line": 3,
-      "column": 13,
-      "code": 7006,
-      "message": "Parameter 'm' implicitly has an 'any' type.",
-      "source": "m"
-    },
-    {
-      "id": "099691132f394799bf10",
-      "file": "worker-test.ts",
-      "line": 3,
-      "column": 20,
-      "code": 18047,
-      "message": "'out' is possibly 'null'.",
-      "source": "out"
-    },
-    {
-      "id": "346e9c64c8abdbe9fe7e",
-      "file": "worker-test.ts",
-      "line": 4,
-      "column": 17,
-      "code": 7006,
-      "message": "Parameter 'ok' implicitly has an 'any' type.",
-      "source": "ok"
-    },
-    {
-      "id": "a4d124294e24674cfbe2",
-      "file": "worker-test.ts",
-      "line": 4,
-      "column": 21,
-      "code": 7006,
-      "message": "Parameter 'msg' implicitly has an 'any' type.",
-      "source": "msg"
-    },
-    {
-      "id": "d832e60f7110eaf5d91e",
-      "file": "worker-test.ts",
-      "line": 4,
-      "column": 70,
-      "code": 18047,
-      "message": "'out' is possibly 'null'.",
-      "source": "out"
-    },
-    {
-      "id": "3f2dfcc45af73d8dbb4c",
-      "file": "worker-test.ts",
-      "line": 7,
-      "column": 32,
-      "code": 2345,
-      "message": "Argument of type '{ mainWasmUrl: string; workerJsUrl: string; workerWasmUrl: string; }' is not assignable to parameter of type '{ mainWasmUrl: any; workerJsUrl: any; workerWasmUrl: any; timeoutMs: any; }'. Property 'timeoutMs' is missing in type '{ mainWasmUrl: string; workerJsUrl: string; workerWasmUrl: string; }' but required in type '{ mainWasmUrl: any; workerJsUrl: any; workerWasmUrl: any; timeoutMs: any; }'.",
-      "source": "{ mainWasmUrl: 'afterglow_web.wasm', workerJsUrl: 'worker.js', workerWasmUrl: 'physics_worker.wasm', }"
-    },
-    {
-      "id": "760e8416d6f520f23243",
-      "file": "worker-test.ts",
-      "line": 16,
-      "column": 72,
-      "code": 2532,
-      "message": "Object is possibly 'undefined'.",
-      "source": "exp[i]"
-    },
-    {
-      "id": "0676399dafd6d9d95f78",
-      "file": "worker-test.ts",
-      "line": 20,
-      "column": 22,
-      "code": 2339,
-      "message": "Property 'stack' does not exist on type '{}'.",
-      "source": "stack"
-    },
-    {
-      "id": "17eef74f81caa54a538e",
-      "file": "worker-test.ts",
-      "line": 21,
-      "column": 17,
-      "code": 18046,
-      "message": "'e' is of type 'unknown'.",
-      "source": "e"
     },
     {
       "id": "465b55728302e3bcf5e0",

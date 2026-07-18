@@ -1,76 +1,37 @@
-//! Minimal COOP/COEP dev server for `afterglow-web`'s `www/` directory.
+//! Bounded COOP/COEP development server for `afterglow-web/www`.
 //!
 //! ```sh
-//! cargo run -p afterglow-web --example coep_server
+//! cargo run -p xtask serve
 //! ```
-//! Then open http://localhost:8787
-//!
-//! Each connection is served on its own thread with a read timeout, so an idle
-//! or early-disconnecting client cannot block the server. Writes never panic on
-//! `BrokenPipe` (a disconnecting client is normal). Path resolution rejects
-//! traversal and canonically confines existing files (symlinks cannot escape).
-
-use std::io::{Read, Write};
-use std::net::TcpListener;
-use std::path::Path;
-use std::time::Duration;
 
 use afterglow_assets::AssetRoot;
-use afterglow_web::dev_server::{CROSS_ORIGIN_HEADERS, handle_request, stream_body};
+use afterglow_web::dev_server::DevAssetServer;
+use std::net::SocketAddr;
+use std::path::Path;
+use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 fn main() {
-    let www_dir = Path::new("crates/afterglow-web/www");
-    if !www_dir.exists() {
-        eprintln!(
-            "www dir not found at {} (run from the workspace root)",
-            www_dir.display()
-        );
-        std::process::exit(1);
+    let www = Path::new("crates/afterglow-web/www");
+    let root = AssetRoot::new(www)
+        .unwrap_or_else(|| panic!("invalid asset root {}", www.display()));
+    let address: SocketAddr = "127.0.0.1:8787".parse().expect("fixed dev address");
+    let mut server = DevAssetServer::start(root, address, 4, 16).expect("start bounded dev server");
+    let stop = server.stop_token();
+    let signal = stop.clone();
+    ctrlc::set_handler(move || signal.store(true, Ordering::Release))
+        .expect("install Ctrl-C handler");
+    eprintln!(
+        "COOP/COEP server running on http://{} with 4 workers × 16 queued connections",
+        server.address()
+    );
+    while !stop.load(Ordering::Acquire) {
+        std::thread::sleep(Duration::from_millis(50));
     }
-    let root = AssetRoot::new(www_dir).expect("canonicalize www directory");
-    let listener = TcpListener::bind("127.0.0.1:8787").expect("bind 127.0.0.1:8787");
-    eprintln!("COOP/COEP server running on http://localhost:8787");
-    eprintln!("Serving from {}", www_dir.display());
-
-    for stream in listener.incoming() {
-        let Ok(mut stream) = stream else { continue };
-        let root = root.clone();
-        // Per-connection thread + read timeout: an idle client cannot block the
-        // accept loop or any other connection.
-        std::thread::spawn(move || {
-            let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
-            let mut buf = [0u8; 8192];
-            // Read the request; tolerate a clean EOF / timeout / early close.
-            let n = match stream.read(&mut buf) {
-                Ok(0) | Err(_) => return,
-                Ok(n) => n,
-            };
-            let request = String::from_utf8_lossy(&buf[..n]);
-            let resp = handle_request(&root, &request);
-
-            let mut head = format!(
-                "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\n",
-                resp.status,
-                resp.reason,
-                resp.mime,
-                resp.body_len()
-            );
-            for (k, v) in CROSS_ORIGIN_HEADERS {
-                head.push_str(&format!("{k}: {v}\r\n"));
-            }
-            if let Some(cr) = &resp.content_range {
-                head.push_str(&format!("Content-Range: {cr}\r\n"));
-            }
-            if let Some(etag) = &resp.etag {
-                head.push_str(&format!("ETag: {etag}\r\n"));
-            }
-            head.push_str("Connection: close\r\n\r\n");
-
-            // Writes must not panic on BrokenPipe (client gone).
-            let _ = stream.write_all(head.as_bytes());
-            let mut chunk = [0u8; 8192];
-            let _ = stream_body(&resp, &mut stream, &mut chunk);
-            let _ = stream.flush();
-        });
-    }
+    server.shutdown();
+    let stats = server.stats();
+    eprintln!(
+        "server stopped: accepted={} rejected={} completed={}",
+        stats.accepted, stats.rejected, stats.completed
+    );
 }

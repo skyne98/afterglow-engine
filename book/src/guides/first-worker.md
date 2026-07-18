@@ -74,26 +74,21 @@ Build the wasm artifacts and serve them with COOP/COEP:
 
 ```sh
 nix-shell shell.nix --run "cargo run -p xtask wasm"
-nix-shell shell.nix --run "cargo run -p afterglow-web --example coep_server"
+nix-shell shell.nix --run "cargo run -p xtask -- serve"
 ```
 
 Then in a page — the `#[rpc]` macro generates a typed TS client, so you call
 typed methods with no manual postcard encoding:
 
 ```ts
-import { Rpc } from './rpc.js';
-import { PhysicsClient } from './physics.client.js';
+import { PhysicsClient } from './physics.client.ts';
 
-const transport = await Rpc.create({
-  mainWasmUrl: 'afterglow_web.wasm',
-  workerJsUrl: 'worker.js',
+const physics = await PhysicsClient.spawn({
   workerWasmUrl: 'physics_worker.wasm',
 });
-
-const physics = new PhysicsClient(transport);
 const result = await physics.step(new Float32Array([0, 1, 2]), 0.5);
 // Float32Array [0.5, 1.5, 2.5]
-transport.terminate();
+physics.close(); // idempotent worker shutdown
 ```
 
 Open <http://localhost:8787/worker-test.html> — the `worker-test.html` page does

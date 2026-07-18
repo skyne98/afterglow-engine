@@ -117,6 +117,14 @@ Implemented on 2026-07-17:
   `BigAssetSession`, `VirtualTextureFeedbackCoordinator`, bounded input,
   diagnostics, frame stepping, and shutdown ownership. The architecture
   baseline is deleted and release status is `conformant`;
+- DME-041: `xtask serve` replaces the thread-per-connection example with an
+  idempotent `DevAssetServer` using fixed workers, bounded queues, deterministic
+  rejection, stable telemetry, and Ctrl-C shutdown. Worker test/benchmark pages
+  now use generated `PhysicsClient` methods and idempotent client shutdown; raw
+  `Rpc.call` remains only in transport diagnostics;
+- DME-042: `xtask conformance`, `xtask test`, and `xtask release-gate` are the
+  canonical local/CI commands. The release gate requires mdBook build plus
+  recent artifact-hash-matched GPU and Dungeon soak evidence;
 - DME-043: the migration escape hatch is removed. Conformant releases accept no
   architecture baseline file, while the lint treats its absence as an empty,
   non-expandable baseline.

@@ -5,6 +5,7 @@ import { AsyncWorker, asyncWorkerImports } from './async-worker.ts';
 
 export class MeshoptClient {
   private rpc: RpcTransport;
+  private closed = false;
 
   /// Spawn the async worker. Instantiates the wasm module, wires the
   /// fetch imports, and returns a ready-to-use client. Call poll()
@@ -25,6 +26,9 @@ export class MeshoptClient {
   poll(): void { (this.rpc as AsyncWorker).poll(); }
 
   constructor(rpc: RpcTransport) { this.rpc = rpc; }
+
+  /// Idempotently stop an owned worker transport when supported.
+  close(): void { if (this.closed) return; this.closed = true; this.rpc.terminate?.(); }
 
   async simplify(indices: Uint32Array, positions: Float32Array, positionStride: number, targetIndexCount: number, targetError: number): Promise<Uint32Array> {
     const args = concat(encodeU32Vec(indices), encodeF32Vec(positions), encodeU32(positionStride), encodeU32(targetIndexCount), encodeF32(targetError));

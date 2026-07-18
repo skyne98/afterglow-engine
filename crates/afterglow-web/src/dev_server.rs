@@ -170,6 +170,176 @@ pub fn stream_body<W: std::io::Write>(
     Ok(written)
 }
 
+/// Stable bounded-server counters.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DevAssetServerStats {
+    pub accepted: u64,
+    pub rejected: u64,
+    pub completed: u64,
+}
+
+#[derive(Default)]
+struct AtomicServerStats {
+    accepted: std::sync::atomic::AtomicU64,
+    rejected: std::sync::atomic::AtomicU64,
+    completed: std::sync::atomic::AtomicU64,
+}
+
+/// Fixed-worker, fixed-queue development asset server.
+pub struct DevAssetServer {
+    address: std::net::SocketAddr,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    stats: std::sync::Arc<AtomicServerStats>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl DevAssetServer {
+    pub fn start(
+        root: AssetRoot,
+        address: std::net::SocketAddr,
+        worker_count: usize,
+        queue_capacity_per_worker: usize,
+    ) -> std::io::Result<Self> {
+        if worker_count == 0 || queue_capacity_per_worker == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "worker and queue capacities must be positive",
+            ));
+        }
+        let listener = std::net::TcpListener::bind(address)?;
+        listener.set_nonblocking(true)?;
+        let address = listener.local_addr()?;
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stats = std::sync::Arc::new(AtomicServerStats::default());
+        let thread_stop = stop.clone();
+        let thread_stats = stats.clone();
+        let thread = std::thread::spawn(move || {
+            let mut senders = Vec::with_capacity(worker_count);
+            let mut workers = Vec::with_capacity(worker_count);
+            for _ in 0..worker_count {
+                let (sender, receiver) = std::sync::mpsc::sync_channel(queue_capacity_per_worker);
+                senders.push(sender);
+                let worker_root = root.clone();
+                let worker_stats = thread_stats.clone();
+                workers.push(std::thread::spawn(move || {
+                    while let Ok(stream) = receiver.recv() {
+                        serve_connection(stream, &worker_root);
+                        worker_stats
+                            .completed
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }));
+            }
+            let mut next = 0usize;
+            while !thread_stop.load(std::sync::atomic::Ordering::Acquire) {
+                match listener.accept() {
+                    Ok((stream, _)) => {
+                        thread_stats
+                            .accepted
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let mut pending = Some(stream);
+                        for offset in 0..senders.len() {
+                            let index = (next + offset) % senders.len();
+                            let stream = pending.take().expect("pending stream");
+                            match senders[index].try_send(stream) {
+                                Ok(()) => {
+                                    next = (index + 1) % senders.len();
+                                    break;
+                                }
+                                Err(std::sync::mpsc::TrySendError::Full(stream)) => {
+                                    pending = Some(stream)
+                                }
+                                Err(std::sync::mpsc::TrySendError::Disconnected(stream)) => {
+                                    pending = Some(stream)
+                                }
+                            }
+                        }
+                        if pending.is_some() {
+                            thread_stats
+                                .rejected
+                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        }
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(std::time::Duration::from_millis(2));
+                    }
+                    Err(_) => break,
+                }
+            }
+            drop(senders);
+            for worker in workers {
+                let _ = worker.join();
+            }
+        });
+        Ok(Self {
+            address,
+            stop,
+            stats,
+            thread: Some(thread),
+        })
+    }
+
+    pub fn address(&self) -> std::net::SocketAddr {
+        self.address
+    }
+    pub fn stop_token(&self) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
+        self.stop.clone()
+    }
+    pub fn stats(&self) -> DevAssetServerStats {
+        use std::sync::atomic::Ordering;
+        DevAssetServerStats {
+            accepted: self.stats.accepted.load(Ordering::Relaxed),
+            rejected: self.stats.rejected.load(Ordering::Relaxed),
+            completed: self.stats.completed.load(Ordering::Relaxed),
+        }
+    }
+    pub fn shutdown(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Release);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+impl Drop for DevAssetServer {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
+
+fn serve_connection(mut stream: std::net::TcpStream, root: &AssetRoot) {
+    use std::io::{Read, Write};
+    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+    let mut request = [0u8; 8192];
+    let size = match stream.read(&mut request) {
+        Ok(0) | Err(_) => return,
+        Ok(size) => size,
+    };
+    let response = handle_request(root, &String::from_utf8_lossy(&request[..size]));
+    let mut head = format!(
+        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\n",
+        response.status,
+        response.reason,
+        response.mime,
+        response.body_len()
+    );
+    for (name, value) in CROSS_ORIGIN_HEADERS {
+        head.push_str(&format!("{name}: {value}\r\n"));
+    }
+    if let Some(value) = &response.content_range {
+        head.push_str(&format!("Content-Range: {value}\r\n"));
+    }
+    if let Some(value) = &response.etag {
+        head.push_str(&format!("ETag: {value}\r\n"));
+    }
+    head.push_str("Connection: close\r\n\r\n");
+    if stream.write_all(head.as_bytes()).is_ok() {
+        let mut chunk = [0u8; 8192];
+        let _ = stream_body(&response, &mut stream, &mut chunk);
+        let _ = stream.flush();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -322,6 +492,35 @@ mod tests {
         let written = stream_body(&resp, &mut out, &mut chunk).unwrap();
         assert_eq!(written, 16);
         assert_eq!(out.len(), 16);
+    }
+
+    #[test]
+    fn bounded_server_serves_and_shuts_down_idempotently() {
+        use std::io::{Read, Write};
+        let mut server =
+            DevAssetServer::start(www_root(), "127.0.0.1:0".parse().unwrap(), 2, 2).unwrap();
+        let mut stream = std::net::TcpStream::connect(server.address()).unwrap();
+        stream
+            .write_all(b"GET /worker-test.html HTTP/1.1\r\nHost: local\r\n\r\n")
+            .unwrap();
+        let mut response = Vec::new();
+        stream.read_to_end(&mut response).unwrap();
+        assert!(response.starts_with(b"HTTP/1.1 200 OK"));
+        for _ in 0..100 {
+            if server.stats().completed == 1 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        assert_eq!(server.stats().completed, 1);
+        server.shutdown();
+        server.shutdown();
+    }
+
+    #[test]
+    fn bounded_server_rejects_zero_capacities() {
+        assert!(DevAssetServer::start(www_root(), "127.0.0.1:0".parse().unwrap(), 0, 1).is_err());
+        assert!(DevAssetServer::start(www_root(), "127.0.0.1:0".parse().unwrap(), 1, 0).is_err());
     }
 
     #[test]

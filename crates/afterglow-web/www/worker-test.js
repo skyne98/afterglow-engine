@@ -1,5 +1,4 @@
-// crates/afterglow-web/www/rpc.ts
-var TIMEOUT_MS = 5000;
+// crates/afterglow-web/www/codec.ts
 function encodeVarint(n) {
   const b = [];
   do {
@@ -13,6 +12,63 @@ function encodeVarint(n) {
 }
 function decodeVarint(bytes, off) {
   let r = 0;
+  for (let shift = 0;shift < 56; shift += 7) {
+    if (off >= bytes.length)
+      throw new Error("postcard varint truncated");
+    const b = bytes[off++];
+    r += (b & 127) * 2 ** shift;
+    if (!(b & 128))
+      return [r, off];
+  }
+  throw new Error("postcard varint overflows");
+}
+function concat(...arrs) {
+  const out = new Uint8Array(arrs.reduce((s, a) => s + a.length, 0));
+  let o = 0;
+  for (const a of arrs) {
+    out.set(a, o);
+    o += a.length;
+  }
+  return out;
+}
+function encodeU32(n) {
+  return new Uint8Array(encodeVarint(n));
+}
+function encodeF32(x) {
+  const b = new Uint8Array(4);
+  new DataView(b.buffer).setFloat32(0, x, true);
+  return b;
+}
+function decodeBool(bytes, off) {
+  if (off >= bytes.length)
+    throw new Error("postcard bool truncated");
+  return [bytes[off] !== 0, off + 1];
+}
+function encodeF32Vec(vec) {
+  const v = encodeVarint(vec.length);
+  const out = new Uint8Array(v.length + vec.length * 4);
+  out.set(v, 0);
+  const dv = new DataView(out.buffer, out.byteOffset + v.length, vec.length * 4);
+  for (let i = 0;i < vec.length; i++)
+    dv.setFloat32(i * 4, vec[i], true);
+  return out;
+}
+function decodeF32Vec(bytes, off) {
+  const [n, o] = decodeVarint(bytes, off);
+  const end = o + n * 4;
+  if (end > bytes.length)
+    throw new Error("postcard f32 vec truncated");
+  const out = new Float32Array(n);
+  const dv = new DataView(bytes.buffer, bytes.byteOffset + o, n * 4);
+  for (let i = 0;i < n; i++)
+    out[i] = dv.getFloat32(i * 4, true);
+  return [out, end];
+}
+
+// crates/afterglow-web/www/rpc.ts
+var TIMEOUT_MS = 5000;
+function decodeVarint2(bytes, off) {
+  let r = 0;
   for (let shift = 0;shift < 35; shift += 7) {
     if (off >= bytes.length)
       throw new Error("postcard varint truncated");
@@ -25,48 +81,16 @@ function decodeVarint(bytes, off) {
   }
   throw new Error("postcard varint overflows u32");
 }
-function concat(...arrs) {
-  const out = new Uint8Array(arrs.reduce((s, a) => s + a.length, 0));
-  let o = 0;
-  for (const a of arrs) {
-    out.set(a, o);
-    o += a.length;
-  }
-  return out;
-}
-function encodeF32Vec(vec) {
-  const v = encodeVarint(vec.length), out = new Uint8Array(v.length + vec.length * 4);
-  out.set(v, 0);
-  const dv = new DataView(out.buffer, out.byteOffset + v.length, vec.length * 4);
-  for (let i = 0;i < vec.length; i++)
-    dv.setFloat32(i * 4, vec[i], true);
-  return out;
-}
-function encodeF32(x) {
-  const b = new Uint8Array(4);
-  new DataView(b.buffer).setFloat32(0, x, true);
-  return b;
-}
-function decodeF32Vec(bytes) {
-  const [n, off] = decodeVarint(bytes, 0);
-  if (n > Math.floor((bytes.length - off) / 4))
-    throw new Error("postcard f32 vector truncated");
-  const out = new Float32Array(n);
-  const dv = new DataView(bytes.buffer, bytes.byteOffset + off, n * 4);
-  for (let i = 0;i < n; i++)
-    out[i] = dv.getFloat32(i * 4, true);
-  return out;
-}
 function unwrapResponse(bytes) {
-  const [variant, off] = decodeVarint(bytes, 0);
+  const [variant, off] = decodeVarint2(bytes, 0);
   if (variant === 0) {
-    const [plen, poff] = decodeVarint(bytes, off);
+    const [plen, poff] = decodeVarint2(bytes, off);
     if (poff + plen > bytes.length)
       throw new Error("RPC response truncated");
     return bytes.subarray(poff, poff + plen);
   }
-  const [method, moff] = decodeVarint(bytes, off);
-  const [mlen, eoff] = decodeVarint(bytes, moff);
+  const [method, moff] = decodeVarint2(bytes, off);
+  const [mlen, eoff] = decodeVarint2(bytes, moff);
   if (eoff + mlen > bytes.length)
     throw new Error("RPC error truncated");
   const msg = new TextDecoder().decode(bytes.subarray(eoff, eoff + mlen));
@@ -204,33 +228,62 @@ class Rpc {
   }
 }
 
+// crates/afterglow-web/www/physics.client.ts
+class PhysicsClient {
+  rpc;
+  closed = false;
+  static async spawn(opts = {}) {
+    const rpc = await Rpc.create({
+      mainWasmUrl: opts.mainWasmUrl ?? "afterglow_web.wasm",
+      workerJsUrl: opts.workerJsUrl ?? "worker.js",
+      workerWasmUrl: opts.workerWasmUrl ?? "physics.wasm",
+      timeoutMs: opts.timeoutMs
+    });
+    return new PhysicsClient(rpc);
+  }
+  constructor(rpc) {
+    this.rpc = rpc;
+  }
+  close() {
+    if (this.closed)
+      return;
+    this.closed = true;
+    this.rpc.terminate?.();
+  }
+  async step(state, dt) {
+    const args = concat(encodeF32Vec(state), encodeF32(dt));
+    const resp = await this.rpc.call(0, args);
+    return decodeF32Vec(resp, 0)[0];
+  }
+  async applyForce(bodyId, fx, fy, fz) {
+    const args = concat(encodeU32(bodyId), encodeF32(fx), encodeF32(fy), encodeF32(fz));
+    const resp = await this.rpc.call(1, args);
+    return decodeBool(resp, 0)[0];
+  }
+}
+
 // crates/afterglow-web/www/worker-test.ts
-var out = document.getElementById("out");
-var log = (m) => {
-  out.textContent += m + `
+var output = document.getElementById("out");
+function log(message) {
+  if (output)
+    output.textContent += `${message}
 `;
-};
-var finish = (ok, msg) => {
+}
+function finish(ok, message) {
   document.title = ok ? "PASS" : "FAIL";
-  out.textContent += (ok ? "PASS: " : "FAIL: ") + msg + `
-`;
-};
+  log(`${ok ? "PASS" : "FAIL"}: ${message}`);
+}
+var client = null;
 try {
-  log("=== afterglow worker round-trip test (Physics.step) ===");
-  const rpc = await Rpc.create({
-    mainWasmUrl: "afterglow_web.wasm",
-    workerJsUrl: "worker.js",
-    workerWasmUrl: "physics_worker.wasm"
-  });
-  const args = concat(encodeF32Vec([0, 1, 2]), encodeF32(0.5));
-  const payload = await rpc.call(0, args);
-  const vec = decodeF32Vec(payload);
-  log("Got [" + [...vec].map((v) => v.toFixed(3)).join(", ") + "]");
-  const exp = [0.5, 1.5, 2.5];
-  const ok = vec.length === 3 && [...vec].every((v, i) => Math.abs(v - exp[i]) < 0.000001);
-  rpc.terminate();
+  log("=== afterglow typed worker round-trip test (Physics.step) ===");
+  client = await PhysicsClient.spawn({ workerWasmUrl: "physics_worker.wasm" });
+  const result = await client.step(new Float32Array([0, 1, 2]), 0.5);
+  log(`Got [${Array.from(result, (value) => value.toFixed(3)).join(", ")}]`);
+  const ok = result.length === 3 && result.every((value, index) => Math.abs(value - (index + 0.5)) < 0.000001);
   finish(ok, "Physics.step([0,1,2], 0.5) == [0.5,1.5,2.5]");
-} catch (e) {
-  log(String(e && e.stack || e));
-  finish(false, e.message || String(e));
+} catch (error) {
+  log(error instanceof Error ? error.stack ?? error.message : String(error));
+  finish(false, error instanceof Error ? error.message : String(error));
+} finally {
+  client?.close();
 }

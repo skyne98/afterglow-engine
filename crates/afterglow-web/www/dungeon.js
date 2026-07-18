@@ -57999,6 +57999,7 @@ function asyncWorkerImports(driver, memory) {
 // crates/afterglow-web/www/texture.client.ts
 class TextureClient {
   rpc;
+  closed = false;
   static async spawn(workerWasmUrl = "texture.wasm", baseUrl = "") {
     const driver = new AsyncWorker(null, baseUrl);
     const memory = new WebAssembly.Memory({ shared: true, initial: 256, maximum: 1024 });
@@ -58012,6 +58013,12 @@ class TextureClient {
   }
   constructor(rpc) {
     this.rpc = rpc;
+  }
+  close() {
+    if (this.closed)
+      return;
+    this.closed = true;
+    this.rpc.terminate?.();
   }
   async transcode(data, targetFormat) {
     const args = concat(encodeBytes(data), encodeU32(targetFormat));

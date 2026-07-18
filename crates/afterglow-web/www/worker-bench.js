@@ -1,5 +1,4 @@
-// crates/afterglow-web/www/rpc.ts
-var TIMEOUT_MS = 5000;
+// crates/afterglow-web/www/codec.ts
 function encodeVarint(n) {
   const b = [];
   do {
@@ -13,6 +12,63 @@ function encodeVarint(n) {
 }
 function decodeVarint(bytes, off) {
   let r = 0;
+  for (let shift = 0;shift < 56; shift += 7) {
+    if (off >= bytes.length)
+      throw new Error("postcard varint truncated");
+    const b = bytes[off++];
+    r += (b & 127) * 2 ** shift;
+    if (!(b & 128))
+      return [r, off];
+  }
+  throw new Error("postcard varint overflows");
+}
+function concat(...arrs) {
+  const out = new Uint8Array(arrs.reduce((s, a) => s + a.length, 0));
+  let o = 0;
+  for (const a of arrs) {
+    out.set(a, o);
+    o += a.length;
+  }
+  return out;
+}
+function encodeU32(n) {
+  return new Uint8Array(encodeVarint(n));
+}
+function encodeF32(x) {
+  const b = new Uint8Array(4);
+  new DataView(b.buffer).setFloat32(0, x, true);
+  return b;
+}
+function decodeBool(bytes, off) {
+  if (off >= bytes.length)
+    throw new Error("postcard bool truncated");
+  return [bytes[off] !== 0, off + 1];
+}
+function encodeF32Vec(vec) {
+  const v = encodeVarint(vec.length);
+  const out = new Uint8Array(v.length + vec.length * 4);
+  out.set(v, 0);
+  const dv = new DataView(out.buffer, out.byteOffset + v.length, vec.length * 4);
+  for (let i = 0;i < vec.length; i++)
+    dv.setFloat32(i * 4, vec[i], true);
+  return out;
+}
+function decodeF32Vec(bytes, off) {
+  const [n, o] = decodeVarint(bytes, off);
+  const end = o + n * 4;
+  if (end > bytes.length)
+    throw new Error("postcard f32 vec truncated");
+  const out = new Float32Array(n);
+  const dv = new DataView(bytes.buffer, bytes.byteOffset + o, n * 4);
+  for (let i = 0;i < n; i++)
+    out[i] = dv.getFloat32(i * 4, true);
+  return [out, end];
+}
+
+// crates/afterglow-web/www/rpc.ts
+var TIMEOUT_MS = 5000;
+function decodeVarint2(bytes, off) {
+  let r = 0;
   for (let shift = 0;shift < 35; shift += 7) {
     if (off >= bytes.length)
       throw new Error("postcard varint truncated");
@@ -25,48 +81,16 @@ function decodeVarint(bytes, off) {
   }
   throw new Error("postcard varint overflows u32");
 }
-function concat(...arrs) {
-  const out = new Uint8Array(arrs.reduce((s, a) => s + a.length, 0));
-  let o = 0;
-  for (const a of arrs) {
-    out.set(a, o);
-    o += a.length;
-  }
-  return out;
-}
-function encodeF32Vec(vec) {
-  const v = encodeVarint(vec.length), out = new Uint8Array(v.length + vec.length * 4);
-  out.set(v, 0);
-  const dv = new DataView(out.buffer, out.byteOffset + v.length, vec.length * 4);
-  for (let i = 0;i < vec.length; i++)
-    dv.setFloat32(i * 4, vec[i], true);
-  return out;
-}
-function encodeF32(x) {
-  const b = new Uint8Array(4);
-  new DataView(b.buffer).setFloat32(0, x, true);
-  return b;
-}
-function decodeF32Vec(bytes) {
-  const [n, off] = decodeVarint(bytes, 0);
-  if (n > Math.floor((bytes.length - off) / 4))
-    throw new Error("postcard f32 vector truncated");
-  const out = new Float32Array(n);
-  const dv = new DataView(bytes.buffer, bytes.byteOffset + off, n * 4);
-  for (let i = 0;i < n; i++)
-    out[i] = dv.getFloat32(i * 4, true);
-  return out;
-}
 function unwrapResponse(bytes) {
-  const [variant, off] = decodeVarint(bytes, 0);
+  const [variant, off] = decodeVarint2(bytes, 0);
   if (variant === 0) {
-    const [plen, poff] = decodeVarint(bytes, off);
+    const [plen, poff] = decodeVarint2(bytes, off);
     if (poff + plen > bytes.length)
       throw new Error("RPC response truncated");
     return bytes.subarray(poff, poff + plen);
   }
-  const [method, moff] = decodeVarint(bytes, off);
-  const [mlen, eoff] = decodeVarint(bytes, moff);
+  const [method, moff] = decodeVarint2(bytes, off);
+  const [mlen, eoff] = decodeVarint2(bytes, moff);
   if (eoff + mlen > bytes.length)
     throw new Error("RPC error truncated");
   const msg = new TextDecoder().decode(bytes.subarray(eoff, eoff + mlen));
@@ -204,44 +228,78 @@ class Rpc {
   }
 }
 
-// crates/afterglow-web/www/worker-bench.ts
-var out = document.getElementById("out");
-var p = (m) => {
-  out.textContent += m + `
-`;
-};
-p("=== Cross-Thread Worker Benchmark (Web Worker + SAB ring) ===");
-p(`Async notification latency is the honest cross-thread RPC metric.
-`);
-var rpc = await Rpc.create({
-  mainWasmUrl: "afterglow_web.wasm",
-  workerJsUrl: "worker.js",
-  workerWasmUrl: "physics_worker.wasm"
-});
-var SIZES = [1, 4, 16, 64, 256, 1024, 4096, 16384];
-var N = 1000;
-var dt = 0.016;
-var dtF = Math.fround(dt);
-var warmupInput = Array.from({ length: 64 }, (_, i) => i);
-var warmupArgs = concat(encodeF32Vec(warmupInput), encodeF32(dt));
-for (let i = 0;i < 100; i++)
-  decodeF32Vec(await rpc.call(0, warmupArgs));
-p("  f32 count   payload   latency    bandwidth    valid/total");
-for (const count of SIZES) {
-  const input = Array.from({ length: count }, (_, i) => i);
-  const args = concat(encodeF32Vec(input), encodeF32(dt));
-  let el = 0, ok = 0;
-  for (let i = 0;i < N; i++) {
-    const started = performance.now();
-    const vec = decodeF32Vec(await rpc.call(0, args));
-    el += performance.now() - started;
-    if (vec.length === count && vec.every((v, j) => Math.abs(v - Math.fround(input[j] + dtF)) < 0.000001))
-      ok++;
+// crates/afterglow-web/www/physics.client.ts
+class PhysicsClient {
+  rpc;
+  closed = false;
+  static async spawn(opts = {}) {
+    const rpc = await Rpc.create({
+      mainWasmUrl: opts.mainWasmUrl ?? "afterglow_web.wasm",
+      workerJsUrl: opts.workerJsUrl ?? "worker.js",
+      workerWasmUrl: opts.workerWasmUrl ?? "physics.wasm",
+      timeoutMs: opts.timeoutMs
+    });
+    return new PhysicsClient(rpc);
   }
-  const lat = el * 1000 / N;
-  const mbps = count * 4 * N * 2 / (el / 1000) / 1048576;
-  p(`  ${String(count).padStart(9)}  ${String(count * 4).padStart(6)} B  ${lat.toFixed(1).padStart(7)} µs  ${mbps.toFixed(1).padStart(8)} MiB/s  ${ok}/${N} ${ok === N ? "OK" : "PARTIAL"}`);
+  constructor(rpc) {
+    this.rpc = rpc;
+  }
+  close() {
+    if (this.closed)
+      return;
+    this.closed = true;
+    this.rpc.terminate?.();
+  }
+  async step(state, dt) {
+    const args = concat(encodeF32Vec(state), encodeF32(dt));
+    const resp = await this.rpc.call(0, args);
+    return decodeF32Vec(resp, 0)[0];
+  }
+  async applyForce(bodyId, fx, fy, fz) {
+    const args = concat(encodeU32(bodyId), encodeF32(fx), encodeF32(fy), encodeF32(fz));
+    const resp = await this.rpc.call(1, args);
+    return decodeBool(resp, 0)[0];
+  }
 }
-rpc.terminate();
-p(`
+
+// crates/afterglow-web/www/worker-bench.ts
+var output = document.getElementById("out");
+function print(message) {
+  if (output)
+    output.textContent += `${message}
+`;
+}
+print("=== Typed Cross-Thread Worker Benchmark (Web Worker + SAB ring) ===");
+print(`Service RPC includes typed postcard encode/decode and cross-thread notification.
+`);
+var client = await PhysicsClient.spawn({ workerWasmUrl: "physics_worker.wasm" });
+try {
+  const sizes = new Uint32Array([1, 4, 16, 64, 256, 1024, 4096, 16384]);
+  const iterations = 1000, dt = 0.016, roundedDt = Math.fround(dt);
+  const warmup = new Float32Array(64);
+  for (let index = 0;index < warmup.length; index++)
+    warmup[index] = index;
+  for (let index = 0;index < 100; index++)
+    await client.step(warmup, dt);
+  print("  f32 count   payload   latency    bandwidth    valid/total");
+  for (const count of sizes) {
+    const input = new Float32Array(count);
+    for (let index = 0;index < count; index++)
+      input[index] = index;
+    let elapsed = 0, valid = 0;
+    for (let iteration = 0;iteration < iterations; iteration++) {
+      const started = performance.now();
+      const result = await client.step(input, dt);
+      elapsed += performance.now() - started;
+      if (result.length === count && result.every((value, index) => Math.abs(value - Math.fround((input[index] ?? 0) + roundedDt)) < 0.000001))
+        valid++;
+    }
+    const latency = elapsed * 1000 / iterations;
+    const bandwidth = count * 4 * iterations * 2 / (elapsed / 1000) / 1048576;
+    print(`  ${String(count).padStart(9)}  ${String(count * 4).padStart(6)} B  ${latency.toFixed(1).padStart(7)} µs  ${bandwidth.toFixed(1).padStart(8)} MiB/s  ${valid}/${iterations} ${valid === iterations ? "OK" : "PARTIAL"}`);
+  }
+  print(`
 Done.`);
+} finally {
+  client.close();
+}

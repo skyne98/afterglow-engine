@@ -33,10 +33,11 @@ memory.sealGameplay();
 sealResources(world);
 ```
 
-This is an active migration, not yet a whole-engine guarantee. Current VT work
-has removed the array LRU, indexed `.big` pages once, bounded pending page work,
-and consolidated asset-worker polling. `AssetStore` uses numeric state tables
-and a fixed completion ring whose publication count is capped per poll.
+All visual entrypoints now satisfy the canonical architecture gate with no
+architecture baseline. Current VT work has removed the array LRU, indexed `.big`
+pages once, bounded pending page work, and consolidated asset-worker polling.
+`AssetStore` uses numeric state tables and a fixed completion ring whose
+publication count is capped per poll.
 
 Engine browser source is authored in TypeScript. JavaScript in `www/` is generated
 or vendored:
@@ -46,6 +47,8 @@ bun install --cwd crates/afterglow-web/www --frozen-lockfile
 bun scripts/build-web.ts
 bun scripts/build-web.ts --check
 cargo run -p xtask conformance
+cargo run -p xtask test
+cargo run -p xtask release-gate
 ```
 
 The conformance command runs several independent gates:
@@ -58,12 +61,14 @@ The conformance command runs several independent gates:
 - hot allocation-effect checks;
 - generated JavaScript drift checks.
 
-The architecture checker rejects new demo-owned frame loops, renderer/runtime
+The architecture checker rejects demo-owned frame loops, renderer/runtime
 construction, worker/BIG/VT/POM/glTF infrastructure, engine globals, private
 Three access, unbounded control collections, direct diagnostic UI, and untyped
-frame callbacks. Existing findings are frozen by fingerprint and may only be
-removed. Strict TypeScript diagnostics use the same merge-base-monotonic rule.
-A release cannot claim conformance while any visual entrypoint remains legacy.
+frame callbacks. Conformant releases cannot carry a legacy state, architecture
+baseline, or bridge. Strict TypeScript diagnostics remain merge-base monotonic.
+`release-gate` additionally builds the book and requires recent, artifact-hash-
+matched real-GPU results for every visual demo plus stable/traverse/thrash
+Dungeon soaks of at least ten minutes.
 
 The allocation lint covers explicitly marked hot regions and cross-checks them
 against `engine-allocation-effects.json`. Budgeted-boundary calls require an

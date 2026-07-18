@@ -765,6 +765,7 @@ mod tests {
         assert!(ts.contains("decodeF32Vec"), "{ts}");
         assert!(ts.contains("decodeBool"), "{ts}");
         assert!(ts.contains("concat"), "{ts}");
+        assert!(ts.contains("close(): void { if (this.closed) return; this.closed = true; this.rpc.terminate?.(); }"), "{ts}");
     }
 
     #[test]

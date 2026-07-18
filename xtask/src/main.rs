@@ -6,6 +6,8 @@
 //!   conformance — run harsh authored-web architecture/type/allocation gates
 //!   check       — cargo check the workspace + conformance gates
 //!   test        — run all tests + conformance gates
+//!   serve — bounded COOP/COEP development asset server
+//!   release-gate — tests, docs, and current GPU/soak evidence
 //!   bench       — run the native ring buffer stress test
 
 use std::path::PathBuf;
@@ -14,7 +16,7 @@ use std::process::Command;
 fn main() {
     let cmd = std::env::args().nth(1).unwrap_or_else(|| {
         eprintln!(
-            "usage: cargo run -p xtask <build|wasm [--release]|conformance|check|test|bench>"
+            "usage: cargo run -p xtask <build|wasm [--release]|serve|conformance|check|test|release-gate|bench>"
         );
         std::process::exit(2);
     });
@@ -24,9 +26,14 @@ fn main() {
             &["build", "--example", "minimal", "-p", "afterglow-cef"],
         ),
         "wasm" => wasm(std::env::args().any(|arg| arg == "--release")),
+        "serve" => sh(
+            "cargo",
+            &["run", "-p", "afterglow-web", "--example", "coep_server"],
+        ),
         "conformance" => conformance(),
         "check" => check_all(),
         "test" => test_all(),
+        "release-gate" => release_gate(),
         "bench" => sh(
             "cargo",
             &[
@@ -206,6 +213,7 @@ fn conformance() -> i32 {
     for args in [
         &["scripts/check-web-contracts.ts"][..],
         &["scripts/lint-demo-architecture.ts"][..],
+        &["scripts/lint-import-boundaries.ts"][..],
         &["scripts/typecheck-ratchet.ts"][..],
         &["scripts/lint-source-hygiene.ts"][..],
         &["scripts/lint-hot-allocations.ts"][..],
@@ -246,7 +254,11 @@ fn test_all() -> i32 {
         return 1;
     }
     let contract_tools = Command::new("bun")
-        .args(["test", "scripts/contracts.test.ts"])
+        .args([
+            "test",
+            "scripts/contracts.test.ts",
+            "scripts/release-evidence.test.ts",
+        ])
         .current_dir(workspace_root())
         .status();
     if !matches!(contract_tools, Ok(value) if value.success()) {
@@ -257,6 +269,7 @@ fn test_all() -> i32 {
             "test",
             "crates/afterglow-web/www/engine",
             "crates/afterglow-web/www/async-worker.test.ts",
+            "crates/afterglow-web/www/physics-client.test.ts",
         ])
         .current_dir(workspace_root())
         .status();
@@ -265,6 +278,20 @@ fn test_all() -> i32 {
     } else {
         1
     }
+}
+
+fn release_gate() -> i32 {
+    if test_all() != 0 {
+        return 1;
+    }
+    let evidence = Command::new("bun")
+        .arg("scripts/check-release-evidence.ts")
+        .current_dir(workspace_root())
+        .status();
+    if !matches!(evidence, Ok(value) if value.success()) {
+        return 1;
+    }
+    sh_in("mdbook", &["build"], &workspace_root().join("book"))
 }
 
 fn workspace_root() -> PathBuf {
@@ -281,7 +308,14 @@ fn target_dir() -> PathBuf {
 }
 
 fn sh(program: &str, args: &[&str]) -> i32 {
-    let status = Command::new(program).args(args).status();
+    sh_in(program, args, &workspace_root())
+}
+
+fn sh_in(program: &str, args: &[&str], directory: &std::path::Path) -> i32 {
+    let status = Command::new(program)
+        .args(args)
+        .current_dir(directory)
+        .status();
     match status {
         Ok(s) => s.code().unwrap_or(1),
         Err(e) => {

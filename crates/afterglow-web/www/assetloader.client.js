@@ -337,6 +337,7 @@ function asyncWorkerImports(driver, memory) {
 // crates/afterglow-web/www/assetloader.client.ts
 class AssetLoaderClient {
   rpc;
+  closed = false;
   static async spawn(workerWasmUrl = "assetloader.wasm", baseUrl = "") {
     const driver = new AsyncWorker(null, baseUrl);
     const memory = new WebAssembly.Memory({ shared: true, initial: 256, maximum: 1024 });
@@ -350,6 +351,12 @@ class AssetLoaderClient {
   }
   constructor(rpc) {
     this.rpc = rpc;
+  }
+  close() {
+    if (this.closed)
+      return;
+    this.closed = true;
+    this.rpc.terminate?.();
   }
   async load(path) {
     const args = encodeString(path);

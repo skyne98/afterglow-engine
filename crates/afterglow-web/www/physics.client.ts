@@ -5,6 +5,7 @@ import { Rpc } from './rpc.ts';
 
 export class PhysicsClient {
   private rpc: RpcTransport;
+  private closed = false;
 
   /// Spawn the sync worker. Instantiates the shared wasm + worker,
   /// and returns a ready-to-use client.
@@ -19,6 +20,9 @@ export class PhysicsClient {
   }
 
   constructor(rpc: RpcTransport) { this.rpc = rpc; }
+
+  /// Idempotently stop an owned worker transport when supported.
+  close(): void { if (this.closed) return; this.closed = true; this.rpc.terminate?.(); }
 
   async step(state: Float32Array, dt: number): Promise<Float32Array> {
     const args = concat(encodeF32Vec(state), encodeF32(dt));

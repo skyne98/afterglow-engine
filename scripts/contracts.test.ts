@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { countBundledThreeCoreCopies, validateWebContracts } from './check-web-contracts.ts';
 import { scanTypeScript } from './lint-demo-architecture.ts';
+import { importBoundaryErrors } from './lint-import-boundaries.ts';
 
 const temporary: string[] = [];
 afterEach(async () => {
@@ -79,6 +80,20 @@ describe('web artifact/conformance contract', () => {
       releaseStatus: 'migration', conformance: { 'demo.ts': 'legacy', 'gone.ts': 'legacy' },
     }));
     expect(errors.some((error) => error.includes('stale/non-visual entrypoint gone.ts'))).toBe(true);
+  });
+});
+
+describe('import boundary contract', () => {
+  const root = '/project/www';
+  test('rejects engine imports outside engine', () => {
+    expect(importBoundaryErrors('engine/runtime.ts', "import '../dungeon.ts'", root, new Set())).toHaveLength(1);
+  });
+  test('rejects visual imports from tests/support', () => {
+    expect(importBoundaryErrors('demo.ts', "import './tests/helper.ts'", root, new Set(['demo.ts']))).toHaveLength(2);
+  });
+  test('allows engine-local and public visual imports', () => {
+    expect(importBoundaryErrors('engine/runtime.ts', "import './frame.ts'", root, new Set())).toEqual([]);
+    expect(importBoundaryErrors('demo.ts', "import './engine/index.ts'", root, new Set(['demo.ts']))).toEqual([]);
   });
 });
 

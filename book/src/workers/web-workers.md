@@ -8,38 +8,32 @@ the CEF `minimal` example and the web target both use.
 
 The `#[rpc(worker = ...)]` macro generates a typed TS client (see
 [Defining a Service](./defining-a-service.md)). You construct it with the
-low-level `Rpc` transport and call typed methods — no manual method IDs or
+generated `spawn()` factory and call typed methods—no manual method IDs or
 postcard encoding:
 
 ```ts
-import { Rpc } from './rpc.js';
-import { PhysicsClient } from './physics.client.js';
+import { PhysicsClient } from './physics.client.ts';
 
-const transport = await Rpc.create({
-  mainWasmUrl: 'afterglow_web.wasm',
-  workerJsUrl: 'worker.js',
+const physics = await PhysicsClient.spawn({
   workerWasmUrl: 'physics_worker.wasm',
-  timeoutMs: 5000, // optional; default 5000
+  timeoutMs: 5000,
 });
-
-const physics = new PhysicsClient(transport);
 
 // Typed — no manual postcard or method IDs.
 const result = await physics.step(new Float32Array([0, 1, 2]), 0.5);
 // Float32Array [0.5, 1.5, 2.5]
 
-transport.terminate();
+physics.close();
 ```
 
-`Rpc.create(...)` instantiates the shared main wasm, spawns the worker, and
-resolves once the worker reports `ready`. `timeoutMs` bounds both the init wait
-and each call's response wait.
+`PhysicsClient.spawn(...)` instantiates the shared main wasm, spawns the worker,
+and resolves once it reports `ready`. `close()` is idempotent. `timeoutMs`
+bounds both the init wait and each call's response wait.
 
 ## The low-level `Rpc` transport
 
-The generated TS client wraps `rpc.call(methodId, args)`; you only need the
-raw `Rpc` to construct the transport. But for ad-hoc/raw calls or custom
-codecs, the byte API is available:
+The generated TS client wraps `rpc.call(methodId, args)`. Only transport
+protocol diagnostics and custom codecs should use the raw byte API:
 
 ```js
 import { Rpc, concat, encodeF32Vec, encodeF32, decodeF32Vec } from './rpc.js';

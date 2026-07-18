@@ -80,7 +80,7 @@ Asset serving code is split across 5 places, each with a distinct role:
 |---|---|
 | `afterglow-assets/src/` (`lib.rs`, `source.rs`, `range.rs`) | **The shared core.** `AssetSource` trait, `FsSource`/`BytesSource`, `parse_range`, `AssetRoot`/`resolve` (confinement), `guess_mime`. Both backends build on this — no backend-specific logic here. |
 | `afterglow-cef/src/resources.rs` | **CEF scheme adapter.** Resolves a path to an `AssetSource`, drives CEF's `ResourceHandler` (`open`/`skip`/`read`/`response_headers`). Sets COOP/COEP + `Accept-Ranges`. |
-| `afterglow-web/src/dev_server.rs` | **HTTP adapter.** Parses `Range` → `206`/`Content-Range`, streams via `stream_body()`. The `coep_server` example wraps this in a TCP server. |
+| `afterglow-web/src/dev_server.rs` | **HTTP adapter + bounded server.** Parses `Range` → `206`/`Content-Range`, streams via `stream_body()`, and runs fixed workers with bounded per-worker queues through `DevAssetServer`. |
 | `afterglow-assets-worker/src/` (`lib.rs`, `fetch.rs`) | **The portable asset loader.** `#[rpc]` async worker that works on both backends. Native: `FsSource`/`pread`. Web: JS-imported `fetch` (the `fetch.rs` bridge). The render thread uses the generated `AssetLoaderClient` TS client on both. |
 | `afterglow-web/www/async-worker.ts` | **Web async worker driver.** Authored TypeScript that drives the wasm async worker executor (`tick` + bounded `drain_completion`) and provides the `ag_fetch_start`/`ag_fetch_poll` imports. |
 

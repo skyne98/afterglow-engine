@@ -44,7 +44,7 @@ cargo build -p afterglow-rpc-demo --target wasm32-unknown-unknown \
 # Copy artifacts to crates/afterglow-web/www/ as
 #   afterglow_web.wasm  and  physics_worker.wasm
 
-nix-shell shell.nix --run "cargo run -p afterglow-web --example coep_server"
+nix-shell shell.nix --run "cargo run -p xtask -- serve"
 ```
 
 Open <http://localhost:8787/worker-bench.html>. It runs the same service-RPC

@@ -119,6 +119,13 @@ multipart). Whitespace-tolerant.
 - `Range` → `206 Partial Content` + `Content-Range`; no range → `200` full.
 - `stream_body(resp, writer, chunk)` — streams via `read_at` in chunks.
 - `Accept-Ranges: bytes` on every response (via `CROSS_ORIGIN_HEADERS`).
+- `DevAssetServer::start(root, address, workers, queue_per_worker)` owns a fixed
+  worker set and fixed synchronous queues. Full queues reject connections
+  deterministically; no connection creates a thread.
+- `stats()` returns stable accepted/rejected/completed counters. `shutdown()`
+  and `Drop` are idempotent and join the accept thread and workers.
+- `cargo run -p xtask -- serve` runs four workers with sixteen queued
+  connections per worker and handles Ctrl-C through the shutdown token.
 
 ## JS asset loader — via the worker client (both backends)
 

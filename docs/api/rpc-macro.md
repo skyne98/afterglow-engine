@@ -140,3 +140,6 @@ import authored runtime modules through `.ts` specifiers (`codec.ts`,
 artifacts. `scripts/build-web.ts` bundles deployment `.js` output and rejects
 JavaScript specifiers in authored TypeScript. Unsupported Rust type shapes are
 rejected during generation rather than silently falling back to untyped values.
+Every generated client also exposes idempotent `close()`; transports with a
+`terminate()` operation stop their owned worker, while local transports safely
+no-op.

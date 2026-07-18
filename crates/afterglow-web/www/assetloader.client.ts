@@ -5,6 +5,7 @@ import { AsyncWorker, asyncWorkerImports } from './async-worker.ts';
 
 export class AssetLoaderClient {
   private rpc: RpcTransport;
+  private closed = false;
 
   /// Spawn the async worker. Instantiates the wasm module, wires the
   /// fetch imports, and returns a ready-to-use client. Call poll()
@@ -25,6 +26,9 @@ export class AssetLoaderClient {
   poll(): void { (this.rpc as AsyncWorker).poll(); }
 
   constructor(rpc: RpcTransport) { this.rpc = rpc; }
+
+  /// Idempotently stop an owned worker transport when supported.
+  close(): void { if (this.closed) return; this.closed = true; this.rpc.terminate?.(); }
 
   async load(path: string): Promise<Uint8Array> {
     const args = encodeString(path);

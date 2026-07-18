@@ -1,22 +1,23 @@
-import { Rpc, concat, encodeF32Vec, encodeF32, decodeF32Vec } from './rpc.ts';
-const out = document.getElementById('out');
-const log = m => { out.textContent += m + '\n'; };
-const finish = (ok, msg) => { document.title = ok ? 'PASS' : 'FAIL'; out.textContent += (ok ? 'PASS: ' : 'FAIL: ') + msg + '\n'; };
+import { PhysicsClient } from './physics.client.ts';
+
+const output = document.getElementById('out');
+function log(message: string): void { if (output) output.textContent += `${message}\n`; }
+function finish(ok: boolean, message: string): void {
+  document.title = ok ? 'PASS' : 'FAIL';
+  log(`${ok ? 'PASS' : 'FAIL'}: ${message}`);
+}
+let client: PhysicsClient | null = null;
 try {
-  log('=== afterglow worker round-trip test (Physics.step) ===');
-  const rpc = await Rpc.create({
-    mainWasmUrl: 'afterglow_web.wasm', workerJsUrl: 'worker.js', workerWasmUrl: 'physics_worker.wasm',
-  });
-  // step(Vec<f32>, f32): method 0. step([0,1,2], 0.5) -> [0.5,1.5,2.5].
-  const args = concat(encodeF32Vec([0, 1, 2]), encodeF32(0.5));
-  const payload = await rpc.call(0, args);
-  const vec = decodeF32Vec(payload);
-  log('Got [' + [...vec].map(v => v.toFixed(3)).join(', ') + ']');
-  const exp = [0.5, 1.5, 2.5];
-  const ok = vec.length === 3 && [...vec].every((v, i) => Math.abs(v - exp[i]) < 1e-6);
-  rpc.terminate();
+  log('=== afterglow typed worker round-trip test (Physics.step) ===');
+  client = await PhysicsClient.spawn({ workerWasmUrl: 'physics_worker.wasm' });
+  const result = await client.step(new Float32Array([0, 1, 2]), 0.5);
+  log(`Got [${Array.from(result, value => value.toFixed(3)).join(', ')}]`);
+  const ok = result.length === 3 && result.every((value, index) =>
+    Math.abs(value - (index + 0.5)) < 1e-6);
   finish(ok, 'Physics.step([0,1,2], 0.5) == [0.5,1.5,2.5]');
-} catch (e) {
-  log(String((e && e.stack) || e));
-  finish(false, e.message || String(e));
+} catch (error) {
+  log(error instanceof Error ? error.stack ?? error.message : String(error));
+  finish(false, error instanceof Error ? error.message : String(error));
+} finally {
+  client?.close();
 }
