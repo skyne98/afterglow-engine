@@ -34,10 +34,12 @@ native OS-thread benchmark uses Valve's released Linux x64 library:
 ```sh
 nix-shell prototype/steam-audio-wasm/toolchain.nix --run \
   './prototype/steam-audio-wasm/build-native.sh'
-./prototype/steam-audio-wasm/dist-native/native-dynamic-benchmark 2
+./prototype/steam-audio-wasm/dist-native/native-dynamic-benchmark 2 p64-512x2
 ```
 
-The argument is Steam Audio's reflection-simulation thread count. The benchmark
+The first argument is Steam Audio's reflection-simulation thread count. The
+optional second argument selects one benchmark scenario; omit it for the full
+sweep. The benchmark
 itself always runs inside one outer `std::thread`, matching a native engine
 worker. To download, cook, and build all three scenes in the real Amazon
 Lumberyard Bistro package:
@@ -112,22 +114,27 @@ atomically published Y translation; it never rebuilds during updates.
 Five fresh CEF launches on the unlocked Ryzen 7 6800U measured the established
 64-source, 512 global ray × 2-bounce, 500 ms parametric tier:
 
-| Tracer | Simulation mean | Worst p99 | 60 Hz misses |
+| Web configuration | Simulation mean | Worst p99 | 60 Hz misses |
 |---|---:|---:|---:|
-| Built-in baseline | 13.17 ms | 15.25 ms | 0/5 launches |
-| **obvhs custom CWBVH8** | **12.27 ms** | **13.365 ms** | **0/5 launches** |
+| Built-in, synchronous baseline | 13.17 ms | 15.25 ms | 0/5 launches |
+| Scalar obvhs, one simulation thread | 12.27 ms | 13.365 ms | 0/5 launches |
+| **SIMD128 obvhs, two pthreads** | **4.47 ms** | **6.235 ms** | **0/5 launches** |
 
-The custom scene contained 1,261 CWBVH nodes and reported 661,048 owned bytes.
-CWBVH construction averaged 13.03 ms. Every run returned a valid dynamic IR,
-non-zero reflection DSP output, and changing low-band RT60. Compared with the
-built-in baseline, mean simulation improved 6.8% and worst p99 improved 12.4%.
-The baseline used `rayBatchSize = 1`; the selected custom callback path uses 64,
-so this is an end-to-end configuration comparison rather than an isolated
-traversal comparison.
+The selected tracer intersects four CWBVH children per SIMD128 operation. Steam
+Audio, Rust, MySOFA, PFFFT, and zlib are all compiled for shared memory; two
+Emscripten pthread workers are created during bootstrap. Every recorded result
+reported two simulation threads and four traversal lanes. Against scalar obvhs,
+mean simulation fell 63.6% and worst p99 fell 53.3%.
 
-Scalar-WASM obvhs is accepted. A WASM SIMD traversal port is deferred until
-structural-proxy or render-loaded measurements demonstrate a need. Raw evidence:
-`docs/benchmarks/steam-audio-wasm-obvhs-fox-laptop-2026-07-18.json`.
+The custom scene contains 1,261 CWBVH nodes and reports 661,048 owned bytes.
+CWBVH construction averaged 12.82 ms. Every run returned a valid dynamic IR,
+non-zero reflection DSP output, and changing low-band RT60. The measured
+simulation wall-duty cycle is 13.4% at 30 Hz or 26.8% during bounded 60 Hz bursts.
+
+Raw evidence: scalar baseline in
+`docs/benchmarks/steam-audio-wasm-obvhs-fox-laptop-2026-07-18.json`; selected
+SIMD+pthread path in
+`docs/benchmarks/steam-audio-wasm-obvhs-simd-pthreads-fox-laptop-2026-07-18.json`.
 
 ## Fully dynamic fox-laptop built-in baseline — 2026-07-18
 
@@ -167,10 +174,10 @@ single-source reflections fit 60 Hz; eight medium sources fit roughly 20–30 Hz
 rays remain suitable for all relevant sources at much higher cadence.
 
 Valve's released WASM archive cannot run reflections because it constructs
-`std::thread` from a non-pthread build. The reproducible build patches the
-upstream ThreadPool to process synchronously inside the dedicated Web Worker and
-rebuilds `libphonon.a`; this avoids nested workers while preserving all dynamic
-simulation work.
+`std::thread` from a non-pthread build. The historical baseline replaced the
+ThreadPool with synchronous execution. The selected build instead retains
+Valve's ThreadPool and rebuilds every linked archive for atomics and shared
+memory, with a fixed two-worker Emscripten pthread pool created at bootstrap.
 
 The final reflection runs occurred after GNOME auto-locked the session. They use
 synchronous Worker CPU timing rather than rAF/presentation timing and were stable
@@ -228,8 +235,9 @@ stress tier, not a default. Raw evidence:
 
 ## Native-worker built-in baseline on fox-laptop
 
-The historical built-in-tracer run used identical runtime geometry, motion path, source counts, ray tiers, and DSP
-ran against Valve's released Linux x64 `libphonon.so` with AVX2. Five launches
+The historical built-in-tracer run used identical runtime geometry, motion path,
+source counts, ray tiers, and DSP against Valve's released Linux x64
+`libphonon.so` with AVX2. Five launches
 were recorded at one, two, and four Steam Audio simulation threads. The outer
 benchmark worker was always one real `std::thread`; the main thread only joined
 it.
@@ -238,10 +246,12 @@ Matching the web-selected 64-source, 512-ray × 2-bounce tier:
 
 | Backend / Steam simulation threads | Simulation mean | Worst p99 | 64-source reflection + HRTF DSP |
 |---|---:|---:|---:|
-| WASM Web Worker / synchronous | 13.17 ms | 15.25 ms | 1.215 ms |
-| Native worker / 1 | 16.48 ms | 19.59 ms | 1.324 ms |
-| **Native worker / 2** | **9.27 ms** | **10.74 ms** | **1.330 ms** |
-| Native worker / 4 | 5.53 ms | 6.44 ms | 1.357 ms |
+| WASM built-in / synchronous baseline | 13.17 ms | 15.25 ms | 1.215 ms |
+| **WASM obvhs SIMD128 / 2 pthreads** | **4.47 ms** | **6.235 ms** | **1.229 ms** |
+| Native obvhs SSE2 / 2 threads | 3.39 ms | 4.316 ms | 1.315 ms |
+| Native built-in / 1 | 16.48 ms | 19.59 ms | 1.324 ms |
+| Native built-in / 2 | 9.27 ms | 10.74 ms | 1.330 ms |
+| Native built-in / 4 | 5.53 ms | 6.44 ms | 1.357 ms |
 
 The balanced native policy is therefore **two Steam Audio simulation threads**,
 128 direct-ray + HRTF sources, 64 priority reflection slots, 512 global rays,

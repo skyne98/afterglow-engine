@@ -12,7 +12,9 @@ baked probes or impulse responses.
 
 The web tracer is linked into the same Emscripten module as Steam Audio. Rays do
 not cross JavaScript. Its closest-hit, any-hit, and batched callbacks use a fixed
-traversal stack and allocate nothing after scene construction.
+traversal stack and allocate nothing after scene construction. A local SIMD128
+kernel intersects four CWBVH children at once, while a fixed two-worker pthread
+pool parallelizes Steam Audio simulation. Both workers are created at bootstrap.
 
 Static triangles, material IDs, and materials are copied into tracer-owned
 memory. The evaluated moving door uses an immutable BLAS plus an atomic
@@ -28,10 +30,12 @@ On the Ryzen 7 6800U, the current balanced policy is:
 - a 500 ms parametric order-0 tail;
 - 30 Hz steady reflection updates with bounded 60 Hz motion bursts.
 
-Five fresh CEF launches measured the web obvhs path at **12.27 ms mean** and
-**13.365 ms worst p99**, with no 16.667 ms misses. Every launch produced valid
-dynamic IRs and non-zero DSP output. The 10,000-triangle test scene used 1,261
-CWBVH nodes and 661,048 reported owned bytes.
+Five fresh CEF launches measured the web SIMD+pthread obvhs path at **4.47 ms
+mean** and **6.235 ms worst p99**, with no 16.667 ms misses. Every launch
+reported two simulation threads and four SIMD lanes, produced valid dynamic IRs,
+and had non-zero DSP output. Scalar one-thread obvhs measured 12.27 ms mean, so
+the combined path reduced simulation time by 63.6%. The 10,000-triangle test
+scene used 1,261 CWBVH nodes and 661,048 reported owned bytes.
 
 Full render meshes are not the production geometry contract. Cook structural
 acoustic proxies containing walls, floors, ceilings, doors, portals, and other

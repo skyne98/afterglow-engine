@@ -347,8 +347,9 @@ All engine work must move toward these non-negotiable requirements:
   `run_callbacks()` in the worker loop, overlay events via `push_event`,
   `--in-process-gpu` flag, `steam_appid.txt`.
 - `docs/research/steam-audio-browser.md` — Steam Audio's experimental WASM
-  target supports fully dynamic no-bake acoustics after rebuilding 4.8.1 with a
-  synchronous Worker-owned ThreadPool. Ray counts are global listener rays per
+  target supports fully dynamic no-bake acoustics after rebuilding 4.8.1 and all
+  dependencies for a fixed two-worker Emscripten pthread pool. Ray counts are
+  global listener rays per
   update, not per source. On the 6800U, low 1,024×2 reflections measured 1.70 ms
   worst p99; medium 4,096×4 measured 10.95 ms for one source,
   33.43 ms for eight, and 114.83 ms for 32 at the original medium tier. The
@@ -356,9 +357,11 @@ All engine work must move toward these non-negotiable requirements:
   reflection slots, 512 global rays × 2 bounces, 500 ms parametric/order 0, at
   30 Hz steady / 60 Hz burst: 15.25 ms reflection p99 and projected 1.364/2.667
   ms for 64 reflections + 128 nearest HRTFs. The selected web tracer is now
-  `obvhs` 0.3.2 through all four `IPL_SCENETYPE_CUSTOM` callbacks: five fresh
-  laptop launches measured 12.27 ms mean / 13.365 ms worst p99, 0/5 over 60 Hz,
-  valid dynamic IRs, 1,261 nodes, and 661,048 owned bytes. Reflecting 96 is aggressive; reflecting all
+  `obvhs` 0.3.2 through all four `IPL_SCENETYPE_CUSTOM` callbacks. Its local
+  four-child WASM SIMD128 kernel plus two pre-created pthreads measured 4.47 ms
+  mean / 6.235 ms worst p99 over five fresh laptop launches, 0/5 over 60 Hz,
+  valid dynamic IRs, 1,261 nodes, and 661,048 owned bytes. Scalar one-thread
+  obvhs was 12.27 ms / 13.365 ms; SIMD+threads reduced mean 63.6%. Reflecting 96 is aggressive; reflecting all
   128 used 94% of the quantum and was rejected. The matching native OS-worker
   sweep selected two Steam simulation threads: 64-source 512×2 reflections were
   9.27 ms mean / 10.74 ms p99, with projected 1.433/2.667 ms DSP for 64
@@ -373,9 +376,10 @@ All engine work must move toward these non-negotiable requirements:
   production acoustic geometry due memory and irrelevant detail; cook structural
   proxies. Web obvhs keeps static geometry and a translated door BLAS in one
   Rust-owned Emscripten memory domain; fixed-stack queries allocate nothing.
-  Its CWBVH node traversal remains scalar on WASM; defer a SIMD port unless
-  structural-proxy or render-contention tests exhaust the measured margin.
-  Render-loaded and actual device-callback validation remain open.
+  The same medium-build, ray-batch-64, two-thread, 64-source 512×2 obvhs
+  configuration works natively (five-launch laptop result: 3.39 ms mean / 4.316
+  ms worst p99) and on web. Render-loaded and actual device-callback validation remain
+  open.
 
 ## API docs
 

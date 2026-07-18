@@ -1,0 +1,565 @@
+{
+  "schemaVersion": 1,
+  "benchmark": "Steam Audio 4.8.1 obvhs WASM SIMD128 plus pthread reflection simulation",
+  "date": "2026-07-18",
+  "host": {
+    "name": "fox-laptop",
+    "cpu": "AMD Ryzen 7 6800U with Radeon Graphics",
+    "os": "Fedora 44 (Linux 7.1.3-201.fc44.x86_64)",
+    "browser": "CEF/Chromium 149.0.7827.201",
+    "session": "unlocked for all five fresh CEF launches"
+  },
+  "build": {
+    "steamAudio": "4.8.1 source rebuild with upstream ThreadPool",
+    "rust": "rustc 1.99.0-nightly commit 375b1431b (2026-07-10)",
+    "emscripten": "4.0.23",
+    "tracer": "obvhs 0.3.2 medium-build CWBVH8 with Afterglow WASM SIMD128 four-child kernel",
+    "rustTargetFeatures": [
+      "atomics",
+      "bulk-memory",
+      "mutable-globals",
+      "simd128"
+    ],
+    "emscriptenFlags": [
+      "-pthread",
+      "-msimd128",
+      "-sPTHREAD_POOL_SIZE=2",
+      "-sPTHREAD_POOL_SIZE_STRICT=2"
+    ],
+    "dependencies": "Steam Audio, MySOFA, PFFFT, zlib, and Rust tracer all rebuilt for atomics/shared memory",
+    "memory": "fixed 256 MiB SharedArrayBuffer-backed WASM memory",
+    "disassembly": {
+      "command": "wasm2wat --enable-threads dynamic-steam-audio.wasm",
+      "customKernelF32x4LeInstructions": 8,
+      "moduleContains": [
+        "f32x4.add",
+        "f32x4.mul",
+        "f32x4.min",
+        "f32x4.max",
+        "f32x4.le"
+      ]
+    }
+  },
+  "methodology": {
+    "launches": 5,
+    "browserProcess": "fresh CEF process per run",
+    "warmupSimulationsPerRun": 3,
+    "measuredSimulationsPerRun": 30,
+    "geometry": "10,000 runtime triangles plus translated two-triangle door BLAS",
+    "quality": {
+      "sources": 64,
+      "globalRays": 512,
+      "bounces": 2,
+      "durationMs": 500,
+      "order": 0,
+      "reflectionType": "parametric",
+      "rayBatchSize": 64
+    },
+    "simulationThreads": 2,
+    "tracerLanes": 4,
+    "bakedData": false
+  },
+  "runs": [
+    {
+      "name": "p64-512x2",
+      "triangles": 10000,
+      "sources": 64,
+      "rays": 512,
+      "bounces": 2,
+      "durationMs": 500,
+      "order": 0,
+      "reflectionType": 1,
+      "samples": 30,
+      "initializationMs": 65.79999999701977,
+      "sceneUpdate": {
+        "mean": 0.007000000774860382,
+        "p50": 0.005000010132789612,
+        "p90": 0.015000000596046448,
+        "p99": 0.015000000596046448,
+        "max": 0.015000000596046448
+      },
+      "reflectionSimulation": {
+        "mean": 4.328166667123636,
+        "p50": 4.245000004768372,
+        "p90": 4.894999995827675,
+        "p99": 5.104999989271164,
+        "max": 5.104999989271164
+      },
+      "simulationRoundTrip": {
+        "mean": 4.394833334287008,
+        "p50": 4.305000007152557,
+        "p90": 4.965000003576279,
+        "p99": 5.195000007748604,
+        "max": 5.195000007748604
+      },
+      "reflectionQuantumMeanMs": 1.0638949999958276,
+      "binauralQuantumMeanMs": 0.16109999999403954,
+      "combinedAudioQuantumMeanMs": 1.224994999989867,
+      "reverb": [
+        0.11806319653987885,
+        0.11805166304111481,
+        0.1180126816034317
+      ],
+      "reverbLowRange": [
+        0.10000000149011612,
+        0.17135757207870483
+      ],
+      "irValid": true,
+      "outputEnergy": 0.13391879200935364,
+      "tracerNodes": 1261,
+      "tracerBuildMs": 12.680192,
+      "tracerOwnedBytes": 661048,
+      "simulationThreads": 2,
+      "tracerLanes": 4
+    },
+    {
+      "name": "p64-512x2",
+      "triangles": 10000,
+      "sources": 64,
+      "rays": 512,
+      "bounces": 2,
+      "durationMs": 500,
+      "order": 0,
+      "reflectionType": 1,
+      "samples": 30,
+      "initializationMs": 64.04500000178814,
+      "sceneUpdate": {
+        "mean": 0.009166667362054189,
+        "p50": 0.01000000536441803,
+        "p90": 0.015000000596046448,
+        "p99": 0.015000000596046448,
+        "max": 0.015000000596046448
+      },
+      "reflectionSimulation": {
+        "mean": 4.516833330690861,
+        "p50": 4.509999990463257,
+        "p90": 4.954999998211861,
+        "p99": 5.830000013113022,
+        "max": 5.830000013113022
+      },
+      "simulationRoundTrip": {
+        "mean": 4.635333333412806,
+        "p50": 4.6099999994039536,
+        "p90": 5,
+        "p99": 5.965000003576279,
+        "max": 5.965000003576279
+      },
+      "reflectionQuantumMeanMs": 1.0606950000077486,
+      "binauralQuantumMeanMs": 0.16614999994635582,
+      "combinedAudioQuantumMeanMs": 1.2268449999541045,
+      "reverb": [
+        0.10078118741512299,
+        0.10078000277280807,
+        0.10075999796390533
+      ],
+      "reverbLowRange": [
+        0.10000000149011612,
+        0.21099761128425598
+      ],
+      "irValid": true,
+      "outputEnergy": 0.17199261486530304,
+      "tracerNodes": 1261,
+      "tracerBuildMs": 12.440064000000001,
+      "tracerOwnedBytes": 661048,
+      "simulationThreads": 2,
+      "tracerLanes": 4
+    },
+    {
+      "name": "p64-512x2",
+      "triangles": 10000,
+      "sources": 64,
+      "rays": 512,
+      "bounces": 2,
+      "durationMs": 500,
+      "order": 0,
+      "reflectionType": 1,
+      "samples": 30,
+      "initializationMs": 66.125,
+      "sceneUpdate": {
+        "mean": 0.008333332339922587,
+        "p50": 0.009999990463256836,
+        "p90": 0.01000000536441803,
+        "p99": 0.025000005960464478,
+        "max": 0.025000005960464478
+      },
+      "reflectionSimulation": {
+        "mean": 4.455333333710829,
+        "p50": 4.350000008940697,
+        "p90": 4.9000000059604645,
+        "p99": 6.2349999994039536,
+        "max": 6.2349999994039536
+      },
+      "simulationRoundTrip": {
+        "mean": 4.548500000933806,
+        "p50": 4.430000007152557,
+        "p90": 4.990000009536743,
+        "p99": 6.4000000059604645,
+        "max": 6.4000000059604645
+      },
+      "reflectionQuantumMeanMs": 1.0607300000041724,
+      "binauralQuantumMeanMs": 0.16510000005364417,
+      "combinedAudioQuantumMeanMs": 1.2258300000578166,
+      "reverb": [
+        0.13180558383464813,
+        0.1317983865737915,
+        0.13176071643829346
+      ],
+      "reverbLowRange": [
+        0.10000000149011612,
+        0.17415116727352142
+      ],
+      "irValid": true,
+      "outputEnergy": 0.1503942757844925,
+      "tracerNodes": 1261,
+      "tracerBuildMs": 13.254912000000001,
+      "tracerOwnedBytes": 661048,
+      "simulationThreads": 2,
+      "tracerLanes": 4
+    },
+    {
+      "name": "p64-512x2",
+      "triangles": 10000,
+      "sources": 64,
+      "rays": 512,
+      "bounces": 2,
+      "durationMs": 500,
+      "order": 0,
+      "reflectionType": 1,
+      "samples": 30,
+      "initializationMs": 65.95999999344349,
+      "sceneUpdate": {
+        "mean": 0.009000002344449361,
+        "p50": 0.01000000536441803,
+        "p90": 0.015000000596046448,
+        "p99": 0.019999995827674866,
+        "max": 0.019999995827674866
+      },
+      "reflectionSimulation": {
+        "mean": 4.566500001152357,
+        "p50": 4.5,
+        "p90": 5.329999998211861,
+        "p99": 5.5350000113248825,
+        "max": 5.5350000113248825
+      },
+      "simulationRoundTrip": {
+        "mean": 4.669666667779286,
+        "p50": 4.614999994635582,
+        "p90": 5.439999997615814,
+        "p99": 5.715000003576279,
+        "max": 5.715000003576279
+      },
+      "reflectionQuantumMeanMs": 1.0650049999952316,
+      "binauralQuantumMeanMs": 0.17420000001788138,
+      "combinedAudioQuantumMeanMs": 1.239205000013113,
+      "reverb": [
+        0.12898403406143188,
+        0.12897521257400513,
+        0.12893886864185333
+      ],
+      "reverbLowRange": [
+        0.10000000149011612,
+        0.17245502769947052
+      ],
+      "irValid": true,
+      "outputEnergy": 0.14588017761707306,
+      "tracerNodes": 1261,
+      "tracerBuildMs": 13.645055999999999,
+      "tracerOwnedBytes": 661048,
+      "simulationThreads": 2,
+      "tracerLanes": 4
+    },
+    {
+      "name": "p64-512x2",
+      "triangles": 10000,
+      "sources": 64,
+      "rays": 512,
+      "bounces": 2,
+      "durationMs": 500,
+      "order": 0,
+      "reflectionType": 1,
+      "samples": 30,
+      "initializationMs": 64.8500000089407,
+      "sceneUpdate": {
+        "mean": 0.009499997893969218,
+        "p50": 0.009999990463256836,
+        "p90": 0.01000000536441803,
+        "p99": 0.015000000596046448,
+        "max": 0.015000000596046448
+      },
+      "reflectionSimulation": {
+        "mean": 4.4824999983112015,
+        "p50": 4.430000007152557,
+        "p90": 5.24499998986721,
+        "p99": 5.549999997019768,
+        "max": 5.549999997019768
+      },
+      "simulationRoundTrip": {
+        "mean": 4.558333334326744,
+        "p50": 4.510000005364418,
+        "p90": 5.305000007152557,
+        "p99": 5.625,
+        "max": 5.625
+      },
+      "reflectionQuantumMeanMs": 1.0610550000071526,
+      "binauralQuantumMeanMs": 0.1654500000178814,
+      "combinedAudioQuantumMeanMs": 1.226505000025034,
+      "reverb": [
+        0.17480236291885376,
+        0.17476797103881836,
+        0.17466183006763458
+      ],
+      "reverbLowRange": [
+        0.10000000149011612,
+        0.1941242218017578
+      ],
+      "irValid": true,
+      "outputEnergy": 0.1491207480430603,
+      "tracerNodes": 1261,
+      "tracerBuildMs": 12.075008,
+      "tracerOwnedBytes": 661048,
+      "simulationThreads": 2,
+      "tracerLanes": 4
+    }
+  ],
+  "aggregate": {
+    "simulationMeanOfLaunchMeansMs": 4.469866666197777,
+    "simulationWorstP99Ms": 6.2349999994039536,
+    "simulationWorstMaxMs": 6.2349999994039536,
+    "combinedAudioQuantumMeanMs": 1.228676000007987,
+    "tracerBuildMeanMs": 12.8190464,
+    "tracerNodes": 1261,
+    "tracerOwnedBytes": 661048,
+    "simulationThreads": 2,
+    "tracerLanes": 4,
+    "allIrValid": true,
+    "allOutputEnergyNonzero": true,
+    "launchesOver16_667MsP99": 0,
+    "simulationWallDutyCycleAt30HzPercent": 13.40959999859333,
+    "simulationWallDutyCycleAt60HzPercent": 26.81919999718666
+  },
+  "versusScalarSingleThreadObvhs": {
+    "source": "steam-audio-wasm-obvhs-fox-laptop-2026-07-18.json",
+    "scalarMeanMs": 12.270566667219004,
+    "scalarWorstP99Ms": 13.364999994635582,
+    "simdPthreadMeanMs": 4.469866666197777,
+    "simdPthreadWorstP99Ms": 6.2349999994039536,
+    "meanReductionPercent": 63.572451155502954,
+    "worstP99ReductionPercent": 53.348297778477026
+  },
+  "conclusion": {
+    "accepted": true,
+    "reason": "All five launches used two simulation threads and four SIMD lanes, produced valid IRs/non-zero DSP, and stayed below 6.235 ms worst p99.",
+    "policy": "Use the same obvhs medium-build, ray batch 64, two-thread, 64-source 512x2 configuration on native and web; retain Embree for native full-render-mesh scenes until full-Bistro obvhs is swept."
+  },
+  "nativeSameConfiguration": {
+    "methodology": "Five independent native process launches; same obvhs medium CWBVH, ray batch 64, two Steam simulation threads, and 64-source 512x2 quality.",
+    "runs": [
+      {
+        "name": "p64-512x2",
+        "triangles": 10000,
+        "sources": 64,
+        "rays": 512,
+        "bounces": 2,
+        "durationMs": 500,
+        "order": 0,
+        "reflectionType": 1,
+        "samples": 30,
+        "initializationMs": 44.917349,
+        "sceneUpdate": {
+          "mean": 0.0051016,
+          "p50": 0.00525,
+          "p90": 0.005751,
+          "p99": 0.005851,
+          "max": 0.005851
+        },
+        "reflectionSimulation": {
+          "mean": 3.42771203333,
+          "p50": 3.421928,
+          "p90": 3.749322,
+          "p99": 3.997618,
+          "max": 3.997618
+        },
+        "reflectionQuantumMeanMs": 1.225116859,
+        "binauralQuantumMeanMs": 0.08122375,
+        "combinedAudioQuantumMeanMs": 1.306340609,
+        "reverb": [
+          0.135678112507,
+          0.135665923357,
+          0.135621130466
+        ],
+        "reverbLowRange": [
+          0.10000000149,
+          0.159563034773
+        ],
+        "irValid": true,
+        "outputEnergy": 17.7310352325
+      },
+      {
+        "name": "p64-512x2",
+        "triangles": 10000,
+        "sources": 64,
+        "rays": 512,
+        "bounces": 2,
+        "durationMs": 500,
+        "order": 0,
+        "reflectionType": 1,
+        "samples": 30,
+        "initializationMs": 49.261697,
+        "sceneUpdate": {
+          "mean": 0.00522816666667,
+          "p50": 0.005199,
+          "p90": 0.00547,
+          "p99": 0.0109,
+          "max": 0.0109
+        },
+        "reflectionSimulation": {
+          "mean": 3.43740163333,
+          "p50": 3.415546,
+          "p90": 3.755594,
+          "p99": 3.989373,
+          "max": 3.989373
+        },
+        "reflectionQuantumMeanMs": 1.239126345,
+        "binauralQuantumMeanMs": 0.07395391,
+        "combinedAudioQuantumMeanMs": 1.313080255,
+        "reverb": [
+          0.17887082696,
+          0.178847521544,
+          0.178767591715
+        ],
+        "reverbLowRange": [
+          0.10000000149,
+          0.17887082696
+        ],
+        "irValid": true,
+        "outputEnergy": 17.7310352325
+      },
+      {
+        "name": "p64-512x2",
+        "triangles": 10000,
+        "sources": 64,
+        "rays": 512,
+        "bounces": 2,
+        "durationMs": 500,
+        "order": 0,
+        "reflectionType": 1,
+        "samples": 30,
+        "initializationMs": 46.579396,
+        "sceneUpdate": {
+          "mean": 0.0052218,
+          "p50": 0.0054,
+          "p90": 0.005851,
+          "p99": 0.005971,
+          "max": 0.005971
+        },
+        "reflectionSimulation": {
+          "mean": 3.42921393333,
+          "p50": 3.370392,
+          "p90": 3.858206,
+          "p99": 4.04112,
+          "max": 4.04112
+        },
+        "reflectionQuantumMeanMs": 1.220400453,
+        "binauralQuantumMeanMs": 0.0803487,
+        "combinedAudioQuantumMeanMs": 1.300749153,
+        "reverb": [
+          0.10000000149,
+          0.10000000149,
+          0.10000000149
+        ],
+        "reverbLowRange": [
+          0.10000000149,
+          0.194592684507
+        ],
+        "irValid": true,
+        "outputEnergy": 17.7310352325
+      },
+      {
+        "name": "p64-512x2",
+        "triangles": 10000,
+        "sources": 64,
+        "rays": 512,
+        "bounces": 2,
+        "durationMs": 500,
+        "order": 0,
+        "reflectionType": 1,
+        "samples": 30,
+        "initializationMs": 45.888019,
+        "sceneUpdate": {
+          "mean": 0.00332076666667,
+          "p50": 0.003026,
+          "p90": 0.00516,
+          "p99": 0.00534,
+          "max": 0.00534
+        },
+        "reflectionSimulation": {
+          "mean": 3.29882393333,
+          "p50": 3.268871,
+          "p90": 3.71069,
+          "p99": 4.032474,
+          "max": 4.032474
+        },
+        "reflectionQuantumMeanMs": 1.248023483,
+        "binauralQuantumMeanMs": 0.08169663,
+        "combinedAudioQuantumMeanMs": 1.329720113,
+        "reverb": [
+          0.11652725935,
+          0.116537153721,
+          0.11016125232
+        ],
+        "reverbLowRange": [
+          0.10000000149,
+          0.16232983768
+        ],
+        "irValid": true,
+        "outputEnergy": 17.7310352325
+      },
+      {
+        "name": "p64-512x2",
+        "triangles": 10000,
+        "sources": 64,
+        "rays": 512,
+        "bounces": 2,
+        "durationMs": 500,
+        "order": 0,
+        "reflectionType": 1,
+        "samples": 30,
+        "initializationMs": 47.692293,
+        "sceneUpdate": {
+          "mean": 0.0039505,
+          "p50": 0.003507,
+          "p90": 0.00521,
+          "p99": 0.00546,
+          "max": 0.00546
+        },
+        "reflectionSimulation": {
+          "mean": 3.36049976667,
+          "p50": 3.324035,
+          "p90": 3.600363,
+          "p99": 4.316115,
+          "max": 4.316115
+        },
+        "reflectionQuantumMeanMs": 1.247089983,
+        "binauralQuantumMeanMs": 0.07883005,
+        "combinedAudioQuantumMeanMs": 1.325920033,
+        "reverb": [
+          0.10000000149,
+          0.10000000149,
+          0.10000000149
+        ],
+        "reverbLowRange": [
+          0.10000000149,
+          0.179148837924
+        ],
+        "irValid": true,
+        "outputEnergy": 17.7310352325
+      }
+    ],
+    "simulationMeanOfLaunchMeansMs": 3.390730259998,
+    "simulationWorstP99Ms": 4.316115,
+    "combinedAudioQuantumMeanMs": 1.3151620326000002,
+    "allIrValid": true,
+    "webMeanOverheadPercent": 31.826076492454835,
+    "webWorstP99OverheadPercent": 44.458616125936246
+  }
+}

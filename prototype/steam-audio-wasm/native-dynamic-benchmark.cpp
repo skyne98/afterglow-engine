@@ -124,13 +124,14 @@ long peakRssKiB() {
     return -1;
 }
 
-void runWorker(int steamAudioThreads) {
+void runWorker(int steamAudioThreads, const std::string& onlyScenario) {
     if (dyn_set_simulation_threads(steamAudioThreads) != 0)
         throw std::runtime_error("invalid Steam Audio thread count");
     std::ostringstream results;
     results << std::setprecision(12) << '[';
     bool first = true;
     for (const auto& scenario : kScenarios) {
+        if (!onlyScenario.empty() && onlyScenario != scenario.name) continue;
         const double initializationMs = elapsedMs([&] {
             return dyn_init(scenario.triangles, scenario.sources, scenario.rays,
                             scenario.bounces, scenario.reflectionType,
@@ -190,6 +191,8 @@ void runWorker(int steamAudioThreads) {
                 << ",\"outputEnergy\":" << dyn_get_output_energy() << '}';
     }
     dyn_shutdown();
+    if (first && !onlyScenario.empty())
+        throw std::runtime_error("unknown Steam Audio scenario: " + onlyScenario);
     results << ']';
     std::cout << "NATIVE_RESULTS {\"worker\":\"std::thread\",\"steamAudioThreads\":" << steamAudioThreads
               << ",\"peakRssKiB\":"
@@ -199,10 +202,11 @@ void runWorker(int steamAudioThreads) {
 
 int main(int argc, char** argv) {
     const int steamAudioThreads = argc > 1 ? std::stoi(argv[1]) : 1;
+    const std::string onlyScenario = argc > 2 ? argv[2] : "";
     std::exception_ptr failure;
     std::thread worker([&] {
         try {
-            runWorker(steamAudioThreads);
+            runWorker(steamAudioThreads, onlyScenario);
         } catch (...) {
             failure = std::current_exception();
             dyn_shutdown();

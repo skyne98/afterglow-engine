@@ -77,16 +77,21 @@ produce an acoustic crack for a ray exactly on a shared triangle edge.
 The web build uses:
 
 ```sh
-RUSTFLAGS='-C target-feature=+simd128' cargo build \
+RUSTFLAGS='-C target-feature=+atomics,+bulk-memory,+mutable-globals,+simd128' cargo build \
   --manifest-path prototype/steam-audio-wasm/obvhs-tracer/Cargo.toml \
   --release --target wasm32-unknown-emscripten \
   -Zbuild-std=core,alloc,std,panic_abort
 ```
 
-Steam Audio is linked with `-O3 -msimd128`, fixed 256 MiB memory for the dynamic
-benchmark, a synchronous outer Web Worker, and `rayBatchSize = 64`. The current
-obvhs CWBVH node traversal is scalar on WASM despite the module-level SIMD flag.
-Other Steam Audio DSP still uses SIMD128.
+Steam Audio is linked with `-O3 -msimd128 -pthread`, fixed 256 MiB shared memory,
+`rayBatchSize = 64`, and a strict two-worker Emscripten pthread pool. Steam
+Audio, MySOFA, PFFFT, zlib, and Rust are all rebuilt with atomics/bulk-memory;
+mixing non-threaded objects into the module is a link error. Workers are created
+during bootstrap, never after sealing.
+
+Afterglow's local CWBVH kernel intersects four children per SIMD128 operation
+using `core::arch::wasm32`. WABT disassembly verifies
+`f32x4.add/mul/min/max/le`. Native uses obvhs's four-lane SSE2 path.
 
 The selected laptop tier is:
 
@@ -97,19 +102,22 @@ The selected laptop tier is:
 - 30 Hz steady updates and bounded 60 Hz motion bursts.
 
 The 10,000-triangle validation scene produced 1,261 CWBVH nodes, reported 661,048
-owned bytes, and built in 13.03 ms on average.
+owned bytes, and built in 12.82 ms on average.
 
 ## Validation
 
-Five fresh unlocked CEF launches on the Ryzen 7 6800U measured 12.27 ms mean
-reflection simulation and 13.365 ms worst p99. No launch exceeded 16.667 ms. All
-IRs were valid, all DSP outputs were non-zero, and RT60 changed with motion.
+Five fresh unlocked CEF launches on the Ryzen 7 6800U measured 4.47 ms mean
+reflection simulation and 6.235 ms worst p99. Every run reported two simulation
+threads and four traversal lanes. No launch exceeded 16.667 ms; all IRs were
+valid, all DSP outputs were non-zero, and RT60 changed with motion. Against the
+scalar one-thread obvhs baseline, mean fell 63.6% and worst p99 fell 53.3%.
 
 Raw evidence:
-`docs/benchmarks/steam-audio-wasm-obvhs-fox-laptop-2026-07-18.json`.
+`docs/benchmarks/steam-audio-wasm-obvhs-simd-pthreads-fox-laptop-2026-07-18.json`.
 
-The web backend is accepted. A WASM SIMD CWBVH port is deferred unless structural
-proxy or rendered-load tests consume the remaining margin. Native full-scene
-acoustics continue to require Embree. AudioWorklet deadline integration,
+The same logical obvhs configuration builds natively: medium CWBVH, batch 64,
+two simulation threads, 64 reflected sources, and 512×2 quality. Five matching
+native laptop launches measured 3.39 ms mean / 4.316 ms worst p99. Native full-render-mesh acoustics continue to use
+the separately validated Embree backend. AudioWorklet deadline integration,
 render-loaded contention, general dynamic instances, and structural-proxy error
 measurement remain open shipping gates.

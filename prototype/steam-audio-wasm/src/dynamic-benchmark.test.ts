@@ -10,7 +10,6 @@ const nativeRunner = await Bun.file(new URL('native-dynamic-benchmark.cpp', root
 const bistroBuild = await Bun.file(new URL('build-native-bistro.sh', root)).text();
 const bistroCooker = await Bun.file(new URL('cook-bistro-acoustic.cpp', root)).text();
 const bistroRunner = await Bun.file(new URL('native-bistro-geometry-benchmark.cpp', root)).text();
-const threadPool = await Bun.file(new URL('steam-audio-wasm-thread-pool.cpp', root)).text();
 const readme = await Bun.file(new URL('README.md', root)).text();
 const evidence = await Bun.file(new URL('../../../docs/benchmarks/steam-audio-wasm-dynamic-fox-laptop-2026-07-18.json', import.meta.url)).json();
 const manySourceEvidence = await Bun.file(new URL('../../../docs/benchmarks/steam-audio-wasm-many-sources-fox-laptop-2026-07-18.json', import.meta.url)).json();
@@ -19,6 +18,7 @@ const bistroEvidence = await Bun.file(new URL('../../../docs/benchmarks/steam-au
 const bistroPackageEvidence = await Bun.file(new URL('../../../docs/benchmarks/steam-audio-native-bistro-full-package-fox-laptop-2026-07-18.json', import.meta.url)).json();
 const bistroEmbreeEvidence = await Bun.file(new URL('../../../docs/benchmarks/steam-audio-native-bistro-embree-fox-laptop-2026-07-18.json', import.meta.url)).json();
 const obvhsEvidence = await Bun.file(new URL('../../../docs/benchmarks/steam-audio-wasm-obvhs-fox-laptop-2026-07-18.json', import.meta.url)).json();
+const threadedObvhsEvidence = await Bun.file(new URL('../../../docs/benchmarks/steam-audio-wasm-obvhs-simd-pthreads-fox-laptop-2026-07-18.json', import.meta.url)).json();
 
 describe('fully dynamic Steam Audio WASM prototype', () => {
   test('uses the allocation-free obvhs custom scene without baked data', () => {
@@ -41,15 +41,24 @@ describe('fully dynamic Steam Audio WASM prototype', () => {
     expect(tracer).toContain('pub unsafe extern "C" fn afterglow_obvhs_batched_any_hit');
     expect(tracer).toContain('callbacks_allocate_nothing_after_build');
     expect(tracer).toContain('shared_triangle_edge_has_no_acoustic_crack');
+    expect(tracer).toContain('core::arch::wasm32');
+    expect(tracer).toContain('f32x4_le');
+    expect(tracer).toContain('afterglow_obvhs_traversal_lanes');
   });
 
-  test('accepts obvhs after five fresh laptop launches', () => {
+  test('records the scalar obvhs baseline and accepts SIMD pthreads', () => {
     expect(obvhsEvidence.runs).toHaveLength(5);
-    expect(obvhsEvidence.aggregate.simulationWorstP99Ms).toBeLessThan(16.667);
-    expect(obvhsEvidence.aggregate.launchesOver16_667MsP99).toBe(0);
-    expect(obvhsEvidence.aggregate.allIrValid).toBe(true);
-    expect(obvhsEvidence.aggregate.allOutputEnergyNonzero).toBe(true);
-    expect(obvhsEvidence.conclusion.accepted).toBe(true);
+    expect(threadedObvhsEvidence.runs).toHaveLength(5);
+    expect(threadedObvhsEvidence.aggregate.simulationWorstP99Ms).toBeLessThan(16.667);
+    expect(threadedObvhsEvidence.aggregate.launchesOver16_667MsP99).toBe(0);
+    expect(threadedObvhsEvidence.aggregate.simulationThreads).toBe(2);
+    expect(threadedObvhsEvidence.aggregate.tracerLanes).toBe(4);
+    expect(threadedObvhsEvidence.aggregate.allIrValid).toBe(true);
+    expect(threadedObvhsEvidence.aggregate.allOutputEnergyNonzero).toBe(true);
+    expect(threadedObvhsEvidence.nativeSameConfiguration.runs).toHaveLength(5);
+    expect(threadedObvhsEvidence.nativeSameConfiguration.simulationWorstP99Ms)
+      .toBeLessThan(threadedObvhsEvidence.aggregate.simulationWorstP99Ms);
+    expect(threadedObvhsEvidence.conclusion.accepted).toBe(true);
   });
 
   test('feeds generated reflections through Steam Audio DSP', () => {
@@ -58,13 +67,14 @@ describe('fully dynamic Steam Audio WASM prototype', () => {
     expect(cpp).toContain('iplBinauralEffectApply');
   });
 
-  test('rebuilds the pinned library without nested browser workers', () => {
-    expect(build).toContain('steam-audio-wasm-thread-pool.cpp');
-    expect(build).toContain('steam-audio-threadless');
+  test('rebuilds every dynamic archive for a fixed pthread pool', () => {
+    expect(build).toContain('steam-audio-threaded');
+    expect(build).toContain('-sPTHREAD_POOL_SIZE=2');
+    expect(build).toContain('-sPTHREAD_POOL_SIZE_STRICT=2');
+    expect(build).toContain('pthread-deps');
+    expect(build).toContain('target-feature=+atomics,+bulk-memory,+mutable-globals,+simd128');
     expect(build).toContain("grep -q '4\\.0\\.23'");
     expect(build).toContain('375b1431b');
-    expect(threadPool).toContain('#if defined(IPL_OS_WASM)');
-    expect(threadPool).toContain('processNextJob(0, mCancel)');
   });
 
   test('keeps published headline measurements tied to raw evidence', () => {
@@ -82,6 +92,7 @@ describe('fully dynamic Steam Audio WASM prototype', () => {
     expect(nativeBuild).toContain('-march=x86-64-v3');
     expect(nativeRunner).toContain('std::thread worker');
     expect(nativeRunner).toContain('dyn_set_simulation_threads');
+    expect(nativeRunner).toContain('onlyScenario');
     expect(nativeRunner).toContain('"c64-512x2-o1"');
     expect(cpp).toContain('simulationSettings.numThreads = gSimulationThreads');
   });

@@ -36,6 +36,7 @@ void afterglow_obvhs_destroy(void* tracer);
 /** Translation-only BLAS instance update; performs no allocation or BVH rebuild. */
 void afterglow_obvhs_set_door_y(void* tracer, float doorY);
 void afterglow_obvhs_get_stats(const void* tracer, AfterglowObvhsStats* stats);
+uint32_t afterglow_obvhs_traversal_lanes(void);
 
 /** Steam Audio IPL_SCENETYPE_CUSTOM callbacks. */
 void afterglow_obvhs_closest_hit(const IPLRay* ray, IPLfloat32 minDistance,

@@ -36,15 +36,56 @@ if ! grep -q 'CMAKE_POLICY_VERSION_MINIMUM=3.5' "$getdeps"; then
   perl -0pi -e "s/cmake_args = \[\]/cmake_args = ['-DCMAKE_POLICY_VERSION_MINIMUM=3.5']/" "$getdeps"
 fi
 
+zlib_library="$upstream/core/deps/zlib/lib/wasm/release/libz.a"
+pffft_library="$upstream/core/deps/pffft/lib/wasm/release/libpffft.a"
+mysofa_library="$upstream/core/deps/mysofa/lib/wasm/release/libmysofa.a"
 pushd "$upstream/core/build" >/dev/null
 for dependency in zlib pffft mysofa; do
   library="$upstream/core/deps/$dependency/lib/wasm/release/lib${dependency}.a"
-  [[ "$dependency" == zlib ]] && library="$upstream/core/deps/zlib/lib/wasm/release/libz.a"
+  [[ "$dependency" == zlib ]] && library="$zlib_library"
   if [[ ! -f "$library" ]]; then
     python3 get_dependencies.py --platform wasm --emsdk "$cache/emsdk" --dependency "$dependency"
   fi
 done
 popd >/dev/null
+
+# Emscripten requires every object linked into a shared-memory module to have
+# atomics and bulk-memory enabled. Keep Valve's ordinary dependency archives for
+# the direct-only module and build a second, pthread-compatible set for dynamic
+# reflections.
+single_deps="$cache/single-thread-deps"
+pthread_deps="$cache/pthread-deps"
+mkdir -p "$single_deps" "$pthread_deps"
+cp "$zlib_library" "$single_deps/libz.a"
+cp "$pffft_library" "$single_deps/libpffft.a"
+cp "$mysofa_library" "$single_deps/libmysofa.a"
+if [[ ! -f "$pthread_deps/libz.a" || ! -f "$pthread_deps/libpffft.a" ||
+      ! -f "$pthread_deps/libmysofa.a" ]]; then
+  dependencies_json="$upstream/core/build/dependencies.json"
+  cp "$dependencies_json" "$cache/dependencies.json.single-thread"
+  restore_single_deps() {
+    cp "$cache/dependencies.json.single-thread" "$dependencies_json"
+    cp "$single_deps/libz.a" "$zlib_library"
+    cp "$single_deps/libpffft.a" "$pffft_library"
+    cp "$single_deps/libmysofa.a" "$mysofa_library"
+  }
+  trap restore_single_deps EXIT
+  perl -0pi -e 's/-msimd128/-pthread -msimd128/g' "$dependencies_json"
+  rm -rf "$upstream/core/deps-build/zlib" \
+         "$upstream/core/deps-build/pffft" \
+         "$upstream/core/deps-build/mysofa"
+  rm -f "$zlib_library" "$pffft_library" "$mysofa_library"
+  pushd "$upstream/core/build" >/dev/null
+  for dependency in zlib pffft mysofa; do
+    python3 get_dependencies.py --platform wasm --emsdk "$cache/emsdk" --dependency "$dependency"
+  done
+  popd >/dev/null
+  cp "$zlib_library" "$pthread_deps/libz.a"
+  cp "$pffft_library" "$pthread_deps/libpffft.a"
+  cp "$mysofa_library" "$pthread_deps/libmysofa.a"
+  restore_single_deps
+  trap - EXIT
+fi
 
 if [[ ! -f "$sdk/libphonon.a" || ! -f "$sdk/phonon_version.h" ]]; then
   archive="$cache/steamaudio.zip"
@@ -60,12 +101,10 @@ fi
 
 # Valve's released WASM archive constructs std::threads for real-time
 # reflections, but it was compiled without atomics/pthreads. Rebuild the pinned
-# source with a synchronous single-worker ThreadPool: the outer Web Worker is
-# already the simulation thread, so nested Emscripten workers add no value.
-threadless="$cache/steam-audio-threadless/src/core/libphonon.a"
-if [[ ! -f "$threadless" ]]; then
-  cp "$prototype/steam-audio-wasm-thread-pool.cpp" \
-    "$upstream/core/src/core/thread_pool.cpp"
+# source with Emscripten pthreads. Two workers are pre-created during bootstrap
+# so gameplay never creates a thread or waits for browser worker startup.
+threaded="$cache/steam-audio-threaded/src/core/libphonon.a"
+if [[ ! -f "$threaded" ]]; then
   if [[ ! -x "$upstream/core/deps/flatbuffers/bin/linux-x64/flatc" ]]; then
     pushd "$upstream/core/build" >/dev/null
     python3 get_dependencies.py --platform wasm --emsdk "$cache/emsdk" --dependency flatbuffers
@@ -75,35 +114,50 @@ if [[ ! -f "$threadless" ]]; then
   # deleted-copy diagnostics.
   perl -0pi -e 's/buf_ = other\.buf_;/buf_ = std::move(other.buf_);/g' \
     "$upstream/core/deps/flatbuffers/include/flatbuffers/flatbuffers.h"
-  emcmake cmake -S "$upstream/core" -B "$cache/steam-audio-threadless" \
+  emcmake cmake -S "$upstream/core" -B "$cache/steam-audio-threaded" \
     -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
     -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=FALSE \
+    -DCMAKE_C_FLAGS=-pthread -DCMAKE_CXX_FLAGS=-pthread \
     -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH \
     -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=BOTH \
     -DEMSCRIPTEN_SYSTEM_PROCESSOR=arm \
     -DSTEAMAUDIO_BUILD_TESTS=FALSE -DSTEAMAUDIO_BUILD_BENCHMARKS=FALSE \
     -DSTEAMAUDIO_BUILD_SAMPLES=FALSE -DSTEAMAUDIO_BUILD_ITESTS=FALSE \
     -DSTEAMAUDIO_BUILD_DOCS=FALSE
-  cmake --build "$cache/steam-audio-threadless" --target phonon -j8
+  cmake --build "$cache/steam-audio-threaded" --target phonon -j8
 fi
 
-tracer_target="$cache/obvhs-tracer-target"
-CARGO_TARGET_DIR="$tracer_target" \
+single_tracer_target="$cache/obvhs-tracer-target-single"
+CARGO_TARGET_DIR="$single_tracer_target" \
 RUSTFLAGS='-C target-feature=+simd128' \
   cargo build --manifest-path "$prototype/obvhs-tracer/Cargo.toml" \
   --release --target wasm32-unknown-emscripten \
   -Zbuild-std=core,alloc,std,panic_abort
-tracer_library="$tracer_target/wasm32-unknown-emscripten/release/libafterglow_obvhs_tracer.a"
+single_tracer_library="$single_tracer_target/wasm32-unknown-emscripten/release/libafterglow_obvhs_tracer.a"
+
+pthread_tracer_target="$cache/obvhs-tracer-target-pthread"
+CARGO_TARGET_DIR="$pthread_tracer_target" \
+RUSTFLAGS='-C target-feature=+atomics,+bulk-memory,+mutable-globals,+simd128' \
+  cargo build --manifest-path "$prototype/obvhs-tracer/Cargo.toml" \
+  --release --target wasm32-unknown-emscripten \
+  -Zbuild-std=core,alloc,std,panic_abort
+pthread_tracer_library="$pthread_tracer_target/wasm32-unknown-emscripten/release/libafterglow_obvhs_tracer.a"
+
+pthread_flags=(
+  -pthread
+  -sPTHREAD_POOL_SIZE=2
+  -sPTHREAD_POOL_SIZE_STRICT=2
+)
 
 mkdir -p "$prototype/dist"
 em++ "$prototype/benchmark.cpp" \
   -I "$sdk" \
   -I "$prototype/obvhs-tracer/include" \
-  "$tracer_library" \
+  "$single_tracer_library" \
   "$sdk/libphonon.a" \
-  "$upstream/core/deps/mysofa/lib/wasm/release/libmysofa.a" \
-  "$upstream/core/deps/pffft/lib/wasm/release/libpffft.a" \
-  "$upstream/core/deps/zlib/lib/wasm/release/libz.a" \
+  "$single_deps/libmysofa.a" \
+  "$single_deps/libpffft.a" \
+  "$single_deps/libz.a" \
   -O3 -msimd128 \
   -sMODULARIZE=1 -sEXPORT_ES6=1 -sENVIRONMENT=worker \
   -sALLOW_MEMORY_GROWTH=0 -sINITIAL_MEMORY=67108864 -sNO_EXIT_RUNTIME=1 \
@@ -113,15 +167,15 @@ em++ "$prototype/benchmark.cpp" \
 em++ "$prototype/dynamic-benchmark.cpp" \
   -I "$sdk" \
   -I "$prototype/obvhs-tracer/include" \
-  "$tracer_library" \
-  "$threadless" \
-  "$upstream/core/deps/mysofa/lib/wasm/release/libmysofa.a" \
-  "$upstream/core/deps/pffft/lib/wasm/release/libpffft.a" \
-  "$upstream/core/deps/zlib/lib/wasm/release/libz.a" \
-  -O3 -msimd128 \
+  "$pthread_tracer_library" \
+  "$threaded" \
+  "$pthread_deps/libmysofa.a" \
+  "$pthread_deps/libpffft.a" \
+  "$pthread_deps/libz.a" \
+  -O3 -msimd128 "${pthread_flags[@]}" \
   -sMODULARIZE=1 -sEXPORT_ES6=1 -sENVIRONMENT=worker \
   -sALLOW_MEMORY_GROWTH=0 -sINITIAL_MEMORY=268435456 -sNO_EXIT_RUNTIME=1 \
-  -sEXPORTED_FUNCTIONS='["_dyn_init","_dyn_update","_dyn_run_reflections","_dyn_run_audio","_dyn_run_binaural","_dyn_get_reverb_low","_dyn_get_reverb_mid","_dyn_get_reverb_high","_dyn_get_ir_valid","_dyn_get_output_energy","_dyn_get_tracer_nodes","_dyn_get_tracer_build_ms","_dyn_get_tracer_owned_bytes","_dyn_shutdown"]' \
+  -sEXPORTED_FUNCTIONS='["_dyn_init","_dyn_update","_dyn_run_reflections","_dyn_run_audio","_dyn_run_binaural","_dyn_get_reverb_low","_dyn_get_reverb_mid","_dyn_get_reverb_high","_dyn_get_ir_valid","_dyn_get_output_energy","_dyn_get_tracer_nodes","_dyn_get_tracer_build_ms","_dyn_get_tracer_owned_bytes","_dyn_get_simulation_threads","_dyn_get_tracer_lanes","_dyn_shutdown"]' \
   -o "$prototype/dist/dynamic-steam-audio.js"
 
 bun build "$prototype/src/worker.ts" --outdir "$prototype/dist" --target browser

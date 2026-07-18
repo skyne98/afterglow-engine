@@ -136,9 +136,10 @@ sources at approximately 20–30 Hz, 32 at 8 Hz, and high rays near 10 Hz.
 Valve's released WASM archive aborts when reflections construct `std::thread`,
 because the archive was not compiled for Emscripten pthreads. Re-linking it with
 `-pthread` also fails because its objects lack atomics/bulk-memory target
-features. The prototype therefore rebuilds pinned 4.8.1 source with a small
-WASM-only patch that executes ThreadPool jobs synchronously inside the dedicated
-simulation Web Worker. No simulation work moves onto the main or audio thread.
+features. The historical baseline used a synchronous WASM-only ThreadPool patch.
+The selected build instead rebuilds Steam Audio, MySOFA, PFFFT, zlib, and the
+Rust tracer for shared memory and pre-creates two Emscripten pthread workers at
+bootstrap. No simulation work moves onto the main or audio thread.
 
 The session auto-locked during final runs. The reported values are synchronous
 Worker CPU timings rather than rAF/presentation timings and were stable, but
@@ -189,15 +190,16 @@ and four Steam Audio reflection-simulation threads:
 
 | Backend / simulation threads | 64 sources, 512×2 mean | Worst p99 | 64-source reflection + HRTF DSP |
 |---|---:|---:|---:|
-| WASM / synchronous Worker | 13.17 ms | 15.25 ms | 1.215 ms |
-| Native / 1 | 16.48 ms | 19.59 ms | 1.324 ms |
-| **Native / 2** | **9.27 ms** | **10.74 ms** | **1.330 ms** |
-| Native / 4 | 5.53 ms | 6.44 ms | 1.357 ms |
+| WASM built-in / synchronous baseline | 13.17 ms | 15.25 ms | 1.215 ms |
+| **WASM obvhs SIMD128 / 2 pthreads** | **4.47 ms** | **6.235 ms** | **1.229 ms** |
+| Native built-in / 1 | 16.48 ms | 19.59 ms | 1.324 ms |
+| Native built-in / 2 | 9.27 ms | 10.74 ms | 1.330 ms |
+| Native built-in / 4 | 5.53 ms | 6.44 ms | 1.357 ms |
 
-Native does not automatically win when constrained to one Steam simulation
-thread: the released library's worker handoff made that configuration slower
-than the synchronously patched WASM Worker. Two threads are the balanced native
-tier. They preserve the 128 direct-ray + HRTF / 64 priority-reflection policy and
+Native did not automatically win in the historical built-in comparison when
+constrained to one Steam simulation thread. The selected SIMD+pthread web path
+is now faster than every built-in synthetic cell above. Two threads remain the
+balanced cross-target tier. They preserve the 128 direct-ray + HRTF / 64 priority-reflection policy and
 project to 1.433 ms per audio quantum. Four threads are the quality tier: 64
 sources at 1,024 global rays × 2 bounces measured 12.52 ms worst p99 and 1.452 ms
 projected DSP.
@@ -323,13 +325,14 @@ managed Embree first. Across eight large scenes
 on a Ryzen 7950X, its aggregate CPU traversal chart reports 35.70 ms for Embree,
 63.12 ms for the slow-build `obvhs` CWBVH preset, 71.34 ms for medium CWBVH,
 106.54 ms for Parry, and 500.89 ms for `bvh`. More importantly, `obvhs` 0.3.2's
-four-node SIMD traversal is currently gated to x86 SSE2; WASM uses its scalar
-fallback, which its source says takes more than twice as long. These native
-renderer numbers do not establish Steam Audio or WASM performance.
+four-node SIMD traversal is gated upstream to x86 SSE2. Unmodified WASM uses its
+scalar fallback, which its source says takes more than twice as long. Afterglow
+now supplies the matching local four-child SIMD128 kernel; these native renderer
+numbers still do not establish Steam Audio performance.
 
 | Candidate | Assessment |
 |---|---|
-| `obvhs` | Best underlying layout: compact wide nodes, strong construction options, suitable hit APIs, pure Rust, and verified Emscripten compilation. Its current WASM traversal is scalar. |
+| `obvhs` | Selected: compact wide nodes, strong construction options, suitable hit APIs, and an Afterglow four-child WASM SIMD128 traversal. |
 | `parry3d` | Most mature and feature-rich. Its `simd-stable` BVH ray path emits real WASM SIMD, but it is a broad collision library and trails `obvhs` in the available native ray benchmark. |
 | `bvh` | Simple maintained SAH implementation. Its `simd` ray/AABB path emits real WASM SIMD, but binary traversal is far slower in the available large-scene native benchmark. |
 | `rtbvh` | Its MBVH and quad-ray packet operations emit real WASM SIMD and map naturally to Steam's batched callbacks. It unconditionally brings Rayon/Crossbeam/CPU-count infrastructure and has less suitable bounded ownership. |
@@ -352,25 +355,33 @@ A local inclusive-edge triangle test replaces obvhs 0.3.2's primitive test
 because the upstream test rejects negative zero and can miss a ray exactly on a
 shared edge.
 
-Five fresh CEF launches on fox-laptop measured the selected 64-source,
-512-ray × 2-bounce tier:
+Five fresh CEF launches on fox-laptop measured the 64-source, 512-ray ×
+2-bounce tier:
 
 | WASM tracer | Mean simulation | Worst p99 | Verdict |
 |---|---:|---:|---|
-| Steam Audio built-in baseline | 13.17 ms | 15.25 ms | Historical baseline |
-| **obvhs custom CWBVH8** | **12.27 ms** | **13.365 ms** | **Selected; 0/5 over 16.667 ms** |
+| Steam Audio built-in synchronous baseline | 13.17 ms | 15.25 ms | Historical baseline |
+| Scalar obvhs / one simulation thread | 12.27 ms | 13.365 ms | Historical custom baseline |
+| **obvhs SIMD128 / two pthreads** | **4.47 ms** | **6.235 ms** | **Selected; 0/5 over 16.667 ms** |
 
-The obvhs scene used 1,261 CWBVH nodes and 661,048 owned bytes; medium-build
-construction averaged 13.03 ms. Every run produced a valid dynamic IR, non-zero
-DSP output, and changing RT60. Mean simulation improved 6.8% and worst p99 12.4%.
-The comparison is not traversal-only: the built-in baseline used ray batch size
-1, while the selected custom callback path uses 64. Raw evidence is
-`docs/benchmarks/steam-audio-wasm-obvhs-fox-laptop-2026-07-18.json`.
+The selected module rebuilds every linked archive for atomics/shared memory and
+pre-creates two strict Emscripten pthread workers during bootstrap. Runtime
+telemetry confirmed two simulation threads and four traversal lanes in every
+run; WABT disassembly confirmed `f32x4.add/mul/min/max/le`. Against scalar
+obvhs, mean simulation fell 63.6% and worst p99 fell 53.3%.
 
-This is sufficient to select scalar-WASM obvhs now. Parry and `rtbvh` are no
-longer planned alternatives. Add WASM SIMD CWBVH traversal only if structural
-proxy or render-contention measurements show that the current margin is
-insufficient.
+The scene used 1,261 CWBVH nodes and 661,048 owned bytes; medium-build
+construction averaged 12.82 ms. Every run produced a valid dynamic IR, non-zero
+DSP output, and changing RT60. Its simulation wall-duty cycle is 13.4% at 30 Hz
+or 26.8% during bounded 60 Hz bursts. Five same-configuration native obvhs
+launches used two OS threads and four SSE2 lanes and measured 3.39 ms mean /
+4.316 ms worst p99. Web mean overhead was 31.8%.
+
+Raw evidence: scalar baseline in
+`docs/benchmarks/steam-audio-wasm-obvhs-fox-laptop-2026-07-18.json`; selected
+path in
+`docs/benchmarks/steam-audio-wasm-obvhs-simd-pthreads-fox-laptop-2026-07-18.json`.
+Parry and `rtbvh` are no longer planned alternatives.
 
 ## Recommendation
 

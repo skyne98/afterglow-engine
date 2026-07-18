@@ -5,10 +5,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use glam::{Vec3A, vec3a};
+use glam::{UVec2, Vec3A, vec3a};
 use obvhs::{
     BvhBuildParams,
-    cwbvh::{CwBvh, builder::build_cwbvh_from_tris},
+    cwbvh::{CwBvh, builder::build_cwbvh_from_tris, node::CwBvhNode},
     ray::{Ray, RayHit},
     triangle::Triangle,
 };
@@ -102,13 +102,25 @@ impl TraceMesh {
     #[inline(always)]
     fn closest(&self, ray: Ray) -> Option<MeshHit> {
         let mut hit = RayHit::none();
-        if !self
-            .bvh
-            .ray_traverse(ray, &mut hit, |candidate_ray, primitive_id| {
-                let original_id = self.bvh.primitive_indices[primitive_id] as usize;
-                intersect_triangle(&self.triangles[original_id], candidate_ray)
-            })
-        {
+        let mut traverse_ray = ray;
+        let mut state = self.bvh.new_traversal(ray.direction);
+        let mut node;
+        obvhs::traverse!(
+            self.bvh,
+            node,
+            state,
+            intersect_node(node, &traverse_ray, state.oct_inv4),
+            {
+                let original_id = self.bvh.primitive_indices[state.primitive_id as usize] as usize;
+                let distance = intersect_triangle(&self.triangles[original_id], &traverse_ray);
+                if distance < traverse_ray.tmax {
+                    hit.primitive_id = state.primitive_id;
+                    hit.t = distance;
+                    traverse_ray.tmax = distance;
+                }
+            }
+        );
+        if hit.t >= ray.tmax {
             return None;
         }
         let original_id = self.bvh.primitive_indices[hit.primitive_id as usize] as usize;
@@ -120,12 +132,26 @@ impl TraceMesh {
 
     #[inline(always)]
     fn any(&self, ray: Ray) -> bool {
-        !self
-            .bvh
-            .ray_traverse_miss(ray, |candidate_ray, primitive_id| {
-                let original_id = self.bvh.primitive_indices[primitive_id] as usize;
-                intersect_triangle(&self.triangles[original_id], candidate_ray)
-            })
+        let mut state = self.bvh.new_traversal(ray.direction);
+        let mut node;
+        let mut hit = false;
+        'traversal: {
+            obvhs::traverse!(
+                self.bvh,
+                node,
+                state,
+                intersect_node(node, &ray, state.oct_inv4),
+                {
+                    let original_id =
+                        self.bvh.primitive_indices[state.primitive_id as usize] as usize;
+                    if intersect_triangle(&self.triangles[original_id], &ray) < ray.tmax {
+                        hit = true;
+                        break 'traversal;
+                    }
+                }
+            );
+        }
+        hit
     }
 
     fn owned_bytes(&self) -> usize {
@@ -248,6 +274,99 @@ impl Tracer {
         output.normal = from_vec3a(normal);
         output.material = self.materials.as_ptr().wrapping_add(material_id) as *mut IplMaterial;
     }
+}
+
+#[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+#[inline(always)]
+fn intersect_node(node: &CwBvhNode, ray: &Ray, oct_inv4: u32) -> u32 {
+    use core::arch::wasm32::*;
+
+    #[inline(always)]
+    unsafe fn quantized4(values: &[u8; 8], group: usize) -> v128 {
+        let offset = group * 4;
+        // SAFETY: `group` is always zero or one.
+        unsafe {
+            f32x4(
+                *values.get_unchecked(offset) as f32,
+                *values.get_unchecked(offset + 1) as f32,
+                *values.get_unchecked(offset + 2) as f32,
+                *values.get_unchecked(offset + 3) as f32,
+            )
+        }
+    }
+
+    #[inline(always)]
+    fn byte(value: u64, index: usize) -> u32 {
+        ((value >> (index * 8)) & 0xff) as u32
+    }
+
+    let adjusted_direction_inverse = node.compute_extent() * ray.inv_direction;
+    let adjusted_origin = (Vec3A::from(node.p) - ray.origin) * ray.inv_direction;
+    let inverse_x = f32x4_splat(adjusted_direction_inverse.x);
+    let inverse_y = f32x4_splat(adjusted_direction_inverse.y);
+    let inverse_z = f32x4_splat(adjusted_direction_inverse.z);
+    let origin_x = f32x4_splat(adjusted_origin.x);
+    let origin_y = f32x4_splat(adjusted_origin.y);
+    let origin_z = f32x4_splat(adjusted_origin.z);
+    let epsilon = f32x4_splat(0.0001);
+    let ray_max = f32x4_splat(ray.tmax);
+    let reverse_x = ray.direction.x < 0.0;
+    let reverse_y = ray.direction.y < 0.0;
+    let reverse_z = ray.direction.z < 0.0;
+    let (child_bits, bit_indices) = node.get_child_and_index_bits(oct_inv4);
+    let mut hit_mask = 0;
+
+    for group in 0..2 {
+        // SAFETY: Both groups select four initialized bytes from every array.
+        let (low_x, high_x, low_y, high_y, low_z, high_z) = unsafe {
+            (
+                quantized4(&node.child_min_x, group),
+                quantized4(&node.child_max_x, group),
+                quantized4(&node.child_min_y, group),
+                quantized4(&node.child_max_y, group),
+                quantized4(&node.child_min_z, group),
+                quantized4(&node.child_max_z, group),
+            )
+        };
+        let (minimum_x, maximum_x) = if reverse_x {
+            (high_x, low_x)
+        } else {
+            (low_x, high_x)
+        };
+        let (minimum_y, maximum_y) = if reverse_y {
+            (high_y, low_y)
+        } else {
+            (low_y, high_y)
+        };
+        let (minimum_z, maximum_z) = if reverse_z {
+            (high_z, low_z)
+        } else {
+            (low_z, high_z)
+        };
+
+        let t_min_x = f32x4_add(f32x4_mul(minimum_x, inverse_x), origin_x);
+        let t_max_x = f32x4_add(f32x4_mul(maximum_x, inverse_x), origin_x);
+        let t_min_y = f32x4_add(f32x4_mul(minimum_y, inverse_y), origin_y);
+        let t_max_y = f32x4_add(f32x4_mul(maximum_y, inverse_y), origin_y);
+        let t_min_z = f32x4_add(f32x4_mul(minimum_z, inverse_z), origin_z);
+        let t_max_z = f32x4_add(f32x4_mul(maximum_z, inverse_z), origin_z);
+        let t_min = f32x4_max(f32x4_max(t_min_x, f32x4_max(t_min_y, t_min_z)), epsilon);
+        let t_max = f32x4_min(f32x4_min(t_max_x, f32x4_min(t_max_y, t_max_z)), ray_max);
+        let lanes = i32x4_bitmask(f32x4_le(t_min, t_max)) as u32;
+        for lane in 0..4 {
+            if lanes & (1 << lane) != 0 {
+                let child = group * 4 + lane;
+                hit_mask |= byte(child_bits, child) << byte(bit_indices, child);
+            }
+        }
+    }
+    hit_mask
+}
+
+#[cfg(not(all(target_arch = "wasm32", target_feature = "simd128")))]
+#[inline(always)]
+fn intersect_node(node: &CwBvhNode, ray: &Ray, oct_inv4: u32) -> u32 {
+    node.intersect_ray(ray, oct_inv4)
 }
 
 #[inline(always)]
@@ -416,6 +535,21 @@ pub unsafe extern "C" fn afterglow_obvhs_set_door_y(tracer: *mut Tracer, door_y:
         unsafe { &*tracer }
             .door_y_bits
             .store(door_y.to_bits(), Ordering::Relaxed);
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn afterglow_obvhs_traversal_lanes() -> u32 {
+    if cfg!(any(
+        all(target_arch = "wasm32", target_feature = "simd128"),
+        all(
+            any(target_arch = "x86", target_arch = "x86_64"),
+            target_feature = "sse2"
+        )
+    )) {
+        4
+    } else {
+        1
     }
 }
 

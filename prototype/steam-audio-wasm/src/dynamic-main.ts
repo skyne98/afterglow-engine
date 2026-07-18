@@ -11,6 +11,8 @@ interface CallResult {
   tracerNodes: number;
   tracerBuildMs: number;
   tracerOwnedBytes: number;
+  simulationThreads: number;
+  tracerLanes: number;
 }
 interface Scenario {
   name: string;
@@ -38,6 +40,8 @@ interface ScenarioResult extends Scenario {
   tracerNodes: number;
   tracerBuildMs: number;
   tracerOwnedBytes: number;
+  simulationThreads: number;
+  tracerLanes: number;
 }
 
 const target = document.getElementById('output');
@@ -46,9 +50,9 @@ const log = (message: string): void => { target.textContent += `${message}\n`; c
 const memory = new SharedArrayBuffer(RING_BYTES * 2);
 initializeRing(memory, 0);
 initializeRing(memory, RING_BYTES);
-const worker = new Worker('./dynamic-worker.js?v=14', { type: 'module' });
+const worker = new Worker('./dynamic-worker.js?v=15', { type: 'module' });
 const request = new Uint8Array(40);
-const response = new Uint8Array(64);
+const response = new Uint8Array(72);
 let sequence = 0;
 let resolveWake: (() => void) | null = null;
 worker.onmessage = (event: MessageEvent): void => {
@@ -86,6 +90,8 @@ async function call(command: number, write: (view: DataView) => void): Promise<C
     tracerNodes: output.getUint32(36, true),
     tracerBuildMs: output.getFloat64(40, true),
     tracerOwnedBytes: output.getFloat64(48, true),
+    simulationThreads: output.getUint32(60, true),
+    tracerLanes: output.getUint32(64, true),
     roundTripMs,
   };
 }
@@ -163,6 +169,8 @@ async function benchmark(scenario: Scenario): Promise<ScenarioResult> {
     tracerNodes: initialized.tracerNodes,
     tracerBuildMs: initialized.tracerBuildMs,
     tracerOwnedBytes: initialized.tracerOwnedBytes,
+    simulationThreads: initialized.simulationThreads,
+    tracerLanes: initialized.tracerLanes,
   };
 }
 

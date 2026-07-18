@@ -31,7 +31,7 @@ int gMaxRays = 0;
 int gMaxBounces = 0;
 int gMaxDurationMs = 0;
 int gMaxOrder = 0;
-int gSimulationThreads = 1;
+int gSimulationThreads = 2;
 float gOutputEnergy = 0.0f;
 
 IPLCoordinateSpace3 coordinates(float x, float y, float z) {
@@ -352,6 +352,10 @@ EMSCRIPTEN_KEEPALIVE double dyn_get_tracer_owned_bytes() {
     AfterglowObvhsStats stats{};
     afterglow_obvhs_get_stats(gTracer, &stats);
     return static_cast<double>(stats.ownedBytes);
+}
+EMSCRIPTEN_KEEPALIVE int dyn_get_simulation_threads() { return gSimulationThreads; }
+EMSCRIPTEN_KEEPALIVE int dyn_get_tracer_lanes() {
+    return static_cast<int>(afterglow_obvhs_traversal_lanes());
 }
 EMSCRIPTEN_KEEPALIVE void dyn_shutdown() { releaseAll(); }
 

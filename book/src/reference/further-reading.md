@@ -31,7 +31,7 @@ The research notes are the canonical record of *why* each choice was made.
 | `docs/research/performance-benchmarks.md` | Optimized communication results (full tables + methodology). |
 | `docs/research/steam-overlay-cef.md` | How the Steam Overlay works with CEF. |
 | `docs/research/steamworks-native-worker.md` | Steamworks as a native Rust worker via `#[rpc(worker = SteamWorker)]`. |
-| `docs/research/steam-audio-browser.md` | Dynamic Steam Audio on the 6800U: Web Worker and native OS-worker comparisons. Native Embree with two simulation threads kept full-Bistro p99 below 3.90 ms at 512×2 and 6.93 ms at 1,024×2; structural proxies remain required for bounded memory and geometry policy. Web now uses obvhs CWBVH8 through Steam's custom callbacks: five fresh 6800U launches measured 13.365 ms worst p99 at 64 sources and 512×2, so the scalar WASM path is accepted without an immediate SIMD port. |
+| `docs/research/steam-audio-browser.md` | Dynamic Steam Audio on the 6800U: Web Worker and native OS-worker comparisons. Native Embree with two simulation threads kept full-Bistro p99 below 3.90 ms at 512×2 and 6.93 ms at 1,024×2; structural proxies remain required for bounded memory and geometry policy. Web uses obvhs CWBVH8 through Steam's custom callbacks: a four-child SIMD128 kernel plus two pre-created pthreads measured 4.47 ms mean / 6.235 ms worst p99 over five fresh 6800U launches at 64 sources and 512×2. |
 
 ## `AGENTS.md`
 
