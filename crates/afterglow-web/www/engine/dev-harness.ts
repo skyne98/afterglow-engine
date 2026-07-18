@@ -133,4 +133,5 @@ export function publishDevHarness<T>(name: string, value: T): void {
 export class TextHud {
   constructor(private readonly element: HTMLElement | null) {}
   setText(text: string): void { if (this.element) this.element.textContent = text; }
+  setVisible(visible: boolean): void { if (this.element) this.element.style.display = visible ? '' : 'none'; }
 }

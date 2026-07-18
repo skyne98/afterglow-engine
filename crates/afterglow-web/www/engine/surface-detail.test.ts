@@ -283,9 +283,9 @@ describe('Dungeon POM integration assets and limits', () => {
     expect(source).toContain('POM_HEIGHT_SCALE=.05,POM_MAX_OFFSET_RATIO=2,POM_MAX_DISTANCE=0,POM_SHADOW_STEPS=8,POM_SHADOW_BIAS=.01,POM_SHADOW_STRENGTH=.82');
     expect(source).toContain("heightSource:'resident ambientCG displacement',heightFormat:'r32float-from-r16'");
     const adapter = await Bun.file(new URL('./virtual-texture-material.ts', import.meta.url)).text();
-    expect(source).toContain('new VT.VirtualPomSceneBinding');
-    expect(source).toContain('pomBinding.add(mesh,set,pomHeight)');
-    expect(source).toContain('pomBinding.setPomEnabled(pomEnabled)');
+    expect(source).toContain('new VirtualPomSceneBinding');
+    expect(source).toContain('pomBinding.add(mesh,set,height as unknown as THREE.Texture)');
+    expect(source).toContain('pomBinding.setPomEnabled(enabled)');
     expect(adapter).toContain("const tbn = (): THREE_TYPES.Node<'mat3'>");
     expect(adapter).toContain('three.normalViewGeometry.mul(sideNode)');
     expect(adapter).toContain('three.positionViewDirection.mul(tbn())');
@@ -296,8 +296,8 @@ describe('Dungeon POM integration assets and limits', () => {
     expect(adapter).toContain('directSpecular.assign(specularBefore.add(specular.mul(visible)))');
     expect(adapter).not.toContain('directDiffuse.mulAssign');
     expect(adapter).not.toContain('directSpecular.mulAssign');
-    expect(source).toContain('loadHeightTextureR16(heightThree,rendererDevice');
-    expect(source).toContain('assertHeightTextureGpuFormat(renderer.backend,height)');
+    expect(source).toContain('loadHeightTextureR16(heightThree,device');
+    expect(source).toContain('host.assertHeightTextureFormat(height)');
     expect(source).not.toContain('TextureLoader().loadAsync(`dungeon-height');
     expect(adapter).toContain('three.vec2(1, -1)');
     expect(source).toContain('VT_QUALITY_BIAS=0, FEEDBACK_INTERVAL=8');

@@ -4,4 +4,4 @@ export {
   type BigAssetSessionOptions,
   type OwnedTextureTranscoder,
 } from './big-asset-session.ts';
-export { getVirtualTextureDimensions } from './big-parser.ts';
+export { createFetchRangeLoader as createAssetRangeSource, getVirtualTextureDimensions } from './big-parser.ts';

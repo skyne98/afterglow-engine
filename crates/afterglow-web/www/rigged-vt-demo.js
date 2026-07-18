@@ -67364,6 +67364,14 @@ class RendererSeal {
   }
 }
 
+// crates/afterglow-web/www/engine/height-texture.ts
+var HEIGHT_R16_MAGIC = new Uint8Array([65, 71, 82, 49, 54, 76, 69, 1]);
+function assertHeightTextureGpuFormat(backend, texture2) {
+  const format = backend.utils?.getTextureFormatGPU(texture2);
+  if (format !== "r32float")
+    throw new Error(`displacement GPU format mismatch: expected r32float, got ${format ?? "unavailable"}`);
+}
+
 // crates/afterglow-web/www/engine/webgpu-only.ts
 function disableWebGLFallback(renderer) {
   renderer._getFallback = null;
@@ -67446,7 +67454,9 @@ class RendererHost {
   renderer;
   device;
   sealMonitor;
+  timestampSupported;
   renderSubmissions = 0;
+  renderSubmitUs = 0;
   scene;
   camera;
   diagnostics;
@@ -67474,6 +67484,8 @@ class RendererHost {
     if (!Number.isFinite(this.maxPixelRatio) || this.maxPixelRatio <= 0)
       throw new RangeError("maxPixelRatio must be positive");
     this.sealMonitor = new RendererSeal(requirePipelineBackend(renderer));
+    const timestampBackend = renderer.backend;
+    this.timestampSupported = Boolean(timestampBackend.hasTimestamp);
     this.deviceTarget = gpuErrorTarget(renderer.backend.device);
     this.onResize = () => this.resize();
     this.onGpuError = (event) => {
@@ -67513,6 +67525,10 @@ class RendererHost {
     this.renderer.setSize(width, height);
     this.resizeClient?.(width, height);
   }
+  assertHeightTextureFormat(texture2) {
+    const backend = this.renderer.backend;
+    assertHeightTextureGpuFormat(backend, texture2);
+  }
   attachVirtualTextureStore(store) {
     const backend = this.renderer.backend;
     store.attachRenderer({
@@ -67534,7 +67550,9 @@ class RendererHost {
     if (this.disposed)
       return;
     this.renderSubmissions++;
+    const started = performance.now();
     this.renderer.render(this.scene, this.camera);
+    this.renderSubmitUs = (performance.now() - started) * 1000;
   }
   dispose() {
     if (this.disposed)
@@ -73813,6 +73831,8 @@ class VirtualTextureFeedbackPass {
 class VirtualTextureFeedbackCoordinator {
   renderer;
   store;
+  vtCpuUs = 0;
+  feedbackSubmitUs = 0;
   pixelScale;
   stats = {
     submittedSnapshots: 0,
@@ -73914,16 +73934,52 @@ class VirtualTextureFeedbackCoordinator {
   seal() {
     this.sealed = true;
   }
+  setGpuTimingEnabled(enabled) {
+    const renderer = this.renderer;
+    renderer.backend.trackTimestamp = enabled;
+    for (const pool of Object.values(renderer.backend.timestampQueryPool ?? {}))
+      if (pool)
+        pool.trackTimestamp = enabled;
+  }
+  async resolveGpuTimings(out) {
+    const renderer = this.renderer;
+    out.gpuTotalMs = await renderer.resolveTimestampsAsync("render");
+    const contexts = renderer._renderContexts, pool = renderer.backend.timestampQueryPool?.render;
+    const timestamps = pool?.timestamps, feedbackTarget = this.passes[0]?.target;
+    if (!contexts || !timestamps || !feedbackTarget)
+      return out;
+    const main = contexts.get(null)?.id, feedback = contexts.get(feedbackTarget)?.id;
+    let mainFrame = -1, feedbackFrame = -1;
+    for (const [uid, duration] of timestamps) {
+      const parts = uid.split(":"), context3 = Number(parts[2]), id = Number(parts[3]?.slice(1));
+      if (context3 === main && id > mainFrame) {
+        mainFrame = id;
+        out.gpuMainMs = duration;
+      } else if (context3 === feedback && id > feedbackFrame) {
+        feedbackFrame = id;
+        out.gpuFeedbackMs = duration;
+      }
+    }
+    timestamps.clear();
+    const frames = pool?.getTimestampFrames?.();
+    if (frames)
+      frames.length = 0;
+    return out;
+  }
   recordFrameTime(frameTimeMs) {
     this.store.recordFrameTime(frameTimeMs);
   }
   poll() {
+    const started = performance.now();
     this.consumeCompletedSnapshot();
     this.store.poll();
+    this.vtCpuUs = (performance.now() - started) * 1000;
   }
   render(frame) {
+    this.feedbackSubmitUs = 0;
     if (this.disposed || frame.frameId % this.cadence !== 0)
       return;
+    const started = performance.now();
     if (this.awaitingPassCount !== 0) {
       this.stats.deferredSnapshots++;
       return;
@@ -73977,6 +74033,7 @@ class VirtualTextureFeedbackCoordinator {
       this.stats.submittedSnapshots++;
     if (this.discardAwaiting)
       this.stats.deferredSnapshots++;
+    this.feedbackSubmitUs = (performance.now() - started) * 1000;
   }
   consumeCompletedSnapshot() {
     if (this.awaitingPassCount === 0)
@@ -74066,6 +74123,13 @@ function actionFor(event) {
     case "p":
     case "P":
       return 11 /* PixelView */;
+    case "ShiftLeft":
+    case "ShiftRight":
+    case "Shift":
+      return 12 /* Sprint */;
+    case "Digit3":
+    case "3":
+      return 13 /* PoseThree */;
     default:
       return -1;
   }
@@ -74073,8 +74137,8 @@ function actionFor(event) {
 
 class BoundedKeyboardInput {
   target;
-  down = new Uint8Array(12 /* Count */);
-  pressed = new Uint8Array(12 /* Count */);
+  down = new Uint8Array(14 /* Count */);
+  pressed = new Uint8Array(14 /* Count */);
   onKeyDown;
   onKeyUp;
   onBlur;
@@ -74287,6 +74351,10 @@ class TextHud {
   setText(text) {
     if (this.element)
       this.element.textContent = text;
+  }
+  setVisible(visible) {
+    if (this.element)
+      this.element.style.display = visible ? "" : "none";
   }
 }
 // crates/afterglow-web/www/rigged-vt-demo.ts

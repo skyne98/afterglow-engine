@@ -23,5 +23,5 @@ export function createProceduralVirtualTextureStore(
 }
 export {
   FeedbackRegistrationStatus, VirtualTextureFeedbackCoordinator,
-  type FeedbackRenderable,
+  type FeedbackRenderable, type VirtualTextureGpuTimings,
 } from './virtual-texture-feedback-coordinator.ts';

@@ -112,7 +112,14 @@ Implemented on 2026-07-17:
 - DME-033: `lod-demo.ts` is canonical and presents one CC0 Avocado using
   offline meshopt-compressed records, fixed `LodSet` coverage selection, and
   hysteresis. Its real-GPU trajectory passes levels `0,1,2,3,2,1,0` with one
-  visible mesh and no diagnostics. Dungeon remains DME-030.
+  visible mesh and no diagnostics;
+- DME-030: Dungeon is canonical on `EngineRuntime`, `RendererHost`,
+  `BigAssetSession`, `VirtualTextureFeedbackCoordinator`, bounded input,
+  diagnostics, frame stepping, and shutdown ownership. The architecture
+  baseline is deleted and release status is `conformant`;
+- DME-043: the migration escape hatch is removed. Conformant releases accept no
+  architecture baseline file, while the lint treats its absence as an empty,
+  non-expandable baseline.
 
 The machine-readable source of truth remains `engine-conformance.json`; this
 progress note does not override its gates.

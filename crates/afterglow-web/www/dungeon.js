@@ -13,1817 +13,6 @@ var __export = (target, all) => {
     });
 };
 
-// crates/afterglow-web/www/codec.ts
-function encodeVarint(n) {
-  const b = [];
-  do {
-    let x = n & 127;
-    n = Math.floor(n / 128);
-    if (n)
-      x |= 128;
-    b.push(x);
-  } while (n);
-  return b;
-}
-function decodeVarint(bytes, off) {
-  let r = 0;
-  for (let shift = 0;shift < 56; shift += 7) {
-    if (off >= bytes.length)
-      throw new Error("postcard varint truncated");
-    const b = bytes[off++];
-    r += (b & 127) * 2 ** shift;
-    if (!(b & 128))
-      return [r, off];
-  }
-  throw new Error("postcard varint overflows");
-}
-function concat(...arrs) {
-  const out = new Uint8Array(arrs.reduce((s, a) => s + a.length, 0));
-  let o = 0;
-  for (const a of arrs) {
-    out.set(a, o);
-    o += a.length;
-  }
-  return out;
-}
-function encodeU32(n) {
-  return new Uint8Array(encodeVarint(n));
-}
-function encodeBytes(b) {
-  return concat(encodeVarint(b.length), b);
-}
-function decodeBytes(bytes, off) {
-  const [len, o] = decodeVarint(bytes, off);
-  const end = o + len;
-  if (end > bytes.length)
-    throw new Error("postcard bytes truncated");
-  return [bytes.subarray(o, end), end];
-}
-function unwrapResponse(bytes) {
-  const [variant, off] = decodeVarint(bytes, 0);
-  if (variant === 0) {
-    const [plen, poff] = decodeVarint(bytes, off);
-    if (poff + plen > bytes.length)
-      throw new Error("RPC response truncated");
-    return bytes.subarray(poff, poff + plen);
-  }
-  const [method, moff] = decodeVarint(bytes, off);
-  const [mlen, eoff] = decodeVarint(bytes, moff);
-  if (eoff + mlen > bytes.length)
-    throw new Error("RPC error truncated");
-  const msg = new TextDecoder().decode(Uint8Array.from(bytes.subarray(eoff, eoff + mlen)));
-  throw new Error(`RPC ${variant === 1 ? "server" : "decode"} error (method ${method}): ${msg}`);
-}
-
-// crates/afterglow-web/www/async-worker.ts
-class PendingFetch {
-  constructor(url) {
-    this.promise = fetch(url);
-    this.resolved = false;
-    this.bytes = null;
-    this.error = null;
-    this.promise.then(async (resp) => {
-      if (!resp.ok) {
-        this.error = new Error(`fetch ${resp.status}: ${url}`);
-      } else {
-        this.bytes = new Uint8Array(await resp.arrayBuffer());
-      }
-      this.resolved = true;
-    }).catch((e) => {
-      this.error = e;
-      this.resolved = true;
-    });
-  }
-}
-
-class HeadFetch {
-  constructor(url) {
-    this.promise = fetch(url, { method: "HEAD" });
-    this.resolved = false;
-    this.contentLength = null;
-    this.error = null;
-    this.promise.then((resp) => {
-      if (!resp.ok) {
-        this.error = new Error(`HEAD ${resp.status}: ${url}`);
-      } else {
-        const cl = resp.headers.get("Content-Length");
-        this.contentLength = cl ? parseInt(cl, 10) : null;
-      }
-      this.resolved = true;
-    }).catch((e) => {
-      this.error = e;
-      this.resolved = true;
-    });
-  }
-}
-
-class RangeFetch {
-  constructor(url, offset, len) {
-    const start = Number(offset);
-    const end = start + Number(len) - 1;
-    this.promise = fetch(url, { headers: { Range: `bytes=${start}-${end}` } });
-    this.resolved = false;
-    this.bytes = null;
-    this.error = null;
-    this.promise.then(async (resp) => {
-      if (!resp.ok && resp.status !== 206) {
-        this.error = new Error(`range fetch ${resp.status}: ${url}`);
-      } else {
-        this.bytes = new Uint8Array(await resp.arrayBuffer());
-      }
-      this.resolved = true;
-    }).catch((e) => {
-      this.error = e;
-      this.resolved = true;
-    });
-  }
-}
-
-class AsyncWorker {
-  constructor(wasm, baseUrl = "") {
-    this.w = wasm;
-    this.baseUrl = baseUrl;
-    this._memory = null;
-    this.nextFetchId = 1;
-    this._fetchCapacity = 256;
-    this._fetchIds = new Float64Array(this._fetchCapacity);
-    this._fetchIds.fill(-1);
-    this._fetches = new Array(this._fetchCapacity).fill(null);
-    this._pendingFetchCount = 0;
-    this._callCapacity = 256;
-    this._callIds = new Float64Array(this._callCapacity);
-    this._callIds.fill(-1);
-    this._callResolves = new Array(this._callCapacity).fill(null);
-    this._callRejects = new Array(this._callCapacity).fill(null);
-    this._pendingCallCount = 0;
-    this._taskIdCounter = 0;
-    this._pumpScheduled = false;
-    this._completionLimit = 32;
-    this._lastPollCompletions = 0;
-    this._totalCompletions = 0;
-    this._completionLimitHits = 0;
-  }
-  async call(method, args) {
-    const taskId = this._nextTaskId();
-    const slot = taskId % this._callCapacity;
-    if (this._callIds[slot] !== -1)
-      throw new Error("async worker: fixed task capacity exhausted");
-    return new Promise((resolve, reject) => {
-      this._callIds[slot] = taskId;
-      this._callResolves[slot] = resolve;
-      this._callRejects[slot] = reject;
-      this._pendingCallCount++;
-      if (this.serveAsync(method, args, taskId) < 0) {
-        this._releaseCallSlot(slot);
-        reject(new Error("async worker: serveAsync failed"));
-        return;
-      }
-      this._schedulePump();
-    });
-  }
-  _schedulePump() {
-    if (this._pumpScheduled || this._pendingCallCount === 0)
-      return;
-    this._pumpScheduled = true;
-    setTimeout(() => {
-      this._pumpScheduled = false;
-      if (this._pendingCallCount === 0)
-        return;
-      this.poll();
-      this._schedulePump();
-    }, 0);
-  }
-  serveAsync(method, args, taskId = this._nextTaskId()) {
-    const inPtr = this.w.afterglow_wasm_input_ptr();
-    const inSize = this.w.afterglow_wasm_input_size();
-    if (args.length + 12 > inSize) {
-      console.error("async worker: args too large for input scratch");
-      return -1;
-    }
-    const view = new DataView((this._memory || this.w.memory).buffer, inPtr, 12 + args.length);
-    view.setUint32(0, method, true);
-    view.setBigUint64(4, BigInt(taskId), true);
-    new Uint8Array((this._memory || this.w.memory).buffer, inPtr + 12, args.length).set(args);
-    const r = this.w.afterglow_wasm_serve_async(method, inPtr + 12, args.length, BigInt(taskId));
-    if (r < 0)
-      return -1;
-    return taskId;
-  }
-  poll(maxCompletions = this._completionLimit) {
-    this.w.afterglow_wasm_tick();
-    const outPtr = this.w.afterglow_wasm_output_ptr();
-    const outSize = this.w.afterglow_wasm_output_size();
-    const memory = this._memory || this.w.memory;
-    let drained = 0;
-    while (drained < maxCompletions) {
-      const n = this.w.afterglow_wasm_drain_completion(outPtr, outSize);
-      if (n < 0)
-        break;
-      if (n < 8)
-        continue;
-      const taskId = Number(new DataView(memory.buffer, outPtr, 8).getBigUint64(0, true));
-      const responseBytes = new Uint8Array(memory.buffer, outPtr + 8, n - 8).slice();
-      drained++;
-      const slot = taskId % this._callCapacity;
-      if (this._callIds[slot] === taskId) {
-        const resolve = this._callResolves[slot];
-        const reject = this._callRejects[slot];
-        this._releaseCallSlot(slot);
-        try {
-          resolve(unwrapResponse(responseBytes));
-        } catch (e) {
-          reject(e);
-        }
-      }
-    }
-    this._lastPollCompletions = drained;
-    this._totalCompletions += drained;
-    if (drained === maxCompletions)
-      this._completionLimitHits++;
-    return drained;
-  }
-  fetchStart(urlPtr, urlLen) {
-    const url = new TextDecoder().decode(Uint8Array.from(new Uint8Array((this._memory || this.w.memory).buffer, urlPtr, urlLen)));
-    const fullUrl = this._resolveUrl(url);
-    return this._registerFetch(new PendingFetch(fullUrl));
-  }
-  fetchPoll(fetchId, outPtr, outMax) {
-    const pending = this._getFetch(fetchId);
-    if (!pending)
-      return -1;
-    if (!pending.resolved)
-      return -1;
-    this._releaseFetch(fetchId);
-    if (pending.error) {
-      return 0;
-    }
-    if (pending.bytes.length > outMax)
-      return -2;
-    new Uint8Array((this._memory || this.w.memory).buffer, outPtr, outMax).set(pending.bytes);
-    return pending.bytes.length;
-  }
-  headStart(urlPtr, urlLen) {
-    const url = new TextDecoder().decode(Uint8Array.from(new Uint8Array((this._memory || this.w.memory).buffer, urlPtr, urlLen)));
-    const fullUrl = this._resolveUrl(url);
-    return this._registerFetch(new HeadFetch(fullUrl));
-  }
-  headPoll(fetchId, outPtr, outMax) {
-    const pending = this._getFetch(fetchId);
-    if (!pending)
-      return -2;
-    if (!pending.resolved)
-      return -1;
-    this._releaseFetch(fetchId);
-    if (pending.error || pending.contentLength === null || outMax < 8)
-      return -2;
-    new DataView((this._memory || this.w.memory).buffer, outPtr, 8).setBigUint64(0, BigInt(pending.contentLength), true);
-    return 8;
-  }
-  rangeStart(urlPtr, urlLen, offset, len) {
-    const url = new TextDecoder().decode(Uint8Array.from(new Uint8Array((this._memory || this.w.memory).buffer, urlPtr, urlLen)));
-    const fullUrl = this._resolveUrl(url);
-    return this._registerFetch(new RangeFetch(fullUrl, offset, len));
-  }
-  _registerFetch(fetch2) {
-    for (let probe = 0;probe < this._fetchCapacity; probe++) {
-      const id = this.nextFetchId++;
-      const slot = id % this._fetchCapacity;
-      if (this._fetchIds[slot] !== -1)
-        continue;
-      this._fetchIds[slot] = id;
-      this._fetches[slot] = fetch2;
-      this._pendingFetchCount++;
-      return id;
-    }
-    return 0;
-  }
-  _getFetch(id) {
-    const slot = id % this._fetchCapacity;
-    return this._fetchIds[slot] === id ? this._fetches[slot] : null;
-  }
-  _releaseFetch(id) {
-    const slot = id % this._fetchCapacity;
-    if (this._fetchIds[slot] !== id)
-      return;
-    this._fetchIds[slot] = -1;
-    this._fetches[slot] = null;
-    this._pendingFetchCount--;
-  }
-  _releaseCallSlot(slot) {
-    this._callIds[slot] = -1;
-    this._callResolves[slot] = null;
-    this._callRejects[slot] = null;
-    this._pendingCallCount--;
-  }
-  _nextTaskId() {
-    return ++this._taskIdCounter;
-  }
-  _resolveUrl(path) {
-    if (!this.baseUrl)
-      return path;
-    const p = path.startsWith("/") ? path.slice(1) : path;
-    const sep = this.baseUrl.endsWith("/") ? "" : "/";
-    return `${this.baseUrl}${sep}${p}`;
-  }
-}
-function asyncWorkerImports(driver, memory) {
-  driver._memory = memory;
-  return {
-    env: {
-      memory,
-      notify_worker: () => {},
-      performance_now: () => performance.now(),
-      ag_fetch_start: (urlPtr, urlLen) => driver.fetchStart(urlPtr, urlLen),
-      ag_fetch_poll: (fetchId, outPtr, outMax) => driver.fetchPoll(fetchId, outPtr, outMax),
-      ag_fetch_head_start: (urlPtr, urlLen) => driver.headStart(urlPtr, urlLen),
-      ag_fetch_head_poll: (fetchId, outPtr, outMax) => driver.headPoll(fetchId, outPtr, outMax),
-      ag_fetch_range_start: (urlPtr, urlLen, offset, len) => driver.rangeStart(urlPtr, urlLen, offset, len)
-    }
-  };
-}
-
-// crates/afterglow-web/www/texture.client.ts
-class TextureClient {
-  rpc;
-  static async spawn(workerWasmUrl = "texture.wasm", baseUrl = "") {
-    const driver = new AsyncWorker(null, baseUrl);
-    const memory = new WebAssembly.Memory({ shared: true, initial: 256, maximum: 1024 });
-    const { instance } = await WebAssembly.instantiate(await (await fetch(workerWasmUrl)).arrayBuffer(), asyncWorkerImports(driver, memory));
-    driver.w = instance.exports;
-    instance.exports.afterglow_wasm_init();
-    return new TextureClient(driver);
-  }
-  poll() {
-    this.rpc.poll();
-  }
-  constructor(rpc) {
-    this.rpc = rpc;
-  }
-  async transcode(data, targetFormat) {
-    const args = concat(encodeBytes(data), encodeU32(targetFormat));
-    const resp = await this.rpc.call(0, args);
-    return decodeBytes(resp, 0)[0];
-  }
-  async generateMips(data, width, height) {
-    const args = concat(encodeBytes(data), encodeU32(width), encodeU32(height));
-    const resp = await this.rpc.call(1, args);
-    return decodeBytes(resp, 0)[0];
-  }
-  async downscale(data, width, height, targetWidth, targetHeight) {
-    const args = concat(encodeBytes(data), encodeU32(width), encodeU32(height), encodeU32(targetWidth), encodeU32(targetHeight));
-    const resp = await this.rpc.call(2, args);
-    return decodeBytes(resp, 0)[0];
-  }
-}
-
-// crates/afterglow-web/www/rpc.ts
-var TIMEOUT_MS = 5000;
-function decodeVarint2(bytes, off) {
-  let r = 0;
-  for (let shift = 0;shift < 35; shift += 7) {
-    if (off >= bytes.length)
-      throw new Error("postcard varint truncated");
-    const b = bytes[off++];
-    if (shift === 28 && b & 240)
-      throw new Error("postcard varint overflows u32");
-    r += (b & 127) * 2 ** shift;
-    if (!(b & 128))
-      return [r >>> 0, off];
-  }
-  throw new Error("postcard varint overflows u32");
-}
-function unwrapResponse2(bytes) {
-  const [variant, off] = decodeVarint2(bytes, 0);
-  if (variant === 0) {
-    const [plen, poff] = decodeVarint2(bytes, off);
-    if (poff + plen > bytes.length)
-      throw new Error("RPC response truncated");
-    return bytes.subarray(poff, poff + plen);
-  }
-  const [method, moff] = decodeVarint2(bytes, off);
-  const [mlen, eoff] = decodeVarint2(bytes, moff);
-  if (eoff + mlen > bytes.length)
-    throw new Error("RPC error truncated");
-  const msg = new TextDecoder().decode(bytes.subarray(eoff, eoff + mlen));
-  throw new Error(`RPC ${variant === 1 ? "server" : "decode"} error (method ${method}): ${msg}`);
-}
-
-class Rpc {
-  static async create({ mainWasmUrl, workerJsUrl, workerWasmUrl, timeoutMs }) {
-    const memory = new WebAssembly.Memory({ shared: true, initial: 256, maximum: 1024 });
-    const worker = new Worker(workerJsUrl, { type: "module" });
-    let rpc = null;
-    try {
-      const { exports: wasm } = await WebAssembly.instantiate(await WebAssembly.compile(await (await fetch(mainWasmUrl)).arrayBuffer()), { env: { memory, notify_worker: () => worker.postMessage("wake") } });
-      wasm.init_ring_buffers();
-      rpc = new Rpc(wasm, memory, worker, { timeoutMs });
-      worker.postMessage({
-        type: "init",
-        sab: memory.buffer,
-        reqBase: wasm.get_request_ptr(),
-        respBase: wasm.get_response_ptr(),
-        bufSize: wasm.get_buffer_size(),
-        wasmUrl: workerWasmUrl
-      });
-      await rpc._initPromise;
-      worker.postMessage({ type: "run" });
-      return rpc;
-    } catch (e) {
-      if (rpc)
-        rpc.terminate();
-      else
-        worker.terminate();
-      throw e;
-    }
-  }
-  constructor(wasm, memory, worker, opts = {}) {
-    this.w = wasm;
-    this.mem = memory;
-    this.worker = worker;
-    this.scratch = wasm.get_scratch_ptr();
-    this.scratchLen = wasm.get_scratch_size();
-    this.pending = null;
-    this._resolve = null;
-    this._reject = null;
-    this._fatal = null;
-    this._terminated = false;
-    this.timeoutMs = opts.timeoutMs ?? TIMEOUT_MS;
-    this._initPromise = new Promise((res, rej) => {
-      this._resolve = res;
-      this._reject = rej;
-    });
-    this._initTimer = setTimeout(() => this._fail(new Error("worker init timeout")), this.timeoutMs);
-    worker.onmessage = (e) => this._onmsg(e.data);
-    worker.onerror = (e) => this._fail(new Error("worker: " + (e && e.message || e)));
-  }
-  _onmsg(d) {
-    if (this._fatal)
-      return;
-    if (d && d.type === "ready") {
-      clearTimeout(this._initTimer);
-      const r = this._resolve;
-      this._resolve = this._reject = null;
-      if (r)
-        r();
-      return;
-    }
-    if (d && d.type === "error") {
-      this._fail(this._reject ? new Error("worker init: " + (d.message || "error")) : new Error(d.message || "worker error"));
-      return;
-    }
-    if (this.pending)
-      this._readResponse();
-  }
-  async call(method, args) {
-    if (this._fatal)
-      throw this._fatal;
-    if (this.pending)
-      throw new Error("RPC busy: one in-flight call at a time");
-    const len = 4 + args.length;
-    if (len > this.scratchLen)
-      throw new Error("request too large for scratch");
-    const view = new Uint8Array(this.mem.buffer, this.scratch, len);
-    view[0] = method & 255;
-    view[1] = method >>> 8 & 255;
-    view[2] = method >>> 16 & 255;
-    view[3] = method >>> 24 & 255;
-    view.set(args, 4);
-    if (this.w.write_frame(this.scratch, len) !== 0)
-      throw new Error("write_frame failed (ring full)");
-    return new Promise((resolve, reject) => {
-      this.pending = { resolve, reject };
-      this.pending.timer = setTimeout(() => this._fail(new Error("RPC timeout")), this.timeoutMs);
-    });
-  }
-  _readResponse() {
-    const n = this.w.read_response(this.scratch, this.scratchLen);
-    const p = this.pending;
-    this.pending = null;
-    if (p)
-      clearTimeout(p.timer);
-    if (!p)
-      return;
-    if (n < 0) {
-      p.reject(new Error("read_response returned " + n));
-      return;
-    }
-    try {
-      p.resolve(unwrapResponse2(new Uint8Array(this.mem.buffer, this.scratch, n)));
-    } catch (e) {
-      p.reject(e);
-    }
-  }
-  _fail(err) {
-    if (this._fatal)
-      return;
-    this._fatal = err;
-    clearTimeout(this._initTimer);
-    if (this._reject) {
-      const r = this._reject;
-      this._resolve = this._reject = null;
-      r(err);
-    }
-    if (this.pending) {
-      const p = this.pending;
-      this.pending = null;
-      clearTimeout(p.timer);
-      p.reject(err);
-    }
-  }
-  terminate() {
-    this._fail(new Error("terminated"));
-    if (!this._terminated) {
-      this._terminated = true;
-      this.worker.terminate();
-    }
-  }
-}
-
-// crates/afterglow-web/www/engine/big-parser.ts
-function decodeVarint3(bytes, off) {
-  let r = 0;
-  for (let shift = 0;shift < 56; shift += 7) {
-    if (off >= bytes.length)
-      throw new Error("postcard varint truncated");
-    const b = bytes[off++];
-    r += (b & 127) * 2 ** shift;
-    if (!(b & 128))
-      return [r, off];
-  }
-  throw new Error("postcard varint overflows");
-}
-function decodeU32(bytes, off) {
-  return decodeVarint3(bytes, off);
-}
-function decodeU64(bytes, off) {
-  let result = 0n;
-  for (let shift = 0n;shift < 70n; shift += 7n) {
-    if (off >= bytes.length)
-      throw new Error("postcard u64 varint truncated");
-    const byte = bytes[off++];
-    result |= BigInt(byte & 127) << shift;
-    if (!(byte & 128)) {
-      if (result > 0xffff_ffff_ffff_ffffn)
-        throw new Error("postcard u64 varint overflows");
-      return [result, off];
-    }
-  }
-  throw new Error("postcard u64 varint overflows");
-}
-function decodeString(bytes, off) {
-  const [len, o] = decodeVarint3(bytes, off);
-  const str = new TextDecoder().decode(bytes.subarray(o, o + len));
-  return [str, o + len];
-}
-function decodeVec(bytes, off, decodeFn) {
-  const [len, o] = decodeVarint3(bytes, off);
-  const result = [];
-  let pos = o;
-  for (let i = 0;i < len; i++) {
-    const [item, newOff] = decodeFn(bytes, pos);
-    result.push(item);
-    pos = newOff;
-  }
-  return [result, pos];
-}
-function decodeBool(bytes, off) {
-  return [bytes[off] !== 0, off + 1];
-}
-function decodeU8(bytes, off) {
-  return [bytes[off], off + 1];
-}
-function decodeAssetType(bytes, off) {
-  const [variant, o] = decodeU32(bytes, off);
-  switch (variant) {
-    case 0:
-      return ["Texture", o];
-    case 1:
-      return ["Mesh", o];
-    case 2:
-      return ["VirtualTexture", o];
-    default:
-      throw new Error(`unknown AssetType variant: ${variant}`);
-  }
-}
-function decodeCompression(bytes, off) {
-  const [variant, o] = decodeU32(bytes, off);
-  switch (variant) {
-    case 0:
-      return ["Meshopt", o];
-    case 1:
-      return ["None", o];
-    default:
-      throw new Error(`unknown Compression variant: ${variant}`);
-  }
-}
-function decodeTextureEncoding(bytes, off) {
-  const [variant, next] = decodeU32(bytes, off);
-  if (variant === 0)
-    return ["RawRgba8", next];
-  if (variant === 1)
-    return ["Basis", next];
-  throw new Error(`unknown TextureEncoding variant: ${variant}`);
-}
-function decodeChunkMeta(bytes, off) {
-  const [variant, o] = decodeU32(bytes, off);
-  switch (variant) {
-    case 0: {
-      const [w, o2] = decodeU32(bytes, o);
-      const [h, o3] = decodeU32(bytes, o2);
-      return [{ type: "Texture", width: w, height: h }, o3];
-    }
-    case 1: {
-      const [ic, o2] = decodeU32(bytes, o);
-      const [vc, o3] = decodeU32(bytes, o2);
-      const [ps, o4] = decodeU32(bytes, o3);
-      const [us, o5] = decodeU32(bytes, o4);
-      return [{ type: "Mesh", indexCount: ic, vertexCount: vc, positionStride: ps, uvStride: us }, o5];
-    }
-    case 2:
-      return [{ type: "Raw" }, o];
-    default:
-      throw new Error(`unknown ChunkMeta variant: ${variant}`);
-  }
-}
-function decodeChunkInfo(bytes, off) {
-  const [offset, o1] = decodeU64(bytes, off);
-  const [compressedSize, o2] = decodeU64(bytes, o1);
-  const [uncompressedSize, o3] = decodeU64(bytes, o2);
-  const [lodLevel, o4] = decodeU8(bytes, o3);
-  const [mipLevel, o5] = decodeU8(bytes, o4);
-  const [compression, o6] = decodeCompression(bytes, o5);
-  const [meta, o7] = decodeChunkMeta(bytes, o6);
-  return [{
-    offset,
-    compressedSize,
-    uncompressedSize,
-    lodLevel,
-    mipLevel,
-    compression,
-    meta
-  }, o7];
-}
-function decodeVTMipDirectory(bytes, off) {
-  const [mip, o1] = decodeU8(bytes, off);
-  const [pagesX, o2] = decodeU32(bytes, o1);
-  const [pagesY, o3] = decodeU32(bytes, o2);
-  const [offset, o4] = decodeU64(bytes, o3);
-  const [pageSizes, o5] = decodeVec(bytes, o4, decodeU32);
-  return [{ mip, pagesX, pagesY, offset, pageSizes }, o5];
-}
-function decodeVTTailDirectory(bytes, off) {
-  const [firstMip, o1] = decodeU8(bytes, off);
-  const [offset, o2] = decodeU64(bytes, o1);
-  const [size, o3] = decodeU32(bytes, o2);
-  return [{ firstMip, offset, size }, o3];
-}
-function decodeVTDirectory(bytes, off) {
-  const [width, o1] = decodeU32(bytes, off);
-  const [height, o2] = decodeU32(bytes, o1);
-  const [encoding, o3] = decodeTextureEncoding(bytes, o2);
-  const [mips, o4] = decodeVec(bytes, o3, decodeVTMipDirectory);
-  const [hasTail, o5] = decodeBool(bytes, o4);
-  if (!hasTail)
-    return [{ width, height, encoding, mips, tail: null }, o5];
-  const [tail, o6] = decodeVTTailDirectory(bytes, o5);
-  return [{ width, height, encoding, mips, tail }, o6];
-}
-function decodeAssetEntry(bytes, off) {
-  const [name, o1] = decodeString(bytes, off);
-  const [assetType, o2] = decodeAssetType(bytes, o1);
-  const [chunks, o3] = decodeVec(bytes, o2, decodeChunkInfo);
-  const [hasVirtualTexture, o4] = decodeBool(bytes, o3);
-  if (!hasVirtualTexture)
-    return [{ name, assetType, chunks, virtualTexture: null }, o4];
-  const [virtualTexture, o5] = decodeVTDirectory(bytes, o4);
-  return [{ name, assetType, chunks, virtualTexture }, o5];
-}
-var BIG_MAGIC = 826755394;
-var BIG_VERSION = 5;
-function parseBigHeader(data) {
-  if (data.length < 16)
-    throw new Error(".big: file too small");
-  const magic = new DataView(data.buffer, data.byteOffset, 4).getUint32(0, true);
-  if (magic !== BIG_MAGIC)
-    throw new Error(".big: bad magic");
-  const version = new DataView(data.buffer, data.byteOffset + 4, 4).getUint32(0, true);
-  if (version !== BIG_VERSION)
-    throw new Error(`.big: version ${version} != ${BIG_VERSION}`);
-  const dataOffset = Number(new DataView(data.buffer, data.byteOffset + 8, 8).getBigUint64(0, true));
-  const headerBytes = data.subarray(16, dataOffset);
-  let off = 0;
-  const [hdrVersion, o1] = decodeU32(headerBytes, off);
-  off = o1;
-  const [hdrDataOffset, o2] = decodeU64(headerBytes, off);
-  off = o2;
-  const [assets, o3] = decodeVec(headerBytes, off, decodeAssetEntry);
-  off = o3;
-  return {
-    header: { version: hdrVersion, dataOffset: hdrDataOffset, assets },
-    dataOffset
-  };
-}
-function getVirtualTextureDimensions(header, assetName) {
-  const directory = header.assets.find((asset) => asset.name === assetName)?.virtualTexture;
-  if (!directory)
-    throw new Error(`VT dimensions unavailable: ${assetName}`);
-  return { width: directory.width, height: directory.height };
-}
-class BoundedTranscoderPool {
-  workers;
-  jobs;
-  workerBusy;
-  head = 0;
-  tail = 0;
-  count = 0;
-  active = 0;
-  completed = 0;
-  totalQueueMs = 0;
-  maxQueueMs = 0;
-  totalTranscodeMs = 0;
-  maxTranscodeMs = 0;
-  stats = {
-    workerCount: 0,
-    active: 0,
-    queued: 0,
-    completed: 0,
-    averageQueueMs: 0,
-    maxQueueMs: 0,
-    averageTranscodeMs: 0,
-    maxTranscodeMs: 0
-  };
-  constructor(workers, capacity) {
-    this.workers = workers;
-    if (workers.length === 0 || !Number.isInteger(capacity) || capacity < 1)
-      throw new RangeError("VT transcoder pool requires workers and positive capacity");
-    this.jobs = new Array(capacity).fill(null);
-    this.workerBusy = new Uint8Array(workers.length);
-  }
-  submit(data, format, signal) {
-    if (this.count === this.jobs.length)
-      return Promise.reject(new Error("VT transcode queue capacity exceeded"));
-    return new Promise((resolve, reject) => {
-      this.jobs[this.tail] = { data, format, signal, queuedAt: performance.now(), resolve, reject };
-      this.tail = (this.tail + 1) % this.jobs.length;
-      this.count++;
-      this.pump();
-    });
-  }
-  pump() {
-    for (let workerIndex = 0;workerIndex < this.workers.length && this.count !== 0; workerIndex++) {
-      if (this.workerBusy[workerIndex] !== 0)
-        continue;
-      const job = this.jobs[this.head];
-      this.jobs[this.head] = null;
-      this.head = (this.head + 1) % this.jobs.length;
-      this.count--;
-      if (job.signal?.aborted) {
-        job.reject(new Error("VT transcode canceled before dispatch"));
-        workerIndex--;
-        continue;
-      }
-      const queueMs = performance.now() - job.queuedAt;
-      this.totalQueueMs += queueMs;
-      this.maxQueueMs = Math.max(this.maxQueueMs, queueMs);
-      this.workerBusy[workerIndex] = 1;
-      this.active++;
-      this.run(workerIndex, job);
-    }
-  }
-  async run(workerIndex, job) {
-    const startedAt = performance.now();
-    try {
-      const result = await this.workers[workerIndex].transcode(job.data, job.format);
-      if (job.signal?.aborted)
-        job.reject(new Error("VT transcode canceled after dispatch"));
-      else
-        job.resolve(result.slice());
-    } catch (error) {
-      job.reject(error);
-    } finally {
-      const elapsed = performance.now() - startedAt;
-      this.completed++;
-      this.totalTranscodeMs += elapsed;
-      this.maxTranscodeMs = Math.max(this.maxTranscodeMs, elapsed);
-      this.workerBusy[workerIndex] = 0;
-      this.active--;
-      this.pump();
-    }
-  }
-  getStats() {
-    const stats = this.stats;
-    stats.workerCount = this.workers.length;
-    stats.active = this.active;
-    stats.queued = this.count;
-    stats.completed = this.completed;
-    stats.averageQueueMs = this.completed === 0 ? 0 : this.totalQueueMs / this.completed;
-    stats.maxQueueMs = this.maxQueueMs;
-    stats.averageTranscodeMs = this.completed === 0 ? 0 : this.totalTranscodeMs / this.completed;
-    stats.maxTranscodeMs = this.maxTranscodeMs;
-    return stats;
-  }
-}
-function createFetchRangeLoader(baseUrl = "") {
-  const url = (path) => baseUrl + path;
-  const identity = async (path) => {
-    const response = await fetch(url(path), { headers: { Range: "bytes=0-0" } });
-    if (response.status !== 206)
-      throw new Error(`asset identity range expected 206, got ${response.status}: ${path}`);
-    const contentRange = response.headers.get("content-range") ?? "";
-    const separator = contentRange.lastIndexOf("/");
-    const size = Number(separator < 0 ? "" : contentRange.slice(separator + 1));
-    if (!Number.isSafeInteger(size) || size < 1)
-      throw new Error(`asset identity has invalid content-range: ${path}`);
-    return {
-      size,
-      etag: response.headers.get("etag"),
-      lastModified: response.headers.get("last-modified")
-    };
-  };
-  return {
-    async load(path) {
-      const response = await fetch(url(path));
-      if (!response.ok)
-        throw new Error(`asset fetch ${response.status}: ${path}`);
-      return new Uint8Array(await response.arrayBuffer());
-    },
-    async size(path) {
-      return (await identity(path)).size;
-    },
-    identity,
-    async read(path, offset, len) {
-      if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(len) || len < 0)
-        throw new RangeError("asset range must use non-negative safe integers");
-      if (len === 0)
-        return new Uint8Array(0);
-      const response = await fetch(url(path), {
-        headers: { Range: `bytes=${offset}-${offset + len - 1}` }
-      });
-      if (response.status !== 206)
-        throw new Error(`asset range fetch expected 206, got ${response.status}: ${path}`);
-      const bytes = new Uint8Array(await response.arrayBuffer());
-      if (bytes.byteLength !== len)
-        throw new Error(`asset range returned ${bytes.byteLength} bytes; expected ${len}: ${path}`);
-      return bytes;
-    }
-  };
-}
-
-class BigContainerAssetLoader {
-  source;
-  containerPath;
-  assets = new Map;
-  constructor(source, containerPath, header) {
-    this.source = source;
-    this.containerPath = containerPath;
-    for (const asset of header.assets) {
-      if (asset.chunks.length !== 1 || asset.chunks[0].meta.type !== "Raw")
-        continue;
-      const chunk = asset.chunks[0];
-      if (chunk.compression !== "None" || chunk.compressedSize !== chunk.uncompressedSize)
-        throw new Error(`raw BIG asset must be uncompressed: ${asset.name}`);
-      if (chunk.uncompressedSize > BigInt(Number.MAX_SAFE_INTEGER))
-        throw new RangeError(`raw BIG asset exceeds browser safe size: ${asset.name}`);
-      this.assets.set(asset.name, chunk);
-    }
-  }
-  chunk(path) {
-    const chunk = this.assets.get(path);
-    if (!chunk)
-      throw new Error(`raw BIG asset not found: ${path}`);
-    return chunk;
-  }
-  load(path) {
-    const chunk = this.chunk(path);
-    return this.source.read(this.containerPath, Number(chunk.offset), Number(chunk.uncompressedSize));
-  }
-  async size(path) {
-    return Number(this.chunk(path).uncompressedSize);
-  }
-  read(path, offset, length) {
-    const chunk = this.chunk(path);
-    const size = Number(chunk.uncompressedSize);
-    if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length < 0 || offset + length > size)
-      throw new RangeError(`raw BIG asset range exceeds ${path}: ${offset}+${length} > ${size}`);
-    return this.source.read(this.containerPath, Number(chunk.offset) + offset, length);
-  }
-  poll() {}
-}
-function createPageDataProvider(loader, header, textureWorkers, format, cache, transcodeQueueCapacity = 64) {
-  const directories = new Map;
-  for (let assetId = 0;assetId < header.assets.length; assetId++) {
-    const asset = header.assets[assetId];
-    const source = asset.virtualTexture;
-    if (!source)
-      continue;
-    let maxMip = 0;
-    for (const mip of source.mips)
-      maxMip = Math.max(maxMip, mip.mip);
-    const mips = new Array(maxMip + 1).fill(null);
-    for (const mip of source.mips) {
-      const sizes = Uint32Array.from(mip.pageSizes);
-      const offsets = new Float64Array(sizes.length);
-      let offset = Number(mip.offset);
-      for (let page = 0;page < sizes.length; page++) {
-        offsets[page] = offset;
-        offset += sizes[page];
-      }
-      mips[mip.mip] = { pagesX: mip.pagesX, pagesY: mip.pagesY, offsets, sizes };
-    }
-    directories.set(asset.name, {
-      assetId,
-      encoding: source.encoding,
-      mips,
-      tailOffset: source.tail ? Number(source.tail.offset) : 0,
-      tailSize: source.tail?.size ?? 0
-    });
-  }
-  const transcoder = new BoundedTranscoderPool(textureWorkers, transcodeQueueCapacity);
-  let reads = 0;
-  let totalReadMs = 0;
-  let maxReadMs = 0;
-  const stats = {
-    reads: 0,
-    averageReadMs: 0,
-    maxReadMs: 0,
-    workerCount: textureWorkers.length,
-    activeTranscodes: 0,
-    queuedTranscodes: 0,
-    completedTranscodes: 0,
-    averageTranscodeQueueMs: 0,
-    maxTranscodeQueueMs: 0,
-    averageTranscodeMs: 0,
-    maxTranscodeMs: 0,
-    cacheEnabled: cache !== undefined,
-    cacheBackend: "",
-    cacheEntries: 0,
-    cacheBytes: 0,
-    cacheLiveBytes: 0,
-    cacheQueuedWrites: 0,
-    cacheEvictions: 0,
-    cacheCompactions: 0,
-    cacheReclaimedBytes: 0,
-    cacheMaintenance: false,
-    cacheHits: 0,
-    cacheMisses: 0,
-    cacheWrites: 0,
-    cacheRejected: 0,
-    cacheErrors: 0,
-    averageCacheReadMs: 0,
-    maxCacheReadMs: 0,
-    averageCacheWriteMs: 0,
-    maxCacheWriteMs: 0
-  };
-  const provider = async (path, req, signal) => {
-    if (signal?.aborted)
-      throw new Error("VT page load canceled before read");
-    const directory = directories.get(path);
-    let offset = 0;
-    let size = 0;
-    if (req.tail) {
-      offset = directory?.tailOffset ?? 0;
-      size = directory?.tailSize ?? 0;
-    } else {
-      const mip = directory?.mips[req.mip];
-      if (mip && req.x >= 0 && req.y >= 0 && req.x < mip.pagesX && req.y < mip.pagesY) {
-        const page = req.y * mip.pagesX + req.x;
-        offset = mip.offsets[page];
-        size = mip.sizes[page];
-      }
-    }
-    if (!directory || size === 0)
-      throw new Error(`VT page not found: ${path} mip=${req.mip} (${req.x},${req.y})`);
-    const cacheKey = `${directory.assetId}:${req.tail ? "t" : req.mip}:${req.x}:${req.y}`;
-    const expectedBytes = format === 4 ? 136 * 136 * 4 : 34 * 34 * 16;
-    if (cache) {
-      const cached = await cache.get(cacheKey);
-      if (signal?.aborted)
-        throw new Error("VT page load canceled after cache read");
-      if (cached && cached.byteLength === expectedBytes)
-        return cached;
-    }
-    const readStartedAt = performance.now();
-    const pageData = await loader.read(path + ".big", offset, size);
-    const readMs = performance.now() - readStartedAt;
-    reads++;
-    totalReadMs += readMs;
-    maxReadMs = Math.max(maxReadMs, readMs);
-    if (signal?.aborted)
-      throw new Error("VT page load canceled after read");
-    if (directory.encoding === "RawRgba8") {
-      if (format !== 4) {
-        throw new Error(`VT page ${path} is raw RGBA8 but GPU format ${format} requires Basis encoding`);
-      }
-      if (cache)
-        cache.put(cacheKey, pageData);
-      return pageData;
-    }
-    if (pageData.byteLength < 2 || pageData[0] !== 115 || pageData[1] !== 66)
-      throw new Error(`invalid Basis page range for ${path}: bytes=${pageData.byteLength}, magic=${pageData[0]},${pageData[1]}`);
-    const transcoded = await transcoder.submit(pageData, format, signal);
-    if (signal?.aborted)
-      throw new Error("VT page load canceled after transcode");
-    if (transcoded.byteLength < 16)
-      throw new Error("truncated transcoded VT page");
-    const view = new DataView(transcoded.buffer, transcoded.byteOffset, transcoded.byteLength);
-    const count = view.getUint32(0, true);
-    const width = view.getUint32(4, true);
-    const height = view.getUint32(8, true);
-    const length = view.getUint32(12, true);
-    if (count < 1 || width !== 136 || height !== 136 || 16 + length > transcoded.byteLength)
-      throw new Error(`invalid transcoded VT page header: count=${count}, size=${width}x${height}, bytes=${length}`);
-    const payload = transcoded.slice(16, 16 + length);
-    if (cache)
-      cache.put(cacheKey, payload);
-    return payload;
-  };
-  provider.getStats = () => {
-    const transcode = transcoder.getStats();
-    stats.reads = reads;
-    stats.averageReadMs = reads === 0 ? 0 : totalReadMs / reads;
-    stats.maxReadMs = maxReadMs;
-    stats.workerCount = transcode.workerCount;
-    stats.activeTranscodes = transcode.active;
-    stats.queuedTranscodes = transcode.queued;
-    stats.completedTranscodes = transcode.completed;
-    stats.averageTranscodeQueueMs = transcode.averageQueueMs;
-    stats.maxTranscodeQueueMs = transcode.maxQueueMs;
-    stats.averageTranscodeMs = transcode.averageTranscodeMs;
-    stats.maxTranscodeMs = transcode.maxTranscodeMs;
-    const persistent = cache?.getStats();
-    if (persistent) {
-      stats.cacheBackend = persistent.backend;
-      stats.cacheEntries = persistent.entries;
-      stats.cacheBytes = persistent.bytes;
-      stats.cacheLiveBytes = persistent.liveBytes;
-      stats.cacheQueuedWrites = persistent.queuedWrites;
-      stats.cacheEvictions = persistent.evictions;
-      stats.cacheCompactions = persistent.compactions;
-      stats.cacheReclaimedBytes = persistent.reclaimedBytes;
-      stats.cacheMaintenance = persistent.maintenance;
-      stats.cacheHits = persistent.hits;
-      stats.cacheMisses = persistent.misses;
-      stats.cacheWrites = persistent.writes;
-      stats.cacheRejected = persistent.rejectedCapacity + persistent.rejectedQueue;
-      stats.cacheErrors = persistent.corruptEntries + persistent.readErrors + persistent.writeErrors;
-      stats.averageCacheReadMs = persistent.averageReadMs;
-      stats.maxCacheReadMs = persistent.maxReadMs;
-      stats.averageCacheWriteMs = persistent.averageWriteMs;
-      stats.maxCacheWriteMs = persistent.maxWriteMs;
-    }
-    return stats;
-  };
-  return provider;
-}
-
-// crates/afterglow-web/www/engine/persistent-blob-cache.ts
-var INDEX_MAGIC = 1128417089;
-var MANIFEST_MAGIC = 1296189249;
-var INDEX_VERSION = 2;
-var INDEX_HEADER_BYTES = 16;
-var HASH_WORDS = 8;
-var INDEX_RECORD_BYTES = 48;
-var EMPTY = 0;
-var OCCUPIED = 1;
-var TOMBSTONE = 2;
-function checksum(bytes) {
-  let value = 2166136261;
-  for (let index = 0;index < bytes.length; index++) {
-    value ^= bytes[index];
-    value = Math.imul(value, 16777619);
-  }
-  return value >>> 0;
-}
-async function hashKey(key) {
-  const encoded = new TextEncoder().encode(key);
-  const digest = await crypto.subtle.digest("SHA-256", encoded);
-  return new Uint32Array(digest);
-}
-async function persistentCacheNamespace(parts) {
-  let value = "";
-  for (const part of parts)
-    value += `${part.length}:${part};`;
-  const words = await hashKey(value);
-  let output = "";
-  for (let index = 0;index < words.length; index++)
-    output += words[index].toString(16).padStart(8, "0");
-  return output;
-}
-
-class OpfsBlobBackend {
-  directory;
-  kind = "opfs";
-  constructor(directory) {
-    this.directory = directory;
-  }
-  static async open(namespace) {
-    const storage = navigator.storage;
-    if (!storage?.getDirectory)
-      throw new Error("OPFS is unavailable");
-    const root = await storage.getDirectory();
-    const cacheRoot = await root.getDirectoryHandle("afterglow-cache", { create: true });
-    const directory = await cacheRoot.getDirectoryHandle(namespace, { create: true });
-    return new OpfsBlobBackend(directory);
-  }
-  async file(name) {
-    return this.directory.getFileHandle(name, { create: true });
-  }
-  async size(name) {
-    return (await (await this.file(name)).getFile()).size;
-  }
-  async read(name, offset, length) {
-    const file = await (await this.file(name)).getFile();
-    return new Uint8Array(await file.slice(offset, offset + length).arrayBuffer());
-  }
-  async append(name, data) {
-    const handle = await this.file(name);
-    const size = (await handle.getFile()).size;
-    const writable = await handle.createWritable({ keepExistingData: true });
-    try {
-      await writable.seek(size);
-      await writable.write(data);
-    } finally {
-      await writable.close();
-    }
-  }
-  async replace(name, data) {
-    const writable = await (await this.file(name)).createWritable();
-    try {
-      await writable.write(data);
-    } finally {
-      await writable.close();
-    }
-  }
-}
-function idbRequest(request) {
-  return new Promise((resolve, reject) => {
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error ?? new Error("IndexedDB request failed"));
-  });
-}
-function idbTransaction(transaction) {
-  return new Promise((resolve, reject) => {
-    transaction.oncomplete = () => resolve();
-    transaction.onabort = () => reject(transaction.error ?? new Error("IndexedDB transaction aborted"));
-    transaction.onerror = () => reject(transaction.error ?? new Error("IndexedDB transaction failed"));
-  });
-}
-
-class IndexedDbBlobBackend {
-  database;
-  kind = "indexeddb";
-  constructor(database) {
-    this.database = database;
-  }
-  static async open(namespace) {
-    if (!globalThis.indexedDB)
-      throw new Error("IndexedDB is unavailable");
-    const request = indexedDB.open(`afterglow-cache-${namespace}`, 1);
-    request.onupgradeneeded = () => {
-      const database = request.result;
-      if (!database.objectStoreNames.contains("chunks"))
-        database.createObjectStore("chunks", { keyPath: ["file", "offset"] });
-      if (!database.objectStoreNames.contains("meta"))
-        database.createObjectStore("meta", { keyPath: "file" });
-    };
-    return new IndexedDbBlobBackend(await idbRequest(request));
-  }
-  async size(name) {
-    const transaction = this.database.transaction("meta", "readonly");
-    const result = await idbRequest(transaction.objectStore("meta").get(name));
-    return result?.size ?? 0;
-  }
-  async predecessor(name, offset) {
-    const transaction = this.database.transaction("chunks", "readonly");
-    const range = IDBKeyRange.bound([name, 0], [name, offset]);
-    const cursor = await idbRequest(transaction.objectStore("chunks").openCursor(range, "prev"));
-    return cursor ? cursor.value : null;
-  }
-  async read(name, offset, length) {
-    if (length === 0)
-      return new Uint8Array(0);
-    const exactTransaction = this.database.transaction("chunks", "readonly");
-    const exact = await idbRequest(exactTransaction.objectStore("chunks").get([name, offset]));
-    if (exact && exact.data.byteLength === length)
-      return exact.data;
-    const predecessor = await this.predecessor(name, offset);
-    const firstOffset = predecessor && predecessor.offset + predecessor.data.byteLength > offset ? predecessor.offset : offset;
-    const output = new Uint8Array(length);
-    const end = offset + length;
-    const transaction = this.database.transaction("chunks", "readonly");
-    const store = transaction.objectStore("chunks");
-    const range = IDBKeyRange.bound([name, firstOffset], [name, end - 1]);
-    await new Promise((resolve, reject) => {
-      const request = store.openCursor(range);
-      request.onerror = () => reject(request.error ?? new Error("IndexedDB cursor failed"));
-      request.onsuccess = () => {
-        const cursor = request.result;
-        if (!cursor) {
-          resolve();
-          return;
-        }
-        const chunk = cursor.value;
-        const copyStart = Math.max(offset, chunk.offset);
-        const copyEnd = Math.min(end, chunk.offset + chunk.data.byteLength);
-        if (copyEnd > copyStart)
-          output.set(chunk.data.subarray(copyStart - chunk.offset, copyEnd - chunk.offset), copyStart - offset);
-        cursor.continue();
-      };
-    });
-    return output;
-  }
-  async append(name, data) {
-    const transaction = this.database.transaction(["chunks", "meta"], "readwrite");
-    const done = idbTransaction(transaction);
-    const meta = transaction.objectStore("meta");
-    const previous = await idbRequest(meta.get(name));
-    const offset = previous?.size ?? 0;
-    transaction.objectStore("chunks").put({ file: name, offset, data: data.slice() });
-    meta.put({ file: name, size: offset + data.byteLength });
-    await done;
-  }
-  async replace(name, data) {
-    const transaction = this.database.transaction(["chunks", "meta"], "readwrite");
-    const done = idbTransaction(transaction);
-    const chunks = transaction.objectStore("chunks");
-    const range = IDBKeyRange.bound([name, 0], [name, Number.MAX_SAFE_INTEGER]);
-    await new Promise((resolve, reject) => {
-      const request = chunks.openCursor(range);
-      request.onerror = () => reject(request.error ?? new Error("IndexedDB cursor failed"));
-      request.onsuccess = () => {
-        const cursor = request.result;
-        if (!cursor) {
-          resolve();
-          return;
-        }
-        cursor.delete();
-        cursor.continue();
-      };
-    });
-    if (data.byteLength !== 0)
-      chunks.put({ file: name, offset: 0, data: data.slice() });
-    transaction.objectStore("meta").put({ file: name, size: data.byteLength });
-    await done;
-  }
-}
-
-class PersistentBlobCache {
-  backend;
-  maxBytes;
-  maxEntries;
-  states;
-  hashes;
-  offsets;
-  lengths;
-  checksums;
-  lruPrevious;
-  lruNext;
-  compactionOffsets;
-  jobs;
-  stats;
-  head = 0;
-  tail = 0;
-  queued = 0;
-  queuedBytes = 0;
-  writingBytes = 0;
-  writing = false;
-  entries = 0;
-  packBytes = 0;
-  liveBytes = 0;
-  lruHead = -1;
-  lruTail = -1;
-  activeGeneration = 0;
-  maintenancePromise = null;
-  idleResolvers = [];
-  totalReadMs = 0;
-  maxReadMs = 0;
-  totalWriteMs = 0;
-  maxWriteMs = 0;
-  constructor(backend, maxBytes, maxEntries, writeQueueCapacity) {
-    this.backend = backend;
-    this.maxBytes = maxBytes;
-    this.maxEntries = maxEntries;
-    this.states = new Uint8Array(maxEntries * 2);
-    this.hashes = new Uint32Array(this.states.length * HASH_WORDS);
-    this.offsets = new Float64Array(this.states.length);
-    this.lengths = new Uint32Array(this.states.length);
-    this.checksums = new Uint32Array(this.states.length);
-    this.lruPrevious = new Int32Array(this.states.length);
-    this.lruNext = new Int32Array(this.states.length);
-    this.lruPrevious.fill(-1);
-    this.lruNext.fill(-1);
-    this.compactionOffsets = new Float64Array(this.states.length);
-    this.jobs = new Array(writeQueueCapacity).fill(null);
-    this.stats = {
-      enabled: true,
-      backend: backend.kind ?? "custom",
-      entries: 0,
-      bytes: 0,
-      liveBytes: 0,
-      maxBytes,
-      maxEntries,
-      queuedWrites: 0,
-      hits: 0,
-      misses: 0,
-      writes: 0,
-      writeBytes: 0,
-      rejectedCapacity: 0,
-      rejectedQueue: 0,
-      corruptEntries: 0,
-      readErrors: 0,
-      writeErrors: 0,
-      evictions: 0,
-      compactions: 0,
-      reclaimedBytes: 0,
-      maintenance: false,
-      averageReadMs: 0,
-      maxReadMs: 0,
-      averageWriteMs: 0,
-      maxWriteMs: 0
-    };
-  }
-  static async open(options, backend) {
-    if (!options.namespace || !Number.isSafeInteger(options.maxBytes) || options.maxBytes < 1 || !Number.isInteger(options.maxEntries) || options.maxEntries < 1)
-      throw new RangeError("invalid persistent blob cache options");
-    const queueCapacity = options.writeQueueCapacity ?? 64;
-    if (!Number.isInteger(queueCapacity) || queueCapacity < 1)
-      throw new RangeError("cache write queue capacity must be positive");
-    let store = backend;
-    if (!store) {
-      try {
-        store = await OpfsBlobBackend.open(options.namespace);
-      } catch {
-        store = await IndexedDbBlobBackend.open(options.namespace);
-      }
-    }
-    const cache = new PersistentBlobCache(store, options.maxBytes, options.maxEntries, queueCapacity);
-    await cache.loadIndex();
-    return cache;
-  }
-  hashStart(slot) {
-    return slot * HASH_WORDS;
-  }
-  hashesEqual(slot, hash) {
-    const start = this.hashStart(slot);
-    for (let word = 0;word < HASH_WORDS; word++)
-      if (this.hashes[start + word] !== hash[word])
-        return false;
-    return true;
-  }
-  hashSlot(hash) {
-    let value = 2654435769;
-    for (let word = 0;word < HASH_WORDS; word++)
-      value = Math.imul(value ^ hash[word], 2246822507);
-    return (value >>> 0) % this.states.length;
-  }
-  find(hash) {
-    let slot = this.hashSlot(hash);
-    for (let probe = 0;probe < this.states.length; probe++) {
-      const state = this.states[slot];
-      if (state === EMPTY)
-        return -1;
-      if (state === OCCUPIED && this.hashesEqual(slot, hash))
-        return slot;
-      slot = (slot + 1) % this.states.length;
-    }
-    return -1;
-  }
-  insert(hash, offset, length, valueChecksum) {
-    let slot = this.hashSlot(hash);
-    let tombstone = -1;
-    for (let probe = 0;probe < this.states.length; probe++) {
-      const state = this.states[slot];
-      if (state === OCCUPIED && this.hashesEqual(slot, hash)) {
-        this.liveBytes += length - this.lengths[slot];
-        this.offsets[slot] = offset;
-        this.lengths[slot] = length;
-        this.checksums[slot] = valueChecksum;
-        this.touch(slot);
-        return true;
-      }
-      if (state === TOMBSTONE && tombstone < 0)
-        tombstone = slot;
-      if (state === EMPTY) {
-        const target = tombstone < 0 ? slot : tombstone;
-        this.states[target] = OCCUPIED;
-        this.hashes.set(hash, this.hashStart(target));
-        this.offsets[target] = offset;
-        this.lengths[target] = length;
-        this.checksums[target] = valueChecksum;
-        this.entries++;
-        this.liveBytes += length;
-        this.linkLruTail(target);
-        return true;
-      }
-      slot = (slot + 1) % this.states.length;
-    }
-    return false;
-  }
-  linkLruTail(slot) {
-    this.lruPrevious[slot] = this.lruTail;
-    this.lruNext[slot] = -1;
-    if (this.lruTail < 0)
-      this.lruHead = slot;
-    else
-      this.lruNext[this.lruTail] = slot;
-    this.lruTail = slot;
-  }
-  unlinkLru(slot) {
-    const previous = this.lruPrevious[slot];
-    const next = this.lruNext[slot];
-    if (previous < 0)
-      this.lruHead = next;
-    else
-      this.lruNext[previous] = next;
-    if (next < 0)
-      this.lruTail = previous;
-    else
-      this.lruPrevious[next] = previous;
-    this.lruPrevious[slot] = -1;
-    this.lruNext[slot] = -1;
-  }
-  touch(slot) {
-    if (slot === this.lruTail)
-      return;
-    this.unlinkLru(slot);
-    this.linkLruTail(slot);
-  }
-  remove(slot) {
-    if (slot < 0 || this.states[slot] !== OCCUPIED)
-      return;
-    this.unlinkLru(slot);
-    this.liveBytes -= this.lengths[slot];
-    this.states[slot] = TOMBSTONE;
-    this.entries--;
-  }
-  record(hash, offset, length, valueChecksum) {
-    const bytes = new Uint8Array(INDEX_RECORD_BYTES);
-    const view = new DataView(bytes.buffer);
-    for (let word = 0;word < HASH_WORDS; word++)
-      view.setUint32(word * 4, hash[word], true);
-    view.setBigUint64(32, BigInt(offset), true);
-    view.setUint32(40, length, true);
-    view.setUint32(44, valueChecksum, true);
-    return bytes;
-  }
-  packName(generation = this.activeGeneration) {
-    return `values-${generation}.pack`;
-  }
-  indexName(generation = this.activeGeneration) {
-    return `values-${generation}.index`;
-  }
-  manifest(generation) {
-    const bytes = new Uint8Array(8);
-    const view = new DataView(bytes.buffer);
-    view.setUint32(0, MANIFEST_MAGIC, true);
-    view.setUint32(4, generation, true);
-    return bytes;
-  }
-  async loadIndex() {
-    const manifestSize = await this.backend.size("manifest");
-    if (manifestSize >= 8) {
-      const manifest = await this.backend.read("manifest", 0, 8);
-      const view2 = new DataView(manifest.buffer, manifest.byteOffset, manifest.byteLength);
-      if (view2.getUint32(0, true) === MANIFEST_MAGIC)
-        this.activeGeneration = view2.getUint32(4, true) & 1;
-    } else {
-      await this.backend.replace("manifest", this.manifest(0));
-    }
-    this.packBytes = await this.backend.size(this.packName());
-    let indexSize = await this.backend.size(this.indexName());
-    if (this.packBytes > this.maxBytes) {
-      await this.clear();
-      return;
-    }
-    if (indexSize < INDEX_HEADER_BYTES) {
-      await this.backend.replace(this.indexName(), this.indexHeader());
-      return;
-    }
-    const bytes = await this.backend.read(this.indexName(), 0, indexSize);
-    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-    if (view.getUint32(0, true) !== INDEX_MAGIC || view.getUint32(4, true) !== INDEX_VERSION) {
-      await this.clear();
-      return;
-    }
-    indexSize = INDEX_HEADER_BYTES + Math.floor((indexSize - INDEX_HEADER_BYTES) / INDEX_RECORD_BYTES) * INDEX_RECORD_BYTES;
-    const hash = new Uint32Array(HASH_WORDS);
-    for (let offset = INDEX_HEADER_BYTES;offset < indexSize; offset += INDEX_RECORD_BYTES) {
-      for (let word = 0;word < HASH_WORDS; word++)
-        hash[word] = view.getUint32(offset + word * 4, true);
-      const packOffset = Number(view.getBigUint64(offset + 32, true));
-      const length = view.getUint32(offset + 40, true);
-      const valueChecksum = view.getUint32(offset + 44, true);
-      if (length === 0) {
-        this.remove(this.find(hash));
-      } else if (packOffset + length <= this.packBytes && this.entries < this.maxEntries) {
-        this.insert(hash, packOffset, length, valueChecksum);
-      }
-    }
-  }
-  indexHeader() {
-    const bytes = new Uint8Array(INDEX_HEADER_BYTES);
-    const view = new DataView(bytes.buffer);
-    view.setUint32(0, INDEX_MAGIC, true);
-    view.setUint32(4, INDEX_VERSION, true);
-    view.setUint32(8, INDEX_RECORD_BYTES, true);
-    view.setUint32(12, HASH_WORDS, true);
-    return bytes;
-  }
-  async get(key) {
-    const startedAt = performance.now();
-    try {
-      if (this.maintenancePromise)
-        await this.maintenancePromise;
-      const hash = await hashKey(key);
-      const slot = this.find(hash);
-      if (slot < 0) {
-        this.stats.misses++;
-        return null;
-      }
-      const bytes = await this.backend.read(this.packName(), this.offsets[slot], this.lengths[slot]);
-      if (bytes.byteLength !== this.lengths[slot] || checksum(bytes) !== this.checksums[slot]) {
-        this.remove(slot);
-        this.stats.corruptEntries++;
-        this.stats.misses++;
-        return null;
-      }
-      this.touch(slot);
-      this.stats.hits++;
-      return bytes;
-    } catch {
-      this.stats.readErrors++;
-      this.stats.misses++;
-      return null;
-    } finally {
-      const elapsed = performance.now() - startedAt;
-      this.totalReadMs += elapsed;
-      this.maxReadMs = Math.max(this.maxReadMs, elapsed);
-    }
-  }
-  async put(key, data) {
-    if (data.byteLength === 0 || data.byteLength > this.maxBytes) {
-      this.stats.rejectedCapacity++;
-      return false;
-    }
-    if (this.maintenancePromise)
-      await this.maintenancePromise;
-    const hash = await hashKey(key);
-    if (this.find(hash) >= 0)
-      return true;
-    if (this.hasQueued(hash))
-      return true;
-    if (this.entries + this.queued + (this.writing ? 1 : 0) >= this.maxEntries || this.packBytes + this.queuedBytes + this.writingBytes + data.byteLength > this.maxBytes) {
-      try {
-        await this.ensureCapacity(data.byteLength);
-      } catch {
-        this.stats.writeErrors++;
-        return false;
-      }
-      if (this.find(hash) >= 0)
-        return true;
-    }
-    if (this.entries + this.queued + (this.writing ? 1 : 0) >= this.maxEntries || this.packBytes + this.queuedBytes + this.writingBytes + data.byteLength > this.maxBytes) {
-      this.stats.rejectedCapacity++;
-      return false;
-    }
-    if (this.queued >= this.jobs.length) {
-      this.stats.rejectedQueue++;
-      return false;
-    }
-    return new Promise((resolve) => {
-      this.jobs[this.tail] = { hash, data, resolve };
-      this.tail = (this.tail + 1) % this.jobs.length;
-      this.queued++;
-      this.queuedBytes += data.byteLength;
-      this.pump();
-    });
-  }
-  hasQueued(hash) {
-    for (let count = 0, index = this.head;count < this.queued; count++, index = (index + 1) % this.jobs.length) {
-      const job = this.jobs[index];
-      if (job) {
-        let equal = true;
-        for (let word = 0;word < HASH_WORDS; word++)
-          if (job.hash[word] !== hash[word]) {
-            equal = false;
-            break;
-          }
-        if (equal)
-          return true;
-      }
-    }
-    return false;
-  }
-  pump() {
-    if (this.writing || this.queued === 0)
-      return;
-    const job = this.jobs[this.head];
-    this.jobs[this.head] = null;
-    this.head = (this.head + 1) % this.jobs.length;
-    this.queued--;
-    this.queuedBytes -= job.data.byteLength;
-    this.writing = true;
-    this.writingBytes = job.data.byteLength;
-    this.write(job);
-  }
-  async write(job) {
-    const startedAt = performance.now();
-    let success = false;
-    try {
-      if (this.find(job.hash) >= 0) {
-        success = true;
-      } else if (this.entries < this.maxEntries && this.packBytes + job.data.byteLength <= this.maxBytes) {
-        const offset = this.packBytes;
-        const valueChecksum = checksum(job.data);
-        await this.backend.append(this.packName(), job.data);
-        await this.backend.append(this.indexName(), this.record(job.hash, offset, job.data.byteLength, valueChecksum));
-        this.packBytes += job.data.byteLength;
-        success = this.insert(job.hash, offset, job.data.byteLength, valueChecksum);
-        if (success) {
-          this.stats.writes++;
-          this.stats.writeBytes += job.data.byteLength;
-        }
-      } else {
-        this.stats.rejectedCapacity++;
-      }
-    } catch {
-      this.stats.writeErrors++;
-      try {
-        this.packBytes = await this.backend.size(this.packName());
-      } catch {}
-    } finally {
-      const elapsed = performance.now() - startedAt;
-      this.totalWriteMs += elapsed;
-      this.maxWriteMs = Math.max(this.maxWriteMs, elapsed);
-      this.writing = false;
-      this.writingBytes = 0;
-      job.resolve(success);
-      this.pump();
-      this.resolveIdle();
-    }
-  }
-  waitForIdle() {
-    if (!this.writing && this.queued === 0)
-      return Promise.resolve();
-    return new Promise((resolve) => this.idleResolvers.push(resolve));
-  }
-  resolveIdle() {
-    if (this.writing || this.queued !== 0)
-      return;
-    while (this.idleResolvers.length !== 0)
-      this.idleResolvers.pop()();
-  }
-  resetIndexState() {
-    this.states.fill(EMPTY);
-    this.lruPrevious.fill(-1);
-    this.lruNext.fill(-1);
-    this.entries = 0;
-    this.liveBytes = 0;
-    this.lruHead = -1;
-    this.lruTail = -1;
-  }
-  async ensureCapacity(incomingBytes) {
-    if (this.maintenancePromise) {
-      await this.maintenancePromise;
-      return;
-    }
-    const maintenance = this.compact(incomingBytes).finally(() => {
-      if (this.maintenancePromise === maintenance)
-        this.maintenancePromise = null;
-    });
-    this.maintenancePromise = maintenance;
-    await maintenance;
-  }
-  async compact(incomingBytes) {
-    await this.waitForIdle();
-    const oldGeneration = this.activeGeneration;
-    const nextGeneration = oldGeneration ^ 1;
-    const oldPackBytes = this.packBytes;
-    const targetBytes = Math.min(Math.floor(this.maxBytes * 0.75), Math.max(0, this.maxBytes - incomingBytes));
-    const targetEntries = Math.min(Math.floor(this.maxEntries * 0.75), Math.max(0, this.maxEntries - 1));
-    let evicted = 0;
-    while (this.lruHead >= 0 && (this.liveBytes > targetBytes || this.entries > targetEntries)) {
-      this.remove(this.lruHead);
-      evicted++;
-    }
-    let published = false;
-    try {
-      await this.backend.replace(this.packName(nextGeneration), new Uint8Array(0));
-      await this.backend.replace(this.indexName(nextGeneration), this.indexHeader());
-      let nextOffset = 0;
-      let slot = this.lruHead;
-      while (slot >= 0) {
-        const following = this.lruNext[slot];
-        const bytes = await this.backend.read(this.packName(oldGeneration), this.offsets[slot], this.lengths[slot]);
-        if (bytes.byteLength !== this.lengths[slot] || checksum(bytes) !== this.checksums[slot]) {
-          this.remove(slot);
-          this.stats.corruptEntries++;
-        } else {
-          const hash = this.hashes.subarray(this.hashStart(slot), this.hashStart(slot) + HASH_WORDS);
-          await this.backend.append(this.packName(nextGeneration), bytes);
-          await this.backend.append(this.indexName(nextGeneration), this.record(hash, nextOffset, bytes.byteLength, this.checksums[slot]));
-          this.compactionOffsets[slot] = nextOffset;
-          nextOffset += bytes.byteLength;
-        }
-        slot = following;
-      }
-      await this.backend.replace("manifest", this.manifest(nextGeneration));
-      this.activeGeneration = nextGeneration;
-      published = true;
-      for (let index = 0;index < this.states.length; index++)
-        if (this.states[index] === OCCUPIED)
-          this.offsets[index] = this.compactionOffsets[index];
-      this.packBytes = nextOffset;
-      this.stats.evictions += evicted;
-      this.stats.compactions++;
-      this.stats.reclaimedBytes += Math.max(0, oldPackBytes - nextOffset);
-      try {
-        await this.backend.replace(this.packName(oldGeneration), new Uint8Array(0));
-        await this.backend.replace(this.indexName(oldGeneration), this.indexHeader());
-      } catch {}
-    } catch (error) {
-      if (!published) {
-        this.activeGeneration = oldGeneration;
-        this.resetIndexState();
-        await this.loadIndex();
-      }
-      throw error;
-    }
-  }
-  async clear() {
-    if (this.writing || this.queued !== 0 || this.maintenancePromise)
-      throw new Error("cannot clear persistent cache while writes or maintenance are pending");
-    await this.backend.replace(this.packName(0), new Uint8Array(0));
-    await this.backend.replace(this.indexName(0), this.indexHeader());
-    await this.backend.replace(this.packName(1), new Uint8Array(0));
-    await this.backend.replace(this.indexName(1), this.indexHeader());
-    await this.backend.replace("manifest", this.manifest(0));
-    this.activeGeneration = 0;
-    this.resetIndexState();
-    this.packBytes = 0;
-  }
-  getStats() {
-    const stats = this.stats;
-    stats.entries = this.entries;
-    stats.bytes = this.packBytes;
-    stats.liveBytes = this.liveBytes;
-    stats.queuedWrites = this.queued + (this.writing ? 1 : 0);
-    stats.maintenance = this.maintenancePromise !== null;
-    const reads = stats.hits + stats.misses;
-    stats.averageReadMs = reads === 0 ? 0 : this.totalReadMs / reads;
-    stats.maxReadMs = this.maxReadMs;
-    const writes = stats.writes + stats.writeErrors;
-    stats.averageWriteMs = writes === 0 ? 0 : this.totalWriteMs / writes;
-    stats.maxWriteMs = this.maxWriteMs;
-    return stats;
-  }
-}
-
-// crates/afterglow-web/www/engine/webgpu-only.ts
-function disableWebGLFallback(renderer) {
-  renderer._getFallback = null;
-}
-function assertWebGPUBackend(renderer) {
-  if (renderer.backend?.isWebGPUBackend !== true || renderer.backend.device == null) {
-    throw new Error("Afterglow requires a live WebGPU backend; WebGL fallback is forbidden.");
-  }
-}
-function showWebGPUFailure(error) {
-  const message = error instanceof Error ? error.message : String(error);
-  const panel = document.createElement("pre");
-  panel.id = "afterglow-webgpu-failure";
-  panel.textContent = `Afterglow requires hardware WebGPU.
-
-${message}`;
-  panel.style.cssText = "box-sizing:border-box;margin:0;min-height:100vh;padding:24px;background:#11151c;color:#ff9a9a;font:16px/1.5 ui-monospace,monospace;white-space:pre-wrap";
-  document.body.replaceChildren(panel);
-  console.error("Afterglow WebGPU startup failed:", error);
-}
-async function createWebGPUOnlyRenderer(parameters = {}, factory) {
-  const gpu = navigator.gpu;
-  if (!gpu)
-    throw new Error("navigator.gpu is unavailable. WebGL fallback is disabled.");
-  const adapter = await gpu.requestAdapter();
-  if (!adapter)
-    throw new Error("Unable to acquire a hardware WebGPU adapter. WebGL fallback is disabled.");
-  const renderer = factory(parameters);
-  renderer.afterglowAdapterInfo = adapter.info;
-  disableWebGLFallback(renderer);
-  try {
-    await renderer.init();
-    assertWebGPUBackend(renderer);
-  } catch (error) {
-    renderer.dispose();
-    throw error;
-  }
-  const onDeviceLost = renderer.onDeviceLost.bind(renderer);
-  renderer.onDeviceLost = (info) => {
-    onDeviceLost(info);
-    showWebGPUFailure(new Error(`WebGPU device lost (${info.reason ?? "unknown"}): ${info.message ?? "no detail"}`));
-  };
-  return renderer;
-}
-
 // crates/afterglow-web/www/node_modules/three/build/three.webgpu.js
 var exports_three_webgpu = {};
 __export(exports_three_webgpu, {
@@ -25151,11 +23340,11 @@ class StackTrace {
       return message;
     }
     const stackString = this.stack.map((frame) => {
-      const location = `${frame.file}:${frame.line}:${frame.column}`;
+      const location2 = `${frame.file}:${frame.line}:${frame.column}`;
       if (frame.fn) {
-        return `    at ${frame.fn} (${location})`;
+        return `    at ${frame.fn} (${location2})`;
       }
-      return `    at ${location}`;
+      return `    at ${location2}`;
     }).join(`
 `);
     return `${message}
@@ -49341,9 +47530,9 @@ ${flowData.code}
     let snippet = "";
     if (shaderStage === "vertex" || shaderStage === "compute") {
       const attributes = this.getAttributesArray();
-      let location = 0;
+      let location2 = 0;
       for (const attribute2 of attributes) {
-        snippet += `layout( location = ${location++} ) in ${attribute2.type} ${attribute2.name};
+        snippet += `layout( location = ${location2++} ) in ${attribute2.type} ${attribute2.name};
 `;
       }
     }
@@ -53049,12 +51238,12 @@ void main() {}`
       for (const binding of bindGroup.bindings) {
         if (binding.isUniformsGroup || binding.isUniformBuffer) {
           const index = uniformBuffers++;
-          const location = gl.getUniformBlockIndex(programGPU, binding.name);
-          gl.uniformBlockBinding(programGPU, location, index);
+          const location2 = gl.getUniformBlockIndex(programGPU, binding.name);
+          gl.uniformBlockBinding(programGPU, location2, index);
         } else if (binding.isSampledTexture) {
           const index = textures++;
-          const location = gl.getUniformLocation(programGPU, binding.name);
-          gl.uniform1i(location, index);
+          const location2 = gl.getUniformLocation(programGPU, binding.name);
+          gl.uniform1i(location2, index);
         }
       }
     }
@@ -57233,8 +55422,8 @@ class WebGPUPipelineUtils {
       const sourceLines = program.code.split(`
 `);
       for (const msg of info.messages) {
-        const location = msg.lineNum > 0 ? ` at line ${msg.lineNum}${msg.linePos > 0 ? `:${msg.linePos}` : ""}` : "";
-        const header = `WebGPURenderer [${pipelineLabel} / ${program.stage} ${msg.type}]${location}: ${msg.message}`;
+        const location2 = msg.lineNum > 0 ? ` at line ${msg.lineNum}${msg.linePos > 0 ? `:${msg.linePos}` : ""}` : "";
+        const header = `WebGPURenderer [${pipelineLabel} / ${program.stage} ${msg.type}]${location2}: ${msg.message}`;
         let excerpt = "";
         if (msg.lineNum > 0 && msg.lineNum <= sourceLines.length) {
           excerpt = `
@@ -59478,190 +57667,529 @@ class ClippingGroup extends Group {
   }
 }
 
-// crates/afterglow-web/www/engine/renderer-seal.ts
-class RendererSeal {
-  backend;
-  sealed = false;
-  renderPipelines = 0;
-  computePipelines = 0;
-  renderPipelineViolations = 0;
-  computePipelineViolations = 0;
-  constructor(backend) {
-    this.backend = backend;
-    const originalRender = backend.createRenderPipeline.bind(backend);
-    const originalCompute = backend.createComputePipeline.bind(backend);
-    const monitor = this;
-    backend.createRenderPipeline = function(renderObject, promises) {
-      monitor.renderPipelines++;
-      if (monitor.sealed)
-        monitor.renderPipelineViolations++;
-      originalRender(renderObject, promises);
-    };
-    backend.createComputePipeline = function(computePipeline, bindings) {
-      monitor.computePipelines++;
-      if (monitor.sealed)
-        monitor.computePipelineViolations++;
-      originalCompute(computePipeline, bindings);
-    };
-  }
-  seal() {
-    this.sealed = true;
-  }
-  get isSealed() {
-    return this.sealed;
-  }
-  get violations() {
-    return this.renderPipelineViolations + this.computePipelineViolations;
-  }
-  assertNoViolations() {
-    if (this.violations !== 0)
-      throw new Error(`renderer created ${this.violations} pipeline(s) after seal`);
-  }
+// crates/afterglow-web/www/codec.ts
+function encodeVarint(n) {
+  const b = [];
+  do {
+    let x = n & 127;
+    n = Math.floor(n / 128);
+    if (n)
+      x |= 128;
+    b.push(x);
+  } while (n);
+  return b;
 }
-async function warmRendererVariants(renderer, variants) {
-  for (const variant of variants)
-    await renderer.compileAsync(variant.scene, variant.camera);
-}
-
-// crates/afterglow-web/www/engine/renderer-host.ts
-var moduleRendererFactory = (parameters) => new WebGPURenderer(parameters);
-// crates/afterglow-web/www/engine/height-texture.ts
-var HEIGHT_R16_MAGIC = new Uint8Array([65, 71, 82, 49, 54, 76, 69, 1]);
-var HEIGHT_R16_HEADER_BYTES = 16;
-function parseHeightR16(buffer2) {
-  if (buffer2.byteLength < HEIGHT_R16_HEADER_BYTES)
-    throw new Error("R16 height payload is truncated");
-  const bytes = new Uint8Array(buffer2);
-  for (let index = 0;index < HEIGHT_R16_MAGIC.length; index++) {
-    if (bytes[index] !== HEIGHT_R16_MAGIC[index])
-      throw new Error("R16 height magic/version mismatch");
+function decodeVarint(bytes, off) {
+  let r = 0;
+  for (let shift = 0;shift < 56; shift += 7) {
+    if (off >= bytes.length)
+      throw new Error("postcard varint truncated");
+    const b = bytes[off++];
+    r += (b & 127) * 2 ** shift;
+    if (!(b & 128))
+      return [r, off];
   }
-  const header = new DataView(buffer2, 8, 8);
-  const width = header.getUint32(0, true);
-  const height = header.getUint32(4, true);
-  if (width === 0 || height === 0)
-    throw new Error("R16 height dimensions must be non-zero");
-  const count = width * height;
-  if (!Number.isSafeInteger(count))
-    throw new Error("R16 height dimensions overflow");
-  const expectedBytes = HEIGHT_R16_HEADER_BYTES + count * 2;
-  if (buffer2.byteLength !== expectedBytes) {
-    throw new Error(`R16 height byte length mismatch: expected ${expectedBytes}, got ${buffer2.byteLength}`);
+  throw new Error("postcard varint overflows");
+}
+function concat(...arrs) {
+  const out = new Uint8Array(arrs.reduce((s, a) => s + a.length, 0));
+  let o = 0;
+  for (const a of arrs) {
+    out.set(a, o);
+    o += a.length;
   }
-  const endianProbe = new Uint16Array([258]);
-  if (new Uint8Array(endianProbe.buffer)[0] !== 2)
-    throw new Error("R16 height loading requires a little-endian platform");
-  return { width, height, pixels: new Uint16Array(buffer2, HEIGHT_R16_HEADER_BYTES, count) };
+  return out;
 }
-function assertHeightTextureSupport(device) {
-  if (device.features?.has("float32-filterable") !== true) {
-    throw new Error("16-bit displacement requires the WebGPU float32-filterable feature");
+function encodeU32(n) {
+  return new Uint8Array(encodeVarint(n));
+}
+function encodeBytes(b) {
+  return concat(encodeVarint(b.length), b);
+}
+function decodeBytes(bytes, off) {
+  const [len, o] = decodeVarint(bytes, off);
+  const end = o + len;
+  if (end > bytes.length)
+    throw new Error("postcard bytes truncated");
+  return [bytes.subarray(o, end), end];
+}
+function unwrapResponse(bytes) {
+  const [variant, off] = decodeVarint(bytes, 0);
+  if (variant === 0) {
+    const [plen, poff] = decodeVarint(bytes, off);
+    if (poff + plen > bytes.length)
+      throw new Error("RPC response truncated");
+    return bytes.subarray(poff, poff + plen);
   }
-}
-function assertHeightTextureGpuFormat(backend, texture2) {
-  const format = backend.utils?.getTextureFormatGPU(texture2);
-  if (format !== "r32float")
-    throw new Error(`displacement GPU format mismatch: expected r32float, got ${format ?? "unavailable"}`);
-}
-async function loadHeightTextureR16(three, device, url) {
-  assertHeightTextureSupport(device);
-  const response = await fetch(url);
-  if (!response.ok)
-    throw new Error(`failed to load R16 height ${url}: HTTP ${response.status}`);
-  const asset = parseHeightR16(await response.arrayBuffer());
-  const normalized = new Float32Array(asset.pixels.length);
-  for (let index = 0;index < asset.pixels.length; index++)
-    normalized[index] = asset.pixels[index] / 65535;
-  const texture2 = new three.DataTexture(normalized, asset.width, asset.height, three.RedFormat, three.FloatType);
-  texture2.name = url;
-  texture2.wrapS = texture2.wrapT = three.RepeatWrapping;
-  texture2.minFilter = texture2.magFilter = three.LinearFilter;
-  texture2.generateMipmaps = false;
-  texture2.flipY = false;
-  texture2.colorSpace = three.NoColorSpace;
-  texture2.unpackAlignment = 4;
-  texture2.needsUpdate = true;
-  return texture2;
+  const [method, moff] = decodeVarint(bytes, off);
+  const [mlen, eoff] = decodeVarint(bytes, moff);
+  if (eoff + mlen > bytes.length)
+    throw new Error("RPC error truncated");
+  const msg = new TextDecoder().decode(Uint8Array.from(bytes.subarray(eoff, eoff + mlen)));
+  throw new Error(`RPC ${variant === 1 ? "server" : "decode"} error (method ${method}): ${msg}`);
 }
 
-// crates/afterglow-web/www/engine/relative-pointer.ts
-class RelativePointerInput {
-  element;
-  sink;
-  ownerDocument;
-  status;
-  requestedUnadjustedMovement = false;
-  onMovement = (event) => {
-    if (this.ownerDocument.pointerLockElement !== this.element)
-      return;
-    const movement = event;
-    this.sink(movement.movementX, movement.movementY);
-  };
-  onPointerLockChange = () => {
-    this.status.locked = this.ownerDocument.pointerLockElement === this.element;
-    this.status.unadjustedMovement = this.status.locked && this.requestedUnadjustedMovement;
-    if (!this.status.locked)
-      this.requestedUnadjustedMovement = false;
-  };
-  onRawLockAcquired = () => {
-    this.status.locked = this.ownerDocument.pointerLockElement === this.element;
-    this.status.unadjustedMovement = this.status.locked;
-  };
-  onRawLockRejected = () => {
-    this.requestedUnadjustedMovement = false;
-    this.requestFallbackLock();
-  };
-  onFallbackLockAcquired = () => {
-    this.status.locked = this.ownerDocument.pointerLockElement === this.element;
-    this.status.unadjustedMovement = false;
-  };
-  onFallbackLockRejected = () => {
-    this.status.locked = false;
-    this.status.unadjustedMovement = false;
-  };
-  constructor(element2, sink, options = {}) {
-    this.element = element2;
-    this.sink = sink;
-    this.ownerDocument = options.document ?? element2.ownerDocument;
-    const view = this.ownerDocument.defaultView;
-    const rawEventSupported = options.rawEventSupported ?? (view !== null && ("onpointerrawupdate" in view));
-    this.status = {
-      eventType: rawEventSupported ? "pointerrawupdate" : "mousemove",
-      locked: false,
-      unadjustedMovement: false
-    };
-    this.element.addEventListener(this.status.eventType, this.onMovement, { passive: true });
-    this.ownerDocument.addEventListener("pointerlockchange", this.onPointerLockChange, { passive: true });
+// crates/afterglow-web/www/async-worker.ts
+class PendingFetch {
+  constructor(url) {
+    this.promise = fetch(url);
+    this.resolved = false;
+    this.bytes = null;
+    this.error = null;
+    this.promise.then(async (resp) => {
+      if (!resp.ok) {
+        this.error = new Error(`fetch ${resp.status}: ${url}`);
+      } else {
+        this.bytes = new Uint8Array(await resp.arrayBuffer());
+      }
+      this.resolved = true;
+    }).catch((e) => {
+      this.error = e;
+      this.resolved = true;
+    });
   }
-  requestLock() {
-    if (this.ownerDocument.pointerLockElement === this.element)
+}
+
+class HeadFetch {
+  constructor(url) {
+    this.promise = fetch(url, { method: "HEAD" });
+    this.resolved = false;
+    this.contentLength = null;
+    this.error = null;
+    this.promise.then((resp) => {
+      if (!resp.ok) {
+        this.error = new Error(`HEAD ${resp.status}: ${url}`);
+      } else {
+        const cl = resp.headers.get("Content-Length");
+        this.contentLength = cl ? parseInt(cl, 10) : null;
+      }
+      this.resolved = true;
+    }).catch((e) => {
+      this.error = e;
+      this.resolved = true;
+    });
+  }
+}
+
+class RangeFetch {
+  constructor(url, offset, len) {
+    const start = Number(offset);
+    const end = start + Number(len) - 1;
+    this.promise = fetch(url, { headers: { Range: `bytes=${start}-${end}` } });
+    this.resolved = false;
+    this.bytes = null;
+    this.error = null;
+    this.promise.then(async (resp) => {
+      if (!resp.ok && resp.status !== 206) {
+        this.error = new Error(`range fetch ${resp.status}: ${url}`);
+      } else {
+        this.bytes = new Uint8Array(await resp.arrayBuffer());
+      }
+      this.resolved = true;
+    }).catch((e) => {
+      this.error = e;
+      this.resolved = true;
+    });
+  }
+}
+
+class AsyncWorker {
+  constructor(wasm, baseUrl = "") {
+    this.w = wasm;
+    this.baseUrl = baseUrl;
+    this._memory = null;
+    this.nextFetchId = 1;
+    this._fetchCapacity = 256;
+    this._fetchIds = new Float64Array(this._fetchCapacity);
+    this._fetchIds.fill(-1);
+    this._fetches = new Array(this._fetchCapacity).fill(null);
+    this._pendingFetchCount = 0;
+    this._callCapacity = 256;
+    this._callIds = new Float64Array(this._callCapacity);
+    this._callIds.fill(-1);
+    this._callResolves = new Array(this._callCapacity).fill(null);
+    this._callRejects = new Array(this._callCapacity).fill(null);
+    this._pendingCallCount = 0;
+    this._taskIdCounter = 0;
+    this._pumpScheduled = false;
+    this._completionLimit = 32;
+    this._lastPollCompletions = 0;
+    this._totalCompletions = 0;
+    this._completionLimitHits = 0;
+  }
+  async call(method, args) {
+    const taskId = this._nextTaskId();
+    const slot = taskId % this._callCapacity;
+    if (this._callIds[slot] !== -1)
+      throw new Error("async worker: fixed task capacity exhausted");
+    return new Promise((resolve, reject) => {
+      this._callIds[slot] = taskId;
+      this._callResolves[slot] = resolve;
+      this._callRejects[slot] = reject;
+      this._pendingCallCount++;
+      if (this.serveAsync(method, args, taskId) < 0) {
+        this._releaseCallSlot(slot);
+        reject(new Error("async worker: serveAsync failed"));
+        return;
+      }
+      this._schedulePump();
+    });
+  }
+  _schedulePump() {
+    if (this._pumpScheduled || this._pendingCallCount === 0)
       return;
-    this.requestedUnadjustedMovement = true;
+    this._pumpScheduled = true;
+    setTimeout(() => {
+      this._pumpScheduled = false;
+      if (this._pendingCallCount === 0)
+        return;
+      this.poll();
+      this._schedulePump();
+    }, 0);
+  }
+  serveAsync(method, args, taskId = this._nextTaskId()) {
+    const inPtr = this.w.afterglow_wasm_input_ptr();
+    const inSize = this.w.afterglow_wasm_input_size();
+    if (args.length + 12 > inSize) {
+      console.error("async worker: args too large for input scratch");
+      return -1;
+    }
+    const view = new DataView((this._memory || this.w.memory).buffer, inPtr, 12 + args.length);
+    view.setUint32(0, method, true);
+    view.setBigUint64(4, BigInt(taskId), true);
+    new Uint8Array((this._memory || this.w.memory).buffer, inPtr + 12, args.length).set(args);
+    const r = this.w.afterglow_wasm_serve_async(method, inPtr + 12, args.length, BigInt(taskId));
+    if (r < 0)
+      return -1;
+    return taskId;
+  }
+  poll(maxCompletions = this._completionLimit) {
+    this.w.afterglow_wasm_tick();
+    const outPtr = this.w.afterglow_wasm_output_ptr();
+    const outSize = this.w.afterglow_wasm_output_size();
+    const memory = this._memory || this.w.memory;
+    let drained = 0;
+    while (drained < maxCompletions) {
+      const n = this.w.afterglow_wasm_drain_completion(outPtr, outSize);
+      if (n < 0)
+        break;
+      if (n < 8)
+        continue;
+      const taskId = Number(new DataView(memory.buffer, outPtr, 8).getBigUint64(0, true));
+      const responseBytes = new Uint8Array(memory.buffer, outPtr + 8, n - 8).slice();
+      drained++;
+      const slot = taskId % this._callCapacity;
+      if (this._callIds[slot] === taskId) {
+        const resolve = this._callResolves[slot];
+        const reject = this._callRejects[slot];
+        this._releaseCallSlot(slot);
+        try {
+          resolve(unwrapResponse(responseBytes));
+        } catch (e) {
+          reject(e);
+        }
+      }
+    }
+    this._lastPollCompletions = drained;
+    this._totalCompletions += drained;
+    if (drained === maxCompletions)
+      this._completionLimitHits++;
+    return drained;
+  }
+  fetchStart(urlPtr, urlLen) {
+    const url = new TextDecoder().decode(Uint8Array.from(new Uint8Array((this._memory || this.w.memory).buffer, urlPtr, urlLen)));
+    const fullUrl = this._resolveUrl(url);
+    return this._registerFetch(new PendingFetch(fullUrl));
+  }
+  fetchPoll(fetchId, outPtr, outMax) {
+    const pending = this._getFetch(fetchId);
+    if (!pending)
+      return -1;
+    if (!pending.resolved)
+      return -1;
+    this._releaseFetch(fetchId);
+    if (pending.error) {
+      return 0;
+    }
+    if (pending.bytes.length > outMax)
+      return -2;
+    new Uint8Array((this._memory || this.w.memory).buffer, outPtr, outMax).set(pending.bytes);
+    return pending.bytes.length;
+  }
+  headStart(urlPtr, urlLen) {
+    const url = new TextDecoder().decode(Uint8Array.from(new Uint8Array((this._memory || this.w.memory).buffer, urlPtr, urlLen)));
+    const fullUrl = this._resolveUrl(url);
+    return this._registerFetch(new HeadFetch(fullUrl));
+  }
+  headPoll(fetchId, outPtr, outMax) {
+    const pending = this._getFetch(fetchId);
+    if (!pending)
+      return -2;
+    if (!pending.resolved)
+      return -1;
+    this._releaseFetch(fetchId);
+    if (pending.error || pending.contentLength === null || outMax < 8)
+      return -2;
+    new DataView((this._memory || this.w.memory).buffer, outPtr, 8).setBigUint64(0, BigInt(pending.contentLength), true);
+    return 8;
+  }
+  rangeStart(urlPtr, urlLen, offset, len) {
+    const url = new TextDecoder().decode(Uint8Array.from(new Uint8Array((this._memory || this.w.memory).buffer, urlPtr, urlLen)));
+    const fullUrl = this._resolveUrl(url);
+    return this._registerFetch(new RangeFetch(fullUrl, offset, len));
+  }
+  _registerFetch(fetch2) {
+    for (let probe = 0;probe < this._fetchCapacity; probe++) {
+      const id = this.nextFetchId++;
+      const slot = id % this._fetchCapacity;
+      if (this._fetchIds[slot] !== -1)
+        continue;
+      this._fetchIds[slot] = id;
+      this._fetches[slot] = fetch2;
+      this._pendingFetchCount++;
+      return id;
+    }
+    return 0;
+  }
+  _getFetch(id) {
+    const slot = id % this._fetchCapacity;
+    return this._fetchIds[slot] === id ? this._fetches[slot] : null;
+  }
+  _releaseFetch(id) {
+    const slot = id % this._fetchCapacity;
+    if (this._fetchIds[slot] !== id)
+      return;
+    this._fetchIds[slot] = -1;
+    this._fetches[slot] = null;
+    this._pendingFetchCount--;
+  }
+  _releaseCallSlot(slot) {
+    this._callIds[slot] = -1;
+    this._callResolves[slot] = null;
+    this._callRejects[slot] = null;
+    this._pendingCallCount--;
+  }
+  _nextTaskId() {
+    return ++this._taskIdCounter;
+  }
+  _resolveUrl(path) {
+    if (!this.baseUrl)
+      return path;
+    const p = path.startsWith("/") ? path.slice(1) : path;
+    const sep = this.baseUrl.endsWith("/") ? "" : "/";
+    return `${this.baseUrl}${sep}${p}`;
+  }
+}
+function asyncWorkerImports(driver, memory) {
+  driver._memory = memory;
+  return {
+    env: {
+      memory,
+      notify_worker: () => {},
+      performance_now: () => performance.now(),
+      ag_fetch_start: (urlPtr, urlLen) => driver.fetchStart(urlPtr, urlLen),
+      ag_fetch_poll: (fetchId, outPtr, outMax) => driver.fetchPoll(fetchId, outPtr, outMax),
+      ag_fetch_head_start: (urlPtr, urlLen) => driver.headStart(urlPtr, urlLen),
+      ag_fetch_head_poll: (fetchId, outPtr, outMax) => driver.headPoll(fetchId, outPtr, outMax),
+      ag_fetch_range_start: (urlPtr, urlLen, offset, len) => driver.rangeStart(urlPtr, urlLen, offset, len)
+    }
+  };
+}
+
+// crates/afterglow-web/www/texture.client.ts
+class TextureClient {
+  rpc;
+  static async spawn(workerWasmUrl = "texture.wasm", baseUrl = "") {
+    const driver = new AsyncWorker(null, baseUrl);
+    const memory = new WebAssembly.Memory({ shared: true, initial: 256, maximum: 1024 });
+    const { instance: instance2 } = await WebAssembly.instantiate(await (await fetch(workerWasmUrl)).arrayBuffer(), asyncWorkerImports(driver, memory));
+    driver.w = instance2.exports;
+    instance2.exports.afterglow_wasm_init();
+    return new TextureClient(driver);
+  }
+  poll() {
+    this.rpc.poll();
+  }
+  constructor(rpc) {
+    this.rpc = rpc;
+  }
+  async transcode(data, targetFormat) {
+    const args = concat(encodeBytes(data), encodeU32(targetFormat));
+    const resp = await this.rpc.call(0, args);
+    return decodeBytes(resp, 0)[0];
+  }
+  async generateMips(data, width, height) {
+    const args = concat(encodeBytes(data), encodeU32(width), encodeU32(height));
+    const resp = await this.rpc.call(1, args);
+    return decodeBytes(resp, 0)[0];
+  }
+  async downscale(data, width, height, targetWidth, targetHeight) {
+    const args = concat(encodeBytes(data), encodeU32(width), encodeU32(height), encodeU32(targetWidth), encodeU32(targetHeight));
+    const resp = await this.rpc.call(2, args);
+    return decodeBytes(resp, 0)[0];
+  }
+}
+
+// crates/afterglow-web/www/rpc.ts
+var TIMEOUT_MS = 5000;
+function decodeVarint2(bytes, off) {
+  let r = 0;
+  for (let shift = 0;shift < 35; shift += 7) {
+    if (off >= bytes.length)
+      throw new Error("postcard varint truncated");
+    const b = bytes[off++];
+    if (shift === 28 && b & 240)
+      throw new Error("postcard varint overflows u32");
+    r += (b & 127) * 2 ** shift;
+    if (!(b & 128))
+      return [r >>> 0, off];
+  }
+  throw new Error("postcard varint overflows u32");
+}
+function unwrapResponse2(bytes) {
+  const [variant, off] = decodeVarint2(bytes, 0);
+  if (variant === 0) {
+    const [plen, poff] = decodeVarint2(bytes, off);
+    if (poff + plen > bytes.length)
+      throw new Error("RPC response truncated");
+    return bytes.subarray(poff, poff + plen);
+  }
+  const [method, moff] = decodeVarint2(bytes, off);
+  const [mlen, eoff] = decodeVarint2(bytes, moff);
+  if (eoff + mlen > bytes.length)
+    throw new Error("RPC error truncated");
+  const msg = new TextDecoder().decode(bytes.subarray(eoff, eoff + mlen));
+  throw new Error(`RPC ${variant === 1 ? "server" : "decode"} error (method ${method}): ${msg}`);
+}
+
+class Rpc {
+  static async create({ mainWasmUrl, workerJsUrl, workerWasmUrl, timeoutMs }) {
+    const memory = new WebAssembly.Memory({ shared: true, initial: 256, maximum: 1024 });
+    const worker = new Worker(workerJsUrl, { type: "module" });
+    let rpc = null;
     try {
-      const pending = this.element.requestPointerLock({ unadjustedMovement: true });
-      if (pending)
-        pending.then(this.onRawLockAcquired, this.onRawLockRejected);
-    } catch {
-      this.requestedUnadjustedMovement = false;
-      this.requestFallbackLock();
+      const { exports: wasm } = await WebAssembly.instantiate(await WebAssembly.compile(await (await fetch(mainWasmUrl)).arrayBuffer()), { env: { memory, notify_worker: () => worker.postMessage("wake") } });
+      wasm.init_ring_buffers();
+      rpc = new Rpc(wasm, memory, worker, { timeoutMs });
+      worker.postMessage({
+        type: "init",
+        sab: memory.buffer,
+        reqBase: wasm.get_request_ptr(),
+        respBase: wasm.get_response_ptr(),
+        bufSize: wasm.get_buffer_size(),
+        wasmUrl: workerWasmUrl
+      });
+      await rpc._initPromise;
+      worker.postMessage({ type: "run" });
+      return rpc;
+    } catch (e) {
+      if (rpc)
+        rpc.terminate();
+      else
+        worker.terminate();
+      throw e;
     }
   }
-  requestFallbackLock() {
-    this.requestedUnadjustedMovement = false;
+  constructor(wasm, memory, worker, opts = {}) {
+    this.w = wasm;
+    this.mem = memory;
+    this.worker = worker;
+    this.scratch = wasm.get_scratch_ptr();
+    this.scratchLen = wasm.get_scratch_size();
+    this.pending = null;
+    this._resolve = null;
+    this._reject = null;
+    this._fatal = null;
+    this._terminated = false;
+    this.timeoutMs = opts.timeoutMs ?? TIMEOUT_MS;
+    this._initPromise = new Promise((res, rej) => {
+      this._resolve = res;
+      this._reject = rej;
+    });
+    this._initTimer = setTimeout(() => this._fail(new Error("worker init timeout")), this.timeoutMs);
+    worker.onmessage = (e) => this._onmsg(e.data);
+    worker.onerror = (e) => this._fail(new Error("worker: " + (e && e.message || e)));
+  }
+  _onmsg(d) {
+    if (this._fatal)
+      return;
+    if (d && d.type === "ready") {
+      clearTimeout(this._initTimer);
+      const r = this._resolve;
+      this._resolve = this._reject = null;
+      if (r)
+        r();
+      return;
+    }
+    if (d && d.type === "error") {
+      this._fail(this._reject ? new Error("worker init: " + (d.message || "error")) : new Error(d.message || "worker error"));
+      return;
+    }
+    if (this.pending)
+      this._readResponse();
+  }
+  async call(method, args) {
+    if (this._fatal)
+      throw this._fatal;
+    if (this.pending)
+      throw new Error("RPC busy: one in-flight call at a time");
+    const len = 4 + args.length;
+    if (len > this.scratchLen)
+      throw new Error("request too large for scratch");
+    const view = new Uint8Array(this.mem.buffer, this.scratch, len);
+    view[0] = method & 255;
+    view[1] = method >>> 8 & 255;
+    view[2] = method >>> 16 & 255;
+    view[3] = method >>> 24 & 255;
+    view.set(args, 4);
+    if (this.w.write_frame(this.scratch, len) !== 0)
+      throw new Error("write_frame failed (ring full)");
+    return new Promise((resolve, reject) => {
+      this.pending = { resolve, reject };
+      this.pending.timer = setTimeout(() => this._fail(new Error("RPC timeout")), this.timeoutMs);
+    });
+  }
+  _readResponse() {
+    const n = this.w.read_response(this.scratch, this.scratchLen);
+    const p = this.pending;
+    this.pending = null;
+    if (p)
+      clearTimeout(p.timer);
+    if (!p)
+      return;
+    if (n < 0) {
+      p.reject(new Error("read_response returned " + n));
+      return;
+    }
     try {
-      const pending = this.element.requestPointerLock();
-      if (pending)
-        pending.then(this.onFallbackLockAcquired, this.onFallbackLockRejected);
-    } catch {
-      this.onFallbackLockRejected();
+      p.resolve(unwrapResponse2(new Uint8Array(this.mem.buffer, this.scratch, n)));
+    } catch (e) {
+      p.reject(e);
     }
   }
-  getStatus() {
-    return this.status;
+  _fail(err) {
+    if (this._fatal)
+      return;
+    this._fatal = err;
+    clearTimeout(this._initTimer);
+    if (this._reject) {
+      const r = this._reject;
+      this._resolve = this._reject = null;
+      r(err);
+    }
+    if (this.pending) {
+      const p = this.pending;
+      this.pending = null;
+      clearTimeout(p.timer);
+      p.reject(err);
+    }
   }
-  dispose() {
-    this.element.removeEventListener(this.status.eventType, this.onMovement);
-    this.ownerDocument.removeEventListener("pointerlockchange", this.onPointerLockChange);
+  terminate() {
+    this._fail(new Error("terminated"));
+    if (!this._terminated) {
+      this._terminated = true;
+      this.worker.terminate();
+    }
   }
 }
 // crates/afterglow-web/www/node_modules/three/build/three.module.js
@@ -64612,25 +63140,6 @@ var DATA2 = new Uint16Array([
   1183
 ]);
 
-// crates/afterglow-web/www/engine/asset-handle.ts
-class AssetHandle {
-  asset;
-  generation = 0;
-  state = "loading";
-  path;
-  constructor(path, fallback) {
-    this.path = path;
-    this.asset = fallback;
-  }
-  get isReady() {
-    return this.state === "ready";
-  }
-  get isError() {
-    return this.state === "error";
-  }
-  lod = -1;
-}
-
 // crates/afterglow-web/www/engine/resource.ts
 var RESOURCES = Symbol.for("afterglow-resources");
 var RESOURCES_SEALED = Symbol.for("afterglow-resources-sealed");
@@ -64669,6 +63178,1237 @@ class Resource {
 }
 function defineResource(name, factory) {
   return new Resource(name, factory);
+}
+function initResources(world) {
+  ensureStore(world);
+}
+
+class ResourceManifest {
+  resources;
+  constructor(...resources) {
+    const names = new Set;
+    for (const resource of resources) {
+      if (names.has(resource.name))
+        throw new Error(`duplicate resource manifest entry ${resource.name}`);
+      names.add(resource.name);
+    }
+    this.resources = resources;
+  }
+  initialize(world) {
+    initResources(world);
+    for (const resource of this.resources)
+      resource.get(world);
+  }
+  seal(world) {
+    const missing = [];
+    for (const resource of this.resources)
+      if (!resource.has(world))
+        missing.push(resource.name);
+    if (missing.length !== 0)
+      throw new Error(`resources missing before gameplay seal: ${missing.join(", ")}`);
+    sealResources(world);
+  }
+  initializeAndSeal(world) {
+    this.initialize(world);
+    this.seal(world);
+  }
+}
+function sealResources(world) {
+  ensureStore(world);
+  world[RESOURCES_SEALED] = true;
+}
+
+// crates/afterglow-web/www/engine/asset-handle.ts
+class AssetHandle {
+  asset;
+  generation = 0;
+  state = "loading";
+  path;
+  constructor(path, fallback) {
+    this.path = path;
+    this.asset = fallback;
+  }
+  get isReady() {
+    return this.state === "ready";
+  }
+  get isError() {
+    return this.state === "error";
+  }
+  lod = -1;
+}
+
+// crates/afterglow-web/www/engine/fallback.ts
+var _fallbackGeometry = null;
+var _fallbackMaterial = null;
+var _fallbackGroup = null;
+function fallbackGeometry() {
+  if (!_fallbackGeometry) {
+    _fallbackGeometry = new BoxGeometry(2, 2, 2);
+  }
+  return _fallbackGeometry;
+}
+function fallbackMaterial() {
+  if (!_fallbackMaterial) {
+    _fallbackMaterial = new MeshBasicMaterial({ color: 16711935 });
+  }
+  return _fallbackMaterial;
+}
+function fallbackGroup() {
+  if (!_fallbackGroup) {
+    _fallbackGroup = new Group;
+    const mesh = new Mesh(fallbackGeometry(), fallbackMaterial());
+    _fallbackGroup.add(mesh);
+    _fallbackGroup.name = "__afterglow_fallback__";
+  }
+  return _fallbackGroup.clone(true);
+}
+
+// crates/afterglow-web/www/engine/asset-store.ts
+var MAX_SINGLE_LOAD = 1 << 20;
+var CHUNK_SIZE = 512 * 1024;
+var DEFAULT_LOD_RATIOS = [1, 0.5, 0.25, 0.1];
+var DEFAULT_TARGET_ERROR = 0.02;
+var DEFAULT_ASSET_CAPACITY = 1024;
+async function parseTexture(bytes) {
+  const bitmap = await createImageBitmap(new Blob([bytes]));
+  const tex = new Texture(bitmap);
+  tex.needsUpdate = true;
+  tex.colorSpace = SRGBColorSpace;
+  return tex;
+}
+async function parseGLTFAsset(bytes, loader) {
+  const buf = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(buf).set(bytes);
+  if (!loader)
+    throw new Error("parseGLTFAsset requires an injected Three.js GLTFLoader");
+  return new Promise((resolve, reject) => loader.parse(buf, "", (result) => {
+    try {
+      const materialIndices = new Map;
+      let materialCount = 0;
+      result.scene.traverse((object) => {
+        if (!(object instanceof Mesh))
+          return;
+        const materials = Array.isArray(object.material) ? object.material : [object.material];
+        for (const material of materials) {
+          materialCount++;
+          const index = result.parser?.associations?.get(material)?.materials;
+          if (index !== undefined)
+            materialIndices.set(material, index);
+        }
+      });
+      if (materialCount > 0 && materialIndices.size === 0)
+        throw new Error("GLTFLoader parser associations did not expose stable material indices");
+      resolve({
+        scene: result.scene,
+        animations: result.animations,
+        materialIndices,
+        dispose() {
+          result.scene.traverse((object) => {
+            if (!(object instanceof Mesh))
+              return;
+            object.geometry.dispose();
+            const materials = Array.isArray(object.material) ? object.material : [object.material];
+            for (const material of materials)
+              material.dispose();
+          });
+        }
+      });
+    } catch (error2) {
+      reject(error2);
+    }
+  }, reject));
+}
+function parseGlbMaterialTextures(bytes) {
+  if (bytes.byteLength < 20 || new DataView(bytes.buffer, bytes.byteOffset, 4).getUint32(0, true) !== 1179937895)
+    throw new Error("material metadata requires a GLB payload");
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const jsonLength = view.getUint32(12, true);
+  const jsonType = view.getUint32(16, true);
+  if (jsonType !== 1313821514 || 20 + jsonLength > bytes.byteLength)
+    throw new Error("GLB has no valid JSON chunk");
+  const document2 = JSON.parse(new TextDecoder().decode(bytes.subarray(20, 20 + jsonLength)).replace(/[\\0 ]+$/, ""));
+  const virtualMetadata = document2.extensions?.AFTERGLOW_virtual_textures;
+  const textures = virtualMetadata?.textures ?? document2.textures ?? [];
+  const samplers = virtualMetadata?.samplers ?? document2.samplers ?? [];
+  const materials = virtualMetadata?.materials ?? document2.materials ?? [];
+  const sampling = (info) => {
+    if (info?.index === undefined)
+      return null;
+    const texture2 = textures[info.index];
+    const source = texture2?.source;
+    if (!Number.isSafeInteger(source) || source < 0)
+      return null;
+    const sampler2 = samplers[texture2.sampler] ?? {};
+    const transform = info.extensions?.KHR_texture_transform ?? {};
+    const offset = transform.offset ?? [0, 0];
+    const scale2 = transform.scale ?? [1, 1];
+    return {
+      image: source,
+      texCoord: transform.texCoord ?? info.texCoord ?? 0,
+      offset: [offset[0] ?? 0, offset[1] ?? 0],
+      rotation: transform.rotation ?? 0,
+      scale: [scale2[0] ?? 1, scale2[1] ?? 1],
+      wrapS: sampler2.wrapS ?? 10497,
+      wrapT: sampler2.wrapT ?? 10497,
+      minFilter: sampler2.minFilter ?? 9987,
+      magFilter: sampler2.magFilter ?? 9729
+    };
+  };
+  return materials.map((material, index) => {
+    const baseColorSampling = sampling(material.pbrMetallicRoughness?.baseColorTexture);
+    const metallicRoughnessSampling = sampling(material.pbrMetallicRoughness?.metallicRoughnessTexture);
+    const normalSampling = sampling(material.normalTexture);
+    const emissiveSampling = sampling(material.emissiveTexture);
+    return {
+      index,
+      name: material.name ?? `material-${index}`,
+      baseColorImage: baseColorSampling?.image ?? null,
+      metallicRoughnessImage: metallicRoughnessSampling?.image ?? null,
+      normalImage: normalSampling?.image ?? null,
+      emissiveImage: emissiveSampling?.image ?? null,
+      baseColorSampling,
+      metallicRoughnessSampling,
+      normalSampling,
+      emissiveSampling
+    };
+  });
+}
+async function parseGLTF(bytes, loader) {
+  return (await parseGLTFAsset(bytes, loader)).scene;
+}
+function parseJSON(bytes) {
+  return JSON.parse(new TextDecoder().decode(bytes));
+}
+class AssetStore {
+  maxCompletionsPerPoll;
+  idsByPath = new Map;
+  paths;
+  handles;
+  states;
+  requestTokens;
+  completionIds;
+  completionTokens;
+  completionKinds;
+  completionValues;
+  completionHead = 0;
+  completionTail = 0;
+  completionCount = 0;
+  completionHighWater = 0;
+  completionOverflows = 0;
+  assetCount = 0;
+  readyCount = 0;
+  meshopt;
+  loader;
+  vtStore = null;
+  constructor(loader, meshopt, capacity = DEFAULT_ASSET_CAPACITY, maxCompletionsPerPoll = 32) {
+    this.maxCompletionsPerPoll = maxCompletionsPerPoll;
+    if (!Number.isInteger(capacity) || capacity <= 0)
+      throw new RangeError("asset capacity must be positive");
+    if (!Number.isInteger(maxCompletionsPerPoll) || maxCompletionsPerPoll <= 0)
+      throw new RangeError("asset completion limit must be positive");
+    this.loader = loader;
+    this.meshopt = meshopt;
+    this.paths = new Array(capacity).fill(null);
+    this.handles = new Array(capacity).fill(null);
+    this.states = new Uint8Array(capacity);
+    this.requestTokens = new Uint32Array(capacity);
+    this.completionIds = new Int32Array(capacity);
+    this.completionTokens = new Uint32Array(capacity);
+    this.completionKinds = new Uint8Array(capacity);
+    this.completionValues = new Array(capacity).fill(null);
+  }
+  get assetLoader() {
+    return this.loader;
+  }
+  setVirtualTextureStore(vt) {
+    this.vtStore = vt;
+  }
+  get virtualTextureStore() {
+    return this.vtStore;
+  }
+  poll() {
+    this.loader.poll();
+    this.meshopt?.poll();
+    this.drainCompletions(this.maxCompletionsPerPoll);
+  }
+  enqueueCompletion(id, token, kind, value) {
+    if (this.requestTokens[id] !== token || this.handles[id] === null) {
+      if (kind === 1)
+        value?.dispose?.();
+      return;
+    }
+    if (this.completionCount === this.completionIds.length) {
+      this.completionOverflows++;
+      if (kind === 1)
+        value?.dispose?.();
+      this.handles[id].state = "error";
+      this.states[id] = 6 /* Error */;
+      return;
+    }
+    const slot = this.completionTail;
+    this.completionIds[slot] = id;
+    this.completionTokens[slot] = token;
+    this.completionKinds[slot] = kind;
+    this.completionValues[slot] = value;
+    this.completionTail = (slot + 1) % this.completionIds.length;
+    this.completionCount++;
+    if (this.completionCount > this.completionHighWater)
+      this.completionHighWater = this.completionCount;
+    this.states[id] = 4 /* ReadyToPublish */;
+  }
+  drainCompletions(limit) {
+    let drained = 0;
+    while (drained < limit && this.completionCount !== 0) {
+      const slot = this.completionHead;
+      const id = this.completionIds[slot];
+      const token = this.completionTokens[slot];
+      const kind = this.completionKinds[slot];
+      const value = this.completionValues[slot];
+      this.completionValues[slot] = null;
+      this.completionHead = (slot + 1) % this.completionIds.length;
+      this.completionCount--;
+      drained++;
+      const handle = this.handles[id];
+      if (this.requestTokens[id] !== token || handle === null) {
+        if (kind === 1)
+          value?.dispose?.();
+        continue;
+      }
+      if (kind === 1) {
+        handle.asset = value;
+        handle.generation++;
+        handle.state = "ready";
+        handle.lod = 0;
+        this.states[id] = 5 /* Ready */;
+        this.readyCount++;
+      } else {
+        handle.state = "error";
+        this.states[id] = 6 /* Error */;
+        this.reportCompletionError(kind, id, value);
+      }
+    }
+    return drained;
+  }
+  reportCompletionError(kind, id, value) {
+    const path = this.paths[id];
+    console.error(kind === 2 ? `[afterglow] parse failed: ${path}` : `[afterglow] load failed: ${path}`, value);
+  }
+  registerAsset(path) {
+    const existing = this.idsByPath.get(path);
+    if (existing !== undefined)
+      return existing;
+    if (this.assetCount === this.states.length)
+      return -1;
+    const id = this.assetCount++;
+    this.idsByPath.set(path, id);
+    this.paths[id] = path;
+    this.states[id] = 1 /* Idle */;
+    return id;
+  }
+  observeLoad(id, handle, parser) {
+    const path = this.paths[id];
+    const token = ++this.requestTokens[id];
+    this.states[id] = 2 /* Reading */;
+    this.startLoad(path).then(async (bytes) => {
+      if (this.requestTokens[id] !== token || this.handles[id] !== handle)
+        return;
+      this.states[id] = 3 /* Parsing */;
+      try {
+        const asset = await parser(bytes);
+        if (this.requestTokens[id] !== token || this.handles[id] !== handle) {
+          asset?.dispose?.();
+          return;
+        }
+        this.enqueueCompletion(id, token, 1, asset);
+      } catch (err) {
+        this.enqueueCompletion(id, token, 2, err);
+      }
+    }, (err) => {
+      this.enqueueCompletion(id, token, 3, err);
+    });
+  }
+  tryLoad(path, parser, fallback) {
+    const id = this.registerAsset(path);
+    if (id < 0)
+      return { status: 2 /* CapacityExceeded */, id, handle: null };
+    return this.tryLoadAsset(id, parser, fallback);
+  }
+  tryLoadAsset(id, parser, fallback) {
+    if (!Number.isInteger(id) || id < 0 || id >= this.assetCount)
+      return { status: 2 /* CapacityExceeded */, id: -1, handle: null };
+    const existing = this.handles[id];
+    const state = this.states[id];
+    if (existing && state !== 1 /* Idle */ && state !== 6 /* Error */)
+      return { status: 1 /* Existing */, id, handle: existing };
+    if (state === 5 /* Ready */)
+      return { status: 1 /* Existing */, id, handle: existing };
+    const path = this.paths[id];
+    const handle = new AssetHandle(path, fallback);
+    this.handles[id] = handle;
+    this.observeLoad(id, handle, parser);
+    return { status: 0 /* Started */, id, handle };
+  }
+  load(path, parser, fallback) {
+    const result = this.tryLoad(path, parser, fallback);
+    if (!result.handle)
+      throw new RangeError(`asset capacity exceeded while registering ${path}`);
+    return result.handle;
+  }
+  getHandleById(id) {
+    if (id < 0 || id >= this.assetCount || this.states[id] !== 5 /* Ready */)
+      return;
+    return this.handles[id];
+  }
+  getHandle(path) {
+    const id = this.idsByPath.get(path);
+    return id === undefined ? undefined : this.getHandleById(id);
+  }
+  has(path) {
+    const id = this.idsByPath.get(path);
+    return id !== undefined && this.states[id] === 5 /* Ready */;
+  }
+  isLoading(path) {
+    const id = this.idsByPath.get(path);
+    return id !== undefined && (this.states[id] === 2 /* Reading */ || this.states[id] === 3 /* Parsing */ || this.states[id] === 4 /* ReadyToPublish */);
+  }
+  async optimizeGltfScene(scene) {
+    if (!this.meshopt)
+      throw new Error("optimizeGltfScene requires a meshopt worker");
+    const meshes = [];
+    scene.traverse((object) => {
+      if (object.isMesh)
+        meshes.push(object);
+    });
+    const stats = [];
+    for (const mesh of meshes) {
+      const geometry = mesh.geometry;
+      const position = geometry.getAttribute("position");
+      if (!position || position.itemSize < 3)
+        continue;
+      let source;
+      if (geometry.index) {
+        source = new Uint32Array(geometry.index.count);
+        for (let index = 0;index < source.length; index++)
+          source[index] = geometry.index.getX(index);
+      } else {
+        source = new Uint32Array(position.count);
+        for (let index = 0;index < source.length; index++)
+          source[index] = index;
+      }
+      if (source.length % 3 !== 0)
+        throw new Error(`mesh ${mesh.name} index count is not a triangle list`);
+      const positions = new Float32Array(position.count * 3);
+      for (let index = 0;index < position.count; index++) {
+        const target = index * 3;
+        positions[target] = position.getX(index);
+        positions[target + 1] = position.getY(index);
+        positions[target + 2] = position.getZ(index);
+      }
+      const original = await this.meshopt.analyzeVertexCache(source, position.count);
+      const optimized = source.slice();
+      const groups = geometry.groups.length === 0 ? [{ start: 0, count: source.length }] : geometry.groups;
+      for (const group of groups) {
+        if (group.start % 3 !== 0 || group.count % 3 !== 0 || group.start + group.count > source.length)
+          throw new Error(`mesh ${mesh.name} has a non-triangular material group`);
+        const groupIndices = source.slice(group.start, group.start + group.count);
+        const cacheOptimized = await this.meshopt.optimizeVertexCache(groupIndices, position.count);
+        const overdrawOptimized = await this.meshopt.optimizeOverdraw(cacheOptimized, positions, 12, 1.05);
+        optimized.set(overdrawOptimized, group.start);
+      }
+      const optimizedAnalysis = await this.meshopt.analyzeVertexCache(optimized, position.count);
+      const compressed = await this.meshopt.encodeIndexBuffer(optimized, position.count);
+      geometry.setIndex(new BufferAttribute(optimized, 1));
+      stats.push({
+        name: mesh.name,
+        vertexCount: position.count,
+        skinned: mesh.isSkinnedMesh === true,
+        preservedAttributes: Object.keys(geometry.attributes),
+        originalTriangles: source.length / 3,
+        originalAcmr: original[0],
+        optimizedAcmr: optimizedAnalysis[0],
+        compressedIndexBytes: compressed.byteLength,
+        uncompressedIndexBytes: optimized.byteLength
+      });
+    }
+    return stats;
+  }
+  loadOptimizedGLTF(path, loader) {
+    const fallback = {
+      scene: fallbackGroup(),
+      animations: [],
+      materialIndices: new Map,
+      meshOptimization: [],
+      materialTextures: [],
+      dispose() {}
+    };
+    return this.load(path, async (bytes) => {
+      const materialTextures = parseGlbMaterialTextures(bytes);
+      const parsed = await parseGLTFAsset(bytes, loader);
+      const meshOptimization = await this.optimizeGltfScene(parsed.scene);
+      return { ...parsed, meshOptimization, materialTextures };
+    }, fallback);
+  }
+  loadModel(path) {
+    return this.load(path, (bytes) => this.processModel(bytes, path));
+  }
+  async processModel(bytes, path) {
+    let meshes = [];
+    let textures = new Map;
+    try {
+      const scene = await parseGLTF(bytes);
+      scene.traverse((obj) => {
+        if (obj.isMesh && obj.geometry?.index) {
+          const geo = obj.geometry;
+          meshes.push({
+            indices: new Uint32Array(geo.index.array),
+            positions: new Float32Array(geo.attributes.position.array),
+            uvs: geo.attributes.uv ? new Float32Array(geo.attributes.uv.array) : new Float32Array(0)
+          });
+        }
+        if (obj.isMesh && obj.material?.map)
+          textures.set("diffuse", obj.material.map);
+      });
+    } catch {
+      meshes = this.parseMinimalGLB(bytes);
+    }
+    const stats = [];
+    const meshLods = [];
+    for (const mesh of meshes) {
+      const { lods, stat } = await this.optimizeMesh(mesh.indices, mesh.positions, mesh.uvs);
+      meshLods.push(lods);
+      if (stat)
+        stats.push(stat);
+    }
+    return { meshes: meshLods, textures, stats };
+  }
+  parseMinimalGLB(bytes) {
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    if (view.getUint32(0, true) !== 1179937895)
+      throw new Error("not a GLB");
+    const totalLen = view.getUint32(8, true);
+    let off = 12;
+    let json = null;
+    let bin = null;
+    while (off < totalLen) {
+      const len = view.getUint32(off, true);
+      off += 4;
+      const type = view.getUint32(off, true);
+      off += 4;
+      if (type === 1313821514)
+        json = JSON.parse(new TextDecoder().decode(bytes.subarray(off, off + len)));
+      else if (type === 5130562)
+        bin = bytes.subarray(off, off + len);
+      off += len;
+    }
+    if (!json || !bin)
+      throw new Error("GLB missing JSON or BIN");
+    const accs = json.accessors || [];
+    const bvs = json.bufferViews || [];
+    const prims = json.meshes?.[0]?.primitives || [];
+    const meshes = [];
+    for (const prim of prims) {
+      const read = (aIdx, T2) => {
+        if (aIdx === undefined)
+          return new T2(0);
+        const a = accs[aIdx];
+        const bv = bvs[a.bufferView];
+        const o = (bv.byteOffset || 0) + (a.byteOffset || 0);
+        const comps = a.type === "VEC3" ? 3 : a.type === "VEC2" ? 2 : 1;
+        return new T2(bin.buffer, bin.byteOffset + o, a.count * comps).slice();
+      };
+      meshes.push({
+        indices: read(prim.indices, Uint32Array),
+        positions: read(prim.attributes.POSITION, Float32Array),
+        uvs: prim.attributes.TEXCOORD_0 !== undefined ? read(prim.attributes.TEXCOORD_0, Float32Array) : new Float32Array(0)
+      });
+    }
+    return meshes;
+  }
+  async optimizeMesh(indices, positions, uvs) {
+    const vertexCount = positions.length / 3;
+    const originalTriangles = indices.length / 3;
+    const stride = 12;
+    const uvStride = 8;
+    if (!this.meshopt) {
+      return {
+        lods: [{ indices, positions, uvs, triangleCount: originalTriangles }]
+      };
+    }
+    const origStats = await this.meshopt.analyzeVertexCache(indices, vertexCount);
+    const originalAcmr = origStats[0];
+    let optimized = await this.meshopt.optimizeVertexCache(indices, vertexCount);
+    optimized = await this.meshopt.optimizeOverdraw(optimized, positions, stride, 1.05);
+    const optStats = await this.meshopt.analyzeVertexCache(optimized, vertexCount);
+    const optimizedAcmr = optStats[0];
+    const compressed = await this.meshopt.encodeIndexBuffer(optimized, vertexCount);
+    const lods = [];
+    for (const ratio of DEFAULT_LOD_RATIOS) {
+      if (ratio >= 1) {
+        lods.push({
+          indices: optimized,
+          positions,
+          uvs,
+          triangleCount: optimized.length / 3,
+          stats: ratio === 1 ? {
+            originalTriangles,
+            originalAcmr,
+            optimizedAcmr,
+            compressedIndexBytes: compressed.length,
+            uncompressedIndexBytes: optimized.length * 4
+          } : undefined
+        });
+      } else {
+        const targetTris = Math.max(4, Math.floor(originalTriangles * ratio));
+        const targetIndexCount = targetTris * 3;
+        const simplified = await this.meshopt.simplifyWithUvs(optimized, positions, stride, uvs, uvStride, 0.5, targetIndexCount, DEFAULT_TARGET_ERROR);
+        lods.push({ indices: simplified, positions, uvs, triangleCount: simplified.length / 3 });
+      }
+    }
+    return {
+      lods,
+      stat: {
+        originalTriangles,
+        originalAcmr,
+        optimizedAcmr,
+        compressedIndexBytes: compressed.length,
+        uncompressedIndexBytes: optimized.length * 4
+      }
+    };
+  }
+  loadTexture(path) {
+    if (this.vtStore) {
+      return this.vtStore.loadTexture(path);
+    }
+    return this.load(path, parseTexture, undefined);
+  }
+  loadGLTF(path, loader) {
+    return this.load(path, (bytes) => parseGLTF(bytes, loader), fallbackGroup());
+  }
+  loadJSON(path) {
+    return this.load(path, parseJSON, null);
+  }
+  async startLoad(path) {
+    const total = await this.loader.size(path);
+    if (total > MAX_SINGLE_LOAD)
+      return this.loadChunked(path, total);
+    return this.loader.load(path);
+  }
+  async loadChunked(path, total) {
+    const chunks = [];
+    let offset = 0;
+    while (offset < total) {
+      const len = Math.min(CHUNK_SIZE, total - offset);
+      chunks.push(await this.loader.read(path, offset, len));
+      offset += chunks[chunks.length - 1].byteLength;
+    }
+    const bytes = new Uint8Array(total);
+    let pos = 0;
+    for (const c of chunks) {
+      bytes.set(c, pos);
+      pos += c.byteLength;
+    }
+    return bytes;
+  }
+  evict(path) {
+    const id = this.idsByPath.get(path);
+    if (id === undefined)
+      return;
+    if (this.states[id] === 5 /* Ready */)
+      this.readyCount--;
+    this.requestTokens[id]++;
+    this.handles[id] = null;
+    this.states[id] = 1 /* Idle */;
+  }
+  get size() {
+    return this.readyCount;
+  }
+  get cachedPaths() {
+    const result = [];
+    for (let id = 0;id < this.assetCount; id++)
+      if (this.states[id] === 5 /* Ready */)
+        result.push(this.paths[id]);
+    return result;
+  }
+  get capacity() {
+    return this.states.length;
+  }
+  get registeredAssetCount() {
+    return this.assetCount;
+  }
+  get stateTable() {
+    return this.states;
+  }
+  get pendingCompletionCount() {
+    return this.completionCount;
+  }
+  get completionQueueHighWater() {
+    return this.completionHighWater;
+  }
+  get completionQueueOverflows() {
+    return this.completionOverflows;
+  }
+  dispose() {
+    while (this.completionCount !== 0) {
+      const slot = this.completionHead;
+      if (this.completionKinds[slot] === 1)
+        this.completionValues[slot]?.dispose?.();
+      this.completionValues[slot] = null;
+      this.completionHead = (slot + 1) % this.completionIds.length;
+      this.completionCount--;
+    }
+    this.completionHead = 0;
+    this.completionTail = 0;
+    for (let id = 0;id < this.assetCount; id++) {
+      const handle = this.handles[id];
+      handle?.asset?.dispose?.();
+      this.requestTokens[id]++;
+      this.handles[id] = null;
+      this.paths[id] = null;
+      this.states[id] = 0 /* Free */;
+    }
+    this.idsByPath.clear();
+    this.assetCount = 0;
+    this.readyCount = 0;
+  }
+}
+var AssetStoreRes = defineResource("assetStore", () => {
+  throw new Error("AssetStore not initialized. Call AssetStoreRes.set(world, new AssetStore(loader, meshopt)).");
+});
+// crates/afterglow-web/www/engine/big-parser.ts
+function decodeVarint3(bytes, off) {
+  let r = 0;
+  for (let shift = 0;shift < 56; shift += 7) {
+    if (off >= bytes.length)
+      throw new Error("postcard varint truncated");
+    const b = bytes[off++];
+    r += (b & 127) * 2 ** shift;
+    if (!(b & 128))
+      return [r, off];
+  }
+  throw new Error("postcard varint overflows");
+}
+function decodeU32(bytes, off) {
+  return decodeVarint3(bytes, off);
+}
+function decodeU64(bytes, off) {
+  let result = 0n;
+  for (let shift = 0n;shift < 70n; shift += 7n) {
+    if (off >= bytes.length)
+      throw new Error("postcard u64 varint truncated");
+    const byte = bytes[off++];
+    result |= BigInt(byte & 127) << shift;
+    if (!(byte & 128)) {
+      if (result > 0xffff_ffff_ffff_ffffn)
+        throw new Error("postcard u64 varint overflows");
+      return [result, off];
+    }
+  }
+  throw new Error("postcard u64 varint overflows");
+}
+function decodeString(bytes, off) {
+  const [len, o] = decodeVarint3(bytes, off);
+  const str = new TextDecoder().decode(bytes.subarray(o, o + len));
+  return [str, o + len];
+}
+function decodeVec(bytes, off, decodeFn) {
+  const [len, o] = decodeVarint3(bytes, off);
+  const result = [];
+  let pos = o;
+  for (let i = 0;i < len; i++) {
+    const [item, newOff] = decodeFn(bytes, pos);
+    result.push(item);
+    pos = newOff;
+  }
+  return [result, pos];
+}
+function decodeBool(bytes, off) {
+  return [bytes[off] !== 0, off + 1];
+}
+function decodeU8(bytes, off) {
+  return [bytes[off], off + 1];
+}
+function decodeAssetType(bytes, off) {
+  const [variant, o] = decodeU32(bytes, off);
+  switch (variant) {
+    case 0:
+      return ["Texture", o];
+    case 1:
+      return ["Mesh", o];
+    case 2:
+      return ["VirtualTexture", o];
+    default:
+      throw new Error(`unknown AssetType variant: ${variant}`);
+  }
+}
+function decodeCompression(bytes, off) {
+  const [variant, o] = decodeU32(bytes, off);
+  switch (variant) {
+    case 0:
+      return ["Meshopt", o];
+    case 1:
+      return ["None", o];
+    default:
+      throw new Error(`unknown Compression variant: ${variant}`);
+  }
+}
+function decodeTextureEncoding(bytes, off) {
+  const [variant, next] = decodeU32(bytes, off);
+  if (variant === 0)
+    return ["RawRgba8", next];
+  if (variant === 1)
+    return ["Basis", next];
+  throw new Error(`unknown TextureEncoding variant: ${variant}`);
+}
+function decodeChunkMeta(bytes, off) {
+  const [variant, o] = decodeU32(bytes, off);
+  switch (variant) {
+    case 0: {
+      const [w, o2] = decodeU32(bytes, o);
+      const [h, o3] = decodeU32(bytes, o2);
+      return [{ type: "Texture", width: w, height: h }, o3];
+    }
+    case 1: {
+      const [ic, o2] = decodeU32(bytes, o);
+      const [vc, o3] = decodeU32(bytes, o2);
+      const [ps, o4] = decodeU32(bytes, o3);
+      const [us, o5] = decodeU32(bytes, o4);
+      return [{ type: "Mesh", indexCount: ic, vertexCount: vc, positionStride: ps, uvStride: us }, o5];
+    }
+    case 2:
+      return [{ type: "Raw" }, o];
+    default:
+      throw new Error(`unknown ChunkMeta variant: ${variant}`);
+  }
+}
+function decodeChunkInfo(bytes, off) {
+  const [offset, o1] = decodeU64(bytes, off);
+  const [compressedSize, o2] = decodeU64(bytes, o1);
+  const [uncompressedSize, o3] = decodeU64(bytes, o2);
+  const [lodLevel, o4] = decodeU8(bytes, o3);
+  const [mipLevel, o5] = decodeU8(bytes, o4);
+  const [compression, o6] = decodeCompression(bytes, o5);
+  const [meta, o7] = decodeChunkMeta(bytes, o6);
+  return [{
+    offset,
+    compressedSize,
+    uncompressedSize,
+    lodLevel,
+    mipLevel,
+    compression,
+    meta
+  }, o7];
+}
+function decodeVTMipDirectory(bytes, off) {
+  const [mip, o1] = decodeU8(bytes, off);
+  const [pagesX, o2] = decodeU32(bytes, o1);
+  const [pagesY, o3] = decodeU32(bytes, o2);
+  const [offset, o4] = decodeU64(bytes, o3);
+  const [pageSizes, o5] = decodeVec(bytes, o4, decodeU32);
+  return [{ mip, pagesX, pagesY, offset, pageSizes }, o5];
+}
+function decodeVTTailDirectory(bytes, off) {
+  const [firstMip, o1] = decodeU8(bytes, off);
+  const [offset, o2] = decodeU64(bytes, o1);
+  const [size, o3] = decodeU32(bytes, o2);
+  return [{ firstMip, offset, size }, o3];
+}
+function decodeVTDirectory(bytes, off) {
+  const [width, o1] = decodeU32(bytes, off);
+  const [height, o2] = decodeU32(bytes, o1);
+  const [encoding, o3] = decodeTextureEncoding(bytes, o2);
+  const [mips, o4] = decodeVec(bytes, o3, decodeVTMipDirectory);
+  const [hasTail, o5] = decodeBool(bytes, o4);
+  if (!hasTail)
+    return [{ width, height, encoding, mips, tail: null }, o5];
+  const [tail, o6] = decodeVTTailDirectory(bytes, o5);
+  return [{ width, height, encoding, mips, tail }, o6];
+}
+function decodeAssetEntry(bytes, off) {
+  const [name, o1] = decodeString(bytes, off);
+  const [assetType, o2] = decodeAssetType(bytes, o1);
+  const [chunks, o3] = decodeVec(bytes, o2, decodeChunkInfo);
+  const [hasVirtualTexture, o4] = decodeBool(bytes, o3);
+  if (!hasVirtualTexture)
+    return [{ name, assetType, chunks, virtualTexture: null }, o4];
+  const [virtualTexture, o5] = decodeVTDirectory(bytes, o4);
+  return [{ name, assetType, chunks, virtualTexture }, o5];
+}
+var BIG_MAGIC = 826755394;
+var BIG_VERSION = 5;
+function parseBigHeader(data) {
+  if (data.length < 16)
+    throw new Error(".big: file too small");
+  const magic = new DataView(data.buffer, data.byteOffset, 4).getUint32(0, true);
+  if (magic !== BIG_MAGIC)
+    throw new Error(".big: bad magic");
+  const version = new DataView(data.buffer, data.byteOffset + 4, 4).getUint32(0, true);
+  if (version !== BIG_VERSION)
+    throw new Error(`.big: version ${version} != ${BIG_VERSION}`);
+  const dataOffset = Number(new DataView(data.buffer, data.byteOffset + 8, 8).getBigUint64(0, true));
+  const headerBytes = data.subarray(16, dataOffset);
+  let off = 0;
+  const [hdrVersion, o1] = decodeU32(headerBytes, off);
+  off = o1;
+  const [hdrDataOffset, o2] = decodeU64(headerBytes, off);
+  off = o2;
+  const [assets, o3] = decodeVec(headerBytes, off, decodeAssetEntry);
+  off = o3;
+  return {
+    header: { version: hdrVersion, dataOffset: hdrDataOffset, assets },
+    dataOffset
+  };
+}
+function getVirtualTextureDimensions(header, assetName) {
+  const directory = header.assets.find((asset) => asset.name === assetName)?.virtualTexture;
+  if (!directory)
+    throw new Error(`VT dimensions unavailable: ${assetName}`);
+  return { width: directory.width, height: directory.height };
+}
+class BoundedTranscoderPool {
+  workers;
+  jobs;
+  workerBusy;
+  head = 0;
+  tail = 0;
+  count = 0;
+  active = 0;
+  completed = 0;
+  totalQueueMs = 0;
+  maxQueueMs = 0;
+  totalTranscodeMs = 0;
+  maxTranscodeMs = 0;
+  stats = {
+    workerCount: 0,
+    active: 0,
+    queued: 0,
+    completed: 0,
+    averageQueueMs: 0,
+    maxQueueMs: 0,
+    averageTranscodeMs: 0,
+    maxTranscodeMs: 0
+  };
+  constructor(workers, capacity) {
+    this.workers = workers;
+    if (workers.length === 0 || !Number.isInteger(capacity) || capacity < 1)
+      throw new RangeError("VT transcoder pool requires workers and positive capacity");
+    this.jobs = new Array(capacity).fill(null);
+    this.workerBusy = new Uint8Array(workers.length);
+  }
+  submit(data, format, signal) {
+    if (this.count === this.jobs.length)
+      return Promise.reject(new Error("VT transcode queue capacity exceeded"));
+    return new Promise((resolve, reject) => {
+      this.jobs[this.tail] = { data, format, signal, queuedAt: performance.now(), resolve, reject };
+      this.tail = (this.tail + 1) % this.jobs.length;
+      this.count++;
+      this.pump();
+    });
+  }
+  pump() {
+    for (let workerIndex = 0;workerIndex < this.workers.length && this.count !== 0; workerIndex++) {
+      if (this.workerBusy[workerIndex] !== 0)
+        continue;
+      const job = this.jobs[this.head];
+      this.jobs[this.head] = null;
+      this.head = (this.head + 1) % this.jobs.length;
+      this.count--;
+      if (job.signal?.aborted) {
+        job.reject(new Error("VT transcode canceled before dispatch"));
+        workerIndex--;
+        continue;
+      }
+      const queueMs = performance.now() - job.queuedAt;
+      this.totalQueueMs += queueMs;
+      this.maxQueueMs = Math.max(this.maxQueueMs, queueMs);
+      this.workerBusy[workerIndex] = 1;
+      this.active++;
+      this.run(workerIndex, job);
+    }
+  }
+  async run(workerIndex, job) {
+    const startedAt = performance.now();
+    try {
+      const result = await this.workers[workerIndex].transcode(job.data, job.format);
+      if (job.signal?.aborted)
+        job.reject(new Error("VT transcode canceled after dispatch"));
+      else
+        job.resolve(result.slice());
+    } catch (error2) {
+      job.reject(error2);
+    } finally {
+      const elapsed = performance.now() - startedAt;
+      this.completed++;
+      this.totalTranscodeMs += elapsed;
+      this.maxTranscodeMs = Math.max(this.maxTranscodeMs, elapsed);
+      this.workerBusy[workerIndex] = 0;
+      this.active--;
+      this.pump();
+    }
+  }
+  getStats() {
+    const stats = this.stats;
+    stats.workerCount = this.workers.length;
+    stats.active = this.active;
+    stats.queued = this.count;
+    stats.completed = this.completed;
+    stats.averageQueueMs = this.completed === 0 ? 0 : this.totalQueueMs / this.completed;
+    stats.maxQueueMs = this.maxQueueMs;
+    stats.averageTranscodeMs = this.completed === 0 ? 0 : this.totalTranscodeMs / this.completed;
+    stats.maxTranscodeMs = this.maxTranscodeMs;
+    return stats;
+  }
+}
+function createFetchRangeLoader(baseUrl = "") {
+  const url = (path) => baseUrl + path;
+  const identity = async (path) => {
+    const response = await fetch(url(path), { headers: { Range: "bytes=0-0" } });
+    if (response.status !== 206)
+      throw new Error(`asset identity range expected 206, got ${response.status}: ${path}`);
+    const contentRange = response.headers.get("content-range") ?? "";
+    const separator = contentRange.lastIndexOf("/");
+    const size = Number(separator < 0 ? "" : contentRange.slice(separator + 1));
+    if (!Number.isSafeInteger(size) || size < 1)
+      throw new Error(`asset identity has invalid content-range: ${path}`);
+    return {
+      size,
+      etag: response.headers.get("etag"),
+      lastModified: response.headers.get("last-modified")
+    };
+  };
+  return {
+    async load(path) {
+      const response = await fetch(url(path));
+      if (!response.ok)
+        throw new Error(`asset fetch ${response.status}: ${path}`);
+      return new Uint8Array(await response.arrayBuffer());
+    },
+    async size(path) {
+      return (await identity(path)).size;
+    },
+    identity,
+    async read(path, offset, len) {
+      if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(len) || len < 0)
+        throw new RangeError("asset range must use non-negative safe integers");
+      if (len === 0)
+        return new Uint8Array(0);
+      const response = await fetch(url(path), {
+        headers: { Range: `bytes=${offset}-${offset + len - 1}` }
+      });
+      if (response.status !== 206)
+        throw new Error(`asset range fetch expected 206, got ${response.status}: ${path}`);
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      if (bytes.byteLength !== len)
+        throw new Error(`asset range returned ${bytes.byteLength} bytes; expected ${len}: ${path}`);
+      return bytes;
+    }
+  };
+}
+
+class BigContainerAssetLoader {
+  source;
+  containerPath;
+  assets = new Map;
+  constructor(source, containerPath, header) {
+    this.source = source;
+    this.containerPath = containerPath;
+    for (const asset of header.assets) {
+      if (asset.chunks.length !== 1 || asset.chunks[0].meta.type !== "Raw")
+        continue;
+      const chunk = asset.chunks[0];
+      if (chunk.compression !== "None" || chunk.compressedSize !== chunk.uncompressedSize)
+        throw new Error(`raw BIG asset must be uncompressed: ${asset.name}`);
+      if (chunk.uncompressedSize > BigInt(Number.MAX_SAFE_INTEGER))
+        throw new RangeError(`raw BIG asset exceeds browser safe size: ${asset.name}`);
+      this.assets.set(asset.name, chunk);
+    }
+  }
+  chunk(path) {
+    const chunk = this.assets.get(path);
+    if (!chunk)
+      throw new Error(`raw BIG asset not found: ${path}`);
+    return chunk;
+  }
+  load(path) {
+    const chunk = this.chunk(path);
+    return this.source.read(this.containerPath, Number(chunk.offset), Number(chunk.uncompressedSize));
+  }
+  async size(path) {
+    return Number(this.chunk(path).uncompressedSize);
+  }
+  read(path, offset, length2) {
+    const chunk = this.chunk(path);
+    const size = Number(chunk.uncompressedSize);
+    if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length2) || length2 < 0 || offset + length2 > size)
+      throw new RangeError(`raw BIG asset range exceeds ${path}: ${offset}+${length2} > ${size}`);
+    return this.source.read(this.containerPath, Number(chunk.offset) + offset, length2);
+  }
+  poll() {}
+}
+function createPageDataProvider(loader, header, textureWorkers, format, cache2, transcodeQueueCapacity = 64) {
+  const directories = new Map;
+  for (let assetId = 0;assetId < header.assets.length; assetId++) {
+    const asset = header.assets[assetId];
+    const source = asset.virtualTexture;
+    if (!source)
+      continue;
+    let maxMip = 0;
+    for (const mip of source.mips)
+      maxMip = Math.max(maxMip, mip.mip);
+    const mips = new Array(maxMip + 1).fill(null);
+    for (const mip of source.mips) {
+      const sizes = Uint32Array.from(mip.pageSizes);
+      const offsets = new Float64Array(sizes.length);
+      let offset = Number(mip.offset);
+      for (let page = 0;page < sizes.length; page++) {
+        offsets[page] = offset;
+        offset += sizes[page];
+      }
+      mips[mip.mip] = { pagesX: mip.pagesX, pagesY: mip.pagesY, offsets, sizes };
+    }
+    directories.set(asset.name, {
+      assetId,
+      encoding: source.encoding,
+      mips,
+      tailOffset: source.tail ? Number(source.tail.offset) : 0,
+      tailSize: source.tail?.size ?? 0
+    });
+  }
+  const transcoder = new BoundedTranscoderPool(textureWorkers, transcodeQueueCapacity);
+  let reads = 0;
+  let totalReadMs = 0;
+  let maxReadMs = 0;
+  const stats = {
+    reads: 0,
+    averageReadMs: 0,
+    maxReadMs: 0,
+    workerCount: textureWorkers.length,
+    activeTranscodes: 0,
+    queuedTranscodes: 0,
+    completedTranscodes: 0,
+    averageTranscodeQueueMs: 0,
+    maxTranscodeQueueMs: 0,
+    averageTranscodeMs: 0,
+    maxTranscodeMs: 0,
+    cacheEnabled: cache2 !== undefined,
+    cacheBackend: "",
+    cacheEntries: 0,
+    cacheBytes: 0,
+    cacheLiveBytes: 0,
+    cacheQueuedWrites: 0,
+    cacheEvictions: 0,
+    cacheCompactions: 0,
+    cacheReclaimedBytes: 0,
+    cacheMaintenance: false,
+    cacheHits: 0,
+    cacheMisses: 0,
+    cacheWrites: 0,
+    cacheRejected: 0,
+    cacheErrors: 0,
+    averageCacheReadMs: 0,
+    maxCacheReadMs: 0,
+    averageCacheWriteMs: 0,
+    maxCacheWriteMs: 0
+  };
+  const provider = async (path, req, signal) => {
+    if (signal?.aborted)
+      throw new Error("VT page load canceled before read");
+    const directory = directories.get(path);
+    let offset = 0;
+    let size = 0;
+    if (req.tail) {
+      offset = directory?.tailOffset ?? 0;
+      size = directory?.tailSize ?? 0;
+    } else {
+      const mip = directory?.mips[req.mip];
+      if (mip && req.x >= 0 && req.y >= 0 && req.x < mip.pagesX && req.y < mip.pagesY) {
+        const page = req.y * mip.pagesX + req.x;
+        offset = mip.offsets[page];
+        size = mip.sizes[page];
+      }
+    }
+    if (!directory || size === 0)
+      throw new Error(`VT page not found: ${path} mip=${req.mip} (${req.x},${req.y})`);
+    const cacheKey = `${directory.assetId}:${req.tail ? "t" : req.mip}:${req.x}:${req.y}`;
+    const expectedBytes = format === 4 ? 136 * 136 * 4 : 34 * 34 * 16;
+    if (cache2) {
+      const cached = await cache2.get(cacheKey);
+      if (signal?.aborted)
+        throw new Error("VT page load canceled after cache read");
+      if (cached && cached.byteLength === expectedBytes)
+        return cached;
+    }
+    const readStartedAt = performance.now();
+    const pageData = await loader.read(path + ".big", offset, size);
+    const readMs = performance.now() - readStartedAt;
+    reads++;
+    totalReadMs += readMs;
+    maxReadMs = Math.max(maxReadMs, readMs);
+    if (signal?.aborted)
+      throw new Error("VT page load canceled after read");
+    if (directory.encoding === "RawRgba8") {
+      if (format !== 4) {
+        throw new Error(`VT page ${path} is raw RGBA8 but GPU format ${format} requires Basis encoding`);
+      }
+      if (cache2)
+        cache2.put(cacheKey, pageData);
+      return pageData;
+    }
+    if (pageData.byteLength < 2 || pageData[0] !== 115 || pageData[1] !== 66)
+      throw new Error(`invalid Basis page range for ${path}: bytes=${pageData.byteLength}, magic=${pageData[0]},${pageData[1]}`);
+    const transcoded = await transcoder.submit(pageData, format, signal);
+    if (signal?.aborted)
+      throw new Error("VT page load canceled after transcode");
+    if (transcoded.byteLength < 16)
+      throw new Error("truncated transcoded VT page");
+    const view = new DataView(transcoded.buffer, transcoded.byteOffset, transcoded.byteLength);
+    const count = view.getUint32(0, true);
+    const width = view.getUint32(4, true);
+    const height = view.getUint32(8, true);
+    const length2 = view.getUint32(12, true);
+    if (count < 1 || width !== 136 || height !== 136 || 16 + length2 > transcoded.byteLength)
+      throw new Error(`invalid transcoded VT page header: count=${count}, size=${width}x${height}, bytes=${length2}`);
+    const payload = transcoded.slice(16, 16 + length2);
+    if (cache2)
+      cache2.put(cacheKey, payload);
+    return payload;
+  };
+  provider.getStats = () => {
+    const transcode = transcoder.getStats();
+    stats.reads = reads;
+    stats.averageReadMs = reads === 0 ? 0 : totalReadMs / reads;
+    stats.maxReadMs = maxReadMs;
+    stats.workerCount = transcode.workerCount;
+    stats.activeTranscodes = transcode.active;
+    stats.queuedTranscodes = transcode.queued;
+    stats.completedTranscodes = transcode.completed;
+    stats.averageTranscodeQueueMs = transcode.averageQueueMs;
+    stats.maxTranscodeQueueMs = transcode.maxQueueMs;
+    stats.averageTranscodeMs = transcode.averageTranscodeMs;
+    stats.maxTranscodeMs = transcode.maxTranscodeMs;
+    const persistent = cache2?.getStats();
+    if (persistent) {
+      stats.cacheBackend = persistent.backend;
+      stats.cacheEntries = persistent.entries;
+      stats.cacheBytes = persistent.bytes;
+      stats.cacheLiveBytes = persistent.liveBytes;
+      stats.cacheQueuedWrites = persistent.queuedWrites;
+      stats.cacheEvictions = persistent.evictions;
+      stats.cacheCompactions = persistent.compactions;
+      stats.cacheReclaimedBytes = persistent.reclaimedBytes;
+      stats.cacheMaintenance = persistent.maintenance;
+      stats.cacheHits = persistent.hits;
+      stats.cacheMisses = persistent.misses;
+      stats.cacheWrites = persistent.writes;
+      stats.cacheRejected = persistent.rejectedCapacity + persistent.rejectedQueue;
+      stats.cacheErrors = persistent.corruptEntries + persistent.readErrors + persistent.writeErrors;
+      stats.averageCacheReadMs = persistent.averageReadMs;
+      stats.maxCacheReadMs = persistent.maxReadMs;
+      stats.averageCacheWriteMs = persistent.averageWriteMs;
+      stats.maxCacheWriteMs = persistent.maxWriteMs;
+    }
+    return stats;
+  };
+  return provider;
 }
 
 // crates/afterglow-web/www/engine/virtual-texture-layout.ts
@@ -66527,6 +66267,3402 @@ fn vtFeedback(
 }
 `;
 
+// crates/afterglow-web/www/engine/big-asset-session.ts
+class BigAssetSession {
+  source;
+  containerPath;
+  header;
+  format;
+  workers;
+  rawAssets;
+  pageProvider;
+  stats = { workersStarted: 0, closeErrors: 0, closed: false };
+  closed = false;
+  assetStore = null;
+  store = null;
+  constructor(source, containerPath, header, format, workers, pageProvider) {
+    this.source = source;
+    this.containerPath = containerPath;
+    this.header = header;
+    this.format = format;
+    this.workers = workers;
+    this.rawAssets = new BigContainerAssetLoader(source, containerPath, header);
+    this.pageProvider = pageProvider;
+    this.stats.workersStarted = workers.length;
+  }
+  static async open(options) {
+    if (!options.containerPath)
+      throw new RangeError("BIG session requires a container path");
+    if (!Number.isInteger(options.workerCount) || options.workerCount <= 0)
+      throw new RangeError("BIG session workerCount must be positive");
+    if (!Number.isInteger(options.transcodeQueueCapacity) || options.transcodeQueueCapacity <= 0)
+      throw new RangeError("BIG session transcode queue capacity must be positive");
+    if (!Number.isSafeInteger(options.maxHeaderBytes) || options.maxHeaderBytes < 16)
+      throw new RangeError("BIG session maxHeaderBytes must be at least 16");
+    const source = options.source ?? createFetchRangeLoader();
+    const workers = [];
+    try {
+      const prefix = await source.read(options.containerPath, 0, 16);
+      if (prefix.byteLength !== 16)
+        throw new Error("BIG session received a truncated prefix");
+      const view = new DataView(prefix.buffer, prefix.byteOffset, prefix.byteLength);
+      if (view.getUint32(0, true) !== BIG_MAGIC)
+        throw new Error("BIG session has invalid magic");
+      if (view.getUint32(4, true) !== BIG_VERSION)
+        throw new Error("BIG session has unsupported version");
+      const dataOffset = Number(view.getBigUint64(8, true));
+      if (!Number.isSafeInteger(dataOffset) || dataOffset < 16 || dataOffset > options.maxHeaderBytes)
+        throw new RangeError(`BIG header size ${dataOffset} exceeds configured capacity ${options.maxHeaderBytes}`);
+      const headerBytes = await source.read(options.containerPath, 0, dataOffset);
+      if (headerBytes.byteLength !== dataOffset)
+        throw new Error("BIG session received a truncated header");
+      const { header } = parseBigHeader(headerBytes);
+      for (let index = 0;index < options.workerCount; index++)
+        workers.push(await options.createWorker(index));
+      const clients = workers.map((owned) => owned.worker);
+      const containerLoader = {
+        load: (path) => source.load(path),
+        size: (path) => source.size(path),
+        read: (_path, offset, length2) => source.read(options.containerPath, offset, length2)
+      };
+      const pageProvider = createPageDataProvider(containerLoader, header, clients, options.format, options.cache, options.transcodeQueueCapacity);
+      return new BigAssetSession(source, options.containerPath, header, options.format, workers, pageProvider);
+    } catch (error2) {
+      for (let index = workers.length - 1;index >= 0; index--) {
+        try {
+          await workers[index]?.close();
+        } catch (closeError) {
+          if (error2 instanceof Error && error2.cause === undefined)
+            error2.cause = closeError;
+        }
+      }
+      throw error2;
+    }
+  }
+  createAssetStore(meshopt, capacity = 64, maxCompletionsPerPoll = 32) {
+    if (this.closed)
+      throw new Error("cannot create an asset store from a closed BIG session");
+    if (this.assetStore)
+      throw new Error("BIG session already created its asset store");
+    this.assetStore = new AssetStore(this.rawAssets, meshopt, capacity, maxCompletionsPerPoll);
+    return this.assetStore;
+  }
+  createVirtualTextureStore(device, tuning) {
+    if (this.closed)
+      throw new Error("cannot create a VT store from a closed BIG session");
+    if (this.store)
+      throw new Error("BIG session already created its VT store");
+    const loader = {
+      read: (_path, offset, length2) => this.source.read(this.containerPath, offset, length2),
+      poll() {}
+    };
+    this.store = new VirtualTextureStore(loader, this.pageProvider, this.format, device, tuning ?? new VirtualTextureTuning);
+    return this.store;
+  }
+  async close() {
+    if (this.closed)
+      return;
+    this.closed = true;
+    this.assetStore?.dispose();
+    this.assetStore = null;
+    this.store?.dispose();
+    this.store = null;
+    let firstError = null;
+    for (let index = this.workers.length - 1;index >= 0; index--) {
+      try {
+        await this.workers[index]?.close();
+      } catch (error2) {
+        this.stats.closeErrors++;
+        if (firstError === null)
+          firstError = error2;
+      }
+    }
+    this.workers.length = 0;
+    this.stats.closed = true;
+    if (firstError !== null)
+      throw firstError;
+  }
+}
+// crates/afterglow-web/www/engine/persistent-blob-cache.ts
+var INDEX_MAGIC = 1128417089;
+var MANIFEST_MAGIC = 1296189249;
+var INDEX_VERSION = 2;
+var INDEX_HEADER_BYTES = 16;
+var HASH_WORDS = 8;
+var INDEX_RECORD_BYTES = 48;
+var EMPTY = 0;
+var OCCUPIED = 1;
+var TOMBSTONE = 2;
+function checksum(bytes) {
+  let value = 2166136261;
+  for (let index = 0;index < bytes.length; index++) {
+    value ^= bytes[index];
+    value = Math.imul(value, 16777619);
+  }
+  return value >>> 0;
+}
+async function hashKey(key) {
+  const encoded = new TextEncoder().encode(key);
+  const digest = await crypto.subtle.digest("SHA-256", encoded);
+  return new Uint32Array(digest);
+}
+async function persistentCacheNamespace(parts) {
+  let value = "";
+  for (const part of parts)
+    value += `${part.length}:${part};`;
+  const words = await hashKey(value);
+  let output2 = "";
+  for (let index = 0;index < words.length; index++)
+    output2 += words[index].toString(16).padStart(8, "0");
+  return output2;
+}
+
+class OpfsBlobBackend {
+  directory;
+  kind = "opfs";
+  constructor(directory) {
+    this.directory = directory;
+  }
+  static async open(namespace) {
+    const storage2 = navigator.storage;
+    if (!storage2?.getDirectory)
+      throw new Error("OPFS is unavailable");
+    const root = await storage2.getDirectory();
+    const cacheRoot = await root.getDirectoryHandle("afterglow-cache", { create: true });
+    const directory = await cacheRoot.getDirectoryHandle(namespace, { create: true });
+    return new OpfsBlobBackend(directory);
+  }
+  async file(name) {
+    return this.directory.getFileHandle(name, { create: true });
+  }
+  async size(name) {
+    return (await (await this.file(name)).getFile()).size;
+  }
+  async read(name, offset, length2) {
+    const file = await (await this.file(name)).getFile();
+    return new Uint8Array(await file.slice(offset, offset + length2).arrayBuffer());
+  }
+  async append(name, data) {
+    const handle = await this.file(name);
+    const size = (await handle.getFile()).size;
+    const writable = await handle.createWritable({ keepExistingData: true });
+    try {
+      await writable.seek(size);
+      await writable.write(data);
+    } finally {
+      await writable.close();
+    }
+  }
+  async replace(name, data) {
+    const writable = await (await this.file(name)).createWritable();
+    try {
+      await writable.write(data);
+    } finally {
+      await writable.close();
+    }
+  }
+}
+function idbRequest(request) {
+  return new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error ?? new Error("IndexedDB request failed"));
+  });
+}
+function idbTransaction(transaction) {
+  return new Promise((resolve, reject) => {
+    transaction.oncomplete = () => resolve();
+    transaction.onabort = () => reject(transaction.error ?? new Error("IndexedDB transaction aborted"));
+    transaction.onerror = () => reject(transaction.error ?? new Error("IndexedDB transaction failed"));
+  });
+}
+
+class IndexedDbBlobBackend {
+  database;
+  kind = "indexeddb";
+  constructor(database) {
+    this.database = database;
+  }
+  static async open(namespace) {
+    if (!globalThis.indexedDB)
+      throw new Error("IndexedDB is unavailable");
+    const request = indexedDB.open(`afterglow-cache-${namespace}`, 1);
+    request.onupgradeneeded = () => {
+      const database = request.result;
+      if (!database.objectStoreNames.contains("chunks"))
+        database.createObjectStore("chunks", { keyPath: ["file", "offset"] });
+      if (!database.objectStoreNames.contains("meta"))
+        database.createObjectStore("meta", { keyPath: "file" });
+    };
+    return new IndexedDbBlobBackend(await idbRequest(request));
+  }
+  async size(name) {
+    const transaction = this.database.transaction("meta", "readonly");
+    const result = await idbRequest(transaction.objectStore("meta").get(name));
+    return result?.size ?? 0;
+  }
+  async predecessor(name, offset) {
+    const transaction = this.database.transaction("chunks", "readonly");
+    const range2 = IDBKeyRange.bound([name, 0], [name, offset]);
+    const cursor = await idbRequest(transaction.objectStore("chunks").openCursor(range2, "prev"));
+    return cursor ? cursor.value : null;
+  }
+  async read(name, offset, length2) {
+    if (length2 === 0)
+      return new Uint8Array(0);
+    const exactTransaction = this.database.transaction("chunks", "readonly");
+    const exact = await idbRequest(exactTransaction.objectStore("chunks").get([name, offset]));
+    if (exact && exact.data.byteLength === length2)
+      return exact.data;
+    const predecessor = await this.predecessor(name, offset);
+    const firstOffset = predecessor && predecessor.offset + predecessor.data.byteLength > offset ? predecessor.offset : offset;
+    const output2 = new Uint8Array(length2);
+    const end = offset + length2;
+    const transaction = this.database.transaction("chunks", "readonly");
+    const store = transaction.objectStore("chunks");
+    const range2 = IDBKeyRange.bound([name, firstOffset], [name, end - 1]);
+    await new Promise((resolve, reject) => {
+      const request = store.openCursor(range2);
+      request.onerror = () => reject(request.error ?? new Error("IndexedDB cursor failed"));
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) {
+          resolve();
+          return;
+        }
+        const chunk = cursor.value;
+        const copyStart = Math.max(offset, chunk.offset);
+        const copyEnd = Math.min(end, chunk.offset + chunk.data.byteLength);
+        if (copyEnd > copyStart)
+          output2.set(chunk.data.subarray(copyStart - chunk.offset, copyEnd - chunk.offset), copyStart - offset);
+        cursor.continue();
+      };
+    });
+    return output2;
+  }
+  async append(name, data) {
+    const transaction = this.database.transaction(["chunks", "meta"], "readwrite");
+    const done = idbTransaction(transaction);
+    const meta = transaction.objectStore("meta");
+    const previous = await idbRequest(meta.get(name));
+    const offset = previous?.size ?? 0;
+    transaction.objectStore("chunks").put({ file: name, offset, data: data.slice() });
+    meta.put({ file: name, size: offset + data.byteLength });
+    await done;
+  }
+  async replace(name, data) {
+    const transaction = this.database.transaction(["chunks", "meta"], "readwrite");
+    const done = idbTransaction(transaction);
+    const chunks = transaction.objectStore("chunks");
+    const range2 = IDBKeyRange.bound([name, 0], [name, Number.MAX_SAFE_INTEGER]);
+    await new Promise((resolve, reject) => {
+      const request = chunks.openCursor(range2);
+      request.onerror = () => reject(request.error ?? new Error("IndexedDB cursor failed"));
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) {
+          resolve();
+          return;
+        }
+        cursor.delete();
+        cursor.continue();
+      };
+    });
+    if (data.byteLength !== 0)
+      chunks.put({ file: name, offset: 0, data: data.slice() });
+    transaction.objectStore("meta").put({ file: name, size: data.byteLength });
+    await done;
+  }
+}
+
+class PersistentBlobCache {
+  backend;
+  maxBytes;
+  maxEntries;
+  states;
+  hashes;
+  offsets;
+  lengths;
+  checksums;
+  lruPrevious;
+  lruNext;
+  compactionOffsets;
+  jobs;
+  stats;
+  head = 0;
+  tail = 0;
+  queued = 0;
+  queuedBytes = 0;
+  writingBytes = 0;
+  writing = false;
+  entries = 0;
+  packBytes = 0;
+  liveBytes = 0;
+  lruHead = -1;
+  lruTail = -1;
+  activeGeneration = 0;
+  maintenancePromise = null;
+  idleResolvers = [];
+  totalReadMs = 0;
+  maxReadMs = 0;
+  totalWriteMs = 0;
+  maxWriteMs = 0;
+  constructor(backend, maxBytes, maxEntries, writeQueueCapacity) {
+    this.backend = backend;
+    this.maxBytes = maxBytes;
+    this.maxEntries = maxEntries;
+    this.states = new Uint8Array(maxEntries * 2);
+    this.hashes = new Uint32Array(this.states.length * HASH_WORDS);
+    this.offsets = new Float64Array(this.states.length);
+    this.lengths = new Uint32Array(this.states.length);
+    this.checksums = new Uint32Array(this.states.length);
+    this.lruPrevious = new Int32Array(this.states.length);
+    this.lruNext = new Int32Array(this.states.length);
+    this.lruPrevious.fill(-1);
+    this.lruNext.fill(-1);
+    this.compactionOffsets = new Float64Array(this.states.length);
+    this.jobs = new Array(writeQueueCapacity).fill(null);
+    this.stats = {
+      enabled: true,
+      backend: backend.kind ?? "custom",
+      entries: 0,
+      bytes: 0,
+      liveBytes: 0,
+      maxBytes,
+      maxEntries,
+      queuedWrites: 0,
+      hits: 0,
+      misses: 0,
+      writes: 0,
+      writeBytes: 0,
+      rejectedCapacity: 0,
+      rejectedQueue: 0,
+      corruptEntries: 0,
+      readErrors: 0,
+      writeErrors: 0,
+      evictions: 0,
+      compactions: 0,
+      reclaimedBytes: 0,
+      maintenance: false,
+      averageReadMs: 0,
+      maxReadMs: 0,
+      averageWriteMs: 0,
+      maxWriteMs: 0
+    };
+  }
+  static async open(options, backend) {
+    if (!options.namespace || !Number.isSafeInteger(options.maxBytes) || options.maxBytes < 1 || !Number.isInteger(options.maxEntries) || options.maxEntries < 1)
+      throw new RangeError("invalid persistent blob cache options");
+    const queueCapacity = options.writeQueueCapacity ?? 64;
+    if (!Number.isInteger(queueCapacity) || queueCapacity < 1)
+      throw new RangeError("cache write queue capacity must be positive");
+    let store = backend;
+    if (!store) {
+      try {
+        store = await OpfsBlobBackend.open(options.namespace);
+      } catch {
+        store = await IndexedDbBlobBackend.open(options.namespace);
+      }
+    }
+    const cache2 = new PersistentBlobCache(store, options.maxBytes, options.maxEntries, queueCapacity);
+    await cache2.loadIndex();
+    return cache2;
+  }
+  hashStart(slot) {
+    return slot * HASH_WORDS;
+  }
+  hashesEqual(slot, hash2) {
+    const start = this.hashStart(slot);
+    for (let word = 0;word < HASH_WORDS; word++)
+      if (this.hashes[start + word] !== hash2[word])
+        return false;
+    return true;
+  }
+  hashSlot(hash2) {
+    let value = 2654435769;
+    for (let word = 0;word < HASH_WORDS; word++)
+      value = Math.imul(value ^ hash2[word], 2246822507);
+    return (value >>> 0) % this.states.length;
+  }
+  find(hash2) {
+    let slot = this.hashSlot(hash2);
+    for (let probe = 0;probe < this.states.length; probe++) {
+      const state = this.states[slot];
+      if (state === EMPTY)
+        return -1;
+      if (state === OCCUPIED && this.hashesEqual(slot, hash2))
+        return slot;
+      slot = (slot + 1) % this.states.length;
+    }
+    return -1;
+  }
+  insert(hash2, offset, length2, valueChecksum) {
+    let slot = this.hashSlot(hash2);
+    let tombstone = -1;
+    for (let probe = 0;probe < this.states.length; probe++) {
+      const state = this.states[slot];
+      if (state === OCCUPIED && this.hashesEqual(slot, hash2)) {
+        this.liveBytes += length2 - this.lengths[slot];
+        this.offsets[slot] = offset;
+        this.lengths[slot] = length2;
+        this.checksums[slot] = valueChecksum;
+        this.touch(slot);
+        return true;
+      }
+      if (state === TOMBSTONE && tombstone < 0)
+        tombstone = slot;
+      if (state === EMPTY) {
+        const target = tombstone < 0 ? slot : tombstone;
+        this.states[target] = OCCUPIED;
+        this.hashes.set(hash2, this.hashStart(target));
+        this.offsets[target] = offset;
+        this.lengths[target] = length2;
+        this.checksums[target] = valueChecksum;
+        this.entries++;
+        this.liveBytes += length2;
+        this.linkLruTail(target);
+        return true;
+      }
+      slot = (slot + 1) % this.states.length;
+    }
+    return false;
+  }
+  linkLruTail(slot) {
+    this.lruPrevious[slot] = this.lruTail;
+    this.lruNext[slot] = -1;
+    if (this.lruTail < 0)
+      this.lruHead = slot;
+    else
+      this.lruNext[this.lruTail] = slot;
+    this.lruTail = slot;
+  }
+  unlinkLru(slot) {
+    const previous = this.lruPrevious[slot];
+    const next = this.lruNext[slot];
+    if (previous < 0)
+      this.lruHead = next;
+    else
+      this.lruNext[previous] = next;
+    if (next < 0)
+      this.lruTail = previous;
+    else
+      this.lruPrevious[next] = previous;
+    this.lruPrevious[slot] = -1;
+    this.lruNext[slot] = -1;
+  }
+  touch(slot) {
+    if (slot === this.lruTail)
+      return;
+    this.unlinkLru(slot);
+    this.linkLruTail(slot);
+  }
+  remove(slot) {
+    if (slot < 0 || this.states[slot] !== OCCUPIED)
+      return;
+    this.unlinkLru(slot);
+    this.liveBytes -= this.lengths[slot];
+    this.states[slot] = TOMBSTONE;
+    this.entries--;
+  }
+  record(hash2, offset, length2, valueChecksum) {
+    const bytes = new Uint8Array(INDEX_RECORD_BYTES);
+    const view = new DataView(bytes.buffer);
+    for (let word = 0;word < HASH_WORDS; word++)
+      view.setUint32(word * 4, hash2[word], true);
+    view.setBigUint64(32, BigInt(offset), true);
+    view.setUint32(40, length2, true);
+    view.setUint32(44, valueChecksum, true);
+    return bytes;
+  }
+  packName(generation = this.activeGeneration) {
+    return `values-${generation}.pack`;
+  }
+  indexName(generation = this.activeGeneration) {
+    return `values-${generation}.index`;
+  }
+  manifest(generation) {
+    const bytes = new Uint8Array(8);
+    const view = new DataView(bytes.buffer);
+    view.setUint32(0, MANIFEST_MAGIC, true);
+    view.setUint32(4, generation, true);
+    return bytes;
+  }
+  async loadIndex() {
+    const manifestSize = await this.backend.size("manifest");
+    if (manifestSize >= 8) {
+      const manifest = await this.backend.read("manifest", 0, 8);
+      const view2 = new DataView(manifest.buffer, manifest.byteOffset, manifest.byteLength);
+      if (view2.getUint32(0, true) === MANIFEST_MAGIC)
+        this.activeGeneration = view2.getUint32(4, true) & 1;
+    } else {
+      await this.backend.replace("manifest", this.manifest(0));
+    }
+    this.packBytes = await this.backend.size(this.packName());
+    let indexSize = await this.backend.size(this.indexName());
+    if (this.packBytes > this.maxBytes) {
+      await this.clear();
+      return;
+    }
+    if (indexSize < INDEX_HEADER_BYTES) {
+      await this.backend.replace(this.indexName(), this.indexHeader());
+      return;
+    }
+    const bytes = await this.backend.read(this.indexName(), 0, indexSize);
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    if (view.getUint32(0, true) !== INDEX_MAGIC || view.getUint32(4, true) !== INDEX_VERSION) {
+      await this.clear();
+      return;
+    }
+    indexSize = INDEX_HEADER_BYTES + Math.floor((indexSize - INDEX_HEADER_BYTES) / INDEX_RECORD_BYTES) * INDEX_RECORD_BYTES;
+    const hash2 = new Uint32Array(HASH_WORDS);
+    for (let offset = INDEX_HEADER_BYTES;offset < indexSize; offset += INDEX_RECORD_BYTES) {
+      for (let word = 0;word < HASH_WORDS; word++)
+        hash2[word] = view.getUint32(offset + word * 4, true);
+      const packOffset = Number(view.getBigUint64(offset + 32, true));
+      const length2 = view.getUint32(offset + 40, true);
+      const valueChecksum = view.getUint32(offset + 44, true);
+      if (length2 === 0) {
+        this.remove(this.find(hash2));
+      } else if (packOffset + length2 <= this.packBytes && this.entries < this.maxEntries) {
+        this.insert(hash2, packOffset, length2, valueChecksum);
+      }
+    }
+  }
+  indexHeader() {
+    const bytes = new Uint8Array(INDEX_HEADER_BYTES);
+    const view = new DataView(bytes.buffer);
+    view.setUint32(0, INDEX_MAGIC, true);
+    view.setUint32(4, INDEX_VERSION, true);
+    view.setUint32(8, INDEX_RECORD_BYTES, true);
+    view.setUint32(12, HASH_WORDS, true);
+    return bytes;
+  }
+  async get(key) {
+    const startedAt = performance.now();
+    try {
+      if (this.maintenancePromise)
+        await this.maintenancePromise;
+      const hash2 = await hashKey(key);
+      const slot = this.find(hash2);
+      if (slot < 0) {
+        this.stats.misses++;
+        return null;
+      }
+      const bytes = await this.backend.read(this.packName(), this.offsets[slot], this.lengths[slot]);
+      if (bytes.byteLength !== this.lengths[slot] || checksum(bytes) !== this.checksums[slot]) {
+        this.remove(slot);
+        this.stats.corruptEntries++;
+        this.stats.misses++;
+        return null;
+      }
+      this.touch(slot);
+      this.stats.hits++;
+      return bytes;
+    } catch {
+      this.stats.readErrors++;
+      this.stats.misses++;
+      return null;
+    } finally {
+      const elapsed = performance.now() - startedAt;
+      this.totalReadMs += elapsed;
+      this.maxReadMs = Math.max(this.maxReadMs, elapsed);
+    }
+  }
+  async put(key, data) {
+    if (data.byteLength === 0 || data.byteLength > this.maxBytes) {
+      this.stats.rejectedCapacity++;
+      return false;
+    }
+    if (this.maintenancePromise)
+      await this.maintenancePromise;
+    const hash2 = await hashKey(key);
+    if (this.find(hash2) >= 0)
+      return true;
+    if (this.hasQueued(hash2))
+      return true;
+    if (this.entries + this.queued + (this.writing ? 1 : 0) >= this.maxEntries || this.packBytes + this.queuedBytes + this.writingBytes + data.byteLength > this.maxBytes) {
+      try {
+        await this.ensureCapacity(data.byteLength);
+      } catch {
+        this.stats.writeErrors++;
+        return false;
+      }
+      if (this.find(hash2) >= 0)
+        return true;
+    }
+    if (this.entries + this.queued + (this.writing ? 1 : 0) >= this.maxEntries || this.packBytes + this.queuedBytes + this.writingBytes + data.byteLength > this.maxBytes) {
+      this.stats.rejectedCapacity++;
+      return false;
+    }
+    if (this.queued >= this.jobs.length) {
+      this.stats.rejectedQueue++;
+      return false;
+    }
+    return new Promise((resolve) => {
+      this.jobs[this.tail] = { hash: hash2, data, resolve };
+      this.tail = (this.tail + 1) % this.jobs.length;
+      this.queued++;
+      this.queuedBytes += data.byteLength;
+      this.pump();
+    });
+  }
+  hasQueued(hash2) {
+    for (let count = 0, index = this.head;count < this.queued; count++, index = (index + 1) % this.jobs.length) {
+      const job = this.jobs[index];
+      if (job) {
+        let equal2 = true;
+        for (let word = 0;word < HASH_WORDS; word++)
+          if (job.hash[word] !== hash2[word]) {
+            equal2 = false;
+            break;
+          }
+        if (equal2)
+          return true;
+      }
+    }
+    return false;
+  }
+  pump() {
+    if (this.writing || this.queued === 0)
+      return;
+    const job = this.jobs[this.head];
+    this.jobs[this.head] = null;
+    this.head = (this.head + 1) % this.jobs.length;
+    this.queued--;
+    this.queuedBytes -= job.data.byteLength;
+    this.writing = true;
+    this.writingBytes = job.data.byteLength;
+    this.write(job);
+  }
+  async write(job) {
+    const startedAt = performance.now();
+    let success = false;
+    try {
+      if (this.find(job.hash) >= 0) {
+        success = true;
+      } else if (this.entries < this.maxEntries && this.packBytes + job.data.byteLength <= this.maxBytes) {
+        const offset = this.packBytes;
+        const valueChecksum = checksum(job.data);
+        await this.backend.append(this.packName(), job.data);
+        await this.backend.append(this.indexName(), this.record(job.hash, offset, job.data.byteLength, valueChecksum));
+        this.packBytes += job.data.byteLength;
+        success = this.insert(job.hash, offset, job.data.byteLength, valueChecksum);
+        if (success) {
+          this.stats.writes++;
+          this.stats.writeBytes += job.data.byteLength;
+        }
+      } else {
+        this.stats.rejectedCapacity++;
+      }
+    } catch {
+      this.stats.writeErrors++;
+      try {
+        this.packBytes = await this.backend.size(this.packName());
+      } catch {}
+    } finally {
+      const elapsed = performance.now() - startedAt;
+      this.totalWriteMs += elapsed;
+      this.maxWriteMs = Math.max(this.maxWriteMs, elapsed);
+      this.writing = false;
+      this.writingBytes = 0;
+      job.resolve(success);
+      this.pump();
+      this.resolveIdle();
+    }
+  }
+  waitForIdle() {
+    if (!this.writing && this.queued === 0)
+      return Promise.resolve();
+    return new Promise((resolve) => this.idleResolvers.push(resolve));
+  }
+  resolveIdle() {
+    if (this.writing || this.queued !== 0)
+      return;
+    while (this.idleResolvers.length !== 0)
+      this.idleResolvers.pop()();
+  }
+  resetIndexState() {
+    this.states.fill(EMPTY);
+    this.lruPrevious.fill(-1);
+    this.lruNext.fill(-1);
+    this.entries = 0;
+    this.liveBytes = 0;
+    this.lruHead = -1;
+    this.lruTail = -1;
+  }
+  async ensureCapacity(incomingBytes) {
+    if (this.maintenancePromise) {
+      await this.maintenancePromise;
+      return;
+    }
+    const maintenance = this.compact(incomingBytes).finally(() => {
+      if (this.maintenancePromise === maintenance)
+        this.maintenancePromise = null;
+    });
+    this.maintenancePromise = maintenance;
+    await maintenance;
+  }
+  async compact(incomingBytes) {
+    await this.waitForIdle();
+    const oldGeneration = this.activeGeneration;
+    const nextGeneration = oldGeneration ^ 1;
+    const oldPackBytes = this.packBytes;
+    const targetBytes = Math.min(Math.floor(this.maxBytes * 0.75), Math.max(0, this.maxBytes - incomingBytes));
+    const targetEntries = Math.min(Math.floor(this.maxEntries * 0.75), Math.max(0, this.maxEntries - 1));
+    let evicted = 0;
+    while (this.lruHead >= 0 && (this.liveBytes > targetBytes || this.entries > targetEntries)) {
+      this.remove(this.lruHead);
+      evicted++;
+    }
+    let published = false;
+    try {
+      await this.backend.replace(this.packName(nextGeneration), new Uint8Array(0));
+      await this.backend.replace(this.indexName(nextGeneration), this.indexHeader());
+      let nextOffset = 0;
+      let slot = this.lruHead;
+      while (slot >= 0) {
+        const following = this.lruNext[slot];
+        const bytes = await this.backend.read(this.packName(oldGeneration), this.offsets[slot], this.lengths[slot]);
+        if (bytes.byteLength !== this.lengths[slot] || checksum(bytes) !== this.checksums[slot]) {
+          this.remove(slot);
+          this.stats.corruptEntries++;
+        } else {
+          const hash2 = this.hashes.subarray(this.hashStart(slot), this.hashStart(slot) + HASH_WORDS);
+          await this.backend.append(this.packName(nextGeneration), bytes);
+          await this.backend.append(this.indexName(nextGeneration), this.record(hash2, nextOffset, bytes.byteLength, this.checksums[slot]));
+          this.compactionOffsets[slot] = nextOffset;
+          nextOffset += bytes.byteLength;
+        }
+        slot = following;
+      }
+      await this.backend.replace("manifest", this.manifest(nextGeneration));
+      this.activeGeneration = nextGeneration;
+      published = true;
+      for (let index = 0;index < this.states.length; index++)
+        if (this.states[index] === OCCUPIED)
+          this.offsets[index] = this.compactionOffsets[index];
+      this.packBytes = nextOffset;
+      this.stats.evictions += evicted;
+      this.stats.compactions++;
+      this.stats.reclaimedBytes += Math.max(0, oldPackBytes - nextOffset);
+      try {
+        await this.backend.replace(this.packName(oldGeneration), new Uint8Array(0));
+        await this.backend.replace(this.indexName(oldGeneration), this.indexHeader());
+      } catch {}
+    } catch (error2) {
+      if (!published) {
+        this.activeGeneration = oldGeneration;
+        this.resetIndexState();
+        await this.loadIndex();
+      }
+      throw error2;
+    }
+  }
+  async clear() {
+    if (this.writing || this.queued !== 0 || this.maintenancePromise)
+      throw new Error("cannot clear persistent cache while writes or maintenance are pending");
+    await this.backend.replace(this.packName(0), new Uint8Array(0));
+    await this.backend.replace(this.indexName(0), this.indexHeader());
+    await this.backend.replace(this.packName(1), new Uint8Array(0));
+    await this.backend.replace(this.indexName(1), this.indexHeader());
+    await this.backend.replace("manifest", this.manifest(0));
+    this.activeGeneration = 0;
+    this.resetIndexState();
+    this.packBytes = 0;
+  }
+  getStats() {
+    const stats = this.stats;
+    stats.entries = this.entries;
+    stats.bytes = this.packBytes;
+    stats.liveBytes = this.liveBytes;
+    stats.queuedWrites = this.queued + (this.writing ? 1 : 0);
+    stats.maintenance = this.maintenancePromise !== null;
+    const reads = stats.hits + stats.misses;
+    stats.averageReadMs = reads === 0 ? 0 : this.totalReadMs / reads;
+    stats.maxReadMs = this.maxReadMs;
+    const writes = stats.writes + stats.writeErrors;
+    stats.averageWriteMs = writes === 0 ? 0 : this.totalWriteMs / writes;
+    stats.maxWriteMs = this.maxWriteMs;
+    return stats;
+  }
+}
+// crates/afterglow-web/www/engine/height-texture.ts
+var HEIGHT_R16_MAGIC = new Uint8Array([65, 71, 82, 49, 54, 76, 69, 1]);
+var HEIGHT_R16_HEADER_BYTES = 16;
+function parseHeightR16(buffer2) {
+  if (buffer2.byteLength < HEIGHT_R16_HEADER_BYTES)
+    throw new Error("R16 height payload is truncated");
+  const bytes = new Uint8Array(buffer2);
+  for (let index = 0;index < HEIGHT_R16_MAGIC.length; index++) {
+    if (bytes[index] !== HEIGHT_R16_MAGIC[index])
+      throw new Error("R16 height magic/version mismatch");
+  }
+  const header = new DataView(buffer2, 8, 8);
+  const width = header.getUint32(0, true);
+  const height = header.getUint32(4, true);
+  if (width === 0 || height === 0)
+    throw new Error("R16 height dimensions must be non-zero");
+  const count = width * height;
+  if (!Number.isSafeInteger(count))
+    throw new Error("R16 height dimensions overflow");
+  const expectedBytes = HEIGHT_R16_HEADER_BYTES + count * 2;
+  if (buffer2.byteLength !== expectedBytes) {
+    throw new Error(`R16 height byte length mismatch: expected ${expectedBytes}, got ${buffer2.byteLength}`);
+  }
+  const endianProbe = new Uint16Array([258]);
+  if (new Uint8Array(endianProbe.buffer)[0] !== 2)
+    throw new Error("R16 height loading requires a little-endian platform");
+  return { width, height, pixels: new Uint16Array(buffer2, HEIGHT_R16_HEADER_BYTES, count) };
+}
+function assertHeightTextureSupport(device) {
+  if (device.features?.has("float32-filterable") !== true) {
+    throw new Error("16-bit displacement requires the WebGPU float32-filterable feature");
+  }
+}
+function assertHeightTextureGpuFormat(backend, texture2) {
+  const format = backend.utils?.getTextureFormatGPU(texture2);
+  if (format !== "r32float")
+    throw new Error(`displacement GPU format mismatch: expected r32float, got ${format ?? "unavailable"}`);
+}
+async function loadHeightTextureR16(three, device, url) {
+  assertHeightTextureSupport(device);
+  const response = await fetch(url);
+  if (!response.ok)
+    throw new Error(`failed to load R16 height ${url}: HTTP ${response.status}`);
+  const asset = parseHeightR16(await response.arrayBuffer());
+  const normalized = new Float32Array(asset.pixels.length);
+  for (let index = 0;index < asset.pixels.length; index++)
+    normalized[index] = asset.pixels[index] / 65535;
+  const texture2 = new three.DataTexture(normalized, asset.width, asset.height, three.RedFormat, three.FloatType);
+  texture2.name = url;
+  texture2.wrapS = texture2.wrapT = three.RepeatWrapping;
+  texture2.minFilter = texture2.magFilter = three.LinearFilter;
+  texture2.generateMipmaps = false;
+  texture2.flipY = false;
+  texture2.colorSpace = three.NoColorSpace;
+  texture2.unpackAlignment = 4;
+  texture2.needsUpdate = true;
+  return texture2;
+}
+// crates/afterglow-web/www/engine/diagnostics.ts
+class EngineDiagnostics {
+  capacity;
+  sequences;
+  codes;
+  sources;
+  details;
+  head = 0;
+  nextSequence = 1;
+  count = 0;
+  highWater = 0;
+  dropped = 0;
+  constructor(capacity) {
+    this.capacity = capacity;
+    if (!Number.isInteger(capacity) || capacity <= 0)
+      throw new RangeError("diagnostic capacity must be a positive integer");
+    this.sequences = new Uint32Array(capacity);
+    this.codes = new Uint16Array(capacity);
+    this.sources = new Uint8Array(capacity);
+    this.details = new Array(capacity).fill(null);
+  }
+  tryRecord(code2, source, detail) {
+    if (this.count === this.capacity) {
+      this.dropped++;
+      return 1 /* CapacityExceeded */;
+    }
+    const slot = (this.head + this.count) % this.capacity;
+    this.sequences[slot] = this.nextSequence++;
+    this.codes[slot] = code2;
+    this.sources[slot] = source;
+    this.details[slot] = detail;
+    this.count++;
+    if (this.count > this.highWater)
+      this.highWater = this.count;
+    return 0 /* Recorded */;
+  }
+  readInto(index, out) {
+    if (!Number.isInteger(index) || index < 0 || index >= this.count)
+      return false;
+    const slot = (this.head + index) % this.capacity;
+    out.sequence = this.sequences[slot] ?? 0;
+    out.code = this.codes[slot] ?? 0;
+    out.source = this.sources[slot] ?? 0;
+    out.detail = this.details[slot];
+    return true;
+  }
+  shiftInto(out) {
+    if (this.count === 0)
+      return false;
+    const slot = this.head;
+    out.sequence = this.sequences[slot] ?? 0;
+    out.code = this.codes[slot] ?? 0;
+    out.source = this.sources[slot] ?? 0;
+    out.detail = this.details[slot];
+    this.details[slot] = null;
+    this.head = (slot + 1) % this.capacity;
+    this.count--;
+    return true;
+  }
+  clear() {
+    while (this.count !== 0) {
+      this.details[this.head] = null;
+      this.head = (this.head + 1) % this.capacity;
+      this.count--;
+    }
+  }
+}
+// crates/afterglow-web/www/node_modules/bitecs/dist/core/index.min.mjs
+var A = (e, t, n) => Object.defineProperty(e, t, { value: n, enumerable: false, writable: true, configurable: true });
+var pe = (e, t) => t & e.entityMask;
+var z = (e) => {
+  let t = e ? typeof e == "function" ? e() : e : { versioning: false, versionBits: 8 }, n = t.versionBits ?? 8, o = t.versioning ?? false, r = 32 - n, a = (1 << r) - 1, i = r, s = (1 << n) - 1 << i;
+  return { aliveCount: 0, dense: [], sparse: [], maxId: 0, versioning: o, versionBits: n, entityMask: a, versionShift: i, versionMask: s };
+};
+var ue = (e) => {
+  if (e.aliveCount < e.dense.length) {
+    let n = e.dense[e.aliveCount], o = n;
+    return e.sparse[o] = e.aliveCount, e.aliveCount++, n;
+  }
+  let t = ++e.maxId;
+  return e.dense.push(t), e.sparse[t] = e.aliveCount, e.aliveCount++, t;
+};
+var K = (e, t) => {
+  let n = pe(e, t), o = e.sparse[n];
+  return o !== undefined && o < e.aliveCount && e.dense[o] === t;
+};
+var u = Symbol.for("bitecs_internal");
+var Ye = (e, t) => A(e || {}, u, { entityIndex: t || z(), entityMasks: [[]], entityComponents: new Map, bitflag: 1, componentMap: new Map, componentCount: 0, queries: new Set, queriesHashMap: new Map, notQueries: new Set, dirtyQueries: new Set, entitiesWithRelations: new Set, hierarchyData: new Map, hierarchyActiveRelations: new Set, hierarchyQueryCache: new Map });
+function Je(...e) {
+  let t, n;
+  return e.forEach((o) => {
+    typeof o == "object" && "dense" in o && "sparse" in o && "aliveCount" in o ? t = o : typeof o == "object" && (n = o);
+  }), Ye(n, t);
+}
+var M = () => {
+  let e = [], t = [], n = (s) => e[t[s]] === s;
+  return { add: (s) => {
+    n(s) || (t[s] = e.push(s) - 1);
+  }, remove: (s) => {
+    if (!n(s))
+      return;
+    let p = t[s], c = e.pop();
+    c !== s && (e[p] = c, t[c] = p);
+  }, has: n, sparse: t, dense: e, reset: () => {
+    e.length = 0, t.length = 0;
+  }, sort: (s) => {
+    e.sort(s);
+    for (let p = 0;p < e.length; p++)
+      t[e[p]] = p;
+  } };
+};
+var me = typeof SharedArrayBuffer < "u" ? SharedArrayBuffer : ArrayBuffer;
+var X = (e = 1000) => {
+  let t = [], n = 0, o = new Uint32Array(new me(e * 4)), r = (c) => c < t.length && t[c] < n && o[t[c]] === c;
+  return { add: (c) => {
+    if (!r(c)) {
+      if (n >= o.length) {
+        let f = new Uint32Array(new me(o.length * 2 * 4));
+        f.set(o), o = f;
+      }
+      o[n] = c, t[c] = n, n++;
+    }
+  }, remove: (c) => {
+    if (!r(c))
+      return;
+    n--;
+    let f = t[c], d = o[n];
+    o[f] = d, t[d] = f;
+  }, has: r, sparse: t, get dense() {
+    return new Uint32Array(o.buffer, 0, n);
+  }, reset: () => {
+    n = 0, t.length = 0;
+  }, sort: (c) => {
+    let f = Array.from(o.subarray(0, n));
+    f.sort(c);
+    for (let d = 0;d < f.length; d++)
+      o[d] = f[d];
+    for (let d = 0;d < n; d++)
+      t[o[d]] = d;
+  } };
+};
+var P = () => {
+  let e = new Set;
+  return { subscribe: (o) => (e.add(o), () => {
+    e.delete(o);
+  }), notify: (o, ...r) => Array.from(e).reduce((a, i) => {
+    let s = i(o, ...r);
+    return s && typeof s == "object" ? { ...a, ...s } : a;
+  }, {}) };
+};
+var k = Symbol.for("bitecs-relation");
+var T2 = Symbol.for("bitecs-pairTarget");
+var U = Symbol.for("bitecs-isPairComponent");
+var x = Symbol.for("bitecs-relationData");
+var Y = () => {
+  let e = { pairsMap: new Map, initStore: undefined, exclusiveRelation: false, autoRemoveSubject: false, onTargetRemoved: undefined }, t = (n) => {
+    if (n === undefined)
+      throw Error("Relation target is undefined");
+    let o = n === "*" ? y : n;
+    if (!e.pairsMap.has(o)) {
+      let r = e.initStore ? e.initStore(n) : {};
+      A(r, k, t), A(r, T2, o), A(r, U, true), e.pairsMap.set(o, r);
+    }
+    return e.pairsMap.get(o);
+  };
+  return A(t, x, e), t;
+};
+var ye = (e) => (t) => {
+  let n = t[x];
+  return n.initStore = e, t;
+};
+var le = (e) => {
+  let t = e[x];
+  return t.exclusiveRelation = true, e;
+};
+var he = (e) => {
+  let t = e[x];
+  return t.autoRemoveSubject = true, e;
+};
+var be = (e) => (t) => {
+  let n = t[x];
+  return n.onTargetRemoved = e, t;
+};
+var b = (e, t) => {
+  if (e === undefined)
+    throw Error("Relation is undefined");
+  return e(t);
+};
+var I = (e, t, n) => {
+  let o = L(e, t), r = [];
+  for (let a of o)
+    a[k] === n && a[T2] !== y && !xe(a[T2]) && r.push(a[T2]);
+  return r;
+};
+function ot(...e) {
+  if (e.length === 1 && typeof e[0] == "object") {
+    let { store: t, exclusive: n, autoRemoveSubject: o, onTargetRemoved: r } = e[0];
+    return [t && ye(t), n && le, o && he, r && be(r)].filter(Boolean).reduce((i, s) => s(i), Y());
+  } else
+    return e.reduce((n, o) => o(n), Y());
+}
+var Re = Symbol.for("bitecs-wildcard");
+function rt() {
+  let e = Y();
+  return Object.defineProperty(e, Re, { value: true, enumerable: false, writable: false, configurable: false }), e;
+}
+function at() {
+  let e = Symbol.for("bitecs-global-wildcard");
+  return globalThis[e] || (globalThis[e] = rt()), globalThis[e];
+}
+var y = at();
+function st() {
+  return Y();
+}
+function it() {
+  let e = Symbol.for("bitecs-global-isa");
+  return globalThis[e] || (globalThis[e] = st()), globalThis[e];
+}
+var B2 = it();
+function xe(e) {
+  return e ? Object.getOwnPropertySymbols(e).includes(x) : false;
+}
+var pt = 64;
+var g = 4294967295;
+var ge = 1024;
+function ve(e, t) {
+  let { depths: n } = e;
+  if (t < n.length)
+    return n;
+  let o = Math.max(t + 1, n.length * 2, n.length + ge), r = new Uint32Array(o);
+  return r.fill(g), r.set(n), e.depths = r, r;
+}
+function Ce(e, t, n, o) {
+  let { depthToEntities: r } = e;
+  if (o !== undefined && o !== g) {
+    let a = r.get(o);
+    a && (a.remove(t), a.dense.length === 0 && r.delete(o));
+  }
+  n !== g && (r.has(n) || r.set(n, X()), r.get(n).add(t));
+}
+function ft(e, t) {
+  t > e.maxDepth && (e.maxDepth = t);
+}
+function ne(e, t, n, o) {
+  e.depths[t] = n, Ce(e, t, n, o), ft(e, n);
+}
+function Te(e, t) {
+  e[u].hierarchyQueryCache.delete(t);
+}
+function Z(e, t) {
+  let n = e[u];
+  return n.hierarchyActiveRelations.has(t) || (n.hierarchyActiveRelations.add(t), oe(e, t), ut(e, t)), n.hierarchyData.get(t);
+}
+function ut(e, t) {
+  let n = $(e, [b(t, y)]);
+  for (let r of n)
+    te(e, t, r);
+  let o = new Set;
+  for (let r of n)
+    for (let a of I(e, r, t))
+      o.has(a) || (o.add(a), te(e, t, a));
+}
+function oe(e, t) {
+  let n = e[u];
+  if (!n.hierarchyData.has(t)) {
+    let o = Math.max(ge, n.entityIndex.dense.length * 2), r = new Uint32Array(o);
+    r.fill(g), n.hierarchyData.set(t, { depths: r, dirty: M(), depthToEntities: new Map, maxDepth: 0 });
+  }
+}
+function Ie(e, t, n, o = new Set) {
+  if (o.has(n))
+    return 0;
+  o.add(n);
+  let r = I(e, n, t);
+  if (r.length === 0)
+    return 0;
+  if (r.length === 1)
+    return J(e, t, r[0], o) + 1;
+  let a = 1 / 0;
+  for (let i of r) {
+    let s = J(e, t, i, o);
+    if (s < a && (a = s, a === 0))
+      break;
+  }
+  return a === 1 / 0 ? 0 : a + 1;
+}
+function J(e, t, n, o) {
+  let r = e[u];
+  oe(e, t);
+  let a = r.hierarchyData.get(t), { depths: i } = a;
+  if (i = ve(a, n), i[n] === g) {
+    let s = Ie(e, t, n, o);
+    return ne(a, n, s), s;
+  }
+  return i[n];
+}
+function te(e, t, n) {
+  return J(e, t, n, new Set);
+}
+function Ee(e, t, n, o, r = M()) {
+  if (r.has(n))
+    return;
+  r.add(n);
+  let a = $(e, [t(n)]);
+  for (let i of a)
+    o.add(i), Ee(e, t, i, o, r);
+}
+function We(e, t, n, o, r = new Set) {
+  let a = e[u];
+  if (!a.hierarchyActiveRelations.has(t))
+    return;
+  oe(e, t);
+  let i = a.hierarchyData.get(t);
+  if (r.has(n)) {
+    i.dirty.add(n);
+    return;
+  }
+  r.add(n);
+  let { depths: s, dirty: p } = i, c = o !== undefined ? te(e, t, o) + 1 : 0;
+  if (c > pt)
+    return;
+  let f = s[n];
+  ne(i, n, c, f === g ? undefined : f), f !== c && (Ee(e, t, n, p, M()), Te(e, t));
+}
+function Se(e, t, n) {
+  let o = e[u];
+  if (!o.hierarchyActiveRelations.has(t))
+    return;
+  let r = o.hierarchyData.get(t), { depths: a } = r;
+  a = ve(r, n), Me(e, t, n, a, M()), Te(e, t);
+}
+function Me(e, t, n, o, r) {
+  if (r.has(n))
+    return;
+  r.add(n);
+  let i = e[u].hierarchyData.get(t);
+  if (n < o.length) {
+    let p = o[n];
+    p !== g && (i.depths[n] = g, Ce(i, n, g, p));
+  }
+  let s = $(e, [t(n)]);
+  for (let p of s)
+    Me(e, t, p, o, r);
+}
+function De(e, t) {
+  let o = e[u].hierarchyData.get(t);
+  if (!o)
+    return;
+  let { dirty: r, depths: a } = o;
+  if (r.dense.length !== 0) {
+    for (let i of r.dense)
+      if (a[i] === g) {
+        let s = Ie(e, t, i);
+        ne(o, i, s);
+      }
+    r.reset();
+  }
+}
+function Oe(e, t, n, o = {}) {
+  let r = e[u];
+  Z(e, t);
+  let a = H(e, [t, ...n]), i = r.hierarchyQueryCache.get(t);
+  if (i && i.hash === a)
+    return i.result;
+  De(e, t), re(e, n, o);
+  let s = r.queriesHashMap.get(H(e, n)), p = r.hierarchyData.get(t), { depths: c } = p;
+  s.sort((d, W) => {
+    let l = c[d], R = c[W];
+    return l !== R ? l - R : d - W;
+  });
+  let f = (o.buffered, s.dense);
+  return r.hierarchyQueryCache.set(t, { hash: a, result: f }), f;
+}
+function Qe(e, t, n, o = {}) {
+  let r = Z(e, t);
+  De(e, t);
+  let a = r.depthToEntities.get(n);
+  return a ? (o.buffered, a.dense) : o.buffered ? new Uint32Array(0) : [];
+}
+var v = Symbol.for("bitecs-opType");
+var D = Symbol.for("bitecs-opTerms");
+var se = (e) => (...t) => ({ [v]: e, [D]: t });
+var Ae = se("Or");
+var ke = se("And");
+var He = se("Not");
+var ae = Symbol.for("bitecs-hierarchyType");
+var $e = Symbol.for("bitecs-hierarchyRel");
+var qe = Symbol.for("bitecs-hierarchyDepth");
+var F = Symbol.for("bitecs-modifierType");
+var Rt = { [F]: "buffer" };
+var Pe = { [F]: "nested" };
+var Ue = (e) => (...t) => ({ [v]: e, [D]: t });
+var xt = Ue("add");
+var gt = Ue("remove");
+var H = (e, t) => {
+  let n = e[u], o = (a) => (n.componentMap.has(a) || E(e, a), n.componentMap.get(a).id), r = (a) => (v in a) ? `${a[v].toLowerCase()}(${a[D].map(r).sort().join(",")})` : o(a).toString();
+  return t.map(r).sort().join("-");
+};
+var ee = (e, t, n = {}) => {
+  let o = e[u], r = H(e, t), a = [], i = (m) => {
+    v in m ? m[D].forEach(i) : (o.componentMap.has(m) || E(e, m), a.push(m));
+  };
+  t.forEach(i);
+  let s = [], p = [], c = [], f = (m, h) => {
+    h.forEach((S) => {
+      o.componentMap.has(S) || E(e, S), m.push(S);
+    });
+  };
+  t.forEach((m) => {
+    if (v in m) {
+      let { [v]: h, [D]: S } = m;
+      if (h === "Not")
+        f(p, S);
+      else if (h === "Or")
+        f(c, S);
+      else if (h === "And")
+        f(s, S);
+      else
+        throw new Error(`Nested combinator ${h} not supported yet - use simple queries for best performance`);
+    } else
+      o.componentMap.has(m) || E(e, m), s.push(m);
+  });
+  let d = a.map((m) => o.componentMap.get(m)), W = [...new Set(d.map((m) => m.generationId))], l = (m, h) => (m[h.generationId] = (m[h.generationId] || 0) | h.bitflag, m), R = s.map((m) => o.componentMap.get(m)).reduce(l, {}), _e = p.map((m) => o.componentMap.get(m)).reduce(l, {}), Ge = c.map((m) => o.componentMap.get(m)).reduce(l, {}), ze = d.reduce(l, {}), Q = Object.assign(n.buffered ? X() : M(), { allComponents: a, orComponents: c, notComponents: p, masks: R, notMasks: _e, orMasks: Ge, hasMasks: ze, generations: W, toRemove: M(), addObservable: P(), removeObservable: P(), queues: {} });
+  o.queries.add(Q), o.queriesHashMap.set(r, Q), d.forEach((m) => {
+    m.queries.add(Q);
+  }), p.length && o.notQueries.add(Q);
+  let ce = o.entityIndex;
+  for (let m = 0;m < ce.aliveCount; m++) {
+    let h = ce.dense[m];
+    if (O(e, h, q))
+      continue;
+    V(e, Q, h) && w(Q, h);
+  }
+  return Q;
+};
+function re(e, t, n = {}) {
+  let o = e[u], r = H(e, t), a = o.queriesHashMap.get(r);
+  return a ? n.buffered && !("buffer" in a.dense) && (a = ee(e, t, { buffered: true })) : a = ee(e, t, n), n.buffered, a.dense;
+}
+function $(e, t, ...n) {
+  let o = t.find((p) => p && typeof p == "object" && (ae in p)), r = t.filter((p) => !(p && typeof p == "object" && (ae in p))), a = false, i = true, s = n.some((p) => p && typeof p == "object" && (F in p));
+  for (let p of n)
+    if (s && p && typeof p == "object" && F in p) {
+      let c = p;
+      c[F] === "buffer" && (a = true), c[F] === "nested" && (i = false);
+    } else if (!s) {
+      let c = p;
+      c.buffered !== undefined && (a = c.buffered), c.commit !== undefined && (i = c.commit);
+    }
+  if (o) {
+    let { [$e]: p, [qe]: c } = o;
+    return c !== undefined ? Qe(e, p, c, { buffered: a }) : Oe(e, p, r, { buffered: a });
+  }
+  return i && Be(e), re(e, r, { buffered: a });
+}
+function V(e, t, n) {
+  let o = e[u], { masks: r, notMasks: a, orMasks: i, generations: s } = t, p = Object.keys(i).length === 0;
+  for (let c = 0;c < s.length; c++) {
+    let f = s[c], d = r[f], W = a[f], l = i[f], R = o.entityMasks[f][n];
+    if (W && R & W || d && (R & d) !== d)
+      return false;
+    l && R & l && (p = true);
+  }
+  return p;
+}
+var w = (e, t) => {
+  if (e.toRemove.has(t)) {
+    e.toRemove.remove(t), e.addObservable.notify(t);
+    return;
+  }
+  e.has(t) || (e.add(t), e.addObservable.notify(t));
+};
+var It = (e) => {
+  for (let t = 0;t < e.toRemove.dense.length; t++) {
+    let n = e.toRemove.dense[t];
+    e.remove(n);
+  }
+  e.toRemove.reset();
+};
+var Be = (e) => {
+  let t = e[u];
+  t.dirtyQueries.size && (t.dirtyQueries.forEach(It), t.dirtyQueries.clear());
+};
+var _ = (e, t, n) => {
+  let o = e[u];
+  !t.has(n) || t.toRemove.has(n) || (t.toRemove.add(n), o.dirtyQueries.add(t), t.removeObservable.notify(n));
+};
+var E = (e, t) => {
+  if (!t)
+    throw new Error("bitECS - Cannot register null or undefined component");
+  let n = e[u], o = new Set, r = { id: n.componentCount++, generationId: n.entityMasks.length - 1, bitflag: n.bitflag, ref: t, queries: o, setObservable: P(), getObservable: P() };
+  return n.componentMap.set(t, r), n.bitflag *= 2, n.bitflag >= 2 ** 31 && (n.bitflag = 1, n.entityMasks.push([])), r;
+};
+var O = (e, t, n) => {
+  let o = e[u], r = o.componentMap.get(n);
+  if (!r)
+    return false;
+  let { generationId: a, bitflag: i } = r;
+  return (o.entityMasks[a][t] & i) === i;
+};
+var Fe = (e, t, n) => {
+  let r = e[u].componentMap.get(n);
+  if (r && O(e, t, n))
+    return r.getObservable.notify(t);
+};
+var we = (e, t, n, o, r = new Set) => {
+  if (!r.has(o)) {
+    r.add(o), j(t, n, B2(o));
+    for (let a of L(t, o))
+      if (a !== q && !O(t, n, a)) {
+        j(t, n, a);
+        let i = e.componentMap.get(a);
+        if (i?.setObservable) {
+          let s = Fe(t, o, a);
+          i.setObservable.notify(n, s);
+        }
+      }
+    for (let a of I(t, o, B2))
+      we(e, t, n, a, r);
+  }
+};
+var j = (e, t, n) => {
+  if (!N2(e, t))
+    throw new Error(`Cannot add component - entity ${t} does not exist in the world.`);
+  let o = e[u], r = "component" in n ? n.component : n, a = "data" in n ? n.data : undefined;
+  o.componentMap.has(r) || E(e, r);
+  let i = o.componentMap.get(r);
+  if (O(e, t, r))
+    return a !== undefined && i.setObservable.notify(t, a), false;
+  let { generationId: s, bitflag: p, queries: c } = i;
+  if (o.entityMasks[s][t] |= p, O(e, t, q) || c.forEach((f) => {
+    V(e, f, t) ? w(f, t) : _(e, f, t);
+  }), o.entityComponents.get(t).add(r), a !== undefined && i.setObservable.notify(t, a), r[U]) {
+    let f = r[k], d = r[T2];
+    if (G(e, t, b(f, y), b(y, d)), typeof d == "number" && (G(e, d, b(y, t), b(y, f)), o.entitiesWithRelations.add(d), o.entitiesWithRelations.add(t)), o.entitiesWithRelations.add(d), f[x].exclusiveRelation === true && d !== y) {
+      let l = I(e, t, f)[0];
+      l != null && l !== d && C(e, t, f(l));
+    }
+    if (f === B2) {
+      let l = I(e, t, B2);
+      for (let R of l)
+        we(o, e, t, R);
+    }
+    We(e, f, t, typeof d == "number" ? d : undefined);
+  }
+  return true;
+};
+function G(e, t, ...n) {
+  (Array.isArray(n[0]) ? n[0] : n).forEach((r) => {
+    j(e, t, r);
+  });
+}
+var C = (e, t, ...n) => {
+  let o = e[u];
+  if (!N2(e, t))
+    throw new Error(`Cannot remove component - entity ${t} does not exist in the world.`);
+  n.forEach((r) => {
+    if (!O(e, t, r))
+      return;
+    let a = o.componentMap.get(r), { generationId: i, bitflag: s, queries: p } = a;
+    if (o.entityMasks[i][t] &= ~s, p.forEach((c) => {
+      c.toRemove.remove(t), V(e, c, t) ? w(c, t) : _(e, c, t);
+    }), o.entityComponents.get(t).delete(r), r[U]) {
+      let c = r[T2], f = r[k];
+      Se(e, f, t), C(e, t, b(y, c)), typeof c == "number" && N2(e, c) && (C(e, c, b(y, t)), C(e, c, b(y, f))), I(e, t, f).length === 0 && C(e, t, b(f, y));
+    }
+  });
+};
+var q = {};
+function Ne(e, ...t) {
+  let n = e[u], o = ue(n.entityIndex);
+  return n.notQueries.forEach((r) => {
+    V(e, r, o) && w(r, o);
+  }), n.entityComponents.set(o, new Set), t.length > 0 && G(e, o, t), o;
+}
+var L = (e, t) => {
+  let n = e[u];
+  if (t === undefined)
+    throw new Error("getEntityComponents: entity id is undefined.");
+  if (!K(n.entityIndex, t))
+    throw new Error(`getEntityComponents: entity ${t} does not exist in the world.`);
+  return Array.from(n.entityComponents.get(t));
+};
+var N2 = (e, t) => K(e[u].entityIndex, t);
+
+// crates/afterglow-web/www/engine/types.ts
+var NULL_ENTITY = 0;
+var NONE_U32 = 4294967295;
+
+// crates/afterglow-web/www/engine/components.ts
+var MAX_ENTITIES = 1e6;
+function createTransformStore(capacity = MAX_ENTITIES) {
+  const rotationW = new Float32Array(capacity);
+  const scaleX = new Float32Array(capacity);
+  const scaleY = new Float32Array(capacity);
+  const scaleZ = new Float32Array(capacity);
+  rotationW.fill(1);
+  scaleX.fill(1);
+  scaleY.fill(1);
+  scaleZ.fill(1);
+  return {
+    positionX: new Float32Array(capacity),
+    positionY: new Float32Array(capacity),
+    positionZ: new Float32Array(capacity),
+    rotationX: new Float32Array(capacity),
+    rotationY: new Float32Array(capacity),
+    rotationZ: new Float32Array(capacity),
+    rotationW,
+    scaleX,
+    scaleY,
+    scaleZ
+  };
+}
+function createAppearanceStore(capacity = MAX_ENTITIES) {
+  const red = new Float32Array(capacity);
+  const green = new Float32Array(capacity);
+  const blue = new Float32Array(capacity);
+  const opacity = new Float32Array(capacity);
+  red.fill(1);
+  green.fill(1);
+  blue.fill(1);
+  opacity.fill(1);
+  return { red, green, blue, opacity };
+}
+function createRenderRefStore(capacity = MAX_ENTITIES) {
+  return {
+    descriptorId: new Uint32Array(capacity)
+  };
+}
+
+// crates/afterglow-web/www/engine/descriptors.ts
+class RenderResourceRegistry {
+  descriptors = [null];
+  register(descriptor) {
+    const id = this.descriptors.length;
+    this.descriptors.push(descriptor);
+    return id;
+  }
+  get size() {
+    return this.descriptors.length - 1;
+  }
+  get(id) {
+    const descriptor = this.descriptors[id];
+    if (!descriptor)
+      throw new Error(`Unknown render descriptor ${id}`);
+    return descriptor;
+  }
+}
+
+// crates/afterglow-web/www/engine/dirty-queue.ts
+class EntityDirtyQueue {
+  capacity;
+  entities;
+  queued;
+  flags;
+  head = 0;
+  tail = 0;
+  count = 0;
+  highWater = 0;
+  overflows = 0;
+  constructor(capacity) {
+    this.capacity = capacity;
+    if (!Number.isInteger(capacity) || capacity <= 0)
+      throw new RangeError("dirty queue capacity must be positive");
+    this.entities = new Uint32Array(capacity);
+    this.queued = new Uint8Array(capacity);
+    this.flags = new Uint8Array(capacity);
+  }
+  mark(entity, dirty) {
+    if (entity >= this.capacity) {
+      this.overflows++;
+      return 2 /* CapacityExceeded */;
+    }
+    this.flags[entity] |= dirty;
+    if (this.queued[entity] !== 0)
+      return 1 /* AlreadyQueued */;
+    if (this.count >= this.capacity) {
+      this.overflows++;
+      return 2 /* CapacityExceeded */;
+    }
+    this.queued[entity] = 1;
+    this.entities[this.tail] = entity;
+    this.tail = (this.tail + 1) % this.capacity;
+    this.count++;
+    if (this.count > this.highWater)
+      this.highWater = this.count;
+    return 0 /* Accepted */;
+  }
+  entityAt(index) {
+    return this.entities[(this.head + index) % this.capacity];
+  }
+  clearPrefix(maxEntities) {
+    const removed = Math.min(maxEntities, this.count);
+    for (let index = 0;index < removed; index++) {
+      const entity = this.entities[this.head];
+      this.head = (this.head + 1) % this.capacity;
+      this.queued[entity] = 0;
+      this.flags[entity] = 0 /* None */;
+    }
+    this.count -= removed;
+    if (this.count === 0)
+      this.head = this.tail = 0;
+    return removed;
+  }
+  clear() {
+    this.clearPrefix(this.count);
+  }
+}
+
+// crates/afterglow-web/www/engine/dirty-ranges.ts
+class DirtySlotRanges {
+  maximumRanges;
+  bits;
+  rangePool;
+  dirtyCount = 0;
+  minimumSlot = NONE_U32;
+  maximumSlot = 0;
+  constructor(capacity, maximumRanges = 16) {
+    this.maximumRanges = maximumRanges;
+    this.bits = new Uint32Array(capacity + 31 >>> 5);
+    this.rangePool = Array.from({ length: maximumRanges }, () => ({ start: 0, count: 0 }));
+  }
+  mark(slot) {
+    const wordIndex = slot >>> 5;
+    const bit = 1 << (slot & 31);
+    const previous = this.bits[wordIndex];
+    if ((previous & bit) !== 0)
+      return;
+    this.bits[wordIndex] = previous | bit;
+    this.dirtyCount++;
+    if (slot < this.minimumSlot)
+      this.minimumSlot = slot;
+    if (slot > this.maximumSlot)
+      this.maximumSlot = slot;
+  }
+  flush(attribute2, stride, activeCount) {
+    if (this.dirtyCount === 0 || activeCount === 0)
+      return;
+    const updateRanges = attribute2.updateRanges;
+    updateRanges.length = 0;
+    const dirtyRatio = this.dirtyCount / activeCount;
+    if (dirtyRatio >= 0.25) {
+      const range2 = this.rangePool[0];
+      range2.start = 0;
+      range2.count = activeCount * stride;
+      updateRanges[0] = range2;
+    } else {
+      let rangeCount = 0;
+      let slot = this.minimumSlot;
+      while (slot <= this.maximumSlot) {
+        while (slot <= this.maximumSlot && !this.isDirty(slot))
+          slot++;
+        if (slot > this.maximumSlot)
+          break;
+        const runStart = slot++;
+        while (slot <= this.maximumSlot && this.isDirty(slot))
+          slot++;
+        if (rangeCount >= this.maximumRanges) {
+          const range3 = this.rangePool[0];
+          range3.start = this.minimumSlot * stride;
+          range3.count = (this.maximumSlot - this.minimumSlot + 1) * stride;
+          updateRanges.length = 1;
+          updateRanges[0] = range3;
+          rangeCount = 1;
+          break;
+        }
+        const range2 = this.rangePool[rangeCount];
+        range2.start = runStart * stride;
+        range2.count = (slot - runStart) * stride;
+        updateRanges[rangeCount++] = range2;
+      }
+    }
+    attribute2.needsUpdate = true;
+    const firstWord = this.minimumSlot >>> 5;
+    const lastWord = this.maximumSlot >>> 5;
+    this.bits.fill(0, firstWord, lastWord + 1);
+    this.dirtyCount = 0;
+    this.minimumSlot = NONE_U32;
+    this.maximumSlot = 0;
+  }
+  isDirty(slot) {
+    return (this.bits[slot >>> 5] & 1 << (slot & 31)) !== 0;
+  }
+}
+
+// crates/afterglow-web/www/engine/instance-shard.ts
+class InstanceShard {
+  id;
+  descriptorId;
+  descriptor;
+  mesh;
+  slotToEntity;
+  tintOpacityAttribute;
+  matrixDirty;
+  appearanceDirty;
+  matrixData;
+  appearanceData;
+  count = 0;
+  constructor(id, descriptorId, descriptor, scene) {
+    this.id = id;
+    this.descriptorId = descriptorId;
+    this.descriptor = descriptor;
+    const capacity = descriptor.shardCapacity;
+    this.slotToEntity = new Uint32Array(capacity);
+    this.slotToEntity.fill(NONE_U32);
+    this.tintOpacityAttribute = new InstancedBufferAttribute(new Float32Array(capacity * 4), 4);
+    this.tintOpacityAttribute.setUsage(DynamicDrawUsage);
+    const material = descriptor.createMaterial(this.tintOpacityAttribute);
+    this.mesh = new InstancedMesh(descriptor.geometry, material, capacity);
+    this.mesh.count = 0;
+    this.mesh.instanceMatrix.setUsage(DynamicDrawUsage);
+    this.mesh.matrixAutoUpdate = false;
+    this.mesh.matrixWorldAutoUpdate = false;
+    this.mesh.castShadow = descriptor.castShadow ?? false;
+    this.mesh.receiveShadow = descriptor.receiveShadow ?? false;
+    this.mesh.renderOrder = descriptor.renderOrder ?? 0;
+    if (descriptor.layersMask !== undefined) {
+      this.mesh.layers.mask = descriptor.layersMask;
+    }
+    this.mesh.frustumCulled = descriptor.boundsPolicy !== "dynamic-disable-three-culling";
+    descriptor.configureMesh?.(this.mesh);
+    this.matrixData = this.mesh.instanceMatrix.array;
+    this.appearanceData = this.tintOpacityAttribute.array;
+    this.matrixDirty = new DirtySlotRanges(capacity);
+    this.appearanceDirty = new DirtySlotRanges(capacity);
+    scene.add(this.mesh);
+  }
+  hasCapacity() {
+    return this.count < this.slotToEntity.length;
+  }
+  allocate(entity) {
+    if (!this.hasCapacity())
+      throw new Error("Instance shard full");
+    const slot = this.count++;
+    this.slotToEntity[slot] = entity;
+    this.mesh.count = this.count;
+    this.matrixDirty.mark(slot);
+    this.appearanceDirty.mark(slot);
+    return slot;
+  }
+  remove(slot, entityToSlot, entityToHandle) {
+    const lastSlot = this.count - 1;
+    const movedEntity = this.slotToEntity[lastSlot];
+    this.count = lastSlot;
+    this.mesh.count = lastSlot;
+    if (slot !== lastSlot) {
+      this.matrixData.copyWithin(slot * 16, lastSlot * 16, lastSlot * 16 + 16);
+      this.appearanceData.copyWithin(slot * 4, lastSlot * 4, lastSlot * 4 + 4);
+      this.slotToEntity[slot] = movedEntity;
+      entityToSlot[movedEntity] = slot;
+      entityToHandle[movedEntity] = this.id;
+      this.matrixDirty.mark(slot);
+      this.appearanceDirty.mark(slot);
+    }
+    this.slotToEntity[lastSlot] = NONE_U32;
+  }
+  markMatrix(slot) {
+    this.matrixDirty.mark(slot);
+  }
+  markAppearance(slot) {
+    this.appearanceDirty.mark(slot);
+  }
+  flushUploads() {
+    this.matrixDirty.flush(this.mesh.instanceMatrix, 16, this.count);
+    this.appearanceDirty.flush(this.tintOpacityAttribute, 4, this.count);
+  }
+}
+
+// crates/afterglow-web/www/engine/matrix.ts
+function composeTransformInto(output2, offset, transform, entity) {
+  const qx = transform.rotationX[entity];
+  const qy = transform.rotationY[entity];
+  const qz = transform.rotationZ[entity];
+  const qw = transform.rotationW[entity];
+  const x2 = qx + qx;
+  const y2 = qy + qy;
+  const z2 = qz + qz;
+  const xx = qx * x2;
+  const xy = qx * y2;
+  const xz = qx * z2;
+  const yy = qy * y2;
+  const yz = qy * z2;
+  const zz = qz * z2;
+  const wx = qw * x2;
+  const wy = qw * y2;
+  const wz = qw * z2;
+  const sx = transform.scaleX[entity];
+  const sy = transform.scaleY[entity];
+  const sz = transform.scaleZ[entity];
+  output2[offset] = (1 - (yy + zz)) * sx;
+  output2[offset + 1] = (xy + wz) * sx;
+  output2[offset + 2] = (xz - wy) * sx;
+  output2[offset + 3] = 0;
+  output2[offset + 4] = (xy - wz) * sy;
+  output2[offset + 5] = (1 - (xx + zz)) * sy;
+  output2[offset + 6] = (yz + wx) * sy;
+  output2[offset + 7] = 0;
+  output2[offset + 8] = (xz + wy) * sz;
+  output2[offset + 9] = (yz - wx) * sz;
+  output2[offset + 10] = (1 - (xx + yy)) * sz;
+  output2[offset + 11] = 0;
+  output2[offset + 12] = transform.positionX[entity];
+  output2[offset + 13] = transform.positionY[entity];
+  output2[offset + 14] = transform.positionZ[entity];
+  output2[offset + 15] = 1;
+}
+function multiplyMatricesInto(output2, outputOffset, left, leftOffset, right, rightOffset) {
+  const a11 = left[leftOffset];
+  const a12 = left[leftOffset + 4];
+  const a13 = left[leftOffset + 8];
+  const a14 = left[leftOffset + 12];
+  const a21 = left[leftOffset + 1];
+  const a22 = left[leftOffset + 5];
+  const a23 = left[leftOffset + 9];
+  const a24 = left[leftOffset + 13];
+  const a31 = left[leftOffset + 2];
+  const a32 = left[leftOffset + 6];
+  const a33 = left[leftOffset + 10];
+  const a34 = left[leftOffset + 14];
+  const a41 = left[leftOffset + 3];
+  const a42 = left[leftOffset + 7];
+  const a43 = left[leftOffset + 11];
+  const a44 = left[leftOffset + 15];
+  const b11 = right[rightOffset];
+  const b12 = right[rightOffset + 4];
+  const b13 = right[rightOffset + 8];
+  const b14 = right[rightOffset + 12];
+  const b21 = right[rightOffset + 1];
+  const b22 = right[rightOffset + 5];
+  const b23 = right[rightOffset + 9];
+  const b24 = right[rightOffset + 13];
+  const b31 = right[rightOffset + 2];
+  const b32 = right[rightOffset + 6];
+  const b33 = right[rightOffset + 10];
+  const b34 = right[rightOffset + 14];
+  const b41 = right[rightOffset + 3];
+  const b42 = right[rightOffset + 7];
+  const b43 = right[rightOffset + 11];
+  const b44 = right[rightOffset + 15];
+  output2[outputOffset] = a11 * b11 + a12 * b21 + a13 * b31 + a14 * b41;
+  output2[outputOffset + 4] = a11 * b12 + a12 * b22 + a13 * b32 + a14 * b42;
+  output2[outputOffset + 8] = a11 * b13 + a12 * b23 + a13 * b33 + a14 * b43;
+  output2[outputOffset + 12] = a11 * b14 + a12 * b24 + a13 * b34 + a14 * b44;
+  output2[outputOffset + 1] = a21 * b11 + a22 * b21 + a23 * b31 + a24 * b41;
+  output2[outputOffset + 5] = a21 * b12 + a22 * b22 + a23 * b32 + a24 * b42;
+  output2[outputOffset + 9] = a21 * b13 + a22 * b23 + a23 * b33 + a24 * b43;
+  output2[outputOffset + 13] = a21 * b14 + a22 * b24 + a23 * b34 + a24 * b44;
+  output2[outputOffset + 2] = a31 * b11 + a32 * b21 + a33 * b31 + a34 * b41;
+  output2[outputOffset + 6] = a31 * b12 + a32 * b22 + a33 * b32 + a34 * b42;
+  output2[outputOffset + 10] = a31 * b13 + a32 * b23 + a33 * b33 + a34 * b43;
+  output2[outputOffset + 14] = a31 * b14 + a32 * b24 + a33 * b34 + a34 * b44;
+  output2[outputOffset + 3] = a41 * b11 + a42 * b21 + a43 * b31 + a44 * b41;
+  output2[outputOffset + 7] = a41 * b12 + a42 * b22 + a43 * b32 + a44 * b42;
+  output2[outputOffset + 11] = a41 * b13 + a42 * b23 + a43 * b33 + a44 * b43;
+  output2[outputOffset + 15] = a41 * b14 + a42 * b24 + a43 * b34 + a44 * b44;
+}
+
+// crates/afterglow-web/www/engine/hierarchy.ts
+var ChildOf = ot(le);
+class HierarchyState {
+  capacity;
+  parentByEntity;
+  childCountByEntity;
+  firstChildByEntity;
+  nextSiblingByEntity;
+  previousSiblingByEntity;
+  activeOrder;
+  buildOrder;
+  traversalStack;
+  activeChildren;
+  activeIndexByEntity;
+  activeChildCount = 0;
+  traversalStackCount = 0;
+  scanCursor = 0;
+  walkNode = NULL_ENTITY;
+  buildCount = 0;
+  hierarchyCount = 0;
+  topologyDirty = false;
+  rebuilding = false;
+  justCommitted = false;
+  rebuildRestarts = 0;
+  rebuildBudgetExhaustions = 0;
+  rebuildCommits = 0;
+  lastRebuildOperations = 0;
+  constructor(capacity) {
+    this.capacity = capacity;
+    if (!Number.isInteger(capacity) || capacity <= 0)
+      throw new RangeError("hierarchy capacity must be positive");
+    this.parentByEntity = new Uint32Array(capacity).fill(NULL_ENTITY);
+    this.childCountByEntity = new Uint32Array(capacity);
+    this.firstChildByEntity = new Uint32Array(capacity).fill(NULL_ENTITY);
+    this.nextSiblingByEntity = new Uint32Array(capacity).fill(NULL_ENTITY);
+    this.previousSiblingByEntity = new Uint32Array(capacity).fill(NULL_ENTITY);
+    this.activeOrder = new Uint32Array(capacity);
+    this.buildOrder = new Uint32Array(capacity);
+    this.traversalStack = new Uint32Array(capacity);
+    this.activeChildren = new Uint32Array(capacity);
+    this.activeIndexByEntity = new Uint32Array(capacity).fill(NONE_U32);
+  }
+  get hierarchyOrder() {
+    return this.activeOrder;
+  }
+  validateParentChange(child, oldParent, newParent) {
+    if (child >= this.capacity || newParent !== NULL_ENTITY && newParent >= this.capacity)
+      throw new RangeError("hierarchy entity exceeds configured capacity");
+    if (child === newParent)
+      throw new Error("an entity cannot parent itself");
+    let ancestor = newParent;
+    for (let depth2 = 0;ancestor !== NULL_ENTITY && depth2 < this.capacity; depth2++) {
+      if (ancestor === child)
+        throw new Error("hierarchy parenting would create a cycle");
+      ancestor = this.parentByEntity[ancestor];
+    }
+    if (ancestor !== NULL_ENTITY)
+      throw new Error("hierarchy parent chain exceeds capacity");
+    if (this.parentByEntity[child] !== oldParent)
+      throw new Error("cached hierarchy parent does not match requested old parent");
+  }
+  updateCachedParent(child, oldParent, newParent) {
+    this.validateParentChange(child, oldParent, newParent);
+    if (oldParent !== NULL_ENTITY) {
+      const previous = this.previousSiblingByEntity[child];
+      const next = this.nextSiblingByEntity[child];
+      if (previous === NULL_ENTITY)
+        this.firstChildByEntity[oldParent] = next;
+      else
+        this.nextSiblingByEntity[previous] = next;
+      if (next !== NULL_ENTITY)
+        this.previousSiblingByEntity[next] = previous;
+      this.childCountByEntity[oldParent]--;
+    }
+    this.previousSiblingByEntity[child] = NULL_ENTITY;
+    this.nextSiblingByEntity[child] = NULL_ENTITY;
+    if (newParent !== NULL_ENTITY) {
+      const first = this.firstChildByEntity[newParent];
+      this.nextSiblingByEntity[child] = first;
+      if (first !== NULL_ENTITY)
+        this.previousSiblingByEntity[first] = child;
+      this.firstChildByEntity[newParent] = child;
+      this.childCountByEntity[newParent]++;
+    }
+    if (oldParent === NULL_ENTITY && newParent !== NULL_ENTITY) {
+      this.activeIndexByEntity[child] = this.activeChildCount;
+      this.activeChildren[this.activeChildCount++] = child;
+    } else if (oldParent !== NULL_ENTITY && newParent === NULL_ENTITY) {
+      const index = this.activeIndexByEntity[child];
+      const last = this.activeChildren[--this.activeChildCount];
+      this.activeChildren[index] = last;
+      this.activeIndexByEntity[last] = index;
+      this.activeIndexByEntity[child] = NONE_U32;
+    }
+    this.parentByEntity[child] = newParent;
+    this.topologyDirty = true;
+    if (this.rebuilding) {
+      this.rebuildRestarts++;
+      this.resetBuild();
+    }
+  }
+  resetBuild() {
+    this.rebuilding = true;
+    this.scanCursor = 0;
+    this.walkNode = NULL_ENTITY;
+    this.traversalStackCount = 0;
+    this.buildCount = 0;
+    this.lastRebuildOperations = 0;
+  }
+  stepRebuild(maxOperations, deadlineMs = Number.POSITIVE_INFINITY) {
+    if (!Number.isInteger(maxOperations) || maxOperations <= 0)
+      throw new RangeError("hierarchy rebuild operation limit must be positive");
+    if (!this.topologyDirty)
+      return 0 /* Idle */;
+    if (!this.rebuilding)
+      this.resetBuild();
+    let operations = 0;
+    while (operations < maxOperations) {
+      if ((operations & 7) === 0 && performance.now() >= deadlineMs)
+        break;
+      if (this.walkNode !== NULL_ENTITY) {
+        const node = this.walkNode;
+        if (this.buildCount >= this.capacity) {
+          this.rebuilding = false;
+          throw new Error("hierarchy traversal exceeded capacity (cycle or duplicate child)");
+        }
+        this.buildOrder[this.buildCount++] = node;
+        const sibling = this.nextSiblingByEntity[node];
+        if (sibling !== NULL_ENTITY)
+          this.traversalStack[this.traversalStackCount++] = sibling;
+        const child = this.firstChildByEntity[node];
+        this.walkNode = child !== NULL_ENTITY ? child : this.traversalStackCount === 0 ? NULL_ENTITY : this.traversalStack[--this.traversalStackCount];
+        operations++;
+        continue;
+      }
+      if (this.scanCursor < this.activeChildCount) {
+        const entity = this.activeChildren[this.scanCursor++];
+        const parent = this.parentByEntity[entity];
+        if (parent !== NULL_ENTITY && this.parentByEntity[parent] === NULL_ENTITY && this.firstChildByEntity[parent] === entity)
+          this.walkNode = entity;
+        operations++;
+        continue;
+      }
+      const previous = this.activeOrder;
+      this.activeOrder = this.buildOrder;
+      this.buildOrder = previous;
+      this.hierarchyCount = this.buildCount;
+      this.rebuilding = false;
+      this.topologyDirty = false;
+      this.justCommitted = true;
+      this.rebuildCommits++;
+      this.lastRebuildOperations += operations;
+      return 2 /* Committed */;
+    }
+    this.lastRebuildOperations += operations;
+    this.rebuildBudgetExhaustions++;
+    return 1 /* InProgress */;
+  }
+  finishFrame() {
+    this.justCommitted = false;
+  }
+}
+
+// crates/afterglow-web/www/engine/render-adapter.ts
+var HIERARCHY_REBUILD_OPERATIONS = 512;
+var HIERARCHY_REBUILD_BUDGET_MS = 0.2;
+var MAX_STRUCTURAL_CHANGES_PER_FRAME = 256;
+var MAX_DIRTY_ENTITIES_PER_FRAME = 4096;
+var MAX_HIERARCHY_SYNCS_PER_FRAME = 4096;
+var MAX_UNIQUE_SYNCS_PER_FRAME = 512;
+class RenderAdapter {
+  world;
+  scene;
+  registry = new RenderResourceRegistry;
+  transform;
+  appearance;
+  renderRef;
+  dirty;
+  structuralDirty;
+  proxyTier;
+  proxyHandle;
+  proxySlot;
+  proxyDescriptorId;
+  shards = [];
+  nextShardId = 0;
+  warmedDescriptors = new Set;
+  uniqueObjects = [];
+  uniquePools = [];
+  uniqueEntityIds;
+  uniqueIndexByEntity;
+  uniqueEntityCount = 0;
+  uniqueSyncCursor = 0;
+  hierarchy;
+  worldMatrices;
+  worldMatrixValid;
+  worldChangedFrame;
+  localMatrixScratch;
+  instancedRootIds;
+  instancedRootCount = 0;
+  hierarchySyncCursor = 0;
+  workStats = {
+    deferredStructural: 0,
+    deferredDirty: 0,
+    deferredHierarchy: 0,
+    deferredUnique: 0,
+    structuralOverflows: 0,
+    dirtyOverflows: 0,
+    attachCapacityExceeded: 0,
+    descriptorNotWarmed: 0
+  };
+  unsubscribe = [];
+  currentFrame = { frameId: 0, deltaSeconds: 0, elapsedSeconds: 0 };
+  gameplaySealed = false;
+  constructor(scene, capacity = MAX_ENTITIES) {
+    this.world = Je();
+    this.scene = scene;
+    this.transform = createTransformStore(capacity);
+    this.appearance = createAppearanceStore(capacity);
+    this.renderRef = createRenderRefStore(capacity);
+    this.dirty = new EntityDirtyQueue(capacity);
+    this.structuralDirty = new EntityDirtyQueue(capacity);
+    this.proxyTier = new Uint8Array(capacity);
+    this.proxyHandle = new Uint32Array(capacity).fill(NONE_U32);
+    this.proxySlot = new Uint32Array(capacity).fill(NONE_U32);
+    this.proxyDescriptorId = new Uint32Array(capacity);
+    this.worldMatrices = new Float32Array(capacity * 16);
+    this.worldMatrixValid = new Uint8Array(capacity);
+    this.worldChangedFrame = new Uint32Array(capacity).fill(NONE_U32);
+    this.localMatrixScratch = new Float32Array(16);
+    this.instancedRootIds = new Uint32Array(capacity);
+    this.uniqueEntityIds = new Uint32Array(capacity);
+    this.uniqueIndexByEntity = new Uint32Array(capacity).fill(NONE_U32);
+    this.hierarchy = new HierarchyState(capacity);
+    this.installObservers();
+  }
+  warmDescriptor(descriptorId) {
+    const descriptor = this.registry.get(descriptorId);
+    if (this.warmedDescriptors.has(descriptorId))
+      return;
+    if (descriptor.tier === 1 /* Instanced */) {
+      if (!Number.isInteger(descriptor.maxShards) || descriptor.maxShards <= 0)
+        throw new RangeError("instanced descriptor maxShards must be positive");
+      for (let index = 0;index < descriptor.maxShards; index++) {
+        const id = this.nextShardId++;
+        this.shards[id] = new InstanceShard(id, descriptorId, descriptor, this.scene);
+      }
+    } else if (descriptor.tier === 2 /* Unique */) {
+      if (!Number.isInteger(descriptor.poolCapacity) || descriptor.poolCapacity <= 0)
+        throw new RangeError("unique descriptor poolCapacity must be positive");
+      const pool = new Array(descriptor.poolCapacity);
+      for (let index = 0;index < pool.length; index++) {
+        const object = descriptor.instantiate();
+        object.matrixAutoUpdate = false;
+        pool[index] = object;
+      }
+      this.uniquePools[descriptorId] = pool;
+    }
+    this.warmedDescriptors.add(descriptorId);
+  }
+  warmAllDescriptors() {
+    for (let id = 1;id <= this.registry.size; id++)
+      this.warmDescriptor(id);
+  }
+  sealGameplay() {
+    for (let id = 1;id <= this.registry.size; id++) {
+      const descriptor = this.registry.get(id);
+      if (descriptor.tier === 1 /* Instanced */ && !this.warmedDescriptors.has(id))
+        throw new Error(`instanced descriptor ${id} was not warmed before seal`);
+      if (descriptor.tier === 2 /* Unique */ && !this.warmedDescriptors.has(id))
+        throw new Error(`unique descriptor ${id} was not warmed before seal`);
+    }
+    this.gameplaySealed = true;
+  }
+  get isGameplaySealed() {
+    return this.gameplaySealed;
+  }
+  createEntity() {
+    return Ne(this.world);
+  }
+  addTransform(entity) {
+    j(this.world, entity, this.transform);
+  }
+  addRenderRef(entity, descriptorId) {
+    this.renderRef.descriptorId[entity] = descriptorId;
+    j(this.world, entity, this.renderRef);
+  }
+  markTransformDirty(entity) {
+    this.dirty.mark(entity, 1 /* Transform */);
+  }
+  markAppearanceDirty(entity) {
+    this.dirty.mark(entity, 2 /* Appearance */);
+  }
+  setParent(child, newParent) {
+    const oldParent = this.hierarchy.parentByEntity[child];
+    if (oldParent === newParent)
+      return;
+    this.hierarchy.validateParentChange(child, oldParent, newParent);
+    if (oldParent !== NULL_ENTITY) {
+      C(this.world, child, ChildOf(oldParent));
+    }
+    if (newParent !== NULL_ENTITY) {
+      j(this.world, child, ChildOf(newParent));
+    }
+    this.hierarchy.updateCachedParent(child, oldParent, newParent);
+    this.hierarchy.topologyDirty = true;
+    this.dirty.mark(child, 16 /* WorldOnly */);
+    if (newParent !== NULL_ENTITY) {
+      this.dirty.mark(newParent, 16 /* WorldOnly */);
+    }
+  }
+  prepareFrame(frame) {
+    if (!this.gameplaySealed)
+      throw new Error("RenderAdapter must be warmed and sealed before prepareFrame");
+    this.currentFrame = frame;
+    this.flushStructuralChanges(MAX_STRUCTURAL_CHANGES_PER_FRAME);
+    if (this.hierarchy.topologyDirty) {
+      this.hierarchy.stepRebuild(HIERARCHY_REBUILD_OPERATIONS, performance.now() + HIERARCHY_REBUILD_BUDGET_MS);
+    }
+    this.syncTransforms(frame, MAX_DIRTY_ENTITIES_PER_FRAME);
+    this.syncUniqueProxies(frame);
+    this.flushUploads();
+    this.workStats.deferredStructural = this.structuralDirty.count;
+    this.workStats.deferredDirty = this.dirty.count;
+    this.workStats.deferredHierarchy = Math.max(0, this.hierarchy.hierarchyCount - MAX_HIERARCHY_SYNCS_PER_FRAME);
+    this.workStats.deferredUnique = Math.max(0, this.uniqueEntityCount - MAX_UNIQUE_SYNCS_PER_FRAME);
+    this.workStats.structuralOverflows = this.structuralDirty.overflows;
+    this.workStats.dirtyOverflows = this.dirty.overflows;
+    this.hierarchy.finishFrame();
+  }
+  flushStructuralChanges(maxOperations) {
+    const count = Math.min(this.structuralDirty.count, maxOperations);
+    for (let i = 0;i < count; i++) {
+      const entity = this.structuralDirty.entityAt(i);
+      const shouldHaveProxy = N2(this.world, entity) && O(this.world, entity, this.transform) && O(this.world, entity, this.renderRef) && this.renderRef.descriptorId[entity] !== 0;
+      if (!shouldHaveProxy) {
+        this.detachProxy(entity);
+        continue;
+      }
+      const descriptorId = this.renderRef.descriptorId[entity];
+      if (this.proxyTier[entity] === 0 /* None */) {
+        this.attachProxy(entity, descriptorId);
+        continue;
+      }
+      if (this.proxyDescriptorId[entity] !== descriptorId) {
+        this.detachProxy(entity);
+        this.attachProxy(entity, descriptorId);
+      }
+    }
+    this.structuralDirty.clearPrefix(count);
+  }
+  attachProxy(entity, descriptorId) {
+    const descriptor = this.registry.get(descriptorId);
+    switch (descriptor.tier) {
+      case 1 /* Instanced */: {
+        const shard = this.obtainShard(descriptorId);
+        if (!shard) {
+          const warmed = this.warmedDescriptors.has(descriptorId);
+          if (warmed)
+            this.workStats.attachCapacityExceeded++;
+          else
+            this.workStats.descriptorNotWarmed++;
+          return warmed ? 2 /* CapacityExceeded */ : 1 /* DescriptorNotWarmed */;
+        }
+        const slot = shard.allocate(entity);
+        this.proxyTier[entity] = 1 /* Instanced */;
+        this.proxyHandle[entity] = shard.id;
+        this.proxySlot[entity] = slot;
+        break;
+      }
+      case 2 /* Unique */: {
+        const pool = this.uniquePools[descriptorId];
+        if (!pool) {
+          this.workStats.descriptorNotWarmed++;
+          return 1 /* DescriptorNotWarmed */;
+        }
+        const object = pool.pop();
+        if (!object) {
+          this.workStats.attachCapacityExceeded++;
+          return 2 /* CapacityExceeded */;
+        }
+        this.scene.add(object);
+        this.uniqueObjects[entity] = object;
+        this.uniqueIndexByEntity[entity] = this.uniqueEntityCount;
+        this.uniqueEntityIds[this.uniqueEntityCount++] = entity;
+        this.proxyTier[entity] = 2 /* Unique */;
+        this.proxyHandle[entity] = entity;
+        this.proxySlot[entity] = 0;
+        break;
+      }
+    }
+    this.proxyDescriptorId[entity] = descriptorId;
+    this.dirty.mark(entity, 1 /* Transform */ | 2 /* Appearance */);
+    return 0 /* Attached */;
+  }
+  detachProxy(entity) {
+    if (this.proxyTier[entity] === 1 /* Instanced */) {
+      const shard = this.shards[this.proxyHandle[entity]];
+      if (shard) {
+        shard.remove(this.proxySlot[entity], this.proxySlot, this.proxyHandle);
+      }
+    } else if (this.proxyTier[entity] === 2 /* Unique */) {
+      const obj = this.uniqueObjects[entity];
+      if (obj) {
+        this.scene.remove(obj);
+        this.uniqueObjects[entity] = null;
+        this.uniquePools[this.proxyDescriptorId[entity]]?.push(obj);
+        const index = this.uniqueIndexByEntity[entity];
+        const last = this.uniqueEntityIds[--this.uniqueEntityCount];
+        this.uniqueEntityIds[index] = last;
+        this.uniqueIndexByEntity[last] = index;
+        this.uniqueIndexByEntity[entity] = NONE_U32;
+        if (this.uniqueSyncCursor > this.uniqueEntityCount)
+          this.uniqueSyncCursor = 0;
+      }
+    }
+    this.proxyTier[entity] = 0 /* None */;
+    this.proxyHandle[entity] = NONE_U32;
+    this.proxySlot[entity] = NONE_U32;
+    this.proxyDescriptorId[entity] = 0;
+  }
+  obtainShard(descriptorId) {
+    for (const shard of this.shards) {
+      if (shard && shard.descriptorId === descriptorId && shard.hasCapacity()) {
+        return shard;
+      }
+    }
+    return null;
+  }
+  syncTransforms(frame, maxDirtyEntities) {
+    const changedFrame = frame.frameId;
+    const dirtyCount = Math.min(this.dirty.count, maxDirtyEntities);
+    const dirtyFlags = this.dirty.flags;
+    this.instancedRootCount = 0;
+    const instancedRootIds = this.instancedRootIds;
+    for (let i = 0;i < dirtyCount; i++) {
+      const entity = this.dirty.entityAt(i);
+      const flags = dirtyFlags[entity];
+      if (this.hierarchy.parentByEntity[entity] !== NULL_ENTITY)
+        continue;
+      if (this.proxyTier[entity] !== 1 /* Instanced */)
+        continue;
+      if (this.hierarchy.childCountByEntity[entity] !== 0)
+        continue;
+      if ((flags & (1 /* Transform */ | 16 /* WorldOnly */)) === 0) {
+        if ((flags & 2 /* Appearance */) !== 0) {
+          this.writeAppearanceToProxy(entity);
+        }
+        continue;
+      }
+      instancedRootIds[this.instancedRootCount++] = entity;
+    }
+    const transform = this.transform;
+    const shards = this.shards;
+    const proxyHandle = this.proxyHandle;
+    const proxySlot = this.proxySlot;
+    for (let i = 0;i < this.instancedRootCount; i++) {
+      const entity = instancedRootIds[i];
+      const shard = shards[proxyHandle[entity]];
+      const slot = proxySlot[entity];
+      const off = slot * 16;
+      const qx = transform.rotationX[entity];
+      const qy = transform.rotationY[entity];
+      const qz = transform.rotationZ[entity];
+      const qw = transform.rotationW[entity];
+      const x2 = qx + qx, y2 = qy + qy, z2 = qz + qz;
+      const xx = qx * x2, xy = qx * y2, xz = qx * z2;
+      const yy = qy * y2, yz = qy * z2, zz = qz * z2;
+      const wx = qw * x2, wy = qw * y2, wz = qw * z2;
+      const sx = transform.scaleX[entity];
+      const sy = transform.scaleY[entity];
+      const sz = transform.scaleZ[entity];
+      const md = shard.matrixData;
+      md[off] = (1 - (yy + zz)) * sx;
+      md[off + 1] = (xy + wz) * sx;
+      md[off + 2] = (xz - wy) * sx;
+      md[off + 3] = 0;
+      md[off + 4] = (xy - wz) * sy;
+      md[off + 5] = (1 - (xx + zz)) * sy;
+      md[off + 6] = (yz + wx) * sy;
+      md[off + 7] = 0;
+      md[off + 8] = (xz + wy) * sz;
+      md[off + 9] = (yz - wx) * sz;
+      md[off + 10] = (1 - (xx + yy)) * sz;
+      md[off + 11] = 0;
+      md[off + 12] = transform.positionX[entity];
+      md[off + 13] = transform.positionY[entity];
+      md[off + 14] = transform.positionZ[entity];
+      md[off + 15] = 1;
+      shard.markMatrix(slot);
+      const flags = dirtyFlags[entity];
+      if ((flags & 2 /* Appearance */) !== 0) {
+        const ad = shard.appearanceData;
+        const aoff = slot * 4;
+        ad[aoff] = this.appearance.red[entity];
+        ad[aoff + 1] = this.appearance.green[entity];
+        ad[aoff + 2] = this.appearance.blue[entity];
+        ad[aoff + 3] = this.appearance.opacity[entity];
+        shard.markAppearance(slot);
+      }
+    }
+    for (let i = 0;i < dirtyCount; i++) {
+      const entity = this.dirty.entityAt(i);
+      const flags = dirtyFlags[entity];
+      if (this.hierarchy.parentByEntity[entity] !== NULL_ENTITY)
+        continue;
+      if (this.proxyTier[entity] === 1 /* Instanced */ && this.hierarchy.childCountByEntity[entity] === 0)
+        continue;
+      if ((flags & (1 /* Transform */ | 16 /* WorldOnly */)) === 0)
+        continue;
+      const worldOffset = entity * 16;
+      composeTransformInto(this.worldMatrices, worldOffset, this.transform, entity);
+      this.worldMatrixValid[entity] = 1;
+      this.worldChangedFrame[entity] = changedFrame;
+      this.writeWorldMatrixToProxy(entity, worldOffset);
+      if ((flags & 2 /* Appearance */) !== 0) {
+        this.writeAppearanceToProxy(entity);
+      }
+    }
+    if (!this.hierarchy.rebuilding && this.hierarchy.hierarchyCount !== 0) {
+      if (this.hierarchy.justCommitted)
+        this.hierarchySyncCursor = 0;
+      const hierarchyCount = this.hierarchy.hierarchyCount;
+      const hierarchyOperations = Math.min(hierarchyCount, MAX_HIERARCHY_SYNCS_PER_FRAME);
+      for (let operation = 0;operation < hierarchyOperations; operation++) {
+        const index = (this.hierarchySyncCursor + operation) % hierarchyCount;
+        const entity = this.hierarchy.hierarchyOrder[index];
+        const parent = this.hierarchy.parentByEntity[entity];
+        composeTransformInto(this.localMatrixScratch, 0, this.transform, entity);
+        const worldOffset = entity * 16;
+        multiplyMatricesInto(this.worldMatrices, worldOffset, this.worldMatrices, parent * 16, this.localMatrixScratch, 0);
+        this.worldMatrixValid[entity] = 1;
+        this.worldChangedFrame[entity] = changedFrame;
+        this.writeWorldMatrixToProxy(entity, worldOffset);
+        this.writeAppearanceToProxy(entity);
+      }
+      this.hierarchySyncCursor = (this.hierarchySyncCursor + hierarchyOperations) % hierarchyCount;
+    }
+    this.dirty.clearPrefix(dirtyCount);
+  }
+  writeWorldMatrixToProxy(entity, worldOffset) {
+    const tier = this.proxyTier[entity];
+    if (tier === 1 /* Instanced */) {
+      const shard = this.shards[this.proxyHandle[entity]];
+      const slot = this.proxySlot[entity];
+      const destOffset = slot * 16;
+      for (let c = 0;c < 16; c++) {
+        shard.matrixData[destOffset + c] = this.worldMatrices[worldOffset + c];
+      }
+      shard.markMatrix(slot);
+    } else if (tier === 2 /* Unique */) {
+      const obj = this.uniqueObjects[entity];
+      if (!obj)
+        return;
+      const dest = obj.matrix.elements;
+      for (let c = 0;c < 16; c++) {
+        dest[c] = this.worldMatrices[worldOffset + c] ?? 0;
+      }
+      obj.matrixWorldNeedsUpdate = true;
+    }
+  }
+  writeAppearanceToProxy(entity) {
+    if (this.proxyTier[entity] !== 1 /* Instanced */)
+      return;
+    const shard = this.shards[this.proxyHandle[entity]];
+    const slot = this.proxySlot[entity];
+    const offset = slot * 4;
+    shard.appearanceData[offset] = this.appearance.red[entity];
+    shard.appearanceData[offset + 1] = this.appearance.green[entity];
+    shard.appearanceData[offset + 2] = this.appearance.blue[entity];
+    shard.appearanceData[offset + 3] = this.appearance.opacity[entity];
+    shard.markAppearance(slot);
+  }
+  syncUniqueProxies(frame) {
+    if (this.uniqueEntityCount === 0)
+      return;
+    const operations = Math.min(this.uniqueEntityCount, MAX_UNIQUE_SYNCS_PER_FRAME);
+    for (let operation = 0;operation < operations; operation++) {
+      const index = (this.uniqueSyncCursor + operation) % this.uniqueEntityCount;
+      const entity = this.uniqueEntityIds[index];
+      const object = this.uniqueObjects[entity];
+      const descriptor = this.registry.get(this.proxyDescriptorId[entity]);
+      if (descriptor.tier === 2 /* Unique */ && descriptor.continuous)
+        descriptor.sync?.(object, entity, 1 /* Transform */ | 2 /* Appearance */, frame);
+    }
+    this.uniqueSyncCursor = (this.uniqueSyncCursor + operations) % this.uniqueEntityCount;
+  }
+  flushUploads() {
+    for (const shard of this.shards) {
+      shard?.flushUploads();
+    }
+  }
+  installObservers() {}
+  markStructural(entity) {
+    this.structuralDirty.mark(entity, 8 /* Structural */);
+  }
+  dispose() {
+    for (const u2 of this.unsubscribe)
+      u2();
+    this.unsubscribe = [];
+    for (const shard of this.shards) {
+      if (shard) {
+        this.scene.remove(shard.mesh);
+        shard.mesh.geometry.dispose();
+        shard.mesh.material.dispose();
+      }
+    }
+    this.shards.length = 0;
+    for (const obj of this.uniqueObjects) {
+      if (obj)
+        this.scene.remove(obj);
+    }
+    this.uniqueObjects.length = 0;
+  }
+}
+// crates/afterglow-web/www/engine/renderer-seal.ts
+class RendererSeal {
+  backend;
+  sealed = false;
+  renderPipelines = 0;
+  computePipelines = 0;
+  renderPipelineViolations = 0;
+  computePipelineViolations = 0;
+  constructor(backend) {
+    this.backend = backend;
+    const originalRender = backend.createRenderPipeline.bind(backend);
+    const originalCompute = backend.createComputePipeline.bind(backend);
+    const monitor = this;
+    backend.createRenderPipeline = function(renderObject, promises) {
+      monitor.renderPipelines++;
+      if (monitor.sealed)
+        monitor.renderPipelineViolations++;
+      originalRender(renderObject, promises);
+    };
+    backend.createComputePipeline = function(computePipeline, bindings) {
+      monitor.computePipelines++;
+      if (monitor.sealed)
+        monitor.computePipelineViolations++;
+      originalCompute(computePipeline, bindings);
+    };
+  }
+  seal() {
+    this.sealed = true;
+  }
+  get isSealed() {
+    return this.sealed;
+  }
+  get violations() {
+    return this.renderPipelineViolations + this.computePipelineViolations;
+  }
+  assertNoViolations() {
+    if (this.violations !== 0)
+      throw new Error(`renderer created ${this.violations} pipeline(s) after seal`);
+  }
+}
+
+// crates/afterglow-web/www/engine/webgpu-only.ts
+function disableWebGLFallback(renderer) {
+  renderer._getFallback = null;
+}
+function assertWebGPUBackend(renderer) {
+  if (renderer.backend?.isWebGPUBackend !== true || renderer.backend.device == null) {
+    throw new Error("Afterglow requires a live WebGPU backend; WebGL fallback is forbidden.");
+  }
+}
+function showWebGPUFailure(error2) {
+  const message = error2 instanceof Error ? error2.message : String(error2);
+  const panel = document.createElement("pre");
+  panel.id = "afterglow-webgpu-failure";
+  panel.textContent = `Afterglow requires hardware WebGPU.
+
+${message}`;
+  panel.style.cssText = "box-sizing:border-box;margin:0;min-height:100vh;padding:24px;background:#11151c;color:#ff9a9a;font:16px/1.5 ui-monospace,monospace;white-space:pre-wrap";
+  document.body.replaceChildren(panel);
+  console.error("Afterglow WebGPU startup failed:", error2);
+}
+async function createWebGPUOnlyRenderer(parameters = {}, factory) {
+  const gpu = navigator.gpu;
+  if (!gpu)
+    throw new Error("navigator.gpu is unavailable. WebGL fallback is disabled.");
+  const adapter = await gpu.requestAdapter();
+  if (!adapter)
+    throw new Error("Unable to acquire a hardware WebGPU adapter. WebGL fallback is disabled.");
+  const renderer = factory(parameters);
+  renderer.afterglowAdapterInfo = adapter.info;
+  disableWebGLFallback(renderer);
+  try {
+    await renderer.init();
+    assertWebGPUBackend(renderer);
+  } catch (error2) {
+    renderer.dispose();
+    throw error2;
+  }
+  const onDeviceLost = renderer.onDeviceLost.bind(renderer);
+  renderer.onDeviceLost = (info) => {
+    onDeviceLost(info);
+    showWebGPUFailure(new Error(`WebGPU device lost (${info.reason ?? "unknown"}): ${info.message ?? "no detail"}`));
+  };
+  return renderer;
+}
+
+// crates/afterglow-web/www/engine/renderer-host.ts
+class BrowserRendererViewport {
+  get width() {
+    return window.innerWidth;
+  }
+  get height() {
+    return window.innerHeight;
+  }
+  get pixelRatio() {
+    return window.devicePixelRatio;
+  }
+  subscribe(listener) {
+    window.addEventListener("resize", listener);
+    return () => window.removeEventListener("resize", listener);
+  }
+}
+var moduleRendererFactory = (parameters) => new WebGPURenderer(parameters);
+function requireGpuDevice(renderer) {
+  if (typeof renderer.backend.device !== "object" || renderer.backend.device === null)
+    throw new Error("Three WebGPU renderer has no live GPU device");
+  return renderer.backend.device;
+}
+function requirePipelineBackend(renderer) {
+  const backend = renderer.backend;
+  return backend;
+}
+function gpuErrorTarget(device) {
+  if (typeof device !== "object" || device === null)
+    return null;
+  const candidate = device;
+  return candidate.addEventListener && candidate.removeEventListener ? candidate : null;
+}
+
+class RendererHost {
+  renderer;
+  device;
+  sealMonitor;
+  timestampSupported;
+  renderSubmissions = 0;
+  renderSubmitUs = 0;
+  scene;
+  camera;
+  diagnostics;
+  container;
+  viewport;
+  maxPixelRatio;
+  deviceTarget;
+  resizeClient;
+  onResize;
+  onGpuError;
+  unsubscribeResize = null;
+  disposed = false;
+  constructor(renderer, options) {
+    if (!renderer.domElement || !renderer.setPixelRatio || !renderer.setSize || !renderer.compileAsync || !renderer.render)
+      throw new Error("Three WebGPU renderer is missing a required host method");
+    this.renderer = renderer;
+    this.device = requireGpuDevice(renderer);
+    this.scene = options.scene;
+    this.camera = options.camera;
+    this.diagnostics = options.diagnostics;
+    this.container = options.container ?? document.body;
+    this.viewport = options.viewport ?? new BrowserRendererViewport;
+    this.maxPixelRatio = options.maxPixelRatio ?? 2;
+    this.resizeClient = options.onResize;
+    if (!Number.isFinite(this.maxPixelRatio) || this.maxPixelRatio <= 0)
+      throw new RangeError("maxPixelRatio must be positive");
+    this.sealMonitor = new RendererSeal(requirePipelineBackend(renderer));
+    const timestampBackend = renderer.backend;
+    this.timestampSupported = Boolean(timestampBackend.hasTimestamp);
+    this.deviceTarget = gpuErrorTarget(renderer.backend.device);
+    this.onResize = () => this.resize();
+    this.onGpuError = (event) => {
+      this.diagnostics.tryRecord(3 /* UncapturedGpuError */, 1 /* Renderer */, event);
+    };
+    try {
+      this.container.appendChild(renderer.domElement);
+      this.resize();
+      this.unsubscribeResize = this.viewport.subscribe(this.onResize);
+      this.deviceTarget?.addEventListener("uncapturederror", this.onGpuError);
+    } catch (error2) {
+      this.unsubscribeResize?.();
+      this.unsubscribeResize = null;
+      this.deviceTarget?.removeEventListener("uncapturederror", this.onGpuError);
+      if (renderer.domElement.parentNode === this.container)
+        this.container.removeChild(renderer.domElement);
+      throw error2;
+    }
+  }
+  static async create(options) {
+    let renderer = null;
+    try {
+      renderer = await createWebGPUOnlyRenderer(options.parameters, options.factory ?? moduleRendererFactory);
+      return new RendererHost(renderer, options);
+    } catch (error2) {
+      renderer?.dispose();
+      if (options.showFailure !== false)
+        showWebGPUFailure(error2);
+      throw error2;
+    }
+  }
+  resize() {
+    const ratio = Math.min(this.maxPixelRatio, Math.max(0.1, this.viewport.pixelRatio));
+    const width = Math.max(1, this.viewport.width);
+    const height = Math.max(1, this.viewport.height);
+    this.renderer.setPixelRatio(ratio);
+    this.renderer.setSize(width, height);
+    this.resizeClient?.(width, height);
+  }
+  assertHeightTextureFormat(texture2) {
+    const backend = this.renderer.backend;
+    assertHeightTextureGpuFormat(backend, texture2);
+  }
+  attachVirtualTextureStore(store) {
+    const backend = this.renderer.backend;
+    store.attachRenderer({
+      backend: {
+        device: this.device,
+        get: (texture2) => backend.get(texture2)
+      }
+    });
+  }
+  async warm() {
+    if (this.disposed)
+      throw new Error("cannot warm a disposed renderer host");
+    await this.renderer.compileAsync(this.scene, this.camera);
+  }
+  seal() {
+    this.sealMonitor.seal();
+  }
+  render() {
+    if (this.disposed)
+      return;
+    this.renderSubmissions++;
+    const started = performance.now();
+    this.renderer.render(this.scene, this.camera);
+    this.renderSubmitUs = (performance.now() - started) * 1000;
+  }
+  dispose() {
+    if (this.disposed)
+      return;
+    this.disposed = true;
+    this.unsubscribeResize?.();
+    this.unsubscribeResize = null;
+    this.deviceTarget?.removeEventListener("uncapturederror", this.onGpuError);
+    const canvas = this.renderer.domElement;
+    if (canvas.parentNode === this.container)
+      this.container.removeChild(canvas);
+    this.renderer.dispose();
+  }
+}
+// crates/afterglow-web/www/engine/engine-memory.ts
+var INVALID_MEMORY_OFFSET = -1;
+var INVALID_POOL_INDEX = 4294967295;
+class LinearArena {
+  capacity;
+  buffer;
+  used = 0;
+  highWater = 0;
+  overflows = 0;
+  constructor(capacity) {
+    this.capacity = capacity;
+    if (!Number.isInteger(capacity) || capacity < 0)
+      throw new RangeError("arena capacity must be a non-negative integer");
+    this.buffer = new ArrayBuffer(capacity);
+  }
+  allocate(size, alignment = 1) {
+    const aligned = Math.ceil(this.used / alignment) * alignment;
+    if (size < 0 || aligned + size > this.capacity) {
+      this.overflows++;
+      return INVALID_MEMORY_OFFSET;
+    }
+    this.used = aligned + size;
+    if (this.used > this.highWater)
+      this.highWater = this.used;
+    return aligned;
+  }
+  reset() {
+    this.used = 0;
+  }
+}
+
+class FixedIndexPool {
+  capacity;
+  free;
+  top;
+  used = 0;
+  highWater = 0;
+  overflows = 0;
+  constructor(capacity) {
+    this.capacity = capacity;
+    if (!Number.isInteger(capacity) || capacity < 0)
+      throw new RangeError("pool capacity must be a non-negative integer");
+    this.free = new Uint32Array(capacity);
+    for (let index = 0;index < capacity; index++)
+      this.free[index] = capacity - index - 1;
+    this.top = capacity;
+  }
+  acquire() {
+    if (this.top === 0) {
+      this.overflows++;
+      return INVALID_POOL_INDEX;
+    }
+    const index = this.free[--this.top];
+    this.used++;
+    if (this.used > this.highWater)
+      this.highWater = this.used;
+    return index;
+  }
+  release(index) {
+    if (!Number.isInteger(index) || index < 0 || index >= this.capacity || this.top >= this.capacity)
+      return false;
+    this.free[this.top++] = index;
+    this.used--;
+    return true;
+  }
+}
+
+class FixedStructuralCommandRing {
+  capacity;
+  kinds;
+  entities;
+  argument0;
+  argument1;
+  head = 0;
+  tail = 0;
+  count = 0;
+  highWater = 0;
+  overflows = 0;
+  constructor(capacity) {
+    this.capacity = capacity;
+    if (!Number.isInteger(capacity) || capacity <= 0)
+      throw new RangeError("structural command capacity must be positive");
+    this.kinds = new Uint8Array(capacity);
+    this.entities = new Uint32Array(capacity);
+    this.argument0 = new Float64Array(capacity);
+    this.argument1 = new Float64Array(capacity);
+  }
+  tryPush(kind, entity, argument0 = 0, argument1 = 0) {
+    if (this.count === this.capacity) {
+      this.overflows++;
+      return 1 /* CapacityExceeded */;
+    }
+    const slot = this.tail;
+    this.kinds[slot] = kind;
+    this.entities[slot] = entity;
+    this.argument0[slot] = argument0;
+    this.argument1[slot] = argument1;
+    this.tail = (slot + 1) % this.capacity;
+    this.count++;
+    if (this.count > this.highWater)
+      this.highWater = this.count;
+    return 0 /* Accepted */;
+  }
+  drain(maxOperations, sink) {
+    let drained = 0;
+    while (drained < maxOperations && this.count !== 0) {
+      const slot = this.head;
+      sink.applyStructuralCommand(this.kinds[slot], this.entities[slot], this.argument0[slot], this.argument1[slot]);
+      this.head = (slot + 1) % this.capacity;
+      this.count--;
+      drained++;
+    }
+    return drained;
+  }
+}
+
+class EngineMemory {
+  config;
+  phase = 0 /* Bootstrap */;
+  frame;
+  render;
+  structuralCommands;
+  workerCompletions;
+  assetRequests;
+  vtRequests;
+  metrics = {
+    frameArenaOverflows: 0,
+    renderArenaOverflows: 0,
+    poolOverflows: 0,
+    sealedAllocationViolations: 0
+  };
+  constructor(config) {
+    this.config = config;
+    this.frame = new LinearArena(config.frameScratchBytes);
+    this.render = new LinearArena(config.renderScratchBytes);
+    this.structuralCommands = new FixedStructuralCommandRing(config.structuralCommands);
+    this.workerCompletions = new FixedIndexPool(config.workerCompletions);
+    this.assetRequests = new FixedIndexPool(config.assetRequests);
+    this.vtRequests = new FixedIndexPool(config.vtRequests);
+  }
+  warmup() {
+    if (this.phase !== 0 /* Bootstrap */)
+      throw new Error("EngineMemory can enter warmup only from bootstrap");
+    this.phase = 1 /* Warmup */;
+  }
+  sealGameplay() {
+    if (this.phase !== 1 /* Warmup */ && this.phase !== 3 /* LoadingScreen */)
+      throw new Error("EngineMemory can seal only after warmup/loading");
+    this.phase = 2 /* GameplaySealed */;
+  }
+  beginFrame() {
+    this.frame.reset();
+    this.render.reset();
+  }
+  refreshMetrics() {
+    this.metrics.frameArenaOverflows = this.frame.overflows;
+    this.metrics.renderArenaOverflows = this.render.overflows;
+    this.metrics.poolOverflows = this.structuralCommands.overflows + this.workerCompletions.overflows + this.assetRequests.overflows + this.vtRequests.overflows;
+    return this.metrics;
+  }
+}
+
+// crates/afterglow-web/www/engine/frame-budget.ts
+var DEFAULT_FRAME_BUDGET = {
+  deadlineFractions: [0.15, 0.35, 0.45, 0.55, 0.95],
+  operationLimits: [1, 1, 1, 1, 1]
+};
+
+class FrameBudget {
+  clock;
+  deadlineFractions = new Float64Array(5 /* Count */);
+  operationLimits = new Uint32Array(5 /* Count */);
+  deadlines = new Float64Array(5 /* Count */);
+  operations = new Uint32Array(5 /* Count */);
+  exhaustions = new Uint32Array(5 /* Count */);
+  overruns = new Uint32Array(5 /* Count */);
+  deferred = new Uint32Array(5 /* Count */);
+  stageStarts = new Float64Array(5 /* Count */);
+  elapsedUs = new Float64Array(5 /* Count */);
+  totalElapsedUs = new Float64Array(5 /* Count */);
+  maxElapsedUs = new Float64Array(5 /* Count */);
+  frameId = 0;
+  frameStart = 0;
+  frameDurationMs = 0;
+  constructor(config = DEFAULT_FRAME_BUDGET, clock = () => performance.now()) {
+    this.clock = clock;
+    if (config.deadlineFractions.length !== 5 /* Count */ || config.operationLimits.length !== 5 /* Count */)
+      throw new RangeError(`FrameBudget requires ${5 /* Count */} stage entries`);
+    let previous = 0;
+    for (let stage = 0;stage < 5 /* Count */; stage++) {
+      const fraction = config.deadlineFractions[stage];
+      const operations = config.operationLimits[stage];
+      if (!Number.isFinite(fraction) || fraction < previous || fraction > 1)
+        throw new RangeError("frame deadline fractions must be monotonic values in 0..1");
+      if (!Number.isInteger(operations) || operations < 1)
+        throw new RangeError("frame operation limits must be positive integers");
+      this.deadlineFractions[stage] = fraction;
+      this.operationLimits[stage] = operations;
+      previous = fraction;
+    }
+  }
+  beginFrame(frameId2, frameDurationMs) {
+    this.frameId = frameId2;
+    this.frameStart = this.clock();
+    this.frameDurationMs = Math.max(0.1, frameDurationMs);
+    for (let stage = 0;stage < 5 /* Count */; stage++) {
+      this.operations[stage] = 0;
+      this.elapsedUs[stage] = 0;
+      this.stageStarts[stage] = 0;
+      this.deadlines[stage] = this.frameStart + this.frameDurationMs * this.deadlineFractions[stage];
+    }
+  }
+  beginStage(stage, required = false) {
+    const operationExceeded = this.operations[stage] >= this.operationLimits[stage];
+    const deadlineExceeded = this.clock() > this.deadlines[stage];
+    if (operationExceeded || deadlineExceeded) {
+      this.exhaustions[stage]++;
+      if (!required) {
+        this.deferred[stage]++;
+        return operationExceeded ? 1 /* DeferredOperationLimit */ : 2 /* DeferredDeadline */;
+      }
+    }
+    this.operations[stage]++;
+    this.stageStarts[stage] = this.clock();
+    return 0 /* Run */;
+  }
+  endStage(stage) {
+    const now = this.clock();
+    const elapsedUs = Math.max(0, (now - this.stageStarts[stage]) * 1000);
+    this.elapsedUs[stage] += elapsedUs;
+    this.totalElapsedUs[stage] += elapsedUs;
+    if (this.elapsedUs[stage] > this.maxElapsedUs[stage])
+      this.maxElapsedUs[stage] = this.elapsedUs[stage];
+    if (now > this.deadlines[stage])
+      this.overruns[stage]++;
+  }
+  get currentFrameId() {
+    return this.frameId;
+  }
+  get currentFrameDurationMs() {
+    return this.frameDurationMs;
+  }
+  get stageOperations() {
+    return this.operations;
+  }
+  get stageExhaustions() {
+    return this.exhaustions;
+  }
+  get stageOverruns() {
+    return this.overruns;
+  }
+  get stageDeferred() {
+    return this.deferred;
+  }
+  get stageElapsedUs() {
+    return this.elapsedUs;
+  }
+  get stageTotalElapsedUs() {
+    return this.totalElapsedUs;
+  }
+  get stageMaxElapsedUs() {
+    return this.maxElapsedUs;
+  }
+}
+var FrameBudgetRes = defineResource("frameBudget", () => new FrameBudget);
+
+// crates/afterglow-web/www/engine/frame.ts
+function prepareAfterglowFrame(frame, workerInput, adapter, vtInput, memory, budget) {
+  if (memory && memory.phase !== 2 /* GameplaySealed */ && memory.phase !== 3 /* LoadingScreen */)
+    throw new Error("EngineMemory must be sealed before frame orchestration");
+  memory?.beginFrame();
+  budget?.beginFrame(frame.frameId, frame.deltaSeconds * 1000);
+  if (workerInput) {
+    budget?.beginStage(0 /* WorkerPoll */, true);
+    workerInput.poll();
+    budget?.endStage(0 /* WorkerPoll */);
+  }
+  if (vtInput) {
+    budget?.beginStage(1 /* VirtualTexture */, true);
+    if (vtInput.frameTimeMs !== undefined)
+      vtInput.store.recordFrameTime(vtInput.frameTimeMs);
+    vtInput.store.processFeedback(vtInput.feedback);
+    vtInput.store.poll();
+    budget?.endStage(1 /* VirtualTexture */);
+  }
+  if (workerInput?.drainStructuralCommands && (!budget || budget.beginStage(2 /* StructuralCommands */) === 0 /* Run */)) {
+    workerInput.drainStructuralCommands(adapter);
+    budget?.endStage(2 /* StructuralCommands */);
+  }
+  if (workerInput?.drainPoseBatches && (!budget || budget.beginStage(3 /* PoseBatches */) === 0 /* Run */)) {
+    workerInput.drainPoseBatches(adapter);
+    budget?.endStage(3 /* PoseBatches */);
+  }
+  budget?.beginStage(4 /* RenderPrepare */, true);
+  adapter.prepareFrame(frame);
+  budget?.endStage(4 /* RenderPrepare */);
+}
+
+// crates/afterglow-web/www/engine/runtime.ts
+class BrowserAnimationScheduler {
+  request(callback) {
+    return requestAnimationFrame(callback);
+  }
+  cancel(handle) {
+    cancelAnimationFrame(handle);
+  }
+}
+
+class FixedWorkerInputs {
+  capacity;
+  inputs;
+  count = 0;
+  constructor(capacity) {
+    this.capacity = capacity;
+    if (!Number.isInteger(capacity) || capacity < 0)
+      throw new RangeError("worker input capacity must be a non-negative integer");
+    this.inputs = new Array(capacity).fill(null);
+  }
+  get size() {
+    return this.count;
+  }
+  add(input) {
+    if (this.count === this.capacity)
+      return 1 /* CapacityExceeded */;
+    this.inputs[this.count++] = input;
+    return 0 /* Registered */;
+  }
+  poll() {
+    for (let index = 0;index < this.count; index++) {
+      const input = this.inputs[index];
+      if (input !== null && input !== undefined)
+        input.poll();
+    }
+  }
+  drainStructuralCommands(adapter) {
+    for (let index = 0;index < this.count; index++) {
+      const input = this.inputs[index];
+      if (input !== null && input !== undefined)
+        input.drainStructuralCommands?.(adapter);
+    }
+  }
+  drainPoseBatches(adapter) {
+    for (let index = 0;index < this.count; index++) {
+      const input = this.inputs[index];
+      if (input !== null && input !== undefined)
+        input.drainPoseBatches?.(adapter);
+    }
+  }
+}
+
+class EngineRuntime {
+  memory;
+  budget;
+  diagnostics;
+  mutableFrame = { frameId: 0, deltaSeconds: 0, elapsedSeconds: 0 };
+  workers;
+  passes;
+  scheduler;
+  manifest;
+  adapter;
+  vt;
+  onAnimationFrame;
+  passCount = 0;
+  client = null;
+  animationHandle = 0;
+  previousTimestamp = -1;
+  elapsedSeconds = 0;
+  mutableState = 0 /* Bootstrap */;
+  static forScene(options) {
+    const adapter = new RenderAdapter(options.scene, options.entityCapacity);
+    return new EngineRuntime({ ...options, adapter });
+  }
+  constructor(options) {
+    if (!Number.isInteger(options.maxRenderPasses) || options.maxRenderPasses < 1)
+      throw new RangeError("render pass capacity must be a positive integer");
+    this.adapter = options.adapter;
+    this.memory = new EngineMemory(options.memory);
+    this.budget = new FrameBudget(options.frameBudget);
+    this.diagnostics = new EngineDiagnostics(options.diagnosticCapacity);
+    this.workers = new FixedWorkerInputs(options.maxWorkerInputs);
+    this.passes = new Array(options.maxRenderPasses).fill(null);
+    this.scheduler = options.scheduler ?? new BrowserAnimationScheduler;
+    this.vt = options.vt;
+    this.onAnimationFrame = (timestamp) => this.tick(timestamp);
+    const memoryResource = defineResource("engineMemory", () => this.memory);
+    const budgetResource = defineResource("frameBudget", () => this.budget);
+    memoryResource.set(this.adapter.world, this.memory);
+    budgetResource.set(this.adapter.world, this.budget);
+    this.manifest = new ResourceManifest(memoryResource, budgetResource, ...options.resources ?? []);
+    this.manifest.initialize(this.adapter.world);
+  }
+  get state() {
+    return this.mutableState;
+  }
+  get frame() {
+    return this.mutableFrame;
+  }
+  get registeredWorkers() {
+    return this.workers.size;
+  }
+  get registeredRenderPasses() {
+    return this.passCount;
+  }
+  registerWorker(input) {
+    if (this.mutableState !== 0 /* Bootstrap */)
+      return 2 /* RuntimeSealed */;
+    return this.workers.add(input);
+  }
+  registerRenderPass(pass2) {
+    if (this.mutableState !== 0 /* Bootstrap */)
+      return 2 /* RuntimeSealed */;
+    if (this.passCount === this.passes.length)
+      return 1 /* CapacityExceeded */;
+    this.passes[this.passCount++] = pass2;
+    return 0 /* Registered */;
+  }
+  enterWarmup() {
+    if (this.mutableState !== 0 /* Bootstrap */)
+      throw new Error("runtime can enter warmup only from bootstrap");
+    this.memory.warmup();
+    this.mutableState = 1 /* Warmup */;
+  }
+  async warm() {
+    if (this.mutableState !== 1 /* Warmup */)
+      throw new Error("runtime variants can be warmed only during warmup");
+    for (let index = 0;index < this.passCount; index++) {
+      const pass2 = this.passes[index];
+      if (pass2 !== null && pass2 !== undefined)
+        await pass2.warm?.();
+    }
+  }
+  sealGameplay() {
+    if (this.mutableState !== 1 /* Warmup */)
+      throw new Error("runtime can seal only after entering warmup");
+    this.adapter.sealGameplay();
+    this.memory.sealGameplay();
+    this.manifest.seal(this.adapter.world);
+    for (let index = 0;index < this.passCount; index++) {
+      const pass2 = this.passes[index];
+      if (pass2 !== null && pass2 !== undefined)
+        pass2.seal?.();
+    }
+    this.mutableState = 2 /* GameplaySealed */;
+  }
+  start(client) {
+    if (this.mutableState !== 2 /* GameplaySealed */ && this.mutableState !== 4 /* Stopped */)
+      throw new Error("runtime can start only after gameplay seal");
+    this.client = client;
+    this.previousTimestamp = -1;
+    this.mutableState = 3 /* Running */;
+    this.animationHandle = this.scheduler.request(this.onAnimationFrame);
+  }
+  stop() {
+    if (this.mutableState !== 3 /* Running */)
+      return;
+    this.mutableState = 4 /* Stopped */;
+    if (this.animationHandle !== 0)
+      this.scheduler.cancel(this.animationHandle);
+    this.animationHandle = 0;
+  }
+  dispose() {
+    if (this.mutableState === 5 /* Shutdown */)
+      return;
+    this.stop();
+    for (let index = this.passCount - 1;index >= 0; index--) {
+      const pass2 = this.passes[index];
+      if (pass2 !== null && pass2 !== undefined)
+        pass2.dispose();
+      this.passes[index] = null;
+    }
+    this.passCount = 0;
+    this.adapter.dispose();
+    this.client = null;
+    this.memory.phase = 4 /* Shutdown */;
+    this.mutableState = 5 /* Shutdown */;
+  }
+  tick(timestamp) {
+    if (this.mutableState !== 3 /* Running */ || this.client === null)
+      return;
+    this.animationHandle = 0;
+    const deltaSeconds = this.previousTimestamp < 0 ? 1 / 60 : Math.max(0, (timestamp - this.previousTimestamp) / 1000);
+    this.previousTimestamp = timestamp;
+    this.elapsedSeconds += deltaSeconds;
+    this.mutableFrame.frameId++;
+    this.mutableFrame.deltaSeconds = deltaSeconds;
+    this.mutableFrame.elapsedSeconds = this.elapsedSeconds;
+    try {
+      prepareAfterglowFrame(this.mutableFrame, this.workers, this.adapter, this.vt, this.memory, this.budget);
+      this.client.update(this.mutableFrame);
+      for (let index = 0;index < this.passCount; index++) {
+        const pass2 = this.passes[index];
+        if (pass2 !== null && pass2 !== undefined)
+          pass2.render(this.mutableFrame);
+      }
+    } catch (error2) {
+      this.diagnostics.tryRecord(1 /* RuntimeState */, 0 /* Runtime */, error2);
+      this.mutableState = 4 /* Stopped */;
+      return;
+    }
+    if (this.mutableState === 3 /* Running */)
+      this.animationHandle = this.scheduler.request(this.onAnimationFrame);
+  }
+}
+// crates/afterglow-web/www/engine/input.ts
+function actionFor(event) {
+  switch (event.code || event.key) {
+    case "KeyA":
+    case "a":
+    case "A":
+      return 0 /* OrbitLeft */;
+    case "KeyD":
+    case "d":
+    case "D":
+      return 1 /* OrbitRight */;
+    case "KeyW":
+    case "w":
+    case "W":
+      return 2 /* ZoomIn */;
+    case "KeyS":
+    case "s":
+    case "S":
+      return 3 /* ZoomOut */;
+    case "Digit1":
+    case "1":
+      return 4 /* ModelOne */;
+    case "Digit2":
+    case "2":
+      return 5 /* ModelTwo */;
+    case "Space":
+    case " ":
+      return 6 /* ToggleAnimation */;
+    case "KeyB":
+    case "b":
+    case "B":
+      return 7 /* ToggleSkeleton */;
+    case "KeyF":
+    case "f":
+    case "F":
+      return 8 /* ToggleFeedback */;
+    case "KeyR":
+    case "r":
+    case "R":
+      return 9 /* ResetView */;
+    case "KeyO":
+    case "o":
+    case "O":
+      return 10 /* Overview */;
+    case "KeyP":
+    case "p":
+    case "P":
+      return 11 /* PixelView */;
+    case "ShiftLeft":
+    case "ShiftRight":
+    case "Shift":
+      return 12 /* Sprint */;
+    case "Digit3":
+    case "3":
+      return 13 /* PoseThree */;
+    default:
+      return -1;
+  }
+}
+
+class BoundedKeyboardInput {
+  target;
+  down = new Uint8Array(14 /* Count */);
+  pressed = new Uint8Array(14 /* Count */);
+  onKeyDown;
+  onKeyUp;
+  onBlur;
+  onWheel;
+  wheelDelta = 0;
+  disposed = false;
+  programmatic = false;
+  constructor(target = window) {
+    this.target = target;
+    this.onKeyDown = (event) => {
+      if (this.programmatic)
+        return;
+      const action = actionFor(event);
+      if (action < 0)
+        return;
+      if (this.down[action] === 0 && !event.repeat)
+        this.pressed[action] = 1;
+      this.down[action] = 1;
+    };
+    this.onKeyUp = (event) => {
+      const action = actionFor(event);
+      if (action >= 0)
+        this.down[action] = 0;
+    };
+    this.onBlur = () => {
+      this.down.fill(0);
+      this.pressed.fill(0);
+    };
+    this.onWheel = (event) => {
+      if (!this.programmatic)
+        this.wheelDelta += event.deltaY;
+    };
+    target.addEventListener("keydown", this.onKeyDown);
+    target.addEventListener("keyup", this.onKeyUp);
+    target.addEventListener("blur", this.onBlur);
+    target.addEventListener("wheel", this.onWheel);
+  }
+  isDown(action) {
+    return this.down[action] !== 0;
+  }
+  consumePressed(action) {
+    const value = this.pressed[action] !== 0;
+    this.pressed[action] = 0;
+    return value;
+  }
+  consumeWheelDelta() {
+    const delta = this.wheelDelta;
+    this.wheelDelta = 0;
+    return delta;
+  }
+  clear() {
+    this.down.fill(0);
+    this.pressed.fill(0);
+    this.wheelDelta = 0;
+  }
+  dispose() {
+    if (this.disposed)
+      return;
+    this.disposed = true;
+    this.target.removeEventListener("keydown", this.onKeyDown);
+    this.target.removeEventListener("keyup", this.onKeyUp);
+    this.target.removeEventListener("blur", this.onBlur);
+    this.target.removeEventListener("wheel", this.onWheel);
+    this.clear();
+  }
+}
+// crates/afterglow-web/www/engine/relative-pointer.ts
+class RelativePointerInput {
+  element;
+  sink;
+  ownerDocument;
+  status;
+  requestedUnadjustedMovement = false;
+  onMovement = (event) => {
+    if (this.ownerDocument.pointerLockElement !== this.element)
+      return;
+    const movement = event;
+    this.sink(movement.movementX, movement.movementY);
+  };
+  onPointerLockChange = () => {
+    this.status.locked = this.ownerDocument.pointerLockElement === this.element;
+    this.status.unadjustedMovement = this.status.locked && this.requestedUnadjustedMovement;
+    if (!this.status.locked)
+      this.requestedUnadjustedMovement = false;
+  };
+  onRawLockAcquired = () => {
+    this.status.locked = this.ownerDocument.pointerLockElement === this.element;
+    this.status.unadjustedMovement = this.status.locked;
+  };
+  onRawLockRejected = () => {
+    this.requestedUnadjustedMovement = false;
+    this.requestFallbackLock();
+  };
+  onFallbackLockAcquired = () => {
+    this.status.locked = this.ownerDocument.pointerLockElement === this.element;
+    this.status.unadjustedMovement = false;
+  };
+  onFallbackLockRejected = () => {
+    this.status.locked = false;
+    this.status.unadjustedMovement = false;
+  };
+  constructor(element2, sink, options = {}) {
+    this.element = element2;
+    this.sink = sink;
+    this.ownerDocument = options.document ?? element2.ownerDocument;
+    const view = this.ownerDocument.defaultView;
+    const rawEventSupported = options.rawEventSupported ?? (view !== null && ("onpointerrawupdate" in view));
+    this.status = {
+      eventType: rawEventSupported ? "pointerrawupdate" : "mousemove",
+      locked: false,
+      unadjustedMovement: false
+    };
+    this.element.addEventListener(this.status.eventType, this.onMovement, { passive: true });
+    this.ownerDocument.addEventListener("pointerlockchange", this.onPointerLockChange, { passive: true });
+  }
+  requestLock() {
+    if (this.ownerDocument.pointerLockElement === this.element)
+      return;
+    this.requestedUnadjustedMovement = true;
+    try {
+      const pending = this.element.requestPointerLock({ unadjustedMovement: true });
+      if (pending)
+        pending.then(this.onRawLockAcquired, this.onRawLockRejected);
+    } catch {
+      this.requestedUnadjustedMovement = false;
+      this.requestFallbackLock();
+    }
+  }
+  requestFallbackLock() {
+    this.requestedUnadjustedMovement = false;
+    try {
+      const pending = this.element.requestPointerLock();
+      if (pending)
+        pending.then(this.onFallbackLockAcquired, this.onFallbackLockRejected);
+    } catch {
+      this.onFallbackLockRejected();
+    }
+  }
+  getStatus() {
+    return this.status;
+  }
+  dispose() {
+    this.element.removeEventListener(this.status.eventType, this.onMovement);
+    this.ownerDocument.removeEventListener("pointerlockchange", this.onPointerLockChange);
+  }
+}
 // crates/afterglow-web/www/node_modules/three/build/three.tsl.js
 var exports_three_tsl = {};
 __export(exports_three_tsl, {
@@ -68250,19 +71386,19 @@ class VirtualTextureFeedbackPass {
         if ((packed & 2147483648) === 0)
           continue;
         const mip = packed & 63;
-        const x = packed >>> 6 & 2047;
-        const y = packed >>> 17 & 2047;
+        const x2 = packed >>> 6 & 2047;
+        const y2 = packed >>> 17 & 2047;
         const entry = store.getEntryById(words[index + 1]);
         if (!entry || mip > entry.textureMaxMip)
           continue;
         const tail = mip > entry.maxMip;
         const gridWidth = tail ? 1 : pagesAtMipAxis(entry.pageTableLayout.width, mip);
         const gridHeight = tail ? 1 : pagesAtMipAxis(entry.pageTableLayout.baseHeight, mip);
-        if (x >= gridWidth || y >= gridHeight)
+        if (x2 >= gridWidth || y2 >= gridHeight)
           continue;
         const requestMip = tail ? entry.tailFirstMip : mip;
-        const requestX = tail ? 0 : x;
-        const requestY = tail ? 0 : y;
+        const requestX = tail ? 0 : x2;
+        const requestY = tail ? 0 : y2;
         const local = tail ? 268435456 : (requestMip & 63 | (requestX & 2047) << 6 | (requestY & 2047) << 17) >>> 0;
         const key = entry.textureId * 536870912 + local;
         const pixel = index >> 1;
@@ -68317,6 +71453,406 @@ class VirtualTextureFeedbackPass {
     this.requestPool.length = 0;
   }
 }
+// crates/afterglow-web/www/engine/virtual-texture-feedback-coordinator.ts
+class VirtualTextureFeedbackCoordinator {
+  renderer;
+  store;
+  vtCpuUs = 0;
+  feedbackSubmitUs = 0;
+  pixelScale;
+  stats = {
+    submittedSnapshots: 0,
+    completedSnapshots: 0,
+    discardedSnapshots: 0,
+    deferredSnapshots: 0,
+    registrationOverflows: 0,
+    activePasses: 0
+  };
+  passes;
+  renderables;
+  activeRenderable;
+  activeLocalPass;
+  heldResults;
+  renderableCount = 0;
+  registeredPassCount = 0;
+  awaitingPassCount = 0;
+  discardAwaiting = false;
+  sealed = false;
+  disposed = false;
+  constructor(renderer, store, capacities) {
+    this.renderer = renderer;
+    this.store = store;
+    if (!Number.isInteger(capacities.renderables) || capacities.renderables <= 0)
+      throw new RangeError("feedback renderable capacity must be positive");
+    if (!Number.isInteger(capacities.passes) || capacities.passes <= 0)
+      throw new RangeError("feedback pass capacity must be positive");
+    if (!Number.isInteger(capacities.cadence) || capacities.cadence <= 0)
+      throw new RangeError("feedback cadence must be positive");
+    this.cadence = capacities.cadence;
+    this.passes = new Array(capacities.passes);
+    this.renderables = new Array(capacities.renderables);
+    this.heldResults = new Array(capacities.passes).fill(null);
+    for (let index = 0;index < capacities.passes; index++)
+      this.passes[index] = new VirtualTextureFeedbackPass(capacities.scale ?? 0.125);
+    for (let index = 0;index < capacities.renderables; index++)
+      this.renderables[index] = { renderable: null, passOffset: 0 };
+    this.activeRenderable = new Int32Array(capacities.passes);
+    this.activeLocalPass = new Uint16Array(capacities.passes);
+    const firstPass = this.passes[0];
+    if (!firstPass)
+      throw new Error("feedback coordinator failed to reserve its first pass");
+    this.pixelScale = firstPass.pixelScale;
+  }
+  cadence;
+  register(renderable) {
+    if (this.sealed)
+      return 3 /* Sealed */;
+    if (!Number.isInteger(renderable.feedbackPassCount) || renderable.feedbackPassCount <= 0)
+      return 2 /* InvalidPassCount */;
+    if (this.renderableCount === this.renderables.length || this.registeredPassCount + renderable.feedbackPassCount > this.passes.length) {
+      this.stats.registrationOverflows++;
+      return 1 /* CapacityExceeded */;
+    }
+    const slot = this.renderables[this.renderableCount];
+    if (!slot)
+      return 1 /* CapacityExceeded */;
+    slot.renderable = renderable;
+    slot.passOffset = this.registeredPassCount;
+    this.registeredPassCount += renderable.feedbackPassCount;
+    this.renderableCount++;
+    return 0 /* Registered */;
+  }
+  resize(displayWidth, displayHeight) {
+    for (let index = 0;index < this.passes.length; index++)
+      this.passes[index]?.resize(displayWidth, displayHeight);
+  }
+  async warm() {
+    if (this.disposed)
+      throw new Error("cannot warm a disposed feedback coordinator");
+    const previousTarget = this.renderer.getRenderTarget();
+    const shadows = this.renderer.shadowMap.enabled;
+    this.renderer.shadowMap.enabled = false;
+    try {
+      for (let recordIndex = 0;recordIndex < this.renderableCount; recordIndex++) {
+        const record = this.renderables[recordIndex];
+        const renderable = record?.renderable;
+        if (!record || !renderable)
+          continue;
+        for (let localPass = 0;localPass < renderable.feedbackPassCount; localPass++) {
+          const pass3 = this.passes[record.passOffset + localPass];
+          if (!pass3)
+            continue;
+          renderable.beginFeedbackPass(localPass);
+          try {
+            this.renderer.setRenderTarget(pass3.target);
+            await this.renderer.compileAsync(renderable.feedbackScene, renderable.feedbackCamera);
+            this.renderer.render(renderable.feedbackScene, renderable.feedbackCamera);
+          } finally {
+            renderable.endFeedbackPass(localPass);
+          }
+        }
+      }
+    } finally {
+      this.renderer.setRenderTarget(previousTarget);
+      this.renderer.shadowMap.enabled = shadows;
+    }
+  }
+  seal() {
+    this.sealed = true;
+  }
+  setGpuTimingEnabled(enabled) {
+    const renderer = this.renderer;
+    renderer.backend.trackTimestamp = enabled;
+    for (const pool of Object.values(renderer.backend.timestampQueryPool ?? {}))
+      if (pool)
+        pool.trackTimestamp = enabled;
+  }
+  async resolveGpuTimings(out) {
+    const renderer = this.renderer;
+    out.gpuTotalMs = await renderer.resolveTimestampsAsync("render");
+    const contexts = renderer._renderContexts, pool = renderer.backend.timestampQueryPool?.render;
+    const timestamps = pool?.timestamps, feedbackTarget = this.passes[0]?.target;
+    if (!contexts || !timestamps || !feedbackTarget)
+      return out;
+    const main = contexts.get(null)?.id, feedback = contexts.get(feedbackTarget)?.id;
+    let mainFrame = -1, feedbackFrame = -1;
+    for (const [uid, duration] of timestamps) {
+      const parts = uid.split(":"), context3 = Number(parts[2]), id = Number(parts[3]?.slice(1));
+      if (context3 === main && id > mainFrame) {
+        mainFrame = id;
+        out.gpuMainMs = duration;
+      } else if (context3 === feedback && id > feedbackFrame) {
+        feedbackFrame = id;
+        out.gpuFeedbackMs = duration;
+      }
+    }
+    timestamps.clear();
+    const frames = pool?.getTimestampFrames?.();
+    if (frames)
+      frames.length = 0;
+    return out;
+  }
+  recordFrameTime(frameTimeMs) {
+    this.store.recordFrameTime(frameTimeMs);
+  }
+  poll() {
+    const started = performance.now();
+    this.consumeCompletedSnapshot();
+    this.store.poll();
+    this.vtCpuUs = (performance.now() - started) * 1000;
+  }
+  render(frame) {
+    this.feedbackSubmitUs = 0;
+    if (this.disposed || frame.frameId % this.cadence !== 0)
+      return;
+    const started = performance.now();
+    if (this.awaitingPassCount !== 0) {
+      this.stats.deferredSnapshots++;
+      return;
+    }
+    let activeCount = 0;
+    for (let recordIndex = 0;recordIndex < this.renderableCount; recordIndex++) {
+      const renderable = this.renderables[recordIndex]?.renderable;
+      if (!renderable || !renderable.isFeedbackActive())
+        continue;
+      for (let localPass = 0;localPass < renderable.feedbackPassCount; localPass++) {
+        if (activeCount >= this.passes.length)
+          break;
+        this.activeRenderable[activeCount] = recordIndex;
+        this.activeLocalPass[activeCount] = localPass;
+        activeCount++;
+      }
+    }
+    this.stats.activePasses = activeCount;
+    if (activeCount === 0)
+      return;
+    for (let index = 0;index < activeCount; index++) {
+      if (this.passes[index]?.canSubmit !== true) {
+        this.stats.deferredSnapshots++;
+        return;
+      }
+    }
+    const shadows = this.renderer.shadowMap.enabled;
+    this.renderer.shadowMap.enabled = false;
+    let submitted = 0;
+    try {
+      for (let index = 0;index < activeCount; index++) {
+        const renderable = this.renderables[this.activeRenderable[index] ?? -1]?.renderable;
+        const localPass = this.activeLocalPass[index] ?? 0;
+        const pass3 = this.passes[index];
+        if (!renderable || !pass3)
+          continue;
+        renderable.beginFeedbackPass(localPass);
+        try {
+          if (pass3.submit(this.renderer, renderable.feedbackScene, renderable.feedbackCamera, this.store))
+            submitted++;
+        } finally {
+          renderable.endFeedbackPass(localPass);
+        }
+      }
+    } finally {
+      this.renderer.shadowMap.enabled = shadows;
+    }
+    this.awaitingPassCount = submitted;
+    this.discardAwaiting = submitted !== activeCount;
+    if (submitted !== 0)
+      this.stats.submittedSnapshots++;
+    if (this.discardAwaiting)
+      this.stats.deferredSnapshots++;
+    this.feedbackSubmitUs = (performance.now() - started) * 1000;
+  }
+  consumeCompletedSnapshot() {
+    if (this.awaitingPassCount === 0)
+      return false;
+    let complete = true;
+    for (let index = 0;index < this.awaitingPassCount; index++) {
+      if (this.heldResults[index] === null)
+        this.heldResults[index] = this.passes[index]?.consume() ?? null;
+      if (this.heldResults[index] === null)
+        complete = false;
+    }
+    if (!complete)
+      return false;
+    if (this.discardAwaiting) {
+      this.stats.discardedSnapshots++;
+    } else {
+      this.store.processFeedbackBatch(this.heldResults, this.awaitingPassCount);
+      this.stats.completedSnapshots++;
+    }
+    for (let index = 0;index < this.awaitingPassCount; index++)
+      this.heldResults[index] = null;
+    this.awaitingPassCount = 0;
+    this.discardAwaiting = false;
+    return true;
+  }
+  dispose() {
+    if (this.disposed)
+      return;
+    this.disposed = true;
+    for (let index = 0;index < this.passes.length; index++)
+      this.passes[index]?.dispose();
+    for (let index = 0;index < this.renderables.length; index++) {
+      const slot = this.renderables[index];
+      if (slot)
+        slot.renderable = null;
+    }
+    for (let index = 0;index < this.heldResults.length; index++)
+      this.heldResults[index] = null;
+    this.awaitingPassCount = 0;
+  }
+}
+// crates/afterglow-web/www/engine/dev-harness.ts
+class BootstrapGuard {
+  capacity;
+  cleanups;
+  count = 0;
+  constructor(capacity) {
+    this.capacity = capacity;
+    if (!Number.isInteger(capacity) || capacity <= 0)
+      throw new RangeError("bootstrap cleanup capacity must be positive");
+    this.cleanups = new Array(capacity).fill(null);
+  }
+  defer(cleanup) {
+    if (this.count === this.capacity)
+      throw new Error("bootstrap cleanup capacity exceeded");
+    this.cleanups[this.count++] = cleanup;
+  }
+  release() {
+    for (let index = 0;index < this.count; index++)
+      this.cleanups[index] = null;
+    this.count = 0;
+  }
+  async rollback() {
+    let firstError = null;
+    for (let index = this.count - 1;index >= 0; index--) {
+      const cleanup = this.cleanups[index];
+      this.cleanups[index] = null;
+      try {
+        await cleanup?.();
+      } catch (error2) {
+        if (firstError === null)
+          firstError = error2;
+      }
+    }
+    this.count = 0;
+    if (firstError !== null)
+      throw firstError;
+  }
+}
+
+class FrameStepHarness {
+  capacity;
+  targets;
+  resolvers;
+  count = 0;
+  constructor(capacity) {
+    this.capacity = capacity;
+    if (!Number.isInteger(capacity) || capacity <= 0)
+      throw new RangeError("frame-step capacity must be positive");
+    this.targets = new Float64Array(capacity);
+    this.resolvers = new Array(capacity).fill(null);
+  }
+  wait(currentFrame, count = 1) {
+    if (!Number.isInteger(count) || count <= 0)
+      throw new RangeError("frame-step count must be positive");
+    if (this.count === this.capacity)
+      throw new Error("frame-step capacity exceeded");
+    const slot = this.count++;
+    this.targets[slot] = currentFrame + count;
+    return new Promise((resolve) => {
+      this.resolvers[slot] = resolve;
+    });
+  }
+  poll(frame) {
+    let write = 0;
+    for (let read = 0;read < this.count; read++) {
+      const resolver = this.resolvers[read];
+      if (frame >= (this.targets[read] ?? Number.POSITIVE_INFINITY)) {
+        this.resolvers[read] = null;
+        resolver?.();
+        continue;
+      }
+      if (write !== read) {
+        this.targets[write] = this.targets[read] ?? 0;
+        this.resolvers[write] = resolver ?? null;
+        this.resolvers[read] = null;
+      }
+      write++;
+    }
+    this.count = write;
+  }
+}
+
+class BrowserErrorCapture {
+  diagnostics;
+  target;
+  record = { sequence: 0, code: 0 /* Unknown */, source: 5 /* Game */, detail: null };
+  onError;
+  onRejection;
+  disposed = false;
+  constructor(diagnostics2, target = window) {
+    this.diagnostics = diagnostics2;
+    this.target = target;
+    this.onError = (event) => {
+      diagnostics2.tryRecord(0 /* Unknown */, 5 /* Game */, event.error ?? event);
+    };
+    this.onRejection = (event) => {
+      diagnostics2.tryRecord(0 /* Unknown */, 5 /* Game */, event.reason);
+    };
+    target.addEventListener("error", this.onError);
+    target.addEventListener("unhandledrejection", this.onRejection);
+  }
+  snapshot() {
+    const result = [];
+    for (let index = 0;index < this.diagnostics.count; index++) {
+      if (this.diagnostics.readInto(index, this.record))
+        result.push(this.record.detail);
+    }
+    return result;
+  }
+  dispose() {
+    if (this.disposed)
+      return;
+    this.disposed = true;
+    this.target.removeEventListener("error", this.onError);
+    this.target.removeEventListener("unhandledrejection", this.onRejection);
+  }
+}
+
+class PageShutdown {
+  target;
+  onUnload;
+  disposed = false;
+  constructor(callback, target = window) {
+    this.target = target;
+    this.onUnload = () => callback();
+    target.addEventListener("beforeunload", this.onUnload, { once: true });
+  }
+  dispose() {
+    if (this.disposed)
+      return;
+    this.disposed = true;
+    this.target.removeEventListener("beforeunload", this.onUnload);
+  }
+}
+function publishDevHarness(name, value) {
+  Object.defineProperty(window, name, { configurable: true, value });
+}
+
+class TextHud {
+  element;
+  constructor(element3) {
+    this.element = element3;
+  }
+  setText(text) {
+    if (this.element)
+      this.element.textContent = text;
+  }
+  setVisible(visible) {
+    if (this.element)
+      this.element.style.display = visible ? "" : "none";
+  }
+}
 // crates/afterglow-web/www/dungeon.ts
 var VT_QUALITY_BIAS = 0;
 var FEEDBACK_INTERVAL = 8;
@@ -68328,463 +71864,313 @@ var POM_MAX_DISTANCE = 0;
 var POM_SHADOW_STEPS = 8;
 var POM_SHADOW_BIAS = 0.01;
 var POM_SHADOW_STRENGTH = 0.82;
-var pomEnabled = true;
 var scene = new Scene;
 scene.background = new Color(1053464);
 scene.fog = new Fog(1053464, 7, 28);
 var camera = new PerspectiveCamera(70, innerWidth / innerHeight, 0.05, 60);
 camera.rotation.order = "YXZ";
-var renderer = await createWebGPUOnlyRenderer({ antialias: false, trackTimestamp: false }, moduleRendererFactory).catch((error2) => {
-  showWebGPUFailure(error2);
+var runtime = EngineRuntime.forScene({ scene, entityCapacity: 1, memory: { frameScratchBytes: 16384, renderScratchBytes: 16384, structuralCommands: 8, workerCompletions: 8, assetRequests: 8, vtRequests: 512 }, diagnosticCapacity: 128, maxWorkerInputs: 1, maxRenderPasses: 2 });
+var coordinator = null;
+function resizeCamera(width, height) {
+  camera.aspect = width / height;
+  camera.updateProjectionMatrix();
+  const ratio = Math.min(2, Math.max(0.1, devicePixelRatio));
+  coordinator?.resize(width * ratio, height * ratio);
+}
+var host = await RendererHost.create({ scene, camera, diagnostics: runtime.diagnostics, parameters: { antialias: false, trackTimestamp: false }, onResize: resizeCamera }).catch((error2) => {
+  runtime.dispose();
   throw error2;
 });
-renderer.setSize(innerWidth, innerHeight);
-renderer.setPixelRatio(devicePixelRatio);
-document.body.append(renderer.domElement);
-var rendererSeal = new RendererSeal(renderer.backend);
-var rendererSealStats = { renderPipelines: 0, computePipelines: 0, renderPipelineViolations: 0, computePipelineViolations: 0 };
-function pipelineTelemetry() {
-  rendererSealStats.renderPipelines = rendererSeal.renderPipelines;
-  rendererSealStats.computePipelines = rendererSeal.computePipelines;
-  rendererSealStats.renderPipelineViolations = rendererSeal.renderPipelineViolations;
-  rendererSealStats.computePipelineViolations = rendererSeal.computePipelineViolations;
-  return rendererSealStats;
-}
-var errors = [];
-renderer.backend.device.addEventListener("uncapturederror", (e) => errors.push(String(e.error?.message ?? e.error)));
-addEventListener("error", (e) => errors.push(String(e.error?.stack ?? e.message)));
-addEventListener("unhandledrejection", (e) => errors.push(String(e.reason?.stack ?? e.reason)));
-scene.add(new HemisphereLight(12175592, 2366229, 1.6));
-var lamp = new PointLight(16763269, 30, 18, 2);
-lamp.position.set(0, 3.2, 0);
-scene.add(lamp);
-var floor3 = new Mesh(new PlaneGeometry(16, 16), new MeshStandardMaterial({ color: 2696994, roughness: 1 }));
-floor3.rotation.x = -Math.PI / 2;
-scene.add(floor3);
-var ceiling = floor3.clone();
-ceiling.position.y = 4;
-ceiling.rotation.x = Math.PI / 2;
-ceiling.material = new MeshStandardMaterial({ color: 1579291, roughness: 1 });
-scene.add(ceiling);
-var rangeLoader = createFetchRangeLoader();
-var TEXTURE_WORKER_COUNT = Math.max(2, Math.min(4, Math.floor((navigator.hardwareConcurrency || 4) / 2)));
-var textureRpcs = await Promise.all(Array.from({ length: TEXTURE_WORKER_COUNT }, () => Rpc.create({
-  mainWasmUrl: "afterglow_web.wasm",
-  workerJsUrl: "worker.js",
-  workerWasmUrl: "texture.wasm",
-  timeoutMs: 1e4
-})));
-var textureWorkers = textureRpcs.map((rpc) => new TextureClient(rpc));
-addEventListener("beforeunload", () => {
-  for (const rpc of textureRpcs)
-    rpc.terminate();
-}, { once: true });
-var prefix = await rangeLoader.read("dungeon.big", 0, 16);
-var dataOffset = Number(new DataView(prefix.buffer, prefix.byteOffset + 8, 8).getBigUint64(0, true));
-var headerBytes = await rangeLoader.read("dungeon.big", 0, dataOffset);
-var { header } = parseBigHeader(headerBytes);
-var rendererDevice = renderer.backend.device;
-var format = rendererDevice.features.has("texture-compression-bc") ? 0 : rendererDevice.features.has("texture-compression-astc") ? 1 : FORMAT_RGBA;
-var sourceIdentity = await rangeLoader.identity("dungeon.big");
-var adapterInfo = renderer.afterglowAdapterInfo ?? {};
-var persistentCache = null;
-if (sourceIdentity.etag || sourceIdentity.lastModified) {
-  try {
-    const namespace = await persistentCacheNamespace([
-      "afterglow-cache-v1",
-      "dungeon.big",
-      String(sourceIdentity.size),
-      sourceIdentity.etag ?? "",
-      sourceIdentity.lastModified ?? "",
-      String(format),
-      "basisu-transcoder-v1",
-      "slot-136-border-4",
-      adapterInfo.vendor ?? "",
-      adapterInfo.architecture ?? "",
-      adapterInfo.device ?? "",
-      adapterInfo.description ?? ""
-    ]);
-    persistentCache = await PersistentBlobCache.open({
-      namespace,
-      maxBytes: 1024 * 1024 * 1024,
-      maxEntries: 65536,
-      writeQueueCapacity: 64
-    });
-  } catch (error2) {
-    console.warn("[cache] persistent blob cache unavailable:", error2);
+var bootstrap = new BootstrapGuard(20);
+bootstrap.defer(() => host.dispose());
+bootstrap.defer(() => runtime.dispose());
+try {
+  let pointDistance = function(x2, z2, w4) {
+    const dx = w4.x2 - w4.x1, dz = w4.z2 - w4.z1, l2 = dx * dx + dz * dz, t = Math.max(0, Math.min(1, ((x2 - w4.x1) * dx + (z2 - w4.z1) * dz) / l2));
+    return Math.hypot(x2 - (w4.x1 + t * dx), z2 - (w4.z1 + t * dz));
+  }, valid = function(x2, z2) {
+    if (!(x2 > -7.7 && x2 < 7.7 && z2 > -7.7 && z2 < 7.7))
+      return false;
+    for (let i = 4;i < walls.length; i++) {
+      const wall = walls[i];
+      if (wall && pointDistance(x2, z2, wall) <= PLAYER_RADIUS)
+        return false;
+    }
+    return true;
+  }, setPose = function(x2, z2, yaw = pose.yaw, pitch = pose.pitch) {
+    if (valid(x2, z2)) {
+      pose.x = x2;
+      pose.z = z2;
+    }
+    pose.yaw = yaw;
+    pose.pitch = Math.max(-1.45, Math.min(1.45, pitch));
+  }, move = function(forward, strafe) {
+    const sin3 = Math.sin(pose.yaw), cos3 = Math.cos(pose.yaw), dx = -sin3 * forward + cos3 * strafe, dz = -cos3 * forward - sin3 * strafe;
+    if (valid(pose.x + dx, pose.z))
+      pose.x += dx;
+    if (valid(pose.x, pose.z + dz))
+      pose.z += dz;
+  }, setPomEnabled = function(enabled) {
+    pomEnabled = enabled;
+    pomBinding.setPomEnabled(enabled);
+  }, updateHud = function() {
+    const d = store.getStats(), status = relativePointer.getStatus();
+    hud.setText(`afterglow — Engine Dungeon
+3 × 8K PBR sets · 12 walls · ${Math.round(1 / smoothedDt)} FPS
+Position ${pose.x.toFixed(2)}, ${pose.z.toFixed(2)} · ${status.eventType}
+POM ${pomEnabled ? "8–32 layers · 8-step self-shadow" : "off"}
+Resident ${d.atlasSlotsUsed}/${d.atlasSlotsTotal} · pending ${d.pendingPages}
+Errors ${runtime.diagnostics.count}`);
+  }, updateFrame = function(frame) {
+    const frameStarted = performance.now(), dt = Math.min(0.05, frame.deltaSeconds);
+    smoothedDt = smoothedDt * 0.95 + dt * 0.05;
+    coordinator?.recordFrameTime(dt * 1000);
+    if (!programmatic) {
+      let f = (input.isDown(2 /* ZoomIn */) ? 1 : 0) - (input.isDown(3 /* ZoomOut */) ? 1 : 0), s = (input.isDown(1 /* OrbitRight */) ? 1 : 0) - (input.isDown(0 /* OrbitLeft */) ? 1 : 0), speed = input.isDown(12 /* Sprint */) ? 5.5 : 2.8;
+      if (f || s) {
+        const n = Math.hypot(f, s);
+        move(f / n * speed * dt, s / n * speed * dt);
+      }
+      if (input.consumePressed(9 /* ResetView */))
+        setPose(-5.5, -5.5, 0, 0);
+      if (input.consumePressed(11 /* PixelView */))
+        setPomEnabled(!pomEnabled);
+      if (input.consumePressed(4 /* ModelOne */))
+        setPose(-5.5, -5.5, 0, 0);
+      if (input.consumePressed(5 /* ModelTwo */))
+        setPose(5.5, -5.5, Math.PI, 0);
+      if (input.consumePressed(13 /* PoseThree */))
+        setPose(5.5, 6.5, -Math.PI / 2, 0);
+    }
+    camera.position.set(pose.x, 1.7, pose.z);
+    camera.rotation.set(pose.pitch, pose.yaw, 0);
+    camera.updateMatrixWorld();
+    lamp.position.set(pose.x, 3.1, pose.z);
+    steps.poll(frame.frameId);
+    timing.vtCpuUs = coordinator?.vtCpuUs ?? 0;
+    timing.renderSubmitUs = host.renderSubmitUs;
+    timing.feedbackSubmitUs = coordinator?.feedbackSubmitUs ?? 0;
+    timing.frameCpuUs = (performance.now() - frameStarted) * 1000;
+    if (hudVisible && frame.frameId % 15 === 0)
+      updateHud();
+  }, atlasFeedback = function(groups, start = 0) {
+    const map = new Map, entries = sets.map((set) => set.albedo);
+    for (let i = 0;i < groups; i++) {
+      const entry = entries[i % entries.length];
+      if (!entry)
+        continue;
+      const local = start + Math.floor(i / entries.length), page = local % (entry.pageGridX * entry.pageGridY);
+      map.set(i, { path: entry.path, mip: 0, x: page % entry.pageGridX, y: Math.floor(page / entry.pageGridX) });
+    }
+    return map;
+  };
+  const source = createFetchRangeLoader(), identity = await source.identity("dungeon.big");
+  const device = host.device, format = device.features.has("texture-compression-bc") ? 0 : device.features.has("texture-compression-astc") ? 1 : FORMAT_RGBA;
+  const adapterInfo = host.renderer.afterglowAdapterInfo ?? {};
+  let cache3;
+  if (identity.etag || identity.lastModified) {
+    try {
+      cache3 = await PersistentBlobCache.open({ namespace: await persistentCacheNamespace(["afterglow-cache-v1", "dungeon.big", String(identity.size), identity.etag ?? "", identity.lastModified ?? "", String(format), "basisu-transcoder-v1", "slot-136-border-4", adapterInfo.vendor ?? "", adapterInfo.architecture ?? "", adapterInfo.device ?? "", adapterInfo.description ?? ""]), maxBytes: 1024 * 1024 * 1024, maxEntries: 65536, writeQueueCapacity: 64 });
+    } catch (error2) {
+      console.warn("[cache] persistent blob cache unavailable:", error2);
+    }
   }
-} else
-  console.warn("[cache] source has no ETag/Last-Modified; persistent VT cache disabled");
-var containerLoader = {
-  load: (path) => rangeLoader.load(path),
-  size: (path) => rangeLoader.size(path),
-  read: (_path, offset, len) => rangeLoader.read("dungeon.big", offset, len)
-};
-var pageProvider = createPageDataProvider(containerLoader, header, textureWorkers, format, persistentCache ?? undefined);
-var loader = { read: (path, offset, len) => rangeLoader.read(path, offset, len), poll() {} };
-var vtTuning = new VirtualTextureTuning;
-var store = new VirtualTextureStore(loader, pageProvider, format, rendererDevice, vtTuning);
-var feedbackPass = new VirtualTextureFeedbackPass(0.125);
-var pomBinding = new VirtualPomSceneBinding({
-  camera,
-  store,
-  feedbackPixelScale: feedbackPass.pixelScale,
-  capacity: 12,
-  material: { minLayers: POM_MIN_LAYERS, maxLayers: POM_MAX_LAYERS, heightScale: POM_HEIGHT_SCALE, maxOffsetRatio: POM_MAX_OFFSET_RATIO, maxDistance: POM_MAX_DISTANCE, shadowSteps: POM_SHADOW_STEPS, shadowBias: POM_SHADOW_BIAS, shadowStrength: POM_SHADOW_STRENGTH, qualityBias: VT_QUALITY_BIAS, addressMode: 1, side: DoubleSide }
-});
-var feedbackScene = pomBinding.feedbackScene;
-var materialNames = ["Rock064", "Ground103", "PavingStones150"];
-var heightThree = exports_three_webgpu;
-var heightTextures = await Promise.all(materialNames.map((name) => loadHeightTextureR16(heightThree, rendererDevice, `dungeon-height/${name}_Height.r16`)));
-var materialSets = materialNames.map((name) => {
-  const paths = { albedo: `${name}_Color.png`, normal: `${name}_NormalGL.png`, masks: `${name}_Masks.png` };
-  const dimensions = getVirtualTextureDimensions(header, paths.albedo);
-  return store.loadMaterialSet(paths, { ...dimensions, mipTail: true });
-});
-var segments = [
-  [-8, -8, 8, -8],
-  [8, -8, 8, 8],
-  [8, 8, -8, 8],
-  [-8, 8, -8, -8],
-  [-3, -8, -3, 1],
-  [-3, 1, 2, 1],
-  [2, 1, 2, 8],
-  [3, -8, 3, -1],
-  [-2, -1, 3, -1],
-  [-2, -1, -2, 5],
-  [-2, 5, 4, 5],
-  [4, 5, 4, 8]
-];
-var walls = [];
-for (let i = 0;i < segments.length; i++) {
-  const segment = segments[i], set = materialSets[i % materialSets.length], heightTexture = heightTextures[i % heightTextures.length];
-  if (!segment || !set || !heightTexture)
-    throw new Error("dungeon wall material layout is incomplete");
-  const [x1, z1, x2, z2] = segment, entry = set.albedo, path = entry.path;
-  const dx = x2 - x1, dz = z2 - z1, len = Math.hypot(dx, dz), geometry = new PlaneGeometry(len, 4, 1, 1);
-  geometry.setAttribute("tangent", new BufferAttribute(new Float32Array([1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1]), 4));
-  const wallUv = geometry.getAttribute("uv");
-  for (let u = 0;u < wallUv.count; u++)
-    wallUv.setX(u, wallUv.getX(u) * len / 4);
-  const placeholder = new MeshStandardMaterial;
-  const mesh = new Mesh(geometry, placeholder);
-  mesh.position.set((x1 + x2) / 2, 2, (z1 + z2) / 2);
-  mesh.rotation.y = Math.atan2(-dz, dx);
-  scene.add(mesh);
-  const pomHeight = heightTexture;
-  pomBinding.add(mesh, set, pomHeight);
-  placeholder.dispose();
-  walls.push({ path, entry, x1, z1, x2, z2, len, mesh });
-}
-pomBinding.seal();
-var PLAYER_RADIUS = 0.28;
-var pose = { x: -5.5, z: -5.5, yaw: 0, pitch: 0 };
-var keys = new Set;
-var programmatic = false;
-var diagnosticAtlas = false;
-var feedbackEnabled = true;
-var last = performance.now();
-var smoothedDt = 1 / 60;
-var frame = 0;
-var lastResult = { loaded: 0, evicted: 0, totalRequests: 0, lodBias: 0 };
-var runtimeTiming = { vtCpuUs: 0, renderSubmitUs: 0, feedbackSubmitUs: 0, frameCpuUs: 0, gpuMainMs: 0, gpuFeedbackMs: 0, gpuTotalMs: 0, gpuTimestampSupported: Boolean(renderer.backend.hasTimestamp) };
-var resolvingGpuTimestamps = false;
-async function resolveGpuTimings() {
-  if (!runtimeTiming.gpuTimestampSupported || resolvingGpuTimestamps)
-    return runtimeTiming;
-  resolvingGpuTimestamps = true;
-  try {
-    runtimeTiming.gpuTotalMs = await renderer.resolveTimestampsAsync("render");
-    const contexts = renderer._renderContexts, pool = renderer.backend.timestampQueryPool?.render, timestamps = pool?.timestamps;
-    if (contexts && timestamps) {
-      const mainContext = contexts.get(null).id, feedbackContext = contexts.get(feedbackPass.target).id;
-      let mainFrame = -1, feedbackFrame = -1;
-      for (const [uid, duration] of timestamps) {
-        const parts = uid.split(":"), context3 = Number(parts[2]), id = Number(parts[3]?.slice(1));
-        if (context3 === mainContext && id > mainFrame) {
-          mainFrame = id;
-          runtimeTiming.gpuMainMs = duration;
-        } else if (context3 === feedbackContext && id > feedbackFrame) {
-          feedbackFrame = id;
-          runtimeTiming.gpuFeedbackMs = duration;
+  const workerCount = Math.max(2, Math.min(4, Math.floor((navigator.hardwareConcurrency || 4) / 2)));
+  const session = await BigAssetSession.open({ containerPath: "dungeon.big", format, workerCount, transcodeQueueCapacity: 64, maxHeaderBytes: 2 * 1024 * 1024, source, ...cache3 ? { cache: cache3 } : {}, async createWorker() {
+    const rpc = await Rpc.create({ mainWasmUrl: "afterglow_web.wasm", workerJsUrl: "worker.js", workerWasmUrl: "texture.wasm", timeoutMs: 1e4 });
+    return { worker: new TextureClient(rpc), close() {
+      rpc.terminate();
+    } };
+  } });
+  bootstrap.defer(() => session.close());
+  const store = session.createVirtualTextureStore(device, new VirtualTextureTuning);
+  bootstrap.defer(() => store.dispose());
+  coordinator = new VirtualTextureFeedbackCoordinator(host.renderer, store, { renderables: 1, passes: 1, cadence: FEEDBACK_INTERVAL, scale: 0.125 });
+  coordinator.resize(host.renderer.domElement.width, host.renderer.domElement.height);
+  const pomBinding = new VirtualPomSceneBinding({ camera, store, feedbackPixelScale: coordinator.pixelScale, capacity: 12, material: { minLayers: POM_MIN_LAYERS, maxLayers: POM_MAX_LAYERS, heightScale: POM_HEIGHT_SCALE, maxOffsetRatio: POM_MAX_OFFSET_RATIO, maxDistance: POM_MAX_DISTANCE, shadowSteps: POM_SHADOW_STEPS, shadowBias: POM_SHADOW_BIAS, shadowStrength: POM_SHADOW_STRENGTH, qualityBias: VT_QUALITY_BIAS, addressMode: 1, side: DoubleSide } });
+  bootstrap.defer(() => pomBinding.dispose());
+  if (coordinator.register(pomBinding) !== 0 /* Registered */)
+    throw new Error("Dungeon feedback capacity exceeded");
+  scene.add(new HemisphereLight(12175592, 2366229, 1.6));
+  const lamp = new PointLight(16763269, 30, 18, 2);
+  lamp.position.set(0, 3.2, 0);
+  scene.add(lamp);
+  const floor3 = new Mesh(new PlaneGeometry(16, 16), new MeshStandardMaterial({ color: 2696994, roughness: 1 }));
+  floor3.rotation.x = -Math.PI / 2;
+  scene.add(floor3);
+  const ceiling = floor3.clone();
+  ceiling.position.y = 4;
+  ceiling.rotation.x = Math.PI / 2;
+  ceiling.material = new MeshStandardMaterial({ color: 1579291, roughness: 1 });
+  scene.add(ceiling);
+  const materialNames = ["Rock064", "Ground103", "PavingStones150"];
+  const heightThree = exports_three_webgpu;
+  const heights = await Promise.all(materialNames.map((name) => loadHeightTextureR16(heightThree, device, `dungeon-height/${name}_Height.r16`)));
+  const sets = materialNames.map((name) => {
+    const paths = { albedo: `${name}_Color.png`, normal: `${name}_NormalGL.png`, masks: `${name}_Masks.png` }, dimensions = getVirtualTextureDimensions(session.header, paths.albedo);
+    return store.loadMaterialSet(paths, { ...dimensions, mipTail: true });
+  });
+  const segments = [[-8, -8, 8, -8], [8, -8, 8, 8], [8, 8, -8, 8], [-8, 8, -8, -8], [-3, -8, -3, 1], [-3, 1, 2, 1], [2, 1, 2, 8], [3, -8, 3, -1], [-2, -1, 3, -1], [-2, -1, -2, 5], [-2, 5, 4, 5], [4, 5, 4, 8]];
+  const walls = new Array(12).fill(null);
+  for (let i = 0;i < segments.length; i++) {
+    const segment = segments[i], set = sets[i % sets.length], height = heights[i % heights.length];
+    if (!segment || !set || !height)
+      throw new Error("Dungeon material layout incomplete");
+    const [x1, z1, x2, z2] = segment, dx = x2 - x1, dz = z2 - z1, len = Math.hypot(dx, dz), geometry = new PlaneGeometry(len, 4);
+    geometry.setAttribute("tangent", new BufferAttribute(new Float32Array([1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1]), 4));
+    const wallUv = geometry.getAttribute("uv");
+    for (let u2 = 0;u2 < wallUv.count; u2++)
+      wallUv.setX(u2, wallUv.getX(u2) * len / 4);
+    const placeholder = new MeshStandardMaterial, mesh = new Mesh(geometry, placeholder);
+    mesh.position.set((x1 + x2) / 2, 2, (z1 + z2) / 2);
+    mesh.rotation.y = Math.atan2(-dz, dx);
+    scene.add(mesh);
+    pomBinding.add(mesh, set, height);
+    placeholder.dispose();
+    walls[i] = { x1, z1, x2, z2 };
+  }
+  pomBinding.seal();
+  const PLAYER_RADIUS = 0.28, pose = { x: -5.5, z: -5.5, yaw: 0, pitch: 0 };
+  let programmatic = false, pomEnabled = true, hudVisible = true, smoothedDt = 1 / 60;
+  const input = new BoundedKeyboardInput;
+  bootstrap.defer(() => input.dispose());
+  const relativePointer = new RelativePointerInput(host.renderer.domElement, (x2, y2) => {
+    if (!programmatic) {
+      pose.yaw -= x2 * 0.002;
+      pose.pitch = Math.max(-1.45, Math.min(1.45, pose.pitch - y2 * 0.002));
+    }
+  });
+  bootstrap.defer(() => relativePointer.dispose());
+  const errors = new BrowserErrorCapture(runtime.diagnostics);
+  bootstrap.defer(() => errors.dispose());
+  const steps = new FrameStepHarness(64), hud = new TextHud(document.getElementById("hud"));
+  const timing = { vtCpuUs: 0, renderSubmitUs: 0, feedbackSubmitUs: 0, frameCpuUs: 0, gpuMainMs: 0, gpuFeedbackMs: 0, gpuTotalMs: 0, gpuTimestampSupported: host.timestampSupported };
+  if (runtime.registerWorker(coordinator) !== 0 /* Registered */ || runtime.registerRenderPass(host) !== 0 /* Registered */ || runtime.registerRenderPass(coordinator) !== 0 /* Registered */)
+    throw new Error("Dungeon runtime capacity exceeded");
+  let pomShaders = 0, pomFeedback = 0;
+  const originalShader = device.createShaderModule.bind(device);
+  device.createShaderModule = (descriptor) => {
+    if (descriptor.code.includes("fn pomMarchUV")) {
+      if (descriptor.code.includes("fn vtSampleFromLevel")) {
+        assertPomGeneratedWgsl(descriptor.code);
+        pomShaders++;
+      } else if (descriptor.code.includes("fn vtFeedback"))
+        pomFeedback++;
+    }
+    return originalShader(descriptor);
+  };
+  runtime.enterWarmup();
+  runtime.adapter.warmAllDescriptors();
+  pomBinding.setPomEnabled(false);
+  await host.warm();
+  await coordinator.warm();
+  pomBinding.setPomEnabled(true);
+  await host.warm();
+  await coordinator.warm();
+  await runtime.warm();
+  device.createShaderModule = originalShader;
+  if (pomShaders < 1 || pomFeedback < 1)
+    throw new Error("POM shader contracts did not compile");
+  host.renderer.render(scene, camera);
+  host.attachVirtualTextureStore(store);
+  for (const height of heights)
+    host.assertHeightTextureFormat(height);
+  runtime.sealGameplay();
+  const shutdown = new PageShutdown(() => {
+    runtime.stop();
+    relativePointer.dispose();
+    input.dispose();
+    errors.dispose();
+    pomBinding.dispose();
+    store.dispose();
+    session.close();
+    runtime.dispose();
+  });
+  bootstrap.defer(() => shutdown.dispose());
+  runtime.start({ update: updateFrame });
+  const step3 = (count = 1) => steps.wait(runtime.frame.frameId, Math.max(1, count | 0));
+  async function waitIdle(timeout = 15000) {
+    const end = performance.now() + timeout;
+    while (performance.now() < end) {
+      const s = store.getStats();
+      if (!s.pendingPages && !s.scheduledRequests && !s.readyUploads)
+        return true;
+      await step3(1);
+    }
+    return false;
+  }
+  async function runAtlasScenario(name, timeout = 120000) {
+    if (!["cold", "half", "full", "churn"].includes(name))
+      throw new Error(`unknown atlas scenario ${name}`);
+    programmatic = true;
+    pomBinding.setFeedbackEnabled(false);
+    try {
+      const initial = store.getStats(), total = initial.atlasSlotsTotal, target = name === "half" ? Math.floor(total / 2) : name === "cold" ? initial.atlasSlotsUsed : Math.floor(total * 0.995), feedback = atlasFeedback(Math.ceil(Math.max(0, target - initial.atlasSlotsUsed) / 3) + 32, name === "half" ? 0 : 1024);
+      if (name !== "cold")
+        store.processFeedback(feedback);
+      let end = performance.now() + timeout;
+      while (performance.now() < end) {
+        const s = store.getStats();
+        if (s.atlasSlotsUsed >= target && !s.pendingPages && !s.scheduledRequests && !s.readyUploads)
+          break;
+        if (name !== "cold")
+          store.processFeedback(feedback);
+        await step3(FEEDBACK_INTERVAL);
+      }
+      if (name === "churn") {
+        const before = store.getStats().cacheEvictions, replacement = atlasFeedback(Math.ceil(total / 3), 3072);
+        for (let epoch = 0;epoch < 17; epoch++)
+          store.processFeedback(replacement);
+        end = performance.now() + timeout;
+        while (performance.now() < end) {
+          const s = store.getStats();
+          if (s.cacheEvictions > before && !s.pendingPages && !s.scheduledRequests && !s.readyUploads)
+            break;
+          store.processFeedback(replacement);
+          await step3(FEEDBACK_INTERVAL);
         }
       }
-      timestamps.clear();
-      const frames = pool.getTimestampFrames?.();
-      if (frames)
-        frames.length = 0;
+      return { name, target, ...store.getStats(), timing: { ...timing }, errors: runtime.diagnostics.count };
+    } finally {
+      pomBinding.setFeedbackEnabled(true);
     }
-  } finally {
-    resolvingGpuTimestamps = false;
   }
-  return runtimeTiming;
-}
-function setGpuTimingEnabled(enabled) {
-  const active = Boolean(enabled) && runtimeTiming.gpuTimestampSupported;
-  renderer.backend.trackTimestamp = active;
-  for (const pool of Object.values(renderer.backend.timestampQueryPool ?? {}))
-    if (pool)
-      pool.trackTimestamp = active;
-}
-function pointSegmentDistance(x, z, s) {
-  const dx = s.x2 - s.x1, dz = s.z2 - s.z1, l2 = dx * dx + dz * dz, t = Math.max(0, Math.min(1, ((x - s.x1) * dx + (z - s.z1) * dz) / l2)), px2 = s.x1 + t * dx, pz2 = s.z1 + t * dz;
-  return Math.hypot(x - px2, z - pz2);
-}
-function valid(x, z) {
-  return x > -7.7 && x < 7.7 && z > -7.7 && z < 7.7 && walls.slice(4).every((s) => pointSegmentDistance(x, z, s) > PLAYER_RADIUS);
-}
-function setPose(x, z, yaw = pose.yaw, pitch = pose.pitch) {
-  if (valid(x, z)) {
-    pose.x = x;
-    pose.z = z;
-  }
-  pose.yaw = yaw;
-  pose.pitch = Math.max(-1.45, Math.min(1.45, pitch));
-}
-function move(forward, strafe) {
-  const sin3 = Math.sin(pose.yaw), cos3 = Math.cos(pose.yaw), dx = -sin3 * forward + cos3 * strafe, dz = -cos3 * forward - sin3 * strafe;
-  if (valid(pose.x + dx, pose.z))
-    pose.x += dx;
-  if (valid(pose.x, pose.z + dz))
-    pose.z += dz;
-}
-function update(dt) {
-  let f = (keys.has("w") ? 1 : 0) - (keys.has("s") ? 1 : 0), s = (keys.has("d") ? 1 : 0) - (keys.has("a") ? 1 : 0), sprint = keys.has("shift") ? 5.5 : 2.8;
-  if (f || s) {
-    const n = Math.hypot(f, s);
-    move(f / n * sprint * dt, s / n * sprint * dt);
-  }
-  camera.position.set(pose.x, 1.7, pose.z);
-  camera.rotation.set(pose.pitch, pose.yaw, 0);
-  camera.updateMatrixWorld();
-  lamp.position.set(pose.x, 3.1, pose.z);
-  const stageStart = performance.now();
-  const feedback = feedbackPass.consume();
-  if (feedback && !diagnosticAtlas)
-    lastResult = store.processFeedback(feedback);
-  store.poll();
-  runtimeTiming.vtCpuUs = (performance.now() - stageStart) * 1000;
-}
-feedbackPass.resize(renderer.domElement.width, renderer.domElement.height);
-var pomShaderContracts = 0;
-var pomFeedbackContracts = 0;
-var gpuDevice = rendererDevice;
-var createShaderModule = gpuDevice.createShaderModule.bind(gpuDevice);
-gpuDevice.createShaderModule = (descriptor) => {
-  if (descriptor.code.includes("fn pomMarchUV")) {
-    if (descriptor.code.includes("fn vtSampleFromLevel")) {
-      assertPomGeneratedWgsl(descriptor.code);
-      pomShaderContracts++;
-    } else if (descriptor.code.includes("fn vtFeedback"))
-      pomFeedbackContracts++;
-    else
-      throw new Error("unknown POM shader variant compiled during warm-up");
-  }
-  return createShaderModule(descriptor);
-};
-pomBinding.setPomEnabled(false);
-await warmRendererVariants(renderer, [{ scene, camera }]);
-var previousTarget = renderer.getRenderTarget();
-renderer.setRenderTarget(feedbackPass.target);
-await warmRendererVariants(renderer, [{ scene: feedbackScene, camera }]);
-pomBinding.setPomEnabled(true);
-renderer.setRenderTarget(previousTarget);
-await warmRendererVariants(renderer, [{ scene, camera }]);
-renderer.setRenderTarget(feedbackPass.target);
-await warmRendererVariants(renderer, [{ scene: feedbackScene, camera }]);
-renderer.setRenderTarget(previousTarget);
-gpuDevice.createShaderModule = createShaderModule;
-if (pomShaderContracts < 1 || pomFeedbackContracts < 1)
-  throw new Error("POM render/feedback shader contracts were not compiled during warm-up");
-await new Promise((r) => setTimeout(r, 0));
-renderer.render(scene, camera);
-for (const height of heightTextures)
-  assertHeightTextureGpuFormat(renderer.backend, height);
-renderer.setRenderTarget(feedbackPass.target);
-renderer.render(feedbackScene, camera);
-renderer.setRenderTarget(previousTarget);
-store.attachRenderer(renderer);
-rendererSeal.seal();
-var waiters = [];
-var hud = document.getElementById("hud");
-var hudVisible = true;
-function setPomEnabled(enabled) {
-  pomEnabled = Boolean(enabled);
-  pomBinding.setPomEnabled(pomEnabled);
-}
-renderer.setAnimationLoop((now) => {
-  const frameCpuStart = performance.now(), dt = Math.min(0.05, (now - last) / 1000);
-  last = now;
-  smoothedDt = smoothedDt * 0.95 + dt * 0.05;
-  store.recordFrameTime(dt * 1000);
-  update(dt);
-  const renderStart = performance.now();
-  renderer.render(scene, camera);
-  runtimeTiming.renderSubmitUs = (performance.now() - renderStart) * 1000;
-  if (feedbackEnabled && !diagnosticAtlas && frame % FEEDBACK_INTERVAL === 0) {
-    const feedbackStart = performance.now();
-    feedbackPass.submit(renderer, feedbackScene, camera, store);
-    runtimeTiming.feedbackSubmitUs = (performance.now() - feedbackStart) * 1000;
-  } else
-    runtimeTiming.feedbackSubmitUs = 0;
-  runtimeTiming.frameCpuUs = (performance.now() - frameCpuStart) * 1000;
-  frame++;
-  for (let i = waiters.length - 1;i >= 0; i--)
-    if (frame >= waiters[i].target) {
-      waiters[i].resolve();
-      waiters.splice(i, 1);
-    }
-  if (hudVisible && frame % 15 === 0) {
-    const d = store.getStats(), input = relativePointer.getStatus();
-    hud.innerHTML = `<b>afterglow — Engine Dungeon</b><br>3 × 8K scanned PBR material sets · 12 wall instances<br>Virtual RGBA channels: 1.875 GiB · physical atlas: ${store.atlasWidth}²<br>Position: ${pose.x.toFixed(2)}, ${pose.z.toFixed(2)} · yaw ${(pose.yaw * 180 / Math.PI).toFixed(0)}° · ${(1 / smoothedDt).toFixed(0)} FPS<br>Input: ${input.eventType}${input.unadjustedMovement ? " · unadjusted" : ""}<br>POM: ${pomEnabled ? `${POM_MIN_LAYERS}–${POM_MAX_LAYERS} layers · ${POM_SHADOW_STEPS}-step light self-shadow · no radial fade` : "off"}<br>Textures: ${d.textureCount} · resident ${d.atlasSlotsUsed}/${d.atlasSlotsTotal} · pending ${d.pendingPages}<br>GPU feedback pages: ${lastResult.totalRequests} · mips [${feedbackPass.getLatestMips().join(",")}] · quality ${VT_QUALITY_BIAS} · capacity bias ${d.lodBias} · budget ${d.budget} · errors ${errors.length}`;
-  }
-});
-addEventListener("resize", () => {
-  camera.aspect = innerWidth / innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth, innerHeight);
-  feedbackPass.resize(renderer.domElement.width, renderer.domElement.height);
-});
-addEventListener("keydown", (e) => {
-  if (programmatic)
-    return;
-  const key = e.key.toLowerCase();
-  keys.add(key);
-  if (key === "r")
-    setPose(-5.5, -5.5, 0, 0);
-  if (key === "p")
-    setPomEnabled(!pomEnabled);
-  if (e.key === "1")
-    setPose(-5.5, -5.5, 0, 0);
-  if (e.key === "2")
-    setPose(5.5, -5.5, Math.PI, 0);
-  if (e.key === "3")
-    setPose(5.5, 6.5, -Math.PI / 2, 0);
-});
-addEventListener("keyup", (e) => keys.delete(e.key.toLowerCase()));
-var relativePointer = new RelativePointerInput(renderer.domElement, (movementX, movementY) => {
-  if (!programmatic) {
-    pose.yaw -= movementX * 0.002;
-    pose.pitch = Math.max(-1.45, Math.min(1.45, pose.pitch - movementY * 0.002));
-  }
-});
-renderer.domElement.addEventListener("click", () => {
-  if (!programmatic)
-    relativePointer.requestLock();
-});
-var scenarios = { forward: () => setPose(-5.5, -5.5, 0, 0), reverse: () => setPose(5.5, -5.5, Math.PI, 0), corner: () => setPose(5.8, 6.4, -Math.PI / 2, -0.2) };
-function atlasFeedback(groupCount, startPage = 0) {
-  const feedback = new Map, albedos = materialSets.map((set) => set.albedo);
-  for (let index = 0;index < groupCount; index++) {
-    const entry = albedos[index % albedos.length];
-    if (!entry)
-      throw new Error("atlas feedback material is missing");
-    const local = startPage + Math.floor(index / albedos.length), page = local % (entry.pageGridX * entry.pageGridY);
-    feedback.set(index, { path: entry.path, mip: 0, x: page % entry.pageGridX, y: Math.floor(page / entry.pageGridX) });
-  }
-  return feedback;
-}
-async function waitForAtlas(target, timeout, feedback = null) {
-  const end = performance.now() + timeout;
-  let steps = 0;
-  while (performance.now() < end) {
-    const stats = store.getStats();
-    if (stats.atlasSlotsUsed >= target && !stats.pendingPages && !stats.scheduledRequests && !stats.readyUploads)
-      return true;
-    if (feedback && steps % FEEDBACK_INTERVAL === 0)
-      store.processFeedback(feedback);
-    steps++;
-    await window.__afterglowDungeon.step(1);
-  }
-  return false;
-}
-async function runAtlasScenario(name, timeout = 120000) {
-  if (!["cold", "half", "full", "churn"].includes(name))
-    throw new Error(`unknown atlas scenario ${name}`);
-  const previousProgrammatic = programmatic;
-  programmatic = true;
-  diagnosticAtlas = true;
-  keys.clear();
-  feedbackPass.consume();
-  try {
-    const initial = store.getStats(), total = initial.atlasSlotsTotal;
-    let target = name === "half" ? Math.floor(total / 2) : name === "cold" ? initial.atlasSlotsUsed : Math.floor(total * 0.995);
-    if (name === "cold") {
-      await waitForAtlas(target, timeout);
-      target = store.getStats().atlasSlotsUsed;
-    } else {
-      const groups = Math.ceil(Math.max(0, target - initial.atlasSlotsUsed) / 3) + 32;
-      const admission = atlasFeedback(groups, name === "half" ? 0 : 1024);
-      store.processFeedback(admission);
-      await waitForAtlas(target, timeout, admission);
-    }
-    if (name === "churn") {
-      const before = store.getStats().cacheEvictions, groups = Math.ceil(total / 3);
-      const replacement = atlasFeedback(groups, 3072);
-      for (let epoch = 0;epoch < 17; epoch++)
-        store.processFeedback(replacement);
-      const end = performance.now() + timeout;
-      let steps = 0;
-      while (performance.now() < end && (store.getStats().cacheEvictions === before || store.getStats().pendingPages || store.getStats().scheduledRequests || store.getStats().readyUploads)) {
-        if (steps % FEEDBACK_INTERVAL === 0)
-          store.processFeedback(replacement);
-        steps++;
-        await window.__afterglowDungeon.step(1);
-      }
-    }
-    return { name, target, ...store.getStats(), timing: { ...runtimeTiming }, errors: errors.length };
-  } finally {
-    diagnosticAtlas = false;
-    programmatic = previousProgrammatic;
-  }
-}
-window.__afterglowDungeon = {
-  ready: () => true,
-  telemetry: () => store.getStats(),
-  timing: () => runtimeTiming,
-  inputStatus: () => relativePointer.getStatus(),
-  pomStatus: () => ({ enabled: pomEnabled, minLayers: POM_MIN_LAYERS, maxLayers: POM_MAX_LAYERS, heightScale: POM_HEIGHT_SCALE, maxOffsetRatio: POM_MAX_OFFSET_RATIO, maxDistance: POM_MAX_DISTANCE, selfShadowSteps: POM_SHADOW_STEPS, selfShadowStrength: POM_SHADOW_STRENGTH, heightSource: "resident ambientCG displacement", heightFormat: "r32float-from-r16" }),
-  setPomEnabled,
-  setFeedbackEnabled: (enabled) => {
-    feedbackEnabled = Boolean(enabled);
-  },
-  pipelineTelemetry,
-  resolveGpuTimings,
-  setGpuTimingEnabled,
-  errorCount: () => errors.length,
-  runAtlasScenario,
-  snapshot: () => ({ pose: { ...pose }, ...store.getDebugSnapshot(), requests: lastResult.totalRequests, feedbackMips: [...feedbackPass.getLatestMips()], errors: [...errors] }),
-  setProgrammatic: (enabled) => {
-    programmatic = Boolean(enabled);
-    keys.clear();
-    if (programmatic && document.pointerLockElement)
-      document.exitPointerLock();
-  },
-  setHudVisible: (visible) => {
-    hudVisible = Boolean(visible);
-    hud.style.display = hudVisible ? "" : "none";
-  },
-  setPose,
-  getPose: () => ({ ...pose }),
-  move,
-  look: (yaw, pitch) => setPose(pose.x, pose.z, pose.yaw + yaw, pose.pitch + pitch),
-  step: (n) => new Promise((resolve) => waiters.push({ target: frame + Math.max(1, n | 0), resolve })),
-  waitForIdle: async (timeout = 5000) => {
-    const end = performance.now() + timeout;
-    while ((store.getStats().pendingPages || store.getStats().scheduledRequests || store.getStats().readyUploads) && performance.now() < end)
-      await window.__afterglowDungeon.step(1);
-    return store.getStats().pendingPages === 0 && store.getStats().scheduledRequests === 0 && store.getStats().readyUploads === 0;
-  },
-  runScenario: async (name) => {
-    if (!scenarios[name])
+  const scenarios = { forward: () => setPose(-5.5, -5.5, 0, 0), reverse: () => setPose(5.5, -5.5, Math.PI, 0), corner: () => setPose(5.8, 6.4, -Math.PI / 2, -0.2) };
+  const pipelineStats = { renderPipelines: 0, computePipelines: 0, renderPipelineViolations: 0, computePipelineViolations: 0 };
+  publishDevHarness("__afterglowDungeon", { ready: () => true, telemetry: () => store.getStats(), timing: () => timing, inputStatus: () => relativePointer.getStatus(), pomStatus: () => ({ enabled: pomEnabled, minLayers: POM_MIN_LAYERS, maxLayers: POM_MAX_LAYERS, heightScale: POM_HEIGHT_SCALE, maxOffsetRatio: POM_MAX_OFFSET_RATIO, maxDistance: POM_MAX_DISTANCE, selfShadowSteps: POM_SHADOW_STEPS, selfShadowStrength: POM_SHADOW_STRENGTH, heightSource: "resident ambientCG displacement", heightFormat: "r32float-from-r16" }), setPomEnabled, setFeedbackEnabled: (enabled) => pomBinding.setFeedbackEnabled(enabled), pipelineTelemetry: () => {
+    const seal = host.sealMonitor;
+    pipelineStats.renderPipelines = seal.renderPipelines;
+    pipelineStats.computePipelines = seal.computePipelines;
+    pipelineStats.renderPipelineViolations = seal.renderPipelineViolations;
+    pipelineStats.computePipelineViolations = seal.computePipelineViolations;
+    return pipelineStats;
+  }, resolveGpuTimings: async () => coordinator?.resolveGpuTimings(timing) ?? timing, setGpuTimingEnabled: (enabled) => coordinator?.setGpuTimingEnabled(enabled), errorCount: () => runtime.diagnostics.count, runAtlasScenario, snapshot: () => ({ pose: { ...pose }, ...store.getDebugSnapshot(), requests: 0, feedbackMips: [], errors: errors.snapshot() }), setProgrammatic: (enabled) => {
+    programmatic = enabled;
+    input.programmatic = enabled;
+    input.clear();
+  }, setHudVisible: (visible) => {
+    hudVisible = visible;
+    hud.setVisible(visible);
+  }, setPose, getPose: () => ({ ...pose }), move, look: (yaw, pitch) => setPose(pose.x, pose.z, pose.yaw + yaw, pose.pitch + pitch), step: step3, waitForIdle: waitIdle, runScenario: async (name) => {
+    const scenario = scenarios[name];
+    if (!scenario)
       throw new Error(`unknown scenario ${name}`);
     programmatic = true;
-    keys.clear();
-    scenarios[name]();
-    await window.__afterglowDungeon.step(120);
-    await window.__afterglowDungeon.waitForIdle(15000);
-    await window.__afterglowDungeon.step(16);
-    await window.__afterglowDungeon.waitForIdle(15000);
-    return window.__afterglowDungeon.snapshot();
+    scenario();
+    await step3(120);
+    await waitIdle();
+    await step3(16);
+    await waitIdle();
+    return { pose: { ...pose }, ...store.getDebugSnapshot(), errors: errors.snapshot() };
+  } });
+  bootstrap.release();
+  console.log("afterglow-engine: canonical Dungeon started");
+} catch (error2) {
+  try {
+    await bootstrap.rollback();
+  } catch (cleanup) {
+    if (error2 instanceof Error && error2.cause === undefined)
+      error2.cause = cleanup;
   }
-};
+  throw error2;
+}

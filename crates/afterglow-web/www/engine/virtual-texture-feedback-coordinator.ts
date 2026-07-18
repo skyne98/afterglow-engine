@@ -51,7 +51,15 @@ interface RenderableSlot {
 }
 
 /** Fixed-capacity owner of feedback targets, snapshots, state, and atomic merge. */
+export interface VirtualTextureGpuTimings {
+  gpuMainMs: number;
+  gpuFeedbackMs: number;
+  gpuTotalMs: number;
+}
+
 export class VirtualTextureFeedbackCoordinator implements EngineRenderPass, RenderWorkerInput {
+  vtCpuUs = 0;
+  feedbackSubmitUs = 0;
   readonly pixelScale: THREE.Vector2;
   readonly stats = {
     submittedSnapshots: 0,
@@ -155,17 +163,51 @@ export class VirtualTextureFeedbackCoordinator implements EngineRenderPass, Rend
 
   seal(): void { this.sealed = true; }
 
+  setGpuTimingEnabled(enabled: boolean): void {
+    const renderer = this.renderer as unknown as { // @unsafe-cast reason=ThreePrivateTimestampTracking issue=DME-030 expires=2026-10-01
+      backend: { trackTimestamp?: boolean; timestampQueryPool?: Record<string, { trackTimestamp?: boolean } | undefined> };
+    };
+    renderer.backend.trackTimestamp = enabled;
+    for (const pool of Object.values(renderer.backend.timestampQueryPool ?? {})) if (pool) pool.trackTimestamp = enabled;
+  }
+
+  async resolveGpuTimings(out: VirtualTextureGpuTimings): Promise<VirtualTextureGpuTimings> {
+    const renderer = this.renderer as unknown as { // @unsafe-cast reason=ThreePrivateTimestampReadback issue=DME-030 expires=2026-10-01
+      resolveTimestampsAsync(type: string): Promise<number>;
+      _renderContexts?: Map<unknown, { id: number }>;
+      backend: { timestampQueryPool?: { render?: { timestamps?: Map<string, number>; getTimestampFrames?(): unknown[] } } };
+    };
+    out.gpuTotalMs = await renderer.resolveTimestampsAsync('render');
+    const contexts = renderer._renderContexts, pool = renderer.backend.timestampQueryPool?.render;
+    const timestamps = pool?.timestamps, feedbackTarget = this.passes[0]?.target;
+    if (!contexts || !timestamps || !feedbackTarget) return out;
+    const main = contexts.get(null)?.id, feedback = contexts.get(feedbackTarget)?.id;
+    let mainFrame = -1, feedbackFrame = -1;
+    for (const [uid, duration] of timestamps) {
+      const parts = uid.split(':'), context = Number(parts[2]), id = Number(parts[3]?.slice(1));
+      if (context === main && id > mainFrame) { mainFrame = id; out.gpuMainMs = duration; }
+      else if (context === feedback && id > feedbackFrame) { feedbackFrame = id; out.gpuFeedbackMs = duration; }
+    }
+    timestamps.clear();
+    const frames = pool?.getTimestampFrames?.(); if (frames) frames.length = 0;
+    return out;
+  }
+
   /** @alloc-effect none */
   recordFrameTime(frameTimeMs: number): void { this.store.recordFrameTime(frameTimeMs); }
 
   /** Worker-stage hook: publish only complete logical snapshots, then advance VT. */
   poll(): void {
+    const started = performance.now();
     this.consumeCompletedSnapshot();
     this.store.poll();
+    this.vtCpuUs = (performance.now() - started) * 1000;
   }
 
   render(frame: Readonly<RenderFrame>): void {
+    this.feedbackSubmitUs = 0;
     if (this.disposed || frame.frameId % this.cadence !== 0) return;
+    const started = performance.now();
     if (this.awaitingPassCount !== 0) {
       this.stats.deferredSnapshots++;
       return;
@@ -215,6 +257,7 @@ export class VirtualTextureFeedbackCoordinator implements EngineRenderPass, Rend
     this.discardAwaiting = submitted !== activeCount;
     if (submitted !== 0) this.stats.submittedSnapshots++;
     if (this.discardAwaiting) this.stats.deferredSnapshots++;
+    this.feedbackSubmitUs = (performance.now() - started) * 1000;
   }
 
   private consumeCompletedSnapshot(): boolean {

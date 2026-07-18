@@ -1,8 +1,8 @@
 {
   "version": 1,
-  "releaseStatus": "migration",
+  "releaseStatus": "conformant",
   "visualEntrypoints": {
-    "dungeon.ts": "legacy",
+    "dungeon.ts": "canonical",
     "engine-demo.ts": "canonical",
     "lod-demo.ts": "canonical",
     "rigged-vt-demo.ts": "canonical",

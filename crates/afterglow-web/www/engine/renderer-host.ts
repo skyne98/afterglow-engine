@@ -3,6 +3,7 @@ import { EngineDiagnostics, DiagnosticCode, DiagnosticSource } from './diagnosti
 import { RendererSeal } from './renderer-seal.ts';
 import type { EngineRenderPass } from './runtime.ts';
 import type { VirtualTextureStore } from './virtual-texture.ts';
+import { assertHeightTextureGpuFormat } from './height-texture.ts';
 import {
   createWebGPUOnlyRenderer,
   showWebGPUFailure,
@@ -75,7 +76,9 @@ export class RendererHost implements EngineRenderPass {
   readonly renderer: WebGPUOnlyRenderer;
   readonly device: GPUDevice;
   readonly sealMonitor: RendererSeal;
+  readonly timestampSupported: boolean;
   renderSubmissions = 0;
+  renderSubmitUs = 0;
 
   private readonly scene: unknown;
   private readonly camera: unknown;
@@ -106,6 +109,8 @@ export class RendererHost implements EngineRenderPass {
     if (!Number.isFinite(this.maxPixelRatio) || this.maxPixelRatio <= 0)
       throw new RangeError('maxPixelRatio must be positive');
     this.sealMonitor = new RendererSeal(requirePipelineBackend(renderer));
+    const timestampBackend = renderer.backend as unknown as { hasTimestamp?: boolean }; // @unsafe-cast reason=ThreePrivateTimestampCapability issue=DME-030 expires=2026-10-01
+    this.timestampSupported = Boolean(timestampBackend.hasTimestamp);
     this.deviceTarget = gpuErrorTarget(renderer.backend.device);
     this.onResize = (): void => this.resize();
     this.onGpuError = (event: Event): void => {
@@ -150,6 +155,11 @@ export class RendererHost implements EngineRenderPass {
     this.resizeClient?.(width, height);
   }
 
+  assertHeightTextureFormat(texture: Parameters<typeof assertHeightTextureGpuFormat>[1]): void {
+    const backend = this.renderer.backend as unknown as Parameters<typeof assertHeightTextureGpuFormat>[0]; // @unsafe-cast reason=ThreePrivateTextureFormat issue=DME-030 expires=2026-10-01
+    assertHeightTextureGpuFormat(backend, texture);
+  }
+
   attachVirtualTextureStore(store: VirtualTextureStore): void {
     const backend = this.renderer.backend as unknown as { // @unsafe-cast reason=ThreePrivateTextureLookup issue=DME-040 expires=2026-10-01
       get(texture: unknown): { texture?: GPUTexture };
@@ -172,7 +182,9 @@ export class RendererHost implements EngineRenderPass {
   render(): void {
     if (this.disposed) return;
     this.renderSubmissions++;
+    const started = performance.now();
     this.renderer.render(this.scene, this.camera);
+    this.renderSubmitUs = (performance.now() - started) * 1000;
   }
 
   dispose(): void {

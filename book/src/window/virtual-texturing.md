@@ -172,6 +172,10 @@ DISPLAY=:0 ./scripts/test-dungeon-gpu.sh
 ./scripts/baseline-vt-atlas.sh full vt-atlas-full.log
 ```
 
+Dungeon is a canonical `EngineRuntime` consumer using `RendererHost`,
+`BigAssetSession`, the feedback coordinator, and bounded input/diagnostics. No
+visual demo retains a global bridge or architecture-baseline exception.
+
 Click for raw mouse look; use **WASD**, **Shift**, **P**, **R**, and **1–3** for
 movement, sprint, prewarmed close-range POM toggle, reset, and deterministic
 viewpoints. The POM tier uses official resident 16-bit displacement from the

@@ -344,7 +344,9 @@ both models, grounding, inertia, required page residency, zero errors, and zero
 post-seal pipelines. Model 1 is KallMor's “Decraniated (Low Poly
 Retro Pixel),” CC BY 4.0; model 2 is CC BY-NC 4.0.
 
-`afterglow-cef --example dungeon` is a first-person corridor dungeon using
+`afterglow-cef --example dungeon` is a canonical `EngineRuntime` consumer using
+`RendererHost`, `BigAssetSession`, `VirtualTextureFeedbackCoordinator`, bounded
+input/diagnostics, and engine-owned POM materials. It is a first-person corridor dungeon using
 three downloaded 8K PBR sets across twelve wall instances. Two sets are
 8192×8192 and one is natively rectangular at 8192×4096. Albedo, OpenGL normal,
 roughness, and AO pages stream together through linked material feedback while

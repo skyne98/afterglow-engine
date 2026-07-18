@@ -244,7 +244,10 @@ if (import.meta.main) {
 
   let baseline: ArchitectureBaseline;
   try { baseline = JSON.parse(await readFile(baselinePath, 'utf8')) as ArchitectureBaseline; }
-  catch { console.error('architecture baseline is missing; bootstrap it explicitly with --write-baseline'); process.exit(1); }
+  catch {
+    if (conformance.releaseStatus === 'conformant') baseline = { version: baselineVersion, findings: [] };
+    else { console.error('architecture baseline is missing; bootstrap it explicitly with --write-baseline'); process.exit(1); }
+  }
   if (baseline.version !== baselineVersion || !Array.isArray(baseline.findings)) {
     console.error('architecture baseline has an unsupported or malformed schema');
     process.exit(1);

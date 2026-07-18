@@ -11,7 +11,9 @@ export const enum DemoInputAction {
   ResetView = 9,
   Overview = 10,
   PixelView = 11,
-  Count = 12,
+  Sprint = 12,
+  PoseThree = 13,
+  Count = 14,
 }
 
 function actionFor(event: KeyboardEvent): DemoInputAction | -1 {
@@ -28,6 +30,8 @@ function actionFor(event: KeyboardEvent): DemoInputAction | -1 {
     case 'KeyR': case 'r': case 'R': return DemoInputAction.ResetView;
     case 'KeyO': case 'o': case 'O': return DemoInputAction.Overview;
     case 'KeyP': case 'p': case 'P': return DemoInputAction.PixelView;
+    case 'ShiftLeft': case 'ShiftRight': case 'Shift': return DemoInputAction.Sprint;
+    case 'Digit3': case '3': return DemoInputAction.PoseThree;
     default: return -1;
   }
 }

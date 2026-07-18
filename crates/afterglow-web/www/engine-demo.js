@@ -43742,6 +43742,14 @@ class RendererSeal {
   }
 }
 
+// crates/afterglow-web/www/engine/height-texture.ts
+var HEIGHT_R16_MAGIC = new Uint8Array([65, 71, 82, 49, 54, 76, 69, 1]);
+function assertHeightTextureGpuFormat(backend, texture2) {
+  const format = backend.utils?.getTextureFormatGPU(texture2);
+  if (format !== "r32float")
+    throw new Error(`displacement GPU format mismatch: expected r32float, got ${format ?? "unavailable"}`);
+}
+
 // crates/afterglow-web/www/engine/webgpu-only.ts
 function disableWebGLFallback(renderer) {
   renderer._getFallback = null;
@@ -43824,7 +43832,9 @@ class RendererHost {
   renderer;
   device;
   sealMonitor;
+  timestampSupported;
   renderSubmissions = 0;
+  renderSubmitUs = 0;
   scene;
   camera;
   diagnostics;
@@ -43852,6 +43862,8 @@ class RendererHost {
     if (!Number.isFinite(this.maxPixelRatio) || this.maxPixelRatio <= 0)
       throw new RangeError("maxPixelRatio must be positive");
     this.sealMonitor = new RendererSeal(requirePipelineBackend(renderer));
+    const timestampBackend = renderer.backend;
+    this.timestampSupported = Boolean(timestampBackend.hasTimestamp);
     this.deviceTarget = gpuErrorTarget(renderer.backend.device);
     this.onResize = () => this.resize();
     this.onGpuError = (event) => {
@@ -43891,6 +43903,10 @@ class RendererHost {
     this.renderer.setSize(width, height);
     this.resizeClient?.(width, height);
   }
+  assertHeightTextureFormat(texture2) {
+    const backend = this.renderer.backend;
+    assertHeightTextureGpuFormat(backend, texture2);
+  }
   attachVirtualTextureStore(store) {
     const backend = this.renderer.backend;
     store.attachRenderer({
@@ -43912,7 +43928,9 @@ class RendererHost {
     if (this.disposed)
       return;
     this.renderSubmissions++;
+    const started = performance.now();
     this.renderer.render(this.scene, this.camera);
+    this.renderSubmitUs = (performance.now() - started) * 1000;
   }
   dispose() {
     if (this.disposed)
