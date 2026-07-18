@@ -34,7 +34,35 @@ function movementEvent(type: string, x: number, y: number): Event {
   return event;
 }
 
+function pointerDown(button: number): Event {
+  const event = new Event('pointerdown');
+  Object.defineProperty(event, 'button', { value: button });
+  return event;
+}
+
 describe('RelativePointerInput', () => {
+  test('locks from a primary canvas gesture and removes activation on dispose', async () => {
+    const document = new FakeDocument();
+    const element = new FakeElement(document);
+    const input = new RelativePointerInput(
+      element as unknown as HTMLElement,
+      () => {},
+      { document: document as unknown as Document, rawEventSupported: true },
+    );
+
+    element.dispatchEvent(pointerDown(2));
+    expect(element.requests).toEqual([]);
+    element.dispatchEvent(pointerDown(0));
+    await Promise.resolve();
+    expect(element.requests).toEqual([{ unadjustedMovement: true }]);
+    expect(input.getStatus().locked).toBe(true);
+
+    document.pointerLockElement = null;
+    input.dispose();
+    element.dispatchEvent(pointerDown(0));
+    expect(element.requests).toHaveLength(1);
+  });
+
   test('uses raw updates and unadjusted pointer lock when available', async () => {
     const document = new FakeDocument();
     const element = new FakeElement(document);

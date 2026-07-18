@@ -10,10 +10,10 @@ const input = new RelativePointerInput(canvas, (movementX, movementY) => {
   yaw -= movementX * sensitivity;
   pitch -= movementY * sensitivity;
 });
-canvas.addEventListener('click', () => input.requestLock());
 ```
 
-Construction feature-detects `pointerrawupdate`. Chromium/CEF receives this
+Construction registers a primary `pointerdown` activation on the element and
+feature-detects `pointerrawupdate`. Chromium/CEF receives this
 event as soon as possible instead of waiting for the coalescible `pointermove`
 path. Browsers without it use `mousemove`. Exactly one movement event type is
 registered, preventing duplicate deltas. The passive movement callback checks
@@ -22,10 +22,10 @@ the authored hot callback allocates nothing.
 
 ### `requestLock(): void`
 
-Requests Pointer Lock 2 with `{ unadjustedMovement: true }`, bypassing operating
-system mouse acceleration for raw relative deltas. Rejection or a synchronous
-legacy-browser failure retries ordinary pointer lock. Lock acquisition is an
-explicit browser-permission slow path and must be called from a user gesture.
+The element calls this automatically for primary pointer gestures. It remains
+public for other user-gesture controls. It requests Pointer Lock 2 with
+`{ unadjustedMovement: true }`, bypassing operating-system mouse acceleration.
+Rejection or a synchronous legacy-browser failure retries ordinary pointer lock.
 
 ### `getStatus(): Readonly<RelativePointerStatus>`
 
@@ -37,7 +37,7 @@ Returns one stable object:
 
 ### `dispose(): void`
 
-Removes the movement and `pointerlockchange` listeners.
+Removes the activation, movement, and `pointerlockchange` listeners.
 
 ## Latency boundary
 

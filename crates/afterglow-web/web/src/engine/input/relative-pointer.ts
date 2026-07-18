@@ -27,6 +27,11 @@ export class RelativePointerInput {
     this.sink(movement.movementX, movement.movementY);
   };
 
+  private readonly onPrimaryPointer = (event: Event): void => {
+    if ((event as PointerEvent).button !== 0) return;
+    this.requestLock();
+  };
+
   private readonly onPointerLockChange = (): void => {
     this.status.locked = this.ownerDocument.pointerLockElement === this.element;
     this.status.unadjustedMovement = this.status.locked && this.requestedUnadjustedMovement;
@@ -64,6 +69,7 @@ export class RelativePointerInput {
       locked: false,
       unadjustedMovement: false,
     };
+    this.element.addEventListener('pointerdown', this.onPrimaryPointer, { passive: true });
     this.element.addEventListener(this.status.eventType, this.onMovement, { passive: true });
     this.ownerDocument.addEventListener('pointerlockchange', this.onPointerLockChange, { passive: true });
   }
@@ -97,6 +103,7 @@ export class RelativePointerInput {
   }
 
   dispose(): void {
+    this.element.removeEventListener('pointerdown', this.onPrimaryPointer);
     this.element.removeEventListener(this.status.eventType, this.onMovement);
     this.ownerDocument.removeEventListener('pointerlockchange', this.onPointerLockChange);
   }
