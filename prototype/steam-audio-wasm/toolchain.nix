@@ -5,6 +5,7 @@ let
 in
 pkgs.mkShell {
   packages = with pkgs; [
+    assimp
     bun
     cmake
     curl

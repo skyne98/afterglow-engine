@@ -35,7 +35,18 @@ nix-shell prototype/steam-audio-wasm/toolchain.nix --run \
 
 The argument is Steam Audio's reflection-simulation thread count. The benchmark
 itself always runs inside one outer `std::thread`, matching a native engine
-worker.
+worker. To download, cook, and build the real Amazon Lumberyard Bistro interior
+geometry benchmark:
+
+```sh
+nix-shell prototype/steam-audio-wasm/toolchain.nix --run \
+  './prototype/steam-audio-wasm/build-native-bistro.sh'
+./prototype/steam-audio-wasm/dist-native/native-bistro-geometry-benchmark \
+  target/bistro-source/BistroInterior.acoustic.bin 4
+```
+
+The official archive is large (about 894 MiB compressed); generated assets stay
+under ignored `target/` and are never committed.
 
 To run through CEF's cross-origin-isolated custom scheme during development:
 
@@ -221,3 +232,44 @@ simulation p99, and roughly 283 MiB process peak RSS, so it remains rejected.
 
 Raw evidence:
 `docs/benchmarks/steam-audio-native-many-sources-fox-laptop-2026-07-18.json`.
+
+## Real Amazon Lumberyard Bistro geometry
+
+The synthetic 10K scene was not a representative geometry-scaling test because
+most filler triangles were distant. A separate native benchmark now uses the
+official **Amazon Lumberyard BistroInterior v5.2** FBX: 813,360 joined vertices
+and all **1,046,609 real render triangles** after flattening node transforms.
+The scene is Amazon Lumberyard's ORCA asset, licensed CC-BY 4.0. Render material
+names are mapped into six plausible acoustic categories; no baked acoustics or
+textures are used. The listener starts at the authored camera.
+
+Five fox-laptop launches per thread count measured 64 sources, two bounces, and
+a 500 ms parametric tail:
+
+| Steam simulation threads | 512-ray mean / worst p99 | 1,024-ray mean / worst p99 |
+|---:|---:|---:|
+| 2 | 39.79 / 42.36 ms | 73.68 / 78.58 ms |
+| **4** | **23.24 / 25.56 ms** | 42.36 / 45.76 ms |
+| 8 | 15.46 / 17.52 ms | 30.00 / 33.54 ms |
+
+The full render mesh therefore does **not** sustain 60 Hz reflections on the
+6800U. Four threads support the selected 512×2 tier at 30 Hz; eight threads only
+approach 60 Hz while occupying every physical core. At four threads, Bistro was
+about 4× slower than the synthetic 10K scene's 6.44 ms p99—not 100× slower for
+100× more triangles, demonstrating useful BVH scaling but substantial local
+geometry cost.
+
+The compact geometry loaded in 32 ms. Steam Audio's static-mesh/BVH creation
+averaged 2.48 s at bootstrap, scene RSS reached about 152 MiB, and process peak
+RSS was about 207 MiB. This is evidence against feeding render geometry directly
+to acoustics. Production should cook a structural proxy that retains walls,
+floors, ceilings, large furniture, and portals while removing tableware,
+fixtures, bevels, and other acoustically insignificant detail. Proxy quality and
+triangle-count scaling still need measurement.
+
+Attribution: *Amazon Lumberyard Bistro, Open Research Content Archive (ORCA)*,
+Amazon Lumberyard, July 2017,
+[CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/), from
+[NVIDIA ORCA](https://developer.nvidia.com/orca/amazon-lumberyard-bistro).
+Raw evidence:
+`docs/benchmarks/steam-audio-native-bistro-fox-laptop-2026-07-18.json`.
