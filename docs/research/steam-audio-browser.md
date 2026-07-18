@@ -82,7 +82,7 @@ in a CEF Web Worker. It uses WASM SIMD128, fixed 64 MiB memory, the Afterglow
 SPSC ring layout, and payload-free wake messages. Occlusion and material
 transmission outputs were validated against a wall before timing.
 
-On fox-laptop (Ryzen 7 6800U, Chromium 149), five launches × 2,000 measured calls
+On fox-workstation (Ryzen 9 9950X3D, Chromium 149), five launches × 2,000 measured calls
 per scenario produced:
 
 | Geometry / active sources | Direct compute, occluded | Ring+wake mean | Worst p99 | Worst observed |

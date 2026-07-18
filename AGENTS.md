@@ -350,7 +350,8 @@ All engine work must move toward these non-negotiable requirements:
   Emscripten/WASM target, but no supported Web Audio integration and incomplete
   prebuilt dependency packaging. The real WASM direct-ray prototype measured
   20–30 µs worst p99 worker-ring round trips (up to 100K triangles / 128 sources)
-  on the 6800U; rendering load, AudioWorklet DSP, and reflections remain open.
+  on a Ryzen 9 9950X3D; laptop, rendering-load, AudioWorklet DSP, and reflection
+  measurements remain open.
 
 ## API docs
 

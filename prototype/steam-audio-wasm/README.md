@@ -34,9 +34,9 @@ cp -r prototype/steam-audio-wasm/dist \
 Remove the temporary `www/steam-audio-prototype` directory before running the
 canonical web artifact check.
 
-## fox-laptop result — 2026-07-18
+## fox-workstation result — 2026-07-18
 
-Environment: Ryzen 7 6800U, CEF/Chromium 149.0.7827.201, Steam Audio 4.8.1,
+Environment: Ryzen 9 9950X3D, CEF/Chromium 149.0.7827.201, Steam Audio 4.8.1,
 Emscripten 5.0.7, `-O3`, WASM SIMD128, fixed 64 MiB memory. Five launches, 100
 warm-up calls and 2,000 measured worker round trips per scenario per launch.
 Batched compute means use 10,000 Steam Audio simulations per source state.

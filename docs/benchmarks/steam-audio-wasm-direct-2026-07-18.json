@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "date": "2026-07-18",
   "host": {
-    "cpu": "AMD Ryzen 7 6800U",
-    "os": "Fedora 44",
+    "cpu": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "os": "NixOS (Linux 6.18.38)",
     "browser": "CEF/Chromium 149.0.7827.201"
   },
   "software": {
