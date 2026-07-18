@@ -368,9 +368,10 @@ All engine work must move toward these non-negotiable requirements:
   7.81 s to 0.52 s, but resident scene memory rose from ~375 MiB to ~486 MiB.
   Full render meshes are no longer a traversal blocker but remain forbidden as
   production acoustic geometry due memory and irrelevant detail; cook structural
-  proxies. For web custom tracing, `obvhs` 0.3.2 is the leading pure-Rust candidate
-  and compiles to both WASM targets, but its CWBVH SIMD path is x86-only and its
-  scalar WASM traversal is not yet benchmarked. Render-loaded and actual
+  proxies. For web custom tracing, `obvhs` 0.3.2 has the strongest candidate
+  layout but its CWBVH SIMD path is x86-only. Release disassembly proved that
+  Parry 0.29 and `rtbvh` 0.6.2 emit real WASM SIMD for BVH/packet traversal;
+  benchmark those unchanged before porting `obvhs` SIMD. Render-loaded and actual
   device-callback validation remain open.
 
 ## API docs

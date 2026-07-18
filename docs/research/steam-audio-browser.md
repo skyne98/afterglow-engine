@@ -327,16 +327,25 @@ renderer numbers do not establish Steam Audio or WASM performance.
 
 | Candidate | Assessment |
 |---|---|
-| `obvhs` | Best fit: compact wide nodes, strong construction options, suitable hit APIs, pure Rust, and verified Emscripten compilation. Must add/measure WASM SIMD and Steam callback integration. |
-| `parry3d` | Most mature and feature-rich; stable SIMD and WASM compile, but it is a broad collision library and trails `obvhs` in the available native ray benchmark. Good correctness oracle/fallback. |
-| `bvh` | Simple, maintained SAH implementation with WASM compilation and optional stable SIMD, but its binary BVH traversal is far slower in the available large-scene benchmark. Not a hot-path choice. |
-| `rtbvh` | Supports quad-ray packets and multiple builders and compiles for WASM, but unconditionally depends on Rayon/Crossbeam/CPU-count infrastructure and has less suitable bounded ownership. Not the first choice. |
+| `obvhs` | Best underlying layout: compact wide nodes, strong construction options, suitable hit APIs, pure Rust, and verified Emscripten compilation. Its current WASM traversal is scalar. |
+| `parry3d` | Most mature and feature-rich. Its `simd-stable` BVH ray path emits real WASM SIMD, but it is a broad collision library and trails `obvhs` in the available native ray benchmark. |
+| `bvh` | Simple maintained SAH implementation. Its `simd` ray/AABB path emits real WASM SIMD, but binary traversal is far slower in the available large-scene native benchmark. |
+| `rtbvh` | Its MBVH and quad-ray packet operations emit real WASM SIMD and map naturally to Steam's batched callbacks. It unconditionally brings Rayon/Crossbeam/CPU-count infrastructure and has less suitable bounded ownership. |
 
-The next web experiment should therefore connect an offline-cooked `obvhs`
-CWBVH to Steam Audio's four custom-scene callbacks, keep nodes/triangles/materials
-in one fixed worker memory domain, and compare built-in versus scalar CWBVH versus
-a WASM-SIMD traversal over 10K/50K/100K/200K structural proxies. Until that
-measurement, `obvhs` is a promising candidate—not a selected dependency.
+A follow-up release-mode proof built minimal exported ray/AABB or packet
+operations with `-C target-feature=+simd128` and disassembled them with WABT
+`wasm2wat`. `bvh` 0.12.0 emitted `f32x4.sub/mul/pmin/pmax`; `parry3d` 0.29.0
+with `simd-stable` emitted the same instructions from its BVH ray traversal; and
+`rtbvh` 0.6.2 emitted them from `BvhNode::intersect4` over `RayPacket4`.
+Therefore there are off-the-shelf pure-Rust tracers using actual WASM SIMD, not
+just scalar code that happens to compile for WASM.
+
+The next web experiment should benchmark Parry and `rtbvh` unchanged, then a
+small `obvhs` WASM-SIMD port if neither is adequate. Connect each to Steam
+Audio's four custom-scene callbacks, keep nodes/triangles/materials in one fixed
+worker memory domain, and compare against the built-in tracer over
+10K/50K/100K/200K structural proxies. No candidate is selected before that
+end-to-end measurement.
 
 ## Recommendation
 
