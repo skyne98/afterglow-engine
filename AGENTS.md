@@ -361,14 +361,14 @@ All engine work must move toward these non-negotiable requirements:
   9.27 ms mean / 10.74 ms p99, with projected 1.433/2.667 ms DSP for 64
   reflections + 128 HRTFs. Four simulation threads reached 6.44 ms p99 or fit
   1,024×2 at 12.52 ms p99; per-source DSP remains serial. All official Bistro
-  package scenes were tested: 512×2 p99 on four/eight threads was 34.82/24.24 ms
-  Exterior, 26.77/18.33 ms Interior, and 32.05/22.29 ms Interior-with-wine. The
-  package-wide full-render tier needs eight threads at 30 Hz; Exterior BVH
-  bootstrap was 7.81 s and peak RSS ~569 MiB. Full render meshes are forbidden
-  as production acoustic geometry; cook structural proxies. All native numbers
-  use Steam Audio's built-in tracer; upstream documents Embree as faster, so an
-  Embree rerun is required before freezing native capacities. Render-loaded and
-  actual device-callback validation remain open.
+  package scenes were tested with both the built-in tracer and Steam Audio
+  4.8.1's embedded Embree 4.4. Embree is mandatory for native: on two simulation
+  threads, package-worst p99 was 3.90 ms at 512×2 and 6.93 ms at 1,024×2; matching
+  four-thread mean simulation improved 18.8–22.9×. Exterior BVH build fell from
+  7.81 s to 0.52 s, but resident scene memory rose from ~375 MiB to ~486 MiB.
+  Full render meshes are no longer a traversal blocker but remain forbidden as
+  production acoustic geometry due memory and irrelevant detail; cook structural
+  proxies. Render-loaded and actual device-callback validation remain open.
 
 ## API docs
 

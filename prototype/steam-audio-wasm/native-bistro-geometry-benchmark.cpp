@@ -130,12 +130,15 @@ void require(IPLerror status, const char* operation) {
     if (status != IPL_STATUS_SUCCESS) throw std::runtime_error(std::string(operation) + " failed: " + std::to_string(status));
 }
 
-void runWorker(const char* path, int simulationThreads) {
+void runWorker(const char* path, int simulationThreads, const std::string& rayTracer) {
     if (simulationThreads < 1 || simulationThreads > 16) throw std::runtime_error("invalid thread count");
+    if (rayTracer != "default" && rayTracer != "embree") throw std::runtime_error("invalid ray tracer");
+    const IPLSceneType sceneType = rayTracer == "embree" ? IPL_SCENETYPE_EMBREE : IPL_SCENETYPE_DEFAULT;
     Geometry geometry;
     const double geometryLoadMs = elapsedMs([&] { geometry = loadGeometry(path); });
 
     IPLContext context = nullptr;
+    IPLEmbreeDevice embreeDevice = nullptr;
     IPLScene scene = nullptr;
     IPLStaticMesh mesh = nullptr;
     IPLSimulator simulator = nullptr;
@@ -154,6 +157,7 @@ void runWorker(const char* path, int simulationThreads) {
             iplStaticMeshRelease(&mesh);
         }
         if (scene) iplSceneRelease(&scene);
+        if (embreeDevice) iplEmbreeDeviceRelease(&embreeDevice);
         if (context) iplContextRelease(&context);
     };
     try {
@@ -161,8 +165,16 @@ void runWorker(const char* path, int simulationThreads) {
         contextSettings.version = STEAMAUDIO_VERSION;
         contextSettings.simdLevel = IPL_SIMDLEVEL_AVX2;
         require(iplContextCreate(&contextSettings, &context), "context creation");
+        double rayTracerDeviceCreateMs = 0.0;
+        if (sceneType == IPL_SCENETYPE_EMBREE) {
+            IPLEmbreeDeviceSettings embreeSettings{};
+            rayTracerDeviceCreateMs = elapsedMs([&] {
+                require(iplEmbreeDeviceCreate(context, &embreeSettings, &embreeDevice), "Embree device creation");
+            });
+        }
         IPLSceneSettings sceneSettings{};
-        sceneSettings.type = IPL_SCENETYPE_DEFAULT;
+        sceneSettings.type = sceneType;
+        sceneSettings.embreeDevice = embreeDevice;
         require(iplSceneCreate(context, &sceneSettings, &scene), "scene creation");
         std::array<IPLMaterial, 6> materials{{
             {{0.20f, 0.30f, 0.40f}, 0.20f, {0.05f, 0.03f, 0.02f}}, // generic
@@ -189,7 +201,7 @@ void runWorker(const char* path, int simulationThreads) {
 
         IPLSimulationSettings settings{};
         settings.flags = IPL_SIMULATIONFLAGS_REFLECTIONS;
-        settings.sceneType = IPL_SCENETYPE_DEFAULT;
+        settings.sceneType = sceneType;
         settings.reflectionType = IPL_REFLECTIONEFFECTTYPE_PARAMETRIC;
         settings.maxNumRays = 1024;
         settings.numDiffuseSamples = 32;
@@ -264,11 +276,13 @@ void runWorker(const char* path, int simulationThreads) {
         const auto asset = std::filesystem::path(path).filename().string();
         std::cout << std::setprecision(12)
                   << "BISTRO_RESULTS {\"worker\":\"std::thread\",\"steamAudioThreads\":" << simulationThreads
+                  << ",\"rayTracer\":\"" << rayTracer << "\""
                   << ",\"asset\":\"Amazon Lumberyard " << asset << " v5.2\",\"vertices\":" << geometry.header.vertexCount
                   << ",\"triangles\":" << geometry.header.triangleCount
                   << ",\"bounds\":{\"min\":[" << geometry.header.minimum[0] << ',' << geometry.header.minimum[1] << ',' << geometry.header.minimum[2]
                   << "],\"max\":[" << geometry.header.maximum[0] << ',' << geometry.header.maximum[1] << ',' << geometry.header.maximum[2] << "]}"
                   << ",\"geometryLoadMs\":" << geometryLoadMs
+                  << ",\"rayTracerDeviceCreateMs\":" << rayTracerDeviceCreateMs
                   << ",\"staticMeshCreateMs\":" << staticMeshCreateMs
                   << ",\"sceneCommitMs\":" << sceneCommitMs
                   << ",\"simulatorCreateMs\":" << simulatorCreateMs
@@ -284,15 +298,16 @@ void runWorker(const char* path, int simulationThreads) {
 }
 
 int main(int argc, char** argv) {
-    if (argc != 3) {
-        std::cerr << "usage: native-bistro-geometry-benchmark <bistro-acoustic.bin> <simulation-threads>\n";
+    if (argc != 4) {
+        std::cerr << "usage: native-bistro-geometry-benchmark <bistro-acoustic.bin> <simulation-threads> <default|embree>\n";
         return 2;
     }
     const int threads = std::stoi(argv[2]);
+    const std::string rayTracer = argv[3];
     std::exception_ptr failure;
     std::thread worker([&] {
         try {
-            runWorker(argv[1], threads);
+            runWorker(argv[1], threads, rayTracer);
         } catch (...) {
             failure = std::current_exception();
         }

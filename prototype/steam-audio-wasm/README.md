@@ -42,7 +42,7 @@ Lumberyard Bistro package:
 nix-shell prototype/steam-audio-wasm/toolchain.nix --run \
   './prototype/steam-audio-wasm/build-native-bistro.sh'
 ./prototype/steam-audio-wasm/dist-native/native-bistro-geometry-benchmark \
-  target/bistro-source/BistroInterior.acoustic.bin 4
+  target/bistro-source/BistroInterior.acoustic.bin 2 embree
 ```
 
 The official archive is large (about 894 MiB compressed); generated assets stay
@@ -249,31 +249,54 @@ separately because they are overlapping variants, not geometry to merge:
 Assimp triangulates and flattens node transforms, all resulting render triangles
 are retained, and render material names map to six acoustic categories. Each
 scene uses its authored camera, 64 sources, two bounces, a 500 ms parametric tail,
-and no baked data. Five fox-laptop launches measured each cell:
+and no baked data. The original built-in Steam Audio tracer missed 60 Hz on every
+full render scene, including with eight simulation threads. Steam Audio 4.8.1's
+embedded **Embree 4.4.0** changes that result decisively. Five launches measured
+each scene/thread cell:
 
-| Scene | 4 threads, 512×2 p99 | 8 threads, 512×2 p99 | 4 threads, 1,024×2 p99 | 8 threads, 1,024×2 p99 |
+| Scene | Embree 2 threads, 512×2 p99 | Embree 2 threads, 1,024×2 p99 | Embree 4 threads, 512×2 p99 | Embree 4 threads, 1,024×2 p99 |
 |---|---:|---:|---:|---:|
-| Exterior | 34.82 ms | 24.24 ms | 59.19 ms | 48.93 ms |
-| Interior | 26.77 ms | 18.33 ms | 46.96 ms | 33.58 ms |
-| Interior with wine | 32.05 ms | 22.29 ms | 67.51 ms | 43.94 ms |
+| Exterior | 3.90 ms | 5.52 ms | 3.58 ms | 3.55 ms |
+| Interior | 3.19 ms | 6.56 ms | 2.04 ms | 2.75 ms |
+| Interior with wine | 3.64 ms | 6.93 ms | 2.90 ms | 3.36 ms |
 
-No full render scene sustains strict 60 Hz p99, even on eight simulation threads.
-The package-wide safe full-geometry tier is **eight threads, 512×2, 30 Hz**.
-Four threads support 30 Hz for both interior variants, but the exterior's 34.82
-ms p99 requires about 20 Hz. This does not alter the separately measured DSP
-cap: 128 direct+HRTF sources with 64 reflected sources remains the endpoint.
+All full render scenes now sustain strict 60 Hz simulation p99 at both quality
+tiers, even with two simulation threads. Against matching four-thread built-in
+runs, Embree improved mean simulation time by **18.8–22.9×**. This does not alter
+the separately measured serial DSP cap: 128 direct+HRTF sources with 64 reflected
+sources remains the endpoint.
 
-The exterior is also the bootstrap/memory bound: static-mesh/BVH creation
-averaged **7.81 s**, scene RSS reached **375 MiB**, and process peak RSS reached
-**569 MiB**. Interior-with-wine required 3.25 s/~191 MiB scene RSS; Interior
-required 2.53 s/~152 MiB. Full render meshes are therefore stress bounds, not
-production acoustic geometry. Cook structural proxies retaining walls, floors,
-ceilings, large furniture, doors, and portals while removing tableware, bevels,
-fixtures, vegetation detail, and other acoustically insignificant triangles.
+Embree also moved acceleration-structure construction from `iplStaticMeshCreate`
+to `iplSceneCommit` and reduced total build time substantially:
+
+| Scene | Built-in build | Embree build | Embree scene RSS | Embree peak RSS |
+|---|---:|---:|---:|---:|
+| Exterior | 7.81 s | 0.52 s | 486 MiB | 487 MiB |
+| Interior | 2.53 s | 0.19 s | 183 MiB | 184 MiB |
+| Interior with wine | 3.25 s | 0.25 s | 228 MiB | 228 MiB |
+
+Embree is the required native backend. Full render geometry is no longer a
+ray-traversal deadline blocker, but the Exterior still consumes nearly 486 MiB
+for its acoustic scene and includes acoustically irrelevant detail. Structural
+proxies remain required for bounded engine memory, faster loading, controllable
+materials, and correct geometry policy—not to rescue reflection simulation time.
 
 Attribution: *Amazon Lumberyard Bistro, Open Research Content Archive (ORCA)*,
 Amazon Lumberyard, July 2017,
 [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/), from
 [NVIDIA ORCA](https://developer.nvidia.com/orca/amazon-lumberyard-bistro).
 Raw evidence:
-`docs/benchmarks/steam-audio-native-bistro-full-package-fox-laptop-2026-07-18.json`.
+`docs/benchmarks/steam-audio-native-bistro-full-package-fox-laptop-2026-07-18.json`
+(built-in baseline) and
+`docs/benchmarks/steam-audio-native-bistro-embree-fox-laptop-2026-07-18.json`
+(Embree).
+
+Build and run one cell with:
+
+```sh
+nix-shell prototype/steam-audio-wasm/toolchain.nix --run \
+  'prototype/steam-audio-wasm/build-native-bistro.sh'
+nix-shell prototype/steam-audio-wasm/toolchain.nix --run \
+  'prototype/steam-audio-wasm/dist-native/native-bistro-geometry-benchmark \
+   target/bistro-source/BistroExterior.acoustic.bin 2 embree'
+```

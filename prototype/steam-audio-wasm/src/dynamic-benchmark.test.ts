@@ -15,6 +15,7 @@ const manySourceEvidence = await Bun.file(new URL('../../../docs/benchmarks/stea
 const nativeEvidence = await Bun.file(new URL('../../../docs/benchmarks/steam-audio-native-many-sources-fox-laptop-2026-07-18.json', import.meta.url)).json();
 const bistroEvidence = await Bun.file(new URL('../../../docs/benchmarks/steam-audio-native-bistro-fox-laptop-2026-07-18.json', import.meta.url)).json();
 const bistroPackageEvidence = await Bun.file(new URL('../../../docs/benchmarks/steam-audio-native-bistro-full-package-fox-laptop-2026-07-18.json', import.meta.url)).json();
+const bistroEmbreeEvidence = await Bun.file(new URL('../../../docs/benchmarks/steam-audio-native-bistro-embree-fox-laptop-2026-07-18.json', import.meta.url)).json();
 
 describe('fully dynamic Steam Audio WASM prototype', () => {
   test('uses runtime geometry and explicitly disables baked reflection data', () => {
@@ -83,6 +84,8 @@ describe('fully dynamic Steam Audio WASM prototype', () => {
     expect(bistroCooker).toContain('acousticCategory');
     expect(bistroRunner).toContain('inputs[index].baked = IPL_FALSE');
     expect(bistroRunner).toContain('iplStaticMeshCreate');
+    expect(bistroRunner).toContain('IPL_SCENETYPE_EMBREE');
+    expect(bistroRunner).toContain('iplEmbreeDeviceCreate');
     expect(bistroRunner).toContain('std::thread worker');
   });
 
@@ -128,5 +131,19 @@ describe('fully dynamic Steam Audio WASM prototype', () => {
     expect(exteriorEight.aggregate.scenarios[0].simulationWorstP99Ms).toBeCloseTo(24.2426, 3);
     expect(bistroPackageEvidence.package.note).toContain('intentionally not merged');
     expect(readme).toContain('## Full Amazon Lumberyard Bistro package');
+  });
+
+  test('uses Embree to keep every full Bistro scene inside 60 Hz', () => {
+    expect(bistroEmbreeEvidence.method.rayTracer).toContain('IPL_SCENETYPE_EMBREE');
+    expect(bistroEmbreeEvidence.sceneThreadSets).toHaveLength(9);
+    expect(bistroEmbreeEvidence.sceneThreadSets.every((value: { runs: unknown[] }) => value.runs.length === 5)).toBe(true);
+    expect(bistroEmbreeEvidence.sceneThreadSets.every((set: {
+      aggregate: { scenarios: Array<{ simulationWorstP99Ms: number; allIrValid: boolean }> };
+    }) => set.aggregate.scenarios.every(scenario =>
+      scenario.simulationWorstP99Ms < 1000 / 60 && scenario.allIrValid))).toBe(true);
+    expect(bistroEmbreeEvidence.conclusion.packageWorstTwoThread512P99Ms).toBeCloseTo(3.89501, 4);
+    expect(bistroEmbreeEvidence.conclusion.packageWorstTwoThread1024P99Ms).toBeCloseTo(6.93063, 4);
+    expect(bistroEmbreeEvidence.conclusion.exteriorBuildMeanMs).toBeCloseTo(519.603, 2);
+    expect(readme).toContain('Embree improved mean simulation time by **18.8–22.9×**');
   });
 });

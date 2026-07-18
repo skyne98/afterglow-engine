@@ -224,35 +224,47 @@ node flattening retain 2,832,120 Exterior, 1,046,609 Interior, and 1,320,323
 Interior-with-wine triangles. Render material names map into six acoustic
 categories; listeners use each authored camera and no baked data is loaded.
 
-Five Ryzen 7 6800U launches measured every cell with 64 sources:
+The initial built-in ray-tracer sweep missed strict 60 Hz on every full render
+scene, including at eight simulation threads. Steam Audio 4.8.1 embeds Embree
+4.4.0, so a second sweep created an `IPLEmbreeDevice`, selected
+`IPL_SCENETYPE_EMBREE` for the scene and simulator, and measured five launches
+for every 2/4/8-thread cell:
 
-| Scene | 4 threads, 512×2 p99 | 8 threads, 512×2 p99 | 4 threads, 1,024×2 p99 | 8 threads, 1,024×2 p99 |
+| Scene | Embree 2 threads, 512×2 p99 | Embree 2 threads, 1,024×2 p99 | Embree 4 threads, 512×2 p99 | Embree 4 threads, 1,024×2 p99 |
 |---|---:|---:|---:|---:|
-| Exterior | 34.82 ms | 24.24 ms | 59.19 ms | 48.93 ms |
-| Interior | 26.77 ms | 18.33 ms | 46.96 ms | 33.58 ms |
-| Interior with wine | 32.05 ms | 22.29 ms | 67.51 ms | 43.94 ms |
+| Exterior | 3.90 ms | 5.52 ms | 3.58 ms | 3.55 ms |
+| Interior | 3.19 ms | 6.56 ms | 2.04 ms | 2.75 ms |
+| Interior with wine | 3.64 ms | 6.93 ms | 2.90 ms | 3.36 ms |
 
-No full render scene sustains strict 60 Hz, even with eight simulation threads.
-The package-wide safe full-geometry tier is eight threads, 512×2, 30 Hz. Four
-threads support 30 Hz for both interiors but require about 20 Hz for the
-Exterior. The approximately 4× Interior slowdown versus the 100× smaller
-synthetic scene shows useful sublinear BVH scaling, but render detail remains too
-costly for the production acoustic representation.
+Every full render scene now sustains strict 60 Hz simulation p99 at both ray
+tiers, even with two simulation threads. At matching four-thread settings,
+Embree improved mean simulation time by 18.8–22.9×. It therefore removes the
+real-geometry traversal blocker and is the required native ray tracer.
 
-The Exterior is the bootstrap/memory bound: static mesh/BVH construction
-averaged 7.81 s, scene RSS reached 375 MiB, and process peak reached 569 MiB.
-Interior-with-wine required 3.25 s/~191 MiB scene RSS; Interior required 2.53
-s/~152 MiB. Cook structural proxies preserving walls, floors, ceilings, large
-furniture, and portals while removing tableware, fixtures, bevels, vegetation
-detail, and other small triangles. Proxy triangle-count and acoustic-error tiers
-remain to be measured.
+Embree moves acceleration-structure work from `iplStaticMeshCreate` to
+`iplSceneCommit`. Total Exterior build time fell from 7.81 s to 0.52 s,
+Interior from 2.53 s to 0.19 s, and Interior-with-wine from 3.25 s to 0.25 s.
+The memory trade-off is important: Exterior resident scene memory increased from
+375 MiB to 486 MiB, although peak memory fell from 569 MiB to 487 MiB because
+the built-in tracer's large transient build allocation disappeared.
+
+Full render geometry is no longer rejected for simulation time alone. It remains
+unsuitable as the production representation because the Exterior acoustic scene
+uses nearly 486 MiB and includes acoustically irrelevant tableware, fixtures,
+bevels, and vegetation detail. Structural proxies remain required for bounded
+engine memory, faster asset loading, explicit material control, and correct
+acoustic geometry policy. Proxy triangle-count and acoustic-error tiers remain
+to be measured.
 
 Asset attribution: *Amazon Lumberyard Bistro, Open Research Content Archive
 (ORCA)*, Amazon Lumberyard, July 2017, CC-BY 4.0,
 https://developer.nvidia.com/orca/amazon-lumberyard-bistro.
 
 Raw evidence:
-`docs/benchmarks/steam-audio-native-bistro-full-package-fox-laptop-2026-07-18.json`.
+`docs/benchmarks/steam-audio-native-bistro-full-package-fox-laptop-2026-07-18.json`
+(built-in baseline) and
+`docs/benchmarks/steam-audio-native-bistro-embree-fox-laptop-2026-07-18.json`
+(Embree).
 
 ## Upstream optimization guidance
 
@@ -273,12 +285,12 @@ following optimization strategies:
 | CPU/debug | Select suitable SIMD and thread counts; disable validation outside diagnostics because it significantly increases CPU usage. | Yes. |
 | Precomputation | Bake static-source/static-listener reflections, listener reverb, and pathing probes. Use pathing instead of brute-force rays for long corridors and corners. | No; conflicts with Afterglow's zero-baked baseline. |
 
-The largest untested upstream optimization for the native Bistro workload is
-**Embree**: every current native result uses Steam Audio's built-in ray tracer.
-The most promising no-bake combination is a structural acoustic proxy + Embree +
-listener-centric parametric reverb bus, with source-centric reflection slots only
-for important sounds. These are upstream-supported mechanisms, but their combined
-Afterglow performance remains to be measured.
+Embree is now validated and mandatory for native simulation: it improved the
+full Bistro sweep by roughly 19–23× and made two-thread 1,024×2 simulation fit
+strict 60 Hz throughout the package. The remaining promising no-bake combination
+is a structural acoustic proxy + Embree + listener-centric parametric reverb bus,
+with source-centric reflection slots only for important sounds. Proxy memory and
+acoustic error, shared-bus DSP, and render-loaded contention remain to be measured.
 
 Primary documentation:
 [C API guide](https://valvesoftware.github.io/steam-audio/doc/capi/guide.html),
@@ -300,16 +312,16 @@ Use a zero-baked-acoustics baseline:
    under pressure—not to baked probes or static impulse responses;
 5. retain and smoothly crossfade the latest dynamic result when a source misses
    its update budget;
-6. cook a structural acoustic proxy instead of submitting render geometry—the
-   full Bistro package required eight threads for a package-wide 512×2/30 Hz tier.
+6. use Embree for every native acoustic scene;
+7. cook a structural acoustic proxy for bounded memory and correct acoustic
+   geometry policy, even though Embree makes the render-mesh stress bound fast.
 
-For native CEF, use the measured two-simulation-thread `libphonon` tier in an
-Afterglow native worker; reserve four simulation threads for a higher-quality
-option. Processed PCM or acoustic results still need a bounded low-latency path
-into CEF's browser audio output, and serial DSP must remain capped at 64
-independently reflected sources. Before freezing native capacities, repeat the
-full-package and proxy sweeps with Embree, which upstream identifies as faster
-than the built-in ray tracer.
+For native CEF, use Embree with the measured two-simulation-thread `libphonon`
+tier in an Afterglow native worker; reserve four simulation threads for a
+higher-quality or contention-sensitive option. Two threads kept the worst full
+Bistro p99 to 3.90 ms at 512×2 and 6.93 ms at 1,024×2. Processed PCM or acoustic
+results still need a bounded low-latency path into CEF's browser audio output,
+and serial DSP must remain capped at 64 independently reflected sources.
 
 ## Primary sources
 
