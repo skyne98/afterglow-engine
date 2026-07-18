@@ -1,6 +1,4 @@
 import * as THREE from 'three/webgpu';
-import { TextureClient } from './texture.client.ts';
-import { Rpc } from './rpc.ts';
 import { BigAssetSession, createAssetRangeSource, getVirtualTextureDimensions } from './engine/asset-api.ts';
 import { PersistentBlobCache, persistentCacheNamespace } from './engine/persistent-cache-api.ts';
 import { loadHeightTextureR16 } from './engine/height-api.ts';
@@ -10,7 +8,7 @@ import {
   FeedbackRegistrationStatus, FORMAT_RGBA, VirtualPomSceneBinding,
   VirtualTextureFeedbackCoordinator, VirtualTextureTuning,
 } from './engine/virtual-texturing-api.ts';
-import { assertPomGeneratedWgsl } from './engine/surface-detail-api.ts';
+import { validatePomShaderWarmup } from './engine/surface-detail-api.ts';
 import {
   BootstrapGuard, BrowserErrorCapture, FrameStepHarness, PageShutdown, TextHud,
   publishDevHarness,
@@ -28,13 +26,14 @@ const bootstrap=new BootstrapGuard(20);bootstrap.defer(()=>host.dispose());boots
 try{
 const source=createAssetRangeSource(),identity=await source.identity('dungeon.big');
 const device=host.device,format=device.features.has('texture-compression-bc')?0:device.features.has('texture-compression-astc')?1:FORMAT_RGBA;
-const adapterInfo=host.renderer.afterglowAdapterInfo??{};let cache:PersistentBlobCache|undefined;
+const adapterInfo=host.adapterInfo;let cache:PersistentBlobCache|undefined;
 if(identity.etag||identity.lastModified){try{cache=await PersistentBlobCache.open({namespace:await persistentCacheNamespace(['afterglow-cache-v1','dungeon.big',String(identity.size),identity.etag??'',identity.lastModified??'',String(format),'basisu-transcoder-v1','slot-136-border-4',adapterInfo.vendor??'',adapterInfo.architecture??'',adapterInfo.device??'',adapterInfo.description??'']),maxBytes:1024*1024*1024,maxEntries:65536,writeQueueCapacity:64})}catch(error){console.warn('[cache] persistent blob cache unavailable:',error)}}
 const workerCount=Math.max(2,Math.min(4,Math.floor((navigator.hardwareConcurrency||4)/2)));
-const session=await BigAssetSession.open({containerPath:'dungeon.big',format,workerCount,transcodeQueueCapacity:64,maxHeaderBytes:2*1024*1024,source,...(cache?{cache}:{}),async createWorker(){const rpc=await Rpc.create({mainWasmUrl:'afterglow_web.wasm',workerJsUrl:'worker.js',workerWasmUrl:'texture.wasm',timeoutMs:10000});return{worker:new TextureClient(rpc),close():void{rpc.terminate()}}}});bootstrap.defer(()=>session.close());
+const session=await BigAssetSession.open({containerPath:'dungeon.big',format,workerCount,transcodeQueueCapacity:64,maxHeaderBytes:2*1024*1024,source,...(cache?{cache}:{})});bootstrap.defer(()=>session.close());
 const store=session.createVirtualTextureStore(device,new VirtualTextureTuning());bootstrap.defer(()=>store.dispose());
 coordinator=new VirtualTextureFeedbackCoordinator(host.renderer,store,{renderables:1,passes:1,cadence:FEEDBACK_INTERVAL,scale:.125});
-coordinator.resize(host.renderer.domElement.width,host.renderer.domElement.height);
+const activeCoordinator=coordinator;
+activeCoordinator.resize(host.renderer.domElement.width,host.renderer.domElement.height);
 const pomBinding=new VirtualPomSceneBinding({camera,store,feedbackPixelScale:coordinator.pixelScale,capacity:12,material:{minLayers:POM_MIN_LAYERS,maxLayers:POM_MAX_LAYERS,heightScale:POM_HEIGHT_SCALE,maxOffsetRatio:POM_MAX_OFFSET_RATIO,maxDistance:POM_MAX_DISTANCE,shadowSteps:POM_SHADOW_STEPS,shadowBias:POM_SHADOW_BIAS,shadowStrength:POM_SHADOW_STRENGTH,qualityBias:VT_QUALITY_BIAS,addressMode:1,side:THREE.DoubleSide}});bootstrap.defer(()=>pomBinding.dispose());
 if(coordinator.register(pomBinding)!==FeedbackRegistrationStatus.Registered)throw new Error('Dungeon feedback capacity exceeded');
 scene.add(new THREE.HemisphereLight(0xb9c8e8,0x241b15,1.6));const lamp=new THREE.PointLight(0xffc985,30,18,2);lamp.position.set(0,3.2,0);scene.add(lamp);
@@ -60,8 +59,7 @@ const timing={vtCpuUs:0,renderSubmitUs:0,feedbackSubmitUs:0,frameCpuUs:0,gpuMain
 /** @alloc-effect diagnostic */function updateHud():void{const d=store.getStats(),status=relativePointer.getStatus();hud.setText(`afterglow — Engine Dungeon\n3 × 8K PBR sets · 12 walls · ${Math.round(1/smoothedDt)} FPS\nPosition ${pose.x.toFixed(2)}, ${pose.z.toFixed(2)} · ${status.eventType}\nPOM ${pomEnabled?'8–32 layers · 8-step self-shadow':'off'}\nResident ${d.atlasSlotsUsed}/${d.atlasSlotsTotal} · pending ${d.pendingPages}\nErrors ${runtime.diagnostics.count}`)}
 /** @alloc-effect none */function updateFrame(frame:Readonly<RenderFrame>):void{const frameStarted=performance.now(),dt=Math.min(.05,frame.deltaSeconds);smoothedDt=smoothedDt*.95+dt*.05;coordinator?.recordFrameTime(dt*1000);if(!programmatic){let f=(input.isDown(DemoInputAction.ZoomIn)?1:0)-(input.isDown(DemoInputAction.ZoomOut)?1:0),s=(input.isDown(DemoInputAction.OrbitRight)?1:0)-(input.isDown(DemoInputAction.OrbitLeft)?1:0),speed=input.isDown(DemoInputAction.Sprint)?5.5:2.8;if(f||s){const n=Math.hypot(f,s);move(f/n*speed*dt,s/n*speed*dt)}if(input.consumePressed(DemoInputAction.ResetView))setPose(-5.5,-5.5,0,0);if(input.consumePressed(DemoInputAction.PixelView))setPomEnabled(!pomEnabled);if(input.consumePressed(DemoInputAction.ModelOne))setPose(-5.5,-5.5,0,0);if(input.consumePressed(DemoInputAction.ModelTwo))setPose(5.5,-5.5,Math.PI,0);if(input.consumePressed(DemoInputAction.PoseThree))setPose(5.5,6.5,-Math.PI/2,0)}camera.position.set(pose.x,1.7,pose.z);camera.rotation.set(pose.pitch,pose.yaw,0);camera.updateMatrixWorld();lamp.position.set(pose.x,3.1,pose.z);steps.poll(frame.frameId);timing.vtCpuUs=coordinator?.vtCpuUs??0;timing.renderSubmitUs=host.renderSubmitUs;timing.feedbackSubmitUs=coordinator?.feedbackSubmitUs??0;timing.frameCpuUs=(performance.now()-frameStarted)*1000;if(hudVisible&&frame.frameId%15===0)updateHud()} // @alloc-allowed reason=DiagnosticHud issue=DME-034 expires=2026-10-01
 if(runtime.registerWorker(coordinator)!==RegistrationStatus.Registered||runtime.registerRenderPass(host)!==RegistrationStatus.Registered||runtime.registerRenderPass(coordinator)!==RegistrationStatus.Registered)throw new Error('Dungeon runtime capacity exceeded');
-let pomShaders=0,pomFeedback=0;const originalShader=device.createShaderModule.bind(device);device.createShaderModule=descriptor=>{if(descriptor.code.includes('fn pomMarchUV')){if(descriptor.code.includes('fn vtSampleFromLevel')){assertPomGeneratedWgsl(descriptor.code);pomShaders++}else if(descriptor.code.includes('fn vtFeedback'))pomFeedback++}return originalShader(descriptor)};
-runtime.enterWarmup();runtime.adapter.warmAllDescriptors();pomBinding.setPomEnabled(false);await host.warm();await coordinator.warm();pomBinding.setPomEnabled(true);await host.warm();await coordinator.warm();await runtime.warm();device.createShaderModule=originalShader;if(pomShaders<1||pomFeedback<1)throw new Error('POM shader contracts did not compile');host.renderer.render(scene,camera);host.attachVirtualTextureStore(store);for(const height of heights)host.assertHeightTextureFormat(height);runtime.sealGameplay();
+runtime.enterWarmup();await validatePomShaderWarmup(host,async()=>{runtime.adapter.warmAllDescriptors();pomBinding.setPomEnabled(false);await host.warm();await activeCoordinator.warm();pomBinding.setPomEnabled(true);await host.warm();await activeCoordinator.warm();await runtime.warm()});host.renderer.render(scene,camera);host.attachVirtualTextureStore(store);for(const height of heights)host.assertHeightTextureFormat(height);runtime.sealGameplay();
 const shutdown=new PageShutdown(()=>{runtime.stop();relativePointer.dispose();input.dispose();errors.dispose();pomBinding.dispose();store.dispose();void session.close();runtime.dispose()});bootstrap.defer(()=>shutdown.dispose());runtime.start({update:updateFrame});
 const step=(count=1):Promise<void>=>steps.wait(runtime.frame.frameId,Math.max(1,count|0));
 function atlasFeedback(groups:number,start=0):Map<number,{path:string;mip:number;x:number;y:number}>{const map=new Map(),entries=sets.map(set=>set.albedo);for(let i=0;i<groups;i++){const entry=entries[i%entries.length];if(!entry)continue;const local=start+Math.floor(i/entries.length),page=local%(entry.pageGridX*entry.pageGridY);map.set(i,{path:entry.path,mip:0,x:page%entry.pageGridX,y:Math.floor(page/entry.pageGridX)})}return map}

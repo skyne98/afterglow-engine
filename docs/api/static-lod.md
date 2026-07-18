@@ -17,10 +17,12 @@ offline operation; no runtime worker generates levels.
 
 ## Runtime API
 
-`StaticLodSession.open()` validates the bounded `.big` header, finds one named
-mesh chain, checks contiguous stable LOD indices, and decodes each meshopt chunk
-during bootstrap through an explicitly owned decoder. The session owns all
-created `BufferGeometry` instances and the decoder. `close()` is idempotent.
+`loadStaticMesh()` validates the bounded `.big` header, finds one named mesh
+chain, checks contiguous stable LOD indices, and decodes each meshopt chunk
+during bootstrap. The engine creates and closes the decoder before the promise
+resolves. It returns a `StaticMeshAsset` that owns only its fixed
+`BufferGeometry` levels; `dispose()` is idempotent. There is no static-LOD
+"session" and game code never configures RPC or worker lifetime.
 
 `LodSet(meshes, thresholds, hysteresis, capacity)` owns fixed selection state.
 Levels are ordered finest to coarsest. Thresholds are normalized projected

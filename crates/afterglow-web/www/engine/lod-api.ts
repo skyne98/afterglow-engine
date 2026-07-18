@@ -1,5 +1,5 @@
 export {
-  LodSet, StaticLodSession, projectedCoverage,
+  LodSet, StaticMeshAsset, loadStaticMesh, projectedCoverage,
   type MeshoptVertexDecoder, type OwnedMeshoptVertexDecoder,
-  type StaticLodLevel, type StaticLodSessionOptions,
+  type StaticLodLevel, type StaticMeshLoadOptions,
 } from './static-lod.ts';

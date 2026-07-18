@@ -41,6 +41,7 @@ const descriptions: Record<string, string> = {
   'AG-DEMO-014': 'demo writes diagnostic UI directly',
   'AG-DEMO-015': 'demo erases type safety with any',
   'AG-DEMO-016': 'demo imports engine implementation modules instead of the public barrel',
+  'AG-DEMO-017': 'demo assembles a raw RPC worker transport instead of using a typed worker factory',
 };
 const infrastructureConstructors = new Set([
   'WebGPURenderer', 'RendererSeal', 'EngineMemory', 'FrameBudget', 'RenderAdapter',
@@ -105,6 +106,7 @@ export function scanTypeScript(sourceText: string, file: string): RawFinding[] {
       const publicBarrel = /^(?:\.\/|\.\.\/)engine\/(?:index|[a-z0-9-]+-api)\.ts$/.test(specifier);
       if (!publicBarrel && (specifier.startsWith('./engine/') || specifier.startsWith('../engine/')))
         add('AG-DEMO-016', node, specifier);
+      if (specifier.endsWith('.client.ts')) add('AG-DEMO-017', node, specifier);
       if (specifier.endsWith('/surface-detail.ts') || specifier.endsWith('/virtual-texture-material.ts'))
         add('AG-DEMO-009', node, specifier);
     }
@@ -120,6 +122,7 @@ export function scanTypeScript(sourceText: string, file: string): RawFinding[] {
       const name = nodeName(node.expression);
       if (infrastructureConstructors.has(name)) add('AG-DEMO-002', node, name);
       if (name === 'VirtualTextureFeedbackPass') add('AG-DEMO-003', node, name);
+      if (name.endsWith('Client')) add('AG-DEMO-017', node, name);
     }
     if (ts.isCallExpression(node)) {
       const name = nodeName(node.expression);
@@ -159,13 +162,18 @@ export function scanTypeScript(sourceText: string, file: string): RawFinding[] {
         const target = ts.isPropertyAccessExpression(node.expression) ? node.expression.expression.getText(source) : '';
         if (/feedback/i.test(target)) add('AG-DEMO-003', node, `${target}.${name}`);
       }
+      const callTarget = node.expression.getText(source);
+      if (callTarget === 'Rpc.create' || /Client\.(?:spawn|spawnThreaded)$/.test(callTarget))
+        add('AG-DEMO-017', node, callTarget);
       if (bigCalls.has(name)) add('AG-DEMO-007', node, name);
       if (pomNames.has(name)) add('AG-DEMO-009', node, name);
     }
     if (ts.isPropertyAccessExpression(node)) {
       const text = node.getText(source);
       if (/^window\.(?:THREE|Afterglow\w*|bitecs\w*)\b/.test(text)) add('AG-DEMO-004', node, text);
-      if (node.name.text === 'backend' || node.name.text.startsWith('_')) add('AG-DEMO-005', node, text);
+      if (node.name.text === 'backend' || node.name.text.startsWith('_') ||
+          node.name.text === 'afterglowAdapterInfo' || node.name.text === 'createShaderModule')
+        add('AG-DEMO-005', node, text);
       if (node.name.text === 'innerHTML' || node.name.text === 'textContent') add('AG-DEMO-014', node, text);
     }
     if (ts.isIdentifier(node) && pomNames.has(node.text)) add('AG-DEMO-009', node, node.text);

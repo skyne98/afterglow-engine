@@ -324,6 +324,25 @@ class BoundedTranscoderPool {
     return stats;
   }
 }
+async function readBigHeader(source, path, maxHeaderBytes) {
+  if (!Number.isSafeInteger(maxHeaderBytes) || maxHeaderBytes < 16)
+    throw new RangeError("BIG maxHeaderBytes must be at least 16");
+  const prefix = await source.read(path, 0, 16);
+  if (prefix.byteLength !== 16)
+    throw new Error("BIG container prefix is truncated");
+  const view = new DataView(prefix.buffer, prefix.byteOffset, prefix.byteLength);
+  if (view.getUint32(0, true) !== BIG_MAGIC)
+    throw new Error("BIG container has invalid magic");
+  if (view.getUint32(4, true) !== BIG_VERSION)
+    throw new Error("BIG container version is unsupported");
+  const dataOffset = Number(view.getBigUint64(8, true));
+  if (!Number.isSafeInteger(dataOffset) || dataOffset < 16 || dataOffset > maxHeaderBytes)
+    throw new RangeError(`BIG header size ${dataOffset} exceeds configured capacity ${maxHeaderBytes}`);
+  const bytes = await source.read(path, 0, dataOffset);
+  if (bytes.byteLength !== dataOffset)
+    throw new Error("BIG container header is truncated");
+  return parseBigHeader(bytes).header;
+}
 function createFetchRangeLoader(baseUrl = "") {
   const url = (path) => baseUrl + path;
   const identity = async (path) => {
@@ -577,6 +596,7 @@ function createPageDataProvider(loader, header, textureWorkers, format, cache, t
   return provider;
 }
 export {
+  readBigHeader,
   parseBigHeader,
   getVirtualTextureDimensions,
   findVTPageChunk,

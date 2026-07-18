@@ -1,15 +1,15 @@
+import { MeshoptClient } from '../meshopt.client.ts';
+import { TextureClient } from '../texture.client.ts';
 import {
-  BIG_MAGIC,
-  BIG_VERSION,
   BigContainerAssetLoader,
   createFetchRangeLoader,
   createPageDataProvider,
-  parseBigHeader,
+  readBigHeader,
   type BigHeader,
   type FetchRangeLoader,
   type VirtualTexturePageProvider,
 } from './big-parser.ts';
-import { AssetStore } from './asset-store.ts';
+import { AssetStore, type MeshOptimizer } from './asset-store.ts';
 import type { PersistentBlobCache } from './persistent-blob-cache.ts';
 import { VirtualTextureStore, VirtualTextureTuning } from './virtual-texture.ts';
 
@@ -17,8 +17,11 @@ export interface TextureTranscoder {
   transcode(data: Uint8Array, targetFormat: number): Promise<Uint8Array>;
 }
 
-export interface OwnedTextureTranscoder {
-  readonly worker: TextureTranscoder;
+export interface OwnedTextureTranscoder extends TextureTranscoder {
+  close(): void | Promise<void>;
+}
+
+export interface OwnedMeshOptimizer extends MeshOptimizer {
   close(): void | Promise<void>;
 }
 
@@ -28,7 +31,9 @@ export interface BigAssetSessionOptions {
   workerCount: number;
   transcodeQueueCapacity: number;
   maxHeaderBytes: number;
-  createWorker(index: number): Promise<OwnedTextureTranscoder>;
+  /** Test/platform injection; games use the engine-owned default workers. */
+  createTranscoder?(index: number): Promise<OwnedTextureTranscoder>;
+  createMeshOptimizer?(): Promise<OwnedMeshOptimizer>;
   source?: FetchRangeLoader;
   cache?: PersistentBlobCache;
 }
@@ -41,6 +46,7 @@ export class BigAssetSession {
 
   private closed = false;
   private assetStore: AssetStore | null = null;
+  private meshOptimizer: OwnedMeshOptimizer | null = null;
   private store: VirtualTextureStore | null = null;
 
   private constructor(
@@ -49,6 +55,7 @@ export class BigAssetSession {
     readonly header: BigHeader,
     readonly format: number,
     private readonly workers: OwnedTextureTranscoder[],
+    private readonly createMeshOptimizer: (() => Promise<OwnedMeshOptimizer>) | undefined,
     pageProvider: VirtualTexturePageProvider,
   ) {
     this.rawAssets = new BigContainerAssetLoader(source, containerPath, header);
@@ -62,27 +69,16 @@ export class BigAssetSession {
       throw new RangeError('BIG session workerCount must be positive');
     if (!Number.isInteger(options.transcodeQueueCapacity) || options.transcodeQueueCapacity <= 0)
       throw new RangeError('BIG session transcode queue capacity must be positive');
-    if (!Number.isSafeInteger(options.maxHeaderBytes) || options.maxHeaderBytes < 16)
-      throw new RangeError('BIG session maxHeaderBytes must be at least 16');
-
     const source = options.source ?? createFetchRangeLoader();
     const workers: OwnedTextureTranscoder[] = [];
     try {
-      const prefix = await source.read(options.containerPath, 0, 16);
-      if (prefix.byteLength !== 16) throw new Error('BIG session received a truncated prefix');
-      const view = new DataView(prefix.buffer, prefix.byteOffset, prefix.byteLength);
-      if (view.getUint32(0, true) !== BIG_MAGIC) throw new Error('BIG session has invalid magic');
-      if (view.getUint32(4, true) !== BIG_VERSION) throw new Error('BIG session has unsupported version');
-      const dataOffset = Number(view.getBigUint64(8, true));
-      if (!Number.isSafeInteger(dataOffset) || dataOffset < 16 || dataOffset > options.maxHeaderBytes)
-        throw new RangeError(`BIG header size ${dataOffset} exceeds configured capacity ${options.maxHeaderBytes}`);
-      const headerBytes = await source.read(options.containerPath, 0, dataOffset);
-      if (headerBytes.byteLength !== dataOffset) throw new Error('BIG session received a truncated header');
-      const { header } = parseBigHeader(headerBytes);
+      const header = await readBigHeader(source, options.containerPath, options.maxHeaderBytes);
 
+      const createTranscoder = options.createTranscoder ?? (() =>
+        TextureClient.spawnThreaded({ workerWasmUrl: 'texture.wasm', timeoutMs: 10_000 }));
       for (let index = 0; index < options.workerCount; index++)
-        workers.push(await options.createWorker(index));
-      const clients = workers.map((owned) => owned.worker);
+        workers.push(await createTranscoder(index));
+      const clients = workers;
       const containerLoader = {
         load: (path: string): Promise<Uint8Array> => source.load(path),
         size: (path: string): Promise<number> => source.size(path),
@@ -98,7 +94,8 @@ export class BigAssetSession {
         options.transcodeQueueCapacity,
       );
       return new BigAssetSession(
-        source, options.containerPath, header, options.format, workers, pageProvider,
+        source, options.containerPath, header, options.format, workers,
+        options.createMeshOptimizer, pageProvider,
       );
     } catch (error) {
       for (let index = workers.length - 1; index >= 0; index--) {
@@ -111,15 +108,26 @@ export class BigAssetSession {
     }
   }
 
-  createAssetStore(
-    meshopt?: ConstructorParameters<typeof AssetStore>[1],
+  async createAssetStore(
     capacity = 64,
     maxCompletionsPerPoll = 32,
-  ): AssetStore {
+  ): Promise<AssetStore> {
     if (this.closed) throw new Error('cannot create an asset store from a closed BIG session');
-    if (this.assetStore) throw new Error('BIG session already created its asset store');
-    this.assetStore = new AssetStore(this.rawAssets, meshopt, capacity, maxCompletionsPerPoll);
-    return this.assetStore;
+    if (this.assetStore || this.meshOptimizer) throw new Error('BIG session already created its asset store');
+    const createOptimizer = this.createMeshOptimizer ?? (() =>
+      MeshoptClient.spawnThreaded({ workerWasmUrl: 'meshopt.wasm', timeoutMs: 10_000 }));
+    const optimizer = await createOptimizer();
+    if (this.closed) { await optimizer.close(); throw new Error('BIG session closed while creating its asset store'); }
+    try {
+      this.assetStore = new AssetStore(this.rawAssets, optimizer, capacity, maxCompletionsPerPoll);
+      this.meshOptimizer = optimizer;
+      this.stats.workersStarted++;
+      return this.assetStore;
+    } catch (error) {
+      try { await optimizer.close(); }
+      catch (closeError) { if (error instanceof Error && error.cause === undefined) error.cause = closeError; }
+      throw error;
+    }
   }
 
   createVirtualTextureStore(device?: GPUDevice, tuning?: VirtualTextureTuning): VirtualTextureStore {
@@ -148,6 +156,11 @@ export class BigAssetSession {
     this.store?.dispose();
     this.store = null;
     let firstError: unknown = null;
+    if (this.meshOptimizer) {
+      try { await this.meshOptimizer.close(); }
+      catch (error) { this.stats.closeErrors++; firstError = error; }
+      this.meshOptimizer = null;
+    }
     for (let index = this.workers.length - 1; index >= 0; index--) {
       try { await this.workers[index]?.close(); }
       catch (error) {

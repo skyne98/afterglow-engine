@@ -126,9 +126,11 @@ fully recessed, half-height planes, rising/falling linear ramps, hard steps,
 thin ridges, a circular island, direction symmetry, distance fade, layer
 bounds, physical-height clamping, and grazing offset limits. These tests caught
 and fixed the original height/depth inversion (`height` was incorrectly used as
-ray depth). `assertPomGeneratedWgsl()` additionally checks Three's generated
-fragment shader during warm-up: exactly one march, geometric TBN, march before
-all VT reads, and exactly three linked PBR samples.
+ray depth). `validatePomShaderWarmup()` runs through the renderer host's
+bootstrap-only shader inspection boundary and requires both visible and feedback
+POM shaders. It applies `assertPomGeneratedWgsl()` to verify exactly one march,
+a geometric TBN, march-before-VT-read ordering, and exactly three linked PBR
+samples. The Dungeon never patches `GPUDevice.createShaderModule` itself.
 
 ## Dungeon controls and automation
 

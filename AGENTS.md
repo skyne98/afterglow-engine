@@ -225,6 +225,12 @@ CEF native path; the web `SharedArrayBuffer` path has no such issue.
 - Separate mechanism from policy. For example, persistent storage provides
   generic `open/get/put/clear/stats` byte operations; virtual texturing decides
   adapter/source cache identity, page keys, and when reads/writes are useful.
+- Visual demos and examples contain pure game/presentation code and consume only
+  public engine APIs. They never assemble RPC transports or generated clients,
+  patch renderer/device methods, parse engine containers, or own engine worker
+  lifecycles. If a demo exposes missing infrastructure, add or compose a small,
+  generic engine primitive—never hide the leak behind a single-use subsystem
+  wrapper or a feature-specific `*Session` abstraction.
 
 ### Runtime allocation, complexity, and frame budgets
 

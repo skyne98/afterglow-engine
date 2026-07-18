@@ -16,6 +16,7 @@
 export type RpcTransport = {
   call(method: number, args: Uint8Array): Promise<Uint8Array>;
   terminate?(): void;
+  poll?(): void;
 };
 
 // --- varint (unsigned LEB128) -------------------------------------------

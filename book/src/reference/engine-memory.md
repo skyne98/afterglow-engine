@@ -62,7 +62,7 @@ The conformance command runs several independent gates:
 - generated JavaScript drift checks.
 
 The architecture checker rejects demo-owned frame loops, renderer/runtime
-construction, worker/BIG/VT/POM/glTF infrastructure, engine globals, private
+construction, generated worker-client/RPC assembly, BIG/VT/POM/glTF infrastructure, engine globals, private
 Three access, unbounded control collections, direct diagnostic UI, and untyped
 frame callbacks. Conformant releases cannot carry a legacy state, architecture
 baseline, or bridge. Strict TypeScript diagnostics remain merge-base monotonic.

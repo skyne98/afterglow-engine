@@ -1,8 +1,6 @@
 import * as THREE from 'three/webgpu';
-import { MeshoptClient } from './meshopt.client.ts';
-import { Rpc } from './rpc.ts';
 import { EngineRuntime, RegistrationStatus, RendererHost, type RenderFrame } from './engine/index.ts';
-import { LodSet, StaticLodSession, projectedCoverage } from './engine/lod-api.ts';
+import { LodSet, loadStaticMesh, projectedCoverage } from './engine/lod-api.ts';
 import { BoundedKeyboardInput, DemoInputAction } from './engine/input-api.ts';
 import {
   BootstrapGuard, BrowserErrorCapture, FrameStepHarness, PageShutdown, TextHud,
@@ -39,17 +37,10 @@ const bootstrap = new BootstrapGuard(10);
 bootstrap.defer(() => rendererHost.dispose());
 bootstrap.defer(() => runtime.dispose());
 try {
-const session = await StaticLodSession.open({
+const asset = await loadStaticMesh({
   containerPath: 'lod-demo.big', assetName: 'Avocado', maxHeaderBytes: 64 * 1024,
-  async createDecoder() {
-    const rpc = await Rpc.create({
-      mainWasmUrl: 'afterglow_web.wasm', workerJsUrl: 'worker.js',
-      workerWasmUrl: 'meshopt.wasm', timeoutMs: 10_000,
-    });
-    return { decoder: new MeshoptClient(rpc), close(): void { rpc.terminate(); } };
-  },
 });
-bootstrap.defer(() => session.close());
+bootstrap.defer(() => asset.dispose());
 const root = new THREE.Group();
 root.rotation.y = Math.PI;
 scene.add(root);
@@ -58,12 +49,12 @@ const wireMaterial = new THREE.MeshBasicMaterial({ color: 0xc8f0a0, wireframe: t
 bootstrap.defer(() => solidMaterial.dispose());
 bootstrap.defer(() => wireMaterial.dispose());
 const meshes: THREE.Mesh[] = [];
-for (const level of session.levels) {
+for (const level of asset.levels) {
   const mesh = new THREE.Mesh(level.geometry, solidMaterial);
   root.add(mesh);
   meshes.push(mesh);
 }
-const bounds = session.levels[0]?.geometry.boundingSphere;
+const bounds = asset.levels[0]?.geometry.boundingSphere;
 if (!bounds) throw new Error('static LOD source has no bounds');
 const modelScale = 1.5 / bounds.radius;
 for (const mesh of meshes) mesh.position.copy(bounds.center).multiplyScalar(-1);
@@ -87,12 +78,12 @@ const verticalFov = THREE.MathUtils.degToRad(camera.fov);
 /** @alloc-effect diagnostic */
 function updateHud(): void {
   const level = lod.level();
-  const triangles = session.levels[level]?.triangleCount ?? 0;
+  const triangles = asset.levels[level]?.triangleCount ?? 0;
   hud.setText(
     `afterglow-engine — Offline Static LOD\n` +
     `CC0 Avocado · level ${level} · ${triangles} triangles\n` +
     `Distance ${distance.toFixed(2)} · hysteresis 10%\n` +
-    `LOD chain ${session.levels.map((entry) => entry.triangleCount).join(' → ')}\n` +
+    `LOD chain ${asset.levels.map((entry) => entry.triangleCount).join(' → ')}\n` +
     `Errors ${runtime.diagnostics.count}\n\nW wireframe`,
   );
 }
@@ -129,7 +120,7 @@ await rendererHost.renderer.compileAsync(scene, camera);
 for (const mesh of meshes) mesh.material = solidMaterial;
 runtime.sealGameplay();
 const shutdown = new PageShutdown(() => {
-  runtime.stop(); input.dispose(); errors.dispose(); void session.close(); runtime.dispose();
+  runtime.stop(); input.dispose(); errors.dispose(); asset.dispose(); runtime.dispose();
 });
 bootstrap.defer(() => shutdown.dispose());
 runtime.start({ update: update });
@@ -139,7 +130,7 @@ function step(count = 1): Promise<void> {
 publishDevHarness('__afterglowLod', {
   snapshot: () => ({
     level: lod.level(), distance,
-    triangles: session.levels[lod.level()]?.triangleCount ?? 0,
+    triangles: asset.levels[lod.level()]?.triangleCount ?? 0,
     visible: meshes.reduce((count, mesh) => count + (mesh.visible ? 1 : 0), 0),
     errors: errors.snapshot(),
   }),
@@ -157,7 +148,7 @@ publishDevHarness('__afterglowLod', {
         throw new Error('LOD visibility invariant failed');
     }
     if (runtime.diagnostics.count !== 0) throw new Error('LOD runtime diagnostics are not empty');
-    return { ok: true, distances, levels, triangles: session.levels.map((entry) => entry.triangleCount) };
+    return { ok: true, distances, levels, triangles: asset.levels.map((entry) => entry.triangleCount) };
   },
 });
 bootstrap.release();

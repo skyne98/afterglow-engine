@@ -13,7 +13,9 @@ export function importBoundaryErrors(file: string, source: string, wwwRoot: stri
     const specifier = match[1];
     if (!specifier || !specifier.startsWith('.')) continue;
     const target = normalize(resolve(dirname(join(wwwRoot, file)), specifier));
-    if (file.startsWith('engine/') && !file.endsWith('.test.ts') && relative(engineRoot, target).startsWith('..'))
+    const generatedRootClient = dirname(target) === wwwRoot && target.endsWith('.client.ts');
+    if (file.startsWith('engine/') && !file.endsWith('.test.ts') &&
+        relative(engineRoot, target).startsWith('..') && !generatedRootClient)
       found.push(`${file}: engine production source may not import outside engine: ${specifier}`);
     if (visualSources.has(file) && (specifier.includes('/support/') || target.includes('/tests/') || specifier.includes('.test.')))
       found.push(`${file}: visual production source may not import test/support code: ${specifier}`);

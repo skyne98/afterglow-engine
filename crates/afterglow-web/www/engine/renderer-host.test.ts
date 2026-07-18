@@ -77,7 +77,11 @@ describe('RendererHost', () => {
     await withNavigator(async () => {
       const diagnostics = new EngineDiagnostics(4);
       const viewport = new FakeViewport();
-      const device = new EventTarget();
+      let shaderModules = 0;
+      const device = Object.assign(new EventTarget(), {
+        createShaderModule(_descriptor: GPUShaderModuleDescriptor) { shaderModules++; return Object.create(null); },
+      });
+      const originalShaderFactory = device.createShaderModule;
       const renderer = fakeRenderer(device);
       const children: unknown[] = [];
       const container = {
@@ -94,14 +98,32 @@ describe('RendererHost', () => {
         factory: () => renderer,
       });
       expect(renderer.initialized).toBe(1);
+      expect(host.adapterInfo.vendor).toBe('test');
       expect(renderer.ratios).toEqual([2]);
       expect(renderer.sizes).toEqual([800, 600]);
       expect(children.length).toBe(1);
       await host.warm();
       expect(renderer.compiled).toBe(1);
+      const inspected: string[] = [];
+      await host.inspectShaderModulesDuring(async () => {
+        host.device.createShaderModule({ code: 'test shader' });
+      }, source => inspected.push(source));
+      expect(inspected).toEqual(['test shader']);
+      expect(shaderModules).toBe(1);
+      expect(device.createShaderModule).toBe(originalShaderFactory);
+      await expect(host.inspectShaderModulesDuring(async () => {
+        throw new Error('warmup failed');
+      }, () => {})).rejects.toThrow('warmup failed');
+      expect(device.createShaderModule).toBe(originalShaderFactory);
+      await expect(host.inspectShaderModulesDuring(async () => {
+        await host.inspectShaderModulesDuring(async () => {}, () => {});
+      }, () => {})).rejects.toThrow('already active');
+      expect(device.createShaderModule).toBe(originalShaderFactory);
       host.render();
       expect(renderer.rendered).toBe(1);
       host.seal();
+      await expect(host.inspectShaderModulesDuring(async () => {}, () => {}))
+        .rejects.toThrow('bootstrap-only');
       renderer.backend.createRenderPipeline?.({}, []);
       expect(host.sealMonitor.renderPipelineViolations).toBe(1);
       device.dispatchEvent(new Event('uncapturederror'));

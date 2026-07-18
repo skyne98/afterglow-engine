@@ -12,7 +12,8 @@ On NixOS, run them inside `nix-shell shell.nix` so native C++ test libraries are
 available.
 
 `conformance` validates the authored artifact/page manifest, zero-tolerance demo
-architecture, strict TypeScript and source-hygiene ratchets, allocation effects,
+architecture (including bans on generated worker clients, raw RPC assembly, and
+renderer/device interception), strict TypeScript and source-hygiene ratchets, allocation effects,
 single-Three bundle identity, and generated JavaScript drift.
 
 `test` runs workspace Rust tests, raw RPC transport tests, conformance, contract

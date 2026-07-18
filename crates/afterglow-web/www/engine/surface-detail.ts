@@ -1,5 +1,7 @@
 // Bounded low-core parallax occlusion mapping for resident height textures.
 
+import type { RendererHost } from './renderer-host.ts';
+
 /**
  * Adaptive 8–32-style POM march with interpolation and distance fade.
  * No silhouette, self-shadow, or secondary relief pass.
@@ -88,6 +90,32 @@ fn pomSelfShadow(
   return 1.0;
 }
 `;
+
+export interface PomShaderWarmupResult {
+  readonly visibleShaders: number;
+  readonly feedbackShaders: number;
+}
+
+/** Validate the generated visible and feedback POM shader contracts during bootstrap. */
+export async function validatePomShaderWarmup(
+  host: Pick<RendererHost, 'inspectShaderModulesDuring'>,
+  warmup: () => Promise<void>,
+): Promise<PomShaderWarmupResult> {
+  let visibleShaders = 0;
+  let feedbackShaders = 0;
+  await host.inspectShaderModulesDuring(warmup, (source) => {
+    if (!source.includes('fn pomMarchUV')) return;
+    if (source.includes('fn vtSampleFromLevel')) {
+      assertPomGeneratedWgsl(source);
+      visibleShaders++;
+    } else if (source.includes('fn vtFeedback')) {
+      feedbackShaders++;
+    }
+  });
+  if (visibleShaders < 1 || feedbackShaders < 1)
+    throw new Error('POM visible and feedback shader contracts did not both compile');
+  return { visibleShaders, feedbackShaders };
+}
 
 export function assertPomGeneratedWgsl(source: string): void {
   const fragment = source.lastIndexOf('@fragment');

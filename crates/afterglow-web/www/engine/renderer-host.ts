@@ -21,6 +21,13 @@ interface GpuErrorTarget {
   removeEventListener(type: 'uncapturederror', listener: (event: Event) => void): void;
 }
 
+export interface GpuAdapterIdentity {
+  readonly vendor: string | undefined;
+  readonly architecture: string | undefined;
+  readonly device: string | undefined;
+  readonly description: string | undefined;
+}
+
 export interface RendererViewport {
   readonly width: number;
   readonly height: number;
@@ -75,6 +82,7 @@ function gpuErrorTarget(device: unknown): GpuErrorTarget | null {
 export class RendererHost implements EngineRenderPass {
   readonly renderer: WebGPUOnlyRenderer;
   readonly device: GPUDevice;
+  readonly adapterInfo: Readonly<GpuAdapterIdentity>;
   readonly sealMonitor: RendererSeal;
   readonly timestampSupported: boolean;
   renderSubmissions = 0;
@@ -92,6 +100,7 @@ export class RendererHost implements EngineRenderPass {
   private readonly onGpuError: (event: Event) => void;
   private unsubscribeResize: (() => void) | null = null;
   private disposed = false;
+  private shaderInspectionActive = false;
 
   private constructor(renderer: WebGPUOnlyRenderer, options: RendererHostOptions) {
     if (!renderer.domElement || !renderer.setPixelRatio || !renderer.setSize ||
@@ -99,6 +108,13 @@ export class RendererHost implements EngineRenderPass {
       throw new Error('Three WebGPU renderer is missing a required host method');
     this.renderer = renderer;
     this.device = requireGpuDevice(renderer);
+    const adapter = renderer.afterglowAdapterInfo;
+    this.adapterInfo = Object.freeze({
+      vendor: adapter?.vendor,
+      architecture: adapter?.architecture,
+      device: adapter?.device,
+      description: adapter?.description,
+    });
     this.scene = options.scene;
     this.camera = options.camera;
     this.diagnostics = options.diagnostics;
@@ -175,6 +191,28 @@ export class RendererHost implements EngineRenderPass {
   async warm(): Promise<void> {
     if (this.disposed) throw new Error('cannot warm a disposed renderer host');
     await this.renderer.compileAsync(this.scene, this.camera);
+  }
+
+  /** Inspect generated WGSL during one bootstrap operation, restoring the device on every exit. */
+  async inspectShaderModulesDuring(
+    operation: () => Promise<void>,
+    inspect: (source: string) => void,
+  ): Promise<void> {
+    if (this.disposed) throw new Error('cannot inspect shaders on a disposed renderer host');
+    if (this.sealMonitor.isSealed) throw new Error('shader inspection is bootstrap-only');
+    if (this.shaderInspectionActive) throw new Error('shader inspection is already active');
+    const original = this.device.createShaderModule;
+    this.shaderInspectionActive = true;
+    this.device.createShaderModule = (descriptor: GPUShaderModuleDescriptor): GPUShaderModule => {
+      inspect(descriptor.code);
+      return original.call(this.device, descriptor);
+    };
+    try {
+      await operation();
+    } finally {
+      this.device.createShaderModule = original;
+      this.shaderInspectionActive = false;
+    }
   }
 
   seal(): void { this.sealMonitor.seal(); }

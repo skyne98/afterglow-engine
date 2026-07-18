@@ -91,8 +91,9 @@ describe('import boundary contract', () => {
   test('rejects visual imports from tests/support', () => {
     expect(importBoundaryErrors('demo.ts', "import './tests/helper.ts'", root, new Set(['demo.ts']))).toHaveLength(2);
   });
-  test('allows engine-local and public visual imports', () => {
+  test('allows engine-local, generated worker clients, and public visual imports', () => {
     expect(importBoundaryErrors('engine/runtime.ts', "import './frame.ts'", root, new Set())).toEqual([]);
+    expect(importBoundaryErrors('engine/runtime.ts', "import '../meshopt.client.ts'", root, new Set())).toEqual([]);
     expect(importBoundaryErrors('demo.ts', "import './engine/index.ts'", root, new Set(['demo.ts']))).toEqual([]);
   });
 });
@@ -120,6 +121,20 @@ describe('demo architecture scanner', () => {
       'AG-DEMO-001', 'AG-DEMO-002', 'AG-DEMO-004', 'AG-DEMO-005',
       'AG-DEMO-006', 'AG-DEMO-010', 'AG-DEMO-013', 'AG-DEMO-015', 'AG-DEMO-016',
     ]) expect(rules.has(rule)).toBe(true);
+  });
+
+  test('rejects renderer extension hooks and raw RPC worker assembly', () => {
+    const findings = scanTypeScript(`
+      import { MeshoptClient } from './meshopt.client.ts';
+      const info = host.renderer.afterglowAdapterInfo;
+      device.createShaderModule = compile;
+      const rpc = await Rpc.create(options);
+      const texture = new TextureClient(rpc);
+      const meshopt = await MeshoptClient.spawnThreaded();
+    `, 'hacks.ts');
+    const rules = new Set(findings.map((finding) => finding.rule));
+    expect(rules.has('AG-DEMO-005')).toBe(true);
+    expect(rules.has('AG-DEMO-017')).toBe(true);
   });
 
   test('allows explicit subsystem API barrels but rejects implementation modules', () => {

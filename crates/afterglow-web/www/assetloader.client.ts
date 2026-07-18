@@ -2,6 +2,7 @@
 // Source trait: AssetLoader
 import { RpcTransport, concat, decodeBytes, decodeU64, encodeString, encodeU32, encodeU64 } from './codec.ts';
 import { AsyncWorker, asyncWorkerImports } from './async-worker.ts';
+import { Rpc } from './rpc.ts';
 
 export class AssetLoaderClient {
   private rpc: RpcTransport;
@@ -22,8 +23,19 @@ export class AssetLoaderClient {
     return new AssetLoaderClient(driver);
   }
 
-  /// Drive the executor + resolve pending promises. Call each frame.
-  poll(): void { (this.rpc as AsyncWorker).poll(); }
+  /// Spawn the service in a real Web Worker using the shared-ring transport.
+  static async spawnThreaded(opts: { mainWasmUrl?: string; workerJsUrl?: string; workerWasmUrl?: string; timeoutMs?: number } = {}): Promise<AssetLoaderClient> {
+    const rpc = await Rpc.create({
+      mainWasmUrl: opts.mainWasmUrl ?? 'afterglow_web.wasm',
+      workerJsUrl: opts.workerJsUrl ?? 'worker.js',
+      workerWasmUrl: opts.workerWasmUrl ?? 'assetloader.wasm',
+      timeoutMs: opts.timeoutMs,
+    });
+    return new AssetLoaderClient(rpc);
+  }
+
+  /// Drive a locally instantiated async service. Threaded clients do not require polling.
+  poll(): void { this.rpc.poll?.(); }
 
   constructor(rpc: RpcTransport) { this.rpc = rpc; }
 

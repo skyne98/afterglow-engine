@@ -1,76 +1,71 @@
 import * as THREE from 'three/webgpu';
+import { MeshoptClient } from '../meshopt.client.ts';
 import {
-  BIG_MAGIC, BIG_VERSION, createFetchRangeLoader, parseBigHeader,
+  createFetchRangeLoader, readBigHeader,
   type ChunkInfo, type FetchRangeLoader,
 } from './big-parser.ts';
 
 export interface MeshoptVertexDecoder {
   decodeVertexBuffer(buffer: Uint8Array, vertexCount: number, vertexSize: number): Promise<Uint8Array>;
 }
-export interface OwnedMeshoptVertexDecoder {
-  readonly decoder: MeshoptVertexDecoder;
+export interface OwnedMeshoptVertexDecoder extends MeshoptVertexDecoder {
   close(): void | Promise<void>;
 }
-export interface StaticLodSessionOptions {
+export interface StaticMeshLoadOptions {
   containerPath: string;
   assetName: string;
   maxHeaderBytes: number;
-  createDecoder(): Promise<OwnedMeshoptVertexDecoder>;
   source?: FetchRangeLoader;
+  /** Test/platform injection; games use the engine-owned default worker. */
+  createDecoder?(): Promise<OwnedMeshoptVertexDecoder>;
 }
 export interface StaticLodLevel {
   readonly geometry: THREE.BufferGeometry;
   readonly triangleCount: number;
 }
 
-/** Bootstrap owner for one offline-cooked static LOD chain. */
-export class StaticLodSession {
-  private closed = false;
-  private constructor(
-    readonly levels: readonly StaticLodLevel[],
-    private readonly ownedDecoder: OwnedMeshoptVertexDecoder,
-  ) {}
-
-  static async open(options: StaticLodSessionOptions): Promise<StaticLodSession> {
-    if (!options.containerPath || !options.assetName) throw new Error('static LOD source and asset names are required');
-    if (!Number.isSafeInteger(options.maxHeaderBytes) || options.maxHeaderBytes < 16)
-      throw new RangeError('static LOD maxHeaderBytes must be at least 16');
-    const source = options.source ?? createFetchRangeLoader();
-    const prefix = await source.read(options.containerPath, 0, 16);
-    if (prefix.byteLength !== 16) throw new Error('static LOD container prefix is truncated');
-    const view = new DataView(prefix.buffer, prefix.byteOffset, 16);
-    if (view.getUint32(0, true) !== BIG_MAGIC || view.getUint32(4, true) !== BIG_VERSION)
-      throw new Error('static LOD container version is unsupported');
-    const dataOffset = Number(view.getBigUint64(8, true));
-    if (!Number.isSafeInteger(dataOffset) || dataOffset < 16 || dataOffset > options.maxHeaderBytes)
-      throw new RangeError('static LOD header exceeds configured capacity');
-    const headerBytes = await source.read(options.containerPath, 0, dataOffset);
-    const { header } = parseBigHeader(headerBytes);
-    const asset = header.assets.find((candidate) => candidate.name === options.assetName);
-    if (!asset || asset.assetType !== 'Mesh') throw new Error(`static LOD asset not found: ${options.assetName}`);
-    if (asset.chunks.length < 2) throw new Error('static LOD asset requires at least two levels');
-    const chunks = asset.chunks.slice().sort((left, right) => left.lodLevel - right.lodLevel);
-    for (let index = 0; index < chunks.length; index++) {
-      if (chunks[index]?.lodLevel !== index) throw new Error('static LOD levels must be contiguous');
-    }
-    const owned = await options.createDecoder();
-    const levels: StaticLodLevel[] = [];
-    try {
-      for (const chunk of chunks) levels.push(await decodeLevel(source, options.containerPath, chunk, owned.decoder));
-      return new StaticLodSession(levels, owned);
-    } catch (error) {
-      for (const level of levels) level.geometry.dispose();
-      try { await owned.close(); }
-      catch (closeError) { if (error instanceof Error && error.cause === undefined) error.cause = closeError; }
-      throw error;
-    }
-  }
-
-  async close(): Promise<void> {
-    if (this.closed) return;
-    this.closed = true;
+/** Decoded static mesh data. Worker lifetime ends before this asset is returned. */
+export class StaticMeshAsset {
+  private disposed = false;
+  constructor(readonly levels: readonly StaticLodLevel[]) {}
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
     for (const level of this.levels) level.geometry.dispose();
-    await this.ownedDecoder.close();
+  }
+}
+
+async function createDefaultDecoder(): Promise<OwnedMeshoptVertexDecoder> {
+  return MeshoptClient.spawnThreaded({ workerWasmUrl: 'meshopt.wasm', timeoutMs: 10_000 });
+}
+
+/** Load one offline-cooked static mesh and release its bootstrap decoder. */
+export async function loadStaticMesh(options: StaticMeshLoadOptions): Promise<StaticMeshAsset> {
+  if (!options.containerPath || !options.assetName) throw new Error('static mesh source and asset names are required');
+  const source = options.source ?? createFetchRangeLoader();
+  const header = await readBigHeader(source, options.containerPath, options.maxHeaderBytes);
+  const entry = header.assets.find((candidate) => candidate.name === options.assetName);
+  if (!entry || entry.assetType !== 'Mesh') throw new Error(`static mesh asset not found: ${options.assetName}`);
+  if (entry.chunks.length < 2) throw new Error('static mesh asset requires at least two levels');
+  const chunks = entry.chunks.slice().sort((left, right) => left.lodLevel - right.lodLevel);
+  for (let index = 0; index < chunks.length; index++) {
+    if (chunks[index]?.lodLevel !== index) throw new Error('static mesh levels must be contiguous');
+  }
+  const decoder = await (options.createDecoder ?? createDefaultDecoder)();
+  const levels: StaticLodLevel[] = [];
+  let closeAttempted = false;
+  try {
+    for (const chunk of chunks) levels.push(await decodeLevel(source, options.containerPath, chunk, decoder));
+    closeAttempted = true;
+    await decoder.close();
+    return new StaticMeshAsset(levels);
+  } catch (error) {
+    for (const level of levels) level.geometry.dispose();
+    if (!closeAttempted) {
+      try { await decoder.close(); }
+      catch (closeError) { if (error instanceof Error && error.cause === undefined) error.cause = closeError; }
+    }
+    throw error;
   }
 }
 

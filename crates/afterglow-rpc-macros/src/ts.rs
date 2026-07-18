@@ -253,6 +253,7 @@ pub fn generate_client(tr: &ItemTrait, is_async: bool) -> syn::Result<String> {
         lines.push(
             "import { AsyncWorker, asyncWorkerImports } from './async-worker.ts';".to_string(),
         );
+        lines.push("import { Rpc } from './rpc.ts';".to_string());
     } else {
         lines.push("import { Rpc } from './rpc.ts';".to_string());
     }
@@ -285,8 +286,19 @@ pub fn generate_client(tr: &ItemTrait, is_async: bool) -> syn::Result<String> {
             format!("    return new {client_name}(driver);"),
             format!("  }}"),
             String::new(),
-            format!("  /// Drive the executor + resolve pending promises. Call each frame."),
-            format!("  poll(): void {{ (this.rpc as AsyncWorker).poll(); }}"),
+            format!("  /// Spawn the service in a real Web Worker using the shared-ring transport."),
+            format!("  static async spawnThreaded(opts: {{ mainWasmUrl?: string; workerJsUrl?: string; workerWasmUrl?: string; timeoutMs?: number }} = {{}}): Promise<{client_name}> {{"),
+            format!("    const rpc = await Rpc.create({{"),
+            format!("      mainWasmUrl: opts.mainWasmUrl ?? 'afterglow_web.wasm',"),
+            format!("      workerJsUrl: opts.workerJsUrl ?? 'worker.js',"),
+            format!("      workerWasmUrl: opts.workerWasmUrl ?? '{wasm_default}',"),
+            format!("      timeoutMs: opts.timeoutMs,"),
+            format!("    }});"),
+            format!("    return new {client_name}(rpc);"),
+            format!("  }}"),
+            String::new(),
+            format!("  /// Drive a locally instantiated async service. Threaded clients do not require polling."),
+            format!("  poll(): void {{ this.rpc.poll?.(); }}"),
         ]);
     } else {
         // Sync: static spawn() that uses Rpc.create (the blocking ring transport).

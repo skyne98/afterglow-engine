@@ -1,19 +1,27 @@
 # `afterglow-assets` + `afterglow-assets-worker` API — streaming assets + async loader
 
-> Status: working; API checked against the 2026-07-17 source.
+> Status: working; API checked against the 2026-07-18 source.
 
 ## Browser BIG asset session
 
 `afterglow-web/www/engine/big-asset-session.ts` provides `BigAssetSession`, the
 bootstrap owner for one seekable `.big` source. `open()` requires explicit
 `workerCount`, `transcodeQueueCapacity`, `maxHeaderBytes`, target GPU format, and
-a worker factory. It validates the 16-byte prefix and configured header bound
+a typed transcoder factory. It validates the 16-byte prefix and configured header bound
 before starting workers, parses the header once, constructs the direct raw-asset
 loader and VT page provider, and rolls workers back in reverse order after any
 startup failure.
 
-The public browser barrel is `engine/asset-api.ts`.
-`createAssetStore(meshopt, capacity, completionsPerPoll)` binds a fixed-capacity
+The public browser barrel is `engine/asset-api.ts`. The policy-free
+`readBigHeader(source, path, maxHeaderBytes)` primitive performs the shared
+bounded prefix/header read used by both VT/model archives and static meshes; no
+consumer duplicates container validation. The session creates the
+standard typed transcoder clients through `spawnThreaded()` and closes every
+client in reverse order. Games never construct `Rpc`, select worker scripts, or
+terminate raw transports. `createTranscoder` exists only as a platform/test
+injection boundary.
+`createAssetStore(capacity, completionsPerPoll)` starts and owns the standard
+mesh optimizer and binds a fixed-capacity
 `AssetStore` to the session's raw loader, so demos do not reconstruct container
 ownership. A session creates at most one `VirtualTextureStore`; a second request or a
 request after shutdown fails deterministically. Only one session-owned
@@ -30,10 +38,9 @@ const session = await BigAssetSession.open({
   workerCount: 4,
   transcodeQueueCapacity: 64,
   maxHeaderBytes: 2 * 1024 * 1024,
-  createWorker,
   cache,
 });
-const assets = session.createAssetStore(meshopt, 64, 8);
+const assets = await session.createAssetStore(64, 8);
 const store = session.createVirtualTextureStore(device, tuning);
 ```
 

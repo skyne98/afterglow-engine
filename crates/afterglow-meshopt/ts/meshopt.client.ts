@@ -2,6 +2,7 @@
 // Source trait: Meshopt
 import { RpcTransport, concat, decodeBytes, decodeF32Vec, decodeU16, decodeU32Vec, encodeBytes, encodeF32, encodeF32Vec, encodeU32, encodeU32Vec } from './codec.ts';
 import { AsyncWorker, asyncWorkerImports } from './async-worker.ts';
+import { Rpc } from './rpc.ts';
 
 export class MeshoptClient {
   private rpc: RpcTransport;
@@ -22,8 +23,19 @@ export class MeshoptClient {
     return new MeshoptClient(driver);
   }
 
-  /// Drive the executor + resolve pending promises. Call each frame.
-  poll(): void { (this.rpc as AsyncWorker).poll(); }
+  /// Spawn the service in a real Web Worker using the shared-ring transport.
+  static async spawnThreaded(opts: { mainWasmUrl?: string; workerJsUrl?: string; workerWasmUrl?: string; timeoutMs?: number } = {}): Promise<MeshoptClient> {
+    const rpc = await Rpc.create({
+      mainWasmUrl: opts.mainWasmUrl ?? 'afterglow_web.wasm',
+      workerJsUrl: opts.workerJsUrl ?? 'worker.js',
+      workerWasmUrl: opts.workerWasmUrl ?? 'meshopt.wasm',
+      timeoutMs: opts.timeoutMs,
+    });
+    return new MeshoptClient(rpc);
+  }
+
+  /// Drive a locally instantiated async service. Threaded clients do not require polling.
+  poll(): void { this.rpc.poll?.(); }
 
   constructor(rpc: RpcTransport) { this.rpc = rpc; }
 

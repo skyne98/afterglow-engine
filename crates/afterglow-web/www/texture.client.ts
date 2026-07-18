@@ -2,6 +2,7 @@
 // Source trait: Texture
 import { RpcTransport, concat, decodeBytes, encodeBytes, encodeU32 } from './codec.ts';
 import { AsyncWorker, asyncWorkerImports } from './async-worker.ts';
+import { Rpc } from './rpc.ts';
 
 export class TextureClient {
   private rpc: RpcTransport;
@@ -22,8 +23,19 @@ export class TextureClient {
     return new TextureClient(driver);
   }
 
-  /// Drive the executor + resolve pending promises. Call each frame.
-  poll(): void { (this.rpc as AsyncWorker).poll(); }
+  /// Spawn the service in a real Web Worker using the shared-ring transport.
+  static async spawnThreaded(opts: { mainWasmUrl?: string; workerJsUrl?: string; workerWasmUrl?: string; timeoutMs?: number } = {}): Promise<TextureClient> {
+    const rpc = await Rpc.create({
+      mainWasmUrl: opts.mainWasmUrl ?? 'afterglow_web.wasm',
+      workerJsUrl: opts.workerJsUrl ?? 'worker.js',
+      workerWasmUrl: opts.workerWasmUrl ?? 'texture.wasm',
+      timeoutMs: opts.timeoutMs,
+    });
+    return new TextureClient(rpc);
+  }
+
+  /// Drive a locally instantiated async service. Threaded clients do not require polling.
+  poll(): void { this.rpc.poll?.(); }
 
   constructor(rpc: RpcTransport) { this.rpc = rpc; }
 

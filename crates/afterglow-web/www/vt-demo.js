@@ -59367,6 +59367,7 @@ function gpuErrorTarget(device) {
 class RendererHost {
   renderer;
   device;
+  adapterInfo;
   sealMonitor;
   timestampSupported;
   renderSubmissions = 0;
@@ -59383,11 +59384,19 @@ class RendererHost {
   onGpuError;
   unsubscribeResize = null;
   disposed = false;
+  shaderInspectionActive = false;
   constructor(renderer, options) {
     if (!renderer.domElement || !renderer.setPixelRatio || !renderer.setSize || !renderer.compileAsync || !renderer.render)
       throw new Error("Three WebGPU renderer is missing a required host method");
     this.renderer = renderer;
     this.device = requireGpuDevice(renderer);
+    const adapter = renderer.afterglowAdapterInfo;
+    this.adapterInfo = Object.freeze({
+      vendor: adapter?.vendor,
+      architecture: adapter?.architecture,
+      device: adapter?.device,
+      description: adapter?.description
+    });
     this.scene = options.scene;
     this.camera = options.camera;
     this.diagnostics = options.diagnostics;
@@ -59456,6 +59465,26 @@ class RendererHost {
     if (this.disposed)
       throw new Error("cannot warm a disposed renderer host");
     await this.renderer.compileAsync(this.scene, this.camera);
+  }
+  async inspectShaderModulesDuring(operation, inspect) {
+    if (this.disposed)
+      throw new Error("cannot inspect shaders on a disposed renderer host");
+    if (this.sealMonitor.isSealed)
+      throw new Error("shader inspection is bootstrap-only");
+    if (this.shaderInspectionActive)
+      throw new Error("shader inspection is already active");
+    const original = this.device.createShaderModule;
+    this.shaderInspectionActive = true;
+    this.device.createShaderModule = (descriptor) => {
+      inspect(descriptor.code);
+      return original.call(this.device, descriptor);
+    };
+    try {
+      await operation();
+    } finally {
+      this.device.createShaderModule = original;
+      this.shaderInspectionActive = false;
+    }
   }
   seal() {
     this.sealMonitor.seal();

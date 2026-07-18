@@ -30,6 +30,15 @@ export interface AssetLoader {
 
 export type AssetParser<T> = (bytes: Uint8Array) => Promise<T> | T;
 
+export interface MeshOptimizer {
+  optimizeVertexCache(indices: Uint32Array, vertexCount: number): Promise<Uint32Array>;
+  optimizeOverdraw(indices: Uint32Array, positions: Float32Array, stride: number, threshold: number): Promise<Uint32Array>;
+  simplifyWithUvs(indices: Uint32Array, positions: Float32Array, posStride: number, uvs: Float32Array, uvStride: number, uvWeight: number, targetIndexCount: number, targetError: number): Promise<Uint32Array>;
+  analyzeVertexCache(indices: Uint32Array, vertexCount: number): Promise<Float32Array>;
+  encodeIndexBuffer(indices: Uint32Array, vertexCount: number): Promise<Uint8Array>;
+  poll(): void;
+}
+
 // --- constants -----------------------------------------------------------
 
 const MAX_SINGLE_LOAD = 1 << 20;
@@ -295,29 +304,15 @@ export class AssetStore {
   private assetCount = 0;
   private readyCount = 0;
 
-  /** The meshopt worker (structural type — matches MeshoptClient). */
-  private readonly meshopt?: {
-    optimizeVertexCache(indices: Uint32Array, vertexCount: number): Promise<Uint32Array>;
-    optimizeOverdraw(indices: Uint32Array, positions: Float32Array, stride: number, threshold: number): Promise<Uint32Array>;
-    simplifyWithUvs(indices: Uint32Array, positions: Float32Array, posStride: number, uvs: Float32Array, uvStride: number, uvWeight: number, targetIndexCount: number, targetError: number): Promise<Uint32Array>;
-    analyzeVertexCache(indices: Uint32Array, vertexCount: number): Promise<Float32Array>;
-    encodeIndexBuffer(indices: Uint32Array, vertexCount: number): Promise<Uint8Array>;
-    poll(): void;
-  };
+  /** Optional policy-free mesh processor owned by the caller. */
+  private readonly meshopt: MeshOptimizer | undefined;
 
   private loader: AssetLoader;
   private vtStore: VirtualTextureStore | null = null;
 
   constructor(
     loader: AssetLoader,
-    meshopt?: {
-      optimizeVertexCache(indices: Uint32Array, vertexCount: number): Promise<Uint32Array>;
-      optimizeOverdraw(indices: Uint32Array, positions: Float32Array, stride: number, threshold: number): Promise<Uint32Array>;
-      simplifyWithUvs(indices: Uint32Array, positions: Float32Array, posStride: number, uvs: Float32Array, uvStride: number, uvWeight: number, targetIndexCount: number, targetError: number): Promise<Uint32Array>;
-      analyzeVertexCache(indices: Uint32Array, vertexCount: number): Promise<Float32Array>;
-      encodeIndexBuffer(indices: Uint32Array, vertexCount: number): Promise<Uint8Array>;
-      poll(): void;
-    },
+    meshopt?: MeshOptimizer,
     capacity = DEFAULT_ASSET_CAPACITY,
     private readonly maxCompletionsPerPoll = 32,
   ) {

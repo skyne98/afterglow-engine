@@ -46,7 +46,11 @@ describe('pipeline-packed rigged VT demo', () => {
     const source = await Bun.file(new URL('../rigged-vt-demo.ts', import.meta.url)).text();
     expect(source).toContain('EngineRuntime.forScene({');
     expect(source).toContain('await BigAssetSession.open({');
-    expect(source).toContain('session.createAssetStore(meshopt, 4, 4)');
+    expect(source).not.toContain('createTranscoder');
+    expect(source).not.toContain('TextureClient');
+    expect(source).not.toContain('Rpc.create(');
+    expect(source).toContain('await session.createAssetStore(4, 4)');
+    expect(source).not.toContain('MeshoptClient');
     expect(source).toContain("assetStore.loadOptimizedGLTF('model.glb', new GLTFLoader())");
     expect(source).toContain("assetStore.loadOptimizedGLTF('model-2.glb', new GLTFLoader())");
     expect(source).toContain('VirtualTextureFeedbackCoordinator(');

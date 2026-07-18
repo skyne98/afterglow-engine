@@ -1,5 +1,9 @@
 import { describe, expect, test } from 'bun:test';
-import { BigAssetSession, type OwnedTextureTranscoder } from './big-asset-session.ts';
+import {
+  BigAssetSession,
+  type OwnedMeshOptimizer,
+  type OwnedTextureTranscoder,
+} from './big-asset-session.ts';
 import type { FetchRangeLoader } from './big-parser.ts';
 
 function minimalContainer(dataOffset = 19): Uint8Array {
@@ -23,11 +27,23 @@ function source(bytes: Uint8Array): FetchRangeLoader {
 
 function worker(index: number, events: string[], closeFailure = false): OwnedTextureTranscoder {
   return {
-    worker: { async transcode(data) { return data; } },
+    async transcode(data) { return data; },
     close() {
       events.push(`close-${index}`);
       if (closeFailure) throw new Error(`close failure ${index}`);
     },
+  };
+}
+
+function optimizer(events: string[]): OwnedMeshOptimizer {
+  return {
+    async optimizeVertexCache(indices) { return indices; },
+    async optimizeOverdraw(indices) { return indices; },
+    async simplifyWithUvs(indices) { return indices; },
+    async analyzeVertexCache() { return new Float32Array(4); },
+    async encodeIndexBuffer(indices) { return new Uint8Array(indices.buffer.slice(0)); },
+    poll() {},
+    close() { events.push('close-mesh'); },
   };
 }
 
@@ -41,19 +57,20 @@ describe('BigAssetSession', () => {
       transcodeQueueCapacity: 8,
       maxHeaderBytes: 1024,
       source: source(minimalContainer()),
-      async createWorker(index) { events.push(`open-${index}`); return worker(index, events); },
+      async createTranscoder(index) { events.push(`open-${index}`); return worker(index, events); },
+      async createMeshOptimizer() { events.push('open-mesh'); return optimizer(events); },
     });
     expect(session.header.version).toBe(5);
     expect(session.stats.workersStarted).toBe(2);
-    const assets = session.createAssetStore(undefined, 3, 2);
+    const assets = await session.createAssetStore(3, 2);
     expect(assets.assetLoader).toBe(session.rawAssets);
-    expect(() => session.createAssetStore()).toThrow('already created');
+    await expect(session.createAssetStore()).rejects.toThrow('already created');
     const store = session.createVirtualTextureStore();
     expect(store).toBeDefined();
     expect(() => session.createVirtualTextureStore()).toThrow('already created');
     await session.close();
     await session.close();
-    expect(events).toEqual(['open-0', 'open-1', 'close-1', 'close-0']);
+    expect(events).toEqual(['open-0', 'open-1', 'open-mesh', 'close-mesh', 'close-1', 'close-0']);
     expect(session.stats.closed).toBe(true);
     expect(() => session.createVirtualTextureStore()).toThrow('closed');
   });
@@ -64,7 +81,7 @@ describe('BigAssetSession', () => {
       containerPath: 'bad.big', format: 4, workerCount: 1,
       transcodeQueueCapacity: 1, maxHeaderBytes: 64,
       source: source(minimalContainer(128)),
-      async createWorker() { workers++; return worker(0, []); },
+      async createTranscoder() { workers++; return worker(0, []); },
     })).rejects.toThrow('exceeds configured capacity');
     expect(workers).toBe(0);
   });
@@ -75,7 +92,7 @@ describe('BigAssetSession', () => {
       containerPath: 'scene.big', format: 4, workerCount: 3,
       transcodeQueueCapacity: 2, maxHeaderBytes: 1024,
       source: source(minimalContainer()),
-      async createWorker(index) {
+      async createTranscoder(index) {
         events.push(`open-${index}`);
         if (index === 1) throw new Error('worker startup failed');
         return worker(index, events);
@@ -90,7 +107,7 @@ describe('BigAssetSession', () => {
       containerPath: 'scene.big', format: 4, workerCount: 2,
       transcodeQueueCapacity: 2, maxHeaderBytes: 1024,
       source: source(minimalContainer()),
-      async createWorker(index) { return worker(index, events, index === 1); },
+      async createTranscoder(index) { return worker(index, events, index === 1); },
     });
     await expect(session.close()).rejects.toThrow('close failure 1');
     expect(events).toEqual(['close-1', 'close-0']);
@@ -106,7 +123,7 @@ describe('BigAssetSession', () => {
     await expect(BigAssetSession.open({
       containerPath: 'scene.big', format: 4, workerCount: 0,
       transcodeQueueCapacity: 1, maxHeaderBytes: 1024,
-      source: badSource, async createWorker() { return worker(0, []); },
+      source: badSource, async createTranscoder() { return worker(0, []); },
     })).rejects.toThrow('workerCount');
     expect(reads).toBe(0);
   });

@@ -142,4 +142,6 @@ JavaScript specifiers in authored TypeScript. Unsupported Rust type shapes are
 rejected during generation rather than silently falling back to untyped values.
 Every generated client also exposes idempotent `close()`; transports with a
 `terminate()` operation stop their owned worker, while local transports safely
-no-op.
+no-op. Async clients provide both local poll-model `spawn()` and
+`spawnThreaded()` for a real Web Worker over the shared-ring transport. A
+threaded client does not require `poll()`.

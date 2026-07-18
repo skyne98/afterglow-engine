@@ -21,8 +21,9 @@ single static triangle primitive into compressed 100%, 50%, 25%, and 10% mesh
 records. Skins and morph targets are rejected rather than simplified with the
 wrong semantics.
 
-At bootstrap, `StaticLodSession` validates and decodes the fixed chain. `LodSet`
-selects one precreated mesh from normalized projected coverage, with explicit
+At bootstrap, `loadStaticMesh()` validates and decodes the fixed chain, closes
+its decoder, and returns a disposable `StaticMeshAsset` containing only fixed
+geometry levels. `LodSet` selects one precreated mesh from normalized projected coverage, with explicit
 capacity and hysteresis. Selection performs no allocation and leaves exactly
 one level visible. The canonical LOD demo uses one CC0 Avocado model and its GPU
 regression verifies transitions `0,1,2,3,2,1,0` in both camera directions.

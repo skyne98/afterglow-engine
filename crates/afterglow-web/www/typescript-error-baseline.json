@@ -5,7 +5,7 @@
     {
       "id": "9f3088763872f83cff0e",
       "file": "assetloader.client.ts",
-      "line": 19,
+      "line": 21,
       "column": 12,
       "code": 2339,
       "message": "Property 'w' does not exist on type 'AsyncWorker'.",
@@ -14,7 +14,7 @@
     {
       "id": "8102703d24acfce0670b",
       "file": "assetloader.client.ts",
-      "line": 20,
+      "line": 22,
       "column": 5,
       "code": 2722,
       "message": "Cannot invoke an object which is possibly 'undefined'.",
@@ -23,7 +23,7 @@
     {
       "id": "3f76a2055b44220ef2cc",
       "file": "assetloader.client.ts",
-      "line": 20,
+      "line": 22,
       "column": 22,
       "code": 2349,
       "message": "This expression is not callable. No constituent of type 'ExportValue' is callable.",
@@ -32,7 +32,7 @@
     {
       "id": "fcab348c857c7a640b67",
       "file": "assetloader.client.ts",
-      "line": 21,
+      "line": 23,
       "column": 34,
       "code": 2345,
       "message": "Argument of type 'AsyncWorker' is not assignable to parameter of type 'RpcTransport'. The types returned by 'call(...)' are incompatible between these types. Type 'Promise<unknown>' is not assignable to type 'Promise<Uint8Array<ArrayBufferLike>>'. Type 'unknown' is not assignable to type 'Uint8Array<ArrayBufferLike>'.",
@@ -1715,7 +1715,7 @@
     {
       "id": "fd738fb113a95ab36904",
       "file": "codec.ts",
-      "line": 39,
+      "line": 40,
       "column": 11,
       "code": 18048,
       "message": "'b' is possibly 'undefined'.",
@@ -1724,7 +1724,7 @@
     {
       "id": "b20c23f5a38fbd205be2",
       "file": "codec.ts",
-      "line": 40,
+      "line": 41,
       "column": 11,
       "code": 18048,
       "message": "'b' is possibly 'undefined'.",
@@ -1733,7 +1733,7 @@
     {
       "id": "8a6f4da9871c56081f25",
       "file": "codec.ts",
-      "line": 74,
+      "line": 75,
       "column": 11,
       "code": 2322,
       "message": "Type 'number | undefined' is not assignable to type 'number'. Type 'undefined' is not assignable to type 'number'.",
@@ -1742,7 +1742,7 @@
     {
       "id": "d079557a90f496cd237c",
       "file": "codec.ts",
-      "line": 106,
+      "line": 107,
       "column": 7,
       "code": 18048,
       "message": "'v' is possibly 'undefined'.",
@@ -1751,7 +1751,7 @@
     {
       "id": "09e23761740f09f03e0a",
       "file": "codec.ts",
-      "line": 106,
+      "line": 107,
       "column": 16,
       "code": 18048,
       "message": "'v' is possibly 'undefined'.",
@@ -1760,7 +1760,7 @@
     {
       "id": "6fb698044c07992c3bf8",
       "file": "codec.ts",
-      "line": 107,
+      "line": 108,
       "column": 11,
       "code": 2322,
       "message": "Type 'number | undefined' is not assignable to type 'number'. Type 'undefined' is not assignable to type 'number'.",
@@ -1769,7 +1769,7 @@
     {
       "id": "230613d65aa60310d5e5",
       "file": "codec.ts",
-      "line": 193,
+      "line": 194,
       "column": 61,
       "code": 2345,
       "message": "Argument of type 'number | undefined' is not assignable to parameter of type 'number'. Type 'undefined' is not assignable to type 'number'.",
@@ -1778,7 +1778,7 @@
     {
       "id": "46aa3a3d51017d9f9e1a",
       "file": "codec.ts",
-      "line": 211,
+      "line": 212,
       "column": 61,
       "code": 2345,
       "message": "Argument of type 'number | undefined' is not assignable to parameter of type 'number'. Type 'undefined' is not assignable to type 'number'.",
@@ -1787,7 +1787,7 @@
     {
       "id": "bfe43fabf41b2d85fa9f",
       "file": "codec.ts",
-      "line": 229,
+      "line": 230,
       "column": 64,
       "code": 2345,
       "message": "Argument of type 'number | undefined' is not assignable to parameter of type 'number'. Type 'undefined' is not assignable to type 'number'.",
@@ -1841,25 +1841,16 @@
     {
       "id": "a103ad4b834813dde23e",
       "file": "engine/asset-store.ts",
-      "line": 109,
+      "line": 118,
       "column": 52,
       "code": 2322,
       "message": "Type 'Uint8Array<ArrayBufferLike>' is not assignable to type 'BlobPart'. Type 'Uint8Array<ArrayBufferLike>' is not assignable to type 'ArrayBufferView<ArrayBuffer>'. Types of property 'buffer' are incompatible. Type 'ArrayBufferLike' is not assignable to type 'ArrayBuffer'. Property 'resize' is missing in type 'SharedArrayBuffer' but required in type 'ArrayBuffer'.",
       "source": "bytes"
     },
     {
-      "id": "82c1d45698c3546934f4",
-      "file": "engine/asset-store.ts",
-      "line": 328,
-      "column": 5,
-      "code": 2412,
-      "message": "Type '{ optimizeVertexCache(indices: Uint32Array<ArrayBufferLike>, vertexCount: number): Promise<Uint32Array<ArrayBufferLike>>; ... 4 more ...; poll(): void; } | undefined' is not assignable to type '{ optimizeVertexCache(indices: Uint32Array<ArrayBufferLike>, vertexCount: number): Promise<Uint32Array<ArrayBufferLike>>; ... 4 more ...; poll(): void; }' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the type of the target. Type 'undefined' is not assignable to type '{ optimizeVertexCache(indices: Uint32Array<ArrayBufferLike>, vertexCount: number): Promise<Uint32Array<ArrayBufferLike>>; ... 4 more ...; poll(): void; }'.",
-      "source": "this.meshopt"
-    },
-    {
       "id": "d2a7fc7f103f6d2eddce",
       "file": "engine/asset-store.ts",
-      "line": 390,
+      "line": 385,
       "column": 35,
       "code": 2538,
       "message": "Type 'undefined' cannot be used as an index type.",
@@ -1868,7 +1859,7 @@
     {
       "id": "39782949d293d30a56ff",
       "file": "engine/asset-store.ts",
-      "line": 391,
+      "line": 386,
       "column": 30,
       "code": 2538,
       "message": "Type 'undefined' cannot be used as an index type.",
@@ -1877,7 +1868,7 @@
     {
       "id": "02d50ff19ecd739f867b",
       "file": "engine/asset-store.ts",
-      "line": 400,
+      "line": 395,
       "column": 21,
       "code": 2538,
       "message": "Type 'undefined' cannot be used as an index type.",
@@ -1886,7 +1877,7 @@
     {
       "id": "b9625d16b89193f1d32a",
       "file": "engine/asset-store.ts",
-      "line": 404,
+      "line": 399,
       "column": 21,
       "code": 2538,
       "message": "Type 'undefined' cannot be used as an index type.",
@@ -1895,7 +1886,7 @@
     {
       "id": "6e8aa87cec9b04a486d3",
       "file": "engine/asset-store.ts",
-      "line": 405,
+      "line": 400,
       "column": 36,
       "code": 2345,
       "message": "Argument of type 'number | undefined' is not assignable to parameter of type 'number'. Type 'undefined' is not assignable to type 'number'.",
@@ -1904,7 +1895,7 @@
     {
       "id": "522ef5bf48c0cfb43c43",
       "file": "engine/asset-store.ts",
-      "line": 432,
+      "line": 427,
       "column": 21,
       "code": 2532,
       "message": "Object is possibly 'undefined'.",
@@ -1913,7 +1904,7 @@
     {
       "id": "91491218b12c15e625c2",
       "file": "engine/asset-store.ts",
-      "line": 563,
+      "line": 558,
       "column": 9,
       "code": 2322,
       "message": "Type 'number | undefined' is not assignable to type 'number'. Type 'undefined' is not assignable to type 'number'.",
@@ -1922,7 +1913,7 @@
     {
       "id": "24de02c7c2309a49fcd4",
       "file": "engine/asset-store.ts",
-      "line": 564,
+      "line": 559,
       "column": 9,
       "code": 2322,
       "message": "Type 'number | undefined' is not assignable to type 'number'. Type 'undefined' is not assignable to type 'number'.",
@@ -1931,7 +1922,7 @@
     {
       "id": "9d740842ccf4bc421d4a",
       "file": "engine/asset-store.ts",
-      "line": 698,
+      "line": 693,
       "column": 11,
       "code": 2412,
       "message": "Type '{ originalTriangles: number; originalAcmr: number | undefined; optimizedAcmr: number | undefined; compressedIndexBytes: number; uncompressedIndexBytes: number; } | undefined' is not assignable to type 'MeshStats | undefined' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the type of the target.",
@@ -1940,7 +1931,7 @@
     {
       "id": "681aa7972dff1619330b",
       "file": "engine/asset-store.ts",
-      "line": 716,
+      "line": 711,
       "column": 34,
       "code": 2322,
       "message": "Type 'number | undefined' is not assignable to type 'number'. Type 'undefined' is not assignable to type 'number'.",
@@ -1949,7 +1940,7 @@
     {
       "id": "da0c92f5f14c0a4b28a1",
       "file": "engine/asset-store.ts",
-      "line": 716,
+      "line": 711,
       "column": 48,
       "code": 2322,
       "message": "Type 'number | undefined' is not assignable to type 'number'. Type 'undefined' is not assignable to type 'number'.",
@@ -1958,7 +1949,7 @@
     {
       "id": "a3cde88cfe59935c29da",
       "file": "engine/asset-store.ts",
-      "line": 751,
+      "line": 746,
       "column": 17,
       "code": 2532,
       "message": "Object is possibly 'undefined'.",
@@ -1967,7 +1958,7 @@
     {
       "id": "aa6574b552674a08d4a1",
       "file": "engine/asset-store.ts",
-      "line": 763,
+      "line": 758,
       "column": 5,
       "code": 2532,
       "message": "Object is possibly 'undefined'.",
@@ -1976,7 +1967,7 @@
     {
       "id": "07c49c6ad5048e817b4d",
       "file": "engine/asset-store.ts",
-      "line": 796,
+      "line": 791,
       "column": 7,
       "code": 2532,
       "message": "Object is possibly 'undefined'.",
@@ -6701,7 +6692,7 @@
     {
       "id": "83f715bb0c7e5053a27a",
       "file": "meshopt.client.ts",
-      "line": 19,
+      "line": 21,
       "column": 12,
       "code": 2339,
       "message": "Property 'w' does not exist on type 'AsyncWorker'.",
@@ -6710,7 +6701,7 @@
     {
       "id": "86816b9c189bb4dec4bd",
       "file": "meshopt.client.ts",
-      "line": 20,
+      "line": 22,
       "column": 5,
       "code": 2722,
       "message": "Cannot invoke an object which is possibly 'undefined'.",
@@ -6719,7 +6710,7 @@
     {
       "id": "68135b84d56de0e5dd1f",
       "file": "meshopt.client.ts",
-      "line": 20,
+      "line": 22,
       "column": 22,
       "code": 2349,
       "message": "This expression is not callable. No constituent of type 'ExportValue' is callable.",
@@ -6728,7 +6719,7 @@
     {
       "id": "ae5630fe71495c0c7673",
       "file": "meshopt.client.ts",
-      "line": 21,
+      "line": 23,
       "column": 30,
       "code": 2345,
       "message": "Argument of type 'AsyncWorker' is not assignable to parameter of type 'RpcTransport'. The types returned by 'call(...)' are incompatible between these types. Type 'Promise<unknown>' is not assignable to type 'Promise<Uint8Array<ArrayBufferLike>>'. Type 'unknown' is not assignable to type 'Uint8Array<ArrayBufferLike>'.",
@@ -7601,7 +7592,7 @@
     {
       "id": "454439690b2731e6655d",
       "file": "texture.client.ts",
-      "line": 19,
+      "line": 21,
       "column": 12,
       "code": 2339,
       "message": "Property 'w' does not exist on type 'AsyncWorker'.",
@@ -7610,7 +7601,7 @@
     {
       "id": "d76d462be0323b618de6",
       "file": "texture.client.ts",
-      "line": 20,
+      "line": 22,
       "column": 5,
       "code": 2722,
       "message": "Cannot invoke an object which is possibly 'undefined'.",
@@ -7619,7 +7610,7 @@
     {
       "id": "923e71f79172e29802af",
       "file": "texture.client.ts",
-      "line": 20,
+      "line": 22,
       "column": 22,
       "code": 2349,
       "message": "This expression is not callable. No constituent of type 'ExportValue' is callable.",
@@ -7628,7 +7619,7 @@
     {
       "id": "9db78f836f0a84e0fc81",
       "file": "texture.client.ts",
-      "line": 21,
+      "line": 23,
       "column": 30,
       "code": 2345,
       "message": "Argument of type 'AsyncWorker' is not assignable to parameter of type 'RpcTransport'. The types returned by 'call(...)' are incompatible between these types. Type 'Promise<unknown>' is not assignable to type 'Promise<Uint8Array<ArrayBufferLike>>'. Type 'unknown' is not assignable to type 'Uint8Array<ArrayBufferLike>'.",

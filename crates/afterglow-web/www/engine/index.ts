@@ -4,7 +4,12 @@ export {
   type DiagnosticRecord,
 } from './diagnostics.ts';
 export { RenderAdapter, RenderAttachStatus } from './render-adapter.ts';
-export { RendererHost, type RendererHostOptions, type RendererViewport } from './renderer-host.ts';
+export {
+  RendererHost,
+  type GpuAdapterIdentity,
+  type RendererHostOptions,
+  type RendererViewport,
+} from './renderer-host.ts';
 export {
   EngineRuntime, RegistrationStatus, RuntimeState,
   type AnimationScheduler, type EngineFrameClient, type EngineRenderPass,

@@ -769,6 +769,19 @@ mod tests {
     }
 
     #[test]
+    fn ts_async_client_can_spawn_a_real_threaded_worker() {
+        let tr = parsed("pub trait Texture { async fn transcode(data: Vec<u8>) -> Vec<u8>; }");
+        let ts = crate::ts::generate_client(&tr, true).unwrap();
+        assert!(ts.contains("import { Rpc } from './rpc.ts';"), "{ts}");
+        assert!(ts.contains("static async spawnThreaded(opts:"), "{ts}");
+        assert!(
+            ts.contains("workerWasmUrl: opts.workerWasmUrl ?? 'texture.wasm'"),
+            "{ts}"
+        );
+        assert!(ts.contains("poll(): void { this.rpc.poll?.(); }"), "{ts}");
+    }
+
+    #[test]
     fn ts_handles_void_return() {
         let tr = parsed("pub trait Logger { fn log(msg: String); }");
         let ts = crate::ts::generate_client(&tr, false).unwrap();

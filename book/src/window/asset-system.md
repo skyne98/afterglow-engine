@@ -47,11 +47,15 @@ registers the path and throws if the configured asset capacity is exhausted.
 
 `BigAssetSession.open()` is the browser bootstrap owner for one `.big`
 container. It requires explicit worker count, transcode-queue capacity, and
-maximum header bytes; validates the header bound before spawning workers; owns
+maximum header bytes; validates the header bound before spawning its standard
+typed transcoder workers; owns
 the raw loader and VT page provider; and rolls partial startup back in reverse
-order. `createAssetStore()` binds fixed asset/completion capacities to that raw
-loader. It creates at most one `VirtualTextureStore`. Idempotent shutdown closes
-all workers even if one close fails, with stable error telemetry.
+order. `createAssetStore()` starts the engine-owned mesh optimizer and binds
+fixed asset/completion capacities to that raw loader. It creates at most one
+`VirtualTextureStore`. Idempotent shutdown closes
+all workers even if one close fails, with stable error telemetry. Pages do not
+construct a raw `Rpc` transport, choose worker scripts, or manually terminate
+workers.
 
 Self-contained GLBs follow this same path. The offline pipeline extracts
 embedded images into virtual textures, removes their payload buffer views, and

@@ -1,1 +1,5 @@
-export { assertPomGeneratedWgsl } from './surface-detail.ts';
+export {
+  assertPomGeneratedWgsl,
+  validatePomShaderWarmup,
+  type PomShaderWarmupResult,
+} from './surface-detail.ts';

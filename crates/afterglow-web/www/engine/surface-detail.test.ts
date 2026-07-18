@@ -7,6 +7,7 @@ import {
   marchPomReference,
   pomDistanceFade,
   pomLayerCount,
+  validatePomShaderWarmup,
   type PomReferenceResult,
 } from './surface-detail.ts';
 import { parseHeightR16 } from './height-texture.ts';
@@ -71,6 +72,25 @@ describe('low-core POM shader contract', () => {
     expect(() => assertPomGeneratedWgsl('fn pomMarchUV() {}')).toThrow('fragment entry');
     expect(() => assertPomGeneratedWgsl(generated(samples))).toThrow('march invocation');
     expect(() => assertPomGeneratedWgsl(generated('uv = pomMarchUV(x * mat3x3(t,b,n));\na = vtSampleFromLevel();'))).toThrow('expected 3');
+  });
+
+  test('validates visible and feedback shader compilation through the renderer hook', async () => {
+    const host = {
+      async inspectShaderModulesDuring(operation: () => Promise<void>, inspect: (source: string) => void) {
+        await operation();
+        inspect(`fn vtSampleFromLevel() {}\n${generated(`uv = pomMarchUV(positionViewDirection * mat3x3(t,b,n));\n${samples}`)}`);
+        inspect('fn pomMarchUV() {}\nfn vtFeedback() {}');
+      },
+    };
+    const result = await validatePomShaderWarmup(host, async () => {});
+    expect(result).toEqual({ visibleShaders: 1, feedbackShaders: 1 });
+    const missing = {
+      async inspectShaderModulesDuring(operation: () => Promise<void>, inspect: (source: string) => void) {
+        await operation();
+        inspect(`fn vtSampleFromLevel() {}\n${generated(`uv = pomMarchUV(positionViewDirection * mat3x3(t,b,n));\n${samples}`)}`);
+      },
+    };
+    await expect(validatePomShaderWarmup(missing, async () => {})).rejects.toThrow('did not both compile');
   });
 });
 

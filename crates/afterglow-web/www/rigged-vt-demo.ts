@@ -1,8 +1,5 @@
 import * as THREE from 'three/webgpu';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { MeshoptClient } from './meshopt.client.ts';
-import { TextureClient } from './texture.client.ts';
-import { Rpc } from './rpc.ts';
 import {
   EngineRuntime, RegistrationStatus, RendererHost, type RenderFrame,
 } from './engine/index.ts';
@@ -108,17 +105,9 @@ const session = await BigAssetSession.open({
   workerCount,
   transcodeQueueCapacity: 64,
   maxHeaderBytes: 2 * 1024 * 1024,
-  async createWorker() {
-    const rpc = await Rpc.create({
-      mainWasmUrl: 'afterglow_web.wasm', workerJsUrl: 'worker.js',
-      workerWasmUrl: 'texture.wasm', timeoutMs: 10_000,
-    });
-    return { worker: new TextureClient(rpc), close(): void { rpc.terminate(); } };
-  },
 });
 bootstrap.defer(() => session.close());
-const meshopt = await MeshoptClient.spawn('meshopt.wasm');
-const assetStore = session.createAssetStore(meshopt, 4, 4);
+const assetStore = await session.createAssetStore(4, 4);
 const firstHandle = assetStore.loadOptimizedGLTF('model.glb', new GLTFLoader());
 const secondHandle = assetStore.loadOptimizedGLTF('model-2.glb', new GLTFLoader());
 while (firstHandle.state === 'loading' || secondHandle.state === 'loading') {
