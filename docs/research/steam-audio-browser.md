@@ -111,7 +111,11 @@ Steam Audio's real-time reflection simulator, retrieved fresh parametric or
 convolution output, and applied Steam Audio's reflection DSP to 128-frame audio
 buffers. Five launches produced:
 
-| Mode | Sources | Rays × bounces | Simulation mean | Worst p99 | DSP / 2.67 ms quantum |
+The ray count is shared per simulation update, not per source: Steam Audio
+traces these primary rays from the listener and evaluates active source
+contributions along the paths.
+
+| Mode | Sources | Global listener rays × bounces | Simulation mean | Worst p99 | DSP / 2.67 ms quantum |
 |---|---:|---:|---:|---:|---:|
 | Parametric low | 1 | 1,024 × 2 | 1.02 ms | 1.70 ms | 0.020 ms |
 | Parametric medium | 1 | 4,096 × 4 | 7.82 ms | 10.95 ms | 0.017 ms |

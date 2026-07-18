@@ -83,7 +83,11 @@ launches were recorded. The laptop direct-path pass also remained cheap: 100K
 triangles / one source had 55 µs worst p99 ring round trips, while 10K triangles
 / 128 sources had 105 µs worst p99. A rare scheduler outlier reached 5.30 ms.
 
-| Mode | Sources | Rays × bounces | Simulation mean | Worst p99 | DSP / 2.67 ms quantum |
+`numRays` is a shared simulation input: these are total listener rays per
+reflection update, **not rays per source**. Additional sources increase source
+connection/accumulation work without multiplying the primary listener-ray count.
+
+| Mode | Sources | Global listener rays × bounces | Simulation mean | Worst p99 | DSP / 2.67 ms quantum |
 |---|---:|---:|---:|---:|---:|
 | Parametric low | 1 | 1,024 × 2 | 1.02 ms | 1.70 ms | 0.020 ms |
 | Parametric medium | 1 | 4,096 × 4 | 7.82 ms | 10.95 ms | 0.017 ms |

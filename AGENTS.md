@@ -348,8 +348,9 @@ All engine work must move toward these non-negotiable requirements:
   `--in-process-gpu` flag, `steam_appid.txt`.
 - `docs/research/steam-audio-browser.md` — Steam Audio's experimental WASM
   target supports fully dynamic no-bake acoustics after rebuilding 4.8.1 with a
-  synchronous Worker-owned ThreadPool. On the 6800U, low 1,024×2 reflections
-  measured 1.70 ms worst p99; medium 4,096×4 measured 10.95 ms for one source,
+  synchronous Worker-owned ThreadPool. Ray counts are global listener rays per
+  update, not per source. On the 6800U, low 1,024×2 reflections measured 1.70 ms
+  worst p99; medium 4,096×4 measured 10.95 ms for one source,
   33.43 ms for eight, and 114.83 ms for 32. Final runs auto-locked but measured
   synchronous Worker CPU, not rAF; render-loaded and actual AudioWorklet
   callback validation remain open.
