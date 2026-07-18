@@ -116,8 +116,9 @@ export class PhysicsClient {
 }
 ```
 
-`cargo run -p xtask wasm` copies generated `.ts` clients into
-`crates/afterglow-web/www/` alongside `codec.ts` (the postcard codec library).
+`cargo run -p xtask wasm` refreshes generated `.ts` clients under
+`crates/afterglow-web/web/src/workers/`, beside the authored codec and transport.
+The disposable `www/` deployment receives bundled JavaScript only.
 
 **Supported types** (rejected at compile time with a clear error otherwise):
 

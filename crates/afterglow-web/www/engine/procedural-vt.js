@@ -1,4 +1,4 @@
-// crates/afterglow-web/www/engine/procedural-vt.ts
+// crates/afterglow-web/web/src/engine/virtual-texturing/procedural-vt.ts
 var VT_PAGE_SIZE = 128;
 var VT_PAGE_BORDER = 4;
 var VT_SLOT_SIZE = VT_PAGE_SIZE + VT_PAGE_BORDER * 2;

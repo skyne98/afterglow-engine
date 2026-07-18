@@ -16,7 +16,7 @@ jobs:
         with:
           bun-version: 1.3.13
       - name: Install authored web dependencies
-        run: bun install --cwd crates/afterglow-web/www --frozen-lockfile
+        run: bun install --cwd crates/afterglow-web/web --frozen-lockfile
       - name: Run the canonical conformance command
         run: cargo run -p xtask -- conformance
       - name: Reject strict TypeScript baseline additions

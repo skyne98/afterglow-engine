@@ -10,9 +10,11 @@ afterEach(async () => { while (roots.length) { const root = roots.pop(); if (roo
 async function fixture(): Promise<{ root: string; hash: string }> {
   const root = await mkdtemp(join(tmpdir(), 'afterglow-release-')); roots.push(root);
   const www = join(root, 'crates/afterglow-web/www');
-  await mkdir(www, { recursive: true }); await mkdir(join(root, 'docs/benchmarks'), { recursive: true });
+  const contracts = join(root, 'crates/afterglow-web/web/contracts');
+  await mkdir(www, { recursive: true }); await mkdir(contracts, { recursive: true });
+  await mkdir(join(root, 'docs/benchmarks'), { recursive: true });
   await writeFile(join(www, 'dungeon.js'), 'artifact');
-  await writeFile(join(www, 'web-artifacts.json'), JSON.stringify({ version: 1, artifacts: [
+  await writeFile(join(contracts, 'web-artifacts.json'), JSON.stringify({ version: 1, artifacts: [
     { source: 'dungeon.ts', output: 'dungeon.js', role: 'visual-demo', pages: ['dungeon.html'], architectureChecked: true },
   ] }));
   const hash = new Bun.CryptoHasher('sha256').update('artifact').digest('hex');

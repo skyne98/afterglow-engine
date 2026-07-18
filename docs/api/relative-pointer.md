@@ -1,6 +1,6 @@
 # Relative pointer input API
 
-`crates/afterglow-web/www/engine/relative-pointer.ts` provides the engine's
+`crates/afterglow-web/web/src/engine/input/relative-pointer.ts` provides the engine's
 lowest-latency browser-relative mouse path.
 
 ## `RelativePointerInput`

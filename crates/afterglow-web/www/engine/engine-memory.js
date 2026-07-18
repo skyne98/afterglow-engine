@@ -1,4 +1,4 @@
-// crates/afterglow-web/www/engine/resource.ts
+// crates/afterglow-web/web/src/engine/core/resource.ts
 var RESOURCES = Symbol.for("afterglow-resources");
 var RESOURCES_SEALED = Symbol.for("afterglow-resources-sealed");
 function ensureStore(world) {
@@ -38,7 +38,7 @@ function defineResource(name, factory) {
   return new Resource(name, factory);
 }
 
-// crates/afterglow-web/www/engine/engine-memory.ts
+// crates/afterglow-web/web/src/engine/core/engine-memory.ts
 var INVALID_MEMORY_OFFSET = -1;
 var INVALID_POOL_INDEX = 4294967295;
 var RingPushStatus;

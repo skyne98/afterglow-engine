@@ -11,7 +11,7 @@ The normal asset pipeline handles it as one ordinary GLB input:
 
 ```sh
 nix-shell shell.nix --run \
-  "cargo run -p afterglow-pipeline --release -- process assets/rigged-vt crates/afterglow-web/www/rigged-vt.big"
+  "cargo run -p afterglow-pipeline --release -- process assets/rigged-vt crates/afterglow-web/web/assets/rigged-vt.big"
 ```
 
 The pipeline embeds external glTF side files into a self-contained GLB, packs

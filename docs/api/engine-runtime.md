@@ -1,6 +1,6 @@
 # Engine runtime
 
-`crates/afterglow-web/www/engine/runtime.ts` is the canonical owner of sealed
+`crates/afterglow-web/web/src/engine/core/runtime.ts` is the canonical owner of sealed
 browser-frame orchestration. Visual entrypoints should use it instead of owning
 `requestAnimationFrame` or manually ordering workers, VT, ECS synchronization,
 and render passes.
@@ -86,8 +86,8 @@ overwrites an unread record. `readInto` and `shiftInto` require a caller-owned
 ## Verification
 
 ```sh
-bun test crates/afterglow-web/www/engine/runtime.test.ts \
-  crates/afterglow-web/www/engine/diagnostics.test.ts
+bun test crates/afterglow-web/web/src/engine/core/runtime.test.ts \
+  crates/afterglow-web/web/src/engine/core/diagnostics.test.ts
 cargo run -p xtask conformance
 ```
 

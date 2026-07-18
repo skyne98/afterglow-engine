@@ -1,0 +1,4 @@
+node_modules/
+assets/*.wasm
+assets/dungeon.big
+assets/rigged-vt.big

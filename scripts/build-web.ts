@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
-/** Build every browser JavaScript artifact from authored TypeScript sources. */
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+/** Build the disposable browser deployment tree from organized web sources. */
+import { cp, mkdir, mkdtemp, readFile, rename, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, relative, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import {
   countBundledThreeCoreCopies,
   validateWebContracts,
@@ -10,7 +10,9 @@ import {
 } from './check-web-contracts.ts';
 
 const root = resolve(import.meta.dir, '..');
-const www = join(root, 'crates/afterglow-web/www');
+const web = join(root, 'crates/afterglow-web/web');
+const sourceRoot = web;
+const dist = join(root, 'crates/afterglow-web/www');
 const check = process.argv.includes('--check');
 
 const contractErrors = await validateWebContracts(root);
@@ -19,75 +21,83 @@ if (contractErrors.length !== 0) {
   process.exit(1);
 }
 const manifest = JSON.parse(
-  await readFile(join(www, 'web-artifacts.json'), 'utf8'),
+  await readFile(join(web, 'contracts/web-artifacts.json'), 'utf8'),
 ) as WebArtifactManifest;
-// Authored module specifiers point to TypeScript. Bun resolves and bundles
-// them; emitted JavaScript exists only as a deployment artifact.
-const targets = manifest.artifacts;
-const generated = new Set(targets.map((artifact) => artifact.output));
-const vendor = new Set([
-  'three.core.js', 'three.js', 'three.module.js', 'three.webgpu.js',
-  'three.webgpu.min.js',
-]);
 
-async function listFiles(directory: string, pattern: string): Promise<string[]> {
+async function listFiles(directory: string, pattern = '**/*'): Promise<string[]> {
   const glob = new Bun.Glob(pattern);
   const files: string[] = [];
   for await (const file of glob.scan({ cwd: directory, onlyFiles: true })) files.push(file);
-  return files;
+  return files.sort();
 }
 
-for (const file of await listFiles(www, '**/*.js')) {
-  if (file.startsWith('node_modules/')) continue;
-  if (!generated.has(file) && !vendor.has(file)) {
-    console.error(`hand-authored JavaScript is forbidden: ${relative(root, join(www, file))}`);
-    process.exit(1);
-  }
+for (const file of await listFiles(join(web, 'src'), '**/*.js')) {
+  console.error(`hand-authored JavaScript is forbidden: ${relative(root, join(web, 'src', file))}`);
+  process.exit(1);
 }
-
-for (const file of await listFiles(www, '**/*.ts')) {
-  if (file.startsWith('node_modules/')) continue;
-  const source = await readFile(join(www, file), 'utf8');
+for (const file of await listFiles(join(web, 'src'), '**/*.ts')) {
+  const source = await readFile(join(web, 'src', file), 'utf8');
   if (/(?:from\s*|import\s*\()\s*['"]\.\.?\/[^'"]+\.js['"]/.test(source)) {
-    console.error(`TypeScript must not import generated local JavaScript: ${relative(root, join(www, file))}`);
+    console.error(`TypeScript must not import generated local JavaScript: ${relative(root, join(web, 'src', file))}`);
     process.exit(1);
   }
 }
 
-const temporary = await mkdtemp(join(tmpdir(), 'afterglow-web-build-'));
+async function compareTrees(expected: string, actual: string): Promise<boolean> {
+  const expectedFiles = await listFiles(expected);
+  let actualFiles: string[] = [];
+  try { actualFiles = await listFiles(actual); } catch {}
+  let drift = expectedFiles.length !== actualFiles.length ||
+    expectedFiles.some((file, index) => file !== actualFiles[index]);
+  if (!drift) {
+    for (const file of expectedFiles) {
+      const left = await readFile(join(expected, file));
+      const right = await readFile(join(actual, file));
+      if (!Buffer.from(left).equals(right)) { drift = true; break; }
+    }
+  }
+  return drift;
+}
+
+const temporaryRoot = await mkdtemp(join(tmpdir(), 'afterglow-web-build-'));
+const staged = join(temporaryRoot, 'www');
 try {
-  let drift = false;
-  for (const { source, output, role } of targets) {
-    const built = join(temporary, output);
+  await mkdir(staged, { recursive: true });
+  await cp(join(web, 'public'), staged, { recursive: true });
+  await cp(join(web, 'assets'), staged, { recursive: true });
+  for (const file of await listFiles(staged)) {
+    if (/\.(?:[cm]?js|ts|tsx)$/.test(file) || /(?:^|\/)(?:package(?:-lock)?\.json|bun\.lock)$/.test(file)) {
+      console.error(`public/assets input may not contain source or package state: ${file}`);
+      process.exit(1);
+    }
+  }
+  for (const { source, output, role } of manifest.artifacts) {
+    const built = join(staged, output);
+    await mkdir(dirname(built), { recursive: true });
     const proc = Bun.spawn([
-      process.execPath, 'build', join(www, source), '--outfile', built,
+      process.execPath, 'build', join(sourceRoot, source), '--outfile', built,
       '--target', 'browser',
     ], { stdout: 'inherit', stderr: 'inherit' });
     if (await proc.exited !== 0) process.exit(1);
     const builtSource = await readFile(built, 'utf8');
-    const threeCoreCopies = countBundledThreeCoreCopies(builtSource);
-    if (threeCoreCopies > 1 || (role === 'visual-demo' && threeCoreCopies !== 1)) {
-      console.error(`${source}: ${role === 'visual-demo' ? 'visual bundle requires exactly one' : 'bundle contains'} ${threeCoreCopies} Three.js core identities`);
-      drift = true;
-      continue;
-    }
-    const destination = join(www, output);
-    if (check) {
-      let actual: Uint8Array;
-      try { actual = await readFile(destination); }
-      catch { actual = new Uint8Array(); }
-      const expected = await readFile(built);
-      if (!Buffer.from(actual).equals(expected)) {
-        console.error(`generated artifact is stale: ${relative(root, destination)}`);
-        drift = true;
-      }
-    } else {
-      await Bun.write(destination, Bun.file(built));
+    const copies = countBundledThreeCoreCopies(builtSource);
+    if (copies > 1 || (role === 'visual-demo' && copies !== 1)) {
+      console.error(`${source}: ${role === 'visual-demo' ? 'visual bundle requires exactly one' : 'bundle contains'} ${copies} Three.js core identities`);
+      process.exit(1);
     }
   }
-  if (drift) process.exit(1);
+
+  if (check) {
+    if (await compareTrees(staged, dist)) {
+      console.error(`generated web deployment is stale: ${relative(root, dist)}`);
+      process.exit(1);
+    }
+  } else {
+    await rm(dist, { recursive: true, force: true });
+    await rename(staged, dist);
+  }
 } finally {
-  await rm(temporary, { recursive: true, force: true });
+  await rm(temporaryRoot, { recursive: true, force: true });
 }
 
-console.log(check ? 'web TypeScript artifacts are current' : 'built web artifacts from TypeScript');
+console.log(check ? 'web deployment is current' : 'built disposable web deployment');

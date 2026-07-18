@@ -1,4 +1,4 @@
-// crates/afterglow-web/www/codec.ts
+// crates/afterglow-web/web/src/workers/codec.ts
 function encodeVarint(n) {
   const b = [];
   do {
@@ -65,7 +65,7 @@ function decodeF32Vec(bytes, off) {
   return [out, end];
 }
 
-// crates/afterglow-web/www/rpc.ts
+// crates/afterglow-web/web/src/workers/rpc.ts
 var TIMEOUT_MS = 5000;
 function decodeVarint2(bytes, off) {
   let r = 0;
@@ -228,7 +228,7 @@ class Rpc {
   }
 }
 
-// crates/afterglow-web/www/physics.client.ts
+// crates/afterglow-web/web/src/workers/physics.client.ts
 class PhysicsClient {
   rpc;
   closed = false;
@@ -262,7 +262,7 @@ class PhysicsClient {
   }
 }
 
-// crates/afterglow-web/www/worker-bench.ts
+// crates/afterglow-web/web/src/demos/worker-bench/main.ts
 var output = document.getElementById("out");
 function print(message) {
   if (output)

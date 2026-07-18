@@ -43,15 +43,16 @@ as standard + secure + CORS + fetch + CSP-bypass, ES-module imports work:
 <!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>my game</title></head>
 <body><canvas id="c"></canvas>
-<script type="module">
-  import * as THREE from '/three.webgpu.js';   // served via afterglow://
-  // …renderer, scene, requestAnimationFrame loop…
-  // To talk to a worker, construct the generated TS client:
-  //   const t = await Rpc.create({…});
-  //   const physics = new PhysicsClient(t);
-  //   await physics.step(…)
-</script>
+<script type="module" src="./game.js"></script>
 </body></html>
+```
+
+Author `game.ts` against package modules and public engine barrels, then bundle
+it into the deployment:
+
+```ts
+import * as THREE from 'three/webgpu';
+import { EngineRuntime, RendererHost } from './engine/index.ts';
 ```
 
 `afterglow://local/` is same-origin and secure-context, so WebGPU,

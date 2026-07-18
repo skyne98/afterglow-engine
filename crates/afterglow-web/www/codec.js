@@ -1,4 +1,4 @@
-// crates/afterglow-web/www/codec.ts
+// crates/afterglow-web/web/src/workers/codec.ts
 function encodeVarint(n) {
   const b = [];
   do {

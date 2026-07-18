@@ -1,6 +1,6 @@
 # Surface-detail / POM API
 
-`crates/afterglow-web/www/engine/surface-detail.ts` exports the reusable
+`crates/afterglow-web/web/src/engine/virtual-texturing/surface-detail.ts` exports the reusable
 low-core POM shader used by the Dungeon demo.
 
 `VirtualPomSceneBinding` is the engine-owned adapter for static VT surfaces. It

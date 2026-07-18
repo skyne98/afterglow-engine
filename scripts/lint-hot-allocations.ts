@@ -2,12 +2,13 @@
 /** Conservative allocation lint for explicitly sealed engine hot regions. */
 import { readFile } from 'node:fs/promises';
 import { join, relative, resolve } from 'node:path';
-import ts from '../crates/afterglow-web/www/node_modules/typescript/lib/typescript.js';
+import ts from '../crates/afterglow-web/web/node_modules/typescript/lib/typescript.js';
 
 const root = resolve(import.meta.dir, '..');
-const www = join(root, 'crates/afterglow-web/www');
-const engine = join(www, 'engine');
-const effectsPath = join(root, 'crates/afterglow-web/www/engine-allocation-effects.json');
+const web = join(root, 'crates/afterglow-web/web');
+const sourceRoot = join(web, 'src');
+const engine = join(sourceRoot, 'engine');
+const effectsPath = join(web, 'contracts/engine-allocation-effects.json');
 const effects = JSON.parse(await readFile(effectsPath, 'utf8')) as {
   version: number;
   moduleEffects: Record<string, string>;
@@ -101,10 +102,10 @@ for await (const path of glob.scan({ cwd: engine, onlyFiles: true })) {
 // Every authored function declaring @alloc-effect none is scanned as a whole,
 // including demo entrypoints outside engine/.
 let effectFunctions = 0;
-const configPath = join(www, 'tsconfig.harsh.json');
+const configPath = join(web, 'tsconfig.harsh.json');
 const loadedConfig = ts.readConfigFile(configPath, ts.sys.readFile);
 if (loadedConfig.error) throw new Error(ts.flattenDiagnosticMessageText(loadedConfig.error.messageText, '\n'));
-const parsedConfig = ts.parseJsonConfigFileContent(loadedConfig.config, ts.sys, www, undefined, configPath);
+const parsedConfig = ts.parseJsonConfigFileContent(loadedConfig.config, ts.sys, web, undefined, configPath);
 const effectProgram = ts.createProgram(parsedConfig.fileNames, parsedConfig.options);
 const effectChecker = effectProgram.getTypeChecker();
 
@@ -116,7 +117,7 @@ function declaredEffect(call: ts.CallExpression): string | null {
   const declaration = symbol.valueDeclaration ?? symbol.declarations?.[0];
   if (!declaration) return null;
   const declarationFile = declaration.getSourceFile().fileName;
-  if (!declarationFile.startsWith(www) || declarationFile.includes('/node_modules/')) return null;
+  if (!declarationFile.startsWith(sourceRoot) || declarationFile.includes('/node_modules/')) return null;
   const file = relative(engine, declarationFile).replaceAll('\\', '/');
   let qualified = symbol.getName();
   if ((ts.isMethodDeclaration(declaration) || ts.isMethodSignature(declaration)) &&
@@ -132,9 +133,9 @@ function declaredEffect(call: ts.CallExpression): string | null {
 }
 
 const authoredGlob = new Bun.Glob('**/*.ts');
-for await (const path of authoredGlob.scan({ cwd: www, onlyFiles: true })) {
+for await (const path of authoredGlob.scan({ cwd: sourceRoot, onlyFiles: true })) {
   if (path.startsWith('node_modules/') || path.endsWith('.test.ts') || path.endsWith('.d.ts')) continue;
-  const absolutePath = join(www, path);
+  const absolutePath = join(sourceRoot, path);
   const sourceText = await readFile(absolutePath, 'utf8');
   const source = effectProgram.getSourceFile(absolutePath) ??
     ts.createSourceFile(path, sourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
@@ -151,7 +152,7 @@ for await (const path of authoredGlob.scan({ cwd: www, onlyFiles: true })) {
           const permit = line.match(/@alloc-allowed\s+reason=\S+\s+issue=DME-\d+\s+expires=(\d{4}-\d{2}-\d{2})/);
           if (permit?.[1] !== undefined && permit[1] >= new Date().toISOString().slice(0, 10)) continue;
           for (const [pattern, description] of effectBanned) if (pattern.test(line)) {
-            console.error(`${relative(root, join(www, path))}:${start + index + 1}: @alloc-effect none: ${description}`);
+            console.error(`${relative(root, join(sourceRoot, path))}:${start + index + 1}: @alloc-effect none: ${description}`);
             failures++;
           }
         }

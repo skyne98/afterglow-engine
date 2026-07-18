@@ -1,4 +1,4 @@
-// crates/afterglow-web/www/rpc.ts
+// crates/afterglow-web/web/src/workers/rpc.ts
 var TIMEOUT_MS = 5000;
 function encodeVarint(n) {
   const b = [];

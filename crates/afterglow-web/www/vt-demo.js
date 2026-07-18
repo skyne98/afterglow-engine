@@ -13,7 +13,7 @@ var __export = (target, all) => {
     });
 };
 
-// crates/afterglow-web/www/node_modules/three/build/three.webgpu.js
+// crates/afterglow-web/web/node_modules/three/build/three.webgpu.js
 var exports_three_webgpu = {};
 __export(exports_three_webgpu, {
   warnOnce: () => warnOnce,
@@ -647,7 +647,7 @@ __export(exports_three_webgpu, {
   ACESFilmicToneMapping: () => ACESFilmicToneMapping
 });
 
-// crates/afterglow-web/www/node_modules/three/build/three.core.js
+// crates/afterglow-web/web/node_modules/three/build/three.core.js
 var REVISION = "185";
 var MOUSE = { LEFT: 0, MIDDLE: 1, RIGHT: 2, ROTATE: 0, DOLLY: 1, PAN: 2 };
 var TOUCH = { ROTATE: 0, PAN: 1, DOLLY_PAN: 2, DOLLY_ROTATE: 3 };
@@ -22938,7 +22938,7 @@ if (typeof window !== "undefined") {
   }
 }
 
-// crates/afterglow-web/www/node_modules/three/build/three.webgpu.js
+// crates/afterglow-web/web/node_modules/three/build/three.webgpu.js
 var refreshUniforms = [
   "alphaMap",
   "alphaTest",
@@ -57666,7 +57666,7 @@ class ClippingGroup extends Group {
     this.clipShadows = false;
   }
 }
-// crates/afterglow-web/www/engine/diagnostics.ts
+// crates/afterglow-web/web/src/engine/core/diagnostics.ts
 class EngineDiagnostics {
   capacity;
   sequences;
@@ -57733,7 +57733,7 @@ class EngineDiagnostics {
     }
   }
 }
-// crates/afterglow-web/www/node_modules/bitecs/dist/core/index.min.mjs
+// crates/afterglow-web/web/node_modules/bitecs/dist/core/index.min.mjs
 var A = (e, t, n) => Object.defineProperty(e, t, { value: n, enumerable: false, writable: true, configurable: true });
 var pe = (e, t) => t & e.entityMask;
 var z = (e) => {
@@ -58251,11 +58251,11 @@ var L = (e, t) => {
 };
 var N2 = (e, t) => K(e[u].entityIndex, t);
 
-// crates/afterglow-web/www/engine/types.ts
+// crates/afterglow-web/web/src/engine/core/types.ts
 var NULL_ENTITY = 0;
 var NONE_U32 = 4294967295;
 
-// crates/afterglow-web/www/engine/components.ts
+// crates/afterglow-web/web/src/engine/ecs/components.ts
 var MAX_ENTITIES = 1e6;
 function createTransformStore(capacity = MAX_ENTITIES) {
   const rotationW = new Float32Array(capacity);
@@ -58296,7 +58296,7 @@ function createRenderRefStore(capacity = MAX_ENTITIES) {
   };
 }
 
-// crates/afterglow-web/www/engine/descriptors.ts
+// crates/afterglow-web/web/src/engine/renderer/descriptors.ts
 class RenderResourceRegistry {
   descriptors = [null];
   register(descriptor) {
@@ -58315,7 +58315,7 @@ class RenderResourceRegistry {
   }
 }
 
-// crates/afterglow-web/www/engine/dirty-queue.ts
+// crates/afterglow-web/web/src/engine/ecs/dirty-queue.ts
 class EntityDirtyQueue {
   capacity;
   entities;
@@ -58375,7 +58375,7 @@ class EntityDirtyQueue {
   }
 }
 
-// crates/afterglow-web/www/engine/dirty-ranges.ts
+// crates/afterglow-web/web/src/engine/ecs/dirty-ranges.ts
 class DirtySlotRanges {
   maximumRanges;
   bits;
@@ -58451,7 +58451,7 @@ class DirtySlotRanges {
   }
 }
 
-// crates/afterglow-web/www/engine/instance-shard.ts
+// crates/afterglow-web/web/src/engine/renderer/instance-shard.ts
 class InstanceShard {
   id;
   descriptorId;
@@ -58534,7 +58534,7 @@ class InstanceShard {
   }
 }
 
-// crates/afterglow-web/www/engine/matrix.ts
+// crates/afterglow-web/web/src/engine/ecs/matrix.ts
 function composeTransformInto(output2, offset, transform, entity) {
   const qx = transform.rotationX[entity];
   const qy = transform.rotationY[entity];
@@ -58623,7 +58623,7 @@ function multiplyMatricesInto(output2, outputOffset, left, leftOffset, right, ri
   output2[outputOffset + 15] = a41 * b14 + a42 * b24 + a43 * b34 + a44 * b44;
 }
 
-// crates/afterglow-web/www/engine/hierarchy.ts
+// crates/afterglow-web/web/src/engine/ecs/hierarchy.ts
 var ChildOf = ot(le);
 class HierarchyState {
   capacity;
@@ -58786,7 +58786,7 @@ class HierarchyState {
   }
 }
 
-// crates/afterglow-web/www/engine/render-adapter.ts
+// crates/afterglow-web/web/src/engine/renderer/render-adapter.ts
 var HIERARCHY_REBUILD_OPERATIONS = 512;
 var HIERARCHY_REBUILD_BUDGET_MS = 0.2;
 var MAX_STRUCTURAL_CHANGES_PER_FRAME = 256;
@@ -59237,7 +59237,7 @@ class RenderAdapter {
     this.uniqueObjects.length = 0;
   }
 }
-// crates/afterglow-web/www/engine/renderer-seal.ts
+// crates/afterglow-web/web/src/engine/renderer/renderer-seal.ts
 class RendererSeal {
   backend;
   sealed = false;
@@ -59278,7 +59278,7 @@ class RendererSeal {
   }
 }
 
-// crates/afterglow-web/www/engine/height-texture.ts
+// crates/afterglow-web/web/src/engine/assets/height-texture.ts
 var HEIGHT_R16_MAGIC = new Uint8Array([65, 71, 82, 49, 54, 76, 69, 1]);
 function assertHeightTextureGpuFormat(backend, texture2) {
   const format = backend.utils?.getTextureFormatGPU(texture2);
@@ -59286,7 +59286,7 @@ function assertHeightTextureGpuFormat(backend, texture2) {
     throw new Error(`displacement GPU format mismatch: expected r32float, got ${format ?? "unavailable"}`);
 }
 
-// crates/afterglow-web/www/engine/webgpu-only.ts
+// crates/afterglow-web/web/src/engine/renderer/webgpu-only.ts
 function disableWebGLFallback(renderer) {
   renderer._getFallback = null;
 }
@@ -59331,7 +59331,7 @@ async function createWebGPUOnlyRenderer(parameters = {}, factory) {
   return renderer;
 }
 
-// crates/afterglow-web/www/engine/renderer-host.ts
+// crates/afterglow-web/web/src/engine/renderer/renderer-host.ts
 class BrowserRendererViewport {
   get width() {
     return window.innerWidth;
@@ -59510,7 +59510,7 @@ class RendererHost {
     this.renderer.dispose();
   }
 }
-// crates/afterglow-web/www/engine/resource.ts
+// crates/afterglow-web/web/src/engine/core/resource.ts
 var RESOURCES = Symbol.for("afterglow-resources");
 var RESOURCES_SEALED = Symbol.for("afterglow-resources-sealed");
 function ensureStore(world) {
@@ -59588,7 +59588,7 @@ function sealResources(world) {
   world[RESOURCES_SEALED] = true;
 }
 
-// crates/afterglow-web/www/engine/engine-memory.ts
+// crates/afterglow-web/web/src/engine/core/engine-memory.ts
 var INVALID_MEMORY_OFFSET = -1;
 var INVALID_POOL_INDEX = 4294967295;
 class LinearArena {
@@ -59750,7 +59750,7 @@ class EngineMemory {
   }
 }
 
-// crates/afterglow-web/www/engine/frame-budget.ts
+// crates/afterglow-web/web/src/engine/core/frame-budget.ts
 var DEFAULT_FRAME_BUDGET = {
   deadlineFractions: [0.15, 0.35, 0.45, 0.55, 0.95],
   operationLimits: [1, 1, 1, 1, 1]
@@ -59854,7 +59854,7 @@ class FrameBudget {
 }
 var FrameBudgetRes = defineResource("frameBudget", () => new FrameBudget);
 
-// crates/afterglow-web/www/engine/frame.ts
+// crates/afterglow-web/web/src/engine/core/frame.ts
 function prepareAfterglowFrame(frame, workerInput, adapter, vtInput, memory, budget) {
   if (memory && memory.phase !== 2 /* GameplaySealed */ && memory.phase !== 3 /* LoadingScreen */)
     throw new Error("EngineMemory must be sealed before frame orchestration");
@@ -59886,7 +59886,7 @@ function prepareAfterglowFrame(frame, workerInput, adapter, vtInput, memory, bud
   budget?.endStage(4 /* RenderPrepare */);
 }
 
-// crates/afterglow-web/www/engine/runtime.ts
+// crates/afterglow-web/web/src/engine/core/runtime.ts
 class BrowserAnimationScheduler {
   request(callback) {
     return requestAnimationFrame(callback);
@@ -60091,7 +60091,7 @@ class EngineRuntime {
       this.animationHandle = this.scheduler.request(this.onAnimationFrame);
   }
 }
-// crates/afterglow-web/www/node_modules/three/build/three.module.js
+// crates/afterglow-web/web/node_modules/three/build/three.module.js
 var alphahash_fragment = `#ifdef USE_ALPHAHASH
 	if ( diffuseColor.a < getAlphaHashThreshold( vPosition ) ) discard;
 #endif`;
@@ -65039,7 +65039,7 @@ var DATA2 = new Uint16Array([
   1183
 ]);
 
-// crates/afterglow-web/www/engine/asset-handle.ts
+// crates/afterglow-web/web/src/engine/assets/asset-handle.ts
 class AssetHandle {
   asset;
   generation = 0;
@@ -65058,7 +65058,7 @@ class AssetHandle {
   lod = -1;
 }
 
-// crates/afterglow-web/www/engine/virtual-texture-layout.ts
+// crates/afterglow-web/web/src/engine/virtual-texturing/virtual-texture-layout.ts
 function assertVirtualTextureDimensions(width, height) {
   for (const [name, value] of [["width", width], ["height", height]])
     if (!Number.isSafeInteger(value) || value <= 0)
@@ -65095,7 +65095,7 @@ function packedMipTailIndex(layout) {
   return layout.mipOffsets[layout.maxMip] * layout.storageWidth + 1;
 }
 
-// crates/afterglow-web/www/engine/virtual-texture.ts
+// crates/afterglow-web/web/src/engine/virtual-texturing/virtual-texture.ts
 var PAGE_SIZE = 128;
 var PAGE_BORDER = 4;
 var SLOT_SIZE = PAGE_SIZE + PAGE_BORDER * 2;
@@ -67028,7 +67028,7 @@ fn vtFeedback(
 }
 `;
 
-// crates/afterglow-web/www/node_modules/three/build/three.tsl.js
+// crates/afterglow-web/web/node_modules/three/build/three.tsl.js
 var exports_three_tsl = {};
 __export(exports_three_tsl, {
   xor: () => xor2,
@@ -68309,7 +68309,7 @@ var workgroupId2 = TSL.workgroupId;
 var workingToColorSpace2 = TSL.workingToColorSpace;
 var xor2 = TSL.xor;
 
-// crates/afterglow-web/www/engine/surface-detail.ts
+// crates/afterglow-web/web/src/engine/virtual-texturing/surface-detail.ts
 var POM_UV_WGSL = `
 fn pomMarchUV(
   heightTexture: texture_2d<f32>, heightSampler: sampler,
@@ -68393,7 +68393,7 @@ fn pomSelfShadow(
 }
 `;
 
-// crates/afterglow-web/www/engine/virtual-texture-material.ts
+// crates/afterglow-web/web/src/engine/virtual-texturing/virtual-texture-material.ts
 function createVirtualGltfMaterialPair(three, store, set, feedbackPixelScale, options = {}) {
   const addressMode = options.addressMode ?? 1 /* Repeat */;
   const qualityBias = options.qualityBias ?? 0;
@@ -68737,7 +68737,7 @@ function createVirtualPomMaterialPair(three, store, set, heightTexture, feedback
     pomFeedbackMaterial: makeFeedback(true)
   };
 }
-// crates/afterglow-web/www/engine/virtual-material-binding.ts
+// crates/afterglow-web/web/src/engine/virtual-texturing/virtual-material-binding.ts
 class VirtualMaterialBinding {
   options;
   feedbackScene;
@@ -68788,7 +68788,7 @@ class VirtualMaterialBinding {
       feedback.dispose();
   }
 }
-// crates/afterglow-web/www/engine/virtual-pom-binding.ts
+// crates/afterglow-web/web/src/engine/virtual-texturing/virtual-pom-binding.ts
 class VirtualPomSceneBinding {
   options;
   feedbackScene = new Scene;
@@ -68871,7 +68871,7 @@ class VirtualPomSceneBinding {
     this.count = 0;
   }
 }
-// crates/afterglow-web/www/engine/virtual-texture-feedback-pass.ts
+// crates/afterglow-web/web/src/engine/virtual-texturing/virtual-texture-feedback-pass.ts
 class VirtualTextureFeedbackPass {
   scale;
   pixelScale = new Vector2(1, 1);
@@ -69014,7 +69014,7 @@ class VirtualTextureFeedbackPass {
     this.requestPool.length = 0;
   }
 }
-// crates/afterglow-web/www/engine/virtual-texture-feedback-coordinator.ts
+// crates/afterglow-web/web/src/engine/virtual-texturing/virtual-texture-feedback-coordinator.ts
 class VirtualTextureFeedbackCoordinator {
   renderer;
   store;
@@ -69262,14 +69262,7 @@ class VirtualTextureFeedbackCoordinator {
     this.awaitingPassCount = 0;
   }
 }
-// crates/afterglow-web/www/engine/virtual-texturing-api.ts
-function createProceduralVirtualTextureStore(provider, device) {
-  return new VirtualTextureStore({ async read() {
-    return new Uint8Array;
-  }, poll() {} }, provider, FORMAT_RGBA, device);
-}
-
-// crates/afterglow-web/www/engine/procedural-vt.ts
+// crates/afterglow-web/web/src/engine/virtual-texturing/procedural-vt.ts
 var VT_PAGE_SIZE = 128;
 var VT_PAGE_BORDER = 4;
 var VT_SLOT_SIZE = VT_PAGE_SIZE + VT_PAGE_BORDER * 2;
@@ -69350,81 +69343,14 @@ function generateTerrainPage(mip, pageX, pageY, virtualSize) {
     return [r, g2, b2];
   });
 }
-// crates/afterglow-web/www/engine/vt-gpu-test.ts
-async function testRawFeedback(device, direction) {
-  const transform = direction === "west" ? "vec2f(1.0-in.uv.x,in.uv.y)" : direction === "rotated" ? "vec2f(in.uv.y,1.0-in.uv.x)" : "in.uv";
-  const shader = device.createShaderModule({ code: `struct Out{@builtin(position) position:vec4f,@location(0) uv:vec2f};@vertex fn vs(@builtin(vertex_index)i:u32)->Out{var p=array<vec2f,3>(vec2f(-1,-1),vec2f(3,-1),vec2f(-1,3));var o:Out;o.position=vec4f(p[i],0,1);o.uv=p[i]*.5+.5;return o;}@fragment fn fs(in:Out)->@location(0) vec2u{let q=${transform};let x=u32(clamp(floor(q.x*2048.),0.,2047.));let y=u32(clamp(floor(q.y*2048.),0.,2047.));return vec2u(0x80000000u|(x<<6)|(y<<17),0x12345678u);}` });
-  const info = await shader.getCompilationInfo(), errors = info.messages.filter((x2) => x2.type === "error");
-  if (errors.length)
-    throw new Error(errors.map((x2) => x2.message).join(`
-`));
-  const pipeline = device.createRenderPipeline({ layout: "auto", vertex: { module: shader, entryPoint: "vs" }, fragment: { module: shader, entryPoint: "fs", targets: [{ format: "rg32uint" }] }, primitive: { topology: "triangle-list" } });
-  const tex = device.createTexture({ size: [32, 32], format: "rg32uint", usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC }), buffer3 = device.createBuffer({ size: 8192, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ }), encoder = device.createCommandEncoder(), pass3 = encoder.beginRenderPass({ colorAttachments: [{ view: tex.createView(), loadOp: "clear", storeOp: "store", clearValue: { r: 0, g: 0, b: 0, a: 0 } }] });
-  pass3.setPipeline(pipeline);
-  pass3.draw(3);
-  pass3.end();
-  encoder.copyTextureToBuffer({ texture: tex }, { buffer: buffer3, bytesPerRow: 256 }, [32, 32]);
-  device.queue.submit([encoder.finish()]);
-  await buffer3.mapAsync(GPUMapMode.READ);
-  const words = new Uint32Array(buffer3.getMappedRange());
-  let valid = 0, minX = 2048, maxX = -1, minY = 2048, maxY = -1;
-  const xs = new Set, ys = new Set;
-  for (let i = 0;i < words.length; i += 2)
-    if (words[i] & 2147483648 && words[i + 1] === 305419896) {
-      valid++;
-      const x2 = words[i] >>> 6 & 2047, y2 = words[i] >>> 17 & 2047;
-      xs.add(x2);
-      ys.add(y2);
-      minX = Math.min(minX, x2);
-      maxX = Math.max(maxX, x2);
-      minY = Math.min(minY, y2);
-      maxY = Math.max(maxY, y2);
-    }
-  buffer3.unmap();
-  buffer3.destroy();
-  tex.destroy();
-  if (valid !== 1024 || xs.size !== 32 || ys.size !== 32)
-    throw new Error(`feedback ${direction} mismatch`);
-  return { direction, valid, range: [minX, maxX, minY, maxY] };
+// crates/afterglow-web/web/src/engine/virtual-texturing/index.ts
+function createProceduralVirtualTextureStore(provider, device) {
+  return new VirtualTextureStore({ async read() {
+    return new Uint8Array;
+  }, poll() {} }, provider, FORMAT_RGBA, device);
 }
-async function testUploadLocations(device, atlasWidth, atlasHeight, slotSize) {
-  const result = { rgba: 0, compressed: 0, compressedFormat: "unsupported" }, tex = device.createTexture({ size: [64, 64], format: "rgba8unorm", usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.COPY_SRC }), origins = [[0, 0], [60, 60], [24, 36]];
-  for (let n = 0;n < 3; n++) {
-    const color3 = [17 + n, 83, 201, 255], pixels = new Uint8Array(64);
-    for (let i = 0;i < 64; i += 4)
-      pixels.set(color3, i);
-    device.queue.writeTexture({ texture: tex, origin: origins[n] }, pixels, { bytesPerRow: 16, rowsPerImage: 4 }, [4, 4]);
-    const b2 = device.createBuffer({ size: 1024, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ }), e = device.createCommandEncoder();
-    e.copyTextureToBuffer({ texture: tex, origin: origins[n] }, { buffer: b2, bytesPerRow: 256 }, [4, 4]);
-    device.queue.submit([e.finish()]);
-    await b2.mapAsync(GPUMapMode.READ);
-    const bytes = new Uint8Array(b2.getMappedRange());
-    for (let y2 = 0;y2 < 4; y2++)
-      for (let x2 = 0;x2 < 4; x2++)
-        for (let c = 0;c < 4; c++)
-          if (bytes[y2 * 256 + x2 * 4 + c] !== color3[c])
-            throw new Error(`RGBA mismatch ${n}/${x2}/${y2}/${c}`);
-    b2.unmap();
-    b2.destroy();
-    result.rgba++;
-  }
-  tex.destroy();
-  const compressed = device.features.has("texture-compression-bc") ? ["bc7", "bc7-rgba-unorm"] : device.features.has("texture-compression-astc") ? ["astc", "astc-4x4-unorm"] : null;
-  if (compressed) {
-    const t = device.createTexture({ size: [atlasWidth, atlasHeight], format: compressed[1], usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING }), o = [[0, 0], [atlasWidth - slotSize, atlasHeight - slotSize], [Math.floor(atlasWidth / slotSize / 2) * slotSize, Math.floor(atlasHeight / slotSize / 2) * slotSize]];
-    for (let n = 0;n < 3; n++) {
-      const blocks = new Uint8Array(34 * 34 * 16);
-      blocks.fill(31 + n);
-      device.queue.writeTexture({ texture: t, origin: o[n] }, blocks, { bytesPerRow: 544, rowsPerImage: 34 }, [slotSize, slotSize]);
-      result.compressed++;
-    }
-    t.destroy();
-    result.compressedFormat = compressed[0];
-  }
-  await device.queue.onSubmittedWorkDone();
-  return result;
-}
-// crates/afterglow-web/www/engine/input.ts
+
+// crates/afterglow-web/web/src/engine/input/input.ts
 function actionFor(event) {
   switch (event.code || event.key) {
     case "KeyA":
@@ -69554,7 +69480,7 @@ class BoundedKeyboardInput {
     this.clear();
   }
 }
-// crates/afterglow-web/www/engine/dev-harness.ts
+// crates/afterglow-web/web/src/engine/diagnostics/dev-harness.ts
 class BootstrapGuard {
   capacity;
   cleanups;
@@ -69706,7 +69632,81 @@ class TextHud {
       this.element.style.display = visible ? "" : "none";
   }
 }
-// crates/afterglow-web/www/vt-demo.ts
+// crates/afterglow-web/web/src/engine/diagnostics/vt-gpu-test.ts
+async function testRawFeedback(device, direction) {
+  const transform = direction === "west" ? "vec2f(1.0-in.uv.x,in.uv.y)" : direction === "rotated" ? "vec2f(in.uv.y,1.0-in.uv.x)" : "in.uv";
+  const shader = device.createShaderModule({ code: `struct Out{@builtin(position) position:vec4f,@location(0) uv:vec2f};@vertex fn vs(@builtin(vertex_index)i:u32)->Out{var p=array<vec2f,3>(vec2f(-1,-1),vec2f(3,-1),vec2f(-1,3));var o:Out;o.position=vec4f(p[i],0,1);o.uv=p[i]*.5+.5;return o;}@fragment fn fs(in:Out)->@location(0) vec2u{let q=${transform};let x=u32(clamp(floor(q.x*2048.),0.,2047.));let y=u32(clamp(floor(q.y*2048.),0.,2047.));return vec2u(0x80000000u|(x<<6)|(y<<17),0x12345678u);}` });
+  const info = await shader.getCompilationInfo(), errors = info.messages.filter((x2) => x2.type === "error");
+  if (errors.length)
+    throw new Error(errors.map((x2) => x2.message).join(`
+`));
+  const pipeline = device.createRenderPipeline({ layout: "auto", vertex: { module: shader, entryPoint: "vs" }, fragment: { module: shader, entryPoint: "fs", targets: [{ format: "rg32uint" }] }, primitive: { topology: "triangle-list" } });
+  const tex = device.createTexture({ size: [32, 32], format: "rg32uint", usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC }), buffer3 = device.createBuffer({ size: 8192, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ }), encoder = device.createCommandEncoder(), pass3 = encoder.beginRenderPass({ colorAttachments: [{ view: tex.createView(), loadOp: "clear", storeOp: "store", clearValue: { r: 0, g: 0, b: 0, a: 0 } }] });
+  pass3.setPipeline(pipeline);
+  pass3.draw(3);
+  pass3.end();
+  encoder.copyTextureToBuffer({ texture: tex }, { buffer: buffer3, bytesPerRow: 256 }, [32, 32]);
+  device.queue.submit([encoder.finish()]);
+  await buffer3.mapAsync(GPUMapMode.READ);
+  const words = new Uint32Array(buffer3.getMappedRange());
+  let valid = 0, minX = 2048, maxX = -1, minY = 2048, maxY = -1;
+  const xs = new Set, ys = new Set;
+  for (let i = 0;i < words.length; i += 2)
+    if (words[i] & 2147483648 && words[i + 1] === 305419896) {
+      valid++;
+      const x2 = words[i] >>> 6 & 2047, y2 = words[i] >>> 17 & 2047;
+      xs.add(x2);
+      ys.add(y2);
+      minX = Math.min(minX, x2);
+      maxX = Math.max(maxX, x2);
+      minY = Math.min(minY, y2);
+      maxY = Math.max(maxY, y2);
+    }
+  buffer3.unmap();
+  buffer3.destroy();
+  tex.destroy();
+  if (valid !== 1024 || xs.size !== 32 || ys.size !== 32)
+    throw new Error(`feedback ${direction} mismatch`);
+  return { direction, valid, range: [minX, maxX, minY, maxY] };
+}
+async function testUploadLocations(device, atlasWidth, atlasHeight, slotSize) {
+  const result = { rgba: 0, compressed: 0, compressedFormat: "unsupported" }, tex = device.createTexture({ size: [64, 64], format: "rgba8unorm", usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.COPY_SRC }), origins = [[0, 0], [60, 60], [24, 36]];
+  for (let n = 0;n < 3; n++) {
+    const color3 = [17 + n, 83, 201, 255], pixels = new Uint8Array(64);
+    for (let i = 0;i < 64; i += 4)
+      pixels.set(color3, i);
+    device.queue.writeTexture({ texture: tex, origin: origins[n] }, pixels, { bytesPerRow: 16, rowsPerImage: 4 }, [4, 4]);
+    const b2 = device.createBuffer({ size: 1024, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ }), e = device.createCommandEncoder();
+    e.copyTextureToBuffer({ texture: tex, origin: origins[n] }, { buffer: b2, bytesPerRow: 256 }, [4, 4]);
+    device.queue.submit([e.finish()]);
+    await b2.mapAsync(GPUMapMode.READ);
+    const bytes = new Uint8Array(b2.getMappedRange());
+    for (let y2 = 0;y2 < 4; y2++)
+      for (let x2 = 0;x2 < 4; x2++)
+        for (let c = 0;c < 4; c++)
+          if (bytes[y2 * 256 + x2 * 4 + c] !== color3[c])
+            throw new Error(`RGBA mismatch ${n}/${x2}/${y2}/${c}`);
+    b2.unmap();
+    b2.destroy();
+    result.rgba++;
+  }
+  tex.destroy();
+  const compressed = device.features.has("texture-compression-bc") ? ["bc7", "bc7-rgba-unorm"] : device.features.has("texture-compression-astc") ? ["astc", "astc-4x4-unorm"] : null;
+  if (compressed) {
+    const t = device.createTexture({ size: [atlasWidth, atlasHeight], format: compressed[1], usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING }), o = [[0, 0], [atlasWidth - slotSize, atlasHeight - slotSize], [Math.floor(atlasWidth / slotSize / 2) * slotSize, Math.floor(atlasHeight / slotSize / 2) * slotSize]];
+    for (let n = 0;n < 3; n++) {
+      const blocks = new Uint8Array(34 * 34 * 16);
+      blocks.fill(31 + n);
+      device.queue.writeTexture({ texture: t, origin: o[n] }, blocks, { bytesPerRow: 544, rowsPerImage: 34 }, [slotSize, slotSize]);
+      result.compressed++;
+    }
+    t.destroy();
+    result.compressedFormat = compressed[0];
+  }
+  await device.queue.onSubmittedWorkDone();
+  return result;
+}
+// crates/afterglow-web/web/src/demos/vt/main.ts
 var VIRTUAL_SIZE = 262144;
 var scene = new Scene;
 scene.background = new Color(658448);

@@ -20,28 +20,29 @@ async function fixture(options: {
 } = {}): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'afterglow-contract-'));
   temporary.push(root);
-  const www = join(root, 'crates/afterglow-web/www');
-  await mkdir(join(www, 'engine'), { recursive: true });
-  await writeFile(join(www, 'demo.ts'), 'export {};\n');
-  await writeFile(join(www, 'demo.js'), 'export {};\n');
-  await writeFile(join(www, 'demo.html'), options.html ??
+  const web = join(root, 'crates/afterglow-web/web');
+  const source = join(web, 'src');
+  const publicDirectory = join(web, 'public');
+  const contracts = join(web, 'contracts');
+  await mkdir(source, { recursive: true });
+  await mkdir(publicDirectory, { recursive: true });
+  await mkdir(contracts, { recursive: true });
+  await writeFile(join(source, 'demo.ts'), 'export {};\n');
+  await writeFile(join(publicDirectory, 'demo.html'), options.html ??
     `${options.legacyBridge ? '<script src="bridge.js"></script>' : ''}<script type="module" src="./demo.js"></script>\n`);
-  if (options.extraJs) await writeFile(join(www, options.extraJs), 'bad();\n');
-  if (options.legacyBridge) {
-    await writeFile(join(www, 'bridge.ts'), 'export {};\n');
-    await writeFile(join(www, 'bridge.js'), 'export {};\n');
-  }
+  if (options.extraJs) await writeFile(join(source, options.extraJs), 'bad();\n');
+  if (options.legacyBridge) await writeFile(join(source, 'bridge.ts'), 'export {};\n');
   const artifacts: Array<Record<string, unknown>> = [{
-    source: 'demo.ts', output: 'demo.js', role: 'visual-demo',
+    source: 'src/demo.ts', output: 'demo.js', role: 'visual-demo',
     pages: ['demo.html'], architectureChecked: true,
   }];
   if (options.legacyBridge)
-    artifacts.push({ source: 'bridge.ts', output: 'bridge.js', role: 'legacy-bridge', architectureChecked: true });
-  await writeFile(join(www, 'web-artifacts.json'), JSON.stringify({ version: 1, artifacts }));
-  await writeFile(join(www, 'engine-conformance.json'), JSON.stringify({
+    artifacts.push({ source: 'src/bridge.ts', output: 'bridge.js', role: 'legacy-bridge', architectureChecked: true });
+  await writeFile(join(contracts, 'web-artifacts.json'), JSON.stringify({ version: 1, artifacts }));
+  await writeFile(join(contracts, 'engine-conformance.json'), JSON.stringify({
     version: 1,
     releaseStatus: options.releaseStatus ?? 'conformant',
-    visualEntrypoints: options.conformance ?? { 'demo.ts': 'canonical' },
+    visualEntrypoints: options.conformance ?? { 'src/demo.ts': 'canonical' },
   }));
   return root;
 }
@@ -59,7 +60,7 @@ describe('web artifact/conformance contract', () => {
 
   test('rejects unclassified generated or authored JavaScript', async () => {
     const errors = await validateWebContracts(await fixture({ extraJs: 'escape.js' }));
-    expect(errors.some((error) => error.includes('escape.js') && error.includes('not classified'))).toBe(true);
+    expect(errors.some((error) => error.includes('escape.js') && error.includes('hand-authored JavaScript'))).toBe(true);
   });
 
   test('rejects a legacy bridge on a canonical page', async () => {
@@ -70,14 +71,14 @@ describe('web artifact/conformance contract', () => {
 
   test('rejects false conformant release claims', async () => {
     const errors = await validateWebContracts(await fixture({
-      releaseStatus: 'conformant', conformance: { 'demo.ts': 'legacy' },
+      releaseStatus: 'conformant', conformance: { 'src/demo.ts': 'legacy' },
     }));
     expect(errors.some((error) => error.includes('conformant release has legacy demos'))).toBe(true);
   });
 
   test('rejects stale conformance entries', async () => {
     const errors = await validateWebContracts(await fixture({
-      releaseStatus: 'migration', conformance: { 'demo.ts': 'legacy', 'gone.ts': 'legacy' },
+      releaseStatus: 'migration', conformance: { 'src/demo.ts': 'legacy', 'gone.ts': 'legacy' },
     }));
     expect(errors.some((error) => error.includes('stale/non-visual entrypoint gone.ts'))).toBe(true);
   });
@@ -93,7 +94,7 @@ describe('import boundary contract', () => {
   });
   test('allows engine-local, generated worker clients, and public visual imports', () => {
     expect(importBoundaryErrors('engine/runtime.ts', "import './frame.ts'", root, new Set())).toEqual([]);
-    expect(importBoundaryErrors('engine/runtime.ts', "import '../meshopt.client.ts'", root, new Set())).toEqual([]);
+    expect(importBoundaryErrors('engine/runtime.ts', "import '../workers/meshopt.client.ts'", root, new Set())).toEqual([]);
     expect(importBoundaryErrors('demo.ts', "import './engine/index.ts'", root, new Set(['demo.ts']))).toEqual([]);
   });
 });
@@ -109,7 +110,7 @@ describe('bundle identity contract', () => {
 describe('demo architecture scanner', () => {
   test('finds lifecycle, globals, any, internals, allocations, and untyped frame callbacks', () => {
     const findings = scanTypeScript(`
-      import { Thing } from './engine/private.ts';
+      import { Thing } from '../../engine/core/private.ts';
       const errors = [];
       function frame(value: any) { window.AfterglowMemory = value; renderer.backend._secret(); }
       addEventListener('error', frame);
@@ -137,10 +138,10 @@ describe('demo architecture scanner', () => {
     expect(rules.has('AG-DEMO-017')).toBe(true);
   });
 
-  test('allows explicit subsystem API barrels but rejects implementation modules', () => {
+  test('allows subsystem index barrels but rejects implementation modules', () => {
     const findings = scanTypeScript(`
-      import { ModelPrimitives } from './engine/model-api.ts';
-      import { VirtualGltfBinding } from './engine/virtual-texturing-api.ts';
+      import { ModelPrimitives } from '../../engine/presentation/index.ts';
+      import { VirtualGltfBinding } from '../../engine/virtual-texturing/index.ts';
     `, 'barrels.ts');
     expect(findings.some((finding) => finding.rule === 'AG-DEMO-016')).toBe(false);
   });

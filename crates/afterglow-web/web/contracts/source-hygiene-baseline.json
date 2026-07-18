@@ -1,0 +1,605 @@
+{
+  "version": 3,
+  "findings": [
+    {
+      "id": "2f2fe81efa8c25c0d998",
+      "rule": "AG-TS-006",
+      "file": "demos/rigged-vt/main.test.ts",
+      "line": 13,
+      "column": 19,
+      "excerpt": "header.assets.find(asset => asset.name === 'model.glb')!"
+    },
+    {
+      "id": "4d87ffec9cc3af396140",
+      "rule": "AG-TS-006",
+      "file": "demos/rigged-vt/main.test.ts",
+      "line": 31,
+      "column": 23,
+      "excerpt": "header.assets.find(asset => asset.name === `model.glb#image-${image}`)!"
+    },
+    {
+      "id": "0d07489a84ac917e4569",
+      "rule": "AG-TS-006",
+      "file": "demos/rigged-vt/main.test.ts",
+      "line": 33,
+      "column": 15,
+      "excerpt": "texture.virtualTexture!"
+    },
+    {
+      "id": "3d11bfe27288ec44134f",
+      "rule": "AG-TS-006",
+      "file": "demos/rigged-vt/main.test.ts",
+      "line": 33,
+      "column": 46,
+      "excerpt": "texture.virtualTexture!"
+    },
+    {
+      "id": "3ad32b08de63293588c3",
+      "rule": "AG-TS-006",
+      "file": "demos/rigged-vt/main.test.ts",
+      "line": 34,
+      "column": 14,
+      "excerpt": "texture.virtualTexture!"
+    },
+    {
+      "id": "d566d6175758c50dc1c4",
+      "rule": "AG-TS-006",
+      "file": "demos/rigged-vt/main.test.ts",
+      "line": 35,
+      "column": 14,
+      "excerpt": "texture.virtualTexture!"
+    },
+    {
+      "id": "e7880bf9b712e4b62fc5",
+      "rule": "AG-TS-006",
+      "file": "demos/rigged-vt/main.test.ts",
+      "line": 37,
+      "column": 20,
+      "excerpt": "header.assets.find(asset => asset.name === 'model-2.glb')!"
+    },
+    {
+      "id": "1fddd7e20be3b8d3b4c7",
+      "rule": "AG-TS-006",
+      "file": "demos/rigged-vt/main.test.ts",
+      "line": 42,
+      "column": 13,
+      "excerpt": "dragonTextures[0].virtualTexture!"
+    },
+    {
+      "id": "dfeab0c10005e70a3c63",
+      "rule": "AG-TS-006",
+      "file": "demos/rigged-vt/main.test.ts",
+      "line": 42,
+      "column": 54,
+      "excerpt": "dragonTextures[0].virtualTexture!"
+    },
+    {
+      "id": "f037576ed79b0af5a265",
+      "rule": "AG-TS-006",
+      "file": "engine/assets/asset-store.test.ts",
+      "line": 114,
+      "column": 23,
+      "excerpt": "geometry.index!"
+    },
+    {
+      "id": "a2c34c5ec140814aca24",
+      "rule": "AG-TS-001",
+      "file": "engine/assets/asset-store.ts",
+      "line": 220,
+      "column": 35,
+      "excerpt": "any"
+    },
+    {
+      "id": "9757fa586a8a0c1d54a3",
+      "rule": "AG-TS-006",
+      "file": "engine/assets/asset-store.ts",
+      "line": 357,
+      "column": 7,
+      "excerpt": "this.handles[id]!"
+    },
+    {
+      "id": "d9ab9e3e38c18877fc0e",
+      "rule": "AG-TS-007",
+      "file": "engine/assets/asset-store.ts",
+      "line": 400,
+      "column": 57,
+      "excerpt": "this.reportCompletionError(kind, id, value); // @alloc-allowed reason=DiagnosticFailure"
+    },
+    {
+      "id": "17cff10b80e4e2e1f1e7",
+      "rule": "AG-TS-006",
+      "file": "engine/assets/asset-store.ts",
+      "line": 409,
+      "column": 18,
+      "excerpt": "this.paths[id]!"
+    },
+    {
+      "id": "630b86275887e584efb9",
+      "rule": "AG-TS-006",
+      "file": "engine/assets/asset-store.ts",
+      "line": 426,
+      "column": 18,
+      "excerpt": "this.paths[id]!"
+    },
+    {
+      "id": "96346d27d633d97e83a5",
+      "rule": "AG-TS-006",
+      "file": "engine/assets/asset-store.ts",
+      "line": 467,
+      "column": 18,
+      "excerpt": "this.paths[id]!"
+    },
+    {
+      "id": "c59bce81c48afbab9cd2",
+      "rule": "AG-TS-001",
+      "file": "engine/assets/asset-store.ts",
+      "line": 595,
+      "column": 28,
+      "excerpt": "any"
+    },
+    {
+      "id": "6541b9020d71c41a7fa8",
+      "rule": "AG-TS-001",
+      "file": "engine/assets/asset-store.ts",
+      "line": 626,
+      "column": 15,
+      "excerpt": "any"
+    },
+    {
+      "id": "ba3da548d60330ce02b6",
+      "rule": "AG-TS-001",
+      "file": "engine/assets/asset-store.ts",
+      "line": 642,
+      "column": 38,
+      "excerpt": "any"
+    },
+    {
+      "id": "799a9d3184254e70c64d",
+      "rule": "AG-TS-006",
+      "file": "engine/assets/asset-store.ts",
+      "line": 767,
+      "column": 68,
+      "excerpt": "this.paths[id]!"
+    },
+    {
+      "id": "11e475cb47d616536850",
+      "rule": "AG-TS-006",
+      "file": "engine/assets/big-parser.test.ts",
+      "line": 71,
+      "column": 20,
+      "excerpt": "findVTPageChunk(header, 'terrain', 0, 1, 0)!"
+    },
+    {
+      "id": "b9630b602aa25d32e2bf",
+      "rule": "AG-TS-006",
+      "file": "engine/assets/big-parser.test.ts",
+      "line": 148,
+      "column": 5,
+      "excerpt": "resolvers.shift()!"
+    },
+    {
+      "id": "da5d4a69b133a51dd14b",
+      "rule": "AG-TS-006",
+      "file": "engine/assets/big-parser.test.ts",
+      "line": 173,
+      "column": 5,
+      "excerpt": "resolvers.shift()!"
+    },
+    {
+      "id": "aa6a0db5823d3d3840e0",
+      "rule": "AG-TS-006",
+      "file": "engine/assets/big-parser.test.ts",
+      "line": 174,
+      "column": 5,
+      "excerpt": "resolvers.shift()!"
+    },
+    {
+      "id": "225f97216f6a53728b1c",
+      "rule": "AG-TS-006",
+      "file": "engine/assets/big-parser.test.ts",
+      "line": 207,
+      "column": 5,
+      "excerpt": "resolvers.shift()!"
+    },
+    {
+      "id": "b11082e90eb903f7102e",
+      "rule": "AG-TS-006",
+      "file": "engine/assets/big-parser.test.ts",
+      "line": 210,
+      "column": 5,
+      "excerpt": "resolvers.shift()!"
+    },
+    {
+      "id": "d7bc9aa3c20b02d9a586",
+      "rule": "AG-TS-006",
+      "file": "engine/assets/big-parser.ts",
+      "line": 397,
+      "column": 19,
+      "excerpt": "this.jobs[this.head]!"
+    },
+    {
+      "id": "45976105a4d08e4b42ab",
+      "rule": "AG-TS-006",
+      "file": "engine/assets/persistent-blob-cache.test.ts",
+      "line": 71,
+      "column": 5,
+      "excerpt": "backend.files.get('values-0.pack')!"
+    },
+    {
+      "id": "82e585e2799d56081c4a",
+      "rule": "AG-TS-009",
+      "file": "engine/assets/persistent-blob-cache.ts",
+      "line": 125,
+      "column": 28,
+      "excerpt": "data as unknown as FileSystemWriteChunkType"
+    },
+    {
+      "id": "27b74a83e2f9b34e88cc",
+      "rule": "AG-TS-009",
+      "file": "engine/assets/persistent-blob-cache.ts",
+      "line": 134,
+      "column": 28,
+      "excerpt": "data as unknown as FileSystemWriteChunkType"
+    },
+    {
+      "id": "30824215617f8c988ed2",
+      "rule": "AG-TS-006",
+      "file": "engine/assets/persistent-blob-cache.ts",
+      "line": 590,
+      "column": 17,
+      "excerpt": "this.jobs[this.head]!"
+    },
+    {
+      "id": "b15875848c0f8f398f61",
+      "rule": "AG-TS-004",
+      "file": "engine/assets/persistent-blob-cache.ts",
+      "line": 624,
+      "column": 74,
+      "excerpt": "catch { /* retain last known bound */ }"
+    },
+    {
+      "id": "0601747d36b24605729e",
+      "rule": "AG-TS-006",
+      "file": "engine/assets/persistent-blob-cache.ts",
+      "line": 644,
+      "column": 45,
+      "excerpt": "this.idleResolvers.pop()!"
+    },
+    {
+      "id": "095824f652f3d37be6d8",
+      "rule": "AG-TS-004",
+      "file": "engine/assets/persistent-blob-cache.ts",
+      "line": 726,
+      "column": 9,
+      "excerpt": "catch { /* quota cleanup will retry on a later compaction */ }"
+    },
+    {
+      "id": "0002a6a1e5f0a7b5b619",
+      "rule": "AG-TS-009",
+      "file": "engine/input/relative-pointer.test.ts",
+      "line": 25,
+      "column": 33,
+      "excerpt": "undefined as unknown as Promise<void>"
+    },
+    {
+      "id": "f85cc25364b9542911ab",
+      "rule": "AG-TS-009",
+      "file": "engine/input/relative-pointer.test.ts",
+      "line": 43,
+      "column": 7,
+      "excerpt": "element as unknown as HTMLElement"
+    },
+    {
+      "id": "fec40accaba0c4bb2141",
+      "rule": "AG-TS-009",
+      "file": "engine/input/relative-pointer.test.ts",
+      "line": 45,
+      "column": 19,
+      "excerpt": "document as unknown as Document"
+    },
+    {
+      "id": "e0318cce896706b30e7f",
+      "rule": "AG-TS-009",
+      "file": "engine/input/relative-pointer.test.ts",
+      "line": 68,
+      "column": 7,
+      "excerpt": "element as unknown as HTMLElement"
+    },
+    {
+      "id": "02510f61045b64362ca8",
+      "rule": "AG-TS-009",
+      "file": "engine/input/relative-pointer.test.ts",
+      "line": 70,
+      "column": 19,
+      "excerpt": "document as unknown as Document"
+    },
+    {
+      "id": "3c4d481feb8d78fbdb79",
+      "rule": "AG-TS-009",
+      "file": "engine/input/relative-pointer.test.ts",
+      "line": 83,
+      "column": 7,
+      "excerpt": "element as unknown as HTMLElement"
+    },
+    {
+      "id": "57b2dee500e36e950d04",
+      "rule": "AG-TS-009",
+      "file": "engine/input/relative-pointer.test.ts",
+      "line": 85,
+      "column": 19,
+      "excerpt": "document as unknown as Document"
+    },
+    {
+      "id": "a63ea39e61bf447de731",
+      "rule": "AG-TS-009",
+      "file": "engine/renderer/descriptors.ts",
+      "line": 60,
+      "column": 55,
+      "excerpt": "null as unknown as RenderDescriptor"
+    },
+    {
+      "id": "8301b6a95a663e110a32",
+      "rule": "AG-TS-006",
+      "file": "engine/renderer/fallback.ts",
+      "line": 36,
+      "column": 15,
+      "excerpt": "canvas.getContext('2d')!"
+    },
+    {
+      "id": "bb8568d855768253b346",
+      "rule": "AG-TS-009",
+      "file": "engine/renderer/render-adapter-pool.test.ts",
+      "line": 22,
+      "column": 22,
+      "excerpt": "adapter as unknown as { attachProxy(entity: number, descriptor: number): RenderAttachStatus; detachProxy(entity: number): void; syncUniqueProxies(frame: unknown): void; }"
+    },
+    {
+      "id": "52a6b057613d27704cc9",
+      "rule": "AG-TS-006",
+      "file": "engine/renderer/render-adapter.ts",
+      "line": 420,
+      "column": 21,
+      "excerpt": "shards[proxyHandle[entity]]!"
+    },
+    {
+      "id": "138b004c985c3774cbaf",
+      "rule": "AG-TS-006",
+      "file": "engine/renderer/render-adapter.ts",
+      "line": 523,
+      "column": 21,
+      "excerpt": "this.shards[this.proxyHandle[entity]]!"
+    },
+    {
+      "id": "f7cee07644282e69824f",
+      "rule": "AG-TS-006",
+      "file": "engine/renderer/render-adapter.ts",
+      "line": 544,
+      "column": 19,
+      "excerpt": "this.shards[this.proxyHandle[entity]]!"
+    },
+    {
+      "id": "7ce7d2e115c79ad74c8b",
+      "rule": "AG-TS-006",
+      "file": "engine/renderer/render-adapter.ts",
+      "line": 562,
+      "column": 22,
+      "excerpt": "this.uniqueObjects[entity]!"
+    },
+    {
+      "id": "c1f6f323c9ba1f8a00f3",
+      "rule": "AG-TS-009",
+      "file": "engine/renderer/renderer-host.test.ts",
+      "line": 29,
+      "column": 18,
+      "excerpt": "{ parentNode: null } as unknown as HTMLCanvasElement"
+    },
+    {
+      "id": "84d5732b4797a0aa6e09",
+      "rule": "AG-TS-009",
+      "file": "engine/renderer/renderer-host.test.ts",
+      "line": 87,
+      "column": 25,
+      "excerpt": "{ appendChild(child: unknown) { children.push(child); (child as { parentNode: unknown }).parentNode = container; }, removeChild(child: unknown) { const index = children.indexOf(chi"
+    },
+    {
+      "id": "df5d0787eea5a385a7a9",
+      "rule": "AG-TS-009",
+      "file": "engine/renderer/renderer-host.test.ts",
+      "line": 146,
+      "column": 20,
+      "excerpt": "{ appendChild() {} } as unknown as HTMLElement"
+    },
+    {
+      "id": "be34534dd54f48b260b2",
+      "rule": "AG-TS-009",
+      "file": "engine/renderer/webgpu-only.ts",
+      "line": 65,
+      "column": 24,
+      "excerpt": "window as unknown as { THREE: { WebGPURenderer: new (options: Record<string, unknown>) => WebGPUOnlyRenderer }; }"
+    },
+    {
+      "id": "5ae407671a865c9f4715",
+      "rule": "AG-TS-006",
+      "file": "engine/virtual-texturing/procedural-vt.test.ts",
+      "line": 28,
+      "column": 52,
+      "excerpt": "chain.levels.get(3)!"
+    },
+    {
+      "id": "2cbdb2af4baae04f211c",
+      "rule": "AG-TS-006",
+      "file": "engine/virtual-texturing/procedural-vt.test.ts",
+      "line": 28,
+      "column": 80,
+      "excerpt": "chain.levels.get(4)!"
+    },
+    {
+      "id": "a43e2522c6c79c48bf9d",
+      "rule": "AG-TS-006",
+      "file": "engine/virtual-texturing/virtual-texture-feedback-pass.test.ts",
+      "line": 50,
+      "column": 21,
+      "excerpt": "pass.consume()!"
+    },
+    {
+      "id": "d5507e9dc7e8f3f960f9",
+      "rule": "AG-TS-006",
+      "file": "engine/virtual-texturing/virtual-texture-feedback-pass.test.ts",
+      "line": 74,
+      "column": 19,
+      "excerpt": "pass.consume()!"
+    },
+    {
+      "id": "ad3e610ed77b43152cb9",
+      "rule": "AG-TS-006",
+      "file": "engine/virtual-texturing/virtual-texture-feedback-pass.test.ts",
+      "line": 81,
+      "column": 20,
+      "excerpt": "pass.consume()!"
+    },
+    {
+      "id": "dab5e1081663c56688f4",
+      "rule": "AG-TS-006",
+      "file": "engine/virtual-texturing/virtual-texture-feedback-pass.test.ts",
+      "line": 87,
+      "column": 19,
+      "excerpt": "pass.consume()!"
+    },
+    {
+      "id": "d86c9fa0ee2823b2e985",
+      "rule": "AG-TS-006",
+      "file": "engine/virtual-texturing/virtual-texture-feedback-pass.ts",
+      "line": 111,
+      "column": 37,
+      "excerpt": "entry.tailFirstMip!"
+    },
+    {
+      "id": "49af1486a201cdbd5dde",
+      "rule": "AG-TS-006",
+      "file": "engine/virtual-texturing/virtual-texture-store.test.ts",
+      "line": 138,
+      "column": 20,
+      "excerpt": "store.getEntry('a')!"
+    },
+    {
+      "id": "0edca7866fefa2c73a0b",
+      "rule": "AG-TS-006",
+      "file": "engine/virtual-texturing/virtual-texture-store.test.ts",
+      "line": 139,
+      "column": 20,
+      "excerpt": "store.getEntry('b')!"
+    },
+    {
+      "id": "3d46c54f4ccbaed27464",
+      "rule": "AG-TS-006",
+      "file": "engine/virtual-texturing/virtual-texture-store.test.ts",
+      "line": 179,
+      "column": 19,
+      "excerpt": "store.getEntry('tail')!"
+    },
+    {
+      "id": "75333c9dae998a4eac25",
+      "rule": "AG-TS-009",
+      "file": "engine/virtual-texturing/virtual-texture-store.test.ts",
+      "line": 191,
+      "column": 20,
+      "excerpt": "store.atlasTexture as unknown as DataTexture"
+    },
+    {
+      "id": "21cac33fb60c38227985",
+      "rule": "AG-TS-009",
+      "file": "engine/virtual-texturing/virtual-texture-store.test.ts",
+      "line": 200,
+      "column": 20,
+      "excerpt": "{ limits: { maxTextureDimension2D: 8192 }, queue: { writeTexture(_dst: unknown, _data: unknown, layout: { bytesPerRow?: number; rowsPerImage?: number }) { layouts.push(layout); } }"
+    },
+    {
+      "id": "2887123ebaf8c28ca9c6",
+      "rule": "AG-TS-006",
+      "file": "engine/virtual-texturing/virtual-texture-store.test.ts",
+      "line": 251,
+      "column": 15,
+      "excerpt": "store.getEntry('color')!"
+    },
+    {
+      "id": "acf59ac6ae70d2141f9f",
+      "rule": "AG-TS-006",
+      "file": "engine/virtual-texturing/virtual-texture-store.test.ts",
+      "line": 251,
+      "column": 49,
+      "excerpt": "store.getEntry('normal')!"
+    },
+    {
+      "id": "23ff470c721686349f23",
+      "rule": "AG-TS-006",
+      "file": "engine/virtual-texturing/virtual-texture-store.test.ts",
+      "line": 251,
+      "column": 83,
+      "excerpt": "store.getEntry('masks')!"
+    },
+    {
+      "id": "415e2e3aee6aecfbf2e0",
+      "rule": "AG-TS-006",
+      "file": "engine/virtual-texturing/virtual-texture-store.test.ts",
+      "line": 253,
+      "column": 37,
+      "excerpt": "store.getEntry('color')!"
+    },
+    {
+      "id": "01032cbf77207f8432be",
+      "rule": "AG-TS-006",
+      "file": "engine/virtual-texturing/virtual-texture-store.test.ts",
+      "line": 253,
+      "column": 73,
+      "excerpt": "store.getEntry('emissive')!"
+    },
+    {
+      "id": "5630915db5f8c4c6ba98",
+      "rule": "AG-TS-006",
+      "file": "engine/virtual-texturing/virtual-texture-store.test.ts",
+      "line": 289,
+      "column": 40,
+      "excerpt": "material.normal!"
+    },
+    {
+      "id": "bea92376a19acb547476",
+      "rule": "AG-TS-006",
+      "file": "engine/virtual-texturing/virtual-texture-store.test.ts",
+      "line": 289,
+      "column": 58,
+      "excerpt": "material.masks!"
+    },
+    {
+      "id": "8151cd01753a58092734",
+      "rule": "AG-TS-006",
+      "file": "engine/virtual-texturing/virtual-texture.ts",
+      "line": 1110,
+      "column": 14,
+      "excerpt": "this.entries.get(path)!"
+    },
+    {
+      "id": "4ad71dc1c5087c1b0f47",
+      "rule": "AG-TS-006",
+      "file": "engine/virtual-texturing/virtual-texture.ts",
+      "line": 1143,
+      "column": 50,
+      "excerpt": "this.entriesById[textureId]!"
+    },
+    {
+      "id": "03964622f3a5b4310279",
+      "rule": "AG-TS-006",
+      "file": "engine/virtual-texturing/virtual-texture.ts",
+      "line": 1152,
+      "column": 23,
+      "excerpt": "this.pageTables.get(path)!"
+    },
+    {
+      "id": "087b91254ee4a282890a",
+      "rule": "AG-TS-007",
+      "file": "engine/virtual-texturing/virtual-texture.ts",
+      "line": 1593,
+      "column": 80,
+      "excerpt": "if (this.queuePageLoad(entry, request, pageTable, false, priority)) { // @alloc-allowed reason=AssetFetch"
+    }
+  ]
+}

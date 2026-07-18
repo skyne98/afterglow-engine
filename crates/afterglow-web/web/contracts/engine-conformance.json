@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "releaseStatus": "conformant",
+  "visualEntrypoints": {
+    "src/demos/dungeon/main.ts": "canonical",
+    "src/demos/engine/main.ts": "canonical",
+    "src/demos/lod/main.ts": "canonical",
+    "src/demos/rigged-vt/main.ts": "canonical",
+    "src/demos/vt/main.ts": "canonical"
+  }
+}

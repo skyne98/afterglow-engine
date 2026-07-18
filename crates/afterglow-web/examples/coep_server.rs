@@ -1,4 +1,4 @@
-//! Bounded COOP/COEP development server for `afterglow-web/www`.
+//! Bounded COOP/COEP development server for the generated `afterglow-web/www` deployment.
 //!
 //! ```sh
 //! cargo run -p xtask serve
@@ -13,8 +13,8 @@ use std::time::Duration;
 
 fn main() {
     let www = Path::new("crates/afterglow-web/www");
-    let root = AssetRoot::new(www)
-        .unwrap_or_else(|| panic!("invalid asset root {}", www.display()));
+    let root =
+        AssetRoot::new(www).unwrap_or_else(|| panic!("invalid asset root {}", www.display()));
     let address: SocketAddr = "127.0.0.1:8787".parse().expect("fixed dev address");
     let mut server = DevAssetServer::start(root, address, 4, 16).expect("start bounded dev server");
     let stop = server.stop_token();

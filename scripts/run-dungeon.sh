@@ -4,7 +4,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CACHE="${TMPDIR:-/tmp}/afterglow-dungeon-materials-v3"
 SOURCES="$CACHE/sources"
 BIG="$CACHE/dungeon.big"
-PUBLISHED="$ROOT/crates/afterglow-web/www/dungeon.big"
+PUBLISHED="$ROOT/crates/afterglow-web/web/assets/dungeon.big"
 cd "$ROOT"
 if [[ ! -s "$PUBLISHED" ]]; then
   rm -rf "$CACHE"; mkdir -p "$SOURCES"

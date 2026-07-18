@@ -2,8 +2,8 @@
 
 Public browser barrels:
 
-- `engine/input-api.ts`
-- `engine/dev-harness-api.ts`
+- `web/src/engine/input/index.ts`
+- `web/src/engine/diagnostics/index.ts`
 
 These are reusable ownership mechanisms for visual entrypoints; they do not
 encode game controls or renderer policy.

@@ -1,4 +1,4 @@
-// crates/afterglow-web/www/node_modules/three/build/three.core.js
+// crates/afterglow-web/web/node_modules/three/build/three.core.js
 var REVISION = "185";
 var PCFShadowMap = 1;
 var VSMShadowMap = 3;
@@ -8177,7 +8177,7 @@ if (typeof window !== "undefined") {
     window.__THREE__ = REVISION;
   }
 }
-// crates/afterglow-web/www/node_modules/three/build/three.module.js
+// crates/afterglow-web/web/node_modules/three/build/three.module.js
 var alphahash_fragment = `#ifdef USE_ALPHAHASH
 	if ( diffuseColor.a < getAlphaHashThreshold( vPosition ) ) discard;
 #endif`;
@@ -13125,7 +13125,7 @@ var DATA = new Uint16Array([
   1183
 ]);
 
-// crates/afterglow-web/www/engine/resource.ts
+// crates/afterglow-web/web/src/engine/core/resource.ts
 var RESOURCES = Symbol.for("afterglow-resources");
 var RESOURCES_SEALED = Symbol.for("afterglow-resources-sealed");
 function ensureStore(world) {
@@ -13165,7 +13165,7 @@ function defineResource(name, factory) {
   return new Resource(name, factory);
 }
 
-// crates/afterglow-web/www/engine/asset-handle.ts
+// crates/afterglow-web/web/src/engine/assets/asset-handle.ts
 class AssetHandle {
   asset;
   generation = 0;
@@ -13184,7 +13184,7 @@ class AssetHandle {
   lod = -1;
 }
 
-// crates/afterglow-web/www/engine/fallback.ts
+// crates/afterglow-web/web/src/engine/renderer/fallback.ts
 var _fallbackGeometry = null;
 var _fallbackMaterial = null;
 var _fallbackGroup = null;
@@ -13210,7 +13210,7 @@ function fallbackGroup() {
   return _fallbackGroup.clone(true);
 }
 
-// crates/afterglow-web/www/engine/asset-store.ts
+// crates/afterglow-web/web/src/engine/assets/asset-store.ts
 var MAX_SINGLE_LOAD = 1 << 20;
 var CHUNK_SIZE = 512 * 1024;
 var DEFAULT_LOD_RATIOS = [1, 0.5, 0.25, 0.1];

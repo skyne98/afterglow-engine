@@ -52,7 +52,7 @@ The current Radeon 680M adapter admits a 60×60 physical page grid: 3,600
 - Cold/half/full/churn: `docs/benchmarks/vt-atlas-baseline-2026-07-16.md`.
 - Corrected 10/30/60-minute soaks: `docs/benchmarks/vt-soak-2026-07-16.md`.
 - Allocation boundaries: `docs/api/allocation-boundaries.md`.
-- Machine policy: `crates/afterglow-web/www/engine-allocation-effects.json`.
+- Machine policy: `crates/afterglow-web/web/contracts/engine-allocation-effects.json`.
 
 No engine-owned queue in the migrated runtime grows during gameplay. String
 Maps are confined to manifest/load/unload and game-facing lookup; frame VT

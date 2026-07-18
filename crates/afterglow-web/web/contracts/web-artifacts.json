@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "artifacts": [
+    { "source": "src/workers/codec.ts", "output": "codec.js", "role": "runtime" },
+    { "source": "src/workers/async-worker.ts", "output": "async-worker.js", "role": "runtime" },
+    { "source": "src/workers/ring-buf.ts", "output": "ring-buf.js", "role": "runtime" },
+    { "source": "src/workers/assetloader.client.ts", "output": "assetloader.client.js", "role": "runtime" },
+    { "source": "src/workers/meshopt.client.ts", "output": "meshopt.client.js", "role": "runtime" },
+    { "source": "src/workers/texture.client.ts", "output": "texture.client.js", "role": "runtime" },
+    { "source": "src/workers/rpc.ts", "output": "rpc.js", "role": "runtime" },
+    { "source": "src/workers/worker.ts", "output": "worker.js", "role": "worker" },
+    { "source": "src/engine/assets/asset-store.ts", "output": "engine/asset-store.js", "role": "runtime" },
+    { "source": "src/engine/core/engine-memory.ts", "output": "engine/engine-memory.js", "role": "runtime" },
+    { "source": "src/engine/assets/big-parser.ts", "output": "engine/big-parser.js", "role": "runtime" },
+    { "source": "src/engine/virtual-texturing/procedural-vt.ts", "output": "engine/procedural-vt.js", "role": "diagnostic" },
+    { "source": "src/engine/diagnostics/vt-gpu-test.ts", "output": "engine/vt-gpu-test.js", "role": "diagnostic" },
+    { "source": "src/demos/dungeon/main.ts", "output": "dungeon.js", "role": "visual-demo", "pages": ["dungeon.html"], "architectureChecked": true },
+    { "source": "src/demos/rigged-vt/main.ts", "output": "rigged-vt-demo.js", "role": "visual-demo", "pages": ["rigged-vt-demo.html"], "architectureChecked": true },
+    { "source": "src/demos/vt/main.ts", "output": "vt-demo.js", "role": "visual-demo", "pages": ["vt-demo.html"], "architectureChecked": true },
+    { "source": "src/demos/vt-mip-inspector/main.ts", "output": "vt-mip-inspector.js", "role": "diagnostic", "pages": ["vt-mip-inspector.html"] },
+    { "source": "src/demos/engine/main.ts", "output": "engine-demo.js", "role": "visual-demo", "pages": ["engine-demo.html"], "architectureChecked": true },
+    { "source": "src/demos/lod/main.ts", "output": "lod-demo.js", "role": "visual-demo", "pages": ["lod-demo.html"], "architectureChecked": true },
+    { "source": "src/demos/worker-bench/main.ts", "output": "worker-bench.js", "role": "diagnostic", "pages": ["worker-bench.html"] },
+    { "source": "src/demos/worker-test/main.ts", "output": "worker-test.js", "role": "diagnostic", "pages": ["worker-test.html"] }
+  ]
+}

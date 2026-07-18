@@ -1,4 +1,4 @@
-// crates/afterglow-web/www/codec.ts
+// crates/afterglow-web/web/src/workers/codec.ts
 function decodeVarint(bytes, off) {
   let r = 0;
   for (let shift = 0;shift < 56; shift += 7) {
@@ -27,7 +27,7 @@ function unwrapResponse(bytes) {
   throw new Error(`RPC ${variant === 1 ? "server" : "decode"} error (method ${method}): ${msg}`);
 }
 
-// crates/afterglow-web/www/async-worker.ts
+// crates/afterglow-web/web/src/workers/async-worker.ts
 class PendingFetch {
   constructor(url) {
     this.promise = fetch(url);

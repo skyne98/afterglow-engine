@@ -1,6 +1,6 @@
 # Persistent blob cache API
 
-`crates/afterglow-web/www/engine/persistent-blob-cache.ts` provides generic,
+`crates/afterglow-web/web/src/engine/assets/persistent-blob-cache.ts` provides generic,
 policy-free persistent byte storage. It does not know about textures, assets,
 GPUs, paths, or codecs.
 

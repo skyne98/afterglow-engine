@@ -1,4 +1,4 @@
-// crates/afterglow-web/www/ring-buf.ts
+// crates/afterglow-web/web/src/workers/ring-buf.ts
 var U32 = 4;
 var HEADER = 12;
 function rdU32(u8, off, cap) {

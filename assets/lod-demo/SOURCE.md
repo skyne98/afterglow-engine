@@ -11,5 +11,5 @@ Regenerate the checked-in runtime container with:
 ```sh
 cargo run -p afterglow-pipeline -- \
   static-lod assets/lod-demo/Avocado.gltf \
-  crates/afterglow-web/www/lod-demo.big
+  crates/afterglow-web/web/assets/lod-demo.big
 ```

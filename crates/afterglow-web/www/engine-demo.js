@@ -1,4 +1,4 @@
-// crates/afterglow-web/www/node_modules/three/build/three.core.js
+// crates/afterglow-web/web/node_modules/three/build/three.core.js
 var REVISION = "185";
 var CullFaceNone = 0;
 var CullFaceBack = 1;
@@ -11692,7 +11692,7 @@ if (typeof window !== "undefined") {
   }
 }
 
-// crates/afterglow-web/www/node_modules/three/build/three.webgpu.js
+// crates/afterglow-web/web/node_modules/three/build/three.webgpu.js
 var refreshUniforms = [
   "alphaMap",
   "alphaTest",
@@ -41994,7 +41994,7 @@ class WebGPURenderer extends Renderer {
   }
 }
 
-// crates/afterglow-web/www/engine/bench.ts
+// crates/afterglow-web/web/src/engine/diagnostics/bench.ts
 class FrameBench {
   intervals;
   sorted;
@@ -42130,7 +42130,7 @@ function benchFromUrl(options = {}) {
   bench.start(frames);
   return bench;
 }
-// crates/afterglow-web/www/engine/diagnostics.ts
+// crates/afterglow-web/web/src/engine/core/diagnostics.ts
 class EngineDiagnostics {
   capacity;
   sequences;
@@ -42197,7 +42197,7 @@ class EngineDiagnostics {
     }
   }
 }
-// crates/afterglow-web/www/node_modules/bitecs/dist/core/index.min.mjs
+// crates/afterglow-web/web/node_modules/bitecs/dist/core/index.min.mjs
 var A = (e, t, n) => Object.defineProperty(e, t, { value: n, enumerable: false, writable: true, configurable: true });
 var pe = (e, t) => t & e.entityMask;
 var z = (e) => {
@@ -42715,11 +42715,11 @@ var L = (e, t) => {
 };
 var N2 = (e, t) => K(e[u].entityIndex, t);
 
-// crates/afterglow-web/www/engine/types.ts
+// crates/afterglow-web/web/src/engine/core/types.ts
 var NULL_ENTITY = 0;
 var NONE_U32 = 4294967295;
 
-// crates/afterglow-web/www/engine/components.ts
+// crates/afterglow-web/web/src/engine/ecs/components.ts
 var MAX_ENTITIES = 1e6;
 function createTransformStore(capacity = MAX_ENTITIES) {
   const rotationW = new Float32Array(capacity);
@@ -42760,7 +42760,7 @@ function createRenderRefStore(capacity = MAX_ENTITIES) {
   };
 }
 
-// crates/afterglow-web/www/engine/descriptors.ts
+// crates/afterglow-web/web/src/engine/renderer/descriptors.ts
 class RenderResourceRegistry {
   descriptors = [null];
   register(descriptor) {
@@ -42779,7 +42779,7 @@ class RenderResourceRegistry {
   }
 }
 
-// crates/afterglow-web/www/engine/dirty-queue.ts
+// crates/afterglow-web/web/src/engine/ecs/dirty-queue.ts
 class EntityDirtyQueue {
   capacity;
   entities;
@@ -42839,7 +42839,7 @@ class EntityDirtyQueue {
   }
 }
 
-// crates/afterglow-web/www/engine/dirty-ranges.ts
+// crates/afterglow-web/web/src/engine/ecs/dirty-ranges.ts
 class DirtySlotRanges {
   maximumRanges;
   bits;
@@ -42915,7 +42915,7 @@ class DirtySlotRanges {
   }
 }
 
-// crates/afterglow-web/www/engine/instance-shard.ts
+// crates/afterglow-web/web/src/engine/renderer/instance-shard.ts
 class InstanceShard {
   id;
   descriptorId;
@@ -42998,7 +42998,7 @@ class InstanceShard {
   }
 }
 
-// crates/afterglow-web/www/engine/matrix.ts
+// crates/afterglow-web/web/src/engine/ecs/matrix.ts
 function composeTransformInto(output2, offset, transform, entity) {
   const qx = transform.rotationX[entity];
   const qy = transform.rotationY[entity];
@@ -43087,7 +43087,7 @@ function multiplyMatricesInto(output2, outputOffset, left, leftOffset, right, ri
   output2[outputOffset + 15] = a41 * b14 + a42 * b24 + a43 * b34 + a44 * b44;
 }
 
-// crates/afterglow-web/www/engine/hierarchy.ts
+// crates/afterglow-web/web/src/engine/ecs/hierarchy.ts
 var ChildOf = ot(le);
 class HierarchyState {
   capacity;
@@ -43250,7 +43250,7 @@ class HierarchyState {
   }
 }
 
-// crates/afterglow-web/www/engine/render-adapter.ts
+// crates/afterglow-web/web/src/engine/renderer/render-adapter.ts
 var HIERARCHY_REBUILD_OPERATIONS = 512;
 var HIERARCHY_REBUILD_BUDGET_MS = 0.2;
 var MAX_STRUCTURAL_CHANGES_PER_FRAME = 256;
@@ -43701,7 +43701,7 @@ class RenderAdapter {
     this.uniqueObjects.length = 0;
   }
 }
-// crates/afterglow-web/www/engine/renderer-seal.ts
+// crates/afterglow-web/web/src/engine/renderer/renderer-seal.ts
 class RendererSeal {
   backend;
   sealed = false;
@@ -43742,7 +43742,7 @@ class RendererSeal {
   }
 }
 
-// crates/afterglow-web/www/engine/height-texture.ts
+// crates/afterglow-web/web/src/engine/assets/height-texture.ts
 var HEIGHT_R16_MAGIC = new Uint8Array([65, 71, 82, 49, 54, 76, 69, 1]);
 function assertHeightTextureGpuFormat(backend, texture2) {
   const format = backend.utils?.getTextureFormatGPU(texture2);
@@ -43750,7 +43750,7 @@ function assertHeightTextureGpuFormat(backend, texture2) {
     throw new Error(`displacement GPU format mismatch: expected r32float, got ${format ?? "unavailable"}`);
 }
 
-// crates/afterglow-web/www/engine/webgpu-only.ts
+// crates/afterglow-web/web/src/engine/renderer/webgpu-only.ts
 function disableWebGLFallback(renderer) {
   renderer._getFallback = null;
 }
@@ -43795,7 +43795,7 @@ async function createWebGPUOnlyRenderer(parameters = {}, factory) {
   return renderer;
 }
 
-// crates/afterglow-web/www/engine/renderer-host.ts
+// crates/afterglow-web/web/src/engine/renderer/renderer-host.ts
 class BrowserRendererViewport {
   get width() {
     return window.innerWidth;
@@ -43974,7 +43974,7 @@ class RendererHost {
     this.renderer.dispose();
   }
 }
-// crates/afterglow-web/www/engine/resource.ts
+// crates/afterglow-web/web/src/engine/core/resource.ts
 var RESOURCES = Symbol.for("afterglow-resources");
 var RESOURCES_SEALED = Symbol.for("afterglow-resources-sealed");
 function ensureStore(world) {
@@ -44052,7 +44052,7 @@ function sealResources(world) {
   world[RESOURCES_SEALED] = true;
 }
 
-// crates/afterglow-web/www/engine/engine-memory.ts
+// crates/afterglow-web/web/src/engine/core/engine-memory.ts
 var INVALID_MEMORY_OFFSET = -1;
 var INVALID_POOL_INDEX = 4294967295;
 class LinearArena {
@@ -44214,7 +44214,7 @@ class EngineMemory {
   }
 }
 
-// crates/afterglow-web/www/engine/frame-budget.ts
+// crates/afterglow-web/web/src/engine/core/frame-budget.ts
 var DEFAULT_FRAME_BUDGET = {
   deadlineFractions: [0.15, 0.35, 0.45, 0.55, 0.95],
   operationLimits: [1, 1, 1, 1, 1]
@@ -44318,7 +44318,7 @@ class FrameBudget {
 }
 var FrameBudgetRes = defineResource("frameBudget", () => new FrameBudget);
 
-// crates/afterglow-web/www/engine/frame.ts
+// crates/afterglow-web/web/src/engine/core/frame.ts
 function prepareAfterglowFrame(frame, workerInput, adapter, vtInput, memory, budget) {
   if (memory && memory.phase !== 2 /* GameplaySealed */ && memory.phase !== 3 /* LoadingScreen */)
     throw new Error("EngineMemory must be sealed before frame orchestration");
@@ -44350,7 +44350,7 @@ function prepareAfterglowFrame(frame, workerInput, adapter, vtInput, memory, bud
   budget?.endStage(4 /* RenderPrepare */);
 }
 
-// crates/afterglow-web/www/engine/runtime.ts
+// crates/afterglow-web/web/src/engine/core/runtime.ts
 class BrowserAnimationScheduler {
   request(callback) {
     return requestAnimationFrame(callback);
@@ -44555,7 +44555,7 @@ class EngineRuntime {
       this.animationHandle = this.scheduler.request(this.onAnimationFrame);
   }
 }
-// crates/afterglow-web/www/engine-demo.ts
+// crates/afterglow-web/web/src/demos/engine/main.ts
 var ENTITY_COUNT = 5000;
 var scene = new Scene;
 scene.background = new Color(658448);

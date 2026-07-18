@@ -11,16 +11,26 @@ service runs in the browser over a `SharedArrayBuffer`.
 nix-shell shell.nix --run "cargo run -p xtask wasm"
 ```
 
-`xtask wasm` builds `afterglow-web` and `afterglow-rpc-demo` to
-`wasm32-unknown-unknown` with `-Zbuild-std` and the shared-memory flags, then
-copies them deterministically into `crates/afterglow-web/www/`:
+`xtask wasm` builds `afterglow-web` and worker crates for
+`wasm32-unknown-unknown` with `-Zbuild-std` and the shared-memory flags. It
+stages byte-identical wasm files in `crates/afterglow-web/web/assets/`, refreshes
+generated clients in `web/src/workers/`, and runs `scripts/build-web.ts`.
 
-| Build output | Copied to |
+The web tree has one-way ownership:
+
+| Directory | Contents |
 |---|---|
-| `afterglow_web.wasm` | `www/afterglow_web.wasm` |
-| `afterglow_rpc_demo.wasm` | `www/physics_worker.wasm` |
+| `web/src/engine/` | Authored engine TypeScript, organized by subsystem |
+| `web/src/demos/` | Pure game/presentation examples |
+| `web/src/workers/` | Worker runtime and generated typed clients |
+| `web/public/` | Authored HTML and static public files |
+| `web/assets/` | Cooked assets and wasm staging inputs |
+| `web/contracts/` | Manifests and conformance ratchets |
+| `www/` | Disposable generated deployment; never author files here |
 
-The copies are byte-identical to the `target/` artifacts.
+`bun scripts/build-web.ts` deletes and reconstructs `www/`. `--check` compares
+the complete staged tree, so missing, stale, and undeclared deployment files all
+fail conformance.
 
 ### Optimized (for shipping/benchmarking)
 
@@ -90,22 +100,18 @@ headers on every response from your game's origin.
 ## The page
 
 ```html
-<script type="module">
-  import * as THREE from '/three.webgpu.js';
-  import { Rpc } from '/rpc.js';
-  import { PhysicsClient } from '/physics.client.js';
+<script type="module" src="./game.js"></script>
+```
 
-  const transport = await Rpc.create({
-    mainWasmUrl: '/afterglow_web.wasm',
-    workerJsUrl: '/worker.js',
-    workerWasmUrl: '/physics_worker.wasm',
-    timeoutMs: 5000,
-  });
+Author and bundle `game.ts`; HTML never contains authored inline JavaScript:
 
-  const physics = new PhysicsClient(transport);
-  const result = await physics.step(new Float32Array([0, 1, 2]), 0.5);
-  // Float32Array [0.5, 1.5, 2.5]
-</script>
+```ts
+import * as THREE from 'three/webgpu';
+import { PhysicsClient } from './workers/physics.client.ts';
+
+const physics = await PhysicsClient.spawn({ workerWasmUrl: 'physics_worker.wasm' });
+const result = await physics.step(new Float32Array([0, 1, 2]), 0.5);
+physics.close();
 ```
 
 See [Web Workers](../workers/web-workers.md) for the full `Rpc` transport API

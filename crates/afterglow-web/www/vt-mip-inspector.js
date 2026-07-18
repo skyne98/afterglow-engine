@@ -1,4 +1,4 @@
-// crates/afterglow-web/www/engine/procedural-vt.ts
+// crates/afterglow-web/web/src/engine/virtual-texturing/procedural-vt.ts
 var VT_PAGE_SIZE = 128;
 var VT_PAGE_BORDER = 4;
 var VT_SLOT_SIZE = VT_PAGE_SIZE + VT_PAGE_BORDER * 2;
@@ -74,7 +74,7 @@ function generateStonePage(seed, mip, pageX, pageY, virtualSize = 131072) {
   return pagePixels(mip, pageX, pageY, virtualSize, (x, y, mipScale) => sampleStoneResized(seed, x, y, mipScale, virtualSize));
 }
 
-// crates/afterglow-web/www/vt-mip-inspector.ts
+// crates/afterglow-web/web/src/demos/vt-mip-inspector/main.ts
 var seed = 40503;
 var virtualCrop = 32768;
 var grid = document.querySelector("#grid");

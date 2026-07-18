@@ -5,7 +5,7 @@
 ```sh
 cargo run -p afterglow-pipeline -- \
   static-lod assets/lod-demo/Avocado.gltf \
-  crates/afterglow-web/www/lod-demo.big
+  crates/afterglow-web/web/assets/lod-demo.big
 ```
 
 `static-lod` accepts one glTF/GLB triangle primitive, reads POSITION, indices,

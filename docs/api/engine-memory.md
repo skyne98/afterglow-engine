@@ -1,6 +1,6 @@
 # Engine memory and sealed runtime policy
 
-`crates/afterglow-web/www/engine/engine-memory.ts` provides the first allocation-
+`crates/afterglow-web/web/src/engine/core/engine-memory.ts` provides the first allocation-
 discipline primitives for the engine migration described in
 `docs/implementation/no-runtime-allocation-constant-time-budget-plan.md`.
 
@@ -75,16 +75,18 @@ supported way to rewind frame scratch exactly once per frame.
 Authored browser source is TypeScript. Run:
 
 ```sh
-bun install --cwd crates/afterglow-web/www --frozen-lockfile
+bun install --cwd crates/afterglow-web/web --frozen-lockfile
 bun scripts/build-web.ts
 bun scripts/build-web.ts --check
 bun scripts/lint-hot-allocations.ts
 ```
 
-`build-web.ts` owns the TypeScript-to-JavaScript artifact manifest and rejects
-unclassified hand-authored JavaScript. Authored TypeScript imports authored
+`build-web.ts` owns the artifact manifest in `web/contracts/`, bundles authored
+TypeScript from `web/src/`, and reconstructs the disposable `www/` deployment
+from `web/public/` and `web/assets/`. Authored TypeScript imports authored
 modules through `.ts` specifiers; importing generated `.js` artifacts is rejected.
-`--check` rebuilds into a temporary directory and detects artifact drift.
+`--check` stages the complete deployment in a temporary directory and detects
+missing, stale, or extra files.
 
 The allocation lint scans explicit `@hot-no-alloc-begin/end` regions and rejects
 common allocation constructs. `engine-allocation-effects.json` must classify

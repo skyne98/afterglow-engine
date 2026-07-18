@@ -53,8 +53,7 @@ flowchart TB
 
 ```sh
 cargo run -p xtask build   # build the native CEF host + examples
-cargo run -p xtask wasm    # build afterglow-web + afterglow-rpc-demo to wasm,
-                           #   copy artifacts into crates/afterglow-web/www/
+cargo run -p xtask wasm    # build wasm, stage web inputs, and regenerate www/
 cargo run -p xtask check   # cargo check the whole workspace
 cargo run -p xtask test    # cargo test --workspace + node --test on rpc.test.mjs
 cargo run -p xtask bench   # run the native ring buffer stress test
@@ -68,5 +67,5 @@ cargo run -p xtask bench   # run the native ring buffer stress test
 | Understand asset serving | `crates/afterglow-cef/src/resources.rs`, `crates/afterglow-assets/` |
 | See a worker service | `crates/afterglow-rpc-demo/src/lib.rs` |
 | Use the `#[rpc]` macro | `crates/afterglow-rpc-macros/src/lib.rs` |
-| Call a worker from JS | `crates/afterglow-web/www/rpc.js`, `worker.js` |
+| Call a worker from TypeScript | `crates/afterglow-web/web/src/workers/` |
 | Build wasm | `xtask/src/main.rs`, `.cargo/config.toml` |

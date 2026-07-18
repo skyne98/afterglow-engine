@@ -249,8 +249,11 @@ All engine work must move toward these non-negotiable requirements:
   share an address space.
 - All authored web engine, runtime, RPC, worker, and demo source must be
   TypeScript. HTML contains markup/style and external generated-script tags,
-  never inline authored JavaScript. JavaScript under `www/` is generated
-  deployment output or vendored Three.js; never edit generated `.js` directly.
+  never inline authored JavaScript. `crates/afterglow-web/web/` separates
+  `src/engine/<subsystem>`, `src/workers`, `src/demos/<name>`, `public`,
+  `assets`, and `contracts`. `www/` is a disposable generated deployment tree:
+  never place authored source, tests, package state, manifests, or vendored
+  libraries there, and never edit its generated `.js` directly.
   Authored `.ts` files must import authored modules via `.ts` specifiers, never
   via generated `.js` artifact paths; `scripts/build-web.ts` enforces this. Run `bun scripts/build-web.ts` and enforce
   drift with `bun scripts/build-web.ts --check`.
@@ -439,7 +442,7 @@ has a fixed-capacity **built-in frame benchmark**: load `?bench=300` to run a
 300-frame rAF timing benchmark (p50/p90/p99/max + dropped-frame count).
 Capture uses preallocated typed arrays; sorting/formatting occurs once after the
 sample. Results appear in the JS console (`[bench]` prefix). The
-`www/engine/bench.ts` module is the reusable engine API (`FrameBench` class +
+`web/src/engine/diagnostics/bench.ts` module is the reusable engine API (`FrameBench` class +
 `formatBenchResults`). Run:
 
 ```sh

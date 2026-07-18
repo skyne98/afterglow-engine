@@ -1,6 +1,6 @@
 # `afterglow-web` API — shared-memory worker transport
 
-> Status: working; API checked against the 2026-07-15 source.
+> Status: working; API checked against the 2026-07-18 source.
 
 ## Architecture
 
@@ -25,6 +25,19 @@ if all slots are occupied. Generated wasm services reserve a matching 256-entry
 completion queue and reject a 257th outstanding export call. One shared polling
 pump remains active while the fixed pending count is nonzero and drains at most
 32 completions per invocation.
+
+## Source and deployment layout
+
+- `web/src/engine/<subsystem>/` contains authored engine TypeScript.
+- `web/src/workers/` contains worker runtime and generated typed clients.
+- `web/src/demos/<name>/` contains pure game/presentation entrypoints.
+- `web/public/`, `web/assets/`, and `web/contracts/` separate authored pages,
+  deployable inputs, and development policy.
+- `www/` is generated from those inputs by `scripts/build-web.ts`; it is never
+  an authored source or package workspace and can be deleted and rebuilt.
+
+The build replaces the complete deployment tree. `--check` compares every
+staged file and rejects missing, stale, or extra output.
 
 ## Required page headers
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /** Strict TypeScript checker with a merge-base-monotonic legacy error baseline. */
-import ts from '../crates/afterglow-web/www/node_modules/typescript/lib/typescript.js';
+import ts from '../crates/afterglow-web/web/node_modules/typescript/lib/typescript.js';
 import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join, relative, resolve } from 'node:path';
@@ -16,12 +16,12 @@ interface TypeFinding {
   source: string;
 }
 interface TypeBaseline { version: number; config: string; findings: TypeFinding[] }
-const baselineVersion = 2;
+const baselineVersion = 3;
 const root = resolve(import.meta.dir, '..');
-const www = join(root, 'crates/afterglow-web/www');
+const web = join(root, 'crates/afterglow-web/web');
 const configName = 'tsconfig.harsh.json';
-const configPath = join(www, configName);
-const baselinePath = join(www, 'typescript-error-baseline.json');
+const configPath = join(web, configName);
+const baselinePath = join(web, 'contracts/typescript-error-baseline.json');
 
 function compact(text: string): string { return text.replace(/\s+/g, ' ').trim(); }
 function parseCompareRef(): string | null {
@@ -29,7 +29,7 @@ function parseCompareRef(): string | null {
   return index < 0 ? null : process.argv[index + 1] ?? null;
 }
 function baselineAtRef(ref: string): TypeBaseline | null {
-  const path = 'crates/afterglow-web/www/typescript-error-baseline.json';
+  const path = 'crates/afterglow-web/web/contracts/typescript-error-baseline.json';
   const result = spawnSync('git', ['show', `${ref}:${path}`], { cwd: root, encoding: 'utf8' });
   if (result.status !== 0) return null;
   try {
@@ -41,14 +41,14 @@ function baselineAtRef(ref: string): TypeBaseline | null {
 export function collectTypeFindings(): TypeFinding[] {
   const loaded = ts.readConfigFile(configPath, ts.sys.readFile);
   if (loaded.error) throw new Error(ts.flattenDiagnosticMessageText(loaded.error.messageText, '\n'));
-  const parsed = ts.parseJsonConfigFileContent(loaded.config, ts.sys, www, undefined, configPath);
+  const parsed = ts.parseJsonConfigFileContent(loaded.config, ts.sys, web, undefined, configPath);
   if (parsed.errors.length !== 0)
     throw new Error(parsed.errors.map((error) => ts.flattenDiagnosticMessageText(error.messageText, '\n')).join('\n'));
   const program = ts.createProgram(parsed.fileNames, parsed.options);
   const diagnostics = ts.getPreEmitDiagnostics(program)
     .filter((diagnostic) => !diagnostic.file?.fileName.includes('/node_modules/'));
   const raw = diagnostics.map((diagnostic) => {
-    const file = diagnostic.file ? relative(www, diagnostic.file.fileName).replaceAll('\\', '/') : '<global>';
+    const file = diagnostic.file ? relative(web, diagnostic.file.fileName).replaceAll('\\', '/') : '<global>';
     const position = diagnostic.file && diagnostic.start !== undefined
       ? diagnostic.file.getLineAndCharacterOfPosition(diagnostic.start)
       : { line: 0, character: 0 };

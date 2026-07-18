@@ -13,7 +13,7 @@ var __export = (target, all) => {
     });
 };
 
-// crates/afterglow-web/www/node_modules/three/build/three.webgpu.js
+// crates/afterglow-web/web/node_modules/three/build/three.webgpu.js
 var exports_three_webgpu = {};
 __export(exports_three_webgpu, {
   warnOnce: () => warnOnce,
@@ -647,7 +647,7 @@ __export(exports_three_webgpu, {
   ACESFilmicToneMapping: () => ACESFilmicToneMapping
 });
 
-// crates/afterglow-web/www/node_modules/three/build/three.core.js
+// crates/afterglow-web/web/node_modules/three/build/three.core.js
 var REVISION = "185";
 var MOUSE = { LEFT: 0, MIDDLE: 1, RIGHT: 2, ROTATE: 0, DOLLY: 1, PAN: 2 };
 var TOUCH = { ROTATE: 0, PAN: 1, DOLLY_PAN: 2, DOLLY_ROTATE: 3 };
@@ -22938,7 +22938,7 @@ if (typeof window !== "undefined") {
   }
 }
 
-// crates/afterglow-web/www/node_modules/three/build/three.webgpu.js
+// crates/afterglow-web/web/node_modules/three/build/three.webgpu.js
 var refreshUniforms = [
   "alphaMap",
   "alphaTest",
@@ -57666,7 +57666,7 @@ class ClippingGroup extends Group {
     this.clipShadows = false;
   }
 }
-// crates/afterglow-web/www/node_modules/three/build/three.module.js
+// crates/afterglow-web/web/node_modules/three/build/three.module.js
 var alphahash_fragment = `#ifdef USE_ALPHAHASH
 	if ( diffuseColor.a < getAlphaHashThreshold( vPosition ) ) discard;
 #endif`;
@@ -62614,7 +62614,7 @@ var DATA2 = new Uint16Array([
   1183
 ]);
 
-// crates/afterglow-web/www/node_modules/three/examples/jsm/utils/BufferGeometryUtils.js
+// crates/afterglow-web/web/node_modules/three/examples/jsm/utils/BufferGeometryUtils.js
 function toTrianglesDrawMode(geometry, drawMode) {
   if (drawMode === TrianglesDrawMode) {
     console.warn("THREE.BufferGeometryUtils.toTrianglesDrawMode(): Geometry already defined as triangles.");
@@ -62670,7 +62670,7 @@ function toTrianglesDrawMode(geometry, drawMode) {
   }
 }
 
-// crates/afterglow-web/www/node_modules/three/examples/jsm/utils/SkeletonUtils.js
+// crates/afterglow-web/web/node_modules/three/examples/jsm/utils/SkeletonUtils.js
 function clone(source) {
   const sourceLookup = new Map;
   const cloneLookup = new Map;
@@ -62701,7 +62701,7 @@ function parallelTraverse(a, b, callback) {
   }
 }
 
-// crates/afterglow-web/www/node_modules/three/examples/jsm/loaders/GLTFLoader.js
+// crates/afterglow-web/web/node_modules/three/examples/jsm/loaders/GLTFLoader.js
 class GLTFLoader extends Loader {
   constructor(manager) {
     super(manager);
@@ -65092,7 +65092,7 @@ function addPrimitiveAttributes(geometry, primitiveDef, parser) {
     return primitiveDef.targets !== undefined ? addMorphTargets(geometry, primitiveDef.targets, parser) : geometry;
   });
 }
-// crates/afterglow-web/www/engine/diagnostics.ts
+// crates/afterglow-web/web/src/engine/core/diagnostics.ts
 class EngineDiagnostics {
   capacity;
   sequences;
@@ -65159,7 +65159,7 @@ class EngineDiagnostics {
     }
   }
 }
-// crates/afterglow-web/www/node_modules/bitecs/dist/core/index.min.mjs
+// crates/afterglow-web/web/node_modules/bitecs/dist/core/index.min.mjs
 var A = (e, t, n) => Object.defineProperty(e, t, { value: n, enumerable: false, writable: true, configurable: true });
 var pe = (e, t) => t & e.entityMask;
 var z = (e) => {
@@ -65677,11 +65677,11 @@ var L = (e, t) => {
 };
 var N2 = (e, t) => K(e[u].entityIndex, t);
 
-// crates/afterglow-web/www/engine/types.ts
+// crates/afterglow-web/web/src/engine/core/types.ts
 var NULL_ENTITY = 0;
 var NONE_U32 = 4294967295;
 
-// crates/afterglow-web/www/engine/components.ts
+// crates/afterglow-web/web/src/engine/ecs/components.ts
 var MAX_ENTITIES = 1e6;
 function createTransformStore(capacity = MAX_ENTITIES) {
   const rotationW = new Float32Array(capacity);
@@ -65722,7 +65722,7 @@ function createRenderRefStore(capacity = MAX_ENTITIES) {
   };
 }
 
-// crates/afterglow-web/www/engine/descriptors.ts
+// crates/afterglow-web/web/src/engine/renderer/descriptors.ts
 class RenderResourceRegistry {
   descriptors = [null];
   register(descriptor) {
@@ -65741,7 +65741,7 @@ class RenderResourceRegistry {
   }
 }
 
-// crates/afterglow-web/www/engine/dirty-queue.ts
+// crates/afterglow-web/web/src/engine/ecs/dirty-queue.ts
 class EntityDirtyQueue {
   capacity;
   entities;
@@ -65801,7 +65801,7 @@ class EntityDirtyQueue {
   }
 }
 
-// crates/afterglow-web/www/engine/dirty-ranges.ts
+// crates/afterglow-web/web/src/engine/ecs/dirty-ranges.ts
 class DirtySlotRanges {
   maximumRanges;
   bits;
@@ -65877,7 +65877,7 @@ class DirtySlotRanges {
   }
 }
 
-// crates/afterglow-web/www/engine/instance-shard.ts
+// crates/afterglow-web/web/src/engine/renderer/instance-shard.ts
 class InstanceShard {
   id;
   descriptorId;
@@ -65960,7 +65960,7 @@ class InstanceShard {
   }
 }
 
-// crates/afterglow-web/www/engine/matrix.ts
+// crates/afterglow-web/web/src/engine/ecs/matrix.ts
 function composeTransformInto(output2, offset, transform, entity) {
   const qx = transform.rotationX[entity];
   const qy = transform.rotationY[entity];
@@ -66049,7 +66049,7 @@ function multiplyMatricesInto(output2, outputOffset, left, leftOffset, right, ri
   output2[outputOffset + 15] = a41 * b14 + a42 * b24 + a43 * b34 + a44 * b44;
 }
 
-// crates/afterglow-web/www/engine/hierarchy.ts
+// crates/afterglow-web/web/src/engine/ecs/hierarchy.ts
 var ChildOf = ot(le);
 class HierarchyState {
   capacity;
@@ -66212,7 +66212,7 @@ class HierarchyState {
   }
 }
 
-// crates/afterglow-web/www/engine/render-adapter.ts
+// crates/afterglow-web/web/src/engine/renderer/render-adapter.ts
 var HIERARCHY_REBUILD_OPERATIONS = 512;
 var HIERARCHY_REBUILD_BUDGET_MS = 0.2;
 var MAX_STRUCTURAL_CHANGES_PER_FRAME = 256;
@@ -66663,7 +66663,7 @@ class RenderAdapter {
     this.uniqueObjects.length = 0;
   }
 }
-// crates/afterglow-web/www/engine/renderer-seal.ts
+// crates/afterglow-web/web/src/engine/renderer/renderer-seal.ts
 class RendererSeal {
   backend;
   sealed = false;
@@ -66704,7 +66704,7 @@ class RendererSeal {
   }
 }
 
-// crates/afterglow-web/www/engine/height-texture.ts
+// crates/afterglow-web/web/src/engine/assets/height-texture.ts
 var HEIGHT_R16_MAGIC = new Uint8Array([65, 71, 82, 49, 54, 76, 69, 1]);
 function assertHeightTextureGpuFormat(backend, texture2) {
   const format = backend.utils?.getTextureFormatGPU(texture2);
@@ -66712,7 +66712,7 @@ function assertHeightTextureGpuFormat(backend, texture2) {
     throw new Error(`displacement GPU format mismatch: expected r32float, got ${format ?? "unavailable"}`);
 }
 
-// crates/afterglow-web/www/engine/webgpu-only.ts
+// crates/afterglow-web/web/src/engine/renderer/webgpu-only.ts
 function disableWebGLFallback(renderer) {
   renderer._getFallback = null;
 }
@@ -66757,7 +66757,7 @@ async function createWebGPUOnlyRenderer(parameters = {}, factory) {
   return renderer;
 }
 
-// crates/afterglow-web/www/engine/renderer-host.ts
+// crates/afterglow-web/web/src/engine/renderer/renderer-host.ts
 class BrowserRendererViewport {
   get width() {
     return window.innerWidth;
@@ -66936,7 +66936,7 @@ class RendererHost {
     this.renderer.dispose();
   }
 }
-// crates/afterglow-web/www/engine/resource.ts
+// crates/afterglow-web/web/src/engine/core/resource.ts
 var RESOURCES = Symbol.for("afterglow-resources");
 var RESOURCES_SEALED = Symbol.for("afterglow-resources-sealed");
 function ensureStore(world) {
@@ -67014,7 +67014,7 @@ function sealResources(world) {
   world[RESOURCES_SEALED] = true;
 }
 
-// crates/afterglow-web/www/engine/engine-memory.ts
+// crates/afterglow-web/web/src/engine/core/engine-memory.ts
 var INVALID_MEMORY_OFFSET = -1;
 var INVALID_POOL_INDEX = 4294967295;
 class LinearArena {
@@ -67176,7 +67176,7 @@ class EngineMemory {
   }
 }
 
-// crates/afterglow-web/www/engine/frame-budget.ts
+// crates/afterglow-web/web/src/engine/core/frame-budget.ts
 var DEFAULT_FRAME_BUDGET = {
   deadlineFractions: [0.15, 0.35, 0.45, 0.55, 0.95],
   operationLimits: [1, 1, 1, 1, 1]
@@ -67280,7 +67280,7 @@ class FrameBudget {
 }
 var FrameBudgetRes = defineResource("frameBudget", () => new FrameBudget);
 
-// crates/afterglow-web/www/engine/frame.ts
+// crates/afterglow-web/web/src/engine/core/frame.ts
 function prepareAfterglowFrame(frame, workerInput, adapter, vtInput, memory, budget) {
   if (memory && memory.phase !== 2 /* GameplaySealed */ && memory.phase !== 3 /* LoadingScreen */)
     throw new Error("EngineMemory must be sealed before frame orchestration");
@@ -67312,7 +67312,7 @@ function prepareAfterglowFrame(frame, workerInput, adapter, vtInput, memory, bud
   budget?.endStage(4 /* RenderPrepare */);
 }
 
-// crates/afterglow-web/www/engine/runtime.ts
+// crates/afterglow-web/web/src/engine/core/runtime.ts
 class BrowserAnimationScheduler {
   request(callback) {
     return requestAnimationFrame(callback);
@@ -67517,7 +67517,7 @@ class EngineRuntime {
       this.animationHandle = this.scheduler.request(this.onAnimationFrame);
   }
 }
-// crates/afterglow-web/www/engine/asset-handle.ts
+// crates/afterglow-web/web/src/engine/assets/asset-handle.ts
 class AssetHandle {
   asset;
   generation = 0;
@@ -67536,7 +67536,7 @@ class AssetHandle {
   lod = -1;
 }
 
-// crates/afterglow-web/www/engine/fallback.ts
+// crates/afterglow-web/web/src/engine/renderer/fallback.ts
 var _fallbackGeometry = null;
 var _fallbackMaterial = null;
 var _fallbackGroup = null;
@@ -67562,7 +67562,7 @@ function fallbackGroup() {
   return _fallbackGroup.clone(true);
 }
 
-// crates/afterglow-web/www/engine/asset-store.ts
+// crates/afterglow-web/web/src/engine/assets/asset-store.ts
 var MAX_SINGLE_LOAD = 1 << 20;
 var CHUNK_SIZE = 512 * 1024;
 var DEFAULT_LOD_RATIOS = [1, 0.5, 0.25, 0.1];
@@ -68173,7 +68173,7 @@ class AssetStore {
 var AssetStoreRes = defineResource("assetStore", () => {
   throw new Error("AssetStore not initialized. Call AssetStoreRes.set(world, new AssetStore(loader, meshopt)).");
 });
-// crates/afterglow-web/www/codec.ts
+// crates/afterglow-web/web/src/workers/codec.ts
 function encodeVarint(n) {
   const b2 = [];
   do {
@@ -68280,7 +68280,7 @@ function unwrapResponse(bytes) {
   throw new Error(`RPC ${variant === 1 ? "server" : "decode"} error (method ${method}): ${msg}`);
 }
 
-// crates/afterglow-web/www/async-worker.ts
+// crates/afterglow-web/web/src/workers/async-worker.ts
 class PendingFetch {
   constructor(url) {
     this.promise = fetch(url);
@@ -68547,7 +68547,7 @@ function asyncWorkerImports(driver, memory) {
   };
 }
 
-// crates/afterglow-web/www/rpc.ts
+// crates/afterglow-web/web/src/workers/rpc.ts
 var TIMEOUT_MS = 5000;
 function decodeVarint2(bytes, off) {
   let r = 0;
@@ -68710,7 +68710,7 @@ class Rpc {
   }
 }
 
-// crates/afterglow-web/www/meshopt.client.ts
+// crates/afterglow-web/web/src/workers/meshopt.client.ts
 class MeshoptClient {
   rpc;
   closed = false;
@@ -68815,7 +68815,7 @@ class MeshoptClient {
   }
 }
 
-// crates/afterglow-web/www/texture.client.ts
+// crates/afterglow-web/web/src/workers/texture.client.ts
 class TextureClient {
   rpc;
   closed = false;
@@ -68865,7 +68865,7 @@ class TextureClient {
   }
 }
 
-// crates/afterglow-web/www/engine/big-parser.ts
+// crates/afterglow-web/web/src/engine/assets/big-parser.ts
 function decodeVarint3(bytes, off) {
   let r = 0;
   for (let shift = 0;shift < 56; shift += 7) {
@@ -69421,7 +69421,7 @@ function createPageDataProvider(loader, header, textureWorkers, format, cache2, 
   return provider;
 }
 
-// crates/afterglow-web/www/engine/virtual-texture-layout.ts
+// crates/afterglow-web/web/src/engine/virtual-texturing/virtual-texture-layout.ts
 function assertVirtualTextureDimensions(width, height) {
   for (const [name, value] of [["width", width], ["height", height]])
     if (!Number.isSafeInteger(value) || value <= 0)
@@ -69458,7 +69458,7 @@ function packedMipTailIndex(layout) {
   return layout.mipOffsets[layout.maxMip] * layout.storageWidth + 1;
 }
 
-// crates/afterglow-web/www/engine/virtual-texture.ts
+// crates/afterglow-web/web/src/engine/virtual-texturing/virtual-texture.ts
 var PAGE_SIZE = 128;
 var PAGE_BORDER = 4;
 var SLOT_SIZE = PAGE_SIZE + PAGE_BORDER * 2;
@@ -71391,7 +71391,7 @@ fn vtFeedback(
 }
 `;
 
-// crates/afterglow-web/www/engine/big-asset-session.ts
+// crates/afterglow-web/web/src/engine/assets/big-asset-session.ts
 class BigAssetSession {
   source;
   containerPath;
@@ -71522,7 +71522,7 @@ class BigAssetSession {
       throw firstError;
   }
 }
-// crates/afterglow-web/www/engine/model-utils.ts
+// crates/afterglow-web/web/src/engine/presentation/model-utils.ts
 class ModelPrimitives {
   capacity;
   items;
@@ -71690,7 +71690,7 @@ class SkeletonDebugAdapter {
     this.helper.dispose();
   }
 }
-// crates/afterglow-web/www/node_modules/three/build/three.tsl.js
+// crates/afterglow-web/web/node_modules/three/build/three.tsl.js
 var exports_three_tsl = {};
 __export(exports_three_tsl, {
   xor: () => xor2,
@@ -72971,7 +72971,7 @@ var workgroupId2 = TSL.workgroupId;
 var workingToColorSpace2 = TSL.workingToColorSpace;
 var xor2 = TSL.xor;
 
-// crates/afterglow-web/www/engine/surface-detail.ts
+// crates/afterglow-web/web/src/engine/virtual-texturing/surface-detail.ts
 var POM_UV_WGSL = `
 fn pomMarchUV(
   heightTexture: texture_2d<f32>, heightSampler: sampler,
@@ -73055,7 +73055,7 @@ fn pomSelfShadow(
 }
 `;
 
-// crates/afterglow-web/www/engine/virtual-texture-material.ts
+// crates/afterglow-web/web/src/engine/virtual-texturing/virtual-texture-material.ts
 function createVirtualGltfMaterialPair(three, store, set, feedbackPixelScale, options = {}) {
   const addressMode = options.addressMode ?? 1 /* Repeat */;
   const qualityBias = options.qualityBias ?? 0;
@@ -73400,7 +73400,7 @@ function createVirtualPomMaterialPair(three, store, set, heightTexture, feedback
   };
 }
 
-// crates/afterglow-web/www/engine/virtual-gltf-binding.ts
+// crates/afterglow-web/web/src/engine/virtual-texturing/virtual-gltf-binding.ts
 function collectMaterialTextures(material, output3) {
   if (material instanceof MeshStandardMaterial) {
     for (const texture3 of [
@@ -73696,7 +73696,7 @@ class VirtualGltfBinding {
     this.recordCount = 0;
   }
 }
-// crates/afterglow-web/www/engine/virtual-pom-binding.ts
+// crates/afterglow-web/web/src/engine/virtual-texturing/virtual-pom-binding.ts
 class VirtualPomSceneBinding {
   options;
   feedbackScene = new Scene;
@@ -73779,7 +73779,7 @@ class VirtualPomSceneBinding {
     this.count = 0;
   }
 }
-// crates/afterglow-web/www/engine/virtual-texture-feedback-pass.ts
+// crates/afterglow-web/web/src/engine/virtual-texturing/virtual-texture-feedback-pass.ts
 class VirtualTextureFeedbackPass {
   scale;
   pixelScale = new Vector2(1, 1);
@@ -73922,7 +73922,7 @@ class VirtualTextureFeedbackPass {
     this.requestPool.length = 0;
   }
 }
-// crates/afterglow-web/www/engine/virtual-texture-feedback-coordinator.ts
+// crates/afterglow-web/web/src/engine/virtual-texturing/virtual-texture-feedback-coordinator.ts
 class VirtualTextureFeedbackCoordinator {
   renderer;
   store;
@@ -74170,7 +74170,11 @@ class VirtualTextureFeedbackCoordinator {
     this.awaitingPassCount = 0;
   }
 }
-// crates/afterglow-web/www/engine/input.ts
+// crates/afterglow-web/web/src/engine/virtual-texturing/procedural-vt.ts
+var VT_PAGE_SIZE = 128;
+var VT_PAGE_BORDER = 4;
+var VT_SLOT_SIZE = VT_PAGE_SIZE + VT_PAGE_BORDER * 2;
+// crates/afterglow-web/web/src/engine/input/input.ts
 function actionFor(event) {
   switch (event.code || event.key) {
     case "KeyA":
@@ -74300,7 +74304,7 @@ class BoundedKeyboardInput {
     this.clear();
   }
 }
-// crates/afterglow-web/www/engine/dev-harness.ts
+// crates/afterglow-web/web/src/engine/diagnostics/dev-harness.ts
 class BootstrapGuard {
   capacity;
   cleanups;
@@ -74452,7 +74456,7 @@ class TextHud {
       this.element.style.display = visible ? "" : "none";
   }
 }
-// crates/afterglow-web/www/rigged-vt-demo.ts
+// crates/afterglow-web/web/src/demos/rigged-vt/main.ts
 var FEEDBACK_INTERVAL = 8;
 var MODEL_LAYER = 1;
 var MODEL_HEIGHT = 2.55;

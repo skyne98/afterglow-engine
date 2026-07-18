@@ -4,15 +4,16 @@
 
 ## Browser BIG asset session
 
-`afterglow-web/www/engine/big-asset-session.ts` provides `BigAssetSession`, the
+`afterglow-web/web/src/engine/assets/big-asset-session.ts` provides `BigAssetSession`, the
 bootstrap owner for one seekable `.big` source. `open()` requires explicit
-`workerCount`, `transcodeQueueCapacity`, `maxHeaderBytes`, target GPU format, and
-a typed transcoder factory. It validates the 16-byte prefix and configured header bound
+`workerCount`, `transcodeQueueCapacity`, `maxHeaderBytes`, and target GPU
+format. Engine-owned typed transcoders are the default; tests/platform adapters
+may inject a factory. It validates the 16-byte prefix and configured header bound
 before starting workers, parses the header once, constructs the direct raw-asset
 loader and VT page provider, and rolls workers back in reverse order after any
 startup failure.
 
-The public browser barrel is `engine/asset-api.ts`. The policy-free
+The public browser barrel is `web/src/engine/assets/index.ts`. The policy-free
 `readBigHeader(source, path, maxHeaderBytes)` primitive performs the shared
 bounded prefix/header read used by both VT/model archives and static meshes; no
 consumer duplicates container validation. The session creates the

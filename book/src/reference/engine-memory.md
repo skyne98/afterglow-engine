@@ -39,11 +39,12 @@ pages once, bounded pending page work, and consolidated asset-worker polling.
 `AssetStore` uses numeric state tables and a fixed completion ring whose
 publication count is capped per poll.
 
-Engine browser source is authored in TypeScript. JavaScript in `www/` is generated
-or vendored:
+Engine browser source is authored under `afterglow-web/web/src/`. `www/` is a
+fully generated, disposable deployment tree and contains no authored or vendored
+source:
 
 ```sh
-bun install --cwd crates/afterglow-web/www --frozen-lockfile
+bun install --cwd crates/afterglow-web/web --frozen-lockfile
 bun scripts/build-web.ts
 bun scripts/build-web.ts --check
 cargo run -p xtask conformance

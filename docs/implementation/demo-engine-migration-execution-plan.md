@@ -143,7 +143,7 @@ progress note does not override its gates.
   fixed primitives are implemented, but whole-demo conformance is not.
 - Link the audit and this plan.
 - Add a machine-readable file:
-  `crates/afterglow-web/www/engine-conformance.json`.
+  `crates/afterglow-web/web/contracts/engine-conformance.json`.
 
 Initial shape:
 
@@ -179,7 +179,7 @@ entrypoint remains legacy.
 
 **Change**
 
-Create `crates/afterglow-web/www/web-artifacts.json` with, for every generated
+Create `crates/afterglow-web/web/contracts/web-artifacts.json` with, for every generated
 artifact:
 
 - authored source;
@@ -232,7 +232,7 @@ these rule IDs:
 | `AG-DEMO-010` | frame callback without an allocation effect declaration |
 
 During migration only, commit
-`crates/afterglow-web/www/demo-architecture-baseline.json`, containing the exact
+`crates/afterglow-web/web/contracts/demo-architecture-baseline.json`, containing the exact
 current `(file, rule, line fingerprint)` set. CI compares the candidate report
 both to this file and, on pull requests, to the merge-base report from the
 protected default branch. CI fails if:
@@ -312,8 +312,8 @@ effect. CI reports zero unknown nodes in the reachable call graph.
 
 **New files**
 
-- `www/engine/diagnostics.ts`
-- `www/engine/renderer-host.ts`
+- `web/src/engine/core/diagnostics.ts`
+- `web/src/engine/renderer/renderer-host.ts`
 - tests beside both files
 
 **API**
@@ -359,7 +359,7 @@ device loss, resize, warm-before-seal, and post-seal pipeline violation.
 
 **New file**
 
-`www/engine/runtime.ts`
+`web/src/engine/core/runtime.ts`
 
 **API contract**
 
@@ -485,7 +485,7 @@ restart, percentile, dropped-frame, and no-per-tick-allocation tests.
 
 **New file**
 
-`www/engine/virtual-texture-feedback-coordinator.ts`
+`web/src/engine/virtual-texturing/virtual-texture-feedback-coordinator.ts`
 
 **Required API**
 
@@ -531,7 +531,7 @@ Update `docs/api/virtual-texturing.md` and the book in the same change.
 
 **New file**
 
-`www/engine/big-asset-session.ts`
+`web/src/engine/assets/big-asset-session.ts`
 
 `BigAssetSession.open()` must accept explicit worker, request, byte-in-flight,
 completion, and cache capacities. It owns:
@@ -564,7 +564,7 @@ Update `docs/api/asset-system.md`, `docs/api/runtime-capacities.md`, and the boo
 
 **New file**
 
-`www/engine/virtual-gltf-binding.ts`
+`web/src/engine/virtual-texturing/virtual-gltf-binding.ts`
 
 **API**
 
@@ -621,7 +621,7 @@ Update pipeline/asset/VT API docs and book chapters.
 
 **New file**
 
-`www/engine/virtual-pom-material.ts`
+`web/src/engine/virtual-texturing/virtual-pom-material.ts`
 
 Implement `createVirtualPomMaterialPair()` with fixed base/POM visible and
 feedback variants. Move all POM graph/TBN/VT fallback wiring out of dungeon.
@@ -747,8 +747,8 @@ Update relative-pointer/input docs and book.
 
 ### DME-040 — Remove global bundle bridge
 
-- Add typed `www/engine/index.ts` core exports plus tree-shakeable
-  `model-api.ts` and `virtual-texturing-api.ts` subsystem barrels.
+- Add typed `web/src/engine/index.ts` core exports plus tree-shakeable
+  `presentation/index.ts` and `virtual-texturing/index.ts` subsystem barrels.
 - Bundle each entrypoint with exactly one Three module graph.
 - Delete `engine-bundle-input.ts`, `engine-bundle.js`, all `window.Afterglow*`
   writes, and redundant HTML script tags.

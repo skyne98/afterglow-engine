@@ -22,7 +22,6 @@ export interface EngineConformance {
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const defaultRoot = resolve(scriptDir, '..');
 const validRoles = new Set<ArtifactRole>(['runtime', 'worker', 'visual-demo', 'diagnostic', 'legacy-bridge']);
-const vendor = new Set(['three.core.js', 'three.js', 'three.module.js', 'three.webgpu.js', 'three.webgpu.min.js']);
 const artifactKeys = new Set(['source', 'output', 'role', 'pages', 'architectureChecked']);
 
 function isSafeRelative(path: unknown, extension: string): path is string {
@@ -40,6 +39,16 @@ async function list(directory: string, suffix: string): Promise<string[]> {
     .filter((entry) => entry.isFile() && entry.name.endsWith(suffix))
     .map((entry) => entry.name)
     .sort();
+}
+
+async function listRecursive(directory: string, suffix: string, prefix = ''): Promise<string[]> {
+  const files: string[] = [];
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const path = prefix ? `${prefix}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) files.push(...await listRecursive(join(directory, entry.name), suffix, path));
+    else if (entry.isFile() && entry.name.endsWith(suffix)) files.push(path);
+  }
+  return files.sort();
 }
 
 export function countBundledThreeCoreCopies(source: string): number {
@@ -70,9 +79,11 @@ function parseExternalScripts(html: string, page: string, errors: string[]): str
 
 export async function validateWebContracts(root = defaultRoot): Promise<string[]> {
   const errors: string[] = [];
-  const www = join(root, 'crates/afterglow-web/www');
-  const manifestPath = join(www, 'web-artifacts.json');
-  const conformancePath = join(www, 'engine-conformance.json');
+  const web = join(root, 'crates/afterglow-web/web');
+  const publicDirectory = join(web, 'public');
+  const contracts = join(web, 'contracts');
+  const manifestPath = join(contracts, 'web-artifacts.json');
+  const conformancePath = join(contracts, 'engine-conformance.json');
   let manifest: WebArtifactManifest;
   let conformance: EngineConformance;
   try { manifest = JSON.parse(await readFile(manifestPath, 'utf8')); }
@@ -104,7 +115,7 @@ export async function validateWebContracts(root = defaultRoot): Promise<string[]
     if (sources.has(artifact.source)) errors.push(`${where}: duplicate source ${artifact.source}`);
     if (outputs.has(artifact.output)) errors.push(`${where}: duplicate output ${artifact.output}`);
     sources.add(artifact.source); outputs.add(artifact.output); outputOwners.set(artifact.output, artifact);
-    if (!(await exists(join(www, artifact.source)))) errors.push(`${where}: source does not exist: ${artifact.source}`);
+    if (!(await exists(join(web, artifact.source)))) errors.push(`${where}: source does not exist: ${artifact.source}`);
     if (artifact.pages !== undefined && !Array.isArray(artifact.pages)) errors.push(`${where}: pages must be an array`);
     for (const page of artifact.pages ?? []) {
       if (!isSafeRelative(page, '.html') || page.includes('/')) errors.push(`${where}: unsafe page ${String(page)}`);
@@ -120,14 +131,13 @@ export async function validateWebContracts(root = defaultRoot): Promise<string[]
       errors.push(`${where}: architectureChecked must be boolean`);
   }
 
-  const actualPages = await list(www, '.html');
+  const actualPages = await list(publicDirectory, '.html');
   for (const page of actualPages) if (!declaredPages.has(page)) errors.push(`${page}: HTML page is missing from web-artifacts.json`);
   for (const page of declaredPages) if (!actualPages.includes(page)) errors.push(`${page}: declared HTML page does not exist`);
 
   for (const page of actualPages) {
-    const scripts = parseExternalScripts(await readFile(join(www, page), 'utf8'), page, errors);
+    const scripts = parseExternalScripts(await readFile(join(publicDirectory, page), 'utf8'), page, errors);
     for (const output of scripts) {
-      if (vendor.has(output)) continue;
       const artifact = outputOwners.get(output);
       if (!artifact) { errors.push(`${page}: script output is not declared: ${output}`); continue; }
       const pageOwned = artifact.pages?.includes(page) ?? false;
@@ -142,14 +152,8 @@ export async function validateWebContracts(root = defaultRoot): Promise<string[]
     if (owner && !scripts.includes(owner.output)) errors.push(`${page}: does not load its owned output ${owner.output}`);
   }
 
-  for (const file of await list(www, '.js')) {
-    if (!outputs.has(file) && !vendor.has(file)) errors.push(`${file}: generated/hand-authored JavaScript is not classified`);
-  }
-  const engineDirectory = join(www, 'engine');
-  for (const file of await list(engineDirectory, '.js')) {
-    const path = `engine/${file}`;
-    if (!outputs.has(path)) errors.push(`${path}: generated/hand-authored JavaScript is not classified`);
-  }
+  for (const file of await listRecursive(join(web, 'src'), '.js'))
+    errors.push(`${file}: hand-authored JavaScript is forbidden in web/src`);
 
   const states = conformance.visualEntrypoints ?? {};
   for (const source of visualSources) {
@@ -161,7 +165,7 @@ export async function validateWebContracts(root = defaultRoot): Promise<string[]
     errors.push(`engine-conformance.json: stale/non-visual entrypoint ${source}`);
 
   const legacy = Object.entries(states).filter(([, state]) => state === 'legacy').map(([source]) => source);
-  const baselineExists = await exists(join(www, 'demo-architecture-baseline.json'));
+  const baselineExists = await exists(join(contracts, 'demo-architecture-baseline.json'));
   if (conformance.releaseStatus === 'conformant') {
     if (legacy.length !== 0) errors.push(`engine-conformance.json: conformant release has legacy demos: ${legacy.join(', ')}`);
     if (baselineExists) errors.push('engine-conformance.json: conformant release may not retain demo-architecture-baseline.json');

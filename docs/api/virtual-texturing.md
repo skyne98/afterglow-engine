@@ -1,7 +1,7 @@
 # Virtual texturing
 
 The web engine's virtual-texture implementation lives in
-`crates/afterglow-web/www/engine/virtual-texture.ts`. It provides a shared
+`crates/afterglow-web/web/src/engine/virtual-texturing/virtual-texture.ts`. It provides a shared
 physical atlas, packed page-table entries, LRU residency, mip fallback, and a
 fixed per-frame page upload budget.
 
@@ -107,7 +107,7 @@ InstancedMesh, SkinnedMesh, and morph targets because Three retains its normal
 geometry vertex path. Animated/deformed objects must render feedback with the
 same object (temporarily swapping the prewarmed material), not a bind-pose proxy.
 
-The tree-shakeable public barrel is `engine/virtual-texturing-api.ts`.
+The tree-shakeable public barrel is `web/src/engine/virtual-texturing/index.ts`.
 `parseGLTFAsset()` records `GLTFParser.associations` as a stable
 `materialIndices` map. `VirtualGltfBinding.create(asset, store, options)` uses
 those indices—not material names—to join primitives to cooked texture layouts.

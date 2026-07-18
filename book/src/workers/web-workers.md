@@ -107,23 +107,16 @@ For types the macro doesn't support (custom structs, enums), use the raw
 
 ## The files
 
-`crates/afterglow-web/www/` contains:
+Authored worker runtime and generated typed clients live together under
+`crates/afterglow-web/web/src/workers/`. Wasm inputs are staged under
+`web/assets/`; diagnostic pages are authored under `web/public/` and
+`web/src/demos/`.
 
-| File | What it is |
-|---|---|
-| `afterglow_web.wasm` | The page-side ring buffer API (shared memory). |
-| `physics_worker.wasm` | The demo `Physics` worker service. |
-| `rpc.js` | The low-level `Rpc` transport (instantiate + `call`). |
-| `codec.ts` | The postcard codec library (typed encode/decode for all supported types). |
-| `physics.client.ts` | **Generated** typed TS client for `Physics`. |
-| `worker.js` | The Web Worker that drives the service wasm. |
-| `ring-buf.js` | Tested wrap-safe ring primitives (used by `worker.js`). |
-| `worker-test.html` | A round-trip test page. |
-| `worker-bench.html` | A benchmark page. |
-
-Build them with `cargo run -p xtask wasm` (dev) or the optimized build in
-[Web (Wasm)](../building/web.md). `xtask wasm` also copies generated `.ts`
-clients into `www/`.
+`cargo run -p xtask wasm` refreshes those generated inputs and rebuilds
+`crates/afterglow-web/www/`. The `www/` tree contains deployment `.js`, `.wasm`,
+HTML, and cooked assets only. It contains no TypeScript, tests, package-manager
+state, manifests, or vendored Three.js source and may be deleted and rebuilt at
+any time.
 
 ## Notes
 

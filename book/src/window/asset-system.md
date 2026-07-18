@@ -86,7 +86,7 @@ Asset serving code is split across 5 places, each with a distinct role:
 | `afterglow-cef/src/resources.rs` | **CEF scheme adapter.** Resolves a path to an `AssetSource`, drives CEF's `ResourceHandler` (`open`/`skip`/`read`/`response_headers`). Sets COOP/COEP + `Accept-Ranges`. |
 | `afterglow-web/src/dev_server.rs` | **HTTP adapter + bounded server.** Parses `Range` → `206`/`Content-Range`, streams via `stream_body()`, and runs fixed workers with bounded per-worker queues through `DevAssetServer`. |
 | `afterglow-assets-worker/src/` (`lib.rs`, `fetch.rs`) | **The portable asset loader.** `#[rpc]` async worker that works on both backends. Native: `FsSource`/`pread`. Web: JS-imported `fetch` (the `fetch.rs` bridge). The render thread uses the generated `AssetLoaderClient` TS client on both. |
-| `afterglow-web/www/async-worker.ts` | **Web async worker driver.** Authored TypeScript that drives the wasm async worker executor (`tick` + bounded `drain_completion`) and provides the `ag_fetch_start`/`ag_fetch_poll` imports. |
+| `afterglow-web/web/src/workers/async-worker.ts` | **Web async worker driver.** Authored TypeScript that drives the wasm async worker executor (`tick` + bounded `drain_completion`) and provides the `ag_fetch_start`/`ag_fetch_poll` imports. |
 
 **The principle:** the *what* (streaming reads, ranges, confinement, MIME) lives
 in `afterglow-assets`; the *how to deliver it* (CEF vs HTTP vs RPC) lives in

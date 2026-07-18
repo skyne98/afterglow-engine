@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /** Zero-growth ratchet for TypeScript escape hatches and deferred-code markers. */
-import ts from '../crates/afterglow-web/www/node_modules/typescript/lib/typescript.js';
+import ts from '../crates/afterglow-web/web/node_modules/typescript/lib/typescript.js';
 import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join, relative, resolve } from 'node:path';
@@ -8,10 +8,10 @@ import { spawnSync } from 'node:child_process';
 
 interface Finding { id: string; rule: string; file: string; line: number; column: number; excerpt: string }
 interface Baseline { version: number; findings: Finding[] }
-const baselineVersion = 2;
+const baselineVersion = 3;
 const root = resolve(import.meta.dir, '..');
-const www = join(root, 'crates/afterglow-web/www');
-const baselinePath = join(www, 'source-hygiene-baseline.json');
+const sourceRoot = join(root, 'crates/afterglow-web/web/src');
+const baselinePath = join(root, 'crates/afterglow-web/web/contracts/source-hygiene-baseline.json');
 const descriptions: Record<string, string> = {
   'AG-TS-001': 'explicit any defeats static type checking',
   'AG-TS-002': 'TypeScript/linter suppression directive',
@@ -30,7 +30,7 @@ function compareRef(): string | null {
   return index < 0 ? null : process.argv[index + 1] ?? null;
 }
 function atRef(ref: string): Baseline | null {
-  const path = 'crates/afterglow-web/www/source-hygiene-baseline.json';
+  const path = 'crates/afterglow-web/web/contracts/source-hygiene-baseline.json';
   const result = spawnSync('git', ['show', `${ref}:${path}`], { cwd: root, encoding: 'utf8' });
   if (result.status !== 0) return null;
   try {
@@ -42,9 +42,9 @@ function atRef(ref: string): Baseline | null {
 export async function scanSourceHygiene(): Promise<Finding[]> {
   const raw: Array<Omit<Finding, 'id'> & { identity: string }> = [];
   const glob = new Bun.Glob('**/*.ts');
-  for await (const file of glob.scan({ cwd: www, onlyFiles: true })) {
+  for await (const file of glob.scan({ cwd: sourceRoot, onlyFiles: true })) {
     if (file.startsWith('node_modules/')) continue;
-    const text = await readFile(join(www, file), 'utf8');
+    const text = await readFile(join(sourceRoot, file), 'utf8');
     const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
     const add = (rule: string, node: ts.Node, identity?: string): void => {
       const position = source.getLineAndCharacterOfPosition(node.getStart(source));

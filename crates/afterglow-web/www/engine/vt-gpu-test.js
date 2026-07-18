@@ -1,4 +1,4 @@
-// crates/afterglow-web/www/engine/vt-gpu-test.ts
+// crates/afterglow-web/web/src/engine/diagnostics/vt-gpu-test.ts
 async function testRawFeedback(device, direction) {
   const transform = direction === "west" ? "vec2f(1.0-in.uv.x,in.uv.y)" : direction === "rotated" ? "vec2f(in.uv.y,1.0-in.uv.x)" : "in.uv";
   const shader = device.createShaderModule({ code: `struct Out{@builtin(position) position:vec4f,@location(0) uv:vec2f};@vertex fn vs(@builtin(vertex_index)i:u32)->Out{var p=array<vec2f,3>(vec2f(-1,-1),vec2f(3,-1),vec2f(-1,3));var o:Out;o.position=vec4f(p[i],0,1);o.uv=p[i]*.5+.5;return o;}@fragment fn fs(in:Out)->@location(0) vec2u{let q=${transform};let x=u32(clamp(floor(q.x*2048.),0.,2047.));let y=u32(clamp(floor(q.y*2048.),0.,2047.));return vec2u(0x80000000u|(x<<6)|(y<<17),0x12345678u);}` });

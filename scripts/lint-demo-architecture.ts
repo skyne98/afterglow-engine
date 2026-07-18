@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /** Ratcheting architecture lint for first-party visual demos and launchers. */
-import ts from '../crates/afterglow-web/www/node_modules/typescript/lib/typescript.js';
+import ts from '../crates/afterglow-web/web/node_modules/typescript/lib/typescript.js';
 import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { basename, join, relative, resolve } from 'node:path';
@@ -20,10 +20,11 @@ interface ArchitectureBaseline { version: number; findings: ArchitectureFinding[
 const baselineVersion = 2;
 
 const root = resolve(import.meta.dir, '..');
-const www = join(root, 'crates/afterglow-web/www');
-const baselinePath = join(www, 'demo-architecture-baseline.json');
-const manifest = JSON.parse(await readFile(join(www, 'web-artifacts.json'), 'utf8')) as WebArtifactManifest;
-const conformance = JSON.parse(await readFile(join(www, 'engine-conformance.json'), 'utf8')) as EngineConformance;
+const web = join(root, 'crates/afterglow-web/web');
+const contracts = join(web, 'contracts');
+const baselinePath = join(contracts, 'demo-architecture-baseline.json');
+const manifest = JSON.parse(await readFile(join(contracts, 'web-artifacts.json'), 'utf8')) as WebArtifactManifest;
+const conformance = JSON.parse(await readFile(join(contracts, 'engine-conformance.json'), 'utf8')) as EngineConformance;
 const descriptions: Record<string, string> = {
   'AG-DEMO-001': 'demo owns requestAnimationFrame/setAnimationLoop instead of EngineRuntime',
   'AG-DEMO-002': 'demo constructs engine lifecycle/infrastructure directly',
@@ -103,9 +104,10 @@ export function scanTypeScript(sourceText: string, file: string): RawFinding[] {
   const visit = (node: ts.Node): void => {
     if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
       const specifier = node.moduleSpecifier.text;
-      const publicBarrel = /^(?:\.\/|\.\.\/)engine\/(?:index|[a-z0-9-]+-api)\.ts$/.test(specifier);
-      if (!publicBarrel && (specifier.startsWith('./engine/') || specifier.startsWith('../engine/')))
-        add('AG-DEMO-016', node, specifier);
+      const localPath = specifier.replace(/^(?:(?:\.\/)|(?:\.\.\/))+/, '');
+      const engineImport = localPath.startsWith('engine/');
+      const publicBarrel = /^engine\/(?:index|[a-z0-9-]+\/index)\.ts$/.test(localPath);
+      if (engineImport && !publicBarrel) add('AG-DEMO-016', node, specifier);
       if (specifier.endsWith('.client.ts')) add('AG-DEMO-017', node, specifier);
       if (specifier.endsWith('/surface-detail.ts') || specifier.endsWith('/virtual-texture-material.ts'))
         add('AG-DEMO-009', node, specifier);
@@ -217,7 +219,7 @@ export async function scanArchitecture(): Promise<ArchitectureFinding[]> {
   const raw: RawFinding[] = [];
   for (const artifact of manifest.artifacts) {
     if (artifact.architectureChecked !== true) continue;
-    raw.push(...scanTypeScript(await readFile(join(www, artifact.source), 'utf8'), artifact.source));
+    raw.push(...scanTypeScript(await readFile(join(web, artifact.source), 'utf8'), artifact.source));
   }
   raw.push(...await scanRustLaunchers());
   return finalize(raw);
@@ -228,7 +230,7 @@ function parseCompareRef(): string | null {
   return index < 0 ? null : process.argv[index + 1] ?? null;
 }
 function baselineAtRef(ref: string): ArchitectureBaseline | null {
-  const path = 'crates/afterglow-web/www/demo-architecture-baseline.json';
+  const path = 'crates/afterglow-web/web/contracts/demo-architecture-baseline.json';
   const result = spawnSync('git', ['show', `${ref}:${path}`], { cwd: root, encoding: 'utf8' });
   if (result.status !== 0) return null;
   try {

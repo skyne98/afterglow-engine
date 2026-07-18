@@ -2,7 +2,7 @@
 //!
 //! Commands:
 //!   build   — build the native CEF host + examples
-//!   wasm [--release] — build wasm services and copy artifacts into `www/`
+//!   wasm [--release] — build wasm services, stage web assets, and rebuild `www/`
 //!   conformance — run harsh authored-web architecture/type/allocation gates
 //!   check       — cargo check the workspace + conformance gates
 //!   test        — run all tests + conformance gates
@@ -56,10 +56,8 @@ fn main() {
 const WASM_TARGET: &str = "wasm32-unknown-unknown";
 const WASM_STD: &str = "-Zbuild-std=core,alloc,std,panic_abort";
 
-/// Build all wasm artifacts and copy them into `crates/afterglow-web/www/`.
-///
-/// - `afterglow-web` cdylib  -> `www/afterglow_web.wasm` (the transport)
-/// - Each worker crate (any crate with a `ts/` dir) -> `www/<trait>.wasm`
+/// Build wasm artifacts into `web/assets/`, refresh generated clients in
+/// `web/src/workers/`, then rebuild the disposable `www/` deployment tree.
 ///
 /// Copies are deterministic (byte-identical to the `target/` artifacts).
 fn wasm(release: bool) -> i32 {
@@ -99,13 +97,15 @@ fn wasm(release: bool) -> i32 {
 
     let target_dir = target_dir();
     let src = target_dir.join(WASM_TARGET).join(profile);
-    let www = workspace_root().join("crates/afterglow-web/www");
+    let web = workspace_root().join("crates/afterglow-web/web");
+    let assets = web.join("assets");
+    let workers = web.join("src/workers");
 
     // Copy the transport wasm (afterglow-web) + JS glue.
     let copies: &[(&str, &str)] = &[("afterglow_web.wasm", "afterglow_web.wasm")];
     for (from, to) in copies {
         let from_path = src.join(from);
-        let to_path = www.join(to);
+        let to_path = assets.join(to);
         if let Err(e) = std::fs::copy(&from_path, &to_path) {
             eprintln!(
                 "failed to copy {} -> {}: {e}",
@@ -148,7 +148,7 @@ fn wasm(release: bool) -> i32 {
                                 // assetloader.client.ts → assetloader.wasm
                                 let trait_lower = name.trim_end_matches(".client.ts");
                                 let to_wasm = format!("{trait_lower}.wasm");
-                                let to_path = www.join(&to_wasm);
+                                let to_path = assets.join(&to_wasm);
                                 if let Err(e) = std::fs::copy(&from_path, &to_path) {
                                     eprintln!(
                                         "failed to copy {} -> {}: {e}",
@@ -182,7 +182,7 @@ fn wasm(release: bool) -> i32 {
                     if path.extension().is_some_and(|e| e == "ts") {
                         // Copy the .ts (for editors/IDEs).
                         let name = path.file_name().unwrap();
-                        let to = www.join(name);
+                        let to = workers.join(name);
                         if let Err(e) = std::fs::copy(&path, &to) {
                             eprintln!("failed to copy {} -> {}: {e}", path.display(), to.display());
                             return 1;
@@ -196,16 +196,16 @@ fn wasm(release: bool) -> i32 {
         }
     }
 
-    let web = Command::new("bun")
+    let web_build = Command::new("bun")
         .args(["scripts/build-web.ts"])
         .current_dir(workspace_root())
         .status();
-    if !matches!(web, Ok(status) if status.success()) {
+    if !matches!(web_build, Ok(status) if status.success()) {
         eprintln!("failed to generate browser JavaScript from TypeScript");
         return 1;
     }
 
-    eprintln!("wasm artifacts updated in {}", www.display());
+    eprintln!("web assets and deployment updated in {}", web.display());
     0
 }
 
@@ -267,9 +267,10 @@ fn test_all() -> i32 {
     let web = Command::new("bun")
         .args([
             "test",
-            "crates/afterglow-web/www/engine",
-            "crates/afterglow-web/www/async-worker.test.ts",
-            "crates/afterglow-web/www/physics-client.test.ts",
+            "crates/afterglow-web/web/src/engine",
+            "crates/afterglow-web/web/src/demos/rigged-vt/main.test.ts",
+            "crates/afterglow-web/web/src/workers/async-worker.test.ts",
+            "crates/afterglow-web/web/src/workers/physics-client.test.ts",
         ])
         .current_dir(workspace_root())
         .status();

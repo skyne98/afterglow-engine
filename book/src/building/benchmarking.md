@@ -36,14 +36,7 @@ Payloads sweep `64 B → 1 MiB` (raw ring) and `1 → 16,384 B` (service RPC). S
 Build the optimized web artifacts, then serve with COOP/COEP:
 
 ```sh
-cargo build -p afterglow-web --target wasm32-unknown-unknown \
-  -Zbuild-std=core,alloc,std,panic_abort --profile wasm-release
-cargo build -p afterglow-rpc-demo --target wasm32-unknown-unknown \
-  -Zbuild-std=core,alloc,std,panic_abort --profile wasm-release
-
-# Copy artifacts to crates/afterglow-web/www/ as
-#   afterglow_web.wasm  and  physics_worker.wasm
-
+nix-shell shell.nix --run "cargo run -p xtask -- wasm --release"
 nix-shell shell.nix --run "cargo run -p xtask -- serve"
 ```
 

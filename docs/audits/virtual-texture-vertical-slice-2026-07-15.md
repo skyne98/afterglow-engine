@@ -179,7 +179,7 @@ This audit follows data from offline source files to final Three.js PBR shading.
 
 ### Runtime indexing, RPC, and transcoding
 
-- `crates/afterglow-web/www/engine/big-parser.ts`
+- `crates/afterglow-web/web/src/engine/assets/big-parser.ts`
 - `crates/afterglow-web/www/rpc.js`
 - `crates/afterglow-web/www/worker.js`
 - `crates/afterglow-texture/src/lib.rs`
@@ -187,10 +187,10 @@ This audit follows data from offline source files to final Three.js PBR shading.
 
 ### Residency, feedback, upload, and shaders
 
-- `crates/afterglow-web/www/engine/virtual-texture-layout.ts`
-- `crates/afterglow-web/www/engine/virtual-texture-feedback.ts`
-- `crates/afterglow-web/www/engine/virtual-texture-feedback-pass.ts`
-- `crates/afterglow-web/www/engine/virtual-texture.ts`
+- `crates/afterglow-web/web/src/engine/virtual-texturing/virtual-texture-layout.ts`
+- `crates/afterglow-web/web/src/engine/virtual-texturing/virtual-texture-feedback.ts`
+- `crates/afterglow-web/web/src/engine/virtual-texturing/virtual-texture-feedback-pass.ts`
+- `crates/afterglow-web/web/src/engine/virtual-texturing/virtual-texture.ts`
 - `crates/afterglow-web/www/dungeon.html`
 
 ### Concrete audited asset

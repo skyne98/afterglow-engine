@@ -104,7 +104,7 @@ mod tests {
     #[test]
     fn transcode_real_checker_basis_bc7() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../afterglow-web/www/checker.basis");
+            .join("../afterglow-web/web/assets/checker.basis");
         let data = std::fs::read(&path)
             .unwrap_or_else(|_| { return Vec::new(); });
         if data.is_empty() { return; } // skip if file not present
@@ -119,7 +119,7 @@ mod tests {
     #[test]
     fn transcode_real_checker_basis_rgba() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../afterglow-web/www/checker.basis");
+            .join("../afterglow-web/web/assets/checker.basis");
         let data = std::fs::read(&path)
             .unwrap_or_else(|_| { return Vec::new(); });
         if data.is_empty() { return; } // skip if file not present

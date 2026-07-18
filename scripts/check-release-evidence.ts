@@ -27,12 +27,13 @@ interface ReleaseEvidence { version: number; gpu: GpuEvidence[]; dungeonSoaks: S
 export async function validateReleaseEvidence(root: string, now = new Date()): Promise<string[]> {
   const errors: string[] = [];
   const www = join(root, 'crates/afterglow-web/www');
+  const contracts = join(root, 'crates/afterglow-web/web/contracts');
   const evidencePath = join(root, 'docs/benchmarks/release-evidence.json');
   let evidence: ReleaseEvidence;
   let manifest: WebArtifactManifest;
   try { evidence = JSON.parse(await readFile(evidencePath, 'utf8')) as ReleaseEvidence; }
   catch { return ['release evidence is missing or malformed: docs/benchmarks/release-evidence.json']; }
-  try { manifest = JSON.parse(await readFile(join(www, 'web-artifacts.json'), 'utf8')) as WebArtifactManifest; }
+  try { manifest = JSON.parse(await readFile(join(contracts, 'web-artifacts.json'), 'utf8')) as WebArtifactManifest; }
   catch { return ['web artifact manifest is unavailable']; }
   if (evidence.version !== 1 || !Array.isArray(evidence.gpu) || !Array.isArray(evidence.dungeonSoaks))
     return ['release evidence has an unsupported schema'];
