@@ -3,6 +3,12 @@
 The Dungeon combines streamed 8K stone materials with a bounded close-range
 parallax occlusion mapping tier.
 
+`VirtualPomSceneBinding` owns the precreated base/POM visible materials and
+matching feedback variants for fixed static surfaces. Consumers configure the
+bounded tier and toggle references; they do not assemble TSL graphs. Per-light
+visibility attenuates only the current direct-light contribution, preserving
+previous lights and ambient fill.
+
 The engine's `POM_UV_WGSL` performs an adaptive 8–32-layer march with linear
 intersection refinement. Physical height (`1` exposed, `0` recessed) is
 converted to ray depth with `1 - height`; a ratio-2 offset limit prevents

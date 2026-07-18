@@ -14,7 +14,6 @@
     { "source": "engine/big-parser.ts", "output": "engine/big-parser.js", "role": "runtime" },
     { "source": "engine/procedural-vt.ts", "output": "engine/procedural-vt.js", "role": "diagnostic" },
     { "source": "engine/vt-gpu-test.ts", "output": "engine/vt-gpu-test.js", "role": "diagnostic" },
-    { "source": "engine-bundle-input.ts", "output": "engine-bundle.js", "role": "legacy-bridge", "architectureChecked": true },
     { "source": "dungeon.ts", "output": "dungeon.js", "role": "visual-demo", "pages": ["dungeon.html"], "architectureChecked": true },
     { "source": "rigged-vt-demo.ts", "output": "rigged-vt-demo.js", "role": "visual-demo", "pages": ["rigged-vt-demo.html"], "architectureChecked": true },
     { "source": "vt-demo.ts", "output": "vt-demo.js", "role": "visual-demo", "pages": ["vt-demo.html"], "architectureChecked": true },

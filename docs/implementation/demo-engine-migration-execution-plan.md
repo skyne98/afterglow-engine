@@ -102,6 +102,13 @@ Implemented on 2026-07-17:
   store factory, generic `VirtualMaterialBinding`, and feedback coordinator. The
   three-launch real-GPU regression passes all feedback, upload, and residency
   trajectories;
+- DME-024: `VirtualPomSceneBinding` now owns Dungeon base/POM visible and
+  feedback graphs, bounded records, toggles, and disposal. The Dungeon page
+  imports one Three module graph and no longer loads the global engine bundle;
+  its three-launch GPU regression passes all viewpoints with zero pipeline
+  violations;
+- DME-040: no page consumes the global bridge; `engine-bundle-input.ts` and its
+  generated `engine-bundle.js` artifact are deleted;
 - DME-033: `lod-demo.ts` is canonical and presents one CC0 Avocado using
   offline meshopt-compressed records, fixed `LodSet` coverage selection, and
   hysteresis. Its real-GPU trajectory passes levels `0,1,2,3,2,1,0` with one

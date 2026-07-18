@@ -3,6 +3,14 @@
 `crates/afterglow-web/www/engine/surface-detail.ts` exports the reusable
 low-core POM shader used by the Dungeon demo.
 
+`VirtualPomSceneBinding` is the engine-owned adapter for static VT surfaces. It
+creates fixed base/POM visible and matching feedback variants during bootstrap,
+owns their disposal, applies one displaced UV to linked albedo/normal/mask
+samples, and toggles only material references after sealing. Its lighting model
+attenuates only each current direct-light delta, preserving prior lights and
+ambient fill. Dungeon no longer assembles TSL graphs or consumes the legacy
+global Three/VT bundle.
+
 ## `POM_UV_WGSL`
 
 Pass the string to Three.js `wgslFn()`. `pomMarchUV` accepts a resident height

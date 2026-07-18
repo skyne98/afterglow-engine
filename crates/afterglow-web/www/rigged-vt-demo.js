@@ -71177,6 +71177,78 @@ fn vtSampleLevel(
   );
 }
 `;
+var VT_SAMPLE_FROM_LEVEL_WGSL = `
+fn vtSampleFromLevel(
+  pageTable: texture_2d<u32>, atlas: texture_2d<f32>, atlasSampler: sampler,
+  sampleUV: vec2f, gradientUV: vec2f,
+  virtualSize: vec2f, pageGrid: vec2f, pageSize: f32, pageBorder: f32,
+  atlasSize: vec2f, maxMip: f32, resolvedMip: f32, addressMode: u32
+) -> vec4f {
+  var addressedUV = clamp(sampleUV, vec2f(0.0), vec2f(0.99999994));
+  if (addressMode == 1u) {
+    addressedUV = fract(sampleUV);
+  } else if (addressMode == 2u) {
+    let period = sampleUV - floor(sampleUV * 0.5) * 2.0;
+    addressedUV = select(period, 2.0 - period, period > vec2f(1.0));
+    addressedUV = clamp(addressedUV, vec2f(0.0), vec2f(0.99999994));
+  }
+
+  let requested = i32(resolvedMip);
+  let maxLevel = i32(maxMip);
+  var entry = 0u;
+  var selected = -1;
+  var selectedPage = vec2i(0);
+  var selectedSize = vec2f(1.0);
+  if (requested <= maxLevel) {
+    for (var mip = max(0, requested); mip <= maxLevel; mip = mip + 1) {
+      let scale = exp2(-f32(mip));
+      let grid = max(ceil(pageGrid * scale), vec2f(1.0));
+      let mipSize = max(floor(virtualSize * scale), vec2f(1.0));
+      let page = vec2i(min(floor(addressedUV * mipSize / pageSize), grid - 1.0));
+      var offset = 0.0;
+      for (var level = 0; level < mip; level = level + 1) {
+        offset += max(1.0, ceil(pageGrid.y / exp2(f32(level))));
+      }
+      let candidate = textureLoad(pageTable, vec2i(page.x, page.y + i32(offset)), 0).r;
+      if ((candidate & 1u) != 0u) {
+        entry = candidate; selected = mip; selectedPage = page; selectedSize = mipSize;
+        break;
+      }
+    }
+  }
+
+  if (selected >= 0) {
+    let local = addressedUV * selectedSize - vec2f(selectedPage) * pageSize;
+    let origin = vec2f(f32((entry >> 1) & 0xFFu), f32((entry >> 9) & 0xFFu)) * (pageSize + pageBorder * 2.0);
+    let atlasUV = (origin + pageBorder + local) / atlasSize;
+    let gradientScale = selectedSize / atlasSize;
+    return textureSampleGrad(atlas, atlasSampler, atlasUV,
+      dpdx(gradientUV) * gradientScale, dpdy(gradientUV) * gradientScale);
+  }
+
+  var tailOffset = 0.0;
+  for (var level = 0; level < maxLevel; level = level + 1) {
+    tailOffset += max(1.0, ceil(pageGrid.y / exp2(f32(level))));
+  }
+  let tailEntry = textureLoad(pageTable, vec2i(1, i32(tailOffset)), 0).r;
+  if ((tailEntry & 1u) == 0u) { return vec4f(0.5, 0.5, 0.5, 1.0); }
+  let tailMip = max(maxLevel + 1, requested);
+  let delta = tailMip - maxLevel;
+  var rectOrigin = vec2f(0.0);
+  if (delta == 2) { rectOrigin = vec2f(72.0, 0.0); }
+  else if (delta == 3) { rectOrigin = vec2f(112.0, 0.0); }
+  else if (delta == 4) { rectOrigin = vec2f(72.0, 40.0); }
+  else if (delta == 5) { rectOrigin = vec2f(88.0, 40.0); }
+  else if (delta == 6) { rectOrigin = vec2f(100.0, 40.0); }
+  else if (delta >= 7) { rectOrigin = vec2f(110.0, 40.0); }
+  let tailSize = max(vec2f(1.0), floor(virtualSize / exp2(f32(tailMip))));
+  let slot = vec2f(f32((tailEntry >> 1) & 0xFFu), f32((tailEntry >> 9) & 0xFFu)) * (pageSize + pageBorder * 2.0);
+  let atlasUV = (slot + rectOrigin + pageBorder + addressedUV * tailSize) / atlasSize;
+  let gradientScale = tailSize / atlasSize;
+  return textureSampleGrad(atlas, atlasSampler, atlasUV,
+    dpdx(gradientUV) * gradientScale, dpdy(gradientUV) * gradientScale);
+}
+`;
 var VT_FEEDBACK_WGSL = `
 fn vtFeedback(
   sampleUV: vec2f,
@@ -72786,6 +72858,90 @@ var workgroupId2 = TSL.workgroupId;
 var workingToColorSpace2 = TSL.workingToColorSpace;
 var xor2 = TSL.xor;
 
+// crates/afterglow-web/www/engine/surface-detail.ts
+var POM_UV_WGSL = `
+fn pomMarchUV(
+  heightTexture: texture_2d<f32>, heightSampler: sampler,
+  baseUV: vec2f, viewDir: vec3f, heightScale: f32, maxOffsetRatio: f32,
+  minLayers: u32, maxLayers: u32, maxDistance: f32, viewDistance: f32
+) -> vec2f {
+  if (heightScale <= 0.0) {
+    return baseUV;
+  }
+  var fade = 1.0;
+  if (maxDistance > 0.0) {
+    if (viewDistance >= maxDistance) { return baseUV; }
+    fade = 1.0 - smoothstep(maxDistance * 0.65, maxDistance, viewDistance);
+  }
+  let scale = heightScale * fade;
+  if (scale <= 0.00001) { return baseUV; }
+
+  let v = normalize(viewDir);
+  let vz = max(abs(v.z), 0.001);
+  let low = max(1u, min(minLayers, maxLayers));
+  let high = max(low, maxLayers);
+  let layerCount = max(low, min(high, u32(mix(f32(high), f32(low), abs(v.z)) + 0.5)));
+  let layerDepth = 1.0 / f32(layerCount);
+  let rawSlope = v.xy / vz;
+  let slopeLength = length(rawSlope);
+  let boundedSlope = rawSlope * min(1.0, max(0.0, maxOffsetRatio) / max(slopeLength, 0.00001));
+  let deltaUV = boundedSlope * scale / f32(layerCount);
+
+  var currentUV = baseUV;
+  var currentDepth = 0.0;
+  var previousUV = baseUV;
+  var previousDepth = 0.0;
+  // Input is physical height: white/exposed=1, black/recessed=0. Ray depth is
+  // measured downward from the top of the relief volume, so intersect against
+  // surfaceDepth = 1-height (not height itself).
+  var previousSurfaceDepth = 1.0 - textureSampleLevel(heightTexture, heightSampler, baseUV, 0.0).r;
+  for (var i = 0u; i < layerCount; i = i + 1u) {
+    currentUV = currentUV - deltaUV;
+    currentDepth = currentDepth + layerDepth;
+    let surfaceDepth = 1.0 - textureSampleLevel(heightTexture, heightSampler, currentUV, 0.0).r;
+    if (surfaceDepth < currentDepth) {
+      let afterDepth = surfaceDepth - currentDepth;
+      let beforeDepth = previousSurfaceDepth - previousDepth;
+      let denominator = afterDepth - beforeDepth;
+      let weight = select(0.5, clamp(afterDepth / denominator, 0.0, 1.0), abs(denominator) > 0.00001);
+      return mix(currentUV, previousUV, weight);
+    }
+    previousUV = currentUV;
+    previousDepth = currentDepth;
+    previousSurfaceDepth = surfaceDepth;
+  }
+  return currentUV;
+}
+`;
+var POM_SELF_SHADOW_WGSL = `
+fn pomSelfShadow(
+  heightTexture: texture_2d<f32>, heightSampler: sampler,
+  hitUV: vec2f, lightDir: vec3f, heightScale: f32, maxOffsetRatio: f32,
+  requestedSteps: u32, bias: f32
+) -> f32 {
+  let l = normalize(lightDir);
+  if (l.z <= 0.001 || heightScale <= 0.0) { return 1.0; }
+  let hitHeight = clamp(textureSampleLevel(heightTexture, heightSampler, hitUV, 0.0).r, 0.0, 1.0);
+  let remainingHeight = 1.0 - hitHeight;
+  if (remainingHeight <= bias) { return 1.0; }
+  let steps = max(1u, min(requestedSteps, 16u));
+  let rawSlope = l.xy / max(l.z, 0.001);
+  let slopeLength = length(rawSlope);
+  let boundedSlope = rawSlope * min(1.0, max(0.0, maxOffsetRatio) / max(slopeLength, 0.00001));
+  let uvStep = boundedSlope * heightScale * remainingHeight / f32(steps);
+  let heightStep = remainingHeight / f32(steps);
+  var rayUV = hitUV;
+  var rayHeight = hitHeight;
+  for (var i = 0u; i < steps; i = i + 1u) {
+    rayUV = rayUV + uvStep;
+    rayHeight = rayHeight + heightStep;
+    let terrainHeight = textureSampleLevel(heightTexture, heightSampler, rayUV, 0.0).r;
+    if (terrainHeight > rayHeight + bias) { return 0.0; }
+  }
+  return 1.0;
+}
+`;
+
 // crates/afterglow-web/www/engine/virtual-texture-material.ts
 function createVirtualGltfMaterialPair(three, store, set, feedbackPixelScale, options = {}) {
   const addressMode = options.addressMode ?? 1 /* Repeat */;
@@ -72960,6 +73116,174 @@ function createVirtualGltfMaterialPair(three, store, set, feedbackPixelScale, op
     feedbackMaterial,
     feedbackMaterials,
     feedbackEntries
+  };
+}
+function createVirtualPomMaterialPair(three, store, set, heightTexture, feedbackPixelScale, options = {}) {
+  const { normal: normalEntry, masks: masksEntry } = set;
+  if (!normalEntry || !masksEntry)
+    throw new Error("POM material requires albedo, normal, and packed masks");
+  store.linkMaterialSet(set);
+  const minLayers = options.minLayers ?? 8, maxLayers = options.maxLayers ?? 32;
+  const heightScale = options.heightScale ?? 0.05, maxOffsetRatio = options.maxOffsetRatio ?? 2;
+  const maxDistance = options.maxDistance ?? 0, shadowSteps = options.shadowSteps ?? 8;
+  const shadowBias = options.shadowBias ?? 0.01, shadowStrength = options.shadowStrength ?? 0.82;
+  const qualityBias = options.qualityBias ?? 0;
+  const addressMode = options.addressMode ?? 1 /* Repeat */;
+  const side = options.side ?? three.DoubleSide;
+  const atlas = three.texture(store.atlasTexture), atlasSampler = three.sampler(atlas);
+  const atlasSize = three.uniform(new three.Vector2(store.atlasWidth, store.atlasHeight));
+  const virtualSize = three.uniform(new three.Vector2(set.albedo.width, set.albedo.height));
+  const pageGrid = three.uniform(new three.Vector2(set.albedo.pageGridX, set.albedo.pageGridY));
+  const sampleLevel = three.wgslFn(VT_SAMPLE_LEVEL_WGSL);
+  const sampleFromLevel = three.wgslFn(VT_SAMPLE_FROM_LEVEL_WGSL);
+  const resolveMaterialMip = three.wgslFn(VT_RESOLVE_MATERIAL_MIP4_WGSL);
+  const feedback = three.wgslFn(VT_FEEDBACK_WGSL);
+  const march = three.wgslFn(POM_UV_WGSL), shadow3 = three.wgslFn(POM_SELF_SHADOW_WGSL);
+  const table = (entry) => three.texture(entry.pageTableTexture);
+  const resolveArgs = {
+    pageTable0: table(set.albedo),
+    pageTable1: table(normalEntry),
+    pageTable2: table(masksEntry),
+    pageTable3: table(masksEntry),
+    uv: three.uv(),
+    virtualSize,
+    pageGrid,
+    pageSize: three.float(PAGE_SIZE),
+    maxMip: three.float(set.albedo.maxMip),
+    textureMaxMip: three.float(set.albedo.textureMaxMip),
+    addressMode: three.uint(addressMode)
+  };
+  const sampleAtMip = (entry, resolvedMip, sampleUv = three.uv()) => sampleLevel({
+    pageTable: table(entry),
+    atlas,
+    atlasSampler,
+    uv: sampleUv,
+    virtualSize,
+    pageGrid,
+    pageSize: three.float(PAGE_SIZE),
+    pageBorder: three.float(PAGE_BORDER),
+    atlasSize,
+    maxMip: three.float(entry.maxMip),
+    resolvedMip,
+    filterMode: three.uint(0),
+    addressMode: three.uint(addressMode)
+  });
+  const sampleFromMip = (entry, resolvedMip, sampleUv) => sampleFromLevel({
+    pageTable: table(entry),
+    atlas,
+    atlasSampler,
+    sampleUV: sampleUv,
+    gradientUV: three.uv(),
+    virtualSize,
+    pageGrid,
+    pageSize: three.float(PAGE_SIZE),
+    pageBorder: three.float(PAGE_BORDER),
+    atlasSize,
+    maxMip: three.float(entry.maxMip),
+    resolvedMip,
+    filterMode: three.uint(0),
+    addressMode: three.uint(addressMode)
+  });
+  const tbn = () => {
+    const sideNode = three.faceDirection;
+    const normal2 = three.normalViewGeometry.mul(sideNode);
+    const tangent = three.tangentView.mul(sideNode);
+    const bitangent = normal2.cross(tangent).mul(three.tangentGeometry.w).normalize();
+    return three.mat3(tangent, bitangent, normal2);
+  };
+  const displacedUv = () => march({
+    heightTexture: three.texture(heightTexture),
+    heightSampler: three.sampler(three.texture(heightTexture)),
+    baseUV: three.uv(),
+    viewDir: three.positionViewDirection.mul(tbn()),
+    heightScale: three.float(heightScale),
+    maxOffsetRatio: three.float(maxOffsetRatio),
+    minLayers: three.uint(minLayers),
+    maxLayers: three.uint(maxLayers),
+    maxDistance: three.float(maxDistance),
+    viewDistance: three.positionView.length()
+  });
+  const visibility = (hitUv, lightDirection) => {
+    const height = three.texture(heightTexture);
+    const result = shadow3({
+      heightTexture: height,
+      heightSampler: three.sampler(height),
+      hitUV: hitUv,
+      lightDir: lightDirection.mul(tbn()),
+      heightScale: three.float(heightScale),
+      maxOffsetRatio: three.float(maxOffsetRatio),
+      requestedSteps: three.uint(shadowSteps),
+      bias: three.float(shadowBias)
+    });
+    return three.mix(three.float(1), result, three.float(shadowStrength));
+  };
+
+  class PomLightingModel extends three.PhysicalLightingModel {
+    lightVisibility;
+    constructor(lightVisibility) {
+      super();
+      this.lightVisibility = lightVisibility;
+    }
+    direct(lightData, builder) {
+      const directDiffuse = lightData.reflectedLight.directDiffuse;
+      const directSpecular = lightData.reflectedLight.directSpecular;
+      const diffuseBefore = directDiffuse.toVar(), specularBefore = directSpecular.toVar();
+      super.direct(lightData, builder);
+      const lightDirection = lightData.lightDirection;
+      const visible = this.lightVisibility(lightDirection);
+      const diffuse = directDiffuse.sub(diffuseBefore), specular = directSpecular.sub(specularBefore);
+      directDiffuse.assign(diffuseBefore.add(diffuse.mul(visible)));
+      directSpecular.assign(specularBefore.add(specular.mul(visible)));
+    }
+  }
+  const baseMaterial = new three.MeshStandardNodeMaterial({ metalness: 0, side });
+  const baseMip = three.Fn(() => resolveMaterialMip(resolveArgs))().toVar();
+  baseMaterial.colorNode = three.Fn(() => {
+    const color3 = sampleAtMip(set.albedo, baseMip);
+    return three.vec4(three.sRGBTransferEOTF(color3.rgb), color3.a);
+  })();
+  const baseMasks = three.Fn(() => sampleAtMip(masksEntry, baseMip))().toVar();
+  baseMaterial.normalNode = three.Fn(() => three.normalMap(sampleAtMip(normalEntry, baseMip).xyz, three.vec2(1, -1)))();
+  baseMaterial.roughnessNode = three.Fn(() => baseMasks.r)();
+  baseMaterial.aoNode = three.Fn(() => baseMasks.g)();
+  const pomMaterial = new three.MeshStandardNodeMaterial({ metalness: 0, side });
+  const sharedUv = three.property("vec2"), sharedMip = three.property("float");
+  pomMaterial.colorNode = three.Fn(() => {
+    const hit = displacedUv().toVar();
+    const mip = resolveMaterialMip(resolveArgs).toVar();
+    const color3 = sampleFromMip(set.albedo, mip, hit);
+    sharedUv.assign(hit);
+    sharedMip.assign(mip);
+    return three.vec4(three.sRGBTransferEOTF(color3.rgb), color3.a);
+  })();
+  const pomMasks = sampleFromMip(masksEntry, sharedMip, sharedUv);
+  pomMaterial.normalNode = three.normalMap(sampleFromMip(normalEntry, sharedMip, sharedUv).xyz, three.vec2(1, -1));
+  pomMaterial.roughnessNode = pomMasks.r;
+  pomMaterial.aoNode = pomMasks.g;
+  pomMaterial.setupLightingModel = () => new PomLightingModel((direction) => visibility(sharedUv, direction));
+  const makeFeedback = (usePom) => {
+    const material = new three.MeshBasicNodeMaterial({ side });
+    material.fragmentNode = three.Fn(() => {
+      const gradientUv = three.uv(), sampleUv = usePom ? displacedUv() : gradientUv;
+      return feedback({
+        sampleUV: sampleUv,
+        gradientUV: gradientUv,
+        feedbackPixelScale: three.uniform(feedbackPixelScale),
+        virtualSize,
+        pageGrid,
+        maxMip: three.float(set.albedo.maxMip),
+        qualityBias: three.float(qualityBias),
+        addressMode: three.uint(addressMode),
+        textureId: three.uint(set.albedo.textureId)
+      });
+    })();
+    return material;
+  };
+  return {
+    baseMaterial,
+    pomMaterial,
+    baseFeedbackMaterial: makeFeedback(false),
+    pomFeedbackMaterial: makeFeedback(true)
   };
 }
 
@@ -73259,6 +73583,89 @@ class VirtualGltfBinding {
     this.recordCount = 0;
   }
 }
+// crates/afterglow-web/www/engine/virtual-pom-binding.ts
+class VirtualPomSceneBinding {
+  options;
+  feedbackScene = new Scene;
+  feedbackCamera;
+  feedbackPassCount = 1;
+  records;
+  count = 0;
+  pomEnabled = true;
+  feedbackEnabled = true;
+  sealed = false;
+  disposed = false;
+  constructor(options) {
+    this.options = options;
+    if (!Number.isInteger(options.capacity) || options.capacity <= 0)
+      throw new RangeError("POM binding capacity must be positive");
+    this.feedbackCamera = options.camera;
+    this.records = new Array(options.capacity).fill(null);
+  }
+  add(mesh, set, heightTexture) {
+    if (this.sealed || this.disposed)
+      throw new Error("cannot add to a sealed POM binding");
+    if (this.count >= this.records.length)
+      throw new RangeError("POM binding capacity exceeded");
+    const source = mesh.material;
+    if (Array.isArray(source))
+      throw new Error("POM binding requires one source material");
+    const runtime = Object.assign({}, exports_three_webgpu, exports_three_tsl);
+    const pair = (this.options.createPair ?? createVirtualPomMaterialPair)(runtime, this.options.store, set, heightTexture, this.options.feedbackPixelScale, this.options.material);
+    const feedback = new Mesh(mesh.geometry, pair.pomFeedbackMaterial);
+    feedback.position.copy(mesh.position);
+    feedback.quaternion.copy(mesh.quaternion);
+    feedback.scale.copy(mesh.scale);
+    feedback.matrixAutoUpdate = mesh.matrixAutoUpdate;
+    feedback.name = mesh.name;
+    mesh.material = pair.pomMaterial;
+    this.feedbackScene.add(feedback);
+    this.records[this.count++] = { source: mesh, feedback, pair };
+    return pair;
+  }
+  seal() {
+    this.sealed = true;
+  }
+  setPomEnabled(enabled) {
+    this.pomEnabled = enabled;
+    for (let index = 0;index < this.count; index++) {
+      const record = this.records[index];
+      if (!record)
+        continue;
+      record.source.material = enabled ? record.pair.pomMaterial : record.pair.baseMaterial;
+      record.feedback.material = enabled ? record.pair.pomFeedbackMaterial : record.pair.baseFeedbackMaterial;
+    }
+  }
+  setFeedbackEnabled(enabled) {
+    this.feedbackEnabled = enabled;
+  }
+  isFeedbackActive() {
+    return this.feedbackEnabled && !this.disposed;
+  }
+  beginFeedbackPass(_localPass) {}
+  endFeedbackPass(_localPass) {}
+  isPomEnabled() {
+    return this.pomEnabled;
+  }
+  dispose() {
+    if (this.disposed)
+      return;
+    this.disposed = true;
+    for (let index = this.count - 1;index >= 0; index--) {
+      const record = this.records[index];
+      if (!record)
+        continue;
+      record.source.visible = false;
+      this.feedbackScene.remove(record.feedback);
+      record.pair.baseMaterial.dispose();
+      record.pair.pomMaterial.dispose();
+      record.pair.baseFeedbackMaterial.dispose();
+      record.pair.pomFeedbackMaterial.dispose();
+      this.records[index] = null;
+    }
+    this.count = 0;
+  }
+}
 // crates/afterglow-web/www/engine/virtual-texture-feedback-pass.ts
 class VirtualTextureFeedbackPass {
   scale;
@@ -73402,7 +73809,6 @@ class VirtualTextureFeedbackPass {
     this.requestPool.length = 0;
   }
 }
-
 // crates/afterglow-web/www/engine/virtual-texture-feedback-coordinator.ts
 class VirtualTextureFeedbackCoordinator {
   renderer;

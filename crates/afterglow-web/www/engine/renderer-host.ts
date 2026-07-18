@@ -37,7 +37,7 @@ class BrowserRendererViewport implements RendererViewport {
   }
 }
 
-const moduleRendererFactory: WebGPUOnlyRendererFactory = parameters =>
+export const moduleRendererFactory: WebGPUOnlyRendererFactory = parameters =>
   new WebGPURenderer(parameters) as unknown as WebGPUOnlyRenderer; // @unsafe-cast reason=ThreePrivateRenderer issue=DME-040 expires=2026-10-01
 
 export interface RendererHostOptions {
