@@ -254,6 +254,39 @@ https://developer.nvidia.com/orca/amazon-lumberyard-bistro.
 Raw evidence:
 `docs/benchmarks/steam-audio-native-bistro-full-package-fox-laptop-2026-07-18.json`.
 
+## Upstream optimization guidance
+
+Steam Audio's C API and engine-integration documentation explicitly exposes the
+following optimization strategies:
+
+| Area | Documented strategy | Zero-bake compatible? |
+|---|---|---|
+| Geometry | Tag only acoustically influential objects; simplify complex terrain before export. Small objects can be omitted unless their aggregate matters. | Yes; required by Bistro results. |
+| Ray tracer | Embree is faster than the built-in native tracer. Radeon Rays may be significantly faster on supported Windows/OpenCL GPUs; resource reservation limits graphics interference. Games may provide custom ray callbacks. | Embree/custom: yes. Radeon Rays: unavailable for our Linux target. |
+| Simulation | Reduce real-time rays, bounces, diffuse samples, maximum sources, duration, and Ambisonic order. | Yes. |
+| Scheduling | Increase Simulation Update Interval; run reflection/pathing simulation on separate threads while keeping latency-sensitive direct occlusion responsive. | Yes. |
+| Rendering | Parametric reverb uses less CPU; Hybrid trades early convolution length for cost; Convolution preserves most detail at high cost. | Yes. |
+| Shared reverb | Listener-centric reverb simulation has source-count-independent cost. Put it on a submix/bus. | Yes, and promising for dense scenes. |
+| Mixing | Mix sources into an Ambisonic bus and spatialize late to reduce repeated spatialization work. | Yes. |
+| Direct sound | Prefer one-ray occlusion over volumetric where acceptable; reduce volumetric samples and maximum transmission surfaces. | Yes. |
+| HRTF | Nearest interpolation is fastest; bilinear can cost up to 2×. Use panning or disable optional HRTF on indirect effects where acceptable. | Yes. |
+| CPU/debug | Select suitable SIMD and thread counts; disable validation outside diagnostics because it significantly increases CPU usage. | Yes. |
+| Precomputation | Bake static-source/static-listener reflections, listener reverb, and pathing probes. Use pathing instead of brute-force rays for long corridors and corners. | No; conflicts with Afterglow's zero-baked baseline. |
+
+The largest untested upstream optimization for the native Bistro workload is
+**Embree**: every current native result uses Steam Audio's built-in ray tracer.
+The most promising no-bake combination is a structural acoustic proxy + Embree +
+listener-centric parametric reverb bus, with source-centric reflection slots only
+for important sounds. These are upstream-supported mechanisms, but their combined
+Afterglow performance remains to be measured.
+
+Primary documentation:
+[C API guide](https://valvesoftware.github.io/steam-audio/doc/capi/guide.html),
+[integration guide](https://valvesoftware.github.io/steam-audio/doc/capi/integration.html),
+[Unity settings](https://valvesoftware.github.io/steam-audio/doc/unity/settings.html),
+[Unity source](https://valvesoftware.github.io/steam-audio/doc/unity/source.html), and
+[Unity geometry](https://valvesoftware.github.io/steam-audio/doc/unity/geometry.html).
+
 ## Recommendation
 
 Use a zero-baked-acoustics baseline:
@@ -274,7 +307,9 @@ For native CEF, use the measured two-simulation-thread `libphonon` tier in an
 Afterglow native worker; reserve four simulation threads for a higher-quality
 option. Processed PCM or acoustic results still need a bounded low-latency path
 into CEF's browser audio output, and serial DSP must remain capped at 64
-independently reflected sources.
+independently reflected sources. Before freezing native capacities, repeat the
+full-package and proxy sweeps with Embree, which upstream identifies as faster
+than the built-in ray tracer.
 
 ## Primary sources
 

@@ -365,8 +365,10 @@ All engine work must move toward these non-negotiable requirements:
   Exterior, 26.77/18.33 ms Interior, and 32.05/22.29 ms Interior-with-wine. The
   package-wide full-render tier needs eight threads at 30 Hz; Exterior BVH
   bootstrap was 7.81 s and peak RSS ~569 MiB. Full render meshes are forbidden
-  as production acoustic geometry; cook structural proxies. Render-loaded and actual device-callback
-  validation remain open.
+  as production acoustic geometry; cook structural proxies. All native numbers
+  use Steam Audio's built-in tracer; upstream documents Embree as faster, so an
+  Embree rerun is required before freezing native capacities. Render-loaded and
+  actual device-callback validation remain open.
 
 ## API docs
 
