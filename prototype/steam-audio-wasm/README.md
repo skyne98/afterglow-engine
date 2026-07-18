@@ -1,4 +1,4 @@
-# Steam Audio WASM direct-ray latency prototype
+# Steam Audio WASM dynamic-acoustics prototype
 
 This prototype links Valve Steam Audio 4.8.1's experimental Emscripten library
 with the missing WASM MySOFA, PFFFT, and zlib dependencies built from Valve's
@@ -6,9 +6,11 @@ pinned sources. It executes Steam Audio's built-in ray tracer in a Web Worker.
 Requests and responses use the same SharedArrayBuffer SPSC ring layout as
 Afterglow and payload-free `postMessage` wake-ups.
 
-It measures **direct raycast occlusion plus one material-transmission ray**. It
-does not measure reflection simulation, convolution, AudioWorklet scheduling, or
-a loaded game/render workload.
+It measures direct raycast occlusion/transmission and fully runtime-generated
+parametric or convolution reflections. The dynamic benchmark moves an instanced
+door, sources, and listener before every simulation; it uses no baked acoustic
+data. It also applies Steam Audio's reflection DSP to 128-frame buffers, but does
+not yet host that DSP in an AudioWorklet or run alongside a loaded game renderer.
 
 ## Build
 
@@ -17,9 +19,12 @@ Build products and upstream sources remain under ignored `target/` and `dist/`
 directories.
 
 ```sh
-nix-shell -p emscripten python3 cmake git curl unzip --run \
+nix-shell prototype/steam-audio-wasm/toolchain.nix --run \
   './prototype/steam-audio-wasm/build.sh'
 ```
+
+`toolchain.nix` pins nixpkgs revision `aa290c9891fa` and Emscripten 4.0.23 so
+recorded benchmark builds do not vary with the host's channel.
 
 To run through CEF's cross-origin-isolated custom scheme during development:
 
@@ -67,3 +72,50 @@ measurements. The correct next gate is the same test during Dungeon rendering,
 followed by bounded reflection tiers and end-to-speaker scheduling.
 
 Raw measurements: `docs/benchmarks/steam-audio-wasm-direct-2026-07-18.json`.
+
+## Fully dynamic fox-laptop result — 2026-07-18
+
+The dynamic benchmark ran in CEF/Chromium 149 on fox-laptop's Ryzen 7 6800U
+with a 10K-triangle runtime scene. Every sample moved and committed an instanced
+door, moved the source(s) and listener, generated fresh non-baked reflection
+results, and passed them through Steam Audio's real reflection effect. Five
+launches were recorded. The laptop direct-path pass also remained cheap: 100K
+triangles / one source had 55 µs worst p99 ring round trips, while 10K triangles
+/ 128 sources had 105 µs worst p99. A rare scheduler outlier reached 5.30 ms.
+
+| Mode | Sources | Rays × bounces | Simulation mean | Worst p99 | DSP / 2.67 ms quantum |
+|---|---:|---:|---:|---:|---:|
+| Parametric low | 1 | 1,024 × 2 | 1.02 ms | 1.70 ms | 0.020 ms |
+| Parametric medium | 1 | 4,096 × 4 | 7.82 ms | 10.95 ms | 0.017 ms |
+| Parametric high | 1 | 16,384 × 8 | 62.01 ms | 66.09 ms | 0.016 ms |
+| Parametric medium | 8 | 4,096 × 4 | 30.72 ms | 33.43 ms | 0.123 ms |
+| Parametric medium | 32 | 4,096 × 4 | 108.74 ms | 114.83 ms | 0.513 ms |
+| Convolution low | 1 | 1,024 × 2 | 1.16 ms | 1.79 ms | 0.021 ms |
+| Convolution medium | 1 | 4,096 × 4 | 9.02 ms | 12.29 ms | 0.098 ms |
+| Convolution medium | 8 | 4,096 × 4 | 41.83 ms | 44.51 ms | 0.856 ms |
+
+Runtime door/source/listener updates and scene commits had a worst p99 of 0.025
+ms. All reflection IR handles were valid, all DSP outputs had non-zero energy,
+and the parametric low-band RT60 changed over motion (for example 0.10–0.21 s),
+showing that the results were refreshed rather than static or baked. Each tier
+uses 32 diffuse samples and ray batch size 1.
+
+The result establishes that fully dynamic acoustics are feasible, but require a
+bounded quality scheduler. In this idle Worker test, low and medium
+single-source reflections fit 60 Hz; eight medium sources fit roughly 20–30 Hz;
+32 medium sources fit 8 Hz. High ray counts should update near 10 Hz. Direct
+rays remain suitable for all relevant sources at much higher cadence.
+
+Valve's released WASM archive cannot run reflections because it constructs
+`std::thread` from a non-pthread build. The reproducible build patches the
+upstream ThreadPool to process synchronously inside the dedicated Web Worker and
+rebuilds `libphonon.a`; this avoids nested workers while preserving all dynamic
+simulation work.
+
+The final reflection runs occurred after GNOME auto-locked the session. They use
+synchronous Worker CPU timing rather than rAF/presentation timing and were stable
+across launches, but a render-loaded unlocked Dungeon run and a real
+AudioWorklet deadline test remain required shipping gates.
+
+Raw measurements:
+`docs/benchmarks/steam-audio-wasm-dynamic-fox-laptop-2026-07-18.json`.

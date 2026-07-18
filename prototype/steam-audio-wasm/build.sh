@@ -11,6 +11,10 @@ version=v4.8.1
 for command in em++ python3 cmake git curl unzip bun; do
   command -v "$command" >/dev/null || { echo "missing build command: $command" >&2; exit 1; }
 done
+em++ --version | head -1 | grep -q '4\.0\.23' || {
+  echo 'Steam Audio benchmark requires pinned Emscripten 4.0.23; use toolchain.nix' >&2
+  exit 1
+}
 
 if [[ ! -d "$upstream/.git" ]]; then
   mkdir -p "$cache"
@@ -50,6 +54,35 @@ if [[ ! -f "$sdk/libphonon.a" || ! -f "$sdk/phonon_version.h" ]]; then
     -d "$sdk" >/dev/null
 fi
 
+# Valve's released WASM archive constructs std::threads for real-time
+# reflections, but it was compiled without atomics/pthreads. Rebuild the pinned
+# source with a synchronous single-worker ThreadPool: the outer Web Worker is
+# already the simulation thread, so nested Emscripten workers add no value.
+threadless="$cache/steam-audio-threadless/src/core/libphonon.a"
+if [[ ! -f "$threadless" ]]; then
+  cp "$prototype/steam-audio-wasm-thread-pool.cpp" \
+    "$upstream/core/src/core/thread_pool.cpp"
+  if [[ ! -x "$upstream/core/deps/flatbuffers/bin/linux-x64/flatc" ]]; then
+    pushd "$upstream/core/build" >/dev/null
+    python3 get_dependencies.py --platform wasm --emsdk "$cache/emsdk" --dependency flatbuffers
+    popd >/dev/null
+  fi
+  # FlatBuffers 1.12's move assignment predates current Clang's stricter
+  # deleted-copy diagnostics.
+  perl -0pi -e 's/buf_ = other\.buf_;/buf_ = std::move(other.buf_);/g' \
+    "$upstream/core/deps/flatbuffers/include/flatbuffers/flatbuffers.h"
+  emcmake cmake -S "$upstream/core" -B "$cache/steam-audio-threadless" \
+    -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+    -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=FALSE \
+    -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH \
+    -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=BOTH \
+    -DEMSCRIPTEN_SYSTEM_PROCESSOR=arm \
+    -DSTEAMAUDIO_BUILD_TESTS=FALSE -DSTEAMAUDIO_BUILD_BENCHMARKS=FALSE \
+    -DSTEAMAUDIO_BUILD_SAMPLES=FALSE -DSTEAMAUDIO_BUILD_ITESTS=FALSE \
+    -DSTEAMAUDIO_BUILD_DOCS=FALSE
+  cmake --build "$cache/steam-audio-threadless" --target phonon -j8
+fi
+
 mkdir -p "$prototype/dist"
 em++ "$prototype/benchmark.cpp" \
   -I "$sdk" \
@@ -63,7 +96,22 @@ em++ "$prototype/benchmark.cpp" \
   -sEXPORTED_FUNCTIONS='["_sa_init","_sa_set_occluded","_sa_run_direct","_sa_run_direct_batch","_sa_get_occlusion","_sa_get_transmission_low","_sa_get_transmission_mid","_sa_get_transmission_high","_sa_shutdown"]' \
   -o "$prototype/dist/steam-audio.js"
 
+em++ "$prototype/dynamic-benchmark.cpp" \
+  -I "$sdk" \
+  "$threadless" \
+  "$upstream/core/deps/mysofa/lib/wasm/release/libmysofa.a" \
+  "$upstream/core/deps/pffft/lib/wasm/release/libpffft.a" \
+  "$upstream/core/deps/zlib/lib/wasm/release/libz.a" \
+  -O3 -msimd128 \
+  -sMODULARIZE=1 -sEXPORT_ES6=1 -sENVIRONMENT=worker \
+  -sALLOW_MEMORY_GROWTH=0 -sINITIAL_MEMORY=268435456 -sNO_EXIT_RUNTIME=1 \
+  -sEXPORTED_FUNCTIONS='["_dyn_init","_dyn_update","_dyn_run_reflections","_dyn_run_audio","_dyn_get_reverb_low","_dyn_get_reverb_mid","_dyn_get_reverb_high","_dyn_get_ir_valid","_dyn_get_output_energy","_dyn_shutdown"]' \
+  -o "$prototype/dist/dynamic-steam-audio.js"
+
 bun build "$prototype/src/worker.ts" --outdir "$prototype/dist" --target browser
 bun build "$prototype/src/main.ts" --outdir "$prototype/dist" --target browser
+bun build "$prototype/src/dynamic-worker.ts" --outdir "$prototype/dist" --target browser
+bun build "$prototype/src/dynamic-main.ts" --outdir "$prototype/dist" --target browser
 cp "$prototype/index.html" "$prototype/dist/index.html"
+cp "$prototype/dynamic.html" "$prototype/dist/dynamic.html"
 echo "built Steam Audio WASM prototype in ${prototype#$root/}/dist"

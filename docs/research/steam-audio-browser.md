@@ -2,10 +2,10 @@
 
 **Investigated:** 2026-07-18  
 **Upstream version:** Steam Audio 4.8.1  
-**Verdict:** technically viable through Valve's experimental Emscripten target,
-but not a supported turnkey browser integration. Prototype direct sound, HRTF,
-and occlusion first; do not commit the engine to dynamic reflections until they
-are measured in an AudioWorklet/Worker implementation.
+**Verdict:** fully dynamic direct sound and real-time reflections are technically
+viable through Valve's experimental Emscripten target, including on the Ryzen 7
+6800U. It is not a supported turnkey browser integration, and AudioWorklet
+hosting plus render-loaded scheduling remain unvalidated shipping boundaries.
 
 ## Evidence
 
@@ -95,21 +95,66 @@ per scenario produced:
 
 Therefore a fresh single-ray direct result does not itself require a 10–30 ms
 lookahead on this hardware. One 128-frame 48 kHz quantum (2.67 ms) is ample in
-the measured idle case. This is not yet a shipping bound: rendering load,
-volumetric occlusion, adversarial BVHs, scene commits, reflections, AudioWorklet
-scheduling, and device buffering remain unmeasured. Source and methodology are
-in `prototype/steam-audio-wasm/`; raw data is in
+the measured idle case. Source and methodology are in
+`prototype/steam-audio-wasm/`; raw data is in
 `docs/benchmarks/steam-audio-wasm-direct-2026-07-18.json`.
+
+## Measured fully dynamic reflections
+
+The expanded WASM prototype was run on fox-laptop (Ryzen 7 6800U, Chromium 149)
+with 10K runtime triangles and **no baked acoustic data**. A direct-path pass
+first measured 55 µs worst p99 for 100K triangles / one source and 105 µs worst
+p99 for 10K triangles / 128 sources, with one rare 5.30 ms scheduler outlier.
+Before every reflection sample it
+moved and committed an instanced door, moved the source(s) and listener, ran
+Steam Audio's real-time reflection simulator, retrieved fresh parametric or
+convolution output, and applied Steam Audio's reflection DSP to 128-frame audio
+buffers. Five launches produced:
+
+| Mode | Sources | Rays × bounces | Simulation mean | Worst p99 | DSP / 2.67 ms quantum |
+|---|---:|---:|---:|---:|---:|
+| Parametric low | 1 | 1,024 × 2 | 1.02 ms | 1.70 ms | 0.020 ms |
+| Parametric medium | 1 | 4,096 × 4 | 7.82 ms | 10.95 ms | 0.017 ms |
+| Parametric high | 1 | 16,384 × 8 | 62.01 ms | 66.09 ms | 0.016 ms |
+| Parametric medium | 8 | 4,096 × 4 | 30.72 ms | 33.43 ms | 0.123 ms |
+| Parametric medium | 32 | 4,096 × 4 | 108.74 ms | 114.83 ms | 0.513 ms |
+| Convolution low | 1 | 1,024 × 2 | 1.16 ms | 1.79 ms | 0.021 ms |
+| Convolution medium | 1 | 4,096 × 4 | 9.02 ms | 12.29 ms | 0.098 ms |
+| Convolution medium | 8 | 4,096 × 4 | 41.83 ms | 44.51 ms | 0.856 ms |
+
+Door/source/listener update plus scene commit stayed below 0.025 ms worst p99.
+All IR handles were valid, DSP output energy was non-zero, and parametric RT60
+changed over motion. With 32 diffuse samples and ray batch size 1, the idle
+Worker supports low and medium one-source simulation at 60 Hz, eight medium
+sources at approximately 20–30 Hz, 32 at 8 Hz, and high rays near 10 Hz.
+
+Valve's released WASM archive aborts when reflections construct `std::thread`,
+because the archive was not compiled for Emscripten pthreads. Re-linking it with
+`-pthread` also fails because its objects lack atomics/bulk-memory target
+features. The prototype therefore rebuilds pinned 4.8.1 source with a small
+WASM-only patch that executes ThreadPool jobs synchronously inside the dedicated
+simulation Web Worker. No simulation work moves onto the main or audio thread.
+
+The session auto-locked during final runs. The reported values are synchronous
+Worker CPU timings rather than rAF/presentation timings and were stable, but
+render-loaded unlocked testing remains necessary. Reflection DSP was measured in
+the Worker, not yet hosted under an actual AudioWorklet callback deadline.
+Raw data:
+`docs/benchmarks/steam-audio-wasm-dynamic-fox-laptop-2026-07-18.json`.
 
 ## Recommendation
 
-For the web target, prototype these tiers in order:
+Use a zero-baked-acoustics baseline:
 
-1. binaural direct sound;
-2. distance attenuation and directivity;
-3. bounded geometry occlusion at a lower Worker update rate;
-4. baked reflection/reverb data;
-5. only then, bounded dynamic reflections.
+1. binaural direct sound, attenuation, directivity, and bounded direct rays for
+   every relevant source;
+2. fully dynamic low reflections continuously;
+3. prioritize medium convolution or parametric reflections for the most
+   important sources and update lower-priority sources less often;
+4. degrade ray count, bounce count, source count, duration, order, and cadence
+   under pressure—not to baked probes or static impulse responses;
+5. retain and smoothly crossfade the latest dynamic result when a source misses
+   its update budget.
 
 For native CEF, separately evaluate native `libphonon` in an Afterglow native
 worker. It avoids the experimental WASM build and missing-package limitations,

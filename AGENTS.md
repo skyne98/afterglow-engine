@@ -346,12 +346,13 @@ All engine work must move toward these non-negotiable requirements:
   worker via `#[rpc(worker = SteamWorker)]`. `Client::init()` before CEF,
   `run_callbacks()` in the worker loop, overlay events via `push_event`,
   `--in-process-gpu` flag, `steam_appid.txt`.
-- `docs/research/steam-audio-browser.md` — Steam Audio has an experimental
-  Emscripten/WASM target, but no supported Web Audio integration and incomplete
-  prebuilt dependency packaging. The real WASM direct-ray prototype measured
-  20–30 µs worst p99 worker-ring round trips (up to 100K triangles / 128 sources)
-  on a Ryzen 9 9950X3D; laptop, rendering-load, AudioWorklet DSP, and reflection
-  measurements remain open.
+- `docs/research/steam-audio-browser.md` — Steam Audio's experimental WASM
+  target supports fully dynamic no-bake acoustics after rebuilding 4.8.1 with a
+  synchronous Worker-owned ThreadPool. On the 6800U, low 1,024×2 reflections
+  measured 1.70 ms worst p99; medium 4,096×4 measured 10.95 ms for one source,
+  33.43 ms for eight, and 114.83 ms for 32. Final runs auto-locked but measured
+  synchronous Worker CPU, not rAF; render-loaded and actual AudioWorklet
+  callback validation remain open.
 
 ## API docs
 
