@@ -5,7 +5,7 @@
 //   afterglow-pipeline inspect assets.big
 
 use afterglow_pipeline::{
-    embed_external_gltf, encode_height_r16_image, extract_glb_images, pack_mask_channels,
+    cook_static_gltf_lods, embed_external_gltf, encode_height_r16_image, extract_glb_images, pack_mask_channels,
     parse_header, stream_virtual_texture, strip_glb_images_for_virtual_texturing,
     virtual_mip_tail_first_mip, BigWriter, TextureEncoding, VirtualTextureMipTailData,
     VirtualTexturePageData,
@@ -22,24 +22,40 @@ fn main() {
         "inspect" => inspect(&args[2..]),
         "pack-masks" => pack_masks(&args[2..]),
         "height-r16" => height_r16(&args[2..]),
+        "static-lod" => static_lod(&args[2..]),
         "help" | "--help" | "-h" | _ => {
             eprintln!("afterglow-pipeline — offline asset processor");
             eprintln!();
             eprintln!("Usage:");
-            eprintln!(
-                "  afterglow-pipeline process <input_dir> <output.big> [--texture-mips] [--mesh-lods N]"
-            );
+            eprintln!("  afterglow-pipeline process <input_dir> <output.big>");
             eprintln!("  afterglow-pipeline inspect <file.big>");
             eprintln!("  afterglow-pipeline pack-masks <red.png> <green.png> <output.png>");
             eprintln!("  afterglow-pipeline height-r16 <height.png> <output.r16>");
+            eprintln!("  afterglow-pipeline static-lod <model.gltf|glb> <output.big>");
             eprintln!();
-            eprintln!("Options:");
-            eprintln!("  --texture-mips    Generate mip chains for textures (default: on)");
-            eprintln!("  --mesh-lods N     Generate N LOD levels for meshes (default: 4)");
-            eprintln!("  --mesh-optimize   Optimize vertex cache + fetch (default: on)");
-            eprintln!("  --compress        Compress mesh chunks with meshopt encode (default: on)");
+            eprintln!();
+            eprintln!("Use static-lod for offline static-mesh simplification.");
         }
     }
+}
+
+fn static_lod(args: &[String]) {
+    if args.len() != 2 {
+        eprintln!("usage: afterglow-pipeline static-lod <model.gltf|glb> <output.big>");
+        std::process::exit(1);
+    }
+    let input = PathBuf::from(&args[0]);
+    let lods = cook_static_gltf_lods(&input, &[1.0, 0.5, 0.25, 0.1], 0.02)
+        .unwrap_or_else(|error| panic!("failed to cook {}: {error}", input.display()));
+    let triangles: Vec<_> = lods.iter().map(|lod| lod.indices.len() / 3).collect();
+    let name = input.file_stem().and_then(|name| name.to_str()).unwrap_or("static-mesh");
+    let mut writer = BigWriter::new();
+    writer.add_mesh(name, lods);
+    let mut file = std::fs::File::create(&args[1])
+        .unwrap_or_else(|error| panic!("failed to create {}: {error}", args[1]));
+    writer.finish(&mut file)
+        .unwrap_or_else(|error| panic!("failed to write {}: {error}", args[1]));
+    eprintln!("[static-lod] {} → {} ({triangles:?} triangles)", input.display(), args[1]);
 }
 
 fn height_r16(args: &[String]) {
@@ -140,13 +156,6 @@ fn process(args: &[String]) {
     }
     let input_dir = PathBuf::from(&args[0]);
     let output_path = PathBuf::from(&args[1]);
-    let _mesh_lods: usize = args
-        .iter()
-        .find(|a| a.starts_with("--mesh-lods="))
-        .and_then(|a| a.split('=').nth(1))
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(4);
-
     if !input_dir.exists() {
         eprintln!(
             "error: input directory '{}' does not exist",

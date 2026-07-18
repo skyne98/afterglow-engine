@@ -133,7 +133,7 @@ export class Rpc {
 
   /// One in-flight SPSC call: write [method][args] to scratch, write_frame
   /// (auto-wakes the worker), then await the response wake.
-  async call(method, args) {
+  async call(method: number, args: Uint8Array): Promise<Uint8Array> {
     if (this._fatal) throw this._fatal; // poisoned: never touch the rings again
     if (this.pending) throw new Error('RPC busy: one in-flight call at a time');
     const len = 4 + args.length;

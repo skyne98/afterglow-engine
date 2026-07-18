@@ -101,7 +101,11 @@ Implemented on 2026-07-17:
 - DME-032: `vt-demo.ts` is canonical on the runtime, renderer host, procedural
   store factory, generic `VirtualMaterialBinding`, and feedback coordinator. The
   three-launch real-GPU regression passes all feedback, upload, and residency
-  trajectories. Dungeon/LOD migrations remain DME-030/033.
+  trajectories;
+- DME-033: `lod-demo.ts` is canonical and presents one CC0 Avocado using
+  offline meshopt-compressed records, fixed `LodSet` coverage selection, and
+  hysteresis. Its real-GPU trajectory passes levels `0,1,2,3,2,1,0` with one
+  visible mesh and no diagnostics. Dungeon remains DME-030.
 
 The machine-readable source of truth remains `engine-conformance.json`; this
 progress note does not override its gates.

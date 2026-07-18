@@ -4,7 +4,7 @@
   "visualEntrypoints": {
     "dungeon.ts": "legacy",
     "engine-demo.ts": "canonical",
-    "lod-demo.ts": "legacy",
+    "lod-demo.ts": "canonical",
     "rigged-vt-demo.ts": "canonical",
     "vt-demo.ts": "canonical"
   }

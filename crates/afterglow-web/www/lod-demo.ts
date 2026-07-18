@@ -1,297 +1,170 @@
+import * as THREE from 'three/webgpu';
 import { MeshoptClient } from './meshopt.client.ts';
-import { TextureClient } from './texture.client.ts';
-import { AssetStore } from './engine/asset-store.ts';
-import { createWebGPUOnlyRenderer, legacyWindowRendererFactory, showWebGPUFailure } from './engine/webgpu-only.ts';
+import { Rpc } from './rpc.ts';
+import { EngineRuntime, RegistrationStatus, RendererHost, type RenderFrame } from './engine/index.ts';
+import { LodSet, StaticLodSession, projectedCoverage } from './engine/lod-api.ts';
+import { BoundedKeyboardInput, DemoInputAction } from './engine/input-api.ts';
+import {
+  BootstrapGuard, BrowserErrorCapture, FrameStepHarness, PageShutdown, TextHud,
+  publishDevHarness,
+} from './engine/dev-harness-api.ts';
 
-const THREE = window.THREE;
-const loadingEl = document.getElementById('loading');
-const infoEl = document.getElementById('info');
-
-// --- Three.js setup ---
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0a0c10);
-const camera = new THREE.OrthographicCamera(-7, 7, 5, -5, 0.1, 100);
-camera.position.set(0, 0, 14);
-camera.lookAt(0, 0, 0);
-const renderer = await createWebGPUOnlyRenderer({ antialias: true }, legacyWindowRendererFactory).catch(error => {
-  showWebGPUFailure(error);
-  throw error;
+const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 100);
+camera.position.set(0, 1.4, 8);
+scene.add(new THREE.HemisphereLight(0xaac4e8, 0x241b15, 2));
+const key = new THREE.DirectionalLight(0xffffff, 3);
+key.position.set(4, 7, 5);
+scene.add(key);
+const runtime = EngineRuntime.forScene({
+  scene, entityCapacity: 1,
+  memory: {
+    frameScratchBytes: 8 * 1024, renderScratchBytes: 8 * 1024,
+    structuralCommands: 4, workerCompletions: 4, assetRequests: 4, vtRequests: 4,
+  },
+  diagnosticCapacity: 32, maxWorkerInputs: 0, maxRenderPasses: 1,
 });
-renderer.setSize(innerWidth, innerHeight);
-document.body.appendChild(renderer.domElement);
-addEventListener('resize', () => {
-  const aspect = innerWidth / innerHeight;
-  camera.left = -7 * aspect;
-  camera.right = 7 * aspect;
-  camera.top = 5;
-  camera.bottom = -5;
+function resizeCamera(width: number, height: number): void {
+  camera.aspect = width / height;
   camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth, innerHeight);
+}
+const rendererHost = await RendererHost.create({
+  scene, camera, diagnostics: runtime.diagnostics,
+  parameters: { antialias: true }, onResize: resizeCamera,
+}).catch((error: unknown) => { runtime.dispose(); throw error; });
+const loadingElement = document.getElementById('loading');
+const startupHud = new TextHud(loadingElement);
+const bootstrap = new BootstrapGuard(10);
+bootstrap.defer(() => rendererHost.dispose());
+bootstrap.defer(() => runtime.dispose());
+try {
+const session = await StaticLodSession.open({
+  containerPath: 'lod-demo.big', assetName: 'Avocado', maxHeaderBytes: 64 * 1024,
+  async createDecoder() {
+    const rpc = await Rpc.create({
+      mainWasmUrl: 'afterglow_web.wasm', workerJsUrl: 'worker.js',
+      workerWasmUrl: 'meshopt.wasm', timeoutMs: 10_000,
+    });
+    return { decoder: new MeshoptClient(rpc), close(): void { rpc.terminate(); } };
+  },
 });
-scene.add(new THREE.AmbientLight(0x404060, 0.5));
-const dirLight = new THREE.DirectionalLight(0xffffff, 1.0);
-dirLight.position.set(5, 10, 7);
-scene.add(dirLight);
+bootstrap.defer(() => session.close());
+const root = new THREE.Group();
+root.rotation.y = Math.PI;
+scene.add(root);
+const solidMaterial = new THREE.MeshStandardMaterial({ color: 0x78b84b, roughness: 0.72, metalness: 0 });
+const wireMaterial = new THREE.MeshBasicMaterial({ color: 0xc8f0a0, wireframe: true });
+bootstrap.defer(() => solidMaterial.dispose());
+bootstrap.defer(() => wireMaterial.dispose());
+const meshes: THREE.Mesh[] = [];
+for (const level of session.levels) {
+  const mesh = new THREE.Mesh(level.geometry, solidMaterial);
+  root.add(mesh);
+  meshes.push(mesh);
+}
+const bounds = session.levels[0]?.geometry.boundingSphere;
+if (!bounds) throw new Error('static LOD source has no bounds');
+const modelScale = 1.5 / bounds.radius;
+for (const mesh of meshes) mesh.position.copy(bounds.center).multiplyScalar(-1);
+root.scale.setScalar(modelScale);
+const lod = new LodSet(meshes, [0.35, 0.18, 0.08], 0.1, 4);
+const input = new BoundedKeyboardInput();
+bootstrap.defer(() => input.dispose());
+const errors = new BrowserErrorCapture(runtime.diagnostics);
+bootstrap.defer(() => errors.dispose());
+const frameSteps = new FrameStepHarness(24);
+const infoElement = document.getElementById('info');
+const hud = new TextHud(infoElement);
+if (loadingElement) loadingElement.style.display = 'none';
+if (infoElement) infoElement.style.display = 'block';
+let programmatic = false;
+let distance = 8;
+let elapsed = 0;
+let wireframe = false;
+const verticalFov = THREE.MathUtils.degToRad(camera.fov);
 
-// --- Generate a UV sphere mesh ---
-function generateSphere(segments, rings) {
-  const positions = [], uvs = [], indices = [];
-  for (let y = 0; y <= rings; y++) {
-    const v = y / rings, phi = v * Math.PI;
-    for (let x = 0; x <= segments; x++) {
-      const u = x / segments, theta = u * Math.PI * 2;
-      positions.push(Math.cos(theta) * Math.sin(phi), Math.cos(phi), Math.sin(theta) * Math.sin(phi));
-      uvs.push(u, v);
+/** @alloc-effect diagnostic */
+function updateHud(): void {
+  const level = lod.level();
+  const triangles = session.levels[level]?.triangleCount ?? 0;
+  hud.setText(
+    `afterglow-engine — Offline Static LOD\n` +
+    `CC0 Avocado · level ${level} · ${triangles} triangles\n` +
+    `Distance ${distance.toFixed(2)} · hysteresis 10%\n` +
+    `LOD chain ${session.levels.map((entry) => entry.triangleCount).join(' → ')}\n` +
+    `Errors ${runtime.diagnostics.count}\n\nW wireframe`,
+  );
+}
+/** @alloc-effect none */
+function update(frame: Readonly<RenderFrame>): void {
+  elapsed += frame.deltaSeconds;
+  if (!programmatic) distance = 24 + Math.sin(elapsed * 0.45) * 21;
+  camera.position.z = distance;
+  camera.lookAt(0, 0, 0);
+  root.rotation.y = Math.PI + elapsed * 0.25;
+  lod.select(projectedCoverage(1.5, distance, verticalFov));
+  if (input.consumePressed(DemoInputAction.ZoomIn)) {
+    wireframe = !wireframe;
+    for (let index = 0; index < meshes.length; index++) {
+      const mesh = meshes[index];
+      if (mesh) mesh.material = wireframe ? wireMaterial : solidMaterial;
     }
   }
-  for (let y = 0; y < rings; y++) {
-    for (let x = 0; x < segments; x++) {
-      const i = y * (segments + 1) + x;
-      indices.push(i, i + 1, i + segments + 1);
-      indices.push(i + 1, i + segments + 2, i + segments + 1);
-    }
-  }
-  return { positions: new Float32Array(positions), uvs: new Float32Array(uvs), indices: new Uint32Array(indices) };
+  frameSteps.poll(frame.frameId);
+  if (frame.frameId % 15 === 0)
+    updateHud(); // @alloc-allowed reason=DiagnosticHud issue=DME-033 expires=2026-10-01
 }
 
-// --- Build a minimal GLB from mesh data ---
-function buildGLB(indices, positions, uvs) {
-  const indexBytes = indices.byteLength;
-  const posBytes = positions.byteLength;
-  const uvBytes = uvs.byteLength;
-  const binSize = indexBytes + posBytes + uvBytes;
-  const json = {
-    asset: { version: '2.0' },
-    meshes: [{ primitives: [{ attributes: { POSITION: 0, TEXCOORD_0: 1 }, indices: 2 }] }],
-    accessors: [
-      { bufferView: 1, componentType: 5126, count: positions.length / 3, type: 'VEC3' },
-      { bufferView: 2, componentType: 5126, count: uvs.length / 2, type: 'VEC2' },
-      { bufferView: 0, componentType: 5125, count: indices.length, type: 'SCALAR' },
-    ],
-    bufferViews: [
-      { buffer: 0, byteOffset: 0, byteLength: indexBytes, target: 34963 },
-      { buffer: 0, byteOffset: indexBytes, byteLength: posBytes, target: 34962 },
-      { buffer: 0, byteOffset: indexBytes + posBytes, byteLength: uvBytes, target: 34962 },
-    ],
-    buffers: [{ byteLength: binSize }],
-  };
-  const jsonStr = JSON.stringify(json);
-  const jsonBytes = new TextEncoder().encode(jsonStr);
-  const jsonPad = (4 - (jsonBytes.length % 4)) % 4;
-  const binPad = (4 - (binSize % 4)) % 4;
-  const totalSize = 12 + 8 + jsonBytes.length + jsonPad + 8 + binSize + binPad;
-  const glb = new ArrayBuffer(totalSize);
-  const view = new DataView(glb);
-  view.setUint32(0, 0x46546C67, true);
-  view.setUint32(4, 2, true);
-  view.setUint32(8, totalSize, true);
-  let off = 12;
-  view.setUint32(off, jsonBytes.length + jsonPad, true); off += 4;
-  view.setUint32(off, 0x4E4F534A, true); off += 4;
-  new Uint8Array(glb, off, jsonBytes.length).set(jsonBytes); off += jsonBytes.length;
-  for (let i = 0; i < jsonPad; i++) new Uint8Array(glb)[off++] = 0x20;
-  view.setUint32(off, binSize + binPad, true); off += 4;
-  view.setUint32(off, 0x004E4942, true); off += 4;
-  const binView = new Uint8Array(glb, off, binSize);
-  binView.set(new Uint8Array(indices.buffer, indices.byteOffset, indexBytes), 0);
-  binView.set(new Uint8Array(positions.buffer, positions.byteOffset, posBytes), indexBytes);
-  binView.set(new Uint8Array(uvs.buffer, uvs.byteOffset, uvBytes), indexBytes + posBytes);
-  return new Uint8Array(glb);
-}
-
-// --- Spawn workers ---
-loadingEl.textContent = 'spawning meshopt + texture workers...';
-const meshopt = await MeshoptClient.spawn('meshopt.wasm');
-const texture = await TextureClient.spawn('texture.wasm');
-
-// --- Generate sphere + build GLB ---
-const segments = 48, rings = 32;
-const sphere = generateSphere(segments, rings);
-const glbBytes = buildGLB(sphere.indices, sphere.positions, sphere.uvs);
-
-// --- Fetch the .basis texture ---
-loadingEl.textContent = 'fetching checker.basis...';
-const basisResp = await fetch('checker.basis');
-const basisBytes = new Uint8Array(await basisResp.arrayBuffer());
-
-// --- Create AssetStore with both workers ---
-const loader = {
-  files: new Map([['sphere.glb', glbBytes], ['checker.basis', basisBytes]]),
-  async load(path) { return this.files.get(path); },
-  async size(path) { return this.files.get(path)?.byteLength ?? 0; },
-  async read(path, off, len) { return this.files.get(path)?.subarray(off, off + len); },
-  poll() {},
-};
-const store = new AssetStore(loader, meshopt, texture);
-
-// --- Load model + texture through AssetStore ---
-loadingEl.textContent = 'loading + optimizing model + transcoding texture...';
-const modelHandle = store.loadModel('sphere.glb');
-
-// Load basis texture as raw transcoded bytes (we'll create per-LOD textures).
-const basisTexHandle = store.loadBasisTexture('checker.basis');
-let lastModelGen = -1, lastBasisGen = -1;
-let modelReady = false;
-
-// Per-LOD textures: LOD 0 = mip 0 (128×128), LOD 1 = mip 1 (64×64), etc.
-// Lower-LOD meshes get lower-resolution textures (fewer triangles → fewer texels).
-let lodTextures = [];
-
-function buildLodTextures(serializedMips) {
-  if (lodTextures.length > 0) return;
-  const mips = store.parseSerializedMips(serializedMips);
-  if (mips.length === 0) return;
-  // Create one texture per LOD level, each using a different mip.
-  const numLods = 4;
-  for (let i = 0; i < numLods; i++) {
-    // Use progressively lower mip levels for lower LODs.
-    // mip 0=128, mip 2=32, mip 4=8, mip 5=4 — dramatic but still colorful.
-    const mipIdx = Math.min(i === 3 ? 5 : i * 2, mips.length - 1);
-    const mip = mips[mipIdx];
-    const tex = new THREE.DataTexture(mip.data, mip.width, mip.height, THREE.RGBAFormat);
-    tex.wrapS = THREE.RepeatWrapping;
-    tex.wrapT = THREE.RepeatWrapping;
-    tex.colorSpace = THREE.SRGBColorSpace;
-    tex.needsUpdate = true;
-    lodTextures.push(tex);
-  }
-}
-
-// --- Info overlay ---
-function updateInfo(asset) {
-  let html = '<b>afterglow-engine — LOD Demo (AssetStore)</b><br>';
-  html += `Source: UV sphere ${segments}×${rings} — ${sphere.indices.length / 3} triangles<br>`;
-  html += `Texture: checker.basis (128×128, 8 mips, UASTC → BC7)<br>`;
-  html += `<br>`;
-  if (asset && asset.stats && asset.stats.length > 0) {
-    const s = asset.stats[0];
-    html += `<b>Mesh optimization:</b><br>`;
-    html += `  Original: ${s.originalTriangles} tris, ACMR=${s.originalAcmr.toFixed(2)}<br>`;
-    html += `  Optimized: ACMR=${s.optimizedAcmr.toFixed(2)}<br>`;
-    html += `  Index: ${s.uncompressedIndexBytes}→${s.compressedIndexBytes} bytes (${(100 * s.compressedIndexBytes / s.uncompressedIndexBytes).toFixed(0)}%)<br>`;
-    html += `<br>`;
-  }
-  if (asset && asset.meshes && asset.meshes.length > 0) {
-    const lods = asset.meshes[0];
-    const labels = ['LOD 0 — Full', 'LOD 1 — 50%', 'LOD 2 — 25%', 'LOD 3 — 10%'];
-    html += `<b>LOD levels:</b><br>`;
-    for (let i = 0; i < lods.length; i++) {
-      const pct = (lods[i].triangleCount / (sphere.indices.length / 3) * 100).toFixed(0);
-      html += `  ${labels[i]}: ${lods[i].triangleCount} tris (${pct}%)<br>`;
-    }
-    html += `<br>`;
-  }
-  html += `<b>Texture LOD (per-sphere):</b><br>`;
-  html += `  Basis file: ${basisBytes.length} bytes<br>`;
-  if (lodTextures.length > 0) {
-    const labels = ['LOD 0 — Full', 'LOD 1 — 50%', 'LOD 2 — 25%', 'LOD 3 — 10%'];
-    for (let i = 0; i < lodTextures.length; i++) {
-      html += `  ${labels[i]}: ${lodTextures[i].image.width}×${lodTextures[i].image.height} tex<br>`;
-    }
-  } else {
-    html += `  Status: transcoding... (gen ${basisTexHandle.generation})<br>`;
-  }
-  html += `<br>Press W to toggle wireframes`;
-  infoEl.innerHTML = html;
-  infoEl.style.display = 'block';
-}
-
-// --- Build Three.js meshes from the model asset ---
-const lodGroups = [];
-const colors = [0x4fc3f7, 0x66bb6a, 0xffa726, 0xef5350];
-let meshesBuilt = false;
-
-function buildMeshesFromAsset(asset) {
-  if (meshesBuilt) return;
-  if (!asset || !asset.meshes || asset.meshes.length === 0) return;
-  meshesBuilt = true;
-
-  const lods = asset.meshes[0];
-  const spacing = 3.5;
-  const grid = [
-    [-spacing, spacing, 0],
-    [spacing, spacing, 0],
-    [-spacing, -spacing, 0],
-    [spacing, -spacing, 0],
-  ];
-
-  for (let i = 0; i < lods.length; i++) {
-    const lod = lods[i];
-    const geom = new THREE.BufferGeometry();
-    geom.setAttribute('position', new THREE.BufferAttribute(lod.positions, 3));
-    if (lod.uvs.length > 0) geom.setAttribute('uv', new THREE.BufferAttribute(lod.uvs, 2));
-    geom.setIndex(new THREE.BufferAttribute(lod.indices, 1));
-    geom.computeVertexNormals();
-
-    // Use the per-LOD texture (or fallback if not ready yet).
-    const tex = lodTextures[i] || lodTextures[lodTextures.length - 1] || texHandle?.fallback;
-    const solidMat = new THREE.MeshStandardMaterial({ map: tex, metalness: 0.0, roughness: 0.9 });
-    const wireMat = new THREE.MeshBasicMaterial({ color: colors[i], wireframe: true, transparent: true, opacity: 0.25 });
-
-    const group = new THREE.Group();
-    const solid = new THREE.Mesh(geom, solidMat);
-    const wire = new THREE.Mesh(geom.clone(), wireMat);
-    wire.scale.setScalar(1.001);
-    group.add(solid);
-    group.add(wire);
-
-    const [x, y, z] = grid[i] || [0, 0, 0];
-    group.position.set(x, y, z);
-    scene.add(group);
-    lodGroups.push({ group, solid, wire, solidMat, wireMat });
-  }
-
-  loadingEl.style.display = 'none';
-  updateInfo(asset);
-}
-
-// --- Wireframe toggle (press W) ---
-let wireframesVisible = true;
-addEventListener('keydown', e => {
-  if (e.key === 'w' || e.key === 'W') {
-    wireframesVisible = !wireframesVisible;
-    for (const lod of lodGroups) {
-      lod.wire.visible = wireframesVisible;
-    }
-  }
+if (runtime.registerRenderPass(rendererHost) !== RegistrationStatus.Registered)
+  throw new Error('LOD render-pass capacity exceeded');
+runtime.enterWarmup();
+runtime.adapter.warmAllDescriptors();
+await runtime.warm();
+rendererHost.renderer.render(scene, camera);
+await rendererHost.renderer.compileAsync(scene, camera);
+for (const mesh of meshes) mesh.material = wireMaterial;
+rendererHost.renderer.render(scene, camera);
+await rendererHost.renderer.compileAsync(scene, camera);
+for (const mesh of meshes) mesh.material = solidMaterial;
+runtime.sealGameplay();
+const shutdown = new PageShutdown(() => {
+  runtime.stop(); input.dispose(); errors.dispose(); void session.close(); runtime.dispose();
 });
-
-// --- Animation loop ---
-const startTime = performance.now();
-
-function animate() {
-  const elapsed = (performance.now() - startTime) / 1000;
-
-  // Drive the AssetStore (polls all workers + streams mips).
-  store.poll();
-
-  // Check model readiness.
-  if (!modelReady && modelHandle.generation > lastModelGen) {
-    lastModelGen = modelHandle.generation;
-    if (modelHandle.state === 'ready' && modelHandle.asset) {
-      modelReady = true;
-      buildMeshesFromAsset(modelHandle.asset);
-    }
-  }
-
-  // Check basis texture readiness — create per-LOD textures when ready.
-  if (basisTexHandle.generation > lastBasisGen) {
-    lastBasisGen = basisTexHandle.generation;
-    if (basisTexHandle.state === 'ready' && basisTexHandle.asset) {
-      buildLodTextures(basisTexHandle.asset);
-      if (modelReady) updateInfo(modelHandle.asset);
-    }
-  }
-
-  // Synced rotation — apply to group so solid + wire stay aligned.
-  for (const lod of lodGroups) {
-    lod.group.rotation.y = elapsed * 0.5;
-    lod.group.rotation.x = elapsed * 0.2;
-  }
-
-  renderer.render(scene, camera);
-  requestAnimationFrame(animate);
+bootstrap.defer(() => shutdown.dispose());
+runtime.start({ update: update });
+function step(count = 1): Promise<void> {
+  return frameSteps.wait(runtime.frame.frameId, Math.max(1, count | 0));
 }
-
-requestAnimationFrame(animate);
-console.log('afterglow-engine: LOD demo started (AssetStore pipeline + Basis texture)');
+publishDevHarness('__afterglowLod', {
+  snapshot: () => ({
+    level: lod.level(), distance,
+    triangles: session.levels[lod.level()]?.triangleCount ?? 0,
+    visible: meshes.reduce((count, mesh) => count + (mesh.visible ? 1 : 0), 0),
+    errors: errors.snapshot(),
+  }),
+  setDistance(value: number) { programmatic = true; distance = Math.max(2, Math.min(80, value)); },
+  step,
+  async run() {
+    programmatic = true;
+    const distances = [5, 12, 24, 50, 24, 12, 5];
+    const levels: number[] = [];
+    for (const value of distances) {
+      distance = value;
+      await step(3);
+      levels.push(lod.level());
+      if (meshes.reduce((count, mesh) => count + (mesh.visible ? 1 : 0), 0) !== 1)
+        throw new Error('LOD visibility invariant failed');
+    }
+    if (runtime.diagnostics.count !== 0) throw new Error('LOD runtime diagnostics are not empty');
+    return { ok: true, distances, levels, triangles: session.levels.map((entry) => entry.triangleCount) };
+  },
+});
+bootstrap.release();
+console.log('afterglow-engine: canonical offline static LOD demo started');
+} catch (error) {
+  startupHud.setText(`LOD bootstrap failed: ${String(error)}`);
+  try { await bootstrap.rollback(); }
+  catch (cleanupError) { if (error instanceof Error && error.cause === undefined) error.cause = cleanupError; }
+  throw error;
+}
