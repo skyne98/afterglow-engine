@@ -9,7 +9,7 @@ dist="$prototype/dist-native"
 version=v4.8.1
 archive="$cache/steamaudio.zip"
 
-for command in c++ curl unzip; do
+for command in c++ curl unzip cargo; do
   command -v "$command" >/dev/null || { echo "missing build command: $command" >&2; exit 1; }
 done
 
@@ -24,12 +24,19 @@ if [[ ! -f "$sdk/libphonon.so" || ! -f "$sdk/phonon_version.h" ]]; then
     -d "$sdk" >/dev/null
 fi
 
+tracer_target="$cache/obvhs-tracer-target"
+CARGO_TARGET_DIR="$tracer_target" \
+  cargo build --manifest-path "$prototype/obvhs-tracer/Cargo.toml" --release
+tracer_library="$tracer_target/release/libafterglow_obvhs_tracer.a"
+
 mkdir -p "$dist"
 c++ -std=c++20 -O3 -march=x86-64-v3 -pthread \
   -I "$sdk" \
+  -I "$prototype/obvhs-tracer/include" \
   "$prototype/dynamic-benchmark.cpp" \
   "$prototype/native-dynamic-benchmark.cpp" \
-  -L "$sdk" -lphonon \
+  "$tracer_library" \
+  -L "$sdk" -lphonon -ldl -lm \
   -Wl,-rpath,'$ORIGIN' \
   -o "$dist/native-dynamic-benchmark"
 cp "$sdk/libphonon.so" "$dist/libphonon.so"

@@ -6,6 +6,8 @@ interface SampleResult {
   internalMs: number;
   occlusion: number;
   transmission: readonly [number, number, number];
+  tracerNodes: number;
+  tracerBuildMs: number;
   roundTripMs: number;
 }
 
@@ -28,6 +30,8 @@ interface ScenarioResult {
   occluded: number;
   visible: number;
   transmission: readonly [number, number, number];
+  tracerNodes: number;
+  tracerBuildMs: number;
 }
 
 const output = document.getElementById('output');
@@ -40,8 +44,8 @@ const log = (message: string): void => {
 const memory = new SharedArrayBuffer(RING_BYTES * 2);
 initializeRing(memory, 0);
 initializeRing(memory, RING_BYTES);
-const worker = new Worker('./worker.js?v=4', { type: 'module' });
-const response = new Uint8Array(32);
+const worker = new Worker('./worker.js?v=5', { type: 'module' });
+const response = new Uint8Array(48);
 const request = new Uint8Array(16);
 let sequence = 0;
 let resolveWake: (() => void) | null = null;
@@ -68,7 +72,7 @@ async function call(command: number, value0: number, value1: number): Promise<Sa
   resolveWake = null;
   const elapsed = performance.now() - started;
   const bytes = readFrame(memory, RING_BYTES, response);
-  if (bytes !== 32) throw new Error(`unexpected response size ${bytes}`);
+  if (bytes !== response.length) throw new Error(`unexpected response size ${bytes}`);
   const result = new DataView(response.buffer);
   if (result.getUint32(0, true) !== current) throw new Error('response sequence mismatch');
   return {
@@ -79,6 +83,8 @@ async function call(command: number, value0: number, value1: number): Promise<Sa
     transmission: [
       result.getFloat32(20, true), result.getFloat32(24, true), result.getFloat32(28, true),
     ],
+    tracerNodes: result.getUint32(32, true),
+    tracerBuildMs: result.getFloat64(40, true),
     roundTripMs: elapsed,
   };
 }
@@ -130,6 +136,8 @@ async function benchmark(triangles: number, sources: number, samples = 2000): Pr
     occluded,
     visible,
     transmission,
+    tracerNodes: initialized.tracerNodes,
+    tracerBuildMs: initialized.tracerBuildMs,
   };
 }
 

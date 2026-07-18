@@ -13,17 +13,20 @@ interface DynamicSteamAudioModule {
   _dyn_get_reverb_high(): number;
   _dyn_get_ir_valid(): number;
   _dyn_get_output_energy(): number;
+  _dyn_get_tracer_nodes(): number;
+  _dyn_get_tracer_build_ms(): number;
+  _dyn_get_tracer_owned_bytes(): number;
 }
 
 const request = new Uint8Array(40);
-const response = new Uint8Array(40);
+const response = new Uint8Array(64);
 let memory: SharedArrayBuffer | null = null;
 let steam: DynamicSteamAudioModule | null = null;
 
 self.onmessage = async (event: MessageEvent): Promise<void> => {
   if (event.data instanceof SharedArrayBuffer) {
     memory = event.data;
-    steam = await createSteamAudio({ locateFile: (path: string) => `${path}?v=13` }) as DynamicSteamAudioModule;
+    steam = await createSteamAudio({ locateFile: (path: string) => `${path}?v=14` }) as DynamicSteamAudioModule;
     self.postMessage('ready');
     return;
   }
@@ -66,7 +69,10 @@ self.onmessage = async (event: MessageEvent): Promise<void> => {
   output.setFloat32(24, steam._dyn_get_reverb_high(), true);
   output.setUint32(28, steam._dyn_get_ir_valid(), true);
   output.setFloat32(32, steam._dyn_get_output_energy(), true);
-  output.setUint32(36, command, true);
+  output.setUint32(36, steam._dyn_get_tracer_nodes(), true);
+  output.setFloat64(40, steam._dyn_get_tracer_build_ms(), true);
+  output.setFloat64(48, steam._dyn_get_tracer_owned_bytes(), true);
+  output.setUint32(56, command, true);
   writeFrame(memory, RING_BYTES, response);
   self.postMessage('wake');
 };

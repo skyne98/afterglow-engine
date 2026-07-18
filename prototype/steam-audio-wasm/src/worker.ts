@@ -10,11 +10,13 @@ interface SteamAudioModule {
   _sa_get_transmission_low(): number;
   _sa_get_transmission_mid(): number;
   _sa_get_transmission_high(): number;
+  _sa_get_tracer_nodes(): number;
+  _sa_get_tracer_build_ms(): number;
   _sa_shutdown(): void;
 }
 
 const request = new Uint8Array(32);
-const response = new Uint8Array(32);
+const response = new Uint8Array(48);
 let memory: SharedArrayBuffer | null = null;
 let steam: SteamAudioModule | null = null;
 
@@ -62,6 +64,8 @@ self.onmessage = async (event: MessageEvent): Promise<void> => {
   output.setFloat32(20, steam._sa_get_transmission_low(), true);
   output.setFloat32(24, steam._sa_get_transmission_mid(), true);
   output.setFloat32(28, steam._sa_get_transmission_high(), true);
+  output.setUint32(32, steam._sa_get_tracer_nodes(), true);
+  output.setFloat64(40, steam._sa_get_tracer_build_ms(), true);
   writeFrame(memory, RING_BYTES, response);
   self.postMessage('wake');
 };

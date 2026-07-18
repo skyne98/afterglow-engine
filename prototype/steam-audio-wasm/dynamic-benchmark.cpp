@@ -1,4 +1,5 @@
 #include <phonon.h>
+#include <afterglow_obvhs_tracer.h>
 #if defined(__EMSCRIPTEN__)
 #include <emscripten/emscripten.h>
 #else
@@ -13,10 +14,7 @@ constexpr int kFrameSize = 128;
 
 IPLContext gContext = nullptr;
 IPLScene gScene = nullptr;
-IPLStaticMesh gRoomMesh = nullptr;
-IPLScene gDoorScene = nullptr;
-IPLStaticMesh gDoorMesh = nullptr;
-IPLInstancedMesh gDoorInstance = nullptr;
+void* gTracer = nullptr;
 IPLSimulator gSimulator = nullptr;
 std::vector<IPLSource> gSources;
 std::vector<IPLSimulationInputs> gSourceInputs;
@@ -45,15 +43,6 @@ IPLCoordinateSpace3 coordinates(float x, float y, float z) {
     return value;
 }
 
-IPLMatrix4x4 translation(float x, float y, float z) {
-    IPLMatrix4x4 value{};
-    for (int index = 0; index < 4; ++index) value.elements[index][index] = 1.0f;
-    value.elements[0][3] = x;
-    value.elements[1][3] = y;
-    value.elements[2][3] = z;
-    return value;
-}
-
 void releaseAll() {
     if (gBinauralOut.data) iplAudioBufferFree(gContext, &gBinauralOut);
     if (gAudioOut.data) iplAudioBufferFree(gContext, &gAudioOut);
@@ -73,41 +62,28 @@ void releaseAll() {
     gSourceInputs.clear();
     gOutputs.clear();
     if (gSimulator) iplSimulatorRelease(&gSimulator);
-    if (gDoorInstance) {
-        iplInstancedMeshRemove(gDoorInstance, gScene);
-        iplInstancedMeshRelease(&gDoorInstance);
-    }
-    if (gDoorMesh) {
-        iplStaticMeshRemove(gDoorMesh, gDoorScene);
-        iplStaticMeshRelease(&gDoorMesh);
-    }
-    if (gDoorScene) iplSceneRelease(&gDoorScene);
-    if (gRoomMesh) {
-        iplStaticMeshRemove(gRoomMesh, gScene);
-        iplStaticMeshRelease(&gRoomMesh);
-    }
     if (gScene) iplSceneRelease(&gScene);
+    if (gTracer) {
+        afterglow_obvhs_destroy(gTracer);
+        gTracer = nullptr;
+    }
     if (gContext) iplContextRelease(&gContext);
     gAudioIn = {};
     gAudioOut = {};
     gBinauralOut = {};
 }
 
-bool createMesh(IPLScene scene, std::vector<IPLVector3>& vertices,
-                std::vector<IPLTriangle>& triangles, IPLMaterial* material,
-                IPLStaticMesh* mesh) {
-    std::vector<IPLint32> materialIndices(triangles.size(), 0);
-    IPLStaticMeshSettings settings{};
-    settings.numVertices = static_cast<IPLint32>(vertices.size());
-    settings.numTriangles = static_cast<IPLint32>(triangles.size());
-    settings.numMaterials = 1;
-    settings.vertices = vertices.data();
-    settings.triangles = triangles.data();
-    settings.materialIndices = materialIndices.data();
-    settings.materials = material;
-    if (iplStaticMeshCreate(scene, &settings, mesh) != IPL_STATUS_SUCCESS) return false;
-    iplStaticMeshAdd(*mesh, scene);
-    return true;
+std::vector<AfterglowObvhsTriangle> flattenTriangles(
+    const std::vector<IPLVector3>& vertices,
+    const std::vector<IPLTriangle>& triangles,
+    IPLint32 materialIndex) {
+    std::vector<AfterglowObvhsTriangle> output;
+    output.reserve(triangles.size());
+    for (const auto& triangle : triangles) {
+        output.push_back({vertices[triangle.indices[0]], vertices[triangle.indices[1]],
+                          vertices[triangle.indices[2]], materialIndex});
+    }
+    return output;
 }
 
 void addQuad(std::vector<IPLVector3>& vertices, std::vector<IPLTriangle>& triangles,
@@ -154,10 +130,6 @@ EMSCRIPTEN_KEEPALIVE int dyn_init(int triangleCount, int sourceCount, int maxRay
 #endif
     if (iplContextCreate(&contextSettings, &gContext) != IPL_STATUS_SUCCESS) return 1;
 
-    IPLSceneSettings sceneSettings{};
-    sceneSettings.type = IPL_SCENETYPE_DEFAULT;
-    if (iplSceneCreate(gContext, &sceneSettings, &gScene) != IPL_STATUS_SUCCESS) return 2;
-
     std::vector<IPLVector3> vertices;
     std::vector<IPLTriangle> triangles;
     vertices.reserve(static_cast<size_t>(triangleCount) * 3);
@@ -180,28 +152,32 @@ EMSCRIPTEN_KEEPALIVE int dyn_init(int triangleCount, int sourceCount, int maxRay
         vertices.push_back({x, y + 0.02f, z});
         triangles.push_back({base, base + 1, base + 2});
     }
-    IPLMaterial roomMaterial = {{0.12f, 0.20f, 0.35f}, 0.18f, {0.08f, 0.05f, 0.03f}};
-    if (!createMesh(gScene, vertices, triangles, &roomMaterial, &gRoomMesh)) return 3;
-
-    // A separate runtime-instanced door moves every benchmark sample.
-    if (iplSceneCreate(gContext, &sceneSettings, &gDoorScene) != IPL_STATUS_SUCCESS) return 4;
     std::vector<IPLVector3> doorVertices;
     std::vector<IPLTriangle> doorTriangles;
     addQuad(doorVertices, doorTriangles, {0, -1.5f, -1.2f}, {0, 1.5f, -1.2f},
             {0, 1.5f, 1.2f}, {0, -1.5f, 1.2f});
-    IPLMaterial doorMaterial = {{0.20f, 0.30f, 0.45f}, 0.10f, {0.03f, 0.02f, 0.01f}};
-    if (!createMesh(gDoorScene, doorVertices, doorTriangles, &doorMaterial, &gDoorMesh)) return 5;
-    iplSceneCommit(gDoorScene);
-    IPLInstancedMeshSettings doorSettings{};
-    doorSettings.subScene = gDoorScene;
-    doorSettings.transform = translation(0, 0, 0);
-    if (iplInstancedMeshCreate(gScene, &doorSettings, &gDoorInstance) != IPL_STATUS_SUCCESS) return 6;
-    iplInstancedMeshAdd(gDoorInstance, gScene);
-    iplSceneCommit(gScene);
+    auto staticGeometry = flattenTriangles(vertices, triangles, 0);
+    auto doorGeometry = flattenTriangles(doorVertices, doorTriangles, 1);
+    IPLMaterial materials[2] = {
+        {{0.12f, 0.20f, 0.35f}, 0.18f, {0.08f, 0.05f, 0.03f}},
+        {{0.20f, 0.30f, 0.45f}, 0.10f, {0.03f, 0.02f, 0.01f}},
+    };
+    if (afterglow_obvhs_create(staticGeometry.data(), static_cast<uint32_t>(staticGeometry.size()),
+                               doorGeometry.data(), static_cast<uint32_t>(doorGeometry.size()),
+                               materials, 2, &gTracer) != 0) return 2;
+
+    IPLSceneSettings sceneSettings{};
+    sceneSettings.type = IPL_SCENETYPE_CUSTOM;
+    sceneSettings.closestHitCallback = afterglow_obvhs_closest_hit;
+    sceneSettings.anyHitCallback = afterglow_obvhs_any_hit;
+    sceneSettings.batchedClosestHitCallback = afterglow_obvhs_batched_closest_hit;
+    sceneSettings.batchedAnyHitCallback = afterglow_obvhs_batched_any_hit;
+    sceneSettings.userData = gTracer;
+    if (iplSceneCreate(gContext, &sceneSettings, &gScene) != IPL_STATUS_SUCCESS) return 3;
 
     IPLSimulationSettings simulationSettings{};
     simulationSettings.flags = static_cast<IPLSimulationFlags>(IPL_SIMULATIONFLAGS_DIRECT | IPL_SIMULATIONFLAGS_REFLECTIONS);
-    simulationSettings.sceneType = IPL_SCENETYPE_DEFAULT;
+    simulationSettings.sceneType = IPL_SCENETYPE_CUSTOM;
     simulationSettings.reflectionType = gReflectionType;
     simulationSettings.maxNumOcclusionSamples = 1;
     simulationSettings.maxNumRays = maxRays;
@@ -210,7 +186,7 @@ EMSCRIPTEN_KEEPALIVE int dyn_init(int triangleCount, int sourceCount, int maxRay
     simulationSettings.maxOrder = maxOrder;
     simulationSettings.maxNumSources = sourceCount;
     simulationSettings.numThreads = gSimulationThreads;
-    simulationSettings.rayBatchSize = 1;
+    simulationSettings.rayBatchSize = 64;
     simulationSettings.samplingRate = kSampleRate;
     simulationSettings.frameSize = kFrameSize;
     if (iplSimulatorCreate(gContext, &simulationSettings, &gSimulator) != IPL_STATUS_SUCCESS) return 7;
@@ -280,8 +256,7 @@ EMSCRIPTEN_KEEPALIVE int dyn_init(int triangleCount, int sourceCount, int maxRay
 EMSCRIPTEN_KEEPALIVE int dyn_update(float phase) {
     if (!gSimulator || !std::isfinite(phase)) return 101;
     const float doorY = std::sin(phase) * 2.5f;
-    iplInstancedMeshUpdateTransform(gDoorInstance, gScene, translation(0, doorY, 0));
-    iplSceneCommit(gScene);
+    afterglow_obvhs_set_door_y(gTracer, doorY);
     for (size_t index = 0; index < gSources.size(); ++index) {
         auto& input = gSourceInputs[index];
         input.source = coordinates(-2.0f + std::sin(phase + static_cast<float>(index) * 0.1f) * 0.5f,
@@ -363,6 +338,21 @@ EMSCRIPTEN_KEEPALIVE float dyn_get_reverb_mid() { return gOutputs.empty() ? 0.0f
 EMSCRIPTEN_KEEPALIVE float dyn_get_reverb_high() { return gOutputs.empty() ? 0.0f : gOutputs[0].reflections.reverbTimes[2]; }
 EMSCRIPTEN_KEEPALIVE int dyn_get_ir_valid() { return (!gOutputs.empty() && gOutputs[0].reflections.ir) ? 1 : 0; }
 EMSCRIPTEN_KEEPALIVE float dyn_get_output_energy() { return gOutputEnergy; }
+EMSCRIPTEN_KEEPALIVE int dyn_get_tracer_nodes() {
+    AfterglowObvhsStats stats{};
+    afterglow_obvhs_get_stats(gTracer, &stats);
+    return static_cast<int>(stats.staticNodeCount + stats.doorNodeCount);
+}
+EMSCRIPTEN_KEEPALIVE double dyn_get_tracer_build_ms() {
+    AfterglowObvhsStats stats{};
+    afterglow_obvhs_get_stats(gTracer, &stats);
+    return stats.buildMilliseconds;
+}
+EMSCRIPTEN_KEEPALIVE double dyn_get_tracer_owned_bytes() {
+    AfterglowObvhsStats stats{};
+    afterglow_obvhs_get_stats(gTracer, &stats);
+    return static_cast<double>(stats.ownedBytes);
+}
 EMSCRIPTEN_KEEPALIVE void dyn_shutdown() { releaseAll(); }
 
 }

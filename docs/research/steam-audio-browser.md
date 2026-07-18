@@ -43,8 +43,8 @@ A credible integration would:
    shared rings;
 6. preallocate and seal memory before gameplay rather than relying on upstream's
    default `ALLOW_MEMORY_GROWTH`;
-7. use the built-in CPU ray tracer, because no Steam Audio WebGPU/Embree/OpenCL
-   backend is available in browsers.
+7. use the pure-Rust obvhs CWBVH8 custom CPU tracer, because no Steam Audio
+   WebGPU/Embree/OpenCL backend is available in browsers.
 
 Afterglow already supplies cross-origin isolation, SharedArrayBuffer, worker
 ownership, and fixed rings. Those solve transport prerequisites, not real-time
@@ -77,9 +77,10 @@ callback endpoint.
 
 ## Measured direct-path prototype
 
-A real Steam Audio 4.8.1 Emscripten prototype now runs the built-in ray tracer
-in a CEF Web Worker. It uses WASM SIMD128, fixed 64 MiB memory, the Afterglow
-SPSC ring layout, and payload-free wake messages. Occlusion and material
+The initial Steam Audio 4.8.1 Emscripten prototype ran the built-in ray tracer
+in a CEF Web Worker; it is retained as the direct-path baseline. It used WASM
+SIMD128, fixed 64 MiB memory, the Afterglow SPSC ring layout, and payload-free
+wake messages. Occlusion and material
 transmission outputs were validated against a wall before timing.
 
 On fox-workstation (Ryzen 9 9950X3D, Chromium 149), five launches × 2,000 measured calls
@@ -299,10 +300,10 @@ Primary documentation:
 [Unity source](https://valvesoftware.github.io/steam-audio/doc/unity/source.html), and
 [Unity geometry](https://valvesoftware.github.io/steam-audio/doc/unity/geometry.html).
 
-## Pure-Rust custom ray tracer candidate
+## Selected pure-Rust custom ray tracer
 
-[`obvhs` 0.3.2](https://github.com/DGriffin91/obvhs) is the strongest current
-pure-Rust candidate for Steam Audio's `IPL_SCENETYPE_CUSTOM` web path. It offers:
+[`obvhs` 0.3.2](https://github.com/DGriffin91/obvhs) is now the selected
+pure-Rust tracer for Steam Audio's `IPL_SCENETYPE_CUSTOM` web path. It offers:
 
 - PLOC BVH2 construction with reinsertion and optional spatial pre-splits;
 - compressed eight-way CWBVH nodes (`repr(C)`, `Pod`, 80 bytes each);
@@ -316,8 +317,9 @@ The Emscripten target matters: the Rust tracer can be linked into the same Steam
 Audio module and called directly from its synchronous batched callbacks. Crossing
 JavaScript or a second WASM instance per ray is forbidden.
 
-This is not a drop-in Embree equivalent. Upstream's February 2026 Tray Racing
-native benchmark explicitly ranks managed Embree first. Across eight large scenes
+This is not a drop-in Embree equivalent, and native full-scene builds continue
+to require Embree. Upstream's February 2026 Tray Racing native benchmark ranks
+managed Embree first. Across eight large scenes
 on a Ryzen 7950X, its aggregate CPU traversal chart reports 35.70 ms for Embree,
 63.12 ms for the slow-build `obvhs` CWBVH preset, 71.34 ms for medium CWBVH,
 106.54 ms for Parry, and 500.89 ms for `bvh`. More importantly, `obvhs` 0.3.2's
@@ -340,12 +342,35 @@ with `simd-stable` emitted the same instructions from its BVH ray traversal; and
 Therefore there are off-the-shelf pure-Rust tracers using actual WASM SIMD, not
 just scalar code that happens to compile for WASM.
 
-The next web experiment should benchmark Parry and `rtbvh` unchanged, then a
-small `obvhs` WASM-SIMD port if neither is adequate. Connect each to Steam
-Audio's four custom-scene callbacks, keep nodes/triangles/materials in one fixed
-worker memory domain, and compare against the built-in tracer over
-10K/50K/100K/200K structural proxies. No candidate is selected before that
-end-to-end measurement.
+Afterglow now links a Rust `staticlib` into the same Emscripten module as Steam
+Audio and implements all four synchronous custom-scene callbacks. The tracer
+owns copied triangles, material indices, materials, and medium-build CWBVH8
+nodes. Queries use obvhs's fixed shallow traversal stack and allocate nothing.
+The moving door is a separate immutable two-triangle BLAS; updates atomically
+publish one Y translation and transform rays into local space without rebuilding.
+A local inclusive-edge triangle test replaces obvhs 0.3.2's primitive test
+because the upstream test rejects negative zero and can miss a ray exactly on a
+shared edge.
+
+Five fresh CEF launches on fox-laptop measured the selected 64-source,
+512-ray × 2-bounce tier:
+
+| WASM tracer | Mean simulation | Worst p99 | Verdict |
+|---|---:|---:|---|
+| Steam Audio built-in baseline | 13.17 ms | 15.25 ms | Historical baseline |
+| **obvhs custom CWBVH8** | **12.27 ms** | **13.365 ms** | **Selected; 0/5 over 16.667 ms** |
+
+The obvhs scene used 1,261 CWBVH nodes and 661,048 owned bytes; medium-build
+construction averaged 13.03 ms. Every run produced a valid dynamic IR, non-zero
+DSP output, and changing RT60. Mean simulation improved 6.8% and worst p99 12.4%.
+The comparison is not traversal-only: the built-in baseline used ray batch size
+1, while the selected custom callback path uses 64. Raw evidence is
+`docs/benchmarks/steam-audio-wasm-obvhs-fox-laptop-2026-07-18.json`.
+
+This is sufficient to select scalar-WASM obvhs now. Parry and `rtbvh` are no
+longer planned alternatives. Add WASM SIMD CWBVH traversal only if structural
+proxy or render-contention measurements show that the current margin is
+insufficient.
 
 ## Recommendation
 
@@ -360,7 +385,8 @@ Use a zero-baked-acoustics baseline:
    under pressure—not to baked probes or static impulse responses;
 5. retain and smoothly crossfade the latest dynamic result when a source misses
    its update budget;
-6. use Embree for every native acoustic scene;
+6. use Embree for every native acoustic scene and the measured obvhs custom
+   CWBVH8 callbacks for web;
 7. cook a structural acoustic proxy for bounded memory and correct acoustic
    geometry policy, even though Embree makes the render-mesh stress bound fast.
 

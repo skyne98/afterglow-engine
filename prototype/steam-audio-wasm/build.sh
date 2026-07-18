@@ -8,11 +8,15 @@ upstream="$cache/steam-audio"
 sdk="$cache/sdk"
 version=v4.8.1
 
-for command in em++ python3 cmake git curl unzip bun; do
+for command in em++ python3 cmake git curl unzip bun cargo rustc; do
   command -v "$command" >/dev/null || { echo "missing build command: $command" >&2; exit 1; }
 done
 em++ --version | head -1 | grep -q '4\.0\.23' || {
   echo 'Steam Audio benchmark requires pinned Emscripten 4.0.23; use toolchain.nix' >&2
+  exit 1
+}
+rustc --version | grep -q '1\.99\.0-nightly (375b1431b 2026-07-10)' || {
+  echo 'Steam Audio obvhs benchmark requires rustc 1.99.0-nightly commit 375b1431b' >&2
   exit 1
 }
 
@@ -83,9 +87,19 @@ if [[ ! -f "$threadless" ]]; then
   cmake --build "$cache/steam-audio-threadless" --target phonon -j8
 fi
 
+tracer_target="$cache/obvhs-tracer-target"
+CARGO_TARGET_DIR="$tracer_target" \
+RUSTFLAGS='-C target-feature=+simd128' \
+  cargo build --manifest-path "$prototype/obvhs-tracer/Cargo.toml" \
+  --release --target wasm32-unknown-emscripten \
+  -Zbuild-std=core,alloc,std,panic_abort
+tracer_library="$tracer_target/wasm32-unknown-emscripten/release/libafterglow_obvhs_tracer.a"
+
 mkdir -p "$prototype/dist"
 em++ "$prototype/benchmark.cpp" \
   -I "$sdk" \
+  -I "$prototype/obvhs-tracer/include" \
+  "$tracer_library" \
   "$sdk/libphonon.a" \
   "$upstream/core/deps/mysofa/lib/wasm/release/libmysofa.a" \
   "$upstream/core/deps/pffft/lib/wasm/release/libpffft.a" \
@@ -93,11 +107,13 @@ em++ "$prototype/benchmark.cpp" \
   -O3 -msimd128 \
   -sMODULARIZE=1 -sEXPORT_ES6=1 -sENVIRONMENT=worker \
   -sALLOW_MEMORY_GROWTH=0 -sINITIAL_MEMORY=67108864 -sNO_EXIT_RUNTIME=1 \
-  -sEXPORTED_FUNCTIONS='["_sa_init","_sa_set_occluded","_sa_run_direct","_sa_run_direct_batch","_sa_get_occlusion","_sa_get_transmission_low","_sa_get_transmission_mid","_sa_get_transmission_high","_sa_shutdown"]' \
+  -sEXPORTED_FUNCTIONS='["_sa_init","_sa_set_occluded","_sa_run_direct","_sa_run_direct_batch","_sa_get_occlusion","_sa_get_transmission_low","_sa_get_transmission_mid","_sa_get_transmission_high","_sa_get_tracer_nodes","_sa_get_tracer_build_ms","_sa_shutdown"]' \
   -o "$prototype/dist/steam-audio.js"
 
 em++ "$prototype/dynamic-benchmark.cpp" \
   -I "$sdk" \
+  -I "$prototype/obvhs-tracer/include" \
+  "$tracer_library" \
   "$threadless" \
   "$upstream/core/deps/mysofa/lib/wasm/release/libmysofa.a" \
   "$upstream/core/deps/pffft/lib/wasm/release/libpffft.a" \
@@ -105,7 +121,7 @@ em++ "$prototype/dynamic-benchmark.cpp" \
   -O3 -msimd128 \
   -sMODULARIZE=1 -sEXPORT_ES6=1 -sENVIRONMENT=worker \
   -sALLOW_MEMORY_GROWTH=0 -sINITIAL_MEMORY=268435456 -sNO_EXIT_RUNTIME=1 \
-  -sEXPORTED_FUNCTIONS='["_dyn_init","_dyn_update","_dyn_run_reflections","_dyn_run_audio","_dyn_run_binaural","_dyn_get_reverb_low","_dyn_get_reverb_mid","_dyn_get_reverb_high","_dyn_get_ir_valid","_dyn_get_output_energy","_dyn_shutdown"]' \
+  -sEXPORTED_FUNCTIONS='["_dyn_init","_dyn_update","_dyn_run_reflections","_dyn_run_audio","_dyn_run_binaural","_dyn_get_reverb_low","_dyn_get_reverb_mid","_dyn_get_reverb_high","_dyn_get_ir_valid","_dyn_get_output_energy","_dyn_get_tracer_nodes","_dyn_get_tracer_build_ms","_dyn_get_tracer_owned_bytes","_dyn_shutdown"]' \
   -o "$prototype/dist/dynamic-steam-audio.js"
 
 bun build "$prototype/src/worker.ts" --outdir "$prototype/dist" --target browser

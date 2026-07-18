@@ -8,6 +8,9 @@ interface CallResult {
   reverb: readonly [number, number, number];
   irValid: boolean;
   outputEnergy: number;
+  tracerNodes: number;
+  tracerBuildMs: number;
+  tracerOwnedBytes: number;
 }
 interface Scenario {
   name: string;
@@ -32,6 +35,9 @@ interface ScenarioResult extends Scenario {
   reverbLowRange: readonly [number, number];
   irValid: boolean;
   outputEnergy: number;
+  tracerNodes: number;
+  tracerBuildMs: number;
+  tracerOwnedBytes: number;
 }
 
 const target = document.getElementById('output');
@@ -40,9 +46,9 @@ const log = (message: string): void => { target.textContent += `${message}\n`; c
 const memory = new SharedArrayBuffer(RING_BYTES * 2);
 initializeRing(memory, 0);
 initializeRing(memory, RING_BYTES);
-const worker = new Worker('./dynamic-worker.js?v=13', { type: 'module' });
+const worker = new Worker('./dynamic-worker.js?v=14', { type: 'module' });
 const request = new Uint8Array(40);
-const response = new Uint8Array(40);
+const response = new Uint8Array(64);
 let sequence = 0;
 let resolveWake: (() => void) | null = null;
 worker.onmessage = (event: MessageEvent): void => {
@@ -77,6 +83,9 @@ async function call(command: number, write: (view: DataView) => void): Promise<C
     reverb: [output.getFloat32(16, true), output.getFloat32(20, true), output.getFloat32(24, true)],
     irValid: output.getUint32(28, true) !== 0,
     outputEnergy: output.getFloat32(32, true),
+    tracerNodes: output.getUint32(36, true),
+    tracerBuildMs: output.getFloat64(40, true),
+    tracerOwnedBytes: output.getFloat64(48, true),
     roundTripMs,
   };
 }
@@ -151,6 +160,9 @@ async function benchmark(scenario: Scenario): Promise<ScenarioResult> {
     reverbLowRange: [reverbLowMin, reverbLowMax],
     irValid: last.irValid,
     outputEnergy: audio.outputEnergy,
+    tracerNodes: initialized.tracerNodes,
+    tracerBuildMs: initialized.tracerBuildMs,
+    tracerOwnedBytes: initialized.tracerOwnedBytes,
   };
 }
 

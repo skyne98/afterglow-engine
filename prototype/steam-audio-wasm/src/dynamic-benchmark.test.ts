@@ -2,6 +2,8 @@ import { describe, expect, test } from 'bun:test';
 
 const root = new URL('../', import.meta.url);
 const cpp = await Bun.file(new URL('dynamic-benchmark.cpp', root)).text();
+const directCpp = await Bun.file(new URL('benchmark.cpp', root)).text();
+const tracer = await Bun.file(new URL('obvhs-tracer/src/lib.rs', root)).text();
 const build = await Bun.file(new URL('build.sh', root)).text();
 const nativeBuild = await Bun.file(new URL('build-native.sh', root)).text();
 const nativeRunner = await Bun.file(new URL('native-dynamic-benchmark.cpp', root)).text();
@@ -16,15 +18,38 @@ const nativeEvidence = await Bun.file(new URL('../../../docs/benchmarks/steam-au
 const bistroEvidence = await Bun.file(new URL('../../../docs/benchmarks/steam-audio-native-bistro-fox-laptop-2026-07-18.json', import.meta.url)).json();
 const bistroPackageEvidence = await Bun.file(new URL('../../../docs/benchmarks/steam-audio-native-bistro-full-package-fox-laptop-2026-07-18.json', import.meta.url)).json();
 const bistroEmbreeEvidence = await Bun.file(new URL('../../../docs/benchmarks/steam-audio-native-bistro-embree-fox-laptop-2026-07-18.json', import.meta.url)).json();
+const obvhsEvidence = await Bun.file(new URL('../../../docs/benchmarks/steam-audio-wasm-obvhs-fox-laptop-2026-07-18.json', import.meta.url)).json();
 
 describe('fully dynamic Steam Audio WASM prototype', () => {
-  test('uses runtime geometry and explicitly disables baked reflection data', () => {
+  test('uses the allocation-free obvhs custom scene without baked data', () => {
     expect(cpp).toContain('input.baked = IPL_FALSE');
-    expect(cpp).toContain('iplInstancedMeshUpdateTransform');
-    expect(cpp).toContain('iplSceneCommit(gScene)');
+    expect(cpp).toContain('IPL_SCENETYPE_CUSTOM');
+    expect(cpp).toContain('afterglow_obvhs_batched_closest_hit');
+    expect(cpp).toContain('afterglow_obvhs_set_door_y');
     expect(cpp).toContain('iplSimulatorRunReflections');
     expect(cpp).toContain("sourceCount > 128");
     expect(cpp).toContain("rays > gMaxRays");
+    expect(build).toContain('libafterglow_obvhs_tracer.a');
+    expect(build).toContain('target-feature=+simd128');
+  });
+
+  test('implements all custom callbacks with fixed-stack query traversal', () => {
+    expect(directCpp).toContain('IPL_SCENETYPE_CUSTOM');
+    expect(tracer).toContain('pub unsafe extern "C" fn afterglow_obvhs_closest_hit');
+    expect(tracer).toContain('pub unsafe extern "C" fn afterglow_obvhs_any_hit');
+    expect(tracer).toContain('pub unsafe extern "C" fn afterglow_obvhs_batched_closest_hit');
+    expect(tracer).toContain('pub unsafe extern "C" fn afterglow_obvhs_batched_any_hit');
+    expect(tracer).toContain('callbacks_allocate_nothing_after_build');
+    expect(tracer).toContain('shared_triangle_edge_has_no_acoustic_crack');
+  });
+
+  test('accepts obvhs after five fresh laptop launches', () => {
+    expect(obvhsEvidence.runs).toHaveLength(5);
+    expect(obvhsEvidence.aggregate.simulationWorstP99Ms).toBeLessThan(16.667);
+    expect(obvhsEvidence.aggregate.launchesOver16_667MsP99).toBe(0);
+    expect(obvhsEvidence.aggregate.allIrValid).toBe(true);
+    expect(obvhsEvidence.aggregate.allOutputEnergyNonzero).toBe(true);
+    expect(obvhsEvidence.conclusion.accepted).toBe(true);
   });
 
   test('feeds generated reflections through Steam Audio DSP', () => {
@@ -37,6 +62,7 @@ describe('fully dynamic Steam Audio WASM prototype', () => {
     expect(build).toContain('steam-audio-wasm-thread-pool.cpp');
     expect(build).toContain('steam-audio-threadless');
     expect(build).toContain("grep -q '4\\.0\\.23'");
+    expect(build).toContain('375b1431b');
     expect(threadPool).toContain('#if defined(IPL_OS_WASM)');
     expect(threadPool).toContain('processNextJob(0, mCancel)');
   });

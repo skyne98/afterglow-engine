@@ -352,10 +352,13 @@ All engine work must move toward these non-negotiable requirements:
   update, not per source. On the 6800U, low 1,024×2 reflections measured 1.70 ms
   worst p99; medium 4,096×4 measured 10.95 ms for one source,
   33.43 ms for eight, and 114.83 ms for 32 at the original medium tier. The
-  unlocked sweep selected 128 direct-ray+HRTF sources with 64 priority reflection
-  slots, 512 global rays × 2 bounces, 500 ms parametric/order 0, at 30 Hz steady /
-  60 Hz burst: 15.25 ms reflection p99 and projected 1.364/2.667 ms for 64
-  reflections + 128 nearest HRTFs. Reflecting 96 is aggressive; reflecting all
+  unlocked built-in sweep selected 128 direct-ray+HRTF sources with 64 priority
+  reflection slots, 512 global rays × 2 bounces, 500 ms parametric/order 0, at
+  30 Hz steady / 60 Hz burst: 15.25 ms reflection p99 and projected 1.364/2.667
+  ms for 64 reflections + 128 nearest HRTFs. The selected web tracer is now
+  `obvhs` 0.3.2 through all four `IPL_SCENETYPE_CUSTOM` callbacks: five fresh
+  laptop launches measured 12.27 ms mean / 13.365 ms worst p99, 0/5 over 60 Hz,
+  valid dynamic IRs, 1,261 nodes, and 661,048 owned bytes. Reflecting 96 is aggressive; reflecting all
   128 used 94% of the quantum and was rejected. The matching native OS-worker
   sweep selected two Steam simulation threads: 64-source 512×2 reflections were
   9.27 ms mean / 10.74 ms p99, with projected 1.433/2.667 ms DSP for 64
@@ -368,11 +371,11 @@ All engine work must move toward these non-negotiable requirements:
   7.81 s to 0.52 s, but resident scene memory rose from ~375 MiB to ~486 MiB.
   Full render meshes are no longer a traversal blocker but remain forbidden as
   production acoustic geometry due memory and irrelevant detail; cook structural
-  proxies. For web custom tracing, `obvhs` 0.3.2 has the strongest candidate
-  layout but its CWBVH SIMD path is x86-only. Release disassembly proved that
-  Parry 0.29 and `rtbvh` 0.6.2 emit real WASM SIMD for BVH/packet traversal;
-  benchmark those unchanged before porting `obvhs` SIMD. Render-loaded and actual
-  device-callback validation remain open.
+  proxies. Web obvhs keeps static geometry and a translated door BLAS in one
+  Rust-owned Emscripten memory domain; fixed-stack queries allocate nothing.
+  Its CWBVH node traversal remains scalar on WASM; defer a SIMD port unless
+  structural-proxy or render-contention tests exhaust the measured margin.
+  Render-loaded and actual device-callback validation remain open.
 
 ## API docs
 
@@ -410,6 +413,8 @@ All engine work must move toward these non-negotiable requirements:
   pointer-lock fallback.
 - `docs/api/allocation-boundaries.md` — unavoidable browser/Three/codec boundaries.
 - `docs/api/runtime-capacities.md` — canonical capacities and degradation behavior.
+- `docs/api/steam-audio.md` — selected native Embree and web obvhs scene backends,
+  custom callback ABI, ownership, dynamic instances, capacities, and validation.
 - `docs/api/testing.md` — canonical unit, vertical-integration, browser/GPU, and release-evidence test lanes.
 
 ## Benchmarks

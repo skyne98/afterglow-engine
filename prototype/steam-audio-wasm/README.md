@@ -2,8 +2,10 @@
 
 This prototype links Valve Steam Audio 4.8.1's experimental Emscripten library
 with the missing WASM MySOFA, PFFFT, and zlib dependencies built from Valve's
-pinned sources. It executes Steam Audio's built-in ray tracer in a Web Worker.
-Requests and responses use the same SharedArrayBuffer SPSC ring layout as
+pinned sources. It links the pure-Rust `obvhs` 0.3.2 CWBVH8 tracer into the same
+Emscripten module and exposes it through Steam Audio's four
+`IPL_SCENETYPE_CUSTOM` callbacks in a Web Worker. Requests and responses use the
+same SharedArrayBuffer SPSC ring layout as
 Afterglow and payload-free `postMessage` wake-ups.
 
 It measures direct raycast occlusion/transmission and fully runtime-generated
@@ -23,8 +25,10 @@ nix-shell prototype/steam-audio-wasm/toolchain.nix --run \
   './prototype/steam-audio-wasm/build.sh'
 ```
 
-`toolchain.nix` pins nixpkgs revision `aa290c9891fa` and Emscripten 4.0.23 so
-recorded benchmark builds do not vary with the host's channel. The matching
+`toolchain.nix` pins nixpkgs revision `aa290c9891fa` and Emscripten 4.0.23. The
+build also requires the project's rustc 1.99.0-nightly commit `375b1431b`
+(2026-07-10), so recorded benchmark builds fail rather than silently varying
+with another compiler. The matching
 native OS-thread benchmark uses Valve's released Linux x64 library:
 
 ```sh
@@ -61,7 +65,7 @@ cp -r prototype/steam-audio-wasm/dist \
 Remove the temporary `www/steam-audio-prototype` directory before running the
 canonical web artifact check.
 
-## fox-workstation result — 2026-07-18
+## fox-workstation built-in direct baseline — 2026-07-18
 
 Environment: Ryzen 9 9950X3D, CEF/Chromium 149.0.7827.201, Steam Audio 4.8.1,
 Emscripten 5.0.7, `-O3`, WASM SIMD128, fixed 64 MiB memory. Five launches, 100
@@ -94,11 +98,41 @@ measurements. The correct next gate is the same test during Dungeon rendering,
 followed by bounded reflection tiers and end-to-speaker scheduling.
 
 Raw measurements: `docs/benchmarks/steam-audio-wasm-direct-2026-07-18.json`.
+Those measurements are the historical built-in-tracer baseline; the current
+prototype's direct path uses obvhs.
 
-## Fully dynamic fox-laptop result — 2026-07-18
+## obvhs custom tracer acceptance — 2026-07-18
 
-The dynamic benchmark ran in CEF/Chromium 149 on fox-laptop's Ryzen 7 6800U
-with a 10K-triangle runtime scene. Every sample moved and committed an instanced
+The selected web path owns medium-build CWBVH8 nodes, triangles, material IDs,
+and materials in Rust inside Steam Audio's WASM instance. Closest-hit, any-hit,
+and both batched callbacks are synchronous and allocation-free after build. A
+separate two-triangle door BLAS handles motion by transforming rays with an
+atomically published Y translation; it never rebuilds during updates.
+
+Five fresh CEF launches on the unlocked Ryzen 7 6800U measured the established
+64-source, 512 global ray × 2-bounce, 500 ms parametric tier:
+
+| Tracer | Simulation mean | Worst p99 | 60 Hz misses |
+|---|---:|---:|---:|
+| Built-in baseline | 13.17 ms | 15.25 ms | 0/5 launches |
+| **obvhs custom CWBVH8** | **12.27 ms** | **13.365 ms** | **0/5 launches** |
+
+The custom scene contained 1,261 CWBVH nodes and reported 661,048 owned bytes.
+CWBVH construction averaged 13.03 ms. Every run returned a valid dynamic IR,
+non-zero reflection DSP output, and changing low-band RT60. Compared with the
+built-in baseline, mean simulation improved 6.8% and worst p99 improved 12.4%.
+The baseline used `rayBatchSize = 1`; the selected custom callback path uses 64,
+so this is an end-to-end configuration comparison rather than an isolated
+traversal comparison.
+
+Scalar-WASM obvhs is accepted. A WASM SIMD traversal port is deferred until
+structural-proxy or render-loaded measurements demonstrate a need. Raw evidence:
+`docs/benchmarks/steam-audio-wasm-obvhs-fox-laptop-2026-07-18.json`.
+
+## Fully dynamic fox-laptop built-in baseline — 2026-07-18
+
+The original built-in-tracer dynamic benchmark ran in CEF/Chromium 149 on
+fox-laptop's Ryzen 7 6800U with a 10K-triangle runtime scene. Every sample moved and committed an instanced
 door, moved the source(s) and listener, generated fresh non-baked reflection
 results, and passed them through Steam Audio's real reflection effect. Five
 launches were recorded. The laptop direct-path pass also remained cheap: 100K
@@ -146,9 +180,9 @@ AudioWorklet deadline test remain required shipping gates.
 Raw measurements:
 `docs/benchmarks/steam-audio-wasm-dynamic-fox-laptop-2026-07-18.json`.
 
-## Many-source optimum on fox-laptop
+## Many-source built-in baseline on fox-laptop
 
-A second unlocked, idle-inhibited sweep measured 28 configurations over five
+A second unlocked, idle-inhibited built-in-tracer sweep measured 28 configurations over five
 launches. It included the real per-source Steam Audio reflection effect and
 nearest-interpolated binaural HRTF processing for every source. Ray counts remain
 global listener rays per update.
@@ -192,9 +226,9 @@ final source mixing, and the browser/device graph. Therefore 96 is an opt-in
 stress tier, not a default. Raw evidence:
 `docs/benchmarks/steam-audio-wasm-many-sources-fox-laptop-2026-07-18.json`.
 
-## Native-worker comparison on fox-laptop
+## Native-worker built-in baseline on fox-laptop
 
-The identical runtime geometry, motion path, source counts, ray tiers, and DSP
+The historical built-in-tracer run used identical runtime geometry, motion path, source counts, ray tiers, and DSP
 ran against Valve's released Linux x64 `libphonon.so` with AVX2. Five launches
 were recorded at one, two, and four Steam Audio simulation threads. The outer
 benchmark worker was always one real `std::thread`; the main thread only joined

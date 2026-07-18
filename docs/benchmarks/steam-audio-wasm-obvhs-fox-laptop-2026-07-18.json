@@ -1,0 +1,322 @@
+{
+  "schemaVersion": 1,
+  "benchmark": "Steam Audio 4.8.1 custom obvhs CWBVH8 WASM reflection simulation",
+  "date": "2026-07-18",
+  "host": {
+    "name": "fox-laptop",
+    "cpu": "AMD Ryzen 7 6800U with Radeon Graphics",
+    "os": "Fedora 44 (Linux 7.1.3-201.fc44.x86_64)",
+    "browser": "CEF/Chromium 149.0.7827.201",
+    "session": "unlocked for all five fresh CEF launches"
+  },
+  "build": {
+    "steamAudio": "4.8.1, source-rebuilt synchronous WASM ThreadPool",
+    "rust": "rustc 1.99.0-nightly commit 375b1431b (2026-07-10)",
+    "emscripten": "4.0.23",
+    "optimization": "Rust opt-level=3 fat LTO; C++ -O3 -msimd128",
+    "tracer": "obvhs 0.3.2 CWBVH8 medium_build",
+    "traversal": "obvhs scalar WASM CWBVH node traversal; module compiled with +simd128",
+    "sceneType": "IPL_SCENETYPE_CUSTOM",
+    "rayBatchSize": 64
+  },
+  "methodology": {
+    "launches": 5,
+    "browserProcess": "fresh CEF process per run",
+    "warmupSimulationsPerRun": 3,
+    "measuredSimulationsPerRun": 30,
+    "geometry": "10,000 runtime triangles: closed room plus distant deterministic filler; separate translated two-triangle door BLAS",
+    "motion": "door, 64 sources, and listener updated before every simulation",
+    "quality": {
+      "sources": 64,
+      "globalRays": 512,
+      "bounces": 2,
+      "durationMs": 500,
+      "order": 0,
+      "reflectionType": "parametric"
+    },
+    "bakedData": false
+  },
+  "runs": [
+    {
+      "name": "p64-512x2",
+      "triangles": 10000,
+      "sources": 64,
+      "rays": 512,
+      "bounces": 2,
+      "durationMs": 500,
+      "order": 0,
+      "reflectionType": 1,
+      "samples": 30,
+      "initializationMs": 71.23000000417233,
+      "sceneUpdate": {
+        "mean": 0.005499998231728872,
+        "p50": 0.004999995231628418,
+        "p90": 0.01000000536441803,
+        "p99": 0.015000000596046448,
+        "max": 0.015000000596046448
+      },
+      "reflectionSimulation": {
+        "mean": 12.220000000794728,
+        "p50": 12.195000007748604,
+        "p90": 12.850000008940697,
+        "p99": 13.364999994635582,
+        "max": 13.364999994635582
+      },
+      "simulationRoundTrip": {
+        "mean": 12.336499999960264,
+        "p50": 12.320000007748604,
+        "p90": 12.969999998807907,
+        "p99": 13.515000000596046,
+        "max": 13.515000000596046
+      },
+      "reflectionQuantumMeanMs": 1.0742900000065565,
+      "binauralQuantumMeanMs": 0.18445000007748605,
+      "combinedAudioQuantumMeanMs": 1.2587400000840425,
+      "reverb": [
+        0.1369505375623703,
+        0.13693749904632568,
+        0.13689124584197998
+      ],
+      "reverbLowRange": [
+        0.10000000149011612,
+        0.19394780695438385
+      ],
+      "irValid": true,
+      "outputEnergy": 0.2225978821516037,
+      "tracerNodes": 1261,
+      "tracerBuildMs": 14.18,
+      "tracerOwnedBytes": 661048
+    },
+    {
+      "name": "p64-512x2",
+      "triangles": 10000,
+      "sources": 64,
+      "rays": 512,
+      "bounces": 2,
+      "durationMs": 500,
+      "order": 0,
+      "reflectionType": 1,
+      "samples": 30,
+      "initializationMs": 71.54500000178814,
+      "sceneUpdate": {
+        "mean": 0.007666664818922679,
+        "p50": 0.009999990463256836,
+        "p90": 0.01000000536441803,
+        "p99": 0.015000000596046448,
+        "max": 0.015000000596046448
+      },
+      "reflectionSimulation": {
+        "mean": 12.198833333949247,
+        "p50": 12.195000007748604,
+        "p90": 12.910000011324883,
+        "p99": 12.935000002384186,
+        "max": 12.935000002384186
+      },
+      "simulationRoundTrip": {
+        "mean": 12.25799999833107,
+        "p50": 12.259999990463257,
+        "p90": 12.95499999821186,
+        "p99": 13.024999991059303,
+        "max": 13.024999991059303
+      },
+      "reflectionQuantumMeanMs": 1.0370750000029803,
+      "binauralQuantumMeanMs": 0.16629999995231629,
+      "combinedAudioQuantumMeanMs": 1.2033749999552965,
+      "reverb": [
+        0.1337314248085022,
+        0.13381557166576385,
+        0.13385441899299622
+      ],
+      "reverbLowRange": [
+        0.10000000149011612,
+        0.18947580456733704
+      ],
+      "irValid": true,
+      "outputEnergy": 0.1406448781490326,
+      "tracerNodes": 1261,
+      "tracerBuildMs": 11.49,
+      "tracerOwnedBytes": 661048
+    },
+    {
+      "name": "p64-512x2",
+      "triangles": 10000,
+      "sources": 64,
+      "rays": 512,
+      "bounces": 2,
+      "durationMs": 500,
+      "order": 0,
+      "reflectionType": 1,
+      "samples": 30,
+      "initializationMs": 74.4299999922514,
+      "sceneUpdate": {
+        "mean": 0.0064999997615814206,
+        "p50": 0.005000010132789612,
+        "p90": 0.01000000536441803,
+        "p99": 0.025000005960464478,
+        "max": 0.025000005960464478
+      },
+      "reflectionSimulation": {
+        "mean": 12.298666667441527,
+        "p50": 12.265000000596046,
+        "p90": 13.044999986886978,
+        "p99": 13.179999992251396,
+        "max": 13.179999992251396
+      },
+      "simulationRoundTrip": {
+        "mean": 12.437500000496705,
+        "p50": 12.395000010728836,
+        "p90": 13.179999992251396,
+        "p99": 13.385000005364418,
+        "max": 13.385000005364418
+      },
+      "reflectionQuantumMeanMs": 1.0611949999928474,
+      "binauralQuantumMeanMs": 0.16549999997019768,
+      "combinedAudioQuantumMeanMs": 1.226694999963045,
+      "reverb": [
+        0.12031896412372589,
+        0.120321124792099,
+        0.12030170857906342
+      ],
+      "reverbLowRange": [
+        0.10000000149011612,
+        0.20420688390731812
+      ],
+      "irValid": true,
+      "outputEnergy": 0.1661364585161209,
+      "tracerNodes": 1261,
+      "tracerBuildMs": 12.095,
+      "tracerOwnedBytes": 661048
+    },
+    {
+      "name": "p64-512x2",
+      "triangles": 10000,
+      "sources": 64,
+      "rays": 512,
+      "bounces": 2,
+      "durationMs": 500,
+      "order": 0,
+      "reflectionType": 1,
+      "samples": 30,
+      "initializationMs": 74.98999999463558,
+      "sceneUpdate": {
+        "mean": 0.007666666309038798,
+        "p50": 0.009999990463256836,
+        "p90": 0.015000000596046448,
+        "p99": 0.019999995827674866,
+        "max": 0.019999995827674866
+      },
+      "reflectionSimulation": {
+        "mean": 12.363666667540867,
+        "p50": 12.349999994039536,
+        "p90": 12.969999998807907,
+        "p99": 13.065000012516975,
+        "max": 13.065000012516975
+      },
+      "simulationRoundTrip": {
+        "mean": 12.499166665474574,
+        "p50": 12.485000014305115,
+        "p90": 13.109999999403954,
+        "p99": 13.200000002980232,
+        "max": 13.200000002980232
+      },
+      "reflectionQuantumMeanMs": 1.0645450000017882,
+      "binauralQuantumMeanMs": 0.17194999992847443,
+      "combinedAudioQuantumMeanMs": 1.2364949999302626,
+      "reverb": [
+        0.14066047966480255,
+        0.1406480371952057,
+        0.1406041532754898
+      ],
+      "reverbLowRange": [
+        0.10000000149011612,
+        0.1502573937177658
+      ],
+      "irValid": true,
+      "outputEnergy": 0.1340385377407074,
+      "tracerNodes": 1261,
+      "tracerBuildMs": 14.595,
+      "tracerOwnedBytes": 661048
+    },
+    {
+      "name": "p64-512x2",
+      "triangles": 10000,
+      "sources": 64,
+      "rays": 512,
+      "bounces": 2,
+      "durationMs": 500,
+      "order": 0,
+      "reflectionType": 1,
+      "samples": 30,
+      "initializationMs": 75.67500001192093,
+      "sceneUpdate": {
+        "mean": 0.00950000137090683,
+        "p50": 0.009999990463256836,
+        "p90": 0.015000000596046448,
+        "p99": 0.025000005960464478,
+        "max": 0.025000005960464478
+      },
+      "reflectionSimulation": {
+        "mean": 12.271666666368644,
+        "p50": 12.290000006556511,
+        "p90": 12.95499999821186,
+        "p99": 13.194999992847443,
+        "max": 13.194999992847443
+      },
+      "simulationRoundTrip": {
+        "mean": 12.33583333293597,
+        "p50": 12.350000008940697,
+        "p90": 13.055000007152557,
+        "p99": 13.269999995827675,
+        "max": 13.269999995827675
+      },
+      "reflectionQuantumMeanMs": 1.060060000002384,
+      "binauralQuantumMeanMs": 0.1691500000655651,
+      "combinedAudioQuantumMeanMs": 1.2292100000679491,
+      "reverb": [
+        0.12046388536691666,
+        0.12045355886220932,
+        0.1204165667295456
+      ],
+      "reverbLowRange": [
+        0.10000000149011612,
+        0.16177374124526978
+      ],
+      "irValid": true,
+      "outputEnergy": 0.15728239715099335,
+      "tracerNodes": 1261,
+      "tracerBuildMs": 12.8,
+      "tracerOwnedBytes": 661048
+    }
+  ],
+  "aggregate": {
+    "simulationMeanOfLaunchMeansMs": 12.270566667219004,
+    "simulationWorstP99Ms": 13.364999994635582,
+    "simulationWorstMaxMs": 13.364999994635582,
+    "combinedAudioQuantumMeanMs": 1.230903000000119,
+    "tracerBuildMeanMs": 13.032,
+    "tracerBuildMaxMs": 14.595,
+    "tracerNodes": 1261,
+    "tracerOwnedBytes": 661048,
+    "reverbLowMin": 0.10000000149011612,
+    "reverbLowMax": 0.20420688390731812,
+    "allIrValid": true,
+    "allOutputEnergyNonzero": true,
+    "launchesOver16_667MsP99": 0
+  },
+  "versusBuiltinBaseline": {
+    "source": "steam-audio-wasm-many-sources-fox-laptop-2026-07-18.json",
+    "sameGeometrySourcesAndQuality": true,
+    "caveat": "The built-in baseline used rayBatchSize 1; custom obvhs uses the selected callback batch size 64.",
+    "builtinMeanMs": 13.170666666328907,
+    "builtinWorstP99Ms": 15.25,
+    "obvhsMeanMs": 12.270566667219004,
+    "obvhsWorstP99Ms": 13.364999994635582,
+    "meanImprovementPercent": 6.834126334781733,
+    "worstP99ImprovementPercent": 12.36065577288143
+  },
+  "conclusion": {
+    "accepted": true,
+    "reason": "All five fresh launches stayed inside 16.667 ms; worst p99 was 13.365 ms with valid dynamic IRs and non-zero DSP output.",
+    "remainingWork": "Validate structural proxies and rendered-load contention; add WASM SIMD CWBVH traversal only if those workloads need more margin."
+  }
+}
