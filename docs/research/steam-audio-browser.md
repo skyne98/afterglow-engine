@@ -179,6 +179,42 @@ priority set rather than applied to every source.
 Raw evidence:
 `docs/benchmarks/steam-audio-wasm-many-sources-fox-laptop-2026-07-18.json`.
 
+## Native-worker comparison
+
+The matching 28 scenarios plus the native-only 64-source order-1 convolution
+case ran in a real `std::thread` on fox-laptop against Valve's released Linux
+x64 `libphonon.so` with AVX2. Five launches each tested one, two,
+and four Steam Audio reflection-simulation threads:
+
+| Backend / simulation threads | 64 sources, 512×2 mean | Worst p99 | 64-source reflection + HRTF DSP |
+|---|---:|---:|---:|
+| WASM / synchronous Worker | 13.17 ms | 15.25 ms | 1.215 ms |
+| Native / 1 | 16.48 ms | 19.59 ms | 1.324 ms |
+| **Native / 2** | **9.27 ms** | **10.74 ms** | **1.330 ms** |
+| Native / 4 | 5.53 ms | 6.44 ms | 1.357 ms |
+
+Native does not automatically win when constrained to one Steam simulation
+thread: the released library's worker handoff made that configuration slower
+than the synchronously patched WASM Worker. Two threads are the balanced native
+tier. They preserve the 128 direct-ray + HRTF / 64 priority-reflection policy and
+project to 1.433 ms per audio quantum. Four threads are the quality tier: 64
+sources at 1,024 global rays × 2 bounces measured 12.52 ms worst p99 and 1.452 ms
+projected DSP.
+
+System monitors mostly showed one busy core because Steam Audio only uses its
+thread pool during `iplSimulatorRunReflections`. Per-source reflection and HRTF
+effects remain serial on the outer native worker and dominate the benchmark's
+wall time. The reflection timings prove actual parallelism: 16.48 → 9.27 → 5.53
+ms mean for one → two → four simulation threads.
+
+Native removed the fixed-WASM-heap failure for 64-source order-1 convolution,
+but did not make it viable: it consumed 3.70 ms DSP, reached 50.01 ms one-thread
+simulation p99, and pushed process peak RSS to roughly 283 MiB. Reflecting all
+128 parametric sources likewise exceeded the audio deadline at about 3.09 ms.
+
+Raw evidence:
+`docs/benchmarks/steam-audio-native-many-sources-fox-laptop-2026-07-18.json`.
+
 ## Recommendation
 
 Use a zero-baked-acoustics baseline:
@@ -193,10 +229,11 @@ Use a zero-baked-acoustics baseline:
 5. retain and smoothly crossfade the latest dynamic result when a source misses
    its update budget.
 
-For native CEF, separately evaluate native `libphonon` in an Afterglow native
-worker. It avoids the experimental WASM build and missing-package limitations,
-but processed PCM or acoustic results still need a bounded low-latency path into
-CEF's browser audio output.
+For native CEF, use the measured two-simulation-thread `libphonon` tier in an
+Afterglow native worker; reserve four simulation threads for a higher-quality
+option. Processed PCM or acoustic results still need a bounded low-latency path
+into CEF's browser audio output, and serial DSP must remain capped at 64
+independently reflected sources.
 
 ## Primary sources
 

@@ -24,7 +24,18 @@ nix-shell prototype/steam-audio-wasm/toolchain.nix --run \
 ```
 
 `toolchain.nix` pins nixpkgs revision `aa290c9891fa` and Emscripten 4.0.23 so
-recorded benchmark builds do not vary with the host's channel.
+recorded benchmark builds do not vary with the host's channel. The matching
+native OS-thread benchmark uses Valve's released Linux x64 library:
+
+```sh
+nix-shell prototype/steam-audio-wasm/toolchain.nix --run \
+  './prototype/steam-audio-wasm/build-native.sh'
+./prototype/steam-audio-wasm/dist-native/native-dynamic-benchmark 2
+```
+
+The argument is Steam Audio's reflection-simulation thread count. The benchmark
+itself always runs inside one outer `std::thread`, matching a native engine
+worker.
 
 To run through CEF's cross-origin-isolated custom scheme during development:
 
@@ -169,3 +180,44 @@ The combined DSP measurement excludes actual AudioWorklet callback overhead,
 final source mixing, and the browser/device graph. Therefore 96 is an opt-in
 stress tier, not a default. Raw evidence:
 `docs/benchmarks/steam-audio-wasm-many-sources-fox-laptop-2026-07-18.json`.
+
+## Native-worker comparison on fox-laptop
+
+The identical runtime geometry, motion path, source counts, ray tiers, and DSP
+ran against Valve's released Linux x64 `libphonon.so` with AVX2. Five launches
+were recorded at one, two, and four Steam Audio simulation threads. The outer
+benchmark worker was always one real `std::thread`; the main thread only joined
+it.
+
+Matching the web-selected 64-source, 512-ray × 2-bounce tier:
+
+| Backend / Steam simulation threads | Simulation mean | Worst p99 | 64-source reflection + HRTF DSP |
+|---|---:|---:|---:|
+| WASM Web Worker / synchronous | 13.17 ms | 15.25 ms | 1.215 ms |
+| Native worker / 1 | 16.48 ms | 19.59 ms | 1.324 ms |
+| **Native worker / 2** | **9.27 ms** | **10.74 ms** | **1.330 ms** |
+| Native worker / 4 | 5.53 ms | 6.44 ms | 1.357 ms |
+
+The balanced native policy is therefore **two Steam Audio simulation threads**,
+128 direct-ray + HRTF sources, 64 priority reflection slots, 512 global rays,
+two bounces, 500 ms parametric/order-0 tails, 30 Hz steady updates, and 60 Hz
+bursts. Measured 64-source reflection DSP plus 128-source HRTF projects to
+**1.433 ms (54%)** per quantum. Four simulation threads are a higher-CPU tier;
+they can raise reflections to 1,024 rays × 2 while retaining 12.52 ms worst p99
+and 1.452 ms projected DSP.
+
+Most wall-clock CPU still appears on one core by design. Steam Audio's thread
+count parallelizes `iplSimulatorRunReflections`; it does not parallelize the
+per-source `iplReflectionEffectApply` or `iplBinauralEffectApply` loops. The
+benchmark performs 1,000 serial parametric DSP quanta after each short simulation
+sample set, so process monitors mostly show the outer worker. The simulation
+curve nevertheless demonstrates real parallel work: 16.48 → 9.27 → 5.53 ms
+mean for one → two → four threads.
+
+Reflecting all 96 sources consumed about 2.12 ms per quantum and is too close to
+the device deadline; all 128 exceeded it at about 3.09 ms. Native 64-source
+order-1 convolution no longer OOMed, but reached 3.70 ms DSP, 50.01 ms one-thread
+simulation p99, and roughly 283 MiB process peak RSS, so it remains rejected.
+
+Raw evidence:
+`docs/benchmarks/steam-audio-native-many-sources-fox-laptop-2026-07-18.json`.

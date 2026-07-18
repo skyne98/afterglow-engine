@@ -1,5 +1,9 @@
 #include <phonon.h>
+#if defined(__EMSCRIPTEN__)
 #include <emscripten/emscripten.h>
+#else
+#define EMSCRIPTEN_KEEPALIVE
+#endif
 #include <cmath>
 #include <vector>
 
@@ -29,6 +33,7 @@ int gMaxRays = 0;
 int gMaxBounces = 0;
 int gMaxDurationMs = 0;
 int gMaxOrder = 0;
+int gSimulationThreads = 1;
 float gOutputEnergy = 0.0f;
 
 IPLCoordinateSpace3 coordinates(float x, float y, float z) {
@@ -116,6 +121,12 @@ void addQuad(std::vector<IPLVector3>& vertices, std::vector<IPLTriangle>& triang
 
 extern "C" {
 
+EMSCRIPTEN_KEEPALIVE int dyn_set_simulation_threads(int threads) {
+    if (threads < 1 || threads > 16) return 105;
+    gSimulationThreads = threads;
+    return 0;
+}
+
 EMSCRIPTEN_KEEPALIVE int dyn_init(int triangleCount, int sourceCount, int maxRays,
                                   int maxBounces, int reflectionType,
                                   int maxDurationMs, int maxOrder) {
@@ -136,7 +147,11 @@ EMSCRIPTEN_KEEPALIVE int dyn_init(int triangleCount, int sourceCount, int maxRay
 
     IPLContextSettings contextSettings{};
     contextSettings.version = STEAMAUDIO_VERSION;
+#if defined(__EMSCRIPTEN__)
     contextSettings.simdLevel = IPL_SIMDLEVEL_NEON;
+#else
+    contextSettings.simdLevel = IPL_SIMDLEVEL_AVX2;
+#endif
     if (iplContextCreate(&contextSettings, &gContext) != IPL_STATUS_SUCCESS) return 1;
 
     IPLSceneSettings sceneSettings{};
@@ -194,7 +209,7 @@ EMSCRIPTEN_KEEPALIVE int dyn_init(int triangleCount, int sourceCount, int maxRay
     simulationSettings.maxDuration = static_cast<float>(maxDurationMs) / 1000.0f;
     simulationSettings.maxOrder = maxOrder;
     simulationSettings.maxNumSources = sourceCount;
-    simulationSettings.numThreads = 1;
+    simulationSettings.numThreads = gSimulationThreads;
     simulationSettings.rayBatchSize = 1;
     simulationSettings.samplingRate = kSampleRate;
     simulationSettings.frameSize = kFrameSize;

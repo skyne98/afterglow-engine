@@ -31,7 +31,7 @@ The research notes are the canonical record of *why* each choice was made.
 | `docs/research/performance-benchmarks.md` | Optimized communication results (full tables + methodology). |
 | `docs/research/steam-overlay-cef.md` | How the Steam Overlay works with CEF. |
 | `docs/research/steamworks-native-worker.md` | Steamworks as a native Rust worker via `#[rpc(worker = SteamWorker)]`. |
-| `docs/research/steam-audio-browser.md` | Steam Audio's experimental WASM target; no-bake 6800U optimum is 128 direct-ray+HRTF sources with 64 priority reflection slots, 512 global rays × 2 bounces, and 1.364 ms projected DSP per quantum. |
+| `docs/research/steam-audio-browser.md` | Dynamic Steam Audio on the 6800U: Web Worker and native OS-worker comparisons. Native balance uses two simulation threads, 128 direct+HRTF sources, and 64 reflection slots at 10.74 ms p99. |
 
 ## `AGENTS.md`
 

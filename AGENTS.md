@@ -356,8 +356,12 @@ All engine work must move toward these non-negotiable requirements:
   slots, 512 global rays × 2 bounces, 500 ms parametric/order 0, at 30 Hz steady /
   60 Hz burst: 15.25 ms reflection p99 and projected 1.364/2.667 ms for 64
   reflections + 128 nearest HRTFs. Reflecting 96 is aggressive; reflecting all
-  128 used 94% of the quantum and was rejected. Render-loaded
-  and actual AudioWorklet-callback validation remain open.
+  128 used 94% of the quantum and was rejected. The matching native OS-worker
+  sweep selected two Steam simulation threads: 64-source 512×2 reflections were
+  9.27 ms mean / 10.74 ms p99, with projected 1.433/2.667 ms DSP for 64
+  reflections + 128 HRTFs. Four simulation threads reached 6.44 ms p99 or fit
+  1,024×2 at 12.52 ms p99; per-source DSP remains serial. Render-loaded and
+  actual device-callback validation remain open.
 
 ## API docs
 
