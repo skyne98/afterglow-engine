@@ -299,6 +299,45 @@ Primary documentation:
 [Unity source](https://valvesoftware.github.io/steam-audio/doc/unity/source.html), and
 [Unity geometry](https://valvesoftware.github.io/steam-audio/doc/unity/geometry.html).
 
+## Pure-Rust custom ray tracer candidate
+
+[`obvhs` 0.3.2](https://github.com/DGriffin91/obvhs) is the strongest current
+pure-Rust candidate for Steam Audio's `IPL_SCENETYPE_CUSTOM` web path. It offers:
+
+- PLOC BVH2 construction with reinsertion and optional spatial pre-splits;
+- compressed eight-way CWBVH nodes (`repr(C)`, `Pod`, 80 bytes each);
+- closest-hit and early-out miss/occlusion traversal;
+- fixed shallow CWBVH traversal state and dynamic BVH2 update tools;
+- optional Rayon only, so the core works synchronously without a nested pool;
+- direct compilation, verified locally, to both `wasm32-unknown-unknown` and
+  `wasm32-unknown-emscripten` with Rust nightly 2026-07-10.
+
+The Emscripten target matters: the Rust tracer can be linked into the same Steam
+Audio module and called directly from its synchronous batched callbacks. Crossing
+JavaScript or a second WASM instance per ray is forbidden.
+
+This is not a drop-in Embree equivalent. Upstream's February 2026 Tray Racing
+native benchmark explicitly ranks managed Embree first. Across eight large scenes
+on a Ryzen 7950X, its aggregate CPU traversal chart reports 35.70 ms for Embree,
+63.12 ms for the slow-build `obvhs` CWBVH preset, 71.34 ms for medium CWBVH,
+106.54 ms for Parry, and 500.89 ms for `bvh`. More importantly, `obvhs` 0.3.2's
+four-node SIMD traversal is currently gated to x86 SSE2; WASM uses its scalar
+fallback, which its source says takes more than twice as long. These native
+renderer numbers do not establish Steam Audio or WASM performance.
+
+| Candidate | Assessment |
+|---|---|
+| `obvhs` | Best fit: compact wide nodes, strong construction options, suitable hit APIs, pure Rust, and verified Emscripten compilation. Must add/measure WASM SIMD and Steam callback integration. |
+| `parry3d` | Most mature and feature-rich; stable SIMD and WASM compile, but it is a broad collision library and trails `obvhs` in the available native ray benchmark. Good correctness oracle/fallback. |
+| `bvh` | Simple, maintained SAH implementation with WASM compilation and optional stable SIMD, but its binary BVH traversal is far slower in the available large-scene benchmark. Not a hot-path choice. |
+| `rtbvh` | Supports quad-ray packets and multiple builders and compiles for WASM, but unconditionally depends on Rayon/Crossbeam/CPU-count infrastructure and has less suitable bounded ownership. Not the first choice. |
+
+The next web experiment should therefore connect an offline-cooked `obvhs`
+CWBVH to Steam Audio's four custom-scene callbacks, keep nodes/triangles/materials
+in one fixed worker memory domain, and compare built-in versus scalar CWBVH versus
+a WASM-SIMD traversal over 10K/50K/100K/200K structural proxies. Until that
+measurement, `obvhs` is a promising candidate—not a selected dependency.
+
 ## Recommendation
 
 Use a zero-baked-acoustics baseline:
