@@ -51,6 +51,30 @@ ownership, and fixed rings. Those solve transport prerequisites, not real-time
 audio deadlines. AudioWorklet code must not block, allocate, ray trace a large
 scene, or compile WASM while rendering.
 
+## Unified Afterglow worker target
+
+The engine target is one source-level `SpatialAudio` service and protocol using
+`afterglow-rpc::RingBuffer` on both backends—not one identical binary:
+
+- native builds link the normal Steam Audio C/C++ library and run the service on
+  an Afterglow native worker thread;
+- web builds compile the same service boundary with Steam Audio's Emscripten
+  library and run it behind the existing shared-ring Web Worker transport.
+
+Upstream's Emscripten archive cannot be linked directly into Afterglow's current
+`wasm32-unknown-unknown` service module. The clean prototype is either a
+`wasm32-unknown-emscripten` service target with an adapted loader, or a thin
+Emscripten module adapter behind the same generated method IDs and ring framing.
+Do not leak this toolchain difference into game APIs.
+
+One acoustics worker should own the scene initially. Additional simulation
+workers duplicate scene/context memory and are justified only by measurements.
+The browser still requires a separate AudioWorklet execution context for
+hard-deadline sample processing; ray tracing and scene mutation must never run
+in its callback. The worklet is a renderer endpoint fed by bounded rings, not a
+second game-facing service. Native builds use the corresponding real-time audio
+callback endpoint.
+
 ## Recommendation
 
 For the web target, prototype these tiers in order:
