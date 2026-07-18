@@ -37,11 +37,19 @@ and had non-zero DSP output. Scalar one-thread obvhs measured 12.27 ms mean, so
 the combined path reduced simulation time by 63.6%. The 10,000-triangle test
 scene used 1,261 CWBVH nodes and 661,048 reported owned bytes.
 
-Full render meshes are not the production geometry contract. Cook structural
-acoustic proxies containing walls, floors, ceilings, doors, portals, and other
-large acoustically relevant surfaces. Native Embree makes full Bistro traversal
-fast enough, but does not make hundreds of MiB of irrelevant acoustic geometry
-a good memory policy.
+The web path was also run against every full-resolution Bistro scene—up to
+2,832,120 triangles—using five fresh Worker/WASM builds per scene. All runs
+loaded, built, reported two threads/four SIMD lanes, and returned varying valid
+IR output. At 512×2, the package-worst p99 was **27.88 ms**: suitable only as a
+30 Hz stress tier, not strict 60 Hz. At 1,024×2 it rose to 50.28 ms. Exterior's
+CWBVH owned 182,158,408 bytes and built in 2.83 seconds on average inside a
+separate fixed-1.5-GiB test module.
+
+Full render meshes are therefore not the production geometry contract. Cook
+structural acoustic proxies containing walls, floors, ceilings, doors, portals,
+and other large acoustically relevant surfaces. Native Embree makes full Bistro
+traversal fast enough, but neither backend makes irrelevant render detail a good
+cross-platform memory or geometry policy.
 
 The remaining shipping gates are structural-proxy acoustic error, simultaneous
 rendering contention, and real AudioWorklet/device-buffer scheduling. See

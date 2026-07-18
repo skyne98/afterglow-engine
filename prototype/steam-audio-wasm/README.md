@@ -60,8 +60,13 @@ To run through CEF's cross-origin-isolated custom scheme during development:
 rm -rf crates/afterglow-web/www/steam-audio-prototype
 cp -r prototype/steam-audio-wasm/dist \
   crates/afterglow-web/www/steam-audio-prototype
+# For the isolated full-resolution stress test only:
+mkdir -p crates/afterglow-web/www/steam-audio-prototype/assets
+cp target/bistro-source/*.acoustic.bin \
+  crates/afterglow-web/www/steam-audio-prototype/assets/
 # launch the minimal CEF example, then navigate DevTools/CDP to:
 # afterglow://local/steam-audio-prototype/index.html
+# afterglow://local/steam-audio-prototype/bistro.html?scene=BistroExterior
 ```
 
 Remove the temporary `www/steam-audio-prototype` directory before running the
@@ -329,13 +334,32 @@ Attribution: *Amazon Lumberyard Bistro, Open Research Content Archive (ORCA)*,
 Amazon Lumberyard, July 2017,
 [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/), from
 [NVIDIA ORCA](https://developer.nvidia.com/orca/amazon-lumberyard-bistro).
+The browser obvhs path also ran all three full-resolution scenes through a
+separate fixed-1.5-GiB stress module. It ingests the indexed cooked file directly,
+uses two pthreads/four SIMD128 lanes, and frees the source bytes after CWBVH
+construction. Five fresh Worker/WASM instances per scene measured:
+
+| Scene | obvhs owned bytes | Build mean | 512×2 mean / worst p99 | 1,024×2 mean / worst p99 |
+|---|---:|---:|---:|---:|
+| Exterior | 182,158,408 | 2.83 s | 23.87 / 27.88 ms | 46.78 / 50.28 ms |
+| Interior | 67,204,112 | 0.88 s | 19.34 / 21.53 ms | 36.02 / 40.17 ms |
+| Interior with wine | 84,738,896 | 1.13 s | 20.84 / 24.82 ms | 41.37 / 45.41 ms |
+
+All 15 runs produced valid, varying acoustic output and reported two threads and
+four lanes. Full Bistro therefore actually works in browser WASM, but 512×2 is a
+30 Hz stress tier rather than strict 60 Hz; 1,024×2 misses even 30 Hz. The run
+isolated simulation from game rendering and AudioWorklet DSP. Structural proxies
+remain the production requirement.
+
 Raw evidence:
 `docs/benchmarks/steam-audio-native-bistro-full-package-fox-laptop-2026-07-18.json`
-(built-in baseline) and
+(built-in baseline),
 `docs/benchmarks/steam-audio-native-bistro-embree-fox-laptop-2026-07-18.json`
-(Embree).
+(Embree), and
+`docs/benchmarks/steam-audio-wasm-bistro-full-package-fox-laptop-2026-07-19.json`
+(web obvhs).
 
-Build and run one cell with:
+Build and run one native cell with:
 
 ```sh
 nix-shell prototype/steam-audio-wasm/toolchain.nix --run \

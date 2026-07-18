@@ -21,6 +21,11 @@ int32_t afterglow_obvhs_create(
     const AfterglowObvhsTriangle* staticTriangles, uint32_t staticTriangleCount,
     const AfterglowObvhsTriangle* doorTriangles, uint32_t doorTriangleCount,
     const IPLMaterial* materials, uint32_t materialCount, void** tracer);
+int32_t afterglow_obvhs_create_indexed(
+    const IPLVector3* vertices, uint32_t vertexCount,
+    const uint32_t* triangleIndices, const uint8_t* materialIndices,
+    uint32_t triangleCount, const IPLMaterial* materials,
+    uint32_t materialCount, void** tracer);
 void afterglow_obvhs_destroy(void* tracer);
 void afterglow_obvhs_set_door_y(void* tracer, float doorY);
 void afterglow_obvhs_get_stats(const void* tracer, AfterglowObvhsStats* stats);
@@ -37,10 +42,14 @@ The Rust `staticlib` is compiled for `wasm32-unknown-emscripten` and linked into
 the same module as Steam Audio. No ray crosses JavaScript or a second WASM
 instance.
 
-`afterglow_obvhs_create` returns zero on success and one for invalid pointers,
-counts, materials, or material indices. It copies every triangle, material
-index, and material before returning. Callers may release the input arrays.
-Destroy the tracer only after the simulator and custom scene have been released.
+Both create functions return zero on success and one for invalid pointers,
+counts, indices, or materials. `afterglow_obvhs_create` accepts flattened
+triangles and an optional door BLAS. `afterglow_obvhs_create_indexed` accepts a
+static indexed mesh, validates every vertex/material index, and expands directly
+into tracer-owned triangles without a second flattened C++ input array. Both
+copy all retained data before returning, so callers may release the input
+arrays. Destroy the tracer only after the simulator and custom scene have been
+released.
 
 ## Ownership and query behavior
 
@@ -83,8 +92,10 @@ RUSTFLAGS='-C target-feature=+atomics,+bulk-memory,+mutable-globals,+simd128' ca
   -Zbuild-std=core,alloc,std,panic_abort
 ```
 
-Steam Audio is linked with `-O3 -msimd128 -pthread`, fixed 256 MiB shared memory,
-`rayBatchSize = 64`, and a strict two-worker Emscripten pthread pool. Steam
+Steam Audio is linked with `-O3 -msimd128 -pthread`, `rayBatchSize = 64`, and a
+strict two-worker Emscripten pthread pool. The ordinary dynamic module has fixed
+256 MiB shared memory. The isolated full-Bistro stress module has fixed 1.5 GiB
+shared memory and is never loaded by the normal runtime. Steam
 Audio, MySOFA, PFFFT, zlib, and Rust are all rebuilt with atomics/bulk-memory;
 mixing non-threaded objects into the module is a link error. Workers are created
 during bootstrap, never after sealing.
@@ -115,9 +126,23 @@ scalar one-thread obvhs baseline, mean fell 63.6% and worst p99 fell 53.3%.
 Raw evidence:
 `docs/benchmarks/steam-audio-wasm-obvhs-simd-pthreads-fox-laptop-2026-07-18.json`.
 
+The browser stress module also loaded and built all three full-resolution Bistro
+scenes through `afterglow_obvhs_create_indexed`. Five fresh Worker/WASM builds
+per scene on the laptop produced valid, varying IR output throughout. At 512×2,
+package-worst p99 was 27.88 ms: all scenes fit 30 Hz, but none establishes a
+strict 60 Hz production tier. At 1,024×2, package-worst p99 was 50.28 ms. The
+2,832,120-triangle Exterior CWBVH owned 182,158,408 bytes and built in 2.83 s on
+average. This proves correctness and gives a full-render stress bound; it also
+confirms structural proxies are required for 60 Hz web simulation and bounded
+memory.
+
+Raw full-package evidence:
+`docs/benchmarks/steam-audio-wasm-bistro-full-package-fox-laptop-2026-07-19.json`.
+
 The same logical obvhs configuration builds natively: medium CWBVH, batch 64,
 two simulation threads, 64 reflected sources, and 512×2 quality. Five matching
-native laptop launches measured 3.39 ms mean / 4.316 ms worst p99. Native full-render-mesh acoustics continue to use
-the separately validated Embree backend. AudioWorklet deadline integration,
+native laptop launches measured 3.39 ms mean / 4.316 ms worst p99. Native
+full-render-mesh acoustics continue to use the separately validated Embree
+backend. AudioWorklet deadline integration,
 render-loaded contention, general dynamic instances, and structural-proxy error
 measurement remain open shipping gates.

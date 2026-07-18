@@ -31,6 +31,15 @@ int32_t afterglow_obvhs_create(const AfterglowObvhsTriangle* staticTriangles,
                                const IPLMaterial* materials,
                                uint32_t materialCount,
                                void** tracer);
+/** Builds directly from an indexed static mesh without a flattened input copy. */
+int32_t afterglow_obvhs_create_indexed(const IPLVector3* vertices,
+                                       uint32_t vertexCount,
+                                       const uint32_t* triangleIndices,
+                                       const uint8_t* materialIndices,
+                                       uint32_t triangleCount,
+                                       const IPLMaterial* materials,
+                                       uint32_t materialCount,
+                                       void** tracer);
 void afterglow_obvhs_destroy(void* tracer);
 
 /** Translation-only BLAS instance update; performs no allocation or BVH rebuild. */

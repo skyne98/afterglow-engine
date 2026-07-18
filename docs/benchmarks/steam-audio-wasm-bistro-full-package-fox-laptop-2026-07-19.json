@@ -1,0 +1,1131 @@
+{
+  "schemaVersion": 1,
+  "benchmark": "Steam Audio 4.8.1 full-resolution Bistro package with obvhs WASM SIMD128 plus pthreads",
+  "date": "2026-07-19",
+  "host": {
+    "name": "fox-laptop",
+    "cpu": "AMD Ryzen 7 6800U with Radeon Graphics",
+    "os": "Fedora 44",
+    "browser": "CEF/Chromium 149.0.7827.201",
+    "session": "unlocked for the complete sweep"
+  },
+  "asset": {
+    "title": "Amazon Lumberyard Bistro v5.2",
+    "license": "CC-BY 4.0",
+    "source": "https://developer.nvidia.com/orca/amazon-lumberyard-bistro",
+    "download": "https://developer.nvidia.com/bistro",
+    "citation": "Amazon Lumberyard Bistro, Open Research Content Archive (ORCA), Amazon Lumberyard, July 2017",
+    "cooker": "Afterglow cook-bistro-acoustic.cpp with Assimp 6.0.5 triangulation and pre-transformed vertices",
+    "scenes": [
+      {
+        "name": "BistroExterior",
+        "fbxSha256": "471991629c7e35a88338c48f3565390ad19cc5d1d7c7e067fc2a60b4f3b5f195",
+        "cookedSha256": "aa37118345bf2c56fbe013b55472fa7281ef114452984b5e14da393d46f0a30e"
+      },
+      {
+        "name": "BistroInterior",
+        "fbxSha256": "f18aea42854112e59752f14596e557c3d011e3526caf6a1bd55ce0e51881c11e",
+        "cookedSha256": "89479b3eccb94049717db0be298d647a19fe6a5772d15e94f2f0ae048d5c1baf"
+      },
+      {
+        "name": "BistroInterior_Wine",
+        "fbxSha256": "e5f4549548b0ec05c1f534551dcc7053d5286e0b48c9798c985ac1a7fa87cb1c",
+        "cookedSha256": "25ab92a5a7be48c2f7b698e0e221aa330686f868442be690b4949407a0ac0e47"
+      }
+    ]
+  },
+  "build": {
+    "steamAudio": "4.8.1 source rebuild with upstream ThreadPool",
+    "rust": "rustc 1.99.0-nightly commit 375b1431b (2026-07-10)",
+    "emscripten": "4.0.23",
+    "tracer": "obvhs 0.3.2 medium-build CWBVH8 with Afterglow WASM SIMD128 four-child kernel",
+    "simulationThreads": 2,
+    "tracerLanes": 4,
+    "rayBatchSize": 64,
+    "memory": "fixed 1.5 GiB SharedArrayBuffer-backed WASM memory; separate stress-test module",
+    "indexedIngestion": "cooked indexed geometry is copied once into WASM and expanded directly into the Rust tracer without a flattened C++ triangle copy"
+  },
+  "methodology": {
+    "launchesPerScene": 5,
+    "process": "one dedicated unlocked CEF process; every launch creates a fresh page Worker, WASM instance, indexed geometry load, and CWBVH build",
+    "scenes": 3,
+    "warmupSimulationsPerScenario": 3,
+    "measuredSimulationsPerScenario": 30,
+    "quality": {
+      "sources": 64,
+      "globalRays": [
+        512,
+        1024
+      ],
+      "bounces": 2,
+      "durationMs": 500,
+      "order": 0,
+      "reflectionType": "parametric"
+    },
+    "movingListener": "5 cm sinusoidal offset per sample",
+    "bakedData": false,
+    "rendering": "no simultaneous game rendering",
+    "dsp": "reflection and HRTF DSP excluded; this sweep isolates full-geometry simulation"
+  },
+  "aggregates": [
+    {
+      "scene": "BistroExterior",
+      "launches": 5,
+      "vertices": 2883642,
+      "triangles": 2832120,
+      "geometryBytes": 71421336,
+      "tracerNodes": 294494,
+      "tracerOwnedBytes": 182158408,
+      "initializationMeanMs": 3025.645000001788,
+      "initializationMaxMs": 3187.1650000065565,
+      "tracerBuildMeanMs": 2827.3219584,
+      "scenarios": [
+        {
+          "rays": 512,
+          "meanOfLaunchMeansMs": 23.873499999543032,
+          "worstP99Ms": 27.87999999523163,
+          "worstMaxMs": 27.87999999523163,
+          "meanRoundTripMs": 24.01696666687727,
+          "allIrValid": true,
+          "allReverbVaried": true
+        },
+        {
+          "rays": 1024,
+          "meanOfLaunchMeansMs": 46.78393333305915,
+          "worstP99Ms": 50.28000000119209,
+          "worstMaxMs": 50.28000000119209,
+          "meanRoundTripMs": 46.958966666460036,
+          "allIrValid": true,
+          "allReverbVaried": true
+        }
+      ]
+    },
+    {
+      "scene": "BistroInterior",
+      "launches": 5,
+      "vertices": 813359,
+      "triangles": 1046609,
+      "geometryBytes": 23366297,
+      "tracerNodes": 107423,
+      "tracerOwnedBytes": 67204112,
+      "initializationMeanMs": 969.5919999986887,
+      "initializationMaxMs": 992.2250000089407,
+      "tracerBuildMeanMs": 876.391936,
+      "scenarios": [
+        {
+          "rays": 512,
+          "meanOfLaunchMeansMs": 19.337233332594238,
+          "worstP99Ms": 21.525000005960464,
+          "worstMaxMs": 21.525000005960464,
+          "meanRoundTripMs": 19.472500000198682,
+          "allIrValid": true,
+          "allReverbVaried": true
+        },
+        {
+          "rays": 1024,
+          "meanOfLaunchMeansMs": 36.01500000009934,
+          "worstP99Ms": 40.17499999701977,
+          "worstMaxMs": 40.17499999701977,
+          "meanRoundTripMs": 36.18233333398898,
+          "allIrValid": true,
+          "allReverbVaried": true
+        }
+      ]
+    },
+    {
+      "scene": "BistroInterior_Wine",
+      "launches": 5,
+      "vertices": 1063841,
+      "triangles": 1320323,
+      "geometryBytes": 29930363,
+      "tracerNodes": 135008,
+      "tracerOwnedBytes": 84738896,
+      "initializationMeanMs": 1231.3889999985695,
+      "initializationMaxMs": 1248.7899999916553,
+      "tracerBuildMeanMs": 1127.5209728,
+      "scenarios": [
+        {
+          "rays": 512,
+          "meanOfLaunchMeansMs": 20.838166666030883,
+          "worstP99Ms": 24.819999992847443,
+          "worstMaxMs": 24.819999992847443,
+          "meanRoundTripMs": 20.979600000480808,
+          "allIrValid": true,
+          "allReverbVaried": true
+        },
+        {
+          "rays": 1024,
+          "meanOfLaunchMeansMs": 41.37259999960661,
+          "worstP99Ms": 45.40500000119209,
+          "worstMaxMs": 45.40500000119209,
+          "meanRoundTripMs": 41.53219999969006,
+          "allIrValid": true,
+          "allReverbVaried": true
+        }
+      ]
+    }
+  ],
+  "acceptance": {
+    "strict60HzMs": 16.666666666666668,
+    "strict30HzMs": 33.333333333333336,
+    "packageWorst512P99Ms": 27.87999999523163,
+    "packageWorst1024P99Ms": 50.28000000119209,
+    "ray512Fits60HzAllScenes": false,
+    "ray512Fits30HzAllScenes": true,
+    "ray1024Fits30HzAllScenes": false,
+    "allIrValid": true,
+    "allRuntimeTelemetry": true
+  },
+  "conclusion": {
+    "result": "The full Bistro package actually loads, builds, traces, and returns varying valid acoustic output in browser WASM on the laptop.",
+    "production": "Full render geometry does not meet strict 60 Hz. At 512x2 it is a 30 Hz stress tier; cook structural acoustic proxies for production 60 Hz simulation.",
+    "comparison": "Native Embree remains far faster for full render meshes; unified obvhs remains appropriate for bounded structural proxies, not raw multi-million-triangle render content."
+  },
+  "runs": [
+    {
+      "scene": "BistroExterior",
+      "initializationMs": 3187.1650000065565,
+      "geometryBytes": 71421336,
+      "vertices": 2883642,
+      "triangles": 2832120,
+      "tracerNodes": 294494,
+      "tracerBuildMs": 2986.374912,
+      "tracerOwnedBytes": 182158408,
+      "simulationThreads": 2,
+      "tracerLanes": 4,
+      "scenarios": [
+        {
+          "rays": 512,
+          "bounces": 2,
+          "samples": 30,
+          "reflectionSimulation": {
+            "mean": 23.685333333412807,
+            "p50": 23.24499998986721,
+            "p90": 25.864999994635582,
+            "p99": 27.134999990463257,
+            "max": 27.134999990463257
+          },
+          "simulationRoundTrip": {
+            "mean": 23.810166666905086,
+            "p50": 23.399999991059303,
+            "p90": 26.015000000596046,
+            "p99": 27.265000000596046,
+            "max": 27.265000000596046
+          },
+          "reverbLowRange": [
+            0.3404296040534973,
+            0.9573664665222168
+          ],
+          "irValid": true
+        },
+        {
+          "rays": 1024,
+          "bounces": 2,
+          "samples": 30,
+          "reflectionSimulation": {
+            "mean": 46.24799999992053,
+            "p50": 46.07500000298023,
+            "p90": 47.79999999701977,
+            "p99": 49.060000002384186,
+            "max": 49.060000002384186
+          },
+          "simulationRoundTrip": {
+            "mean": 46.41049999942382,
+            "p50": 46.20999999344349,
+            "p90": 47.900000005960464,
+            "p99": 49.195000007748604,
+            "max": 49.195000007748604
+          },
+          "reverbLowRange": [
+            0.2903137505054474,
+            0.5013718605041504
+          ],
+          "irValid": true
+        }
+      ],
+      "launch": 1
+    },
+    {
+      "scene": "BistroExterior",
+      "initializationMs": 3017.3049999922514,
+      "geometryBytes": 71421336,
+      "vertices": 2883642,
+      "triangles": 2832120,
+      "tracerNodes": 294494,
+      "tracerBuildMs": 2819.8397440000003,
+      "tracerOwnedBytes": 182158408,
+      "simulationThreads": 2,
+      "tracerLanes": 4,
+      "scenarios": [
+        {
+          "rays": 512,
+          "bounces": 2,
+          "samples": 30,
+          "reflectionSimulation": {
+            "mean": 24.311500000953675,
+            "p50": 24.185000002384186,
+            "p90": 26.240000009536743,
+            "p99": 27.075000002980232,
+            "max": 27.075000002980232
+          },
+          "simulationRoundTrip": {
+            "mean": 24.463666666547457,
+            "p50": 24.315000012516975,
+            "p90": 26.445000007748604,
+            "p99": 27.280000001192093,
+            "max": 27.280000001192093
+          },
+          "reverbLowRange": [
+            0.3485872745513916,
+            0.8787816166877747
+          ],
+          "irValid": true
+        },
+        {
+          "rays": 1024,
+          "bounces": 2,
+          "samples": 30,
+          "reflectionSimulation": {
+            "mean": 46.58583333392938,
+            "p50": 46.729999989271164,
+            "p90": 48.45499999821186,
+            "p99": 48.900000005960464,
+            "max": 48.900000005960464
+          },
+          "simulationRoundTrip": {
+            "mean": 46.772000000377496,
+            "p50": 46.96000000834465,
+            "p90": 48.645000010728836,
+            "p99": 49.03499999642372,
+            "max": 49.03499999642372
+          },
+          "reverbLowRange": [
+            0.3151015639305115,
+            0.48836904764175415
+          ],
+          "irValid": true
+        }
+      ],
+      "launch": 2
+    },
+    {
+      "scene": "BistroExterior",
+      "initializationMs": 2971.954999998212,
+      "geometryBytes": 71421336,
+      "vertices": 2883642,
+      "triangles": 2832120,
+      "tracerNodes": 294494,
+      "tracerBuildMs": 2768.89984,
+      "tracerOwnedBytes": 182158408,
+      "simulationThreads": 2,
+      "tracerLanes": 4,
+      "scenarios": [
+        {
+          "rays": 512,
+          "bounces": 2,
+          "samples": 30,
+          "reflectionSimulation": {
+            "mean": 23.50333333412806,
+            "p50": 23.50499999523163,
+            "p90": 24.030000001192093,
+            "p99": 25.774999991059303,
+            "max": 25.774999991059303
+          },
+          "simulationRoundTrip": {
+            "mean": 23.64783333440622,
+            "p50": 23.609999999403954,
+            "p90": 24.230000004172325,
+            "p99": 25.930000007152557,
+            "max": 25.930000007152557
+          },
+          "reverbLowRange": [
+            0.39315634965896606,
+            0.9724130630493164
+          ],
+          "irValid": true
+        },
+        {
+          "rays": 1024,
+          "bounces": 2,
+          "samples": 30,
+          "reflectionSimulation": {
+            "mean": 47.31283333301544,
+            "p50": 47.09000000357628,
+            "p90": 49.570000007748604,
+            "p99": 50.28000000119209,
+            "max": 50.28000000119209
+          },
+          "simulationRoundTrip": {
+            "mean": 47.48283333480358,
+            "p50": 47.29000000655651,
+            "p90": 49.76000000536442,
+            "p99": 50.480000004172325,
+            "max": 50.480000004172325
+          },
+          "reverbLowRange": [
+            0.31682658195495605,
+            0.4725513458251953
+          ],
+          "irValid": true
+        }
+      ],
+      "launch": 3
+    },
+    {
+      "scene": "BistroExterior",
+      "initializationMs": 2952.910000011325,
+      "geometryBytes": 71421336,
+      "vertices": 2883642,
+      "triangles": 2832120,
+      "tracerNodes": 294494,
+      "tracerBuildMs": 2757.080064,
+      "tracerOwnedBytes": 182158408,
+      "simulationThreads": 2,
+      "tracerLanes": 4,
+      "scenarios": [
+        {
+          "rays": 512,
+          "bounces": 2,
+          "samples": 30,
+          "reflectionSimulation": {
+            "mean": 24.09566666483879,
+            "p50": 23.785000011324883,
+            "p90": 25.58500000834465,
+            "p99": 27.87999999523163,
+            "max": 27.87999999523163
+          },
+          "simulationRoundTrip": {
+            "mean": 24.242666665712992,
+            "p50": 23.91499999165535,
+            "p90": 25.71500000357628,
+            "p99": 28.12999999523163,
+            "max": 28.12999999523163
+          },
+          "reverbLowRange": [
+            0.34420931339263916,
+            0.9904716610908508
+          ],
+          "irValid": true
+        },
+        {
+          "rays": 1024,
+          "bounces": 2,
+          "samples": 30,
+          "reflectionSimulation": {
+            "mean": 47.07966666718324,
+            "p50": 46.929999992251396,
+            "p90": 48.55500000715256,
+            "p99": 49.86999998986721,
+            "max": 49.86999998986721
+          },
+          "simulationRoundTrip": {
+            "mean": 47.26433333357175,
+            "p50": 47.144999995827675,
+            "p90": 48.76500000059605,
+            "p99": 50.064999997615814,
+            "max": 50.064999997615814
+          },
+          "reverbLowRange": [
+            0.29781970381736755,
+            0.6619912385940552
+          ],
+          "irValid": true
+        }
+      ],
+      "launch": 4
+    },
+    {
+      "scene": "BistroExterior",
+      "initializationMs": 2998.890000000596,
+      "geometryBytes": 71421336,
+      "vertices": 2883642,
+      "triangles": 2832120,
+      "tracerNodes": 294494,
+      "tracerBuildMs": 2804.4152320000003,
+      "tracerOwnedBytes": 182158408,
+      "simulationThreads": 2,
+      "tracerLanes": 4,
+      "scenarios": [
+        {
+          "rays": 512,
+          "bounces": 2,
+          "samples": 30,
+          "reflectionSimulation": {
+            "mean": 23.771666664381822,
+            "p50": 23.859999999403954,
+            "p90": 24.855000004172325,
+            "p99": 25.009999990463257,
+            "max": 25.009999990463257
+          },
+          "simulationRoundTrip": {
+            "mean": 23.920500000814595,
+            "p50": 24.04000000655651,
+            "p90": 25.075000002980232,
+            "p99": 25.12999999523163,
+            "max": 25.12999999523163
+          },
+          "reverbLowRange": [
+            0.391192227602005,
+            0.8132809400558472
+          ],
+          "irValid": true
+        },
+        {
+          "rays": 1024,
+          "bounces": 2,
+          "samples": 30,
+          "reflectionSimulation": {
+            "mean": 46.69333333124717,
+            "p50": 46.60999999940395,
+            "p90": 48.15500000119209,
+            "p99": 48.91499999165535,
+            "max": 48.91499999165535
+          },
+          "simulationRoundTrip": {
+            "mean": 46.865166664123535,
+            "p50": 46.78000000119209,
+            "p90": 48.35999999940395,
+            "p99": 49.06999999284744,
+            "max": 49.06999999284744
+          },
+          "reverbLowRange": [
+            0.3171938359737396,
+            0.5440942645072937
+          ],
+          "irValid": true
+        }
+      ],
+      "launch": 5
+    },
+    {
+      "scene": "BistroInterior",
+      "initializationMs": 968.9799999892712,
+      "geometryBytes": 23366297,
+      "vertices": 813359,
+      "triangles": 1046609,
+      "tracerNodes": 107423,
+      "tracerBuildMs": 847.934976,
+      "tracerOwnedBytes": 67204112,
+      "simulationThreads": 2,
+      "tracerLanes": 4,
+      "scenarios": [
+        {
+          "rays": 512,
+          "bounces": 2,
+          "samples": 30,
+          "reflectionSimulation": {
+            "mean": 19.151999998092652,
+            "p50": 19.03499999642372,
+            "p90": 20.094999998807907,
+            "p99": 21.49499998986721,
+            "max": 21.49499998986721
+          },
+          "simulationRoundTrip": {
+            "mean": 19.271000001827876,
+            "p50": 19.17500001192093,
+            "p90": 20.219999998807907,
+            "p99": 21.61999998986721,
+            "max": 21.61999998986721
+          },
+          "reverbLowRange": [
+            0.1594742387533188,
+            0.24913525581359863
+          ],
+          "irValid": true
+        },
+        {
+          "rays": 1024,
+          "bounces": 2,
+          "samples": 30,
+          "reflectionSimulation": {
+            "mean": 35.828499999642375,
+            "p50": 35.51500000059605,
+            "p90": 37.49500000476837,
+            "p99": 40.01500000059605,
+            "max": 40.01500000059605
+          },
+          "simulationRoundTrip": {
+            "mean": 36.00000000198682,
+            "p50": 35.689999997615814,
+            "p90": 37.67500001192093,
+            "p99": 40.25500001013279,
+            "max": 40.25500001013279
+          },
+          "reverbLowRange": [
+            0.1534871757030487,
+            0.2723434567451477
+          ],
+          "irValid": true
+        }
+      ],
+      "launch": 1
+    },
+    {
+      "scene": "BistroInterior",
+      "initializationMs": 960.5300000011921,
+      "geometryBytes": 23366297,
+      "vertices": 813359,
+      "triangles": 1046609,
+      "tracerNodes": 107423,
+      "tracerBuildMs": 873.55008,
+      "tracerOwnedBytes": 67204112,
+      "simulationThreads": 2,
+      "tracerLanes": 4,
+      "scenarios": [
+        {
+          "rays": 512,
+          "bounces": 2,
+          "samples": 30,
+          "reflectionSimulation": {
+            "mean": 19.142000000178815,
+            "p50": 19.015000000596046,
+            "p90": 20.08500000834465,
+            "p99": 20.554999992251396,
+            "max": 20.554999992251396
+          },
+          "simulationRoundTrip": {
+            "mean": 19.286166666944823,
+            "p50": 19.140000000596046,
+            "p90": 20.314999997615814,
+            "p99": 20.74500000476837,
+            "max": 20.74500000476837
+          },
+          "reverbLowRange": [
+            0.15642902255058289,
+            0.265337198972702
+          ],
+          "irValid": true
+        },
+        {
+          "rays": 1024,
+          "bounces": 2,
+          "samples": 30,
+          "reflectionSimulation": {
+            "mean": 35.18900000105302,
+            "p50": 35.179999992251396,
+            "p90": 36.230000004172325,
+            "p99": 37.26000000536442,
+            "max": 37.26000000536442
+          },
+          "simulationRoundTrip": {
+            "mean": 35.337833332518734,
+            "p50": 35.37000000476837,
+            "p90": 36.375,
+            "p99": 37.42500001192093,
+            "max": 37.42500001192093
+          },
+          "reverbLowRange": [
+            0.16401797533035278,
+            0.25356021523475647
+          ],
+          "irValid": true
+        }
+      ],
+      "launch": 2
+    },
+    {
+      "scene": "BistroInterior",
+      "initializationMs": 945.765000000596,
+      "geometryBytes": 23366297,
+      "vertices": 813359,
+      "triangles": 1046609,
+      "tracerNodes": 107423,
+      "tracerBuildMs": 862.575104,
+      "tracerOwnedBytes": 67204112,
+      "simulationThreads": 2,
+      "tracerLanes": 4,
+      "scenarios": [
+        {
+          "rays": 512,
+          "bounces": 2,
+          "samples": 30,
+          "reflectionSimulation": {
+            "mean": 19.92966666718324,
+            "p50": 19.99500000476837,
+            "p90": 21.265000000596046,
+            "p99": 21.525000005960464,
+            "max": 21.525000005960464
+          },
+          "simulationRoundTrip": {
+            "mean": 20.06966666628917,
+            "p50": 20.149999991059303,
+            "p90": 21.40999999642372,
+            "p99": 21.650000005960464,
+            "max": 21.650000005960464
+          },
+          "reverbLowRange": [
+            0.1384049654006958,
+            0.2829258143901825
+          ],
+          "irValid": true
+        },
+        {
+          "rays": 1024,
+          "bounces": 2,
+          "samples": 30,
+          "reflectionSimulation": {
+            "mean": 36.66616666714351,
+            "p50": 36.37999999523163,
+            "p90": 38.54999999701977,
+            "p99": 40.17499999701977,
+            "max": 40.17499999701977
+          },
+          "simulationRoundTrip": {
+            "mean": 36.838166667521,
+            "p50": 36.53500001132488,
+            "p90": 38.75500001013279,
+            "p99": 40.35999999940395,
+            "max": 40.35999999940395
+          },
+          "reverbLowRange": [
+            0.1715041548013687,
+            0.2498369812965393
+          ],
+          "irValid": true
+        }
+      ],
+      "launch": 3
+    },
+    {
+      "scene": "BistroInterior",
+      "initializationMs": 992.2250000089407,
+      "geometryBytes": 23366297,
+      "vertices": 813359,
+      "triangles": 1046609,
+      "tracerNodes": 107423,
+      "tracerBuildMs": 903.579648,
+      "tracerOwnedBytes": 67204112,
+      "simulationThreads": 2,
+      "tracerLanes": 4,
+      "scenarios": [
+        {
+          "rays": 512,
+          "bounces": 2,
+          "samples": 30,
+          "reflectionSimulation": {
+            "mean": 19.36583333114783,
+            "p50": 19.180000007152557,
+            "p90": 20.689999997615814,
+            "p99": 21.189999997615814,
+            "max": 21.189999997615814
+          },
+          "simulationRoundTrip": {
+            "mean": 19.486499999960262,
+            "p50": 19.32999999821186,
+            "p90": 20.859999999403954,
+            "p99": 21.310000002384186,
+            "max": 21.310000002384186
+          },
+          "reverbLowRange": [
+            0.1683664470911026,
+            0.4297805428504944
+          ],
+          "irValid": true
+        },
+        {
+          "rays": 1024,
+          "bounces": 2,
+          "samples": 30,
+          "reflectionSimulation": {
+            "mean": 36.76049999942382,
+            "p50": 36.67499999701977,
+            "p90": 38.32499998807907,
+            "p99": 39.13500000536442,
+            "max": 39.13500000536442
+          },
+          "simulationRoundTrip": {
+            "mean": 36.9404999996225,
+            "p50": 36.92000000178814,
+            "p90": 38.48999999463558,
+            "p99": 39.29999999701977,
+            "max": 39.29999999701977
+          },
+          "reverbLowRange": [
+            0.1712823361158371,
+            0.25988224148750305
+          ],
+          "irValid": true
+        }
+      ],
+      "launch": 4
+    },
+    {
+      "scene": "BistroInterior",
+      "initializationMs": 980.4599999934435,
+      "geometryBytes": 23366297,
+      "vertices": 813359,
+      "triangles": 1046609,
+      "tracerNodes": 107423,
+      "tracerBuildMs": 894.3198719999999,
+      "tracerOwnedBytes": 67204112,
+      "simulationThreads": 2,
+      "tracerLanes": 4,
+      "scenarios": [
+        {
+          "rays": 512,
+          "bounces": 2,
+          "samples": 30,
+          "reflectionSimulation": {
+            "mean": 19.096666666368645,
+            "p50": 19.060000002384186,
+            "p90": 19.75,
+            "p99": 20.109999999403954,
+            "max": 20.109999999403954
+          },
+          "simulationRoundTrip": {
+            "mean": 19.24916666597128,
+            "p50": 19.195000007748604,
+            "p90": 19.884999990463257,
+            "p99": 20.240000009536743,
+            "max": 20.240000009536743
+          },
+          "reverbLowRange": [
+            0.16746854782104492,
+            0.2579364478588104
+          ],
+          "irValid": true
+        },
+        {
+          "rays": 1024,
+          "bounces": 2,
+          "samples": 30,
+          "reflectionSimulation": {
+            "mean": 35.630833333233994,
+            "p50": 35.48499999940395,
+            "p90": 37.064999997615814,
+            "p99": 37.87999999523163,
+            "max": 37.87999999523163
+          },
+          "simulationRoundTrip": {
+            "mean": 35.79516666829586,
+            "p50": 35.78500001132488,
+            "p90": 37.25999999046326,
+            "p99": 38.08499999344349,
+            "max": 38.08499999344349
+          },
+          "reverbLowRange": [
+            0.18061310052871704,
+            0.37057140469551086
+          ],
+          "irValid": true
+        }
+      ],
+      "launch": 5
+    },
+    {
+      "scene": "BistroInterior_Wine",
+      "initializationMs": 1248.7899999916553,
+      "geometryBytes": 29930363,
+      "vertices": 1063841,
+      "triangles": 1320323,
+      "tracerNodes": 135008,
+      "tracerBuildMs": 1130.459904,
+      "tracerOwnedBytes": 84738896,
+      "simulationThreads": 2,
+      "tracerLanes": 4,
+      "scenarios": [
+        {
+          "rays": 512,
+          "bounces": 2,
+          "samples": 30,
+          "reflectionSimulation": {
+            "mean": 20.832833332816758,
+            "p50": 20.700000002980232,
+            "p90": 22.399999991059303,
+            "p99": 23.57999999821186,
+            "max": 23.57999999821186
+          },
+          "simulationRoundTrip": {
+            "mean": 20.963666666547457,
+            "p50": 20.79000000655651,
+            "p90": 22.53999999165535,
+            "p99": 23.78999999165535,
+            "max": 23.78999999165535
+          },
+          "reverbLowRange": [
+            0.22474229335784912,
+            0.33461815118789673
+          ],
+          "irValid": true
+        },
+        {
+          "rays": 1024,
+          "bounces": 2,
+          "samples": 30,
+          "reflectionSimulation": {
+            "mean": 40.60716666678588,
+            "p50": 40.65500000119209,
+            "p90": 41.625,
+            "p99": 41.87000000476837,
+            "max": 41.87000000476837
+          },
+          "simulationRoundTrip": {
+            "mean": 40.74883333295584,
+            "p50": 40.79500000178814,
+            "p90": 41.78000000119209,
+            "p99": 42.04500000178814,
+            "max": 42.04500000178814
+          },
+          "reverbLowRange": [
+            0.20537349581718445,
+            0.30862218141555786
+          ],
+          "irValid": true
+        }
+      ],
+      "launch": 1
+    },
+    {
+      "scene": "BistroInterior_Wine",
+      "initializationMs": 1217.5499999970198,
+      "geometryBytes": 29930363,
+      "vertices": 1063841,
+      "triangles": 1320323,
+      "tracerNodes": 135008,
+      "tracerBuildMs": 1119.980032,
+      "tracerOwnedBytes": 84738896,
+      "simulationThreads": 2,
+      "tracerLanes": 4,
+      "scenarios": [
+        {
+          "rays": 512,
+          "bounces": 2,
+          "samples": 30,
+          "reflectionSimulation": {
+            "mean": 21.180999999245007,
+            "p50": 21.190000012516975,
+            "p90": 22.510000005364418,
+            "p99": 24.819999992847443,
+            "max": 24.819999992847443
+          },
+          "simulationRoundTrip": {
+            "mean": 21.32883333414793,
+            "p50": 21.330000013113022,
+            "p90": 22.689999997615814,
+            "p99": 24.99500000476837,
+            "max": 24.99500000476837
+          },
+          "reverbLowRange": [
+            0.1927134394645691,
+            0.38880330324172974
+          ],
+          "irValid": true
+        },
+        {
+          "rays": 1024,
+          "bounces": 2,
+          "samples": 30,
+          "reflectionSimulation": {
+            "mean": 41.51233333448569,
+            "p50": 41.570000007748604,
+            "p90": 42.82500000298023,
+            "p99": 45.40500000119209,
+            "max": 45.40500000119209
+          },
+          "simulationRoundTrip": {
+            "mean": 41.667499998708564,
+            "p50": 41.71000000834465,
+            "p90": 42.98499999940395,
+            "p99": 45.58499999344349,
+            "max": 45.58499999344349
+          },
+          "reverbLowRange": [
+            0.2076956331729889,
+            0.33086496591567993
+          ],
+          "irValid": true
+        }
+      ],
+      "launch": 2
+    },
+    {
+      "scene": "BistroInterior_Wine",
+      "initializationMs": 1227.0600000023842,
+      "geometryBytes": 29930363,
+      "vertices": 1063841,
+      "triangles": 1320323,
+      "tracerNodes": 135008,
+      "tracerBuildMs": 1123.99488,
+      "tracerOwnedBytes": 84738896,
+      "simulationThreads": 2,
+      "tracerLanes": 4,
+      "scenarios": [
+        {
+          "rays": 512,
+          "bounces": 2,
+          "samples": 30,
+          "reflectionSimulation": {
+            "mean": 20.87449999998013,
+            "p50": 20.674999997019768,
+            "p90": 21.95499999821186,
+            "p99": 23.12000000476837,
+            "max": 23.12000000476837
+          },
+          "simulationRoundTrip": {
+            "mean": 21.021666665871937,
+            "p50": 20.849999994039536,
+            "p90": 22.105000004172325,
+            "p99": 23.274999991059303,
+            "max": 23.274999991059303
+          },
+          "reverbLowRange": [
+            0.22858254611492157,
+            0.2975570261478424
+          ],
+          "irValid": true
+        },
+        {
+          "rays": 1024,
+          "bounces": 2,
+          "samples": 30,
+          "reflectionSimulation": {
+            "mean": 41.82566666553418,
+            "p50": 41.82500000298023,
+            "p90": 43.37999999523163,
+            "p99": 44.16499999165535,
+            "max": 44.16499999165535
+          },
+          "simulationRoundTrip": {
+            "mean": 41.99166666666667,
+            "p50": 42.00499999523163,
+            "p90": 43.560000002384186,
+            "p99": 44.37999999523163,
+            "max": 44.37999999523163
+          },
+          "reverbLowRange": [
+            0.1960880160331726,
+            0.2770370841026306
+          ],
+          "irValid": true
+        }
+      ],
+      "launch": 3
+    },
+    {
+      "scene": "BistroInterior_Wine",
+      "initializationMs": 1245.2450000047684,
+      "geometryBytes": 29930363,
+      "vertices": 1063841,
+      "triangles": 1320323,
+      "tracerNodes": 135008,
+      "tracerBuildMs": 1143.124992,
+      "tracerOwnedBytes": 84738896,
+      "simulationThreads": 2,
+      "tracerLanes": 4,
+      "scenarios": [
+        {
+          "rays": 512,
+          "bounces": 2,
+          "samples": 30,
+          "reflectionSimulation": {
+            "mean": 20.790499999622504,
+            "p50": 20.84000000357628,
+            "p90": 21.70499999821186,
+            "p99": 21.865000009536743,
+            "max": 21.865000009536743
+          },
+          "simulationRoundTrip": {
+            "mean": 20.939333335061868,
+            "p50": 20.964999988675117,
+            "p90": 21.814999997615814,
+            "p99": 22.075000002980232,
+            "max": 22.075000002980232
+          },
+          "reverbLowRange": [
+            0.1930510550737381,
+            0.361979603767395
+          ],
+          "irValid": true
+        },
+        {
+          "rays": 1024,
+          "bounces": 2,
+          "samples": 30,
+          "reflectionSimulation": {
+            "mean": 41.647499999403955,
+            "p50": 41.69499999284744,
+            "p90": 42.689999997615814,
+            "p99": 43.42499999701977,
+            "max": 43.42499999701977
+          },
+          "simulationRoundTrip": {
+            "mean": 41.818333333233994,
+            "p50": 41.81999999284744,
+            "p90": 42.82500000298023,
+            "p99": 43.66499999165535,
+            "max": 43.66499999165535
+          },
+          "reverbLowRange": [
+            0.21076083183288574,
+            0.32405227422714233
+          ],
+          "irValid": true
+        }
+      ],
+      "launch": 4
+    },
+    {
+      "scene": "BistroInterior_Wine",
+      "initializationMs": 1218.2999999970198,
+      "geometryBytes": 29930363,
+      "vertices": 1063841,
+      "triangles": 1320323,
+      "tracerNodes": 135008,
+      "tracerBuildMs": 1120.045056,
+      "tracerOwnedBytes": 84738896,
+      "simulationThreads": 2,
+      "tracerLanes": 4,
+      "scenarios": [
+        {
+          "rays": 512,
+          "bounces": 2,
+          "samples": 30,
+          "reflectionSimulation": {
+            "mean": 20.511999998490015,
+            "p50": 20.41499999165535,
+            "p90": 21.269999995827675,
+            "p99": 23.015000000596046,
+            "max": 23.015000000596046
+          },
+          "simulationRoundTrip": {
+            "mean": 20.644500000774862,
+            "p50": 20.515000000596046,
+            "p90": 21.394999995827675,
+            "p99": 23.21500000357628,
+            "max": 23.21500000357628
+          },
+          "reverbLowRange": [
+            0.22665345668792725,
+            0.3834630846977234
+          ],
+          "irValid": true
+        },
+        {
+          "rays": 1024,
+          "bounces": 2,
+          "samples": 30,
+          "reflectionSimulation": {
+            "mean": 41.27033333182335,
+            "p50": 41.29500000178814,
+            "p90": 42.66500000655651,
+            "p99": 43.60999999940395,
+            "max": 43.60999999940395
+          },
+          "simulationRoundTrip": {
+            "mean": 41.434666666885214,
+            "p50": 41.49499998986721,
+            "p90": 42.814999997615814,
+            "p99": 43.79000000655651,
+            "max": 43.79000000655651
+          },
+          "reverbLowRange": [
+            0.21248501539230347,
+            0.3337462842464447
+          ],
+          "irValid": true
+        }
+      ],
+      "launch": 5
+    }
+  ]
+}

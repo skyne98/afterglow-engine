@@ -372,10 +372,14 @@ All engine work must move toward these non-negotiable requirements:
   threads, package-worst p99 was 3.90 ms at 512×2 and 6.93 ms at 1,024×2; matching
   four-thread mean simulation improved 18.8–22.9×. Exterior BVH build fell from
   7.81 s to 0.52 s, but resident scene memory rose from ~375 MiB to ~486 MiB.
-  Full render meshes are no longer a traversal blocker but remain forbidden as
-  production acoustic geometry due memory and irrelevant detail; cook structural
-  proxies. Web obvhs keeps static geometry and a translated door BLAS in one
-  Rust-owned Emscripten memory domain; fixed-stack queries allocate nothing.
+  The complete package was also validated in web obvhs through an isolated 1.5
+  GiB stress module: five fresh Worker/WASM builds per scene all returned valid,
+  varying IRs. Package-worst 512×2 p99 was 27.88 ms (30 Hz only); 1,024×2 was
+  50.28 ms. Exterior owned 182,158,408 CWBVH bytes and built in 2.83 s. Full
+  render meshes remain forbidden as production acoustic geometry due frame time,
+  memory, and irrelevant detail; cook structural proxies. Web obvhs keeps static
+  geometry and a translated door BLAS in one Rust-owned Emscripten memory domain;
+  fixed-stack queries allocate nothing.
   The same medium-build, ray-batch-64, two-thread, 64-source 512×2 obvhs
   configuration works natively (five-launch laptop result: 3.39 ms mean / 4.316
   ms worst p99) and on web. Render-loaded and actual device-callback validation remain

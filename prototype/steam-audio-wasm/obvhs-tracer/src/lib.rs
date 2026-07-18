@@ -91,12 +91,50 @@ impl TraceMesh {
             });
             material_indices.push(u32::try_from(triangle.material_index).ok()?);
         }
+        Some(Self::build_owned(triangles, material_indices, build_time))
+    }
+
+    fn build_indexed(
+        vertices: &[IplVector3],
+        triangle_indices: &[u32],
+        material_indices: &[u8],
+        build_time: &mut Duration,
+    ) -> Option<Self> {
+        if material_indices.is_empty() || triangle_indices.len() != material_indices.len() * 3 {
+            return None;
+        }
+        let mut triangles = Vec::with_capacity(material_indices.len());
+        for indices in triangle_indices.as_chunks::<3>().0 {
+            let v0 = *vertices.get(indices[0] as usize)?;
+            let v1 = *vertices.get(indices[1] as usize)?;
+            let v2 = *vertices.get(indices[2] as usize)?;
+            triangles.push(Triangle {
+                v0: to_vec3a(v0),
+                v1: to_vec3a(v1),
+                v2: to_vec3a(v2),
+            });
+        }
+        Some(Self::build_owned(
+            triangles,
+            material_indices
+                .iter()
+                .map(|&value| u32::from(value))
+                .collect(),
+            build_time,
+        ))
+    }
+
+    fn build_owned(
+        triangles: Vec<Triangle>,
+        material_indices: Vec<u32>,
+        build_time: &mut Duration,
+    ) -> Self {
         let bvh = build_cwbvh_from_tris(&triangles, BvhBuildParams::medium_build(), build_time);
-        Some(Self {
+        Self {
             bvh,
             triangles: triangles.into_boxed_slice(),
             material_indices: material_indices.into_boxed_slice(),
-        })
+        }
     }
 
     #[inline(always)]
@@ -431,6 +469,45 @@ fn miss() -> IplHit {
     }
 }
 
+fn material_is_finite(material: &IplMaterial) -> bool {
+    material.absorption.iter().all(|value| value.is_finite())
+        && material.scattering.is_finite()
+        && material.transmission.iter().all(|value| value.is_finite())
+}
+
+unsafe fn write_tracer(
+    static_mesh: TraceMesh,
+    door_mesh: Option<TraceMesh>,
+    material_input: &[IplMaterial],
+    started: Instant,
+    tracer_out: *mut *mut Tracer,
+) {
+    let materials = material_input.to_vec().into_boxed_slice();
+    let stats = TracerStats {
+        static_node_count: static_mesh.bvh.nodes.len() as u32,
+        static_primitive_count: static_mesh.triangles.len() as u32,
+        door_node_count: door_mesh
+            .as_ref()
+            .map_or(0, |mesh| mesh.bvh.nodes.len() as u32),
+        door_primitive_count: door_mesh
+            .as_ref()
+            .map_or(0, |mesh| mesh.triangles.len() as u32),
+        owned_bytes: (static_mesh.owned_bytes()
+            + door_mesh.as_ref().map_or(0, TraceMesh::owned_bytes)
+            + materials.len() * size_of::<IplMaterial>()) as u64,
+        build_milliseconds: started.elapsed().as_secs_f64() * 1_000.0,
+    };
+    let tracer = Box::new(Tracer {
+        static_mesh,
+        door_mesh,
+        materials,
+        door_y_bits: AtomicU32::new(0.0f32.to_bits()),
+        stats,
+    });
+    // SAFETY: `tracer_out` is writable by this function's caller contract.
+    unsafe { tracer_out.write(Box::into_raw(tracer)) };
+}
+
 /// # Safety
 /// All input arrays must contain the declared number of initialized elements and
 /// remain readable for this call. `tracer_out` must be writable.
@@ -469,11 +546,7 @@ pub unsafe extern "C" fn afterglow_obvhs_create(
     };
     if !static_input.iter().all(valid_material)
         || !door_input.iter().all(valid_material)
-        || !material_input.iter().all(|material| {
-            material.absorption.iter().all(|value| value.is_finite())
-                && material.scattering.is_finite()
-                && material.transmission.iter().all(|value| value.is_finite())
-        })
+        || !material_input.iter().all(material_is_finite)
     {
         return STATUS_INVALID_ARGUMENT;
     }
@@ -488,35 +561,71 @@ pub unsafe extern "C" fn afterglow_obvhs_create(
     } else {
         TraceMesh::build(door_input, &mut measured_build_time)
     };
-    let materials = material_input.to_vec().into_boxed_slice();
-    let stats = TracerStats {
-        static_node_count: static_mesh.bvh.nodes.len() as u32,
-        static_primitive_count: static_mesh.triangles.len() as u32,
-        door_node_count: door_mesh
-            .as_ref()
-            .map_or(0, |mesh| mesh.bvh.nodes.len() as u32),
-        door_primitive_count: door_mesh
-            .as_ref()
-            .map_or(0, |mesh| mesh.triangles.len() as u32),
-        owned_bytes: (static_mesh.owned_bytes()
-            + door_mesh.as_ref().map_or(0, TraceMesh::owned_bytes)
-            + materials.len() * size_of::<IplMaterial>()) as u64,
-        build_milliseconds: started.elapsed().as_secs_f64() * 1_000.0,
-    };
-    let tracer = Box::new(Tracer {
-        static_mesh,
-        door_mesh,
-        materials,
-        door_y_bits: AtomicU32::new(0.0f32.to_bits()),
-        stats,
-    });
-    // SAFETY: `tracer_out` is writable by contract and receives ownership.
-    unsafe { tracer_out.write(Box::into_raw(tracer)) };
+    // SAFETY: `tracer_out` was validated and the created tracer owns all copied inputs.
+    unsafe { write_tracer(static_mesh, door_mesh, material_input, started, tracer_out) };
     STATUS_OK
 }
 
 /// # Safety
-/// `tracer` must be null or a live pointer returned by `afterglow_obvhs_create`
+/// Input arrays must contain their declared initialized elements and remain
+/// readable for this call. Triangle indices and material indices are validated.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn afterglow_obvhs_create_indexed(
+    vertices: *const IplVector3,
+    vertex_count: u32,
+    triangle_indices: *const u32,
+    material_indices: *const u8,
+    triangle_count: u32,
+    materials: *const IplMaterial,
+    material_count: u32,
+    tracer_out: *mut *mut Tracer,
+) -> i32 {
+    if vertices.is_null()
+        || triangle_indices.is_null()
+        || material_indices.is_null()
+        || materials.is_null()
+        || tracer_out.is_null()
+        || vertex_count == 0
+        || triangle_count == 0
+        || material_count == 0
+    {
+        return STATUS_INVALID_ARGUMENT;
+    }
+    let Some(index_count) = (triangle_count as usize).checked_mul(3) else {
+        return STATUS_INVALID_ARGUMENT;
+    };
+    // SAFETY: Non-null pointers and declared lengths are part of the caller contract.
+    let vertex_input = unsafe { slice::from_raw_parts(vertices, vertex_count as usize) };
+    let index_input = unsafe { slice::from_raw_parts(triangle_indices, index_count) };
+    let material_index_input =
+        unsafe { slice::from_raw_parts(material_indices, triangle_count as usize) };
+    let material_input = unsafe { slice::from_raw_parts(materials, material_count as usize) };
+    if !vertex_input.iter().all(|vertex| vector_is_finite(*vertex))
+        || !material_index_input
+            .iter()
+            .all(|&index| u32::from(index) < material_count)
+        || !material_input.iter().all(material_is_finite)
+    {
+        return STATUS_INVALID_ARGUMENT;
+    }
+
+    let started = Instant::now();
+    let mut measured_build_time = Duration::ZERO;
+    let Some(static_mesh) = TraceMesh::build_indexed(
+        vertex_input,
+        index_input,
+        material_index_input,
+        &mut measured_build_time,
+    ) else {
+        return STATUS_INVALID_ARGUMENT;
+    };
+    // SAFETY: `tracer_out` was validated and the created tracer owns all copied inputs.
+    unsafe { write_tracer(static_mesh, None, material_input, started, tracer_out) };
+    STATUS_OK
+}
+
+/// # Safety
+/// `tracer` must be null or a live pointer returned by a create function
 /// that has not already been destroyed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn afterglow_obvhs_destroy(tracer: *mut Tracer) {
@@ -765,6 +874,73 @@ mod tests {
         assert_eq!(status, STATUS_OK);
         assert!(!tracer.is_null());
         tracer
+    }
+
+    #[test]
+    fn indexed_mesh_matches_flattened_mesh() {
+        let vertices = [
+            point(0.0, -2.0, -2.0),
+            point(0.0, 2.0, -2.0),
+            point(0.0, 2.0, 2.0),
+            point(0.0, -2.0, 2.0),
+        ];
+        let indices = [0, 1, 2, 0, 2, 3];
+        let material_indices = [0_u8, 0];
+        let materials = [IplMaterial {
+            absorption: [0.1; 3],
+            scattering: 0.2,
+            transmission: [0.3; 3],
+        }];
+        let mut tracer = ptr::null_mut();
+        let status = unsafe {
+            afterglow_obvhs_create_indexed(
+                vertices.as_ptr(),
+                vertices.len() as u32,
+                indices.as_ptr(),
+                material_indices.as_ptr(),
+                material_indices.len() as u32,
+                materials.as_ptr(),
+                materials.len() as u32,
+                &mut tracer,
+            )
+        };
+        assert_eq!(status, STATUS_OK);
+        let ray = IplRay {
+            origin: point(-1.0, 0.25, 0.0),
+            direction: point(1.0, 0.0, 0.0),
+        };
+        let mut hit = miss();
+        unsafe { afterglow_obvhs_closest_hit(&ray, 0.001, 10.0, &mut hit, tracer) };
+        assert!((hit.distance - 1.0).abs() < 1.0e-5);
+        assert_eq!(hit.material_index, 0);
+        unsafe { afterglow_obvhs_destroy(tracer) };
+    }
+
+    #[test]
+    fn indexed_mesh_rejects_out_of_range_indices() {
+        let vertices = [point(0.0, 0.0, 0.0), point(0.0, 1.0, 0.0)];
+        let indices = [0, 1, 2];
+        let material_indices = [0_u8];
+        let materials = [IplMaterial {
+            absorption: [0.1; 3],
+            scattering: 0.2,
+            transmission: [0.3; 3],
+        }];
+        let mut tracer = ptr::null_mut();
+        let status = unsafe {
+            afterglow_obvhs_create_indexed(
+                vertices.as_ptr(),
+                vertices.len() as u32,
+                indices.as_ptr(),
+                material_indices.as_ptr(),
+                1,
+                materials.as_ptr(),
+                1,
+                &mut tracer,
+            )
+        };
+        assert_eq!(status, STATUS_INVALID_ARGUMENT);
+        assert!(tracer.is_null());
     }
 
     #[test]

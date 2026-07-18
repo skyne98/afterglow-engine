@@ -178,10 +178,30 @@ em++ "$prototype/dynamic-benchmark.cpp" \
   -sEXPORTED_FUNCTIONS='["_dyn_init","_dyn_update","_dyn_run_reflections","_dyn_run_audio","_dyn_run_binaural","_dyn_get_reverb_low","_dyn_get_reverb_mid","_dyn_get_reverb_high","_dyn_get_ir_valid","_dyn_get_output_energy","_dyn_get_tracer_nodes","_dyn_get_tracer_build_ms","_dyn_get_tracer_owned_bytes","_dyn_get_simulation_threads","_dyn_get_tracer_lanes","_dyn_shutdown"]' \
   -o "$prototype/dist/dynamic-steam-audio.js"
 
+# The full-resolution Bistro stress test has a separate large fixed memory. It
+# is not loaded by the normal prototype and never grows after worker bootstrap.
+em++ "$prototype/bistro-benchmark.cpp" \
+  -I "$sdk" \
+  -I "$prototype/obvhs-tracer/include" \
+  "$pthread_tracer_library" \
+  "$threaded" \
+  "$pthread_deps/libmysofa.a" \
+  "$pthread_deps/libpffft.a" \
+  "$pthread_deps/libz.a" \
+  -O3 -msimd128 "${pthread_flags[@]}" \
+  -sMODULARIZE=1 -sEXPORT_ES6=1 -sENVIRONMENT=worker \
+  -sALLOW_MEMORY_GROWTH=0 -sINITIAL_MEMORY=1610612736 -sNO_EXIT_RUNTIME=1 \
+  -sEXPORTED_RUNTIME_METHODS='["HEAPU8"]' \
+  -sEXPORTED_FUNCTIONS='["_malloc","_free","_bistro_init","_bistro_run_reflections","_bistro_get_vertices","_bistro_get_triangles","_bistro_get_tracer_nodes","_bistro_get_tracer_build_ms","_bistro_get_tracer_owned_bytes","_bistro_get_reverb_low","_bistro_get_ir_valid","_bistro_get_simulation_threads","_bistro_get_tracer_lanes","_bistro_shutdown"]' \
+  -o "$prototype/dist/bistro-steam-audio.js"
+
 bun build "$prototype/src/worker.ts" --outdir "$prototype/dist" --target browser
 bun build "$prototype/src/main.ts" --outdir "$prototype/dist" --target browser
 bun build "$prototype/src/dynamic-worker.ts" --outdir "$prototype/dist" --target browser
 bun build "$prototype/src/dynamic-main.ts" --outdir "$prototype/dist" --target browser
+bun build "$prototype/src/bistro-worker.ts" --outdir "$prototype/dist" --target browser
+bun build "$prototype/src/bistro-main.ts" --outdir "$prototype/dist" --target browser
 cp "$prototype/index.html" "$prototype/dist/index.html"
 cp "$prototype/dynamic.html" "$prototype/dist/dynamic.html"
+cp "$prototype/bistro.html" "$prototype/dist/bistro.html"
 echo "built Steam Audio WASM prototype in ${prototype#$root/}/dist"

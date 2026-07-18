@@ -263,11 +263,34 @@ Asset attribution: *Amazon Lumberyard Bistro, Open Research Content Archive
 (ORCA)*, Amazon Lumberyard, July 2017, CC-BY 4.0,
 https://developer.nvidia.com/orca/amazon-lumberyard-bistro.
 
+The selected web obvhs path was subsequently tested against the same complete
+package, not the synthetic 10K scene. An indexed ingestion ABI avoids a second
+flattened triangle copy; a separate fixed-1.5-GiB stress module loads the cooked
+asset, builds medium CWBVH8, and then frees the input bytes. Assimp 6.0.5 retained
+the same triangle counts while joining vertices slightly differently. Five
+fresh Worker/WASM instances per scene measured:
+
+| Scene | CWBVH owned bytes | Build mean | 512×2 mean / worst p99 | 1,024×2 mean / worst p99 |
+|---|---:|---:|---:|---:|
+| Exterior, 2,832,120 triangles | 182,158,408 | 2.83 s | 23.87 / 27.88 ms | 46.78 / 50.28 ms |
+| Interior, 1,046,609 triangles | 67,204,112 | 0.88 s | 19.34 / 21.53 ms | 36.02 / 40.17 ms |
+| Interior with wine, 1,320,323 triangles | 84,738,896 | 1.13 s | 20.84 / 24.82 ms | 41.37 / 45.41 ms |
+
+Every run reported two pthreads and four SIMD lanes, returned valid IRs, and
+produced changing RT60 as the listener moved. Thus the full package demonstrably
+works in browser WASM. It does **not** sustain strict 60 Hz: 512×2 fits a 30 Hz
+update budget across the package, while 1,024×2 does not. This dedicated run had
+no game rendering or AudioWorklet DSP. Native Embree remains dramatically better
+for raw render meshes, and structural proxies remain mandatory for web 60 Hz and
+bounded memory.
+
 Raw evidence:
 `docs/benchmarks/steam-audio-native-bistro-full-package-fox-laptop-2026-07-18.json`
-(built-in baseline) and
+(built-in baseline),
 `docs/benchmarks/steam-audio-native-bistro-embree-fox-laptop-2026-07-18.json`
-(Embree).
+(Embree), and
+`docs/benchmarks/steam-audio-wasm-bistro-full-package-fox-laptop-2026-07-19.json`
+(web obvhs SIMD+pthread).
 
 ## Upstream optimization guidance
 
@@ -377,10 +400,17 @@ or 26.8% during bounded 60 Hz bursts. Five same-configuration native obvhs
 launches used two OS threads and four SSE2 lanes and measured 3.39 ms mean /
 4.316 ms worst p99. Web mean overhead was 31.8%.
 
+The full-resolution Bistro sweep above bounds where that small-scene result
+stops scaling: package-worst 512×2 p99 rose to 27.88 ms. The web backend is
+therefore accepted for cooked structural proxies, while raw multi-million-
+triangle render meshes are a 30 Hz stress tier only.
+
 Raw evidence: scalar baseline in
 `docs/benchmarks/steam-audio-wasm-obvhs-fox-laptop-2026-07-18.json`; selected
 path in
-`docs/benchmarks/steam-audio-wasm-obvhs-simd-pthreads-fox-laptop-2026-07-18.json`.
+`docs/benchmarks/steam-audio-wasm-obvhs-simd-pthreads-fox-laptop-2026-07-18.json`;
+full-package path in
+`docs/benchmarks/steam-audio-wasm-bistro-full-package-fox-laptop-2026-07-19.json`.
 Parry and `rtbvh` are no longer planned alternatives.
 
 ## Recommendation

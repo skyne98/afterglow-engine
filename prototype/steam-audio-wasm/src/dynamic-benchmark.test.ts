@@ -10,6 +10,9 @@ const nativeRunner = await Bun.file(new URL('native-dynamic-benchmark.cpp', root
 const bistroBuild = await Bun.file(new URL('build-native-bistro.sh', root)).text();
 const bistroCooker = await Bun.file(new URL('cook-bistro-acoustic.cpp', root)).text();
 const bistroRunner = await Bun.file(new URL('native-bistro-geometry-benchmark.cpp', root)).text();
+const bistroWasm = await Bun.file(new URL('bistro-benchmark.cpp', root)).text();
+const bistroWorker = await Bun.file(new URL('src/bistro-worker.ts', root)).text();
+const bistroMain = await Bun.file(new URL('src/bistro-main.ts', root)).text();
 const readme = await Bun.file(new URL('README.md', root)).text();
 const evidence = await Bun.file(new URL('../../../docs/benchmarks/steam-audio-wasm-dynamic-fox-laptop-2026-07-18.json', import.meta.url)).json();
 const manySourceEvidence = await Bun.file(new URL('../../../docs/benchmarks/steam-audio-wasm-many-sources-fox-laptop-2026-07-18.json', import.meta.url)).json();
@@ -19,6 +22,7 @@ const bistroPackageEvidence = await Bun.file(new URL('../../../docs/benchmarks/s
 const bistroEmbreeEvidence = await Bun.file(new URL('../../../docs/benchmarks/steam-audio-native-bistro-embree-fox-laptop-2026-07-18.json', import.meta.url)).json();
 const obvhsEvidence = await Bun.file(new URL('../../../docs/benchmarks/steam-audio-wasm-obvhs-fox-laptop-2026-07-18.json', import.meta.url)).json();
 const threadedObvhsEvidence = await Bun.file(new URL('../../../docs/benchmarks/steam-audio-wasm-obvhs-simd-pthreads-fox-laptop-2026-07-18.json', import.meta.url)).json();
+const bistroWasmEvidence = await Bun.file(new URL('../../../docs/benchmarks/steam-audio-wasm-bistro-full-package-fox-laptop-2026-07-19.json', import.meta.url)).json();
 
 describe('fully dynamic Steam Audio WASM prototype', () => {
   test('uses the allocation-free obvhs custom scene without baked data', () => {
@@ -168,6 +172,23 @@ describe('fully dynamic Steam Audio WASM prototype', () => {
     expect(exteriorEight.aggregate.scenarios[0].simulationWorstP99Ms).toBeCloseTo(24.2426, 3);
     expect(bistroPackageEvidence.package.note).toContain('intentionally not merged');
     expect(readme).toContain('## Full Amazon Lumberyard Bistro package');
+  });
+
+  test('runs the complete full-resolution Bistro package in browser WASM', () => {
+    expect(tracer).toContain('afterglow_obvhs_create_indexed');
+    expect(bistroWasm).toContain('afterglow_obvhs_create_indexed');
+    expect(bistroWasm).toContain('settings.rayBatchSize = 64');
+    expect(bistroWorker).toContain('writeFrame(rings, RING_BYTES, response)');
+    expect(bistroMain).toContain('FAILED:');
+    expect(build).toContain('-sINITIAL_MEMORY=1610612736');
+    expect(bistroWasmEvidence.runs).toHaveLength(15);
+    expect(bistroWasmEvidence.aggregates.map((value: { triangles: number }) => value.triangles))
+      .toEqual([2_832_120, 1_046_609, 1_320_323]);
+    expect(bistroWasmEvidence.acceptance.allIrValid).toBe(true);
+    expect(bistroWasmEvidence.acceptance.allRuntimeTelemetry).toBe(true);
+    expect(bistroWasmEvidence.acceptance.ray512Fits60HzAllScenes).toBe(false);
+    expect(bistroWasmEvidence.acceptance.ray512Fits30HzAllScenes).toBe(true);
+    expect(bistroWasmEvidence.acceptance.packageWorst512P99Ms).toBeCloseTo(27.88, 2);
   });
 
   test('uses Embree to keep every full Bistro scene inside 60 Hz', () => {
