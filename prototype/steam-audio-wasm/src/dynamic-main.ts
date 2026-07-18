@@ -25,7 +25,9 @@ interface ScenarioResult extends Scenario {
   sceneUpdate: Summary;
   reflectionSimulation: Summary;
   simulationRoundTrip: Summary;
-  audioQuantumMeanMs: number;
+  reflectionQuantumMeanMs: number;
+  binauralQuantumMeanMs: number;
+  combinedAudioQuantumMeanMs: number;
   reverb: readonly [number, number, number];
   reverbLowRange: readonly [number, number];
   irValid: boolean;
@@ -38,7 +40,7 @@ const log = (message: string): void => { target.textContent += `${message}\n`; c
 const memory = new SharedArrayBuffer(RING_BYTES * 2);
 initializeRing(memory, 0);
 initializeRing(memory, RING_BYTES);
-const worker = new Worker('./dynamic-worker.js?v=7', { type: 'module' });
+const worker = new Worker('./dynamic-worker.js?v=13', { type: 'module' });
 const request = new Uint8Array(40);
 const response = new Uint8Array(40);
 let sequence = 0;
@@ -130,14 +132,21 @@ async function benchmark(scenario: Scenario): Promise<ScenarioResult> {
   }
   const audioIterations = scenario.reflectionType === 0 ? 100 : 1000;
   const audio = await call(4, view => view.setUint32(8, audioIterations, true));
-  if (audio.status !== 0) throw new Error(`${scenario.name}: audio processing failed ${audio.status}`);
+  if (audio.status !== 0) throw new Error(`${scenario.name}: reflection audio failed ${audio.status}`);
+  const binauralIterations = 100;
+  const binaural = await call(5, view => view.setUint32(8, binauralIterations, true));
+  if (binaural.status !== 0) throw new Error(`${scenario.name}: binaural audio failed ${binaural.status}`);
+  const reflectionQuantumMeanMs = audio.internalMs / audioIterations;
+  const binauralQuantumMeanMs = binaural.internalMs / binauralIterations;
   return {
     ...scenario,
     initializationMs: initialized.internalMs,
     sceneUpdate: summarize(updates),
     reflectionSimulation: summarize(simulations),
     simulationRoundTrip: summarize(roundTrips),
-    audioQuantumMeanMs: audio.internalMs / audioIterations,
+    reflectionQuantumMeanMs,
+    binauralQuantumMeanMs,
+    combinedAudioQuantumMeanMs: reflectionQuantumMeanMs + binauralQuantumMeanMs,
     reverb: last.reverb,
     reverbLowRange: [reverbLowMin, reverbLowMax],
     irValid: last.irValid,
@@ -145,7 +154,7 @@ async function benchmark(scenario: Scenario): Promise<ScenarioResult> {
   };
 }
 
-const scenarios: Scenario[] = [
+const standardScenarios: Scenario[] = [
   { name: 'parametric-low', triangles: 10_000, sources: 1, rays: 1024, bounces: 2, durationMs: 500, order: 0, reflectionType: 1, samples: 100 },
   { name: 'parametric-medium', triangles: 10_000, sources: 1, rays: 4096, bounces: 4, durationMs: 1000, order: 1, reflectionType: 1, samples: 100 },
   { name: 'parametric-high', triangles: 10_000, sources: 1, rays: 16_384, bounces: 8, durationMs: 1500, order: 1, reflectionType: 1, samples: 50 },
@@ -155,6 +164,43 @@ const scenarios: Scenario[] = [
   { name: 'convolution-medium', triangles: 10_000, sources: 1, rays: 4096, bounces: 4, durationMs: 1000, order: 1, reflectionType: 0, samples: 30 },
   { name: 'convolution-8-sources', triangles: 10_000, sources: 8, rays: 4096, bounces: 4, durationMs: 1000, order: 1, reflectionType: 0, samples: 20 },
 ];
+const manySourceScenarios: Scenario[] = [
+  { name: 'p16-512x1', triangles: 10_000, sources: 16, rays: 512, bounces: 1, durationMs: 250, order: 0, reflectionType: 1, samples: 30 },
+  { name: 'p16-1024x2', triangles: 10_000, sources: 16, rays: 1024, bounces: 2, durationMs: 500, order: 0, reflectionType: 1, samples: 30 },
+  { name: 'p16-2048x2', triangles: 10_000, sources: 16, rays: 2048, bounces: 2, durationMs: 500, order: 0, reflectionType: 1, samples: 30 },
+  { name: 'p32-256x1', triangles: 10_000, sources: 32, rays: 256, bounces: 1, durationMs: 250, order: 0, reflectionType: 1, samples: 30 },
+  { name: 'p32-512x1', triangles: 10_000, sources: 32, rays: 512, bounces: 1, durationMs: 250, order: 0, reflectionType: 1, samples: 30 },
+  { name: 'p32-512x2', triangles: 10_000, sources: 32, rays: 512, bounces: 2, durationMs: 500, order: 0, reflectionType: 1, samples: 30 },
+  { name: 'p32-1024x1', triangles: 10_000, sources: 32, rays: 1024, bounces: 1, durationMs: 250, order: 0, reflectionType: 1, samples: 30 },
+  { name: 'p32-1024x2', triangles: 10_000, sources: 32, rays: 1024, bounces: 2, durationMs: 500, order: 0, reflectionType: 1, samples: 30 },
+  { name: 'p32-2048x2', triangles: 10_000, sources: 32, rays: 2048, bounces: 2, durationMs: 500, order: 0, reflectionType: 1, samples: 30 },
+  { name: 'p32-2048x4', triangles: 10_000, sources: 32, rays: 2048, bounces: 4, durationMs: 1000, order: 0, reflectionType: 1, samples: 30 },
+  { name: 'p64-256x1', triangles: 10_000, sources: 64, rays: 256, bounces: 1, durationMs: 250, order: 0, reflectionType: 1, samples: 30 },
+  { name: 'p64-512x1', triangles: 10_000, sources: 64, rays: 512, bounces: 1, durationMs: 250, order: 0, reflectionType: 1, samples: 30 },
+  { name: 'p64-256x2', triangles: 10_000, sources: 64, rays: 256, bounces: 2, durationMs: 500, order: 0, reflectionType: 1, samples: 30 },
+  { name: 'p64-384x2', triangles: 10_000, sources: 64, rays: 384, bounces: 2, durationMs: 500, order: 0, reflectionType: 1, samples: 30 },
+  { name: 'p64-512x2', triangles: 10_000, sources: 64, rays: 512, bounces: 2, durationMs: 500, order: 0, reflectionType: 1, samples: 30 },
+  { name: 'p64-1024x1', triangles: 10_000, sources: 64, rays: 1024, bounces: 1, durationMs: 250, order: 0, reflectionType: 1, samples: 30 },
+  { name: 'p64-1024x2', triangles: 10_000, sources: 64, rays: 1024, bounces: 2, durationMs: 500, order: 0, reflectionType: 1, samples: 30 },
+  { name: 'p64-2048x2', triangles: 10_000, sources: 64, rays: 2048, bounces: 2, durationMs: 500, order: 0, reflectionType: 1, samples: 30 },
+  { name: 'p96-256x2', triangles: 10_000, sources: 96, rays: 256, bounces: 2, durationMs: 500, order: 0, reflectionType: 1, samples: 30 },
+  { name: 'p96-512x2', triangles: 10_000, sources: 96, rays: 512, bounces: 2, durationMs: 500, order: 0, reflectionType: 1, samples: 30 },
+  { name: 'p128-128x2', triangles: 10_000, sources: 128, rays: 128, bounces: 2, durationMs: 500, order: 0, reflectionType: 1, samples: 30 },
+  { name: 'p128-256x2', triangles: 10_000, sources: 128, rays: 256, bounces: 2, durationMs: 500, order: 0, reflectionType: 1, samples: 30 },
+  { name: 'p128-512x2', triangles: 10_000, sources: 128, rays: 512, bounces: 2, durationMs: 500, order: 0, reflectionType: 1, samples: 30 },
+  { name: 'c32-256x1-o0', triangles: 10_000, sources: 32, rays: 256, bounces: 1, durationMs: 250, order: 0, reflectionType: 0, samples: 20 },
+  { name: 'c32-512x2-o0', triangles: 10_000, sources: 32, rays: 512, bounces: 2, durationMs: 500, order: 0, reflectionType: 0, samples: 20 },
+  { name: 'c32-512x2-o1', triangles: 10_000, sources: 32, rays: 512, bounces: 2, durationMs: 500, order: 1, reflectionType: 0, samples: 20 },
+  { name: 'c64-256x1-o0', triangles: 10_000, sources: 64, rays: 256, bounces: 1, durationMs: 250, order: 0, reflectionType: 0, samples: 20 },
+  { name: 'c64-512x2-o0', triangles: 10_000, sources: 64, rays: 512, bounces: 2, durationMs: 500, order: 0, reflectionType: 0, samples: 20 },
+];
+const search = new URLSearchParams(location.search);
+const selectedScenarios = search.has('many') ? manySourceScenarios : standardScenarios;
+const only = search.get('only');
+const scenarios = only === null
+  ? selectedScenarios
+  : selectedScenarios.filter(scenario => scenario.name === only);
+if (scenarios.length === 0) throw new Error(`unknown Steam Audio scenario ${only}`);
 const results: ScenarioResult[] = [];
 for (const scenario of scenarios) {
   log(`running ${scenario.name}…`);

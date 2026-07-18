@@ -123,3 +123,49 @@ AudioWorklet deadline test remain required shipping gates.
 
 Raw measurements:
 `docs/benchmarks/steam-audio-wasm-dynamic-fox-laptop-2026-07-18.json`.
+
+## Many-source optimum on fox-laptop
+
+A second unlocked, idle-inhibited sweep measured 28 configurations over five
+launches. It included the real per-source Steam Audio reflection effect and
+nearest-interpolated binaural HRTF processing for every source. Ray counts remain
+global listener rays per update.
+
+The quality/performance knee for 64 independently reflected sources was:
+
+| 64-source parametric tier | Simulation worst p99 | Combined reflection + HRTF / quantum | Observed low RT60 range |
+|---|---:|---:|---:|
+| 256 rays × 2 | 7.47 ms | 1.212 ms | 0.10–0.32 s |
+| 384 rays × 2 | 12.26 ms | 1.218 ms | 0.10–0.25 s |
+| **512 rays × 2** | **15.25 ms** | **1.215 ms** | **0.10–0.21 s** |
+| 1,024 rays × 2 | 29.24 ms | 1.217 ms | 0.10–0.19 s |
+
+The lower ray tiers produced large RT60 excursions; one-bounce tiers remained
+at Steam Audio's 0.10 s estimator floor and did not produce useful dynamic late
+reverb. The 512×2 tier was the first stable knee while still fitting a 16.67 ms
+simulation burst deadline.
+
+Scaling that configuration by source count:
+
+| Reflected + HRTF sources | Simulation worst p99 | Combined DSP / 2.67 ms quantum | Verdict |
+|---:|---:|---:|---|
+| 32 | 7.43 ms | 0.592 ms (22%) | Large margin |
+| **64** | **15.25 ms** | **1.215 ms (46%)** | Recommended maximum |
+| 96 | 20.78 ms | 1.850 ms (69%) | Aggressive 30 Hz tier |
+| 128 | 29.50 ms | 2.517 ms (94%) | Rejected: no callback margin |
+
+Recommended 6800U policy: allow **128 audible direct-ray + HRTF sources**, but
+cap independent reflections at **64 priority sources**. Use 512 global reflection
+rays, two bounces, 500 ms parametric tail, order 0, 30 Hz steady updates, and 60
+Hz bursts after important motion. Combining the measured 64-source reflection
+cost with 128-source HRTF costs about **1.364 ms (51%)** of the quantum, leaving
+1.30 ms for direct effects, mixing, callback, and browser overhead. Directional
+convolution should be limited to a much smaller priority set: 32
+order-1 convolution sources already consumed 2.115 ms per quantum, and 64 order-1
+sources deterministically exceeded the fixed 256 MiB WASM memory during fresh
+initialization.
+
+The combined DSP measurement excludes actual AudioWorklet callback overhead,
+final source mixing, and the browser/device graph. Therefore 96 is an opt-in
+stress tier, not a default. Raw evidence:
+`docs/benchmarks/steam-audio-wasm-many-sources-fox-laptop-2026-07-18.json`.

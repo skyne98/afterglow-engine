@@ -105,7 +105,7 @@ em++ "$prototype/dynamic-benchmark.cpp" \
   -O3 -msimd128 \
   -sMODULARIZE=1 -sEXPORT_ES6=1 -sENVIRONMENT=worker \
   -sALLOW_MEMORY_GROWTH=0 -sINITIAL_MEMORY=268435456 -sNO_EXIT_RUNTIME=1 \
-  -sEXPORTED_FUNCTIONS='["_dyn_init","_dyn_update","_dyn_run_reflections","_dyn_run_audio","_dyn_get_reverb_low","_dyn_get_reverb_mid","_dyn_get_reverb_high","_dyn_get_ir_valid","_dyn_get_output_energy","_dyn_shutdown"]' \
+  -sEXPORTED_FUNCTIONS='["_dyn_init","_dyn_update","_dyn_run_reflections","_dyn_run_audio","_dyn_run_binaural","_dyn_get_reverb_low","_dyn_get_reverb_mid","_dyn_get_reverb_high","_dyn_get_ir_valid","_dyn_get_output_energy","_dyn_shutdown"]' \
   -o "$prototype/dist/dynamic-steam-audio.js"
 
 bun build "$prototype/src/worker.ts" --outdir "$prototype/dist" --target browser

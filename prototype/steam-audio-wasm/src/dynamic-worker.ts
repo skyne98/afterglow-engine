@@ -7,6 +7,7 @@ interface DynamicSteamAudioModule {
   _dyn_update(phase: number): number;
   _dyn_run_reflections(rays: number, bounces: number, durationMs: number, order: number): number;
   _dyn_run_audio(iterations: number): number;
+  _dyn_run_binaural(iterations: number): number;
   _dyn_get_reverb_low(): number;
   _dyn_get_reverb_mid(): number;
   _dyn_get_reverb_high(): number;
@@ -22,7 +23,7 @@ let steam: DynamicSteamAudioModule | null = null;
 self.onmessage = async (event: MessageEvent): Promise<void> => {
   if (event.data instanceof SharedArrayBuffer) {
     memory = event.data;
-    steam = await createSteamAudio({ locateFile: (path: string) => `${path}?v=7` }) as DynamicSteamAudioModule;
+    steam = await createSteamAudio({ locateFile: (path: string) => `${path}?v=13` }) as DynamicSteamAudioModule;
     self.postMessage('ready');
     return;
   }
@@ -50,6 +51,8 @@ self.onmessage = async (event: MessageEvent): Promise<void> => {
     );
   } else if (command === 4) {
     status = steam._dyn_run_audio(input.getUint32(8, true));
+  } else if (command === 5) {
+    status = steam._dyn_run_binaural(input.getUint32(8, true));
   } else {
     status = 0xffff_ffff;
   }

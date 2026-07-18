@@ -351,9 +351,13 @@ All engine work must move toward these non-negotiable requirements:
   synchronous Worker-owned ThreadPool. Ray counts are global listener rays per
   update, not per source. On the 6800U, low 1,024×2 reflections measured 1.70 ms
   worst p99; medium 4,096×4 measured 10.95 ms for one source,
-  33.43 ms for eight, and 114.83 ms for 32. Final runs auto-locked but measured
-  synchronous Worker CPU, not rAF; render-loaded and actual AudioWorklet
-  callback validation remain open.
+  33.43 ms for eight, and 114.83 ms for 32 at the original medium tier. The
+  unlocked sweep selected 128 direct-ray+HRTF sources with 64 priority reflection
+  slots, 512 global rays × 2 bounces, 500 ms parametric/order 0, at 30 Hz steady /
+  60 Hz burst: 15.25 ms reflection p99 and projected 1.364/2.667 ms for 64
+  reflections + 128 nearest HRTFs. Reflecting 96 is aggressive; reflecting all
+  128 used 94% of the quantum and was rejected. Render-loaded
+  and actual AudioWorklet-callback validation remain open.
 
 ## API docs
 

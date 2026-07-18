@@ -18,9 +18,12 @@ std::vector<IPLSource> gSources;
 std::vector<IPLSimulationInputs> gSourceInputs;
 std::vector<IPLSimulationOutputs> gOutputs;
 std::vector<IPLReflectionEffect> gEffects;
+IPLHRTF gHrtf = nullptr;
+std::vector<IPLBinauralEffect> gBinauralEffects;
 IPLSimulationSharedInputs gSharedInputs{};
 IPLAudioBuffer gAudioIn{};
 IPLAudioBuffer gAudioOut{};
+IPLAudioBuffer gBinauralOut{};
 IPLReflectionEffectType gReflectionType = IPL_REFLECTIONEFFECTTYPE_PARAMETRIC;
 int gMaxRays = 0;
 int gMaxBounces = 0;
@@ -47,8 +50,12 @@ IPLMatrix4x4 translation(float x, float y, float z) {
 }
 
 void releaseAll() {
+    if (gBinauralOut.data) iplAudioBufferFree(gContext, &gBinauralOut);
     if (gAudioOut.data) iplAudioBufferFree(gContext, &gAudioOut);
     if (gAudioIn.data) iplAudioBufferFree(gContext, &gAudioIn);
+    for (auto& effect : gBinauralEffects) if (effect) iplBinauralEffectRelease(&effect);
+    gBinauralEffects.clear();
+    if (gHrtf) iplHRTFRelease(&gHrtf);
     for (auto& effect : gEffects) if (effect) iplReflectionEffectRelease(&effect);
     gEffects.clear();
     for (auto& source : gSources) {
@@ -78,6 +85,7 @@ void releaseAll() {
     if (gContext) iplContextRelease(&gContext);
     gAudioIn = {};
     gAudioOut = {};
+    gBinauralOut = {};
 }
 
 bool createMesh(IPLScene scene, std::vector<IPLVector3>& vertices,
@@ -113,7 +121,7 @@ EMSCRIPTEN_KEEPALIVE int dyn_init(int triangleCount, int sourceCount, int maxRay
                                   int maxDurationMs, int maxOrder) {
     releaseAll();
     if (triangleCount < 12 || triangleCount > 1'000'000 ||
-        sourceCount < 1 || sourceCount > 64 ||
+        sourceCount < 1 || sourceCount > 128 ||
         maxRays < 1 || maxRays > 65'536 ||
         maxBounces < 1 || maxBounces > 64 ||
         (reflectionType != IPL_REFLECTIONEFFECTTYPE_CONVOLUTION &&
@@ -235,6 +243,16 @@ EMSCRIPTEN_KEEPALIVE int dyn_init(int triangleCount, int sourceCount, int maxRay
     }
     if (iplAudioBufferAllocate(gContext, 1, kFrameSize, &gAudioIn) != IPL_STATUS_SUCCESS) return 10;
     if (iplAudioBufferAllocate(gContext, effectSettings.numChannels, kFrameSize, &gAudioOut) != IPL_STATUS_SUCCESS) return 11;
+    IPLHRTFSettings hrtfSettings{};
+    hrtfSettings.type = IPL_HRTFTYPE_DEFAULT;
+    hrtfSettings.volume = 1.0f;
+    hrtfSettings.normType = IPL_HRTFNORMTYPE_NONE;
+    if (iplHRTFCreate(gContext, &audioSettings, &hrtfSettings, &gHrtf) != IPL_STATUS_SUCCESS) return 12;
+    IPLBinauralEffectSettings binauralSettings{gHrtf};
+    gBinauralEffects.resize(static_cast<size_t>(sourceCount), nullptr);
+    for (auto& effect : gBinauralEffects)
+        if (iplBinauralEffectCreate(gContext, &audioSettings, &binauralSettings, &effect) != IPL_STATUS_SUCCESS) return 13;
+    if (iplAudioBufferAllocate(gContext, 2, kFrameSize, &gBinauralOut) != IPL_STATUS_SUCCESS) return 14;
     for (int sample = 0; sample < kFrameSize; ++sample)
         gAudioIn.data[0][sample] = std::sin(static_cast<float>(sample) * 0.0576f) * 0.1f;
 
@@ -293,6 +311,35 @@ EMSCRIPTEN_KEEPALIVE int dyn_run_audio(int iterations) {
     for (int channel = 0; channel < gAudioOut.numChannels; ++channel)
         for (int sample = 0; sample < gAudioOut.numSamples; ++sample)
             gOutputEnergy += std::fabs(gAudioOut.data[channel][sample]);
+    return 0;
+}
+
+EMSCRIPTEN_KEEPALIVE int dyn_run_binaural(int iterations) {
+    if (!gAudioIn.data || iterations < 1 || iterations > 10'000) return 104;
+    for (int iteration = 0; iteration < iterations; ++iteration) {
+        for (int sample = 0; sample < kFrameSize; ++sample) {
+            const float time = static_cast<float>(iteration * kFrameSize + sample);
+            gAudioIn.data[0][sample] = std::sin(time * 0.0576f) * 0.1f;
+        }
+        for (size_t index = 0; index < gBinauralEffects.size(); ++index) {
+            const auto& origin = gSourceInputs[index].source.origin;
+            const auto& listener = gSharedInputs.listener.origin;
+            float x = origin.x - listener.x;
+            float y = origin.y - listener.y;
+            float z = origin.z - listener.z;
+            const float inverseLength = 1.0f / std::sqrt(x * x + y * y + z * z);
+            IPLBinauralEffectParams params{};
+            params.direction = {x * inverseLength, y * inverseLength, z * inverseLength};
+            params.interpolation = IPL_HRTFINTERPOLATION_NEAREST;
+            params.spatialBlend = 1.0f;
+            params.hrtf = gHrtf;
+            iplBinauralEffectApply(gBinauralEffects[index], &params, &gAudioIn, &gBinauralOut);
+        }
+    }
+    gOutputEnergy = 0.0f;
+    for (int channel = 0; channel < gBinauralOut.numChannels; ++channel)
+        for (int sample = 0; sample < gBinauralOut.numSamples; ++sample)
+            gOutputEnergy += std::fabs(gBinauralOut.data[channel][sample]);
     return 0;
 }
 

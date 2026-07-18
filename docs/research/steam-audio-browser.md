@@ -146,6 +146,39 @@ the Worker, not yet hosted under an actual AudioWorklet callback deadline.
 Raw data:
 `docs/benchmarks/steam-audio-wasm-dynamic-fox-laptop-2026-07-18.json`.
 
+## Optimal many-source configuration
+
+An unlocked five-launch sweep added nearest-interpolated Steam Audio HRTF cost
+for every source and searched 28 reflection configurations. For 64 sources,
+one-bounce parametric tiers stayed at the 0.10 s RT60 estimator floor. Two
+bounces with 256 or 384 global rays showed much larger RT60 excursions than 512;
+1,024 rays doubled simulation cost for little additional stability. The measured
+knee was therefore **512 global listener rays × 2 bounces, 500 ms parametric
+reverb, order 0**:
+
+| Independently reflected + HRTF sources | Simulation worst p99 | Reflection + HRTF per 2.67 ms quantum |
+|---:|---:|---:|
+| 32 | 7.43 ms | 0.592 ms (22%) |
+| **64** | **15.25 ms** | **1.215 ms (46%)** |
+| 96 | 20.78 ms | 1.850 ms (69%) |
+| 128 | 29.50 ms | 2.517 ms (94%) |
+
+The recommended 6800U configuration is **128 direct-ray + HRTF sources with 64
+priority reflection slots** at 30 Hz steady cadence and 60 Hz bursts after
+important motion. Measured 64-source reflection DSP plus 128-source nearest-HRTF
+processing projects to 1.364 ms (51%) of the quantum, leaving 1.30 ms for direct
+effects, mixing, callback, and browser overhead. Reflecting all 96 sources is an
+aggressive option; reflecting all 128 is rejected because only 0.15 ms remains.
+
+Parametric order 0 was decisively preferable for density. Thirty-two order-1
+convolution sources consumed 2.115 ms per quantum, while 64 order-1 convolution
+sources deterministically exhausted the fixed 256 MiB WASM memory in fresh
+initialization. Directional convolution should be restricted to a smaller
+priority set rather than applied to every source.
+
+Raw evidence:
+`docs/benchmarks/steam-audio-wasm-many-sources-fox-laptop-2026-07-18.json`.
+
 ## Recommendation
 
 Use a zero-baked-acoustics baseline:
