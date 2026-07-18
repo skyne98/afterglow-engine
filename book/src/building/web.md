@@ -25,7 +25,7 @@ The web tree has one-way ownership:
 | `web/src/workers/` | Worker runtime and generated typed clients |
 | `web/public/` | Authored HTML and static public files |
 | `web/assets/` | Cooked assets and wasm staging inputs |
-| `web/contracts/` | Manifests and conformance ratchets |
+| `web/contracts/` | Deployment, architecture, and allocation contracts |
 | `www/` | Disposable generated deployment; never author files here |
 
 `bun scripts/build-web.ts` deletes and reconstructs `www/`. `--check` compares

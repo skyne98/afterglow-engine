@@ -383,6 +383,7 @@ All engine work must move toward these non-negotiable requirements:
   pointer-lock fallback.
 - `docs/api/allocation-boundaries.md` — unavoidable browser/Three/codec boundaries.
 - `docs/api/runtime-capacities.md` — canonical capacities and degradation behavior.
+- `docs/api/testing.md` — canonical unit, vertical-integration, browser/GPU, and release-evidence test lanes.
 
 ## Benchmarks
 

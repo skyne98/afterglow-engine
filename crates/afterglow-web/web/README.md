@@ -7,7 +7,7 @@ This directory is the authored/staged input to the browser deployment.
 - `src/demos/<name>/` — pure game/presentation entrypoints
 - `public/` — authored HTML
 - `assets/` — cooked assets and wasm staging inputs
-- `contracts/` — artifact inventory and conformance ratchets
+- `contracts/` — deployment, architecture, and allocation contracts
 
 `../www/` is generated output. Never add source, tests, package state, manifests,
 or vendored libraries there.

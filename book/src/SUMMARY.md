@@ -30,6 +30,7 @@
 
 - [Native (CEF)](./building/native.md)
 - [Web (Wasm)](./building/web.md)
+- [Testing](./building/testing.md)
 - [Benchmarking & Latency](./building/benchmarking.md)
 
 # Guides

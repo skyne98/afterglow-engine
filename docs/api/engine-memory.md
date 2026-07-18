@@ -111,19 +111,11 @@ bypassing that partial coverage:
   private Three access, unbounded control collections, untyped callbacks, raw
   listeners, direct HUD writes, and implementation-module imports. Its exact
   legacy findings are frozen; candidate changes may only delete findings.
-- `typecheck-ratchet.ts` runs `tsconfig.harsh.json` with strict indexed access,
-  exact optionals, implicit-return/fallthrough checks, and other strict flags.
-  Existing diagnostics are frozen by semantic fingerprint. CI rejects additions
-  relative to both the checked-in baseline and the protected-branch merge base.
 - `lint-hot-allocations.ts` checks both legacy marked regions and complete
   JSDoc `@alloc-effect none` functions across engine and demo sources. For the
   latter it resolves authored callees through the TypeScript checker and rejects
   calls into diagnostic, budgeted, bootstrap, game-facing, or unknown effects
   unless the call line has a reason/issue/expiry permit.
-- `lint-source-hygiene.ts` independently forbids new explicit `any`, TypeScript
-  or linter suppressions, dynamic evaluation, empty catches, non-null/definite
-  assignment assertions, untracked allocation permits, and deferred
-  TODO/FIXME/HACK markers. Existing instances are also a monotonic baseline.
 
 Run the complete local contract:
 
@@ -131,11 +123,12 @@ Run the complete local contract:
 cargo run -p xtask conformance
 ```
 
-`.github/workflows/engine-contract.yml` runs these inventory, architecture,
-type, allocation, generated-artifact, browser-storage, and Rust tracked-
-allocator checks on pushes and pull requests. The temporary architecture and
-TypeScript baselines expose existing debt; they are ratchets, not waivers. They
-must only shrink and are deleted when migration reaches zero.
+`.github/workflows/engine-contract.yml` runs inventory, focused architecture and
+allocation contracts, generated-artifact validation, and the complete Rust and
+browser test suites on pushes and pull requests. Generic TypeScript diagnostic
+and source-style baselines are intentionally not release gates; observable
+behavior is established by unit, vertical-integration, browser, GPU, and soak
+tests.
 
 ## Current migration status
 

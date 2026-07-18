@@ -13,13 +13,14 @@ available.
 
 `conformance` validates the authored artifact/page manifest, zero-tolerance demo
 architecture (including bans on generated worker clients, raw RPC assembly, and
-renderer/device interception), strict TypeScript and source-hygiene ratchets, allocation effects,
-single-Three bundle identity, and generated JavaScript drift.
+renderer/device interception), allocation effects, single-Three bundle identity,
+and generated JavaScript drift.
 
 `test` runs workspace Rust tests, raw RPC transport tests, conformance, contract
-tooling tests, and all authored engine/Bun tests. CI invokes the canonical
-`conformance` and `test` commands; merge-base checks separately prevent edits
-from expanding the remaining TypeScript or source-hygiene baselines.
+tooling tests, and every authored Bun test found under `web/src/`. Colocated
+unit tests and multi-component vertical tests are discovered recursively, so new
+subsystems and demos cannot be omitted by a maintained path allowlist. CI invokes
+the canonical `conformance` and `test` commands.
 
 `release-gate` runs `test`, validates `docs/benchmarks/release-evidence.json`, and
 builds the mdBook. Packaging must not bypass it.

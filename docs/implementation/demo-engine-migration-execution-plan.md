@@ -66,10 +66,10 @@ Implemented on 2026-07-17:
 
 - DME-001–003: authoritative artifact/conformance manifests, architecture debt
   fingerprinting, protected-branch comparison support, and CI/xtask gates;
-- DME-004 foundation: strict TypeScript and source-hygiene ratchets plus whole-
-  function syntax and TypeScript-symbol call-effect checking for
-  `@alloc-effect none`; legacy marker regions still need migration to JSDoc
-  effects before whole-frame reachability is complete;
+- DME-004 foundation: whole-function syntax and TypeScript-symbol call-effect
+  checking for `@alloc-effect none`; generic TypeScript-diagnostic and
+  source-style debt ratchets were retired on 2026-07-18 in favor of recursively
+  discovered unit, vertical-integration, browser, GPU, and soak tests;
 - DME-010–011: fixed diagnostics, owned renderer host, and sealed
   `EngineRuntime` with fixed worker/render-pass registrations;
 - DME-012: `engine-demo.ts` is the first `canonical` visual entrypoint and uses

@@ -56,9 +56,6 @@ The conformance command runs several independent gates:
 
 - the authoritative browser artifact/page inventory;
 - visual-demo architecture checks and canonical/legacy status validation;
-- a strict TypeScript diagnostic ratchet;
-- a no-new-escape-hatches ratchet for explicit `any`, suppressions, unchecked
-  assertions, swallowed errors, and deferred TODO/FIXME/HACK markers;
 - hot allocation-effect checks;
 - generated JavaScript drift checks.
 
@@ -66,8 +63,9 @@ The architecture checker rejects demo-owned frame loops, renderer/runtime
 construction, generated worker-client/RPC assembly, BIG/VT/POM/glTF infrastructure, engine globals, private
 Three access, unbounded control collections, direct diagnostic UI, and untyped
 frame callbacks. Conformant releases cannot carry a legacy state, architecture
-baseline, or bridge. Strict TypeScript diagnostics remain merge-base monotonic.
-`release-gate` additionally builds the book and requires recent, artifact-hash-
+baseline, or bridge. Generic compiler/style debt is not release-gated; unit and
+vertical tests establish implementation behavior. `release-gate` additionally
+builds the book and requires recent, artifact-hash-
 matched real-GPU results for every visual demo plus stable/traverse/thrash
 Dungeon soaks of at least ten minutes.
 

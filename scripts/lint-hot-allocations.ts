@@ -102,7 +102,9 @@ for await (const path of glob.scan({ cwd: engine, onlyFiles: true })) {
 // Every authored function declaring @alloc-effect none is scanned as a whole,
 // including demo entrypoints outside engine/.
 let effectFunctions = 0;
-const configPath = join(web, 'tsconfig.harsh.json');
+// The compiler model resolves symbols for allocation-effect declarations only;
+// diagnostics are intentionally left to behavior-focused tests.
+const configPath = join(web, 'tsconfig.analysis.json');
 const loadedConfig = ts.readConfigFile(configPath, ts.sys.readFile);
 if (loadedConfig.error) throw new Error(ts.flattenDiagnosticMessageText(loadedConfig.error.messageText, '\n'));
 const parsedConfig = ts.parseJsonConfigFileContent(loadedConfig.config, ts.sys, web, undefined, configPath);

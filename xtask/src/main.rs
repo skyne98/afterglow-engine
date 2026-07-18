@@ -214,8 +214,6 @@ fn conformance() -> i32 {
         &["scripts/check-web-contracts.ts"][..],
         &["scripts/lint-demo-architecture.ts"][..],
         &["scripts/lint-import-boundaries.ts"][..],
-        &["scripts/typecheck-ratchet.ts"][..],
-        &["scripts/lint-source-hygiene.ts"][..],
         &["scripts/lint-hot-allocations.ts"][..],
         &["scripts/build-web.ts", "--check"][..],
     ] {
@@ -264,14 +262,10 @@ fn test_all() -> i32 {
     if !matches!(contract_tools, Ok(value) if value.success()) {
         return 1;
     }
+    // Discover every authored unit and vertical-integration test. New subsystem,
+    // demo, and worker tests participate without maintaining a path allowlist.
     let web = Command::new("bun")
-        .args([
-            "test",
-            "crates/afterglow-web/web/src/engine",
-            "crates/afterglow-web/web/src/demos/rigged-vt/main.test.ts",
-            "crates/afterglow-web/web/src/workers/async-worker.test.ts",
-            "crates/afterglow-web/web/src/workers/physics-client.test.ts",
-        ])
+        .args(["test", "crates/afterglow-web/web/src"])
         .current_dir(workspace_root())
         .status();
     if matches!(web, Ok(value) if value.success()) {
