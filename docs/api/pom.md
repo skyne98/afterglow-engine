@@ -15,14 +15,17 @@ global Three/VT bundle.
 
 Pass the string to Three.js `wgslFn()`. `pomMarchUV` accepts a resident height
 texture/sampler, base UV, tangent-space view direction, height scale, maximum
-offset ratio, layer bounds, maximum distance, and fragment view distance. It
-returns a displaced UV. Input is **physical height** (`1` exposed, `0`
+offset ratio, layer bounds, maximum distance, fragment view distance, a
+blue-noise texture/sampler for ray-start dither, screen UV, and a blue-noise
+tile count. It returns a displaced UV. Input is **physical height** (`1` exposed, `0`
 recessed); the marcher intersects ray depth against `1 - height`.
 
 The bounded tier provides:
 
 - view-angle-adaptive layers (Dungeon: 8–32),
 - linear intersection refinement,
+- **blue-noise ray-start dither** (decorrelates discrete-layer banding at low
+  sample counts; essential for the 8-bit height field),
 - optional smooth distance fade (`maxDistance <= 0` disables it),
 - grazing-angle offset limiting (Dungeon ratio cap: 2),
 - fixed maximum work and explicit-LOD height samples,
@@ -37,32 +40,64 @@ LOD must switch whole surfaces rather than vary relief strength per pixel.
 This is the tier measured viable on the Radeon 680M. It intentionally does not
 expose the prototype's expensive evaluation modes.
 
-## Resident R16 displacement API
+## Resident displacement API
 
-`engine/height-texture.ts` exposes four bootstrap-only operations:
+The POM height field is a **resident (non-virtual) texture**: single-mip,
+always-resident, sampled directly at mip 0 with no page table, no mip tail,
+and no VT feedback. Height is deliberately kept out of VT so the march loop
+pays one direct fetch per step; normals/albedo/masks remain VT-streamed.
 
-- `parseHeightR16(buffer)` validates magic/version, non-zero dimensions, exact
-  byte length, and little-endian execution, then returns `{width, height,
-  pixels: Uint16Array}` without copying the texels.
-- `assertHeightTextureSupport(device)` requires WebGPU `float32-filterable`;
-  absence is fatal rather than a precision fallback.
-- `loadHeightTextureR16(three, device, url)` fetches and parses the payload,
-  converts each normalized u16 level to a distinct float32 value, and returns a
-  resident, linearly filtered `RedFormat + FloatType` `DataTexture`. It is
-  repeat-wrapped, no-mipmap, linear-data, `flipY=false`, with four-byte unpack
-  alignment.
-- `assertHeightTextureGpuFormat(backend, texture)` runs after warm-up and asks
-  Three for the actual created GPU format; anything except `r32float` is fatal.
+### 8-bit R8 height (current)
 
-WebGPU classifies `r16unorm` as `unfilterable-float`, and Three r185 cannot bind
-that texture correctly to the custom POM WGSL. A manual bilinear implementation
-would quadruple every height lookup. Filterable single-channel `r32float`
-preserves every R16 level without patching vendored Three.
+`engine/assets/resident-texture.ts` exposes the unified resident-texture
+loader, shared by height and the blue-noise dither tile:
 
-The offline producer is `afterglow-pipeline height-r16 <height.png>
-<output.r16>`. The format has a 16-byte header (`AGR16LE`, version 1, width,
-height) followed by exactly one little-endian normalized `u16` per texel.
-Loading and GPU creation complete before renderer sealing.
+- `findResidentTextureChunk(header, name)` validates that a `.big` asset is a
+  single uncompressed `Texture` chunk with an explicit `TextureFormat` and a
+  byte length matching `width * height * bytes_per_texel`.
+- `loadResidentTexture(three, source, header, name)` reads the chunk and builds
+  a `DataTexture` with the GPU format implied by the stored `TextureFormat`:
+  - `R8` → `RedFormat + UnsignedByteType` (WebGPU `r8unorm`, **filterable**,
+    samples as f32 in [0,1] — no `float32-filterable` feature required).
+  - `Rgba8` → `RGBAFormat + UnsignedByteType`.
+  It is repeat-wrapped, no-mipmap, linear-data, `flipY=false`, `unpackAlignment=1`.
+
+The height is quantized to 8-bit **at cook time** by `afterglow-pipeline
+resident-texture <input.r16|png>... <output.big> --format r8` via the
+deterministic round-to-nearest map `(sample + 128) / 257`. This is a deliberate
+cook-time quantization, not the silent browser-PNG truncation that is
+forbidden. The cook accepts `.r16` interchange (decodes losslessly, then
+quantizes 16→8) or 8/16-bit grayscale PNGs.
+
+**Why 8-bit, not 16-bit float:** every major engine (Unity, Unreal, Godot,
+Babylon.js) ships 8-bit fragment POM; the former r32float path was an outlier.
+R8unorm is universally filterable (drops the `float32-filterable` requirement)
+and ~4× less height bandwidth. The visible precision loss at shallow slopes
+is mitigated by the blue-noise ray-start dither; the engine has no TAA, so the
+residual shimmer is the accepted peer-level tradeoff.
+
+### Blue-noise dither tile
+
+`pomMarchUV` takes a blue-noise texture + sampler, `screenUV`, and a tile count.
+The march offsets its start depth/UV by a per-pixel blue-noise fraction of one
+layer, decorrelating the banding that low march-sample counts produce. A 1×1
+zero texture disables dither with no WGSL branching. The tile is generated by
+`afterglow-pipeline blue-noise <size> <output.big>` (void-and-cluster,
+deterministic, tileable) and loaded via the same `loadResidentTexture` path.
+
+### Legacy R16 interchange (deprecated runtime path)
+
+`engine/assets/height-texture.ts` retains `parseHeightR16` / `loadHeightTextureR16`
+for the standalone `.r16` interchange format produced by `afterglow-pipeline
+height-r16`. The Dungeon demo no longer loads `.r16` at runtime — it loads R8
+height from a v6 `.big` via `loadResidentTexture`. The `.r16` files remain as
+cook intermediates (consumed by `resident-texture --format r8`).
+`loadHeightTextureR16` (r32float-from-r16) and `assertHeightTextureGpuFormat`
+are deprecated and slated for removal once no demo references them.
+
+WebGPU classifies `r16unorm` as `unfilterable-float`; the former r32float path
+existed because Three r185 cannot bind `r16unorm` to the custom POM WGSL. R8unorm
+has no such limitation.
 
 ## Virtual-texture composition
 

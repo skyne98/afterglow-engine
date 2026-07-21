@@ -3,7 +3,6 @@ import { EngineDiagnostics, DiagnosticCode, DiagnosticSource } from '../core/dia
 import { RendererSeal } from './renderer-seal.ts';
 import type { EngineRenderPass } from '../core/runtime.ts';
 import type { VirtualTextureStore } from '../virtual-texturing/virtual-texture.ts';
-import { assertHeightTextureGpuFormat } from '../assets/height-texture.ts';
 import {
   createWebGPUOnlyRenderer,
   showWebGPUFailure,
@@ -169,11 +168,6 @@ export class RendererHost implements EngineRenderPass {
     this.renderer.setPixelRatio(ratio);
     this.renderer.setSize(width, height);
     this.resizeClient?.(width, height);
-  }
-
-  assertHeightTextureFormat(texture: Parameters<typeof assertHeightTextureGpuFormat>[1]): void {
-    const backend = this.renderer.backend as unknown as Parameters<typeof assertHeightTextureGpuFormat>[0]; // @unsafe-cast reason=ThreePrivateTextureFormat issue=DME-030 expires=2026-10-01
-    assertHeightTextureGpuFormat(backend, texture);
   }
 
   attachVirtualTextureStore(store: VirtualTextureStore): void {

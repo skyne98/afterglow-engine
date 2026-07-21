@@ -10,5 +10,14 @@ export {
   getVirtualTextureDimensions,
   readBigHeader,
 } from './big-parser.ts';
-export { assertHeightTextureGpuFormat, loadHeightTextureR16 } from './height-texture.ts';
+export { parseHeightR16, type HeightR16 } from './height-texture.ts';
+export {
+  findResidentTextureChunk,
+  loadResidentTexture,
+  residentTextureBytesPerTexel,
+  type ResidentTexture,
+  type ResidentTextureResult,
+  type ResidentTextureSource,
+  type ResidentTextureThree,
+} from './resident-texture.ts';
 export { PersistentBlobCache, persistentCacheNamespace } from './persistent-blob-cache.ts';

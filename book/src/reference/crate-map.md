@@ -10,7 +10,7 @@ truth.
 | `afterglow-rpc-demo` | Demo `Physics` service + `bench_rpc` stress test. The reference example of a `#[rpc(worker = ...)]` service. |
 | `afterglow-assets` | Shared asset-path/MIME helpers (`AssetRoot`, `guess_mime`, `resolve`). The single security boundary for FS asset confinement. |
 | `afterglow-basis-encoder` | Offline-only UASTC encoder used by the asset pipeline; isolates the official C++ Basis encoder from runtime and wasm crates. |
-| `afterglow-pipeline` | Confines/embeds external glTF packages, packs self-contained GLBs, extracts images, emits lossless single-channel R16 displacement payloads, builds bordered VT pages and packed mip tails, UASTC-encodes slots, and writes seekable `.big` containers. |
+| `afterglow-pipeline` | Confines/embeds external glTF packages, packs self-contained GLBs, extracts images, cooks resident 8-bit R8 displacement + blue-noise dither textures into `.big` containers, builds bordered VT pages and packed mip tails, UASTC-encodes slots, and writes seekable `.big` containers. |
 | `afterglow-texture` | Pure-Rust runtime worker that transcodes Basis pages to BC7, ASTC, ETC, or RGBA. |
 | `afterglow-web` | Wasm target and authored TypeScript runtime: shared-ring workers, packed model loading, rig-preserving runtime meshopt, VT materials/feedback, fixed engine memory, and demos. |
 | `afterglow-cef` | Thin CEF shell: window + WebGPU flags + `afterglow://` scheme + COOP/COEP headers. No worker code, no IPC, no input. |

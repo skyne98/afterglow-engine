@@ -86,11 +86,14 @@ function decodeU8(bytes: Uint8Array, off: number): [number, number] {
 export type AssetType = 'Texture' | 'Mesh' | 'VirtualTexture';
 export type Compression = 'Meshopt' | 'None';
 export type TextureEncoding = 'RawRgba8' | 'Basis';
+/** Texel format of a resident (non-virtual) `Texture` asset. */
+export type TextureFormat = 'Rgba8' | 'R8';
 
 export interface ChunkMeta {
   type: 'Texture' | 'Mesh' | 'VirtualTexturePage' | 'VirtualTextureMipTail' | 'Raw';
   width?: number;
   height?: number;
+  format?: TextureFormat;
   indexCount?: number;
   vertexCount?: number;
   positionStride?: number;
@@ -176,13 +179,21 @@ function decodeTextureEncoding(bytes: Uint8Array, off: number): [TextureEncoding
   throw new Error(`unknown TextureEncoding variant: ${variant}`);
 }
 
+function decodeTextureFormat(bytes: Uint8Array, off: number): [TextureFormat, number] {
+  const [variant, next] = decodeU32(bytes, off);
+  if (variant === 0) return ['Rgba8', next];
+  if (variant === 1) return ['R8', next];
+  throw new Error(`unknown TextureFormat variant: ${variant}`);
+}
+
 function decodeChunkMeta(bytes: Uint8Array, off: number): [ChunkMeta, number] {
   const [variant, o] = decodeU32(bytes, off);
   switch (variant) {
-    case 0: { // Texture { width, height }
+    case 0: { // Texture { width, height, format }
       const [w, o2] = decodeU32(bytes, o);
       const [h, o3] = decodeU32(bytes, o2);
-      return [{ type: 'Texture', width: w, height: h }, o3];
+      const [format, o4] = decodeTextureFormat(bytes, o3);
+      return [{ type: 'Texture', width: w, height: h, format }, o4];
     }
     case 1: { // Mesh { index_count, vertex_count, position_stride, uv_stride }
       const [ic, o2] = decodeU32(bytes, o);
@@ -252,7 +263,12 @@ function decodeAssetEntry(bytes: Uint8Array, off: number): [AssetEntry, number] 
 // ============================================================================
 
 export const BIG_MAGIC = 0x31474942; // "BIG1" as u32 LE
-export const BIG_VERSION = 5;
+/** Current `.big` version written by the pipeline. */
+export const BIG_VERSION = 6;
+/** Oldest readable `.big` version. v5 files predate resident `Texture` assets
+ *  (they contain no `AssetType::Texture` chunks, so the `ChunkMeta::Texture`
+ *  encoding carrying a `format` field is unambiguous). */
+export const BIG_MIN_READABLE_VERSION = 5;
 
 /**
  * Parse a .big file header from raw bytes.
@@ -271,7 +287,9 @@ export function parseBigHeader(data: Uint8Array): { header: BigHeader; dataOffse
 
   // VERSION (4 bytes, LE u32)
   const version = new DataView(data.buffer, data.byteOffset + 4, 4).getUint32(0, true);
-  if (version !== BIG_VERSION) throw new Error(`.big: version ${version} != ${BIG_VERSION}`);
+  if (version < BIG_MIN_READABLE_VERSION || version > BIG_VERSION) {
+    throw new Error(`.big: version ${version} not in [${BIG_MIN_READABLE_VERSION},${BIG_VERSION}]`);
+  }
 
   // DATA_OFFSET (8 bytes, LE u64)
   const dataOffset = Number(new DataView(data.buffer, data.byteOffset + 8, 8).getBigUint64(0, true));
@@ -482,7 +500,10 @@ export async function readBigHeader(
   if (prefix.byteLength !== 16) throw new Error('BIG container prefix is truncated');
   const view = new DataView(prefix.buffer, prefix.byteOffset, prefix.byteLength);
   if (view.getUint32(0, true) !== BIG_MAGIC) throw new Error('BIG container has invalid magic');
-  if (view.getUint32(4, true) !== BIG_VERSION) throw new Error('BIG container version is unsupported');
+  const version = view.getUint32(4, true);
+  if (version < BIG_MIN_READABLE_VERSION || version > BIG_VERSION) {
+    throw new Error(`BIG container version ${version} is unsupported`);
+  }
   const dataOffset = Number(view.getBigUint64(8, true));
   if (!Number.isSafeInteger(dataOffset) || dataOffset < 16 || dataOffset > maxHeaderBytes)
     throw new RangeError(`BIG header size ${dataOffset} exceeds configured capacity ${maxHeaderBytes}`);

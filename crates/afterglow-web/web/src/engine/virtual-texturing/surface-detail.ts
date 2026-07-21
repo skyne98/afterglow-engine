@@ -3,14 +3,16 @@
 import type { RendererHost } from '../renderer/renderer-host.ts';
 
 /**
- * Adaptive 8–32-style POM march with interpolation and distance fade.
- * No silhouette, self-shadow, or secondary relief pass.
+ * Adaptive 8–32-style POM march with interpolation, distance fade, and
+ * blue-noise ray-start dither. No silhouette or secondary relief pass.
  */
 export const POM_UV_WGSL = /* wgsl */ `
 fn pomMarchUV(
   heightTexture: texture_2d<f32>, heightSampler: sampler,
   baseUV: vec2f, viewDir: vec3f, heightScale: f32, maxOffsetRatio: f32,
-  minLayers: u32, maxLayers: u32, maxDistance: f32, viewDistance: f32
+  minLayers: u32, maxLayers: u32, maxDistance: f32, viewDistance: f32,
+  blueNoiseTex: texture_2d<f32>, blueNoiseSampler: sampler,
+  screenUV: vec2f, blueNoiseTile: f32
 ) -> vec2f {
   if (heightScale <= 0.0) {
     return baseUV;
@@ -34,14 +36,22 @@ fn pomMarchUV(
   let boundedSlope = rawSlope * min(1.0, max(0.0, maxOffsetRatio) / max(slopeLength, 0.00001));
   let deltaUV = boundedSlope * scale / f32(layerCount);
 
-  var currentUV = baseUV;
-  var currentDepth = 0.0;
-  var previousUV = baseUV;
-  var previousDepth = 0.0;
+  // Blue-noise ray-start dither: offset the start depth/UV by a per-pixel
+  // blue-noise fraction of one layer. This decorrelates the discrete-layer
+  // banding that low march-sample counts produce, so 8-bit height fields and
+  // few-sample tiers stay smooth at grazing angles. The noise is tiled in
+  // screen space; a uniform-zero texture disables dither with no branching.
+  let noiseUV = fract(screenUV * max(blueNoiseTile, 1.0));
+  let jitter = textureSampleLevel(blueNoiseTex, blueNoiseSampler, noiseUV, 0.0).r;
+
+  var currentDepth = jitter * layerDepth;
+  var currentUV = baseUV - jitter * deltaUV;
+  var previousUV = currentUV;
+  var previousDepth = currentDepth;
   // Input is physical height: white/exposed=1, black/recessed=0. Ray depth is
   // measured downward from the top of the relief volume, so intersect against
   // surfaceDepth = 1-height (not height itself).
-  var previousSurfaceDepth = 1.0 - textureSampleLevel(heightTexture, heightSampler, baseUV, 0.0).r;
+  var previousSurfaceDepth = 1.0 - textureSampleLevel(heightTexture, heightSampler, currentUV, 0.0).r;
   for (var i = 0u; i < layerCount; i = i + 1u) {
     currentUV = currentUV - deltaUV;
     currentDepth = currentDepth + layerDepth;
@@ -173,7 +183,8 @@ export function pomDistanceFade(distance: number, maxDistance: number): number {
   return 1 - x * x * (3 - 2 * x);
 }
 
-/** Allocation-free CPU oracle matching `pomMarchUV` for deterministic tests. */
+/** Allocation-free CPU oracle matching `pomMarchUV` for deterministic tests.
+ *  `jitter` in [0,1) mirrors the blue-noise ray-start fraction (0 = no dither). */
 export function marchPomReference(
   sampleHeight: (u: number, v: number) => number,
   baseU: number,
@@ -188,6 +199,7 @@ export function marchPomReference(
   maxDistance: number,
   viewDistance: number,
   out: PomReferenceResult,
+  jitter = 0,
 ): PomReferenceResult {
   out.u = baseU; out.v = baseV; out.depth = 0; out.layers = 0; out.samples = 0; out.hit = false;
   const fade = pomDistanceFade(viewDistance, maxDistance);
@@ -205,9 +217,10 @@ export function marchPomReference(
   const slopeScale = Math.min(1, Math.max(0, maxOffsetRatio) / Math.max(slopeLength, 0.00001));
   const deltaU = rawSlopeU * slopeScale * scale / layers;
   const deltaV = rawSlopeV * slopeScale * scale / layers;
-  let currentU = baseU, currentV = baseV, currentDepth = 0;
-  let previousU = baseU, previousV = baseV, previousDepth = 0;
-  let previousSurfaceDepth = 1 - Math.max(0, Math.min(1, sampleHeight(baseU, baseV)));
+  const j = Math.max(0, Math.min(0.999999, jitter));
+  let currentU = baseU - j * deltaU, currentV = baseV - j * deltaV, currentDepth = j * layerDepth;
+  let previousU = currentU, previousV = currentV, previousDepth = currentDepth;
+  let previousSurfaceDepth = 1 - Math.max(0, Math.min(1, sampleHeight(currentU, currentV)));
   out.samples = 1;
   for (let index = 0; index < layers; index++) {
     currentU -= deltaU; currentV -= deltaV; currentDepth += layerDepth;

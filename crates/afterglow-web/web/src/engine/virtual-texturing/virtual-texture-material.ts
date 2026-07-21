@@ -266,6 +266,11 @@ export interface VirtualPomMaterialOptions {
   qualityBias?: number;
   addressMode?: VirtualTextureAddressMode;
   side?: THREE_TYPES.Side;
+  /** Resident blue-noise texture (R8) tiled in screen space to dither the
+   *  POM ray-start. When omitted, a 1×1 zero texture disables dither. */
+  blueNoiseTexture?: THREE_TYPES.Texture;
+  /** Screen-space tile count for the blue-noise texture (default 64). */
+  blueNoiseTile?: number;
 }
 
 export interface VirtualPomMaterialPair {
@@ -298,6 +303,15 @@ export function createVirtualPomMaterialPair(
   const qualityBias = options.qualityBias ?? 0;
   const addressMode = options.addressMode ?? VirtualTextureAddressMode.Repeat;
   const side = options.side ?? three.DoubleSide;
+  const blueNoiseTile = options.blueNoiseTile ?? 64;
+  // A 1×1 zero texture samples as 0 → jitter disabled, no WGSL branching.
+  const blueNoiseTexture = options.blueNoiseTexture ?? new three.DataTexture(
+    new Uint8Array([0]), 1, 1, three.RedFormat, three.UnsignedByteType,
+  );
+  if (!options.blueNoiseTexture) {
+    (blueNoiseTexture as THREE_TYPES.Texture).name = 'pom-blue-noise-disabled';
+    (blueNoiseTexture as THREE_TYPES.Texture).needsUpdate = true;
+  }
   const atlas = three.texture(store.atlasTexture), atlasSampler = three.sampler(atlas);
   const atlasSize = three.uniform(new three.Vector2(store.atlasWidth, store.atlasHeight));
   const virtualSize = three.uniform(new three.Vector2(set.albedo.width, set.albedo.height));
@@ -342,6 +356,9 @@ export function createVirtualPomMaterialPair(
     heightScale: three.float(heightScale), maxOffsetRatio: three.float(maxOffsetRatio),
     minLayers: three.uint(minLayers), maxLayers: three.uint(maxLayers),
     maxDistance: three.float(maxDistance), viewDistance: three.positionView.length(),
+    blueNoiseTex: three.texture(blueNoiseTexture),
+    blueNoiseSampler: three.sampler(three.texture(blueNoiseTexture)),
+    screenUV: three.screenUV, blueNoiseTile: three.float(blueNoiseTile),
   }) as THREE_TYPES.Node<'vec2'>;
   const visibility = (hitUv: THREE_TYPES.Node<'vec2'>, lightDirection: THREE_TYPES.Node<'vec3'>) => {
     const height = three.texture(heightTexture);

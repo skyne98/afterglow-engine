@@ -20,21 +20,22 @@ by the current light; accumulated energy from earlier lights is preserved.
 Hemisphere fill remains unshadowed. There is no silhouette or secondary
 relief/depth pass.
 
-Height comes from the official resident 1K, 16-bit ambientCG displacement maps.
-The offline pipeline converts the source PNGs into versioned, single-channel
-R16 payloads. Runtime expands their exact normalized `u16` levels into a
-single-channel filterable WebGPU `r32float` texture; every source level remains
-distinct and the data never passes through the browser's 8-bit image path. The
-Dungeon fails closed without `float32-filterable`. WebGPU exposes `r16unorm` as
-unfilterable, while manual bilinear sampling would quadruple every POM height
-read and patching vendored Three would be brittle.
+Height comes from the official resident 1K ambientCG displacement maps. The
+offline pipeline quantizes the source to **8-bit R8** (`(sample + 128) / 257`,
+deliberate cook-time quantization — never the browser's 8-bit image path) and
+packs it as a resident `Texture` asset in a v6 `.big` container. Runtime loads
+it via the unified `loadResidentTexture` path into a single-channel WebGPU
+`r8unorm` texture — **filterable** with no `float32-filterable` feature
+required (unlike the former r32float-from-r16 path). R8unorm samples as f32 in
+[0,1], so the POM march WGSL is format-agnostic. A blue-noise dither tile
+(void-and-cluster, also a resident `.big` asset) jitters the ray start to
+suppress the banding low march-sample counts produce at 8-bit precision.
 
-AO describes occluded lighting, not geometry; using it as pseudo-height produced
-weak, incorrect relief. Keeping displacement resident prevents page residency
-from changing during the non-uniform march; the 8K color, normal, and packed
-mask channels remain virtual. Resident displacement uses `flipY=false` to match
-VT storage, and the virtual `NormalGL` green channel is inverted at sampling to
-correct the custom uploader's top-left row orientation.
+Keeping displacement resident prevents page residency from changing during the
+non-uniform march; the 8K color, normal, and packed mask channels remain
+virtual. Resident displacement uses `flipY=false` to match VT storage, and the
+virtual `NormalGL` green channel is inverted at sampling to correct the custom
+uploader's top-left row orientation.
 
 Displaced PBR channels use `VT_SAMPLE_FROM_LEVEL_WGSL`: each begins at the
 material's resolved mip, walks to a coarser resident page when the coordinate

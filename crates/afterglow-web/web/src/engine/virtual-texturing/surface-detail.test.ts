@@ -298,39 +298,51 @@ describe('POM oracle on analytically predictable height fields', () => {
 
 describe('Dungeon POM integration assets and limits', () => {
   test('constants remain inside the measured 680M tier', async () => {
-    const source = await Bun.file(new URL('../../demos/dungeon/main.ts', import.meta.url)).text();
-    expect(source).toContain('POM_MIN_LAYERS=8,POM_MAX_LAYERS=32');
-    expect(source).toContain('POM_HEIGHT_SCALE=.05,POM_MAX_OFFSET_RATIO=2,POM_MAX_DISTANCE=0,POM_SHADOW_STEPS=8,POM_SHADOW_BIAS=.01,POM_SHADOW_STRENGTH=.82');
-    expect(source).toContain("heightSource:'resident ambientCG displacement',heightFormat:'r32float-from-r16'");
-    const adapter = await Bun.file(new URL('./virtual-texture-material.ts', import.meta.url)).text();
-    expect(source).toContain('new VirtualPomSceneBinding');
-    expect(source).toContain('pomBinding.add(mesh,set,height as unknown as THREE.Texture)');
-    expect(source).toContain('pomBinding.setPomEnabled(enabled)');
-    expect(adapter).toContain("const tbn = (): THREE_TYPES.Node<'mat3'>");
-    expect(adapter).toContain('three.normalViewGeometry.mul(sideNode)');
-    expect(adapter).toContain('three.positionViewDirection.mul(tbn())');
-    expect(adapter).toContain('lightDirection.mul(tbn())');
-    expect(adapter).toContain('const diffuseBefore = directDiffuse.toVar()');
-    expect(adapter).toContain('const diffuse = directDiffuse.sub(diffuseBefore)');
-    expect(adapter).toContain('directDiffuse.assign(diffuseBefore.add(diffuse.mul(visible)))');
-    expect(adapter).toContain('directSpecular.assign(specularBefore.add(specular.mul(visible)))');
+    const raw = await Bun.file(new URL('../../demos/dungeon/main.ts', import.meta.url)).text();
+    // Normalize whitespace on both sides so the contract is robust to prettier.
+    const compact = (s: string): string => s.replace(/\s+/g, '');
+    const source = compact(raw);
+    const has = (needle: string): boolean => source.includes(compact(needle));
+    expect(has('POM_MIN_LAYERS=8,POM_MAX_LAYERS=32')).toBe(true);
+    expect(has('POM_HEIGHT_SCALE=0.05,POM_MAX_OFFSET_RATIO=2,POM_MAX_DISTANCE=0,POM_SHADOW_STEPS=8,POM_SHADOW_BIAS=0.01,POM_SHADOW_STRENGTH=0.82')).toBe(true);
+    // Height is now a resident 8-bit R8 texture (not the former r32float-from-r16).
+    expect(has("heightSource: \"resident R8 displacement (ambientCG)\", heightFormat: \"r8unorm\"")).toBe(true);
+    const adapterRaw = await Bun.file(new URL('./virtual-texture-material.ts', import.meta.url)).text();
+    const adapter = compact(adapterRaw);
+    const hasAdapter = (needle: string): boolean => adapter.includes(compact(needle));
+    expect(has('new VirtualPomSceneBinding')).toBe(true);
+    // Height is a THREE.Texture from loadResidentTexture; no cast needed.
+    expect(has('pomBinding.add(mesh, set, height)')).toBe(true);
+    expect(has('pomBinding.setPomEnabled(enabled)')).toBe(true);
+    expect(hasAdapter("const tbn = (): THREE_TYPES.Node<'mat3'>")).toBe(true);
+    expect(hasAdapter('three.normalViewGeometry.mul(sideNode)')).toBe(true);
+    expect(hasAdapter('three.positionViewDirection.mul(tbn())')).toBe(true);
+    expect(hasAdapter('lightDirection.mul(tbn())')).toBe(true);
+    expect(hasAdapter('const diffuseBefore = directDiffuse.toVar()')).toBe(true);
+    expect(hasAdapter('const diffuse = directDiffuse.sub(diffuseBefore)')).toBe(true);
+    expect(hasAdapter('directDiffuse.assign(diffuseBefore.add(diffuse.mul(visible)))')).toBe(true);
+    expect(hasAdapter('directSpecular.assign(specularBefore.add(specular.mul(visible)))')).toBe(true);
     expect(adapter).not.toContain('directDiffuse.mulAssign');
     expect(adapter).not.toContain('directSpecular.mulAssign');
-    expect(source).toContain('loadHeightTextureR16(heightThree,device');
-    expect(source).toContain('host.assertHeightTextureFormat(height)');
-    expect(source).not.toContain('TextureLoader().loadAsync(`dungeon-height');
-    expect(adapter).toContain('three.vec2(1, -1)');
-    expect(source).toContain('VT_QUALITY_BIAS=0, FEEDBACK_INTERVAL=8');
+    // Resident texture loader replaced the standalone R16 float loader.
+    expect(has('loadResidentTexture(residentThree')).toBe(true);
+    expect(has('loadResidentTexture(')).toBe(true);
+    expect(source).not.toContain('loadHeightTextureR16');
+    // R8unorm is universally filterable; the r32float format assertion is gone.
+    expect(source).not.toContain('host.assertHeightTextureFormat');
+    expect(source).not.toContain(compact('TextureLoader().loadAsync(`dungeon-height'));
+    expect(hasAdapter('three.vec2(1, -1)')).toBe(true);
+    expect(has('VT_QUALITY_BIAS=0, FEEDBACK_INTERVAL=8')).toBe(true);
     expect(source).not.toContain('VT_LOD_BIAS');
-    expect(adapter).toContain('feedbackPixelScale: three.uniform(feedbackPixelScale)');
-    expect(adapter).toContain('sampleUv = usePom ? displacedUv() : gradientUv');
-    expect(adapter).toContain('baseFeedbackMaterial: makeFeedback(false)');
-    expect(adapter).toContain('pomFeedbackMaterial: makeFeedback(true)');
-    expect(source).toContain('trackTimestamp:false');
+    expect(hasAdapter('feedbackPixelScale: three.uniform(feedbackPixelScale)')).toBe(true);
+    expect(hasAdapter('sampleUv = usePom ? displacedUv() : gradientUv')).toBe(true);
+    expect(hasAdapter('baseFeedbackMaterial: makeFeedback(false)')).toBe(true);
+    expect(hasAdapter('pomFeedbackMaterial: makeFeedback(true)')).toBe(true);
+    expect(has('trackTimestamp: false')).toBe(true);
     expect(adapter).not.toContain('parallaxDirection');
-    expect(adapter).toContain('sharedUv.assign(hit); sharedMip.assign(mip)');
-    expect(adapter).toContain('sampleFromMip(normalEntry, sharedMip, sharedUv)');
-    expect(adapter).toContain('sampleFromMip(masksEntry, sharedMip, sharedUv)');
+    expect(hasAdapter('sharedUv.assign(hit); sharedMip.assign(mip)')).toBe(true);
+    expect(hasAdapter('sampleFromMip(normalEntry, sharedMip, sharedUv)')).toBe(true);
+    expect(hasAdapter('sampleFromMip(masksEntry, sharedMip, sharedUv)')).toBe(true);
   });
 
   test('ships lossless runtime R16 displacement at source aspect ratios', async () => {

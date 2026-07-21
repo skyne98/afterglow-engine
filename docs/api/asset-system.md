@@ -153,6 +153,45 @@ returns `-1` rather than growing past capacity. `tryLoadAsset(id, parser)` uses
 direct `Uint8Array` state and object-handle tables. The game-facing `load(path,
 parser)` wrapper performs registration and throws on capacity exhaustion.
 
+## Resident (non-virtual) textures
+
+Resident textures are single-mip, always-resident byte streams stored as
+`AssetType::Texture` chunks in a `.big` container, sampled directly at runtime
+— no page table, no mip tail, no VT feedback. The canonical use is the POM
+height field (8-bit R8), kept out of VT so the march loop pays one direct
+mip-0 fetch per step; normals/albedo/masks remain VT-streamed.
+
+### `.big` v6 container format
+
+v6 adds an explicit `TextureFormat` (`Rgba8` | `R8`) to `ChunkMeta::Texture`.
+v5 files remain readable (they never contain `Texture` chunks, so the
+`ChunkMeta::Texture` encoding carrying a `format` field is unambiguous); the
+parser accepts `[5, 6]`, the writer writes 6. Resident texture chunks are
+uncompressed (`Compression::None`) so loading has no meshopt-worker dependency.
+
+### Cook
+
+```
+afterglow-pipeline resident-texture <input.r16|png> [<input2>...] <output.big> [--format r8|rgba8] [--name <name>]
+afterglow-pipeline blue-noise <size> <output.big> [--name <name>]
+```
+
+`resident-texture` accepts multiple inputs (each becomes a named asset in one
+container). `.r16` inputs are decoded losslessly and quantized 16→8 via
+`(sample + 128) / 257` (deliberate cook-time quantization, not browser
+truncation). `blue-noise` generates a tileable void-and-cluster dither tile.
+
+### Runtime
+
+`engine/assets/resident-texture.ts`:
+- `findResidentTextureChunk(header, name)` — validates the chunk shape/format.
+- `loadResidentTexture(three, source, header, name)` — reads + builds a
+  `DataTexture` (`R8`→`r8unorm`, `Rgba8`→RGBA), repeat-wrapped, no-mipmap,
+  `flipY=false`. Caller owns disposal.
+
+Loading completes before renderer sealing. See `docs/api/pom.md` for the POM
+height + blue-noise dither wiring.
+
 States are `Free → Idle → Reading → Parsing → ReadyToPublish → Ready`, with an
 `Error` terminal/retry state. Promise callbacks only place `(id, token, kind,
 value)` into a preallocated completion ring. `poll()` publishes at most 32

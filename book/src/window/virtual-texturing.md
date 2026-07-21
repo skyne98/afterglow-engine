@@ -178,10 +178,12 @@ visual demo retains a global bridge or architecture-baseline exception.
 
 Click for raw mouse look; use **WASD**, **Shift**, **P**, **R**, and **1–3** for
 movement, sprint, prewarmed close-range POM toggle, reset, and deterministic
-viewpoints. The POM tier uses official resident 16-bit displacement from the
+viewpoints. The POM tier uses official resident 8-bit R8 displacement from the
 same scanned stone materials while the 8K PBR channels remain virtual. The
-offline `height-r16` conversion and single-channel `r32float` upload preserve
-all source levels without browser image decoding. Its feedback variant runs the
+offline `resident-texture` cook quantizes the lossless `.r16` interchange to
+R8 and a `blue-noise` cook generates the ray-start dither tile; both load via
+`loadResidentTexture` as `r8unorm` (filterable, no `float32-filterable` required).
+Its feedback variant runs the
 same bounded POM march, requesting pages at displaced UVs while deriving mip
 footprints from the original continuous UV. Base/POM feedback pipelines are
 prewarmed and switch with the visible material. Automated clients use

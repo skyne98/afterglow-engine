@@ -9,7 +9,14 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 pub const MAGIC: &[u8; 4] = b"BIG1";
-pub const VERSION: u32 = 5;
+/// Current `.big` container version written by this crate.
+///
+/// v6 adds an explicit `TextureFormat` to `ChunkMeta::Texture`. v5 files are
+/// still readable (they never contain `AssetType::Texture` chunks, so the
+/// `ChunkMeta::Texture` encoding is unambiguous); the parser accepts both.
+pub const VERSION: u32 = 6;
+/// Oldest readable version. v5 files predate resident `Texture` assets.
+pub const MIN_READABLE_VERSION: u32 = 5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum AssetType {
@@ -30,6 +37,19 @@ pub enum TextureEncoding {
     Basis,
 }
 
+/// Texel format of a resident (non-virtual) `AssetType::Texture` asset.
+///
+/// Virtual textures always use `TextureEncoding` (RGBA8/Basis) for their
+/// paged PBR channels; resident textures are single-mip, always-resident
+/// byte streams interpreted by this format (e.g. an R8 height field for POM).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum TextureFormat {
+    /// 4 bytes per texel, RGBA channel order.
+    Rgba8,
+    /// 1 byte per texel, single-channel unorm (e.g. 8-bit displacement).
+    R8,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ChunkInfo {
     pub offset: u64,
@@ -46,6 +66,7 @@ pub enum ChunkMeta {
     Texture {
         width: u32,
         height: u32,
+        format: TextureFormat,
     },
     Mesh {
         index_count: u32,
@@ -96,6 +117,15 @@ pub struct BigHeader {
     pub version: u32,
     pub data_offset: u64,
     pub assets: Vec<AssetEntry>,
+}
+
+impl TextureFormat {
+    pub fn bytes_per_texel(self) -> usize {
+        match self {
+            TextureFormat::Rgba8 => 4,
+            TextureFormat::R8 => 1,
+        }
+    }
 }
 
 impl BigHeader {
@@ -224,13 +254,69 @@ impl BigWriter {
                 lod_level: 0,
                 mip_level: mip_level as u8,
                 compression: Compression::Meshopt,
-                meta: ChunkMeta::Texture { width, height },
+                meta: ChunkMeta::Texture {
+                    width,
+                    height,
+                    format: TextureFormat::Rgba8,
+                },
             });
         }
         self.assets.push(AssetEntry {
             name: name.to_string(),
             asset_type: AssetType::Texture,
             chunks: chunks_meta,
+            virtual_texture: None,
+        });
+    }
+
+    /// Add a single-mip resident (non-virtual) texture, e.g. an R8 height field.
+    ///
+    /// Resident textures are always-resident byte streams sampled directly at
+    /// runtime (no page table, no mip tail). `bytes.len()` must equal
+    /// `width * height * format.bytes_per_texel()`.
+    pub fn add_resident_texture(
+        &mut self,
+        name: &str,
+        width: u32,
+        height: u32,
+        format: TextureFormat,
+        bytes: Vec<u8>,
+    ) {
+        let expected = (width as u64)
+            .checked_mul(height as u64)
+            .and_then(|texels| texels.checked_mul(format.bytes_per_texel() as u64))
+            .expect("resident texture dimensions overflow");
+        assert_eq!(
+            bytes.len() as u64,
+            expected,
+            "resident texture byte length must match width*height*bpp"
+        );
+        let asset_idx = self.assets.len();
+        let uncompressed_size = bytes.len() as u64;
+        self.push_chunk(
+            asset_idx,
+            bytes,
+            Compression::None,
+            0,
+            0,
+            PendingChunkKind::Regular { chunk: 0 },
+        );
+        self.assets.push(AssetEntry {
+            name: name.to_string(),
+            asset_type: AssetType::Texture,
+            chunks: vec![ChunkInfo {
+                offset: 0,
+                compressed_size: 0,
+                uncompressed_size,
+                lod_level: 0,
+                mip_level: 0,
+                compression: Compression::None,
+                meta: ChunkMeta::Texture {
+                    width,
+                    height,
+                    format,
+                },
+            }],
             virtual_texture: None,
         });
     }
@@ -679,8 +765,8 @@ pub fn parse_header(data: &[u8]) -> Result<(BigHeader, usize), String> {
         return Err(format!("bad magic"));
     }
     let version = u32::from_le_bytes(data[4..8].try_into().unwrap());
-    if version != VERSION {
-        return Err(format!("version {version} != {VERSION}"));
+    if !(MIN_READABLE_VERSION..=VERSION).contains(&version) {
+        return Err(format!("version {version} not in [{MIN_READABLE_VERSION},{VERSION}]"));
     }
     let data_offset = u64::from_le_bytes(data[8..16].try_into().unwrap()) as usize;
     let header: BigHeader =
@@ -814,6 +900,41 @@ mod tests {
         let c0 = &header.assets[0].chunks[0];
         let decoded = read_chunk_decompressed(&buf, c0);
         assert_eq!(decoded, tex_data);
+    }
+
+    #[test]
+    fn roundtrip_resident_r8_texture() {
+        let mut writer = BigWriter::new();
+        let height: Vec<u8> = (0..(8 * 8)).map(|i| (i * 2) as u8).collect();
+        writer.add_resident_texture("Rock_Height", 8, 8, TextureFormat::R8, height.clone());
+        let mut buf = Vec::new();
+        writer.finish(&mut buf).unwrap();
+        let (header, _) = parse_header(&buf).unwrap();
+        assert_eq!(header.version, VERSION);
+        assert_eq!(header.assets.len(), 1);
+        assert_eq!(header.assets[0].asset_type, AssetType::Texture);
+        assert_eq!(header.assets[0].chunks.len(), 1);
+        let chunk = &header.assets[0].chunks[0];
+        match &chunk.meta {
+            ChunkMeta::Texture { width, height, format } => {
+                assert_eq!((*width, *height), (8, 8));
+                assert_eq!(*format, TextureFormat::R8);
+            }
+            other => panic!("unexpected chunk meta {other:?}"),
+        }
+        assert_eq!(chunk.compression, Compression::None);
+        assert_eq!(chunk.uncompressed_size, 64);
+        let decoded = read_chunk_decompressed(&buf, chunk);
+        assert_eq!(decoded, height);
+    }
+
+    #[test]
+    fn resident_texture_rejects_byte_count_mismatch() {
+        let mut writer = BigWriter::new();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            writer.add_resident_texture("bad", 4, 4, TextureFormat::R8, vec![0; 15]);
+        }));
+        assert!(result.is_err(), "mismatched byte length must panic");
     }
 
     #[test]

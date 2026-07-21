@@ -3,7 +3,7 @@
 Afterglow's frame-owned queues, caches, and typed-array operations are sealed.
 Some boundaries necessarily allocate: browser fetch/readback, worker response
 Promises, Basis output, image/model parsing and runtime meshopt during bootstrap,
-resident R16 displacement fetch/texture creation, prewarmed VT material creation,
+resident R8 displacement + blue-noise fetch/texture creation, prewarmed VT material creation,
 Three.js pipeline compilation, timestamp resolution,
 diagnostics, and game-facing reactive callbacks.
 

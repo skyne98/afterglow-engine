@@ -7,9 +7,10 @@
 use afterglow_pipeline::{
     cook_static_gltf_lods, embed_external_gltf, encode_height_r16_image, extract_glb_images, pack_mask_channels,
     parse_header, stream_virtual_texture, strip_glb_images_for_virtual_texturing,
-    virtual_mip_tail_first_mip, BigWriter, TextureEncoding, VirtualTextureMipTailData,
+    virtual_mip_tail_first_mip, BigWriter, TextureEncoding, TextureFormat, VirtualTextureMipTailData,
     VirtualTexturePageData,
 };
+use afterglow_pipeline::resident::{blue_noise_resident_payload, load_displacement_r8};
 use rayon::prelude::*;
 use std::path::PathBuf;
 
@@ -22,6 +23,8 @@ fn main() {
         "inspect" => inspect(&args[2..]),
         "pack-masks" => pack_masks(&args[2..]),
         "height-r16" => height_r16(&args[2..]),
+        "resident-texture" => resident_texture(&args[2..]),
+        "blue-noise" => blue_noise(&args[2..]),
         "static-lod" => static_lod(&args[2..]),
         "help" | "--help" | "-h" | _ => {
             eprintln!("afterglow-pipeline — offline asset processor");
@@ -31,6 +34,8 @@ fn main() {
             eprintln!("  afterglow-pipeline inspect <file.big>");
             eprintln!("  afterglow-pipeline pack-masks <red.png> <green.png> <output.png>");
             eprintln!("  afterglow-pipeline height-r16 <height.png> <output.r16>");
+            eprintln!("  afterglow-pipeline resident-texture <input.png> <output.big> [--format r8|rgba8] [--name <name>]");
+            eprintln!("  afterglow-pipeline blue-noise <size> <output.big> [--name <name>]");
             eprintln!("  afterglow-pipeline static-lod <model.gltf|glb> <output.big>");
             eprintln!();
             eprintln!();
@@ -73,6 +78,132 @@ fn height_r16(args: &[String]) {
         "[height-r16] {} → {} ({}×{}, r16unorm)",
         args[0], args[1], width, height
     );
+}
+
+fn resident_texture(args: &[String]) {
+    // afterglow-pipeline resident-texture <input.png|.r16> [<input2>...] <output.big> [--format r8|rgba8] [--name <name>]
+    // Multiple inputs each become a named resident asset in one container.
+    if args.len() < 2 {
+        eprintln!("usage: afterglow-pipeline resident-texture <input.png|.r16> [<input2>...] <output.big> [--format r8|rgba8] [--name <name>]");
+        std::process::exit(1);
+    }
+    let mut format = TextureFormat::R8;
+    let mut name: Option<String> = None;
+    let mut i = 0usize;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--format" => {
+                i += 1;
+                format = match args.get(i).map(|s| s.as_str()) {
+                    Some("r8") => TextureFormat::R8,
+                    Some("rgba8") => TextureFormat::Rgba8,
+                    other => {
+                        eprintln!("--format expects r8|rgba8, got {:?}", other);
+                        std::process::exit(1);
+                    }
+                };
+            }
+            "--name" => {
+                i += 1;
+                name = args.get(i).cloned();
+            }
+            _ => { /* positional — handled below */ }
+        }
+        i += 1;
+    }
+    // Positional inputs are all args except the last (output) and the flags.
+    let mut positionals: Vec<usize> = Vec::new();
+    let mut j = 0usize;
+    while j < args.len() {
+        match args[j].as_str() {
+            "--format" | "--name" => { j += 2; continue; }
+            _ => { positionals.push(j); j += 1; }
+        }
+    }
+    if positionals.len() < 2 {
+        eprintln!("resident-texture needs at least one input and an output.big");
+        std::process::exit(1);
+    }
+    let (input_idxs, output_idx) = positionals.split_at(positionals.len() - 1);
+    let output = PathBuf::from(&args[*output_idx.last().unwrap()]);
+    let single_name = name.clone();
+    let mut writer = BigWriter::new();
+    for &idx in input_idxs {
+        let input = PathBuf::from(&args[idx]);
+        let asset_name = if input_idxs.len() == 1 {
+            single_name.clone().unwrap_or_else(|| {
+                input
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("resident-texture")
+                    .to_string()
+            })
+        } else {
+            input
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("resident-texture")
+                .to_string()
+        };
+        let (width, height, bytes) = match format {
+            TextureFormat::R8 => load_displacement_r8(&input)
+                .unwrap_or_else(|e| panic!("failed to cook R8 {}: {e}", input.display())),
+            TextureFormat::Rgba8 => {
+                let img = image::open(&input)
+                    .unwrap_or_else(|e| panic!("failed to read {}: {e}", input.display()))
+                    .into_rgba8();
+                let (w, h) = img.dimensions();
+                (w, h, img.into_raw())
+            }
+        };
+        writer.add_resident_texture(&asset_name, width, height, format, bytes);
+        eprintln!(
+            "[resident-texture] {} → {asset_name} ({width}×{height}, {format:?})",
+            input.display()
+        );
+    }
+    let mut file = std::fs::File::create(&output)
+        .unwrap_or_else(|e| panic!("failed to create {}: {e}", output.display()));
+    writer
+        .finish(&mut file)
+        .unwrap_or_else(|e| panic!("failed to write {}: {e}", output.display()));
+    eprintln!("[resident-texture] wrote {} ({} asset(s))", output.display(), input_idxs.len());
+}
+
+fn blue_noise(args: &[String]) {
+    // afterglow-pipeline blue-noise <size> <output.big> [--name <name>]
+    if args.len() < 2 {
+        eprintln!("usage: afterglow-pipeline blue-noise <size> <output.big> [--name <name>]");
+        std::process::exit(1);
+    }
+    let size: u32 = args[0]
+        .parse()
+        .unwrap_or_else(|e| panic!("blue-noise size must be a power-of-two u32: {e}"));
+    let output = PathBuf::from(&args[1]);
+    let mut name = "blue-noise".to_string();
+    let mut i = 2;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--name" => {
+                i += 1;
+                name = args.get(i).cloned().unwrap_or(name);
+            }
+            other => {
+                eprintln!("unknown blue-noise flag: {other}");
+                std::process::exit(1);
+            }
+        }
+        i += 1;
+    }
+    let (w, h, fmt, bytes) = blue_noise_resident_payload(size);
+    let mut writer = BigWriter::new();
+    writer.add_resident_texture(&name, w, h, fmt, bytes);
+    let mut file = std::fs::File::create(&output)
+        .unwrap_or_else(|e| panic!("failed to create {}: {e}", output.display()));
+    writer
+        .finish(&mut file)
+        .unwrap_or_else(|e| panic!("failed to write {}: {e}", output.display()));
+    eprintln!("[blue-noise] {size}×{size} → {} ({name})", output.display());
 }
 
 fn pack_masks(args: &[String]) {
@@ -281,8 +412,8 @@ fn inspect(args: &[String]) {
         }
         for chunk in &asset.chunks {
             let detail = match &chunk.meta {
-                afterglow_pipeline::ChunkMeta::Texture { width, height } => {
-                    format!("{width}×{height}")
+                afterglow_pipeline::ChunkMeta::Texture { width, height, format } => {
+                    format!("{width}×{height} {format:?}")
                 }
                 afterglow_pipeline::ChunkMeta::Mesh {
                     index_count,
