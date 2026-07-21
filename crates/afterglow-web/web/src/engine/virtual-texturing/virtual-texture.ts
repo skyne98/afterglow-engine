@@ -570,6 +570,11 @@ export interface VirtualTextureTuningConfig {
   sampleWindow: number;
   stableWindowsBeforeProbe: number;
   probeCooldownWindows: number;
+  /** Cap the physical atlas dimension (texels) below the device's
+   *  maxTextureDimension2D. Useful on iGPUs where the default (max 2D
+   *  dimension, e.g. 16384 -> ~1 GB atlas) blows the small VRAM carve-out
+   *  and saturates shared memory bandwidth. 0 = use device max. */
+  atlasMaxDimension?: number;
 }
 
 export const DEFAULT_VIRTUAL_TEXTURE_TUNING: Readonly<VirtualTextureTuningConfig> = {
@@ -610,6 +615,8 @@ export class VirtualTextureTuning {
   readonly sampleWindow: number;
   readonly stableWindowsBeforeProbe: number;
   readonly probeCooldownWindows: number;
+  /** Physical atlas dimension cap (0 = device max). See VirtualTextureTuningConfig. */
+  readonly atlasMaxDimension: number;
   uploadsPerPoll: number;
   uploadBudgetMs: number;
   bestSafeUploadsPerPoll: number;
@@ -624,34 +631,36 @@ export class VirtualTextureTuning {
   probes = 0;
   probeRejections = 0;
 
-  constructor(config: Readonly<VirtualTextureTuningConfig> = DEFAULT_VIRTUAL_TEXTURE_TUNING) {
-    const integers = [config.minUploadsPerPoll, config.baselineUploadsPerPoll,
-      config.maxUploadsPerPoll, config.overloadSamples, config.sampleWindow,
-      config.stableWindowsBeforeProbe, config.probeCooldownWindows];
+  constructor(config: Readonly<Partial<VirtualTextureTuningConfig>> = DEFAULT_VIRTUAL_TEXTURE_TUNING) {
+    const cfg: Readonly<VirtualTextureTuningConfig> = { ...DEFAULT_VIRTUAL_TEXTURE_TUNING, ...config };
+    const integers = [cfg.minUploadsPerPoll, cfg.baselineUploadsPerPoll,
+      cfg.maxUploadsPerPoll, cfg.overloadSamples, cfg.sampleWindow,
+      cfg.stableWindowsBeforeProbe, cfg.probeCooldownWindows];
     if (integers.some(value => !Number.isInteger(value) || value < 1) ||
-        config.minUploadsPerPoll > config.baselineUploadsPerPoll ||
-        config.baselineUploadsPerPoll > config.maxUploadsPerPoll ||
-        !Number.isFinite(config.minUploadBudgetMs) || !Number.isFinite(config.baselineUploadBudgetMs) ||
-        !Number.isFinite(config.maxUploadBudgetMs) || config.minUploadBudgetMs <= 0 ||
-        config.minUploadBudgetMs > config.baselineUploadBudgetMs ||
-        config.baselineUploadBudgetMs > config.maxUploadBudgetMs ||
-        !Number.isFinite(config.uploadBudgetStepMs) || config.uploadBudgetStepMs <= 0 ||
-        !Number.isFinite(config.targetFrameMs) || config.targetFrameMs <= 0 ||
-        !Number.isFinite(config.overloadMultiplier) || config.overloadMultiplier <= 1)
+        cfg.minUploadsPerPoll > cfg.baselineUploadsPerPoll ||
+        cfg.baselineUploadsPerPoll > cfg.maxUploadsPerPoll ||
+        !Number.isFinite(cfg.minUploadBudgetMs) || !Number.isFinite(cfg.baselineUploadBudgetMs) ||
+        !Number.isFinite(cfg.maxUploadBudgetMs) || cfg.minUploadBudgetMs <= 0 ||
+        cfg.minUploadBudgetMs > cfg.baselineUploadBudgetMs ||
+        cfg.baselineUploadBudgetMs > cfg.maxUploadBudgetMs ||
+        !Number.isFinite(cfg.uploadBudgetStepMs) || cfg.uploadBudgetStepMs <= 0 ||
+        !Number.isFinite(cfg.targetFrameMs) || cfg.targetFrameMs <= 0 ||
+        !Number.isFinite(cfg.overloadMultiplier) || cfg.overloadMultiplier <= 1)
       throw new RangeError('invalid virtual-texture tuning configuration');
-    this.minUploadsPerPoll = config.minUploadsPerPoll;
-    this.baselineUploadsPerPoll = config.baselineUploadsPerPoll;
-    this.maxUploadsPerPoll = config.maxUploadsPerPoll;
-    this.minUploadBudgetMs = config.minUploadBudgetMs;
-    this.baselineUploadBudgetMs = config.baselineUploadBudgetMs;
-    this.maxUploadBudgetMs = config.maxUploadBudgetMs;
-    this.uploadBudgetStepMs = config.uploadBudgetStepMs;
-    this.targetFrameMs = config.targetFrameMs;
-    this.overloadFrameMs = config.targetFrameMs * config.overloadMultiplier;
-    this.overloadSamples = config.overloadSamples;
-    this.sampleWindow = config.sampleWindow;
-    this.stableWindowsBeforeProbe = config.stableWindowsBeforeProbe;
-    this.probeCooldownWindows = config.probeCooldownWindows;
+    this.minUploadsPerPoll = cfg.minUploadsPerPoll;
+    this.baselineUploadsPerPoll = cfg.baselineUploadsPerPoll;
+    this.maxUploadsPerPoll = cfg.maxUploadsPerPoll;
+    this.minUploadBudgetMs = cfg.minUploadBudgetMs;
+    this.baselineUploadBudgetMs = cfg.baselineUploadBudgetMs;
+    this.maxUploadBudgetMs = cfg.maxUploadBudgetMs;
+    this.uploadBudgetStepMs = cfg.uploadBudgetStepMs;
+    this.targetFrameMs = cfg.targetFrameMs;
+    this.overloadFrameMs = cfg.targetFrameMs * cfg.overloadMultiplier;
+    this.overloadSamples = cfg.overloadSamples;
+    this.sampleWindow = cfg.sampleWindow;
+    this.stableWindowsBeforeProbe = cfg.stableWindowsBeforeProbe;
+    this.probeCooldownWindows = cfg.probeCooldownWindows;
+    this.atlasMaxDimension = cfg.atlasMaxDimension ?? 0;
     this.uploadsPerPoll = config.baselineUploadsPerPoll;
     this.uploadBudgetMs = config.baselineUploadBudgetMs;
     this.bestSafeUploadsPerPoll = config.baselineUploadsPerPoll;
@@ -908,7 +917,9 @@ export class VirtualTextureStore {
     this.format = format ?? FORMAT_RGBA;
     this.device = device ?? null;
     this.tuning = tuning ?? new VirtualTextureTuning();
-    this.cache = new PageCache(this.format, device?.limits.maxTextureDimension2D ?? ATLAS_WIDTH);
+    const deviceMax = device?.limits.maxTextureDimension2D ?? ATLAS_WIDTH;
+    const atlasDim = this.tuning.atlasMaxDimension > 0 ? this.tuning.atlasMaxDimension : deviceMax;
+    this.cache = new PageCache(this.format, atlasDim);
     this.atlasWidth = this.cache.width;
     this.atlasHeight = this.cache.height;
     this.atlasPagesX = this.cache.pagesX;
