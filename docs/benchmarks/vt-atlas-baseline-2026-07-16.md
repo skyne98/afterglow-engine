@@ -26,6 +26,15 @@ recorded long tasks. Three.js WebGPU timestamp queries were enabled. The raw rec
 latest main-context, feedback-context, and aggregate render GPU durations;
 query resolution occurs once per second outside the frame hot path.
 
+> **GPU timestamp correction (2026-07-21):** the rAF, residency, queue, heap,
+> and error results below remain valid, but the historical Main/Aggregate GPU
+> columns do not. Afterglow's external loop did not advance Three's frame ID, so
+> the aggregate grouped all unresolved passes since the previous readback under
+> `f0`; “Main” selected r185's output color-transform context rather than its
+> internal HDR scene context. Feedback values are individual pass durations and
+> remain useful. Corrected current Dungeon totals are recorded in
+> `docs/research/amd-rgp-radv-capture-methodology.md`.
+
 ## Results
 
 | State | Duration | Resident | Evictions (cumulative) | Mean frame | Max frame | >17 ms | Heap delta | Long tasks | Failed / overflow / GPU errors |
@@ -35,7 +44,7 @@ query resolution occurs once per second outside the frame hot path.
 | Full | 9.33 s | 3600 / 3600 | 78 | 6.950 ms | 6.955 ms | 0 | +5.8 MiB | 0 | 0 / 0 / 0 |
 | Churn | 4.92 s | 3600 / 3600 | 1014 | 6.970 ms | 20.850 ms | 1 | −3.9 MiB | 0 | 0 / 0 / 0 |
 
-| State | Main GPU | Feedback GPU | Aggregate render GPU |
+| State | Historical mislabeled output GPU | Feedback GPU | Historical cadence-dependent aggregate |
 |---|---:|---:|---:|
 | Cold | 0.018 ms | 0.007 ms | 0.128 ms |
 | Half | 0.169 ms | 0.007 ms | 0.481 ms |
@@ -76,8 +85,9 @@ full-cache pacing regression.
 Relative to the earlier four-page run, full admission improved from 23 frames
 above 17 ms with a 66.695 ms maximum to one such frame with a 33.350 ms maximum.
 Churn retained one isolated 50.025 ms interval, so this is a substantial
-reduction—not a strict zero-drop certification. GPU timings remained bounded:
-main 1.00–1.05 ms, feedback 0.013–0.015 ms, aggregate render 4.01–5.90 ms.
+reduction—not a strict zero-drop certification. The historical timestamp output was output-transform 1.00–1.05 ms, feedback
+0.013–0.015 ms, and cadence-dependent aggregate 4.01–5.90 ms. Only the
+individual feedback-pass duration survives the 2026-07-21 timing audit.
 
 ## Follow-up: range/transcode latency and progressive priority
 

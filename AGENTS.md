@@ -528,8 +528,12 @@ The `.big` v5 dungeon header is 123,768 bytes (v4: 764,192). Atlas baselines at
 144 Hz reached 1,896/3,600 half occupancy and 3,600/3,600 full occupancy in
 ~9.3 seconds each. Full-cache replacement produced 1,014 cumulative evictions
 in 4.92 seconds; mean/max rAF were 6.970/20.850 ms with one interval above
-17 ms, zero failed loads/queue overflow/long tasks/GPU errors. Full-state GPU
-timestamps: 0.149 ms main, 0.018 ms feedback, 0.465 ms aggregate render.
+17 ms, zero failed loads/queue overflow/long tasks/GPU errors. The historical
+GPU timestamp fields were mislabeled/cadence-dependent because the external loop
+left Three's frame ID at zero; only the individual 0.018 ms feedback pass remains
+valid. The corrected 2026-07-21 Dungeon audit measured scene-plus-output means
+of 4.19/4.28/5.84 ms non-POM and 6.56/5.49/8.29 ms POM across the three canonical
+poses, with 10.49 ms worst-pose p99.
 
 Corrected 10/30/60-minute stable/traverse/eight-way-teleport soaks covered
 863,264 frames and averaged 6.950 ms in every mode. They ended with zero

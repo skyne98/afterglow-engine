@@ -255,15 +255,19 @@ full-coverage, two-triangle material draw dominated both captures:
 
 These are trace-local attribution numbers, not production timings. SQTT tracing
 was active and the safe immediate capture preceded settled fine-page residency.
-A later non-traced, settled ablation measured the full non-POM main context at
-about 1.05 ms versus 0.83–0.88 ms for constant standard PBR; the complete VT
-material therefore added roughly 0.2 ms, not 4.8 ms. RADV's compiler dump showed
-why the resolver is structurally non-trivial (1,135 static instructions, 14
-image operations, and 44 branches versus 287/2/2 for constant standard PBR),
-but missing-page fallback paths were disproportionately exercised by the RGP
-capture. See [`amd-rgp-radv-capture-methodology.md`](amd-rgp-radv-capture-methodology.md)
-for screenshots, exact metrics, the ablation, safe RADV capture commands, NixOS
-viewer setup, CEF frame-delimiter caveats, and the failed long-trace attempt.
+A subsequent audit also invalidated the old 10.63 ms engine timestamp: Afterglow's
+external rAF loop left Three's frame ID at zero, making each resolve group all
+unresolved passes under one frame, while `gpuMainMs` selected the ~1.07 ms output
+color-transform pass rather than the internal HDR scene pass. With frame identity
+temporarily corrected, settled scene-plus-output totals were 4.19/4.28/5.84 ms
+non-POM means and 6.56/5.49/8.29 ms POM means across forward/reverse/corner;
+worst pose p99 was 10.49 ms. RADV's compiler dump still shows why the resolver
+is structurally non-trivial (1,135 static instructions, 14 image operations, and
+44 branches versus 287/2/2 for constant standard PBR), but it does not assign a
+production duration to those instructions. See
+[`amd-rgp-radv-capture-methodology.md`](amd-rgp-radv-capture-methodology.md) for
+screenshots, exact metrics, the audit, safe RADV capture commands, NixOS viewer
+setup, CEF frame-delimiter caveats, and the failed long-trace attempt.
 
 ## Recommended path
 

@@ -397,9 +397,13 @@ atlas AMD RGP 2.7 comparison identified a 4.56-million-pixel material draw as
 the dominant traced event. POM raised FS register use from 40 to 56 VGPR and
 reduced theoretical occupancy from 12/16 to 9/16 without spills. The trace's
 4.824/5.749 ms durations are not production timing because SQTT was active and
-fine-page residency had not settled. A non-traced settled ablation measured the
-full non-POM main context at about 1.05 ms versus 0.83–0.88 ms for constant
-standard PBR. See `docs/benchmarks/vt-atlas-baseline-2026-07-16.md` and
+fine-page residency had not settled. The subsequent timestamp audit invalidated
+the historical 10.63 ms result: Three's frame ID stayed at zero under the engine
+rAF loop, and `gpuMainMs` named the output transform rather than the HDR scene.
+With temporary corrected frame identity, scene-plus-output means were
+4.19/4.28/5.84 ms non-POM and 6.56/5.49/8.29 ms POM across the three canonical
+poses; corner POM p99 was 10.49 ms. See
+`docs/benchmarks/vt-atlas-baseline-2026-07-16.md` and
 `docs/research/amd-rgp-radv-capture-methodology.md`.
 
 Corrected 10/30/60-minute soaks produced 86,325 / 258,978 / 517,961 frames.

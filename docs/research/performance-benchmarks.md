@@ -161,8 +161,12 @@ On fox-laptop (Radeon 680M/RADV, 1440×900 logical CEF window at 144 Hz), the
 a 6.955 ms maximum rAF interval. A disjoint full-cache replacement produced
 1,014 cumulative material-group evictions in 4.92 seconds; mean/max were
 6.970/20.850 ms with one interval above 17 ms. Failed loads, scheduler overflow,
-long tasks, and GPU errors were zero. Full-state WebGPU timestamps measured
-0.149 ms main, 0.018 ms feedback, and 0.465 ms aggregate render work.
+long tasks, and GPU errors were zero. The historical WebGPU timestamp fields
+were 0.149 ms mislabeled output transform, 0.018 ms feedback, and a 0.465 ms
+cadence-dependent aggregate. A 2026-07-21 audit found that the external engine
+loop left Three's frame ID at zero; only the individual feedback duration remains
+valid. Corrected current three-pose totals are recorded in
+`amd-rgp-radv-capture-methodology.md`.
 
 Corrected long soaks (timestamp tracking disabled to avoid Three r185's
 per-frame diagnostic-key retention) covered 863,264 frames: 10-minute stable,

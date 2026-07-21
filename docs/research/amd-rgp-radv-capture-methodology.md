@@ -35,23 +35,42 @@ settled.
 RGP's render-target view reports the same traced main pass at 4,825.930 µs base
 and 5,749.917 µs POM. Secondary 2880×1800 RGBA8 passes were 0.55–1.55 ms.
 
-A subsequent non-traced, settled 2880×1800 ablation used Three's timestamp for
-the latest main render context over 40 samples at the same forward pose:
+A subsequent timestamp audit found two bugs in the engine's Three r185 adapter:
 
-| Non-POM material | Mean | p50 | Range |
-|---|---:|---:|---:|
-| Constant `MeshStandardNodeMaterial` | 0.876 ms | 0.830 ms | 0.708–1.324 ms |
-| VT albedo + constant roughness/geometric normal | 1.072 ms | 1.083 ms | 1.025–1.132 ms |
-| Full VT albedo + normal + packed roughness/AO | 1.050 ms | 1.047 ms | 1.039–1.116 ms |
+1. Afterglow owns the rAF loop but did not reset `renderer.info` or advance
+   `renderer.info.frame`. Every query UID therefore ended in `f0`, so Three
+   grouped every unresolved pass since the prior readback into one nominal
+   “frame.” The historical 10.63 ms value depended on readback cadence and is
+   invalid as a per-frame measurement.
+2. `gpuMainMs` looked up Three's null-target context. Under r185 that is the
+   fullscreen output color-transform pass; the scene itself renders first into
+   an internal `RGBA16F` framebuffer. The reported ~1.05 ms was output conversion,
+   not material rendering.
 
-The albedo/full ordering is within independent-launch clock noise, but both show
-that the settled full non-POM main render costs about 1.05 ms and the complete
-VT material adds roughly 0.2 ms over constant standard PBR—not 4.8 ms. The RADV
-compiler dump still explains why the shader is structurally non-trivial: the
-inlined full base shader contains 1,135 static machine instructions, 14 image
-operations, and 44 branches versus 287/2/2 for the constant standard shader.
-Those fallback paths are most expensive when regular pages are absent, as in
-the immediate RGP capture.
+A temporary measured prototype reset Three's per-frame counters and assigned the
+engine `frameId` before each render. With feedback disabled, queues drained, and
+80 samples per canonical pose at 2880×1800, Three's corrected last-frame total
+(scene plus output conversion) was:
+
+| Pose | Non-POM mean / p99 | POM mean / p99 |
+|---|---:|---:|
+| Forward | 4.190 / 5.539 ms | 6.559 / 8.909 ms |
+| Reverse | 4.283 / 5.229 ms | 5.492 / 6.493 ms |
+| Corner | 5.837 / 7.425 ms | 8.288 / 10.493 ms |
+
+The output transform was independently stable around 1.07 ms. Therefore the
+HDR scene portion was approximately 3.1–4.8 ms non-POM and 4.4–7.2 ms POM,
+depending on view. The old 10.63 ms happens to be close to the corrected corner
+POM p99, but only coincidentally; its original query grouping was invalid. Full
+commands, distributions, and the permanent-fix decision are recorded in
+`docs/benchmarks/dungeon-gpu-timing-audit-2026-07-21.md`.
+
+The RADV compiler dump explains why the material is non-trivial: the inlined
+full base shader contains 1,135 static machine instructions, 14 image operations,
+and 44 branches versus 287/2/2 for constant standard PBR. Those fallback paths
+are most expensive when regular pages are absent, as in the immediate RGP
+capture. These static counts identify optimization candidates but do not divide
+the corrected scene time by operation.
 
 ## Evidence retained in the repository
 
