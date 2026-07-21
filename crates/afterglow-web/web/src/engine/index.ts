@@ -17,3 +17,10 @@ export {
 } from './core/runtime.ts';
 export { RenderTier, RenderDirty } from './core/types.ts';
 export type { EntityId, RenderDescriptorId, RenderFrame } from './core/types.ts';
+export {
+  Profiling,
+  ProfilingRes,
+  type ProfilingFrame,
+  type ProfilingHost,
+  type ProfilingOptions,
+} from './profiling/index.ts';

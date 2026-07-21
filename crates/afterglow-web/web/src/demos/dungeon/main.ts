@@ -10,9 +10,13 @@ import {
 } from "../../engine/assets/index.ts";
 import {
   EngineRuntime,
+  Profiling,
+  ProfilingRes,
   RegistrationStatus,
   RendererHost,
   type RenderFrame,
+  type ProfilingFrame,
+  type ProfilingHost,
 } from "../../engine/index.ts";
 import { GpuProfiler } from "../../engine/renderer/gpu-profiler.ts";
 import {
@@ -332,6 +336,13 @@ try {
     gpuTotalMs: 0,
     gpuTimestampSupported: host.timestampSupported,
   };
+  // Central profiling ECS resource: gathers renderer.info counts + Three GPU
+  // pass timings into a bounded ring. Set on the world so any system can read it.
+  const profiling = new Profiling(
+    { renderer: host.renderer, deltaSource: () => smoothedDt * 1000 } as unknown as ProfilingHost,
+    { capacity: 240 },
+  );
+  ProfilingRes.set(runtime.adapter.world, profiling);
   /** @alloc-effect none */ function pointDistance(
     x: number,
     z: number,
@@ -425,6 +436,9 @@ try {
     timing.renderSubmitUs = host.renderSubmitUs;
     timing.feedbackSubmitUs = coordinator?.feedbackSubmitUs ?? 0;
     timing.frameCpuUs = (performance.now() - frameStarted) * 1000;
+    // Gather profiling (renderer.info + GPU pass timings) off the hot path.
+    // Fire-and-forget: info snapshot is sync, GPU readback resolves async.
+    if (frame.frameId % 15 === 0) void profiling.gather(frame.frameId);
     if (hudVisible && frame.frameId % 15 === 0) updateHud();
   } // @alloc-allowed reason=DiagnosticHud issue=DME-034 expires=2026-10-01
   if (
@@ -434,6 +448,7 @@ try {
   )
     throw new Error("Dungeon runtime capacity exceeded");
   runtime.enterWarmup();
+  profiling.setEnabled(true);
   await validatePomShaderWarmup(host, async () => {
     runtime.adapter.warmAllDescriptors();
     pomBinding.setPomEnabled(false);
@@ -587,6 +602,14 @@ try {
       heightSource: "resident R8 displacement (ambientCG)",
       heightFormat: "r8unorm",
     }),
+    /** Latest gathered profiling frame (renderer.info counts + GPU pass ms). */
+    profilingSnapshot: () => {
+      const out: ProfilingFrame[] = [];
+      profiling.latest(1, out);
+      return out[0] ?? null;
+    },
+    /** Chrome-tracing JSON of all gathered frames (paste into chrome://tracing). */
+    profilingTrace: () => profiling.exportChromeTrace(),
     setPomEnabled,
     setFeedbackEnabled: (enabled: boolean) =>
       pomBinding.setFeedbackEnabled(enabled),
