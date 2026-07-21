@@ -48,7 +48,7 @@ normal rather than Three's normal-map-dependent `parallaxDirection`, avoiding a
 cycle where the normal needs the displaced UV that the normal itself influences.
 The first material flow publishes one marched UV for albedo, normal, roughness,
 and AO. Generated WGSL is checked during warm-up for one correctly ordered
-march and three linked PBR samples.
+march and three independently resident PBR samples.
 
 The march equations and sign convention match LearnOpenGL's established POM
 implementation; the direct-light ray comes from the known-working prototype.

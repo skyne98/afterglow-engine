@@ -147,7 +147,7 @@ export function assertPomGeneratedWgsl(source: string): void {
   }
   let samples = 0, cursor = 0;
   while ((cursor = body.indexOf('vtSampleFromLevel(', cursor)) >= 0) { samples++; cursor += 18; }
-  if (samples !== 3) throw new Error(`POM shader contract: expected 3 linked PBR samples, got ${samples}`);
+  if (samples !== 3) throw new Error(`POM shader contract: expected 3 independent PBR samples, got ${samples}`);
 }
 
 export interface PomReferenceResult {

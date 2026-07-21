@@ -16,20 +16,26 @@ fixed per-frame page upload budget.
 
 - `VirtualTextureTuning(config?)` owns the central bounded atlas/page-table
   commit policy. `VirtualTextureTuningRes` is the ECS resource definition.
-  It starts at two pages / 0.20 ms, tightens after repeated overloaded rAF
-  samples with backlog, then cautiously probes toward configured device caps
-  after stable windows; a bad promoted cap immediately returns to the
-  independently validated baseline.
+  Configuration is partial: omitted fields retain the defaults, including when
+  only `atlasMaxDimension` is supplied. It starts at two pages / 0.20 ms,
+  tightens after repeated overloaded rAF samples with backlog, then cautiously
+  probes toward configured device caps after stable windows; a bad promoted cap
+  immediately returns to the independently validated baseline.
+  `atlasMaxDimension` caps the physical atlas to the largest whole 136-texel
+  slot grid at or below that dimension; zero uses the device limit.
 - `VirtualTextureStore(loader, pageDataProvider?, format?, device?, tuning?)`
   accepts the shared tuning instance. `recordFrameTime(milliseconds)` feeds
   the tuner without allocation; `getStats()` exposes active limits and
   downshift/recovery counters.
 - `loadTexture(path, options?) -> AssetHandle<THREE.Texture>`
 - `loadMaterialSet({ albedo, normal?, masks?, roughness?, ao?, emissive? }, options?)`
-  loads aligned PBR channels and expands each feedback page to every linked channel.
-- `linkMaterialSet(set)` applies the same residency link to already-loaded aligned
-  entries. Overlapping sets are unioned, so materials sharing an albedo cannot
-  orphan another material's normal, mask, or emissive pages.
+  loads aligned PBR channels and registers one albedo-driven stream policy.
+  `options.mipBiases` is material-configurable; omitted roles use albedo `0`,
+  normal/emissive `+1`, and masks/roughness/AO `+2`.
+- `linkMaterialSet(set, mipBiases?)` applies that stream policy to already-loaded
+  aligned entries. One albedo feedback request expands into independently
+  resident channel requests. If an albedo is shared by several materials, the
+  finest requested bias per channel wins.
 - `processFeedback(feedback)` accepts globally identified requests
   `{ path, mip, x, y, screenPriority?, coverage? }` and merges them into a
   fixed persistent priority scheduler. `screenPriority` ranges from 0 at the
@@ -50,7 +56,9 @@ fixed per-frame page upload budget.
   its page table in engine materials. `atlasWidth`, `atlasHeight`,
   `atlasPagesX`, and `atlasPagesY` report the device-sized physical atlas.
 - `PAGE_SIZE`, `PAGE_BORDER`, `SLOT_SIZE`, `ATLAS_WIDTH`, and `ATLAS_HEIGHT`
-  expose shader/layout constants without duplicating them in clients.
+  expose shader/layout constants without duplicating them in clients. Consumers
+  express atlas caps as an integer slot count multiplied by `SLOT_SIZE`; the
+  dungeon profile uses `53 * SLOT_SIZE` (2,809 physical slots).
 - `VirtualTextureFeedbackCoordinator(renderer, store, capacities)` is the
   application-facing feedback owner. Capacities explicitly bound registered
   renderables, total channel passes, cadence, and target count. A
@@ -86,14 +94,13 @@ fixed per-frame page upload budget.
 - `VirtualTextureRes` is the ECS resource definition.
 - `detectBestTextureFormat(adapter?)` selects BC7, ASTC, or RGBA fallback.
 - `VT_SAMPLE_WGSL` and `VT_FEEDBACK_WGSL` contain the sampling and feedback
-  shader functions. `VT_RESOLVE_MATERIAL_MIP4_WGSL` resolves one level that is
-resident in all four PBR page tables; `VT_SAMPLE_LEVEL_WGSL` samples each
-channel exactly at that shared level. `VT_SAMPLE_FROM_LEVEL_WGSL` starts a
-displaced sample at that level, walks to coarser resident pages, then uses the
-pinned tail while retaining gradients from a separate continuous base UV. This provides atomic material visibility
-even when channel completions arrive separately. Clock eviction of one material
-page also removes the same logical page from every resident channel in constant
-group-size work, so mixed residency cannot persist.
+  shader functions. `VT_DESIRED_MIP_WGSL` calculates one channel's requested
+  mip from stable derivatives plus its explicit bias.
+  `VT_SAMPLE_FROM_LEVEL_WGSL` starts a displaced sample at that channel's level,
+  walks only its page table to coarser resident pages, then uses its pinned tail
+  while retaining gradients from a separate continuous base UV. Albedo, normal,
+  emissive, and scalar data may therefore resolve different mip levels. Clock
+  eviction removes only the selected physical page.
 
 `AssetStore.setVirtualTextureStore(store)` routes subsequent `loadTexture()`
 assets into VT storage, but a shared atlas texture is not directly sampleable as
@@ -101,8 +108,8 @@ a conventional `material.map`. Materials must use VT page-table nodes.
 `createVirtualGltfMaterialPair(THREE, store, set, feedbackPixelScale, options)`
 builds matched visible/feedback `MeshStandardNodeMaterial` variants for glTF
 base color plus optional normal and packed metallic/roughness channels. Aligned
-channels share one residency level and feedback stream; differently sized
-channels sample and emit feedback independently. It works with Mesh,
+channels share one albedo feedback stream but sample and evict independently;
+differently sized channels emit separate feedback and also sample independently. It works with Mesh,
 InstancedMesh, SkinnedMesh, and morph targets because Three retains its normal
 geometry vertex path. Animated/deformed objects must render feedback with the
 same object (temporarily swapping the prewarmed material), not a bind-pose proxy.
@@ -136,22 +143,21 @@ before disposing their VT materials, so no visible object retains a disposed
 material. A metadata-free fallback scene remains renderable and contributes no
 feedback.
 
-### Recorded extension: per-material residency identities
+### Material-channel stream policy
 
-The current feedback identity is a texture ID. Consequently, if one texture is
-shared by several materials, `linkMaterialSet()` computes the transitive union
-of their linked channels. This is deterministic and prevents missing PBR pages,
-but may overfetch channels belonging only to another material using that shared
-texture.
+Material feedback identity remains the albedo texture ID for aligned sets. The
+store expands that request through a bootstrap-only fixed channel descriptor:
+texture ID, mip bias, and channel class. Sixty-six fixed scheduler lanes make
+channel class the primary ordering key and preserve coarse-to-fine plus
+center/edge ordering inside each class. All albedo requests therefore outrank
+normal/emissive requests, which outrank scalar masks. Waiting-request aging is
+clamped to its channel class and cannot invert that policy.
 
-If telemetry shows that this bounded overfetch is material, extend feedback with
-a fixed-capacity **material-group ID** distinct from texture identity. A texture
-may then participate in multiple groups, and feedback expands only the group
-used by the rendered material. Preserve the current constraints: bootstrap-only
-group registration, generational/fixed-capacity IDs, no frame allocation,
-bounded O(1) lookup, deterministic exhaustion, and coordinated group eviction.
-Do not add this protocol complexity without measured residency or bandwidth
-pressure; the connected-component union remains the canonical implementation.
+Residency and eviction are not grouped. Each channel walks its own page table,
+falls back to its own pinned tail, and consumes or releases one physical slot.
+The default `0/+1/+2` biases reduce normal page demand by roughly four and scalar
+page demand by roughly sixteen for equal-size textures. Shared albedo stream
+registrations merge channels and retain the finest bias required by any user.
 
 ## Layout and encoding
 
@@ -196,7 +202,10 @@ supports the 2048x2048 page grid of a 256K texture without aliasing identities.
 ## Residency and frame budgets
 
 The physical cache uses an O(1) key-to-slot lookup and a fixed second-chance
-clock. Touches set one reference bit; they never scan slots, splice an LRU array,
+clock. Atlas capacity is a bootstrap choice and does not alter upload tuning:
+constructing `VirtualTextureTuning({ atlasMaxDimension })` preserves the default
+finite upload count and time budget. A regression test loads and commits pages
+through a constrained 4×4-slot store to enforce that invariant. Touches set one reference bit; they never scan slots, splice an LRU array,
 or rebuild an index. CPU residency reads/writes index the packed page-table
 `Uint32Array` directly; the former string-keyed duplicate `Map` was removed. The free-slot stack and ready-upload queue use preallocated
 typed/ring storage. Eviction performs at most two fixed-capacity clock passes and
@@ -349,8 +358,8 @@ Retro Pixel),” CC BY 4.0; model 2 is CC BY-NC 4.0.
 input/diagnostics, and engine-owned POM materials. It is a first-person corridor dungeon using
 three downloaded 8K PBR sets across twelve wall instances. Two sets are
 8192×8192 and one is natively rectangular at 8192×4096. Albedo, OpenGL normal,
-roughness, and AO pages stream together through linked material feedback while
-all walls share the engine atlas. Official resident 1K, 16-bit displacement
+roughness, and AO pages share one albedo feedback stream while retaining
+independent residency, mip fallback, priority, and eviction in the engine atlas. Official resident 1K, 16-bit displacement
 maps from the same materials are expanded losslessly into filterable,
 single-channel WebGPU `r32float` and drive the 8–32-layer POM + 8-step light self-shadow tier; all
 displaced PBR channels use `VT_SAMPLE_FROM_LEVEL_WGSL` for
@@ -379,7 +388,7 @@ DISPLAY=:0 ./scripts/test-dungeon-gpu.sh
 ## Atlas-state baseline
 
 The 2026-07-16 real-GPU baseline filled all 3,600 physical slots and then
-performed 1,014 cumulative group-aware evictions. Cold, half, and full states
+performed 1,014 cumulative evictions under the former grouped-residency policy. Cold, half, and full states
 had 6.955 ms maximum rAF intervals at 144 Hz. Churn averaged 6.970 ms with a
 20.850 ms maximum and one interval above 17 ms; load failures, queue overflows,
 long tasks, and GPU errors remained zero. WebGPU timestamp queries measured the

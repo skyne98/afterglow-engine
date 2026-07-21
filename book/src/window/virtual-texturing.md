@@ -29,12 +29,11 @@ imported-texture disposal, shared-texture retention, and feedback
 material/visibility restoration. UV channels, KHR texture transforms, and
 repeat/clamp/mirror sampling are shared by visible and feedback materials;
 linear and all-nearest samplers are supported, while mixed filtering or
-asymmetric wrapping fails at bootstrap. Differently
-sized channels sample and feed back independently. Shared
-textures currently form a transitive residency-group union, which safely avoids
-missing PBR channels at the cost of bounded overfetch. A recorded future extension
-would add fixed-capacity material-group IDs to feedback if telemetry proves that
-overfetch significant. After Three.js initializes the textures,
+asymmetric wrapping fails at bootstrap. Differently sized channels sample and
+feed back independently. Aligned channels use one albedo feedback stream, but
+residency and eviction are independent: albedo defaults to the requested mip,
+normal/emissive to one level coarser, and masks/roughness/AO to two levels
+coarser. Materials can override those integer biases during bootstrap. After Three.js initializes the textures,
 call `attachRenderer()` so updates become small GPU subregion writes. Packed
 page-table writes reuse fixed upload scratch instead of creating typed-array
 views. Atlas page bytes must use an owned `ArrayBuffer`; incompatible shared
@@ -59,16 +58,20 @@ Resident lookup/touch is O(1); it does not scan or rebuild an LRU as the atlas
 fills. Feedback expansion and capacity fitting reuse preallocated numeric
 scratch records rather than constructing per-frame maps and channel objects. A
 fixed persistent scheduler keeps requests that exceed one frame's budget.
-Twenty-two fixed-array lanes prioritize exact quality rungs—low→middle before
-middle→high before high→ultra—then center/large-coverage pages before small edge
-pages. The whole missing mip chain enters those lanes in one feedback update, so
+Sixty-six fixed-array lanes prioritize channel class first—albedo, then
+normal/emissive, then scalar data. Inside each class, exact quality rungs restore
+low→middle before middle→high before high→ultra, then center/large-coverage pages
+before small edge pages. Aging cannot cross a channel-class boundary. The whole missing mip chain enters those lanes in one feedback update, so
 quality no longer waits for another GPU readback after every rung. Waiting
 requests age upward to prevent starvation. Pages absent
 from two newer feedback snapshots expire (about 56 ms at 36 Hz), and newly
 important work may preempt a strictly worse non-pinned in-flight load. Thus pages
 behind a turning camera stop consuming the bounded queue quickly. Atlas/page-table commits
-are governed by the central `VirtualTextureTuning` resource. It starts at two
-completed pages and 0.20 ms per frame, tightens after repeated overloaded rAF
+are governed by the central `VirtualTextureTuning` resource. Its configuration
+is partial, so setting only `atlasMaxDimension` retains every upload default.
+The cap is rounded down to a whole 136-texel slot grid; zero selects the device
+limit. The tuner starts at two completed pages and 0.20 ms per frame, tightens
+after repeated overloaded rAF
 samples while work is queued, then probes one step after each clean 15-active-
 frame window toward the configured device caps. Evidence survives short empty
 backlog gaps, so this calibrates during bootstrap and short gameplay bursts use
@@ -83,11 +86,10 @@ stage budget exhaustion is reported rather than allowing an unbounded burst. Bec
 channels share one linear atlas, material nodes explicitly decode albedo with
 Three.js `sRGBTransferEOTF`; normal and packed masks remain linear. Roughness
 and AO are packed offline into mask R/G, reducing each material from four
-streamed pages to three and sharing one shader sample. PBR
-materials resolve one fallback level that is resident in all four page tables,
-then sample every channel at that level, preventing mixed-mip material shading.
-Evicting one logical material page removes its resident albedo, normal, and mask
-siblings together.
+streamed pages to three and sharing one shader sample. Each PBR channel resolves its own requested and fallback mip from its own page
+table. Every channel retains a pinned tail, so partially streamed materials stay
+valid while color detail arrives first. Eviction removes only the selected
+physical page; mixed channel mips are intentional.
 
 The `.big` v5 asset format stores each mip as a contiguous row-major block:
 one block offset, its page-grid dimensions, and compact per-page sizes. Runtime
@@ -157,12 +159,14 @@ and AO PNGs and runs the generic asset pipeline once to produce the ignored
 without the former page-side AssetLoader latency. Final GPU blocks are also
 stored through the generic persistent cache under a source/format/adapter
 namespace; warm hits skip both range reads and Basis transcodes. Aligned PBR
-channels are residency-linked—even when separately loaded or shared between
-materials—so visible albedo cannot leave normal/mask/emissive pages absent. GPU feedback and linked
-material sets keep matching pages resident for all three physical channels while
-`MeshStandardNodeMaterial` retains
-Three.js's PBR shader. The shared atlas expands to the largest whole page grid
-supported by the active GPU:
+channels share one albedo feedback stream while loading and evicting
+independently. The scheduler gives diffuse pages strict priority over
+normal/emissive and scalar-mask pages; `MeshStandardNodeMaterial` samples each
+channel's best resident fallback independently while retaining Three.js's PBR
+shader. The dungeon profile caps the shared atlas at 53×53 slots
+(`53 * SLOT_SIZE`, 2,809 pages) instead of expanding to the adapter's maximum
+2D texture dimension. This bounds the active display working set and avoids
+shared-memory bandwidth saturation on integrated GPUs:
 
 ```sh
 DISPLAY=:0 ./scripts/run-dungeon.sh
@@ -193,8 +197,14 @@ scenarios. Soak modes are `stable`, `traverse`, and deliberately hostile
 `thrash`; atlas baselines are `cold`, `half`, `full`, and `churn`. The desktop
 session must remain unlocked.
 
-On fox-laptop, the full baseline reached all 3,600 slots with a 6.955 ms maximum
-rAF interval. A subsequent 1,014-eviction churn run averaged 6.970 ms, peaked at
+On fox-laptop, the constrained 2,809-slot atlas completed 1,087 initial visible
+uploads with zero failures and drained pending, ready, and scheduled work to
+zero. The measured GPU render time was 13.36 ms, down from roughly 26 ms with
+the device-maximum atlas. With independent `0/+1/+2` channel mips, a fresh run
+settled at 1,788 slots: regular page tables reported 1,271 albedo, 395 normal,
+and 113 mask pages, plus nine pinned mip-tail slots. It had zero failures/errors
+and measured 10.63 ms GPU render time. The earlier full baseline reached all 3,600 slots with
+a 6.955 ms maximum rAF interval. A subsequent 1,014-eviction churn run averaged 6.970 ms, peaked at
 20.850 ms, and missed one 17 ms threshold; failed loads, queue overflow, long
 tasks, and GPU errors remained zero. Full-state WebGPU timestamp queries measured
 0.149 ms for the main context and 0.018 ms for feedback.

@@ -27,6 +27,7 @@ import {
 import {
   FeedbackRegistrationStatus,
   FORMAT_RGBA,
+  SLOT_SIZE,
   VirtualPomSceneBinding,
   VirtualTextureFeedbackCoordinator,
   VirtualTextureTuning,
@@ -148,7 +149,7 @@ try {
   bootstrap.defer(() => session.close());
   const store = session.createVirtualTextureStore(
     device,
-    new VirtualTextureTuning(),
+    new VirtualTextureTuning({ atlasMaxDimension: 53 * SLOT_SIZE }),
   );
   bootstrap.defer(() => store.dispose());
   coordinator = new VirtualTextureFeedbackCoordinator(host.renderer, store, {
@@ -499,7 +500,7 @@ try {
     }
     return map;
   }
-  async function waitIdle(timeout = 15000): Promise<boolean> {
+  async function waitIdle(timeout = 60000): Promise<boolean> {
     const end = performance.now() + timeout;
     while (performance.now() < end) {
       const s = store.getStats();

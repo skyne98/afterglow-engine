@@ -1,5 +1,12 @@
 import {
-  FORMAT_RGBA, SLOT_SIZE, VirtualTextureStore, VirtualTextureTuning, type PageDataProvider,
+  DEFAULT_VIRTUAL_MATERIAL_MIP_BIASES,
+  FORMAT_RGBA,
+  SLOT_SIZE,
+  VirtualTextureStore,
+  VirtualTextureTuning,
+  type PageDataProvider,
+  type VirtualMaterialMipBiases,
+  type VirtualMaterialSet,
 } from './virtual-texture.ts';
 export { VirtualGltfBinding, type VirtualGltfBindingOptions } from './virtual-gltf-binding.ts';
 export {
@@ -11,7 +18,15 @@ export {
 export {
   type VirtualPomMaterialOptions, type VirtualPomMaterialPair,
 } from './virtual-texture-material.ts';
-export { FORMAT_RGBA, SLOT_SIZE, VirtualTextureStore, VirtualTextureTuning };
+export {
+  DEFAULT_VIRTUAL_MATERIAL_MIP_BIASES,
+  FORMAT_RGBA,
+  SLOT_SIZE,
+  VirtualTextureStore,
+  VirtualTextureTuning,
+  type VirtualMaterialMipBiases,
+  type VirtualMaterialSet,
+};
 export { VirtualTextureFeedbackPass } from './virtual-texture-feedback-pass.ts';
 export function createProceduralVirtualTextureStore(
   provider: PageDataProvider,

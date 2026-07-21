@@ -5,8 +5,8 @@ low-core POM shader used by the Dungeon demo.
 
 `VirtualPomSceneBinding` is the engine-owned adapter for static VT surfaces. It
 creates fixed base/POM visible and matching feedback variants during bootstrap,
-owns their disposal, applies one displaced UV to linked albedo/normal/mask
-samples, and toggles only material references after sealing. Its lighting model
+owns their disposal, applies one displaced UV to independently resident
+albedo/normal/mask samples, and toggles only material references after sealing. Its lighting model
 attenuates only each current direct-light delta, preserving prior lights and
 ambient fill. Dungeon no longer assembles TSL graphs or consumes the legacy
 global Three/VT bundle.
@@ -164,16 +164,16 @@ and fixed the original height/depth inversion (`height` was incorrectly used as
 ray depth). `validatePomShaderWarmup()` runs through the renderer host's
 bootstrap-only shader inspection boundary and requires both visible and feedback
 POM shaders. It applies `assertPomGeneratedWgsl()` to verify exactly one march,
-a geometric TBN, march-before-VT-read ordering, and exactly three linked PBR
-samples. The Dungeon never patches `GPUDevice.createShaderModule` itself.
+a geometric TBN, march-before-VT-read ordering, and exactly three independently
+resident PBR samples. The Dungeon never patches `GPUDevice.createShaderModule` itself.
 
 ## Dungeon controls and automation
 
 - `P`: toggle the prewarmed POM/base material variants.
 - `window.__afterglowDungeon.setPomEnabled(boolean)`
 - `window.__afterglowDungeon.pomStatus()` reports layer bounds, scale, offset
-  cap, fade state, self-shadow samples/strength, height source/`r32float-from-r16` format,
-  and enabled state.
+  cap, fade state, self-shadow samples/strength, resident R8 height source/
+  `r8unorm` format, and enabled state.
 
 The removed standalone `prototype/pom` and `pom_bench` launcher are superseded
 by this engine primitive and the main Dungeon demo.

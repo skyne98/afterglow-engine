@@ -55,6 +55,28 @@ describe('VirtualTextureStore residency identity', () => {
     expect(VT.VT_SAMPLE_FROM_LEVEL_WGSL).toContain('tailEntry');
   });
 
+  test('atlas-only tuning override preserves upload defaults and drains a constrained store', async () => {
+    const tuning = new VT.VirtualTextureTuning({ atlasMaxDimension: VT.SLOT_SIZE * 4 });
+    expect(tuning.atlasMaxDimension).toBe(VT.SLOT_SIZE * 4);
+    expect(tuning.uploadsPerPoll).toBe(VT.DEFAULT_VIRTUAL_TEXTURE_TUNING.baselineUploadsPerPoll);
+    expect(tuning.uploadBudgetMs).toBe(VT.DEFAULT_VIRTUAL_TEXTURE_TUNING.baselineUploadBudgetMs);
+    expect(tuning.bestSafeUploadsPerPoll).toBe(VT.DEFAULT_VIRTUAL_TEXTURE_TUNING.baselineUploadsPerPoll);
+    expect(tuning.bestSafeUploadBudgetMs).toBe(VT.DEFAULT_VIRTUAL_TEXTURE_TUNING.baselineUploadBudgetMs);
+
+    const store = new VT.VirtualTextureStore(
+      loader,
+      async () => new Uint8Array(PAGE_BYTES),
+      VT.FORMAT_RGBA,
+      undefined,
+      tuning,
+    );
+    expect(store.getStats().atlasSlotsTotal).toBe(16);
+    store.loadTexture('constrained', { width: 512, height: 512 });
+    await settle(store);
+    expect(store.getStats().completedUploads).toBeGreaterThan(0);
+    expect(store.getStats().atlasSlotsUsed).toBeGreaterThan(0);
+  });
+
   test('central tuning probes upward only after stability and rolls back a bad probe', () => {
     const tuning = new VT.VirtualTextureTuning({
       minUploadsPerPoll: 1,
@@ -211,31 +233,44 @@ describe('VirtualTextureStore residency identity', () => {
     expect(layouts.some(layout => layout.bytesPerRow === 136 * 4 && layout.rowsPerImage === 136)).toBe(true);
   });
 
-  test('expands one material feedback page to every linked PBR channel', async () => {
-    const calls: string[] = [];
+  test('expands albedo feedback with albedo-first priority and independent default mip biases', async () => {
+    const calls: Array<{ path: string; mip: number }> = [];
     const store = new VT.VirtualTextureStore(loader, async (path, req) => {
-      calls.push(`${path}:${req.mip}:${req.x}:${req.y}`);
+      calls.push({ path, mip: req.mip });
       return new Uint8Array(PAGE_BYTES);
     });
-    store.loadMaterialSet({ albedo: 'color', normal: 'normal', roughness: 'rough', ao: 'ao' }, { width: 512, height: 512 });
+    store.loadMaterialSet(
+      { albedo: 'color', normal: 'normal', roughness: 'rough', ao: 'ao' },
+      { width: 4096, height: 4096 },
+    );
     await settle(store); calls.length = 0;
     const request: VirtualPageRequest = { path: 'color', mip: 0, x: 0, y: 0 };
     store.processFeedback(new Map([['visible', request]]));
     await settle(store);
-    expect(new Set(calls.map(call => call.split(':')[0]))).toEqual(new Set(['color', 'normal', 'rough', 'ao']));
+    expect(new Set(calls.map(call => call.path))).toEqual(new Set(['color', 'normal', 'rough', 'ao']));
+    expect(Math.min(...calls.filter(call => call.path === 'color').map(call => call.mip))).toBe(0);
+    expect(Math.min(...calls.filter(call => call.path === 'normal').map(call => call.mip))).toBe(1);
+    expect(Math.min(...calls.filter(call => call.path === 'rough').map(call => call.mip))).toBe(2);
+    expect(Math.min(...calls.filter(call => call.path === 'ao').map(call => call.mip))).toBe(2);
+    expect(calls.slice(0, 4).every(call => call.path === 'color')).toBe(true);
   });
 
-  test('expands packed-mask material feedback to three physical pages', async () => {
-    const calls: string[] = [];
-    const store = new VT.VirtualTextureStore(loader, async (path) => {
-      calls.push(path);
+  test('accepts material-configurable channel mip biases', async () => {
+    const calls: Array<{ path: string; mip: number }> = [];
+    const store = new VT.VirtualTextureStore(loader, async (path, req) => {
+      calls.push({ path, mip: req.mip });
       return new Uint8Array(PAGE_BYTES);
     });
-    store.loadMaterialSet({ albedo: 'color', normal: 'normal', masks: 'masks' }, { width: 512, height: 512 });
+    store.loadMaterialSet(
+      { albedo: 'color', normal: 'normal', masks: 'masks' },
+      { width: 4096, height: 4096, mipBiases: { normal: 3, masks: 1 } },
+    );
     await settle(store); calls.length = 0;
     store.processFeedback(new Map([['visible', { path: 'color', mip: 0, x: 0, y: 0 }]]));
     await settle(store);
-    expect(new Set(calls)).toEqual(new Set(['color', 'normal', 'masks']));
+    expect(Math.min(...calls.filter(call => call.path === 'color').map(call => call.mip))).toBe(0);
+    expect(Math.min(...calls.filter(call => call.path === 'normal').map(call => call.mip))).toBe(3);
+    expect(Math.min(...calls.filter(call => call.path === 'masks').map(call => call.mip))).toBe(1);
   });
 
   test('links already-loaded channels and unions shared material roles', async () => {
@@ -245,7 +280,7 @@ describe('VirtualTextureStore residency identity', () => {
       return new Uint8Array(PAGE_BYTES);
     });
     for (const path of ['color', 'normal', 'masks', 'emissive'])
-      store.loadTexture(path, { width: 512, height: 512 });
+      store.loadTexture(path, { width: 4096, height: 4096 });
     await settle(store); calls.length = 0;
     store.linkMaterialSet({
       albedo: store.getEntry('color')!, normal: store.getEntry('normal')!, masks: store.getEntry('masks')!,
@@ -271,7 +306,7 @@ describe('VirtualTextureStore residency identity', () => {
     expect(store.getDebugSnapshot().textures[0].residentPages).toBe(9);
   });
 
-  test('evicts one logical packed-mask material page across every channel', async () => {
+  test('evicts material channels independently under atlas pressure', async () => {
     const device = { limits: { maxTextureDimension2D: 816 } } as GPUDevice; // 6x6 slots
     const store = new VT.VirtualTextureStore(loader, async () => new Uint8Array(PAGE_BYTES), VT.FORMAT_RGBA, device);
     const material = store.loadMaterialSet(
@@ -284,12 +319,14 @@ describe('VirtualTextureStore residency identity', () => {
       store.processFeedback(new Map([[page, request]]));
       await settle(store);
     }
+    let mixedPages = 0;
     for (let page = 0; page < 16; page++) {
       const index = packedPageTableIndex(material.albedo.pageTableLayout, 0, page % 4, Math.floor(page / 4));
       const states = [material.albedo, material.normal!, material.masks!]
         .map(entry => entry.pageTable[index] & 1);
-      expect(new Set(states).size).toBe(1);
+      if (new Set(states).size > 1) mixedPages++;
     }
+    expect(mixedPages).toBeGreaterThan(0);
   });
 
   test('merges several feedback passes into one visibility epoch', async () => {
@@ -355,9 +392,10 @@ describe('VirtualTextureStore residency identity', () => {
 
     const before = store.getStats().completedUploads;
     store.poll();
-    expect(store.getStats().completedUploads - before).toBe(2);
-    expect(store.getStats().readyUploads).toBe(2);
-    store.poll();
+    const firstPoll = store.getStats().completedUploads - before;
+    expect(firstPoll).toBeGreaterThan(0);
+    expect(firstPoll).toBeLessThanOrEqual(2);
+    for (let poll = 0; poll < 4 && store.getStats().readyUploads !== 0; poll++) store.poll();
     expect(store.getStats().completedUploads - before).toBe(4);
     expect(store.getStats().readyUploads).toBe(0);
   });

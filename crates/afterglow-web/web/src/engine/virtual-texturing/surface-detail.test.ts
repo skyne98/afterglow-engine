@@ -58,7 +58,7 @@ describe('low-core POM shader contract', () => {
   const generated = (main: string) => `fn pomMarchUV() {}\n@fragment\nfn main() {\n${main}\n}`;
   const samples = 'a = vtSampleFromLevel();\nb = vtSampleFromLevel();\nc = vtSampleFromLevel();';
 
-  test('accepts one geometric-TBN march before all three linked PBR samples', () => {
+  test('accepts one geometric-TBN march before all three independent PBR samples', () => {
     expect(() => assertPomGeneratedWgsl(generated(`uv = pomMarchUV(positionViewDirection * mat3x3(t,b,n));\n${samples}`))).not.toThrow();
   });
 
@@ -68,7 +68,7 @@ describe('low-core POM shader contract', () => {
     expect(() => assertPomGeneratedWgsl(generated(`uv = pomMarchUV(x * TBNViewMatrix);\n${samples}`))).toThrow('geometric TBN');
   });
 
-  test('rejects missing or unlinked PBR samples', () => {
+  test('rejects missing or misplaced PBR samples', () => {
     expect(() => assertPomGeneratedWgsl('fn pomMarchUV() {}')).toThrow('fragment entry');
     expect(() => assertPomGeneratedWgsl(generated(samples))).toThrow('march invocation');
     expect(() => assertPomGeneratedWgsl(generated('uv = pomMarchUV(x * mat3x3(t,b,n));\na = vtSampleFromLevel();'))).toThrow('expected 3');
@@ -340,9 +340,12 @@ describe('Dungeon POM integration assets and limits', () => {
     expect(hasAdapter('pomFeedbackMaterial: makeFeedback(true)')).toBe(true);
     expect(has('trackTimestamp: false')).toBe(true);
     expect(adapter).not.toContain('parallaxDirection');
-    expect(hasAdapter('sharedUv.assign(hit); sharedMip.assign(mip)')).toBe(true);
-    expect(hasAdapter('sampleFromMip(normalEntry, sharedMip, sharedUv)')).toBe(true);
-    expect(hasAdapter('sampleFromMip(masksEntry, sharedMip, sharedUv)')).toBe(true);
+    expect(hasAdapter('sharedUv.assign(hit)')).toBe(true);
+    expect(adapter).not.toContain('sharedMip');
+    expect(adapter).not.toContain('resolveMaterialMip');
+    expect(hasAdapter("sampleDisplaced(normalEntry, 'normal', sharedUv)")).toBe(true);
+    expect(hasAdapter("sampleDisplaced(masksEntry, 'masks', sharedUv)")).toBe(true);
+    expect(hasAdapter('mipBias: three.float(mipBiases[role])')).toBe(true);
   });
 
   test('ships lossless runtime R16 displacement at source aspect ratios', async () => {

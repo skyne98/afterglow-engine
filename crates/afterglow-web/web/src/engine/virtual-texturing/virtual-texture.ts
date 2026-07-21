@@ -42,7 +42,9 @@ export const ATLAS_PAGES_Y = 15;
 export const ATLAS_WIDTH = ATLAS_PAGES_X * SLOT_SIZE;
 export const ATLAS_HEIGHT = ATLAS_PAGES_Y * SLOT_SIZE;
 const MAX_MIP = 10;              // supports up to 2^10 = 1024 pages per side
-const PRIORITY_LANE_COUNT = (MAX_MIP + 1) * 2; // exact quality rung × center/edge
+const QUALITY_PRIORITY_LANE_COUNT = (MAX_MIP + 1) * 2; // exact quality rung × center/edge
+const MATERIAL_CHANNEL_PRIORITY_COUNT = 3; // albedo, normal/emissive, scalar masks
+const PRIORITY_LANE_COUNT = QUALITY_PRIORITY_LANE_COUNT * MATERIAL_CHANNEL_PRIORITY_COUNT;
 const FEEDBACK_SCALE = 0.125;    // feedback at 1/8 screen resolution
 
 // ============================================================================
@@ -68,6 +70,8 @@ export interface VirtualPageRequest extends PageRequest {
   screenPriority?: number;
   /** Number of feedback pixels covered by this page in the latest readback. */
   coverage?: number;
+  /** Internal material-channel class; 0=albedo, 1=normal/emissive, 2=scalar data. */
+  channelPriority?: number;
   /** Internal fixed-lane admission priority; 0 is highest. */
   priorityTier?: number;
 }
@@ -243,6 +247,32 @@ export interface VirtualMaterialSet {
   roughness?: VirtualTextureEntry;
   ao?: VirtualTextureEntry;
   emissive?: VirtualTextureEntry;
+}
+
+/** Per-channel coarsening relative to the material's albedo feedback mip. */
+export interface VirtualMaterialMipBiases {
+  albedo: number;
+  normal: number;
+  masks: number;
+  roughness: number;
+  ao: number;
+  emissive: number;
+}
+
+/** Albedo-first defaults: full color, one-level-coarser vector data, two-level-coarser scalars. */
+export const DEFAULT_VIRTUAL_MATERIAL_MIP_BIASES: Readonly<VirtualMaterialMipBiases> = {
+  albedo: 0,
+  normal: 1,
+  masks: 2,
+  roughness: 2,
+  ao: 2,
+  emissive: 1,
+};
+
+interface MaterialStreamChannel {
+  textureId: number;
+  mipBias: number;
+  channelPriority: number;
 }
 
 // ============================================================================
@@ -666,10 +696,10 @@ export class VirtualTextureTuning {
     this.stableWindowsBeforeProbe = cfg.stableWindowsBeforeProbe;
     this.probeCooldownWindows = cfg.probeCooldownWindows;
     this.atlasMaxDimension = cfg.atlasMaxDimension ?? 0;
-    this.uploadsPerPoll = config.baselineUploadsPerPoll;
-    this.uploadBudgetMs = config.baselineUploadBudgetMs;
-    this.bestSafeUploadsPerPoll = config.baselineUploadsPerPoll;
-    this.bestSafeUploadBudgetMs = config.baselineUploadBudgetMs;
+    this.uploadsPerPoll = cfg.baselineUploadsPerPoll;
+    this.uploadBudgetMs = cfg.baselineUploadBudgetMs;
+    this.bestSafeUploadsPerPoll = cfg.baselineUploadsPerPoll;
+    this.bestSafeUploadBudgetMs = cfg.baselineUploadBudgetMs;
   }
 
   private resetWindow(): void {
@@ -802,8 +832,8 @@ export class VirtualTextureStore {
   private entries = new Map<string, VirtualTextureEntry>();
   private entriesById: (VirtualTextureEntry | null)[] = [null];
   private pageTablesById: (PageTable | null)[] = [null];
-  private materialGroupIdsById: (readonly number[] | null)[] = [null];
-  private materialGroupByPath = new Map<string, string[]>();
+  /** One albedo feedback identity expands to independently resident channel requests. */
+  private materialChannelsBySourceId: (readonly MaterialStreamChannel[] | null)[] = [null];
   private nextTextureId = 1;
 
   /** Per-path page tables (for lookup). */
@@ -953,7 +983,7 @@ export class VirtualTextureStore {
         page: { path: '', mip: 0, x: 0, y: 0, pinned: false, cacheKey: 0 },
         lastSeen: 0,
         startedAt: 0,
-        priorityTier: 7,
+        priorityTier: PRIORITY_LANE_COUNT - 1,
         controller: null,
         canceled: false,
       };
@@ -1098,7 +1128,7 @@ export class VirtualTextureStore {
     this.entries.set(path, entry);
     this.entriesById[textureId] = entry;
     this.pageTablesById[textureId] = pageTable;
-    this.materialGroupIdsById[textureId] = null;
+    this.materialChannelsBySourceId[textureId] = null;
 
     // Pre-load pinned pages (coarsest mip levels)
     this.loadPinnedPages(path, entry);
@@ -1119,7 +1149,12 @@ export class VirtualTextureStore {
    */
   loadMaterialSet(
     paths: { albedo: string; normal?: string; masks?: string; roughness?: string; ao?: string; emissive?: string },
-    options?: { width?: number; height?: number; mipTail?: boolean },
+    options?: {
+      width?: number;
+      height?: number;
+      mipTail?: boolean;
+      mipBiases?: Readonly<Partial<VirtualMaterialMipBiases>>;
+    },
   ): VirtualMaterialSet {
     const load = (path: string): VirtualTextureEntry => {
       if (!this.entries.has(path)) this.loadTexture(path, options);
@@ -1133,34 +1168,71 @@ export class VirtualTextureStore {
       ao: paths.ao ? load(paths.ao) : undefined,
       emissive: paths.emissive ? load(paths.emissive) : undefined,
     };
-    this.linkMaterialSet(set);
+    this.linkMaterialSet(set, options?.mipBiases);
     return set;
   }
 
-  /** Link an already-loaded aligned PBR set so one feedback request restores every channel. */
-  linkMaterialSet(set: VirtualMaterialSet): void {
+  /**
+   * Expand one aligned albedo feedback stream into independently resident PBR
+   * channels. Biases are non-negative integer mip offsets; channel priority is
+   * albedo first, then normal/emissive, then scalar masks.
+   */
+  linkMaterialSet(
+    set: VirtualMaterialSet,
+    mipBiases: Readonly<Partial<VirtualMaterialMipBiases>> = {},
+  ): void {
     if (set.masks && (set.roughness || set.ao))
       throw new Error('packed masks and separate roughness/AO paths are mutually exclusive');
-    const channels = [set.albedo, set.normal, set.masks, set.roughness, set.ao, set.emissive]
-      .filter((entry): entry is VirtualTextureEntry => entry !== undefined);
-    if (channels.some(entry => entry.width !== set.albedo.width || entry.height !== set.albedo.height ||
+    const biases: Readonly<VirtualMaterialMipBiases> = {
+      ...DEFAULT_VIRTUAL_MATERIAL_MIP_BIASES,
+      ...mipBiases,
+    };
+    for (const value of Object.values(biases)) {
+      if (!Number.isInteger(value) || value < 0 || value > MAX_MIP)
+        throw new RangeError('virtual material mip biases must be integers from 0 through 10');
+    }
+    const descriptors: Array<{
+      entry: VirtualTextureEntry | undefined;
+      mipBias: number;
+      channelPriority: number;
+    }> = [
+      { entry: set.albedo, mipBias: biases.albedo, channelPriority: 0 },
+      { entry: set.normal, mipBias: biases.normal, channelPriority: 1 },
+      { entry: set.emissive, mipBias: biases.emissive, channelPriority: 1 },
+      { entry: set.masks, mipBias: biases.masks, channelPriority: 2 },
+      { entry: set.roughness, mipBias: biases.roughness, channelPriority: 2 },
+      { entry: set.ao, mipBias: biases.ao, channelPriority: 2 },
+    ];
+    const channels = descriptors.filter(
+      (descriptor): descriptor is {
+        entry: VirtualTextureEntry;
+        mipBias: number;
+        channelPriority: number;
+      } => descriptor.entry !== undefined,
+    );
+    if (channels.some(({ entry }) => entry.width !== set.albedo.width || entry.height !== set.albedo.height ||
         entry.pageGridX !== set.albedo.pageGridX || entry.pageGridY !== set.albedo.pageGridY ||
         entry.maxMip !== set.albedo.maxMip))
-      throw new Error('linked virtual material channels must have identical page layouts');
-    const groupIds: number[] = [];
-    const addId = (textureId: number): void => {
-      if (!groupIds.includes(textureId)) groupIds.push(textureId);
-    };
-    for (const channel of channels) {
-      addId(channel.textureId);
-      const existing = this.materialGroupIdsById[channel.textureId];
-      if (existing) for (const textureId of existing) addId(textureId);
+      throw new Error('material feedback channels must have identical page layouts');
+
+    const merged: MaterialStreamChannel[] = [];
+    const existing = this.materialChannelsBySourceId[set.albedo.textureId];
+    if (existing) for (const channel of existing) merged.push({ ...channel });
+    for (const descriptor of channels) {
+      const channel = merged.find(candidate => candidate.textureId === descriptor.entry.textureId);
+      if (channel) {
+        channel.mipBias = Math.min(channel.mipBias, descriptor.mipBias);
+        channel.channelPriority = Math.min(channel.channelPriority, descriptor.channelPriority);
+      } else {
+        merged.push({
+          textureId: descriptor.entry.textureId,
+          mipBias: descriptor.mipBias,
+          channelPriority: descriptor.channelPriority,
+        });
+      }
     }
-    const groupPaths = groupIds.map(textureId => this.entriesById[textureId]!.path);
-    for (let index = 0; index < groupIds.length; index++) {
-      this.materialGroupByPath.set(groupPaths[index], groupPaths);
-      this.materialGroupIdsById[groupIds[index]] = groupIds;
-    }
+    merged.sort((a, b) => a.channelPriority - b.channelPriority || a.textureId - b.textureId);
+    this.materialChannelsBySourceId[set.albedo.textureId] = merged;
   }
 
   /** Pre-load pinned (coarsest) pages. */
@@ -1244,7 +1316,7 @@ export class VirtualTextureStore {
     req: PageRequest,
     pageTable: PageTable,
     pinned = false,
-    priorityTier = 7,
+    priorityTier = PRIORITY_LANE_COUNT - 1,
   ): boolean {
     const path = entry.path;
     if (!this.pageDataProvider || (req.tail ? isResident(entry.tailEntry) : pageTable.isResident(req)) ||
@@ -1309,19 +1381,8 @@ export class VirtualTextureStore {
       const ready = this.readyUploads[this.readyUploadTail];
       ready.key = key;
       ready.generation = generation;
-      // Snapshot the page fields into the ready entry's own object. The pending
-      // slot (and its `page` reference) may be reused for a different page
-      // before poll() uploads this one (priority preemption under a smaller
-      // atlas churns the 64-slot pending queue). Reassigning the reference
-      // (`ready.page = page`) would let that reuse corrupt this entry's
-      // textureId/mip/x/y, causing poll() to skip it (entry mismatch) -> the
-      // upload stall / black walls. Copying the fields decouples the ready
-      // entry from the mutable pending record.
-      const rp = ready.page;
-      rp.textureId = page.textureId; rp.path = page.path; rp.mip = page.mip;
-      rp.x = page.x; rp.y = page.y; rp.tail = page.tail;
-      rp.pinned = page.pinned; rp.cacheKey = page.cacheKey;
-      ready.req = rp;
+      ready.page = page;
+      ready.req = page;
       ready.data = data;
       this.readyUploadTail = (this.readyUploadTail + 1) % this.readyUploads.length;
       this.readyUploadCount++;
@@ -1353,6 +1414,7 @@ export class VirtualTextureStore {
     y: number,
     tail: boolean,
     capacity: number,
+    channelPriority: number,
   ): boolean {
     const key = packedPageCoordinates(entry.textureId, mip, x, y, tail);
     const existing = this.feedbackScratchKeys.get(key);
@@ -1360,6 +1422,7 @@ export class VirtualTextureStore {
       const request = this.feedbackScratch[existing];
       request.screenPriority = Math.min(request.screenPriority ?? 255, source.screenPriority ?? 0);
       request.coverage = Math.min(0xffff, (request.coverage ?? 1) + (source.coverage ?? 1));
+      request.channelPriority = Math.min(request.channelPriority ?? channelPriority, channelPriority);
       if (request.screenPriority <= 96 || request.coverage >= 4)
         request.priorityTier = (request.priorityTier ?? 1) & ~1;
       return true;
@@ -1377,23 +1440,33 @@ export class VirtualTextureStore {
     request.tail = tail ? true : undefined;
     request.screenPriority = source.screenPriority ?? 0;
     request.coverage = source.coverage ?? 1;
-    request.priorityTier = qualityDepth * 2 + (centralOrLarge ? 0 : 1);
+    request.channelPriority = channelPriority;
+    request.priorityTier = channelPriority * QUALITY_PRIORITY_LANE_COUNT +
+      qualityDepth * 2 + (centralOrLarge ? 0 : 1);
     this.feedbackScratchKeys.set(key, index);
     return true;
   }
 
-  private addFeedbackRequest(textureId: number, source: VirtualPageRequest, bias: number, capacity: number): boolean {
+  private addFeedbackRequest(
+    textureId: number,
+    source: VirtualPageRequest,
+    bias: number,
+    capacity: number,
+    channelPriority: number,
+  ): boolean {
     const entry = this.entriesById[textureId];
     const pageTable = this.pageTablesById[textureId];
     if (!entry || !pageTable || !this.isValidEntryRequest(entry, source)) return true;
     if (source.tail === true)
-      return this.addFeedbackPage(textureId, entry, source, source.mip, 0, 0, true, capacity);
+      return this.addFeedbackPage(textureId, entry, source, source.mip, 0, 0, true, capacity, channelPriority);
 
     const desiredMip = Math.min(entry.maxMip, source.mip + bias);
     const desiredX = source.x >> (desiredMip - source.mip);
     const desiredY = source.y >> (desiredMip - source.mip);
     if (pageTable.isResidentAt(desiredMip, desiredX, desiredY))
-      return this.addFeedbackPage(textureId, entry, source, desiredMip, desiredX, desiredY, false, capacity);
+      return this.addFeedbackPage(
+        textureId, entry, source, desiredMip, desiredX, desiredY, false, capacity, channelPriority,
+      );
 
     let fallbackMip = desiredMip + 1;
     while (fallbackMip <= entry.maxMip &&
@@ -1409,7 +1482,8 @@ export class VirtualTextureStore {
     for (let mip = Math.min(entry.maxMip, fallbackMip - 1); mip >= desiredMip; mip--) {
       const shift = mip - desiredMip;
       if (!this.addFeedbackPage(
-        textureId, entry, source, mip, desiredX >> shift, desiredY >> shift, false, capacity,
+        textureId, entry, source, mip, desiredX >> shift, desiredY >> shift,
+        false, capacity, channelPriority,
       )) return false;
     }
     return true;
@@ -1426,15 +1500,17 @@ export class VirtualTextureStore {
       let fits = true;
       outer: for (const source of feedback.values()) {
         const textureId = source.textureId ?? this.entries.get(source.path)?.textureId ?? 0;
-        const group = this.materialGroupIdsById[textureId];
-        if (group) {
-          for (const channelId of group) {
-            if (!this.addFeedbackRequest(channelId, source, bias, capacity)) {
+        const channels = this.materialChannelsBySourceId[textureId];
+        if (channels) {
+          for (const channel of channels) {
+            if (!this.addFeedbackRequest(
+              channel.textureId, source, bias + channel.mipBias, capacity, channel.channelPriority,
+            )) {
               fits = false;
               break outer;
             }
           }
-        } else if (!this.addFeedbackRequest(textureId, source, bias, capacity)) {
+        } else if (!this.addFeedbackRequest(textureId, source, bias, capacity, 0)) {
           fits = false;
           break;
         }
@@ -1466,15 +1542,17 @@ export class VirtualTextureStore {
         if (feedback === null || feedback === undefined) continue;
         for (const source of feedback.values()) {
           const textureId = source.textureId ?? this.entries.get(source.path)?.textureId ?? 0;
-          const group = this.materialGroupIdsById[textureId];
-          if (group) {
-            for (const channelId of group) {
-              if (!this.addFeedbackRequest(channelId, source, bias, capacity)) {
+          const channels = this.materialChannelsBySourceId[textureId];
+          if (channels) {
+            for (const channel of channels) {
+              if (!this.addFeedbackRequest(
+                channel.textureId, source, bias + channel.mipBias, capacity, channel.channelPriority,
+              )) {
                 fits = false;
                 break outer;
               }
             }
-          } else if (!this.addFeedbackRequest(textureId, source, bias, capacity)) {
+          } else if (!this.addFeedbackRequest(textureId, source, bias, capacity, 0)) {
             fits = false;
             break outer;
           }
@@ -1500,6 +1578,7 @@ export class VirtualTextureStore {
     target.tail = source.tail;
     target.screenPriority = source.screenPriority;
     target.coverage = source.coverage;
+    target.channelPriority = source.channelPriority;
     target.priorityTier = source.priorityTier;
   }
 
@@ -1557,14 +1636,21 @@ export class VirtualTextureStore {
     const pending = this.getPending(key);
     if (pending) {
       pending.lastSeen = this.feedbackEpoch;
-      pending.priorityTier = Math.min(pending.priorityTier, request.priorityTier ?? 7);
+      pending.priorityTier = Math.min(
+        pending.priorityTier,
+        request.priorityTier ?? PRIORITY_LANE_COUNT - 1,
+      );
       return;
     }
     const existing = this.scheduledByKey.get(key);
     if (existing !== undefined) {
       this.copyRequest(this.scheduledRequests[existing], request);
       const agePromotion = (this.feedbackEpoch - this.scheduledSince[existing]) >> 2;
-      const priority = Math.max(0, (request.priorityTier ?? 7) - agePromotion);
+      const channelFloor = (request.channelPriority ?? 0) * QUALITY_PRIORITY_LANE_COUNT;
+      const priority = Math.max(
+        channelFloor,
+        (request.priorityTier ?? PRIORITY_LANE_COUNT - 1) - agePromotion,
+      );
       this.moveScheduled(existing, priority);
       this.scheduledLastSeen[existing] = this.feedbackEpoch;
       return;
@@ -1579,7 +1665,7 @@ export class VirtualTextureStore {
     this.scheduledActive[index] = 1;
     this.scheduledLastSeen[index] = this.feedbackEpoch;
     this.scheduledSince[index] = this.feedbackEpoch;
-    this.linkScheduledTail(index, request.priorityTier ?? 7);
+    this.linkScheduledTail(index, request.priorityTier ?? PRIORITY_LANE_COUNT - 1);
     this.scheduledByKey.set(key, index);
     this.scheduledCount++;
   }
@@ -1681,22 +1767,9 @@ export class VirtualTextureStore {
     this.writePageTableEntry(page.path, page, 0);
   }
 
-  /** Evict one logical material page across every resident PBR channel. */
+  /** Evict only the selected physical page; material channels are independent. */
   private evictPage(page: CachedPage): void {
     this.clearEvictedPage(page);
-    if (page.pinned || page.tail) return;
-    const group = this.materialGroupByPath.get(page.path);
-    if (!group) return;
-    for (const path of group) {
-      if (path === page.path) continue;
-      const entry = this.entries.get(path);
-      if (!entry) continue;
-      const key = packedPageCoordinates(entry.textureId, page.mip, page.x, page.y);
-      const sibling = this.cache.evictByKey(key);
-      if (!sibling) continue;
-      this.clearEvictedPage(sibling);
-      this.cacheEvictions++;
-    }
   }
 
   private writeMipTailEntry(path: string, value: number): void {
@@ -1758,12 +1831,13 @@ export class VirtualTextureStore {
    * Late promises are ignored through their removed generation records.
    */
   unloadTexture(path: string): void {
-    const materialGroup = this.materialGroupByPath.get(path);
-    if (materialGroup) {
-      for (const channelPath of materialGroup) {
-        const channel = this.entries.get(channelPath);
-        if (channel) this.materialGroupIdsById[channel.textureId] = null;
-        this.materialGroupByPath.delete(channelPath);
+    const unloading = this.entries.get(path);
+    if (unloading) {
+      for (let sourceId = 1; sourceId < this.materialChannelsBySourceId.length; sourceId++) {
+        const channels = this.materialChannelsBySourceId[sourceId];
+        if (sourceId === unloading.textureId ||
+            channels?.some(channel => channel.textureId === unloading.textureId))
+          this.materialChannelsBySourceId[sourceId] = null;
       }
     }
     for (let index = 0; index < this.scheduledRequests.length; index++) {
@@ -1783,7 +1857,7 @@ export class VirtualTextureStore {
     if (entry) {
       this.entriesById[entry.textureId] = null;
       this.pageTablesById[entry.textureId] = null;
-      this.materialGroupIdsById[entry.textureId] = null;
+      this.materialChannelsBySourceId[entry.textureId] = null;
       entry.pageTableTexture.dispose();
     }
     this.entries.delete(path);
@@ -1865,17 +1939,13 @@ export class VirtualTextureStore {
       const ready = this.readyUploads[this.readyUploadHead];
       this.readyUploadHead = (this.readyUploadHead + 1) % this.readyUploads.length;
       this.readyUploadCount--;
-      // The transcode already completed — the work is done. Upload the page as
-      // long as its texture still exists and it isn't already resident.
-      // Previously a generation-mismatch (pending preempted to make room for
-      // another page) discarded the ready entry, which stalled the whole upload
-      // pipeline under a smaller atlas: priority preemption churned the 64-slot
-      // pending queue faster than poll() could upload, so every completed
-      // transcode was thrown away (completedUploads stayed 0, walls black).
-      // Free the matching pending slot if it's still present; preempted slots
-      // were already freed by preemptWorstPending.
       const pending = this.getPending(ready.key);
-      if (pending && pending.generation === ready.generation) this.deletePending(ready.key);
+      if (!pending || pending.generation !== ready.generation) continue;
+      if (pending.canceled) {
+        this.deletePending(ready.key);
+        continue;
+      }
+      this.deletePending(ready.key);
       const textureId = ready.page.textureId ?? 0;
       const entry = this.entriesById[textureId];
       const pageTable = this.pageTablesById[textureId];
@@ -2062,6 +2132,7 @@ fn vtSample(
   atlasSize: vec2f,
   maxMip: f32,
   textureMaxMip: f32,
+  mipBias: f32,
   filterMode: u32,
   addressMode: u32
 ) -> vec4f {
@@ -2079,7 +2150,11 @@ fn vtSample(
   let dx = dpdx(uv * virtualSize);
   let dy = dpdy(uv * virtualSize);
   let texel_footprint = max(dot(dx, dx), dot(dy, dy));
-  let mip_float = clamp(0.5 * log2(max(texel_footprint, 1e-8)), 0.0, textureMaxMip);
+  let mip_float = clamp(
+    0.5 * log2(max(texel_footprint, 1e-8)) + mipBias,
+    0.0,
+    textureMaxMip
+  );
   let desired_level = i32(mip_float);
 
   // Mips below 128x128 share one pinned physical slot. The entry is stored in
@@ -2164,157 +2239,22 @@ fn vtSample(
 }
 `;
 
-/** Resolve one fallback level that is resident in all four PBR channels. */
-export const VT_RESOLVE_MATERIAL_MIP4_WGSL = /* wgsl */ `
-fn vtResolveMaterialMip4(
-  pageTable0: texture_2d<u32>,
-  pageTable1: texture_2d<u32>,
-  pageTable2: texture_2d<u32>,
-  pageTable3: texture_2d<u32>,
-  uv: vec2f,
+/** Select one channel's requested mip from stable base-UV derivatives. */
+export const VT_DESIRED_MIP_WGSL = /* wgsl */ `
+fn vtDesiredMip(
+  gradientUV: vec2f,
   virtualSize: vec2f,
-  pageGrid: vec2f,
-  pageSize: f32,
-  maxMip: f32,
   textureMaxMip: f32,
-  addressMode: u32
+  mipBias: f32
 ) -> f32 {
-  var addressed_uv = clamp(uv, vec2f(0.0), vec2f(0.99999994));
-  if (addressMode == 1u) {
-    addressed_uv = fract(uv);
-  } else if (addressMode == 2u) {
-    let period = uv - floor(uv * 0.5) * 2.0;
-    addressed_uv = select(period, 2.0 - period, period > vec2f(1.0));
-    addressed_uv = clamp(addressed_uv, vec2f(0.0), vec2f(0.99999994));
-  }
-
-  let dx = dpdx(uv * virtualSize);
-  let dy = dpdy(uv * virtualSize);
+  let dx = dpdx(gradientUV * virtualSize);
+  let dy = dpdy(gradientUV * virtualSize);
   let footprint = max(dot(dx, dx), dot(dy, dy));
-  let desired = i32(clamp(0.5 * log2(max(footprint, 1e-8)), 0.0, textureMaxMip));
-  let max_level = i32(maxMip);
-
-  if (desired > max_level) {
-    var tail_offset = 0.0;
-    for (var level = 0; level < max_level; level = level + 1) {
-      tail_offset += max(1.0, ceil(pageGrid.y / exp2(f32(level))));
-    }
-    let coord = vec2i(1, i32(tail_offset));
-    let e0 = textureLoad(pageTable0, coord, 0).r;
-    let e1 = textureLoad(pageTable1, coord, 0).r;
-    let e2 = textureLoad(pageTable2, coord, 0).r;
-    let e3 = textureLoad(pageTable3, coord, 0).r;
-    if ((e0 & 1u) != 0u && (e1 & 1u) != 0u &&
-        (e2 & 1u) != 0u && (e3 & 1u) != 0u) {
-      return f32(desired);
-    }
-  }
-
-  for (var mip = min(desired, max_level); mip <= max_level; mip = mip + 1) {
-    let scale = exp2(-f32(mip));
-    let grid = max(ceil(pageGrid * scale), vec2f(1.0));
-    let mip_size = max(floor(virtualSize * scale), vec2f(1.0));
-    let page = vec2i(min(floor(addressed_uv * mip_size / pageSize), grid - 1.0));
-    var offset = 0.0;
-    for (var level = 0; level < mip; level = level + 1) {
-      offset += max(1.0, ceil(pageGrid.y / exp2(f32(level))));
-    }
-    let coord = vec2i(page.x, page.y + i32(offset));
-    let e0 = textureLoad(pageTable0, coord, 0).r;
-    let e1 = textureLoad(pageTable1, coord, 0).r;
-    let e2 = textureLoad(pageTable2, coord, 0).r;
-    let e3 = textureLoad(pageTable3, coord, 0).r;
-    if ((e0 & 1u) != 0u && (e1 & 1u) != 0u &&
-        (e2 & 1u) != 0u && (e3 & 1u) != 0u) {
-      return f32(mip);
-    }
-  }
-  return maxMip;
+  return clamp(0.5 * log2(max(footprint, 1e-8)) + mipBias, 0.0, textureMaxMip);
 }
 `;
 
-/** Sample exactly one level chosen by a shared material fallback resolve. */
-export const VT_SAMPLE_LEVEL_WGSL = /* wgsl */ `
-fn vtSampleLevel(
-  pageTable: texture_2d<u32>,
-  atlas: texture_2d<f32>,
-  atlasSampler: sampler,
-  uv: vec2f,
-  virtualSize: vec2f,
-  pageGrid: vec2f,
-  pageSize: f32,
-  pageBorder: f32,
-  atlasSize: vec2f,
-  maxMip: f32,
-  resolvedMip: f32,
-  filterMode: u32,
-  addressMode: u32
-) -> vec4f {
-  var addressed_uv = clamp(uv, vec2f(0.0), vec2f(0.99999994));
-  if (addressMode == 1u) {
-    addressed_uv = fract(uv);
-  } else if (addressMode == 2u) {
-    let period = uv - floor(uv * 0.5) * 2.0;
-    addressed_uv = select(period, 2.0 - period, period > vec2f(1.0));
-    addressed_uv = clamp(addressed_uv, vec2f(0.0), vec2f(0.99999994));
-  }
-
-  let mip = i32(resolvedMip);
-  if (mip > i32(maxMip)) {
-    var tail_offset = 0.0;
-    for (var level = 0; level < i32(maxMip); level = level + 1) {
-      tail_offset += max(1.0, ceil(pageGrid.y / exp2(f32(level))));
-    }
-    let entry = textureLoad(pageTable, vec2i(1, i32(tail_offset)), 0).r;
-    if ((entry & 1u) == 0u) { return vec4f(0.5, 0.5, 0.5, 1.0); }
-    let delta = mip - i32(maxMip);
-    var rect_origin = vec2f(0.0);
-    if (delta == 2) { rect_origin = vec2f(72.0, 0.0); }
-    else if (delta == 3) { rect_origin = vec2f(112.0, 0.0); }
-    else if (delta == 4) { rect_origin = vec2f(72.0, 40.0); }
-    else if (delta == 5) { rect_origin = vec2f(88.0, 40.0); }
-    else if (delta == 6) { rect_origin = vec2f(100.0, 40.0); }
-    else if (delta >= 7) { rect_origin = vec2f(110.0, 40.0); }
-    let tail_size = max(vec2f(1.0), floor(virtualSize / exp2(f32(mip))));
-    let px = (entry >> 1) & 0xFFu;
-    let py = (entry >> 9) & 0xFFu;
-    let slot = vec2f(f32(px), f32(py)) * (pageSize + pageBorder * 2.0);
-    let texel = slot + rect_origin + pageBorder + addressed_uv * tail_size;
-    let scale = tail_size / atlasSize;
-    if (filterMode == 1u) {
-      return textureLoad(atlas, vec2i(clamp(floor(texel), vec2f(0.0), atlasSize - 1.0)), 0);
-    }
-    return textureSampleGrad(atlas, atlasSampler, texel / atlasSize, dpdx(uv) * scale, dpdy(uv) * scale);
-  }
-
-  let mip_scale = exp2(-f32(mip));
-  let grid = max(ceil(pageGrid * mip_scale), vec2f(1.0));
-  let mip_size = max(floor(virtualSize * mip_scale), vec2f(1.0));
-  let page = vec2i(min(floor(addressed_uv * mip_size / pageSize), grid - 1.0));
-  var offset = 0.0;
-  for (var level = 0; level < mip; level = level + 1) {
-    offset += max(1.0, ceil(pageGrid.y / exp2(f32(level))));
-  }
-  let entry = textureLoad(pageTable, vec2i(page.x, page.y + i32(offset)), 0).r;
-  if ((entry & 1u) == 0u) { return vec4f(0.5, 0.5, 0.5, 1.0); }
-  let px = (entry >> 1) & 0xFFu;
-  let py = (entry >> 9) & 0xFFu;
-  let local = addressed_uv * mip_size - vec2f(page) * pageSize;
-  let origin = vec2f(f32(px), f32(py)) * (pageSize + pageBorder * 2.0);
-  let atlas_uv = (origin + pageBorder + local) / atlasSize;
-  let gradient_scale = mip_size / atlasSize;
-  if (filterMode == 1u) {
-    return textureLoad(atlas, vec2i(clamp(floor(origin + pageBorder + local), vec2f(0.0), atlasSize - 1.0)), 0);
-  }
-  return textureSampleGrad(
-    atlas, atlasSampler, atlas_uv,
-    dpdx(uv) * gradient_scale,
-    dpdy(uv) * gradient_scale
-  );
-}
-`;
-
-/** Sample a displaced UV from a resolved level, walking to coarser pages. */
+/** Sample a displaced UV from one channel's requested level, walking to its own fallback. */
 export const VT_SAMPLE_FROM_LEVEL_WGSL = /* wgsl */ `
 fn vtSampleFromLevel(
   pageTable: texture_2d<u32>, atlas: texture_2d<f32>, atlasSampler: sampler,
