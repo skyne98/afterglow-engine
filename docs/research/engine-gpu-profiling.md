@@ -241,16 +241,35 @@ timestamp-query plumbing. It works (the dungeon `timing` object surfaces
 - No SOL/stall-reason path (vendor-tool territory — RGP for the 680M, Nsight for
   the workstation dGPU).
 
+## 680M RGP result (2026-07-21)
+
+The RADV/RGP gate is now complete. Two Radeon GPU Profiler 2.7 captures compared
+the same 2880×1800 Dungeon view with feedback disabled and POM on/off. One
+full-coverage, two-triangle material draw dominated both captures:
+
+- base: 4.824 ms event duration, 40 FS VGPR, 12/16 occupancy;
+- POM: 5.749 ms event duration, 56 FS VGPR, 9/16 occupancy;
+- POM delta: +0.924 ms / +19.2% for the dominant draw;
+- both shaded about 4.56 million pixels with no scratch spills;
+- RGP explicitly identifies vector-register use as the occupancy limiter.
+
+The main optimization target is therefore the full-coverage PBR/VT fragment
+shader, with VGPR pressure as the first proven resource constraint. POM adds
+material cost but is not the majority of the draw. See
+[`amd-rgp-radv-capture-methodology.md`](amd-rgp-radv-capture-methodology.md) for
+screenshots, exact metrics, safe RADV capture commands, NixOS viewer setup,
+CEF frame-delimiter caveats, and the failed long-trace attempt.
+
 ## Recommended path
 
 1. **In-engine (high-value, engine-ownable):** a first-class `GpuProfiler`
    (wgpu-profiler-style) — `scope()` guard over encoder/pass, K-rotated query
    pools, async resolve, `timestamp_period` scaling, chrome-trace export. See
    the proposed design below.
-2. **Deep "why" for the 680M:** **AMD Radeon GPU Profiler (RGP)** — capture the
-   dungeon frame, read wavefront occupancy + shader-ISA stall reasons +
-   texture/L2/memory SOL. This is what diagnoses the base-render regression; it
-   is the one thing no in-engine profiler can replicate.
+2. **Deep "why" for the 680M:** **AMD Radeon GPU Profiler (RGP)** — completed
+   for event timing, wavefront occupancy, register pressure, and spills. Current
+   RADV captures expose no API shader hash/instruction-timing data, so
+   source/ISA hotspots and instruction-level stalls remain unavailable.
 3. **WebGPU-browser, zero-engine-change:** WebGPU Inspector Chrome extension +
    `chrome://tracing` with `gpu` categories — works in CEF on the 680M today.
 
@@ -326,7 +345,8 @@ interface GpuZone { end(): void; } // RAII manual close
    provides per-scope timing for everything the engine controls directly.
 4. Emit `pushDebugGroup`/`popDebugGroup` names alongside `withPass` so RGP/Nsight
    captures show the same scope names.
-5. Validate on the 680M with RGP and on the workstation with Nsight GPU Trace.
+5. Keep the validated 680M RGP runbook current and validate the workstation path
+   separately with Nsight GPU Trace.
 
 This keeps the engine-ownable Layer-1 work KISS and bounded, leaves the deep
 "why" to RGP/Nsight, and removes the fragile `@unsafe-cast DME-030` dependency

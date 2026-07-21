@@ -392,8 +392,12 @@ performed 1,014 cumulative evictions under the former grouped-residency policy. 
 had 6.955 ms maximum rAF intervals at 144 Hz. Churn averaged 6.970 ms with a
 20.850 ms maximum and one interval above 17 ms; load failures, queue overflows,
 long tasks, and GPU errors remained zero. WebGPU timestamp queries measured the
-latest full-state main/feedback contexts at 0.149/0.018 ms. See
-`docs/benchmarks/vt-atlas-baseline-2026-07-16.md` and its raw logs.
+latest full-state main/feedback contexts at 0.149/0.018 ms. A later constrained-
+atlas AMD RGP 2.7 comparison identified the dominant 4.56-million-pixel material
+draw at 4.824 ms base versus 5.749 ms POM. POM raised FS register use from 40 to
+56 VGPR and reduced theoretical occupancy from 12/16 to 9/16 without spills.
+See `docs/benchmarks/vt-atlas-baseline-2026-07-16.md` and
+`docs/research/amd-rgp-radv-capture-methodology.md`.
 
 Corrected 10/30/60-minute soaks produced 86,325 / 258,978 / 517,961 frames.
 Mean timing remained 6.950 ms in stable, traversal, and per-frame teleport
