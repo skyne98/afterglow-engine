@@ -52,8 +52,16 @@ interface RenderableSlot {
 
 /** Fixed-capacity owner of feedback targets, snapshots, state, and atomic merge. */
 export interface VirtualTextureGpuTimings {
-  gpuMainMs: number;
+  /** False and frame -1 when timestamp tracking or Three's adapter is unavailable. */
+  gpuTimingValid: boolean;
+  resolvedFrameId: number;
+  /** Internal HDR scene work, excluding output conversion and VT feedback. */
+  gpuSceneMs: number;
+  /** Fullscreen tone-mapping/color-space output conversion. */
+  gpuOutputMs: number;
+  /** Sum of every VT feedback target rendered in the resolved frame. */
   gpuFeedbackMs: number;
+  /** Sum of all Three render contexts in the resolved frame. */
   gpuTotalMs: number;
 }
 
@@ -74,6 +82,7 @@ export class VirtualTextureFeedbackCoordinator implements EngineRenderPass, Rend
   private readonly renderables: RenderableSlot[];
   private readonly activeRenderable: Int32Array;
   private readonly activeLocalPass: Uint16Array;
+  private readonly feedbackContextIds: Int32Array;
   private readonly heldResults: Array<Map<number, VirtualPageRequest> | null>;
   private renderableCount = 0;
   private registeredPassCount = 0;
@@ -103,6 +112,7 @@ export class VirtualTextureFeedbackCoordinator implements EngineRenderPass, Rend
       this.renderables[index] = { renderable: null, passOffset: 0 };
     this.activeRenderable = new Int32Array(capacities.passes);
     this.activeLocalPass = new Uint16Array(capacities.passes);
+    this.feedbackContextIds = new Int32Array(capacities.passes);
     const firstPass = this.passes[0];
     if (!firstPass) throw new Error('feedback coordinator failed to reserve its first pass');
     this.pixelScale = firstPass.pixelScale;
@@ -171,26 +181,75 @@ export class VirtualTextureFeedbackCoordinator implements EngineRenderPass, Rend
     for (const pool of Object.values(renderer.backend.timestampQueryPool ?? {})) if (pool) pool.trackTimestamp = enabled;
   }
 
+  /** Resolve one logical Three frame. Diagnostic slow path; never called from the hot render pass. */
   async resolveGpuTimings(out: VirtualTextureGpuTimings): Promise<VirtualTextureGpuTimings> {
+    out.gpuTimingValid = false;
+    out.resolvedFrameId = -1;
+    out.gpuSceneMs = 0;
+    out.gpuOutputMs = 0;
+    out.gpuFeedbackMs = 0;
+    out.gpuTotalMs = 0;
     const renderer = this.renderer as unknown as { // @unsafe-cast reason=ThreePrivateTimestampReadback issue=DME-030 expires=2026-10-01
-      resolveTimestampsAsync(type: string): Promise<number>;
-      _renderContexts?: Map<unknown, { id: number }>;
-      backend: { timestampQueryPool?: { render?: { timestamps?: Map<string, number>; getTimestampFrames?(): unknown[] } } };
+      resolveTimestampsAsync(type: string): Promise<number | undefined>;
+      needsFrameBufferTarget?: boolean;
+      _renderContexts?: { get(target?: unknown): { id: number } };
+      backend: { timestampQueryPool?: { render?: {
+        timestamps?: Map<string, number>;
+        getTimestampFrames?(): number[];
+      } } };
     };
-    out.gpuTotalMs = await renderer.resolveTimestampsAsync('render');
-    const contexts = renderer._renderContexts, pool = renderer.backend.timestampQueryPool?.render;
-    const timestamps = pool?.timestamps, feedbackTarget = this.passes[0]?.target;
-    if (!contexts || !timestamps || !feedbackTarget) return out;
-    const main = contexts.get(null)?.id, feedback = contexts.get(feedbackTarget)?.id;
-    let mainFrame = -1, feedbackFrame = -1;
-    for (const [uid, duration] of timestamps) {
-      const parts = uid.split(':'), context = Number(parts[2]), id = Number(parts[3]?.slice(1));
-      if (context === main && id > mainFrame) { mainFrame = id; out.gpuMainMs = duration; }
-      else if (context === feedback && id > feedbackFrame) { feedbackFrame = id; out.gpuFeedbackMs = duration; }
+    let timestamps: Map<string, number> | undefined;
+    let frames: number[] | undefined;
+    try {
+      await renderer.resolveTimestampsAsync('render');
+      const contexts = renderer._renderContexts;
+      const pool = renderer.backend.timestampQueryPool?.render;
+      timestamps = pool?.timestamps;
+      frames = pool?.getTimestampFrames?.();
+      const resolvedFrame = frames?.[frames.length - 1];
+      if (!contexts || !timestamps || resolvedFrame === undefined || !Number.isInteger(resolvedFrame))
+        return out;
+
+      const outputContext = renderer.needsFrameBufferTarget === true
+        ? contexts.get(null).id
+        : -1;
+      this.feedbackContextIds.fill(-1);
+      for (let index = 0; index < this.passes.length; index++) {
+        const pass = this.passes[index];
+        if (pass) this.feedbackContextIds[index] = contexts.get(pass.target).id;
+      }
+
+      let total = 0, output = 0, feedback = 0;
+      for (const [uid, duration] of timestamps) {
+        const match = /^r:\d+:(\d+):f(\d+)$/.exec(uid);
+        if (!match || Number(match[2]) !== resolvedFrame || !Number.isFinite(duration) || duration < 0)
+          continue;
+        const context = Number(match[1]);
+        total += duration;
+        if (context === outputContext) {
+          output += duration;
+          continue;
+        }
+        for (let index = 0; index < this.feedbackContextIds.length; index++) {
+          if (context === this.feedbackContextIds[index]) {
+            feedback += duration;
+            break;
+          }
+        }
+      }
+      out.gpuTimingValid = true;
+      out.resolvedFrameId = resolvedFrame;
+      out.gpuOutputMs = output;
+      out.gpuFeedbackMs = feedback;
+      out.gpuTotalMs = total;
+      out.gpuSceneMs = Math.max(0, total - output - feedback);
+      return out;
+    } catch {
+      return out;
+    } finally {
+      timestamps?.clear();
+      if (frames) frames.length = 0;
     }
-    timestamps.clear();
-    const frames = pool?.getTimestampFrames?.(); if (frames) frames.length = 0;
-    return out;
   }
 
   /** @alloc-effect none */

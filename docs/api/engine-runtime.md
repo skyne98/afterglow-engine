@@ -48,9 +48,10 @@ Each frame executes:
 3. structural/pose drains;
 4. render-adapter preparation;
 5. the allocation-effect-checked game update;
-6. registered render passes in registration order. `RendererHost` uses Three's
-   synchronous `render()` after async initialization, avoiding a render promise
-   per gameplay frame.
+6. registered render passes in registration order. `RendererHost` resets Three's
+   external-loop counters and assigns the engine frame ID before using Three's
+   synchronous `render()`; later passes share that identity, and no render
+   promise is created per gameplay frame.
 
 A frame exception is stored in the bounded diagnostics ring and stops the loop.
 Stopping during update does not schedule another frame. `dispose()` is

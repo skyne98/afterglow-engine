@@ -38,11 +38,11 @@ scene/material pass.
 
 ## Measured prototype
 
-A temporary, uncommitted prototype changed `RendererHost.render(frame)` to call
+The measured prototype changed `RendererHost.render(frame)` to call
 `renderer.info.reset()` and assign `renderer.info.frame = frame.frameId` before
 `renderer.render()`. This preserved the engine-owned rAF loop while giving
-Three's query pool one stable identity per engine frame. The prototype was
-reverted after measurement pending a public timing-semantics decision.
+Three's query pool one stable identity per engine frame. The same frame-ownership
+rule is now the permanent runtime implementation.
 
 Configuration:
 
@@ -84,21 +84,29 @@ samples measured:
 
 Feedback did not explain the historical 10.63 ms result.
 
-## Required permanent correction
+## Permanent correction
 
-Technical invariant: `RendererHost` must establish one Three frame ID and reset
-Three's per-frame counters for each `EngineRuntime` frame before any visible or
-feedback render pass.
+`RendererHost` now establishes one Three frame ID and resets Three's per-frame
+counters for each `EngineRuntime` frame before any visible or feedback render
+pass. The clean-break diagnostics API exposes `gpuTimingValid`,
+`resolvedFrameId`, `gpuSceneMs`, `gpuOutputMs`, `gpuFeedbackMs`, and
+`gpuTotalMs`. The misleading `gpuMainMs` field was deleted.
 
-A public semantics decision remains for the timing fields:
+Regression tests model multiple query frames, output/no-output paths, feedback
+contexts, malformed keys, and unavailable timing. They fail if queries collapse
+under one Three frame ID or if the output context is labeled scene work.
 
-1. recommended: expose `gpuSceneMs`, `gpuOutputMs`, `gpuFeedbackMs`, and
-   `gpuTotalMs`, where total is their same-frame sum;
-2. compatibility option: redefine `gpuMainMs` as scene plus output and retain
-   separate feedback/total fields;
-3. do not retain the current meaning—`gpuMainMs` as an accidentally selected
-   output context is misleading.
+### Permanent implementation GPU gate
 
-Tests must model multiple engine frames between asynchronous resolves and fail
-if queries collapse under one Three frame ID or if the output context is labeled
-as scene/main work.
+A fresh 680M run validated the committed field split at 2880×1800 with POM and
+normal eight-frame feedback cadence. All 80/80 resolutions were valid with
+strictly increasing frame IDs; 11 samples contained feedback work and every
+sample satisfied `scene + output + feedback == total` exactly. Queues drained,
+pipeline violations/errors were zero, and results were:
+
+| Scope | Mean | p50 | p90 | p99/max |
+|---|---:|---:|---:|---:|
+| HDR scene | 5.211 ms | 5.240 ms | 5.955 ms | 7.102 ms |
+| Output transform | 1.083 ms | 1.076 ms | 1.109 ms | 1.137 ms |
+| Feedback (all frames) | 0.006 ms | 0 ms | 0.046 ms | 0.048 ms |
+| Total | 6.301 ms | 6.322 ms | 7.029 ms | 8.238 ms |

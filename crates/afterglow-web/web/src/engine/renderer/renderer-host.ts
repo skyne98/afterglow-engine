@@ -2,6 +2,7 @@ import { WebGPURenderer } from 'three/webgpu';
 import { EngineDiagnostics, DiagnosticCode, DiagnosticSource } from '../core/diagnostics.ts';
 import { RendererSeal } from './renderer-seal.ts';
 import type { EngineRenderPass } from '../core/runtime.ts';
+import type { RenderFrame } from '../core/types.ts';
 import type { VirtualTextureStore } from '../virtual-texturing/virtual-texture.ts';
 import {
   createWebGPUOnlyRenderer,
@@ -211,9 +212,17 @@ export class RendererHost implements EngineRenderPass {
 
   seal(): void { this.sealMonitor.seal(); }
 
-  render(): void {
+  render(frame: Readonly<RenderFrame>): void {
     if (this.disposed) return;
     this.renderSubmissions++;
+    const info = (this.renderer as unknown as { // @unsafe-cast reason=ThreeExternalLoopFrameOwnership issue=DME-030 expires=2026-10-01
+      info: { frame: number; reset(): void };
+    }).info;
+    // Three's own setAnimationLoop performs both operations. Afterglow owns the
+    // rAF loop, so establish one Three frame identity before any render pass;
+    // later passes (including VT feedback) intentionally share this frame ID.
+    info.reset();
+    info.frame = frame.frameId;
     const started = performance.now();
     this.renderer.render(this.scene, this.camera);
     this.renderSubmitUs = (performance.now() - started) * 1000;

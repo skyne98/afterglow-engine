@@ -47,8 +47,8 @@ A subsequent timestamp audit found two bugs in the engine's Three r185 adapter:
    an internal `RGBA16F` framebuffer. The reported ~1.05 ms was output conversion,
    not material rendering.
 
-A temporary measured prototype reset Three's per-frame counters and assigned the
-engine `frameId` before each render. With feedback disabled, queues drained, and
+The corrected runtime resets Three's per-frame counters and assigns the engine
+`frameId` before each render. With feedback disabled, queues drained, and
 80 samples per canonical pose at 2880×1800, Three's corrected last-frame total
 (scene plus output conversion) was:
 

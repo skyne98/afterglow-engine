@@ -43605,14 +43605,6 @@ class RendererSeal {
   }
 }
 
-// crates/afterglow-web/web/src/engine/assets/height-texture.ts
-var HEIGHT_R16_MAGIC = new Uint8Array([65, 71, 82, 49, 54, 76, 69, 1]);
-function assertHeightTextureGpuFormat(backend, texture2) {
-  const format = backend.utils?.getTextureFormatGPU(texture2);
-  if (format !== "r32float")
-    throw new Error(`displacement GPU format mismatch: expected r32float, got ${format ?? "unavailable"}`);
-}
-
 // crates/afterglow-web/web/src/engine/renderer/webgpu-only.ts
 function disableWebGLFallback(renderer) {
   renderer._getFallback = null;
@@ -43775,10 +43767,6 @@ class RendererHost {
     this.renderer.setSize(width, height);
     this.resizeClient?.(width, height);
   }
-  assertHeightTextureFormat(texture2) {
-    const backend = this.renderer.backend;
-    assertHeightTextureGpuFormat(backend, texture2);
-  }
   attachVirtualTextureStore(store) {
     const backend = this.renderer.backend;
     store.attachRenderer({
@@ -43816,10 +43804,13 @@ class RendererHost {
   seal() {
     this.sealMonitor.seal();
   }
-  render() {
+  render(frame) {
     if (this.disposed)
       return;
     this.renderSubmissions++;
+    const info = this.renderer.info;
+    info.reset();
+    info.frame = frame.frameId;
     const started = performance.now();
     this.renderer.render(this.scene, this.camera);
     this.renderSubmitUs = (performance.now() - started) * 1000;
@@ -44418,6 +44409,10 @@ class EngineRuntime {
       this.animationHandle = this.scheduler.request(this.onAnimationFrame);
   }
 }
+// crates/afterglow-web/web/src/engine/profiling/profiling.ts
+var ProfilingRes = defineResource("profiling", () => {
+  throw new Error("Profiling not initialized. Call ProfilingRes.set(world, new Profiling(host)).");
+});
 // crates/afterglow-web/web/src/workers/codec.ts
 function encodeVarint(n) {
   const b2 = [];
@@ -45145,13 +45140,22 @@ function decodeTextureEncoding(bytes, off) {
     return ["Basis", next];
   throw new Error(`unknown TextureEncoding variant: ${variant}`);
 }
+function decodeTextureFormat(bytes, off) {
+  const [variant, next] = decodeU32(bytes, off);
+  if (variant === 0)
+    return ["Rgba8", next];
+  if (variant === 1)
+    return ["R8", next];
+  throw new Error(`unknown TextureFormat variant: ${variant}`);
+}
 function decodeChunkMeta(bytes, off) {
   const [variant, o] = decodeU32(bytes, off);
   switch (variant) {
     case 0: {
       const [w4, o2] = decodeU32(bytes, o);
       const [h, o3] = decodeU32(bytes, o2);
-      return [{ type: "Texture", width: w4, height: h }, o3];
+      const [format, o4] = decodeTextureFormat(bytes, o3);
+      return [{ type: "Texture", width: w4, height: h, format }, o4];
     }
     case 1: {
       const [ic, o2] = decodeU32(bytes, o);
@@ -45220,7 +45224,8 @@ function decodeAssetEntry(bytes, off) {
   return [{ name, assetType, chunks, virtualTexture }, o5];
 }
 var BIG_MAGIC = 826755394;
-var BIG_VERSION = 5;
+var BIG_VERSION = 6;
+var BIG_MIN_READABLE_VERSION = 5;
 function parseBigHeader(data) {
   if (data.length < 16)
     throw new Error(".big: file too small");
@@ -45228,8 +45233,9 @@ function parseBigHeader(data) {
   if (magic !== BIG_MAGIC)
     throw new Error(".big: bad magic");
   const version = new DataView(data.buffer, data.byteOffset + 4, 4).getUint32(0, true);
-  if (version !== BIG_VERSION)
-    throw new Error(`.big: version ${version} != ${BIG_VERSION}`);
+  if (version < BIG_MIN_READABLE_VERSION || version > BIG_VERSION) {
+    throw new Error(`.big: version ${version} not in [${BIG_MIN_READABLE_VERSION},${BIG_VERSION}]`);
+  }
   const dataOffset = Number(new DataView(data.buffer, data.byteOffset + 8, 8).getBigUint64(0, true));
   const headerBytes = data.subarray(16, dataOffset);
   let off = 0;
@@ -45253,8 +45259,10 @@ async function readBigHeader(source, path, maxHeaderBytes) {
   const view = new DataView(prefix.buffer, prefix.byteOffset, prefix.byteLength);
   if (view.getUint32(0, true) !== BIG_MAGIC)
     throw new Error("BIG container has invalid magic");
-  if (view.getUint32(4, true) !== BIG_VERSION)
-    throw new Error("BIG container version is unsupported");
+  const version = view.getUint32(4, true);
+  if (version < BIG_MIN_READABLE_VERSION || version > BIG_VERSION) {
+    throw new Error(`BIG container version ${version} is unsupported`);
+  }
   const dataOffset = Number(view.getBigUint64(8, true));
   if (!Number.isSafeInteger(dataOffset) || dataOffset < 16 || dataOffset > maxHeaderBytes)
     throw new RangeError(`BIG header size ${dataOffset} exceeds configured capacity ${maxHeaderBytes}`);

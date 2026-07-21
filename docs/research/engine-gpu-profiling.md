@@ -218,20 +218,18 @@ The best in-engine profilers all converge on:
 
 ## This engine's current state + gap
 
-The repo has a **thin Layer-1 integration**:
+The repo has a **thin Layer-1 integration**. `RendererHost` establishes Three's
+frame identity under the engine-owned rAF loop; then
 `VirtualTextureFeedbackCoordinator.setGpuTimingEnabled` toggles Three r185's
-private `backend.trackTimestamp` / `timestampQueryPool`, and
-`resolveGpuTimings()` calls `renderer.resolveTimestampsAsync('render')` to get
-**two coarse numbers** — `gpuMainMs` and `gpuFeedbackMs` (whole main render
-pass, whole feedback pass). That is pass-level timing via Three's internal
-timestamp-query plumbing. It works (the dungeon `timing` object surfaces
-`gpuMainMs`/`gpuFeedbackMs`/`gpuTotalMs`).
+private `backend.trackTimestamp` / `timestampQueryPool`. `resolveGpuTimings()`
+filters the resolved logical frame and reports validity/frame ID plus scene,
+output-transform, VT-feedback, and total durations. The misleading historical
+`gpuMainMs` output-context alias was deleted.
 
 **Gap vs the elegant/advanced pattern:**
 
-- Only 2 whole-pass numbers, not arbitrary named scopes. No RAII scope
-  abstraction; no per-pass breakdown (POM pass, VT feedback, shadow pass) beyond
-  main/feedback.
+- Only fixed whole-context numbers, not arbitrary named scopes. No RAII scope
+  abstraction or material/shadow sub-scope breakdown.
 - Relies on Three r185 private `backend.timestampQueryPool` internals (the
   `@unsafe-cast DME-030` accesses in `virtual-texture-feedback-coordinator.ts`)
   — fragile, not first-class.

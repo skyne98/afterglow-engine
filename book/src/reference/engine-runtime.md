@@ -36,8 +36,10 @@ The runtime owns the scene's `RenderAdapter`, one persistent frame record, and
 the only animation callback. It prepares workers, VT, structural changes,
 transforms, and GPU uploads in a fixed order before invoking the game update and
 registered render passes. Registered passes warm and seal with the runtime.
-`RendererHost` submits through synchronous `render()` after initialization, so
-normal rendering does not create one promise per frame. Stopping during an
+`RendererHost` resets Three's external-loop counters, assigns the engine frame
+ID, and submits through synchronous `render()` after initialization. Later
+render passes share that frame identity, and normal rendering creates no promise
+per frame. Stopping during an
 update does not schedule another frame.
 
 Frame exceptions stop the runtime and enter a fixed-capacity diagnostic ring.

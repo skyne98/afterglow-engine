@@ -533,7 +533,8 @@ GPU timestamp fields were mislabeled/cadence-dependent because the external loop
 left Three's frame ID at zero; only the individual 0.018 ms feedback pass remains
 valid. The corrected 2026-07-21 Dungeon audit measured scene-plus-output means
 of 4.19/4.28/5.84 ms non-POM and 6.56/5.49/8.29 ms POM across the three canonical
-poses, with 10.49 ms worst-pose p99.
+poses, with 10.49 ms worst-pose p99. The permanent split-field gate resolved
+80/80 monotonic frames with exact scene+output+feedback totals and zero errors.
 
 Corrected 10/30/60-minute stable/traverse/eight-way-teleport soaks covered
 863,264 frames and averaged 6.950 ms in every mode. They ended with zero

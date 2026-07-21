@@ -27,6 +27,21 @@ function deferredRead(): DeferredRead {
 class FakeRenderer {
   shadowMap = { enabled: true };
   target: THREE.RenderTarget | null = null;
+  needsFrameBufferTarget = true;
+  timestampFrames: number[] = [];
+  timestamps = new Map<string, number>();
+  backend = {
+    trackTimestamp: true,
+    timestampQueryPool: {
+      render: {
+        timestamps: this.timestamps,
+        getTimestampFrames: (): number[] => this.timestampFrames,
+      },
+    },
+  };
+  _renderContexts = {
+    get: (target: unknown): { id: number } => ({ id: target === null ? 2 : 3 }),
+  };
   reads: DeferredRead[] = [];
   readIndex = 0;
   renders = 0;
@@ -40,6 +55,12 @@ class FakeRenderer {
     if (this.throwOnRender) throw new Error('feedback render failed');
   }
   async compileAsync(): Promise<void> { this.compiles++; }
+  async resolveTimestampsAsync(): Promise<number> {
+    let total = 0;
+    const frame = this.timestampFrames[this.timestampFrames.length - 1];
+    for (const [uid, duration] of this.timestamps) if (uid.endsWith(`:f${frame}`)) total += duration;
+    return total;
+  }
   readRenderTargetPixelsAsync(): Promise<ArrayBufferView> {
     const read = this.reads[this.readIndex++];
     if (!read) throw new Error('missing deferred feedback read');
@@ -136,6 +157,67 @@ describe('VirtualTextureFeedbackCoordinator', () => {
     expect(renderer.shadowMap.enabled).toBe(true);
     expect(renderable.begins).toBe(2);
     expect(renderable.ends).toBe(2);
+  });
+
+  test('resolves one logical frame into scene, output, feedback, and total', async () => {
+    const renderer = new FakeRenderer();
+    const coordinator = new VirtualTextureFeedbackCoordinator(renderer, new FakeStore(), {
+      renderables: 1, passes: 2, cadence: 1,
+    });
+    renderer.timestampFrames.push(8, 9);
+    renderer.timestamps.set('r:1:1:f8', 99);
+    renderer.timestamps.set('r:1:1:f9', 4);
+    renderer.timestamps.set('r:2:2:f9', 1);
+    renderer.timestamps.set('r:3:3:f9', 0.25);
+    renderer.timestamps.set('r:4:3:f9', 0.15);
+    renderer.timestamps.set('malformed', 100);
+    const out = {
+      gpuTimingValid: false, resolvedFrameId: -1, gpuSceneMs: -1,
+      gpuOutputMs: -1, gpuFeedbackMs: -1, gpuTotalMs: -1,
+    };
+    await coordinator.resolveGpuTimings(out);
+    expect(out).toEqual({
+      gpuTimingValid: true, resolvedFrameId: 9, gpuSceneMs: 4,
+      gpuOutputMs: 1, gpuFeedbackMs: 0.4, gpuTotalMs: 5.4,
+    });
+    expect(renderer.timestamps.size).toBe(0);
+    expect(renderer.timestampFrames.length).toBe(0);
+  });
+
+  test('treats the canvas context as scene work without an output transform', async () => {
+    const renderer = new FakeRenderer();
+    renderer.needsFrameBufferTarget = false;
+    const coordinator = new VirtualTextureFeedbackCoordinator(renderer, new FakeStore(), {
+      renderables: 1, passes: 1, cadence: 1,
+    });
+    renderer.timestampFrames.push(10);
+    renderer.timestamps.set('r:1:2:f10', 3);
+    renderer.timestamps.set('r:2:3:f10', 0.1);
+    const out = {
+      gpuTimingValid: true, resolvedFrameId: 99, gpuSceneMs: 99,
+      gpuOutputMs: 99, gpuFeedbackMs: 99, gpuTotalMs: 99,
+    };
+    await coordinator.resolveGpuTimings(out);
+    expect(out).toEqual({
+      gpuTimingValid: true, resolvedFrameId: 10, gpuSceneMs: 3,
+      gpuOutputMs: 0, gpuFeedbackMs: 0.1, gpuTotalMs: 3.1,
+    });
+  });
+
+  test('reports unavailable timing deterministically when no frame resolved', async () => {
+    const renderer = new FakeRenderer();
+    const coordinator = new VirtualTextureFeedbackCoordinator(renderer, new FakeStore(), {
+      renderables: 1, passes: 1, cadence: 1,
+    });
+    const out = {
+      gpuTimingValid: true, resolvedFrameId: 99, gpuSceneMs: 99,
+      gpuOutputMs: 99, gpuFeedbackMs: 99, gpuTotalMs: 99,
+    };
+    await coordinator.resolveGpuTimings(out);
+    expect(out).toEqual({
+      gpuTimingValid: false, resolvedFrameId: -1, gpuSceneMs: 0,
+      gpuOutputMs: 0, gpuFeedbackMs: 0, gpuTotalMs: 0,
+    });
   });
 
   test('restores all state when feedback rendering throws', () => {

@@ -207,9 +207,14 @@ and initially reported 10.63 ms GPU time. A later audit invalidated that number:
 the external engine loop left Three's timestamp frame ID at zero, so unresolved
 passes were grouped according to readback cadence, and the field called
 `gpuMainMs` was actually the ~1.07 ms output color-transform pass rather than the
-HDR scene. With frame identity corrected in a measured prototype, settled
-scene-plus-output means across forward/reverse/corner were 4.19/4.28/5.84 ms
-without POM and 6.56/5.49/8.29 ms with POM; corner POM p99 was 10.49 ms. An AMD
+HDR scene. `RendererHost` now resets Three's external-loop counters and assigns
+the engine frame ID before rendering. The timing API exposes the resolved frame plus
+separate scene, output, feedback, and total durations; the misleading
+`gpuMainMs` field was deleted. Corrected settled scene-plus-output means across
+forward/reverse/corner were 4.19/4.28/5.84 ms without POM and
+6.56/5.49/8.29 ms with POM; corner POM p99 was 10.49 ms. The permanent API then
+resolved 80/80 monotonic forward/POM frames with exact scope sums and
+5.211/1.083/0.006/6.301 ms scene/output/feedback/total means. An AMD
 RGP 2.7 trace still identified a 4.56-million-pixel material draw as the dominant
 event and showed POM increasing the fragment shader from 40 to 56 VGPR, reducing
 theoretical occupancy from 12/16 to 9/16 without spills. Its traced 4.824/5.749

@@ -43742,14 +43742,6 @@ class RendererSeal {
   }
 }
 
-// crates/afterglow-web/web/src/engine/assets/height-texture.ts
-var HEIGHT_R16_MAGIC = new Uint8Array([65, 71, 82, 49, 54, 76, 69, 1]);
-function assertHeightTextureGpuFormat(backend, texture2) {
-  const format = backend.utils?.getTextureFormatGPU(texture2);
-  if (format !== "r32float")
-    throw new Error(`displacement GPU format mismatch: expected r32float, got ${format ?? "unavailable"}`);
-}
-
 // crates/afterglow-web/web/src/engine/renderer/webgpu-only.ts
 function disableWebGLFallback(renderer) {
   renderer._getFallback = null;
@@ -43912,10 +43904,6 @@ class RendererHost {
     this.renderer.setSize(width, height);
     this.resizeClient?.(width, height);
   }
-  assertHeightTextureFormat(texture2) {
-    const backend = this.renderer.backend;
-    assertHeightTextureGpuFormat(backend, texture2);
-  }
   attachVirtualTextureStore(store) {
     const backend = this.renderer.backend;
     store.attachRenderer({
@@ -43953,10 +43941,13 @@ class RendererHost {
   seal() {
     this.sealMonitor.seal();
   }
-  render() {
+  render(frame) {
     if (this.disposed)
       return;
     this.renderSubmissions++;
+    const info = this.renderer.info;
+    info.reset();
+    info.frame = frame.frameId;
     const started = performance.now();
     this.renderer.render(this.scene, this.camera);
     this.renderSubmitUs = (performance.now() - started) * 1000;
@@ -44555,6 +44546,10 @@ class EngineRuntime {
       this.animationHandle = this.scheduler.request(this.onAnimationFrame);
   }
 }
+// crates/afterglow-web/web/src/engine/profiling/profiling.ts
+var ProfilingRes = defineResource("profiling", () => {
+  throw new Error("Profiling not initialized. Call ProfilingRes.set(world, new Profiling(host)).");
+});
 // crates/afterglow-web/web/src/demos/engine/main.ts
 var ENTITY_COUNT = 5000;
 var scene = new Scene;

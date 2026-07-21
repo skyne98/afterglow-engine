@@ -385,6 +385,27 @@ DISPLAY=:0 ./scripts/test-dungeon-gpu.sh
 ./scripts/baseline-vt-atlas.sh half vt-atlas-half.log
 ```
 
+## GPU timing diagnostics
+
+`VirtualTextureFeedbackCoordinator.resolveGpuTimings(out)` is a diagnostic slow
+path. `RendererHost` owns Three's external-loop frame boundary: before visible
+rendering it resets `renderer.info` and assigns the engine `frameId`, so the
+visible scene, output conversion, and any later VT feedback passes share one
+logical timestamp frame.
+
+`VirtualTextureGpuTimings` contains:
+
+- `gpuTimingValid` and `resolvedFrameId` (`false` / `-1` when unavailable);
+- `gpuSceneMs`: internal HDR scene work excluding output and VT feedback;
+- `gpuOutputMs`: fullscreen tone-mapping/color-space conversion;
+- `gpuFeedbackMs`: sum of every VT feedback target in that frame;
+- `gpuTotalMs`: sum of all Three render contexts in that frame.
+
+Resolution filters every context by `resolvedFrameId`, clears Three's retained
+diagnostic keys after readback, and deterministically returns invalid/zero values
+if timestamp support or the r185 private adapter shape is unavailable. There is
+no legacy `gpuMainMs`; it accidentally named the output context and was deleted.
+
 ## Atlas-state baseline
 
 The 2026-07-16 real-GPU baseline filled all 3,600 physical slots and then
@@ -400,9 +421,11 @@ reduced theoretical occupancy from 12/16 to 9/16 without spills. The trace's
 fine-page residency had not settled. The subsequent timestamp audit invalidated
 the historical 10.63 ms result: Three's frame ID stayed at zero under the engine
 rAF loop, and `gpuMainMs` named the output transform rather than the HDR scene.
-With temporary corrected frame identity, scene-plus-output means were
+With corrected frame identity, scene-plus-output means were
 4.19/4.28/5.84 ms non-POM and 6.56/5.49/8.29 ms POM across the three canonical
-poses; corner POM p99 was 10.49 ms. See
+poses; corner POM p99 was 10.49 ms. The permanent split-field gate then resolved
+80/80 monotonic frames with exact scope sums: POM/feedback-on forward means were
+5.211 ms scene, 1.083 ms output, 0.006 ms feedback, and 6.301 ms total. See
 `docs/benchmarks/vt-atlas-baseline-2026-07-16.md` and
 `docs/research/amd-rgp-radv-capture-methodology.md`.
 

@@ -11,8 +11,10 @@ render pass. It creates a fail-closed WebGPU renderer from the typed module
 graph, owns canvas/resize/GPU-error listener lifetime, exposes the validated GPU
 device, immutable adapter identity, and confines VT native-texture attachment
 behind a host method. It
-applies the configured pixel-ratio ceiling, compiles during warm-up, seals with the runtime, and rolls
-back partial initialization. Disposal is idempotent.
+applies the configured pixel-ratio ceiling, compiles during warm-up, resets
+Three's external-loop counters and assigns the engine frame ID before rendering,
+seals with the runtime, and rolls back partial initialization. Later render
+passes share that frame identity. Disposal is idempotent.
 
 Generated-WGSL checks run through the bootstrap-only
 `RendererHost.inspectShaderModulesDuring()` boundary. The host restores the

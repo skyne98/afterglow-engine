@@ -21,6 +21,9 @@ interface FakeRenderer extends WebGPUOnlyRenderer {
   compiled: number;
   rendered: number;
   disposed: number;
+  infoResets: number;
+  info: { frame: number; reset(): void };
+  renderedFrames: number[];
   ratios: number[];
   sizes: number[];
 }
@@ -45,11 +48,17 @@ function fakeRenderer(device: EventTarget): FakeRenderer {
     compiled: 0,
     rendered: 0,
     disposed: 0,
+    infoResets: 0,
+    info: {
+      frame: 0,
+      reset() { renderer.infoResets++; },
+    },
+    renderedFrames: [],
     ratios: [],
     sizes: [],
     async init() { renderer.initialized++; },
     async compileAsync() { renderer.compiled++; },
-    render() { renderer.rendered++; },
+    render() { renderer.rendered++; renderer.renderedFrames.push(renderer.info.frame); },
     async renderAsync() { renderer.rendered++; },
     setPixelRatio(value) { renderer.ratios.push(value); },
     setSize(width, height) { renderer.sizes.push(width, height); },
@@ -119,8 +128,11 @@ describe('RendererHost', () => {
         await host.inspectShaderModulesDuring(async () => {}, () => {});
       }, () => {})).rejects.toThrow('already active');
       expect(device.createShaderModule).toBe(originalShaderFactory);
-      host.render();
-      expect(renderer.rendered).toBe(1);
+      host.render({ frameId: 41, deltaSeconds: 1 / 60, elapsedSeconds: 1 });
+      host.render({ frameId: 42, deltaSeconds: 1 / 60, elapsedSeconds: 1 + 1 / 60 });
+      expect(renderer.rendered).toBe(2);
+      expect(renderer.infoResets).toBe(2);
+      expect(renderer.renderedFrames).toEqual([41, 42]);
       host.seal();
       await expect(host.inspectShaderModulesDuring(async () => {}, () => {}))
         .rejects.toThrow('bootstrap-only');

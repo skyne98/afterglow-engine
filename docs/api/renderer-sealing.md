@@ -19,7 +19,9 @@ by the host, exposes the validated typed GPU device and immutable
 `adapterInfo`, appends/removes the canvas,
 applies a bounded pixel ratio, owns the resize and uncaptured-GPU-error listeners,
 compiles its scene/camera during runtime warm-up, implements `EngineRenderPass`,
-and seals its `RendererSeal` when `EngineRuntime` seals registered passes.
+resets Three's counters and assigns `RenderFrame.frameId` at each external-loop
+frame boundary, and seals its `RendererSeal` when `EngineRuntime` seals
+registered passes.
 `attachVirtualTextureStore()` confines Three's private native-texture lookup to
 the host after one warm-up render. Initialization failure disposes
 the partially created renderer; `dispose()` is idempotent.
@@ -35,8 +37,10 @@ of reading `window.THREE`. A renderer factory can be injected for tests, while
 the production factory remains fail-closed against WebGL fallback.
 
 Three.js is initialized with `trackTimestamp: true` where profiling is enabled.
-`resolveTimestampsAsync('render')` runs once per diagnostic second, not in the
-frame hot path. Context IDs distinguish main and feedback GPU durations.
+Timestamp resolution is a diagnostic slow path, not frame-hot work. The
+clean-break timing record carries validity and resolved frame ID plus separate
+HDR scene, output-transform, VT-feedback, and total durations; context IDs are
+filtered to exactly that frame.
 
 ## Proxy pools
 
