@@ -1309,8 +1309,19 @@ export class VirtualTextureStore {
       const ready = this.readyUploads[this.readyUploadTail];
       ready.key = key;
       ready.generation = generation;
-      ready.page = page;
-      ready.req = page;
+      // Snapshot the page fields into the ready entry's own object. The pending
+      // slot (and its `page` reference) may be reused for a different page
+      // before poll() uploads this one (priority preemption under a smaller
+      // atlas churns the 64-slot pending queue). Reassigning the reference
+      // (`ready.page = page`) would let that reuse corrupt this entry's
+      // textureId/mip/x/y, causing poll() to skip it (entry mismatch) -> the
+      // upload stall / black walls. Copying the fields decouples the ready
+      // entry from the mutable pending record.
+      const rp = ready.page;
+      rp.textureId = page.textureId; rp.path = page.path; rp.mip = page.mip;
+      rp.x = page.x; rp.y = page.y; rp.tail = page.tail;
+      rp.pinned = page.pinned; rp.cacheKey = page.cacheKey;
+      ready.req = rp;
       ready.data = data;
       this.readyUploadTail = (this.readyUploadTail + 1) % this.readyUploads.length;
       this.readyUploadCount++;
@@ -1854,13 +1865,17 @@ export class VirtualTextureStore {
       const ready = this.readyUploads[this.readyUploadHead];
       this.readyUploadHead = (this.readyUploadHead + 1) % this.readyUploads.length;
       this.readyUploadCount--;
+      // The transcode already completed — the work is done. Upload the page as
+      // long as its texture still exists and it isn't already resident.
+      // Previously a generation-mismatch (pending preempted to make room for
+      // another page) discarded the ready entry, which stalled the whole upload
+      // pipeline under a smaller atlas: priority preemption churned the 64-slot
+      // pending queue faster than poll() could upload, so every completed
+      // transcode was thrown away (completedUploads stayed 0, walls black).
+      // Free the matching pending slot if it's still present; preempted slots
+      // were already freed by preemptWorstPending.
       const pending = this.getPending(ready.key);
-      if (!pending || pending.generation !== ready.generation) continue;
-      if (pending.canceled) {
-        this.deletePending(ready.key);
-        continue;
-      }
-      this.deletePending(ready.key);
+      if (pending && pending.generation === ready.generation) this.deletePending(ready.key);
       const textureId = ready.page.textureId ?? 0;
       const entry = this.entriesById[textureId];
       const pageTable = this.pageTablesById[textureId];
