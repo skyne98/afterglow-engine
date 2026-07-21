@@ -181,7 +181,7 @@ export class GpuProfiler {
     if (this.frameScopeCount === 0) { this.advance(); return; }
     const used = this.frameScopeCount * 2;
     encoder.resolveQuerySet(slot.querySet, 0, used, slot.resolveBuffer, 0);
-    encoder.copyBufferToBuffer(slot.resolveBuffer, 0, slot.resultBuffer, 0, used);
+    encoder.copyBufferToBuffer(slot.resolveBuffer, 0, slot.resultBuffer, 0, used * 8);
     slot.resolved = true;
     slot.mapped = false;
     this.advance();
@@ -244,6 +244,47 @@ export class GpuProfiler {
       slot.resultBuffer.destroy();
     }
     this.slots.length = 0;
+  }
+
+  /**
+   * Engine-owned self-test: run a few trivial profiled render passes on the
+   * real device and read back GPU timestamps. Proves the Layer-1 path works
+   * end-to-end on this GPU. Demos/diagnostics call this one line — no
+   * per-consumer boilerplate.
+   *
+   * Returns `{ supported, timings }`. `supported` is false (and timings empty)
+   * when the device lacks `timestamp-query`. `durationMs` may read 0 on
+   * browsers that quantize timestamps to 100µs (Chrome default).
+   */
+  static async validate(
+    device: GPUDevice,
+    queue: GPUQueue,
+  ): Promise<{ supported: boolean; timings: readonly GpuScopeTiming[] }> {
+    const profiler = new GpuProfiler(device, queue, { framesInFlight: 2, maxScopesPerFrame: 4 });
+    if (!profiler.isSupported()) { profiler.dispose(); return { supported: false, timings: [] }; }
+    const target = device.createTexture({
+      size: [4096, 4096],
+      format: (navigator as unknown as { gpu: GPU }).gpu.getPreferredCanvasFormat(),
+      usage: GPUTextureUsage.RENDER_ATTACHMENT,
+    });
+    const view = target.createView();
+    // Run framesInFlight + margin frames; await each so the GPU finishes and
+    // the oldest frame's results are available for readback.
+    for (let frame = 0; frame < 4; frame++) {
+      const scope = profiler.beginFrame();
+      const encoder = device.createCommandEncoder();
+      const pass = encoder.beginRenderPass(scope.withPass("validation-pass", {
+        colorAttachments: [{ view, clearValue: { r: 0, g: 0, b: 0, a: 1 }, loadOp: "clear", storeOp: "store" }],
+      }));
+      pass.end();
+      profiler.endFrame(encoder);
+      queue.submit([encoder.finish()]);
+      await queue.onSubmittedWorkDone();
+    }
+    const timings = await profiler.poll();
+    profiler.dispose();
+    target.destroy();
+    return { supported: true, timings };
   }
 }
 

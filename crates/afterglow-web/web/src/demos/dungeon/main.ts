@@ -14,6 +14,7 @@ import {
   RendererHost,
   type RenderFrame,
 } from "../../engine/index.ts";
+import { GpuProfiler } from "../../engine/renderer/gpu-profiler.ts";
 import {
   BoundedKeyboardInput,
   DemoInputAction,
@@ -601,6 +602,9 @@ try {
       coordinator?.resolveGpuTimings(timing) ?? timing,
     setGpuTimingEnabled: (enabled: boolean) =>
       coordinator?.setGpuTimingEnabled(enabled),
+    /** Validate the engine's GpuProfiler against the real WebGPU device.
+     *  One-line call to an engine-owned self-test (no demo boilerplate). */
+    validateGpuProfiler: () => GpuProfiler.validate(host.device, host.device.queue),
     errorCount: () => runtime.diagnostics.count,
     runAtlasScenario,
     snapshot: () => ({
