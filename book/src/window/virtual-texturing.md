@@ -203,12 +203,16 @@ zero. The measured GPU render time was 13.36 ms, down from roughly 26 ms with
 the device-maximum atlas. With independent `0/+1/+2` channel mips, a fresh run
 settled at 1,788 slots: regular page tables reported 1,271 albedo, 395 normal,
 and 113 mask pages, plus nine pinned mip-tail slots. It had zero failures/errors
-and measured 10.63 ms GPU render time. A matching AMD RGP 2.7 capture identified
-the dominant 4.56-million-pixel material draw at 4.824 ms base and 5.749 ms POM.
-POM added 0.924 ms while increasing the fragment shader from 40 to 56 VGPR and
-reducing theoretical occupancy from 12/16 to 9/16; neither variant spilled.
-The earlier full baseline reached all 3,600 slots with a 6.955 ms maximum rAF
-interval. A subsequent 1,014-eviction churn run averaged 6.970 ms, peaked at
+and measured 10.63 ms for the then-reported aggregate GPU render timing. An AMD
+RGP 2.7 trace identified a 4.56-million-pixel material draw as the dominant
+event and showed POM increasing the fragment shader from 40 to 56 VGPR,
+reducing theoretical occupancy from 12/16 to 9/16 without spills. Its traced
+4.824/5.749 ms event durations are not production timings: SQTT was active and
+the safe capture preceded settled fine-page residency. A later non-traced,
+settled ablation measured the full non-POM main context at about 1.05 ms versus
+0.83–0.88 ms for constant standard PBR, putting settled VT material overhead at
+roughly 0.2 ms. The earlier full baseline reached all 3,600 slots with a 6.955
+ms maximum rAF interval. A subsequent 1,014-eviction churn run averaged 6.970 ms, peaked at
 20.850 ms, and missed one 17 ms threshold; failed loads, queue overflow, long
 tasks, and GPU errors remained zero. Full-state WebGPU timestamp queries measured
 0.149 ms for the main context and 0.018 ms for feedback.

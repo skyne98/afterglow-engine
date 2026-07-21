@@ -253,12 +253,17 @@ full-coverage, two-triangle material draw dominated both captures:
 - both shaded about 4.56 million pixels with no scratch spills;
 - RGP explicitly identifies vector-register use as the occupancy limiter.
 
-The main optimization target is therefore the full-coverage PBR/VT fragment
-shader, with VGPR pressure as the first proven resource constraint. POM adds
-material cost but is not the majority of the draw. See
-[`amd-rgp-radv-capture-methodology.md`](amd-rgp-radv-capture-methodology.md) for
-screenshots, exact metrics, safe RADV capture commands, NixOS viewer setup,
-CEF frame-delimiter caveats, and the failed long-trace attempt.
+These are trace-local attribution numbers, not production timings. SQTT tracing
+was active and the safe immediate capture preceded settled fine-page residency.
+A later non-traced, settled ablation measured the full non-POM main context at
+about 1.05 ms versus 0.83–0.88 ms for constant standard PBR; the complete VT
+material therefore added roughly 0.2 ms, not 4.8 ms. RADV's compiler dump showed
+why the resolver is structurally non-trivial (1,135 static instructions, 14
+image operations, and 44 branches versus 287/2/2 for constant standard PBR),
+but missing-page fallback paths were disproportionately exercised by the RGP
+capture. See [`amd-rgp-radv-capture-methodology.md`](amd-rgp-radv-capture-methodology.md)
+for screenshots, exact metrics, the ablation, safe RADV capture commands, NixOS
+viewer setup, CEF frame-delimiter caveats, and the failed long-trace attempt.
 
 ## Recommended path
 

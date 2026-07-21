@@ -393,10 +393,13 @@ had 6.955 ms maximum rAF intervals at 144 Hz. Churn averaged 6.970 ms with a
 20.850 ms maximum and one interval above 17 ms; load failures, queue overflows,
 long tasks, and GPU errors remained zero. WebGPU timestamp queries measured the
 latest full-state main/feedback contexts at 0.149/0.018 ms. A later constrained-
-atlas AMD RGP 2.7 comparison identified the dominant 4.56-million-pixel material
-draw at 4.824 ms base versus 5.749 ms POM. POM raised FS register use from 40 to
-56 VGPR and reduced theoretical occupancy from 12/16 to 9/16 without spills.
-See `docs/benchmarks/vt-atlas-baseline-2026-07-16.md` and
+atlas AMD RGP 2.7 comparison identified a 4.56-million-pixel material draw as
+the dominant traced event. POM raised FS register use from 40 to 56 VGPR and
+reduced theoretical occupancy from 12/16 to 9/16 without spills. The trace's
+4.824/5.749 ms durations are not production timing because SQTT was active and
+fine-page residency had not settled. A non-traced settled ablation measured the
+full non-POM main context at about 1.05 ms versus 0.83–0.88 ms for constant
+standard PBR. See `docs/benchmarks/vt-atlas-baseline-2026-07-16.md` and
 `docs/research/amd-rgp-radv-capture-methodology.md`.
 
 Corrected 10/30/60-minute soaks produced 86,325 / 258,978 / 517,961 frames.

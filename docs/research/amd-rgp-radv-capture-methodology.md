@@ -26,14 +26,32 @@ approximately 4.56 million pixels from two triangles into the 2880×1800
 
 RGP explicitly reports vector-register usage as the occupancy limiter. The base
 shader needs four fewer VGPRs to reach the next occupancy tier; the POM shader
-needs eight fewer. The POM event runs about 0.92 ms longer, but the base shader
-is already the dominant cost. Therefore the current optimization target is the
-full-coverage material fragment draw—especially fragment register pressure and
-per-pixel material/VT work—not VT feedback, CPU submission, or POM alone.
+needs eight fewer. The trace therefore identifies the full-coverage material
+fragment draw as the event to inspect and shows POM's effect on shader resources.
+It does **not** establish a 4.8–5.7 ms production cost: SQTT tracing perturbs
+execution, and the safe immediate capture occurred before fine-page residency
+settled.
 
-RGP's render-target view reports the same main pass at 4,825.930 µs base and
-5,749.917 µs POM. Secondary 2880×1800 RGBA8 passes were 0.55–1.55 ms and did not
-replace the main material draw as the dominant event.
+RGP's render-target view reports the same traced main pass at 4,825.930 µs base
+and 5,749.917 µs POM. Secondary 2880×1800 RGBA8 passes were 0.55–1.55 ms.
+
+A subsequent non-traced, settled 2880×1800 ablation used Three's timestamp for
+the latest main render context over 40 samples at the same forward pose:
+
+| Non-POM material | Mean | p50 | Range |
+|---|---:|---:|---:|
+| Constant `MeshStandardNodeMaterial` | 0.876 ms | 0.830 ms | 0.708–1.324 ms |
+| VT albedo + constant roughness/geometric normal | 1.072 ms | 1.083 ms | 1.025–1.132 ms |
+| Full VT albedo + normal + packed roughness/AO | 1.050 ms | 1.047 ms | 1.039–1.116 ms |
+
+The albedo/full ordering is within independent-launch clock noise, but both show
+that the settled full non-POM main render costs about 1.05 ms and the complete
+VT material adds roughly 0.2 ms over constant standard PBR—not 4.8 ms. The RADV
+compiler dump still explains why the shader is structurally non-trivial: the
+inlined full base shader contains 1,135 static machine instructions, 14 image
+operations, and 44 branches versus 287/2/2 for the constant standard shader.
+Those fallback paths are most expensive when regular pages are absent, as in
+the immediate RGP capture.
 
 ## Evidence retained in the repository
 
@@ -120,9 +138,10 @@ Therefore:
 - keep raw captures out of git because each is tens of MiB.
 
 This means the recorded RGP frame has warmed pipelines but limited fine-page
-residency. It is valid for comparing identical base/POM geometry, shader
-resources, occupancy, and event duration. It is not steady-state atlas-memory
-traffic evidence.
+residency. It is valid for identifying the dominant event and comparing
+base/POM geometry, shader resources, occupancy, and traced duration under the
+same capture conditions. Its absolute event duration is not production timing,
+and it is not steady-state atlas-memory traffic evidence.
 
 ### 4. Install and launch AMD's viewer on NixOS
 
@@ -166,8 +185,12 @@ ImageMagick `import -window <id>` to retain evidence screenshots.
 
 - CEF's GPU process presents multiple Vulkan surfaces. RGP's “GPU-based frame”
   delimiter can therefore be shorter than a command-buffer event in the same
-  capture. Use matching event and render-target durations for base/POM deltas;
-  do not treat the overview frame duration as Afterglow presentation time.
+  capture. Use matching event and render-target durations for trace-local
+  comparisons; do not treat the overview frame duration as Afterglow
+  presentation time.
+- SQTT/RGP instrumentation and pre-residency fallback traversal can materially
+  inflate event duration. Production timing must come from a non-traced,
+  settled timestamp-query run.
 - These RADV captures report `N/A` API shader hashes and no instruction-timing
   data. RGP still provides event timing, wave counts, register use, spills, and
   occupancy, but not source/ISA hotspots or instruction-level stalls.
