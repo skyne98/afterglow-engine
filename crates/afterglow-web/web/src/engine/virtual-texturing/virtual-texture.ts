@@ -548,6 +548,11 @@ class PageCache {
   get usedSlots(): number { return this.usedCount; }
   get pinnedSlots(): number { return this.pinnedCount; }
   get freeSlotCount(): number { return this.freeTop; }
+  get reservedSlots(): number {
+    let count = 0;
+    for (let i = 0; i < this.reserved.length; i++) if (this.reserved[i] !== 0) count++;
+    return count;
+  }
   get totalSlots(): number { return this.pagesX * this.pagesY; }
 }
 
@@ -881,7 +886,7 @@ export class VirtualTextureStore {
     loaded: 0, evicted: 0, totalRequests: 0, queuedRequests: 0, lodBias: 0,
   };
   private readonly stats = {
-    textureCount: 0, atlasSlotsUsed: 0, atlasSlotsTotal: 0, trackedPages: 0,
+    textureCount: 0, atlasSlotsUsed: 0, atlasSlotsFree: 0, atlasSlotsReserved: 0, atlasSlotsTotal: 0, trackedPages: 0,
     pendingPages: 0, lodBias: 0, budget: 0, readyUploads: 0,
     maxPendingPages: 0, pendingBytes: 0, maxPendingBytes: 0,
     scheduledRequests: 0, schedulerCapacity: 0, schedulerOverflows: 0,
@@ -1935,6 +1940,8 @@ export class VirtualTextureStore {
     const stats = this.stats;
     stats.textureCount = this.entries.size;
     stats.atlasSlotsUsed = this.cache.usedSlots;
+    stats.atlasSlotsFree = this.cache.freeSlotCount;
+    stats.atlasSlotsReserved = this.cache.reservedSlots;
     stats.atlasSlotsTotal = this.cache.totalSlots;
     stats.trackedPages = this.cache.usedSlots;
     stats.pendingPages = this.pendingCount;
