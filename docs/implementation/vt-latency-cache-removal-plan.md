@@ -1,7 +1,6 @@
 # VT latency reduction and persistent-cache removal plan
 
-Status: **proposed; no implementation may begin until the blocking defaults
-below are approved**.
+Status: **approved 2026-07-25; implementation in progress**.
 
 Baseline commit: `281c643` (`fix(telemetry): validate VT profiling semantics`).
 Baseline evidence:
@@ -17,9 +16,8 @@ format, or change atlas/upload policy.
 
 ## 1. Blocking product decisions
 
-The cache-removal decision is already explicit. The remaining values are
-recommended defaults, not facts implied by the implementation. The user must
-approve or replace them before code changes begin.
+The user approved every recommended default below on 2026-07-25. They are now
+acceptance constants; changing one requires a new explicit decision.
 
 | Decision | Recommended default | Alternatives | Consequence |
 |---|---|---|---|
@@ -34,8 +32,8 @@ approve or replace them before code changes begin.
 | Source sorting | Leave unchanged in this change | Wire source-sorted provider | RTX profile showed 3 ms reads; do not mix an unmeasured transport change into this latency fix |
 | Success target | Traverse p99 admitted page load ≤100 ms; hostile teleport reported separately | Different quality target | Determines whether worker scaling is admitted later |
 
-Once approved, these values become acceptance constants. Do not silently tune
-them during implementation.
+These values are acceptance constants. Do not silently tune them during
+implementation.
 
 ## 2. Non-goals and invariants
 
