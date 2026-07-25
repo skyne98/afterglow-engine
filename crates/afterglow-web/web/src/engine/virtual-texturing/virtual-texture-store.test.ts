@@ -35,6 +35,7 @@ beforeAll(async () => { VT = await import('./virtual-texture.ts'); });
 
 const PAGE_BYTES = 136 * 136 * 4;
 const TEST_CAPACITIES = { maxPendingPages: 64, maxPendingBytes: 8 * 1024 * 1024 } as const;
+const NO_CACHE_CAPACITIES = { maxPendingPages: 16, maxPendingBytes: 2 * 1024 * 1024 } as const;
 const loader = { read: async () => new Uint8Array(), poll() {} };
 const flush = () => new Promise(resolve => setTimeout(resolve, 0));
 const settle = async (store: { poll(): void }) => {
@@ -553,9 +554,9 @@ describe('VirtualTextureStore residency identity', () => {
     expect(store.getStats().scheduledRequests).toBe(0);
   });
 
-  test('bounds admitted asynchronous page work', async () => {
+  test('bounds admitted asynchronous page work at the selected sixteen-page profile', async () => {
     const never = new Promise<Uint8Array>(() => {});
-    const store = new VT.VirtualTextureStore(loader, TEST_CAPACITIES, async (_path, req) =>
+    const store = new VT.VirtualTextureStore(loader, NO_CACHE_CAPACITIES, async (_path, req) =>
       req.mip >= 4 ? new Uint8Array(PAGE_BYTES) : never);
     for (let texture = 0; texture < 5; texture++) {
       store.loadTexture(`bounded-${texture}`, { width: 4096, height: 4096 });
@@ -572,8 +573,11 @@ describe('VirtualTextureStore residency identity', () => {
     store.processFeedback(feedback);
     for (let frame = 0; frame < 12; frame++) store.poll();
     const stats = store.getStats();
-    expect(stats.pendingPages).toBe(64);
-    expect(stats.maxPendingPages).toBe(64);
+    expect(stats.pendingPages).toBe(16);
+    expect(stats.maxPendingPages).toBe(16);
+    expect(stats.maxPendingBytes).toBe(2 * 1024 * 1024);
+    expect(stats.scheduledRequests).toBeGreaterThan(0);
+    expect(stats.failedLoads).toBe(0);
     expect(stats.rejectedAdmissions).toBeGreaterThan(0);
   });
 

@@ -664,6 +664,13 @@ export interface PageProviderStats {
 
 export type PageLoadTier = 'urgent' | 'quality';
 
+export interface PagePipelineConfig {
+  /** Waiting jobs only; active workers are separate. */
+  transcodeQueueCapacity: number;
+  urgentBatchDeadlineMs: number;
+  qualityBatchDeadlineMs: number;
+}
+
 export type VirtualTexturePageProvider = ((
   path: string,
   req: { mip: number; x: number; y: number; tail?: boolean; batchTier?: PageLoadTier },
@@ -1000,6 +1007,8 @@ class BoundedBulkReadQueue {
 
   constructor(
     private readonly loader: BulkReadLoader,
+    private readonly urgentDeadlineMs: number,
+    private readonly qualityDeadlineMs: number,
     private readonly telemetry?: EngineTelemetry,
   ) {
     for (let index = BULK_RANGE_CAPACITY - 1; index >= 0; index--) {
@@ -1011,7 +1020,9 @@ class BoundedBulkReadQueue {
   }
 
   private tierIndex(tier: PageLoadTier): number { return tier === 'urgent' ? 0 : 1; }
-  private deadlineMs(tier: number): number { return tier === 0 ? 1 : 100; }
+  private deadlineMs(tier: number): number {
+    return tier === 0 ? this.urgentDeadlineMs : this.qualityDeadlineMs;
+  }
 
   read(
     path: string,
@@ -1255,13 +1266,21 @@ export function createPageDataProvider(
   header: BigHeader,
   textureWorkers: readonly { transcode(data: Uint8Array, targetFormat: number): Promise<Uint8Array> }[],
   format: number,
-  transcodeQueueCapacity = 64,
+  config: Readonly<PagePipelineConfig>,
   telemetry?: EngineTelemetry,
 ): VirtualTexturePageProvider {
+  if (!Number.isInteger(config.transcodeQueueCapacity) || config.transcodeQueueCapacity < 1 ||
+      !Number.isInteger(config.urgentBatchDeadlineMs) || config.urgentBatchDeadlineMs < 0 ||
+      !Number.isInteger(config.qualityBatchDeadlineMs) || config.qualityBatchDeadlineMs < 0 ||
+      config.urgentBatchDeadlineMs > config.qualityBatchDeadlineMs) {
+    throw new RangeError('invalid VT page-pipeline configuration');
+  }
   const directories = expandVtDirectories(header);
 
-  const transcoder = new BoundedTranscoderPool(textureWorkers, transcodeQueueCapacity, telemetry);
-  const bulkReads = new BoundedBulkReadQueue(loader, telemetry);
+  const transcoder = new BoundedTranscoderPool(textureWorkers, config.transcodeQueueCapacity, telemetry);
+  const bulkReads = new BoundedBulkReadQueue(
+    loader, config.urgentBatchDeadlineMs, config.qualityBatchDeadlineMs, telemetry,
+  );
   const stats: PageProviderStats = {
     reads: 0, averageReadMs: 0, maxReadMs: 0,
     bulkQueued: 0, bulkInFlight: 0, bulkInFlightBytes: 0,

@@ -9,6 +9,11 @@ import {
 import { EngineTelemetry, TELEMETRY_RECORD_BYTES } from '../telemetry/telemetry.ts';
 
 const flush = () => new Promise(resolve => setTimeout(resolve, 0));
+const TEST_PIPELINE = {
+  transcodeQueueCapacity: 64,
+  urgentBatchDeadlineMs: 1,
+  qualityBatchDeadlineMs: 16,
+} as const;
 
 describe('browser range loader', () => {
   test('issues an exact Range request for a single read', async () => {
@@ -89,11 +94,26 @@ describe('.big v5 compact VT directories', () => {
     };
     const provider = createPageDataProvider(loader, header, [{
       async transcode() { throw new Error('raw pages do not transcode'); },
-    }], 4);
+    }], 4, TEST_PIPELINE);
     expect((await provider('terrain', { mip: 0, x: 1, y: 0 }))[0]).toBe(1);
     expect((await provider('terrain', { mip: 0, x: 1, y: 0 }))[0]).toBe(2);
     expect(reads).toBe(2);
     provider.close();
+  });
+
+  test('rejects invalid page-pipeline capacities and deadline ordering', () => {
+    const loader = {
+      async read() { return new Uint8Array(); }, async load() { return new Uint8Array(); },
+      async size() { return 0; },
+    };
+    expect(() => createPageDataProvider(loader, header, [{
+      async transcode() { return new Uint8Array(); },
+    }], 4, { transcodeQueueCapacity: 0, urgentBatchDeadlineMs: 1, qualityBatchDeadlineMs: 16 }))
+      .toThrow('page-pipeline');
+    expect(() => createPageDataProvider(loader, header, [{
+      async transcode() { return new Uint8Array(); },
+    }], 4, { transcodeQueueCapacity: 1, urgentBatchDeadlineMs: 17, qualityBatchDeadlineMs: 16 }))
+      .toThrow('page-pipeline');
   });
 
   test('expands direct typed-array offsets once for runtime range reads', async () => {
@@ -108,7 +128,7 @@ describe('.big v5 compact VT directories', () => {
     };
     const provider = createPageDataProvider(loader, header, [{
       async transcode() { throw new Error('raw pages do not transcode'); },
-    }], 4);
+    }], 4, TEST_PIPELINE);
     expect((await provider('terrain', { mip: 0, x: 1, y: 0 })).byteLength).toBe(20);
     expect((await provider('terrain', { mip: 1, x: 0, y: 0, tail: true })).byteLength).toBe(30);
     expect(reads).toEqual([
@@ -148,7 +168,7 @@ describe('.big v5 compact VT directories', () => {
     };
     const provider = createPageDataProvider(loader, batchHeader, [{
       async transcode() { throw new Error('raw pages do not transcode'); },
-    }], 4);
+    }], 4, TEST_PIPELINE);
     const [p0, p1, p3] = await Promise.all([
       provider('tiles', { mip: 0, x: 0, y: 0 }),
       provider('tiles', { mip: 0, x: 1, y: 0 }),
@@ -163,7 +183,7 @@ describe('.big v5 compact VT directories', () => {
     provider.close();
   });
 
-  test('quality batching opens one non-resettable 100 ms window', async () => {
+  test('quality batching opens one non-resettable 16 ms window', async () => {
     const batchHeader: BigHeader = {
       version: 5, dataOffset: 64n,
       assets: [{
@@ -194,11 +214,11 @@ describe('.big v5 compact VT directories', () => {
     };
     const provider = createPageDataProvider(loader, batchHeader, [{
       async transcode() { throw new Error('raw pages do not transcode'); },
-    }], 4);
+    }], 4, TEST_PIPELINE);
     try {
       const first = provider('tiles', { mip: 0, x: 0, y: 0, batchTier: 'quality' });
       const second = provider('tiles', { mip: 0, x: 1, y: 0, batchTier: 'quality' });
-      expect(delays).toEqual([100]);
+      expect(delays).toEqual([16]);
       callbacks[0]();
       await Promise.all([first, second]);
       expect(bulks).toHaveLength(1);

@@ -729,6 +729,8 @@ function createPageRangeReader(loader, header, readConcurrency = 16) {
 
 class BoundedBulkReadQueue {
   loader;
+  urgentDeadlineMs;
+  qualityDeadlineMs;
   telemetry;
   slots = new Array(BULK_RANGE_CAPACITY);
   free = new Uint16Array(BULK_RANGE_CAPACITY);
@@ -764,8 +766,10 @@ class BoundedBulkReadQueue {
     rejected: 0,
     canceled: 0
   };
-  constructor(loader, telemetry) {
+  constructor(loader, urgentDeadlineMs, qualityDeadlineMs, telemetry) {
     this.loader = loader;
+    this.urgentDeadlineMs = urgentDeadlineMs;
+    this.qualityDeadlineMs = qualityDeadlineMs;
     this.telemetry = telemetry;
     for (let index = BULK_RANGE_CAPACITY - 1;index >= 0; index--) {
       this.slots[index] = {
@@ -784,7 +788,7 @@ class BoundedBulkReadQueue {
     return tier === "urgent" ? 0 : 1;
   }
   deadlineMs(tier) {
-    return tier === 0 ? 1 : 100;
+    return tier === 0 ? this.urgentDeadlineMs : this.qualityDeadlineMs;
   }
   read(path, offset, length, tier, signal, correlation = 0) {
     const traceCorrelation = correlation || this.telemetry?.nextCorrelation(3 /* VirtualTexture */) || 0;

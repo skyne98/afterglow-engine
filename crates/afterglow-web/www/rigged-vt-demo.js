@@ -69114,6 +69114,8 @@ function expandVtDirectories(header) {
 }
 class BoundedBulkReadQueue {
   loader;
+  urgentDeadlineMs;
+  qualityDeadlineMs;
   telemetry;
   slots = new Array(BULK_RANGE_CAPACITY);
   free = new Uint16Array(BULK_RANGE_CAPACITY);
@@ -69149,8 +69151,10 @@ class BoundedBulkReadQueue {
     rejected: 0,
     canceled: 0
   };
-  constructor(loader, telemetry) {
+  constructor(loader, urgentDeadlineMs, qualityDeadlineMs, telemetry) {
     this.loader = loader;
+    this.urgentDeadlineMs = urgentDeadlineMs;
+    this.qualityDeadlineMs = qualityDeadlineMs;
     this.telemetry = telemetry;
     for (let index = BULK_RANGE_CAPACITY - 1;index >= 0; index--) {
       this.slots[index] = {
@@ -69169,7 +69173,7 @@ class BoundedBulkReadQueue {
     return tier === "urgent" ? 0 : 1;
   }
   deadlineMs(tier) {
-    return tier === 0 ? 1 : 100;
+    return tier === 0 ? this.urgentDeadlineMs : this.qualityDeadlineMs;
   }
   read(path, offset, length2, tier, signal, correlation = 0) {
     const traceCorrelation = correlation || this.telemetry?.nextCorrelation(3 /* VirtualTexture */) || 0;
@@ -69369,10 +69373,13 @@ class BoundedBulkReadQueue {
     return stats;
   }
 }
-function createPageDataProvider(loader, header, textureWorkers, format, transcodeQueueCapacity = 64, telemetry) {
+function createPageDataProvider(loader, header, textureWorkers, format, config, telemetry) {
+  if (!Number.isInteger(config.transcodeQueueCapacity) || config.transcodeQueueCapacity < 1 || !Number.isInteger(config.urgentBatchDeadlineMs) || config.urgentBatchDeadlineMs < 0 || !Number.isInteger(config.qualityBatchDeadlineMs) || config.qualityBatchDeadlineMs < 0 || config.urgentBatchDeadlineMs > config.qualityBatchDeadlineMs) {
+    throw new RangeError("invalid VT page-pipeline configuration");
+  }
   const directories = expandVtDirectories(header);
-  const transcoder = new BoundedTranscoderPool(textureWorkers, transcodeQueueCapacity, telemetry);
-  const bulkReads = new BoundedBulkReadQueue(loader, telemetry);
+  const transcoder = new BoundedTranscoderPool(textureWorkers, config.transcodeQueueCapacity, telemetry);
+  const bulkReads = new BoundedBulkReadQueue(loader, config.urgentBatchDeadlineMs, config.qualityBatchDeadlineMs, telemetry);
   const stats = {
     reads: 0,
     averageReadMs: 0,
@@ -72281,6 +72288,8 @@ class BigAssetSession {
       throw new RangeError("BIG session workerCount must be positive");
     if (!Number.isInteger(options.transcodeQueueCapacity) || options.transcodeQueueCapacity <= 0)
       throw new RangeError("BIG session transcode queue capacity must be positive");
+    if (!Number.isInteger(options.urgentBatchDeadlineMs) || options.urgentBatchDeadlineMs < 0 || !Number.isInteger(options.qualityBatchDeadlineMs) || options.qualityBatchDeadlineMs < 0 || options.urgentBatchDeadlineMs > options.qualityBatchDeadlineMs)
+      throw new RangeError("BIG session bulk deadlines are invalid");
     if (!Number.isInteger(options.maxPendingPages) || options.maxPendingPages <= 0 || !Number.isInteger(options.maxPendingBytes) || options.maxPendingBytes <= 0)
       throw new RangeError("BIG session VT pending capacities must be positive integers");
     const correlation = options.telemetry?.nextCorrelation(4 /* Asset */) ?? 0;
@@ -72298,7 +72307,11 @@ class BigAssetSession {
         read: (_path, offset, length2) => source.read(options.containerPath, offset, length2),
         readBulk: source.readBulk ? (ranges) => source.readBulk(options.containerPath, ranges) : undefined
       };
-      const pageProvider = createPageDataProvider(containerLoader, header, clients, options.format, options.transcodeQueueCapacity, options.telemetry);
+      const pageProvider = createPageDataProvider(containerLoader, header, clients, options.format, {
+        transcodeQueueCapacity: options.transcodeQueueCapacity,
+        urgentBatchDeadlineMs: options.urgentBatchDeadlineMs,
+        qualityBatchDeadlineMs: options.qualityBatchDeadlineMs
+      }, options.telemetry);
       const session = new BigAssetSession(source, options.containerPath, header, options.format, workers, options.createMeshOptimizer, options.telemetry, { maxPendingPages: options.maxPendingPages, maxPendingBytes: options.maxPendingBytes }, pageProvider);
       options.telemetry?.trace.asyncEnd(8 /* SessionOpen */, correlation, workers.length, 0);
       return session;
@@ -75595,7 +75608,9 @@ try {
     telemetry: runtime.telemetry,
     format,
     workerCount,
-    transcodeQueueCapacity: 64,
+    transcodeQueueCapacity: 12,
+    urgentBatchDeadlineMs: 1,
+    qualityBatchDeadlineMs: 16,
     maxPendingPages: 16,
     maxPendingBytes: 2 * 1024 * 1024,
     maxHeaderBytes: 2 * 1024 * 1024

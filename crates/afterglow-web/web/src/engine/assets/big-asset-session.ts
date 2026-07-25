@@ -32,6 +32,8 @@ export interface BigAssetSessionOptions {
   format: number;
   workerCount: number;
   transcodeQueueCapacity: number;
+  urgentBatchDeadlineMs: number;
+  qualityBatchDeadlineMs: number;
   maxPendingPages: number;
   maxPendingBytes: number;
   maxHeaderBytes: number;
@@ -75,6 +77,10 @@ export class BigAssetSession {
       throw new RangeError('BIG session workerCount must be positive');
     if (!Number.isInteger(options.transcodeQueueCapacity) || options.transcodeQueueCapacity <= 0)
       throw new RangeError('BIG session transcode queue capacity must be positive');
+    if (!Number.isInteger(options.urgentBatchDeadlineMs) || options.urgentBatchDeadlineMs < 0 ||
+        !Number.isInteger(options.qualityBatchDeadlineMs) || options.qualityBatchDeadlineMs < 0 ||
+        options.urgentBatchDeadlineMs > options.qualityBatchDeadlineMs)
+      throw new RangeError('BIG session bulk deadlines are invalid');
     if (!Number.isInteger(options.maxPendingPages) || options.maxPendingPages <= 0 ||
         !Number.isInteger(options.maxPendingBytes) || options.maxPendingBytes <= 0)
       throw new RangeError('BIG session VT pending capacities must be positive integers');
@@ -107,7 +113,11 @@ export class BigAssetSession {
         header,
         clients,
         options.format,
-        options.transcodeQueueCapacity,
+        {
+          transcodeQueueCapacity: options.transcodeQueueCapacity,
+          urgentBatchDeadlineMs: options.urgentBatchDeadlineMs,
+          qualityBatchDeadlineMs: options.qualityBatchDeadlineMs,
+        },
         options.telemetry,
       );
       const session = new BigAssetSession(
