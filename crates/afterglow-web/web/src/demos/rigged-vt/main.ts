@@ -99,6 +99,8 @@ const runtime = EngineRuntime.forScene({
     workerCompletions: 32,
     assetRequests: 64,
     vtRequests: 512,
+    telemetryRecords: 8192,
+    telemetryMetricCells: 512,
   },
   diagnosticCapacity: 64,
   maxWorkerInputs: 1,

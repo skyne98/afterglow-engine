@@ -12,8 +12,8 @@ model:
 - game code may allocate, but engine hot paths may not.
 
 `EngineMemory` provides fixed frame/render scratch arenas, a typed structural
-command ring, and fixed index pools for worker completions, asset requests, and
-VT requests. Structural pushes return `CapacityExceeded`; bounded drains leave
+command ring, fixed index pools for worker completions, asset requests, and VT
+requests, plus caller-owned telemetry trace records and metric cells. Structural pushes return `CapacityExceeded`; bounded drains leave
 the remaining suffix queued. Call `warmup()` and `sealGameplay()` after initializing all required
 resources. Declare them in a `ResourceManifest`; `initializeAndSeal(world)`
 eagerly runs factories, verifies injected resources, and prevents later lazy
@@ -27,6 +27,8 @@ const memory = new EngineMemory({
   workerCompletions: 1024,
   assetRequests: 128,
   vtRequests: 4096,
+  telemetryRecords: 16_384,
+  telemetryMetricCells: 512,
 });
 
 memory.warmup();

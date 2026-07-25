@@ -1,5 +1,5 @@
 import { MeshoptClient } from '../../workers/meshopt.client.ts';
-import { NativeRpcTransport } from '../../workers/native-transport.ts';
+import { NativeRpcTransport } from '../workers/native-transport.ts';
 import { TextureClient } from '../../workers/texture.client.ts';
 import type { OwnedMeshOptimizer, OwnedTextureTranscoder } from './big-asset-session.ts';
 

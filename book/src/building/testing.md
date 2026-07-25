@@ -10,7 +10,14 @@ This runs the Rust workspace, generated RPC deployment tests, the
 `afterglow-shell` DOM API contract, conformance-tool tests, every `*.test.ts`
 under `crates/afterglow-web/web/src/`, and the Steam Audio WASM prototype tests.
 Web test discovery is recursive, so a newly added subsystem, worker, or demo
-test is included without editing the orchestrator.
+test is included without editing the orchestrator. The unified telemetry
+mechanism can be gated directly with:
+
+```sh
+cargo test -p afterglow-telemetry
+cargo clippy -p afterglow-telemetry --all-targets -- -D warnings
+cd crates/afterglow-web/web && bun test src/engine/telemetry/telemetry.test.ts
+```
 
 Tests are organized in four levels:
 

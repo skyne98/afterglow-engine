@@ -218,26 +218,33 @@ The best in-engine profilers all converge on:
 
 ## This engine's current state + gap
 
-The repo has a **thin Layer-1 integration**. `RendererHost` establishes Three's
-frame identity under the engine-owned rAF loop; then
-`VirtualTextureFeedbackCoordinator.setGpuTimingEnabled` toggles Three r185's
-private `backend.trackTimestamp` / `timestampQueryPool`. `resolveGpuTimings()`
-filters the resolved logical frame and reports validity/frame ID plus scene,
-output-transform, VT-feedback, and total durations. The misleading historical
-`gpuMainMs` output-context alias was deleted.
+The repo now has both layers of the engine-owned foundation:
 
-**Gap vs the elegant/advanced pattern:**
+- `GpuProfiler` implements fixed-capacity K-rotated WebGPU query pools, named
+  pass/manual scopes, asynchronous readback, timestamp-period scaling, and a
+  real-device self-test for engine-owned passes.
+- `afterglow-telemetry` implements the universal CPU/worker/GPU-adapter target:
+  finite correlated records, explicit clock domains, metrics, versioned batches,
+  a collector, and streaming Chrome/raw export. `EngineRuntime` already emits
+  page frame/stage/game/render spans into it.
 
-- Only fixed whole-context numbers, not arbitrary named scopes. No RAII scope
-  abstraction or material/shadow sub-scope breakdown.
-- Relies on Three r185 private `backend.timestampQueryPool` internals (the
-  `@unsafe-cast DME-030` accesses in `virtual-texture-feedback-coordinator.ts`)
-  — fragile, not first-class.
-- No K-buffered rotation of its own (defers to Three's internals).
-- No chrome-trace JSON export; no `pushDebugGroup` scope names for external
-  tools.
-- No SOL/stall-reason path (vendor-tool territory — RGP for the 680M, Nsight for
-  the workstation dGPU).
+Three-owned scene/output passes still use Three r185's private timestamp pools
+through `VirtualTextureFeedbackCoordinator.resolveGpuTimings()`. The misleading
+historical `gpuMainMs` output-context alias was deleted.
+
+**Remaining GPU gap:**
+
+- `GpuProfiler` is not yet wired into the unified telemetry collector or the
+  production engine-owned feedback passes; its current production use is a
+  validation surface.
+- Three-owned main rendering still exposes fixed whole-context numbers rather
+  than arbitrary material/shadow scopes and still relies on private r185 state.
+- Engine GPU scopes do not yet emit matching `pushDebugGroup` names.
+- WebGPU does not expose a portable CPU/GPU clock calibration, so unified export
+  must retain a separate GPU clock track and frame/submission correlation rather
+  than claim exact CPU overlap.
+- SOL/stall reasons remain vendor-tool territory: RGP for the 680M and Nsight for
+  the workstation dGPU.
 
 ## 680M RGP result (2026-07-21)
 
@@ -269,10 +276,10 @@ setup, CEF frame-delimiter caveats, and the failed long-trace attempt.
 
 ## Recommended path
 
-1. **In-engine (high-value, engine-ownable):** a first-class `GpuProfiler`
-   (wgpu-profiler-style) — `scope()` guard over encoder/pass, K-rotated query
-   pools, async resolve, `timestamp_period` scaling, chrome-trace export. See
-   the proposed design below.
+1. **In-engine:** adapt the implemented `GpuProfiler` into
+   `afterglow-telemetry`, wire engine-owned passes, and retire its private Chrome
+   exporter after equivalent unified output is validated. See
+   `docs/implementation/unified-telemetry-plan.md`.
 2. **Deep "why" for the 680M:** **AMD Radeon GPU Profiler (RGP)** — completed
    for event timing, wavefront occupancy, register pressure, and spills. Current
    RADV captures expose no API shader hash/instruction-timing data, so
@@ -280,9 +287,10 @@ setup, CEF frame-delimiter caveats, and the failed long-trace attempt.
 3. **WebGPU-browser, zero-engine-change:** WebGPU Inspector Chrome extension +
    `chrome://tracing` with `gpu` categories — works in CEF on the 680M today.
 
-## Proposed engine `GpuProfiler` design (Layer-1 upgrade)
+## Implemented engine `GpuProfiler` design (Layer-1 foundation)
 
-A bounded, sealed-runtime-safe, allocation-free-at-steady-state profiler
+The standalone module now implements this bounded, sealed-runtime-safe,
+allocation-free-at-steady-state profiler
 matching the engine's frame-budget rules. Replaces the fragile Three-internal
 `backend.timestampQueryPool` path with a direct WebGPU query pool.
 
@@ -340,9 +348,10 @@ interface GpuZone { end(): void; } // RAII manual close
   never fatal — matches the engine's "telemetry, not correctness" stance for
   profiling.
 
-### Adoption plan (separate implementation pass)
+### Remaining adoption plan
 
-1. Introduce `GpuProfiler` as a standalone module + unit tests (mock device).
+1. ~~Introduce `GpuProfiler` as a standalone module + unit tests and a
+   real-device self-test.~~ Complete.
 2. Wire the **engine-owned passes** (VT feedback pass in
    `virtual-texture-feedback-coordinator.ts`) to use it directly — these are
    created by the engine, so `withPass` is trivial.
@@ -350,9 +359,11 @@ interface GpuZone { end(): void; } // RAII manual close
    the existing Three-internal `resolveTimestampsAsync('render')` as an adapter
    *until* the engine owns its main pass creation. The `GpuProfiler` then
    provides per-scope timing for everything the engine controls directly.
-4. Emit `pushDebugGroup`/`popDebugGroup` names alongside `withPass` so RGP/Nsight
+4. Feed results into `afterglow-telemetry` and remove the standalone Chrome
+   exporter after parity validation.
+5. Emit `pushDebugGroup`/`popDebugGroup` names alongside `withPass` so RGP/Nsight
    captures show the same scope names.
-5. Keep the validated 680M RGP runbook current and validate the workstation path
+6. Keep the validated 680M RGP runbook current and validate the workstation path
    separately with Nsight GPU Trace.
 
 This keeps the engine-ownable Layer-1 work KISS and bounded, leaves the deep

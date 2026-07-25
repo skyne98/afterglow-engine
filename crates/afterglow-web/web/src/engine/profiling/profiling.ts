@@ -167,7 +167,7 @@ export class Profiling {
   /**
    * Copy the latest `n` (≤ sampleCount) frames into `out` (oldest first).
    * Reuses the provided array; returns the count written.
-   * @alloc-effect none if `out` is reused.
+   * @alloc-effect diagnostic (`out` defaults to a newly allocated array).
    */
   latest(n: number, out: ProfilingFrame[] = []): number {
     const take = Math.min(n, this.count);

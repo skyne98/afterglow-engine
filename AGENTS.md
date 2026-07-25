@@ -77,6 +77,7 @@ Do not paper over this by instantiating worker WASM on the native target. See
 | `afterglow-rpc` | Core: `RingBuffer`, `Transport` trait, postcard codec, response envelope, `ServeFuture` type, the shared wasm transport module (main-thread SAB ring exports), and the native transport. `native` has `RingStorage`, `spawn_worker_loop`, `run_worker_loop`, `spawn_async_worker_loop`, `run_async_worker_loop`, `AsyncWorkerTransport`, `Oneshot`, and event rings. Produces the `afterglow_rpc.wasm` transport module. |
 | `afterglow-rpc-macros` | `#[rpc]` proc macro: generates the server trait, typed Rust client, dispatch, native spawn, thin wasm exports, **and a typed TypeScript client**. Supports both sync (`fn`) and async (`async fn`) methods — async uses the poll model (task_id framing, completion queue, `async-executor`). |
 | `afterglow-rpc-demo` | Demo `Physics` service + `bench_rpc` stress test. |
+| `afterglow-telemetry` | Transport-neutral fixed metrics + finite correlated traces: 40-byte records, explicit clock mappings, versioned batches, cold collection, and streaming Chrome/raw export. Worker adapters must use existing RPC rings. |
 | `afterglow-audio-worker` | Unified `#[rpc(worker = EngineAudioWorker)]` service: fixed voice/render state, Steam Audio FFI ownership, device-clock pump, telemetry, and final PCM export. |
 | `afterglow-obvhs-tracer` | Rust obvhs CWBVH8 implementation of Steam Audio's four custom-scene callbacks; linked into the unified audio worker module. |
 | `afterglow-basis-encoder` | Offline-only official Basis Universal C++ UASTC encoder used by `afterglow-pipeline`; never linked into runtime or wasm crates. |
@@ -522,6 +523,7 @@ All engine work must move toward these non-negotiable requirements:
   host gates.
 - `docs/api/latency-tool.md` — CDP diagnostic CLI commands and measurement semantics.
 - `docs/api/frame-budget.md` — staged frame admission, timing, and deferral counters.
+- `docs/api/telemetry.md` — unified fixed metrics and finite correlated traces, record/batch ABI, clocks, collection, export, TypeScript facade, and integration status.
 - `docs/api/hierarchy.md` — fixed linked topology and incremental double-buffered rebuild.
 - `docs/api/renderer-sealing.md` — descriptor pools, bounded renderer slices, warm-up, and pipeline seal.
 - `docs/api/virtual-texturing.md` — bounded VT residency, scheduling, shaders,

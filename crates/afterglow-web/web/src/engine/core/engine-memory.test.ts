@@ -49,10 +49,13 @@ describe('EngineMemory fixed storage', () => {
     const memory = new EngineMemory({
       frameScratchBytes: 64, renderScratchBytes: 64,
       structuralCommands: 8, workerCompletions: 8, assetRequests: 4, vtRequests: 16,
+      telemetryRecords: 4, telemetryMetricCells: 4,
     });
     memory.warmup();
     memory.sealGameplay();
     expect(memory.phase).toBe(EnginePhase.GameplaySealed);
+    expect(memory.telemetryTrace.byteLength).toBe(4 * 40);
+    expect(memory.telemetryMetrics.length).toBe(4);
     expect(() => memory.sealGameplay()).toThrow('only after warmup');
     memory.frame.allocate(16);
     memory.beginFrame();
@@ -63,6 +66,7 @@ describe('EngineMemory fixed storage', () => {
     const memory = new EngineMemory({
       frameScratchBytes: 8, renderScratchBytes: 8,
       structuralCommands: 1, workerCompletions: 1, assetRequests: 1, vtRequests: 1,
+      telemetryRecords: 1, telemetryMetricCells: 1,
     });
     expect(() => prepareAfterglowFrame(
       { frameId: 1, deltaSeconds: 1 / 60, elapsedSeconds: 0 }, null,
@@ -74,6 +78,7 @@ describe('EngineMemory fixed storage', () => {
     const memory = new EngineMemory({
       frameScratchBytes: 64, renderScratchBytes: 64,
       structuralCommands: 8, workerCompletions: 8, assetRequests: 4, vtRequests: 16,
+      telemetryRecords: 4, telemetryMetricCells: 4,
     });
     memory.warmup();
     memory.sealGameplay();

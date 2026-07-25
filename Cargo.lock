@@ -164,6 +164,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "afterglow-telemetry"
+version = "0.1.0"
+
+[[package]]
 name = "afterglow-texture"
 version = "0.1.0"
 dependencies = [

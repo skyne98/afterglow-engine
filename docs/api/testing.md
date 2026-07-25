@@ -19,7 +19,10 @@ colocated web `*.test.ts` is discovered without a subsystem/demo path allowlist.
 ## Test levels
 
 - **Unit tests** cover one bounded primitive, codec, parser, queue, allocator, or
-  state transition and its deterministic failure behavior.
+  state transition and its deterministic failure behavior. Unified telemetry
+  additionally gates its Rust/TypeScript 40-byte ABI, batch corruption,
+  capture transitions, category filtering, overflow, metric cells, clock
+  mapping, streaming export, and enabled/disabled no-allocation paths.
 - **Vertical-integration tests** cross the real ownership boundary for a feature.
   Existing examples include BIG header/session/worker/store lifecycle,
   runtime/renderer registration and sealing, VT feedback-to-residency scheduling,

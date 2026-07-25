@@ -43,6 +43,7 @@
 - [Engine Runtime](./reference/engine-runtime.md)
 - [Engine Memory & Frame Discipline](./reference/engine-memory.md)
 - [Frame Budgets](./reference/frame-budgets.md)
+- [Unified Telemetry](./reference/telemetry.md)
 - [Incremental Hierarchy](./reference/hierarchy.md)
 - [Renderer Sealing](./reference/renderer-sealing.md)
 - [Model Presentation](./reference/model-presentation.md)

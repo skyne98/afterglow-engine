@@ -33,6 +33,10 @@ export interface EngineMemoryConfig {
   workerCompletions: number;
   assetRequests: number;
   vtRequests: number;
+  /** Fixed 40-byte trace records reserved for the page telemetry producer. */
+  telemetryRecords: number;
+  /** Fixed Float64 metric cells reserved for page telemetry descriptors. */
+  telemetryMetricCells: number;
 }
 
 export interface EngineMemoryMetrics {
@@ -179,6 +183,8 @@ export class EngineMemory {
   readonly workerCompletions: FixedIndexPool;
   readonly assetRequests: FixedIndexPool;
   readonly vtRequests: FixedIndexPool;
+  readonly telemetryTrace: ArrayBuffer;
+  readonly telemetryMetrics: Float64Array;
   readonly metrics: EngineMemoryMetrics = {
     frameArenaOverflows: 0,
     renderArenaOverflows: 0,
@@ -193,6 +199,12 @@ export class EngineMemory {
     this.workerCompletions = new FixedIndexPool(config.workerCompletions);
     this.assetRequests = new FixedIndexPool(config.assetRequests);
     this.vtRequests = new FixedIndexPool(config.vtRequests);
+    if (!Number.isInteger(config.telemetryRecords) || config.telemetryRecords <= 0)
+      throw new RangeError('telemetryRecords must be a positive integer');
+    if (!Number.isInteger(config.telemetryMetricCells) || config.telemetryMetricCells <= 0)
+      throw new RangeError('telemetryMetricCells must be a positive integer');
+    this.telemetryTrace = new ArrayBuffer(config.telemetryRecords * 40);
+    this.telemetryMetrics = new Float64Array(config.telemetryMetricCells);
   }
 
   warmup(): void {

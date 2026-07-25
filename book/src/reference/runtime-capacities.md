@@ -15,6 +15,8 @@ The sealed defaults are intentionally finite:
 | Dirty roots / hierarchy children | 4,096 per frame each |
 | Hierarchy rebuild | 512 operations / 0.2 ms |
 | Continuous unique proxies | 512 per frame |
+| Unified trace records | caller-configured, 40 bytes each |
+| Unified metric cells | caller-configured; histograms use 32 cells |
 
 Descriptor capacity is explicit: instanced population is
 `shardCapacity × maxShards`; unique population is `poolCapacity`. Exhaustion

@@ -5,6 +5,13 @@ export {
 } from './core/diagnostics.ts';
 export { RenderAdapter, RenderAttachStatus } from './renderer/render-adapter.ts';
 export {
+  GpuProfiler,
+  type GpuFrameScope,
+  type GpuProfilerOptions,
+  type GpuScopeTiming,
+  type GpuZone,
+} from './renderer/gpu-profiler.ts';
+export {
   RendererHost,
   type GpuAdapterIdentity,
   type RendererHostOptions,
@@ -17,6 +24,32 @@ export {
 } from './core/runtime.ts';
 export { RenderTier, RenderDirty } from './core/types.ts';
 export type { EntityId, RenderDescriptorId, RenderFrame } from './core/types.ts';
+export {
+  EngineMetric,
+  EngineTelemetry,
+  EngineTelemetryCategory,
+  EngineTraceDescriptor,
+  ENGINE_METRIC_DESCRIPTORS,
+  ENGINE_TRACE_DESCRIPTORS,
+  FRAME_BUDGET_TRACE_DESCRIPTORS,
+  TelemetryCaptureState,
+  TelemetryDescriptorKind,
+  TelemetryMetricBank,
+  TelemetryMetricKind,
+  TelemetryMetricStatus,
+  TelemetryPhase,
+  TelemetryRecorder,
+  TelemetryRecordStatus,
+  TelemetryRes,
+  TELEMETRY_BATCH_HEADER_BYTES,
+  TELEMETRY_BATCH_VERSION,
+  TELEMETRY_HISTOGRAM_BUCKETS,
+  TELEMETRY_RECORD_BYTES,
+  type TelemetryClock,
+  type TelemetryDescriptor,
+  type TelemetryMetricDescriptor,
+  type TelemetrySnapshot,
+} from './telemetry/index.ts';
 export {
   Profiling,
   ProfilingRes,

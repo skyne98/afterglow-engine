@@ -10,6 +10,7 @@ import {
 } from "../../engine/assets/index.ts";
 import {
   EngineRuntime,
+  GpuProfiler,
   Profiling,
   ProfilingRes,
   RegistrationStatus,
@@ -18,7 +19,6 @@ import {
   type ProfilingFrame,
   type ProfilingHost,
 } from "../../engine/index.ts";
-import { GpuProfiler } from "../../engine/renderer/gpu-profiler.ts";
 import {
   BoundedKeyboardInput,
   DemoInputAction,
@@ -72,6 +72,8 @@ const runtime = EngineRuntime.forScene({
     workerCompletions: 8,
     assetRequests: 8,
     vtRequests: 512,
+    telemetryRecords: 16384,
+    telemetryMetricCells: 512,
   },
   diagnosticCapacity: 128,
   maxWorkerInputs: 1,
@@ -441,9 +443,9 @@ try {
     timing.feedbackSubmitUs = coordinator?.feedbackSubmitUs ?? 0;
     timing.frameCpuUs = (performance.now() - frameStarted) * 1000;
     // Gather profiling (renderer.info + GPU pass timings) off the hot path.
-    // Fire-and-forget: info snapshot is sync, GPU readback resolves async.
-    if (frame.frameId % 15 === 0) void profiling.gather(frame.frameId);
-    if (hudVisible && frame.frameId % 15 === 0) updateHud();
+    // Fire-and-forget: info snapshot is immediate; GPU readback resolves later.
+    if (frame.frameId % 15 === 0) void profiling.gather(frame.frameId); // @alloc-allowed reason=DiagnosticGpuReadback issue=DME-034 expires=2026-10-01
+    if (hudVisible && frame.frameId % 15 === 0) updateHud(); // @alloc-allowed reason=DiagnosticHud issue=DME-034 expires=2026-10-01
   } // @alloc-allowed reason=DiagnosticHud issue=DME-034 expires=2026-10-01
   if (
     runtime.registerWorker(coordinator) !== RegistrationStatus.Registered ||

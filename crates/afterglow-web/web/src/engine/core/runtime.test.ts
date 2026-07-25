@@ -5,6 +5,7 @@ import {
   type AnimationScheduler, type EngineRenderPass, type RuntimeRenderAdapter,
 } from './runtime.ts';
 import type { RenderFrame } from './types.ts';
+import { TelemetryPhase } from '../telemetry/index.ts';
 
 const memory: EngineMemoryConfig = {
   frameScratchBytes: 64,
@@ -13,6 +14,8 @@ const memory: EngineMemoryConfig = {
   workerCompletions: 4,
   assetRequests: 4,
   vtRequests: 4,
+  telemetryRecords: 64,
+  telemetryMetricCells: 64,
 };
 
 class FakeScheduler implements AnimationScheduler {
@@ -120,6 +123,7 @@ describe('EngineRuntime', () => {
     expect(second.sealed).toBe(1);
     events.length = 0;
     let observed: Readonly<RenderFrame> | null = null;
+    expect(runtime.telemetry.trace.arm(77)).toBe(true);
     runtime.start({ update(frame) { observed = frame; events.push('update'); } });
     scheduler.fire(100);
     expect(events).toEqual([
@@ -132,6 +136,13 @@ describe('EngineRuntime', () => {
     scheduler.fire(116);
     expect(runtime.frame).toBe(identity);
     expect(runtime.frame.frameId).toBe(2);
+    expect(runtime.telemetry.metrics.readCell(0)).toBe(2);
+    expect(runtime.telemetry.trace.stop()).toBe(true);
+    const snapshot = runtime.telemetry.trace.snapshot();
+    expect(snapshot?.epoch).toBe(77);
+    expect(snapshot?.count).toBeGreaterThan(20);
+    if (snapshot === null) throw new Error('telemetry snapshot missing');
+    expect(new Uint32Array(snapshot.buffer)[9]).toBe(TelemetryPhase.SpanBegin);
   });
 
   test('returns typed registration overflow and rejects registration after bootstrap', () => {

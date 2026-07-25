@@ -44,6 +44,19 @@ describe('FrameBudget', () => {
     expect(budget.stageMaxElapsedUs[FrameStage.VirtualTexture]).toBe(1500);
   });
 
+  test('closes only active stages after a fatal stage error', () => {
+    let now = 10;
+    const budget = new FrameBudget(config, () => now);
+    budget.beginFrame(1, 10);
+    now = 11;
+    budget.beginStage(FrameStage.WorkerPoll, true);
+    now = 13;
+    budget.abortOpenStages();
+    expect(budget.stageElapsedUs[FrameStage.WorkerPoll]).toBe(2000);
+    budget.abortOpenStages();
+    expect(budget.stageElapsedUs[FrameStage.WorkerPoll]).toBe(2000);
+  });
+
   test('required stages run while recording deadline misses and overruns', () => {
     let now = 0;
     const budget = new FrameBudget(config, () => now);

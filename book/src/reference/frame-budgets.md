@@ -28,3 +28,7 @@ Telemetry is available through fixed typed arrays:
 
 Use `FrameBudgetRes` for the default 15%/35%/45%/55%/95% cumulative deadlines,
 or construct a budget with project-specific fractions and operation limits.
+`EngineRuntime` connects its budget to `EngineTelemetry`: while a finite trace
+is armed, every stage that actually runs emits a matching begin/end span with
+the frame ID and measured stage microseconds. The fixed arrays remain the
+always-on aggregate view.

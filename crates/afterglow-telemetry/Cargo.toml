@@ -1,0 +1,14 @@
+[package]
+name = "afterglow-telemetry"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+description = "Bounded metrics and correlated trace capture for Afterglow"
+
+[dependencies]
+
+[[example]]
+name = "bench_telemetry"
+path = "examples/bench_telemetry.rs"

@@ -8,6 +8,7 @@ truth.
 | `afterglow-rpc` | Core: `RingBuffer`, `Transport` trait, postcard codec, `Response` envelope. The `native` module has `RingStorage`, `spawn_worker_loop`, `run_worker_loop`, and event rings. |
 | `afterglow-rpc-macros` | The `#[rpc]` proc macro: generates the server trait, typed Rust client, dispatch, native spawn, and thin wasm exports. |
 | `afterglow-rpc-demo` | Demo `Physics` service + `bench_rpc` stress test. The reference example of a `#[rpc(worker = ...)]` service. |
+| `afterglow-telemetry` | Transport-neutral fixed metrics, finite correlated traces, clock mapping, versioned batches, and streaming Chrome/raw exporters. |
 | `afterglow-assets` | Shared confinement/MIME plus positional streaming primitives (`AssetSource`, `FsSource`, `BytesSource`) and bounded range parsing. The single security boundary for FS assets. |
 | `afterglow-assets-worker` | Generated async `load`/`size`/`read` service. Native builds use `FsSource`; the live browser BIG/VT path currently uses the serving-layer range loader instead. |
 | `afterglow-basis-encoder` | Offline-only UASTC encoder used by the asset pipeline; isolates the official C++ Basis encoder from runtime and wasm crates. |
@@ -28,6 +29,7 @@ flowchart TB
   web["afterglow-web<br/>(page wasm + JS)"]
   shell["afterglow-shell<br/>(native V8 + WebGPU + DOM/HUD)"]
   assets["afterglow-assets<br/>(confinement + streaming sources)"]
+  telemetry["afterglow-telemetry<br/>(metrics + finite traces)"]
 
   rpc --> mac
   mac -->|"generates #[rpc] code"| demo
@@ -35,6 +37,9 @@ flowchart TB
   web --> shell
   shell -.->|"native host (parity gates pending)"| assets
   assets -.->|"shared by native loader + web dev server"| web
+  telemetry -.->|"transport-neutral records"| rpc
+  telemetry --> web
+  telemetry --> shell
 ```
 
 - **`afterglow-rpc`** is the foundation: the ring primitive, the `Transport`
@@ -52,6 +57,9 @@ flowchart TB
 - **`afterglow-assets`** is the shared security boundary and positional-byte
   primitive for serving filesystem assets, used by the web dev server (and,
   once the G1 gate lands, the native shell loader).
+- **`afterglow-telemetry`** owns the common record/metric vocabulary and cold
+  collector. It never creates a worker transport; adapters move frozen batches
+  through `afterglow-rpc`.
 
 ## The `xtask` orchestrator
 

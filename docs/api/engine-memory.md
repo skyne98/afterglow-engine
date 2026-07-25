@@ -45,6 +45,8 @@ class EngineMemory {
   readonly workerCompletions: FixedIndexPool;
   readonly assetRequests: FixedIndexPool;
   readonly vtRequests: FixedIndexPool;
+  readonly telemetryTrace: ArrayBuffer;
+  readonly telemetryMetrics: Float64Array;
   warmup(): void;
   sealGameplay(): void;
   beginFrame(): void;
@@ -53,6 +55,11 @@ class EngineMemory {
 
 function defineEngineMemoryResource(config: EngineMemoryConfig): Resource<EngineMemory>;
 ```
+
+`EngineMemoryConfig` also requires explicit `telemetryRecords` and
+`telemetryMetricCells` capacities. Each trace record reserves exactly 40 bytes;
+the metric capacity is a count of `Float64` cells. `EngineRuntime` gives these
+caller-owned stores to its `EngineTelemetry` resource.
 
 Constructors allocate backing buffers during bootstrap. The engine has no
 loading-screen phase: after warm-up, continuous asset/world streaming must use

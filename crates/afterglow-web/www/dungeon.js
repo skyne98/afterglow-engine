@@ -64994,7 +64994,7 @@ class MeshoptClient {
   }
 }
 
-// crates/afterglow-web/web/src/workers/native-transport.ts
+// crates/afterglow-web/web/src/engine/workers/native-transport.ts
 class NativeRpcTransport {
   workerId;
   constructor(workerId) {
@@ -69433,6 +69433,212 @@ class RenderAdapter {
     this.uniqueObjects.length = 0;
   }
 }
+// crates/afterglow-web/web/src/engine/renderer/gpu-profiler.ts
+var DEFAULT_FRAMES_IN_FLIGHT = 3;
+var DEFAULT_MAX_SCOPES = 16;
+
+class GpuProfiler {
+  device;
+  slots = [];
+  maxScopes;
+  capacity;
+  current = 0;
+  framesInFlight;
+  supported;
+  period;
+  result = [];
+  frameScopeCount = 0;
+  constructor(device, queue, options = {}) {
+    this.device = device;
+    if (options.framesInFlight !== undefined && (!Number.isInteger(options.framesInFlight) || options.framesInFlight < 1))
+      throw new RangeError("GpuProfiler framesInFlight must be a positive integer");
+    if (options.maxScopesPerFrame !== undefined && (!Number.isInteger(options.maxScopesPerFrame) || options.maxScopesPerFrame < 1))
+      throw new RangeError("GpuProfiler maxScopesPerFrame must be a positive integer");
+    this.framesInFlight = options.framesInFlight ?? DEFAULT_FRAMES_IN_FLIGHT;
+    this.maxScopes = options.maxScopesPerFrame ?? DEFAULT_MAX_SCOPES;
+    this.capacity = this.maxScopes * 2;
+    this.supported = device.features.has("timestamp-query");
+    this.period = () => queue.getTimestampPeriod?.() ?? 1;
+    if (this.supported)
+      this.initSlots();
+  }
+  initSlots() {
+    for (let i = 0;i < this.framesInFlight; i++) {
+      const querySet = this.device.createQuerySet({
+        type: "timestamp",
+        count: this.capacity
+      });
+      const resolveBuffer = this.device.createBuffer({
+        size: this.capacity * 8,
+        usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC
+      });
+      const resultBuffer = this.device.createBuffer({
+        size: this.capacity * 8,
+        usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
+      });
+      this.slots.push({
+        querySet,
+        resolveBuffer,
+        resultBuffer,
+        names: [],
+        mapped: true,
+        resolved: false
+      });
+    }
+  }
+  isSupported() {
+    return this.supported;
+  }
+  beginFrame() {
+    if (!this.supported)
+      return noopFrameScope;
+    this.frameScopeCount = 0;
+    const slot = this.slots[this.current];
+    if (!slot)
+      return noopFrameScope;
+    slot.names.length = 0;
+    slot.resolved = false;
+    slot.mapped = false;
+    const profiler = this;
+    const frameScope = {
+      withPass(name, descriptor) {
+        if (profiler.frameScopeCount >= profiler.maxScopes)
+          return descriptor;
+        const slot2 = profiler.slots[profiler.current];
+        if (!slot2)
+          return descriptor;
+        const pair = profiler.frameScopeCount * 2;
+        slot2.names.push(name);
+        profiler.frameScopeCount++;
+        descriptor.timestampWrites = {
+          querySet: slot2.querySet,
+          beginningOfPassWriteIndex: pair,
+          endOfPassWriteIndex: pair + 1
+        };
+        return descriptor;
+      },
+      scope(name, encoder) {
+        if (profiler.frameScopeCount >= profiler.maxScopes)
+          return { end() {} };
+        const slot2 = profiler.slots[profiler.current];
+        if (!slot2)
+          return { end() {} };
+        const pair = profiler.frameScopeCount * 2;
+        slot2.names.push(name);
+        profiler.frameScopeCount++;
+        encoder.writeTimestamp?.(slot2.querySet, pair);
+        return {
+          end() {
+            encoder.writeTimestamp?.(slot2.querySet, pair + 1);
+          }
+        };
+      }
+    };
+    return frameScope;
+  }
+  endFrame(encoder) {
+    if (!this.supported)
+      return;
+    const slot = this.slots[this.current];
+    if (!slot)
+      return;
+    if (this.frameScopeCount === 0) {
+      this.advance();
+      return;
+    }
+    const used = this.frameScopeCount * 2;
+    encoder.resolveQuerySet(slot.querySet, 0, used, slot.resolveBuffer, 0);
+    encoder.copyBufferToBuffer(slot.resolveBuffer, 0, slot.resultBuffer, 0, used * 8);
+    slot.resolved = true;
+    slot.mapped = false;
+    this.advance();
+  }
+  advance() {
+    this.current = (this.current + 1) % this.framesInFlight;
+  }
+  async poll() {
+    this.result.length = 0;
+    if (!this.supported)
+      return this.result;
+    const slot = this.slots[this.current];
+    if (!slot || !slot.resolved || slot.mapped)
+      return this.result;
+    const used = slot.names.length * 2;
+    await slot.resultBuffer.mapAsync(GPUMapMode.READ);
+    slot.mapped = true;
+    const view = new BigUint64Array(slot.resultBuffer.getMappedRange(0, used * 8));
+    const period = this.period();
+    for (let i = 0;i < slot.names.length; i++) {
+      const start = view[i * 2] ?? 0n;
+      const end = view[i * 2 + 1] ?? 0n;
+      this.result.push({
+        name: slot.names[i] ?? `scope-${i}`,
+        startNs: start,
+        endNs: end,
+        durationMs: Number(end - start) * period / 1e6
+      });
+    }
+    slot.resultBuffer.unmap();
+    slot.resolved = false;
+    return this.result;
+  }
+  exportChromeTrace(scopes) {
+    const events = scopes.map((s) => ({
+      name: s.name,
+      cat: "gpu",
+      ph: "X",
+      ts: Number(s.startNs) / 1000,
+      dur: s.durationMs * 1000,
+      pid: 1,
+      tid: 1
+    }));
+    return JSON.stringify({ traceEvents: events });
+  }
+  dispose() {
+    for (const slot of this.slots) {
+      slot.querySet.destroy();
+      slot.resolveBuffer.destroy();
+      slot.resultBuffer.destroy();
+    }
+    this.slots.length = 0;
+  }
+  static async validate(device, queue) {
+    const profiler = new GpuProfiler(device, queue, { framesInFlight: 2, maxScopesPerFrame: 4 });
+    if (!profiler.isSupported()) {
+      profiler.dispose();
+      return { supported: false, timings: [] };
+    }
+    const target = device.createTexture({
+      size: [4096, 4096],
+      format: navigator.gpu.getPreferredCanvasFormat(),
+      usage: GPUTextureUsage.RENDER_ATTACHMENT
+    });
+    const view = target.createView();
+    for (let frame = 0;frame < 4; frame++) {
+      const scope = profiler.beginFrame();
+      const encoder = device.createCommandEncoder();
+      const pass2 = encoder.beginRenderPass(scope.withPass("validation-pass", {
+        colorAttachments: [{ view, clearValue: { r: 0, g: 0, b: 0, a: 1 }, loadOp: "clear", storeOp: "store" }]
+      }));
+      pass2.end();
+      profiler.endFrame(encoder);
+      queue.submit([encoder.finish()]);
+      await queue.onSubmittedWorkDone();
+    }
+    const timings = await profiler.poll();
+    profiler.dispose();
+    target.destroy();
+    return { supported: true, timings };
+  }
+}
+var noopFrameScope = {
+  withPass(name, d) {
+    return d;
+  },
+  scope(_name, _encoder) {
+    return { end() {} };
+  }
+};
 // crates/afterglow-web/web/src/engine/renderer/renderer-seal.ts
 class RendererSeal {
   backend;
@@ -69822,6 +70028,8 @@ class EngineMemory {
   workerCompletions;
   assetRequests;
   vtRequests;
+  telemetryTrace;
+  telemetryMetrics;
   metrics = {
     frameArenaOverflows: 0,
     renderArenaOverflows: 0,
@@ -69836,6 +70044,12 @@ class EngineMemory {
     this.workerCompletions = new FixedIndexPool(config.workerCompletions);
     this.assetRequests = new FixedIndexPool(config.assetRequests);
     this.vtRequests = new FixedIndexPool(config.vtRequests);
+    if (!Number.isInteger(config.telemetryRecords) || config.telemetryRecords <= 0)
+      throw new RangeError("telemetryRecords must be a positive integer");
+    if (!Number.isInteger(config.telemetryMetricCells) || config.telemetryMetricCells <= 0)
+      throw new RangeError("telemetryMetricCells must be a positive integer");
+    this.telemetryTrace = new ArrayBuffer(config.telemetryRecords * 40);
+    this.telemetryMetrics = new Float64Array(config.telemetryMetricCells);
   }
   warmup() {
     if (this.phase !== 0 /* Bootstrap */)
@@ -69867,6 +70081,7 @@ var DEFAULT_FRAME_BUDGET = {
 
 class FrameBudget {
   clock;
+  telemetry;
   deadlineFractions = new Float64Array(5 /* Count */);
   operationLimits = new Uint32Array(5 /* Count */);
   deadlines = new Float64Array(5 /* Count */);
@@ -69875,14 +70090,16 @@ class FrameBudget {
   overruns = new Uint32Array(5 /* Count */);
   deferred = new Uint32Array(5 /* Count */);
   stageStarts = new Float64Array(5 /* Count */);
+  stageActive = new Uint8Array(5 /* Count */);
   elapsedUs = new Float64Array(5 /* Count */);
   totalElapsedUs = new Float64Array(5 /* Count */);
   maxElapsedUs = new Float64Array(5 /* Count */);
   frameId = 0;
   frameStart = 0;
   frameDurationMs = 0;
-  constructor(config = DEFAULT_FRAME_BUDGET, clock = () => performance.now()) {
+  constructor(config = DEFAULT_FRAME_BUDGET, clock = () => performance.now(), telemetry) {
     this.clock = clock;
+    this.telemetry = telemetry;
     if (config.deadlineFractions.length !== 5 /* Count */ || config.operationLimits.length !== 5 /* Count */)
       throw new RangeError(`FrameBudget requires ${5 /* Count */} stage entries`);
     let previous = 0;
@@ -69906,6 +70123,7 @@ class FrameBudget {
       this.operations[stage] = 0;
       this.elapsedUs[stage] = 0;
       this.stageStarts[stage] = 0;
+      this.stageActive[stage] = 0;
       this.deadlines[stage] = this.frameStart + this.frameDurationMs * this.deadlineFractions[stage];
     }
   }
@@ -69921,6 +70139,10 @@ class FrameBudget {
     }
     this.operations[stage]++;
     this.stageStarts[stage] = this.clock();
+    this.stageActive[stage] = 1;
+    const descriptor = this.telemetry?.stageDescriptors[stage];
+    if (descriptor !== undefined)
+      this.telemetry?.recorder.spanBegin(descriptor, this.frameId, stage, 0);
     return 0 /* Run */;
   }
   endStage(stage) {
@@ -69932,6 +70154,15 @@ class FrameBudget {
       this.maxElapsedUs[stage] = this.elapsedUs[stage];
     if (now > this.deadlines[stage])
       this.overruns[stage]++;
+    this.stageActive[stage] = 0;
+    const descriptor = this.telemetry?.stageDescriptors[stage];
+    if (descriptor !== undefined)
+      this.telemetry?.recorder.spanEnd(descriptor, this.frameId, stage, elapsedUs);
+  }
+  abortOpenStages() {
+    for (let stage = 0;stage < 5 /* Count */; stage++)
+      if (this.stageActive[stage] !== 0)
+        this.endStage(stage);
   }
   get currentFrameId() {
     return this.frameId;
@@ -69995,6 +70226,297 @@ function prepareAfterglowFrame(frame, workerInput, adapter, vtInput, memory, bud
   budget?.endStage(4 /* RenderPrepare */);
 }
 
+// crates/afterglow-web/web/src/engine/telemetry/telemetry.ts
+var TELEMETRY_RECORD_BYTES = 40;
+var TELEMETRY_BATCH_HEADER_BYTES = 40;
+var TELEMETRY_BATCH_VERSION = 1;
+var TELEMETRY_RECORD_WORDS = TELEMETRY_RECORD_BYTES / 4;
+var U32_SCALE = 4294967296;
+var U32_MAX = 4294967295;
+var TELEMETRY_HISTOGRAM_BUCKETS = 32;
+class TelemetryRecorder {
+  descriptors;
+  buffer;
+  clock;
+  ticksPerSecond;
+  words;
+  bytes;
+  enabledDescriptors;
+  stableSnapshot;
+  captureState = 0 /* Idle */;
+  captureEpoch = 0;
+  length = 0;
+  droppedRecords = 0;
+  constructor(descriptors, buffer2, clock = () => performance.now() * 1000, ticksPerSecond = 1e6) {
+    this.descriptors = descriptors;
+    this.buffer = buffer2;
+    this.clock = clock;
+    this.ticksPerSecond = ticksPerSecond;
+    if (buffer2.byteLength === 0 || buffer2.byteLength % TELEMETRY_RECORD_BYTES !== 0)
+      throw new RangeError("telemetry trace buffer must contain a positive whole number of 40-byte records");
+    if (!Number.isFinite(ticksPerSecond) || ticksPerSecond <= 0)
+      throw new RangeError("telemetry ticksPerSecond must be positive");
+    this.words = new Uint32Array(buffer2);
+    this.bytes = new Uint8Array(buffer2);
+    this.enabledDescriptors = new Uint8Array(descriptors.length);
+    this.stableSnapshot = {
+      epoch: 0,
+      count: 0,
+      capacity: buffer2.byteLength / TELEMETRY_RECORD_BYTES,
+      dropped: 0,
+      ticksPerSecond,
+      buffer: buffer2
+    };
+  }
+  get state() {
+    return this.captureState;
+  }
+  get count() {
+    return this.length;
+  }
+  get capacity() {
+    return this.stableSnapshot.capacity;
+  }
+  get dropped() {
+    return this.droppedRecords;
+  }
+  arm(epoch, categoryWords) {
+    if (this.captureState !== 0 /* Idle */ || !Number.isInteger(epoch) || epoch < 0 || epoch > U32_MAX)
+      return false;
+    this.captureEpoch = epoch;
+    this.length = 0;
+    this.droppedRecords = 0;
+    for (let index = 0;index < this.descriptors.length; index++) {
+      const category = this.descriptors[index]?.category ?? -1;
+      this.enabledDescriptors[index] = categoryWords === undefined ? 1 : ((categoryWords[category >>> 5] ?? 0) & 1 << (category & 31)) !== 0 ? 1 : 0;
+    }
+    this.captureState = 1 /* Armed */;
+    return true;
+  }
+  stop() {
+    if (this.captureState !== 1 /* Armed */)
+      return false;
+    this.captureState = 2 /* Frozen */;
+    return true;
+  }
+  snapshot() {
+    if (this.captureState !== 2 /* Frozen */)
+      return null;
+    this.stableSnapshot.epoch = this.captureEpoch;
+    this.stableSnapshot.count = this.length;
+    this.stableSnapshot.dropped = this.droppedRecords;
+    return this.stableSnapshot;
+  }
+  reset() {
+    if (this.captureState !== 2 /* Frozen */)
+      return false;
+    this.length = 0;
+    this.droppedRecords = 0;
+    this.enabledDescriptors.fill(0);
+    this.captureState = 0 /* Idle */;
+    return true;
+  }
+  encodedBatchBytes() {
+    return TELEMETRY_BATCH_HEADER_BYTES + this.length * TELEMETRY_RECORD_BYTES;
+  }
+  encodeBatchInto(output2, sourceId, clockDomain) {
+    if (this.captureState !== 2 /* Frozen */ || !Number.isInteger(sourceId) || sourceId < 0 || sourceId > U32_MAX || !Number.isInteger(clockDomain) || clockDomain < 0 || clockDomain > U32_MAX)
+      return 0;
+    const needed = this.encodedBatchBytes();
+    if (output2.length < needed)
+      return -needed;
+    output2[0] = 65;
+    output2[1] = 71;
+    output2[2] = 84;
+    output2[3] = 66;
+    this.writeU16(output2, 4, TELEMETRY_BATCH_VERSION);
+    this.writeU16(output2, 6, TELEMETRY_BATCH_HEADER_BYTES);
+    this.writeU32(output2, 8, sourceId);
+    this.writeU32(output2, 12, this.captureEpoch);
+    this.writeU32(output2, 16, clockDomain);
+    this.writeU32(output2, 20, 0);
+    this.writeU32(output2, 24, this.length);
+    this.writeU32(output2, 28, Math.min(U32_MAX, this.droppedRecords));
+    this.writeU64Number(output2, 32, this.ticksPerSecond);
+    const payloadBytes = this.length * TELEMETRY_RECORD_BYTES;
+    for (let index = 0;index < payloadBytes; index++)
+      output2[TELEMETRY_BATCH_HEADER_BYTES + index] = this.bytes[index] ?? 0;
+    return needed;
+  }
+  instant(descriptor, correlation, argument0 = 0, argument1 = 0) {
+    return this.record(descriptor, 1 /* Instant */, 1 /* Instant */, correlation, argument0, argument1);
+  }
+  spanBegin(descriptor, correlation, argument0 = 0, argument1 = 0) {
+    return this.record(descriptor, 2 /* Span */, 2 /* SpanBegin */, correlation, argument0, argument1);
+  }
+  spanEnd(descriptor, correlation, argument0 = 0, argument1 = 0) {
+    return this.record(descriptor, 2 /* Span */, 3 /* SpanEnd */, correlation, argument0, argument1);
+  }
+  asyncBegin(descriptor, correlation, argument0 = 0, argument1 = 0) {
+    return this.record(descriptor, 3 /* AsyncSpan */, 4 /* AsyncBegin */, correlation, argument0, argument1);
+  }
+  asyncEnd(descriptor, correlation, argument0 = 0, argument1 = 0) {
+    return this.record(descriptor, 3 /* AsyncSpan */, 5 /* AsyncEnd */, correlation, argument0, argument1);
+  }
+  flowStart(descriptor, correlation, argument0 = 0, argument1 = 0) {
+    return this.record(descriptor, 4 /* Flow */, 6 /* FlowStart */, correlation, argument0, argument1);
+  }
+  flowStep(descriptor, correlation, argument0 = 0, argument1 = 0) {
+    return this.record(descriptor, 4 /* Flow */, 7 /* FlowStep */, correlation, argument0, argument1);
+  }
+  flowEnd(descriptor, correlation, argument0 = 0, argument1 = 0) {
+    return this.record(descriptor, 4 /* Flow */, 8 /* FlowEnd */, correlation, argument0, argument1);
+  }
+  record(descriptor, expectedKind, phase, correlation, argument0, argument1) {
+    if (this.captureState !== 1 /* Armed */)
+      return 1 /* Disabled */;
+    if (!Number.isInteger(descriptor) || descriptor < 0 || descriptor >= this.descriptors.length)
+      return 3 /* InvalidDescriptor */;
+    if (this.descriptors[descriptor]?.kind !== expectedKind)
+      return 4 /* WrongDescriptorKind */;
+    if (this.enabledDescriptors[descriptor] === 0)
+      return 2 /* CategoryDisabled */;
+    if (this.length === this.capacity) {
+      this.droppedRecords++;
+      return 5 /* CapacityExceeded */;
+    }
+    const base = this.length * TELEMETRY_RECORD_WORDS;
+    this.writeU53(base, this.clock());
+    this.writeU53(base + 2, correlation);
+    this.writeU53(base + 4, argument0);
+    this.writeU53(base + 6, argument1);
+    this.words[base + 8] = descriptor;
+    this.words[base + 9] = phase;
+    this.length++;
+    return 0 /* Recorded */;
+  }
+  writeU53(word, value) {
+    const nonNegative = Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+    this.words[word] = nonNegative >>> 0;
+    this.words[word + 1] = Math.floor(nonNegative / U32_SCALE) >>> 0;
+  }
+  writeU16(output2, offset, value) {
+    output2[offset] = value;
+    output2[offset + 1] = value >>> 8;
+  }
+  writeU32(output2, offset, value) {
+    output2[offset] = value;
+    output2[offset + 1] = value >>> 8;
+    output2[offset + 2] = value >>> 16;
+    output2[offset + 3] = value >>> 24;
+  }
+  writeU64Number(output2, offset, value) {
+    const nonNegative = Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+    this.writeU32(output2, offset, nonNegative);
+    this.writeU32(output2, offset + 4, Math.floor(nonNegative / U32_SCALE));
+  }
+}
+class TelemetryMetricBank {
+  descriptors;
+  cells;
+  offsets;
+  requiredCells;
+  constructor(descriptors, cells) {
+    this.descriptors = descriptors;
+    this.cells = cells;
+    this.offsets = new Uint32Array(descriptors.length);
+    let required = 0;
+    for (let index = 0;index < descriptors.length; index++) {
+      this.offsets[index] = required;
+      required += descriptors[index]?.kind === 4 /* HistogramLog2 */ ? TELEMETRY_HISTOGRAM_BUCKETS : 1;
+    }
+    if (cells.length < required)
+      throw new RangeError(`telemetry metrics require ${required} cells, received ${cells.length}`);
+    this.requiredCells = required;
+  }
+  counterAdd(metric, delta) {
+    const offset = this.scalarOffset(metric, 1 /* Counter */);
+    if (offset < 0)
+      return this.metricFailure(metric, 1 /* Counter */);
+    this.cells[offset] = (this.cells[offset] ?? 0) + delta;
+    return 0 /* Updated */;
+  }
+  gaugeSet(metric, value) {
+    const offset = this.scalarOffset(metric, 2 /* Gauge */);
+    if (offset < 0)
+      return this.metricFailure(metric, 2 /* Gauge */);
+    this.cells[offset] = value;
+    return 0 /* Updated */;
+  }
+  maximum(metric, value) {
+    const offset = this.scalarOffset(metric, 3 /* Maximum */);
+    if (offset < 0)
+      return this.metricFailure(metric, 3 /* Maximum */);
+    if (value > (this.cells[offset] ?? 0))
+      this.cells[offset] = value;
+    return 0 /* Updated */;
+  }
+  histogramLog2(metric, value) {
+    if (!Number.isInteger(metric) || metric < 0 || metric >= this.descriptors.length)
+      return 1 /* InvalidMetric */;
+    if (this.descriptors[metric]?.kind !== 4 /* HistogramLog2 */)
+      return 2 /* WrongMetricKind */;
+    const bucket = value <= 0 ? 0 : Math.min(TELEMETRY_HISTOGRAM_BUCKETS - 1, Math.floor(Math.log2(value)));
+    const offset = (this.offsets[metric] ?? 0) + bucket;
+    this.cells[offset] = (this.cells[offset] ?? 0) + 1;
+    return 0 /* Updated */;
+  }
+  readCell(metric, bucket = 0) {
+    if (!Number.isInteger(metric) || metric < 0 || metric >= this.descriptors.length)
+      return 0;
+    const descriptor = this.descriptors[metric];
+    const count = descriptor?.kind === 4 /* HistogramLog2 */ ? TELEMETRY_HISTOGRAM_BUCKETS : 1;
+    if (!Number.isInteger(bucket) || bucket < 0 || bucket >= count)
+      return 0;
+    return this.cells[(this.offsets[metric] ?? 0) + bucket] ?? 0;
+  }
+  scalarOffset(metric, expected) {
+    if (!Number.isInteger(metric) || metric < 0 || metric >= this.descriptors.length)
+      return -1;
+    return this.descriptors[metric]?.kind === expected ? this.offsets[metric] ?? -1 : -1;
+  }
+  metricFailure(metric, expected) {
+    if (!Number.isInteger(metric) || metric < 0 || metric >= this.descriptors.length)
+      return 1 /* InvalidMetric */;
+    return this.descriptors[metric]?.kind === expected ? 1 /* InvalidMetric */ : 2 /* WrongMetricKind */;
+  }
+}
+
+class EngineTelemetry {
+  trace;
+  metrics;
+  constructor(traceDescriptors, metricDescriptors, traceBuffer, metricCells, clock) {
+    this.trace = new TelemetryRecorder(traceDescriptors, traceBuffer, clock);
+    this.metrics = new TelemetryMetricBank(metricDescriptors, metricCells);
+  }
+}
+var TelemetryRes = defineResource("telemetry", () => {
+  throw new Error("Telemetry not initialized. Set TelemetryRes during bootstrap.");
+});
+
+// crates/afterglow-web/web/src/engine/telemetry/catalog.ts
+var ENGINE_TRACE_DESCRIPTORS = [
+  { category: 1 /* Frame */, categoryName: "frame", name: "frame", kind: 2 /* Span */, argument0: "frame_id", argument1: "delta_ns" },
+  { category: 2 /* Worker */, categoryName: "worker", name: "worker.poll", kind: 2 /* Span */, argument0: "stage", argument1: "elapsed_us" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.update", kind: 2 /* Span */, argument0: "stage", argument1: "elapsed_us" },
+  { category: 0 /* Runtime */, categoryName: "runtime", name: "structural.commands", kind: 2 /* Span */, argument0: "stage", argument1: "elapsed_us" },
+  { category: 0 /* Runtime */, categoryName: "runtime", name: "pose.batches", kind: 2 /* Span */, argument0: "stage", argument1: "elapsed_us" },
+  { category: 1 /* Frame */, categoryName: "frame", name: "render.prepare", kind: 2 /* Span */, argument0: "stage", argument1: "elapsed_us" },
+  { category: 0 /* Runtime */, categoryName: "runtime", name: "game.update", kind: 2 /* Span */, argument0: "frame_id" },
+  { category: 1 /* Frame */, categoryName: "frame", name: "render.passes", kind: 2 /* Span */, argument0: "frame_id" }
+];
+var FRAME_BUDGET_TRACE_DESCRIPTORS = [
+  1 /* WorkerPoll */,
+  2 /* VirtualTexture */,
+  3 /* StructuralCommands */,
+  4 /* PoseBatches */,
+  5 /* RenderPrepare */
+];
+var ENGINE_METRIC_DESCRIPTORS = [
+  { category: 1 /* Frame */, categoryName: "frame", name: "frames", kind: 1 /* Counter */, unit: "count" },
+  { category: 1 /* Frame */, categoryName: "frame", name: "frame_delta_ns", kind: 4 /* HistogramLog2 */, unit: "nanoseconds" },
+  { category: 1 /* Frame */, categoryName: "frame", name: "frame_max_ns", kind: 3 /* Maximum */, unit: "nanoseconds" }
+];
 // crates/afterglow-web/web/src/engine/core/runtime.ts
 class BrowserAnimationScheduler {
   request(callback) {
@@ -70051,6 +70573,7 @@ class EngineRuntime {
   memory;
   budget;
   diagnostics;
+  telemetry;
   mutableFrame = { frameId: 0, deltaSeconds: 0, elapsedSeconds: 0 };
   workers;
   passes;
@@ -70074,7 +70597,11 @@ class EngineRuntime {
       throw new RangeError("render pass capacity must be a positive integer");
     this.adapter = options.adapter;
     this.memory = new EngineMemory(options.memory);
-    this.budget = new FrameBudget(options.frameBudget);
+    this.telemetry = new EngineTelemetry(ENGINE_TRACE_DESCRIPTORS, ENGINE_METRIC_DESCRIPTORS, this.memory.telemetryTrace, this.memory.telemetryMetrics);
+    this.budget = new FrameBudget(options.frameBudget, undefined, {
+      recorder: this.telemetry.trace,
+      stageDescriptors: FRAME_BUDGET_TRACE_DESCRIPTORS
+    });
     this.diagnostics = new EngineDiagnostics(options.diagnosticCapacity);
     this.workers = new FixedWorkerInputs(options.maxWorkerInputs);
     this.passes = new Array(options.maxRenderPasses).fill(null);
@@ -70085,7 +70612,8 @@ class EngineRuntime {
     const budgetResource = defineResource("frameBudget", () => this.budget);
     memoryResource.set(this.adapter.world, this.memory);
     budgetResource.set(this.adapter.world, this.budget);
-    this.manifest = new ResourceManifest(memoryResource, budgetResource, ...options.resources ?? []);
+    TelemetryRes.set(this.adapter.world, this.telemetry);
+    this.manifest = new ResourceManifest(memoryResource, budgetResource, TelemetryRes, ...options.resources ?? []);
     this.manifest.initialize(this.adapter.world);
   }
   get state() {
@@ -70183,15 +70711,37 @@ class EngineRuntime {
     this.mutableFrame.frameId++;
     this.mutableFrame.deltaSeconds = deltaSeconds;
     this.mutableFrame.elapsedSeconds = this.elapsedSeconds;
+    const frameNanoseconds = Math.floor(deltaSeconds * 1e9);
+    this.telemetry.metrics.counterAdd(0 /* Frames */, 1);
+    this.telemetry.metrics.histogramLog2(1 /* FrameDeltaNs */, frameNanoseconds);
+    this.telemetry.metrics.maximum(2 /* FrameMaxNs */, frameNanoseconds);
+    this.telemetry.trace.spanBegin(0 /* Frame */, this.mutableFrame.frameId, this.mutableFrame.frameId, frameNanoseconds);
+    let gameSpanOpen = false;
+    let renderSpanOpen = false;
     try {
       prepareAfterglowFrame(this.mutableFrame, this.workers, this.adapter, this.vt, this.memory, this.budget);
+      this.telemetry.trace.spanBegin(6 /* GameUpdate */, this.mutableFrame.frameId, this.mutableFrame.frameId, 0);
+      gameSpanOpen = true;
       this.client.update(this.mutableFrame);
+      this.telemetry.trace.spanEnd(6 /* GameUpdate */, this.mutableFrame.frameId, this.mutableFrame.frameId, 0);
+      gameSpanOpen = false;
+      this.telemetry.trace.spanBegin(7 /* RenderPasses */, this.mutableFrame.frameId, this.mutableFrame.frameId, 0);
+      renderSpanOpen = true;
       for (let index = 0;index < this.passCount; index++) {
         const pass2 = this.passes[index];
         if (pass2 !== null && pass2 !== undefined)
           pass2.render(this.mutableFrame);
       }
+      this.telemetry.trace.spanEnd(7 /* RenderPasses */, this.mutableFrame.frameId, this.mutableFrame.frameId, 0);
+      renderSpanOpen = false;
+      this.telemetry.trace.spanEnd(0 /* Frame */, this.mutableFrame.frameId, this.mutableFrame.frameId, 0);
     } catch (error2) {
+      this.budget.abortOpenStages();
+      if (gameSpanOpen)
+        this.telemetry.trace.spanEnd(6 /* GameUpdate */, this.mutableFrame.frameId, this.mutableFrame.frameId, 1);
+      if (renderSpanOpen)
+        this.telemetry.trace.spanEnd(7 /* RenderPasses */, this.mutableFrame.frameId, this.mutableFrame.frameId, 1);
+      this.telemetry.trace.spanEnd(0 /* Frame */, this.mutableFrame.frameId, this.mutableFrame.frameId, 1);
       this.diagnostics.tryRecord(1 /* RuntimeState */, 0 /* Runtime */, error2);
       console.error("[afterglow] runtime frame failed:", error2 instanceof Error ? error2.stack : String(error2));
       this.mutableState = 4 /* Stopped */;
@@ -70316,213 +70866,6 @@ class Profiling {
 var ProfilingRes = defineResource("profiling", () => {
   throw new Error("Profiling not initialized. Call ProfilingRes.set(world, new Profiling(host)).");
 });
-// crates/afterglow-web/web/src/engine/renderer/gpu-profiler.ts
-var DEFAULT_FRAMES_IN_FLIGHT = 3;
-var DEFAULT_MAX_SCOPES = 16;
-
-class GpuProfiler {
-  device;
-  slots = [];
-  maxScopes;
-  capacity;
-  current = 0;
-  framesInFlight;
-  supported;
-  period;
-  result = [];
-  frameScopeCount = 0;
-  constructor(device, queue, options = {}) {
-    this.device = device;
-    if (options.framesInFlight !== undefined && (!Number.isInteger(options.framesInFlight) || options.framesInFlight < 1))
-      throw new RangeError("GpuProfiler framesInFlight must be a positive integer");
-    if (options.maxScopesPerFrame !== undefined && (!Number.isInteger(options.maxScopesPerFrame) || options.maxScopesPerFrame < 1))
-      throw new RangeError("GpuProfiler maxScopesPerFrame must be a positive integer");
-    this.framesInFlight = options.framesInFlight ?? DEFAULT_FRAMES_IN_FLIGHT;
-    this.maxScopes = options.maxScopesPerFrame ?? DEFAULT_MAX_SCOPES;
-    this.capacity = this.maxScopes * 2;
-    this.supported = device.features.has("timestamp-query");
-    this.period = () => queue.getTimestampPeriod?.() ?? 1;
-    if (this.supported)
-      this.initSlots();
-  }
-  initSlots() {
-    for (let i = 0;i < this.framesInFlight; i++) {
-      const querySet = this.device.createQuerySet({
-        type: "timestamp",
-        count: this.capacity
-      });
-      const resolveBuffer = this.device.createBuffer({
-        size: this.capacity * 8,
-        usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC
-      });
-      const resultBuffer = this.device.createBuffer({
-        size: this.capacity * 8,
-        usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
-      });
-      this.slots.push({
-        querySet,
-        resolveBuffer,
-        resultBuffer,
-        names: [],
-        mapped: true,
-        resolved: false
-      });
-    }
-  }
-  isSupported() {
-    return this.supported;
-  }
-  beginFrame() {
-    if (!this.supported)
-      return noopFrameScope;
-    this.frameScopeCount = 0;
-    const slot = this.slots[this.current];
-    if (!slot)
-      return noopFrameScope;
-    slot.names.length = 0;
-    slot.resolved = false;
-    slot.mapped = false;
-    const profiler = this;
-    const frameScope = {
-      withPass(name, descriptor) {
-        if (profiler.frameScopeCount >= profiler.maxScopes)
-          return descriptor;
-        const slot2 = profiler.slots[profiler.current];
-        if (!slot2)
-          return descriptor;
-        const pair = profiler.frameScopeCount * 2;
-        slot2.names.push(name);
-        profiler.frameScopeCount++;
-        descriptor.timestampWrites = {
-          querySet: slot2.querySet,
-          beginningOfPassWriteIndex: pair,
-          endOfPassWriteIndex: pair + 1
-        };
-        return descriptor;
-      },
-      scope(name, encoder) {
-        if (profiler.frameScopeCount >= profiler.maxScopes)
-          return { end() {} };
-        const slot2 = profiler.slots[profiler.current];
-        if (!slot2)
-          return { end() {} };
-        const pair = profiler.frameScopeCount * 2;
-        slot2.names.push(name);
-        profiler.frameScopeCount++;
-        encoder.writeTimestamp?.(slot2.querySet, pair);
-        return {
-          end() {
-            encoder.writeTimestamp?.(slot2.querySet, pair + 1);
-          }
-        };
-      }
-    };
-    return frameScope;
-  }
-  endFrame(encoder) {
-    if (!this.supported)
-      return;
-    const slot = this.slots[this.current];
-    if (!slot)
-      return;
-    if (this.frameScopeCount === 0) {
-      this.advance();
-      return;
-    }
-    const used = this.frameScopeCount * 2;
-    encoder.resolveQuerySet(slot.querySet, 0, used, slot.resolveBuffer, 0);
-    encoder.copyBufferToBuffer(slot.resolveBuffer, 0, slot.resultBuffer, 0, used * 8);
-    slot.resolved = true;
-    slot.mapped = false;
-    this.advance();
-  }
-  advance() {
-    this.current = (this.current + 1) % this.framesInFlight;
-  }
-  async poll() {
-    this.result.length = 0;
-    if (!this.supported)
-      return this.result;
-    const slot = this.slots[this.current];
-    if (!slot || !slot.resolved || slot.mapped)
-      return this.result;
-    const used = slot.names.length * 2;
-    await slot.resultBuffer.mapAsync(GPUMapMode.READ);
-    slot.mapped = true;
-    const view = new BigUint64Array(slot.resultBuffer.getMappedRange(0, used * 8));
-    const period = this.period();
-    for (let i = 0;i < slot.names.length; i++) {
-      const start = view[i * 2] ?? 0n;
-      const end = view[i * 2 + 1] ?? 0n;
-      this.result.push({
-        name: slot.names[i] ?? `scope-${i}`,
-        startNs: start,
-        endNs: end,
-        durationMs: Number(end - start) * period / 1e6
-      });
-    }
-    slot.resultBuffer.unmap();
-    slot.resolved = false;
-    return this.result;
-  }
-  exportChromeTrace(scopes) {
-    const events = scopes.map((s) => ({
-      name: s.name,
-      cat: "gpu",
-      ph: "X",
-      ts: Number(s.startNs) / 1000,
-      dur: s.durationMs * 1000,
-      pid: 1,
-      tid: 1
-    }));
-    return JSON.stringify({ traceEvents: events });
-  }
-  dispose() {
-    for (const slot of this.slots) {
-      slot.querySet.destroy();
-      slot.resolveBuffer.destroy();
-      slot.resultBuffer.destroy();
-    }
-    this.slots.length = 0;
-  }
-  static async validate(device, queue) {
-    const profiler = new GpuProfiler(device, queue, { framesInFlight: 2, maxScopesPerFrame: 4 });
-    if (!profiler.isSupported()) {
-      profiler.dispose();
-      return { supported: false, timings: [] };
-    }
-    const target = device.createTexture({
-      size: [4096, 4096],
-      format: navigator.gpu.getPreferredCanvasFormat(),
-      usage: GPUTextureUsage.RENDER_ATTACHMENT
-    });
-    const view = target.createView();
-    for (let frame = 0;frame < 4; frame++) {
-      const scope = profiler.beginFrame();
-      const encoder = device.createCommandEncoder();
-      const pass2 = encoder.beginRenderPass(scope.withPass("validation-pass", {
-        colorAttachments: [{ view, clearValue: { r: 0, g: 0, b: 0, a: 1 }, loadOp: "clear", storeOp: "store" }]
-      }));
-      pass2.end();
-      profiler.endFrame(encoder);
-      queue.submit([encoder.finish()]);
-      await queue.onSubmittedWorkDone();
-    }
-    const timings = await profiler.poll();
-    profiler.dispose();
-    target.destroy();
-    return { supported: true, timings };
-  }
-}
-var noopFrameScope = {
-  withPass(name, d) {
-    return d;
-  },
-  scope(_name, _encoder) {
-    return { end() {} };
-  }
-};
-
 // crates/afterglow-web/web/src/engine/input/input.ts
 function actionFor(event) {
   switch (event.code || event.key) {
@@ -73030,7 +73373,9 @@ var runtime = EngineRuntime.forScene({
     structuralCommands: 8,
     workerCompletions: 8,
     assetRequests: 8,
-    vtRequests: 512
+    vtRequests: 512,
+    telemetryRecords: 16384,
+    telemetryMetricCells: 512
   },
   diagnosticCapacity: 128,
   maxWorkerInputs: 1,

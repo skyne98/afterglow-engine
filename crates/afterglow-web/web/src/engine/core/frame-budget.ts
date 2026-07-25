@@ -1,4 +1,5 @@
 import { Resource, defineResource } from './resource.ts';
+import type { TelemetryRecorder } from '../telemetry/telemetry.ts';
 
 /** Fixed stages in deterministic frame order. */
 export enum FrameStage {
@@ -28,6 +29,11 @@ export const DEFAULT_FRAME_BUDGET: FrameBudgetConfig = {
   operationLimits: [1, 1, 1, 1, 1],
 };
 
+export interface FrameBudgetTelemetry {
+  readonly recorder: TelemetryRecorder;
+  readonly stageDescriptors: readonly number[];
+}
+
 /**
  * Allocation-free frame-stage admission and telemetry after construction.
  *
@@ -43,6 +49,7 @@ export class FrameBudget {
   private readonly overruns = new Uint32Array(FrameStage.Count);
   private readonly deferred = new Uint32Array(FrameStage.Count);
   private readonly stageStarts = new Float64Array(FrameStage.Count);
+  private readonly stageActive = new Uint8Array(FrameStage.Count);
   private readonly elapsedUs = new Float64Array(FrameStage.Count);
   private readonly totalElapsedUs = new Float64Array(FrameStage.Count);
   private readonly maxElapsedUs = new Float64Array(FrameStage.Count);
@@ -53,6 +60,7 @@ export class FrameBudget {
   constructor(
     config: FrameBudgetConfig = DEFAULT_FRAME_BUDGET,
     private readonly clock: () => number = () => performance.now(),
+    private readonly telemetry?: FrameBudgetTelemetry,
   ) {
     if (config.deadlineFractions.length !== FrameStage.Count ||
         config.operationLimits.length !== FrameStage.Count)
@@ -80,6 +88,7 @@ export class FrameBudget {
       this.operations[stage] = 0;
       this.elapsedUs[stage] = 0;
       this.stageStarts[stage] = 0;
+      this.stageActive[stage] = 0;
       this.deadlines[stage] = this.frameStart + this.frameDurationMs * this.deadlineFractions[stage];
     }
   }
@@ -100,6 +109,10 @@ export class FrameBudget {
     }
     this.operations[stage]++;
     this.stageStarts[stage] = this.clock();
+    this.stageActive[stage] = 1;
+    const descriptor = this.telemetry?.stageDescriptors[stage];
+    if (descriptor !== undefined)
+      this.telemetry?.recorder.spanBegin(descriptor, this.frameId, stage, 0);
     return BudgetDecision.Run;
   }
   // @hot-no-alloc-end FrameBudget.beginStage
@@ -113,8 +126,19 @@ export class FrameBudget {
     if (this.elapsedUs[stage] > this.maxElapsedUs[stage])
       this.maxElapsedUs[stage] = this.elapsedUs[stage];
     if (now > this.deadlines[stage]) this.overruns[stage]++;
+    this.stageActive[stage] = 0;
+    const descriptor = this.telemetry?.stageDescriptors[stage];
+    if (descriptor !== undefined)
+      this.telemetry?.recorder.spanEnd(descriptor, this.frameId, stage, elapsedUs);
   }
   // @hot-no-alloc-end FrameBudget.endStage
+
+  // @hot-no-alloc-begin FrameBudget.abortOpenStages
+  abortOpenStages(): void {
+    for (let stage = 0; stage < FrameStage.Count; stage++)
+      if (this.stageActive[stage] !== 0) this.endStage(stage);
+  }
+  // @hot-no-alloc-end FrameBudget.abortOpenStages
 
   get currentFrameId(): number { return this.frameId; }
   get currentFrameDurationMs(): number { return this.frameDurationMs; }

@@ -8,6 +8,15 @@ import {
   type VTInput,
 } from './frame.ts';
 import { RenderAdapter } from '../renderer/render-adapter.ts';
+import {
+  EngineMetric,
+  EngineTelemetry,
+  EngineTraceDescriptor,
+  ENGINE_METRIC_DESCRIPTORS,
+  ENGINE_TRACE_DESCRIPTORS,
+  FRAME_BUDGET_TRACE_DESCRIPTORS,
+  TelemetryRes,
+} from '../telemetry/index.ts';
 import { ResourceManifest, defineResource, type Resource } from './resource.ts';
 import type { Scene } from 'three/webgpu';
 import type { RenderFrame } from './types.ts';
@@ -128,6 +137,7 @@ export class EngineRuntime<TAdapter extends RuntimeRenderAdapter = RuntimeRender
   readonly memory: EngineMemory;
   readonly budget: FrameBudget;
   readonly diagnostics: EngineDiagnostics;
+  readonly telemetry: EngineTelemetry;
   private readonly mutableFrame = { frameId: 0, deltaSeconds: 0, elapsedSeconds: 0 };
 
   private readonly workers: FixedWorkerInputs;
@@ -154,7 +164,16 @@ export class EngineRuntime<TAdapter extends RuntimeRenderAdapter = RuntimeRender
       throw new RangeError('render pass capacity must be a positive integer');
     this.adapter = options.adapter;
     this.memory = new EngineMemory(options.memory);
-    this.budget = new FrameBudget(options.frameBudget);
+    this.telemetry = new EngineTelemetry(
+      ENGINE_TRACE_DESCRIPTORS,
+      ENGINE_METRIC_DESCRIPTORS,
+      this.memory.telemetryTrace,
+      this.memory.telemetryMetrics,
+    );
+    this.budget = new FrameBudget(options.frameBudget, undefined, {
+      recorder: this.telemetry.trace,
+      stageDescriptors: FRAME_BUDGET_TRACE_DESCRIPTORS,
+    });
     this.diagnostics = new EngineDiagnostics(options.diagnosticCapacity);
     this.workers = new FixedWorkerInputs(options.maxWorkerInputs);
     this.passes = new Array<EngineRenderPass | null>(options.maxRenderPasses).fill(null);
@@ -166,7 +185,8 @@ export class EngineRuntime<TAdapter extends RuntimeRenderAdapter = RuntimeRender
     const budgetResource = defineResource('frameBudget', () => this.budget);
     memoryResource.set(this.adapter.world, this.memory);
     budgetResource.set(this.adapter.world, this.budget);
-    this.manifest = new ResourceManifest(memoryResource, budgetResource, ...(options.resources ?? []));
+    TelemetryRes.set(this.adapter.world, this.telemetry);
+    this.manifest = new ResourceManifest(memoryResource, budgetResource, TelemetryRes, ...(options.resources ?? []));
     this.manifest.initialize(this.adapter.world);
   }
 
@@ -259,14 +279,54 @@ export class EngineRuntime<TAdapter extends RuntimeRenderAdapter = RuntimeRender
     this.mutableFrame.frameId++;
     this.mutableFrame.deltaSeconds = deltaSeconds;
     this.mutableFrame.elapsedSeconds = this.elapsedSeconds;
+    const frameNanoseconds = Math.floor(deltaSeconds * 1_000_000_000);
+    this.telemetry.metrics.counterAdd(EngineMetric.Frames, 1);
+    this.telemetry.metrics.histogramLog2(EngineMetric.FrameDeltaNs, frameNanoseconds);
+    this.telemetry.metrics.maximum(EngineMetric.FrameMaxNs, frameNanoseconds);
+    this.telemetry.trace.spanBegin(
+      EngineTraceDescriptor.Frame, this.mutableFrame.frameId,
+      this.mutableFrame.frameId, frameNanoseconds,
+    );
+    let gameSpanOpen = false;
+    let renderSpanOpen = false;
     try {
       prepareAfterglowFrame(this.mutableFrame, this.workers, this.adapter, this.vt, this.memory, this.budget);
+      this.telemetry.trace.spanBegin(
+        EngineTraceDescriptor.GameUpdate, this.mutableFrame.frameId,
+        this.mutableFrame.frameId, 0,
+      );
+      gameSpanOpen = true;
       this.client.update(this.mutableFrame);
+      this.telemetry.trace.spanEnd(
+        EngineTraceDescriptor.GameUpdate, this.mutableFrame.frameId,
+        this.mutableFrame.frameId, 0,
+      );
+      gameSpanOpen = false;
+      this.telemetry.trace.spanBegin(
+        EngineTraceDescriptor.RenderPasses, this.mutableFrame.frameId,
+        this.mutableFrame.frameId, 0,
+      );
+      renderSpanOpen = true;
       for (let index = 0; index < this.passCount; index++) {
         const pass = this.passes[index];
         if (pass !== null && pass !== undefined) pass.render(this.mutableFrame);
       }
+      this.telemetry.trace.spanEnd(
+        EngineTraceDescriptor.RenderPasses, this.mutableFrame.frameId,
+        this.mutableFrame.frameId, 0,
+      );
+      renderSpanOpen = false;
+      this.telemetry.trace.spanEnd(
+        EngineTraceDescriptor.Frame, this.mutableFrame.frameId,
+        this.mutableFrame.frameId, 0,
+      );
     } catch (error) {
+      this.budget.abortOpenStages();
+      if (gameSpanOpen)
+        this.telemetry.trace.spanEnd(EngineTraceDescriptor.GameUpdate, this.mutableFrame.frameId, this.mutableFrame.frameId, 1);
+      if (renderSpanOpen)
+        this.telemetry.trace.spanEnd(EngineTraceDescriptor.RenderPasses, this.mutableFrame.frameId, this.mutableFrame.frameId, 1);
+      this.telemetry.trace.spanEnd(EngineTraceDescriptor.Frame, this.mutableFrame.frameId, this.mutableFrame.frameId, 1);
       this.diagnostics.tryRecord(DiagnosticCode.RuntimeState, DiagnosticSource.Runtime, error);
       console.error('[afterglow] runtime frame failed:', error instanceof Error ? error.stack : String(error)); // @alloc-allowed reason=FatalDiagnostic issue=DME-044 expires=2026-10-01
       this.mutableState = RuntimeState.Stopped;

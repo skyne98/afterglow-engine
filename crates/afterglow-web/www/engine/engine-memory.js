@@ -183,6 +183,8 @@ class EngineMemory {
   workerCompletions;
   assetRequests;
   vtRequests;
+  telemetryTrace;
+  telemetryMetrics;
   metrics = {
     frameArenaOverflows: 0,
     renderArenaOverflows: 0,
@@ -197,6 +199,12 @@ class EngineMemory {
     this.workerCompletions = new FixedIndexPool(config.workerCompletions);
     this.assetRequests = new FixedIndexPool(config.assetRequests);
     this.vtRequests = new FixedIndexPool(config.vtRequests);
+    if (!Number.isInteger(config.telemetryRecords) || config.telemetryRecords <= 0)
+      throw new RangeError("telemetryRecords must be a positive integer");
+    if (!Number.isInteger(config.telemetryMetricCells) || config.telemetryMetricCells <= 0)
+      throw new RangeError("telemetryMetricCells must be a positive integer");
+    this.telemetryTrace = new ArrayBuffer(config.telemetryRecords * 40);
+    this.telemetryMetrics = new Float64Array(config.telemetryMetricCells);
   }
   warmup() {
     if (this.phase !== 0 /* Bootstrap */)

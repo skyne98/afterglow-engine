@@ -24,6 +24,7 @@ class FrameBudget {
   beginFrame(frameId: number, frameDurationMs: number): void;
   beginStage(stage: FrameStage, required?: boolean): BudgetDecision;
   endStage(stage: FrameStage): void;
+  abortOpenStages(): void;
 
   readonly stageOperations: Uint32Array;
   readonly stageExhaustions: Uint32Array;
@@ -39,7 +40,10 @@ Deadlines are cumulative fractions of the current frame duration, so the same
 configuration scales between 60 Hz and 144 Hz. Operation limits, deadlines,
 counters, and telemetry use fixed typed arrays allocated at construction.
 Current-frame, cumulative, and maximum stage CPU durations are retained in
-microsecond arrays.
+microsecond arrays. `EngineRuntime` supplies a `FrameBudgetTelemetry` adapter;
+when unified tracing is armed, every admitted stage also emits a begin/end span
+using the frame ID as its correlation value. Disabled tracing returns before a
+clock read and does not change admission behavior.
 
 `prepareAfterglowFrame(..., memory, budget)` starts the budget before any stage.
 Worker polling, VT completion, and render preparation are required: they still

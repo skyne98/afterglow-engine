@@ -31,6 +31,8 @@ hard transport bounds are listed below.
 | Instanced proxies | `shardCapacity × maxShards` | `RenderAttachStatus.CapacityExceeded` |
 | Unique proxies | descriptor `poolCapacity` | `RenderAttachStatus.CapacityExceeded` |
 | Frame stage deadlines | 15/35/45/55/95% cumulative | Optional stages return typed deferral; required stages record overruns |
+| Unified trace capture | caller-configured 40-byte records per producer | Existing prefix retained; new records dropped with exact counter |
+| Unified metrics | caller-configured scalar cells; log2 histograms use 32 cells | Configuration rejects insufficient backing; updates never grow |
 
 The current Radeon 680M adapter admits a 60×60 physical page grid: 3,600
 136×136 slots in an 8160² atlas. Other adapters derive this value from
