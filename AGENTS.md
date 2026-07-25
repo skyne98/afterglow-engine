@@ -366,6 +366,18 @@ All engine work must move toward these non-negotiable requirements:
   comparison of runtime Basis/KTX2 transcoding versus cooked/derived caches.
   The derived cache was implemented, measured, then removed on 2026-07-25 in
   favor of the bounded no-cache VT pipeline.
+- `docs/research/wicked-engine-virtual-texturing-source-audit.md` — Commit-
+  pinned A-to-Z audit of Wicked Engine's terrain-only, runtime-generated VT:
+  software residency, sparse BC aliasing, feedback, LRU, packed tail, shader
+  sampling, backends, failure behavior, and source-level concerns.
+- `docs/research/dagor-engine-virtual-texturing-source-audit.md` — Commit-pinned
+  A-to-Z audit of Dagor Engine's demand-rendered terrain clipmap: UAV/RT/CPU
+  feedback, bounded priority, compression, indirection, fallback, diagnostics,
+  and the separate low-level sparse API.
+- `docs/research/wicked-dagor-virtual-texturing-comparison.md` — Comparative
+  architecture and Afterglow lessons; neither engine implements file-backed
+  asset-page streaming, and neither terrain VT uses sparse mapping for demand
+  residency.
 - `docs/research/surface-detail-low-end-fallbacks.md` — Surface-detail/POM
   fallback evaluation and integrated result: normal/one-tap fallback tiers,
   measured low-core 680M boundary, resident matching height, and bounded VT
