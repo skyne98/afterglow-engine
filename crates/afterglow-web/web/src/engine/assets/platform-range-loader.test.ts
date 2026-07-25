@@ -1,5 +1,9 @@
 import { afterEach, expect, test } from 'bun:test';
 import { createPlatformRangeLoader } from './platform-range-loader.ts';
+import {
+  EngineMetric, ENGINE_METRIC_DESCRIPTORS, ENGINE_TRACE_DESCRIPTORS,
+} from '../telemetry/catalog.ts';
+import { EngineTelemetry } from '../telemetry/telemetry.ts';
 
 afterEach(() => { delete (globalThis as typeof globalThis & { Deno?: unknown }).Deno; });
 
@@ -22,7 +26,15 @@ test('native source returns zero-copy arena views for single and scatter reads',
     op_afterglow_arena_view: (handle: { slot: number }) => handles[handle.slot]!.bytes,
   } } };
 
-  const source = createPlatformRangeLoader();
+  const telemetry = new EngineTelemetry(
+    ENGINE_TRACE_DESCRIPTORS,
+    ENGINE_METRIC_DESCRIPTORS,
+    new ArrayBuffer(40 * 32),
+    new Float64Array(192),
+    () => 1,
+  );
+  telemetry.trace.arm(4);
+  const source = createPlatformRangeLoader('', telemetry);
   expect((await source.identity('dungeon.big')).size).toBe(727);
   const single = await source.read('dungeon.big', 5, 4);
   expect([...single]).toEqual([10, 11, 12, 13]);
@@ -36,4 +48,7 @@ test('native source returns zero-copy arena views for single and scatter reads',
   expect(parts[0]!.buffer).toBe(backing.buffer);
   expect(parts[1]!.buffer).toBe(backing.buffer);
   expect(new DataView(seenSpans[0]!.buffer).getBigUint64(0, true)).toBe(4n);
+  expect(telemetry.metrics.readCell(EngineMetric.AssetBytesRead)).toBe(11);
+  telemetry.trace.stop();
+  expect(telemetry.trace.snapshot()?.count).toBe(6);
 });

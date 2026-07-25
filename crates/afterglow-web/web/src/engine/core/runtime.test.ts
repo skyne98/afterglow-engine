@@ -15,7 +15,7 @@ const memory: EngineMemoryConfig = {
   assetRequests: 4,
   vtRequests: 4,
   telemetryRecords: 64,
-  telemetryMetricCells: 64,
+  telemetryMetricCells: 192,
 };
 
 class FakeScheduler implements AnimationScheduler {

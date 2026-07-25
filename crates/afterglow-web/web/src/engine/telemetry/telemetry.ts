@@ -395,6 +395,7 @@ export class TelemetryMetricBank {
 export class EngineTelemetry {
   readonly trace: TelemetryRecorder;
   readonly metrics: TelemetryMetricBank;
+  private correlationCounter = 1;
 
   constructor(
     traceDescriptors: readonly TelemetryDescriptor[],
@@ -406,6 +407,16 @@ export class EngineTelemetry {
     this.trace = new TelemetryRecorder(traceDescriptors, traceBuffer, clock);
     this.metrics = new TelemetryMetricBank(metricDescriptors, metricCells);
   }
+
+  // @hot-no-alloc-begin EngineTelemetry.nextCorrelation
+  nextCorrelation(namespace = 0): number {
+    const safeNamespace = Number.isInteger(namespace) && namespace >= 0
+      ? Math.min(0x0f_ffff, namespace) : 0;
+    const local = this.correlationCounter;
+    this.correlationCounter = local === U32_MAX ? 1 : local + 1;
+    return safeNamespace * U32_SCALE + local;
+  }
+  // @hot-no-alloc-end EngineTelemetry.nextCorrelation
 }
 
 export const TelemetryRes: Resource<EngineTelemetry> = defineResource<EngineTelemetry>('telemetry', () => {

@@ -1,6 +1,10 @@
 import { describe, expect, test } from 'bun:test';
 import { NativeRpcTransport } from './native-transport.ts';
-import type { RpcTransport } from './codec.ts';
+import type { RpcTransport } from '../../workers/codec.ts';
+import {
+  EngineMetric, ENGINE_METRIC_DESCRIPTORS, ENGINE_TRACE_DESCRIPTORS,
+} from '../telemetry/catalog.ts';
+import { EngineTelemetry } from '../telemetry/telemetry.ts';
 
 describe('NativeRpcTransport', () => {
   test('implements the RpcTransport interface', () => {
@@ -23,11 +27,22 @@ describe('NativeRpcTransport', () => {
       },
     };
     try {
-      const t = new NativeRpcTransport(7);
+      const telemetry = new EngineTelemetry(
+        ENGINE_TRACE_DESCRIPTORS,
+        ENGINE_METRIC_DESCRIPTORS,
+        new ArrayBuffer(40 * 8),
+        new Float64Array(192),
+        () => 1,
+      );
+      telemetry.trace.arm(3);
+      const t = new NativeRpcTransport(7, telemetry);
       const args = new Uint8Array([1, 2, 3]);
       const out = await t.call(42, args);
       expect(calls).toEqual([[7, 42, args]]);
       expect(out).toBe(args); // the op's return is passed through
+      expect(telemetry.metrics.readCell(EngineMetric.RpcCalls)).toBe(1);
+      telemetry.trace.stop();
+      expect(telemetry.trace.snapshot()?.count).toBe(2);
     } finally {
       delete (globalThis as unknown as { Deno?: unknown }).Deno;
     }

@@ -46,7 +46,10 @@ const runtime = EngineRuntime.forScene({
 `TelemetryRes`. It always maintains frame count, frame-delta histogram, and
 maximum-frame metrics. When tracing is armed it records the complete frame,
 worker polling, VT work, structural and pose drains, render preparation, game
-update, and render-pass ranges.
+update, and render-pass ranges. Engine-owned BIG sessions additionally feed
+source reads, bulk wait/dispatch, persistent cache, native RPC round trips,
+texture queue/transcode, mesh optimization, complete page loads, and VT upload/
+publication into the same correlation timeline.
 
 ```ts
 runtime.telemetry.trace.arm(1);
@@ -83,9 +86,10 @@ the lossless `.agt` representation.
 
 ## Current scope
 
-The core crate and TypeScript frame/runtime integration are implemented. RPC
-flow generation, worker draining, native asset/texture/audio scopes, shell file
-capture, and GPU timestamp ingestion are subsequent integration gates. New
+The core crate and broad TypeScript frame/asset/VT integration are implemented.
+Generated server-side RPC flow points, worker-local `pread`/arena/codec detail,
+worker draining, audio scopes, shell file capture, and GPU timestamp ingestion
+are subsequent integration gates. New
 subsystem profilers should feed this API rather than create another event format
 or Chrome exporter.
 

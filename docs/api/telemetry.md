@@ -159,6 +159,14 @@ recording.
 records the complete frame, worker poll, VT update, structural command, pose,
 render preparation, game update, and render-pass spans.
 
+The default catalog also covers BIG session startup, source size/identity,
+single and bulk range reads, native page-side RPC round trips, bulk-queue wait
+and dispatch, persistent-cache reads/writes, texture queue/transcode, complete
+VT page loads, atlas/page-table upload publication, and whole-scene mesh
+optimization. These paths share numeric page/request correlations. Always-on
+metrics include asset bytes/read latency, RPC calls/latency, VT requested/
+loaded/failed pages, upload latency, and transcode latency.
+
 ## Current integration boundary
 
 Implemented now:
@@ -166,12 +174,15 @@ Implemented now:
 - standalone Rust records, recorder, metrics, batch codec, collector, raw
   export, and Chrome export;
 - exact TypeScript record/batch ABI, metrics, allocation contracts, and tests;
-- `EngineMemory` ownership and `EngineRuntime`/`FrameBudget` page tracks.
+- `EngineMemory` ownership and `EngineRuntime`/`FrameBudget` page tracks;
+- web/native range-loader, BIG session, cache, bulk batching, transcode,
+  native RPC round-trip, mesh optimization, VT load, and VT upload tracks.
 
 Still to be composed:
 
-- generated RPC client/server flow endpoints and worker batch draining;
-- native asset `pread`, arena lease, texture transcode, and audio adapters;
+- generated RPC server-side flow endpoints and worker-local batch draining;
+- native worker-internal `pread`, arena lease, and codec scopes;
+- audio callback/simulation adapters;
 - shell capture control/file output;
 - `GpuProfiler` timestamp ingestion;
 - removal of superseded subsystem-specific trace exporters.

@@ -44488,9 +44488,16 @@ class TelemetryMetricBank {
 class EngineTelemetry {
   trace;
   metrics;
+  correlationCounter = 1;
   constructor(traceDescriptors, metricDescriptors, traceBuffer, metricCells, clock) {
     this.trace = new TelemetryRecorder(traceDescriptors, traceBuffer, clock);
     this.metrics = new TelemetryMetricBank(metricDescriptors, metricCells);
+  }
+  nextCorrelation(namespace = 0) {
+    const safeNamespace = Number.isInteger(namespace) && namespace >= 0 ? Math.min(1048575, namespace) : 0;
+    const local = this.correlationCounter;
+    this.correlationCounter = local === U32_MAX ? 1 : local + 1;
+    return safeNamespace * U32_SCALE + local;
   }
 }
 var TelemetryRes = defineResource("telemetry", () => {
@@ -44506,7 +44513,21 @@ var ENGINE_TRACE_DESCRIPTORS = [
   { category: 0 /* Runtime */, categoryName: "runtime", name: "pose.batches", kind: 2 /* Span */, argument0: "stage", argument1: "elapsed_us" },
   { category: 1 /* Frame */, categoryName: "frame", name: "render.prepare", kind: 2 /* Span */, argument0: "stage", argument1: "elapsed_us" },
   { category: 0 /* Runtime */, categoryName: "runtime", name: "game.update", kind: 2 /* Span */, argument0: "frame_id" },
-  { category: 1 /* Frame */, categoryName: "frame", name: "render.passes", kind: 2 /* Span */, argument0: "frame_id" }
+  { category: 1 /* Frame */, categoryName: "frame", name: "render.passes", kind: 2 /* Span */, argument0: "frame_id" },
+  { category: 4 /* Asset */, categoryName: "asset", name: "asset.session.open", kind: 3 /* AsyncSpan */, argument0: "workers", argument1: "status" },
+  { category: 4 /* Asset */, categoryName: "asset", name: "asset.size", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "status" },
+  { category: 4 /* Asset */, categoryName: "asset", name: "asset.read", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "offset_or_status" },
+  { category: 4 /* Asset */, categoryName: "asset", name: "asset.read_bulk", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "spans" },
+  { category: 9 /* Rpc */, categoryName: "rpc", name: "rpc.call", kind: 3 /* AsyncSpan */, argument0: "method", argument1: "bytes" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.page_load", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "status" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.bulk_wait", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "tier" },
+  { category: 4 /* Asset */, categoryName: "asset", name: "asset.bulk_dispatch", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "spans" },
+  { category: 5 /* Texture */, categoryName: "texture", name: "texture.transcode_queue", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "format" },
+  { category: 5 /* Texture */, categoryName: "texture", name: "texture.transcode", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "format" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.upload", kind: 2 /* Span */, argument0: "bytes", argument1: "slot" },
+  { category: 4 /* Asset */, categoryName: "cache", name: "cache.read", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "hit" },
+  { category: 4 /* Asset */, categoryName: "cache", name: "cache.write", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "status" },
+  { category: 4 /* Asset */, categoryName: "asset", name: "mesh.optimize", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "status" }
 ];
 var FRAME_BUDGET_TRACE_DESCRIPTORS = [
   1 /* WorkerPoll */,
@@ -44518,7 +44539,16 @@ var FRAME_BUDGET_TRACE_DESCRIPTORS = [
 var ENGINE_METRIC_DESCRIPTORS = [
   { category: 1 /* Frame */, categoryName: "frame", name: "frames", kind: 1 /* Counter */, unit: "count" },
   { category: 1 /* Frame */, categoryName: "frame", name: "frame_delta_ns", kind: 4 /* HistogramLog2 */, unit: "nanoseconds" },
-  { category: 1 /* Frame */, categoryName: "frame", name: "frame_max_ns", kind: 3 /* Maximum */, unit: "nanoseconds" }
+  { category: 1 /* Frame */, categoryName: "frame", name: "frame_max_ns", kind: 3 /* Maximum */, unit: "nanoseconds" },
+  { category: 4 /* Asset */, categoryName: "asset", name: "asset_bytes_read", kind: 1 /* Counter */, unit: "bytes" },
+  { category: 4 /* Asset */, categoryName: "asset", name: "asset_read_ns", kind: 4 /* HistogramLog2 */, unit: "nanoseconds" },
+  { category: 9 /* Rpc */, categoryName: "rpc", name: "rpc_calls", kind: 1 /* Counter */, unit: "count" },
+  { category: 9 /* Rpc */, categoryName: "rpc", name: "rpc_duration_ns", kind: 4 /* HistogramLog2 */, unit: "nanoseconds" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt_pages_requested", kind: 1 /* Counter */, unit: "count" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt_pages_loaded", kind: 1 /* Counter */, unit: "count" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt_pages_failed", kind: 1 /* Counter */, unit: "count" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt_upload_ns", kind: 4 /* HistogramLog2 */, unit: "nanoseconds" },
+  { category: 5 /* Texture */, categoryName: "texture", name: "texture_transcode_ns", kind: 4 /* HistogramLog2 */, unit: "nanoseconds" }
 ];
 // crates/afterglow-web/web/src/engine/core/runtime.ts
 class BrowserAnimationScheduler {
@@ -45172,6 +45202,7 @@ class BigContainerAssetLoader {
 }
 class BoundedBulkReadQueue {
   loader;
+  telemetry;
   slots = new Array(BULK_RANGE_CAPACITY);
   free = new Uint16Array(BULK_RANGE_CAPACITY);
   freeTop = 0;
@@ -45206,12 +45237,14 @@ class BoundedBulkReadQueue {
     rejected: 0,
     canceled: 0
   };
-  constructor(loader) {
+  constructor(loader, telemetry) {
     this.loader = loader;
+    this.telemetry = telemetry;
     for (let index = BULK_RANGE_CAPACITY - 1;index >= 0; index--) {
       this.slots[index] = {
         path: "",
         offset: 0,
+        correlation: 0,
         length: 0,
         signal: undefined,
         resolve: null,
@@ -45226,7 +45259,8 @@ class BoundedBulkReadQueue {
   deadlineMs(tier) {
     return tier === 0 ? 1 : 100;
   }
-  read(path, offset, length2, tier, signal) {
+  read(path, offset, length2, tier, signal, correlation = 0) {
+    const traceCorrelation = correlation || this.telemetry?.nextCorrelation(3 /* VirtualTexture */) || 0;
     return new Promise((resolve, reject) => {
       if (this.closed) {
         this.rejected++;
@@ -45247,7 +45281,9 @@ class BoundedBulkReadQueue {
       const slot = this.slots[slotIndex];
       slot.path = path;
       slot.offset = offset;
+      slot.correlation = traceCorrelation;
       slot.length = length2;
+      this.telemetry?.trace.asyncBegin(14 /* VtBulkWait */, traceCorrelation, length2, this.tierIndex(tier));
       slot.signal = signal;
       slot.resolve = resolve;
       slot.reject = reject;
@@ -45301,6 +45337,7 @@ class BoundedBulkReadQueue {
         if (slot.signal?.aborted) {
           this.pop(lane);
           this.canceled++;
+          this.telemetry?.trace.asyncEnd(14 /* VtBulkWait */, slot.correlation, 0, lane);
           slot.reject?.(new Error("VT page load canceled while batched"));
           this.release(slotIndex);
           continue;
@@ -45312,6 +45349,7 @@ class BoundedBulkReadQueue {
           if (indices.length === 0) {
             this.pop(lane);
             this.rejected++;
+            this.telemetry?.trace.asyncEnd(14 /* VtBulkWait */, slot.correlation, 0, lane);
             slot.reject?.(new RangeError("one VT page exceeds bulk response capacity"));
             this.release(slotIndex);
             continue;
@@ -45340,6 +45378,12 @@ class BoundedBulkReadQueue {
     else
       this.qualityBatches++;
     const startedAt = performance.now();
+    const batchCorrelation = this.telemetry?.nextCorrelation(4 /* Asset */) ?? 0;
+    for (let index = 0;index < indices.length; index++) {
+      const slot = this.slots[indices[index]];
+      this.telemetry?.trace.asyncEnd(14 /* VtBulkWait */, slot.correlation, slot.length, lane);
+    }
+    this.telemetry?.trace.asyncBegin(15 /* VtBulkDispatch */, batchCorrelation, expectedBytes, indices.length);
     const request = this.loader.readBulk ? this.loader.readBulk(ranges) : Promise.all(indices.map((slotIndex, index) => {
       const slot = this.slots[slotIndex];
       const range = ranges[index];
@@ -45349,6 +45393,10 @@ class BoundedBulkReadQueue {
       if (parts.length !== indices.length)
         throw new Error(`bulk response returned ${parts.length} parts; expected ${indices.length}`);
       const readMs = performance.now() - startedAt;
+      let receivedBytes = 0;
+      for (let index = 0;index < parts.length; index++)
+        receivedBytes += parts[index]?.byteLength ?? 0;
+      this.telemetry?.trace.asyncEnd(15 /* VtBulkDispatch */, batchCorrelation, receivedBytes, parts.length);
       this.reads++;
       this.totalReadMs += readMs;
       this.maxReadMs = Math.max(this.maxReadMs, readMs);
@@ -45366,6 +45414,7 @@ class BoundedBulkReadQueue {
         this.release(slotIndex);
       }
     }).catch((error2) => {
+      this.telemetry?.trace.asyncEnd(15 /* VtBulkDispatch */, batchCorrelation, 0, 0);
       for (const slotIndex of indices) {
         this.slots[slotIndex].reject?.(error2);
         this.release(slotIndex);
@@ -45384,8 +45433,10 @@ class BoundedBulkReadQueue {
       this.clearLaneTimer(lane);
       while (this.counts[lane] !== 0) {
         const slotIndex = this.pop(lane);
+        const slot = this.slots[slotIndex];
         this.canceled++;
-        this.slots[slotIndex].reject?.(new Error("bulk page reader closed"));
+        this.telemetry?.trace.asyncEnd(14 /* VtBulkWait */, slot.correlation, 0, lane);
+        slot.reject?.(new Error("bulk page reader closed"));
         this.release(slotIndex);
       }
       this.ready[lane] = 0;
@@ -45507,9 +45558,95 @@ function createNativeRangeLoader(ops) {
     }
   };
 }
-function createPlatformRangeLoader(baseUrl = "") {
+function instrumentRangeLoader(loader, telemetry) {
+  const duration = (startedAt) => {
+    telemetry.metrics.histogramLog2(4 /* AssetReadNs */, Math.max(1, Math.floor((performance.now() - startedAt) * 1e6)));
+  };
+  return {
+    async load(path) {
+      const correlation = telemetry.nextCorrelation(4 /* Asset */);
+      const startedAt = performance.now();
+      telemetry.trace.asyncBegin(10 /* AssetRead */, correlation, 0, 0);
+      try {
+        const bytes = await loader.load(path);
+        telemetry.metrics.counterAdd(3 /* AssetBytesRead */, bytes.byteLength);
+        telemetry.trace.asyncEnd(10 /* AssetRead */, correlation, bytes.byteLength, 0);
+        return bytes;
+      } catch (error2) {
+        telemetry.trace.asyncEnd(10 /* AssetRead */, correlation, 0, 1);
+        throw error2;
+      } finally {
+        duration(startedAt);
+      }
+    },
+    async size(path) {
+      const correlation = telemetry.nextCorrelation(4 /* Asset */);
+      telemetry.trace.asyncBegin(9 /* AssetSize */, correlation, 0, 0);
+      try {
+        const size = await loader.size(path);
+        telemetry.trace.asyncEnd(9 /* AssetSize */, correlation, size, 0);
+        return size;
+      } catch (error2) {
+        telemetry.trace.asyncEnd(9 /* AssetSize */, correlation, 0, 1);
+        throw error2;
+      }
+    },
+    async identity(path) {
+      const correlation = telemetry.nextCorrelation(4 /* Asset */);
+      telemetry.trace.asyncBegin(9 /* AssetSize */, correlation, 0, 0);
+      try {
+        const identity = await loader.identity(path);
+        telemetry.trace.asyncEnd(9 /* AssetSize */, correlation, identity.size, 0);
+        return identity;
+      } catch (error2) {
+        telemetry.trace.asyncEnd(9 /* AssetSize */, correlation, 0, 1);
+        throw error2;
+      }
+    },
+    async read(path, offset, length2) {
+      const correlation = telemetry.nextCorrelation(4 /* Asset */);
+      const startedAt = performance.now();
+      telemetry.trace.asyncBegin(10 /* AssetRead */, correlation, length2, offset);
+      try {
+        const bytes = await loader.read(path, offset, length2);
+        telemetry.metrics.counterAdd(3 /* AssetBytesRead */, bytes.byteLength);
+        telemetry.trace.asyncEnd(10 /* AssetRead */, correlation, bytes.byteLength, 0);
+        return bytes;
+      } catch (error2) {
+        telemetry.trace.asyncEnd(10 /* AssetRead */, correlation, 0, 1);
+        throw error2;
+      } finally {
+        duration(startedAt);
+      }
+    },
+    readBulk: loader.readBulk === undefined ? undefined : async (path, ranges) => {
+      const correlation = telemetry.nextCorrelation(4 /* Asset */);
+      const startedAt = performance.now();
+      let requested = 0;
+      for (let index = 0;index < ranges.length; index++)
+        requested += ranges[index]?.length ?? 0;
+      telemetry.trace.asyncBegin(11 /* AssetBulkRead */, correlation, requested, ranges.length);
+      try {
+        const parts = await loader.readBulk(path, ranges);
+        let bytes = 0;
+        for (let index = 0;index < parts.length; index++)
+          bytes += parts[index]?.byteLength ?? 0;
+        telemetry.metrics.counterAdd(3 /* AssetBytesRead */, bytes);
+        telemetry.trace.asyncEnd(11 /* AssetBulkRead */, correlation, bytes, parts.length);
+        return parts;
+      } catch (error2) {
+        telemetry.trace.asyncEnd(11 /* AssetBulkRead */, correlation, 0, 0);
+        throw error2;
+      } finally {
+        duration(startedAt);
+      }
+    }
+  };
+}
+function createPlatformRangeLoader(baseUrl = "", telemetry) {
   const ops = nativeOps();
-  return ops === null ? createFetchRangeLoader(baseUrl) : createNativeRangeLoader(ops);
+  const loader = ops === null ? createFetchRangeLoader(baseUrl) : createNativeRangeLoader(ops);
+  return telemetry === undefined ? loader : instrumentRangeLoader(loader, telemetry);
 }
 
 // crates/afterglow-web/web/src/workers/codec.ts
@@ -46129,11 +46266,25 @@ class MeshoptClient {
 // crates/afterglow-web/web/src/engine/workers/native-transport.ts
 class NativeRpcTransport {
   workerId;
-  constructor(workerId) {
+  telemetry;
+  constructor(workerId, telemetry) {
     this.workerId = workerId;
+    this.telemetry = telemetry;
   }
   call(method, args) {
-    return Deno.core.ops.op_afterglow_rpc_call_async(this.workerId, method, args);
+    const correlation = this.telemetry?.nextCorrelation(9 /* Rpc */) ?? 0;
+    const startedAt = performance.now();
+    this.telemetry?.metrics.counterAdd(5 /* RpcCalls */, 1);
+    this.telemetry?.trace.asyncBegin(12 /* RpcCall */, correlation, method, args.byteLength);
+    return Deno.core.ops.op_afterglow_rpc_call_async(this.workerId, method, args).then((result) => {
+      this.telemetry?.trace.asyncEnd(12 /* RpcCall */, correlation, result.byteLength, 0);
+      this.telemetry?.metrics.histogramLog2(6 /* RpcNs */, Math.max(1, Math.floor((performance.now() - startedAt) * 1e6)));
+      return result;
+    }, (error2) => {
+      this.telemetry?.trace.asyncEnd(12 /* RpcCall */, correlation, 0, 1);
+      this.telemetry?.metrics.histogramLog2(6 /* RpcNs */, Math.max(1, Math.floor((performance.now() - startedAt) * 1e6)));
+      throw error2;
+    });
   }
 }
 
@@ -46143,10 +46294,10 @@ function hasNativeWorkerTransport() {
   const deno = globalThis.Deno;
   return typeof deno?.core?.ops?.op_afterglow_rpc_call_async === "function";
 }
-async function createPlatformMeshOptimizer() {
+async function createPlatformMeshOptimizer(telemetry) {
   if (!hasNativeWorkerTransport())
     return MeshoptClient.spawnThreaded({ workerWasmUrl: "meshopt.wasm", timeoutMs: 1e4 });
-  return new MeshoptClient(new NativeRpcTransport(NATIVE_MESHOPT_WORKER));
+  return new MeshoptClient(new NativeRpcTransport(NATIVE_MESHOPT_WORKER, telemetry));
 }
 
 // crates/afterglow-web/web/src/engine/presentation/static-lod.ts

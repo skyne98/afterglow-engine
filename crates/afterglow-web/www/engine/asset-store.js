@@ -13210,6 +13210,53 @@ function fallbackGroup() {
   return _fallbackGroup.clone(true);
 }
 
+// crates/afterglow-web/web/src/engine/telemetry/telemetry.ts
+var TELEMETRY_RECORD_BYTES = 40;
+var TELEMETRY_RECORD_WORDS = TELEMETRY_RECORD_BYTES / 4;
+var TelemetryRes = defineResource("telemetry", () => {
+  throw new Error("Telemetry not initialized. Set TelemetryRes during bootstrap.");
+});
+
+// crates/afterglow-web/web/src/engine/telemetry/catalog.ts
+var ENGINE_TRACE_DESCRIPTORS = [
+  { category: 1 /* Frame */, categoryName: "frame", name: "frame", kind: 2 /* Span */, argument0: "frame_id", argument1: "delta_ns" },
+  { category: 2 /* Worker */, categoryName: "worker", name: "worker.poll", kind: 2 /* Span */, argument0: "stage", argument1: "elapsed_us" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.update", kind: 2 /* Span */, argument0: "stage", argument1: "elapsed_us" },
+  { category: 0 /* Runtime */, categoryName: "runtime", name: "structural.commands", kind: 2 /* Span */, argument0: "stage", argument1: "elapsed_us" },
+  { category: 0 /* Runtime */, categoryName: "runtime", name: "pose.batches", kind: 2 /* Span */, argument0: "stage", argument1: "elapsed_us" },
+  { category: 1 /* Frame */, categoryName: "frame", name: "render.prepare", kind: 2 /* Span */, argument0: "stage", argument1: "elapsed_us" },
+  { category: 0 /* Runtime */, categoryName: "runtime", name: "game.update", kind: 2 /* Span */, argument0: "frame_id" },
+  { category: 1 /* Frame */, categoryName: "frame", name: "render.passes", kind: 2 /* Span */, argument0: "frame_id" },
+  { category: 4 /* Asset */, categoryName: "asset", name: "asset.session.open", kind: 3 /* AsyncSpan */, argument0: "workers", argument1: "status" },
+  { category: 4 /* Asset */, categoryName: "asset", name: "asset.size", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "status" },
+  { category: 4 /* Asset */, categoryName: "asset", name: "asset.read", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "offset_or_status" },
+  { category: 4 /* Asset */, categoryName: "asset", name: "asset.read_bulk", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "spans" },
+  { category: 9 /* Rpc */, categoryName: "rpc", name: "rpc.call", kind: 3 /* AsyncSpan */, argument0: "method", argument1: "bytes" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.page_load", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "status" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.bulk_wait", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "tier" },
+  { category: 4 /* Asset */, categoryName: "asset", name: "asset.bulk_dispatch", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "spans" },
+  { category: 5 /* Texture */, categoryName: "texture", name: "texture.transcode_queue", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "format" },
+  { category: 5 /* Texture */, categoryName: "texture", name: "texture.transcode", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "format" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.upload", kind: 2 /* Span */, argument0: "bytes", argument1: "slot" },
+  { category: 4 /* Asset */, categoryName: "cache", name: "cache.read", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "hit" },
+  { category: 4 /* Asset */, categoryName: "cache", name: "cache.write", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "status" },
+  { category: 4 /* Asset */, categoryName: "asset", name: "mesh.optimize", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "status" }
+];
+var ENGINE_METRIC_DESCRIPTORS = [
+  { category: 1 /* Frame */, categoryName: "frame", name: "frames", kind: 1 /* Counter */, unit: "count" },
+  { category: 1 /* Frame */, categoryName: "frame", name: "frame_delta_ns", kind: 4 /* HistogramLog2 */, unit: "nanoseconds" },
+  { category: 1 /* Frame */, categoryName: "frame", name: "frame_max_ns", kind: 3 /* Maximum */, unit: "nanoseconds" },
+  { category: 4 /* Asset */, categoryName: "asset", name: "asset_bytes_read", kind: 1 /* Counter */, unit: "bytes" },
+  { category: 4 /* Asset */, categoryName: "asset", name: "asset_read_ns", kind: 4 /* HistogramLog2 */, unit: "nanoseconds" },
+  { category: 9 /* Rpc */, categoryName: "rpc", name: "rpc_calls", kind: 1 /* Counter */, unit: "count" },
+  { category: 9 /* Rpc */, categoryName: "rpc", name: "rpc_duration_ns", kind: 4 /* HistogramLog2 */, unit: "nanoseconds" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt_pages_requested", kind: 1 /* Counter */, unit: "count" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt_pages_loaded", kind: 1 /* Counter */, unit: "count" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt_pages_failed", kind: 1 /* Counter */, unit: "count" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt_upload_ns", kind: 4 /* HistogramLog2 */, unit: "nanoseconds" },
+  { category: 5 /* Texture */, categoryName: "texture", name: "texture_transcode_ns", kind: 4 /* HistogramLog2 */, unit: "nanoseconds" }
+];
+
 // crates/afterglow-web/web/src/engine/assets/asset-store.ts
 var MAX_SINGLE_LOAD = 1 << 20;
 var CHUNK_SIZE = 512 * 1024;
@@ -13345,6 +13392,7 @@ var AssetAdmission;
 
 class AssetStore {
   maxCompletionsPerPoll;
+  telemetry;
   idsByPath = new Map;
   paths;
   handles;
@@ -13364,8 +13412,9 @@ class AssetStore {
   meshopt;
   loader;
   vtStore = null;
-  constructor(loader, meshopt, capacity = DEFAULT_ASSET_CAPACITY, maxCompletionsPerPoll = 32) {
+  constructor(loader, meshopt, capacity = DEFAULT_ASSET_CAPACITY, maxCompletionsPerPoll = 32, telemetry) {
     this.maxCompletionsPerPoll = maxCompletionsPerPoll;
+    this.telemetry = telemetry;
     if (!Number.isInteger(capacity) || capacity <= 0)
       throw new RangeError("asset capacity must be positive");
     if (!Number.isInteger(maxCompletionsPerPoll) || maxCompletionsPerPoll <= 0)
@@ -13536,6 +13585,18 @@ class AssetStore {
     return id !== undefined && (this.states[id] === 2 /* Reading */ || this.states[id] === 3 /* Parsing */ || this.states[id] === 4 /* ReadyToPublish */);
   }
   async optimizeGltfScene(scene) {
+    const correlation = this.telemetry?.nextCorrelation(4 /* Asset */) ?? 0;
+    this.telemetry?.trace.asyncBegin(21 /* MeshOptimize */, correlation, 0, 0);
+    try {
+      const stats = await this.optimizeGltfSceneInner(scene);
+      this.telemetry?.trace.asyncEnd(21 /* MeshOptimize */, correlation, stats.length, 0);
+      return stats;
+    } catch (error2) {
+      this.telemetry?.trace.asyncEnd(21 /* MeshOptimize */, correlation, 0, 1);
+      throw error2;
+    }
+  }
+  async optimizeGltfSceneInner(scene) {
     if (!this.meshopt)
       throw new Error("optimizeGltfScene requires a meshopt worker");
     const meshes = [];

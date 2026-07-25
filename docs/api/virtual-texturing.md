@@ -297,6 +297,13 @@ are exposed by `getStats()`. `getStats()` updates and returns one
 stable preallocated object and is safe for per-frame telemetry; the allocating
 `getDebugSnapshot()` is intended only for explicit diagnostics.
 
+When a `BigAssetSession` receives `runtime.telemetry`, armed unified captures
+also correlate each page through page-load, cache read/write, bulk timer wait,
+bulk source dispatch, transcode queue, transcode execution, ready-upload work,
+atlas write, and page-table publication. Web Fetch and native arena-backed
+range operations feed the same descriptors; native worker-internal `pread` and
+arena lease subspans remain a separate adapter gate.
+
 ## Asset containers
 
 The compact `VirtualTextureDirectory` was introduced in container v5 and is

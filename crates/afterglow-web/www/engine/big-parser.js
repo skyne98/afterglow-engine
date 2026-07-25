@@ -113,6 +113,93 @@ async function fetchByteRanges(url, ranges) {
   return parseMultipartByteRanges(body, response.headers.get("content-type") ?? "", ranges);
 }
 
+// crates/afterglow-web/web/src/engine/core/resource.ts
+var RESOURCES = Symbol.for("afterglow-resources");
+var RESOURCES_SEALED = Symbol.for("afterglow-resources-sealed");
+function ensureStore(world) {
+  const w = world;
+  if (!w[RESOURCES])
+    w[RESOURCES] = {};
+  return w[RESOURCES];
+}
+
+class Resource {
+  name;
+  factory;
+  constructor(name, factory) {
+    this.name = name;
+    this.factory = factory;
+  }
+  get(world) {
+    const store = ensureStore(world);
+    if (!(this.name in store)) {
+      if (world[RESOURCES_SEALED] === true)
+        throw new Error(`resource ${this.name} was not initialized before gameplay seal`);
+      store[this.name] = this.factory();
+    }
+    return store[this.name];
+  }
+  set(world, value) {
+    ensureStore(world)[this.name] = value;
+  }
+  has(world) {
+    return this.name in ensureStore(world);
+  }
+  remove(world) {
+    delete ensureStore(world)[this.name];
+  }
+}
+function defineResource(name, factory) {
+  return new Resource(name, factory);
+}
+
+// crates/afterglow-web/web/src/engine/telemetry/telemetry.ts
+var TELEMETRY_RECORD_BYTES = 40;
+var TELEMETRY_RECORD_WORDS = TELEMETRY_RECORD_BYTES / 4;
+var TelemetryRes = defineResource("telemetry", () => {
+  throw new Error("Telemetry not initialized. Set TelemetryRes during bootstrap.");
+});
+
+// crates/afterglow-web/web/src/engine/telemetry/catalog.ts
+var ENGINE_TRACE_DESCRIPTORS = [
+  { category: 1 /* Frame */, categoryName: "frame", name: "frame", kind: 2 /* Span */, argument0: "frame_id", argument1: "delta_ns" },
+  { category: 2 /* Worker */, categoryName: "worker", name: "worker.poll", kind: 2 /* Span */, argument0: "stage", argument1: "elapsed_us" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.update", kind: 2 /* Span */, argument0: "stage", argument1: "elapsed_us" },
+  { category: 0 /* Runtime */, categoryName: "runtime", name: "structural.commands", kind: 2 /* Span */, argument0: "stage", argument1: "elapsed_us" },
+  { category: 0 /* Runtime */, categoryName: "runtime", name: "pose.batches", kind: 2 /* Span */, argument0: "stage", argument1: "elapsed_us" },
+  { category: 1 /* Frame */, categoryName: "frame", name: "render.prepare", kind: 2 /* Span */, argument0: "stage", argument1: "elapsed_us" },
+  { category: 0 /* Runtime */, categoryName: "runtime", name: "game.update", kind: 2 /* Span */, argument0: "frame_id" },
+  { category: 1 /* Frame */, categoryName: "frame", name: "render.passes", kind: 2 /* Span */, argument0: "frame_id" },
+  { category: 4 /* Asset */, categoryName: "asset", name: "asset.session.open", kind: 3 /* AsyncSpan */, argument0: "workers", argument1: "status" },
+  { category: 4 /* Asset */, categoryName: "asset", name: "asset.size", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "status" },
+  { category: 4 /* Asset */, categoryName: "asset", name: "asset.read", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "offset_or_status" },
+  { category: 4 /* Asset */, categoryName: "asset", name: "asset.read_bulk", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "spans" },
+  { category: 9 /* Rpc */, categoryName: "rpc", name: "rpc.call", kind: 3 /* AsyncSpan */, argument0: "method", argument1: "bytes" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.page_load", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "status" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.bulk_wait", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "tier" },
+  { category: 4 /* Asset */, categoryName: "asset", name: "asset.bulk_dispatch", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "spans" },
+  { category: 5 /* Texture */, categoryName: "texture", name: "texture.transcode_queue", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "format" },
+  { category: 5 /* Texture */, categoryName: "texture", name: "texture.transcode", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "format" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.upload", kind: 2 /* Span */, argument0: "bytes", argument1: "slot" },
+  { category: 4 /* Asset */, categoryName: "cache", name: "cache.read", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "hit" },
+  { category: 4 /* Asset */, categoryName: "cache", name: "cache.write", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "status" },
+  { category: 4 /* Asset */, categoryName: "asset", name: "mesh.optimize", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "status" }
+];
+var ENGINE_METRIC_DESCRIPTORS = [
+  { category: 1 /* Frame */, categoryName: "frame", name: "frames", kind: 1 /* Counter */, unit: "count" },
+  { category: 1 /* Frame */, categoryName: "frame", name: "frame_delta_ns", kind: 4 /* HistogramLog2 */, unit: "nanoseconds" },
+  { category: 1 /* Frame */, categoryName: "frame", name: "frame_max_ns", kind: 3 /* Maximum */, unit: "nanoseconds" },
+  { category: 4 /* Asset */, categoryName: "asset", name: "asset_bytes_read", kind: 1 /* Counter */, unit: "bytes" },
+  { category: 4 /* Asset */, categoryName: "asset", name: "asset_read_ns", kind: 4 /* HistogramLog2 */, unit: "nanoseconds" },
+  { category: 9 /* Rpc */, categoryName: "rpc", name: "rpc_calls", kind: 1 /* Counter */, unit: "count" },
+  { category: 9 /* Rpc */, categoryName: "rpc", name: "rpc_duration_ns", kind: 4 /* HistogramLog2 */, unit: "nanoseconds" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt_pages_requested", kind: 1 /* Counter */, unit: "count" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt_pages_loaded", kind: 1 /* Counter */, unit: "count" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt_pages_failed", kind: 1 /* Counter */, unit: "count" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt_upload_ns", kind: 4 /* HistogramLog2 */, unit: "nanoseconds" },
+  { category: 5 /* Texture */, categoryName: "texture", name: "texture_transcode_ns", kind: 4 /* HistogramLog2 */, unit: "nanoseconds" }
+];
+
 // crates/afterglow-web/web/src/engine/assets/big-parser.ts
 function decodeVarint(bytes, off) {
   let r = 0;
@@ -358,6 +445,7 @@ function findVTPageChunk(header, assetName, mip, pageX, pageY) {
 
 class BoundedTranscoderPool {
   workers;
+  telemetry;
   jobs;
   workerBusy;
   head = 0;
@@ -379,18 +467,21 @@ class BoundedTranscoderPool {
     averageTranscodeMs: 0,
     maxTranscodeMs: 0
   };
-  constructor(workers, capacity) {
+  constructor(workers, capacity, telemetry) {
     this.workers = workers;
+    this.telemetry = telemetry;
     if (workers.length === 0 || !Number.isInteger(capacity) || capacity < 1)
       throw new RangeError("VT transcoder pool requires workers and positive capacity");
     this.jobs = new Array(capacity).fill(null);
     this.workerBusy = new Uint8Array(workers.length);
   }
-  submit(data, format, signal) {
+  submit(data, format, signal, correlation = 0) {
     if (this.count === this.jobs.length)
       return Promise.reject(new Error("VT transcode queue capacity exceeded"));
+    const traceCorrelation = correlation || this.telemetry?.nextCorrelation(5 /* Texture */) || 0;
+    this.telemetry?.trace.asyncBegin(16 /* TextureTranscodeQueue */, traceCorrelation, data.byteLength, format);
     return new Promise((resolve, reject) => {
-      this.jobs[this.tail] = { data, format, signal, queuedAt: performance.now(), resolve, reject };
+      this.jobs[this.tail] = { data, format, correlation: traceCorrelation, signal, queuedAt: performance.now(), resolve, reject };
       this.tail = (this.tail + 1) % this.jobs.length;
       this.count++;
       this.pump();
@@ -405,11 +496,13 @@ class BoundedTranscoderPool {
       this.head = (this.head + 1) % this.jobs.length;
       this.count--;
       if (job.signal?.aborted) {
+        this.telemetry?.trace.asyncEnd(16 /* TextureTranscodeQueue */, job.correlation, 0, job.format);
         job.reject(new Error("VT transcode canceled before dispatch"));
         workerIndex--;
         continue;
       }
       const queueMs = performance.now() - job.queuedAt;
+      this.telemetry?.trace.asyncEnd(16 /* TextureTranscodeQueue */, job.correlation, Math.max(1, Math.floor(queueMs * 1e6)), job.format);
       this.totalQueueMs += queueMs;
       this.maxQueueMs = Math.max(this.maxQueueMs, queueMs);
       this.workerBusy[workerIndex] = 1;
@@ -419,8 +512,13 @@ class BoundedTranscoderPool {
   }
   async run(workerIndex, job) {
     const startedAt = performance.now();
+    let status = 1;
+    let outputBytes = 0;
+    this.telemetry?.trace.asyncBegin(17 /* TextureTranscode */, job.correlation, job.data.byteLength, job.format);
     try {
       const result = await this.workers[workerIndex].transcode(job.data, job.format);
+      outputBytes = result.byteLength;
+      status = 0;
       if (job.signal?.aborted)
         job.reject(new Error("VT transcode canceled after dispatch"));
       else
@@ -429,6 +527,8 @@ class BoundedTranscoderPool {
       job.reject(error);
     } finally {
       const elapsed = performance.now() - startedAt;
+      this.telemetry?.trace.asyncEnd(17 /* TextureTranscode */, job.correlation, outputBytes, status);
+      this.telemetry?.metrics.histogramLog2(11 /* TextureTranscodeNs */, Math.max(1, Math.floor(elapsed * 1e6)));
       this.completed++;
       this.totalTranscodeMs += elapsed;
       this.maxTranscodeMs = Math.max(this.maxTranscodeMs, elapsed);
@@ -764,6 +864,7 @@ function createPageRangeReader(loader, header, readConcurrency = 16) {
 
 class BoundedBulkReadQueue {
   loader;
+  telemetry;
   slots = new Array(BULK_RANGE_CAPACITY);
   free = new Uint16Array(BULK_RANGE_CAPACITY);
   freeTop = 0;
@@ -798,12 +899,14 @@ class BoundedBulkReadQueue {
     rejected: 0,
     canceled: 0
   };
-  constructor(loader) {
+  constructor(loader, telemetry) {
     this.loader = loader;
+    this.telemetry = telemetry;
     for (let index = BULK_RANGE_CAPACITY - 1;index >= 0; index--) {
       this.slots[index] = {
         path: "",
         offset: 0,
+        correlation: 0,
         length: 0,
         signal: undefined,
         resolve: null,
@@ -818,7 +921,8 @@ class BoundedBulkReadQueue {
   deadlineMs(tier) {
     return tier === 0 ? 1 : 100;
   }
-  read(path, offset, length, tier, signal) {
+  read(path, offset, length, tier, signal, correlation = 0) {
+    const traceCorrelation = correlation || this.telemetry?.nextCorrelation(3 /* VirtualTexture */) || 0;
     return new Promise((resolve, reject) => {
       if (this.closed) {
         this.rejected++;
@@ -839,7 +943,9 @@ class BoundedBulkReadQueue {
       const slot = this.slots[slotIndex];
       slot.path = path;
       slot.offset = offset;
+      slot.correlation = traceCorrelation;
       slot.length = length;
+      this.telemetry?.trace.asyncBegin(14 /* VtBulkWait */, traceCorrelation, length, this.tierIndex(tier));
       slot.signal = signal;
       slot.resolve = resolve;
       slot.reject = reject;
@@ -893,6 +999,7 @@ class BoundedBulkReadQueue {
         if (slot.signal?.aborted) {
           this.pop(lane);
           this.canceled++;
+          this.telemetry?.trace.asyncEnd(14 /* VtBulkWait */, slot.correlation, 0, lane);
           slot.reject?.(new Error("VT page load canceled while batched"));
           this.release(slotIndex);
           continue;
@@ -904,6 +1011,7 @@ class BoundedBulkReadQueue {
           if (indices.length === 0) {
             this.pop(lane);
             this.rejected++;
+            this.telemetry?.trace.asyncEnd(14 /* VtBulkWait */, slot.correlation, 0, lane);
             slot.reject?.(new RangeError("one VT page exceeds bulk response capacity"));
             this.release(slotIndex);
             continue;
@@ -932,6 +1040,12 @@ class BoundedBulkReadQueue {
     else
       this.qualityBatches++;
     const startedAt = performance.now();
+    const batchCorrelation = this.telemetry?.nextCorrelation(4 /* Asset */) ?? 0;
+    for (let index = 0;index < indices.length; index++) {
+      const slot = this.slots[indices[index]];
+      this.telemetry?.trace.asyncEnd(14 /* VtBulkWait */, slot.correlation, slot.length, lane);
+    }
+    this.telemetry?.trace.asyncBegin(15 /* VtBulkDispatch */, batchCorrelation, expectedBytes, indices.length);
     const request = this.loader.readBulk ? this.loader.readBulk(ranges) : Promise.all(indices.map((slotIndex, index) => {
       const slot = this.slots[slotIndex];
       const range = ranges[index];
@@ -941,6 +1055,10 @@ class BoundedBulkReadQueue {
       if (parts.length !== indices.length)
         throw new Error(`bulk response returned ${parts.length} parts; expected ${indices.length}`);
       const readMs = performance.now() - startedAt;
+      let receivedBytes = 0;
+      for (let index = 0;index < parts.length; index++)
+        receivedBytes += parts[index]?.byteLength ?? 0;
+      this.telemetry?.trace.asyncEnd(15 /* VtBulkDispatch */, batchCorrelation, receivedBytes, parts.length);
       this.reads++;
       this.totalReadMs += readMs;
       this.maxReadMs = Math.max(this.maxReadMs, readMs);
@@ -958,6 +1076,7 @@ class BoundedBulkReadQueue {
         this.release(slotIndex);
       }
     }).catch((error) => {
+      this.telemetry?.trace.asyncEnd(15 /* VtBulkDispatch */, batchCorrelation, 0, 0);
       for (const slotIndex of indices) {
         this.slots[slotIndex].reject?.(error);
         this.release(slotIndex);
@@ -976,8 +1095,10 @@ class BoundedBulkReadQueue {
       this.clearLaneTimer(lane);
       while (this.counts[lane] !== 0) {
         const slotIndex = this.pop(lane);
+        const slot = this.slots[slotIndex];
         this.canceled++;
-        this.slots[slotIndex].reject?.(new Error("bulk page reader closed"));
+        this.telemetry?.trace.asyncEnd(14 /* VtBulkWait */, slot.correlation, 0, lane);
+        slot.reject?.(new Error("bulk page reader closed"));
         this.release(slotIndex);
       }
       this.ready[lane] = 0;
@@ -998,10 +1119,10 @@ class BoundedBulkReadQueue {
     return stats;
   }
 }
-function createPageDataProvider(loader, header, textureWorkers, format, cache, transcodeQueueCapacity = 64) {
+function createPageDataProvider(loader, header, textureWorkers, format, cache, transcodeQueueCapacity = 64, telemetry) {
   const directories = expandVtDirectories(header);
-  const transcoder = new BoundedTranscoderPool(textureWorkers, transcodeQueueCapacity);
-  const bulkReads = new BoundedBulkReadQueue(loader);
+  const transcoder = new BoundedTranscoderPool(textureWorkers, transcodeQueueCapacity, telemetry);
+  const bulkReads = new BoundedBulkReadQueue(loader, telemetry);
   const stats = {
     reads: 0,
     averageReadMs: 0,
@@ -1061,28 +1182,43 @@ function createPageDataProvider(loader, header, textureWorkers, format, cache, t
     if (!directory || size === 0)
       throw new Error(`VT page not found: ${path} mip=${req.mip} (${req.x},${req.y})`);
     const cacheKey = `${directory.assetId}:${req.tail ? "t" : req.mip}:${req.x}:${req.y}`;
+    const correlation = req.cacheKey ?? telemetry?.nextCorrelation(3 /* VirtualTexture */) ?? 0;
     const expectedBytes = format === 4 ? 136 * 136 * 4 : 34 * 34 * 16;
     if (cache) {
-      const cached = await cache.get(cacheKey);
+      telemetry?.trace.asyncBegin(19 /* CacheRead */, correlation, expectedBytes, 0);
+      let cached;
+      try {
+        cached = await cache.get(cacheKey);
+        telemetry?.trace.asyncEnd(19 /* CacheRead */, correlation, cached?.byteLength ?? 0, cached?.byteLength === expectedBytes ? 1 : 0);
+      } catch (error) {
+        telemetry?.trace.asyncEnd(19 /* CacheRead */, correlation, 0, 2);
+        throw error;
+      }
       if (signal?.aborted)
         throw new Error("VT page load canceled after cache read");
       if (cached && cached.byteLength === expectedBytes)
         return cached;
     }
-    const pageData = await bulkReads.read(path, offset, size, req.batchTier ?? "urgent", signal);
+    const pageData = await bulkReads.read(path, offset, size, req.batchTier ?? "urgent", signal, correlation);
     if (signal?.aborted)
       throw new Error("VT page load canceled after read");
     if (directory.encoding === "RawRgba8") {
       if (format !== 4) {
         throw new Error(`VT page ${path} is raw RGBA8 but GPU format ${format} requires Basis encoding`);
       }
-      if (cache)
-        cache.put(cacheKey, pageData);
+      if (cache) {
+        telemetry?.trace.asyncBegin(20 /* CacheWrite */, correlation, pageData.byteLength, 0);
+        cache.put(cacheKey, pageData).then((ok) => {
+          telemetry?.trace.asyncEnd(20 /* CacheWrite */, correlation, pageData.byteLength, ok ? 0 : 1);
+        }, () => {
+          telemetry?.trace.asyncEnd(20 /* CacheWrite */, correlation, 0, 1);
+        });
+      }
       return pageData;
     }
     if (pageData.byteLength < 2 || pageData[0] !== 115 || pageData[1] !== 66)
       throw new Error(`invalid Basis page range for ${path}: bytes=${pageData.byteLength}, magic=${pageData[0]},${pageData[1]}`);
-    const transcoded = await transcoder.submit(pageData, format, signal);
+    const transcoded = await transcoder.submit(pageData, format, signal, correlation);
     if (signal?.aborted)
       throw new Error("VT page load canceled after transcode");
     if (transcoded.byteLength < 16)
@@ -1095,8 +1231,14 @@ function createPageDataProvider(loader, header, textureWorkers, format, cache, t
     if (count < 1 || width !== 136 || height !== 136 || 16 + length > transcoded.byteLength)
       throw new Error(`invalid transcoded VT page header: count=${count}, size=${width}x${height}, bytes=${length}`);
     const payload = transcoded.slice(16, 16 + length);
-    if (cache)
-      cache.put(cacheKey, payload);
+    if (cache) {
+      telemetry?.trace.asyncBegin(20 /* CacheWrite */, correlation, payload.byteLength, 0);
+      cache.put(cacheKey, payload).then((ok) => {
+        telemetry?.trace.asyncEnd(20 /* CacheWrite */, correlation, payload.byteLength, ok ? 0 : 1);
+      }, () => {
+        telemetry?.trace.asyncEnd(20 /* CacheWrite */, correlation, 0, 1);
+      });
+    }
     return payload;
   };
   provider.close = () => bulkReads.close();

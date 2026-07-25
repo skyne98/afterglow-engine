@@ -207,7 +207,11 @@ DISPLAY=:0 ./scripts/test-dungeon-gpu.sh
 
 Dungeon is a canonical `EngineRuntime` consumer using `RendererHost`,
 `BigAssetSession`, the feedback coordinator, and bounded input/diagnostics. No
-visual demo retains a global bridge or architecture-baseline exception.
+visual demo retains a global bridge or architecture-baseline exception. Its BIG
+session feeds unified page-load, cache, bulk-wait/read, RPC, transcode, upload,
+and page-table publication spans into `runtime.telemetry`. Diagnostic clients
+can call `traceArm()`, run a bounded scenario, call `traceStop()`, and retrieve
+the `AGTB` batch with `traceBatch()` through `window.__afterglowDungeon`.
 
 Click for raw mouse look; use **WASD**, **Shift**, **P**, **R**, and **1–3** for
 movement, sprint, prewarmed close-range POM toggle, reset, and deterministic

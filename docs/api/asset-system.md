@@ -11,7 +11,9 @@
 bootstrap owner for one seekable `.big` source. `open()` requires explicit
 `workerCount`, `transcodeQueueCapacity`, `maxHeaderBytes`, and target GPU
 format. Engine-owned typed transcoders are the default; tests/platform adapters
-may inject a factory. It validates the 16-byte prefix and configured header bound
+may inject a factory. Optional `telemetry` connects session startup, platform
+range reads, cache operations, worker round trips, transcode, mesh optimization,
+and VT publication to the unified trace. It validates the 16-byte prefix and configured header bound
 before starting workers, parses the header once, constructs the direct raw-asset
 loader and VT page provider, and rolls workers back in reverse order after any
 startup failure.
@@ -24,13 +26,11 @@ consumer duplicates container validation. The session currently creates typed tr
 construct `Rpc`, select worker scripts, or terminate raw transports.
 `createTranscoder` is the platform/test injection boundary.
 
-**Native target gap:** `afterglow-cef` has been removed. The default
-transcoder factory is not target-aware, and the native shell does not yet
-compose the generated native `afterglow-texture` client as an OS worker.
-`afterglow-texture` has a generated native client and therefore must run as an
-OS worker started from the shell's native bootstrap; until that lands, there is
-no native host that wires native texture workers. Documentation must not treat
-a WASM-on-native path as a supported backend.
+**Native target:** `afterglow-shell` detects its native op bridge and constructs
+generated texture/meshopt clients over `NativeRpcTransport`; the shell bootstrap
+owns their real OS workers. Public web retains `spawnThreaded()` WASM workers.
+The optional unified telemetry records the native page-side RPC round trip;
+worker-internal server/codec spans remain the next adapter gate.
 `createAssetStore(capacity, completionsPerPoll)` starts and owns the standard
 mesh optimizer and binds a fixed-capacity
 `AssetStore` to the session's raw loader, so demos do not reconstruct container
@@ -49,6 +49,7 @@ const session = await BigAssetSession.open({
   workerCount: 4,
   transcodeQueueCapacity: 64,
   maxHeaderBytes: 2 * 1024 * 1024,
+  telemetry: runtime.telemetry,
   cache,
 });
 const assets = await session.createAssetStore(64, 8);

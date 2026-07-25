@@ -100,7 +100,7 @@ const bootstrap = new BootstrapGuard(20);
 bootstrap.defer(() => host.dispose());
 bootstrap.defer(() => runtime.dispose());
 try {
-  const source = createAssetRangeSource(),
+  const source = createAssetRangeSource("", runtime.telemetry),
     identity = await source.identity("dungeon.big");
   const device = host.device,
     format = device.features.has("texture-compression-bc")
@@ -141,6 +141,7 @@ try {
   );
   const session = await BigAssetSession.open({
     containerPath: "dungeon.big",
+    telemetry: runtime.telemetry,
     format,
     workerCount,
     transcodeQueueCapacity: 64,
@@ -594,6 +595,16 @@ try {
   publishDevHarness("__afterglowDungeon", {
     ready: () => true,
     telemetry: () => store.getStats(),
+    traceArm: (epoch = 1) => runtime.telemetry.trace.arm(epoch),
+    traceStop: () => {
+      if (!runtime.telemetry.trace.stop()) return null;
+      return runtime.telemetry.trace.snapshot();
+    },
+    traceBatch: () => {
+      const bytes = new Uint8Array(runtime.telemetry.trace.encodedBatchBytes());
+      const written = runtime.telemetry.trace.encodeBatchInto(bytes, 1, 1);
+      return written > 0 ? bytes : null;
+    },
     timing: () => timing,
     inputStatus: () => relativePointer.getStatus(),
     pomStatus: () => ({

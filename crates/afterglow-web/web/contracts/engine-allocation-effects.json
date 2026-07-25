@@ -91,6 +91,7 @@
     "TelemetryRecorder.flowStart": "telemetry/telemetry.ts",
     "TelemetryRecorder.flowStep": "telemetry/telemetry.ts",
     "TelemetryRecorder.flowEnd": "telemetry/telemetry.ts",
+    "EngineTelemetry.nextCorrelation": "telemetry/telemetry.ts",
     "TelemetryMetricBank.counterAdd": "telemetry/telemetry.ts",
     "TelemetryMetricBank.gaugeSet": "telemetry/telemetry.ts",
     "TelemetryMetricBank.maximum": "telemetry/telemetry.ts",

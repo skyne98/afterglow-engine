@@ -141,6 +141,7 @@ try {
   );
   const session = await BigAssetSession.open({
     containerPath: "rigged-vt.big",
+    telemetry: runtime.telemetry,
     format,
     workerCount,
     transcodeQueueCapacity: 64,

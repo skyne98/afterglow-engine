@@ -25,6 +25,8 @@ import {
 } from './bulk-range.ts';
 
 import type { PersistentBlobCache } from './persistent-blob-cache.ts';
+import { EngineMetric, EngineTelemetryCategory, EngineTraceDescriptor } from '../telemetry/catalog.ts';
+import type { EngineTelemetry } from '../telemetry/telemetry.ts';
 
 // ============================================================================
 // Varint decoder (postcard / LEB128)
@@ -371,7 +373,8 @@ export function findVTPageChunk(
 interface TranscodeJob {
   data: Uint8Array;
   format: number;
-  signal?: AbortSignal;
+  correlation: number;
+  signal: AbortSignal | undefined;
   queuedAt: number;
   resolve(value: Uint8Array): void;
   reject(error: unknown): void;
@@ -401,6 +404,7 @@ export class BoundedTranscoderPool {
       transcode(data: Uint8Array, targetFormat: number): Promise<Uint8Array>;
     }[],
     capacity: number,
+    private readonly telemetry?: EngineTelemetry,
   ) {
     if (workers.length === 0 || !Number.isInteger(capacity) || capacity < 1)
       throw new RangeError('VT transcoder pool requires workers and positive capacity');
@@ -408,10 +412,19 @@ export class BoundedTranscoderPool {
     this.workerBusy = new Uint8Array(workers.length);
   }
 
-  submit(data: Uint8Array, format: number, signal?: AbortSignal): Promise<Uint8Array> {
+  submit(
+    data: Uint8Array,
+    format: number,
+    signal?: AbortSignal,
+    correlation = 0,
+  ): Promise<Uint8Array> {
     if (this.count === this.jobs.length) return Promise.reject(new Error('VT transcode queue capacity exceeded'));
+    const traceCorrelation = correlation || this.telemetry?.nextCorrelation(EngineTelemetryCategory.Texture) || 0;
+    this.telemetry?.trace.asyncBegin(
+      EngineTraceDescriptor.TextureTranscodeQueue, traceCorrelation, data.byteLength, format,
+    );
     return new Promise((resolve, reject) => {
-      this.jobs[this.tail] = { data, format, signal, queuedAt: performance.now(), resolve, reject };
+      this.jobs[this.tail] = { data, format, correlation: traceCorrelation, signal, queuedAt: performance.now(), resolve, reject };
       this.tail = (this.tail + 1) % this.jobs.length;
       this.count++;
       this.pump();
@@ -426,11 +439,18 @@ export class BoundedTranscoderPool {
       this.head = (this.head + 1) % this.jobs.length;
       this.count--;
       if (job.signal?.aborted) {
+        this.telemetry?.trace.asyncEnd(
+          EngineTraceDescriptor.TextureTranscodeQueue, job.correlation, 0, job.format,
+        );
         job.reject(new Error('VT transcode canceled before dispatch'));
         workerIndex--;
         continue;
       }
       const queueMs = performance.now() - job.queuedAt;
+      this.telemetry?.trace.asyncEnd(
+        EngineTraceDescriptor.TextureTranscodeQueue, job.correlation,
+        Math.max(1, Math.floor(queueMs * 1_000_000)), job.format,
+      );
       this.totalQueueMs += queueMs;
       this.maxQueueMs = Math.max(this.maxQueueMs, queueMs);
       this.workerBusy[workerIndex] = 1;
@@ -441,8 +461,15 @@ export class BoundedTranscoderPool {
 
   private async run(workerIndex: number, job: TranscodeJob): Promise<void> {
     const startedAt = performance.now();
+    let status = 1;
+    let outputBytes = 0;
+    this.telemetry?.trace.asyncBegin(
+      EngineTraceDescriptor.TextureTranscode, job.correlation, job.data.byteLength, job.format,
+    );
     try {
       const result = await this.workers[workerIndex].transcode(job.data, job.format);
+      outputBytes = result.byteLength;
+      status = 0;
       if (job.signal?.aborted) job.reject(new Error('VT transcode canceled after dispatch'));
       // Each worker owns one reusable response scratch. Copy before that same
       // worker receives its next call; other workers may complete independently.
@@ -451,6 +478,12 @@ export class BoundedTranscoderPool {
       job.reject(error);
     } finally {
       const elapsed = performance.now() - startedAt;
+      this.telemetry?.trace.asyncEnd(
+        EngineTraceDescriptor.TextureTranscode, job.correlation, outputBytes, status,
+      );
+      this.telemetry?.metrics.histogramLog2(
+        EngineMetric.TextureTranscodeNs, Math.max(1, Math.floor(elapsed * 1_000_000)),
+      );
       this.completed++;
       this.totalTranscodeMs += elapsed;
       this.maxTranscodeMs = Math.max(this.maxTranscodeMs, elapsed);
@@ -496,7 +529,7 @@ export interface FetchRangeLoader {
   identity(path: string): Promise<AssetIdentity>;
   read(path: string, offset: number, len: number): Promise<Uint8Array>;
   /** One bounded multipart response for non-contiguous source spans. */
-  readBulk?(path: string, ranges: readonly AssetByteRange[]): Promise<Uint8Array[]>;
+  readBulk?: ((path: string, ranges: readonly AssetByteRange[]) => Promise<Uint8Array[]>) | undefined;
 }
 
 /** Read and validate one bounded BIG header without loading payload chunks. */
@@ -756,7 +789,7 @@ interface ResolvedPage {
 export function createPageRangeReader(
   loader: {
     read(path: string, offset: number, len: number): Promise<Uint8Array>;
-    readBulk?(path: string, ranges: readonly AssetByteRange[]): Promise<Uint8Array[]>;
+    readBulk?: ((path: string, ranges: readonly AssetByteRange[]) => Promise<Uint8Array[]>) | undefined;
   },
   header: BigHeader,
   readConcurrency = 16,
@@ -939,12 +972,13 @@ export function createPageRangeReader(
 interface BulkReadLoader {
   read(path: string, offset: number, len: number): Promise<Uint8Array>;
   /** Runtime sessions bind this directly to their one cooked container. */
-  readBulk?(ranges: readonly AssetByteRange[]): Promise<Uint8Array[]>;
+  readBulk?: ((ranges: readonly AssetByteRange[]) => Promise<Uint8Array[]>) | undefined;
 }
 
 interface BulkReadSlot {
   path: string;
   offset: number;
+  correlation: number;
   length: number;
   signal: AbortSignal | undefined;
   resolve: ((bytes: Uint8Array) => void) | null;
@@ -984,10 +1018,13 @@ class BoundedBulkReadQueue {
     rejected: 0, canceled: 0,
   };
 
-  constructor(private readonly loader: BulkReadLoader) {
+  constructor(
+    private readonly loader: BulkReadLoader,
+    private readonly telemetry?: EngineTelemetry,
+  ) {
     for (let index = BULK_RANGE_CAPACITY - 1; index >= 0; index--) {
       this.slots[index] = {
-        path: '', offset: 0, length: 0, signal: undefined, resolve: null, reject: null,
+        path: '', offset: 0, correlation: 0, length: 0, signal: undefined, resolve: null, reject: null,
       };
       this.free[this.freeTop++] = index;
     }
@@ -1002,7 +1039,9 @@ class BoundedBulkReadQueue {
     length: number,
     tier: PageLoadTier,
     signal?: AbortSignal,
+    correlation = 0,
   ): Promise<Uint8Array> {
+    const traceCorrelation = correlation || this.telemetry?.nextCorrelation(EngineTelemetryCategory.VirtualTexture) || 0;
     return new Promise<Uint8Array>((resolve, reject) => {
       if (this.closed) { this.rejected++; reject(new Error('bulk page reader is closed')); return; }
       if (signal?.aborted) {
@@ -1019,7 +1058,11 @@ class BoundedBulkReadQueue {
       const slot = this.slots[slotIndex];
       slot.path = path;
       slot.offset = offset;
+      slot.correlation = traceCorrelation;
       slot.length = length;
+      this.telemetry?.trace.asyncBegin(
+        EngineTraceDescriptor.VtBulkWait, traceCorrelation, length, this.tierIndex(tier),
+      );
       slot.signal = signal;
       slot.resolve = resolve;
       slot.reject = reject;
@@ -1077,6 +1120,9 @@ class BoundedBulkReadQueue {
         if (slot.signal?.aborted) {
           this.pop(lane);
           this.canceled++;
+          this.telemetry?.trace.asyncEnd(
+            EngineTraceDescriptor.VtBulkWait, slot.correlation, 0, lane,
+          );
           slot.reject?.(new Error('VT page load canceled while batched'));
           this.release(slotIndex);
           continue;
@@ -1088,6 +1134,9 @@ class BoundedBulkReadQueue {
           if (indices.length === 0) {
             this.pop(lane);
             this.rejected++;
+            this.telemetry?.trace.asyncEnd(
+              EngineTraceDescriptor.VtBulkWait, slot.correlation, 0, lane,
+            );
             slot.reject?.(new RangeError('one VT page exceeds bulk response capacity'));
             this.release(slotIndex);
             continue;
@@ -1118,6 +1167,16 @@ class BoundedBulkReadQueue {
     if (lane === 0) this.urgentBatches++;
     else this.qualityBatches++;
     const startedAt = performance.now();
+    const batchCorrelation = this.telemetry?.nextCorrelation(EngineTelemetryCategory.Asset) ?? 0;
+    for (let index = 0; index < indices.length; index++) {
+      const slot = this.slots[indices[index]];
+      this.telemetry?.trace.asyncEnd(
+        EngineTraceDescriptor.VtBulkWait, slot.correlation, slot.length, lane,
+      );
+    }
+    this.telemetry?.trace.asyncBegin(
+      EngineTraceDescriptor.VtBulkDispatch, batchCorrelation, expectedBytes, indices.length,
+    );
     const request = this.loader.readBulk
       ? this.loader.readBulk(ranges)
       : Promise.all(indices.map((slotIndex, index) => {
@@ -1129,6 +1188,12 @@ class BoundedBulkReadQueue {
       if (parts.length !== indices.length)
         throw new Error(`bulk response returned ${parts.length} parts; expected ${indices.length}`);
       const readMs = performance.now() - startedAt;
+      let receivedBytes = 0;
+      for (let index = 0; index < parts.length; index++)
+        receivedBytes += parts[index]?.byteLength ?? 0;
+      this.telemetry?.trace.asyncEnd(
+        EngineTraceDescriptor.VtBulkDispatch, batchCorrelation, receivedBytes, parts.length,
+      );
       this.reads++;
       this.totalReadMs += readMs;
       this.maxReadMs = Math.max(this.maxReadMs, readMs);
@@ -1145,6 +1210,9 @@ class BoundedBulkReadQueue {
         this.release(slotIndex);
       }
     }).catch(error => {
+      this.telemetry?.trace.asyncEnd(
+        EngineTraceDescriptor.VtBulkDispatch, batchCorrelation, 0, 0,
+      );
       for (const slotIndex of indices) {
         this.slots[slotIndex].reject?.(error);
         this.release(slotIndex);
@@ -1163,8 +1231,12 @@ class BoundedBulkReadQueue {
       this.clearLaneTimer(lane);
       while (this.counts[lane] !== 0) {
         const slotIndex = this.pop(lane);
+        const slot = this.slots[slotIndex];
         this.canceled++;
-        this.slots[slotIndex].reject?.(new Error('bulk page reader closed'));
+        this.telemetry?.trace.asyncEnd(
+          EngineTraceDescriptor.VtBulkWait, slot.correlation, 0, lane,
+        );
+        slot.reject?.(new Error('bulk page reader closed'));
         this.release(slotIndex);
       }
       this.ready[lane] = 0;
@@ -1205,11 +1277,12 @@ export function createPageDataProvider(
   format: number,
   cache?: PersistentBlobCache,
   transcodeQueueCapacity = 64,
+  telemetry?: EngineTelemetry,
 ): VirtualTexturePageProvider {
   const directories = expandVtDirectories(header);
 
-  const transcoder = new BoundedTranscoderPool(textureWorkers, transcodeQueueCapacity);
-  const bulkReads = new BoundedBulkReadQueue(loader);
+  const transcoder = new BoundedTranscoderPool(textureWorkers, transcodeQueueCapacity, telemetry);
+  const bulkReads = new BoundedBulkReadQueue(loader, telemetry);
   const stats: PageProviderStats = {
     reads: 0, averageReadMs: 0, maxReadMs: 0,
     bulkQueued: 0, bulkInFlight: 0, bulkInFlightBytes: 0,
@@ -1250,9 +1323,22 @@ export function createPageDataProvider(
       throw new Error(`VT page not found: ${path} mip=${req.mip} (${req.x},${req.y})`);
 
     const cacheKey = `${directory.assetId}:${req.tail ? 't' : req.mip}:${req.x}:${req.y}`;
+    const correlation = (req as { cacheKey?: number }).cacheKey ??
+      telemetry?.nextCorrelation(EngineTelemetryCategory.VirtualTexture) ?? 0;
     const expectedBytes = format === 4 ? 136 * 136 * 4 : 34 * 34 * 16;
     if (cache) {
-      const cached = await cache.get(cacheKey);
+      telemetry?.trace.asyncBegin(EngineTraceDescriptor.CacheRead, correlation, expectedBytes, 0);
+      let cached: Uint8Array | null;
+      try {
+        cached = await cache.get(cacheKey);
+        telemetry?.trace.asyncEnd(
+          EngineTraceDescriptor.CacheRead, correlation, cached?.byteLength ?? 0,
+          cached?.byteLength === expectedBytes ? 1 : 0,
+        );
+      } catch (error) {
+        telemetry?.trace.asyncEnd(EngineTraceDescriptor.CacheRead, correlation, 0, 2);
+        throw error;
+      }
       if (signal?.aborted) throw new Error('VT page load canceled after cache read');
       if (cached && cached.byteLength === expectedBytes) return cached;
     }
@@ -1263,6 +1349,7 @@ export function createPageDataProvider(
       size,
       req.batchTier ?? 'urgent',
       signal,
+      correlation,
     );
     if (signal?.aborted) throw new Error('VT page load canceled after read');
 
@@ -1270,7 +1357,16 @@ export function createPageDataProvider(
       if (format !== 4) {
         throw new Error(`VT page ${path} is raw RGBA8 but GPU format ${format} requires Basis encoding`);
       }
-      if (cache) void cache.put(cacheKey, pageData);
+      if (cache) {
+        telemetry?.trace.asyncBegin(EngineTraceDescriptor.CacheWrite, correlation, pageData.byteLength, 0);
+        void cache.put(cacheKey, pageData).then(ok => {
+          telemetry?.trace.asyncEnd(
+            EngineTraceDescriptor.CacheWrite, correlation, pageData.byteLength, ok ? 0 : 1,
+          );
+        }, () => {
+          telemetry?.trace.asyncEnd(EngineTraceDescriptor.CacheWrite, correlation, 0, 1);
+        });
+      }
       return pageData;
     }
 
@@ -1281,7 +1377,7 @@ export function createPageDataProvider(
     // Each SPSC worker permits one in-flight transcode. The fixed pool dispatches
     // independently without an unbounded Promise chain and drops canceled jobs
     // before they reach a worker.
-    const transcoded = await transcoder.submit(pageData, format, signal);
+    const transcoded = await transcoder.submit(pageData, format, signal, correlation);
     if (signal?.aborted) throw new Error('VT page load canceled after transcode');
     if (transcoded.byteLength < 16) throw new Error('truncated transcoded VT page');
     const view = new DataView(transcoded.buffer, transcoded.byteOffset, transcoded.byteLength);
@@ -1292,7 +1388,16 @@ export function createPageDataProvider(
     if (count < 1 || width !== 136 || height !== 136 || 16 + length > transcoded.byteLength)
       throw new Error(`invalid transcoded VT page header: count=${count}, size=${width}x${height}, bytes=${length}`);
     const payload = transcoded.slice(16, 16 + length);
-    if (cache) void cache.put(cacheKey, payload);
+    if (cache) {
+      telemetry?.trace.asyncBegin(EngineTraceDescriptor.CacheWrite, correlation, payload.byteLength, 0);
+      void cache.put(cacheKey, payload).then(ok => {
+        telemetry?.trace.asyncEnd(
+          EngineTraceDescriptor.CacheWrite, correlation, payload.byteLength, ok ? 0 : 1,
+        );
+      }, () => {
+        telemetry?.trace.asyncEnd(EngineTraceDescriptor.CacheWrite, correlation, 0, 1);
+      });
+    }
     return payload;
   }) as VirtualTexturePageProvider;
   provider.close = () => bulkReads.close();

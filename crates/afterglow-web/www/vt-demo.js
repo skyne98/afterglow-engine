@@ -60161,9 +60161,16 @@ class TelemetryMetricBank {
 class EngineTelemetry {
   trace;
   metrics;
+  correlationCounter = 1;
   constructor(traceDescriptors, metricDescriptors, traceBuffer, metricCells, clock) {
     this.trace = new TelemetryRecorder(traceDescriptors, traceBuffer, clock);
     this.metrics = new TelemetryMetricBank(metricDescriptors, metricCells);
+  }
+  nextCorrelation(namespace = 0) {
+    const safeNamespace = Number.isInteger(namespace) && namespace >= 0 ? Math.min(1048575, namespace) : 0;
+    const local = this.correlationCounter;
+    this.correlationCounter = local === U32_MAX ? 1 : local + 1;
+    return safeNamespace * U32_SCALE + local;
   }
 }
 var TelemetryRes = defineResource("telemetry", () => {
@@ -60179,7 +60186,21 @@ var ENGINE_TRACE_DESCRIPTORS = [
   { category: 0 /* Runtime */, categoryName: "runtime", name: "pose.batches", kind: 2 /* Span */, argument0: "stage", argument1: "elapsed_us" },
   { category: 1 /* Frame */, categoryName: "frame", name: "render.prepare", kind: 2 /* Span */, argument0: "stage", argument1: "elapsed_us" },
   { category: 0 /* Runtime */, categoryName: "runtime", name: "game.update", kind: 2 /* Span */, argument0: "frame_id" },
-  { category: 1 /* Frame */, categoryName: "frame", name: "render.passes", kind: 2 /* Span */, argument0: "frame_id" }
+  { category: 1 /* Frame */, categoryName: "frame", name: "render.passes", kind: 2 /* Span */, argument0: "frame_id" },
+  { category: 4 /* Asset */, categoryName: "asset", name: "asset.session.open", kind: 3 /* AsyncSpan */, argument0: "workers", argument1: "status" },
+  { category: 4 /* Asset */, categoryName: "asset", name: "asset.size", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "status" },
+  { category: 4 /* Asset */, categoryName: "asset", name: "asset.read", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "offset_or_status" },
+  { category: 4 /* Asset */, categoryName: "asset", name: "asset.read_bulk", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "spans" },
+  { category: 9 /* Rpc */, categoryName: "rpc", name: "rpc.call", kind: 3 /* AsyncSpan */, argument0: "method", argument1: "bytes" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.page_load", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "status" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.bulk_wait", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "tier" },
+  { category: 4 /* Asset */, categoryName: "asset", name: "asset.bulk_dispatch", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "spans" },
+  { category: 5 /* Texture */, categoryName: "texture", name: "texture.transcode_queue", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "format" },
+  { category: 5 /* Texture */, categoryName: "texture", name: "texture.transcode", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "format" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.upload", kind: 2 /* Span */, argument0: "bytes", argument1: "slot" },
+  { category: 4 /* Asset */, categoryName: "cache", name: "cache.read", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "hit" },
+  { category: 4 /* Asset */, categoryName: "cache", name: "cache.write", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "status" },
+  { category: 4 /* Asset */, categoryName: "asset", name: "mesh.optimize", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "status" }
 ];
 var FRAME_BUDGET_TRACE_DESCRIPTORS = [
   1 /* WorkerPoll */,
@@ -60191,7 +60212,16 @@ var FRAME_BUDGET_TRACE_DESCRIPTORS = [
 var ENGINE_METRIC_DESCRIPTORS = [
   { category: 1 /* Frame */, categoryName: "frame", name: "frames", kind: 1 /* Counter */, unit: "count" },
   { category: 1 /* Frame */, categoryName: "frame", name: "frame_delta_ns", kind: 4 /* HistogramLog2 */, unit: "nanoseconds" },
-  { category: 1 /* Frame */, categoryName: "frame", name: "frame_max_ns", kind: 3 /* Maximum */, unit: "nanoseconds" }
+  { category: 1 /* Frame */, categoryName: "frame", name: "frame_max_ns", kind: 3 /* Maximum */, unit: "nanoseconds" },
+  { category: 4 /* Asset */, categoryName: "asset", name: "asset_bytes_read", kind: 1 /* Counter */, unit: "bytes" },
+  { category: 4 /* Asset */, categoryName: "asset", name: "asset_read_ns", kind: 4 /* HistogramLog2 */, unit: "nanoseconds" },
+  { category: 9 /* Rpc */, categoryName: "rpc", name: "rpc_calls", kind: 1 /* Counter */, unit: "count" },
+  { category: 9 /* Rpc */, categoryName: "rpc", name: "rpc_duration_ns", kind: 4 /* HistogramLog2 */, unit: "nanoseconds" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt_pages_requested", kind: 1 /* Counter */, unit: "count" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt_pages_loaded", kind: 1 /* Counter */, unit: "count" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt_pages_failed", kind: 1 /* Counter */, unit: "count" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt_upload_ns", kind: 4 /* HistogramLog2 */, unit: "nanoseconds" },
+  { category: 5 /* Texture */, categoryName: "texture", name: "texture_transcode_ns", kind: 4 /* HistogramLog2 */, unit: "nanoseconds" }
 ];
 // crates/afterglow-web/web/src/engine/core/runtime.ts
 class BrowserAnimationScheduler {
@@ -65925,6 +65955,7 @@ class VirtualTextureTuning {
 var VirtualTextureTuningRes = defineResource("virtualTextureTuning", () => new VirtualTextureTuning);
 
 class VirtualTextureStore {
+  telemetry;
   atlasTexture;
   atlasWidth;
   atlasHeight;
@@ -66086,7 +66117,8 @@ class VirtualTextureStore {
     averageCacheWriteMs: 0,
     maxCacheWriteMs: 0
   };
-  constructor(loader, pageDataProvider, format, device, tuning) {
+  constructor(loader, pageDataProvider, format, device, tuning, telemetry) {
+    this.telemetry = telemetry;
     this.loader = loader;
     this.pageDataProvider = pageDataProvider;
     this.format = format ?? FORMAT_RGBA;
@@ -66396,6 +66428,8 @@ class VirtualTextureStore {
     this.pendingByKey.set(key, slot);
     this.pendingCount++;
     this.pendingBytes += this.cache.slotDataSize;
+    this.telemetry?.metrics.counterAdd(7 /* VtPagesRequested */, 1);
+    this.telemetry?.trace.asyncBegin(13 /* VtPageLoad */, key, this.cache.slotDataSize, priorityTier);
     this.pageDataProvider(path, page, controller.signal).then((data) => {
       if (data.byteLength !== this.cache.slotDataSize) {
         throw new RangeError(`VT page ${key} has ${data.byteLength} bytes; expected ${this.cache.slotDataSize}`);
@@ -66404,6 +66438,7 @@ class VirtualTextureStore {
       if (!pending || pending.generation !== generation)
         return;
       if (pending.canceled) {
+        this.telemetry?.trace.asyncEnd(13 /* VtPageLoad */, key, 0, 2);
         this.deletePending(key);
         return;
       }
@@ -66412,6 +66447,7 @@ class VirtualTextureStore {
       this.totalLoadMs += loadMs;
       this.maxLoadMs = Math.max(this.maxLoadMs, loadMs);
       if (!pending.page.pinned && this.feedbackEpoch - pending.lastSeen >= this.staleFeedbackEpochs) {
+        this.telemetry?.trace.asyncEnd(13 /* VtPageLoad */, key, 0, 3);
         this.deletePending(key);
         this.staleCancellations++;
         return;
@@ -66426,13 +66462,19 @@ class VirtualTextureStore {
       ready.data = data;
       this.readyUploadTail = (this.readyUploadTail + 1) % this.readyUploads.length;
       this.readyUploadCount++;
+      this.telemetry?.metrics.counterAdd(8 /* VtPagesLoaded */, 1);
+      this.telemetry?.trace.asyncEnd(13 /* VtPageLoad */, key, data.byteLength, 0);
     }).catch((error2) => {
       const pending = this.getPending(key);
       const canceled = controller.signal.aborted || pending?.generation === generation && pending.canceled;
       if (pending?.generation === generation)
         this.deletePending(key);
-      if (canceled)
+      if (canceled) {
+        this.telemetry?.trace.asyncEnd(13 /* VtPageLoad */, key, 0, 2);
         return;
+      }
+      this.telemetry?.metrics.counterAdd(9 /* VtPagesFailed */, 1);
+      this.telemetry?.trace.asyncEnd(13 /* VtPageLoad */, key, 0, 1);
       this.failedLoads++;
       console.error(`[VT] Failed to load page ${path} mip=${page.mip} (${page.x},${page.y}):`, error2);
     });
@@ -66895,6 +66937,7 @@ class VirtualTextureStore {
       if (!entry || !pageTable || (ready.req.tail ? isResident(entry.tailEntry) : pageTable.isResident(ready.req)))
         continue;
       const uploadStartedAt = performance.now();
+      this.telemetry?.trace.spanBegin(18 /* VtUpload */, ready.key, ready.data.byteLength, 0);
       let slot;
       try {
         const acquired = this.cache.acquire(ready.page);
@@ -66904,6 +66947,7 @@ class VirtualTextureStore {
           this.cacheEvictions++;
         }
       } catch {
+        this.telemetry?.trace.spanEnd(18 /* VtUpload */, ready.key, 0, 1);
         this.rejectedAdmissions++;
         continue;
       }
@@ -66916,6 +66960,9 @@ class VirtualTextureStore {
         this.updatePageTableTexture(ready.page.path, ready.req, slot);
       }
       const uploadMs = performance.now() - uploadStartedAt;
+      const physicalSlot = slot.y * this.atlasPagesX + slot.x;
+      this.telemetry?.trace.spanEnd(18 /* VtUpload */, ready.key, ready.data.byteLength, physicalSlot);
+      this.telemetry?.metrics.histogramLog2(10 /* VtUploadNs */, Math.max(1, Math.floor(uploadMs * 1e6)));
       this.completedUploads++;
       this.totalUploadMs += uploadMs;
       this.maxUploadMs = Math.max(this.maxUploadMs, uploadMs);

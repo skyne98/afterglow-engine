@@ -4,6 +4,8 @@ import {
   type FetchRangeLoader,
 } from './big-parser.ts';
 import type { AssetByteRange } from './bulk-range.ts';
+import { EngineMetric, EngineTelemetryCategory, EngineTraceDescriptor } from '../telemetry/catalog.ts';
+import type { EngineTelemetry } from '../telemetry/telemetry.ts';
 
 const ARENA_SLOT_BYTES = 4 * 1024 * 1024;
 const COPY_CHUNK_BYTES = 512 * 1024;
@@ -126,8 +128,93 @@ function createNativeRangeLoader(ops: NativeAssetOps): FetchRangeLoader {
   };
 }
 
+function instrumentRangeLoader(loader: FetchRangeLoader, telemetry: EngineTelemetry): FetchRangeLoader {
+  const duration = (startedAt: number): void => {
+    telemetry.metrics.histogramLog2(
+      EngineMetric.AssetReadNs,
+      Math.max(1, Math.floor((performance.now() - startedAt) * 1_000_000)),
+    );
+  };
+  return {
+    async load(path: string): Promise<Uint8Array> {
+      const correlation = telemetry.nextCorrelation(EngineTelemetryCategory.Asset);
+      const startedAt = performance.now();
+      telemetry.trace.asyncBegin(EngineTraceDescriptor.AssetRead, correlation, 0, 0);
+      try {
+        const bytes = await loader.load(path);
+        telemetry.metrics.counterAdd(EngineMetric.AssetBytesRead, bytes.byteLength);
+        telemetry.trace.asyncEnd(EngineTraceDescriptor.AssetRead, correlation, bytes.byteLength, 0);
+        return bytes;
+      } catch (error) {
+        telemetry.trace.asyncEnd(EngineTraceDescriptor.AssetRead, correlation, 0, 1);
+        throw error;
+      } finally { duration(startedAt); }
+    },
+    async size(path: string): Promise<number> {
+      const correlation = telemetry.nextCorrelation(EngineTelemetryCategory.Asset);
+      telemetry.trace.asyncBegin(EngineTraceDescriptor.AssetSize, correlation, 0, 0);
+      try {
+        const size = await loader.size(path);
+        telemetry.trace.asyncEnd(EngineTraceDescriptor.AssetSize, correlation, size, 0);
+        return size;
+      } catch (error) {
+        telemetry.trace.asyncEnd(EngineTraceDescriptor.AssetSize, correlation, 0, 1);
+        throw error;
+      }
+    },
+    async identity(path: string): Promise<AssetIdentity> {
+      const correlation = telemetry.nextCorrelation(EngineTelemetryCategory.Asset);
+      telemetry.trace.asyncBegin(EngineTraceDescriptor.AssetSize, correlation, 0, 0);
+      try {
+        const identity = await loader.identity(path);
+        telemetry.trace.asyncEnd(EngineTraceDescriptor.AssetSize, correlation, identity.size, 0);
+        return identity;
+      } catch (error) {
+        telemetry.trace.asyncEnd(EngineTraceDescriptor.AssetSize, correlation, 0, 1);
+        throw error;
+      }
+    },
+    async read(path: string, offset: number, length: number): Promise<Uint8Array> {
+      const correlation = telemetry.nextCorrelation(EngineTelemetryCategory.Asset);
+      const startedAt = performance.now();
+      telemetry.trace.asyncBegin(EngineTraceDescriptor.AssetRead, correlation, length, offset);
+      try {
+        const bytes = await loader.read(path, offset, length);
+        telemetry.metrics.counterAdd(EngineMetric.AssetBytesRead, bytes.byteLength);
+        telemetry.trace.asyncEnd(EngineTraceDescriptor.AssetRead, correlation, bytes.byteLength, 0);
+        return bytes;
+      } catch (error) {
+        telemetry.trace.asyncEnd(EngineTraceDescriptor.AssetRead, correlation, 0, 1);
+        throw error;
+      } finally { duration(startedAt); }
+    },
+    readBulk: loader.readBulk === undefined ? undefined : async (
+      path: string,
+      ranges: readonly AssetByteRange[],
+    ): Promise<Uint8Array[]> => {
+      const correlation = telemetry.nextCorrelation(EngineTelemetryCategory.Asset);
+      const startedAt = performance.now();
+      let requested = 0;
+      for (let index = 0; index < ranges.length; index++) requested += ranges[index]?.length ?? 0;
+      telemetry.trace.asyncBegin(EngineTraceDescriptor.AssetBulkRead, correlation, requested, ranges.length);
+      try {
+        const parts = await loader.readBulk!(path, ranges);
+        let bytes = 0;
+        for (let index = 0; index < parts.length; index++) bytes += parts[index]?.byteLength ?? 0;
+        telemetry.metrics.counterAdd(EngineMetric.AssetBytesRead, bytes);
+        telemetry.trace.asyncEnd(EngineTraceDescriptor.AssetBulkRead, correlation, bytes, parts.length);
+        return parts;
+      } catch (error) {
+        telemetry.trace.asyncEnd(EngineTraceDescriptor.AssetBulkRead, correlation, 0, 0);
+        throw error;
+      } finally { duration(startedAt); }
+    },
+  };
+}
+
 /** Shared platform selector: native arena worker in afterglow-shell, Fetch on web. */
-export function createPlatformRangeLoader(baseUrl = ''): FetchRangeLoader {
+export function createPlatformRangeLoader(baseUrl = '', telemetry?: EngineTelemetry): FetchRangeLoader {
   const ops = nativeOps();
-  return ops === null ? createFetchRangeLoader(baseUrl) : createNativeRangeLoader(ops);
+  const loader = ops === null ? createFetchRangeLoader(baseUrl) : createNativeRangeLoader(ops);
+  return telemetry === undefined ? loader : instrumentRangeLoader(loader, telemetry);
 }

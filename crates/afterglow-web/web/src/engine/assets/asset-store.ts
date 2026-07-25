@@ -18,6 +18,8 @@ import { Resource, defineResource } from '../core/resource.ts';
 import { AssetHandle } from './asset-handle.ts';
 import { fallbackGroup } from '../renderer/fallback.ts';
 import type { VirtualTextureStore } from '../virtual-texturing/virtual-texture.ts';
+import { EngineTelemetryCategory, EngineTraceDescriptor } from '../telemetry/catalog.ts';
+import type { EngineTelemetry } from '../telemetry/telemetry.ts';
 
 // --- interfaces (match the generated client APIs) -----------------------
 
@@ -315,6 +317,7 @@ export class AssetStore {
     meshopt?: MeshOptimizer,
     capacity = DEFAULT_ASSET_CAPACITY,
     private readonly maxCompletionsPerPoll = 32,
+    private readonly telemetry?: EngineTelemetry,
   ) {
     if (!Number.isInteger(capacity) || capacity <= 0) throw new RangeError('asset capacity must be positive');
     if (!Number.isInteger(maxCompletionsPerPoll) || maxCompletionsPerPoll <= 0)
@@ -509,6 +512,19 @@ export class AssetStore {
    * simplifier does not include skin weights in its error metric.
    */
   async optimizeGltfScene(scene: THREE.Group): Promise<SceneMeshOptimizationStats[]> {
+    const correlation = this.telemetry?.nextCorrelation(EngineTelemetryCategory.Asset) ?? 0;
+    this.telemetry?.trace.asyncBegin(EngineTraceDescriptor.MeshOptimize, correlation, 0, 0);
+    try {
+      const stats = await this.optimizeGltfSceneInner(scene);
+      this.telemetry?.trace.asyncEnd(EngineTraceDescriptor.MeshOptimize, correlation, stats.length, 0);
+      return stats;
+    } catch (error) {
+      this.telemetry?.trace.asyncEnd(EngineTraceDescriptor.MeshOptimize, correlation, 0, 1);
+      throw error;
+    }
+  }
+
+  private async optimizeGltfSceneInner(scene: THREE.Group): Promise<SceneMeshOptimizationStats[]> {
     if (!this.meshopt) throw new Error('optimizeGltfScene requires a meshopt worker');
     const meshes: THREE.Mesh[] = [];
     scene.traverse(object => { if ((object as THREE.Mesh).isMesh) meshes.push(object as THREE.Mesh); });

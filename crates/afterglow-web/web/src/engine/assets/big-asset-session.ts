@@ -11,6 +11,8 @@ import { createPlatformMeshOptimizer, createPlatformTextureTranscoder } from './
 import { AssetStore, type MeshOptimizer } from './asset-store.ts';
 import type { PersistentBlobCache } from './persistent-blob-cache.ts';
 import { VirtualTextureStore, VirtualTextureTuning } from '../virtual-texturing/virtual-texture.ts';
+import { EngineTelemetryCategory, EngineTraceDescriptor } from '../telemetry/catalog.ts';
+import type { EngineTelemetry } from '../telemetry/telemetry.ts';
 
 export interface TextureTranscoder {
   transcode(data: Uint8Array, targetFormat: number): Promise<Uint8Array>;
@@ -35,6 +37,7 @@ export interface BigAssetSessionOptions {
   createMeshOptimizer?(): Promise<OwnedMeshOptimizer>;
   source?: FetchRangeLoader;
   cache?: PersistentBlobCache;
+  telemetry?: EngineTelemetry;
 }
 
 /** Bootstrap owner for one BIG source, its header, workers, and page provider. */
@@ -55,6 +58,7 @@ export class BigAssetSession {
     readonly format: number,
     private readonly workers: OwnedTextureTranscoder[],
     private readonly createMeshOptimizer: (() => Promise<OwnedMeshOptimizer>) | undefined,
+    private readonly telemetry: EngineTelemetry | undefined,
     pageProvider: VirtualTexturePageProvider,
   ) {
     this.rawAssets = new BigContainerAssetLoader(source, containerPath, header);
@@ -68,14 +72,19 @@ export class BigAssetSession {
       throw new RangeError('BIG session workerCount must be positive');
     if (!Number.isInteger(options.transcodeQueueCapacity) || options.transcodeQueueCapacity <= 0)
       throw new RangeError('BIG session transcode queue capacity must be positive');
-    const source = options.source ?? createPlatformRangeLoader();
+    const correlation = options.telemetry?.nextCorrelation(EngineTelemetryCategory.Asset) ?? 0;
+    options.telemetry?.trace.asyncBegin(
+      EngineTraceDescriptor.SessionOpen, correlation, options.workerCount, 0,
+    );
+    const source = options.source ?? createPlatformRangeLoader('', options.telemetry);
     const workers: OwnedTextureTranscoder[] = [];
     try {
       const header = await readBigHeader(source, options.containerPath, options.maxHeaderBytes);
 
-      const createTranscoder = options.createTranscoder ?? createPlatformTextureTranscoder;
       for (let index = 0; index < options.workerCount; index++)
-        workers.push(await createTranscoder(index));
+        workers.push(options.createTranscoder
+          ? await options.createTranscoder(index)
+          : await createPlatformTextureTranscoder(index, options.telemetry));
       const clients = workers;
       const containerLoader = {
         load: (path: string): Promise<Uint8Array> => source.load(path),
@@ -94,11 +103,16 @@ export class BigAssetSession {
         options.format,
         options.cache,
         options.transcodeQueueCapacity,
+        options.telemetry,
       );
-      return new BigAssetSession(
+      const session = new BigAssetSession(
         source, options.containerPath, header, options.format, workers,
-        options.createMeshOptimizer, pageProvider,
+        options.createMeshOptimizer, options.telemetry, pageProvider,
       );
+      options.telemetry?.trace.asyncEnd(
+        EngineTraceDescriptor.SessionOpen, correlation, workers.length, 0,
+      );
+      return session;
     } catch (error) {
       for (let index = workers.length - 1; index >= 0; index--) {
         try { await workers[index]?.close(); }
@@ -106,6 +120,9 @@ export class BigAssetSession {
           if (error instanceof Error && error.cause === undefined) error.cause = closeError;
         }
       }
+      options.telemetry?.trace.asyncEnd(
+        EngineTraceDescriptor.SessionOpen, correlation, workers.length, 1,
+      );
       throw error;
     }
   }
@@ -116,11 +133,14 @@ export class BigAssetSession {
   ): Promise<AssetStore> {
     if (this.closed) throw new Error('cannot create an asset store from a closed BIG session');
     if (this.assetStore || this.meshOptimizer) throw new Error('BIG session already created its asset store');
-    const createOptimizer = this.createMeshOptimizer ?? createPlatformMeshOptimizer;
-    const optimizer = await createOptimizer();
+    const optimizer = this.createMeshOptimizer
+      ? await this.createMeshOptimizer()
+      : await createPlatformMeshOptimizer(this.telemetry);
     if (this.closed) { await optimizer.close(); throw new Error('BIG session closed while creating its asset store'); }
     try {
-      this.assetStore = new AssetStore(this.rawAssets, optimizer, capacity, maxCompletionsPerPoll);
+      this.assetStore = new AssetStore(
+        this.rawAssets, optimizer, capacity, maxCompletionsPerPoll, this.telemetry,
+      );
       this.meshOptimizer = optimizer;
       this.stats.workersStarted++;
       return this.assetStore;
@@ -145,6 +165,7 @@ export class BigAssetSession {
       this.format,
       device,
       tuning ?? new VirtualTextureTuning(),
+      this.telemetry,
     );
     return this.store;
   }

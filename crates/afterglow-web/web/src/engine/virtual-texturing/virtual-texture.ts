@@ -19,6 +19,8 @@
 import * as THREE from 'three';
 import { AssetHandle } from '../assets/asset-handle.ts';
 import { Resource, defineResource } from '../core/resource.ts';
+import { EngineMetric, EngineTraceDescriptor } from '../telemetry/catalog.ts';
+import type { EngineTelemetry } from '../telemetry/telemetry.ts';
 import {
   PackedPageTableLayout,
   assertVirtualTextureDimensions,
@@ -958,6 +960,7 @@ export class VirtualTextureStore {
     format?: number,
     device?: GPUDevice,
     tuning?: VirtualTextureTuning,
+    private readonly telemetry?: EngineTelemetry,
   ) {
     this.loader = loader;
     this.pageDataProvider = pageDataProvider;
@@ -1365,6 +1368,10 @@ export class VirtualTextureStore {
     this.pendingByKey.set(key, slot);
     this.pendingCount++;
     this.pendingBytes += this.cache.slotDataSize;
+    this.telemetry?.metrics.counterAdd(EngineMetric.VtPagesRequested, 1);
+    this.telemetry?.trace.asyncBegin(
+      EngineTraceDescriptor.VtPageLoad, key, this.cache.slotDataSize, priorityTier,
+    );
     // `req` may be a reusable scheduler scratch record. `page` is the owned
     // immutable copy retained for this asynchronous generation.
     this.pageDataProvider(path, page, controller.signal).then(data => {
@@ -1374,6 +1381,7 @@ export class VirtualTextureStore {
       const pending = this.getPending(key);
       if (!pending || pending.generation !== generation) return;
       if (pending.canceled) {
+        this.telemetry?.trace.asyncEnd(EngineTraceDescriptor.VtPageLoad, key, 0, 2);
         this.deletePending(key);
         return;
       }
@@ -1382,6 +1390,7 @@ export class VirtualTextureStore {
       this.totalLoadMs += loadMs;
       this.maxLoadMs = Math.max(this.maxLoadMs, loadMs);
       if (!pending.page.pinned && this.feedbackEpoch - pending.lastSeen >= this.staleFeedbackEpochs) {
+        this.telemetry?.trace.asyncEnd(EngineTraceDescriptor.VtPageLoad, key, 0, 3);
         this.deletePending(key);
         this.staleCancellations++;
         return;
@@ -1399,12 +1408,21 @@ export class VirtualTextureStore {
       ready.data = data;
       this.readyUploadTail = (this.readyUploadTail + 1) % this.readyUploads.length;
       this.readyUploadCount++;
+      this.telemetry?.metrics.counterAdd(EngineMetric.VtPagesLoaded, 1);
+      this.telemetry?.trace.asyncEnd(
+        EngineTraceDescriptor.VtPageLoad, key, data.byteLength, 0,
+      );
     }).catch(error => {
       const pending = this.getPending(key);
       const canceled = controller.signal.aborted ||
         (pending?.generation === generation && pending.canceled);
       if (pending?.generation === generation) this.deletePending(key);
-      if (canceled) return;
+      if (canceled) {
+        this.telemetry?.trace.asyncEnd(EngineTraceDescriptor.VtPageLoad, key, 0, 2);
+        return;
+      }
+      this.telemetry?.metrics.counterAdd(EngineMetric.VtPagesFailed, 1);
+      this.telemetry?.trace.asyncEnd(EngineTraceDescriptor.VtPageLoad, key, 0, 1);
       this.failedLoads++;
       console.error(`[VT] Failed to load page ${path} mip=${page.mip} (${page.x},${page.y}):`, error);
     });
@@ -1976,6 +1994,9 @@ export class VirtualTextureStore {
       if (!entry || !pageTable || (ready.req.tail ? isResident(entry.tailEntry) : pageTable.isResident(ready.req))) continue;
 
       const uploadStartedAt = performance.now();
+      this.telemetry?.trace.spanBegin(
+        EngineTraceDescriptor.VtUpload, ready.key, ready.data.byteLength, 0,
+      );
       let slot: PageSlot;
       try {
         const acquired = this.cache.acquire(ready.page);
@@ -1985,6 +2006,7 @@ export class VirtualTextureStore {
           this.cacheEvictions++;
         }
       } catch {
+        this.telemetry?.trace.spanEnd(EngineTraceDescriptor.VtUpload, ready.key, 0, 1);
         this.rejectedAdmissions++;
         continue;
       }
@@ -1998,6 +2020,13 @@ export class VirtualTextureStore {
         this.updatePageTableTexture(ready.page.path, ready.req, slot);
       }
       const uploadMs = performance.now() - uploadStartedAt;
+      const physicalSlot = slot.y * this.atlasPagesX + slot.x;
+      this.telemetry?.trace.spanEnd(
+        EngineTraceDescriptor.VtUpload, ready.key, ready.data.byteLength, physicalSlot,
+      );
+      this.telemetry?.metrics.histogramLog2(
+        EngineMetric.VtUploadNs, Math.max(1, Math.floor(uploadMs * 1_000_000)),
+      );
       this.completedUploads++;
       this.totalUploadMs += uploadMs;
       this.maxUploadMs = Math.max(this.maxUploadMs, uploadMs);

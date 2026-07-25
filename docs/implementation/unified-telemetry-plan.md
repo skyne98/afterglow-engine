@@ -1,7 +1,7 @@
 # Unified telemetry implementation plan
 
-Status: **foundation and page-frame integration implemented; cross-domain
-adapters pending**. Approved product/failure-policy defaults on 2026-07-25.
+Status: **foundation plus broad page/runtime/asset/VT instrumentation
+implemented; worker-internal, host, audio, and GPU adapters pending**. Approved product/failure-policy defaults on 2026-07-25.
 
 Canonical public API: [`docs/api/telemetry.md`](../api/telemetry.md).
 
@@ -69,7 +69,10 @@ add another Chrome exporter after migration.
 ## Phase 3 — RPC flow adapter
 
 - [ ] Give every generated connection a stable telemetry connection ID.
-- [ ] Emit client-send/server-receive/server-send/client-receive flow endpoints.
+- [x] Emit one correlated native page-side RPC round-trip around generated
+      texture/meshopt calls.
+- [ ] Split that round trip into generated client-send/server-receive/
+      server-send/client-receive flow endpoints.
 - [ ] Derive async flow IDs from `(connection_id, task_id)`.
 - [ ] Derive sync flow IDs from `(connection_id, monotonic_call_sequence)`.
 - [ ] Add reserved telemetry arm/stop/drain control framing to worker loops,
@@ -81,13 +84,17 @@ add another Chrome exporter after migration.
 
 ## Phase 4 — asset and texture route
 
-- [ ] Correlate VT request slot/generation with one trace context.
-- [ ] Instrument scheduler wait and bulk timer wait.
-- [ ] Instrument asset request queue, `pread`, and response publication.
-- [ ] Instrument arena write/read leases and deterministic release.
-- [ ] Instrument texture queue, RPC flow, Basis transcode, and result publication.
-- [ ] Instrument ready-upload wait, atlas write, and page-table publication.
+- [x] Correlate VT request/page identity with one trace context.
+- [x] Instrument complete page load, bulk timer wait, and bulk dispatch.
+- [x] Instrument platform single/bulk asset operations and bytes/latency metrics.
+- [ ] Split native asset operations into worker queue, `pread`, arena write,
+      response publication, arena read lease, and deterministic release.
+- [x] Instrument texture queue, page-side RPC round trip, Basis transcode total,
+      and result publication.
+- [x] Instrument ready-upload work, atlas write, and page-table publication.
 - [ ] Record the first frame whose visible draw may sample the published page.
+- [x] Instrument persistent-cache reads/writes, BIG session startup, and
+      whole-scene mesh optimization.
 - [ ] Acceptance gate: follow one Dungeon tile end-to-end in one exported trace.
 
 ## Phase 5 — GPU and presentation

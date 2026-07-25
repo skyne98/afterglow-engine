@@ -65,9 +65,11 @@ the raw loader and VT page provider; and rolls partial startup back in reverse
 order. `createAssetStore()` starts the engine-owned mesh optimizer and binds
 fixed asset/completion capacities to that raw loader. It creates at most one
 `VirtualTextureStore`. Idempotent shutdown closes
-all workers even if one close fails, with stable error telemetry. Pages do not
-construct a raw `Rpc` transport, choose worker scripts, or manually terminate
-workers.
+all workers even if one close fails, with stable error telemetry. Passing
+`telemetry: runtime.telemetry` correlates session startup, range/cache work,
+bulk waits and dispatch, native RPC round trips, transcode, mesh optimization,
+and VT publication. Pages do not construct a raw `Rpc` transport, choose worker
+scripts, or manually terminate workers.
 
 Self-contained GLBs follow this same path. The offline pipeline extracts
 embedded images into virtual textures, removes their payload buffer views, and

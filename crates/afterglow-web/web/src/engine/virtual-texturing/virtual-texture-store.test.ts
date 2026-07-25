@@ -2,6 +2,10 @@ import { beforeAll, describe, expect, mock, test } from 'bun:test';
 import * as RealThree from 'three/webgpu';
 import { packedPageTableIndex } from './virtual-texture-layout.ts';
 import type { PageRequest, VirtualPageRequest } from './virtual-texture.ts';
+import {
+  EngineMetric, EngineTraceDescriptor, ENGINE_METRIC_DESCRIPTORS, ENGINE_TRACE_DESCRIPTORS,
+} from '../telemetry/catalog.ts';
+import { EngineTelemetry, TELEMETRY_RECORD_BYTES } from '../telemetry/telemetry.ts';
 
 class Texture { needsUpdate = false; dispose() {} }
 class DataTexture extends Texture {
@@ -75,6 +79,39 @@ describe('VirtualTextureStore residency identity', () => {
     await settle(store);
     expect(store.getStats().completedUploads).toBeGreaterThan(0);
     expect(store.getStats().atlasSlotsUsed).toBeGreaterThan(0);
+  });
+
+  test('correlates page load and upload through unified telemetry', async () => {
+    let tick = 1;
+    const telemetry = new EngineTelemetry(
+      ENGINE_TRACE_DESCRIPTORS,
+      ENGINE_METRIC_DESCRIPTORS,
+      new ArrayBuffer(TELEMETRY_RECORD_BYTES * 64),
+      new Float64Array(192),
+      () => tick++,
+    );
+    telemetry.trace.arm(9);
+    const store = new VT.VirtualTextureStore(
+      loader,
+      async () => new Uint8Array(PAGE_BYTES),
+      VT.FORMAT_RGBA,
+      undefined,
+      new VT.VirtualTextureTuning({ atlasMaxDimension: VT.SLOT_SIZE * 2 }),
+      telemetry,
+    );
+    store.loadTexture('traced', { width: 128, height: 128 });
+    await settle(store);
+    telemetry.trace.stop();
+    const snapshot = telemetry.trace.snapshot();
+    if (snapshot === null) throw new Error('missing telemetry snapshot');
+    const words = new Uint32Array(snapshot.buffer);
+    const descriptors: number[] = [];
+    for (let index = 0; index < snapshot.count; index++) descriptors.push(words[index * 10 + 8] ?? -1);
+    expect(descriptors).toContain(EngineTraceDescriptor.VtPageLoad);
+    expect(descriptors).toContain(EngineTraceDescriptor.VtUpload);
+    expect(telemetry.metrics.readCell(EngineMetric.VtPagesRequested)).toBeGreaterThan(0);
+    expect(telemetry.metrics.readCell(EngineMetric.VtPagesLoaded)).toBeGreaterThan(0);
+    store.dispose();
   });
 
   test('central tuning probes upward only after stability and rolls back a bad probe', () => {
