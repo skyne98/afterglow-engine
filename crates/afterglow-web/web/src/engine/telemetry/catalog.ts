@@ -38,7 +38,9 @@ export const enum EngineTraceDescriptor {
   TextureTranscodeQueue = 16,
   TextureTranscode = 17,
   VtUpload = 18,
+  /** Reserved for decoding pre-removal AGTB captures; no runtime producer. */
   CacheRead = 19,
+  /** Reserved for decoding pre-removal AGTB captures; no runtime producer. */
   CacheWrite = 20,
   MeshOptimize = 21,
 }
@@ -63,6 +65,7 @@ export const ENGINE_TRACE_DESCRIPTORS: readonly TelemetryDescriptor[] = [
   { category: EngineTelemetryCategory.Texture, categoryName: 'texture', name: 'texture.transcode_queue', kind: TelemetryDescriptorKind.AsyncSpan, argument0: 'bytes', argument1: 'format' },
   { category: EngineTelemetryCategory.Texture, categoryName: 'texture', name: 'texture.transcode', kind: TelemetryDescriptorKind.AsyncSpan, argument0: 'bytes', argument1: 'format' },
   { category: EngineTelemetryCategory.VirtualTexture, categoryName: 'vt', name: 'vt.upload', kind: TelemetryDescriptorKind.Span, argument0: 'bytes', argument1: 'slot' },
+  // IDs 19–20 remain reserved so historical pre-removal captures decode without ABI drift.
   { category: EngineTelemetryCategory.Asset, categoryName: 'cache', name: 'cache.read', kind: TelemetryDescriptorKind.AsyncSpan, argument0: 'bytes', argument1: 'hit' },
   { category: EngineTelemetryCategory.Asset, categoryName: 'cache', name: 'cache.write', kind: TelemetryDescriptorKind.AsyncSpan, argument0: 'bytes', argument1: 'status' },
   { category: EngineTelemetryCategory.Asset, categoryName: 'asset', name: 'mesh.optimize', kind: TelemetryDescriptorKind.AsyncSpan, argument0: 'bytes', argument1: 'status' },

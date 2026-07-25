@@ -69369,7 +69369,7 @@ class BoundedBulkReadQueue {
     return stats;
   }
 }
-function createPageDataProvider(loader, header, textureWorkers, format, cache2, transcodeQueueCapacity = 64, telemetry) {
+function createPageDataProvider(loader, header, textureWorkers, format, transcodeQueueCapacity = 64, telemetry) {
   const directories = expandVtDirectories(header);
   const transcoder = new BoundedTranscoderPool(textureWorkers, transcodeQueueCapacity, telemetry);
   const bulkReads = new BoundedBulkReadQueue(loader, telemetry);
@@ -69391,26 +69391,7 @@ function createPageDataProvider(loader, header, textureWorkers, format, cache2, 
     averageTranscodeQueueMs: 0,
     maxTranscodeQueueMs: 0,
     averageTranscodeMs: 0,
-    maxTranscodeMs: 0,
-    cacheEnabled: cache2 !== undefined,
-    cacheBackend: "",
-    cacheEntries: 0,
-    cacheBytes: 0,
-    cacheLiveBytes: 0,
-    cacheQueuedWrites: 0,
-    cacheEvictions: 0,
-    cacheCompactions: 0,
-    cacheReclaimedBytes: 0,
-    cacheMaintenance: false,
-    cacheHits: 0,
-    cacheMisses: 0,
-    cacheWrites: 0,
-    cacheRejected: 0,
-    cacheErrors: 0,
-    averageCacheReadMs: 0,
-    maxCacheReadMs: 0,
-    averageCacheWriteMs: 0,
-    maxCacheWriteMs: 0
+    maxTranscodeMs: 0
   };
   const provider = async (path, req, signal) => {
     if (signal?.aborted)
@@ -69431,38 +69412,13 @@ function createPageDataProvider(loader, header, textureWorkers, format, cache2, 
     }
     if (!directory || size === 0)
       throw new Error(`VT page not found: ${path} mip=${req.mip} (${req.x},${req.y})`);
-    const cacheKey = `${directory.assetId}:${req.tail ? "t" : req.mip}:${req.x}:${req.y}`;
     const correlation = req.cacheKey ?? telemetry?.nextCorrelation(3 /* VirtualTexture */) ?? 0;
-    const expectedBytes = format === 4 ? 136 * 136 * 4 : 34 * 34 * 16;
-    if (cache2) {
-      telemetry?.trace.asyncBegin(19 /* CacheRead */, correlation, expectedBytes, 0);
-      let cached;
-      try {
-        cached = await cache2.get(cacheKey);
-        telemetry?.trace.asyncEnd(19 /* CacheRead */, correlation, cached?.byteLength ?? 0, cached?.byteLength === expectedBytes ? 1 : 0);
-      } catch (error2) {
-        telemetry?.trace.asyncEnd(19 /* CacheRead */, correlation, 0, 2);
-        throw error2;
-      }
-      if (signal?.aborted)
-        throw new Error("VT page load canceled after cache read");
-      if (cached && cached.byteLength === expectedBytes)
-        return cached;
-    }
     const pageData = await bulkReads.read(path, offset, size, req.batchTier ?? "urgent", signal, correlation);
     if (signal?.aborted)
       throw new Error("VT page load canceled after read");
     if (directory.encoding === "RawRgba8") {
       if (format !== 4) {
         throw new Error(`VT page ${path} is raw RGBA8 but GPU format ${format} requires Basis encoding`);
-      }
-      if (cache2) {
-        telemetry?.trace.asyncBegin(20 /* CacheWrite */, correlation, pageData.byteLength, 0);
-        cache2.put(cacheKey, pageData).then((ok) => {
-          telemetry?.trace.asyncEnd(20 /* CacheWrite */, correlation, pageData.byteLength, ok ? 0 : 1);
-        }, () => {
-          telemetry?.trace.asyncEnd(20 /* CacheWrite */, correlation, 0, 1);
-        });
       }
       return pageData;
     }
@@ -69480,16 +69436,7 @@ function createPageDataProvider(loader, header, textureWorkers, format, cache2, 
     const length2 = view.getUint32(12, true);
     if (count < 1 || width !== 136 || height !== 136 || 16 + length2 > transcoded.byteLength)
       throw new Error(`invalid transcoded VT page header: count=${count}, size=${width}x${height}, bytes=${length2}`);
-    const payload = transcoded.slice(16, 16 + length2);
-    if (cache2) {
-      telemetry?.trace.asyncBegin(20 /* CacheWrite */, correlation, payload.byteLength, 0);
-      cache2.put(cacheKey, payload).then((ok) => {
-        telemetry?.trace.asyncEnd(20 /* CacheWrite */, correlation, payload.byteLength, ok ? 0 : 1);
-      }, () => {
-        telemetry?.trace.asyncEnd(20 /* CacheWrite */, correlation, 0, 1);
-      });
-    }
-    return payload;
+    return transcoded.slice(16, 16 + length2);
   };
   provider.close = () => bulkReads.close();
   provider.getStats = () => {
@@ -69513,27 +69460,6 @@ function createPageDataProvider(loader, header, textureWorkers, format, cache2, 
     stats.maxTranscodeQueueMs = transcode.maxQueueMs;
     stats.averageTranscodeMs = transcode.averageTranscodeMs;
     stats.maxTranscodeMs = transcode.maxTranscodeMs;
-    const persistent = cache2?.getStats();
-    if (persistent) {
-      stats.cacheBackend = persistent.backend;
-      stats.cacheEntries = persistent.entries;
-      stats.cacheBytes = persistent.bytes;
-      stats.cacheLiveBytes = persistent.liveBytes;
-      stats.cacheQueuedWrites = persistent.queuedWrites;
-      stats.cacheEvictions = persistent.evictions;
-      stats.cacheCompactions = persistent.compactions;
-      stats.cacheReclaimedBytes = persistent.reclaimedBytes;
-      stats.cacheMaintenance = persistent.maintenance;
-      stats.cacheHits = persistent.hits;
-      stats.cacheMisses = persistent.misses;
-      stats.cacheWrites = persistent.writes;
-      stats.cacheRejected = persistent.rejectedCapacity + persistent.rejectedQueue;
-      stats.cacheErrors = persistent.corruptEntries + persistent.readErrors + persistent.writeErrors;
-      stats.averageCacheReadMs = persistent.averageReadMs;
-      stats.maxCacheReadMs = persistent.maxReadMs;
-      stats.averageCacheWriteMs = persistent.averageWriteMs;
-      stats.maxCacheWriteMs = persistent.maxWriteMs;
-    }
     return stats;
   };
   return provider;
@@ -71029,9 +70955,9 @@ class VirtualTextureStore {
   feedbackScratch;
   feedbackScratchKeys;
   feedbackScratchCount = 0;
-  cacheHits = 0;
-  cacheMisses = 0;
-  cacheEvictions = 0;
+  residentHits = 0;
+  residentMisses = 0;
+  residentEvictions = 0;
   completedLoads = 0;
   failedLoads = 0;
   totalLoadMs = 0;
@@ -71070,9 +70996,9 @@ class VirtualTextureStore {
     staleCancellations: 0,
     priorityPreemptions: 0,
     rejectedAdmissions: 0,
-    cacheHits: 0,
-    cacheMisses: 0,
-    cacheEvictions: 0,
+    residentHits: 0,
+    residentMisses: 0,
+    residentEvictions: 0,
     completedLoads: 0,
     failedLoads: 0,
     averageLoadMs: 0,
@@ -71108,26 +71034,7 @@ class VirtualTextureStore {
     averageTranscodeQueueMs: 0,
     maxTranscodeQueueMs: 0,
     averageTranscodeMs: 0,
-    maxTranscodeMs: 0,
-    cacheEnabled: false,
-    cacheBackend: "",
-    cacheEntries: 0,
-    cacheBytes: 0,
-    cacheLiveBytes: 0,
-    cacheQueuedWrites: 0,
-    cacheEvictions: 0,
-    cacheCompactions: 0,
-    cacheReclaimedBytes: 0,
-    cacheMaintenance: false,
-    cacheHits: 0,
-    cacheMisses: 0,
-    cacheWrites: 0,
-    cacheRejected: 0,
-    cacheErrors: 0,
-    averageCacheReadMs: 0,
-    maxCacheReadMs: 0,
-    averageCacheWriteMs: 0,
-    maxCacheWriteMs: 0
+    maxTranscodeMs: 0
   };
   constructor(loader, pageDataProvider, format, device, tuning, telemetry) {
     this.telemetry = telemetry;
@@ -71685,14 +71592,14 @@ class VirtualTextureStore {
       return;
     const key = this.pageKey(request);
     if (request.tail ? isResident(entry.tailEntry) : pageTable.isResident(request)) {
-      this.cacheHits++;
+      this.residentHits++;
       this.cache.touch(key);
       const scheduled = this.scheduledByKey.get(key);
       if (scheduled !== undefined)
         this.removeScheduled(scheduled);
       return;
     }
-    this.cacheMisses++;
+    this.residentMisses++;
     const pending = this.getPending(key);
     if (pending) {
       pending.lastSeen = this.feedbackEpoch;
@@ -71956,7 +71863,7 @@ class VirtualTextureStore {
         slot = acquired.slot;
         if (acquired.evicted) {
           this.evictPage(acquired.evicted);
-          this.cacheEvictions++;
+          this.residentEvictions++;
         }
       } catch {
         this.telemetry?.trace.spanEnd(18 /* VtUpload */, ready.key, 0, 1);
@@ -72036,9 +71943,9 @@ class VirtualTextureStore {
     stats.staleCancellations = this.staleCancellations;
     stats.priorityPreemptions = this.priorityPreemptions;
     stats.rejectedAdmissions = this.rejectedAdmissions;
-    stats.cacheHits = this.cacheHits;
-    stats.cacheMisses = this.cacheMisses;
-    stats.cacheEvictions = this.cacheEvictions;
+    stats.residentHits = this.residentHits;
+    stats.residentMisses = this.residentMisses;
+    stats.residentEvictions = this.residentEvictions;
     stats.completedLoads = this.completedLoads;
     stats.failedLoads = this.failedLoads;
     stats.averageLoadMs = this.completedLoads === 0 ? 0 : this.totalLoadMs / this.completedLoads;
@@ -72077,25 +71984,6 @@ class VirtualTextureStore {
       stats.maxTranscodeQueueMs = provider.maxTranscodeQueueMs;
       stats.averageTranscodeMs = provider.averageTranscodeMs;
       stats.maxTranscodeMs = provider.maxTranscodeMs;
-      stats.cacheEnabled = provider.cacheEnabled;
-      stats.cacheBackend = provider.cacheBackend;
-      stats.cacheEntries = provider.cacheEntries;
-      stats.cacheBytes = provider.cacheBytes;
-      stats.cacheLiveBytes = provider.cacheLiveBytes;
-      stats.cacheQueuedWrites = provider.cacheQueuedWrites;
-      stats.cacheEvictions = provider.cacheEvictions;
-      stats.cacheCompactions = provider.cacheCompactions;
-      stats.cacheReclaimedBytes = provider.cacheReclaimedBytes;
-      stats.cacheMaintenance = provider.cacheMaintenance;
-      stats.cacheHits = provider.cacheHits;
-      stats.cacheMisses = provider.cacheMisses;
-      stats.cacheWrites = provider.cacheWrites;
-      stats.cacheRejected = provider.cacheRejected;
-      stats.cacheErrors = provider.cacheErrors;
-      stats.averageCacheReadMs = provider.averageCacheReadMs;
-      stats.maxCacheReadMs = provider.maxCacheReadMs;
-      stats.averageCacheWriteMs = provider.averageCacheWriteMs;
-      stats.maxCacheWriteMs = provider.maxCacheWriteMs;
     }
     return stats;
   }
@@ -72401,7 +72289,7 @@ class BigAssetSession {
         read: (_path, offset, length2) => source.read(options.containerPath, offset, length2),
         readBulk: source.readBulk ? (ranges) => source.readBulk(options.containerPath, ranges) : undefined
       };
-      const pageProvider = createPageDataProvider(containerLoader, header, clients, options.format, options.cache, options.transcodeQueueCapacity, options.telemetry);
+      const pageProvider = createPageDataProvider(containerLoader, header, clients, options.format, options.transcodeQueueCapacity, options.telemetry);
       const session = new BigAssetSession(source, options.containerPath, header, options.format, workers, options.createMeshOptimizer, options.telemetry, pageProvider);
       options.telemetry?.trace.asyncEnd(8 /* SessionOpen */, correlation, workers.length, 0);
       return session;

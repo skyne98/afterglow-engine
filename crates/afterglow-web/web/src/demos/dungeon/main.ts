@@ -1,11 +1,9 @@
 import * as THREE from "three/webgpu";
 import {
   BigAssetSession,
-  PersistentBlobCache,
   createAssetRangeSource,
   getVirtualTextureDimensions,
   loadResidentTexture,
-  persistentCacheNamespace,
   readBigHeader,
 } from "../../engine/assets/index.ts";
 import {
@@ -100,41 +98,13 @@ const bootstrap = new BootstrapGuard(20);
 bootstrap.defer(() => host.dispose());
 bootstrap.defer(() => runtime.dispose());
 try {
-  const source = createAssetRangeSource("", runtime.telemetry),
-    identity = await source.identity("dungeon.big");
+  const source = createAssetRangeSource("", runtime.telemetry);
   const device = host.device,
     format = device.features.has("texture-compression-bc")
       ? 0
       : device.features.has("texture-compression-astc")
         ? 1
         : FORMAT_RGBA;
-  const adapterInfo = host.adapterInfo;
-  let cache: PersistentBlobCache | undefined;
-  if (identity.etag || identity.lastModified) {
-    try {
-      cache = await PersistentBlobCache.open({
-        namespace: await persistentCacheNamespace([
-          "afterglow-cache-v1",
-          "dungeon.big",
-          String(identity.size),
-          identity.etag ?? "",
-          identity.lastModified ?? "",
-          String(format),
-          "basisu-transcoder-v1",
-          "slot-136-border-4",
-          adapterInfo.vendor ?? "",
-          adapterInfo.architecture ?? "",
-          adapterInfo.device ?? "",
-          adapterInfo.description ?? "",
-        ]),
-        maxBytes: 1024 * 1024 * 1024,
-        maxEntries: 65536,
-        writeQueueCapacity: 64,
-      });
-    } catch (error) {
-      console.warn("[cache] persistent blob cache unavailable:", error);
-    }
-  }
   const workerCount = Math.max(
     2,
     Math.min(4, Math.floor((navigator.hardwareConcurrency || 4) / 2)),
@@ -147,7 +117,6 @@ try {
     transcodeQueueCapacity: 64,
     maxHeaderBytes: 2 * 1024 * 1024,
     source,
-    ...(cache ? { cache } : {}),
   });
   bootstrap.defer(() => session.close());
   const store = session.createVirtualTextureStore(
@@ -552,7 +521,7 @@ try {
         await step(FEEDBACK_INTERVAL);
       }
       if (name === "churn") {
-        const before = store.getStats().cacheEvictions,
+        const before = store.getStats().residentEvictions,
           replacement = atlasFeedback(Math.ceil(total / 3), 3072);
         for (let epoch = 0; epoch < 17; epoch++)
           store.processFeedback(replacement);
@@ -560,7 +529,7 @@ try {
         while (performance.now() < end) {
           const s = store.getStats();
           if (
-            s.cacheEvictions > before &&
+            s.residentEvictions > before &&
             !s.pendingPages &&
             !s.scheduledRequests &&
             !s.readyUploads

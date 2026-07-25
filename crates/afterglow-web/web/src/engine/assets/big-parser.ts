@@ -24,7 +24,6 @@ import {
   type AssetByteRange,
 } from './bulk-range.ts';
 
-import type { PersistentBlobCache } from './persistent-blob-cache.ts';
 import { EngineMetric, EngineTelemetryCategory, EngineTraceDescriptor } from '../telemetry/catalog.ts';
 import type { EngineTelemetry } from '../telemetry/telemetry.ts';
 
@@ -661,25 +660,6 @@ export interface PageProviderStats {
   maxTranscodeQueueMs: number;
   averageTranscodeMs: number;
   maxTranscodeMs: number;
-  cacheEnabled: boolean;
-  cacheBackend: string;
-  cacheEntries: number;
-  cacheBytes: number;
-  cacheLiveBytes: number;
-  cacheQueuedWrites: number;
-  cacheEvictions: number;
-  cacheCompactions: number;
-  cacheReclaimedBytes: number;
-  cacheMaintenance: boolean;
-  cacheHits: number;
-  cacheMisses: number;
-  cacheWrites: number;
-  cacheRejected: number;
-  cacheErrors: number;
-  averageCacheReadMs: number;
-  maxCacheReadMs: number;
-  averageCacheWriteMs: number;
-  maxCacheWriteMs: number;
 }
 
 export type PageLoadTier = 'urgent' | 'quality';
@@ -1275,7 +1255,6 @@ export function createPageDataProvider(
   header: BigHeader,
   textureWorkers: readonly { transcode(data: Uint8Array, targetFormat: number): Promise<Uint8Array> }[],
   format: number,
-  cache?: PersistentBlobCache,
   transcodeQueueCapacity = 64,
   telemetry?: EngineTelemetry,
 ): VirtualTexturePageProvider {
@@ -1290,13 +1269,6 @@ export function createPageDataProvider(
     workerCount: textureWorkers.length, activeTranscodes: 0, queuedTranscodes: 0,
     completedTranscodes: 0, averageTranscodeQueueMs: 0, maxTranscodeQueueMs: 0,
     averageTranscodeMs: 0, maxTranscodeMs: 0,
-    cacheEnabled: cache !== undefined, cacheBackend: '', cacheEntries: 0, cacheBytes: 0,
-    cacheLiveBytes: 0, cacheQueuedWrites: 0, cacheEvictions: 0, cacheCompactions: 0,
-    cacheReclaimedBytes: 0, cacheMaintenance: false,
-    cacheHits: 0, cacheMisses: 0, cacheWrites: 0,
-    cacheRejected: 0, cacheErrors: 0,
-    averageCacheReadMs: 0, maxCacheReadMs: 0,
-    averageCacheWriteMs: 0, maxCacheWriteMs: 0,
   };
 
   const provider = (async (
@@ -1322,26 +1294,8 @@ export function createPageDataProvider(
     if (!directory || size === 0)
       throw new Error(`VT page not found: ${path} mip=${req.mip} (${req.x},${req.y})`);
 
-    const cacheKey = `${directory.assetId}:${req.tail ? 't' : req.mip}:${req.x}:${req.y}`;
     const correlation = (req as { cacheKey?: number }).cacheKey ??
       telemetry?.nextCorrelation(EngineTelemetryCategory.VirtualTexture) ?? 0;
-    const expectedBytes = format === 4 ? 136 * 136 * 4 : 34 * 34 * 16;
-    if (cache) {
-      telemetry?.trace.asyncBegin(EngineTraceDescriptor.CacheRead, correlation, expectedBytes, 0);
-      let cached: Uint8Array | null;
-      try {
-        cached = await cache.get(cacheKey);
-        telemetry?.trace.asyncEnd(
-          EngineTraceDescriptor.CacheRead, correlation, cached?.byteLength ?? 0,
-          cached?.byteLength === expectedBytes ? 1 : 0,
-        );
-      } catch (error) {
-        telemetry?.trace.asyncEnd(EngineTraceDescriptor.CacheRead, correlation, 0, 2);
-        throw error;
-      }
-      if (signal?.aborted) throw new Error('VT page load canceled after cache read');
-      if (cached && cached.byteLength === expectedBytes) return cached;
-    }
 
     const pageData = await bulkReads.read(
       path,
@@ -1356,16 +1310,6 @@ export function createPageDataProvider(
     if (directory.encoding === 'RawRgba8') {
       if (format !== 4) {
         throw new Error(`VT page ${path} is raw RGBA8 but GPU format ${format} requires Basis encoding`);
-      }
-      if (cache) {
-        telemetry?.trace.asyncBegin(EngineTraceDescriptor.CacheWrite, correlation, pageData.byteLength, 0);
-        void cache.put(cacheKey, pageData).then(ok => {
-          telemetry?.trace.asyncEnd(
-            EngineTraceDescriptor.CacheWrite, correlation, pageData.byteLength, ok ? 0 : 1,
-          );
-        }, () => {
-          telemetry?.trace.asyncEnd(EngineTraceDescriptor.CacheWrite, correlation, 0, 1);
-        });
       }
       return pageData;
     }
@@ -1387,18 +1331,7 @@ export function createPageDataProvider(
     const length = view.getUint32(12, true);
     if (count < 1 || width !== 136 || height !== 136 || 16 + length > transcoded.byteLength)
       throw new Error(`invalid transcoded VT page header: count=${count}, size=${width}x${height}, bytes=${length}`);
-    const payload = transcoded.slice(16, 16 + length);
-    if (cache) {
-      telemetry?.trace.asyncBegin(EngineTraceDescriptor.CacheWrite, correlation, payload.byteLength, 0);
-      void cache.put(cacheKey, payload).then(ok => {
-        telemetry?.trace.asyncEnd(
-          EngineTraceDescriptor.CacheWrite, correlation, payload.byteLength, ok ? 0 : 1,
-        );
-      }, () => {
-        telemetry?.trace.asyncEnd(EngineTraceDescriptor.CacheWrite, correlation, 0, 1);
-      });
-    }
-    return payload;
+    return transcoded.slice(16, 16 + length);
   }) as VirtualTexturePageProvider;
   provider.close = () => bulkReads.close();
   provider.getStats = () => {
@@ -1422,27 +1355,6 @@ export function createPageDataProvider(
     stats.maxTranscodeQueueMs = transcode.maxQueueMs;
     stats.averageTranscodeMs = transcode.averageTranscodeMs;
     stats.maxTranscodeMs = transcode.maxTranscodeMs;
-    const persistent = cache?.getStats();
-    if (persistent) {
-      stats.cacheBackend = persistent.backend;
-      stats.cacheEntries = persistent.entries;
-      stats.cacheBytes = persistent.bytes;
-      stats.cacheLiveBytes = persistent.liveBytes;
-      stats.cacheQueuedWrites = persistent.queuedWrites;
-      stats.cacheEvictions = persistent.evictions;
-      stats.cacheCompactions = persistent.compactions;
-      stats.cacheReclaimedBytes = persistent.reclaimedBytes;
-      stats.cacheMaintenance = persistent.maintenance;
-      stats.cacheHits = persistent.hits;
-      stats.cacheMisses = persistent.misses;
-      stats.cacheWrites = persistent.writes;
-      stats.cacheRejected = persistent.rejectedCapacity + persistent.rejectedQueue;
-      stats.cacheErrors = persistent.corruptEntries + persistent.readErrors + persistent.writeErrors;
-      stats.averageCacheReadMs = persistent.averageReadMs;
-      stats.maxCacheReadMs = persistent.maxReadMs;
-      stats.averageCacheWriteMs = persistent.averageWriteMs;
-      stats.maxCacheWriteMs = persistent.maxWriteMs;
-    }
     return stats;
   };
   return provider;

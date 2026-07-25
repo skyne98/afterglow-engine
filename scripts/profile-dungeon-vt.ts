@@ -211,7 +211,7 @@ function scenarioExpression(options: Options, epoch: number): string {
   return `(async()=>{
     const a=window.__afterglowDungeon;
     if(!a||!a.ready())throw new Error('Dungeon harness unavailable');
-    const waitIdle=async(timeout)=>{const end=performance.now()+timeout;while(performance.now()<end){const s=a.telemetry();if(!s.pendingPages&&!s.scheduledRequests&&!s.readyUploads&&!s.activeTranscodes&&!s.queuedTranscodes&&!s.bulkInFlight&&!(s.cacheQueuedWrites||0)&&!(s.cacheMaintenance||false))return;await new Promise(r=>requestAnimationFrame(r))}throw new Error('VT pipeline did not drain')};
+    const waitIdle=async(timeout)=>{const end=performance.now()+timeout;while(performance.now()<end){const s=a.telemetry();if(!s.pendingPages&&!s.scheduledRequests&&!s.readyUploads&&!s.activeTranscodes&&!s.queuedTranscodes&&!s.bulkInFlight)return;await new Promise(r=>requestAnimationFrame(r))}throw new Error('VT pipeline did not drain')};
     await waitIdle(15000);
     const before={...a.telemetry()},scenario=${scenario},durationMs=${options.durationMs};
     a.setProgrammatic(true);a.setHudVisible(false);

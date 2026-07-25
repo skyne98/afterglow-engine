@@ -31,4 +31,3 @@ export {
   type ResidentTextureSource,
   type ResidentTextureThree,
 } from './resident-texture.ts';
-export { PersistentBlobCache, persistentCacheNamespace } from './persistent-blob-cache.ts';

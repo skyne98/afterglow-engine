@@ -66017,9 +66017,9 @@ class VirtualTextureStore {
   feedbackScratch;
   feedbackScratchKeys;
   feedbackScratchCount = 0;
-  cacheHits = 0;
-  cacheMisses = 0;
-  cacheEvictions = 0;
+  residentHits = 0;
+  residentMisses = 0;
+  residentEvictions = 0;
   completedLoads = 0;
   failedLoads = 0;
   totalLoadMs = 0;
@@ -66058,9 +66058,9 @@ class VirtualTextureStore {
     staleCancellations: 0,
     priorityPreemptions: 0,
     rejectedAdmissions: 0,
-    cacheHits: 0,
-    cacheMisses: 0,
-    cacheEvictions: 0,
+    residentHits: 0,
+    residentMisses: 0,
+    residentEvictions: 0,
     completedLoads: 0,
     failedLoads: 0,
     averageLoadMs: 0,
@@ -66096,26 +66096,7 @@ class VirtualTextureStore {
     averageTranscodeQueueMs: 0,
     maxTranscodeQueueMs: 0,
     averageTranscodeMs: 0,
-    maxTranscodeMs: 0,
-    cacheEnabled: false,
-    cacheBackend: "",
-    cacheEntries: 0,
-    cacheBytes: 0,
-    cacheLiveBytes: 0,
-    cacheQueuedWrites: 0,
-    cacheEvictions: 0,
-    cacheCompactions: 0,
-    cacheReclaimedBytes: 0,
-    cacheMaintenance: false,
-    cacheHits: 0,
-    cacheMisses: 0,
-    cacheWrites: 0,
-    cacheRejected: 0,
-    cacheErrors: 0,
-    averageCacheReadMs: 0,
-    maxCacheReadMs: 0,
-    averageCacheWriteMs: 0,
-    maxCacheWriteMs: 0
+    maxTranscodeMs: 0
   };
   constructor(loader, pageDataProvider, format, device, tuning, telemetry) {
     this.telemetry = telemetry;
@@ -66673,14 +66654,14 @@ class VirtualTextureStore {
       return;
     const key = this.pageKey(request);
     if (request.tail ? isResident(entry.tailEntry) : pageTable.isResident(request)) {
-      this.cacheHits++;
+      this.residentHits++;
       this.cache.touch(key);
       const scheduled = this.scheduledByKey.get(key);
       if (scheduled !== undefined)
         this.removeScheduled(scheduled);
       return;
     }
-    this.cacheMisses++;
+    this.residentMisses++;
     const pending = this.getPending(key);
     if (pending) {
       pending.lastSeen = this.feedbackEpoch;
@@ -66944,7 +66925,7 @@ class VirtualTextureStore {
         slot = acquired.slot;
         if (acquired.evicted) {
           this.evictPage(acquired.evicted);
-          this.cacheEvictions++;
+          this.residentEvictions++;
         }
       } catch {
         this.telemetry?.trace.spanEnd(18 /* VtUpload */, ready.key, 0, 1);
@@ -67024,9 +67005,9 @@ class VirtualTextureStore {
     stats.staleCancellations = this.staleCancellations;
     stats.priorityPreemptions = this.priorityPreemptions;
     stats.rejectedAdmissions = this.rejectedAdmissions;
-    stats.cacheHits = this.cacheHits;
-    stats.cacheMisses = this.cacheMisses;
-    stats.cacheEvictions = this.cacheEvictions;
+    stats.residentHits = this.residentHits;
+    stats.residentMisses = this.residentMisses;
+    stats.residentEvictions = this.residentEvictions;
     stats.completedLoads = this.completedLoads;
     stats.failedLoads = this.failedLoads;
     stats.averageLoadMs = this.completedLoads === 0 ? 0 : this.totalLoadMs / this.completedLoads;
@@ -67065,25 +67046,6 @@ class VirtualTextureStore {
       stats.maxTranscodeQueueMs = provider.maxTranscodeQueueMs;
       stats.averageTranscodeMs = provider.averageTranscodeMs;
       stats.maxTranscodeMs = provider.maxTranscodeMs;
-      stats.cacheEnabled = provider.cacheEnabled;
-      stats.cacheBackend = provider.cacheBackend;
-      stats.cacheEntries = provider.cacheEntries;
-      stats.cacheBytes = provider.cacheBytes;
-      stats.cacheLiveBytes = provider.cacheLiveBytes;
-      stats.cacheQueuedWrites = provider.cacheQueuedWrites;
-      stats.cacheEvictions = provider.cacheEvictions;
-      stats.cacheCompactions = provider.cacheCompactions;
-      stats.cacheReclaimedBytes = provider.cacheReclaimedBytes;
-      stats.cacheMaintenance = provider.cacheMaintenance;
-      stats.cacheHits = provider.cacheHits;
-      stats.cacheMisses = provider.cacheMisses;
-      stats.cacheWrites = provider.cacheWrites;
-      stats.cacheRejected = provider.cacheRejected;
-      stats.cacheErrors = provider.cacheErrors;
-      stats.averageCacheReadMs = provider.averageCacheReadMs;
-      stats.maxCacheReadMs = provider.maxCacheReadMs;
-      stats.averageCacheWriteMs = provider.averageCacheWriteMs;
-      stats.maxCacheWriteMs = provider.maxCacheWriteMs;
     }
     return stats;
   }

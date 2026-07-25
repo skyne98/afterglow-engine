@@ -64496,7 +64496,7 @@ class BoundedBulkReadQueue {
     return stats;
   }
 }
-function createPageDataProvider(loader, header, textureWorkers, format, cache2, transcodeQueueCapacity = 64, telemetry) {
+function createPageDataProvider(loader, header, textureWorkers, format, transcodeQueueCapacity = 64, telemetry) {
   const directories = expandVtDirectories(header);
   const transcoder = new BoundedTranscoderPool(textureWorkers, transcodeQueueCapacity, telemetry);
   const bulkReads = new BoundedBulkReadQueue(loader, telemetry);
@@ -64518,26 +64518,7 @@ function createPageDataProvider(loader, header, textureWorkers, format, cache2, 
     averageTranscodeQueueMs: 0,
     maxTranscodeQueueMs: 0,
     averageTranscodeMs: 0,
-    maxTranscodeMs: 0,
-    cacheEnabled: cache2 !== undefined,
-    cacheBackend: "",
-    cacheEntries: 0,
-    cacheBytes: 0,
-    cacheLiveBytes: 0,
-    cacheQueuedWrites: 0,
-    cacheEvictions: 0,
-    cacheCompactions: 0,
-    cacheReclaimedBytes: 0,
-    cacheMaintenance: false,
-    cacheHits: 0,
-    cacheMisses: 0,
-    cacheWrites: 0,
-    cacheRejected: 0,
-    cacheErrors: 0,
-    averageCacheReadMs: 0,
-    maxCacheReadMs: 0,
-    averageCacheWriteMs: 0,
-    maxCacheWriteMs: 0
+    maxTranscodeMs: 0
   };
   const provider = async (path, req, signal) => {
     if (signal?.aborted)
@@ -64558,38 +64539,13 @@ function createPageDataProvider(loader, header, textureWorkers, format, cache2, 
     }
     if (!directory || size === 0)
       throw new Error(`VT page not found: ${path} mip=${req.mip} (${req.x},${req.y})`);
-    const cacheKey = `${directory.assetId}:${req.tail ? "t" : req.mip}:${req.x}:${req.y}`;
     const correlation = req.cacheKey ?? telemetry?.nextCorrelation(3 /* VirtualTexture */) ?? 0;
-    const expectedBytes = format === 4 ? 136 * 136 * 4 : 34 * 34 * 16;
-    if (cache2) {
-      telemetry?.trace.asyncBegin(19 /* CacheRead */, correlation, expectedBytes, 0);
-      let cached;
-      try {
-        cached = await cache2.get(cacheKey);
-        telemetry?.trace.asyncEnd(19 /* CacheRead */, correlation, cached?.byteLength ?? 0, cached?.byteLength === expectedBytes ? 1 : 0);
-      } catch (error2) {
-        telemetry?.trace.asyncEnd(19 /* CacheRead */, correlation, 0, 2);
-        throw error2;
-      }
-      if (signal?.aborted)
-        throw new Error("VT page load canceled after cache read");
-      if (cached && cached.byteLength === expectedBytes)
-        return cached;
-    }
     const pageData = await bulkReads.read(path, offset, size, req.batchTier ?? "urgent", signal, correlation);
     if (signal?.aborted)
       throw new Error("VT page load canceled after read");
     if (directory.encoding === "RawRgba8") {
       if (format !== 4) {
         throw new Error(`VT page ${path} is raw RGBA8 but GPU format ${format} requires Basis encoding`);
-      }
-      if (cache2) {
-        telemetry?.trace.asyncBegin(20 /* CacheWrite */, correlation, pageData.byteLength, 0);
-        cache2.put(cacheKey, pageData).then((ok) => {
-          telemetry?.trace.asyncEnd(20 /* CacheWrite */, correlation, pageData.byteLength, ok ? 0 : 1);
-        }, () => {
-          telemetry?.trace.asyncEnd(20 /* CacheWrite */, correlation, 0, 1);
-        });
       }
       return pageData;
     }
@@ -64607,16 +64563,7 @@ function createPageDataProvider(loader, header, textureWorkers, format, cache2, 
     const length2 = view.getUint32(12, true);
     if (count < 1 || width !== 136 || height !== 136 || 16 + length2 > transcoded.byteLength)
       throw new Error(`invalid transcoded VT page header: count=${count}, size=${width}x${height}, bytes=${length2}`);
-    const payload = transcoded.slice(16, 16 + length2);
-    if (cache2) {
-      telemetry?.trace.asyncBegin(20 /* CacheWrite */, correlation, payload.byteLength, 0);
-      cache2.put(cacheKey, payload).then((ok) => {
-        telemetry?.trace.asyncEnd(20 /* CacheWrite */, correlation, payload.byteLength, ok ? 0 : 1);
-      }, () => {
-        telemetry?.trace.asyncEnd(20 /* CacheWrite */, correlation, 0, 1);
-      });
-    }
-    return payload;
+    return transcoded.slice(16, 16 + length2);
   };
   provider.close = () => bulkReads.close();
   provider.getStats = () => {
@@ -64640,27 +64587,6 @@ function createPageDataProvider(loader, header, textureWorkers, format, cache2, 
     stats.maxTranscodeQueueMs = transcode.maxQueueMs;
     stats.averageTranscodeMs = transcode.averageTranscodeMs;
     stats.maxTranscodeMs = transcode.maxTranscodeMs;
-    const persistent = cache2?.getStats();
-    if (persistent) {
-      stats.cacheBackend = persistent.backend;
-      stats.cacheEntries = persistent.entries;
-      stats.cacheBytes = persistent.bytes;
-      stats.cacheLiveBytes = persistent.liveBytes;
-      stats.cacheQueuedWrites = persistent.queuedWrites;
-      stats.cacheEvictions = persistent.evictions;
-      stats.cacheCompactions = persistent.compactions;
-      stats.cacheReclaimedBytes = persistent.reclaimedBytes;
-      stats.cacheMaintenance = persistent.maintenance;
-      stats.cacheHits = persistent.hits;
-      stats.cacheMisses = persistent.misses;
-      stats.cacheWrites = persistent.writes;
-      stats.cacheRejected = persistent.rejectedCapacity + persistent.rejectedQueue;
-      stats.cacheErrors = persistent.corruptEntries + persistent.readErrors + persistent.writeErrors;
-      stats.averageCacheReadMs = persistent.averageReadMs;
-      stats.maxCacheReadMs = persistent.maxReadMs;
-      stats.averageCacheWriteMs = persistent.averageWriteMs;
-      stats.maxCacheWriteMs = persistent.maxWriteMs;
-    }
     return stats;
   };
   return provider;
@@ -66156,9 +66082,9 @@ class VirtualTextureStore {
   feedbackScratch;
   feedbackScratchKeys;
   feedbackScratchCount = 0;
-  cacheHits = 0;
-  cacheMisses = 0;
-  cacheEvictions = 0;
+  residentHits = 0;
+  residentMisses = 0;
+  residentEvictions = 0;
   completedLoads = 0;
   failedLoads = 0;
   totalLoadMs = 0;
@@ -66197,9 +66123,9 @@ class VirtualTextureStore {
     staleCancellations: 0,
     priorityPreemptions: 0,
     rejectedAdmissions: 0,
-    cacheHits: 0,
-    cacheMisses: 0,
-    cacheEvictions: 0,
+    residentHits: 0,
+    residentMisses: 0,
+    residentEvictions: 0,
     completedLoads: 0,
     failedLoads: 0,
     averageLoadMs: 0,
@@ -66235,26 +66161,7 @@ class VirtualTextureStore {
     averageTranscodeQueueMs: 0,
     maxTranscodeQueueMs: 0,
     averageTranscodeMs: 0,
-    maxTranscodeMs: 0,
-    cacheEnabled: false,
-    cacheBackend: "",
-    cacheEntries: 0,
-    cacheBytes: 0,
-    cacheLiveBytes: 0,
-    cacheQueuedWrites: 0,
-    cacheEvictions: 0,
-    cacheCompactions: 0,
-    cacheReclaimedBytes: 0,
-    cacheMaintenance: false,
-    cacheHits: 0,
-    cacheMisses: 0,
-    cacheWrites: 0,
-    cacheRejected: 0,
-    cacheErrors: 0,
-    averageCacheReadMs: 0,
-    maxCacheReadMs: 0,
-    averageCacheWriteMs: 0,
-    maxCacheWriteMs: 0
+    maxTranscodeMs: 0
   };
   constructor(loader, pageDataProvider, format, device, tuning, telemetry) {
     this.telemetry = telemetry;
@@ -66812,14 +66719,14 @@ class VirtualTextureStore {
       return;
     const key = this.pageKey(request);
     if (request.tail ? isResident(entry.tailEntry) : pageTable.isResident(request)) {
-      this.cacheHits++;
+      this.residentHits++;
       this.cache.touch(key);
       const scheduled = this.scheduledByKey.get(key);
       if (scheduled !== undefined)
         this.removeScheduled(scheduled);
       return;
     }
-    this.cacheMisses++;
+    this.residentMisses++;
     const pending = this.getPending(key);
     if (pending) {
       pending.lastSeen = this.feedbackEpoch;
@@ -67083,7 +66990,7 @@ class VirtualTextureStore {
         slot = acquired.slot;
         if (acquired.evicted) {
           this.evictPage(acquired.evicted);
-          this.cacheEvictions++;
+          this.residentEvictions++;
         }
       } catch {
         this.telemetry?.trace.spanEnd(18 /* VtUpload */, ready.key, 0, 1);
@@ -67163,9 +67070,9 @@ class VirtualTextureStore {
     stats.staleCancellations = this.staleCancellations;
     stats.priorityPreemptions = this.priorityPreemptions;
     stats.rejectedAdmissions = this.rejectedAdmissions;
-    stats.cacheHits = this.cacheHits;
-    stats.cacheMisses = this.cacheMisses;
-    stats.cacheEvictions = this.cacheEvictions;
+    stats.residentHits = this.residentHits;
+    stats.residentMisses = this.residentMisses;
+    stats.residentEvictions = this.residentEvictions;
     stats.completedLoads = this.completedLoads;
     stats.failedLoads = this.failedLoads;
     stats.averageLoadMs = this.completedLoads === 0 ? 0 : this.totalLoadMs / this.completedLoads;
@@ -67204,25 +67111,6 @@ class VirtualTextureStore {
       stats.maxTranscodeQueueMs = provider.maxTranscodeQueueMs;
       stats.averageTranscodeMs = provider.averageTranscodeMs;
       stats.maxTranscodeMs = provider.maxTranscodeMs;
-      stats.cacheEnabled = provider.cacheEnabled;
-      stats.cacheBackend = provider.cacheBackend;
-      stats.cacheEntries = provider.cacheEntries;
-      stats.cacheBytes = provider.cacheBytes;
-      stats.cacheLiveBytes = provider.cacheLiveBytes;
-      stats.cacheQueuedWrites = provider.cacheQueuedWrites;
-      stats.cacheEvictions = provider.cacheEvictions;
-      stats.cacheCompactions = provider.cacheCompactions;
-      stats.cacheReclaimedBytes = provider.cacheReclaimedBytes;
-      stats.cacheMaintenance = provider.cacheMaintenance;
-      stats.cacheHits = provider.cacheHits;
-      stats.cacheMisses = provider.cacheMisses;
-      stats.cacheWrites = provider.cacheWrites;
-      stats.cacheRejected = provider.cacheRejected;
-      stats.cacheErrors = provider.cacheErrors;
-      stats.averageCacheReadMs = provider.averageCacheReadMs;
-      stats.maxCacheReadMs = provider.maxCacheReadMs;
-      stats.averageCacheWriteMs = provider.averageCacheWriteMs;
-      stats.maxCacheWriteMs = provider.maxCacheWriteMs;
     }
     return stats;
   }
@@ -67528,7 +67416,7 @@ class BigAssetSession {
         read: (_path, offset, length2) => source.read(options.containerPath, offset, length2),
         readBulk: source.readBulk ? (ranges) => source.readBulk(options.containerPath, ranges) : undefined
       };
-      const pageProvider = createPageDataProvider(containerLoader, header, clients, options.format, options.cache, options.transcodeQueueCapacity, options.telemetry);
+      const pageProvider = createPageDataProvider(containerLoader, header, clients, options.format, options.transcodeQueueCapacity, options.telemetry);
       const session = new BigAssetSession(source, options.containerPath, header, options.format, workers, options.createMeshOptimizer, options.telemetry, pageProvider);
       options.telemetry?.trace.asyncEnd(8 /* SessionOpen */, correlation, workers.length, 0);
       return session;
@@ -67672,708 +67560,6 @@ async function loadResidentTexture(three, source, header, name) {
   texture2.unpackAlignment = 1;
   texture2.needsUpdate = true;
   return { texture: texture2, format, width, height };
-}
-// crates/afterglow-web/web/src/engine/assets/persistent-blob-cache.ts
-var INDEX_MAGIC = 1128417089;
-var MANIFEST_MAGIC = 1296189249;
-var INDEX_VERSION = 2;
-var INDEX_HEADER_BYTES = 16;
-var HASH_WORDS = 8;
-var INDEX_RECORD_BYTES = 48;
-var EMPTY = 0;
-var OCCUPIED = 1;
-var TOMBSTONE = 2;
-function checksum(bytes) {
-  let value = 2166136261;
-  for (let index = 0;index < bytes.length; index++) {
-    value ^= bytes[index];
-    value = Math.imul(value, 16777619);
-  }
-  return value >>> 0;
-}
-async function hashKey(key) {
-  const encoded = new TextEncoder().encode(key);
-  const digest = await crypto.subtle.digest("SHA-256", encoded);
-  return new Uint32Array(digest);
-}
-async function persistentCacheNamespace(parts) {
-  let value = "";
-  for (const part of parts)
-    value += `${part.length}:${part};`;
-  const words = await hashKey(value);
-  let output2 = "";
-  for (let index = 0;index < words.length; index++)
-    output2 += words[index].toString(16).padStart(8, "0");
-  return output2;
-}
-
-class OpfsBlobBackend {
-  directory;
-  kind = "opfs";
-  constructor(directory) {
-    this.directory = directory;
-  }
-  static async open(namespace) {
-    const storage2 = navigator.storage;
-    if (!storage2?.getDirectory)
-      throw new Error("OPFS is unavailable");
-    const root = await storage2.getDirectory();
-    const cacheRoot = await root.getDirectoryHandle("afterglow-cache", { create: true });
-    const directory = await cacheRoot.getDirectoryHandle(namespace, { create: true });
-    return new OpfsBlobBackend(directory);
-  }
-  async file(name) {
-    return this.directory.getFileHandle(name, { create: true });
-  }
-  async size(name) {
-    return (await (await this.file(name)).getFile()).size;
-  }
-  async read(name, offset, length2) {
-    const file = await (await this.file(name)).getFile();
-    return new Uint8Array(await file.slice(offset, offset + length2).arrayBuffer());
-  }
-  async append(name, data) {
-    const handle = await this.file(name);
-    const size = (await handle.getFile()).size;
-    const writable = await handle.createWritable({ keepExistingData: true });
-    try {
-      await writable.seek(size);
-      await writable.write(data);
-    } finally {
-      await writable.close();
-    }
-  }
-  async replace(name, data) {
-    const writable = await (await this.file(name)).createWritable();
-    try {
-      await writable.write(data);
-    } finally {
-      await writable.close();
-    }
-  }
-}
-function idbRequest(request) {
-  return new Promise((resolve, reject) => {
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error ?? new Error("IndexedDB request failed"));
-  });
-}
-function idbTransaction(transaction) {
-  return new Promise((resolve, reject) => {
-    transaction.oncomplete = () => resolve();
-    transaction.onabort = () => reject(transaction.error ?? new Error("IndexedDB transaction aborted"));
-    transaction.onerror = () => reject(transaction.error ?? new Error("IndexedDB transaction failed"));
-  });
-}
-
-class IndexedDbBlobBackend {
-  database;
-  kind = "indexeddb";
-  constructor(database) {
-    this.database = database;
-  }
-  static async open(namespace) {
-    if (!globalThis.indexedDB)
-      throw new Error("IndexedDB is unavailable");
-    const request = indexedDB.open(`afterglow-cache-${namespace}`, 1);
-    request.onupgradeneeded = () => {
-      const database = request.result;
-      if (!database.objectStoreNames.contains("chunks"))
-        database.createObjectStore("chunks", { keyPath: ["file", "offset"] });
-      if (!database.objectStoreNames.contains("meta"))
-        database.createObjectStore("meta", { keyPath: "file" });
-    };
-    return new IndexedDbBlobBackend(await idbRequest(request));
-  }
-  async size(name) {
-    const transaction = this.database.transaction("meta", "readonly");
-    const result = await idbRequest(transaction.objectStore("meta").get(name));
-    return result?.size ?? 0;
-  }
-  async predecessor(name, offset) {
-    const transaction = this.database.transaction("chunks", "readonly");
-    const range2 = IDBKeyRange.bound([name, 0], [name, offset]);
-    const cursor = await idbRequest(transaction.objectStore("chunks").openCursor(range2, "prev"));
-    return cursor ? cursor.value : null;
-  }
-  async read(name, offset, length2) {
-    if (length2 === 0)
-      return new Uint8Array(0);
-    const exactTransaction = this.database.transaction("chunks", "readonly");
-    const exact = await idbRequest(exactTransaction.objectStore("chunks").get([name, offset]));
-    if (exact && exact.data.byteLength === length2)
-      return exact.data;
-    const predecessor = await this.predecessor(name, offset);
-    const firstOffset = predecessor && predecessor.offset + predecessor.data.byteLength > offset ? predecessor.offset : offset;
-    const output2 = new Uint8Array(length2);
-    const end = offset + length2;
-    const transaction = this.database.transaction("chunks", "readonly");
-    const store = transaction.objectStore("chunks");
-    const range2 = IDBKeyRange.bound([name, firstOffset], [name, end - 1]);
-    await new Promise((resolve, reject) => {
-      const request = store.openCursor(range2);
-      request.onerror = () => reject(request.error ?? new Error("IndexedDB cursor failed"));
-      request.onsuccess = () => {
-        const cursor = request.result;
-        if (!cursor) {
-          resolve();
-          return;
-        }
-        const chunk = cursor.value;
-        const copyStart = Math.max(offset, chunk.offset);
-        const copyEnd = Math.min(end, chunk.offset + chunk.data.byteLength);
-        if (copyEnd > copyStart)
-          output2.set(chunk.data.subarray(copyStart - chunk.offset, copyEnd - chunk.offset), copyStart - offset);
-        cursor.continue();
-      };
-    });
-    return output2;
-  }
-  async append(name, data) {
-    const transaction = this.database.transaction(["chunks", "meta"], "readwrite");
-    const done = idbTransaction(transaction);
-    const meta = transaction.objectStore("meta");
-    const previous = await idbRequest(meta.get(name));
-    const offset = previous?.size ?? 0;
-    transaction.objectStore("chunks").put({ file: name, offset, data: data.slice() });
-    meta.put({ file: name, size: offset + data.byteLength });
-    await done;
-  }
-  async replace(name, data) {
-    const transaction = this.database.transaction(["chunks", "meta"], "readwrite");
-    const done = idbTransaction(transaction);
-    const chunks = transaction.objectStore("chunks");
-    const range2 = IDBKeyRange.bound([name, 0], [name, Number.MAX_SAFE_INTEGER]);
-    await new Promise((resolve, reject) => {
-      const request = chunks.openCursor(range2);
-      request.onerror = () => reject(request.error ?? new Error("IndexedDB cursor failed"));
-      request.onsuccess = () => {
-        const cursor = request.result;
-        if (!cursor) {
-          resolve();
-          return;
-        }
-        cursor.delete();
-        cursor.continue();
-      };
-    });
-    if (data.byteLength !== 0)
-      chunks.put({ file: name, offset: 0, data: data.slice() });
-    transaction.objectStore("meta").put({ file: name, size: data.byteLength });
-    await done;
-  }
-}
-
-class PersistentBlobCache {
-  backend;
-  maxBytes;
-  maxEntries;
-  states;
-  hashes;
-  offsets;
-  lengths;
-  checksums;
-  lruPrevious;
-  lruNext;
-  compactionOffsets;
-  jobs;
-  stats;
-  head = 0;
-  tail = 0;
-  queued = 0;
-  queuedBytes = 0;
-  writingBytes = 0;
-  writing = false;
-  entries = 0;
-  packBytes = 0;
-  liveBytes = 0;
-  lruHead = -1;
-  lruTail = -1;
-  activeGeneration = 0;
-  maintenancePromise = null;
-  idleResolvers = [];
-  totalReadMs = 0;
-  maxReadMs = 0;
-  totalWriteMs = 0;
-  maxWriteMs = 0;
-  constructor(backend, maxBytes, maxEntries, writeQueueCapacity) {
-    this.backend = backend;
-    this.maxBytes = maxBytes;
-    this.maxEntries = maxEntries;
-    this.states = new Uint8Array(maxEntries * 2);
-    this.hashes = new Uint32Array(this.states.length * HASH_WORDS);
-    this.offsets = new Float64Array(this.states.length);
-    this.lengths = new Uint32Array(this.states.length);
-    this.checksums = new Uint32Array(this.states.length);
-    this.lruPrevious = new Int32Array(this.states.length);
-    this.lruNext = new Int32Array(this.states.length);
-    this.lruPrevious.fill(-1);
-    this.lruNext.fill(-1);
-    this.compactionOffsets = new Float64Array(this.states.length);
-    this.jobs = new Array(writeQueueCapacity).fill(null);
-    this.stats = {
-      enabled: true,
-      backend: backend.kind ?? "custom",
-      entries: 0,
-      bytes: 0,
-      liveBytes: 0,
-      maxBytes,
-      maxEntries,
-      queuedWrites: 0,
-      hits: 0,
-      misses: 0,
-      writes: 0,
-      writeBytes: 0,
-      rejectedCapacity: 0,
-      rejectedQueue: 0,
-      corruptEntries: 0,
-      readErrors: 0,
-      writeErrors: 0,
-      evictions: 0,
-      compactions: 0,
-      reclaimedBytes: 0,
-      maintenance: false,
-      averageReadMs: 0,
-      maxReadMs: 0,
-      averageWriteMs: 0,
-      maxWriteMs: 0
-    };
-  }
-  static async open(options, backend) {
-    if (!options.namespace || !Number.isSafeInteger(options.maxBytes) || options.maxBytes < 1 || !Number.isInteger(options.maxEntries) || options.maxEntries < 1)
-      throw new RangeError("invalid persistent blob cache options");
-    const queueCapacity = options.writeQueueCapacity ?? 64;
-    if (!Number.isInteger(queueCapacity) || queueCapacity < 1)
-      throw new RangeError("cache write queue capacity must be positive");
-    let store = backend;
-    if (!store) {
-      try {
-        store = await OpfsBlobBackend.open(options.namespace);
-      } catch {
-        store = await IndexedDbBlobBackend.open(options.namespace);
-      }
-    }
-    const cache2 = new PersistentBlobCache(store, options.maxBytes, options.maxEntries, queueCapacity);
-    await cache2.loadIndex();
-    return cache2;
-  }
-  hashStart(slot) {
-    return slot * HASH_WORDS;
-  }
-  hashesEqual(slot, hash2) {
-    const start = this.hashStart(slot);
-    for (let word = 0;word < HASH_WORDS; word++)
-      if (this.hashes[start + word] !== hash2[word])
-        return false;
-    return true;
-  }
-  hashSlot(hash2) {
-    let value = 2654435769;
-    for (let word = 0;word < HASH_WORDS; word++)
-      value = Math.imul(value ^ hash2[word], 2246822507);
-    return (value >>> 0) % this.states.length;
-  }
-  find(hash2) {
-    let slot = this.hashSlot(hash2);
-    for (let probe = 0;probe < this.states.length; probe++) {
-      const state = this.states[slot];
-      if (state === EMPTY)
-        return -1;
-      if (state === OCCUPIED && this.hashesEqual(slot, hash2))
-        return slot;
-      slot = (slot + 1) % this.states.length;
-    }
-    return -1;
-  }
-  insert(hash2, offset, length2, valueChecksum) {
-    let slot = this.hashSlot(hash2);
-    let tombstone = -1;
-    for (let probe = 0;probe < this.states.length; probe++) {
-      const state = this.states[slot];
-      if (state === OCCUPIED && this.hashesEqual(slot, hash2)) {
-        this.liveBytes += length2 - this.lengths[slot];
-        this.offsets[slot] = offset;
-        this.lengths[slot] = length2;
-        this.checksums[slot] = valueChecksum;
-        this.touch(slot);
-        return true;
-      }
-      if (state === TOMBSTONE && tombstone < 0)
-        tombstone = slot;
-      if (state === EMPTY) {
-        const target = tombstone < 0 ? slot : tombstone;
-        this.states[target] = OCCUPIED;
-        this.hashes.set(hash2, this.hashStart(target));
-        this.offsets[target] = offset;
-        this.lengths[target] = length2;
-        this.checksums[target] = valueChecksum;
-        this.entries++;
-        this.liveBytes += length2;
-        this.linkLruTail(target);
-        return true;
-      }
-      slot = (slot + 1) % this.states.length;
-    }
-    return false;
-  }
-  linkLruTail(slot) {
-    this.lruPrevious[slot] = this.lruTail;
-    this.lruNext[slot] = -1;
-    if (this.lruTail < 0)
-      this.lruHead = slot;
-    else
-      this.lruNext[this.lruTail] = slot;
-    this.lruTail = slot;
-  }
-  unlinkLru(slot) {
-    const previous = this.lruPrevious[slot];
-    const next = this.lruNext[slot];
-    if (previous < 0)
-      this.lruHead = next;
-    else
-      this.lruNext[previous] = next;
-    if (next < 0)
-      this.lruTail = previous;
-    else
-      this.lruPrevious[next] = previous;
-    this.lruPrevious[slot] = -1;
-    this.lruNext[slot] = -1;
-  }
-  touch(slot) {
-    if (slot === this.lruTail)
-      return;
-    this.unlinkLru(slot);
-    this.linkLruTail(slot);
-  }
-  remove(slot) {
-    if (slot < 0 || this.states[slot] !== OCCUPIED)
-      return;
-    this.unlinkLru(slot);
-    this.liveBytes -= this.lengths[slot];
-    this.states[slot] = TOMBSTONE;
-    this.entries--;
-  }
-  record(hash2, offset, length2, valueChecksum) {
-    const bytes = new Uint8Array(INDEX_RECORD_BYTES);
-    const view = new DataView(bytes.buffer);
-    for (let word = 0;word < HASH_WORDS; word++)
-      view.setUint32(word * 4, hash2[word], true);
-    view.setBigUint64(32, BigInt(offset), true);
-    view.setUint32(40, length2, true);
-    view.setUint32(44, valueChecksum, true);
-    return bytes;
-  }
-  packName(generation = this.activeGeneration) {
-    return `values-${generation}.pack`;
-  }
-  indexName(generation = this.activeGeneration) {
-    return `values-${generation}.index`;
-  }
-  manifest(generation) {
-    const bytes = new Uint8Array(8);
-    const view = new DataView(bytes.buffer);
-    view.setUint32(0, MANIFEST_MAGIC, true);
-    view.setUint32(4, generation, true);
-    return bytes;
-  }
-  async loadIndex() {
-    const manifestSize = await this.backend.size("manifest");
-    if (manifestSize >= 8) {
-      const manifest = await this.backend.read("manifest", 0, 8);
-      const view2 = new DataView(manifest.buffer, manifest.byteOffset, manifest.byteLength);
-      if (view2.getUint32(0, true) === MANIFEST_MAGIC)
-        this.activeGeneration = view2.getUint32(4, true) & 1;
-    } else {
-      await this.backend.replace("manifest", this.manifest(0));
-    }
-    this.packBytes = await this.backend.size(this.packName());
-    let indexSize = await this.backend.size(this.indexName());
-    if (this.packBytes > this.maxBytes) {
-      await this.clear();
-      return;
-    }
-    if (indexSize < INDEX_HEADER_BYTES) {
-      await this.backend.replace(this.indexName(), this.indexHeader());
-      return;
-    }
-    const bytes = await this.backend.read(this.indexName(), 0, indexSize);
-    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-    if (view.getUint32(0, true) !== INDEX_MAGIC || view.getUint32(4, true) !== INDEX_VERSION) {
-      await this.clear();
-      return;
-    }
-    indexSize = INDEX_HEADER_BYTES + Math.floor((indexSize - INDEX_HEADER_BYTES) / INDEX_RECORD_BYTES) * INDEX_RECORD_BYTES;
-    const hash2 = new Uint32Array(HASH_WORDS);
-    for (let offset = INDEX_HEADER_BYTES;offset < indexSize; offset += INDEX_RECORD_BYTES) {
-      for (let word = 0;word < HASH_WORDS; word++)
-        hash2[word] = view.getUint32(offset + word * 4, true);
-      const packOffset = Number(view.getBigUint64(offset + 32, true));
-      const length2 = view.getUint32(offset + 40, true);
-      const valueChecksum = view.getUint32(offset + 44, true);
-      if (length2 === 0) {
-        this.remove(this.find(hash2));
-      } else if (packOffset + length2 <= this.packBytes && this.entries < this.maxEntries) {
-        this.insert(hash2, packOffset, length2, valueChecksum);
-      }
-    }
-  }
-  indexHeader() {
-    const bytes = new Uint8Array(INDEX_HEADER_BYTES);
-    const view = new DataView(bytes.buffer);
-    view.setUint32(0, INDEX_MAGIC, true);
-    view.setUint32(4, INDEX_VERSION, true);
-    view.setUint32(8, INDEX_RECORD_BYTES, true);
-    view.setUint32(12, HASH_WORDS, true);
-    return bytes;
-  }
-  async get(key) {
-    const startedAt = performance.now();
-    try {
-      if (this.maintenancePromise)
-        await this.maintenancePromise;
-      const hash2 = await hashKey(key);
-      const slot = this.find(hash2);
-      if (slot < 0) {
-        this.stats.misses++;
-        return null;
-      }
-      const bytes = await this.backend.read(this.packName(), this.offsets[slot], this.lengths[slot]);
-      if (bytes.byteLength !== this.lengths[slot] || checksum(bytes) !== this.checksums[slot]) {
-        this.remove(slot);
-        this.stats.corruptEntries++;
-        this.stats.misses++;
-        return null;
-      }
-      this.touch(slot);
-      this.stats.hits++;
-      return bytes;
-    } catch {
-      this.stats.readErrors++;
-      this.stats.misses++;
-      return null;
-    } finally {
-      const elapsed = performance.now() - startedAt;
-      this.totalReadMs += elapsed;
-      this.maxReadMs = Math.max(this.maxReadMs, elapsed);
-    }
-  }
-  async put(key, data) {
-    if (data.byteLength === 0 || data.byteLength > this.maxBytes) {
-      this.stats.rejectedCapacity++;
-      return false;
-    }
-    if (this.maintenancePromise)
-      await this.maintenancePromise;
-    const hash2 = await hashKey(key);
-    if (this.find(hash2) >= 0)
-      return true;
-    if (this.hasQueued(hash2))
-      return true;
-    if (this.entries + this.queued + (this.writing ? 1 : 0) >= this.maxEntries || this.packBytes + this.queuedBytes + this.writingBytes + data.byteLength > this.maxBytes) {
-      try {
-        await this.ensureCapacity(data.byteLength);
-      } catch {
-        this.stats.writeErrors++;
-        return false;
-      }
-      if (this.find(hash2) >= 0)
-        return true;
-    }
-    if (this.entries + this.queued + (this.writing ? 1 : 0) >= this.maxEntries || this.packBytes + this.queuedBytes + this.writingBytes + data.byteLength > this.maxBytes) {
-      this.stats.rejectedCapacity++;
-      return false;
-    }
-    if (this.queued >= this.jobs.length) {
-      this.stats.rejectedQueue++;
-      return false;
-    }
-    return new Promise((resolve) => {
-      this.jobs[this.tail] = { hash: hash2, data, resolve };
-      this.tail = (this.tail + 1) % this.jobs.length;
-      this.queued++;
-      this.queuedBytes += data.byteLength;
-      this.pump();
-    });
-  }
-  hasQueued(hash2) {
-    for (let count = 0, index = this.head;count < this.queued; count++, index = (index + 1) % this.jobs.length) {
-      const job = this.jobs[index];
-      if (job) {
-        let equal2 = true;
-        for (let word = 0;word < HASH_WORDS; word++)
-          if (job.hash[word] !== hash2[word]) {
-            equal2 = false;
-            break;
-          }
-        if (equal2)
-          return true;
-      }
-    }
-    return false;
-  }
-  pump() {
-    if (this.writing || this.queued === 0)
-      return;
-    const job = this.jobs[this.head];
-    this.jobs[this.head] = null;
-    this.head = (this.head + 1) % this.jobs.length;
-    this.queued--;
-    this.queuedBytes -= job.data.byteLength;
-    this.writing = true;
-    this.writingBytes = job.data.byteLength;
-    this.write(job);
-  }
-  async write(job) {
-    const startedAt = performance.now();
-    let success = false;
-    try {
-      if (this.find(job.hash) >= 0) {
-        success = true;
-      } else if (this.entries < this.maxEntries && this.packBytes + job.data.byteLength <= this.maxBytes) {
-        const offset = this.packBytes;
-        const valueChecksum = checksum(job.data);
-        await this.backend.append(this.packName(), job.data);
-        await this.backend.append(this.indexName(), this.record(job.hash, offset, job.data.byteLength, valueChecksum));
-        this.packBytes += job.data.byteLength;
-        success = this.insert(job.hash, offset, job.data.byteLength, valueChecksum);
-        if (success) {
-          this.stats.writes++;
-          this.stats.writeBytes += job.data.byteLength;
-        }
-      } else {
-        this.stats.rejectedCapacity++;
-      }
-    } catch {
-      this.stats.writeErrors++;
-      try {
-        this.packBytes = await this.backend.size(this.packName());
-      } catch {}
-    } finally {
-      const elapsed = performance.now() - startedAt;
-      this.totalWriteMs += elapsed;
-      this.maxWriteMs = Math.max(this.maxWriteMs, elapsed);
-      this.writing = false;
-      this.writingBytes = 0;
-      job.resolve(success);
-      this.pump();
-      this.resolveIdle();
-    }
-  }
-  waitForIdle() {
-    if (!this.writing && this.queued === 0)
-      return Promise.resolve();
-    return new Promise((resolve) => this.idleResolvers.push(resolve));
-  }
-  resolveIdle() {
-    if (this.writing || this.queued !== 0)
-      return;
-    while (this.idleResolvers.length !== 0)
-      this.idleResolvers.pop()();
-  }
-  resetIndexState() {
-    this.states.fill(EMPTY);
-    this.lruPrevious.fill(-1);
-    this.lruNext.fill(-1);
-    this.entries = 0;
-    this.liveBytes = 0;
-    this.lruHead = -1;
-    this.lruTail = -1;
-  }
-  async ensureCapacity(incomingBytes) {
-    if (this.maintenancePromise) {
-      await this.maintenancePromise;
-      return;
-    }
-    const maintenance = this.compact(incomingBytes).finally(() => {
-      if (this.maintenancePromise === maintenance)
-        this.maintenancePromise = null;
-    });
-    this.maintenancePromise = maintenance;
-    await maintenance;
-  }
-  async compact(incomingBytes) {
-    await this.waitForIdle();
-    const oldGeneration = this.activeGeneration;
-    const nextGeneration = oldGeneration ^ 1;
-    const oldPackBytes = this.packBytes;
-    const targetBytes = Math.min(Math.floor(this.maxBytes * 0.75), Math.max(0, this.maxBytes - incomingBytes));
-    const targetEntries = Math.min(Math.floor(this.maxEntries * 0.75), Math.max(0, this.maxEntries - 1));
-    let evicted = 0;
-    while (this.lruHead >= 0 && (this.liveBytes > targetBytes || this.entries > targetEntries)) {
-      this.remove(this.lruHead);
-      evicted++;
-    }
-    let published = false;
-    try {
-      await this.backend.replace(this.packName(nextGeneration), new Uint8Array(0));
-      await this.backend.replace(this.indexName(nextGeneration), this.indexHeader());
-      let nextOffset = 0;
-      let slot = this.lruHead;
-      while (slot >= 0) {
-        const following = this.lruNext[slot];
-        const bytes = await this.backend.read(this.packName(oldGeneration), this.offsets[slot], this.lengths[slot]);
-        if (bytes.byteLength !== this.lengths[slot] || checksum(bytes) !== this.checksums[slot]) {
-          this.remove(slot);
-          this.stats.corruptEntries++;
-        } else {
-          const hash2 = this.hashes.subarray(this.hashStart(slot), this.hashStart(slot) + HASH_WORDS);
-          await this.backend.append(this.packName(nextGeneration), bytes);
-          await this.backend.append(this.indexName(nextGeneration), this.record(hash2, nextOffset, bytes.byteLength, this.checksums[slot]));
-          this.compactionOffsets[slot] = nextOffset;
-          nextOffset += bytes.byteLength;
-        }
-        slot = following;
-      }
-      await this.backend.replace("manifest", this.manifest(nextGeneration));
-      this.activeGeneration = nextGeneration;
-      published = true;
-      for (let index = 0;index < this.states.length; index++)
-        if (this.states[index] === OCCUPIED)
-          this.offsets[index] = this.compactionOffsets[index];
-      this.packBytes = nextOffset;
-      this.stats.evictions += evicted;
-      this.stats.compactions++;
-      this.stats.reclaimedBytes += Math.max(0, oldPackBytes - nextOffset);
-      try {
-        await this.backend.replace(this.packName(oldGeneration), new Uint8Array(0));
-        await this.backend.replace(this.indexName(oldGeneration), this.indexHeader());
-      } catch {}
-    } catch (error2) {
-      if (!published) {
-        this.activeGeneration = oldGeneration;
-        this.resetIndexState();
-        await this.loadIndex();
-      }
-      throw error2;
-    }
-  }
-  async clear() {
-    if (this.writing || this.queued !== 0 || this.maintenancePromise)
-      throw new Error("cannot clear persistent cache while writes or maintenance are pending");
-    await this.backend.replace(this.packName(0), new Uint8Array(0));
-    await this.backend.replace(this.indexName(0), this.indexHeader());
-    await this.backend.replace(this.packName(1), new Uint8Array(0));
-    await this.backend.replace(this.indexName(1), this.indexHeader());
-    await this.backend.replace("manifest", this.manifest(0));
-    this.activeGeneration = 0;
-    this.resetIndexState();
-    this.packBytes = 0;
-  }
-  getStats() {
-    const stats = this.stats;
-    stats.entries = this.entries;
-    stats.bytes = this.packBytes;
-    stats.liveBytes = this.liveBytes;
-    stats.queuedWrites = this.queued + (this.writing ? 1 : 0);
-    stats.maintenance = this.maintenancePromise !== null;
-    const reads = stats.hits + stats.misses;
-    stats.averageReadMs = reads === 0 ? 0 : this.totalReadMs / reads;
-    stats.maxReadMs = this.maxReadMs;
-    const writes = stats.writes + stats.writeErrors;
-    stats.averageWriteMs = writes === 0 ? 0 : this.totalWriteMs / writes;
-    stats.maxWriteMs = this.maxWriteMs;
-    return stats;
-  }
 }
 // crates/afterglow-web/web/src/engine/core/diagnostics.ts
 class EngineDiagnostics {
@@ -73709,35 +72895,8 @@ Errors ${runtime.diagnostics.count}`);
     }
     return map;
   };
-  const source = createPlatformRangeLoader("", runtime.telemetry), identity = await source.identity("dungeon.big");
+  const source = createPlatformRangeLoader("", runtime.telemetry);
   const device = host.device, format = device.features.has("texture-compression-bc") ? 0 : device.features.has("texture-compression-astc") ? 1 : FORMAT_RGBA;
-  const adapterInfo = host.adapterInfo;
-  let cache3;
-  if (identity.etag || identity.lastModified) {
-    try {
-      cache3 = await PersistentBlobCache.open({
-        namespace: await persistentCacheNamespace([
-          "afterglow-cache-v1",
-          "dungeon.big",
-          String(identity.size),
-          identity.etag ?? "",
-          identity.lastModified ?? "",
-          String(format),
-          "basisu-transcoder-v1",
-          "slot-136-border-4",
-          adapterInfo.vendor ?? "",
-          adapterInfo.architecture ?? "",
-          adapterInfo.device ?? "",
-          adapterInfo.description ?? ""
-        ]),
-        maxBytes: 1024 * 1024 * 1024,
-        maxEntries: 65536,
-        writeQueueCapacity: 64
-      });
-    } catch (error2) {
-      console.warn("[cache] persistent blob cache unavailable:", error2);
-    }
-  }
   const workerCount = Math.max(2, Math.min(4, Math.floor((navigator.hardwareConcurrency || 4) / 2)));
   const session = await BigAssetSession.open({
     containerPath: "dungeon.big",
@@ -73746,8 +72905,7 @@ Errors ${runtime.diagnostics.count}`);
     workerCount,
     transcodeQueueCapacity: 64,
     maxHeaderBytes: 2 * 1024 * 1024,
-    source,
-    ...cache3 ? { cache: cache3 } : {}
+    source
   });
   bootstrap.defer(() => session.close());
   const store = session.createVirtualTextureStore(device, new VirtualTextureTuning({ atlasMaxDimension: 53 * SLOT_SIZE }));
@@ -73941,13 +73099,13 @@ Errors ${runtime.diagnostics.count}`);
         await step3(FEEDBACK_INTERVAL);
       }
       if (name === "churn") {
-        const before = store.getStats().cacheEvictions, replacement = atlasFeedback(Math.ceil(total / 3), 3072);
+        const before = store.getStats().residentEvictions, replacement = atlasFeedback(Math.ceil(total / 3), 3072);
         for (let epoch = 0;epoch < 17; epoch++)
           store.processFeedback(replacement);
         end = performance.now() + timeout;
         while (performance.now() < end) {
           const s = store.getStats();
-          if (s.cacheEvictions > before && !s.pendingPages && !s.scheduledRequests && !s.readyUploads)
+          if (s.residentEvictions > before && !s.pendingPages && !s.scheduledRequests && !s.readyUploads)
             break;
           store.processFeedback(replacement);
           await step3(FEEDBACK_INTERVAL);

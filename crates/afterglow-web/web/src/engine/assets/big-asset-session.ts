@@ -9,7 +9,6 @@ import {
 import { createPlatformRangeLoader } from './platform-range-loader.ts';
 import { createPlatformMeshOptimizer, createPlatformTextureTranscoder } from './platform-workers.ts';
 import { AssetStore, type MeshOptimizer } from './asset-store.ts';
-import type { PersistentBlobCache } from './persistent-blob-cache.ts';
 import { VirtualTextureStore, VirtualTextureTuning } from '../virtual-texturing/virtual-texture.ts';
 import { EngineTelemetryCategory, EngineTraceDescriptor } from '../telemetry/catalog.ts';
 import type { EngineTelemetry } from '../telemetry/telemetry.ts';
@@ -36,7 +35,6 @@ export interface BigAssetSessionOptions {
   createTranscoder?(index: number): Promise<OwnedTextureTranscoder>;
   createMeshOptimizer?(): Promise<OwnedMeshOptimizer>;
   source?: FetchRangeLoader;
-  cache?: PersistentBlobCache;
   telemetry?: EngineTelemetry;
 }
 
@@ -101,7 +99,6 @@ export class BigAssetSession {
         header,
         clients,
         options.format,
-        options.cache,
         options.transcodeQueueCapacity,
         options.telemetry,
       );

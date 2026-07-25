@@ -78,29 +78,22 @@ describe('.big v5 compact VT directories', () => {
     expect(findVTPageChunk(header, 'terrain', 0, 2, 0)).toBeNull();
   });
 
-  test('returns a persistent GPU-block cache hit without source read or transcode', async () => {
-    const payload = new Uint8Array(34 * 34 * 16).fill(7);
+  test('does not retain derived pages between nonresident provider calls', async () => {
     let reads = 0;
-    let transcodes = 0;
     const loader = {
-      async read() { reads++; throw new Error('cache hit must skip source'); },
+      async read(_path: string, _offset: number, size: number) {
+        reads++;
+        return new Uint8Array(size).fill(reads);
+      },
       async load() { return new Uint8Array(); }, async size() { return 0; },
     };
-    const cache = {
-      async get(key: string) { expect(key).toBe('0:0:1:0'); return payload; },
-      async put() { throw new Error('cache hit must not write'); },
-      getStats() { return {
-        entries: 1, bytes: payload.byteLength, queuedWrites: 0, hits: 1, misses: 0, writes: 0,
-        rejectedCapacity: 0, rejectedQueue: 0, corruptEntries: 0, readErrors: 0, writeErrors: 0,
-        averageReadMs: 0, maxReadMs: 0, averageWriteMs: 0, maxWriteMs: 0,
-      }; },
-    };
     const provider = createPageDataProvider(loader, header, [{
-      async transcode() { transcodes++; return new Uint8Array(); },
-    }], 0, cache as never);
-    expect(await provider('terrain', { mip: 0, x: 1, y: 0 })).toBe(payload);
-    expect(reads).toBe(0);
-    expect(transcodes).toBe(0);
+      async transcode() { throw new Error('raw pages do not transcode'); },
+    }], 4);
+    expect((await provider('terrain', { mip: 0, x: 1, y: 0 }))[0]).toBe(1);
+    expect((await provider('terrain', { mip: 0, x: 1, y: 0 }))[0]).toBe(2);
+    expect(reads).toBe(2);
+    provider.close();
   });
 
   test('expands direct typed-array offsets once for runtime range reads', async () => {

@@ -226,25 +226,6 @@ interface PageDataProviderTelemetry {
   maxTranscodeQueueMs: number;
   averageTranscodeMs: number;
   maxTranscodeMs: number;
-  cacheEnabled: boolean;
-  cacheBackend: string;
-  cacheEntries: number;
-  cacheBytes: number;
-  cacheLiveBytes: number;
-  cacheQueuedWrites: number;
-  cacheEvictions: number;
-  cacheCompactions: number;
-  cacheReclaimedBytes: number;
-  cacheMaintenance: boolean;
-  cacheHits: number;
-  cacheMisses: number;
-  cacheWrites: number;
-  cacheRejected: number;
-  cacheErrors: number;
-  averageCacheReadMs: number;
-  maxCacheReadMs: number;
-  averageCacheWriteMs: number;
-  maxCacheWriteMs: number;
 }
 
 export type PageDataProvider = ((path: string, req: PageRequest, signal?: AbortSignal) => Promise<Uint8Array>) & {
@@ -908,9 +889,9 @@ export class VirtualTextureStore {
   private feedbackScratch: VirtualPageRequest[];
   private feedbackScratchKeys: FixedPageSlotMap;
   private feedbackScratchCount = 0;
-  private cacheHits = 0;
-  private cacheMisses = 0;
-  private cacheEvictions = 0;
+  private residentHits = 0;
+  private residentMisses = 0;
+  private residentEvictions = 0;
   private completedLoads = 0;
   private failedLoads = 0;
   private totalLoadMs = 0;
@@ -933,7 +914,7 @@ export class VirtualTextureStore {
     maxPendingPages: 0, pendingBytes: 0, maxPendingBytes: 0,
     scheduledRequests: 0, schedulerCapacity: 0, schedulerOverflows: 0,
     staleCancellations: 0, priorityPreemptions: 0, rejectedAdmissions: 0,
-    cacheHits: 0, cacheMisses: 0, cacheEvictions: 0, completedLoads: 0, failedLoads: 0,
+    residentHits: 0, residentMisses: 0, residentEvictions: 0, completedLoads: 0, failedLoads: 0,
     averageLoadMs: 0, maxLoadMs: 0, completedUploads: 0,
     averageUploadMs: 0, maxUploadMs: 0, scheduleBudgetMs: 0,
     uploadBudgetMs: 0, uploadsPerPoll: 0, tuningDownshifts: 0, tuningRecoveries: 0,
@@ -946,12 +927,6 @@ export class VirtualTextureStore {
     transcodeWorkers: 0, activeTranscodes: 0, queuedTranscodes: 0,
     completedTranscodes: 0, averageTranscodeQueueMs: 0, maxTranscodeQueueMs: 0,
     averageTranscodeMs: 0, maxTranscodeMs: 0,
-    cacheEnabled: false, cacheBackend: '', cacheEntries: 0, cacheBytes: 0,
-    cacheLiveBytes: 0, cacheQueuedWrites: 0, cacheEvictions: 0, cacheCompactions: 0,
-    cacheReclaimedBytes: 0, cacheMaintenance: false,
-    cacheHits: 0, cacheMisses: 0, cacheWrites: 0, cacheRejected: 0, cacheErrors: 0,
-    averageCacheReadMs: 0, maxCacheReadMs: 0,
-    averageCacheWriteMs: 0, maxCacheWriteMs: 0,
   };
 
   constructor(
@@ -1666,13 +1641,13 @@ export class VirtualTextureStore {
     if (!entry || !pageTable || !this.isValidEntryRequest(entry, request)) return;
     const key = this.pageKey(request);
     if (request.tail ? isResident(entry.tailEntry) : pageTable.isResident(request)) {
-      this.cacheHits++;
+      this.residentHits++;
       this.cache.touch(key);
       const scheduled = this.scheduledByKey.get(key);
       if (scheduled !== undefined) this.removeScheduled(scheduled);
       return;
     }
-    this.cacheMisses++;
+    this.residentMisses++;
     const pending = this.getPending(key);
     if (pending) {
       pending.lastSeen = this.feedbackEpoch;
@@ -2003,7 +1978,7 @@ export class VirtualTextureStore {
         slot = acquired.slot;
         if (acquired.evicted) {
           this.evictPage(acquired.evicted);
-          this.cacheEvictions++;
+          this.residentEvictions++;
         }
       } catch {
         this.telemetry?.trace.spanEnd(EngineTraceDescriptor.VtUpload, ready.key, 0, 1);
@@ -2095,9 +2070,9 @@ export class VirtualTextureStore {
     stats.staleCancellations = this.staleCancellations;
     stats.priorityPreemptions = this.priorityPreemptions;
     stats.rejectedAdmissions = this.rejectedAdmissions;
-    stats.cacheHits = this.cacheHits;
-    stats.cacheMisses = this.cacheMisses;
-    stats.cacheEvictions = this.cacheEvictions;
+    stats.residentHits = this.residentHits;
+    stats.residentMisses = this.residentMisses;
+    stats.residentEvictions = this.residentEvictions;
     stats.completedLoads = this.completedLoads;
     stats.failedLoads = this.failedLoads;
     stats.averageLoadMs = this.completedLoads === 0 ? 0 : this.totalLoadMs / this.completedLoads;
@@ -2136,25 +2111,6 @@ export class VirtualTextureStore {
       stats.maxTranscodeQueueMs = provider.maxTranscodeQueueMs;
       stats.averageTranscodeMs = provider.averageTranscodeMs;
       stats.maxTranscodeMs = provider.maxTranscodeMs;
-      stats.cacheEnabled = provider.cacheEnabled;
-      stats.cacheBackend = provider.cacheBackend;
-      stats.cacheEntries = provider.cacheEntries;
-      stats.cacheBytes = provider.cacheBytes;
-      stats.cacheLiveBytes = provider.cacheLiveBytes;
-      stats.cacheQueuedWrites = provider.cacheQueuedWrites;
-      stats.cacheEvictions = provider.cacheEvictions;
-      stats.cacheCompactions = provider.cacheCompactions;
-      stats.cacheReclaimedBytes = provider.cacheReclaimedBytes;
-      stats.cacheMaintenance = provider.cacheMaintenance;
-      stats.cacheHits = provider.cacheHits;
-      stats.cacheMisses = provider.cacheMisses;
-      stats.cacheWrites = provider.cacheWrites;
-      stats.cacheRejected = provider.cacheRejected;
-      stats.cacheErrors = provider.cacheErrors;
-      stats.averageCacheReadMs = provider.averageCacheReadMs;
-      stats.maxCacheReadMs = provider.maxCacheReadMs;
-      stats.averageCacheWriteMs = provider.averageCacheWriteMs;
-      stats.maxCacheWriteMs = provider.maxCacheWriteMs;
     }
     return stats;
   }

@@ -10,7 +10,6 @@
     "assets/height-texture.ts": "bootstrap",
     "assets/index.ts": "budgeted",
     "assets/bulk-range.ts": "budgeted",
-    "assets/persistent-blob-cache.ts": "budgeted",
     "assets/platform-range-loader.ts": "budgeted",
     "assets/platform-workers.ts": "bootstrap",
     "assets/resident-texture.ts": "bootstrap",
