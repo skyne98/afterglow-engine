@@ -73,8 +73,10 @@ class FakeStore {
   batchCount = 0;
   polls = 0;
   frameTime = 0;
+  publicationFrameId = -1;
   getEntryById(): undefined { return undefined; }
   recordFrameTime(value: number): void { this.frameTime = value; }
+  setPublicationFrameId(value: number): void { this.publicationFrameId = value; }
   processFeedbackBatch(
     _maps: ReadonlyArray<ReadonlyMap<unknown, VirtualPageRequest> | null>, count: number,
   ): void { this.batches++; this.batchCount = count; }

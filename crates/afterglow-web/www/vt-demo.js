@@ -60200,7 +60200,10 @@ var ENGINE_TRACE_DESCRIPTORS = [
   { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.upload", kind: 2 /* Span */, argument0: "bytes", argument1: "slot" },
   { category: 4 /* Asset */, categoryName: "cache", name: "cache.read", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "hit" },
   { category: 4 /* Asset */, categoryName: "cache", name: "cache.write", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "status" },
-  { category: 4 /* Asset */, categoryName: "asset", name: "mesh.optimize", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "status" }
+  { category: 4 /* Asset */, categoryName: "asset", name: "mesh.optimize", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "status" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.feedback_detected", kind: 1 /* Instant */, argument0: "priority", argument1: "feedback_epoch" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.scheduler_wait", kind: 3 /* AsyncSpan */, argument0: "priority", argument1: "status" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.page_published", kind: 1 /* Instant */, argument0: "physical_slot", argument1: "eligible_frame_id" }
 ];
 var FRAME_BUDGET_TRACE_DESCRIPTORS = [
   1 /* WorkerPoll */,
@@ -66001,6 +66004,7 @@ class VirtualTextureStore {
   scheduledLastSeen;
   scheduledSince;
   scheduledPriority;
+  scheduledTraceActive;
   scheduledNext;
   scheduledPrevious;
   priorityHeads = new Int32Array(PRIORITY_LANE_COUNT);
@@ -66010,6 +66014,7 @@ class VirtualTextureStore {
   scheduledByKey;
   scheduledCount = 0;
   feedbackEpoch = 0;
+  publicationFrameId = 0;
   staleFeedbackEpochs = 2;
   staleCancellations = 0;
   priorityPreemptions = 0;
@@ -66124,6 +66129,7 @@ class VirtualTextureStore {
     this.scheduledLastSeen = new Uint32Array(schedulerCapacity);
     this.scheduledSince = new Uint32Array(schedulerCapacity);
     this.scheduledPriority = new Uint8Array(schedulerCapacity);
+    this.scheduledTraceActive = new Uint8Array(schedulerCapacity);
     this.scheduledNext = new Int32Array(schedulerCapacity);
     this.scheduledPrevious = new Int32Array(schedulerCapacity);
     this.priorityHeads.fill(-1);
@@ -66642,9 +66648,13 @@ class VirtualTextureStore {
     this.unlinkScheduled(index);
     this.linkScheduledTail(index, priority);
   }
-  removeScheduled(index) {
+  removeScheduled(index, status) {
     if (this.scheduledActive[index] === 0)
       return;
+    if (this.scheduledTraceActive[index] !== 0) {
+      this.telemetry?.trace.asyncEnd(23 /* VtSchedulerWait */, this.scheduledKeys[index], this.scheduledPriority[index], status);
+      this.scheduledTraceActive[index] = 0;
+    }
     this.unlinkScheduled(index);
     this.scheduledByKey.delete(this.scheduledKeys[index]);
     this.scheduledActive[index] = 0;
@@ -66663,7 +66673,7 @@ class VirtualTextureStore {
       this.cache.touch(key);
       const scheduled = this.scheduledByKey.get(key);
       if (scheduled !== undefined)
-        this.removeScheduled(scheduled);
+        this.removeScheduled(scheduled, 1 /* Resident */);
       return;
     }
     this.residentMisses++;
@@ -66679,8 +66689,8 @@ class VirtualTextureStore {
       const agePromotion = this.feedbackEpoch - this.scheduledSince[existing] >> 2;
       const tierFloor = request.batchTier === "quality" ? BATCH_TIER_PRIORITY_COUNT : 0;
       const channelFloor = tierFloor + (request.channelPriority ?? 0) * QUALITY_PRIORITY_LANE_COUNT;
-      const priority = Math.max(channelFloor, (request.priorityTier ?? PRIORITY_LANE_COUNT - 1) - agePromotion);
-      this.moveScheduled(existing, priority);
+      const priority2 = Math.max(channelFloor, (request.priorityTier ?? PRIORITY_LANE_COUNT - 1) - agePromotion);
+      this.moveScheduled(existing, priority2);
       this.scheduledLastSeen[existing] = this.feedbackEpoch;
       return;
     }
@@ -66697,6 +66707,9 @@ class VirtualTextureStore {
     this.linkScheduledTail(index, request.priorityTier ?? PRIORITY_LANE_COUNT - 1);
     this.scheduledByKey.set(key, index);
     this.scheduledCount++;
+    const priority = request.priorityTier ?? PRIORITY_LANE_COUNT - 1;
+    this.telemetry?.trace.instant(22 /* VtFeedbackDetected */, key, priority, this.feedbackEpoch);
+    this.scheduledTraceActive[index] = this.telemetry?.trace.asyncBegin(23 /* VtSchedulerWait */, key, priority, 0) === 0 /* Recorded */ ? 1 : 0;
   }
   schedulePendingRequests() {
     const operationBudget = this.debugPaused ? 0 : this.debugPageBudget ?? this.pageBudget;
@@ -66720,20 +66733,24 @@ class VirtualTextureStore {
       inspected++;
       const request = this.scheduledRequests[index];
       if (this.feedbackEpoch - this.scheduledLastSeen[index] >= this.staleFeedbackEpochs) {
-        this.removeScheduled(index);
+        this.removeScheduled(index, 2 /* Stale */);
         this.staleCancellations++;
         continue;
       }
       const textureId = request.textureId ?? 0;
       const entry = this.entriesById[textureId];
       const pageTable = this.pageTablesById[textureId];
-      if (!entry || !pageTable || (request.tail ? isResident(entry.tailEntry) : pageTable.isResident(request))) {
-        this.removeScheduled(index);
+      if (!entry || !pageTable) {
+        this.removeScheduled(index, 3 /* Invalid */);
+        continue;
+      }
+      if (request.tail ? isResident(entry.tailEntry) : pageTable.isResident(request)) {
+        this.removeScheduled(index, 1 /* Resident */);
         continue;
       }
       this.cache.touch(this.scheduledKeys[index]);
       if (this.queuePageLoad(entry, request, pageTable, false, priority)) {
-        this.removeScheduled(index);
+        this.removeScheduled(index, 0 /* Admitted */);
         loaded++;
       } else {
         break;
@@ -66838,7 +66855,7 @@ class VirtualTextureStore {
     }
     for (let index = 0;index < this.scheduledRequests.length; index++) {
       if (this.scheduledActive[index] !== 0 && this.scheduledRequests[index].path === path)
-        this.removeScheduled(index);
+        this.removeScheduled(index, 4 /* Unloaded */);
     }
     for (let slot = 0;slot < this.pendingRecords.length; slot++) {
       if (this.pendingActive[slot] === 0)
@@ -66895,6 +66912,9 @@ class VirtualTextureStore {
       this.atlasTexture.needsUpdate = true;
     }
   }
+  setPublicationFrameId(frameId2) {
+    this.publicationFrameId = Number.isSafeInteger(frameId2) && frameId2 >= 0 ? frameId2 : 0;
+  }
   recordFrameTime(frameMs) {
     this.tuning.recordFrameTime(frameMs, this.pendingCount + this.readyUploadCount + this.scheduledCount);
   }
@@ -66947,6 +66967,7 @@ class VirtualTextureStore {
       }
       const uploadMs = performance.now() - uploadStartedAt;
       const physicalSlot = slot.y * this.atlasPagesX + slot.x;
+      this.telemetry?.trace.instant(24 /* VtPagePublished */, ready.key, physicalSlot, this.publicationFrameId);
       this.telemetry?.trace.spanEnd(18 /* VtUpload */, ready.key, ready.data.byteLength, physicalSlot);
       this.telemetry?.metrics.histogramLog2(10 /* VtUploadNs */, Math.max(1, Math.floor(uploadMs * 1e6)));
       this.completedUploads++;
@@ -69303,6 +69324,7 @@ class VirtualTextureFeedbackCoordinator {
   awaitingPassCount = 0;
   discardAwaiting = false;
   nextFeedbackSeconds = 0;
+  lastRenderFrameId = -1;
   sealed = false;
   disposed = false;
   constructor(renderer, store, capacities) {
@@ -69459,11 +69481,13 @@ class VirtualTextureFeedbackCoordinator {
   poll() {
     const started = performance.now();
     this.consumeCompletedSnapshot();
+    this.store.setPublicationFrameId(this.lastRenderFrameId + 1);
     this.store.poll();
     this.vtCpuUs = (performance.now() - started) * 1000;
   }
   render(frame) {
     this.feedbackSubmitUs = 0;
+    this.lastRenderFrameId = frame.frameId;
     if (this.disposed || frame.elapsedSeconds < this.nextFeedbackSeconds)
       return;
     this.nextFeedbackSeconds = frame.elapsedSeconds + this.cadenceMs / 1000;

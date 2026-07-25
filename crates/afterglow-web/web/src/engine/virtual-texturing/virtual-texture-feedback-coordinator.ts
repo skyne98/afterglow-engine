@@ -38,6 +38,8 @@ interface FeedbackRenderer {
 interface CoordinatedFeedbackStore extends FeedbackTextureStore {
   /** @alloc-effect none */
   recordFrameTime(frameTimeMs: number): void;
+  /** Frame whose render pass follows the current worker poll. */
+  setPublicationFrameId(frameId: number): void;
   processFeedbackBatch(
     feedbackMaps: ReadonlyArray<ReadonlyMap<unknown, VirtualPageRequest> | null>,
     mapCount: number,
@@ -89,6 +91,7 @@ export class VirtualTextureFeedbackCoordinator implements EngineRenderPass, Rend
   private awaitingPassCount = 0;
   private discardAwaiting = false;
   private nextFeedbackSeconds = 0;
+  private lastRenderFrameId = -1;
   private sealed = false;
   private disposed = false;
 
@@ -260,12 +263,14 @@ export class VirtualTextureFeedbackCoordinator implements EngineRenderPass, Rend
   poll(): void {
     const started = performance.now();
     this.consumeCompletedSnapshot();
+    this.store.setPublicationFrameId(this.lastRenderFrameId + 1);
     this.store.poll();
     this.vtCpuUs = (performance.now() - started) * 1000;
   }
 
   render(frame: Readonly<RenderFrame>): void {
     this.feedbackSubmitUs = 0;
+    this.lastRenderFrameId = frame.frameId;
     if (this.disposed || frame.elapsedSeconds < this.nextFeedbackSeconds) return;
     this.nextFeedbackSeconds = frame.elapsedSeconds + this.cadenceMs / 1000;
     const started = performance.now();

@@ -93,35 +93,56 @@ describe('VirtualTextureStore residency identity', () => {
     expect(store.getStats().atlasSlotsUsed).toBeGreaterThan(0);
   });
 
-  test('correlates page load and upload through unified telemetry', async () => {
+  test('correlates feedback through scheduler, load, upload, and publication', async () => {
     let tick = 1;
     const telemetry = new EngineTelemetry(
       ENGINE_TRACE_DESCRIPTORS,
       ENGINE_METRIC_DESCRIPTORS,
-      new ArrayBuffer(TELEMETRY_RECORD_BYTES * 64),
+      new ArrayBuffer(TELEMETRY_RECORD_BYTES * 256),
       new Float64Array(192),
       () => tick++,
     );
-    telemetry.trace.arm(9);
     const store = new VT.VirtualTextureStore(
       loader,
       TEST_CAPACITIES,
       async () => new Uint8Array(PAGE_BYTES),
       VT.FORMAT_RGBA,
       undefined,
-      new VT.VirtualTextureTuning({ atlasMaxDimension: VT.SLOT_SIZE * 2 }),
+      new VT.VirtualTextureTuning({ atlasMaxDimension: VT.SLOT_SIZE * 4 }),
       telemetry,
     );
-    store.loadTexture('traced', { width: 128, height: 128 });
+    store.loadTexture('traced', { width: 512, height: 512 });
+    await settle(store);
+    telemetry.trace.arm(9);
+    store.setPublicationFrameId(42);
+    store.processFeedback(new Map([['visible', {
+      path: 'traced', mip: 0, x: 0, y: 0, screenPriority: 0, coverage: 8,
+    }]]));
     await settle(store);
     telemetry.trace.stop();
     const snapshot = telemetry.trace.snapshot();
     if (snapshot === null) throw new Error('missing telemetry snapshot');
     const words = new Uint32Array(snapshot.buffer);
     const descriptors: number[] = [];
-    for (let index = 0; index < snapshot.count; index++) descriptors.push(words[index * 10 + 8] ?? -1);
+    let schedulerBegins = 0;
+    let schedulerEnds = 0;
+    let publishedFrame = -1;
+    for (let index = 0; index < snapshot.count; index++) {
+      const descriptor = words[index * 10 + 8] ?? -1;
+      const phase = (words[index * 10 + 9] ?? 0) & 0xff;
+      descriptors.push(descriptor);
+      if (descriptor === EngineTraceDescriptor.VtSchedulerWait && phase === 4) schedulerBegins++;
+      if (descriptor === EngineTraceDescriptor.VtSchedulerWait && phase === 5) schedulerEnds++;
+      if (descriptor === EngineTraceDescriptor.VtPagePublished) publishedFrame = words[index * 10 + 6] ?? -1;
+    }
+    expect(descriptors).toContain(EngineTraceDescriptor.VtFeedbackDetected);
+    expect(descriptors).toContain(EngineTraceDescriptor.VtSchedulerWait);
     expect(descriptors).toContain(EngineTraceDescriptor.VtPageLoad);
     expect(descriptors).toContain(EngineTraceDescriptor.VtUpload);
+    expect(descriptors).toContain(EngineTraceDescriptor.VtPagePublished);
+    expect(schedulerBegins).toBe(schedulerEnds);
+    expect(schedulerBegins).toBeGreaterThan(0);
+    expect(publishedFrame).toBe(42);
     expect(telemetry.metrics.readCell(EngineMetric.VtPagesRequested)).toBeGreaterThan(0);
     expect(telemetry.metrics.readCell(EngineMetric.VtPagesLoaded)).toBeGreaterThan(0);
     store.dispose();

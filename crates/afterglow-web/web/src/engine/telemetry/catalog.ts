@@ -43,6 +43,9 @@ export const enum EngineTraceDescriptor {
   /** Reserved for decoding pre-removal AGTB captures; no runtime producer. */
   CacheWrite = 20,
   MeshOptimize = 21,
+  VtFeedbackDetected = 22,
+  VtSchedulerWait = 23,
+  VtPagePublished = 24,
 }
 
 export const ENGINE_TRACE_DESCRIPTORS: readonly TelemetryDescriptor[] = [
@@ -69,6 +72,9 @@ export const ENGINE_TRACE_DESCRIPTORS: readonly TelemetryDescriptor[] = [
   { category: EngineTelemetryCategory.Asset, categoryName: 'cache', name: 'cache.read', kind: TelemetryDescriptorKind.AsyncSpan, argument0: 'bytes', argument1: 'hit' },
   { category: EngineTelemetryCategory.Asset, categoryName: 'cache', name: 'cache.write', kind: TelemetryDescriptorKind.AsyncSpan, argument0: 'bytes', argument1: 'status' },
   { category: EngineTelemetryCategory.Asset, categoryName: 'asset', name: 'mesh.optimize', kind: TelemetryDescriptorKind.AsyncSpan, argument0: 'bytes', argument1: 'status' },
+  { category: EngineTelemetryCategory.VirtualTexture, categoryName: 'vt', name: 'vt.feedback_detected', kind: TelemetryDescriptorKind.Instant, argument0: 'priority', argument1: 'feedback_epoch' },
+  { category: EngineTelemetryCategory.VirtualTexture, categoryName: 'vt', name: 'vt.scheduler_wait', kind: TelemetryDescriptorKind.AsyncSpan, argument0: 'priority', argument1: 'status' },
+  { category: EngineTelemetryCategory.VirtualTexture, categoryName: 'vt', name: 'vt.page_published', kind: TelemetryDescriptorKind.Instant, argument0: 'physical_slot', argument1: 'eligible_frame_id' },
 ];
 
 export const FRAME_BUDGET_TRACE_DESCRIPTORS: readonly number[] = [

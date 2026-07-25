@@ -20,7 +20,7 @@ import * as THREE from 'three';
 import { AssetHandle } from '../assets/asset-handle.ts';
 import { Resource, defineResource } from '../core/resource.ts';
 import { EngineMetric, EngineTraceDescriptor } from '../telemetry/catalog.ts';
-import type { EngineTelemetry } from '../telemetry/telemetry.ts';
+import { TelemetryRecordStatus, type EngineTelemetry } from '../telemetry/telemetry.ts';
 import {
   PackedPageTableLayout,
   assertVirtualTextureDimensions,
@@ -49,6 +49,14 @@ const MATERIAL_CHANNEL_PRIORITY_COUNT = 3; // albedo, normal/emissive, scalar ma
 const BATCH_TIER_PRIORITY_COUNT = QUALITY_PRIORITY_LANE_COUNT * MATERIAL_CHANNEL_PRIORITY_COUNT;
 const PRIORITY_LANE_COUNT = BATCH_TIER_PRIORITY_COUNT * 2; // urgent parents before exact quality
 const FEEDBACK_SCALE = 0.125;    // feedback at 1/8 screen resolution
+
+const enum SchedulerWaitStatus {
+  Admitted = 0,
+  Resident = 1,
+  Stale = 2,
+  Invalid = 3,
+  Unloaded = 4,
+}
 
 // ============================================================================
 // Types
@@ -878,6 +886,7 @@ export class VirtualTextureStore {
   private scheduledLastSeen: Uint32Array;
   private scheduledSince: Uint32Array;
   private scheduledPriority: Uint8Array;
+  private scheduledTraceActive: Uint8Array;
   private scheduledNext: Int32Array;
   private scheduledPrevious: Int32Array;
   private readonly priorityHeads = new Int32Array(PRIORITY_LANE_COUNT);
@@ -887,6 +896,7 @@ export class VirtualTextureStore {
   private scheduledByKey: FixedPageSlotMap;
   private scheduledCount = 0;
   private feedbackEpoch = 0;
+  private publicationFrameId = 0;
   /** Drop after two absent snapshots; elapsed time depends on the caller's feedback cadence. */
   private readonly staleFeedbackEpochs = 2;
   private staleCancellations = 0;
@@ -971,6 +981,7 @@ export class VirtualTextureStore {
     this.scheduledLastSeen = new Uint32Array(schedulerCapacity);
     this.scheduledSince = new Uint32Array(schedulerCapacity);
     this.scheduledPriority = new Uint8Array(schedulerCapacity);
+    this.scheduledTraceActive = new Uint8Array(schedulerCapacity);
     this.scheduledNext = new Int32Array(schedulerCapacity);
     this.scheduledPrevious = new Int32Array(schedulerCapacity);
     this.priorityHeads.fill(-1);
@@ -1639,8 +1650,17 @@ export class VirtualTextureStore {
     this.linkScheduledTail(index, priority);
   }
 
-  private removeScheduled(index: number): void {
+  private removeScheduled(index: number, status: SchedulerWaitStatus): void {
     if (this.scheduledActive[index] === 0) return;
+    if (this.scheduledTraceActive[index] !== 0) {
+      this.telemetry?.trace.asyncEnd(
+        EngineTraceDescriptor.VtSchedulerWait,
+        this.scheduledKeys[index],
+        this.scheduledPriority[index],
+        status,
+      );
+      this.scheduledTraceActive[index] = 0;
+    }
     this.unlinkScheduled(index);
     this.scheduledByKey.delete(this.scheduledKeys[index]);
     this.scheduledActive[index] = 0;
@@ -1658,7 +1678,7 @@ export class VirtualTextureStore {
       this.residentHits++;
       this.cache.touch(key);
       const scheduled = this.scheduledByKey.get(key);
-      if (scheduled !== undefined) this.removeScheduled(scheduled);
+      if (scheduled !== undefined) this.removeScheduled(scheduled, SchedulerWaitStatus.Resident);
       return;
     }
     this.residentMisses++;
@@ -1699,6 +1719,13 @@ export class VirtualTextureStore {
     this.linkScheduledTail(index, request.priorityTier ?? PRIORITY_LANE_COUNT - 1);
     this.scheduledByKey.set(key, index);
     this.scheduledCount++;
+    const priority = request.priorityTier ?? PRIORITY_LANE_COUNT - 1;
+    this.telemetry?.trace.instant(
+      EngineTraceDescriptor.VtFeedbackDetected, key, priority, this.feedbackEpoch,
+    );
+    this.scheduledTraceActive[index] = this.telemetry?.trace.asyncBegin(
+      EngineTraceDescriptor.VtSchedulerWait, key, priority, 0,
+    ) === TelemetryRecordStatus.Recorded ? 1 : 0;
   }
 
   /** Advance persistent requests through fixed priority lanes under hard budgets. */
@@ -1722,20 +1749,24 @@ export class VirtualTextureStore {
       inspected++;
       const request = this.scheduledRequests[index];
       if (this.feedbackEpoch - this.scheduledLastSeen[index] >= this.staleFeedbackEpochs) {
-        this.removeScheduled(index);
+        this.removeScheduled(index, SchedulerWaitStatus.Stale);
         this.staleCancellations++;
         continue;
       }
       const textureId = request.textureId ?? 0;
       const entry = this.entriesById[textureId];
       const pageTable = this.pageTablesById[textureId];
-      if (!entry || !pageTable || (request.tail ? isResident(entry.tailEntry) : pageTable.isResident(request))) {
-        this.removeScheduled(index);
+      if (!entry || !pageTable) {
+        this.removeScheduled(index, SchedulerWaitStatus.Invalid);
+        continue;
+      }
+      if (request.tail ? isResident(entry.tailEntry) : pageTable.isResident(request)) {
+        this.removeScheduled(index, SchedulerWaitStatus.Resident);
         continue;
       }
       this.cache.touch(this.scheduledKeys[index]);
       if (this.queuePageLoad(entry, request, pageTable, false, priority)) { // @alloc-allowed reason=AssetFetch
-        this.removeScheduled(index);
+        this.removeScheduled(index, SchedulerWaitStatus.Admitted);
         loaded++;
       } else {
         // Capacity or its downstream worker stage is still occupied. Keep this
@@ -1873,7 +1904,7 @@ export class VirtualTextureStore {
     }
     for (let index = 0; index < this.scheduledRequests.length; index++) {
       if (this.scheduledActive[index] !== 0 && this.scheduledRequests[index].path === path)
-        this.removeScheduled(index);
+        this.removeScheduled(index, SchedulerWaitStatus.Unloaded);
     }
     for (let slot = 0; slot < this.pendingRecords.length; slot++) {
       if (this.pendingActive[slot] === 0) continue;
@@ -1951,6 +1982,11 @@ export class VirtualTextureStore {
     }
   }
 
+  /** Frame whose later render pass can first sample pages published by poll(). */
+  setPublicationFrameId(frameId: number): void {
+    this.publicationFrameId = Number.isSafeInteger(frameId) && frameId >= 0 ? frameId : 0;
+  }
+
   /** Feed the presentation interval into the central bounded upload policy. */
   // @hot-no-alloc-begin VirtualTextureStore.recordFrameTime
   recordFrameTime(frameMs: number): void {
@@ -2010,6 +2046,12 @@ export class VirtualTextureStore {
       }
       const uploadMs = performance.now() - uploadStartedAt;
       const physicalSlot = slot.y * this.atlasPagesX + slot.x;
+      this.telemetry?.trace.instant(
+        EngineTraceDescriptor.VtPagePublished,
+        ready.key,
+        physicalSlot,
+        this.publicationFrameId,
+      );
       this.telemetry?.trace.spanEnd(
         EngineTraceDescriptor.VtUpload, ready.key, ready.data.byteLength, physicalSlot,
       );
