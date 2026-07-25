@@ -9,7 +9,9 @@ import {
 import { createPlatformRangeLoader } from './platform-range-loader.ts';
 import { createPlatformMeshOptimizer, createPlatformTextureTranscoder } from './platform-workers.ts';
 import { AssetStore, type MeshOptimizer } from './asset-store.ts';
-import { VirtualTextureStore, VirtualTextureTuning } from '../virtual-texturing/virtual-texture.ts';
+import {
+  VirtualTextureStore, VirtualTextureTuning, type VirtualTextureRuntimeCapacities,
+} from '../virtual-texturing/virtual-texture.ts';
 import { EngineTelemetryCategory, EngineTraceDescriptor } from '../telemetry/catalog.ts';
 import type { EngineTelemetry } from '../telemetry/telemetry.ts';
 
@@ -30,6 +32,8 @@ export interface BigAssetSessionOptions {
   format: number;
   workerCount: number;
   transcodeQueueCapacity: number;
+  maxPendingPages: number;
+  maxPendingBytes: number;
   maxHeaderBytes: number;
   /** Test/platform injection; games use the engine-owned default workers. */
   createTranscoder?(index: number): Promise<OwnedTextureTranscoder>;
@@ -57,6 +61,7 @@ export class BigAssetSession {
     private readonly workers: OwnedTextureTranscoder[],
     private readonly createMeshOptimizer: (() => Promise<OwnedMeshOptimizer>) | undefined,
     private readonly telemetry: EngineTelemetry | undefined,
+    private readonly vtCapacities: Readonly<VirtualTextureRuntimeCapacities>,
     pageProvider: VirtualTexturePageProvider,
   ) {
     this.rawAssets = new BigContainerAssetLoader(source, containerPath, header);
@@ -70,6 +75,9 @@ export class BigAssetSession {
       throw new RangeError('BIG session workerCount must be positive');
     if (!Number.isInteger(options.transcodeQueueCapacity) || options.transcodeQueueCapacity <= 0)
       throw new RangeError('BIG session transcode queue capacity must be positive');
+    if (!Number.isInteger(options.maxPendingPages) || options.maxPendingPages <= 0 ||
+        !Number.isInteger(options.maxPendingBytes) || options.maxPendingBytes <= 0)
+      throw new RangeError('BIG session VT pending capacities must be positive integers');
     const correlation = options.telemetry?.nextCorrelation(EngineTelemetryCategory.Asset) ?? 0;
     options.telemetry?.trace.asyncBegin(
       EngineTraceDescriptor.SessionOpen, correlation, options.workerCount, 0,
@@ -104,7 +112,9 @@ export class BigAssetSession {
       );
       const session = new BigAssetSession(
         source, options.containerPath, header, options.format, workers,
-        options.createMeshOptimizer, options.telemetry, pageProvider,
+        options.createMeshOptimizer, options.telemetry,
+        { maxPendingPages: options.maxPendingPages, maxPendingBytes: options.maxPendingBytes },
+        pageProvider,
       );
       options.telemetry?.trace.asyncEnd(
         EngineTraceDescriptor.SessionOpen, correlation, workers.length, 0,
@@ -158,6 +168,7 @@ export class BigAssetSession {
     };
     this.store = new VirtualTextureStore(
       loader,
+      this.vtCapacities,
       this.pageProvider,
       this.format,
       device,

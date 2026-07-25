@@ -583,6 +583,12 @@ class PageCache {
 // Central VT upload tuning
 // ============================================================================
 
+/** Bootstrap-owned fixed storage for asynchronous VT page generations. */
+export interface VirtualTextureRuntimeCapacities {
+  maxPendingPages: number;
+  maxPendingBytes: number;
+}
+
 /** Bootstrap-only policy for bounded per-frame atlas/page-table commits. */
 export interface VirtualTextureTuningConfig {
   minUploadsPerPoll: number;
@@ -856,8 +862,8 @@ export class VirtualTextureStore {
   private disposed = false;
   /** Shared central policy; created during bootstrap and sampled each frame. */
   readonly tuning: VirtualTextureTuning;
-  private readonly maxPendingPages = 64;
-  private readonly maxPendingBytes = 8 * 1024 * 1024;
+  private readonly maxPendingPages: number;
+  private readonly maxPendingBytes: number;
   private pendingBytes = 0;
   private readonly scheduleBudgetMs = 0.25;
   private rejectedAdmissions = 0;
@@ -931,6 +937,7 @@ export class VirtualTextureStore {
 
   constructor(
     loader: { read(path: string, offset: number, len: number): Promise<Uint8Array>; poll(): void },
+    capacities: Readonly<VirtualTextureRuntimeCapacities>,
     pageDataProvider?: PageDataProvider,
     format?: number,
     device?: GPUDevice,
@@ -945,6 +952,13 @@ export class VirtualTextureStore {
     const deviceMax = device?.limits.maxTextureDimension2D ?? ATLAS_WIDTH;
     const atlasDim = this.tuning.atlasMaxDimension > 0 ? this.tuning.atlasMaxDimension : deviceMax;
     this.cache = new PageCache(this.format, atlasDim);
+    if (!Number.isInteger(capacities.maxPendingPages) || capacities.maxPendingPages < 1 ||
+        !Number.isInteger(capacities.maxPendingBytes) ||
+        capacities.maxPendingBytes < this.cache.slotDataSize) {
+      throw new RangeError('invalid virtual-texture runtime capacities');
+    }
+    this.maxPendingPages = capacities.maxPendingPages;
+    this.maxPendingBytes = capacities.maxPendingBytes;
     this.atlasWidth = this.cache.width;
     this.atlasHeight = this.cache.height;
     this.atlasPagesX = this.cache.pagesX;
@@ -979,7 +993,7 @@ export class VirtualTextureStore {
       };
       this.pendingFree[this.pendingFreeTop++] = index;
     }
-    this.readyUploads = new Array(64);
+    this.readyUploads = new Array(this.maxPendingPages);
     for (let index = 0; index < this.readyUploads.length; index++) {
       const page = { path: '', mip: 0, x: 0, y: 0, pinned: false, cacheKey: 0 };
       this.readyUploads[index] = { key: 0, generation: 0, page, req: page, data: new Uint8Array(0) };
@@ -2122,7 +2136,7 @@ export class VirtualTextureStore {
 // ============================================================================
 
 export const VirtualTextureRes = defineResource<VirtualTextureStore>('virtualTexture', () => {
-  throw new Error('VirtualTextureStore not initialized. Call VirtualTextureRes.set(world, new VirtualTextureStore(loader)).');
+  throw new Error('VirtualTextureStore not initialized. Set it with explicit runtime capacities during bootstrap.');
 });
 
 // ============================================================================

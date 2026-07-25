@@ -7,7 +7,11 @@ import { VirtualTextureStore } from './virtual-texture.ts';
 
 const loader = { async read() { return new Uint8Array(); }, poll() {} };
 const makeStore = (): VirtualTextureStore =>
-  new VirtualTextureStore(loader, async () => new Uint8Array(136 * 136 * 4));
+  new VirtualTextureStore(
+    loader,
+    { maxPendingPages: 16, maxPendingBytes: 2 * 1024 * 1024 },
+    async () => new Uint8Array(136 * 136 * 4),
+  );
 const layout = (index: number, image: number | null): GltfMaterialTextureLayout => ({
   index, name: 'duplicate', baseColorImage: image, metallicRoughnessImage: null,
   normalImage: null, emissiveImage: null,

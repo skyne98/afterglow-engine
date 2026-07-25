@@ -52,13 +52,13 @@ describe('pipeline-packed rigged VT demo', () => {
     expect(source).toContain('await session.createAssetStore(4, 4)');
     expect(source).not.toContain('MeshoptClient');
     expect(source).toContain('assetStore.loadOptimizedGLTF(path, new GLTFLoader())');
-    expect(source).toContain("await waitForPackedModel('model.glb')");
-    expect(source).toContain("await waitForPackedModel('model-2.glb')");
+    expect(source).toContain('await waitForPackedModel("model.glb")');
+    expect(source).toContain('await waitForPackedModel("model-2.glb")');
     expect(source).toContain('VirtualTextureFeedbackCoordinator(');
     expect(source).toContain('VirtualGltfBinding.create(firstAsset');
     expect(source).toContain('VirtualGltfBinding.create(secondAsset');
     expect(source).toContain('new ModelPrimitives(MODEL_CAPACITY)');
-    expect(source).toContain('groundDeformedModel(firstPivot');
+    expect(source).toMatch(/groundDeformedModel\(\s*firstPivot/);
     expect(source).toContain('BoundedKeyboardInput');
     expect(source).toContain('DemoInputAction.OrbitRight');
     expect(source).toContain('Math.exp(-7 * dt)');

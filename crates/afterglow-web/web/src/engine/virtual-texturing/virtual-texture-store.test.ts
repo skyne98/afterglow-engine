@@ -34,6 +34,7 @@ let VT: VTModule;
 beforeAll(async () => { VT = await import('./virtual-texture.ts'); });
 
 const PAGE_BYTES = 136 * 136 * 4;
+const TEST_CAPACITIES = { maxPendingPages: 64, maxPendingBytes: 8 * 1024 * 1024 } as const;
 const loader = { read: async () => new Uint8Array(), poll() {} };
 const flush = () => new Promise(resolve => setTimeout(resolve, 0));
 const settle = async (store: { poll(): void }) => {
@@ -45,12 +46,21 @@ const settle = async (store: { poll(): void }) => {
 
 describe('VirtualTextureStore residency identity', () => {
   test('disposes loaded texture tables and atlas idempotently', () => {
-    const store = new VT.VirtualTextureStore(loader);
+    const store = new VT.VirtualTextureStore(loader, TEST_CAPACITIES);
     store.loadTexture('dispose', { width: 128, height: 128 });
     expect(store.getEntry('dispose')).toBeDefined();
     store.dispose();
     store.dispose();
     expect(store.getEntry('dispose')).toBeUndefined();
+  });
+
+  test('requires explicit positive pending-page and byte capacities', () => {
+    expect(() => new VT.VirtualTextureStore(loader, {
+      maxPendingPages: 0, maxPendingBytes: PAGE_BYTES,
+    })).toThrow('runtime capacities');
+    expect(() => new VT.VirtualTextureStore(loader, {
+      maxPendingPages: 1, maxPendingBytes: PAGE_BYTES - 1,
+    })).toThrow('runtime capacities');
   });
 
   test('displaced samples walk coarser pages with stable base gradients', () => {
@@ -69,6 +79,7 @@ describe('VirtualTextureStore residency identity', () => {
 
     const store = new VT.VirtualTextureStore(
       loader,
+      TEST_CAPACITIES,
       async () => new Uint8Array(PAGE_BYTES),
       VT.FORMAT_RGBA,
       undefined,
@@ -93,6 +104,7 @@ describe('VirtualTextureStore residency identity', () => {
     telemetry.trace.arm(9);
     const store = new VT.VirtualTextureStore(
       loader,
+      TEST_CAPACITIES,
       async () => new Uint8Array(PAGE_BYTES),
       VT.FORMAT_RGBA,
       undefined,
@@ -175,7 +187,7 @@ describe('VirtualTextureStore residency identity', () => {
 
   test('deduplicates in-flight requests but keeps texture paths distinct', async () => {
     const calls: string[] = [];
-    const store = new VT.VirtualTextureStore(loader, async (path, req) => {
+    const store = new VT.VirtualTextureStore(loader, TEST_CAPACITIES, async (path, req) => {
       calls.push(`${path}:${req.mip}:${req.x}:${req.y}`);
       await flush();
       return new Uint8Array(PAGE_BYTES);
@@ -202,7 +214,7 @@ describe('VirtualTextureStore residency identity', () => {
 
   test('cancels asynchronous work before ready-time residency acquisition', async () => {
     let resolvePage!: (data: Uint8Array) => void;
-    const store = new VT.VirtualTextureStore(loader, () => new Promise(resolve => { resolvePage = resolve; }));
+    const store = new VT.VirtualTextureStore(loader, TEST_CAPACITIES, () => new Promise(resolve => { resolvePage = resolve; }));
     store.loadTexture('temporary', { width: 128, height: 128 });
     expect(store.getStats().pendingPages).toBe(1);
     store.unloadTexture('temporary');
@@ -215,7 +227,7 @@ describe('VirtualTextureStore residency identity', () => {
 
   test('does not reserve or evict a physical slot before page data is ready', async () => {
     const never = new Promise<Uint8Array>(() => {});
-    const store = new VT.VirtualTextureStore(loader, async (_path, req) =>
+    const store = new VT.VirtualTextureStore(loader, TEST_CAPACITIES, async (_path, req) =>
       req.mip === 0 ? never : new Uint8Array(PAGE_BYTES));
     store.loadTexture('ready-time', { width: 512, height: 512 });
     await settle(store);
@@ -228,7 +240,7 @@ describe('VirtualTextureStore residency identity', () => {
 
   test('loads one packed mip tail into a pinned physical slot', async () => {
     const requests: Array<{ mip: number; tail?: boolean }> = [];
-    const store = new VT.VirtualTextureStore(loader, async (_path, req) => {
+    const store = new VT.VirtualTextureStore(loader, TEST_CAPACITIES, async (_path, req) => {
       requests.push(req);
       return new Uint8Array(PAGE_BYTES);
     });
@@ -244,7 +256,7 @@ describe('VirtualTextureStore residency identity', () => {
   test('lays out startup RGBA pages as texel rows in the CPU atlas', async () => {
     const page = new Uint8Array(PAGE_BYTES);
     for (let row = 0; row < 136; row++) page.fill(row, row * 136 * 4, (row + 1) * 136 * 4);
-    const store = new VT.VirtualTextureStore(loader, async () => page);
+    const store = new VT.VirtualTextureStore(loader, TEST_CAPACITIES, async () => page);
     store.loadTexture('cpu-rgba', { width: 128, height: 128 });
     await settle(store);
     const atlas = (store.atlasTexture as unknown as DataTexture).data as Uint8Array;
@@ -260,7 +272,7 @@ describe('VirtualTextureStore residency identity', () => {
       limits: { maxTextureDimension2D: 8192 },
       queue: { writeTexture(_dst: unknown, _data: unknown, layout: { bytesPerRow?: number; rowsPerImage?: number }) { layouts.push(layout); } },
     } as unknown as GPUDevice;
-    const store = new VT.VirtualTextureStore(loader, async () => new Uint8Array(PAGE_BYTES));
+    const store = new VT.VirtualTextureStore(loader, TEST_CAPACITIES, async () => new Uint8Array(PAGE_BYTES));
     store.loadTexture('rgba', { width: 512, height: 512 });
     await settle(store);
     store.attachRenderer({ backend: { device, get: () => ({ texture: {} as GPUTexture }) } });
@@ -272,7 +284,7 @@ describe('VirtualTextureStore residency identity', () => {
 
   test('expands albedo feedback with urgent parents before albedo-first exact promotion', async () => {
     const calls: Array<{ path: string; mip: number; tier: string | undefined }> = [];
-    const store = new VT.VirtualTextureStore(loader, async (path, req) => {
+    const store = new VT.VirtualTextureStore(loader, TEST_CAPACITIES, async (path, req) => {
       calls.push({ path, mip: req.mip, tier: req.batchTier });
       return new Uint8Array(PAGE_BYTES);
     });
@@ -297,7 +309,7 @@ describe('VirtualTextureStore residency identity', () => {
 
   test('accepts material-configurable channel mip biases', async () => {
     const calls: Array<{ path: string; mip: number }> = [];
-    const store = new VT.VirtualTextureStore(loader, async (path, req) => {
+    const store = new VT.VirtualTextureStore(loader, TEST_CAPACITIES, async (path, req) => {
       calls.push({ path, mip: req.mip });
       return new Uint8Array(PAGE_BYTES);
     });
@@ -315,7 +327,7 @@ describe('VirtualTextureStore residency identity', () => {
 
   test('links already-loaded channels and unions shared material roles', async () => {
     const calls: string[] = [];
-    const store = new VT.VirtualTextureStore(loader, async path => {
+    const store = new VT.VirtualTextureStore(loader, TEST_CAPACITIES, async path => {
       calls.push(path);
       return new Uint8Array(PAGE_BYTES);
     });
@@ -333,7 +345,7 @@ describe('VirtualTextureStore residency identity', () => {
 
   test('evicts with a bounded second-chance clock at full capacity', async () => {
     const device = { limits: { maxTextureDimension2D: 408 } } as GPUDevice; // 3x3 slots
-    const store = new VT.VirtualTextureStore(loader, async () => new Uint8Array(PAGE_BYTES), VT.FORMAT_RGBA, device);
+    const store = new VT.VirtualTextureStore(loader, TEST_CAPACITIES, async () => new Uint8Array(PAGE_BYTES), VT.FORMAT_RGBA, device);
     store.loadTexture('clock', { width: 512, height: 512 }); // five pinned pages
     await settle(store);
     for (let page = 0; page < 5; page++) {
@@ -348,7 +360,7 @@ describe('VirtualTextureStore residency identity', () => {
 
   test('evicts material channels independently under atlas pressure', async () => {
     const device = { limits: { maxTextureDimension2D: 816 } } as GPUDevice; // 6x6 slots
-    const store = new VT.VirtualTextureStore(loader, async () => new Uint8Array(PAGE_BYTES), VT.FORMAT_RGBA, device);
+    const store = new VT.VirtualTextureStore(loader, TEST_CAPACITIES, async () => new Uint8Array(PAGE_BYTES), VT.FORMAT_RGBA, device);
     const material = store.loadMaterialSet(
       { albedo: 'group-color', normal: 'group-normal', masks: 'group-masks' },
       { width: 512, height: 512 },
@@ -371,7 +383,7 @@ describe('VirtualTextureStore residency identity', () => {
 
   test('merges several feedback passes into one visibility epoch', async () => {
     const calls: string[] = [];
-    const store = new VT.VirtualTextureStore(loader, async (path) => {
+    const store = new VT.VirtualTextureStore(loader, TEST_CAPACITIES, async (path) => {
       calls.push(path);
       return new Uint8Array(PAGE_BYTES);
     });
@@ -393,7 +405,7 @@ describe('VirtualTextureStore residency identity', () => {
   test('owns async page coordinates when scheduler scratch slots are reused', async () => {
     const captured: PageRequest[] = [];
     const never = new Promise<Uint8Array>(() => {});
-    const store = new VT.VirtualTextureStore(loader, async (_path, req) => {
+    const store = new VT.VirtualTextureStore(loader, TEST_CAPACITIES, async (_path, req) => {
       if (req.mip !== 0) return new Uint8Array(PAGE_BYTES);
       captured.push(req);
       return never;
@@ -410,7 +422,7 @@ describe('VirtualTextureStore residency identity', () => {
   test('commits at most two completed page uploads per poll', async () => {
     const releases: Array<() => void> = [];
     const page = new Uint8Array(PAGE_BYTES);
-    const store = new VT.VirtualTextureStore(loader, async (_path, req) => {
+    const store = new VT.VirtualTextureStore(loader, TEST_CAPACITIES, async (_path, req) => {
       // Let pinned coarse mips settle immediately, then release four fine pages
       // together to emulate a worker completion burst.
       if (req.mip !== 0) return page;
@@ -443,7 +455,7 @@ describe('VirtualTextureStore residency identity', () => {
   test('persists visible requests across polls instead of dropping the frame overflow', async () => {
     const calls: string[] = [];
     const never = new Promise<Uint8Array>(() => {});
-    const store = new VT.VirtualTextureStore(loader, async (path, req) => {
+    const store = new VT.VirtualTextureStore(loader, TEST_CAPACITIES, async (path, req) => {
       calls.push(`${path}:${req.mip}:${req.x}:${req.y}`);
       return req.mip >= 4 ? new Uint8Array(PAGE_BYTES) : never;
     });
@@ -466,7 +478,7 @@ describe('VirtualTextureStore residency identity', () => {
 
   test('prioritizes coarse restoration, then screen center, before ultra upgrades', async () => {
     const calls: Array<{ mip: number; x: number; y: number }> = [];
-    const store = new VT.VirtualTextureStore(loader, async (_path, req) => {
+    const store = new VT.VirtualTextureStore(loader, TEST_CAPACITIES, async (_path, req) => {
       calls.push({ mip: req.mip, x: req.x, y: req.y });
       return new Uint8Array(PAGE_BYTES);
     });
@@ -501,7 +513,7 @@ describe('VirtualTextureStore residency identity', () => {
 
   test('cooperatively cancels stale reads before they enter later stages', async () => {
     let aborted = false;
-    const store = new VT.VirtualTextureStore(loader, async (_path, req, signal) => {
+    const store = new VT.VirtualTextureStore(loader, TEST_CAPACITIES, async (_path, req, signal) => {
       if (req.mip !== 0) return new Uint8Array(PAGE_BYTES);
       return new Promise<Uint8Array>((_resolve, reject) => {
         signal?.addEventListener('abort', () => {
@@ -523,7 +535,7 @@ describe('VirtualTextureStore residency identity', () => {
 
   test('drops queued requests after two absent feedback snapshots', async () => {
     const never = new Promise<Uint8Array>(() => {});
-    const store = new VT.VirtualTextureStore(loader, async (_path, req) =>
+    const store = new VT.VirtualTextureStore(loader, TEST_CAPACITIES, async (_path, req) =>
       req.mip >= 4 ? new Uint8Array(PAGE_BYTES) : never);
     store.loadTexture('stale', { width: 4096, height: 4096 });
     await settle(store);
@@ -543,7 +555,7 @@ describe('VirtualTextureStore residency identity', () => {
 
   test('bounds admitted asynchronous page work', async () => {
     const never = new Promise<Uint8Array>(() => {});
-    const store = new VT.VirtualTextureStore(loader, async (_path, req) =>
+    const store = new VT.VirtualTextureStore(loader, TEST_CAPACITIES, async (_path, req) =>
       req.mip >= 4 ? new Uint8Array(PAGE_BYTES) : never);
     for (let texture = 0; texture < 5; texture++) {
       store.loadTexture(`bounded-${texture}`, { width: 4096, height: 4096 });
@@ -567,7 +579,7 @@ describe('VirtualTextureStore residency identity', () => {
 
   test('preempts worse in-flight edge work for a newly visible center page', async () => {
     const calls: string[] = [];
-    const store = new VT.VirtualTextureStore(loader, async (path, req, signal) => {
+    const store = new VT.VirtualTextureStore(loader, TEST_CAPACITIES, async (path, req, signal) => {
       calls.push(`${path}:${req.mip}:${req.x}:${req.y}`);
       if (req.mip >= 4) return new Uint8Array(PAGE_BYTES);
       return new Promise<Uint8Array>((_resolve, reject) =>
@@ -602,7 +614,7 @@ describe('VirtualTextureStore residency identity', () => {
   });
 
   test('coarsens progressive feedback only when its working set exceeds atlas capacity', async () => {
-    const store = new VT.VirtualTextureStore(loader, async () => new Uint8Array(PAGE_BYTES));
+    const store = new VT.VirtualTextureStore(loader, TEST_CAPACITIES, async () => new Uint8Array(PAGE_BYTES));
     for (let texture = 0; texture < 14; texture++) {
       store.loadTexture(`oversubscribed-${texture}`, { width: 4096, height: 4096 });
       await settle(store);
@@ -622,7 +634,7 @@ describe('VirtualTextureStore residency identity', () => {
 
   test('pins terminal mips relative to each texture size', async () => {
     const calls: Array<{ mip: number; x: number; y: number }> = [];
-    const store = new VT.VirtualTextureStore(loader, async (_path, req) => {
+    const store = new VT.VirtualTextureStore(loader, TEST_CAPACITIES, async (_path, req) => {
       calls.push(req);
       return new Uint8Array(PAGE_BYTES);
     });

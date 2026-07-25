@@ -81,6 +81,7 @@ try {
     async (_path, request) =>
       generateTerrainPage(request.mip, request.x, request.y, VIRTUAL_SIZE),
     rendererHost.device,
+    { maxPendingPages: 16, maxPendingBytes: 2 * 1024 * 1024 },
   );
   bootstrap.defer(() => store.dispose());
   store.loadTexture(path, { width: VIRTUAL_SIZE, height: VIRTUAL_SIZE });

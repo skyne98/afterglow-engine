@@ -70925,8 +70925,8 @@ class VirtualTextureStore {
   loadGeneration = 0;
   disposed = false;
   tuning;
-  maxPendingPages = 64;
-  maxPendingBytes = 8 * 1024 * 1024;
+  maxPendingPages;
+  maxPendingBytes;
   pendingBytes = 0;
   scheduleBudgetMs = 0.25;
   rejectedAdmissions = 0;
@@ -71036,7 +71036,7 @@ class VirtualTextureStore {
     averageTranscodeMs: 0,
     maxTranscodeMs: 0
   };
-  constructor(loader, pageDataProvider, format, device, tuning, telemetry) {
+  constructor(loader, capacities, pageDataProvider, format, device, tuning, telemetry) {
     this.telemetry = telemetry;
     this.loader = loader;
     this.pageDataProvider = pageDataProvider;
@@ -71046,6 +71046,11 @@ class VirtualTextureStore {
     const deviceMax = device?.limits.maxTextureDimension2D ?? ATLAS_WIDTH;
     const atlasDim = this.tuning.atlasMaxDimension > 0 ? this.tuning.atlasMaxDimension : deviceMax;
     this.cache = new PageCache(this.format, atlasDim);
+    if (!Number.isInteger(capacities.maxPendingPages) || capacities.maxPendingPages < 1 || !Number.isInteger(capacities.maxPendingBytes) || capacities.maxPendingBytes < this.cache.slotDataSize) {
+      throw new RangeError("invalid virtual-texture runtime capacities");
+    }
+    this.maxPendingPages = capacities.maxPendingPages;
+    this.maxPendingBytes = capacities.maxPendingBytes;
     this.atlasWidth = this.cache.width;
     this.atlasHeight = this.cache.height;
     this.atlasPagesX = this.cache.pagesX;
@@ -71079,7 +71084,7 @@ class VirtualTextureStore {
       };
       this.pendingFree[this.pendingFreeTop++] = index;
     }
-    this.readyUploads = new Array(64);
+    this.readyUploads = new Array(this.maxPendingPages);
     for (let index = 0;index < this.readyUploads.length; index++) {
       const page = { path: "", mip: 0, x: 0, y: 0, pinned: false, cacheKey: 0 };
       this.readyUploads[index] = { key: 0, generation: 0, page, req: page, data: new Uint8Array(0) };
@@ -71989,7 +71994,7 @@ class VirtualTextureStore {
   }
 }
 var VirtualTextureRes = defineResource("virtualTexture", () => {
-  throw new Error("VirtualTextureStore not initialized. Call VirtualTextureRes.set(world, new VirtualTextureStore(loader)).");
+  throw new Error("VirtualTextureStore not initialized. Set it with explicit runtime capacities during bootstrap.");
 });
 var VT_SAMPLE_WGSL = `
 fn vtSample(
@@ -72248,6 +72253,7 @@ class BigAssetSession {
   workers;
   createMeshOptimizer;
   telemetry;
+  vtCapacities;
   rawAssets;
   pageProvider;
   stats = { workersStarted: 0, closeErrors: 0, closed: false };
@@ -72255,7 +72261,7 @@ class BigAssetSession {
   assetStore = null;
   meshOptimizer = null;
   store = null;
-  constructor(source, containerPath, header, format, workers, createMeshOptimizer, telemetry, pageProvider) {
+  constructor(source, containerPath, header, format, workers, createMeshOptimizer, telemetry, vtCapacities, pageProvider) {
     this.source = source;
     this.containerPath = containerPath;
     this.header = header;
@@ -72263,6 +72269,7 @@ class BigAssetSession {
     this.workers = workers;
     this.createMeshOptimizer = createMeshOptimizer;
     this.telemetry = telemetry;
+    this.vtCapacities = vtCapacities;
     this.rawAssets = new BigContainerAssetLoader(source, containerPath, header);
     this.pageProvider = pageProvider;
     this.stats.workersStarted = workers.length;
@@ -72274,6 +72281,8 @@ class BigAssetSession {
       throw new RangeError("BIG session workerCount must be positive");
     if (!Number.isInteger(options.transcodeQueueCapacity) || options.transcodeQueueCapacity <= 0)
       throw new RangeError("BIG session transcode queue capacity must be positive");
+    if (!Number.isInteger(options.maxPendingPages) || options.maxPendingPages <= 0 || !Number.isInteger(options.maxPendingBytes) || options.maxPendingBytes <= 0)
+      throw new RangeError("BIG session VT pending capacities must be positive integers");
     const correlation = options.telemetry?.nextCorrelation(4 /* Asset */) ?? 0;
     options.telemetry?.trace.asyncBegin(8 /* SessionOpen */, correlation, options.workerCount, 0);
     const source = options.source ?? createPlatformRangeLoader("", options.telemetry);
@@ -72290,7 +72299,7 @@ class BigAssetSession {
         readBulk: source.readBulk ? (ranges) => source.readBulk(options.containerPath, ranges) : undefined
       };
       const pageProvider = createPageDataProvider(containerLoader, header, clients, options.format, options.transcodeQueueCapacity, options.telemetry);
-      const session = new BigAssetSession(source, options.containerPath, header, options.format, workers, options.createMeshOptimizer, options.telemetry, pageProvider);
+      const session = new BigAssetSession(source, options.containerPath, header, options.format, workers, options.createMeshOptimizer, options.telemetry, { maxPendingPages: options.maxPendingPages, maxPendingBytes: options.maxPendingBytes }, pageProvider);
       options.telemetry?.trace.asyncEnd(8 /* SessionOpen */, correlation, workers.length, 0);
       return session;
     } catch (error2) {
@@ -72340,7 +72349,7 @@ class BigAssetSession {
       read: (_path, offset, length2) => this.source.read(this.containerPath, offset, length2),
       poll() {}
     };
-    this.store = new VirtualTextureStore(loader, this.pageProvider, this.format, device, tuning ?? new VirtualTextureTuning, this.telemetry);
+    this.store = new VirtualTextureStore(loader, this.vtCapacities, this.pageProvider, this.format, device, tuning ?? new VirtualTextureTuning, this.telemetry);
     return this.store;
   }
   async close() {
@@ -75587,6 +75596,8 @@ try {
     format,
     workerCount,
     transcodeQueueCapacity: 64,
+    maxPendingPages: 16,
+    maxPendingBytes: 2 * 1024 * 1024,
     maxHeaderBytes: 2 * 1024 * 1024
   });
   bootstrap.defer(() => session.close());

@@ -145,6 +145,8 @@ try {
     format,
     workerCount,
     transcodeQueueCapacity: 64,
+    maxPendingPages: 16,
+    maxPendingBytes: 2 * 1024 * 1024,
     maxHeaderBytes: 2 * 1024 * 1024,
   });
   bootstrap.defer(() => session.close());

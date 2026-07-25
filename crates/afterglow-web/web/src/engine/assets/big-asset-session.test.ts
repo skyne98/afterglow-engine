@@ -55,6 +55,8 @@ describe('BigAssetSession', () => {
       format: 4,
       workerCount: 2,
       transcodeQueueCapacity: 8,
+      maxPendingPages: 16,
+      maxPendingBytes: 2 * 1024 * 1024,
       maxHeaderBytes: 1024,
       source: source(minimalContainer()),
       async createTranscoder(index) { events.push(`open-${index}`); return worker(index, events); },
@@ -79,7 +81,7 @@ describe('BigAssetSession', () => {
     let workers = 0;
     await expect(BigAssetSession.open({
       containerPath: 'bad.big', format: 4, workerCount: 1,
-      transcodeQueueCapacity: 1, maxHeaderBytes: 64,
+      transcodeQueueCapacity: 1, maxPendingPages: 16, maxPendingBytes: 2 * 1024 * 1024, maxHeaderBytes: 64,
       source: source(minimalContainer(128)),
       async createTranscoder() { workers++; return worker(0, []); },
     })).rejects.toThrow('exceeds configured capacity');
@@ -90,7 +92,7 @@ describe('BigAssetSession', () => {
     const events: string[] = [];
     await expect(BigAssetSession.open({
       containerPath: 'scene.big', format: 4, workerCount: 3,
-      transcodeQueueCapacity: 2, maxHeaderBytes: 1024,
+      transcodeQueueCapacity: 2, maxPendingPages: 16, maxPendingBytes: 2 * 1024 * 1024, maxHeaderBytes: 1024,
       source: source(minimalContainer()),
       async createTranscoder(index) {
         events.push(`open-${index}`);
@@ -105,7 +107,7 @@ describe('BigAssetSession', () => {
     const events: string[] = [];
     const session = await BigAssetSession.open({
       containerPath: 'scene.big', format: 4, workerCount: 2,
-      transcodeQueueCapacity: 2, maxHeaderBytes: 1024,
+      transcodeQueueCapacity: 2, maxPendingPages: 16, maxPendingBytes: 2 * 1024 * 1024, maxHeaderBytes: 1024,
       source: source(minimalContainer()),
       async createTranscoder(index) { return worker(index, events, index === 1); },
     });
@@ -122,9 +124,15 @@ describe('BigAssetSession', () => {
     badSource.read = async (...args) => { reads++; return originalRead(...args); };
     await expect(BigAssetSession.open({
       containerPath: 'scene.big', format: 4, workerCount: 0,
-      transcodeQueueCapacity: 1, maxHeaderBytes: 1024,
+      transcodeQueueCapacity: 1, maxPendingPages: 16, maxPendingBytes: 2 * 1024 * 1024, maxHeaderBytes: 1024,
       source: badSource, async createTranscoder() { return worker(0, []); },
     })).rejects.toThrow('workerCount');
+    await expect(BigAssetSession.open({
+      containerPath: 'scene.big', format: 4, workerCount: 1,
+      transcodeQueueCapacity: 1, maxPendingPages: 0,
+      maxPendingBytes: 2 * 1024 * 1024, maxHeaderBytes: 1024,
+      source: badSource, async createTranscoder() { return worker(0, []); },
+    })).rejects.toThrow('pending capacities');
     expect(reads).toBe(0);
   });
 });

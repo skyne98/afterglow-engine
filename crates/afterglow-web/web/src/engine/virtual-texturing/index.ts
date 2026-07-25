@@ -6,6 +6,7 @@ import {
   VirtualTextureTuning,
   type PageDataProvider,
   type VirtualMaterialMipBiases,
+  type VirtualTextureRuntimeCapacities,
   type VirtualMaterialSet,
 } from './virtual-texture.ts';
 export { VirtualGltfBinding, type VirtualGltfBindingOptions } from './virtual-gltf-binding.ts';
@@ -26,14 +27,17 @@ export {
   VirtualTextureTuning,
   type VirtualMaterialMipBiases,
   type VirtualMaterialSet,
+  type VirtualTextureRuntimeCapacities,
 };
 export { VirtualTextureFeedbackPass } from './virtual-texture-feedback-pass.ts';
 export function createProceduralVirtualTextureStore(
   provider: PageDataProvider,
   device: GPUDevice,
+  capacities: Readonly<VirtualTextureRuntimeCapacities>,
 ): VirtualTextureStore {
   return new VirtualTextureStore(
-    { async read() { return new Uint8Array(); }, poll() {} }, provider, FORMAT_RGBA, device,
+    { async read() { return new Uint8Array(); }, poll() {} }, capacities,
+    provider, FORMAT_RGBA, device,
   );
 }
 export {

@@ -65987,8 +65987,8 @@ class VirtualTextureStore {
   loadGeneration = 0;
   disposed = false;
   tuning;
-  maxPendingPages = 64;
-  maxPendingBytes = 8 * 1024 * 1024;
+  maxPendingPages;
+  maxPendingBytes;
   pendingBytes = 0;
   scheduleBudgetMs = 0.25;
   rejectedAdmissions = 0;
@@ -66098,7 +66098,7 @@ class VirtualTextureStore {
     averageTranscodeMs: 0,
     maxTranscodeMs: 0
   };
-  constructor(loader, pageDataProvider, format, device, tuning, telemetry) {
+  constructor(loader, capacities, pageDataProvider, format, device, tuning, telemetry) {
     this.telemetry = telemetry;
     this.loader = loader;
     this.pageDataProvider = pageDataProvider;
@@ -66108,6 +66108,11 @@ class VirtualTextureStore {
     const deviceMax = device?.limits.maxTextureDimension2D ?? ATLAS_WIDTH;
     const atlasDim = this.tuning.atlasMaxDimension > 0 ? this.tuning.atlasMaxDimension : deviceMax;
     this.cache = new PageCache(this.format, atlasDim);
+    if (!Number.isInteger(capacities.maxPendingPages) || capacities.maxPendingPages < 1 || !Number.isInteger(capacities.maxPendingBytes) || capacities.maxPendingBytes < this.cache.slotDataSize) {
+      throw new RangeError("invalid virtual-texture runtime capacities");
+    }
+    this.maxPendingPages = capacities.maxPendingPages;
+    this.maxPendingBytes = capacities.maxPendingBytes;
     this.atlasWidth = this.cache.width;
     this.atlasHeight = this.cache.height;
     this.atlasPagesX = this.cache.pagesX;
@@ -66141,7 +66146,7 @@ class VirtualTextureStore {
       };
       this.pendingFree[this.pendingFreeTop++] = index;
     }
-    this.readyUploads = new Array(64);
+    this.readyUploads = new Array(this.maxPendingPages);
     for (let index = 0;index < this.readyUploads.length; index++) {
       const page = { path: "", mip: 0, x: 0, y: 0, pinned: false, cacheKey: 0 };
       this.readyUploads[index] = { key: 0, generation: 0, page, req: page, data: new Uint8Array(0) };
@@ -67051,7 +67056,7 @@ class VirtualTextureStore {
   }
 }
 var VirtualTextureRes = defineResource("virtualTexture", () => {
-  throw new Error("VirtualTextureStore not initialized. Call VirtualTextureRes.set(world, new VirtualTextureStore(loader)).");
+  throw new Error("VirtualTextureStore not initialized. Set it with explicit runtime capacities during bootstrap.");
 });
 var VT_SAMPLE_WGSL = `
 fn vtSample(
@@ -69638,10 +69643,10 @@ function generateTerrainPage(mip, pageX, pageY, virtualSize) {
   });
 }
 // crates/afterglow-web/web/src/engine/virtual-texturing/index.ts
-function createProceduralVirtualTextureStore(provider, device) {
+function createProceduralVirtualTextureStore(provider, device, capacities) {
   return new VirtualTextureStore({ async read() {
     return new Uint8Array;
-  }, poll() {} }, provider, FORMAT_RGBA, device);
+  }, poll() {} }, capacities, provider, FORMAT_RGBA, device);
 }
 
 // crates/afterglow-web/web/src/engine/input/input.ts
@@ -70089,7 +70094,7 @@ WASD pan · wheel zoom · O overview · P pixel`);
     return frameSteps.wait(runtime.frame.frameId, Math.max(1, count | 0));
   };
   const path = "procedural://terrain";
-  const store = createProceduralVirtualTextureStore(async (_path, request) => generateTerrainPage(request.mip, request.x, request.y, VIRTUAL_SIZE), rendererHost.device);
+  const store = createProceduralVirtualTextureStore(async (_path, request) => generateTerrainPage(request.mip, request.x, request.y, VIRTUAL_SIZE), rendererHost.device, { maxPendingPages: 16, maxPendingBytes: 2 * 1024 * 1024 });
   bootstrap.defer(() => store.dispose());
   store.loadTexture(path, { width: VIRTUAL_SIZE, height: VIRTUAL_SIZE });
   const entry = store.getEntry(path);
