@@ -1,9 +1,17 @@
 # VT latency reduction and persistent-cache removal plan
 
-Status: **core implementation complete 2026-07-25; RTX 3090 and Radeon 680M
-acceptance profiles/soaks pending**.
+Status: **core implementation and RTX 3090 latency validation complete 2026-
+07-25; request-count exception, Radeon 680M profiles, and soaks pending**.
 
 Baseline commit: `281c643` (`fix(telemetry): validate VT profiling semantics`).
+Implementation result:
+
+- `docs/benchmarks/dungeon-vt-no-cache-rtx3090-2026-07-25.md`
+- Traverse and teleport latency/frame/trace gates pass on RTX 3090.
+- Bulk requests are 2.94× the pre-removal hostile baseline versus the provisional
+  2× gate. A 24 ms experiment still reached 2.34× and regressed latency/frame
+  maxima; 16 ms remains selected pending explicit acceptance of the exception.
+
 Baseline evidence:
 
 - `docs/benchmarks/dungeon-vt-unified-telemetry-rtx3090-2026-07-25.md`

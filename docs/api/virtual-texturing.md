@@ -312,6 +312,17 @@ mean), versus 3.0 ms bulk I/O, 11.4 ms transcode execution, and 0.028 ms upload/
 page-table publication. The run loaded 973 pages with no failures and emitted
 24,850 records without drops or unmatched spans.
 
+The accepted no-cache RTX 3090 implementation profile is
+`docs/benchmarks/dungeon-vt-no-cache-rtx3090-2026-07-25.md`. Hostile teleport
+improved admitted page latency to 42.02 ms mean / 58.40 ms p99, bulk wait to
+9.11/16.45 ms, and transcode queueing to 18.89/34.55 ms. Its 582 frames had
+6.955 ms p99, 13.895 ms maximum, no slower-than-60 Hz interval, no failures,
+and a 26,861-record trace with zero drops/unmatched spans. Source bytes fell
+13%, while bulk request count rose from 53 to 156; that 2.94× count is the sole
+unaccepted RTX plan gate. A measured 24 ms deadline reduced requests only to
+124 while violating latency/frame targets, so the approved 16 ms policy remains
+selected pending an explicit request-count-policy decision.
+
 ## Asset containers
 
 The compact `VirtualTextureDirectory` was introduced in container v5 and is

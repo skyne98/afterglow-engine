@@ -224,6 +224,14 @@ transcode, and 0.028 ms atlas publication stages. The accepted AGTB contained
 24,850 records with zero drops and zero unmatched spans; raw evidence is under
 `docs/benchmarks/dungeon-vt-unified-telemetry-rtx3090-2026-07-25.*`.
 
+After cache removal and admission/deadline correction, hostile RTX 3090 page
+latency fell to 42.02 ms mean / 58.40 ms p99; bulk wait was 9.11/16.45 ms and
+transcode queueing 18.89/34.55 ms. All 582 frames stayed within 13.895 ms, with
+zero failures, trace drops, or unmatched spans. Source bytes fell 13%; requests
+rose 2.94× versus the former 100 ms batch policy. A tested 24 ms deadline still
+missed the request gate and regressed latency, so 16 ms remains selected.
+Evidence: `docs/benchmarks/dungeon-vt-no-cache-rtx3090-2026-07-25.md`.
+
 Click for raw mouse look; use **WASD**, **Shift**, **P**, **R**, and **1–3** for
 movement, sprint, prewarmed close-range POM toggle, reset, and deterministic
 viewpoints. The POM tier uses official resident 8-bit R8 displacement from the
