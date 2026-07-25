@@ -460,6 +460,10 @@ All engine work must move toward these non-negotiable requirements:
 
 ## Implementation plans
 
+- `docs/implementation/vt-latency-cache-removal-plan.md` — proposed measured
+  VT latency correction: remove the persistent derived-page cache, bound public-
+  web admission to four-worker throughput, reduce exact-page batching delay,
+  make feedback cadence time-based, and validate on RTX 3090 + Radeon 680M.
 - `docs/implementation/comms-unification-plan.md` — current priority.
   Consolidates worker comms (split across `afterglow-rpc`, `afterglow-web`, and
   `afterglow-rpc-macros`, with the postcard codec hand-duplicated in TS) into one
