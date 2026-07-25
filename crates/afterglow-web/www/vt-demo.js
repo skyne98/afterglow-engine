@@ -66474,8 +66474,26 @@ class VirtualTextureStore {
   }
   loadPage(path, req, pageTable, pinned = false) {
     const entry = this.entries.get(path);
-    if (entry)
-      this.queuePageLoad(entry, req, pageTable, pinned);
+    if (!entry)
+      return;
+    if (this.queuePageLoad(entry, req, pageTable, pinned))
+      return;
+    if (pinned && !this.isRequestResident(path, req, pageTable)) {
+      this.rememberRequest({
+        textureId: entry.textureId,
+        path,
+        mip: req.mip,
+        x: req.x,
+        y: req.y,
+        tail: req.tail,
+        batchTier: "urgent",
+        pinned: true,
+        screenPriority: 0,
+        coverage: 65535,
+        channelPriority: 0,
+        priorityTier: 0
+      });
+    }
   }
   addFeedbackPage(textureId, entry, source, mip, x2, y2, tail, capacity, channelPriority, batchTier) {
     const key = packedPageCoordinates(entry.textureId, mip, x2, y2, tail);
@@ -66615,6 +66633,7 @@ class VirtualTextureStore {
     target.channelPriority = source.channelPriority;
     target.priorityTier = source.priorityTier;
     target.batchTier = source.batchTier;
+    target.pinned = source.pinned;
   }
   linkScheduledTail(index, priority) {
     const tail = this.priorityTails[priority];
@@ -66732,7 +66751,7 @@ class VirtualTextureStore {
       const index = this.priorityHeads[priority];
       inspected++;
       const request = this.scheduledRequests[index];
-      if (this.feedbackEpoch - this.scheduledLastSeen[index] >= this.staleFeedbackEpochs) {
+      if (!request.pinned && this.feedbackEpoch - this.scheduledLastSeen[index] >= this.staleFeedbackEpochs) {
         this.removeScheduled(index, 2 /* Stale */);
         this.staleCancellations++;
         continue;
@@ -66749,7 +66768,7 @@ class VirtualTextureStore {
         continue;
       }
       this.cache.touch(this.scheduledKeys[index]);
-      if (this.queuePageLoad(entry, request, pageTable, false, priority)) {
+      if (this.queuePageLoad(entry, request, pageTable, request.pinned === true, priority)) {
         this.removeScheduled(index, 0 /* Admitted */);
         loaded++;
       } else {

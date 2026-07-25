@@ -657,6 +657,25 @@ describe('VirtualTextureStore residency identity', () => {
     expect(result.lodBias).toBeGreaterThan(0);
   });
 
+  test('retains pinned startup overflow in the fixed scheduler', async () => {
+    const store = new VT.VirtualTextureStore(
+      loader,
+      { maxPendingPages: 1, maxPendingBytes: PAGE_BYTES },
+      async () => new Uint8Array(PAGE_BYTES),
+    );
+    store.loadTexture('first-tail', { width: 128, height: 128, mipTail: true });
+    store.loadTexture('second-tail', { width: 128, height: 128, mipTail: true });
+    expect(store.getStats().pendingPages).toBe(1);
+    expect(store.getStats().scheduledRequests).toBeGreaterThan(0);
+    for (let iteration = 0; iteration < 16; iteration++) {
+      await flush();
+      store.poll();
+    }
+    expect((store.getEntry('first-tail')?.tailEntry ?? 0) & 1).toBe(1);
+    expect((store.getEntry('second-tail')?.tailEntry ?? 0) & 1).toBe(1);
+    expect(store.getStats().scheduledRequests).toBe(0);
+  });
+
   test('pins terminal mips relative to each texture size', async () => {
     const calls: Array<{ mip: number; x: number; y: number }> = [];
     const store = new VT.VirtualTextureStore(loader, TEST_CAPACITIES, async (_path, req) => {

@@ -71,6 +71,8 @@ export interface PageRequest {
   tail?: boolean;
   /** Internal bulk-fetch deadline: coarse restoration or exact promotion. */
   batchTier?: 'urgent' | 'quality';
+  /** Internal bootstrap request; pinned residency is never evicted. */
+  pinned?: boolean;
 }
 
 /** Globally unique page request emitted by feedback. */
@@ -1432,7 +1434,24 @@ export class VirtualTextureStore {
   /** Load a single page asynchronously (used for pinned startup pages). */
   private loadPage(path: string, req: PageRequest, pageTable: PageTable, pinned = false): void {
     const entry = this.entries.get(path);
-    if (entry) this.queuePageLoad(entry, req, pageTable, pinned);
+    if (!entry) return;
+    if (this.queuePageLoad(entry, req, pageTable, pinned)) return;
+    if (pinned && !this.isRequestResident(path, req, pageTable)) {
+      this.rememberRequest({
+        textureId: entry.textureId,
+        path,
+        mip: req.mip,
+        x: req.x,
+        y: req.y,
+        tail: req.tail,
+        batchTier: 'urgent',
+        pinned: true,
+        screenPriority: 0,
+        coverage: 0xffff,
+        channelPriority: 0,
+        priorityTier: 0,
+      });
+    }
   }
 
   // @hot-no-alloc-begin VirtualTextureStore.addFeedbackRequest
@@ -1620,6 +1639,7 @@ export class VirtualTextureStore {
     target.channelPriority = source.channelPriority;
     target.priorityTier = source.priorityTier;
     target.batchTier = source.batchTier;
+    target.pinned = source.pinned;
   }
 
   private linkScheduledTail(index: number, priority: number): void {
@@ -1748,7 +1768,8 @@ export class VirtualTextureStore {
       const index = this.priorityHeads[priority];
       inspected++;
       const request = this.scheduledRequests[index];
-      if (this.feedbackEpoch - this.scheduledLastSeen[index] >= this.staleFeedbackEpochs) {
+      if (!request.pinned &&
+          this.feedbackEpoch - this.scheduledLastSeen[index] >= this.staleFeedbackEpochs) {
         this.removeScheduled(index, SchedulerWaitStatus.Stale);
         this.staleCancellations++;
         continue;
@@ -1765,7 +1786,7 @@ export class VirtualTextureStore {
         continue;
       }
       this.cache.touch(this.scheduledKeys[index]);
-      if (this.queuePageLoad(entry, request, pageTable, false, priority)) { // @alloc-allowed reason=AssetFetch
+      if (this.queuePageLoad(entry, request, pageTable, request.pinned === true, priority)) { // @alloc-allowed reason=AssetFetch
         this.removeScheduled(index, SchedulerWaitStatus.Admitted);
         loaded++;
       } else {
