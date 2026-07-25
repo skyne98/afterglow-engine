@@ -13,7 +13,6 @@
 - [Low-latency Mouse Input](./window/input.md)
 - [Serving Assets](./window/assets.md)
 - [The Asset System](./window/asset-system.md)
-- [Persistent Cache](./window/persistent-cache.md)
 - [Virtual Texturing](./window/virtual-texturing.md)
 - [Surface Detail and POM](./window/surface-detail.md)
 - [Graphics & DevTools](./window/graphics.md)

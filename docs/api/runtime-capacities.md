@@ -10,19 +10,18 @@ hard transport bounds are listed below.
 | Wasm worker completion queue | 256 outstanding | Export returns `-2`; no queue growth |
 | JS completion drain | 32/poll | Remaining completions stay in worker queue |
 | Browser fetch slots | 256 | Fetch registration returns `0` |
-| Generic persistent cache | caller-configured; dungeon = 1 GiB / 65,536 entries / 64 writes | LRU evicts to 75% low water; one async two-generation compaction; oversized values/failures return `false` |
-| Persistent cache index | `2 × maxEntries` fixed slots | Open rejects invalid configuration; no growth |
 | AssetStore IDs | 1,024 default | `AssetAdmission.CapacityExceeded` / path wrapper throws |
 | AssetStore publication | ring = asset capacity; 32/poll | Deferred suffix remains queued; counters record high-water/overflow |
 | Native open asset sources | 16 | Round-robin descriptor replacement |
 | VT scheduler | physical atlas slot count | Typed counters report overflow; visible generations persist |
-| VT in-flight pages | 64 and 8 MiB | Admission rejected and retried from scheduler |
-| VT ready uploads | 64 | Fixed completion ownership |
-| VT transcode workers / waiting ring | 2–4 independent SPSC workers / 64 shared jobs | Promise boundary rejects capacity; each worker remains one-in-flight |
+| VT in-flight pages | 16 and 2 MiB | Admission defers in the fixed scheduler; pinned bootstrap overflow is retained there |
+| VT ready uploads | 16 | Fixed completion ownership |
+| VT transcode workers / waiting ring | 2–4 independent SPSC workers / 12 waiting jobs | Admission cap prevents valid queue overflow; each worker remains one-in-flight |
+| VT bulk deadlines | 1 ms urgent / 16 ms exact-quality, non-resettable | Ready lane dispatches within transport byte/span bounds |
 | VT upload commit | adaptive 1–4 pages and 0.10–0.35 ms/poll; starts 2 / 0.20 ms | Ready suffix deferred; overload resets promoted settings |
-| VT scheduling | 8 admissions, 0.25 ms/poll, 22 priority lanes | Highest nonempty exact-rung/center lane resumes next frame |
-| VT stale horizon | 2 feedback epochs | Read/transcode canceled or stale output discarded |
-| Feedback readback | 1 outstanding | New submit returns `false` until consume |
+| VT scheduling | up to 8 admissions/poll inside the 16-page total cap; 0.25 ms/poll; 132 priority lanes | Highest nonempty tier/channel/quality/center lane resumes next frame |
+| VT stale horizon | 2 feedback epochs (~110 ms plus frame/readback quantization) | Read/transcode canceled or stale output discarded |
+| Feedback cadence/readback | 55 ms monotonic / 1 outstanding | No catch-up burst; submit defers until prior readback is consumed |
 | Structural renderer slice | 256/frame | Fixed ring suffix retained |
 | Dirty root slice | 4,096/frame | Dirty flags remain on ring suffix |
 | Hierarchy rebuild | 512 ops and 0.2 ms/frame | Double-buffered old order remains published |

@@ -1,5 +1,10 @@
 # Dungeon VT unified-telemetry profile — RTX 3090 — 2026-07-25
 
+> **Historical pre-removal baseline:** this capture includes the former
+> persistent derived-page cache, 64-page admission, 100 ms quality deadline,
+> and frame-count feedback cadence. It is immutable comparison evidence, not
+> current runtime behavior.
+
 ## Method
 
 - Public-web Dungeon under Chromium 150 WebGPU/Vulkan on an NVIDIA RTX 3090

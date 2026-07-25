@@ -6,7 +6,7 @@ game-facing APIs necessarily allocate.
 
 | Boundary | Effect classification | Why allocation remains | Admission/measurement |
 |---|---|---|---|
-| Asset HTTP range fetch | `budgeted` | `fetch`, `Response.arrayBuffer`, browser networking | VT serving-layer ranges are bounded by 64 pages / 8 MiB in flight; pending bytes/counters |
+| Asset HTTP range fetch | `budgeted` | `fetch`, `Response.arrayBuffer`, browser networking | VT serving-layer work is bounded by 16 pages / 2 MiB admitted plus two / 8 MiB bulk responses; pending bytes/counters |
 | Worker RPC convenience Promise | `gameFacing` | JS Promise and owned response envelope | 256 task slots; 32 completions/poll; capacity rejection |
 | Persistent blob cache | `budgeted` | SHA-256, OPFS/IndexedDB I/O, value buffers, maintenance Promise | Caller hard byte/item limits; fixed LRU/index, bounded write queue, 75% low-water two-generation compaction |
 | Relative pointer input | `budgeted` | Browser event objects and pointer-lock permission Promise | One prebound passive handler; authored movement callback allocates nothing; raw event with deterministic fallback |

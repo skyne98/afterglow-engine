@@ -1,5 +1,8 @@
 # VT atlas-state baseline — 2026-07-16
 
+> Historical pre-removal evidence: cache and capacity fields describe the 2026-
+> 07-16 runtime, not the selected no-cache pipeline.
+
 Hardware and display are the `fox-laptop` configuration recorded in
 `AGENTS.md`: Ryzen 7 6800U, Radeon 680M/RADV, 1440×900 logical CEF window at
 144 Hz. The desktop session was unlocked. The dungeon used `.big` v5, nine

@@ -9,11 +9,12 @@
 
 `afterglow-web/web/src/engine/assets/big-asset-session.ts` provides `BigAssetSession`, the
 bootstrap owner for one seekable `.big` source. `open()` requires explicit
-`workerCount`, `transcodeQueueCapacity`, `maxHeaderBytes`, and target GPU
-format. Engine-owned typed transcoders are the default; tests/platform adapters
-may inject a factory. Optional `telemetry` connects session startup, platform
-range reads, cache operations, worker round trips, transcode, mesh optimization,
-and VT publication to the unified trace. It validates the 16-byte prefix and configured header bound
+`workerCount`, `transcodeQueueCapacity`, `maxPendingPages`, `maxPendingBytes`,
+`urgentBatchDeadlineMs`, `qualityBatchDeadlineMs`, `maxHeaderBytes`, and target
+GPU format. Engine-owned typed transcoders are the default; tests/platform
+adapters may inject a factory. Optional `telemetry` connects session startup,
+platform range reads, worker round trips, transcode, mesh optimization, and VT
+publication to the unified trace. It validates the 16-byte prefix and configured header bound
 before starting workers, parses the header once, constructs the direct raw-asset
 loader and VT page provider, and rolls workers back in reverse order after any
 startup failure.
@@ -38,19 +39,22 @@ ownership. A session creates at most one `VirtualTextureStore`; a second request
 request after shutdown fails deterministically. Only one session-owned
 `AssetStore` is allowed. `close()` first disposes its asset and VT stores, is
 idempotent, closes all workers in reverse order even when one close fails, and reports stable
-started/close-error/closed telemetry. The optional persistent blob cache remains
-a generic caller-supplied byte store. The session applies the configured
-transcode queue capacity instead of an implicit provider default.
+started/close-error/closed telemetry. There is no persistent derived-page cache
+or storage fallback. The session applies every configured capacity/deadline
+instead of an implicit provider default.
 
 ```ts
 const session = await BigAssetSession.open({
   containerPath: 'world.big',
   format,
   workerCount: 4,
-  transcodeQueueCapacity: 64,
+  transcodeQueueCapacity: 12,
+  maxPendingPages: 16,
+  maxPendingBytes: 2 * 1024 * 1024,
+  urgentBatchDeadlineMs: 1,
+  qualityBatchDeadlineMs: 16,
   maxHeaderBytes: 2 * 1024 * 1024,
   telemetry: runtime.telemetry,
-  cache,
 });
 const assets = await session.createAssetStore(64, 8);
 const store = session.createVirtualTextureStore(device, tuning);
@@ -64,7 +68,7 @@ source-sort spans. `createPageRangeReader()` contains a separate source-sorting
 implementation and restores caller order by page index, but `BigAssetSession`
 does not call it. The session's page provider owns a fixed 256-slot
 two-tier queue: mip+2 parent misses open a non-resettable 1 ms maximum window;
-exact pages open a non-resettable 100 ms window. Each response is at most 4 MiB
+exact pages open a non-resettable 16 ms window. Each response is at most 4 MiB
 and at most two responses / 8 MiB are in flight. `close()` rejects queued work
 and prevents late raw bytes from entering a closed transcoder pool. Stable
 telemetry reports queue depth, in-flight response bytes, urgent/quality batches,

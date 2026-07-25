@@ -57,7 +57,8 @@ to-physical-pixel scale after resize, so shader derivatives are converted back
 to physical screen pixels before mip selection. Quality bias zero therefore
 keeps approximately one to two source texels per screen pixel across arbitrary
 texture dimensions, DPR, UV tiling, and feedback resolution; quality bias no
-longer compensates for pass scale. Dungeon runs feedback every eight frames.
+longer compensates for pass scale. Dungeon uses a 55 ms monotonic feedback
+cadence, independent of refresh rate.
 The pass retains each page's nearest-to-center sample and pixel coverage. The store adds capacity fitting, progressive quality
 selection, priority admission, bounded scheduling/upload budgets, and fixed
 second-chance clock residency.
@@ -69,12 +70,11 @@ One hundred thirty-two fixed-array lanes put urgent parent restoration before
 exact promotion, then prioritize albedo, normal/emissive, scalar data, quality,
 and center/coverage. Aging cannot cross a tier/channel boundary. Each miss emits
 at most a mip+2 parent with a non-resettable 1 ms maximum batch window and the
-exact page with a non-resettable 100 ms window. Existing coarser pages and the
+exact page with a non-resettable 16 ms window. Existing coarser pages and the
 pinned tail remain visible immediately; intermediate ancestor requests are not
 created. Waiting requests age upward within their floor to prevent starvation.
-Pages absent from two newer feedback snapshots expire. Dungeon submits feedback
-every eight rendered frames, so this is about 111 ms at 144 Hz or 267 ms at
-60 Hz, not a fixed 56 ms. Newly important work can mark a strictly worse pending
+Pages absent from two newer feedback snapshots expire, approximately 110 ms
+plus frame/readback quantization at any refresh rate. Newly important work can mark a strictly worse pending
 load canceled, but its slot remains occupied until the asynchronous stage
 acknowledges cancellation. In-flight Fetch/CEF reads currently have neither
 transport abort propagation nor a response deadline. Atlas/page-table commits
@@ -92,11 +92,10 @@ GPUs can discover higher sustained throughput without continuous oscillation.
 Excess completed work remains in a
 fixed ready ring for a later frame rather than
 causing a full-cache presentation burst. Physical slots are acquired only after bytes are ready, so slow reads/transcodes do not
-evict useful pages. At most 64 jobs and 8 MiB of expected output may be pending;
+evict useful pages. At most 16 jobs and 2 MiB of expected output may be pending;
 stage budget exhaustion is reported rather than allowing an unbounded burst.
-Pinned startup loads are currently one-shot, so bootstrapping enough VT channels
-to fill all 64 slots can reject later pinned pages without an automatic retry;
-the nine-channel Dungeon stays below that boundary.
+Pinned startup overflow remains in the highest-priority fixed scheduler until
+resident and is not canceled by feedback staleness.
 The serving client also owns a fixed 256-slot bulk queue. The live provider
 currently preserves scheduler/admission order. A separate page-range helper
 source-sorts and restores caller order, but `BigAssetSession` does not yet wire
@@ -185,9 +184,10 @@ and AO PNGs and runs the generic asset pipeline once to produce the ignored
 `www/dungeon.big` deployment asset. At runtime bounded serving-layer multi-range fetches and a fixed two-to-four
 `TextureWorker` pool stream pages without the former page-side AssetLoader
 latency. Urgent mip+2 restoration batches for at most 1 ms; exact promotion
-batches for at most 100 ms. Final GPU blocks are also
-stored through the generic persistent cache under a source/format/adapter
-namespace; warm hits skip both range reads and Basis transcodes. Aligned PBR
+batches for at most 16 ms. There is no persistent derived-page cache: every
+nonresident page uses source read and transcode. The selected profile admits at
+most 16 pages/2 MiB, uses four active workers plus twelve waiting jobs, and
+submits feedback on a 55 ms monotonic cadence. Aligned PBR
 channels share one albedo feedback stream while loading and evicting
 independently. The scheduler gives diffuse pages strict priority over
 normal/emissive and scalar-mask pages; `MeshStandardNodeMaterial` samples each
@@ -198,9 +198,10 @@ shader. The dungeon profile caps the shared atlas at 53×53 slots
 shared-memory bandwidth saturation on integrated GPUs:
 
 ```sh
-DISPLAY=:0 ./scripts/run-dungeon.sh
-DISPLAY=:0 ./scripts/test-dungeon-gpu.sh
-# With the dungeon running, capture per-second telemetry and frame timing:
+nix-shell shell.nix --run "cargo run -p xtask -- serve"
+# Launch hardware WebGPU Chromium on dungeon.html with CDP port 9333, then:
+bun scripts/profile-dungeon-vt.ts --cdp 127.0.0.1:9333 \
+  --scenario traverse --output-prefix docs/benchmarks/vt-traverse
 ./scripts/soak-dungeon.sh 600 traverse vt-traverse-10m.log
 ./scripts/baseline-vt-atlas.sh full vt-atlas-full.log
 ```
@@ -208,14 +209,15 @@ DISPLAY=:0 ./scripts/test-dungeon-gpu.sh
 Dungeon is a canonical `EngineRuntime` consumer using `RendererHost`,
 `BigAssetSession`, the feedback coordinator, and bounded input/diagnostics. No
 visual demo retains a global bridge or architecture-baseline exception. Its BIG
-session feeds unified page-load, cache, bulk-wait/read, RPC, transcode, upload,
-and page-table publication spans into `runtime.telemetry`. Diagnostic clients
+session feeds unified feedback, scheduler, page-load, bulk-wait/read, RPC,
+transcode, upload, and page-table publication spans into `runtime.telemetry`. Diagnostic clients
 can call `traceArm()`, run a bounded scenario, call `traceStop()`, and retrieve
 the `AGTB` batch with `traceBatch()` through `window.__afterglowDungeon`. The
 65,536-record Dungeon capture buffer is 2.5 MiB and remains prefix-preserving.
 
-A fresh-cache RTX 3090 nine-pose capture loaded 973 pages with no failures while
-582 scenario frames held 6.955 ms p99 and 13.900 ms maximum. Complete page-load
+The pre-removal cold-cache RTX 3090 nine-pose baseline loaded 973 pages with no
+failures while 582 scenario frames held 6.955 ms p99 and 13.900 ms maximum.
+Complete page-load
 latency was 149.0 ms mean / 231.4 ms p99: the 56.9 ms mean bulk batching wait
 and 81.8 ms mean texture queue wait dominated the 3.0 ms bulk read, 11.4 ms
 transcode, and 0.028 ms atlas publication stages. The accepted AGTB contained

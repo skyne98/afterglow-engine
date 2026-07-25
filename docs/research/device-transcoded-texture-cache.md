@@ -2,12 +2,11 @@
 
 **Investigated:** 2026-07-16
 
-> **Implementation status:** The first production slice is implemented as the
-> generic, policy-free `PersistentBlobCache`: a bounded append-only pack, fixed
-> SHA-256 index, checksums, crash-safe publication order, OPFS with IndexedDB
-> fallback, and stable telemetry. VT composes device/source/format namespaces
-> over it. Fixed-array O(1) LRU eviction and crash-safe two-generation
-> asynchronous compaction maintain hard limits without frame-time work.
+> **Superseded 2026-07-25:** The generic derived-page cache described below was
+> implemented and measured, then removed completely. The selected runtime uses
+> no persistent derived texture cache: four workers, a sixteen-page/2 MiB
+> admission boundary, 1/16 ms bulk deadlines, and a 55 ms feedback cadence.
+> This document remains historical research, not current API or policy.
 
 ## Question
 
@@ -15,9 +14,9 @@ Should Afterglow repeatedly transcode portable UASTC/Basis virtual-texture pages
 at runtime, or persist the selected GPU-native result for the current device?
 How do other engines handle this?
 
-## Conclusion
+## Historical conclusion
 
-Yes: Afterglow should retain portable UASTC in shipped `.big` containers and add
+The investigation originally concluded that Afterglow should retain portable UASTC in shipped `.big` containers and add
 a bounded, persistent **derived texture cache** keyed by the source build,
 selected GPU format, transcoder ABI, and device signature. A cache hit should
 skip Basis transcoding and return the stored 136×136 BC7/ASTC/RGBA page directly

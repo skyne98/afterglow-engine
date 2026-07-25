@@ -154,7 +154,7 @@ Implemented foundations:
 - one page-thread async-worker pump instead of one timer per RPC;
 - persistent fixed-capacity VT request scheduling with stale replacement;
 - ready-time VT slot acquisition (slow reads do not evict useful pages);
-- 64-page and 8 MiB VT in-flight admission caps;
+- explicit 16-page and 2 MiB VT in-flight admission caps;
 - fixed numeric AssetStore state tables plus a preallocated completion ring;
   Promise callbacks enqueue only, and `poll()` publishes a bounded prefix;
 - stable allocation-free VT statistics for per-frame HUD/telemetry reads.

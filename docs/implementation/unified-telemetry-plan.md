@@ -92,9 +92,11 @@ add another Chrome exporter after migration.
 - [x] Instrument texture queue, page-side RPC round trip, Basis transcode total,
       and result publication.
 - [x] Instrument ready-upload work, atlas write, and page-table publication.
-- [ ] Record the first frame whose visible draw may sample the published page.
-- [x] Instrument persistent-cache reads/writes, BIG session startup, and
-      whole-scene mesh optimization.
+- [x] Record the numeric frame whose later visible draw is first eligible to
+      sample the published page; actual fragment sampling remains a GPU proof.
+- [x] Historical pre-removal captures instrumented persistent-cache reads/
+      writes. IDs remain reserved, but current runtime has no cache producer.
+- [x] Instrument BIG session startup and whole-scene mesh optimization.
 - [ ] Acceptance gate: follow one Dungeon tile end-to-end in one exported trace.
 
 ## Phase 5 — GPU and presentation

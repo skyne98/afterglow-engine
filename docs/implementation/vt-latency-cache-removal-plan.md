@@ -1,6 +1,7 @@
 # VT latency reduction and persistent-cache removal plan
 
-Status: **approved 2026-07-25; implementation in progress**.
+Status: **core implementation complete 2026-07-25; RTX 3090 and Radeon 680M
+acceptance profiles/soaks pending**.
 
 Baseline commit: `281c643` (`fix(telemetry): validate VT profiling semantics`).
 Baseline evidence:

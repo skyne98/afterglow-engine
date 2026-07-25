@@ -313,14 +313,15 @@ Examples of sealed-loop allocations or unbounded growth:
 Dungeon (`dungeon.ts:27-70`) and rigged VT (`rigged-vt-demo.ts:81-116`)
 repeat worker-count policy, RPC construction, cleanup, prefix reads, manual
 `DataView` parsing, header reads, GPU format selection, loader adapters, page
-provider creation, tuning, and store construction. Dungeon additionally builds
-the derived-cache namespace and fallback behavior locally.
+provider creation, tuning, and store construction. At audit time Dungeon also
+built a derived-cache namespace and fallback locally; that subsystem has since
+been removed.
 
 Add `BigAssetSession.open(options)` with explicit capacities and policy hooks.
 It should own the range source, parsed header, raw asset loader, bounded
-transcoder worker pool, selected GPU format, optional generic persistent cache,
-page provider, telemetry, and shutdown. VT-specific cache-key policy remains a
-thin consumer configuration; storage stays generic.
+transcoder worker pool, selected GPU format, page provider, telemetry, and
+shutdown. This historical audit also proposed a generic persistent cache and
+VT-specific cache keys; both were removed on 2026-07-25.
 
 Do not hide I/O: `open()` is bootstrap async, capacities are mandatory, and the
 returned session exposes ownership and byte limits.

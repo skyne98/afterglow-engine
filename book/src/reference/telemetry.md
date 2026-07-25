@@ -47,9 +47,10 @@ const runtime = EngineRuntime.forScene({
 maximum-frame metrics. When tracing is armed it records the complete frame,
 worker polling, VT work, structural and pose drains, render preparation, game
 update, and render-pass ranges. Engine-owned BIG sessions additionally feed
-source reads, bulk wait/dispatch, persistent cache, native RPC round trips,
+source reads, feedback detection, scheduler/bulk waits, native RPC round trips,
 texture queue/transcode, mesh optimization, complete page loads, and VT upload/
-publication into the same correlation timeline.
+publication into the same correlation timeline. Historical cache descriptor IDs
+remain reserved but have no current producer.
 
 ```ts
 runtime.telemetry.trace.arm(1);
@@ -65,10 +66,10 @@ The output is an `AGTB` v1 batch. Browser records use monotonic nanoseconds and
 declare a 1 GHz tick rate. A full capture preserves existing records, drops new
 records, and reports the exact dropped count. It never blocks or grows.
 
-Dungeon reserves 65,536 records (2.5 MiB) for diagnostic captures. A measured
-RTX 3090 nine-pose VT run wrote 24,850 records with no drops or unmatched spans.
-It identified the 100 ms quality batching window and texture-worker queueing—not
-bulk I/O or atlas upload—as the dominant page-latency components.
+Dungeon reserves 65,536 records (2.5 MiB) for diagnostic captures. The
+pre-removal RTX 3090 nine-pose baseline wrote 24,850 records with no drops or
+unmatched spans. It identified the former 100 ms quality batching window and
+texture-worker queueing—not bulk I/O or atlas upload—as the dominant latency.
 
 ## Rust producers
 

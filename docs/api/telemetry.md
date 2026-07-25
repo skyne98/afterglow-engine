@@ -161,16 +161,17 @@ records the complete frame, worker poll, VT update, structural command, pose,
 render preparation, game update, and render-pass spans.
 
 The default catalog also covers BIG session startup, source size/identity,
-single and bulk range reads, native page-side RPC round trips, bulk-queue wait
-and dispatch, persistent-cache reads/writes, texture queue/transcode, complete
-VT page loads, atlas/page-table upload publication, and whole-scene mesh
-optimization. These paths share numeric page/request correlations. Always-on
+single and bulk range reads, native page-side RPC round trips, feedback
+detection, scheduler wait, bulk-queue wait/dispatch, texture queue/transcode,
+complete VT page loads, atlas/page-table upload publication, and whole-scene
+mesh optimization. Descriptor IDs 19–20 remain reserved solely to decode
+historical pre-removal cache captures; current code emits neither. These paths share numeric page/request correlations. Always-on
 metrics include asset bytes/read latency, RPC calls/latency, VT requested/
 loaded/failed pages, upload latency, and transcode latency.
 
-The Dungeon diagnostic profile reserves 65,536 records (2.5 MiB). Its accepted
-RTX 3090 nine-pose VT capture wrote 24,850 records with zero drops and zero
-unmatched spans. Raw AGTB evidence and methodology are in
+The Dungeon diagnostic profile reserves 65,536 records (2.5 MiB). The
+pre-removal RTX 3090 nine-pose baseline wrote 24,850 records with zero drops and
+zero unmatched spans. Raw AGTB evidence and methodology are in
 `docs/benchmarks/dungeon-vt-unified-telemetry-rtx3090-2026-07-25.*`.
 
 ## Current integration boundary
@@ -181,8 +182,9 @@ Implemented now:
   export, and Chrome export;
 - exact TypeScript record/batch ABI, metrics, allocation contracts, and tests;
 - `EngineMemory` ownership and `EngineRuntime`/`FrameBudget` page tracks;
-- web/native range-loader, BIG session, cache, bulk batching, transcode,
-  native RPC round-trip, mesh optimization, VT load, and VT upload tracks.
+- web/native range-loader, BIG session, bulk batching, transcode, native RPC
+  round-trip, mesh optimization, VT feedback/scheduler/load, and VT publication
+  tracks.
 
 Still to be composed:
 

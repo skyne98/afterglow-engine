@@ -5,12 +5,11 @@ The web engine's virtual-texture implementation lives in
 physical atlas, packed page-table entries, LRU residency, mip fallback, and a
 fixed per-frame page upload budget.
 
-> **Audit status (updated 2026-07-22): bounded correctness prototype, not a
-> shipping two-target implementation.** Earlier cache, indexing, polling, and
-> backpressure defects have been remediated, but the live BIG provider does not
-> yet wire the source-sorting batch helper and CEF currently starts the texture
-> service as WASM Web Workers instead of its mandatory generated native worker.
-> See
+> **Audit status (updated 2026-07-25): bounded no-cache correctness
+> prototype, not yet a fully validated two-target release.** Persistent derived
+> caching was removed; admission, queueing, deadlines, and feedback cadence are
+> explicit. The live BIG provider still does not wire the source-sorting helper,
+> and native-shell Dungeon validation remains open. See
 > [`../audits/virtual-texture-vertical-slice-2026-07-15.md`](../audits/virtual-texture-vertical-slice-2026-07-15.md).
 
 ## Public surface
@@ -24,10 +23,12 @@ fixed per-frame page upload budget.
   immediately returns to the independently validated baseline.
   `atlasMaxDimension` caps the physical atlas to the largest whole 136-texel
   slot grid at or below that dimension; zero uses the device limit.
-- `VirtualTextureStore(loader, pageDataProvider?, format?, device?, tuning?)`
-  accepts the shared tuning instance. `recordFrameTime(milliseconds)` feeds
-  the tuner without allocation; `getStats()` exposes active limits and
-  downshift/recovery counters.
+- `VirtualTextureStore(loader, capacities, pageDataProvider?, format?, device?,
+  tuning?, telemetry?)` requires `VirtualTextureRuntimeCapacities {
+  maxPendingPages, maxPendingBytes }` during bootstrap and accepts the shared
+  tuning instance. `recordFrameTime(milliseconds)` feeds the tuner without
+  allocation; `getStats()` exposes active limits and downshift/recovery
+  counters.
 - `loadTexture(path, options?) -> AssetHandle<THREE.Texture>`
 - `loadMaterialSet({ albedo, normal?, masks?, roughness?, ao?, emissive? }, options?)`
   loads aligned PBR channels and registers one albedo-driven stream policy.
@@ -62,7 +63,8 @@ fixed per-frame page upload budget.
   dungeon profile uses `53 * SLOT_SIZE` (2,809 physical slots).
 - `VirtualTextureFeedbackCoordinator(renderer, store, capacities)` is the
   application-facing feedback owner. Capacities explicitly bound registered
-  renderables, total channel passes, cadence, and target count. A
+  renderables and total channel passes; `cadenceMs` is the monotonic submission
+  interval and `scale` selects target size. A
   `FeedbackRenderable` supplies its scene/camera, fixed pass count, active state,
   and begin/end material hooks. The coordinator preallocates all low-level
   passes, owns resize/warm/seal/disposal, disables and restores shadows, and
@@ -152,7 +154,7 @@ texture ID, mip bias, and channel class. One hundred thirty-two fixed scheduler
 lanes first separate urgent parent restoration from exact-quality promotion,
 then preserve albedo → normal/emissive → scalar-mask and coarse/center ordering
 inside each tier. Waiting-request aging is clamped to its tier/channel floor and
-cannot make a 100 ms quality promotion outrank pending urgent restoration.
+cannot make a 16 ms quality promotion outrank pending urgent restoration.
 
 Residency and eviction are not grouped. Each channel walks its own page table,
 falls back to its own pinned tail, and consumes or releases one physical slot.
@@ -195,8 +197,9 @@ addressing and POM displacement affect page coordinates, while mip derivatives
 remain free of wrap/control-flow discontinuities. Dungeon prewarms matching
 base and POM-aware feedback materials; when POM is active, the reduced pass runs
 the same bounded height march and requests the page actually sampled by the
-visible displaced surface. The pass runs every eight frames. Completed worker
-jobs are committed through the centrally tuned bounded upload queue rather than
+visible displaced surface. The pass uses a 55 ms monotonic cadence rather than
+a refresh-dependent frame count. Completed worker jobs are committed through
+the centrally tuned bounded upload queue rather than
 issuing an unbounded burst of atlas and page-table writes between frames.
 
 Feedback uses `RG32Uint`: word zero stores valid, six mip bits, and eleven bits
@@ -222,16 +225,16 @@ capacity persistent scheduler retains feedback that does not fit in one frame's
 dispatch budget. For each missing desired page it emits at most two requests:
 an urgent mip+2 parent (clamped to the terminal paged mip) and the exact page.
 The parent uses a non-resettable 1 ms maximum batch window; exact promotion uses
-a non-resettable 100 ms maximum window. Existing resident coarser pages and the
+a non-resettable 16 ms maximum window. Existing resident coarser pages and the
 pinned tail remain immediately sampleable. Tier/channel/quality/center lanes
 avoid sorting and allocation; visible waiting requests age only within their
 tier/channel floor.
 
-Requests absent from two newer feedback snapshots are removed. This is a
-snapshot count, not a fixed duration: Dungeon submits every eight rendered
-frames, so expiry is about 111 ms at 144 Hz and about 267 ms at 60 Hz (plus
-readback timing). Newly important center/coarse-restoration work marks a
-strictly worse non-pinned load canceled when the 64-entry table is full, but the
+Requests absent from two newer feedback snapshots are removed. Dungeon submits
+on a 55 ms monotonic cadence, so expiry is approximately 110 ms plus discrete
+frame/readback timing at any refresh rate. Newly important center/coarse-
+restoration work marks a strictly worse non-pinned load canceled when the
+16-entry table is full, but the
 slot remains occupied until the asynchronous stage acknowledges cancellation;
 this is not immediate replacement. Cancellation propagates through an
 `AbortSignal`: queued jobs stop before read/transcode stage boundaries, while an
@@ -253,13 +256,11 @@ A fixed 256-slot client queue, 4 MiB complete-response cap,
 two-response/8 MiB in-flight cap, and non-overlapping range validation make
 overflow deterministic. It avoids routing
 tiny page ranges through the page-side AssetLoader wasm executor. A fixed
-64-entry `BoundedTranscoderPool` currently dispatches across two to four
-independent WASM texture workers (four on machines exposing eight or more
-logical CPUs). Each worker remains one-in-flight/SPSC-safe and owns its response
-before reuse. This is the public-web backend. The current default also runs it
-inside CEF, which is a target-boundary defect: CEF must use the generated native
-`afterglow-texture` client and an OS worker started through
-`AppBuilder::on_ready`. Physical slots are acquired only
+12-entry waiting ring dispatches across two to four independent WASM texture
+workers (four on machines exposing eight or more logical CPUs). Each worker
+remains one-in-flight/SPSC-safe and owns its response before reuse. This is the
+public-web backend; `afterglow-shell` composes generated native clients and real
+OS workers instead. Physical slots are acquired only
 after page bytes are ready, so a slow range read or transcode cannot evict useful
 resident data while it is pending. Upload currently copies every completed page
 into the full CPU atlas shadow before `GPUQueue.writeTexture`, even after the
@@ -267,15 +268,13 @@ native GPU atlas is attached. Together with generated RPC encoding and two
 owned-output slices, this is bounded but remains an intentionally documented
 copy/memory optimization target.
 
-Runtime work is bounded to 64 pending pages and 8 MiB of expected output. The
-pending table, ready-upload ring, scheduler, cache slots, and feedback scratch
-are preallocated; hot identity uses numeric `textureId`/packed page keys.
-Pinned startup requests are currently one-shot rather than retained in the
-scheduler: if loading many channels synchronously exhausts all 64 pending slots,
-a rejected pinned page is not automatically retried. The current nine-channel
-Dungeon fits (up to 54 initial pinned/tail requests), but this is not a general
-large-material-count guarantee. Path
-Maps remain only for load/unload and game-facing lookup. The
+Runtime work is bounded to 16 pending pages and 2 MiB of expected output. The
+pending table, 16-entry ready-upload ring, scheduler, resident atlas slots, and
+feedback scratch are preallocated; hot identity uses numeric `textureId`/packed
+page keys. Pinned startup requests that exceed the admission cap enter the same
+fixed scheduler at highest priority and are retried until resident; they are
+exempt from feedback-staleness cancellation. Path Maps remain only for load/
+unload and game-facing lookup. The
 scheduler capacity equals the physical atlas capacity. Scheduling checks a
 0.25 ms budget in small batches; atlas/page-table commits are limited to **two**
 pages and a **0.20 ms** budget per `poll()` by default. The central
@@ -288,9 +287,9 @@ backlog probes one step toward configured device caps
 short gameplay bursts. A clean probe becomes the new known-safe setting; a bad
 promoted cap immediately rolls back to the independently validated two-page /
 0.20 ms baseline and waits sixty quarter-second windows before probing again. Completed pages stay in the fixed ready
-ring for a later rAF rather than turning a full-cache replacement into a
+ring for a later rAF rather than turning a full-residency replacement into a
 presentation burst. Rejected admissions, stale cancellations, priority
-preemptions, cache hits/misses/evictions, queue bytes, range-read latency,
+preemptions, resident hits/misses/evictions, queue bytes, range-read latency,
 bulk queued/in-flight bytes, urgent/quality batch counts, bulk rejects/cancels,
 transcode worker/queue/runtime telemetry, upload CPU time, and budget exhaustion
 are exposed by `getStats()`. `getStats()` updates and returns one
@@ -298,15 +297,16 @@ stable preallocated object and is safe for per-frame telemetry; the allocating
 `getDebugSnapshot()` is intended only for explicit diagnostics.
 
 When a `BigAssetSession` receives `runtime.telemetry`, armed unified captures
-also correlate each page through page-load, cache read/write, bulk timer wait,
-bulk source dispatch, transcode queue, transcode execution, ready-upload work,
-atlas write, and page-table publication. Web Fetch and native arena-backed
-range operations feed the same descriptors; native worker-internal `pread` and
+also correlate each page through feedback detection, scheduler wait, page load,
+bulk timer wait, bulk source dispatch, transcode queue, transcode execution,
+ready-upload work, atlas write, and page-table publication. Publication records
+the numeric frame whose later render pass can first sample the committed entry.
+Web Fetch and native arena-backed range operations feed the same descriptors; native worker-internal `pread` and
 arena lease subspans remain a separate adapter gate.
 
-The first accepted unified profile (`docs/benchmarks/dungeon-vt-unified-
+The pre-removal baseline profile (`docs/benchmarks/dungeon-vt-unified-
 telemetry-rtx3090-2026-07-25.md`) found 149.0 ms mean / 231.4 ms p99 complete
-page latency on a fresh-cache RTX 3090 traversal. The dominant components were
+page latency on a cold-cache RTX 3090 traversal. The dominant components were
 the configured bulk batching window (56.9 ms mean) and transcode queue (81.8 ms
 mean), versus 3.0 ms bulk I/O, 11.4 ms transcode execution, and 0.028 ms upload/
 page-table publication. The run loaded 973 pages with no failures and emitted
@@ -331,15 +331,15 @@ open. `createFetchRangeLoader(baseUrl?)` returns the browser/CEF serving-layer
 `load`/`size`/`identity`/`read`/`readBulk`
 implementation. `read` requires one exact 206 response; `readBulk` emits up to
 256 explicit spans and validates each returned multipart `Content-Range` in
-request order. `identity` exposes size/ETag/Last-Modified for derived-cache
-namespacing.
-`createPageDataProvider(loader, header, textureWorkers, format, cache?)` accepts
-a fixed worker list plus an optional generic `PersistentBlobCache`, expands each compact size
-vector into fixed `Float64Array` offsets and `Uint32Array` sizes, and exposes a
-stable `getStats()` view for cache/read/transcode stages. A cache hit returns
-final GPU blocks before source range read or Basis transcode. Miss output is
-published asynchronously and never delays upload. Page lookup is direct
-`y * pagesX + x` indexing. The production nine-channel dungeon header fell from 764,192 bytes in
+request order. `identity` exposes source size/ETag/Last-Modified to generic
+serving-layer consumers.
+`createPageDataProvider(loader, header, textureWorkers, format, config,
+telemetry?)` accepts a fixed worker list plus explicit transcode queue and
+urgent/quality deadline policy, expands each compact size vector into fixed
+`Float64Array` offsets and `Uint32Array` sizes, and exposes a stable
+`getStats()` view for read/transcode stages. There is no persistent derived-page
+cache: every nonresident page follows source read then Basis transcode. Page
+lookup is direct `y * pagesX + x` indexing. The production nine-channel dungeon header fell from 764,192 bytes in
 v4 to 123,768 bytes in v5, safely below the 1 MiB RPC output limit. v4 is
 rejected; bundled assets were rebuilt rather than retaining compatibility.
 
@@ -365,8 +365,8 @@ use deterministic `<model>#image-N` VT names; external image URIs are rejected.
 
 ## Demonstrations
 
-The dungeon's scanned 8K PBR sources are cached as a generic `.big` container
-under `/tmp`, then loaded through `AssetLoader` range reads and transcoded from
+The dungeon's scanned 8K PBR sources are cooked into a generic `.big` container,
+then loaded through range reads and transcoded from
 Basis to the active GPU format by `TextureWorker`. `MeshStandardNodeMaterial`
 keeps Three.js's PBR implementation; VT nodes supply albedo, tangent-space
 normal, and a packed linear mask page (`R=roughness`, `G=ambient occlusion`).
@@ -381,8 +381,8 @@ Both demonstrations use the engine `VirtualTextureStore`, `VT_SAMPLE_WGSL`,
 packed page tables, request scheduler, incremental writes, and one physical
 atlas sized to the largest whole 136×136-slot grid allowed by the GPU's reported
 `maxTextureDimension2D`. On the current adapter this is 8,160×8,160 (60×60 =
-3,600 slots, approximately 254 MiB RGBA8). Neither demo has a private cache or
-page-table implementation.
+3,600 slots, approximately 254 MiB RGBA8). Neither demo has a private residency
+or page-table implementation; no demo uses persistent derived-page storage.
 
 `vt-demo` (canonical `EngineRuntime` consumer) uses
 the procedural store factory, generic `VirtualMaterialBinding`, renderer host,

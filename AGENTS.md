@@ -362,9 +362,10 @@ All engine work must move toward these non-negotiable requirements:
   The web worker has separate wasm memory, so calls copy SAB→worker wasm→SAB.
   Historical input→present: 1.16ms median @ 144fps (not rerun). Run
   `cargo run --release --example bench_rpc -p afterglow-rpc-demo`.
-- `docs/research/device-transcoded-texture-cache.md` — Industry comparison of
-  runtime Basis/KTX2 transcoding versus cooked/derived caches, plus Afterglow's
-  generic persistent-cache and device/source namespace design.
+- `docs/research/device-transcoded-texture-cache.md` — Historical industry
+  comparison of runtime Basis/KTX2 transcoding versus cooked/derived caches.
+  The derived cache was implemented, measured, then removed on 2026-07-25 in
+  favor of the bounded no-cache VT pipeline.
 - `docs/research/surface-detail-low-end-fallbacks.md` — Surface-detail/POM
   fallback evaluation and integrated result: normal/one-tap fallback tiers,
   measured low-core 680M boundary, resident matching height, and bounded VT
@@ -509,9 +510,6 @@ All engine work must move toward these non-negotiable requirements:
   mdbook-mermaid --run "mdbook serve --open"`. Kept in sync with engine changes.
 - `docs/api/engine-memory.md` — sealed runtime phases, fixed arenas/pools,
   resource sealing, TypeScript artifact enforcement, and allocation linting.
-- `docs/api/persistent-blob-cache.md` — generic bounded OPFS byte cache:
-  append-only pack/fixed SHA-256 index, crash semantics, limits, telemetry, and
-  policy-free composition by VT or other systems.
 - `docs/api/ring-buffer.md` — `afterglow-rpc` ring buffer + native transport
   (SPSC framing, owned halves, worker transport, events, poison/timeout).
 - `docs/api/rpc-macro.md` — `afterglow-rpc-macros` `#[rpc]` attribute: server/

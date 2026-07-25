@@ -8,9 +8,12 @@ The sealed defaults are intentionally finite:
 | Worker completion publication | 32 per poll |
 | Asset IDs | 1,024 |
 | Native open sources | 16 |
-| VT in flight | 64 pages / 8 MiB |
-| VT uploads | 4 pages / 0.35 ms |
-| VT admissions | 8 / 0.25 ms |
+| VT in flight | 16 pages / 2 MiB |
+| VT transcode waiting | 12 jobs behind 2–4 active workers |
+| VT bulk deadlines | 1 ms urgent / 16 ms exact-quality |
+| VT feedback | 55 ms cadence / one readback |
+| VT uploads | adaptive, at most 4 pages / 0.35 ms |
+| VT admissions | at most 8 per poll / 0.25 ms inside the 16-page cap |
 | Structural changes | 256 per frame |
 | Dirty roots / hierarchy children | 4,096 per frame each |
 | Hierarchy rebuild | 512 operations / 0.2 ms |

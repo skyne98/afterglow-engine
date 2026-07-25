@@ -540,7 +540,7 @@ completion, and cache capacities. It owns:
 - raw `AssetStore` loader;
 - bounded transcoder clients/pool;
 - selected device format;
-- optional generic persistent blob cache;
+- historical optional generic persistent blob cache (removed 2026-07-25);
 - page provider;
 - cancellation and idempotent shutdown.
 

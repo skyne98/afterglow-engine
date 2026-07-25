@@ -58,17 +58,19 @@ The path-based `load()` API remains a game-facing convenience wrapper. It
 registers the path and throws if the configured asset capacity is exhausted.
 
 `BigAssetSession.open()` is the browser bootstrap owner for one `.big`
-container. It requires explicit worker count, transcode-queue capacity, and
-maximum header bytes; validates the header bound before spawning its standard
+container. It requires explicit worker count, transcode waiting capacity,
+VT pending page/byte capacities, urgent/quality batch deadlines, and maximum
+header bytes; validates them before spawning its standard
 typed transcoder workers; owns
 the raw loader and VT page provider; and rolls partial startup back in reverse
 order. `createAssetStore()` starts the engine-owned mesh optimizer and binds
 fixed asset/completion capacities to that raw loader. It creates at most one
 `VirtualTextureStore`. Idempotent shutdown closes
 all workers even if one close fails, with stable error telemetry. Passing
-`telemetry: runtime.telemetry` correlates session startup, range/cache work,
-bulk waits and dispatch, native RPC round trips, transcode, mesh optimization,
-and VT publication. Pages do not construct a raw `Rpc` transport, choose worker
+`telemetry: runtime.telemetry` correlates session startup, range work, feedback,
+scheduler and bulk waits, native RPC round trips, transcode, mesh optimization,
+and VT publication. Persistent derived-page caching has been removed; every
+nonresident page follows source read and transcode. Pages do not construct a raw `Rpc` transport, choose worker
 scripts, or manually terminate workers.
 
 Self-contained GLBs follow this same path. The offline pipeline extracts
