@@ -336,38 +336,9 @@ function asyncWorkerImports(driver, memory) {
 
 // crates/afterglow-web/web/src/workers/rpc.ts
 var TIMEOUT_MS = 5000;
-function decodeVarint2(bytes, off) {
-  let r = 0;
-  for (let shift = 0;shift < 35; shift += 7) {
-    if (off >= bytes.length)
-      throw new Error("postcard varint truncated");
-    const b = bytes[off++];
-    if (shift === 28 && b & 240)
-      throw new Error("postcard varint overflows u32");
-    r += (b & 127) * 2 ** shift;
-    if (!(b & 128))
-      return [r >>> 0, off];
-  }
-  throw new Error("postcard varint overflows u32");
-}
-function unwrapResponse2(bytes) {
-  const [variant, off] = decodeVarint2(bytes, 0);
-  if (variant === 0) {
-    const [plen, poff] = decodeVarint2(bytes, off);
-    if (poff + plen > bytes.length)
-      throw new Error("RPC response truncated");
-    return bytes.subarray(poff, poff + plen);
-  }
-  const [method, moff] = decodeVarint2(bytes, off);
-  const [mlen, eoff] = decodeVarint2(bytes, moff);
-  if (eoff + mlen > bytes.length)
-    throw new Error("RPC error truncated");
-  const msg = new TextDecoder().decode(bytes.subarray(eoff, eoff + mlen));
-  throw new Error(`RPC ${variant === 1 ? "server" : "decode"} error (method ${method}): ${msg}`);
-}
 
 class Rpc {
-  static async create({ mainWasmUrl, workerJsUrl, workerWasmUrl, timeoutMs }) {
+  static async create({ mainWasmUrl, workerJsUrl, workerWasmUrl, timeoutMs, workerInit = null }) {
     const memory = new WebAssembly.Memory({ shared: true, initial: 256, maximum: 1024 });
     const worker = new Worker(workerJsUrl, { type: "module" });
     let rpc = null;
@@ -381,7 +352,8 @@ class Rpc {
         reqBase: wasm.get_request_ptr(),
         respBase: wasm.get_response_ptr(),
         bufSize: wasm.get_buffer_size(),
-        wasmUrl: workerWasmUrl
+        wasmUrl: workerWasmUrl,
+        workerInit
       });
       await rpc._initPromise;
       worker.postMessage({ type: "run" });
@@ -466,7 +438,7 @@ class Rpc {
       return;
     }
     try {
-      p.resolve(unwrapResponse2(new Uint8Array(this.mem.buffer, this.scratch, n)));
+      p.resolve(unwrapResponse(new Uint8Array(this.mem.buffer, this.scratch, n)));
     } catch (e) {
       p.reject(e);
     }
@@ -511,7 +483,7 @@ class AssetLoaderClient {
   }
   static async spawnThreaded(opts = {}) {
     const rpc = await Rpc.create({
-      mainWasmUrl: opts.mainWasmUrl ?? "afterglow_web.wasm",
+      mainWasmUrl: opts.mainWasmUrl ?? "afterglow_rpc.wasm",
       workerJsUrl: opts.workerJsUrl ?? "worker.js",
       workerWasmUrl: opts.workerWasmUrl ?? "assetloader.wasm",
       timeoutMs: opts.timeoutMs

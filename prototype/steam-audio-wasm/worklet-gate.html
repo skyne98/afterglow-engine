@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Afterglow Steam Audio Wasm AudioWorklet Gate</title>
+  <style>
+    html,body{margin:0;min-height:100%;background:#080b10;color:#dce8f5;font:14px monospace}
+    button{position:fixed;z-index:2;top:16px;left:16px;padding:10px 18px}
+    pre{position:fixed;z-index:2;top:58px;left:16px;margin:0;padding:12px;background:#000b;white-space:pre-wrap}
+    canvas{display:block;width:100vw;height:100vh}
+  </style>
+</head>
+<body>
+  <button id="start" disabled>Start real-time Wasm AudioWorklet</button>
+  <pre id="output">bootstrapping Steam Audio…</pre>
+  <script type="module" src="worklet-gate-main.js"></script>
+</body>
+</html>

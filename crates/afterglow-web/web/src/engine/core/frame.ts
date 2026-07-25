@@ -69,7 +69,7 @@ export function prepareAfterglowFrame(
 ): void {
   // Rewind fixed frame scratch and establish cumulative stage deadlines before
   // any engine system can consume frame capacity.
-  if (memory && memory.phase !== EnginePhase.GameplaySealed && memory.phase !== EnginePhase.LoadingScreen)
+  if (memory && memory.phase !== EnginePhase.GameplaySealed)
     throw new Error('EngineMemory must be sealed before frame orchestration');
   memory?.beginFrame();
   budget?.beginFrame(frame.frameId, frame.deltaSeconds * 1000);

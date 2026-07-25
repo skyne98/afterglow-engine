@@ -1,0 +1,69 @@
+[package]
+name = "afterglow-shell"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+autoexamples = false
+
+[dependencies]
+winit = { version = "0.30", features = ["rwh_06"] }
+raw-window-handle = "0.6"
+deno_core = "0.408"
+# (No direct `v8` dep — we use deno_core's v8 149.4.0 + `simdutf` feature,
+#  so a single rusty_v8 archive satisfies the whole tree.)
+# Deno's WebGPU implementation (rusty_v8 + wgpu). Goal: expose navigator.gpu
+# to the JS runtime so three.webgpu.js can render into our capture texture.
+deno_webgpu = "0.222"
+# (canvas bridge: GPUCanvasContext headless image + readback)
+deno_image = "0.31"
+deno_error = "0.7.1"
+serde = { version = "1", features = ["derive"] }
+pollster = "0.3"
+env_logger = "0.11"
+tokio = { version = "1", features = ["full"] }
+futures-util = "0.3"
+serde_json = "1"
+image = { version = "0.25", default-features = false, features = ["png"] }
+data-url = "0.3.2"
+deno_webidl = "0.255.0"
+deno_web = "0.286.0"
+url = "2.5.8"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+wgpu-core = "29.0.1"
+# Native worker comms: the op bridge exposes spawned `afterglow-rpc` workers to JS.
+afterglow-rpc = { path = "../afterglow-rpc" }
+afterglow-rpc-demo = { path = "../afterglow-rpc-demo" }
+afterglow-assets = { path = "../afterglow-assets" }
+afterglow-assets-worker = { path = "../afterglow-assets-worker" }
+afterglow-texture = { path = "../afterglow-texture" }
+afterglow-meshopt = { path = "../afterglow-meshopt" }
+wgpu-types = "29.0.1"
+half = "2"
+# LinkeDOM remains the JavaScript DOM; Blitz supplies the browser's native
+# CSS cascade, layout, and complete headless page compositor.
+blitz-dom = { version = "=0.3.0-beta.1", default-features = false, features = ["svg"] }
+blitz-html = "=0.3.0-beta.1"
+blitz-paint = { version = "=0.3.0-beta.1", default-features = false, features = ["font-embolden", "svg"] }
+blitz-traits = "=0.3.0-beta.1"
+anyrender = "0.11"
+anyrender_vello_cpu = "0.14"
+anyrender_vello = "0.12"
+vello = { version = "0.9", features = ["wgpu"] }
+wgpu = "=29.0.4"
+
+[build-dependencies]
+deno_core = "0.408"
+deno_webgpu = "0.222"
+deno_webidl = "0.255.0"
+deno_web = "0.286.0"
+url = "2.5.8"
+pollster = "0.3"
+
+# This runtime is native-only. Its narrow native WebGPU and pinned Blitz
+# patches live in the workspace root because Cargo ignores member patch tables.
+# See vendor/NATIVE_WEBGPU_PATCHES.md for the inventory and upstream links.
+
+[[example]]
+name = "browser_test"
+path = "examples/browser_test.rs"

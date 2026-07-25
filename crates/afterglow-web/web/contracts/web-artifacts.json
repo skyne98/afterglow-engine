@@ -5,10 +5,13 @@
     { "source": "src/workers/async-worker.ts", "output": "async-worker.js", "role": "runtime" },
     { "source": "src/workers/ring-buf.ts", "output": "ring-buf.js", "role": "runtime" },
     { "source": "src/workers/assetloader.client.ts", "output": "assetloader.client.js", "role": "runtime" },
+    { "source": "src/workers/engineaudioservice.client.ts", "output": "engineaudioservice.client.js", "role": "runtime" },
     { "source": "src/workers/meshopt.client.ts", "output": "meshopt.client.js", "role": "runtime" },
     { "source": "src/workers/texture.client.ts", "output": "texture.client.js", "role": "runtime" },
     { "source": "src/workers/rpc.ts", "output": "rpc.js", "role": "runtime" },
     { "source": "src/workers/worker.ts", "output": "worker.js", "role": "worker" },
+    { "source": "src/workers/audio-worker.ts", "output": "audio-worker.js", "role": "worker" },
+    { "source": "src/engine/audio/audio-worklet.ts", "output": "engine/audio-worklet.js", "role": "runtime" },
     { "source": "src/engine/assets/asset-store.ts", "output": "engine/asset-store.js", "role": "runtime" },
     { "source": "src/engine/core/engine-memory.ts", "output": "engine/engine-memory.js", "role": "runtime" },
     { "source": "src/engine/assets/big-parser.ts", "output": "engine/big-parser.js", "role": "runtime" },
@@ -21,6 +24,8 @@
     { "source": "src/demos/engine/main.ts", "output": "engine-demo.js", "role": "visual-demo", "pages": ["engine-demo.html"], "architectureChecked": true },
     { "source": "src/demos/lod/main.ts", "output": "lod-demo.js", "role": "visual-demo", "pages": ["lod-demo.html"], "architectureChecked": true },
     { "source": "src/demos/worker-bench/main.ts", "output": "worker-bench.js", "role": "diagnostic", "pages": ["worker-bench.html"] },
-    { "source": "src/demos/worker-test/main.ts", "output": "worker-test.js", "role": "diagnostic", "pages": ["worker-test.html"] }
+    { "source": "src/demos/range-bench/main.ts", "output": "range-bench.js", "role": "diagnostic", "pages": ["range-bench.html"] },
+    { "source": "src/demos/worker-test/main.ts", "output": "worker-test.js", "role": "diagnostic", "pages": ["worker-test.html"] },
+    { "source": "src/demos/audio-worklet/main.ts", "output": "audio-worklet-demo.js", "role": "diagnostic", "pages": ["audio-worklet.html"] }
   ]
 }

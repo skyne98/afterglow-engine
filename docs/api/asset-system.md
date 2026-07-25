@@ -1,6 +1,9 @@
 # `afterglow-assets` + `afterglow-assets-worker` API — streaming assets + async loader
 
-> Status: working; API checked against the 2026-07-18 source.
+> Status: working with one audited integration gap; API checked against the
+> 2026-07-22 source. The live BIG provider does not yet source-sort bulk spans.
+> `afterglow-cef` has been removed; the native target boundary and native
+> worker composition are tracked in `docs/implementation/shell-promotion-plan.md`.
 
 ## Browser BIG asset session
 
@@ -16,11 +19,18 @@ startup failure.
 The public browser barrel is `web/src/engine/assets/index.ts`. The policy-free
 `readBigHeader(source, path, maxHeaderBytes)` primitive performs the shared
 bounded prefix/header read used by both VT/model archives and static meshes; no
-consumer duplicates container validation. The session creates the
-standard typed transcoder clients through `spawnThreaded()` and closes every
-client in reverse order. Games never construct `Rpc`, select worker scripts, or
-terminate raw transports. `createTranscoder` exists only as a platform/test
-injection boundary.
+consumer duplicates container validation. The session currently creates typed transcoder clients through
+`spawnThreaded()` and closes every client in reverse order. Games never
+construct `Rpc`, select worker scripts, or terminate raw transports.
+`createTranscoder` is the platform/test injection boundary.
+
+**Native target gap:** `afterglow-cef` has been removed. The default
+transcoder factory is not target-aware, and the native shell does not yet
+compose the generated native `afterglow-texture` client as an OS worker.
+`afterglow-texture` has a generated native client and therefore must run as an
+OS worker started from the shell's native bootstrap; until that lands, there is
+no native host that wires native texture workers. Documentation must not treat
+a WASM-on-native path as a supported backend.
 `createAssetStore(capacity, completionsPerPoll)` starts and owns the standard
 mesh optimizer and binds a fixed-capacity
 `AssetStore` to the session's raw loader, so demos do not reconstruct container
@@ -45,10 +55,24 @@ const assets = await session.createAssetStore(64, 8);
 const store = session.createVirtualTextureStore(device, tuning);
 ```
 
+`createFetchRangeLoader()` also exposes `readBulk(path, ranges)`. Public web
+uses standard multipart HTTP ranges for both singleton and bulk reads; the
+former CEF native shared-message bridge has been removed. The live session
+page provider preserves scheduler/admission order. It does **not** currently
+source-sort spans. `createPageRangeReader()` contains a separate source-sorting
+implementation and restores caller order by page index, but `BigAssetSession`
+does not call it. The session's page provider owns a fixed 256-slot
+two-tier queue: mip+2 parent misses open a non-resettable 1 ms maximum window;
+exact pages open a non-resettable 100 ms window. Each response is at most 4 MiB
+and at most two responses / 8 MiB are in flight. `close()` rejects queued work
+and prevents late raw bytes from entering a closed transcoder pool. Stable
+telemetry reports queue depth, in-flight response bytes, urgent/quality batches,
+rejects, and cancellations.
+
 ## Streaming sources (`afterglow-assets::source`)
 
 ```rust
-pub trait AssetSource: Send + Sync {
+pub trait AssetSource {
     fn len(&self) -> u64;
     fn is_empty(&self) -> bool { self.len() == 0 }
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<usize>;  // 0 at EOF
@@ -70,8 +94,9 @@ impl FsSource {
 }
 ```
 
-Reads via `FileExt::read_at` (Unix `pread`, Windows `seek_read`) — no mutex, no
-whole-file load. ETag derived from modified-time (weak, mtime-based).
+The current native implementation uses Unix `FileExt::read_at` (`pread`) — no
+mutex and no whole-file load. ETag is derived from modified-time (weak,
+mtime-based).
 
 ### `BytesSource`
 
@@ -94,6 +119,53 @@ impl AssetRoot {
 Resolve-then-open: delegates to `resolve` (canonically confined) then opens
 an `FsSource`. Returns `None` if missing/escaped/unreadable.
 
+### `AssetSourceCache` (native only)
+
+```rust
+pub const DEFAULT_SOURCE_CACHE_CAPACITY: usize = 16;
+pub struct AssetSourceCache { /* fixed open-source slots */ }
+impl AssetSourceCache {
+    pub fn new(root: AssetRoot) -> Self; // fixed 16 slots
+    pub fn with_capacity(root: AssetRoot, capacity: usize) -> Self;
+    pub fn invalidate(&self, url_path: &str);
+    pub fn clear(&self);
+}
+```
+
+The cache retains `pread`-safe source handles with fixed capacity and
+round-robin replacement. A hit performs no canonicalization, `File::open`, or
+metadata call; it only clones the retained `Arc<FsSource>`. Capacity must be
+positive. A retained handle intentionally continues to read its old inode if an
+asset is replaced; producers must call `invalidate(path)` or `clear()` after a
+rebuild. The web dev server constructs one default-16 cache shared by its
+request handlers and retains the `.big` descriptor across requests.
+
+### Native range bridge (removed)
+
+The CEF shared-message bridge (`readCefNativeRanges` /
+`afterglowNativeReadRanges`) and the `afterglow://local/` scheme handler in
+`afterglow-cef/src/resources.rs` have been removed with `afterglow-cef`. The
+web target's `createFetchRangeLoader` now routes both singleton and bulk reads
+through standards-based HTTP Fetch + Range. A native equivalent for the
+`afterglow-shell` host (asset-root loader + optional native range read) is an
+open parity gate — see `docs/implementation/shell-promotion-plan.md`.
+
+## Bounded bulk ranges (`afterglow-assets::multipart`)
+
+```rust
+pub const MAX_BULK_RANGES: usize = 256;
+pub const MAX_BULK_RESPONSE_BYTES: u64 = 4 * 1024 * 1024;
+pub fn parse_multi_range(header: Option<&str>, total: u64) -> MultiRangeSpec;
+pub struct MultipartSource { /* bounded envelope + streaming source */ }
+```
+
+Authored clients send explicit non-overlapping `bytes=START-END,...` spans.
+`MultipartSource` emits standard `multipart/byteranges` with a stable boundary
+and delegates payload reads to the underlying `AssetSource`; it never assembles
+the payload in a temporary response buffer. Range count and complete response
+bytes are hard-capped. Caddy provides the same standard response directly from
+its static file server.
+
 ## Range parsing (`afterglow-assets::range`)
 
 ```rust
@@ -107,24 +179,24 @@ pub fn parse_range(header: Option<&str>, len: u64) -> RangeSpec;
 pub fn content_range(start: u64, end: u64, total: u64) -> String;
 ```
 
-Single-range only (`bytes=0-499`, `500-`, `-500`). Multi-range → `Full` (no
-multipart). Whitespace-tolerant.
+`parse_range` is single-range only (`bytes=0-499`, `500-`, `-500`) and remains
+whitespace-tolerant. Serving adapters call `parse_multi_range` first, then use
+this parser for ordinary requests.
 
 ## Serving layer
 
-### CEF scheme (`afterglow-cef/src/resources.rs`)
+### Native shell asset loader (pending)
 
-- `open` → resolves to `Box<dyn AssetSource + Send + Sync>`.
-- `response_headers` → sets `Content-Length`, `Accept-Ranges: bytes`, ETag,
-  COOP/COEP/CORP.
-- `skip(n)` → advances the read offset (CEF's range primitive).
-- `read(data_out, n)` → `source.read_at(offset, buf)`, streams from disk.
-- No whole-file buffering. Embedded-first (`index.html`), then FS fallback.
+The `afterglow-shell` host does not yet expose an equivalent asset-root loader;
+serving on the native target is an open parity gate tracked in
+`docs/implementation/shell-promotion-plan.md`. The previous CEF scheme handler
+(`afterglow-cef/src/resources.rs`) has been removed.
 
 ### Web HTTP dev server (`afterglow-web/src/dev_server.rs`)
 
 - `handle_request(root, request) -> Response` — parses `Range` header.
-- `Range` → `206 Partial Content` + `Content-Range`; no range → `200` full.
+- Single `Range` → `206 Partial Content` + `Content-Range`; multi-range → one
+  bounded `206 multipart/byteranges`; no range → `200` full.
 - `stream_body(resp, writer, chunk)` — streams via `read_at` in chunks.
 - `Accept-Ranges: bytes` on every response (via `CROSS_ORIGIN_HEADERS`).
 - `DevAssetServer::start(root, address, workers, queue_per_worker)` owns a fixed
@@ -134,16 +206,30 @@ multipart). Whitespace-tolerant.
   and `Drop` are idempotent and join the accept thread and workers.
 - `cargo run -p xtask -- serve` runs four workers with sixteen queued
   connections per worker and handles Ctrl-C through the shutdown token.
+- The current development server performs one `TcpStream::read` into an 8 KiB
+  request buffer and always closes the connection. TCP does not guarantee that
+  all headers arrive in that read; a fragmented `Range` header can therefore be
+  missed. Treat this server as a local development tool, not the production web
+  origin. `deploy/web/Caddyfile` is the production static-serving profile.
 
-## JS asset loader — via the worker client (both backends)
+Neither HTTP bulk Fetch currently has a response deadline or
+transport-level abort. VT cancellation is checked before dispatch and after
+completion, but an in-flight stalled response can retain one of the fixed slots
+indefinitely.
 
-The render thread uses the generated `AssetLoaderClient` TS client on **both**
-backends. On native, the worker reads from disk via `FsSource`/`pread` and
-retains up to 16 open sources in a fixed round-robin cache; repeated container
-ranges therefore reuse descriptors without unbounded path growth. On web, the
-worker fetches via JS-imported `ag_fetch_start`/`ag_fetch_poll` (the
-`fetch.rs` bridge), driven by `async-worker.js`'s tick loop. No separate JS
-fetch glue in user code — the worker is the single entry point.
+## Asset-loader worker versus the live BIG path
+
+`afterglow-assets-worker` provides generated native and TypeScript clients, but
+it is **not** the entry point used by `BigAssetSession` today. The live BIG/VT
+path uses `createFetchRangeLoader`: public web issues HTTP Fetch + Range for
+both singleton and bulk reads (the former CEF native bridge has been removed).
+`afterglow-assets-worker` remains available to Rust/native consumers and
+retains up to 16 open `FsSource` handles, but claims that every render-thread
+asset load passes through `AssetLoaderClient` are incorrect.
+
+Target policy remains unchanged: when this service is composed into the native
+shell, it must use its generated native client and OS worker, not
+`assetloader.wasm`. Public web may use the serving-layer Fetch path.
 
 ## Engine `AssetStore`
 
@@ -244,9 +330,11 @@ position/UV-only simplification would be visually unsafe during deformation.
 ## Asset loader worker (`afterglow-assets-worker`)
 
 ```rust
-#[rpc(worker = AssetLoaderWorker)]
+#[rpc(worker = AssetLoaderWorker, singleton)]
 pub trait AssetLoader {
     async fn load(path: String) -> RpcResult<Vec<u8>>;
+    async fn size(path: String) -> RpcResult<u64>;
+    async fn read(path: String, offset: u64, len: u32) -> RpcResult<Vec<u8>>;
 }
 
 pub struct AssetLoaderWorker { /* singleton root + 16-source native cache */ }
@@ -259,7 +347,8 @@ Async `#[rpc]` service. `load` reads a file via `FsSource::read_at` and returns
 its bytes (postcard-encoded `Vec<u8>`). The client uses the poll model:
 
 ```rust
-let (client, _events) = AssetLoaderClient::spawn_worker(worker)?;
+AssetLoaderWorker::set_asset_root(AssetRoot::new("assets")?);
+let client = AssetLoaderClient::spawn_worker()?;
 let fut = client.load("path".into())?;  // non-blocking, returns a Future
 client.poll();  // each frame: drain completions, resolve futures
 let bytes: Vec<u8> = fut.await?;
@@ -338,5 +427,4 @@ For async traits, the TS methods are already `async` (they return `Promises`).
   boundary the sources build on).
 - [`ring-buffer.md`](ring-buffer.md) — sync native transport.
 - [`rpc-macro.md`](rpc-macro.md) — `#[rpc]` attribute (sync + async paths).
-- [`cef-shell.md`](cef-shell.md) — the CEF scheme handler.
 - [`web-shared-memory.md`](web-shared-memory.md) — the web HTTP dev server.

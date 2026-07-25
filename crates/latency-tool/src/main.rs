@@ -1,7 +1,8 @@
-//! Automated input→present latency measurement for the cef-rs prototype.
+//! Automated input→present latency measurement for the afterglow-shell native
+//! host via the Chrome DevTools Protocol.
 //!
-//! Connects to CEF's Chrome DevTools Protocol (browser-level endpoint), starts a
-//! Chromium trace, then for N iterations: dispatches a synthetic mouse click via
+//! Connects to the host's CDP endpoint (browser-level), starts a Chromium trace,
+//! then for N iterations: dispatches a synthetic mouse click via
 //! CDP `Input.dispatchMouseEvent` and immediately drops a `performance.mark`
 //! (a trace-clock marker) via `Runtime.evaluate`. After stopping the trace, it
 //! parses each mark's timestamp vs the next `SkiaRenderer::SwapBuffers` (the
@@ -13,7 +14,7 @@
 //!
 //! Usage: latency-tool `[host:port]`   (default 127.0.0.1:9222)
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::time::Duration;
 use tungstenite::Message;
 
@@ -89,6 +90,15 @@ impl Cdp {
             .unwrap();
         recv(&mut self.ws, id)
     }
+
+    /// Bound an event-drain read without affecting request/response calls.
+    /// CEF's DevTools WebSocket is local and plain (`ws://`), so this is the
+    /// only transport shape emitted by its `/json/version` endpoint.
+    fn set_event_read_timeout(&mut self, timeout: Option<Duration>) {
+        if let tungstenite::stream::MaybeTlsStream::Plain(stream) = self.ws.get_mut() {
+            let _ = stream.set_read_timeout(timeout);
+        }
+    }
 }
 
 fn main() {
@@ -111,8 +121,20 @@ fn main() {
         let r = cdp.session("Page.navigate", json!({"url": url}));
         println!("Page.navigate => {}", r["result"]);
         let deadline = std::time::Instant::now() + Duration::from_millis(2500);
+        cdp.set_event_read_timeout(Some(Duration::from_millis(100)));
         while std::time::Instant::now() < deadline {
-            let Ok(msg) = cdp.ws.read() else { break };
+            let msg = match cdp.ws.read() {
+                Ok(msg) => msg,
+                Err(tungstenite::Error::Io(error))
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                    ) =>
+                {
+                    continue
+                }
+                Err(_) => break,
+            };
             let Message::Text(t) = msg else { continue };
             let Ok(v) = serde_json::from_str::<Value>(&t) else {
                 continue;

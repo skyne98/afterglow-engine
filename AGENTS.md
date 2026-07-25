@@ -18,9 +18,13 @@ process". Workers do computation; the website orchestrates and renders.
 ### Communication: one mechanism
 
 **`afterglow-rpc::RingBuffer`** — a lock-free SPSC ring buffer on raw pointers
-+ `AtomicU32` (Acquire/Release). It is the only **payload** communication
-mechanism for website↔worker and worker↔worker. RPC values use postcard;
-thread unparks and payload-free `postMessage` calls are wake-ups only.
++ `AtomicU32` (Acquire/Release). It is the only service **payload** mechanism for
+website↔worker and worker↔worker. RPC values use postcard; thread unparks and
+payload-free `postMessage` calls are wake-ups only. CEF has one explicit
+cross-process adapter: its generic bounded renderer bridge uses CEF process
+messages/shared-memory messages between Chromium's renderer and browser
+processes, then hands service work to generated native RingBuffer clients. This
+adapter is not a second worker transport.
 
 **Sync `#[rpc]`**: blocking request→response (one-in-flight, park/unpark).
 **Async `#[rpc]`**: the poll model — `call_async` writes `[method][task_id][args]`
@@ -46,31 +50,52 @@ Two backends, same framing and ring layout:
   worker has separate memory; `worker.js` accesses the SAB rings with matching
   Atomics/framing and copies arguments/results to/from the service wasm.
 
+### Mandatory target boundary
+
+**The native shell is a native target, not the web target.** This applies to
+`afterglow-shell` (the sole native host; `afterglow-cef` has been removed).
+Every engine service available as a native `afterglow-rpc` worker must use the
+generated native client and a real OS thread. The shell must provide an
+explicit native bootstrap that spawns those clients before gameplay. Native
+targets link native third-party libraries and use native memory; they never
+instantiate a service as WASM or put it in a Web Worker merely because the
+game code uses web APIs. WASM/Web Workers are exclusively the public-web
+fallback. Any exception requires an explicit user decision recorded before
+implementation. Tests and target-specific documentation must enforce this
+boundary.
+
+**Open gap:** the shell does not yet compose native `afterglow-rpc` workers
+(audio, assets, texture, meshopt) or expose a production game bootstrap API.
+Until that lands, there is no native host that wires native worker clients.
+Do not paper over this by instantiating worker WASM on the native target. See
+`docs/implementation/shell-promotion-plan.md`.
+
 ### Crate structure
 
 | Crate | Purpose |
 |-------|---------|
-| `afterglow-rpc` | Core: `RingBuffer`, `Transport` trait, postcard codec, response envelope, `ServeFuture` type, and shared wasm ABI helpers. `native` has `RingStorage`, `spawn_worker_loop`, `run_worker_loop`, `spawn_async_worker_loop`, `run_async_worker_loop`, `AsyncWorkerTransport`, `Oneshot`, and event rings. |
+| `afterglow-rpc` | Core: `RingBuffer`, `Transport` trait, postcard codec, response envelope, `ServeFuture` type, the shared wasm transport module (main-thread SAB ring exports), and the native transport. `native` has `RingStorage`, `spawn_worker_loop`, `run_worker_loop`, `spawn_async_worker_loop`, `run_async_worker_loop`, `AsyncWorkerTransport`, `Oneshot`, and event rings. Produces the `afterglow_rpc.wasm` transport module. |
 | `afterglow-rpc-macros` | `#[rpc]` proc macro: generates the server trait, typed Rust client, dispatch, native spawn, thin wasm exports, **and a typed TypeScript client**. Supports both sync (`fn`) and async (`async fn`) methods — async uses the poll model (task_id framing, completion queue, `async-executor`). |
 | `afterglow-rpc-demo` | Demo `Physics` service + `bench_rpc` stress test. |
+| `afterglow-audio-worker` | Unified `#[rpc(worker = EngineAudioWorker)]` service: fixed voice/render state, Steam Audio FFI ownership, device-clock pump, telemetry, and final PCM export. |
+| `afterglow-obvhs-tracer` | Rust obvhs CWBVH8 implementation of Steam Audio's four custom-scene callbacks; linked into the unified audio worker module. |
 | `afterglow-basis-encoder` | Offline-only official Basis Universal C++ UASTC encoder used by `afterglow-pipeline`; never linked into runtime or wasm crates. |
-| `afterglow-pipeline` | Offline cook: confines and embeds external glTF packages, packs self-contained GLBs, extracts images into paged/UASTC VTs, emits R16 displacement, and writes seekable `.big` v5 containers. |
-| `afterglow-assets-worker` | Asset loader worker: `#[rpc(worker = AssetLoaderWorker)]` with `async fn load(path) -> RpcResult<Vec<u8>>`. Uses the async `#[rpc]` poll model + `async-executor`. Native only (reads disk via `FsSource`); web asset loading goes through the serving layer (fetch + Range). |
-| `afterglow-assets` | Shared asset-path/MIME helpers (`AssetRoot`, `decode_url_path`, `guess_mime`, `resolve`) for the CEF scheme handler and web dev server. Plus streaming `AssetSource` trait + `FsSource`/`BytesSource` + `Range` parser. No deps or file-content reads in the confinement module; `FsSource` owns streaming reads via `pread`. The single security boundary for FS asset confinement. |
-| `afterglow-web` | Wasm target + authored TypeScript runtime: shared-ring worker bridge, fixed runtime storage, packed-GLB AssetStore loading with rig-preserving runtime meshopt, VT sampling/feedback/material adapters, and demos. No wasm-bindgen. |
-| `afterglow-cef` | Thin CEF shell: window + WebGPU flags + `afterglow://` scheme (embedded-first / FS-fallback assets via `afterglow-assets`) + COOP/COEP headers. No worker code, no IPC, no input. |
+| `afterglow-pipeline` | Offline cook: confines and embeds external glTF packages, packs self-contained GLBs, extracts images into paged/UASTC VTs, emits R16 displacement, and writes seekable `.big` v6 containers (the bundled Dungeon VT remains readable v5). |
+| `afterglow-assets-worker` | Asset loader worker: `#[rpc(worker = AssetLoaderWorker)]` with async `load`, `size`, and `read`. Uses the async `#[rpc]` poll model + `async-executor`. Native builds read through `FsSource`; public-web BIG/VT loading currently uses the serving-layer Fetch + Range path. |
+| `afterglow-assets` | Shared asset-path/MIME helpers (`AssetRoot`, `decode_url_path`, `guess_mime`, `resolve`) for the native shell asset loader and web dev server. Plus streaming `AssetSource` trait + `FsSource`/`BytesSource` + `Range` parser. No deps or file-content reads in the confinement module; `FsSource` owns streaming reads via `pread`. The single security boundary for FS asset confinement. |
+| `afterglow-web` | Authored TypeScript runtime: shared-ring worker bridge, fixed runtime storage, packed-GLB AssetStore loading with rig-preserving runtime meshopt, VT sampling/feedback/material adapters, and demos. Plus the native COOP/COEP dev server. No longer hosts the transport wasm (that moved to `afterglow-rpc`). No wasm-bindgen. |
+| `afterglow-shell` | The sole native Three.js/WebGPU runtime and native deployment target: rusty_v8 + Deno WebGPU, direct winit/wgpu presentation, LinkeDOM/Blitz browser environment, and Vello GPU HUD. Asset-root loading, native `afterglow-rpc` worker composition, and a production game bootstrap API are open parity gates — see `docs/implementation/shell-promotion-plan.md`. |
 | `latency-tool` | CDP-based input→present latency measurement. |
 | `xtask` | Build orchestrator: `build`, `wasm`, `check`, `test`, `bench`. |
 
-### CEF shell (`afterglow-cef`)
+### Native shell
 
-Thin wrapper — does NOT contain worker or communication code:
-- Windowed rendering (Views framework)
-- WebGPU + Vulkan forced on the real GPU
-- X11/XWayland (`--ozone-platform=x11`; Wayland+Vulkan incompatible in CEF 149)
-- `afterglow://local/` custom scheme (standard + secure + CORS + fetch + CSP-bypass) serving **embedded-first / FS-fallback assets via `afterglow-assets`** — no localhost HTTP server
-- **COOP/COEP headers** on the scheme handler — enables `SharedArrayBuffer`
-- DevTools on a port; JS console forwarded to a callback
+`afterglow-shell` is the sole native host (`afterglow-cef` has been removed).
+It executes unmodified Three.js modules in rusty_v8, presents through the same
+wgpu-core device used by Deno WebGPU, and composites its LinkeDOM/Blitz HUD
+with Vello. The remaining parity gates (asset-root loading, native worker
+composition, game bootstrap API, release evidence) are tracked in
+`docs/implementation/shell-promotion-plan.md`.
 
 ### Web target build
 
@@ -95,62 +120,42 @@ won't work.
 
 ### NixOS / shell.nix
 
-- `shell.nix` sets up `CEF_PATH`, `DISPLAY`, runtime libs (libvulkan, etc.)
-- `nix-shell shell.nix --run "cargo ..."` for all builds
-- CEF runtime libs are in `target/debug/` (copied by the cef-dll-sys build script)
-- Spawning threads before `execute_process` crashes the GPU process — always
-  use `on_ready` callback (or spawn from within the CEF message loop)
+- `shell.nix` sets up `DISPLAY` and the runtime graphics libs (libvulkan, Mesa,
+  libGL, etc.) that the shell's wgpu surface links against.
+- `nix-shell shell.nix --run "cargo ..."` for all builds.
+- The shell's wgpu surface uses the system Vulkan loader; on NixOS prefer
+  `/run/opengl-driver/lib` and its matching ICDs.
 
 ## Debugging
 
-### CEF app won't start / GPU process crash
+### Native shell won't start / no WebGPU adapter
 
-1. Check `--ozone-platform=x11` is passed (Wayland+Vulkan incompatible in CEF 149)
-2. Check `CEF_PATH` env var points to the right CEF distro
-3. Check no threads are spawned before `execute_process` (causes GPU crash)
-4. Check `shell.nix` is sourced (provides libvulkan etc.)
-5. Check `libudev` version warning is harmless (libudev-zero)
+`afterglow-cef` has been removed; `afterglow-shell` is the sole native host.
+When the shell fails to present:
 
-### fox-laptop (Radeon 680M) CEF/WebGPU validation
+1. Check `shell.nix` is sourced (provides libvulkan + the real ICD).
+2. Check `VK_ICD_FILENAMES` points at the real GPU ICD, not SwiftShader.
+3. Check `DISPLAY` is set (X11/XWayland).
+4. The shell fails closed on device loss — never accept a software/WebGL
+   fallback path.
 
-**Never accept WebGL fallback.** `afterglow-cef` passes `--disable-webgl`, and
-all authored renderer startup paths use `engine/webgpu-only.ts`: it clears
-Three r185's internal fallback callback before `init()`, requires a live WebGPU
-backend, and displays a fatal error after startup failure or device loss. A
-visible window/cubes plus a failure panel is a failed run, not an acceptable
-fallback.
+The CEF-specific GPU-process crashes, `CEF_PATH`, and `execute_process`
+thread-spawn caveats no longer apply.
 
-- **Validated stack:** on this Fedora 44 laptop `shell.nix` must use the
-  default Nix Vulkan loader + Mesa 25.3.4 RADV ICD. The host Mesa 26.1.4 RADV
-  crashes CEF 149's GPU process with `SIGFPE` in
-  `radv_clear_dcc_comp_to_single` during a Skia Vulkan clear. Do not set
-  `AFTERGLOW_VULKAN_STACK=host` except to investigate that driver regression.
-  NixOS instead uses `/run/opengl-driver/lib` and its matching ICDs.
-- **Build and launch:**
+### fox-laptop (Radeon 680M) WebGPU validation
 
-  ```sh
-  cd ~/dev/afterglow-engine
-  nix-shell shell.nix --run "cargo build --release --example minimal -p afterglow-cef"
-  XA=$(ls /run/user/1000/.mutter-Xwaylandauth.* | head -1)
-  setsid env DISPLAY=:0 XAUTHORITY="$XA" nix-shell shell.nix --run \
-    "./target/release/examples/minimal --ozone-platform=x11" \
-    </dev/null >/tmp/cef-minimal.log 2>&1 &
-  ```
+**Never accept WebGL fallback.** All authored renderer startup paths use
+`engine/webgpu-only.ts`: it clears Three r185's internal fallback callback
+before `init()`, requires a live WebGPU backend, and displays a fatal error
+after startup failure or device loss. A visible window/cubes plus a failure
+panel is a failed run, not an acceptable fallback.
 
-- **Prove hardware WebGPU after launch** (the minimal example exposes DevTools
-  on 9222); require `amd` / `rdna-2`, no fallback/crash log lines, and visible
-  cubes:
-
-  ```sh
-  ./target/release/latency-tool eval \
-    '(async()=>{const a=await navigator.gpu.requestAdapter();return JSON.stringify(a&&a.info)})()' \
-    127.0.0.1:9222
-  ! grep -E 'GPU process exited|WebGPU is not available' /tmp/cef-minimal.log
-  ```
-
-  A null/non-AMD adapter, `GPU process exited unexpectedly: exit_code=136`, or
-  `WebGPU is not available, running under WebGL2 backend` is a failed run;
-  stop and fix the Vulkan stack before accepting any FPS result.
+- **Validated stack:** on this Fedora 44 laptop `shell.nix` selects the default
+  Nix Vulkan loader + Mesa RADV ICD via `/run/opengl-driver/lib`.
+- **Native host build/launch commands await the shell promotion** — the former
+  CEF example launchers (`cargo build --example minimal -p afterglow-cef`) are
+  gone. Until the shell exposes a production game bootstrap API, run the shell
+  presenter directly (`cargo run -p afterglow-shell`).
 - **POM evaluation result (2026-07-16, 1440×900 logical at DPR 2 =
   2880×1800 physical):** low core POM (8–32 layers; no silhouette,
   self-shadow, or relief shadow pass) held **60.0 FPS, p99 16.68 ms,
@@ -196,10 +201,9 @@ fallback.
 
 ### `v8_value_create_array_buffer` returns None
 
-This is the **V8 sandbox** — compiled into CEF 149, not toggleable at runtime.
-`CefV8Value::CreateArrayBuffer` (external backing store) always returns nullptr.
-Use `CreateArrayBufferWithCopy` instead (one memcpy). This only affects the
-CEF native path; the web `SharedArrayBuffer` path has no such issue.
+Removed with `afterglow-cef`. The CEF 149 V8 sandbox caveat for
+`CefV8Value::CreateArrayBuffer` no longer applies; the native shell does not
+wrap browser-process shared mappings as V8 ArrayBuffers.
 
 ### `latency-tool eval` times out
 
@@ -213,6 +217,13 @@ CEF native path; the web `SharedArrayBuffer` path has no such issue.
 
 ### Development and design philosophy
 
+- Before implementing a plan, explicitly report every consequential product,
+  architecture, ownership, compatibility, source-format, platform, and failure-
+  policy decision that remains uncertain, state the recommended default and
+  alternatives, and ask the user to decide. Do not silently turn an assumption
+  into engine policy. Clearly separate user decisions from technical questions
+  that should be resolved by a measured prototype or acceptance gate; pause
+  dependent implementation until blocking user decisions are answered.
 - Prefer small, generic, composable engine primitives over subsystem-specific
   infrastructure. If a capability can cache, persist, stream, queue, or store
   arbitrary bytes/items, keep that primitive policy-free and reusable; texture,
@@ -266,6 +277,11 @@ All engine work must move toward these non-negotiable requirements:
   worst-case where practical, otherwise fixed-capacity bounded O(1) amortized.
   Do not use frame-time scans, sorts, array shifts/splices, linear searches, or
   rebuilt indexes whose cost grows with world/cache age or occupancy.
+- There is no loading-screen runtime phase. Bootstrap/warm-up precede gameplay;
+  afterward assets, world/acoustic tiles, clips and derived state stream
+  continuously through fixed arenas/pools/rings, bounded budgets, stale-aware
+  cancellation and atomic publication. Prefer offline cooking; never regain
+  general worker allocation by stopping gameplay.
 - Potentially stalling work must be lazy, incremental, cancelable, stale-aware,
   and controlled by explicit per-stage time, operation-count, and byte budgets.
   Every queue has a hard capacity; no async stage may accumulate unbounded work.
@@ -273,6 +289,9 @@ All engine work must move toward these non-negotiable requirements:
   timers, pending tasks, cache cost, and frame/GPU timings plateau. Short rAF
   tests are not evidence of presentation stability.
 
+- Build CPU-bound native/WASM dependencies with all available logical cores
+  (`nproc`, currently 32); set Cargo/CMake/Make parallelism explicitly when a
+  script would otherwise cap jobs.
 - Use semver for crate versions
 - Use semantic commits (feat, fix, chore, refactor, docs, test, etc.)
 - Agent must always maintain a docs/api/ directory with notes describing the fully up-to-date engine API surface per system
@@ -325,6 +344,14 @@ All engine work must move toward these non-negotiable requirements:
   footprint (Minimal dist + strip + en-US locale ~80-110MB floor, can't
   feature-strip), debugging (remote-debugging-port + chrome://tracing +
   crashpad), cef-rs accelerated_osr zero-copy path.
+- `docs/research/cef-native-renderer-binary-interop.md` — CEF 149's V8 sandbox
+  forbids wrapping browser-process shared mappings directly as ArrayBuffers.
+  Selected path: bounded shared process messages, one renderer-local background
+  copy into `CefV8BackingStore`, then a zero-copy V8 ownership transfer. The
+  source-sorted 4 MiB × two transport diagnostic measured 950.2 MiB/s median on
+  fox-laptop with correct bytes, AMD/RDNA2 WebGPU, and no diagnostic-cadence
+  frame drops. The live `BigAssetSession` provider does not yet wire that
+  source-sorting helper, so this result is not evidence for its current request order.
 - `docs/research/performance-benchmarks.md` — Optimized communication results
   (2026-07-10): 64B service RPC is 2.4µs native vs 10.9µs web; 64KiB
   service RPC is 76.4µs / 1,636 MiB/s native vs 106.5µs / 1,174 MiB/s web.
@@ -338,6 +365,16 @@ All engine work must move toward these non-negotiable requirements:
   fallback evaluation and integrated result: normal/one-tap fallback tiers,
   measured low-core 680M boundary, resident matching height, and bounded VT
   displaced-page composition.
+- `docs/research/temporal-antialiasing-best-implementations.md` — What is the
+  highest-quality TAA implementation available today? Cross-checked tiering of
+  DLAA/DLSS 4 Transformer (ML, hardware-gated), Filmic SMAA / Dynamic TAA
+  (Activision, expert-endorsed non-ML), Decima 2-frame no-accumulation TAA,
+  Intel TAA (open-source reference), and k-DOP Clipping (SIGGRAPH Asia 2024,
+  MIT-0 GLSL drop-in). Source-code locations for each, plus extracted formulas
+  and pseudocode from the three paper-only sources (Filmic SMAA v7, Dynamic TAA
+  in CoD, Decima). Recommended afterglow-engine path: Intel TAA resolve +
+  k-DOP clip_aabb replacement + Activision 1-sample spatio-temporal bicubic
+  (5× cheaper, 3 lines of WGSL).
 - `docs/research/steam-overlay-cef.md` — How the Steam Overlay works (hooks
   Present/SwapBuffers/vkQueuePresentKHR in the game process), why it doesn't
   work with CEF multi-process GPU, and how to fix it (`--in-process-gpu` flag
@@ -382,8 +419,80 @@ All engine work must move toward these non-negotiable requirements:
   fixed-stack queries allocate nothing.
   The same medium-build, ray-batch-64, two-thread, 64-source 512×2 obvhs
   configuration works natively (five-launch laptop result: 3.39 ms mean / 4.316
-  ms worst p99) and on web. Render-loaded and actual device-callback validation remain
-  open.
+  ms worst p99) and on web. Four-quanta public-web failed when a 15.97 ms Worker
+  interval exceeded 10.67 ms. The selected clean production candidate now
+  mirrors native ownership: one RPC Worker owns simulation/DSP/final mixing and
+  a minimal AudioWorklet only drains final PCM. The web profile is 16 total/4
+  complete world-physical voices with eight quanta; native is 128/16 with eight.
+  The first web run completed 38,900 callbacks and 104 Worker simulation updates
+  under same-page WebGPU with zero underruns/errors/deadline misses, 0.095/2.265
+  ms pump mean/max, and physical output with no internal silence above 0.063 ms.
+  The worker now has a fixed no-allocation scheduler with generational handles,
+  hard physical/nonphysical slot partitions, sample-clock volume/pause/stop
+  ramps, and generic equal-power crossfades. A real web scheduler run admitted
+  4 physical + 1 dry voice and completed one crossfade over 7,400 callbacks with
+  zero underruns/rejects/stale handles. Warm-up also supports 64 generational
+  resident mono/stereo 48 kHz WAV sounds in bounded Rust-owned PCM (32 MiB web,
+  256 MiB native); Steam reads those stable samples directly and one-shots
+  release on the device sample clock. The more complex real-time Wasm AudioWorklet DSP path remains research evidence
+  and is not selected. Native completed a historical 600-second synthetic-scene
+  physical-device run at four quanta and 16 world-physical voices with zero
+  underruns, but the real-assets gate superseded that depth: four quanta dropped
+  22–27 callbacks per 10-second full-Bistro scene while the sole worker ran
+  reflection simulation; eight quanta had zero across all three scenes. Native
+  therefore also defaults to eight. That gate coupled five official Steam Audio
+  SDK speech/noise/impulse WAVs (7.52 MiB resident PCM) with all three official
+  full-resolution Bistro scenes (1.05–2.83M triangles), four complete physical
+  voices plus one dry voice, and 512×2 reflection updates every second. The web
+  Worker separately played the same five-file set for 11,244 callbacks with zero
+  underruns; full Bistro is not admitted by the normal 256 MiB web module and
+  reinforces structural proxies plus tile streaming. Long web soak and final
+  CEF composition remain open. The Wasm AudioWorklet experiment is not the
+  CEF implementation. CEF must use the generated native RPC client, a native
+  OS worker, native Steam Audio/Embree, a bounded native PCM ring and native
+  device callback. It may never be "solved" by moving the service back into
+  WASM. The standalone native gate reaches the physical device; final
+  `AppBuilder::on_ready` CEF composition remains to be integrated.
+
+## Implementation plans
+
+- `docs/implementation/comms-unification-plan.md` — current priority.
+  Consolidates worker comms (split across `afterglow-rpc`, `afterglow-web`, and
+  `afterglow-rpc-macros`, with the postcard codec hand-duplicated in TS) into one
+  source of truth, lands the zero-copy native worker layer (shared arena,
+  generational handles, GPU resource table, worker↔worker `HandleQueue`), and
+  retires hand-written `rpc.ts` in favor of macro-generated transport + codec.
+  Standardized per-crate `gen/` output. Decisions locked 2026-07-25.
+- `docs/implementation/shell-promotion-plan.md` — native host parity after CEF
+  removal. Gates: asset-root loader, native `afterglow-rpc` worker composition,
+  game bootstrap API, release evidence. Depends on the comms unification G2
+  (handle/arena) for zero-copy worker integration.
+- `docs/implementation/spatial-audio-integration-plan.md` — current priority.
+  `EngineAudio` is required and owns one target-profiled pool for resident,
+  streamed, procedural, ambience, dialogue, music, and live voice-chat PCM. One
+  fixed Worker/context owns Steam simulation plus direct/HRTF/hybrid DSP and the
+  final mix on both targets. Public web uses 16 total/4 complete physical voices,
+  an eight-quantum final-PCM ring and a minimal sink. The native target uses
+  128/16 and the native RPC/OS-worker backend with native Steam Audio/Embree, a
+  native PCM ring and native device sink—never the WASM Worker or AudioWorklet
+  path.
+  Parametric is an explicit low-quality tier. Any fatal audio fault disables all
+  audio and emits a high-severity diagnostic; there is no partial or alternate
+  pass. The service is one proper `#[rpc(worker = EngineAudioWorker)]` Rust
+  worker: Rust owns scheduling, rings, streaming, telemetry, Steam FFI handles
+  and mixing policy. Acoustic tiles stream automatically around the listener
+  during gameplay.
+- `docs/implementation/box3d-physics-integration-plan.md` — deferred until the
+  Steam Audio gates pass: glTF-authored Box3D shapes, target-specific offline
+  compounds, fixed physics worker, and sealed runtime integration. Runtime uses
+  prebuilt primitive/convex/fixed-topology compound templates; tick-boundary
+  updates may move/resize shapes and enable/disable fixed children, but cannot
+  upload arbitrary point/triangle topology. Triangle meshes, height fields and
+  baked compounds remain static.
+- `docs/implementation/editor-plan.md` — deferred behind audio and Box3D
+  foundations: Blender boundary, scene source, editor/play isolation, then a
+  measured 1,000-entity Yjs-versus-Loro prototype. Select and ship only one
+  collaboration stack.
 
 ## API docs
 
@@ -401,14 +510,16 @@ All engine work must move toward these non-negotiable requirements:
   typed client/dispatch generation, native spawn + wasm exports, reserved names,
   TS client generation, async `#[rpc]` poll model.
 - `docs/api/asset-system.md` — `afterglow-assets` streaming `AssetSource` +
-  `FsSource`/`BytesSource` + range parser, serving layer (CEF scheme + web HTTP),
+  `FsSource`/`BytesSource` + range parser, serving layer (web HTTP),
   `afterglow-assets-worker` async asset loader, async `#[rpc]` transport.
 - `docs/api/web-shared-memory.md` — `afterglow-web` wasm exports, JS client/
   worker contract, build, and COOP/COEP headers.
 - `docs/api/assets.md` — `afterglow-assets` shared `guess_mime`/`resolve`:
-  path/MIME + canonical confinement for the CEF scheme and web dev server.
-- `docs/api/cef-shell.md` — `afterglow-cef` game-window shell: `AppBuilder`,
-  `afterglow://` scheme, WebGPU/X11 flags, COOP/COEP, console, startup caveat.
+  path/MIME + canonical confinement for the native shell asset loader and web
+  dev server.
+- `docs/api/afterglow-shell.md` — lightweight native Three.js/WebGPU runtime,
+  command-line presenter, browser environment, validation path, and native
+  host gates.
 - `docs/api/latency-tool.md` — CDP diagnostic CLI commands and measurement semantics.
 - `docs/api/frame-budget.md` — staged frame admission, timing, and deferral counters.
 - `docs/api/hierarchy.md` — fixed linked topology and incremental double-buffered rebuild.
@@ -487,9 +598,9 @@ sample. Results appear in the JS console (`[bench]` prefix). The
 `formatBenchResults`). Run:
 
 ```sh
-nix-shell shell.nix --run "cargo build --example minimal -p afterglow-cef"
-DISPLAY=:0 XAUTHORITY=/run/user/$(id -u)/.mutter-Xwaylandauth.* \
-  nix-shell shell.nix --run "./target/debug/examples/minimal --ozone-platform=x11"
+# Native host build/launch commands await the shell promotion; run the shell
+# presenter directly until a production game bootstrap API lands.
+nix-shell shell.nix --run "cargo run -p afterglow-shell"
 # Load ?bench=300. DevTools is on port 9222.
 # For headless/OLED-safe measurement via CDP:
 ./target/release/latency-tool eval '(async()=>{const f=[];let p=-1;await new Promise(r=>{function l(t){if(p>=0)f.push(t-p);p=t;if(f.length<300)requestAnimationFrame(l);else r()}requestAnimationFrame(l)});const s=[...f].sort((a,b)=>a-b);return JSON.stringify({n:f.length,fps:(1000/(s.reduce((q,v)=>q+v,0)/s.length)).toFixed(1),p99:s[s.length*0.99|0].toFixed(2),max:s[s.length-1].toFixed(2),below55:f.filter(x=>x>1000/55).length})})()' 127.0.0.1:9222

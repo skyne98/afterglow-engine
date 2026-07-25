@@ -59725,8 +59725,8 @@ class EngineMemory {
     this.phase = 1 /* Warmup */;
   }
   sealGameplay() {
-    if (this.phase !== 1 /* Warmup */ && this.phase !== 3 /* LoadingScreen */)
-      throw new Error("EngineMemory can seal only after warmup/loading");
+    if (this.phase !== 1 /* Warmup */)
+      throw new Error("EngineMemory can seal only after warmup");
     this.phase = 2 /* GameplaySealed */;
   }
   beginFrame() {
@@ -59847,7 +59847,7 @@ var FrameBudgetRes = defineResource("frameBudget", () => new FrameBudget);
 
 // crates/afterglow-web/web/src/engine/core/frame.ts
 function prepareAfterglowFrame(frame, workerInput, adapter, vtInput, memory, budget) {
-  if (memory && memory.phase !== 2 /* GameplaySealed */ && memory.phase !== 3 /* LoadingScreen */)
+  if (memory && memory.phase !== 2 /* GameplaySealed */)
     throw new Error("EngineMemory must be sealed before frame orchestration");
   memory?.beginFrame();
   budget?.beginFrame(frame.frameId, frame.deltaSeconds * 1000);
@@ -60052,7 +60052,7 @@ class EngineRuntime {
     this.passCount = 0;
     this.adapter.dispose();
     this.client = null;
-    this.memory.phase = 4 /* Shutdown */;
+    this.memory.phase = 3 /* Shutdown */;
     this.mutableState = 5 /* Shutdown */;
   }
   tick(timestamp) {
@@ -60075,6 +60075,7 @@ class EngineRuntime {
       }
     } catch (error2) {
       this.diagnostics.tryRecord(1 /* RuntimeState */, 0 /* Runtime */, error2);
+      console.error("[afterglow] runtime frame failed:", error2 instanceof Error ? error2.stack : String(error2));
       this.mutableState = 4 /* Stopped */;
       return;
     }
@@ -65101,7 +65102,8 @@ var ATLAS_HEIGHT = ATLAS_PAGES_Y * SLOT_SIZE;
 var MAX_MIP = 10;
 var QUALITY_PRIORITY_LANE_COUNT = (MAX_MIP + 1) * 2;
 var MATERIAL_CHANNEL_PRIORITY_COUNT = 3;
-var PRIORITY_LANE_COUNT = QUALITY_PRIORITY_LANE_COUNT * MATERIAL_CHANNEL_PRIORITY_COUNT;
+var BATCH_TIER_PRIORITY_COUNT = QUALITY_PRIORITY_LANE_COUNT * MATERIAL_CHANNEL_PRIORITY_COUNT;
+var PRIORITY_LANE_COUNT = BATCH_TIER_PRIORITY_COUNT * 2;
 function packedPageCoordinates(textureId, mip, x2, y2, tail = false) {
   const local = tail ? 268435456 : (mip & 63 | (x2 & 2047) << 6 | (y2 & 2047) << 17) >>> 0;
   return textureId * 536870912 + local;
@@ -65705,6 +65707,13 @@ class VirtualTextureStore {
     pageReads: 0,
     averagePageReadMs: 0,
     maxPageReadMs: 0,
+    bulkQueued: 0,
+    bulkInFlight: 0,
+    bulkInFlightBytes: 0,
+    urgentBatches: 0,
+    qualityBatches: 0,
+    bulkRejected: 0,
+    bulkCanceled: 0,
     transcodeWorkers: 0,
     activeTranscodes: 0,
     queuedTranscodes: 0,
@@ -66030,6 +66039,7 @@ class VirtualTextureStore {
     page.x = req.x;
     page.y = req.y;
     page.tail = req.tail;
+    page.batchTier = req.batchTier;
     page.pinned = pinned;
     page.cacheKey = key;
     pendingRecord.generation = generation;
@@ -66089,24 +66099,28 @@ class VirtualTextureStore {
     if (entry)
       this.queuePageLoad(entry, req, pageTable, pinned);
   }
-  addFeedbackPage(textureId, entry, source, mip, x2, y2, tail, capacity, channelPriority) {
+  addFeedbackPage(textureId, entry, source, mip, x2, y2, tail, capacity, channelPriority, batchTier) {
     const key = packedPageCoordinates(entry.textureId, mip, x2, y2, tail);
+    const qualityDepth = tail ? 0 : Math.min(MAX_MIP, entry.maxMip - mip);
+    const centralOrLarge = (source.screenPriority ?? 0) <= 96 || (source.coverage ?? 1) >= 4;
+    const candidatePriority = (batchTier === "quality" ? BATCH_TIER_PRIORITY_COUNT : 0) + channelPriority * QUALITY_PRIORITY_LANE_COUNT + qualityDepth * 2 + (centralOrLarge ? 0 : 1);
     const existing = this.feedbackScratchKeys.get(key);
     if (existing !== undefined) {
       const request2 = this.feedbackScratch[existing];
       request2.screenPriority = Math.min(request2.screenPriority ?? 255, source.screenPriority ?? 0);
       request2.coverage = Math.min(65535, (request2.coverage ?? 1) + (source.coverage ?? 1));
       request2.channelPriority = Math.min(request2.channelPriority ?? channelPriority, channelPriority);
+      if (batchTier === "urgent")
+        request2.batchTier = "urgent";
+      request2.priorityTier = Math.min(request2.priorityTier ?? candidatePriority, candidatePriority);
       if (request2.screenPriority <= 96 || request2.coverage >= 4)
-        request2.priorityTier = (request2.priorityTier ?? 1) & ~1;
+        request2.priorityTier &= ~1;
       return true;
     }
     if (this.feedbackScratchCount >= capacity)
       return false;
     const index = this.feedbackScratchCount++;
     const request = this.feedbackScratch[index];
-    const qualityDepth = tail ? 0 : Math.min(MAX_MIP, entry.maxMip - mip);
-    const centralOrLarge = (source.screenPriority ?? 0) <= 96 || (source.coverage ?? 1) >= 4;
     request.textureId = textureId;
     request.path = entry.path;
     request.mip = mip;
@@ -66116,7 +66130,8 @@ class VirtualTextureStore {
     request.screenPriority = source.screenPriority ?? 0;
     request.coverage = source.coverage ?? 1;
     request.channelPriority = channelPriority;
-    request.priorityTier = channelPriority * QUALITY_PRIORITY_LANE_COUNT + qualityDepth * 2 + (centralOrLarge ? 0 : 1);
+    request.batchTier = batchTier;
+    request.priorityTier = candidatePriority;
     this.feedbackScratchKeys.set(key, index);
     return true;
   }
@@ -66126,21 +66141,21 @@ class VirtualTextureStore {
     if (!entry || !pageTable || !this.isValidEntryRequest(entry, source))
       return true;
     if (source.tail === true)
-      return this.addFeedbackPage(textureId, entry, source, source.mip, 0, 0, true, capacity, channelPriority);
+      return this.addFeedbackPage(textureId, entry, source, source.mip, 0, 0, true, capacity, channelPriority, "urgent");
     const desiredMip = Math.min(entry.maxMip, source.mip + bias);
     const desiredX = source.x >> desiredMip - source.mip;
     const desiredY = source.y >> desiredMip - source.mip;
     if (pageTable.isResidentAt(desiredMip, desiredX, desiredY))
-      return this.addFeedbackPage(textureId, entry, source, desiredMip, desiredX, desiredY, false, capacity, channelPriority);
-    let fallbackMip = desiredMip + 1;
-    while (fallbackMip <= entry.maxMip && !pageTable.isResidentAt(fallbackMip, desiredX >> fallbackMip - desiredMip, desiredY >> fallbackMip - desiredMip))
-      fallbackMip++;
-    for (let mip = Math.min(entry.maxMip, fallbackMip - 1);mip >= desiredMip; mip--) {
-      const shift = mip - desiredMip;
-      if (!this.addFeedbackPage(textureId, entry, source, mip, desiredX >> shift, desiredY >> shift, false, capacity, channelPriority))
-        return false;
-    }
-    return true;
+      return this.addFeedbackPage(textureId, entry, source, desiredMip, desiredX, desiredY, false, capacity, channelPriority, "quality");
+    const urgentMip = Math.min(entry.maxMip, desiredMip + 2);
+    const urgentShift = urgentMip - desiredMip;
+    const urgentX = desiredX >> urgentShift;
+    const urgentY = desiredY >> urgentShift;
+    if (!pageTable.isResidentAt(urgentMip, urgentX, urgentY) && !this.addFeedbackPage(textureId, entry, source, urgentMip, urgentX, urgentY, false, capacity, channelPriority, "urgent"))
+      return false;
+    if (urgentMip === desiredMip)
+      return true;
+    return this.addFeedbackPage(textureId, entry, source, desiredMip, desiredX, desiredY, false, capacity, channelPriority, "quality");
   }
   buildEffectiveFeedback(feedback) {
     const capacity = Math.max(1, this.cache.totalSlots - this.cache.pinnedSlots);
@@ -66221,6 +66236,7 @@ class VirtualTextureStore {
     target.coverage = source.coverage;
     target.channelPriority = source.channelPriority;
     target.priorityTier = source.priorityTier;
+    target.batchTier = source.batchTier;
   }
   linkScheduledTail(index, priority) {
     const tail = this.priorityTails[priority];
@@ -66289,7 +66305,8 @@ class VirtualTextureStore {
     if (existing !== undefined) {
       this.copyRequest(this.scheduledRequests[existing], request);
       const agePromotion = this.feedbackEpoch - this.scheduledSince[existing] >> 2;
-      const channelFloor = (request.channelPriority ?? 0) * QUALITY_PRIORITY_LANE_COUNT;
+      const tierFloor = request.batchTier === "quality" ? BATCH_TIER_PRIORITY_COUNT : 0;
+      const channelFloor = tierFloor + (request.channelPriority ?? 0) * QUALITY_PRIORITY_LANE_COUNT;
       const priority = Math.max(channelFloor, (request.priorityTier ?? PRIORITY_LANE_COUNT - 1) - agePromotion);
       this.moveScheduled(existing, priority);
       this.scheduledLastSeen[existing] = this.feedbackEpoch;
@@ -66642,6 +66659,13 @@ class VirtualTextureStore {
       stats.pageReads = provider.reads;
       stats.averagePageReadMs = provider.averageReadMs;
       stats.maxPageReadMs = provider.maxReadMs;
+      stats.bulkQueued = provider.bulkQueued;
+      stats.bulkInFlight = provider.bulkInFlight;
+      stats.bulkInFlightBytes = provider.bulkInFlightBytes;
+      stats.urgentBatches = provider.urgentBatches;
+      stats.qualityBatches = provider.qualityBatches;
+      stats.bulkRejected = provider.bulkRejected;
+      stats.bulkCanceled = provider.bulkCanceled;
       stats.transcodeWorkers = provider.workerCount;
       stats.activeTranscodes = provider.activeTranscodes;
       stats.queuedTranscodes = provider.queuedTranscodes;
@@ -69783,9 +69807,30 @@ WASD pan · wheel zoom · O overview · P pixel`);
         feedbackRuns.push(await testRawFeedback(rendererHost.device, direction));
       const residencyRuns = [];
       const scenarios = [
-        { name: "eastbound", points: [{ x: 0.08, y: 0.25, z: 8 }, { x: 0.5, y: 0.25, z: 16 }, { x: 0.92, y: 0.25, z: 32 }] },
-        { name: "westbound", points: [{ x: 0.92, y: 0.75, z: 32 }, { x: 0.5, y: 0.75, z: 8 }, { x: 0.08, y: 0.75, z: 2 }] },
-        { name: "diagonal-lod", points: [{ x: 0.08, y: 0.08, z: 0.5 }, { x: 0.5, y: 0.5, z: 64 }, { x: 0.92, y: 0.92, z: VIRTUAL_SIZE }] }
+        {
+          name: "eastbound",
+          points: [
+            { x: 0.08, y: 0.25, z: 8 },
+            { x: 0.5, y: 0.25, z: 16 },
+            { x: 0.92, y: 0.25, z: 32 }
+          ]
+        },
+        {
+          name: "westbound",
+          points: [
+            { x: 0.92, y: 0.75, z: 32 },
+            { x: 0.5, y: 0.75, z: 8 },
+            { x: 0.08, y: 0.75, z: 2 }
+          ]
+        },
+        {
+          name: "diagonal-lod",
+          points: [
+            { x: 0.08, y: 0.08, z: 0.5 },
+            { x: 0.5, y: 0.5, z: 64 },
+            { x: 0.92, y: 0.92, z: VIRTUAL_SIZE }
+          ]
+        }
       ];
       for (const scenario of scenarios) {
         const before = store.getDebugSnapshot().atlasSlotsUsed;
@@ -69795,9 +69840,17 @@ WASD pan · wheel zoom · O overview · P pixel`);
           camY = point.y;
           zoom = point.z;
           await step3(35);
-          checkpoints.push({ ...point, pages: store.getDebugSnapshot().atlasSlotsUsed });
+          checkpoints.push({
+            ...point,
+            pages: store.getDebugSnapshot().atlasSlotsUsed
+          });
         }
-        residencyRuns.push({ name: scenario.name, before, after: store.getDebugSnapshot().atlasSlotsUsed, checkpoints });
+        residencyRuns.push({
+          name: scenario.name,
+          before,
+          after: store.getDebugSnapshot().atlasSlotsUsed,
+          checkpoints
+        });
       }
       const uploads = await testUploadLocations(rendererHost.device, store.atlasWidth, store.atlasHeight, SLOT_SIZE);
       await rendererHost.device.queue.onSubmittedWorkDone();

@@ -1,0 +1,27 @@
+{
+	# Local benchmark default; public deployment sets AFTERGLOW_WEB_ADDRESS to
+	# its DNS hostname. Caddy's default protocol set is made explicit so H1 is a
+	# compatible fallback while H2/H3 use one multiplexed connection per client.
+	admin off
+	# The local benchmark binds an unprivileged HTTPS port and needs no HTTP
+	# redirect listener. A public deployment may provide an HTTP→HTTPS redirect
+	# at its edge independently.
+	auto_https disable_redirects
+	servers {
+		protocols {$AFTERGLOW_HTTP_PROTOCOLS:h1 h2 h3}
+	}
+}
+
+# `localhost` receives Caddy's local CA automatically. A public DNS hostname
+# receives an ACME certificate automatically; both require TCP 443 and UDP 443
+# when using their default HTTPS port.
+{$AFTERGLOW_WEB_ADDRESS:localhost:8443} {
+	root * {$AFTERGLOW_WEB_ROOT:./crates/afterglow-web/www}
+	header {
+		Cross-Origin-Opener-Policy "same-origin"
+		Cross-Origin-Embedder-Policy "require-corp"
+		Cross-Origin-Resource-Policy "same-origin"
+		Accept-Ranges "bytes"
+	}
+	file_server
+}

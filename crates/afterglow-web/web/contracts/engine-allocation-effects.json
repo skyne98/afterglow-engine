@@ -1,6 +1,8 @@
 {
   "version": 1,
   "moduleEffects": {
+    "audio/audio-worklet.ts": "bootstrap",
+    "audio/pcm-ring.ts": "pooled",
     "assets/asset-handle.ts": "gameFacing",
     "assets/asset-store.ts": "budgeted",
     "assets/big-asset-session.ts": "bootstrap",
@@ -55,6 +57,9 @@
     "virtual-texturing/virtual-texture.ts": "budgeted"
   },
   "none": {
+    "AudioPcmRingWriter.tryWrite": "audio/pcm-ring.ts",
+    "AudioPcmRingReader.readStereo": "audio/pcm-ring.ts",
+    "EngineAudioSinkProcessor.process": "audio/audio-worklet.ts",
     "FrameBudget.beginFrame": "core/frame-budget.ts",
     "FrameBudget.beginStage": "core/frame-budget.ts",
     "FrameBudget.endStage": "core/frame-budget.ts",

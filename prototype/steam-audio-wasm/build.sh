@@ -7,6 +7,10 @@ cache="$root/target/steam-audio-wasm-build"
 upstream="$cache/steam-audio"
 sdk="$cache/sdk"
 version=v4.8.1
+build_jobs=$(nproc)
+export CARGO_BUILD_JOBS="$build_jobs"
+export CMAKE_BUILD_PARALLEL_LEVEL="$build_jobs"
+export MAKEFLAGS="-j$build_jobs"
 
 for command in em++ python3 cmake git curl unzip bun cargo rustc; do
   command -v "$command" >/dev/null || { echo "missing build command: $command" >&2; exit 1; }
@@ -124,13 +128,13 @@ if [[ ! -f "$threaded" ]]; then
     -DSTEAMAUDIO_BUILD_TESTS=FALSE -DSTEAMAUDIO_BUILD_BENCHMARKS=FALSE \
     -DSTEAMAUDIO_BUILD_SAMPLES=FALSE -DSTEAMAUDIO_BUILD_ITESTS=FALSE \
     -DSTEAMAUDIO_BUILD_DOCS=FALSE
-  cmake --build "$cache/steam-audio-threaded" --target phonon -j8
+  cmake --build "$cache/steam-audio-threaded" --target phonon -j"$build_jobs"
 fi
 
 single_tracer_target="$cache/obvhs-tracer-target-single"
 CARGO_TARGET_DIR="$single_tracer_target" \
 RUSTFLAGS='-C target-feature=+simd128' \
-  cargo build --manifest-path "$prototype/obvhs-tracer/Cargo.toml" \
+  cargo build --manifest-path "$root/crates/afterglow-obvhs-tracer/Cargo.toml" \
   --release --target wasm32-unknown-emscripten \
   -Zbuild-std=core,alloc,std,panic_abort
 single_tracer_library="$single_tracer_target/wasm32-unknown-emscripten/release/libafterglow_obvhs_tracer.a"
@@ -138,21 +142,35 @@ single_tracer_library="$single_tracer_target/wasm32-unknown-emscripten/release/l
 pthread_tracer_target="$cache/obvhs-tracer-target-pthread"
 CARGO_TARGET_DIR="$pthread_tracer_target" \
 RUSTFLAGS='-C target-feature=+atomics,+bulk-memory,+mutable-globals,+simd128' \
-  cargo build --manifest-path "$prototype/obvhs-tracer/Cargo.toml" \
+  cargo build --manifest-path "$root/crates/afterglow-obvhs-tracer/Cargo.toml" \
   --release --target wasm32-unknown-emscripten \
   -Zbuild-std=core,alloc,std,panic_abort
 pthread_tracer_library="$pthread_tracer_target/wasm32-unknown-emscripten/release/libafterglow_obvhs_tracer.a"
+
+audio_worker_target="$cache/audio-worker-target-pthread"
+CARGO_TARGET_DIR="$audio_worker_target" \
+RUSTFLAGS='-C target-feature=+atomics,+bulk-memory,+mutable-globals,+simd128' \
+  cargo build --manifest-path "$root/crates/afterglow-audio-worker/Cargo.toml" \
+  --release --features steam-audio --target wasm32-unknown-emscripten \
+  -Zbuild-std=core,alloc,std,panic_abort
+audio_worker_library="$audio_worker_target/wasm32-unknown-emscripten/release/libafterglow_audio_worker.a"
 
 pthread_flags=(
   -pthread
   -sPTHREAD_POOL_SIZE=2
   -sPTHREAD_POOL_SIZE_STRICT=2
 )
+worklet_pthread_flags=(
+  -pthread
+  # Two persistent Steam simulation threads plus one control/simulation owner.
+  -sPTHREAD_POOL_SIZE=3
+  -sPTHREAD_POOL_SIZE_STRICT=3
+)
 
 mkdir -p "$prototype/dist"
 em++ "$prototype/benchmark.cpp" \
   -I "$sdk" \
-  -I "$prototype/obvhs-tracer/include" \
+  -I "$root/crates/afterglow-obvhs-tracer/include" \
   "$single_tracer_library" \
   "$sdk/libphonon.a" \
   "$single_deps/libmysofa.a" \
@@ -166,7 +184,7 @@ em++ "$prototype/benchmark.cpp" \
 
 em++ "$prototype/dynamic-benchmark.cpp" \
   -I "$sdk" \
-  -I "$prototype/obvhs-tracer/include" \
+  -I "$root/crates/afterglow-obvhs-tracer/include" \
   "$pthread_tracer_library" \
   "$threaded" \
   "$pthread_deps/libmysofa.a" \
@@ -178,11 +196,47 @@ em++ "$prototype/dynamic-benchmark.cpp" \
   -sEXPORTED_FUNCTIONS='["_dyn_init","_dyn_update","_dyn_run_reflections","_dyn_run_audio","_dyn_run_binaural","_dyn_get_reverb_low","_dyn_get_reverb_mid","_dyn_get_reverb_high","_dyn_get_ir_valid","_dyn_get_output_energy","_dyn_get_tracer_nodes","_dyn_get_tracer_build_ms","_dyn_get_tracer_owned_bytes","_dyn_get_simulation_threads","_dyn_get_tracer_lanes","_dyn_shutdown"]' \
   -o "$prototype/dist/dynamic-steam-audio.js"
 
+# Gate-0 module: the Rust #[rpc] worker is the only service. The C++ source is
+# linked solely as the Steam Audio FFI implementation owned by that worker.
+em++ "$prototype/dynamic-benchmark.cpp" \
+  -I "$sdk" \
+  -I "$root/crates/afterglow-obvhs-tracer/include" \
+  -Wl,--whole-archive "$audio_worker_library" -Wl,--no-whole-archive \
+  "$threaded" \
+  "$pthread_deps/libmysofa.a" \
+  "$pthread_deps/libpffft.a" \
+  "$pthread_deps/libz.a" \
+  -O3 -msimd128 "${pthread_flags[@]}" \
+  -sMODULARIZE=1 -sEXPORT_ES6=1 -sENVIRONMENT=worker \
+  -sALLOW_MEMORY_GROWTH=0 -sINITIAL_MEMORY=268435456 -sNO_EXIT_RUNTIME=1 \
+  -sEXPORTED_RUNTIME_METHODS='["HEAPU8"]' \
+  -sEXPORTED_FUNCTIONS='["_afterglow_wasm_init","_afterglow_wasm_serve_frame","_afterglow_wasm_input_ptr","_afterglow_wasm_input_size","_afterglow_wasm_output_ptr","_afterglow_wasm_output_size","_afterglow_audio_pump","_afterglow_audio_pcm_ptr","_afterglow_audio_pcm_samples","_afterglow_audio_simulate_motion"]' \
+  -o "$prototype/dist/engine-audio-rpc.js"
+
+# Real-time-priority feasibility gate: Steam's per-quantum DSP executes inside
+# Emscripten's Wasm AudioWorklet thread. This deliberately remains a prototype
+# until thread ownership and callback deadlines pass on real hardware.
+em++ "$prototype/dynamic-benchmark.cpp" \
+  "$prototype/audio-worklet-gate.cpp" \
+  -I "$sdk" \
+  -I "$root/crates/afterglow-obvhs-tracer/include" \
+  "$pthread_tracer_library" \
+  "$threaded" \
+  "$pthread_deps/libmysofa.a" \
+  "$pthread_deps/libpffft.a" \
+  "$pthread_deps/libz.a" \
+  -O3 -msimd128 "${worklet_pthread_flags[@]}" \
+  -sAUDIO_WORKLET=1 -sWASM_WORKERS=1 \
+  -sMODULARIZE=1 -sEXPORT_ES6=1 -sENVIRONMENT=web,worker \
+  -sALLOW_MEMORY_GROWTH=0 -sINITIAL_MEMORY=268435456 -sNO_EXIT_RUNTIME=1 \
+  -sEXPORTED_FUNCTIONS='["_afterglow_steam_audio_init","_afterglow_steam_audio_set_active_reflection_voices","_afterglow_steam_audio_run_simulation","_afterglow_steam_audio_update_motion","_afterglow_steam_audio_shutdown","_afterglow_worklet_gate_create","_afterglow_worklet_gate_start_simulation","_afterglow_worklet_gate_stop_simulation","_afterglow_worklet_gate_resume","_afterglow_worklet_gate_status","_afterglow_worklet_gate_callbacks","_afterglow_worklet_gate_errors","_afterglow_worklet_gate_max_micros","_afterglow_worklet_gate_over_budget","_afterglow_worklet_gate_max_gap_micros","_afterglow_worklet_gate_simulation_updates","_afterglow_worklet_gate_reflection_updates","_afterglow_worklet_gate_simulation_errors","_afterglow_worklet_gate_simulation_max_micros","_afterglow_worklet_gate_simulation_running","_afterglow_worklet_gate_energy","_afterglow_worklet_gate_peak"]' \
+  -o "$prototype/dist/engine-audio-worklet-gate.js"
+
 # The full-resolution Bistro stress test has a separate large fixed memory. It
 # is not loaded by the normal prototype and never grows after worker bootstrap.
 em++ "$prototype/bistro-benchmark.cpp" \
   -I "$sdk" \
-  -I "$prototype/obvhs-tracer/include" \
+  -I "$root/crates/afterglow-obvhs-tracer/include" \
   "$pthread_tracer_library" \
   "$threaded" \
   "$pthread_deps/libmysofa.a" \
@@ -201,7 +255,9 @@ bun build "$prototype/src/dynamic-worker.ts" --outdir "$prototype/dist" --target
 bun build "$prototype/src/dynamic-main.ts" --outdir "$prototype/dist" --target browser
 bun build "$prototype/src/bistro-worker.ts" --outdir "$prototype/dist" --target browser
 bun build "$prototype/src/bistro-main.ts" --outdir "$prototype/dist" --target browser
+bun build "$prototype/src/worklet-gate-main.ts" --outdir "$prototype/dist" --target browser
 cp "$prototype/index.html" "$prototype/dist/index.html"
 cp "$prototype/dynamic.html" "$prototype/dist/dynamic.html"
 cp "$prototype/bistro.html" "$prototype/dist/bistro.html"
+cp "$prototype/worklet-gate.html" "$prototype/dist/worklet-gate.html"
 echo "built Steam Audio WASM prototype in ${prototype#$root/}/dist"

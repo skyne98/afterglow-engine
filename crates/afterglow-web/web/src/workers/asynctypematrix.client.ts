@@ -26,7 +26,7 @@ export class AsyncTypeMatrixClient {
   /// Spawn the service in a real Web Worker using the shared-ring transport.
   static async spawnThreaded(opts: { mainWasmUrl?: string; workerJsUrl?: string; workerWasmUrl?: string; timeoutMs?: number } = {}): Promise<AsyncTypeMatrixClient> {
     const rpc = await Rpc.create({
-      mainWasmUrl: opts.mainWasmUrl ?? 'afterglow_web.wasm',
+      mainWasmUrl: opts.mainWasmUrl ?? 'afterglow_rpc.wasm',
       workerJsUrl: opts.workerJsUrl ?? 'worker.js',
       workerWasmUrl: opts.workerWasmUrl ?? 'asynctypematrix.wasm',
       timeoutMs: opts.timeoutMs,

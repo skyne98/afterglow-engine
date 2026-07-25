@@ -14,7 +14,7 @@ disagree, the API doc is canonical (it is checked against the current source).
 | `docs/api/rpc-macro.md` | `afterglow-rpc-macros` `#[rpc]` attribute: server/typed client/dispatch generation, native spawn + wasm exports, reserved names. |
 | `docs/api/web-shared-memory.md` | `afterglow-web` wasm exports, JS client/worker contract, build, and COOP/COEP headers. |
 | `docs/api/assets.md` | `afterglow-assets` shared `guess_mime`/`resolve`: path/MIME + canonical confinement. |
-| `docs/api/cef-shell.md` | `afterglow-cef` game-window shell: `AppBuilder`, `afterglow://` scheme, WebGPU/X11 flags, COOP/COEP, console, startup caveat. |
+| `docs/api/afterglow-shell.md` | The sole native host: presenter, browser environment, lifecycle, validation path, and native host gates. |
 | `docs/api/latency-tool.md` | CDP diagnostic CLI commands and measurement semantics. |
 
 ## `docs/research/` — decision records
@@ -42,7 +42,7 @@ when you need the exact command or the rationale behind a constraint.
 ## The code
 
 When in doubt, the code is authoritative. Start from the examples:
-`crates/afterglow-cef/examples/minimal.rs` (the CEF app),
+`crates/afterglow-shell/src/main.rs` (the native shell presenter),
 `crates/afterglow-web/examples/coep_server.rs` (the web dev server),
 `crates/afterglow-rpc-demo/examples/bench_rpc.rs` (the benchmark), and
 `crates/afterglow-rpc-demo/src/lib.rs` (the reference `#[rpc]` service).

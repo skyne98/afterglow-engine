@@ -44189,8 +44189,8 @@ class EngineMemory {
     this.phase = 1 /* Warmup */;
   }
   sealGameplay() {
-    if (this.phase !== 1 /* Warmup */ && this.phase !== 3 /* LoadingScreen */)
-      throw new Error("EngineMemory can seal only after warmup/loading");
+    if (this.phase !== 1 /* Warmup */)
+      throw new Error("EngineMemory can seal only after warmup");
     this.phase = 2 /* GameplaySealed */;
   }
   beginFrame() {
@@ -44311,7 +44311,7 @@ var FrameBudgetRes = defineResource("frameBudget", () => new FrameBudget);
 
 // crates/afterglow-web/web/src/engine/core/frame.ts
 function prepareAfterglowFrame(frame, workerInput, adapter, vtInput, memory, budget) {
-  if (memory && memory.phase !== 2 /* GameplaySealed */ && memory.phase !== 3 /* LoadingScreen */)
+  if (memory && memory.phase !== 2 /* GameplaySealed */)
     throw new Error("EngineMemory must be sealed before frame orchestration");
   memory?.beginFrame();
   budget?.beginFrame(frame.frameId, frame.deltaSeconds * 1000);
@@ -44516,7 +44516,7 @@ class EngineRuntime {
     this.passCount = 0;
     this.adapter.dispose();
     this.client = null;
-    this.memory.phase = 4 /* Shutdown */;
+    this.memory.phase = 3 /* Shutdown */;
     this.mutableState = 5 /* Shutdown */;
   }
   tick(timestamp) {
@@ -44539,6 +44539,7 @@ class EngineRuntime {
       }
     } catch (error2) {
       this.diagnostics.tryRecord(1 /* RuntimeState */, 0 /* Runtime */, error2);
+      console.error("[afterglow] runtime frame failed:", error2 instanceof Error ? error2.stack : String(error2));
       this.mutableState = 4 /* Stopped */;
       return;
     }

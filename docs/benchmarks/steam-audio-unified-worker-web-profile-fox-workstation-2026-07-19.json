@@ -1,0 +1,110 @@
+{
+  "schema": 1,
+  "date": "2026-07-19",
+  "status": "sixty-second-gate-pass",
+  "host": {
+    "cpu": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "gpu": "NVIDIA GeForce RTX 3090",
+    "browser": "Chromium 150.0.7871.100",
+    "sampleRate": 48000,
+    "quantumFrames": 128
+  },
+  "architecture": {
+    "control": "generated typed Rust RPC",
+    "owner": "one Emscripten EngineAudio Web Worker",
+    "dsp": "Steam Audio 4.8.1 hybrid in Worker",
+    "transport": "eight-quantum afterglow-rpc final-PCM SAB ring",
+    "sink": "minimal allocation-free TypeScript AudioWorklet",
+    "voiceCapacity": 16,
+    "completeWorldPhysicalVoiceCapacity": 4,
+    "simulationCadenceHz": 1,
+    "gpuLoad": "same-page 1200x800 hardware-WebGPU clear every requestAnimationFrame"
+  },
+  "run": {
+    "callbacks": 38900,
+    "renderedQuanta": 38908,
+    "underruns": 0,
+    "sequenceErrors": 0,
+    "fatal": 0,
+    "simulationUpdates": 104,
+    "pumpMeanMs": 0.09494538398272849,
+    "pumpMaxMs": 2.265,
+    "pumpOverBudget": 0,
+    "activeSpatialVoices": 4,
+    "activeReflectionVoices": 4,
+    "raf": {
+      "samples": 240,
+      "meanMs": 6.978958333333382,
+      "p99Ms": 6.955000000001746,
+      "maxMs": 13.895000000004075,
+      "intervalsBelow120Fps": 1
+    },
+    "physicalMonitorWaveform": {
+      "durationSeconds": 5,
+      "frames": 240000,
+      "channels": 2,
+      "nonzeroSamples": 474852,
+      "rmsI16": 48.33445505882251,
+      "peakI16": 569,
+      "longestInternalZeroFrames": 3,
+      "longestInternalZeroMs": 0.0625
+    }
+  },
+  "voiceSchedulerValidation": {
+    "durationSeconds": 20,
+    "callbacks": 7400,
+    "underruns": 0,
+    "sequenceErrors": 0,
+    "pumpOverBudget": 0,
+    "pumpMeanMs": 0.10210920626349893,
+    "pumpMaxMs": 1.275,
+    "simulationUpdates": 20,
+    "activeVoices": 5,
+    "activeWorldPhysicalVoices": 4,
+    "completedVoiceFades": 1,
+    "rejectedVoiceCapacity": 0,
+    "rejectedPhysicalCapacity": 0,
+    "staleVoiceHandles": 0,
+    "physicalMonitorWaveform": {
+      "durationSeconds": 5,
+      "frames": 240000,
+      "nonzeroSamples": 473818,
+      "rmsI16": 32.17484738373543,
+      "peakI16": 153,
+      "longestInternalZeroFrames": 3,
+      "longestInternalZeroMs": 0.0625
+    }
+  },
+  "residentSoundValidation": {
+    "durationSeconds": 15,
+    "callbacks": 5524,
+    "underruns": 0,
+    "sequenceErrors": 0,
+    "pumpOverBudget": 0,
+    "pumpMeanMs": 0.10691160520607376,
+    "pumpMaxMs": 0.86,
+    "loadedResidentSounds": 1,
+    "residentSoundBytes": 38400,
+    "activeVoices": 5,
+    "activeWorldPhysicalVoices": 4,
+    "completedVoiceFades": 1,
+    "physicalMonitorWaveform": {
+      "durationSeconds": 5,
+      "frames": 240000,
+      "nonzeroSamples": 476288,
+      "rmsI16": 333.7739358645309,
+      "peakI16": 2771,
+      "longestInternalZeroFrames": 3,
+      "longestInternalZeroMs": 0.0625
+    }
+  },
+  "conclusion": {
+    "sixtySecondGatePassed": true,
+    "selectedProductionCandidate": true,
+    "notes": [
+      "Every admitted world-physical voice has both HRTF/direct and hybrid reflection processing; there is no partial acoustic downgrade tier.",
+      "A strict 48 kHz resident stereo WAV was loaded into Rust-owned PCM and played by the Steam mixer during the resident-sound validation.",
+      "The Wasm AudioWorklet DSP experiment is retained only as research evidence until the remaining integration gates pass."
+    ]
+  }
+}

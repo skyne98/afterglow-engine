@@ -1,3 +1,118 @@
+// crates/afterglow-web/web/src/engine/assets/bulk-range.ts
+var BULK_RANGE_CAPACITY = 256;
+var BULK_RESPONSE_MAX_BYTES = 4 * 1024 * 1024;
+var BULK_IN_FLIGHT_MAX_BYTES = 8 * 1024 * 1024;
+var HEADER_ALLOWANCE_PER_RANGE = 192;
+var RESPONSE_FIXED_ALLOWANCE = 64;
+var decoder = new TextDecoder("ascii");
+function estimatedBulkResponseBytes(ranges) {
+  let bytes = RESPONSE_FIXED_ALLOWANCE;
+  for (const range of ranges)
+    bytes += range.length + HEADER_ALLOWANCE_PER_RANGE;
+  return bytes;
+}
+function validateRanges(ranges) {
+  if (ranges.length < 1 || ranges.length > BULK_RANGE_CAPACITY)
+    throw new RangeError(`bulk range count must be 1..${BULK_RANGE_CAPACITY}`);
+  if (estimatedBulkResponseBytes(ranges) > BULK_RESPONSE_MAX_BYTES)
+    throw new RangeError("bulk response exceeds 4 MiB capacity");
+  for (let index = 0;index < ranges.length; index++) {
+    const range = ranges[index];
+    if (!Number.isSafeInteger(range.offset) || range.offset < 0 || !Number.isSafeInteger(range.length) || range.length <= 0)
+      throw new RangeError("bulk ranges require positive safe-integer spans");
+    const end = range.offset + range.length - 1;
+    if (!Number.isSafeInteger(end))
+      throw new RangeError("bulk range end is unsafe");
+    for (let other = 0;other < index; other++) {
+      const prior = ranges[other];
+      const priorEnd = prior.offset + prior.length - 1;
+      if (range.offset <= priorEnd && end >= prior.offset)
+        throw new RangeError("bulk ranges must not overlap");
+    }
+  }
+}
+function boundaryFrom(contentType) {
+  const match = /(?:^|;)\s*boundary=(?:"([^"]+)"|([^;\s]+))/i.exec(contentType);
+  const boundary = match?.[1] ?? match?.[2] ?? "";
+  if (!boundary || boundary.length > 128 || /[^\x21-\x7e]/.test(boundary))
+    throw new Error("multipart byte-range response has an invalid boundary");
+  return boundary;
+}
+function matches(bytes, offset, pattern) {
+  if (offset < 0 || offset + pattern.length > bytes.length)
+    return false;
+  for (let index = 0;index < pattern.length; index++)
+    if (bytes[offset + index] !== pattern[index])
+      return false;
+  return true;
+}
+function find(bytes, pattern, start, limit) {
+  const end = Math.min(bytes.length - pattern.length, limit);
+  for (let offset = start;offset <= end; offset++)
+    if (matches(bytes, offset, pattern))
+      return offset;
+  return -1;
+}
+function parseMultipartByteRanges(body, contentType, requested) {
+  validateRanges(requested);
+  if (body.byteLength > BULK_RESPONSE_MAX_BYTES)
+    throw new RangeError("bulk response exceeded 4 MiB capacity");
+  const boundary = new TextEncoder().encode(`--${boundaryFrom(contentType)}`);
+  const headerEndMarker = new Uint8Array([13, 10, 13, 10]);
+  const crlf = new Uint8Array([13, 10]);
+  const output = new Array(requested.length);
+  let cursor = 0;
+  for (let index = 0;index < requested.length; index++) {
+    if (!matches(body, cursor, boundary))
+      throw new Error(`multipart boundary missing at part ${index}`);
+    cursor += boundary.length;
+    if (!matches(body, cursor, crlf))
+      throw new Error("multipart part has no header line break");
+    cursor += 2;
+    const headerEnd = find(body, headerEndMarker, cursor, cursor + 1024);
+    if (headerEnd < 0)
+      throw new Error("multipart part headers exceed 1 KiB");
+    const headers = decoder.decode(body.subarray(cursor, headerEnd));
+    const match = /(?:^|\r\n)Content-Range:\s*bytes\s+(\d+)-(\d+)\/(?:\d+|\*)/i.exec(headers);
+    if (!match)
+      throw new Error("multipart part has no valid Content-Range");
+    const start = Number(match[1]);
+    const end = Number(match[2]);
+    const expected = requested[index];
+    if (start !== expected.offset || end !== expected.offset + expected.length - 1)
+      throw new Error(`multipart part ${index} does not match its requested range`);
+    const dataStart = headerEnd + 4;
+    const dataEnd = dataStart + expected.length;
+    if (dataEnd > body.length)
+      throw new Error("multipart part payload is truncated");
+    output[index] = body.subarray(dataStart, dataEnd);
+    cursor = dataEnd;
+    if (!matches(body, cursor, crlf))
+      throw new Error("multipart part has no trailing line break");
+    cursor += 2;
+  }
+  if (!matches(body, cursor, boundary))
+    throw new Error("multipart closing boundary is missing");
+  cursor += boundary.length;
+  if (body[cursor] !== 45 || body[cursor + 1] !== 45)
+    throw new Error("multipart closing boundary is malformed");
+  return output;
+}
+async function fetchByteRanges(url, ranges) {
+  validateRanges(ranges);
+  const value = ranges.map((range) => `${range.offset}-${range.offset + range.length - 1}`).join(",");
+  const response = await fetch(url, { headers: { Range: `bytes=${value}` } });
+  if (response.status !== 206)
+    throw new Error(`bulk asset range expected 206, got ${response.status}: ${url}`);
+  const body = new Uint8Array(await response.arrayBuffer());
+  if (ranges.length === 1) {
+    if (body.byteLength !== ranges[0].length)
+      throw new Error(`asset range returned ${body.byteLength} bytes; expected ${ranges[0].length}: ${url}`);
+    return [body];
+  }
+  return parseMultipartByteRanges(body, response.headers.get("content-type") ?? "", ranges);
+}
+
 // crates/afterglow-web/web/src/engine/assets/big-parser.ts
 function decodeVarint(bytes, off) {
   let r = 0;
@@ -389,15 +504,10 @@ function createFetchRangeLoader(baseUrl = "") {
         throw new RangeError("asset range must use non-negative safe integers");
       if (len === 0)
         return new Uint8Array(0);
-      const response = await fetch(url(path), {
-        headers: { Range: `bytes=${offset}-${offset + len - 1}` }
-      });
-      if (response.status !== 206)
-        throw new Error(`asset range fetch expected 206, got ${response.status}: ${path}`);
-      const bytes = new Uint8Array(await response.arrayBuffer());
-      if (bytes.byteLength !== len)
-        throw new Error(`asset range returned ${bytes.byteLength} bytes; expected ${len}: ${path}`);
-      return bytes;
+      return (await fetchByteRanges(url(path), [{ offset, length: len }]))[0];
+    },
+    async readBulk(path, ranges) {
+      return fetchByteRanges(url(path), ranges);
     }
   };
 }
@@ -442,7 +552,7 @@ class BigContainerAssetLoader {
   }
   poll() {}
 }
-function createPageDataProvider(loader, header, textureWorkers, format, cache, transcodeQueueCapacity = 64) {
+function expandVtDirectories(header) {
   const directories = new Map;
   for (let assetId = 0;assetId < header.assets.length; assetId++) {
     const asset = header.assets[assetId];
@@ -471,14 +581,438 @@ function createPageDataProvider(loader, header, textureWorkers, format, cache, t
       tailSize: source.tail?.size ?? 0
     });
   }
-  const transcoder = new BoundedTranscoderPool(textureWorkers, transcodeQueueCapacity);
-  let reads = 0;
-  let totalReadMs = 0;
-  let maxReadMs = 0;
+  return directories;
+}
+function createPageRangeReader(loader, header, readConcurrency = 16) {
+  const directories = expandVtDirectories(header);
+  let reads = 0, totalReadMs = 0, maxReadMs = 0;
+  let batches = 0, pagesRequested = 0, pagesCoalesced = 0, runs = 0;
   const stats = {
     reads: 0,
     averageReadMs: 0,
     maxReadMs: 0,
+    batches: 0,
+    pagesRequested: 0,
+    pagesCoalesced: 0,
+    runs: 0
+  };
+  const resolve = (req, index) => {
+    const dir = directories.get(req.path);
+    if (!dir)
+      throw new Error(`VT directory not found: ${req.path}`);
+    let offset = 0, size = 0;
+    if (req.tail) {
+      offset = dir.tailOffset;
+      size = dir.tailSize;
+    } else {
+      const mip = dir.mips[req.mip];
+      if (!mip || req.x < 0 || req.y < 0 || req.x >= mip.pagesX || req.y >= mip.pagesY)
+        throw new Error(`VT page out of range: ${req.path} mip=${req.mip} (${req.x},${req.y})`);
+      const page = req.y * mip.pagesX + req.x;
+      offset = mip.offsets[page];
+      size = mip.sizes[page];
+    }
+    if (size === 0)
+      throw new Error(`VT page not found: ${req.path} mip=${req.mip} (${req.x},${req.y})`);
+    return { index, path: req.path, mip: req.mip, x: req.x, y: req.y, tail: !!req.tail, offset, size };
+  };
+  const coalesce = (group) => {
+    const out = [];
+    let runStart = 0;
+    for (let i = 1;i <= group.length; i++) {
+      const prev = group[i - 1];
+      const cur = i < group.length ? group[i] : null;
+      const contiguous = cur !== null && cur.x === prev.x + 1 && cur.size === prev.size && cur.offset === prev.offset + prev.size;
+      if (!contiguous) {
+        out.push(group.slice(runStart, i));
+        runStart = i;
+      }
+    }
+    return out;
+  };
+  const readBatch = async (requests, signal) => {
+    if (signal?.aborted)
+      throw new Error("batch read canceled");
+    batches++;
+    pagesRequested += requests.length;
+    const results = new Array(requests.length);
+    const resolved = requests.map(resolve);
+    if (loader.readBulk) {
+      const ordered = resolved.slice().sort((left, right) => left.path === right.path ? left.offset - right.offset : left.path.localeCompare(right.path));
+      const groups2 = [];
+      let group = [];
+      let ranges = [];
+      for (const page of ordered) {
+        const candidate = { offset: page.offset, length: page.size };
+        if (group.length !== 0 && group[0].path !== page.path) {
+          groups2.push(group);
+          group = [];
+          ranges = [];
+        }
+        ranges.push(candidate);
+        if (ranges.length > BULK_RANGE_CAPACITY || estimatedBulkResponseBytes(ranges) > BULK_RESPONSE_MAX_BYTES) {
+          ranges.pop();
+          if (group.length === 0)
+            throw new RangeError("one page exceeds bulk response capacity");
+          groups2.push(group);
+          group = [];
+          ranges = [candidate];
+        }
+        group.push(page);
+      }
+      if (group.length !== 0)
+        groups2.push(group);
+      const readGroup = async (pages) => {
+        if (signal?.aborted)
+          throw new Error("batch read canceled");
+        const spans = pages.map((page) => ({ offset: page.offset, length: page.size }));
+        const readStartedAt = performance.now();
+        const parts = await loader.readBulk(pages[0].path + ".big", spans);
+        const readMs = performance.now() - readStartedAt;
+        if (parts.length !== pages.length)
+          throw new Error("bulk page response count mismatch");
+        reads++;
+        totalReadMs += readMs;
+        maxReadMs = Math.max(maxReadMs, readMs);
+        runs++;
+        if (pages.length > 1)
+          pagesCoalesced += pages.length;
+        for (let index = 0;index < pages.length; index++) {
+          if (parts[index].byteLength !== pages[index].size)
+            throw new Error("bulk page response length mismatch");
+          results[pages[index].index] = parts[index];
+        }
+      };
+      let nextGroup = 0;
+      const concurrency = Math.min(2, readConcurrency);
+      await Promise.all(Array.from({ length: concurrency }, async () => {
+        while (true) {
+          const index = nextGroup++;
+          if (index >= groups2.length)
+            return;
+          await readGroup(groups2[index]);
+        }
+      }));
+      return results;
+    }
+    const groups = new Map;
+    for (const r of resolved) {
+      const key = r.tail ? `${r.path}:tail:${r.mip}` : `${r.path}:${r.mip}:${r.y}`;
+      let g = groups.get(key);
+      if (!g) {
+        g = [];
+        groups.set(key, g);
+      }
+      g.push(r);
+    }
+    const allRuns = [];
+    for (const group of groups.values()) {
+      if (group[0].tail) {
+        for (const r of group)
+          allRuns.push([r]);
+      } else {
+        group.sort((a, b) => a.x - b.x);
+        for (const run of coalesce(group))
+          allRuns.push(run);
+      }
+    }
+    const readRun = async (run) => {
+      const runOffset = run[0].offset;
+      let runSize = 0;
+      for (const p of run)
+        runSize += p.size;
+      const readStartedAt = performance.now();
+      const batchData = await loader.read(run[0].path + ".big", runOffset, runSize);
+      const readMs = performance.now() - readStartedAt;
+      reads++;
+      totalReadMs += readMs;
+      maxReadMs = Math.max(maxReadMs, readMs);
+      runs++;
+      if (run.length > 1)
+        pagesCoalesced += run.length;
+      let rel = 0;
+      for (const p of run) {
+        results[p.index] = batchData.subarray(rel, rel + p.size);
+        rel += p.size;
+      }
+    };
+    let next = 0;
+    await Promise.all(Array.from({ length: readConcurrency }, async () => {
+      while (true) {
+        const i = next++;
+        if (i >= allRuns.length)
+          return;
+        await readRun(allRuns[i]);
+      }
+    }));
+    return results;
+  };
+  return {
+    readBatch,
+    getStats() {
+      stats.reads = reads;
+      stats.averageReadMs = reads === 0 ? 0 : totalReadMs / reads;
+      stats.maxReadMs = maxReadMs;
+      stats.batches = batches;
+      stats.pagesRequested = pagesRequested;
+      stats.pagesCoalesced = pagesCoalesced;
+      stats.runs = runs;
+      return stats;
+    }
+  };
+}
+
+class BoundedBulkReadQueue {
+  loader;
+  slots = new Array(BULK_RANGE_CAPACITY);
+  free = new Uint16Array(BULK_RANGE_CAPACITY);
+  freeTop = 0;
+  queued = [
+    new Uint16Array(BULK_RANGE_CAPACITY),
+    new Uint16Array(BULK_RANGE_CAPACITY)
+  ];
+  heads = new Uint16Array(2);
+  tails = new Uint16Array(2);
+  counts = new Uint16Array(2);
+  ready = new Uint8Array(2);
+  timers = [null, null];
+  inFlight = 0;
+  inFlightBytes = 0;
+  closed = false;
+  reads = 0;
+  totalReadMs = 0;
+  maxReadMs = 0;
+  urgentBatches = 0;
+  qualityBatches = 0;
+  rejected = 0;
+  canceled = 0;
+  stats = {
+    reads: 0,
+    averageReadMs: 0,
+    maxReadMs: 0,
+    queued: 0,
+    inFlight: 0,
+    inFlightBytes: 0,
+    urgentBatches: 0,
+    qualityBatches: 0,
+    rejected: 0,
+    canceled: 0
+  };
+  constructor(loader) {
+    this.loader = loader;
+    for (let index = BULK_RANGE_CAPACITY - 1;index >= 0; index--) {
+      this.slots[index] = {
+        path: "",
+        offset: 0,
+        length: 0,
+        signal: undefined,
+        resolve: null,
+        reject: null
+      };
+      this.free[this.freeTop++] = index;
+    }
+  }
+  tierIndex(tier) {
+    return tier === "urgent" ? 0 : 1;
+  }
+  deadlineMs(tier) {
+    return tier === 0 ? 1 : 100;
+  }
+  read(path, offset, length, tier, signal) {
+    return new Promise((resolve, reject) => {
+      if (this.closed) {
+        this.rejected++;
+        reject(new Error("bulk page reader is closed"));
+        return;
+      }
+      if (signal?.aborted) {
+        this.canceled++;
+        reject(new Error("VT page load canceled before batching"));
+        return;
+      }
+      if (this.freeTop === 0) {
+        this.rejected++;
+        reject(new Error("bulk page queue capacity exceeded"));
+        return;
+      }
+      const slotIndex = this.free[--this.freeTop];
+      const slot = this.slots[slotIndex];
+      slot.path = path;
+      slot.offset = offset;
+      slot.length = length;
+      slot.signal = signal;
+      slot.resolve = resolve;
+      slot.reject = reject;
+      const lane = this.tierIndex(tier);
+      this.queued[lane][this.tails[lane]] = slotIndex;
+      this.tails[lane] = (this.tails[lane] + 1) % BULK_RANGE_CAPACITY;
+      this.counts[lane]++;
+      if (this.timers[lane] === null) {
+        this.timers[lane] = setTimeout(() => {
+          this.timers[lane] = null;
+          this.ready[lane] = 1;
+          this.pump();
+        }, this.deadlineMs(lane));
+      }
+      if (this.counts[lane] === BULK_RANGE_CAPACITY) {
+        this.ready[lane] = 1;
+        this.pump();
+      }
+    });
+  }
+  release(slotIndex) {
+    const slot = this.slots[slotIndex];
+    slot.path = "";
+    slot.signal = undefined;
+    slot.resolve = null;
+    slot.reject = null;
+    this.free[this.freeTop++] = slotIndex;
+  }
+  pop(lane) {
+    const index = this.queued[lane][this.heads[lane]];
+    this.heads[lane] = (this.heads[lane] + 1) % BULK_RANGE_CAPACITY;
+    this.counts[lane]--;
+    return index;
+  }
+  clearLaneTimer(lane) {
+    const timer = this.timers[lane];
+    if (timer !== null)
+      clearTimeout(timer);
+    this.timers[lane] = null;
+  }
+  pump() {
+    while (this.inFlight < 2 && this.inFlightBytes < BULK_IN_FLIGHT_MAX_BYTES) {
+      const lane = this.ready[0] !== 0 && this.counts[0] !== 0 ? 0 : this.ready[1] !== 0 && this.counts[1] !== 0 ? 1 : -1;
+      if (lane < 0)
+        return;
+      const indices = [];
+      const ranges = [];
+      while (this.counts[lane] !== 0 && indices.length < BULK_RANGE_CAPACITY) {
+        const slotIndex = this.queued[lane][this.heads[lane]];
+        const slot = this.slots[slotIndex];
+        if (slot.signal?.aborted) {
+          this.pop(lane);
+          this.canceled++;
+          slot.reject?.(new Error("VT page load canceled while batched"));
+          this.release(slotIndex);
+          continue;
+        }
+        const candidate = { offset: slot.offset, length: slot.length };
+        ranges.push(candidate);
+        if (estimatedBulkResponseBytes(ranges) > BULK_RESPONSE_MAX_BYTES) {
+          ranges.pop();
+          if (indices.length === 0) {
+            this.pop(lane);
+            this.rejected++;
+            slot.reject?.(new RangeError("one VT page exceeds bulk response capacity"));
+            this.release(slotIndex);
+            continue;
+          }
+          break;
+        }
+        indices.push(this.pop(lane));
+      }
+      if (this.counts[lane] === 0) {
+        this.ready[lane] = 0;
+        this.clearLaneTimer(lane);
+      }
+      if (indices.length === 0)
+        continue;
+      const expectedBytes = estimatedBulkResponseBytes(ranges);
+      if (this.inFlightBytes + expectedBytes > BULK_IN_FLIGHT_MAX_BYTES)
+        return;
+      this.dispatch(indices, ranges, expectedBytes, lane);
+    }
+  }
+  dispatch(indices, ranges, expectedBytes, lane) {
+    this.inFlight++;
+    this.inFlightBytes += expectedBytes;
+    if (lane === 0)
+      this.urgentBatches++;
+    else
+      this.qualityBatches++;
+    const startedAt = performance.now();
+    const request = this.loader.readBulk ? this.loader.readBulk(ranges) : Promise.all(indices.map((slotIndex, index) => {
+      const slot = this.slots[slotIndex];
+      const range = ranges[index];
+      return this.loader.read(`${slot.path}.big`, range.offset, range.length);
+    }));
+    request.then((parts) => {
+      if (parts.length !== indices.length)
+        throw new Error(`bulk response returned ${parts.length} parts; expected ${indices.length}`);
+      const readMs = performance.now() - startedAt;
+      this.reads++;
+      this.totalReadMs += readMs;
+      this.maxReadMs = Math.max(this.maxReadMs, readMs);
+      for (let index = 0;index < indices.length; index++) {
+        const slotIndex = indices[index];
+        const slot = this.slots[slotIndex];
+        const bytes = parts[index];
+        if (bytes.byteLength !== slot.length)
+          slot.reject?.(new Error(`bulk page returned ${bytes.byteLength} bytes; expected ${slot.length}`));
+        else if (this.closed || slot.signal?.aborted) {
+          this.canceled++;
+          slot.reject?.(new Error("VT page load canceled after bulk read"));
+        } else
+          slot.resolve?.(bytes);
+        this.release(slotIndex);
+      }
+    }).catch((error) => {
+      for (const slotIndex of indices) {
+        this.slots[slotIndex].reject?.(error);
+        this.release(slotIndex);
+      }
+    }).finally(() => {
+      this.inFlight--;
+      this.inFlightBytes -= expectedBytes;
+      this.pump();
+    });
+  }
+  close() {
+    if (this.closed)
+      return;
+    this.closed = true;
+    for (let lane = 0;lane < 2; lane++) {
+      this.clearLaneTimer(lane);
+      while (this.counts[lane] !== 0) {
+        const slotIndex = this.pop(lane);
+        this.canceled++;
+        this.slots[slotIndex].reject?.(new Error("bulk page reader closed"));
+        this.release(slotIndex);
+      }
+      this.ready[lane] = 0;
+    }
+  }
+  getStats() {
+    const stats = this.stats;
+    stats.reads = this.reads;
+    stats.averageReadMs = this.reads === 0 ? 0 : this.totalReadMs / this.reads;
+    stats.maxReadMs = this.maxReadMs;
+    stats.queued = this.counts[0] + this.counts[1];
+    stats.inFlight = this.inFlight;
+    stats.inFlightBytes = this.inFlightBytes;
+    stats.urgentBatches = this.urgentBatches;
+    stats.qualityBatches = this.qualityBatches;
+    stats.rejected = this.rejected;
+    stats.canceled = this.canceled;
+    return stats;
+  }
+}
+function createPageDataProvider(loader, header, textureWorkers, format, cache, transcodeQueueCapacity = 64) {
+  const directories = expandVtDirectories(header);
+  const transcoder = new BoundedTranscoderPool(textureWorkers, transcodeQueueCapacity);
+  const bulkReads = new BoundedBulkReadQueue(loader);
+  const stats = {
+    reads: 0,
+    averageReadMs: 0,
+    maxReadMs: 0,
+    bulkQueued: 0,
+    bulkInFlight: 0,
+    bulkInFlightBytes: 0,
+    urgentBatches: 0,
+    qualityBatches: 0,
+    bulkRejected: 0,
+    bulkCanceled: 0,
     workerCount: textureWorkers.length,
     activeTranscodes: 0,
     queuedTranscodes: 0,
@@ -535,12 +1069,7 @@ function createPageDataProvider(loader, header, textureWorkers, format, cache, t
       if (cached && cached.byteLength === expectedBytes)
         return cached;
     }
-    const readStartedAt = performance.now();
-    const pageData = await loader.read(path + ".big", offset, size);
-    const readMs = performance.now() - readStartedAt;
-    reads++;
-    totalReadMs += readMs;
-    maxReadMs = Math.max(maxReadMs, readMs);
+    const pageData = await bulkReads.read(path, offset, size, req.batchTier ?? "urgent", signal);
     if (signal?.aborted)
       throw new Error("VT page load canceled after read");
     if (directory.encoding === "RawRgba8") {
@@ -570,11 +1099,20 @@ function createPageDataProvider(loader, header, textureWorkers, format, cache, t
       cache.put(cacheKey, payload);
     return payload;
   };
+  provider.close = () => bulkReads.close();
   provider.getStats = () => {
     const transcode = transcoder.getStats();
-    stats.reads = reads;
-    stats.averageReadMs = reads === 0 ? 0 : totalReadMs / reads;
-    stats.maxReadMs = maxReadMs;
+    const read = bulkReads.getStats();
+    stats.reads = read.reads;
+    stats.averageReadMs = read.averageReadMs;
+    stats.maxReadMs = read.maxReadMs;
+    stats.bulkQueued = read.queued;
+    stats.bulkInFlight = read.inFlight;
+    stats.bulkInFlightBytes = read.inFlightBytes;
+    stats.urgentBatches = read.urgentBatches;
+    stats.qualityBatches = read.qualityBatches;
+    stats.bulkRejected = read.rejected;
+    stats.bulkCanceled = read.canceled;
     stats.workerCount = transcode.workerCount;
     stats.activeTranscodes = transcode.active;
     stats.queuedTranscodes = transcode.queued;
@@ -614,6 +1152,7 @@ export {
   getVirtualTextureDimensions,
   findVTPageChunk,
   findVTMipTailChunk,
+  createPageRangeReader,
   createPageDataProvider,
   createFetchRangeLoader,
   BoundedTranscoderPool,

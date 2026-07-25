@@ -1,2 +1,2 @@
 # Generated TS clients (written by #[rpc] macro at build time)
-ts/
+gen/

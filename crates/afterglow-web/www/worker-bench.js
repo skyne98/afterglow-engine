@@ -64,41 +64,27 @@ function decodeF32Vec(bytes, off) {
     out[i] = dv.getFloat32(i * 4, true);
   return [out, end];
 }
-
-// crates/afterglow-web/web/src/workers/rpc.ts
-var TIMEOUT_MS = 5000;
-function decodeVarint2(bytes, off) {
-  let r = 0;
-  for (let shift = 0;shift < 35; shift += 7) {
-    if (off >= bytes.length)
-      throw new Error("postcard varint truncated");
-    const b = bytes[off++];
-    if (shift === 28 && b & 240)
-      throw new Error("postcard varint overflows u32");
-    r += (b & 127) * 2 ** shift;
-    if (!(b & 128))
-      return [r >>> 0, off];
-  }
-  throw new Error("postcard varint overflows u32");
-}
 function unwrapResponse(bytes) {
-  const [variant, off] = decodeVarint2(bytes, 0);
+  const [variant, off] = decodeVarint(bytes, 0);
   if (variant === 0) {
-    const [plen, poff] = decodeVarint2(bytes, off);
+    const [plen, poff] = decodeVarint(bytes, off);
     if (poff + plen > bytes.length)
       throw new Error("RPC response truncated");
     return bytes.subarray(poff, poff + plen);
   }
-  const [method, moff] = decodeVarint2(bytes, off);
-  const [mlen, eoff] = decodeVarint2(bytes, moff);
+  const [method, moff] = decodeVarint(bytes, off);
+  const [mlen, eoff] = decodeVarint(bytes, moff);
   if (eoff + mlen > bytes.length)
     throw new Error("RPC error truncated");
-  const msg = new TextDecoder().decode(bytes.subarray(eoff, eoff + mlen));
+  const msg = new TextDecoder().decode(Uint8Array.from(bytes.subarray(eoff, eoff + mlen)));
   throw new Error(`RPC ${variant === 1 ? "server" : "decode"} error (method ${method}): ${msg}`);
 }
 
+// crates/afterglow-web/web/src/workers/rpc.ts
+var TIMEOUT_MS = 5000;
+
 class Rpc {
-  static async create({ mainWasmUrl, workerJsUrl, workerWasmUrl, timeoutMs }) {
+  static async create({ mainWasmUrl, workerJsUrl, workerWasmUrl, timeoutMs, workerInit = null }) {
     const memory = new WebAssembly.Memory({ shared: true, initial: 256, maximum: 1024 });
     const worker = new Worker(workerJsUrl, { type: "module" });
     let rpc = null;
@@ -112,7 +98,8 @@ class Rpc {
         reqBase: wasm.get_request_ptr(),
         respBase: wasm.get_response_ptr(),
         bufSize: wasm.get_buffer_size(),
-        wasmUrl: workerWasmUrl
+        wasmUrl: workerWasmUrl,
+        workerInit
       });
       await rpc._initPromise;
       worker.postMessage({ type: "run" });
@@ -234,7 +221,7 @@ class PhysicsClient {
   closed = false;
   static async spawn(opts = {}) {
     const rpc = await Rpc.create({
-      mainWasmUrl: opts.mainWasmUrl ?? "afterglow_web.wasm",
+      mainWasmUrl: opts.mainWasmUrl ?? "afterglow_rpc.wasm",
       workerJsUrl: opts.workerJsUrl ?? "worker.js",
       workerWasmUrl: opts.workerWasmUrl ?? "physics.wasm",
       timeoutMs: opts.timeoutMs
@@ -272,7 +259,9 @@ function print(message) {
 print("=== Typed Cross-Thread Worker Benchmark (Web Worker + SAB ring) ===");
 print(`Service RPC includes typed postcard encode/decode and cross-thread notification.
 `);
-var client = await PhysicsClient.spawn({ workerWasmUrl: "physics_worker.wasm" });
+var client = await PhysicsClient.spawn({
+  workerWasmUrl: "physics_worker.wasm"
+});
 try {
   const sizes = new Uint32Array([1, 4, 16, 64, 256, 1024, 4096, 16384]);
   const iterations = 1000, dt = 0.016, roundedDt = Math.fround(dt);

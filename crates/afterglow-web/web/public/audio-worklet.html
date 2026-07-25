@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Afterglow EngineAudio Gate 0</title>
+  <style>
+    body { color: #dce7ef; background: #0a0c10; font: 16px system-ui; margin: 2rem; }
+    button { font: inherit; margin-right: .5rem; padding: .5rem 1rem; }
+    pre { padding: 1rem; background: #111820; min-height: 18rem; }
+  </style>
+</head>
+<body>
+  <h1>EngineAudio Worker → AudioWorklet Gate</h1>
+  <p>This diagnostic requires a user gesture. It loads resident WAVs, exercises a generic crossfade plus four complete physical voices, and defaults to eight quanta. Use <code>?realSounds</code> for the staged five-file SDK set and <code>?acousticScene=NAME</code> for a staged checked scene.</p>
+  <button id="start">Start audio</button>
+  <button id="stop" disabled>Stop</button>
+  <pre id="output">idle</pre>
+  <script type="module" src="audio-worklet-demo.js"></script>
+</body>
+</html>

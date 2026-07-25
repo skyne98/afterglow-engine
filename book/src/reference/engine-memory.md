@@ -7,6 +7,8 @@ model:
 - gameplay uses fixed arenas, pools, rings, and numeric handles;
 - capacity exhaustion is explicit and never silently grows storage;
 - potentially stalling work is bounded and deferred;
+- there is no loading-screen phase: post-warm-up assets/world data stream
+  continuously through fixed budgets and atomic publication;
 - game code may allocate, but engine hot paths may not.
 
 `EngineMemory` provides fixed frame/render scratch arenas, a typed structural

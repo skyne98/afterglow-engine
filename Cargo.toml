@@ -1,10 +1,13 @@
 [workspace]
 resolver = "2"
+exclude = ["vendor/afterglow-shell-blitz"]
 members = [
+    "crates/afterglow-audio-worker",
+    "crates/afterglow-shell",
+    "crates/afterglow-obvhs-tracer",
     "crates/afterglow-assets",
     "crates/afterglow-assets-worker",
     "crates/afterglow-basis-encoder",
-    "crates/afterglow-cef",
     "crates/afterglow-meshopt",
     "crates/afterglow-pipeline",
     "crates/afterglow-rpc",
@@ -23,7 +26,6 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/skyne98/afterglow-engine"
 
 [workspace.dependencies]
-cef = "149.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 postcard = { version = "1", features = ["alloc"] }
@@ -33,8 +35,30 @@ syn = { version = "2", features = ["full"] }
 quote = "1"
 async-executor = "1"
 
+# afterglow-shell needs narrow native WebGPU patches plus its pinned Blitz
+# browser/layout fixes. Keep these at workspace scope because Cargo ignores
+# patch tables in member manifests.
+[patch.crates-io]
+deno_webgpu = { path = "crates/afterglow-shell/vendor/deno_webgpu" }
+naga = { path = "crates/afterglow-shell/vendor/naga" }
+wgpu = { path = "crates/afterglow-shell/vendor/wgpu" }
+blitz-dom = { path = "vendor/afterglow-shell-blitz/packages/blitz-dom" }
+blitz-html = { path = "vendor/afterglow-shell-blitz/packages/blitz-html" }
+blitz-paint = { path = "vendor/afterglow-shell-blitz/packages/blitz-paint" }
+blitz-traits = { path = "vendor/afterglow-shell-blitz/packages/blitz-traits" }
+stylo_taffy = { path = "vendor/afterglow-shell-blitz/packages/stylo_taffy" }
+debug_timer = { path = "vendor/afterglow-shell-blitz/packages/debug_timer" }
+
 [profile.release]
 opt-level = 2
+
+[profile.release.package.afterglow-audio-worker]
+opt-level = 3
+codegen-units = 1
+
+[profile.release.package.afterglow-obvhs-tracer]
+opt-level = 3
+codegen-units = 1
 
 [profile.wasm-dev]
 inherits = "dev"

@@ -12,7 +12,10 @@
 
 use afterglow_assets::range::{self, RangeSpec};
 use afterglow_assets::source::AssetSource;
-use afterglow_assets::{AssetRoot, BytesSource, guess_mime};
+use afterglow_assets::{
+    AssetRoot, AssetSourceCache, AssetSourceProvider, BytesSource, MULTIPART_CONTENT_TYPE,
+    MultiRangeSpec, MultipartSource, guess_mime, parse_multi_range,
+};
 
 /// Parsed HTTP request line: `(method, raw_path)` where `raw_path` keeps its
 /// query string (the handler strips it). `None` if malformed.
@@ -87,7 +90,7 @@ fn plain(status: u16, reason: &'static str, body: &'static [u8]) -> Response {
 /// and confinement are delegated to [`afterglow_assets::resolve`]. A `Range`
 /// header produces a `206 Partial Content` with `Content-Range`.
 #[doc(hidden)]
-pub fn handle_request(root: &AssetRoot, request: &str) -> Response {
+pub fn handle_request(provider: &dyn AssetSourceProvider, request: &str) -> Response {
     let Some((method, raw)) = parse_request_line(request) else {
         return plain(400, "Bad Request", b"bad request");
     };
@@ -100,12 +103,34 @@ pub fn handle_request(root: &AssetRoot, request: &str) -> Response {
     } else {
         path
     };
-    let Some(src) = root.open_source(path) else {
+    let Some(src) = provider.open_source(path) else {
         return plain(404, "Not Found", b"not found");
     };
     let total = src.len();
     let etag = src.etag();
     let range_header = header_value(request, "Range");
+    match parse_multi_range(range_header, total) {
+        MultiRangeSpec::Ranges(ranges) => {
+            let Ok(source) = MultipartSource::new(src, &ranges, guess_mime(path)) else {
+                return plain(416, "Range Not Satisfiable", b"bulk range exceeds capacity");
+            };
+            let len = source.len();
+            return Response {
+                status: 206,
+                reason: "Partial Content",
+                mime: MULTIPART_CONTENT_TYPE,
+                source: Box::new(source),
+                start: 0,
+                len,
+                content_range: None,
+                etag,
+            };
+        }
+        MultiRangeSpec::Unsatisfiable => {
+            return plain(416, "Range Not Satisfiable", b"range not satisfiable");
+        }
+        MultiRangeSpec::NotMultiple => {}
+    }
     let spec = range::parse_range(range_header, total);
     match spec {
         RangeSpec::Range { start, end } => {
@@ -114,7 +139,7 @@ pub fn handle_request(root: &AssetRoot, request: &str) -> Response {
                 status: 206,
                 reason: "Partial Content",
                 mime: guess_mime(path),
-                source: Box::new(src),
+                source: src,
                 start,
                 len,
                 content_range: Some(range::content_range(start, end, total)),
@@ -125,7 +150,7 @@ pub fn handle_request(root: &AssetRoot, request: &str) -> Response {
             status: 200,
             reason: "OK",
             mime: guess_mime(path),
-            source: Box::new(src),
+            source: src,
             start: 0,
             len: total,
             content_range: None,
@@ -211,6 +236,7 @@ impl DevAssetServer {
         let address = listener.local_addr()?;
         let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let stats = std::sync::Arc::new(AtomicServerStats::default());
+        let cache = std::sync::Arc::new(AssetSourceCache::new(root));
         let thread_stop = stop.clone();
         let thread_stats = stats.clone();
         let thread = std::thread::spawn(move || {
@@ -219,11 +245,11 @@ impl DevAssetServer {
             for _ in 0..worker_count {
                 let (sender, receiver) = std::sync::mpsc::sync_channel(queue_capacity_per_worker);
                 senders.push(sender);
-                let worker_root = root.clone();
+                let worker_cache = cache.clone();
                 let worker_stats = thread_stats.clone();
                 workers.push(std::thread::spawn(move || {
                     while let Ok(stream) = receiver.recv() {
-                        serve_connection(stream, &worker_root);
+                        serve_connection(stream, &worker_cache);
                         worker_stats
                             .completed
                             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -307,7 +333,7 @@ impl Drop for DevAssetServer {
     }
 }
 
-fn serve_connection(mut stream: std::net::TcpStream, root: &AssetRoot) {
+fn serve_connection(mut stream: std::net::TcpStream, cache: &AssetSourceCache) {
     use std::io::{Read, Write};
     let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
     let mut request = [0u8; 8192];
@@ -315,7 +341,7 @@ fn serve_connection(mut stream: std::net::TcpStream, root: &AssetRoot) {
         Ok(0) | Err(_) => return,
         Ok(size) => size,
     };
-    let response = handle_request(root, &String::from_utf8_lossy(&request[..size]));
+    let response = handle_request(cache, &String::from_utf8_lossy(&request[..size]));
     let mut head = format!(
         "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\n",
         response.status,
@@ -459,14 +485,22 @@ mod tests {
     }
 
     #[test]
-    fn multi_range_falls_back_to_full_200() {
+    fn multi_range_streams_one_bounded_multipart_response() {
         let root = www_root();
         let r = handle_request(
             &root,
             "GET /worker-test.html HTTP/1.1\r\nRange: bytes=0-99,200-299\r\n",
         );
-        assert_eq!(r.status, 200);
+        assert_eq!(r.status, 206);
+        assert_eq!(r.mime, MULTIPART_CONTENT_TYPE);
         assert!(r.content_range.is_none());
+        let mut body = Vec::new();
+        let mut chunk = [0u8; 47];
+        assert_eq!(stream_body(&r, &mut body, &mut chunk).unwrap(), r.len);
+        let text = String::from_utf8_lossy(&body);
+        assert!(text.contains("Content-Range: bytes 0-99/"));
+        assert!(text.contains("Content-Range: bytes 200-299/"));
+        assert!(text.ends_with("--afterglow_bulk_v1--\r\n"));
     }
 
     #[test]

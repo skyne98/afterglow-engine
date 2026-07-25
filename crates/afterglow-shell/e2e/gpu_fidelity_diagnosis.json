@@ -1,0 +1,81 @@
+{
+  "version": 1,
+  "captured": "2026-07-23",
+  "native": {
+    "adapter": "NVIDIA GeForce RTX 3090",
+    "backend": "wgpu-core 29 Vulkan",
+    "viewport": "800x500"
+  },
+  "chrome": {
+    "version": "150.0.0.0",
+    "adapter": "NVIDIA GeForce RTX 3090",
+    "backend": "Dawn Vulkan",
+    "deterministicPolicy": "same seeded random and one-frame harness policy"
+  },
+  "pixelThresholdPercent": 0.1,
+  "reproductionScript": "scripts/capture_same_adapter_chrome.ts",
+  "diagnoses": {
+    "webgpu_compute_rasterizer": {
+      "bundledGoldenDiffPercent": 0.321,
+      "sameAdapterChromeDiffPercent": 0.000,
+      "repeatDiffPercent": 0.001,
+      "rootCause": "The example resolves related triangle and instance payloads through separate atomicMax operations, so one contested pixel may legally receive a torn pair. All deterministic geometry and the remaining framebuffer match on the same adapter."
+    },
+    "webgpu_lights_custom": {
+      "bundledGoldenDiffPercent": 0.414,
+      "sameAdapterChromeDiffPercent": 0.000,
+      "rootCause": "Bundled golden adapter/backend numeric output; same-adapter Chrome and native output match exactly after applying the same UUID-independent seeded-random policy."
+    },
+    "webgpu_lights_pointlights": {
+      "bundledGoldenDiffPercent": 0.209,
+      "sameAdapterChromeDiffPercent": 0.000,
+      "rootCause": "Bundled golden adapter/backend numeric output; same-adapter Chrome and native output match exactly."
+    },
+    "webgpu_lights_rectarealight": {
+      "bundledGoldenDiffPercent": 0.158,
+      "sameAdapterChromeDiffPercent": 0.013,
+      "rootCause": "Same-adapter rendering reduces the difference below the strict threshold; residual pixels are edge quantization between Dawn and wgpu-core."
+    },
+    "webgpu_lines_fat_raycasting": {
+      "bundledGoldenDiffPercent": 0.824,
+      "sameAdapterChromeDiffPercent": 0.001,
+      "rootCause": "Same-adapter geometry and line coverage match except for one thresholded pixel."
+    },
+    "webgpu_materials_arrays": {
+      "bundledGoldenDiffPercent": 0.127,
+      "sameAdapterChromeDiffPercent": 0.000,
+      "rootCause": "Same-adapter Chrome and native output match exactly."
+    },
+    "webgpu_materials_envmaps_bpcem": {
+      "bundledGoldenDiffPercent": 2.543,
+      "sameAdapterChromeDiffPercent": 0.109,
+      "rootCause": "The bundled adapter accounts for nearly all reflected-radiance differences; same-adapter output is structurally identical with a 0.009 percentage-point threshold excess at reflection edges."
+    },
+    "webgpu_refraction": {
+      "bundledGoldenDiffPercent": 0.367,
+      "sameAdapterChromeDiffPercent": 0.003,
+      "rootCause": "Same-adapter refraction, depth, and sampling output match below threshold."
+    },
+    "webgpu_textures_anisotropy": {
+      "bundledGoldenDiffPercent": 9.108,
+      "sameAdapterChromeDiffPercent": 0.000,
+      "rootCause": "The bundled golden was generated with materially different anisotropic filtering. With the same 800x500 CSS viewport, seeded policy, NVIDIA adapter, and Vulkan backend, Dawn and wgpu-core output match exactly."
+    },
+    "webgpu_volume_lighting_rectarea": {
+      "bundledGoldenDiffPercent": 0.930,
+      "sameAdapterChromeDiffPercent": 0.000,
+      "rootCause": "Same-adapter Chrome and native output match exactly."
+    },
+    "webgpu_materials_texture_manualmipmap": {
+      "bundledGoldenDiffPercent": 0.615,
+      "sameAdapterChromeFirstFrameDiffPercent": 22.569,
+      "status": "runtime-native-golden",
+      "rootCause": "All manually supplied mip levels and quadrant boundaries are present and stable. Chrome's first deterministic frame does not redraw every asynchronously compiled object, so a same-frame browser differential is not a valid resource-state comparison."
+    },
+    "webgpu_multisampled_renderbuffers": {
+      "bundledGoldenDiffPercent": 2.357,
+      "sameAdapterChromeDiffPercent": 0.000,
+      "rootCause": "With an identical 800x500 CSS viewport, color/depth resolves and wireframe coverage match same-adapter Chrome exactly."
+    }
+  }
+}

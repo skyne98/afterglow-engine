@@ -44052,8 +44052,8 @@ class EngineMemory {
     this.phase = 1 /* Warmup */;
   }
   sealGameplay() {
-    if (this.phase !== 1 /* Warmup */ && this.phase !== 3 /* LoadingScreen */)
-      throw new Error("EngineMemory can seal only after warmup/loading");
+    if (this.phase !== 1 /* Warmup */)
+      throw new Error("EngineMemory can seal only after warmup");
     this.phase = 2 /* GameplaySealed */;
   }
   beginFrame() {
@@ -44174,7 +44174,7 @@ var FrameBudgetRes = defineResource("frameBudget", () => new FrameBudget);
 
 // crates/afterglow-web/web/src/engine/core/frame.ts
 function prepareAfterglowFrame(frame, workerInput, adapter, vtInput, memory, budget) {
-  if (memory && memory.phase !== 2 /* GameplaySealed */ && memory.phase !== 3 /* LoadingScreen */)
+  if (memory && memory.phase !== 2 /* GameplaySealed */)
     throw new Error("EngineMemory must be sealed before frame orchestration");
   memory?.beginFrame();
   budget?.beginFrame(frame.frameId, frame.deltaSeconds * 1000);
@@ -44379,7 +44379,7 @@ class EngineRuntime {
     this.passCount = 0;
     this.adapter.dispose();
     this.client = null;
-    this.memory.phase = 4 /* Shutdown */;
+    this.memory.phase = 3 /* Shutdown */;
     this.mutableState = 5 /* Shutdown */;
   }
   tick(timestamp) {
@@ -44402,6 +44402,7 @@ class EngineRuntime {
       }
     } catch (error2) {
       this.diagnostics.tryRecord(1 /* RuntimeState */, 0 /* Runtime */, error2);
+      console.error("[afterglow] runtime frame failed:", error2 instanceof Error ? error2.stack : String(error2));
       this.mutableState = 4 /* Stopped */;
       return;
     }
@@ -44413,6 +44414,760 @@ class EngineRuntime {
 var ProfilingRes = defineResource("profiling", () => {
   throw new Error("Profiling not initialized. Call ProfilingRes.set(world, new Profiling(host)).");
 });
+// crates/afterglow-web/web/src/engine/assets/bulk-range.ts
+var BULK_RANGE_CAPACITY = 256;
+var BULK_RESPONSE_MAX_BYTES = 4 * 1024 * 1024;
+var BULK_IN_FLIGHT_MAX_BYTES = 8 * 1024 * 1024;
+var HEADER_ALLOWANCE_PER_RANGE = 192;
+var RESPONSE_FIXED_ALLOWANCE = 64;
+var decoder = new TextDecoder("ascii");
+function estimatedBulkResponseBytes(ranges) {
+  let bytes = RESPONSE_FIXED_ALLOWANCE;
+  for (const range of ranges)
+    bytes += range.length + HEADER_ALLOWANCE_PER_RANGE;
+  return bytes;
+}
+function validateRanges(ranges) {
+  if (ranges.length < 1 || ranges.length > BULK_RANGE_CAPACITY)
+    throw new RangeError(`bulk range count must be 1..${BULK_RANGE_CAPACITY}`);
+  if (estimatedBulkResponseBytes(ranges) > BULK_RESPONSE_MAX_BYTES)
+    throw new RangeError("bulk response exceeds 4 MiB capacity");
+  for (let index = 0;index < ranges.length; index++) {
+    const range = ranges[index];
+    if (!Number.isSafeInteger(range.offset) || range.offset < 0 || !Number.isSafeInteger(range.length) || range.length <= 0)
+      throw new RangeError("bulk ranges require positive safe-integer spans");
+    const end = range.offset + range.length - 1;
+    if (!Number.isSafeInteger(end))
+      throw new RangeError("bulk range end is unsafe");
+    for (let other = 0;other < index; other++) {
+      const prior = ranges[other];
+      const priorEnd = prior.offset + prior.length - 1;
+      if (range.offset <= priorEnd && end >= prior.offset)
+        throw new RangeError("bulk ranges must not overlap");
+    }
+  }
+}
+function boundaryFrom(contentType) {
+  const match = /(?:^|;)\s*boundary=(?:"([^"]+)"|([^;\s]+))/i.exec(contentType);
+  const boundary = match?.[1] ?? match?.[2] ?? "";
+  if (!boundary || boundary.length > 128 || /[^\x21-\x7e]/.test(boundary))
+    throw new Error("multipart byte-range response has an invalid boundary");
+  return boundary;
+}
+function matches(bytes, offset, pattern) {
+  if (offset < 0 || offset + pattern.length > bytes.length)
+    return false;
+  for (let index = 0;index < pattern.length; index++)
+    if (bytes[offset + index] !== pattern[index])
+      return false;
+  return true;
+}
+function find(bytes, pattern, start, limit) {
+  const end = Math.min(bytes.length - pattern.length, limit);
+  for (let offset = start;offset <= end; offset++)
+    if (matches(bytes, offset, pattern))
+      return offset;
+  return -1;
+}
+function parseMultipartByteRanges(body, contentType, requested) {
+  validateRanges(requested);
+  if (body.byteLength > BULK_RESPONSE_MAX_BYTES)
+    throw new RangeError("bulk response exceeded 4 MiB capacity");
+  const boundary = new TextEncoder().encode(`--${boundaryFrom(contentType)}`);
+  const headerEndMarker = new Uint8Array([13, 10, 13, 10]);
+  const crlf = new Uint8Array([13, 10]);
+  const output2 = new Array(requested.length);
+  let cursor = 0;
+  for (let index = 0;index < requested.length; index++) {
+    if (!matches(body, cursor, boundary))
+      throw new Error(`multipart boundary missing at part ${index}`);
+    cursor += boundary.length;
+    if (!matches(body, cursor, crlf))
+      throw new Error("multipart part has no header line break");
+    cursor += 2;
+    const headerEnd = find(body, headerEndMarker, cursor, cursor + 1024);
+    if (headerEnd < 0)
+      throw new Error("multipart part headers exceed 1 KiB");
+    const headers = decoder.decode(body.subarray(cursor, headerEnd));
+    const match = /(?:^|\r\n)Content-Range:\s*bytes\s+(\d+)-(\d+)\/(?:\d+|\*)/i.exec(headers);
+    if (!match)
+      throw new Error("multipart part has no valid Content-Range");
+    const start = Number(match[1]);
+    const end = Number(match[2]);
+    const expected = requested[index];
+    if (start !== expected.offset || end !== expected.offset + expected.length - 1)
+      throw new Error(`multipart part ${index} does not match its requested range`);
+    const dataStart = headerEnd + 4;
+    const dataEnd = dataStart + expected.length;
+    if (dataEnd > body.length)
+      throw new Error("multipart part payload is truncated");
+    output2[index] = body.subarray(dataStart, dataEnd);
+    cursor = dataEnd;
+    if (!matches(body, cursor, crlf))
+      throw new Error("multipart part has no trailing line break");
+    cursor += 2;
+  }
+  if (!matches(body, cursor, boundary))
+    throw new Error("multipart closing boundary is missing");
+  cursor += boundary.length;
+  if (body[cursor] !== 45 || body[cursor + 1] !== 45)
+    throw new Error("multipart closing boundary is malformed");
+  return output2;
+}
+async function fetchByteRanges(url, ranges) {
+  validateRanges(ranges);
+  const value = ranges.map((range) => `${range.offset}-${range.offset + range.length - 1}`).join(",");
+  const response = await fetch(url, { headers: { Range: `bytes=${value}` } });
+  if (response.status !== 206)
+    throw new Error(`bulk asset range expected 206, got ${response.status}: ${url}`);
+  const body = new Uint8Array(await response.arrayBuffer());
+  if (ranges.length === 1) {
+    if (body.byteLength !== ranges[0].length)
+      throw new Error(`asset range returned ${body.byteLength} bytes; expected ${ranges[0].length}: ${url}`);
+    return [body];
+  }
+  return parseMultipartByteRanges(body, response.headers.get("content-type") ?? "", ranges);
+}
+
+// crates/afterglow-web/web/src/engine/assets/big-parser.ts
+function decodeVarint(bytes, off) {
+  let r = 0;
+  for (let shift = 0;shift < 56; shift += 7) {
+    if (off >= bytes.length)
+      throw new Error("postcard varint truncated");
+    const b2 = bytes[off++];
+    r += (b2 & 127) * 2 ** shift;
+    if (!(b2 & 128))
+      return [r, off];
+  }
+  throw new Error("postcard varint overflows");
+}
+function decodeU32(bytes, off) {
+  return decodeVarint(bytes, off);
+}
+function decodeU64(bytes, off) {
+  let result = 0n;
+  for (let shift = 0n;shift < 70n; shift += 7n) {
+    if (off >= bytes.length)
+      throw new Error("postcard u64 varint truncated");
+    const byte = bytes[off++];
+    result |= BigInt(byte & 127) << shift;
+    if (!(byte & 128)) {
+      if (result > 0xffff_ffff_ffff_ffffn)
+        throw new Error("postcard u64 varint overflows");
+      return [result, off];
+    }
+  }
+  throw new Error("postcard u64 varint overflows");
+}
+function decodeString(bytes, off) {
+  const [len, o] = decodeVarint(bytes, off);
+  const str = new TextDecoder().decode(bytes.subarray(o, o + len));
+  return [str, o + len];
+}
+function decodeVec(bytes, off, decodeFn) {
+  const [len, o] = decodeVarint(bytes, off);
+  const result = [];
+  let pos = o;
+  for (let i = 0;i < len; i++) {
+    const [item, newOff] = decodeFn(bytes, pos);
+    result.push(item);
+    pos = newOff;
+  }
+  return [result, pos];
+}
+function decodeBool(bytes, off) {
+  return [bytes[off] !== 0, off + 1];
+}
+function decodeU8(bytes, off) {
+  return [bytes[off], off + 1];
+}
+function decodeAssetType(bytes, off) {
+  const [variant, o] = decodeU32(bytes, off);
+  switch (variant) {
+    case 0:
+      return ["Texture", o];
+    case 1:
+      return ["Mesh", o];
+    case 2:
+      return ["VirtualTexture", o];
+    default:
+      throw new Error(`unknown AssetType variant: ${variant}`);
+  }
+}
+function decodeCompression(bytes, off) {
+  const [variant, o] = decodeU32(bytes, off);
+  switch (variant) {
+    case 0:
+      return ["Meshopt", o];
+    case 1:
+      return ["None", o];
+    default:
+      throw new Error(`unknown Compression variant: ${variant}`);
+  }
+}
+function decodeTextureEncoding(bytes, off) {
+  const [variant, next] = decodeU32(bytes, off);
+  if (variant === 0)
+    return ["RawRgba8", next];
+  if (variant === 1)
+    return ["Basis", next];
+  throw new Error(`unknown TextureEncoding variant: ${variant}`);
+}
+function decodeTextureFormat(bytes, off) {
+  const [variant, next] = decodeU32(bytes, off);
+  if (variant === 0)
+    return ["Rgba8", next];
+  if (variant === 1)
+    return ["R8", next];
+  throw new Error(`unknown TextureFormat variant: ${variant}`);
+}
+function decodeChunkMeta(bytes, off) {
+  const [variant, o] = decodeU32(bytes, off);
+  switch (variant) {
+    case 0: {
+      const [w4, o2] = decodeU32(bytes, o);
+      const [h, o3] = decodeU32(bytes, o2);
+      const [format, o4] = decodeTextureFormat(bytes, o3);
+      return [{ type: "Texture", width: w4, height: h, format }, o4];
+    }
+    case 1: {
+      const [ic, o2] = decodeU32(bytes, o);
+      const [vc, o3] = decodeU32(bytes, o2);
+      const [ps, o4] = decodeU32(bytes, o3);
+      const [us, o5] = decodeU32(bytes, o4);
+      return [{ type: "Mesh", indexCount: ic, vertexCount: vc, positionStride: ps, uvStride: us }, o5];
+    }
+    case 2:
+      return [{ type: "Raw" }, o];
+    default:
+      throw new Error(`unknown ChunkMeta variant: ${variant}`);
+  }
+}
+function decodeChunkInfo(bytes, off) {
+  const [offset, o1] = decodeU64(bytes, off);
+  const [compressedSize, o2] = decodeU64(bytes, o1);
+  const [uncompressedSize, o3] = decodeU64(bytes, o2);
+  const [lodLevel, o4] = decodeU8(bytes, o3);
+  const [mipLevel, o5] = decodeU8(bytes, o4);
+  const [compression, o6] = decodeCompression(bytes, o5);
+  const [meta, o7] = decodeChunkMeta(bytes, o6);
+  return [{
+    offset,
+    compressedSize,
+    uncompressedSize,
+    lodLevel,
+    mipLevel,
+    compression,
+    meta
+  }, o7];
+}
+function decodeVTMipDirectory(bytes, off) {
+  const [mip, o1] = decodeU8(bytes, off);
+  const [pagesX, o2] = decodeU32(bytes, o1);
+  const [pagesY, o3] = decodeU32(bytes, o2);
+  const [offset, o4] = decodeU64(bytes, o3);
+  const [pageSizes, o5] = decodeVec(bytes, o4, decodeU32);
+  return [{ mip, pagesX, pagesY, offset, pageSizes }, o5];
+}
+function decodeVTTailDirectory(bytes, off) {
+  const [firstMip, o1] = decodeU8(bytes, off);
+  const [offset, o2] = decodeU64(bytes, o1);
+  const [size, o3] = decodeU32(bytes, o2);
+  return [{ firstMip, offset, size }, o3];
+}
+function decodeVTDirectory(bytes, off) {
+  const [width, o1] = decodeU32(bytes, off);
+  const [height, o2] = decodeU32(bytes, o1);
+  const [encoding, o3] = decodeTextureEncoding(bytes, o2);
+  const [mips, o4] = decodeVec(bytes, o3, decodeVTMipDirectory);
+  const [hasTail, o5] = decodeBool(bytes, o4);
+  if (!hasTail)
+    return [{ width, height, encoding, mips, tail: null }, o5];
+  const [tail, o6] = decodeVTTailDirectory(bytes, o5);
+  return [{ width, height, encoding, mips, tail }, o6];
+}
+function decodeAssetEntry(bytes, off) {
+  const [name, o1] = decodeString(bytes, off);
+  const [assetType, o2] = decodeAssetType(bytes, o1);
+  const [chunks, o3] = decodeVec(bytes, o2, decodeChunkInfo);
+  const [hasVirtualTexture, o4] = decodeBool(bytes, o3);
+  if (!hasVirtualTexture)
+    return [{ name, assetType, chunks, virtualTexture: null }, o4];
+  const [virtualTexture, o5] = decodeVTDirectory(bytes, o4);
+  return [{ name, assetType, chunks, virtualTexture }, o5];
+}
+var BIG_MAGIC = 826755394;
+var BIG_VERSION = 6;
+var BIG_MIN_READABLE_VERSION = 5;
+function parseBigHeader(data) {
+  if (data.length < 16)
+    throw new Error(".big: file too small");
+  const magic = new DataView(data.buffer, data.byteOffset, 4).getUint32(0, true);
+  if (magic !== BIG_MAGIC)
+    throw new Error(".big: bad magic");
+  const version = new DataView(data.buffer, data.byteOffset + 4, 4).getUint32(0, true);
+  if (version < BIG_MIN_READABLE_VERSION || version > BIG_VERSION) {
+    throw new Error(`.big: version ${version} not in [${BIG_MIN_READABLE_VERSION},${BIG_VERSION}]`);
+  }
+  const dataOffset = Number(new DataView(data.buffer, data.byteOffset + 8, 8).getBigUint64(0, true));
+  const headerBytes = data.subarray(16, dataOffset);
+  let off = 0;
+  const [hdrVersion, o1] = decodeU32(headerBytes, off);
+  off = o1;
+  const [hdrDataOffset, o2] = decodeU64(headerBytes, off);
+  off = o2;
+  const [assets, o3] = decodeVec(headerBytes, off, decodeAssetEntry);
+  off = o3;
+  return {
+    header: { version: hdrVersion, dataOffset: hdrDataOffset, assets },
+    dataOffset
+  };
+}
+async function readBigHeader(source, path, maxHeaderBytes) {
+  if (!Number.isSafeInteger(maxHeaderBytes) || maxHeaderBytes < 16)
+    throw new RangeError("BIG maxHeaderBytes must be at least 16");
+  const prefix = await source.read(path, 0, 16);
+  if (prefix.byteLength !== 16)
+    throw new Error("BIG container prefix is truncated");
+  const view = new DataView(prefix.buffer, prefix.byteOffset, prefix.byteLength);
+  if (view.getUint32(0, true) !== BIG_MAGIC)
+    throw new Error("BIG container has invalid magic");
+  const version = view.getUint32(4, true);
+  if (version < BIG_MIN_READABLE_VERSION || version > BIG_VERSION) {
+    throw new Error(`BIG container version ${version} is unsupported`);
+  }
+  const dataOffset = Number(view.getBigUint64(8, true));
+  if (!Number.isSafeInteger(dataOffset) || dataOffset < 16 || dataOffset > maxHeaderBytes)
+    throw new RangeError(`BIG header size ${dataOffset} exceeds configured capacity ${maxHeaderBytes}`);
+  const bytes = await source.read(path, 0, dataOffset);
+  if (bytes.byteLength !== dataOffset)
+    throw new Error("BIG container header is truncated");
+  return parseBigHeader(bytes).header;
+}
+function createFetchRangeLoader(baseUrl = "") {
+  const url = (path) => baseUrl + path;
+  const identity = async (path) => {
+    const response = await fetch(url(path), { headers: { Range: "bytes=0-0" } });
+    if (response.status !== 206)
+      throw new Error(`asset identity range expected 206, got ${response.status}: ${path}`);
+    const contentRange = response.headers.get("content-range") ?? "";
+    const separator = contentRange.lastIndexOf("/");
+    const size = Number(separator < 0 ? "" : contentRange.slice(separator + 1));
+    if (!Number.isSafeInteger(size) || size < 1)
+      throw new Error(`asset identity has invalid content-range: ${path}`);
+    return {
+      size,
+      etag: response.headers.get("etag"),
+      lastModified: response.headers.get("last-modified")
+    };
+  };
+  return {
+    async load(path) {
+      const response = await fetch(url(path));
+      if (!response.ok)
+        throw new Error(`asset fetch ${response.status}: ${path}`);
+      return new Uint8Array(await response.arrayBuffer());
+    },
+    async size(path) {
+      return (await identity(path)).size;
+    },
+    identity,
+    async read(path, offset, len) {
+      if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(len) || len < 0)
+        throw new RangeError("asset range must use non-negative safe integers");
+      if (len === 0)
+        return new Uint8Array(0);
+      return (await fetchByteRanges(url(path), [{ offset, length: len }]))[0];
+    },
+    async readBulk(path, ranges) {
+      return fetchByteRanges(url(path), ranges);
+    }
+  };
+}
+
+class BigContainerAssetLoader {
+  source;
+  containerPath;
+  assets = new Map;
+  constructor(source, containerPath, header) {
+    this.source = source;
+    this.containerPath = containerPath;
+    for (const asset of header.assets) {
+      if (asset.chunks.length !== 1 || asset.chunks[0].meta.type !== "Raw")
+        continue;
+      const chunk = asset.chunks[0];
+      if (chunk.compression !== "None" || chunk.compressedSize !== chunk.uncompressedSize)
+        throw new Error(`raw BIG asset must be uncompressed: ${asset.name}`);
+      if (chunk.uncompressedSize > BigInt(Number.MAX_SAFE_INTEGER))
+        throw new RangeError(`raw BIG asset exceeds browser safe size: ${asset.name}`);
+      this.assets.set(asset.name, chunk);
+    }
+  }
+  chunk(path) {
+    const chunk = this.assets.get(path);
+    if (!chunk)
+      throw new Error(`raw BIG asset not found: ${path}`);
+    return chunk;
+  }
+  load(path) {
+    const chunk = this.chunk(path);
+    return this.source.read(this.containerPath, Number(chunk.offset), Number(chunk.uncompressedSize));
+  }
+  async size(path) {
+    return Number(this.chunk(path).uncompressedSize);
+  }
+  read(path, offset, length2) {
+    const chunk = this.chunk(path);
+    const size = Number(chunk.uncompressedSize);
+    if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length2) || length2 < 0 || offset + length2 > size)
+      throw new RangeError(`raw BIG asset range exceeds ${path}: ${offset}+${length2} > ${size}`);
+    return this.source.read(this.containerPath, Number(chunk.offset) + offset, length2);
+  }
+  poll() {}
+}
+class BoundedBulkReadQueue {
+  loader;
+  slots = new Array(BULK_RANGE_CAPACITY);
+  free = new Uint16Array(BULK_RANGE_CAPACITY);
+  freeTop = 0;
+  queued = [
+    new Uint16Array(BULK_RANGE_CAPACITY),
+    new Uint16Array(BULK_RANGE_CAPACITY)
+  ];
+  heads = new Uint16Array(2);
+  tails = new Uint16Array(2);
+  counts = new Uint16Array(2);
+  ready = new Uint8Array(2);
+  timers = [null, null];
+  inFlight = 0;
+  inFlightBytes = 0;
+  closed = false;
+  reads = 0;
+  totalReadMs = 0;
+  maxReadMs = 0;
+  urgentBatches = 0;
+  qualityBatches = 0;
+  rejected = 0;
+  canceled = 0;
+  stats = {
+    reads: 0,
+    averageReadMs: 0,
+    maxReadMs: 0,
+    queued: 0,
+    inFlight: 0,
+    inFlightBytes: 0,
+    urgentBatches: 0,
+    qualityBatches: 0,
+    rejected: 0,
+    canceled: 0
+  };
+  constructor(loader) {
+    this.loader = loader;
+    for (let index = BULK_RANGE_CAPACITY - 1;index >= 0; index--) {
+      this.slots[index] = {
+        path: "",
+        offset: 0,
+        length: 0,
+        signal: undefined,
+        resolve: null,
+        reject: null
+      };
+      this.free[this.freeTop++] = index;
+    }
+  }
+  tierIndex(tier) {
+    return tier === "urgent" ? 0 : 1;
+  }
+  deadlineMs(tier) {
+    return tier === 0 ? 1 : 100;
+  }
+  read(path, offset, length2, tier, signal) {
+    return new Promise((resolve, reject) => {
+      if (this.closed) {
+        this.rejected++;
+        reject(new Error("bulk page reader is closed"));
+        return;
+      }
+      if (signal?.aborted) {
+        this.canceled++;
+        reject(new Error("VT page load canceled before batching"));
+        return;
+      }
+      if (this.freeTop === 0) {
+        this.rejected++;
+        reject(new Error("bulk page queue capacity exceeded"));
+        return;
+      }
+      const slotIndex = this.free[--this.freeTop];
+      const slot = this.slots[slotIndex];
+      slot.path = path;
+      slot.offset = offset;
+      slot.length = length2;
+      slot.signal = signal;
+      slot.resolve = resolve;
+      slot.reject = reject;
+      const lane = this.tierIndex(tier);
+      this.queued[lane][this.tails[lane]] = slotIndex;
+      this.tails[lane] = (this.tails[lane] + 1) % BULK_RANGE_CAPACITY;
+      this.counts[lane]++;
+      if (this.timers[lane] === null) {
+        this.timers[lane] = setTimeout(() => {
+          this.timers[lane] = null;
+          this.ready[lane] = 1;
+          this.pump();
+        }, this.deadlineMs(lane));
+      }
+      if (this.counts[lane] === BULK_RANGE_CAPACITY) {
+        this.ready[lane] = 1;
+        this.pump();
+      }
+    });
+  }
+  release(slotIndex) {
+    const slot = this.slots[slotIndex];
+    slot.path = "";
+    slot.signal = undefined;
+    slot.resolve = null;
+    slot.reject = null;
+    this.free[this.freeTop++] = slotIndex;
+  }
+  pop(lane) {
+    const index = this.queued[lane][this.heads[lane]];
+    this.heads[lane] = (this.heads[lane] + 1) % BULK_RANGE_CAPACITY;
+    this.counts[lane]--;
+    return index;
+  }
+  clearLaneTimer(lane) {
+    const timer = this.timers[lane];
+    if (timer !== null)
+      clearTimeout(timer);
+    this.timers[lane] = null;
+  }
+  pump() {
+    while (this.inFlight < 2 && this.inFlightBytes < BULK_IN_FLIGHT_MAX_BYTES) {
+      const lane = this.ready[0] !== 0 && this.counts[0] !== 0 ? 0 : this.ready[1] !== 0 && this.counts[1] !== 0 ? 1 : -1;
+      if (lane < 0)
+        return;
+      const indices = [];
+      const ranges = [];
+      while (this.counts[lane] !== 0 && indices.length < BULK_RANGE_CAPACITY) {
+        const slotIndex = this.queued[lane][this.heads[lane]];
+        const slot = this.slots[slotIndex];
+        if (slot.signal?.aborted) {
+          this.pop(lane);
+          this.canceled++;
+          slot.reject?.(new Error("VT page load canceled while batched"));
+          this.release(slotIndex);
+          continue;
+        }
+        const candidate = { offset: slot.offset, length: slot.length };
+        ranges.push(candidate);
+        if (estimatedBulkResponseBytes(ranges) > BULK_RESPONSE_MAX_BYTES) {
+          ranges.pop();
+          if (indices.length === 0) {
+            this.pop(lane);
+            this.rejected++;
+            slot.reject?.(new RangeError("one VT page exceeds bulk response capacity"));
+            this.release(slotIndex);
+            continue;
+          }
+          break;
+        }
+        indices.push(this.pop(lane));
+      }
+      if (this.counts[lane] === 0) {
+        this.ready[lane] = 0;
+        this.clearLaneTimer(lane);
+      }
+      if (indices.length === 0)
+        continue;
+      const expectedBytes = estimatedBulkResponseBytes(ranges);
+      if (this.inFlightBytes + expectedBytes > BULK_IN_FLIGHT_MAX_BYTES)
+        return;
+      this.dispatch(indices, ranges, expectedBytes, lane);
+    }
+  }
+  dispatch(indices, ranges, expectedBytes, lane) {
+    this.inFlight++;
+    this.inFlightBytes += expectedBytes;
+    if (lane === 0)
+      this.urgentBatches++;
+    else
+      this.qualityBatches++;
+    const startedAt = performance.now();
+    const request = this.loader.readBulk ? this.loader.readBulk(ranges) : Promise.all(indices.map((slotIndex, index) => {
+      const slot = this.slots[slotIndex];
+      const range = ranges[index];
+      return this.loader.read(`${slot.path}.big`, range.offset, range.length);
+    }));
+    request.then((parts) => {
+      if (parts.length !== indices.length)
+        throw new Error(`bulk response returned ${parts.length} parts; expected ${indices.length}`);
+      const readMs = performance.now() - startedAt;
+      this.reads++;
+      this.totalReadMs += readMs;
+      this.maxReadMs = Math.max(this.maxReadMs, readMs);
+      for (let index = 0;index < indices.length; index++) {
+        const slotIndex = indices[index];
+        const slot = this.slots[slotIndex];
+        const bytes = parts[index];
+        if (bytes.byteLength !== slot.length)
+          slot.reject?.(new Error(`bulk page returned ${bytes.byteLength} bytes; expected ${slot.length}`));
+        else if (this.closed || slot.signal?.aborted) {
+          this.canceled++;
+          slot.reject?.(new Error("VT page load canceled after bulk read"));
+        } else
+          slot.resolve?.(bytes);
+        this.release(slotIndex);
+      }
+    }).catch((error2) => {
+      for (const slotIndex of indices) {
+        this.slots[slotIndex].reject?.(error2);
+        this.release(slotIndex);
+      }
+    }).finally(() => {
+      this.inFlight--;
+      this.inFlightBytes -= expectedBytes;
+      this.pump();
+    });
+  }
+  close() {
+    if (this.closed)
+      return;
+    this.closed = true;
+    for (let lane = 0;lane < 2; lane++) {
+      this.clearLaneTimer(lane);
+      while (this.counts[lane] !== 0) {
+        const slotIndex = this.pop(lane);
+        this.canceled++;
+        this.slots[slotIndex].reject?.(new Error("bulk page reader closed"));
+        this.release(slotIndex);
+      }
+      this.ready[lane] = 0;
+    }
+  }
+  getStats() {
+    const stats = this.stats;
+    stats.reads = this.reads;
+    stats.averageReadMs = this.reads === 0 ? 0 : this.totalReadMs / this.reads;
+    stats.maxReadMs = this.maxReadMs;
+    stats.queued = this.counts[0] + this.counts[1];
+    stats.inFlight = this.inFlight;
+    stats.inFlightBytes = this.inFlightBytes;
+    stats.urgentBatches = this.urgentBatches;
+    stats.qualityBatches = this.qualityBatches;
+    stats.rejected = this.rejected;
+    stats.canceled = this.canceled;
+    return stats;
+  }
+}
+
+// crates/afterglow-web/web/src/engine/assets/platform-range-loader.ts
+var ARENA_SLOT_BYTES = 4 * 1024 * 1024;
+var COPY_CHUNK_BYTES = 512 * 1024;
+var MAX_BULK_SPANS = 256;
+function nativeOps() {
+  if (typeof Deno !== "object" || Deno === null)
+    return null;
+  const ops = Deno.core?.ops;
+  return typeof ops?.op_native_asset_size === "function" && typeof ops.op_native_asset_read_handle === "function" && typeof ops.op_native_asset_read_many_handle === "function" && typeof ops.op_afterglow_arena_view === "function" ? ops : null;
+}
+function validateRead(offset, length2) {
+  if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length2) || length2 < 0)
+    throw new RangeError("asset range must use non-negative safe integers");
+}
+function viewHandle(ops, words) {
+  if (words.length < 4)
+    throw new Error("native asset worker returned truncated handle metadata");
+  const region = words[0] ?? -1;
+  const slot = words[1] ?? -1;
+  const length2 = words[2] ?? -1;
+  const generation = words[3] ?? -1;
+  if (![region, slot, length2, generation].every(Number.isInteger))
+    throw new Error("native asset worker returned invalid handle metadata");
+  const bytes = ops.op_afterglow_arena_view({ region, slot, length: length2, generation });
+  if (bytes.byteLength !== length2)
+    throw new Error("native asset arena view length mismatch");
+  return bytes;
+}
+function packSpans(ranges) {
+  if (ranges.length === 0 || ranges.length > MAX_BULK_SPANS)
+    throw new RangeError(`native bulk read requires 1..${MAX_BULK_SPANS} spans`);
+  const packed = new Uint8Array(ranges.length * 12);
+  const view = new DataView(packed.buffer);
+  let total = 0;
+  for (let index = 0;index < ranges.length; index++) {
+    const range = ranges[index];
+    validateRead(range.offset, range.length);
+    total += range.length;
+    if (!Number.isSafeInteger(total) || total > ARENA_SLOT_BYTES)
+      throw new RangeError(`native bulk read exceeds ${ARENA_SLOT_BYTES} bytes`);
+    view.setBigUint64(index * 12, BigInt(range.offset), true);
+    view.setUint32(index * 12 + 8, range.length, true);
+  }
+  return packed;
+}
+function createNativeRangeLoader(ops) {
+  const identity = async (path) => ({
+    size: await ops.op_native_asset_size(path),
+    etag: null,
+    lastModified: null
+  });
+  const read = async (path, offset, length2) => {
+    validateRead(offset, length2);
+    if (length2 === 0)
+      return new Uint8Array(0);
+    if (length2 <= ARENA_SLOT_BYTES) {
+      return viewHandle(ops, await ops.op_native_asset_read_handle(path, BigInt(offset), length2));
+    }
+    const output2 = new Uint8Array(length2);
+    let written = 0;
+    while (written < length2) {
+      const requested = Math.min(COPY_CHUNK_BYTES, length2 - written);
+      const chunk = await ops.op_native_asset_read_copy(path, BigInt(offset + written), requested);
+      output2.set(chunk, written);
+      written += chunk.byteLength;
+      if (chunk.byteLength !== requested)
+        return output2.subarray(0, written);
+    }
+    return output2;
+  };
+  return {
+    async load(path) {
+      const size = await ops.op_native_asset_size(path);
+      return read(path, 0, size);
+    },
+    async size(path) {
+      return ops.op_native_asset_size(path);
+    },
+    identity,
+    read,
+    async readBulk(path, ranges) {
+      const metadata = await ops.op_native_asset_read_many_handle(path, packSpans(ranges));
+      if (metadata.length !== 4 + ranges.length)
+        throw new Error("native bulk read returned invalid part metadata");
+      const bytes = viewHandle(ops, metadata);
+      const parts = new Array(ranges.length);
+      let offset = 0;
+      for (let index = 0;index < ranges.length; index++) {
+        const length2 = metadata[4 + index] ?? -1;
+        if (!Number.isInteger(length2) || length2 < 0 || offset + length2 > bytes.byteLength)
+          throw new Error("native bulk read returned invalid part length");
+        parts[index] = bytes.subarray(offset, offset + length2);
+        offset += length2;
+      }
+      if (offset !== bytes.byteLength)
+        throw new Error("native bulk read metadata does not cover its arena view");
+      return parts;
+    }
+  };
+}
+function createPlatformRangeLoader(baseUrl = "") {
+  const ops = nativeOps();
+  return ops === null ? createFetchRangeLoader(baseUrl) : createNativeRangeLoader(ops);
+}
+
 // crates/afterglow-web/web/src/workers/codec.ts
 function encodeVarint(n) {
   const b2 = [];
@@ -44425,7 +45180,7 @@ function encodeVarint(n) {
   } while (n);
   return b2;
 }
-function decodeVarint(bytes, off) {
+function decodeVarint2(bytes, off) {
   let r = 0;
   for (let shift = 0;shift < 56; shift += 7) {
     if (off >= bytes.length)
@@ -44447,7 +45202,7 @@ function concat(...arrs) {
   return out;
 }
 function decodeU16(bytes, off) {
-  return decodeVarint(bytes, off);
+  return decodeVarint2(bytes, off);
 }
 function encodeU32(n) {
   return new Uint8Array(encodeVarint(n));
@@ -44461,7 +45216,7 @@ function encodeBytes(b2) {
   return concat(encodeVarint(b2.length), b2);
 }
 function decodeBytes(bytes, off) {
-  const [len, o] = decodeVarint(bytes, off);
+  const [len, o] = decodeVarint2(bytes, off);
   const end = o + len;
   if (end > bytes.length)
     throw new Error("postcard bytes truncated");
@@ -44477,7 +45232,7 @@ function encodeF32Vec(vec) {
   return out;
 }
 function decodeF32Vec(bytes, off) {
-  const [n, o] = decodeVarint(bytes, off);
+  const [n, o] = decodeVarint2(bytes, off);
   const end = o + n * 4;
   if (end > bytes.length)
     throw new Error("postcard f32 vec truncated");
@@ -44494,26 +45249,26 @@ function encodeU32Vec(vec) {
   return concat(...parts);
 }
 function decodeU32Vec(bytes, off) {
-  const [n, o] = decodeVarint(bytes, off);
+  const [n, o] = decodeVarint2(bytes, off);
   const out = new Uint32Array(n);
   let pos = o;
   for (let i = 0;i < n; i++) {
-    const [val, next] = decodeVarint(bytes, pos);
+    const [val, next] = decodeVarint2(bytes, pos);
     out[i] = val;
     pos = next;
   }
   return [out, pos];
 }
 function unwrapResponse(bytes) {
-  const [variant, off] = decodeVarint(bytes, 0);
+  const [variant, off] = decodeVarint2(bytes, 0);
   if (variant === 0) {
-    const [plen, poff] = decodeVarint(bytes, off);
+    const [plen, poff] = decodeVarint2(bytes, off);
     if (poff + plen > bytes.length)
       throw new Error("RPC response truncated");
     return bytes.subarray(poff, poff + plen);
   }
-  const [method, moff] = decodeVarint(bytes, off);
-  const [mlen, eoff] = decodeVarint(bytes, moff);
+  const [method, moff] = decodeVarint2(bytes, off);
+  const [mlen, eoff] = decodeVarint2(bytes, moff);
   if (eoff + mlen > bytes.length)
     throw new Error("RPC error truncated");
   const msg = new TextDecoder().decode(Uint8Array.from(bytes.subarray(eoff, eoff + mlen)));
@@ -44789,38 +45544,9 @@ function asyncWorkerImports(driver, memory) {
 
 // crates/afterglow-web/web/src/workers/rpc.ts
 var TIMEOUT_MS = 5000;
-function decodeVarint2(bytes, off) {
-  let r = 0;
-  for (let shift = 0;shift < 35; shift += 7) {
-    if (off >= bytes.length)
-      throw new Error("postcard varint truncated");
-    const b2 = bytes[off++];
-    if (shift === 28 && b2 & 240)
-      throw new Error("postcard varint overflows u32");
-    r += (b2 & 127) * 2 ** shift;
-    if (!(b2 & 128))
-      return [r >>> 0, off];
-  }
-  throw new Error("postcard varint overflows u32");
-}
-function unwrapResponse2(bytes) {
-  const [variant, off] = decodeVarint2(bytes, 0);
-  if (variant === 0) {
-    const [plen, poff] = decodeVarint2(bytes, off);
-    if (poff + plen > bytes.length)
-      throw new Error("RPC response truncated");
-    return bytes.subarray(poff, poff + plen);
-  }
-  const [method, moff] = decodeVarint2(bytes, off);
-  const [mlen, eoff] = decodeVarint2(bytes, moff);
-  if (eoff + mlen > bytes.length)
-    throw new Error("RPC error truncated");
-  const msg = new TextDecoder().decode(bytes.subarray(eoff, eoff + mlen));
-  throw new Error(`RPC ${variant === 1 ? "server" : "decode"} error (method ${method}): ${msg}`);
-}
 
 class Rpc {
-  static async create({ mainWasmUrl, workerJsUrl, workerWasmUrl, timeoutMs }) {
+  static async create({ mainWasmUrl, workerJsUrl, workerWasmUrl, timeoutMs, workerInit = null }) {
     const memory = new WebAssembly.Memory({ shared: true, initial: 256, maximum: 1024 });
     const worker = new Worker(workerJsUrl, { type: "module" });
     let rpc = null;
@@ -44834,7 +45560,8 @@ class Rpc {
         reqBase: wasm.get_request_ptr(),
         respBase: wasm.get_response_ptr(),
         bufSize: wasm.get_buffer_size(),
-        wasmUrl: workerWasmUrl
+        wasmUrl: workerWasmUrl,
+        workerInit
       });
       await rpc._initPromise;
       worker.postMessage({ type: "run" });
@@ -44919,7 +45646,7 @@ class Rpc {
       return;
     }
     try {
-      p.resolve(unwrapResponse2(new Uint8Array(this.mem.buffer, this.scratch, n)));
+      p.resolve(unwrapResponse(new Uint8Array(this.mem.buffer, this.scratch, n)));
     } catch (e) {
       p.reject(e);
     }
@@ -44964,7 +45691,7 @@ class MeshoptClient {
   }
   static async spawnThreaded(opts = {}) {
     const rpc = await Rpc.create({
-      mainWasmUrl: opts.mainWasmUrl ?? "afterglow_web.wasm",
+      mainWasmUrl: opts.mainWasmUrl ?? "afterglow_rpc.wasm",
       workerJsUrl: opts.workerJsUrl ?? "worker.js",
       workerWasmUrl: opts.workerWasmUrl ?? "meshopt.wasm",
       timeoutMs: opts.timeoutMs
@@ -45055,307 +45782,27 @@ class MeshoptClient {
   }
 }
 
-// crates/afterglow-web/web/src/engine/assets/big-parser.ts
-function decodeVarint3(bytes, off) {
-  let r = 0;
-  for (let shift = 0;shift < 56; shift += 7) {
-    if (off >= bytes.length)
-      throw new Error("postcard varint truncated");
-    const b2 = bytes[off++];
-    r += (b2 & 127) * 2 ** shift;
-    if (!(b2 & 128))
-      return [r, off];
+// crates/afterglow-web/web/src/workers/native-transport.ts
+class NativeRpcTransport {
+  workerId;
+  constructor(workerId) {
+    this.workerId = workerId;
   }
-  throw new Error("postcard varint overflows");
-}
-function decodeU32(bytes, off) {
-  return decodeVarint3(bytes, off);
-}
-function decodeU64(bytes, off) {
-  let result = 0n;
-  for (let shift = 0n;shift < 70n; shift += 7n) {
-    if (off >= bytes.length)
-      throw new Error("postcard u64 varint truncated");
-    const byte = bytes[off++];
-    result |= BigInt(byte & 127) << shift;
-    if (!(byte & 128)) {
-      if (result > 0xffff_ffff_ffff_ffffn)
-        throw new Error("postcard u64 varint overflows");
-      return [result, off];
-    }
+  call(method, args) {
+    return Deno.core.ops.op_afterglow_rpc_call_async(this.workerId, method, args);
   }
-  throw new Error("postcard u64 varint overflows");
-}
-function decodeString(bytes, off) {
-  const [len, o] = decodeVarint3(bytes, off);
-  const str = new TextDecoder().decode(bytes.subarray(o, o + len));
-  return [str, o + len];
-}
-function decodeVec(bytes, off, decodeFn) {
-  const [len, o] = decodeVarint3(bytes, off);
-  const result = [];
-  let pos = o;
-  for (let i = 0;i < len; i++) {
-    const [item, newOff] = decodeFn(bytes, pos);
-    result.push(item);
-    pos = newOff;
-  }
-  return [result, pos];
-}
-function decodeBool(bytes, off) {
-  return [bytes[off] !== 0, off + 1];
-}
-function decodeU8(bytes, off) {
-  return [bytes[off], off + 1];
-}
-function decodeAssetType(bytes, off) {
-  const [variant, o] = decodeU32(bytes, off);
-  switch (variant) {
-    case 0:
-      return ["Texture", o];
-    case 1:
-      return ["Mesh", o];
-    case 2:
-      return ["VirtualTexture", o];
-    default:
-      throw new Error(`unknown AssetType variant: ${variant}`);
-  }
-}
-function decodeCompression(bytes, off) {
-  const [variant, o] = decodeU32(bytes, off);
-  switch (variant) {
-    case 0:
-      return ["Meshopt", o];
-    case 1:
-      return ["None", o];
-    default:
-      throw new Error(`unknown Compression variant: ${variant}`);
-  }
-}
-function decodeTextureEncoding(bytes, off) {
-  const [variant, next] = decodeU32(bytes, off);
-  if (variant === 0)
-    return ["RawRgba8", next];
-  if (variant === 1)
-    return ["Basis", next];
-  throw new Error(`unknown TextureEncoding variant: ${variant}`);
-}
-function decodeTextureFormat(bytes, off) {
-  const [variant, next] = decodeU32(bytes, off);
-  if (variant === 0)
-    return ["Rgba8", next];
-  if (variant === 1)
-    return ["R8", next];
-  throw new Error(`unknown TextureFormat variant: ${variant}`);
-}
-function decodeChunkMeta(bytes, off) {
-  const [variant, o] = decodeU32(bytes, off);
-  switch (variant) {
-    case 0: {
-      const [w4, o2] = decodeU32(bytes, o);
-      const [h, o3] = decodeU32(bytes, o2);
-      const [format, o4] = decodeTextureFormat(bytes, o3);
-      return [{ type: "Texture", width: w4, height: h, format }, o4];
-    }
-    case 1: {
-      const [ic, o2] = decodeU32(bytes, o);
-      const [vc, o3] = decodeU32(bytes, o2);
-      const [ps, o4] = decodeU32(bytes, o3);
-      const [us, o5] = decodeU32(bytes, o4);
-      return [{ type: "Mesh", indexCount: ic, vertexCount: vc, positionStride: ps, uvStride: us }, o5];
-    }
-    case 2:
-      return [{ type: "Raw" }, o];
-    default:
-      throw new Error(`unknown ChunkMeta variant: ${variant}`);
-  }
-}
-function decodeChunkInfo(bytes, off) {
-  const [offset, o1] = decodeU64(bytes, off);
-  const [compressedSize, o2] = decodeU64(bytes, o1);
-  const [uncompressedSize, o3] = decodeU64(bytes, o2);
-  const [lodLevel, o4] = decodeU8(bytes, o3);
-  const [mipLevel, o5] = decodeU8(bytes, o4);
-  const [compression, o6] = decodeCompression(bytes, o5);
-  const [meta, o7] = decodeChunkMeta(bytes, o6);
-  return [{
-    offset,
-    compressedSize,
-    uncompressedSize,
-    lodLevel,
-    mipLevel,
-    compression,
-    meta
-  }, o7];
-}
-function decodeVTMipDirectory(bytes, off) {
-  const [mip, o1] = decodeU8(bytes, off);
-  const [pagesX, o2] = decodeU32(bytes, o1);
-  const [pagesY, o3] = decodeU32(bytes, o2);
-  const [offset, o4] = decodeU64(bytes, o3);
-  const [pageSizes, o5] = decodeVec(bytes, o4, decodeU32);
-  return [{ mip, pagesX, pagesY, offset, pageSizes }, o5];
-}
-function decodeVTTailDirectory(bytes, off) {
-  const [firstMip, o1] = decodeU8(bytes, off);
-  const [offset, o2] = decodeU64(bytes, o1);
-  const [size, o3] = decodeU32(bytes, o2);
-  return [{ firstMip, offset, size }, o3];
-}
-function decodeVTDirectory(bytes, off) {
-  const [width, o1] = decodeU32(bytes, off);
-  const [height, o2] = decodeU32(bytes, o1);
-  const [encoding, o3] = decodeTextureEncoding(bytes, o2);
-  const [mips, o4] = decodeVec(bytes, o3, decodeVTMipDirectory);
-  const [hasTail, o5] = decodeBool(bytes, o4);
-  if (!hasTail)
-    return [{ width, height, encoding, mips, tail: null }, o5];
-  const [tail, o6] = decodeVTTailDirectory(bytes, o5);
-  return [{ width, height, encoding, mips, tail }, o6];
-}
-function decodeAssetEntry(bytes, off) {
-  const [name, o1] = decodeString(bytes, off);
-  const [assetType, o2] = decodeAssetType(bytes, o1);
-  const [chunks, o3] = decodeVec(bytes, o2, decodeChunkInfo);
-  const [hasVirtualTexture, o4] = decodeBool(bytes, o3);
-  if (!hasVirtualTexture)
-    return [{ name, assetType, chunks, virtualTexture: null }, o4];
-  const [virtualTexture, o5] = decodeVTDirectory(bytes, o4);
-  return [{ name, assetType, chunks, virtualTexture }, o5];
-}
-var BIG_MAGIC = 826755394;
-var BIG_VERSION = 6;
-var BIG_MIN_READABLE_VERSION = 5;
-function parseBigHeader(data) {
-  if (data.length < 16)
-    throw new Error(".big: file too small");
-  const magic = new DataView(data.buffer, data.byteOffset, 4).getUint32(0, true);
-  if (magic !== BIG_MAGIC)
-    throw new Error(".big: bad magic");
-  const version = new DataView(data.buffer, data.byteOffset + 4, 4).getUint32(0, true);
-  if (version < BIG_MIN_READABLE_VERSION || version > BIG_VERSION) {
-    throw new Error(`.big: version ${version} not in [${BIG_MIN_READABLE_VERSION},${BIG_VERSION}]`);
-  }
-  const dataOffset = Number(new DataView(data.buffer, data.byteOffset + 8, 8).getBigUint64(0, true));
-  const headerBytes = data.subarray(16, dataOffset);
-  let off = 0;
-  const [hdrVersion, o1] = decodeU32(headerBytes, off);
-  off = o1;
-  const [hdrDataOffset, o2] = decodeU64(headerBytes, off);
-  off = o2;
-  const [assets, o3] = decodeVec(headerBytes, off, decodeAssetEntry);
-  off = o3;
-  return {
-    header: { version: hdrVersion, dataOffset: hdrDataOffset, assets },
-    dataOffset
-  };
-}
-async function readBigHeader(source, path, maxHeaderBytes) {
-  if (!Number.isSafeInteger(maxHeaderBytes) || maxHeaderBytes < 16)
-    throw new RangeError("BIG maxHeaderBytes must be at least 16");
-  const prefix = await source.read(path, 0, 16);
-  if (prefix.byteLength !== 16)
-    throw new Error("BIG container prefix is truncated");
-  const view = new DataView(prefix.buffer, prefix.byteOffset, prefix.byteLength);
-  if (view.getUint32(0, true) !== BIG_MAGIC)
-    throw new Error("BIG container has invalid magic");
-  const version = view.getUint32(4, true);
-  if (version < BIG_MIN_READABLE_VERSION || version > BIG_VERSION) {
-    throw new Error(`BIG container version ${version} is unsupported`);
-  }
-  const dataOffset = Number(view.getBigUint64(8, true));
-  if (!Number.isSafeInteger(dataOffset) || dataOffset < 16 || dataOffset > maxHeaderBytes)
-    throw new RangeError(`BIG header size ${dataOffset} exceeds configured capacity ${maxHeaderBytes}`);
-  const bytes = await source.read(path, 0, dataOffset);
-  if (bytes.byteLength !== dataOffset)
-    throw new Error("BIG container header is truncated");
-  return parseBigHeader(bytes).header;
-}
-function createFetchRangeLoader(baseUrl = "") {
-  const url = (path) => baseUrl + path;
-  const identity = async (path) => {
-    const response = await fetch(url(path), { headers: { Range: "bytes=0-0" } });
-    if (response.status !== 206)
-      throw new Error(`asset identity range expected 206, got ${response.status}: ${path}`);
-    const contentRange = response.headers.get("content-range") ?? "";
-    const separator = contentRange.lastIndexOf("/");
-    const size = Number(separator < 0 ? "" : contentRange.slice(separator + 1));
-    if (!Number.isSafeInteger(size) || size < 1)
-      throw new Error(`asset identity has invalid content-range: ${path}`);
-    return {
-      size,
-      etag: response.headers.get("etag"),
-      lastModified: response.headers.get("last-modified")
-    };
-  };
-  return {
-    async load(path) {
-      const response = await fetch(url(path));
-      if (!response.ok)
-        throw new Error(`asset fetch ${response.status}: ${path}`);
-      return new Uint8Array(await response.arrayBuffer());
-    },
-    async size(path) {
-      return (await identity(path)).size;
-    },
-    identity,
-    async read(path, offset, len) {
-      if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(len) || len < 0)
-        throw new RangeError("asset range must use non-negative safe integers");
-      if (len === 0)
-        return new Uint8Array(0);
-      const response = await fetch(url(path), {
-        headers: { Range: `bytes=${offset}-${offset + len - 1}` }
-      });
-      if (response.status !== 206)
-        throw new Error(`asset range fetch expected 206, got ${response.status}: ${path}`);
-      const bytes = new Uint8Array(await response.arrayBuffer());
-      if (bytes.byteLength !== len)
-        throw new Error(`asset range returned ${bytes.byteLength} bytes; expected ${len}: ${path}`);
-      return bytes;
-    }
-  };
 }
 
-class BigContainerAssetLoader {
-  source;
-  containerPath;
-  assets = new Map;
-  constructor(source, containerPath, header) {
-    this.source = source;
-    this.containerPath = containerPath;
-    for (const asset of header.assets) {
-      if (asset.chunks.length !== 1 || asset.chunks[0].meta.type !== "Raw")
-        continue;
-      const chunk = asset.chunks[0];
-      if (chunk.compression !== "None" || chunk.compressedSize !== chunk.uncompressedSize)
-        throw new Error(`raw BIG asset must be uncompressed: ${asset.name}`);
-      if (chunk.uncompressedSize > BigInt(Number.MAX_SAFE_INTEGER))
-        throw new RangeError(`raw BIG asset exceeds browser safe size: ${asset.name}`);
-      this.assets.set(asset.name, chunk);
-    }
-  }
-  chunk(path) {
-    const chunk = this.assets.get(path);
-    if (!chunk)
-      throw new Error(`raw BIG asset not found: ${path}`);
-    return chunk;
-  }
-  load(path) {
-    const chunk = this.chunk(path);
-    return this.source.read(this.containerPath, Number(chunk.offset), Number(chunk.uncompressedSize));
-  }
-  async size(path) {
-    return Number(this.chunk(path).uncompressedSize);
-  }
-  read(path, offset, length2) {
-    const chunk = this.chunk(path);
-    const size = Number(chunk.uncompressedSize);
-    if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length2) || length2 < 0 || offset + length2 > size)
-      throw new RangeError(`raw BIG asset range exceeds ${path}: ${offset}+${length2} > ${size}`);
-    return this.source.read(this.containerPath, Number(chunk.offset) + offset, length2);
-  }
-  poll() {}
+// crates/afterglow-web/web/src/engine/assets/platform-workers.ts
+var NATIVE_MESHOPT_WORKER = 5;
+function hasNativeWorkerTransport() {
+  const deno = globalThis.Deno;
+  return typeof deno?.core?.ops?.op_afterglow_rpc_call_async === "function";
+}
+async function createPlatformMeshOptimizer() {
+  if (!hasNativeWorkerTransport())
+    return MeshoptClient.spawnThreaded({ workerWasmUrl: "meshopt.wasm", timeoutMs: 1e4 });
+  return new MeshoptClient(new NativeRpcTransport(NATIVE_MESHOPT_WORKER));
 }
 
 // crates/afterglow-web/web/src/engine/presentation/static-lod.ts
@@ -45374,12 +45821,12 @@ class StaticMeshAsset {
   }
 }
 async function createDefaultDecoder() {
-  return MeshoptClient.spawnThreaded({ workerWasmUrl: "meshopt.wasm", timeoutMs: 1e4 });
+  return createPlatformMeshOptimizer();
 }
 async function loadStaticMesh(options) {
   if (!options.containerPath || !options.assetName)
     throw new Error("static mesh source and asset names are required");
-  const source = options.source ?? createFetchRangeLoader();
+  const source = options.source ?? createPlatformRangeLoader();
   const header = await readBigHeader(source, options.containerPath, options.maxHeaderBytes);
   const entry = header.assets.find((candidate) => candidate.name === options.assetName);
   if (!entry || entry.assetType !== "Mesh")
@@ -45391,21 +45838,21 @@ async function loadStaticMesh(options) {
     if (chunks[index]?.lodLevel !== index)
       throw new Error("static mesh levels must be contiguous");
   }
-  const decoder = await (options.createDecoder ?? createDefaultDecoder)();
+  const decoder2 = await (options.createDecoder ?? createDefaultDecoder)();
   const levels = [];
   let closeAttempted = false;
   try {
     for (const chunk of chunks)
-      levels.push(await decodeLevel(source, options.containerPath, chunk, decoder));
+      levels.push(await decodeLevel(source, options.containerPath, chunk, decoder2));
     closeAttempted = true;
-    await decoder.close();
+    await decoder2.close();
     return new StaticMeshAsset(levels);
   } catch (error2) {
     for (const level of levels)
       level.geometry.dispose();
     if (!closeAttempted) {
       try {
-        await decoder.close();
+        await decoder2.close();
       } catch (closeError) {
         if (error2 instanceof Error && error2.cause === undefined)
           error2.cause = closeError;
@@ -45414,7 +45861,7 @@ async function loadStaticMesh(options) {
     throw error2;
   }
 }
-async function decodeLevel(source, containerPath, chunk, decoder) {
+async function decodeLevel(source, containerPath, chunk, decoder2) {
   if (chunk.meta.type !== "Mesh" || chunk.compression !== "Meshopt")
     throw new Error("static LOD chunk has invalid metadata");
   const size = Number(chunk.uncompressedSize);
@@ -45423,7 +45870,7 @@ async function decodeLevel(source, containerPath, chunk, decoder) {
   if (!Number.isSafeInteger(size) || !Number.isSafeInteger(compressedSize) || !Number.isSafeInteger(offset) || offset < 0)
     throw new RangeError("static LOD chunk exceeds browser safe size");
   const compressed = await source.read(containerPath, offset, compressedSize);
-  const decoded = await decoder.decodeVertexBuffer(compressed, Math.ceil(size / 4), 4);
+  const decoded = await decoder2.decodeVertexBuffer(compressed, Math.ceil(size / 4), 4);
   if (decoded.byteLength < size)
     throw new Error("static LOD decoder returned a truncated chunk");
   const payload = new Uint8Array(size);
@@ -45874,8 +46321,15 @@ W wireframe`);
   const root = new Group;
   root.rotation.y = Math.PI;
   scene.add(root);
-  const solidMaterial = new MeshStandardMaterial({ color: 7911499, roughness: 0.72, metalness: 0 });
-  const wireMaterial = new MeshBasicMaterial({ color: 13168800, wireframe: true });
+  const solidMaterial = new MeshStandardMaterial({
+    color: 7911499,
+    roughness: 0.72,
+    metalness: 0
+  });
+  const wireMaterial = new MeshBasicMaterial({
+    color: 13168800,
+    wireframe: true
+  });
   bootstrap.defer(() => solidMaterial.dispose());
   bootstrap.defer(() => wireMaterial.dispose());
   const meshes = [];
@@ -45957,7 +46411,12 @@ W wireframe`);
       }
       if (runtime.diagnostics.count !== 0)
         throw new Error("LOD runtime diagnostics are not empty");
-      return { ok: true, distances, levels, triangles: asset.levels.map((entry) => entry.triangleCount) };
+      return {
+        ok: true,
+        distances,
+        levels,
+        triangles: asset.levels.map((entry) => entry.triangleCount)
+      };
     }
   });
   bootstrap.release();

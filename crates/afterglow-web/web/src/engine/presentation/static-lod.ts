@@ -1,9 +1,10 @@
 import * as THREE from 'three/webgpu';
-import { MeshoptClient } from '../../workers/meshopt.client.ts';
 import {
-  createFetchRangeLoader, readBigHeader,
+  readBigHeader,
   type ChunkInfo, type FetchRangeLoader,
 } from '../assets/big-parser.ts';
+import { createPlatformRangeLoader } from '../assets/platform-range-loader.ts';
+import { createPlatformMeshOptimizer } from '../assets/platform-workers.ts';
 
 export interface MeshoptVertexDecoder {
   decodeVertexBuffer(buffer: Uint8Array, vertexCount: number, vertexSize: number): Promise<Uint8Array>;
@@ -36,13 +37,13 @@ export class StaticMeshAsset {
 }
 
 async function createDefaultDecoder(): Promise<OwnedMeshoptVertexDecoder> {
-  return MeshoptClient.spawnThreaded({ workerWasmUrl: 'meshopt.wasm', timeoutMs: 10_000 });
+  return createPlatformMeshOptimizer();
 }
 
 /** Load one offline-cooked static mesh and release its bootstrap decoder. */
 export async function loadStaticMesh(options: StaticMeshLoadOptions): Promise<StaticMeshAsset> {
   if (!options.containerPath || !options.assetName) throw new Error('static mesh source and asset names are required');
-  const source = options.source ?? createFetchRangeLoader();
+  const source = options.source ?? createPlatformRangeLoader();
   const header = await readBigHeader(source, options.containerPath, options.maxHeaderBytes);
   const entry = header.assets.find((candidate) => candidate.name === options.assetName);
   if (!entry || entry.assetType !== 'Mesh') throw new Error(`static mesh asset not found: ${options.assetName}`);

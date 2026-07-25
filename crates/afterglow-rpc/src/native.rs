@@ -161,6 +161,9 @@ impl RingProducer {
     pub fn write(&self, payload: &[u8]) -> RpcResult<()> {
         self.alloc.view().write(payload)
     }
+    pub fn can_write(&self, payload_len: usize) -> RpcResult<bool> {
+        self.alloc.view().can_write(payload_len)
+    }
     pub fn capacity(&self) -> u32 {
         self.alloc.view().capacity()
     }
@@ -387,10 +390,29 @@ impl Drop for EventSinkGuard<'_> {
 ///
 /// `serve` is `Fn(&mut S, u32, &[u8]) -> RpcResult<Vec<u8>>`; the `#[rpc]`
 /// macro passes `|s, m, a| s.serve(m, a)` (the trait's provided dispatch).
-pub fn run_worker_loop<S, F>(mut impl_: S, side: WorkerSide, serve: F)
+pub fn run_worker_loop<S, F>(impl_: S, side: WorkerSide, serve: F)
 where
     S: Send + 'static,
     F: Fn(&mut S, u32, &[u8]) -> RpcResult<Vec<u8>> + Send + 'static,
+{
+    run_worker_loop_with_idle(impl_, side, serve, |_| {}, Duration::from_micros(500));
+}
+
+/// Run the native RPC loop with a bounded idle hook on the worker thread.
+///
+/// The hook runs only when the request ring is empty. It is intended for
+/// fixed-work device-clock producers that must remain owned by the service
+/// thread. It must not block or allocate. `idle_park` bounds missed unparks.
+pub fn run_worker_loop_with_idle<S, F, I>(
+    mut impl_: S,
+    side: WorkerSide,
+    serve: F,
+    mut idle: I,
+    idle_park: Duration,
+) where
+    S: Send + 'static,
+    F: Fn(&mut S, u32, &[u8]) -> RpcResult<Vec<u8>> + Send + 'static,
+    I: FnMut(&mut S) + Send + 'static,
 {
     let _sink = install_event_sink(&side.events);
     loop {
@@ -422,10 +444,10 @@ where
                 side.client_thread.unpark();
             }
             Err(RpcError::BufferEmpty) => {
-                // Idle: park with a short timeout. The client unparks us after
-                // writing a request (or shutdown frame). The timeout bounds
-                // against a missed/raced unpark.
-                thread::park_timeout(Duration::from_micros(500));
+                idle(&mut impl_);
+                // The client unparks after requests. The timeout also clocks
+                // bounded idle producers and protects against a missed wake.
+                thread::park_timeout(idle_park);
             }
             Err(e) => {
                 eprintln!("[afterglow] worker ring error: {e}; exiting loop");
@@ -455,6 +477,22 @@ where
     S: Send + 'static,
     F: Fn(&mut S, u32, &[u8]) -> RpcResult<Vec<u8>> + Send + 'static,
 {
+    spawn_worker_loop_with_idle(impl_, capacity, serve, |_| {}, Duration::from_micros(500))
+}
+
+/// Spawn a native RPC worker with a fixed bounded idle hook.
+pub fn spawn_worker_loop_with_idle<S, F, I>(
+    impl_: S,
+    capacity: usize,
+    serve: F,
+    idle: I,
+    idle_park: Duration,
+) -> RpcResult<(WorkerTransport, EventReceiver)>
+where
+    S: Send + 'static,
+    F: Fn(&mut S, u32, &[u8]) -> RpcResult<Vec<u8>> + Send + 'static,
+    I: FnMut(&mut S) + Send + 'static,
+{
     let req = RingStorage::new(capacity)?;
     let resp = RingStorage::new(capacity)?;
     let events = RingStorage::new(capacity)?;
@@ -469,7 +507,7 @@ where
         client_thread,
     };
     let handle = thread::spawn(move || {
-        run_worker_loop(impl_, side, serve);
+        run_worker_loop_with_idle(impl_, side, serve, idle, idle_park);
     });
     // Wake the *worker* (not the caller) after writing a request: store the
     // worker thread handle, not `thread::current()` from here.
@@ -785,10 +823,11 @@ where
         }
     }
 }
+#[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use crate::{RpcError, Transport, encode, make_response};
+    use crate::{RpcError, encode, make_response};
 
     /// A trivial serve fn: echoes the args back as the "payload".
     fn echo_serve<S>(_s: &mut S, _method: u32, args: &[u8]) -> RpcResult<Vec<u8>> {
@@ -825,6 +864,39 @@ mod tests {
         assert!(!c.has_data());
         p.write(&[1, 2, 3]).unwrap();
         assert_eq!(c.read().unwrap(), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn producer_admission_reports_fixed_frame_room() {
+        let s = RingStorage::new(16).unwrap();
+        let (producer, consumer) = s.split();
+        assert!(producer.can_write(4).unwrap());
+        producer.write(&[1, 2, 3, 4]).unwrap();
+        assert!(producer.can_write(4).unwrap());
+        producer.write(&[5, 6, 7, 8]).unwrap();
+        assert!(!producer.can_write(1).unwrap());
+        assert_eq!(consumer.read().unwrap(), vec![1, 2, 3, 4]);
+        assert!(producer.can_write(4).unwrap());
+    }
+
+    #[test]
+    fn bounded_idle_hook_runs_on_rpc_worker() {
+        let calls = Arc::new(AtomicU64::new(0));
+        let worker_calls = calls.clone();
+        let (transport, _events) = spawn_worker_loop_with_idle(
+            (),
+            1 << 16,
+            echo_serve,
+            move |_| {
+                worker_calls.fetch_add(1, Ordering::Relaxed);
+            },
+            Duration::from_micros(100),
+        )
+        .unwrap();
+        assert_eq!(transport.call(7, b"native").unwrap(), b"native");
+        thread::sleep(Duration::from_millis(2));
+        drop(transport);
+        assert!(calls.load(Ordering::Relaxed) > 0);
     }
 
     #[test]

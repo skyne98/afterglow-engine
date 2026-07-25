@@ -5,11 +5,12 @@ The web engine's virtual-texture implementation lives in
 physical atlas, packed page-table entries, LRU residency, mip fallback, and a
 fixed per-frame page upload budget.
 
-> **Audit status (2026-07-15): correctness prototype, not production-ready.**
-> Sustained movement exposes progressively increasing frame cost. The full
-> disk-to-screen audit identifies superlinear cache maintenance, page-thread
-> RPC polling, linear container lookup, missing backpressure, cache churn, and
-> shader/readback costs. See
+> **Audit status (updated 2026-07-22): bounded correctness prototype, not a
+> shipping two-target implementation.** Earlier cache, indexing, polling, and
+> backpressure defects have been remediated, but the live BIG provider does not
+> yet wire the source-sorting batch helper and CEF currently starts the texture
+> service as WASM Web Workers instead of its mandatory generated native worker.
+> See
 > [`../audits/virtual-texture-vertical-slice-2026-07-15.md`](../audits/virtual-texture-vertical-slice-2026-07-15.md).
 
 ## Public surface
@@ -147,11 +148,11 @@ feedback.
 
 Material feedback identity remains the albedo texture ID for aligned sets. The
 store expands that request through a bootstrap-only fixed channel descriptor:
-texture ID, mip bias, and channel class. Sixty-six fixed scheduler lanes make
-channel class the primary ordering key and preserve coarse-to-fine plus
-center/edge ordering inside each class. All albedo requests therefore outrank
-normal/emissive requests, which outrank scalar masks. Waiting-request aging is
-clamped to its channel class and cannot invert that policy.
+texture ID, mip bias, and channel class. One hundred thirty-two fixed scheduler
+lanes first separate urgent parent restoration from exact-quality promotion,
+then preserve albedo → normal/emissive → scalar-mask and coarse/center ordering
+inside each tier. Waiting-request aging is clamped to its tier/channel floor and
+cannot make a 100 ms quality promotion outrank pending urgent restoration.
 
 Residency and eviction are not grouped. Each channel walks its own page table,
 falls back to its own pinned tail, and consumes or releases one physical slot.
@@ -174,8 +175,11 @@ and walks toward coarser mips until it finds a resident page. Mips smaller than
 128x128 (64 through 1 texel) are packed with individual four-texel borders into
 one additional pinned 136x136 mip-tail slot; its entry occupies the otherwise
 unused x=1 texel of the terminal page-table row. Atlas sampling
-uses explicit translated gradients and supports clamp, repeat, and mirrored
-repeat addressing.
+uses explicit translated gradients and selects clamp, repeat, or mirrored
+repeat addressing in the shader. **Known cook limitation:** stored border
+texels always clamp at the global image edge. Repeat/mirrored-repeat filtering
+therefore does not yet have correct opposite-edge border data at the global
+texture seam; those modes are not currently seam-correct.
 
 `VirtualTextureFeedbackPass.pixelScale` records the exact feedback-target pixels
 per physical display pixel after every resize, including ceil-rounding and
@@ -215,32 +219,62 @@ Feedback expansion, material-channel deduplication, and capacity-bias fitting
 write into preallocated request records plus a fixed numeric scratch map; they
 do not construct per-feedback Maps, channel objects, or string keys. A fixed-
 capacity persistent scheduler retains feedback that does not fit in one frame's
-dispatch budget. Twenty-two intrusive fixed-array lanes (eleven exact mip rungs
-× center/edge) avoid sorting and allocation. One feedback sample enqueues the
-whole missing ancestor chain immediately, eliminating a feedback roundtrip per
-rung; lane order still guarantees low→middle restoration before middle→high,
-then high→ultra. Within each exact rung, center/large-coverage pages outrank
-small edge pages. Visible waiting requests age upward every four feedback epochs
-to prevent starvation.
+dispatch budget. For each missing desired page it emits at most two requests:
+an urgent mip+2 parent (clamped to the terminal paged mip) and the exact page.
+The parent uses a non-resettable 1 ms maximum batch window; exact promotion uses
+a non-resettable 100 ms maximum window. Existing resident coarser pages and the
+pinned tail remain immediately sampleable. Tier/channel/quality/center lanes
+avoid sorting and allocation; visible waiting requests age only within their
+tier/channel floor.
 
-Requests absent from two newer feedback snapshots are removed (about 56 ms at
-the dungeon's 36 Hz feedback rate). Newly important center/coarse-restoration
-work can immediately preempt a strictly worse non-pinned in-flight load when the
-64-entry table is full. Cancellation propagates through an `AbortSignal`:
-queued jobs stop before read/transcode stage boundaries, while an already-running
-one-in-flight RPC may finish and its stale generation is discarded. Web/CEF uses
-`createFetchRangeLoader()` to issue exact serving-layer `fetch + Range` reads;
-it avoids routing tiny page ranges through the page-side AssetLoader wasm
-executor. A fixed 64-entry `BoundedTranscoderPool` dispatches across two to four
-independent texture workers (four on machines exposing eight or more logical
-CPUs). Each worker remains one-in-flight/SPSC-safe and owns its response before
-reuse. Physical slots are acquired only
+Requests absent from two newer feedback snapshots are removed. This is a
+snapshot count, not a fixed duration: Dungeon submits every eight rendered
+frames, so expiry is about 111 ms at 144 Hz and about 267 ms at 60 Hz (plus
+readback timing). Newly important center/coarse-restoration work marks a
+strictly worse non-pinned load canceled when the 64-entry table is full, but the
+slot remains occupied until the asynchronous stage acknowledges cancellation;
+this is not immediate replacement. Cancellation propagates through an
+`AbortSignal`: queued jobs stop before read/transcode stage boundaries, while an
+already-running read or one-in-flight RPC may finish and its stale generation is
+discarded. HTTP Fetch and the CEF bridge do not currently receive the signal or
+apply a response deadline, so a stalled transport can retain bounded capacity
+indefinitely.
+`createFetchRangeLoader().readBulk()` automatically selects the bounded CEF
+shared-message bridge when its private renderer binding exists; web targets
+issue a standard HTTP multi-range request and parse one
+`multipart/byteranges` response. The live `BigAssetSession` provider currently
+dispatches spans in scheduler/admission order. A separate
+`createPageRangeReader()` helper source-sorts and restores caller order, but it
+is not wired into the provider. CEF therefore merges only spans already adjacent
+in admission order. Caddy supports multipart ranges through its static file
+server; CEF and the development server can also
+stream that compatibility format through `afterglow-assets::MultipartSource`.
+A fixed 256-slot client queue, 4 MiB complete-response cap,
+two-response/8 MiB in-flight cap, and non-overlapping range validation make
+overflow deterministic. It avoids routing
+tiny page ranges through the page-side AssetLoader wasm executor. A fixed
+64-entry `BoundedTranscoderPool` currently dispatches across two to four
+independent WASM texture workers (four on machines exposing eight or more
+logical CPUs). Each worker remains one-in-flight/SPSC-safe and owns its response
+before reuse. This is the public-web backend. The current default also runs it
+inside CEF, which is a target-boundary defect: CEF must use the generated native
+`afterglow-texture` client and an OS worker started through
+`AppBuilder::on_ready`. Physical slots are acquired only
 after page bytes are ready, so a slow range read or transcode cannot evict useful
-resident data while it is pending.
+resident data while it is pending. Upload currently copies every completed page
+into the full CPU atlas shadow before `GPUQueue.writeTexture`, even after the
+native GPU atlas is attached. Together with generated RPC encoding and two
+owned-output slices, this is bounded but remains an intentionally documented
+copy/memory optimization target.
 
 Runtime work is bounded to 64 pending pages and 8 MiB of expected output. The
 pending table, ready-upload ring, scheduler, cache slots, and feedback scratch
-are preallocated; hot identity uses numeric `textureId`/packed page keys. Path
+are preallocated; hot identity uses numeric `textureId`/packed page keys.
+Pinned startup requests are currently one-shot rather than retained in the
+scheduler: if loading many channels synchronously exhausts all 64 pending slots,
+a rejected pinned page is not automatically retried. The current nine-channel
+Dungeon fits (up to 54 initial pinned/tail requests), but this is not a general
+large-material-count guarantee. Path
 Maps remain only for load/unload and game-facing lookup. The
 scheduler capacity equals the physical atlas capacity. Scheduling checks a
 0.25 ms budget in small batches; atlas/page-table commits are limited to **two**
@@ -257,23 +291,33 @@ promoted cap immediately rolls back to the independently validated two-page /
 ring for a later rAF rather than turning a full-cache replacement into a
 presentation burst. Rejected admissions, stale cancellations, priority
 preemptions, cache hits/misses/evictions, queue bytes, range-read latency,
-transcode worker/queue/runtime telemetry, upload CPU time, and budget
-exhaustion are exposed by `getStats()`. `getStats()` updates and returns one
+bulk queued/in-flight bytes, urgent/quality batch counts, bulk rejects/cancels,
+transcode worker/queue/runtime telemetry, upload CPU time, and budget exhaustion
+are exposed by `getStats()`. `getStats()` updates and returns one
 stable preallocated object and is safe for per-frame telemetry; the allocating
 `getDebugSnapshot()` is intended only for explicit diagnostics.
 
 ## Asset containers
 
-Container version 5 stores each virtual texture in a compact
-`VirtualTextureDirectory`. Every mip is one contiguous row-major block with one
+The compact `VirtualTextureDirectory` was introduced in container v5 and is
+unchanged in current writer version 6 (v6 adds resident-texture format metadata).
+The bundled Dungeon remains a readable v5 file. Every VT mip is one contiguous
+row-major block with one
 absolute block offset, page-grid dimensions, and a vector of encoded page
 sizes. The optional tail stores one offset and size. It does **not** serialize a
 full `ChunkInfo` or repeated mip/x/y/encoding metadata per page.
 
-`parseBigHeader()` admits this directory once. `createFetchRangeLoader(baseUrl?)`
-returns the browser/CEF serving-layer `load`/`size`/`identity`/`read`
-implementation; `read` requires an exact 206 response and `identity` exposes
-size/ETag/Last-Modified for derived-cache namespacing.
+`parseBigHeader()` admits this directory once. `readBigHeader()` checks magic,
+the supported outer version, and the configured header-byte cap, but does not
+yet fully validate decoded directory invariants, duplicate asset names, exact
+decoder consumption, safe cumulative offsets, or every payload span against
+the container's identity size. Malformed-container bootstrap hardening remains
+open. `createFetchRangeLoader(baseUrl?)` returns the browser/CEF serving-layer
+`load`/`size`/`identity`/`read`/`readBulk`
+implementation. `read` requires one exact 206 response; `readBulk` emits up to
+256 explicit spans and validates each returned multipart `Content-Range` in
+request order. `identity` exposes size/ETag/Last-Modified for derived-cache
+namespacing.
 `createPageDataProvider(loader, header, textureWorkers, format, cache?)` accepts
 a fixed worker list plus an optional generic `PersistentBlobCache`, expands each compact size
 vector into fixed `Float64Array` offsets and `Uint32Array` sizes, and exposes a
@@ -325,15 +369,14 @@ atlas sized to the largest whole 136×136-slot grid allowed by the GPU's reporte
 3,600 slots, approximately 254 MiB RGBA8). Neither demo has a private cache or
 page-table implementation.
 
-`afterglow-cef --example vt-demo` is a canonical `EngineRuntime` consumer using
+`vt-demo` (canonical `EngineRuntime` consumer) uses
 the procedural store factory, generic `VirtualMaterialBinding`, renderer host,
 and feedback coordinator. It displays one procedural 262,144×262,144 terrain
 texture (256 GiB logical RGBA), with WASD pan, overview, one-texel zoom, and
 deterministic programmatic control. Three independent real-GPU launches pass
 all raw-feedback, compressed/uncompressed upload, and residency trajectories.
 
-`afterglow-cef --example rigged-vt-demo` is a canonical `EngineRuntime`
-consumer. `BigAssetSession` loads two image-free GLBs from the same `.big`
+`rigged-vt-demo` (canonical `EngineRuntime` consumer) uses `BigAssetSession`, which loads two image-free GLBs from the same `.big`
 container as their extracted virtual material channels; the cook reduced the
 current container from roughly 633 MiB to 463,702,085 bytes. Stable parser
 indices drive `VirtualGltfBinding`, and one coordinator publishes atomic
@@ -353,7 +396,7 @@ both models, grounding, inertia, required page residency, zero errors, and zero
 post-seal pipelines. Model 1 is KallMor's “Decraniated (Low Poly
 Retro Pixel),” CC BY 4.0; model 2 is CC BY-NC 4.0.
 
-`afterglow-cef --example dungeon` is a canonical `EngineRuntime` consumer using
+`dungeon` (canonical `EngineRuntime` consumer) uses
 `RendererHost`, `BigAssetSession`, `VirtualTextureFeedbackCoordinator`, bounded
 input/diagnostics, and engine-owned POM materials. It is a first-person corridor dungeon using
 three downloaded 8K PBR sets across twelve wall instances. Two sets are
@@ -371,16 +414,22 @@ Interactive controls are WASD, Shift sprint, raw pointer-lock mouse look, POM
 `look`, `step`, `waitForIdle`, allocation-free `telemetry`, `errorCount`,
 `snapshot`, and `runScenario`.
 
+> **Launcher status:** the `afterglow-cef` example launchers and their GPU
+> soak scripts have been removed with `afterglow-cef`. The demo pages themselves
+> (`vt-demo.html`, `rigged-vt-demo.html`, `dungeon.html`) still exist under
+> `crates/afterglow-web/www`; they await rehoming as shell-launched pages — see
+> `docs/implementation/shell-promotion-plan.md`. The commands below are retained
+> as historical evidence of the validated configurations.
+
 ```sh
-nix-shell shell.nix --run "cargo build --example vt-demo -p afterglow-cef"
-nix-shell shell.nix --run "cargo build --example rigged-vt-demo -p afterglow-cef"
-DISPLAY=:0 ./target/debug/examples/rigged-vt-demo --ozone-platform=x11
-DISPLAY=:0 ./scripts/test-rigged-vt-gpu.sh
-DISPLAY=:0 ./scripts/run-dungeon.sh
-DISPLAY=:0 ./scripts/test-dungeon-gpu.sh
-# With the dungeon already running; writes raw per-second CDP samples:
-./scripts/soak-dungeon.sh 600 traverse vt-traverse-10m.log
-./scripts/soak-dungeon.sh 600 thrash vt-thrash-10m.log
+# Native host launch awaits the shell promotion (afterglow-cef launchers removed).
+# Historical launcher shape:
+#   nix-shell shell.nix --run "cargo build --example vt-demo -p afterglow-cef"
+#   nix-shell shell.nix --run "cargo build --example rigged-vt-demo -p afterglow-cef"
+#   DISPLAY=:0 ./target/debug/examples/rigged-vt-demo --ozone-platform=x11
+# Soak scripts removed: test-rigged-vt-gpu.sh, run-dungeon.sh, test-dungeon-gpu.sh,
+# soak-dungeon.sh. Re-establish under the shell host as a promotion work item.
+```
 # Deterministic occupancy states (run cold → half → full → churn in one process):
 ./scripts/baseline-vt-atlas.sh half vt-atlas-half.log
 ```

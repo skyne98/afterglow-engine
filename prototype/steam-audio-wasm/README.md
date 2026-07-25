@@ -11,22 +11,44 @@ Afterglow and payload-free `postMessage` wake-ups.
 It measures direct raycast occlusion/transmission and fully runtime-generated
 parametric or convolution reflections. The dynamic benchmark moves an instanced
 door, sources, and listener before every simulation; it uses no baked acoustic
-data. It also applies Steam Audio's reflection DSP to 128-frame buffers, but does
-not yet host that DSP in an AudioWorklet or run alongside a loaded game renderer.
+data.
+
+The first integration gate now also exists. `afterglow-audio-worker` is the one
+proper `#[rpc(worker = EngineAudioWorker)]` Rust service; it owns control,
+scheduling state, failure latching, telemetry, the Steam Audio FFI wrapper and
+final PCM publication. `afterglow-obvhs-tracer` has been promoted into the
+workspace and is linked into that same final Rust module, avoiding duplicate
+Rust runtimes. Thin C++ implements only the `phonon.h` calls. Thin TypeScript
+copies the worker-private PCM into a fixed SAB ring, and a no-allocation
+AudioWorklet drains it. There is no second JavaScript/C++ service protocol.
+
+The current gate module initializes 128 scheduled voices, 128 binaural effects
+and 64 hybrid effects in fixed 256 MiB WASM memory. Its normal-Worker test mix
+renders 32 priority direct/HRTF voices, an explicitly admitted wet tier, and 96
+dry voices from the same pool. Hybrid uses a 32 ms convolution head plus parametric tail. All four
+synthetic producer families share one sample clock. The gate additionally accepts
+up to 64 strict mono/stereo 48 kHz resident WAVs into generational, bounded
+Rust-owned PCM; the C++ Steam mixer reads those stable buffers without another
+copy, loops them on the device clock, and Rust releases one-shot voices after
+their final quantum. This is still a feasibility gate, not the public
+`EngineAudio` API.
 
 ## Build
 
 The first build downloads roughly 200 MB and builds the missing dependencies.
 Build products and upstream sources remain under ignored `target/` and `dist/`
-directories.
+directories. The script explicitly uses every logical core reported by `nproc`
+(32 on the current workstation) for Cargo, CMake and Make.
 
 ```sh
 nix-shell prototype/steam-audio-wasm/toolchain.nix --run \
   './prototype/steam-audio-wasm/build.sh'
 ```
 
-`toolchain.nix` pins nixpkgs revision `aa290c9891fa` and Emscripten 4.0.23. The
-build also requires the project's rustc 1.99.0-nightly commit `375b1431b`
+`toolchain.nix` pins nixpkgs revision `aa290c9891fa` and Emscripten 4.0.23. In
+addition to the historical benchmark modules, the build emits
+`dist/engine-audio-rpc.js` + `.wasm`, the unified Rust RPC/Steam gate module.
+The build also requires the project's rustc 1.99.0-nightly commit `375b1431b`
 (2026-07-10), so recorded benchmark builds fail rather than silently varying
 with another compiler. The matching
 native OS-thread benchmark uses Valve's released Linux x64 library:
@@ -71,6 +93,71 @@ cp target/bistro-source/*.acoustic.bin \
 
 Remove the temporary `www/steam-audio-prototype` directory before running the
 canonical web artifact check.
+
+### Unified Rust RPC Worker → AudioWorklet diagnostic
+
+Build the module and canonical web deployment, then temporarily stage the
+ignored research module beside the diagnostic page:
+
+```sh
+nix-shell prototype/steam-audio-wasm/toolchain.nix --run \
+  './prototype/steam-audio-wasm/build.sh'
+cargo build -p afterglow-audio-worker --target wasm32-unknown-unknown \
+  -Zbuild-std=core,alloc,std,panic_abort --profile wasm-dev
+cp target/wasm32-unknown-unknown/wasm-dev/afterglow_audio_worker.wasm \
+  crates/afterglow-web/web/assets/engineaudioservice.wasm
+bun scripts/build-web.ts
+cp prototype/steam-audio-wasm/dist/engine-audio-rpc.{js,wasm} \
+  crates/afterglow-web/www/
+cargo run --example coep_server -p afterglow-web
+```
+
+Open `http://127.0.0.1:8787/audio-worklet.html?steam&quanta=8` and press Start.
+Omit `steam` to exercise the same Rust RPC/ring/worklet path with the deterministic
+Rust synthetic backend. Eight quanta is selected on both targets. Four is
+rejected for the normal-Worker final-PCM architecture: same-page hardware-WebGPU
+produced 407 underruns because a 15.97 ms Worker interval exceeded 10.67 ms of
+buffering, and native full-Bistro tests later produced 22–27 underruns per
+10-second scene while the sole worker ran reflection simulation.
+
+The selected web 16/4 profile passed 38,900 callbacks under hardware-WebGPU with
+zero underruns/errors/deadline misses. Add `&realSounds` while staging the five
+resampled official SDK WAVs under `www/real-audio/` to run the real sound-set
+gate; it passed 11,244 callbacks with zero underruns. Native coupled testing is
+reproducible with `real_asset_audio_gate`: it chunk-loads those sounds and all
+three full-resolution Bistro scenes. Eight quanta produced zero underruns and
+silent frames across 11,250 callbacks. Rebuild the canonical deployment afterward
+to remove the temporary generated module:
+
+```sh
+bun scripts/build-web.ts
+bun scripts/build-web.ts --check
+```
+
+### Real-time Emscripten Wasm AudioWorklet diagnostic
+
+`build.sh` also emits `engine-audio-worklet-gate.{js,wasm}` and
+`worklet-gate.html`. This path uses `-sAUDIO_WORKLET=1 -sWASM_WORKERS=1` and
+runs Steam's per-quantum DSP directly on WebAudio's real-time-priority thread;
+the same page continuously submits hardware-WebGPU clears. Stage `dist/` under
+a COOP/COEP server, open `worklet-gate.html?wet=32`, and press Start with a real
+user gesture. `wet=16|32|64` changes active hybrid admission while retaining 64
+initialized slots.
+
+The gate now runs simulation on a dedicated pthread while audio is live. It
+publishes direct/reflection scalars and transforms through a fixed lock-free
+latest-value triple buffer; Steam's convolution IR already uses an upstream
+`TripleBuffer<OverlapSaveFIR>`. The accepted short system tier is 16 active wet
+voices, 5 Hz direct updates, and 1 Hz reflections. It measured 22,456 callbacks,
+zero callback/simulation errors, zero steady callbacks over 2.667 ms, and 1.0 ms
+maximum callback time. A 240-frame rAF sample held 6.95/6.955/6.955 ms
+mean/p99/max. Physical capture contained 473,708 non-zero samples, was unclipped,
+and had no internal zero span above 0.084 ms. Static 32-active DSP passed alone,
+but 32 active with concurrent simulation missed the combined render budget and
+is rejected. Raw evidence is
+`docs/benchmarks/steam-audio-wasm-audio-worklet-gate-fox-workstation-2026-07-19.json`.
+The simulation pthread is still a prototype loop rather than the unified Rust
+RPC service owner.
 
 ## fox-workstation built-in direct baseline — 2026-07-18
 

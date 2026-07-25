@@ -28,7 +28,7 @@
 
 # Building
 
-- [Native (CEF)](./building/native.md)
+- [Native (`afterglow-shell`)](./building/afterglow-shell.md)
 - [Web (Wasm)](./building/web.md)
 - [Testing](./building/testing.md)
 - [Benchmarking & Latency](./building/benchmarking.md)

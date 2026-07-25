@@ -199,7 +199,7 @@ function finalize(raw: RawFinding[]): ArchitectureFinding[] {
 async function scanRustLaunchers(): Promise<RawFinding[]> {
   const findings: RawFinding[] = [];
   const glob = new Bun.Glob('*.rs');
-  const directory = join(root, 'crates/afterglow-cef/examples');
+  const directory = join(root, 'crates/afterglow-shell/examples');
   for await (const name of glob.scan({ cwd: directory, onlyFiles: true })) {
     const text = await readFile(join(directory, name), 'utf8');
     for (const match of text.matchAll(/\.index_html\s*\(\s*b?"[^"\n]*<script[\s\S]*?<\/script>[^"\n]*"\s*\)/g)) {
@@ -207,8 +207,8 @@ async function scanRustLaunchers(): Promise<RawFinding[]> {
       const line = before.split('\n').length;
       const excerpt = compact(match[0]);
       findings.push({
-        rule: 'AG-DEMO-011', file: `crates/afterglow-cef/examples/${name}`,
-        line, column: 1, excerpt, identity: `crates/afterglow-cef/examples/${name}\0AG-DEMO-011\0${excerpt}`,
+        rule: 'AG-DEMO-011', file: `crates/afterglow-shell/examples/${name}`,
+        line, column: 1, excerpt, identity: `crates/afterglow-shell/examples/${name}\0AG-DEMO-011\0${excerpt}`,
       });
     }
   }

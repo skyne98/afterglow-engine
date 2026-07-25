@@ -1,0 +1,76 @@
+--- a/src/front/wgsl/parse/directive/enable_extension.rs
++++ b/src/front/wgsl/parse/directive/enable_extension.rs
+@@ -21,6 +21,7 @@
+     wgpu_cooperative_matrix: bool,
+     draw_index: bool,
+     primitive_index: bool,
++    subgroups: bool,
+ }
+ 
+ impl EnableExtensions {
+@@ -36,6 +37,7 @@
+             wgpu_cooperative_matrix: false,
+             draw_index: false,
+             primitive_index: false,
++            subgroups: false,
+         }
+     }
+ 
+@@ -56,6 +58,7 @@
+             ImplementedEnableExtension::WgpuCooperativeMatrix => &mut self.wgpu_cooperative_matrix,
+             ImplementedEnableExtension::DrawIndex => &mut self.draw_index,
+             ImplementedEnableExtension::PrimitiveIndex => &mut self.primitive_index,
++            ImplementedEnableExtension::Subgroups => &mut self.subgroups,
+         };
+         *field = true;
+     }
+@@ -75,6 +78,7 @@
+             ImplementedEnableExtension::WgpuCooperativeMatrix => self.wgpu_cooperative_matrix,
+             ImplementedEnableExtension::DrawIndex => self.draw_index,
+             ImplementedEnableExtension::PrimitiveIndex => self.primitive_index,
++            ImplementedEnableExtension::Subgroups => self.subgroups,
+         }
+     }
+ 
+@@ -147,7 +151,7 @@
+             Self::COOPERATIVE_MATRIX => {
+                 Self::Implemented(ImplementedEnableExtension::WgpuCooperativeMatrix)
+             }
+-            Self::SUBGROUPS => Self::Unimplemented(UnimplementedEnableExtension::Subgroups),
++            Self::SUBGROUPS => Self::Implemented(ImplementedEnableExtension::Subgroups),
+             Self::DRAW_INDEX => Self::Implemented(ImplementedEnableExtension::DrawIndex),
+             Self::PRIMITIVE_INDEX => Self::Implemented(ImplementedEnableExtension::PrimitiveIndex),
+             _ => return Err(Box::new(Error::UnknownEnableExtension(span, word))),
+@@ -170,6 +174,7 @@
+                 ImplementedEnableExtension::DrawIndex => Self::DRAW_INDEX,
+                 ImplementedEnableExtension::PrimitiveIndex => Self::PRIMITIVE_INDEX,
+                 ImplementedEnableExtension::WgpuRayTracingPipeline => Self::RAY_TRACING_PIPELINE,
++                ImplementedEnableExtension::Subgroups => Self::SUBGROUPS,
+             },
+             Self::Unimplemented(kind) => match kind {
+                 UnimplementedEnableExtension::Subgroups => Self::SUBGROUPS,
+@@ -218,6 +223,8 @@
+     ///
+     /// [`enable primitive-index;`]: https://www.w3.org/TR/WGSL/#extension-primitive_index
+     PrimitiveIndex,
++    /// Enables standard WGSL subgroup operations and built-ins.
++    Subgroups,
+ }
+ 
+ impl ImplementedEnableExtension {
+@@ -233,6 +240,7 @@
+         Self::WgpuCooperativeMatrix,
+         Self::DrawIndex,
+         Self::PrimitiveIndex,
++        Self::Subgroups,
+     ];
+ 
+     /// Returns slice of all variants of [`ImplementedEnableExtension`].
+@@ -254,6 +262,7 @@
+             Self::WgpuRayTracingPipeline => C::RAY_TRACING_PIPELINE,
+             Self::DrawIndex => C::DRAW_INDEX,
+             Self::PrimitiveIndex => C::PRIMITIVE_INDEX,
++            Self::Subgroups => C::SUBGROUP,
+         }
+     }
+ }

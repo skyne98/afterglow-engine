@@ -1,5 +1,12 @@
 # Virtual Texturing
 
+> **Partly stale.** `afterglow-cef` and its example launchers have been
+> removed; the CEF-specific transport prose and the `cargo build --example
+> vt-demo -p afterglow-cef` command below no longer apply. The VT engine itself
+> is unchanged. Rehoming the demo launchers under the shell host is tracked in
+> `docs/implementation/shell-promotion-plan.md` (gates G3 + G4). The
+> authoritative current state is `docs/api/virtual-texturing.md`.
+
 Afterglow's texture path uses a shared physical atlas instead of allocating one
 GPU texture per asset. Textures are divided into 128x128 payload pages with a
 four-texel border. The shader translates virtual UVs through a page table and
@@ -58,15 +65,19 @@ Resident lookup/touch is O(1); it does not scan or rebuild an LRU as the atlas
 fills. Feedback expansion and capacity fitting reuse preallocated numeric
 scratch records rather than constructing per-frame maps and channel objects. A
 fixed persistent scheduler keeps requests that exceed one frame's budget.
-Sixty-six fixed-array lanes prioritize channel class first—albedo, then
-normal/emissive, then scalar data. Inside each class, exact quality rungs restore
-low→middle before middle→high before high→ultra, then center/large-coverage pages
-before small edge pages. Aging cannot cross a channel-class boundary. The whole missing mip chain enters those lanes in one feedback update, so
-quality no longer waits for another GPU readback after every rung. Waiting
-requests age upward to prevent starvation. Pages absent
-from two newer feedback snapshots expire (about 56 ms at 36 Hz), and newly
-important work may preempt a strictly worse non-pinned in-flight load. Thus pages
-behind a turning camera stop consuming the bounded queue quickly. Atlas/page-table commits
+One hundred thirty-two fixed-array lanes put urgent parent restoration before
+exact promotion, then prioritize albedo, normal/emissive, scalar data, quality,
+and center/coverage. Aging cannot cross a tier/channel boundary. Each miss emits
+at most a mip+2 parent with a non-resettable 1 ms maximum batch window and the
+exact page with a non-resettable 100 ms window. Existing coarser pages and the
+pinned tail remain visible immediately; intermediate ancestor requests are not
+created. Waiting requests age upward within their floor to prevent starvation.
+Pages absent from two newer feedback snapshots expire. Dungeon submits feedback
+every eight rendered frames, so this is about 111 ms at 144 Hz or 267 ms at
+60 Hz, not a fixed 56 ms. Newly important work can mark a strictly worse pending
+load canceled, but its slot remains occupied until the asynchronous stage
+acknowledges cancellation. In-flight Fetch/CEF reads currently have neither
+transport abort propagation nor a response deadline. Atlas/page-table commits
 are governed by the central `VirtualTextureTuning` resource. Its configuration
 is partial, so setting only `atlasMaxDimension` retains every upload default.
 The cap is rounded down to a whole 136-texel slot grid; zero selects the device
@@ -82,17 +93,32 @@ Excess completed work remains in a
 fixed ready ring for a later frame rather than
 causing a full-cache presentation burst. Physical slots are acquired only after bytes are ready, so slow reads/transcodes do not
 evict useful pages. At most 64 jobs and 8 MiB of expected output may be pending;
-stage budget exhaustion is reported rather than allowing an unbounded burst. Because color and data
-channels share one linear atlas, material nodes explicitly decode albedo with
-Three.js `sRGBTransferEOTF`; normal and packed masks remain linear. Roughness
+stage budget exhaustion is reported rather than allowing an unbounded burst.
+Pinned startup loads are currently one-shot, so bootstrapping enough VT channels
+to fill all 64 slots can reject later pinned pages without an automatic retry;
+the nine-channel Dungeon stays below that boundary.
+The serving client also owns a fixed 256-slot bulk queue. The live provider
+currently preserves scheduler/admission order. A separate page-range helper
+source-sorts and restores caller order, but `BigAssetSession` does not yet wire
+it in. CEF therefore merges only spans already adjacent in supplied order;
+public web issues a standard HTTP multi-range request and validates the
+multipart response. Both paths cap complete responses at 4 MiB and permit at
+most two responses / 8 MiB in flight. The accepted 950.2 MiB/s native transport
+result used the explicitly sorted diagnostic and is not live-provider evidence. Because color and data channels share one linear atlas, material nodes explicitly decode albedo with
+Three.js `sRGBTransferEOTF`; normal and packed masks remain linear. The cook
+currently box-filters every role in byte space and always clamps global-edge
+border texels. Linear-light albedo mips, renormalized normal mips, and seam-
+correct repeat/mirrored-repeat borders remain open quality work. Roughness
 and AO are packed offline into mask R/G, reducing each material from four
 streamed pages to three and sharing one shader sample. Each PBR channel resolves its own requested and fallback mip from its own page
 table. Every channel retains a pinned tail, so partially streamed materials stay
 valid while color detail arrives first. Eviction removes only the selected
 physical page; mixed channel mips are intentional.
 
-The `.big` v5 asset format stores each mip as a contiguous row-major block:
-one block offset, its page-grid dimensions, and compact per-page sizes. Runtime
+The compact VT directory introduced by `.big` v5 stores each mip as a
+contiguous row-major block: one block offset, its page-grid dimensions, and
+compact per-page sizes. Current writer version 6 retains that VT layout while
+adding resident-texture format metadata; the bundled Dungeon remains v5. Runtime
 expands those sizes once into typed offset/size arrays, allowing direct page
 indexing and individual range reads without a serialized object per page. The
 nine-channel dungeon header is 123,768 bytes, down from 764,192 bytes in v4.
@@ -103,9 +129,11 @@ real image boundary. Levels from
 64x64 through 1x1 are packed into one permanently resident mip-tail slot rather
 than wasting one physical slot per tiny level. Every complete slot is encoded
 independently as UASTC Basis offline, then transcoded on demand to BC7, ASTC, or
-RGBA by an optimized runtime texture Web Worker. Payloads travel through the
-shared-memory ring transport, so transcoding never blocks rendering on the page
-thread.
+RGBA. Public web uses optimized texture WASM Web Workers over the shared-memory
+ring transport, so transcoding does not block the page thread. The current CEF
+session also starts those workers, but this is a known architecture defect:
+CEF must use `afterglow-texture`'s generated native client and an OS worker
+started through `AppBuilder::on_ready`.
 
 ## Demos
 
@@ -138,7 +166,7 @@ It displays a 262,144×262,144 terrain texture (256 GiB
 logical RGBA), while generating only requested bordered pages:
 
 ```sh
-nix-shell shell.nix --run "cargo build --example vt-demo -p afterglow-cef"
+nix-shell shell.nix --run "cargo run -p afterglow-shell"  # native host (CEF launcher removed)
 nix-shell shell.nix --run "./target/debug/examples/vt-demo --ozone-platform=x11"
 ```
 
@@ -154,9 +182,10 @@ Use **WASD** to pan, the mouse wheel to zoom, **P** for a one-texel view, and
 The `dungeon` example is a minimal first-person corridor using three scanned
 8K PBR materials. A demo script extracts their albedo, OpenGL normal, roughness,
 and AO PNGs and runs the generic asset pipeline once to produce the ignored
-`www/dungeon.big` deployment asset. At runtime exact serving-layer
-`fetch + Range` reads and a fixed two-to-four `TextureWorker` pool stream pages
-without the former page-side AssetLoader latency. Final GPU blocks are also
+`www/dungeon.big` deployment asset. At runtime bounded serving-layer multi-range fetches and a fixed two-to-four
+`TextureWorker` pool stream pages without the former page-side AssetLoader
+latency. Urgent mip+2 restoration batches for at most 1 ms; exact promotion
+batches for at most 100 ms. Final GPU blocks are also
 stored through the generic persistent cache under a source/format/adapter
 namespace; warm hits skip both range reads and Basis transcodes. Aligned PBR
 channels share one albedo feedback stream while loading and evicting
@@ -226,9 +255,11 @@ tasks, and GPU errors remained zero. The historical timestamp record's 0.149 ms
 “main” value was actually Three's output transform; its independently measured
 0.018 ms feedback pass remains valid.
 
-The corrected close-wall streaming path bypasses the former page-side
-AssetLoader latency and uses four texture workers on fox-laptop. Forty-eight new
-physical PBR pages settled in 283.29 ms; a larger unseen view showed its first
+The corrected close-wall streaming measurement bypassed the former page-side
+AssetLoader latency and used four WASM texture workers on fox-laptop. It is
+renderer/web-worker evidence, not validation of the still-missing native CEF
+texture-worker composition. Forty-eight new physical PBR pages settled in
+283.29 ms; a larger unseen view showed its first
 page at 79.32 ms and first 12 coarse-priority pages at 132.75 ms. Mean page
 admission-to-ready latency fell from 445.81 ms to 26.25 ms, with zero failed
 loads or overflows.

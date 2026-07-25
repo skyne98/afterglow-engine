@@ -1,13 +1,13 @@
 import { describe, expect, test } from 'bun:test';
 import {
-  BigContainerAssetLoader, BoundedTranscoderPool, createFetchRangeLoader, createPageDataProvider, findVTPageChunk,
+  BigContainerAssetLoader, BoundedTranscoderPool, createFetchRangeLoader, createPageDataProvider, createPageRangeReader, findVTPageChunk,
   getVirtualTextureDimensions, type BigHeader,
 } from './big-parser.ts';
 
 const flush = () => new Promise(resolve => setTimeout(resolve, 0));
 
 describe('browser range loader', () => {
-  test('issues an exact Range request and rejects non-partial responses', async () => {
+  test('issues an exact Range request for a single read', async () => {
     const original = globalThis.fetch;
     let range = '';
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -118,6 +118,226 @@ describe('.big v5 compact VT directories', () => {
       ['terrain.big', 110, 20],
       ['terrain.big', 130, 30],
     ]);
+  });
+
+  test('urgent misses share one non-contiguous bulk response', async () => {
+    const batchHeader: BigHeader = {
+      version: 5, dataOffset: 64n,
+      assets: [{
+        name: 'tiles', assetType: 'VirtualTexture', chunks: [],
+        virtualTexture: {
+          width: 512, height: 128, encoding: 'RawRgba8',
+          mips: [{ mip: 0, pagesX: 4, pagesY: 1, offset: 200n, pageSizes: [8, 8, 8, 8] }],
+          tail: null,
+        },
+      }],
+    };
+    const bulks: Array<Array<{ offset: number; length: number }>> = [];
+    const loader = {
+      async read(_path: string, offset: number, size: number) {
+        const bytes = new Uint8Array(size);
+        for (let index = 0; index < size; index++) bytes[index] = (offset + index) & 0xff;
+        return bytes;
+      },
+      async readBulk(ranges: readonly { offset: number; length: number }[]) {
+        bulks.push(ranges.map(range => ({ ...range })));
+        return ranges.map(range => {
+          const bytes = new Uint8Array(range.length);
+          for (let index = 0; index < bytes.length; index++) bytes[index] = (range.offset + index) & 0xff;
+          return bytes;
+        });
+      },
+      async load() { return new Uint8Array(); }, async size() { return 0; },
+    };
+    const provider = createPageDataProvider(loader, batchHeader, [{
+      async transcode() { throw new Error('raw pages do not transcode'); },
+    }], 4);
+    const [p0, p1, p3] = await Promise.all([
+      provider('tiles', { mip: 0, x: 0, y: 0 }),
+      provider('tiles', { mip: 0, x: 1, y: 0 }),
+      provider('tiles', { mip: 0, x: 3, y: 0 }),
+    ]);
+    expect(bulks).toEqual([[
+      { offset: 200, length: 8 },
+      { offset: 208, length: 8 },
+      { offset: 224, length: 8 },
+    ]]);
+    expect([p0[0], p1[0], p3[0]]).toEqual([200 & 0xff, 208 & 0xff, 224 & 0xff]);
+    provider.close();
+  });
+
+  test('quality batching opens one non-resettable 100 ms window', async () => {
+    const batchHeader: BigHeader = {
+      version: 5, dataOffset: 64n,
+      assets: [{
+        name: 'tiles', assetType: 'VirtualTexture', chunks: [],
+        virtualTexture: {
+          width: 256, height: 128, encoding: 'RawRgba8',
+          mips: [{ mip: 0, pagesX: 2, pagesY: 1, offset: 200n, pageSizes: [8, 8] }],
+          tail: null,
+        },
+      }],
+    };
+    const callbacks: Array<() => void> = [];
+    const delays: number[] = [];
+    const originalSetTimeout = globalThis.setTimeout;
+    globalThis.setTimeout = ((callback: TimerHandler, delay?: number) => {
+      callbacks.push(callback as () => void);
+      delays.push(delay ?? 0);
+      return 1 as unknown as ReturnType<typeof setTimeout>;
+    }) as typeof setTimeout;
+    const bulks: Array<readonly { offset: number; length: number }[]> = [];
+    const loader = {
+      async read(_path: string, _offset: number, size: number) { return new Uint8Array(size); },
+      async readBulk(ranges: readonly { offset: number; length: number }[]) {
+        bulks.push(ranges);
+        return ranges.map(range => new Uint8Array(range.length));
+      },
+      async load() { return new Uint8Array(); }, async size() { return 0; },
+    };
+    const provider = createPageDataProvider(loader, batchHeader, [{
+      async transcode() { throw new Error('raw pages do not transcode'); },
+    }], 4);
+    try {
+      const first = provider('tiles', { mip: 0, x: 0, y: 0, batchTier: 'quality' });
+      const second = provider('tiles', { mip: 0, x: 1, y: 0, batchTier: 'quality' });
+      expect(delays).toEqual([100]);
+      callbacks[0]();
+      await Promise.all([first, second]);
+      expect(bulks).toHaveLength(1);
+      expect(bulks[0]).toHaveLength(2);
+    } finally {
+      globalThis.setTimeout = originalSetTimeout;
+      provider.close();
+    }
+  });
+
+  test('PageRangeReader coalesces a shuffled batch into one read per row', async () => {
+    const batchHeader: BigHeader = {
+      version: 5, dataOffset: 64n,
+      assets: [{
+        name: 'tiles', assetType: 'VirtualTexture', chunks: [],
+        virtualTexture: {
+          width: 512, height: 256, encoding: 'RawRgba8',
+          // Two rows of 4 pages, size 8 each, contiguous within a row.
+          // Row 0 at offset 200, row 1 at offset 232.
+          mips: [{ mip: 0, pagesX: 4, pagesY: 2, offset: 200n, pageSizes: [
+            8, 8, 8, 8,  // row 0: 200,208,216,224
+            8, 8, 8, 8,  // row 1: 232,240,248,256
+          ] }],
+          tail: null,
+        },
+      }],
+    };
+    const reads: Array<[string, number, number]> = [];
+    const loader = {
+      async read(path: string, offset: number, size: number) {
+        reads.push([path, offset, size]);
+        const buf = new Uint8Array(size);
+        for (let i = 0; i < size; i++) buf[i] = (offset + i) & 0xff;
+        return buf;
+      },
+    };
+    const reader = createPageRangeReader(loader, batchHeader, 4);
+    // Shuffled order: rows interleaved, non-monotonic x.
+    const reqs = [
+      { path: 'tiles', mip: 0, x: 3, y: 1 },
+      { path: 'tiles', mip: 0, x: 0, y: 0 },
+      { path: 'tiles', mip: 0, x: 1, y: 1 },
+      { path: 'tiles', mip: 0, x: 2, y: 0 },
+      { path: 'tiles', mip: 0, x: 1, y: 0 },
+      { path: 'tiles', mip: 0, x: 0, y: 1 },
+      { path: 'tiles', mip: 0, x: 3, y: 0 },
+      { path: 'tiles', mip: 0, x: 2, y: 1 },
+    ];
+    const out = await reader.readBatch(reqs);
+    // Each row coalesces into exactly one 32-byte read → 2 reads total
+    // (order is non-deterministic under concurrency; sort by offset).
+    expect([...reads].sort((a, b) => a[1] - b[1])).toEqual([
+      ['tiles.big', 200, 32],
+      ['tiles.big', 232, 32],
+    ]);
+    expect(out).toHaveLength(8);
+    // Correct per-page bytes in request order (offsets: row0=200,208,216,224; row1=232,240,248,256).
+    expect(out[0][0]).toBe(256 & 0xff); // (3,1)
+    expect(out[1][0]).toBe(200 & 0xff); // (0,0)
+    expect(out[2][0]).toBe(240 & 0xff); // (1,1)
+    expect(out[3][0]).toBe(216 & 0xff); // (2,0)
+    expect(out[4][0]).toBe(208 & 0xff); // (1,0)
+    expect(out[5][0]).toBe(232 & 0xff); // (0,1)
+    expect(out[6][0]).toBe(224 & 0xff); // (3,0)
+    expect(out[7][0]).toBe(248 & 0xff); // (2,1)
+    const s = reader.getStats();
+    expect(s.reads).toBe(2);
+    expect(s.pagesCoalesced).toBe(8);
+    expect(s.runs).toBe(2);
+  });
+
+  test('PageRangeReader sorts bulk spans but restores caller order', async () => {
+    const batchHeader: BigHeader = {
+      version: 5, dataOffset: 64n,
+      assets: [{
+        name: 'tiles', assetType: 'VirtualTexture', chunks: [],
+        virtualTexture: {
+          width: 512, height: 128, encoding: 'RawRgba8',
+          mips: [{ mip: 0, pagesX: 4, pagesY: 1, offset: 200n, pageSizes: [8, 8, 8, 8] }],
+          tail: null,
+        },
+      }],
+    };
+    const bulks: Array<Array<{ offset: number; length: number }>> = [];
+    const loader = {
+      async read(_path: string, _offset: number, size: number) { return new Uint8Array(size); },
+      async readBulk(_path: string, ranges: readonly { offset: number; length: number }[]) {
+        bulks.push(ranges.map(range => ({ ...range })));
+        return ranges.map(range => new Uint8Array(range.length).fill(range.offset & 0xff));
+      },
+    };
+    const reader = createPageRangeReader(loader, batchHeader, 4);
+    const output = await reader.readBatch([
+      { path: 'tiles', mip: 0, x: 3, y: 0 },
+      { path: 'tiles', mip: 0, x: 0, y: 0 },
+      { path: 'tiles', mip: 0, x: 2, y: 0 },
+      { path: 'tiles', mip: 0, x: 1, y: 0 },
+    ]);
+    expect(bulks).toEqual([[
+      { offset: 200, length: 8 },
+      { offset: 208, length: 8 },
+      { offset: 216, length: 8 },
+      { offset: 224, length: 8 },
+    ]]);
+    expect(output.map(bytes => bytes[0])).toEqual([224, 200, 216, 208]);
+  });
+
+  test('PageRangeReader never mixes asset paths in one bulk request', async () => {
+    const makeAsset = (name: string, offset: bigint) => ({
+      name, assetType: 'VirtualTexture' as const, chunks: [],
+      virtualTexture: {
+        width: 128, height: 128, encoding: 'RawRgba8' as const,
+        mips: [{ mip: 0, pagesX: 1, pagesY: 1, offset, pageSizes: [8] }],
+        tail: null,
+      },
+    });
+    const header: BigHeader = {
+      version: 5,
+      dataOffset: 64n,
+      assets: [makeAsset('b', 100n), makeAsset('a', 200n)],
+    };
+    const paths: string[] = [];
+    const reader = createPageRangeReader({
+      async read(_path: string, _offset: number, length: number) {
+        return new Uint8Array(length);
+      },
+      async readBulk(path: string, ranges: readonly { offset: number; length: number }[]) {
+        paths.push(path);
+        return ranges.map(range => new Uint8Array(range.length));
+      },
+    }, header, 2);
+    await reader.readBatch([
+      { path: 'b', mip: 0, x: 0, y: 0 },
+      { path: 'a', mip: 0, x: 0, y: 0 },
+    ]);
+    expect(paths.sort()).toEqual(['a.big', 'b.big']);
   });
 });
 

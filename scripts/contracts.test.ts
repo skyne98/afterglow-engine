@@ -6,6 +6,12 @@ import { countBundledThreeCoreCopies, validateWebContracts } from './check-web-c
 import { scanTypeScript } from './lint-demo-architecture.ts';
 import { importBoundaryErrors } from './lint-import-boundaries.ts';
 
+const repositoryRoot = new URL('../', import.meta.url);
+const agents = await Bun.file(new URL('AGENTS.md', repositoryRoot)).text();
+const audioPlan = await Bun.file(new URL(
+  'docs/implementation/spatial-audio-integration-plan.md', repositoryRoot,
+)).text();
+
 const temporary: string[] = [];
 afterEach(async () => {
   while (temporary.length !== 0) await rm(temporary.pop()!, { recursive: true, force: true });

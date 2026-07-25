@@ -1,14 +1,13 @@
-import { MeshoptClient } from '../../workers/meshopt.client.ts';
-import { TextureClient } from '../../workers/texture.client.ts';
 import {
   BigContainerAssetLoader,
-  createFetchRangeLoader,
   createPageDataProvider,
   readBigHeader,
   type BigHeader,
   type FetchRangeLoader,
   type VirtualTexturePageProvider,
 } from './big-parser.ts';
+import { createPlatformRangeLoader } from './platform-range-loader.ts';
+import { createPlatformMeshOptimizer, createPlatformTextureTranscoder } from './platform-workers.ts';
 import { AssetStore, type MeshOptimizer } from './asset-store.ts';
 import type { PersistentBlobCache } from './persistent-blob-cache.ts';
 import { VirtualTextureStore, VirtualTextureTuning } from '../virtual-texturing/virtual-texture.ts';
@@ -69,13 +68,12 @@ export class BigAssetSession {
       throw new RangeError('BIG session workerCount must be positive');
     if (!Number.isInteger(options.transcodeQueueCapacity) || options.transcodeQueueCapacity <= 0)
       throw new RangeError('BIG session transcode queue capacity must be positive');
-    const source = options.source ?? createFetchRangeLoader();
+    const source = options.source ?? createPlatformRangeLoader();
     const workers: OwnedTextureTranscoder[] = [];
     try {
       const header = await readBigHeader(source, options.containerPath, options.maxHeaderBytes);
 
-      const createTranscoder = options.createTranscoder ?? (() =>
-        TextureClient.spawnThreaded({ workerWasmUrl: 'texture.wasm', timeoutMs: 10_000 }));
+      const createTranscoder = options.createTranscoder ?? createPlatformTextureTranscoder;
       for (let index = 0; index < options.workerCount; index++)
         workers.push(await createTranscoder(index));
       const clients = workers;
@@ -84,6 +82,10 @@ export class BigAssetSession {
         size: (path: string): Promise<number> => source.size(path),
         read: (_path: string, offset: number, length: number): Promise<Uint8Array> =>
           source.read(options.containerPath, offset, length),
+        readBulk: source.readBulk
+          ? (ranges: Parameters<NonNullable<FetchRangeLoader['readBulk']>>[1]): Promise<Uint8Array[]> =>
+              source.readBulk!(options.containerPath, ranges)
+          : undefined,
       };
       const pageProvider = createPageDataProvider(
         containerLoader,
@@ -114,8 +116,7 @@ export class BigAssetSession {
   ): Promise<AssetStore> {
     if (this.closed) throw new Error('cannot create an asset store from a closed BIG session');
     if (this.assetStore || this.meshOptimizer) throw new Error('BIG session already created its asset store');
-    const createOptimizer = this.createMeshOptimizer ?? (() =>
-      MeshoptClient.spawnThreaded({ workerWasmUrl: 'meshopt.wasm', timeoutMs: 10_000 }));
+    const createOptimizer = this.createMeshOptimizer ?? createPlatformMeshOptimizer;
     const optimizer = await createOptimizer();
     if (this.closed) { await optimizer.close(); throw new Error('BIG session closed while creating its asset store'); }
     try {
@@ -154,6 +155,7 @@ export class BigAssetSession {
     this.assetStore?.dispose();
     this.assetStore = null;
     this.store?.dispose();
+    this.pageProvider.close();
     this.store = null;
     let firstError: unknown = null;
     if (this.meshOptimizer) {

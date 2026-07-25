@@ -1,0 +1,3 @@
+example	runs	unique_hashes	sha256	diff_percent
+webgpu_lights_dynamic	10	1	1fbed7b4406214fa0037a4f8692248ea1822e0ba625a1c6b5b57c56ce27a002d	0.001
+webgpu_tsl_vfx_flames	10	1	1e0f77723b33db1d2f342700af8cb6dd2b01b51ffcbc3d0150ddf49d2d2ba56c	0.039

@@ -63348,18 +63348,121 @@ class AssetStore {
 var AssetStoreRes = defineResource("assetStore", () => {
   throw new Error("AssetStore not initialized. Call AssetStoreRes.set(world, new AssetStore(loader, meshopt)).");
 });
-// crates/afterglow-web/web/src/workers/codec.ts
-function encodeVarint(n) {
-  const b = [];
-  do {
-    let x = n & 127;
-    n = Math.floor(n / 128);
-    if (n)
-      x |= 128;
-    b.push(x);
-  } while (n);
-  return b;
+// crates/afterglow-web/web/src/engine/assets/bulk-range.ts
+var BULK_RANGE_CAPACITY = 256;
+var BULK_RESPONSE_MAX_BYTES = 4 * 1024 * 1024;
+var BULK_IN_FLIGHT_MAX_BYTES = 8 * 1024 * 1024;
+var HEADER_ALLOWANCE_PER_RANGE = 192;
+var RESPONSE_FIXED_ALLOWANCE = 64;
+var decoder = new TextDecoder("ascii");
+function estimatedBulkResponseBytes(ranges) {
+  let bytes = RESPONSE_FIXED_ALLOWANCE;
+  for (const range2 of ranges)
+    bytes += range2.length + HEADER_ALLOWANCE_PER_RANGE;
+  return bytes;
 }
+function validateRanges(ranges) {
+  if (ranges.length < 1 || ranges.length > BULK_RANGE_CAPACITY)
+    throw new RangeError(`bulk range count must be 1..${BULK_RANGE_CAPACITY}`);
+  if (estimatedBulkResponseBytes(ranges) > BULK_RESPONSE_MAX_BYTES)
+    throw new RangeError("bulk response exceeds 4 MiB capacity");
+  for (let index = 0;index < ranges.length; index++) {
+    const range2 = ranges[index];
+    if (!Number.isSafeInteger(range2.offset) || range2.offset < 0 || !Number.isSafeInteger(range2.length) || range2.length <= 0)
+      throw new RangeError("bulk ranges require positive safe-integer spans");
+    const end = range2.offset + range2.length - 1;
+    if (!Number.isSafeInteger(end))
+      throw new RangeError("bulk range end is unsafe");
+    for (let other = 0;other < index; other++) {
+      const prior = ranges[other];
+      const priorEnd = prior.offset + prior.length - 1;
+      if (range2.offset <= priorEnd && end >= prior.offset)
+        throw new RangeError("bulk ranges must not overlap");
+    }
+  }
+}
+function boundaryFrom(contentType) {
+  const match = /(?:^|;)\s*boundary=(?:"([^"]+)"|([^;\s]+))/i.exec(contentType);
+  const boundary = match?.[1] ?? match?.[2] ?? "";
+  if (!boundary || boundary.length > 128 || /[^\x21-\x7e]/.test(boundary))
+    throw new Error("multipart byte-range response has an invalid boundary");
+  return boundary;
+}
+function matches(bytes, offset, pattern) {
+  if (offset < 0 || offset + pattern.length > bytes.length)
+    return false;
+  for (let index = 0;index < pattern.length; index++)
+    if (bytes[offset + index] !== pattern[index])
+      return false;
+  return true;
+}
+function find(bytes, pattern, start, limit) {
+  const end = Math.min(bytes.length - pattern.length, limit);
+  for (let offset = start;offset <= end; offset++)
+    if (matches(bytes, offset, pattern))
+      return offset;
+  return -1;
+}
+function parseMultipartByteRanges(body, contentType, requested) {
+  validateRanges(requested);
+  if (body.byteLength > BULK_RESPONSE_MAX_BYTES)
+    throw new RangeError("bulk response exceeded 4 MiB capacity");
+  const boundary = new TextEncoder().encode(`--${boundaryFrom(contentType)}`);
+  const headerEndMarker = new Uint8Array([13, 10, 13, 10]);
+  const crlf = new Uint8Array([13, 10]);
+  const output2 = new Array(requested.length);
+  let cursor = 0;
+  for (let index = 0;index < requested.length; index++) {
+    if (!matches(body, cursor, boundary))
+      throw new Error(`multipart boundary missing at part ${index}`);
+    cursor += boundary.length;
+    if (!matches(body, cursor, crlf))
+      throw new Error("multipart part has no header line break");
+    cursor += 2;
+    const headerEnd = find(body, headerEndMarker, cursor, cursor + 1024);
+    if (headerEnd < 0)
+      throw new Error("multipart part headers exceed 1 KiB");
+    const headers = decoder.decode(body.subarray(cursor, headerEnd));
+    const match = /(?:^|\r\n)Content-Range:\s*bytes\s+(\d+)-(\d+)\/(?:\d+|\*)/i.exec(headers);
+    if (!match)
+      throw new Error("multipart part has no valid Content-Range");
+    const start = Number(match[1]);
+    const end = Number(match[2]);
+    const expected = requested[index];
+    if (start !== expected.offset || end !== expected.offset + expected.length - 1)
+      throw new Error(`multipart part ${index} does not match its requested range`);
+    const dataStart = headerEnd + 4;
+    const dataEnd = dataStart + expected.length;
+    if (dataEnd > body.length)
+      throw new Error("multipart part payload is truncated");
+    output2[index] = body.subarray(dataStart, dataEnd);
+    cursor = dataEnd;
+    if (!matches(body, cursor, crlf))
+      throw new Error("multipart part has no trailing line break");
+    cursor += 2;
+  }
+  if (!matches(body, cursor, boundary))
+    throw new Error("multipart closing boundary is missing");
+  cursor += boundary.length;
+  if (body[cursor] !== 45 || body[cursor + 1] !== 45)
+    throw new Error("multipart closing boundary is malformed");
+  return output2;
+}
+async function fetchByteRanges(url, ranges) {
+  validateRanges(ranges);
+  const value = ranges.map((range2) => `${range2.offset}-${range2.offset + range2.length - 1}`).join(",");
+  const response = await fetch(url, { headers: { Range: `bytes=${value}` } });
+  if (response.status !== 206)
+    throw new Error(`bulk asset range expected 206, got ${response.status}: ${url}`);
+  const body = new Uint8Array(await response.arrayBuffer());
+  if (ranges.length === 1) {
+    if (body.byteLength !== ranges[0].length)
+      throw new Error(`asset range returned ${body.byteLength} bytes; expected ${ranges[0].length}: ${url}`);
+    return [body];
+  }
+  return parseMultipartByteRanges(body, response.headers.get("content-type") ?? "", ranges);
+}
+// crates/afterglow-web/web/src/engine/assets/big-parser.ts
 function decodeVarint(bytes, off) {
   let r = 0;
   for (let shift = 0;shift < 56; shift += 7) {
@@ -63372,689 +63475,8 @@ function decodeVarint(bytes, off) {
   }
   throw new Error("postcard varint overflows");
 }
-function concat(...arrs) {
-  const out = new Uint8Array(arrs.reduce((s, a) => s + a.length, 0));
-  let o = 0;
-  for (const a of arrs) {
-    out.set(a, o);
-    o += a.length;
-  }
-  return out;
-}
-function decodeU16(bytes, off) {
-  return decodeVarint(bytes, off);
-}
-function encodeU32(n) {
-  return new Uint8Array(encodeVarint(n));
-}
-function encodeF32(x) {
-  const b = new Uint8Array(4);
-  new DataView(b.buffer).setFloat32(0, x, true);
-  return b;
-}
-function encodeBytes(b) {
-  return concat(encodeVarint(b.length), b);
-}
-function decodeBytes(bytes, off) {
-  const [len, o] = decodeVarint(bytes, off);
-  const end = o + len;
-  if (end > bytes.length)
-    throw new Error("postcard bytes truncated");
-  return [bytes.subarray(o, end), end];
-}
-function encodeF32Vec(vec) {
-  const v = encodeVarint(vec.length);
-  const out = new Uint8Array(v.length + vec.length * 4);
-  out.set(v, 0);
-  const dv = new DataView(out.buffer, out.byteOffset + v.length, vec.length * 4);
-  for (let i = 0;i < vec.length; i++)
-    dv.setFloat32(i * 4, vec[i], true);
-  return out;
-}
-function decodeF32Vec(bytes, off) {
-  const [n, o] = decodeVarint(bytes, off);
-  const end = o + n * 4;
-  if (end > bytes.length)
-    throw new Error("postcard f32 vec truncated");
-  const out = new Float32Array(n);
-  const dv = new DataView(bytes.buffer, bytes.byteOffset + o, n * 4);
-  for (let i = 0;i < n; i++)
-    out[i] = dv.getFloat32(i * 4, true);
-  return [out, end];
-}
-function encodeU32Vec(vec) {
-  const parts = [encodeVarint(vec.length)];
-  for (let i = 0;i < vec.length; i++)
-    parts.push(encodeVarint(vec[i]));
-  return concat(...parts);
-}
-function decodeU32Vec(bytes, off) {
-  const [n, o] = decodeVarint(bytes, off);
-  const out = new Uint32Array(n);
-  let pos = o;
-  for (let i = 0;i < n; i++) {
-    const [val, next] = decodeVarint(bytes, pos);
-    out[i] = val;
-    pos = next;
-  }
-  return [out, pos];
-}
-function unwrapResponse(bytes) {
-  const [variant, off] = decodeVarint(bytes, 0);
-  if (variant === 0) {
-    const [plen, poff] = decodeVarint(bytes, off);
-    if (poff + plen > bytes.length)
-      throw new Error("RPC response truncated");
-    return bytes.subarray(poff, poff + plen);
-  }
-  const [method, moff] = decodeVarint(bytes, off);
-  const [mlen, eoff] = decodeVarint(bytes, moff);
-  if (eoff + mlen > bytes.length)
-    throw new Error("RPC error truncated");
-  const msg = new TextDecoder().decode(Uint8Array.from(bytes.subarray(eoff, eoff + mlen)));
-  throw new Error(`RPC ${variant === 1 ? "server" : "decode"} error (method ${method}): ${msg}`);
-}
-
-// crates/afterglow-web/web/src/workers/async-worker.ts
-class PendingFetch {
-  constructor(url) {
-    this.promise = fetch(url);
-    this.resolved = false;
-    this.bytes = null;
-    this.error = null;
-    this.promise.then(async (resp) => {
-      if (!resp.ok) {
-        this.error = new Error(`fetch ${resp.status}: ${url}`);
-      } else {
-        this.bytes = new Uint8Array(await resp.arrayBuffer());
-      }
-      this.resolved = true;
-    }).catch((e) => {
-      this.error = e;
-      this.resolved = true;
-    });
-  }
-}
-
-class HeadFetch {
-  constructor(url) {
-    this.promise = fetch(url, { method: "HEAD" });
-    this.resolved = false;
-    this.contentLength = null;
-    this.error = null;
-    this.promise.then((resp) => {
-      if (!resp.ok) {
-        this.error = new Error(`HEAD ${resp.status}: ${url}`);
-      } else {
-        const cl = resp.headers.get("Content-Length");
-        this.contentLength = cl ? parseInt(cl, 10) : null;
-      }
-      this.resolved = true;
-    }).catch((e) => {
-      this.error = e;
-      this.resolved = true;
-    });
-  }
-}
-
-class RangeFetch {
-  constructor(url, offset, len) {
-    const start = Number(offset);
-    const end = start + Number(len) - 1;
-    this.promise = fetch(url, { headers: { Range: `bytes=${start}-${end}` } });
-    this.resolved = false;
-    this.bytes = null;
-    this.error = null;
-    this.promise.then(async (resp) => {
-      if (!resp.ok && resp.status !== 206) {
-        this.error = new Error(`range fetch ${resp.status}: ${url}`);
-      } else {
-        this.bytes = new Uint8Array(await resp.arrayBuffer());
-      }
-      this.resolved = true;
-    }).catch((e) => {
-      this.error = e;
-      this.resolved = true;
-    });
-  }
-}
-
-class AsyncWorker {
-  constructor(wasm, baseUrl = "") {
-    this.w = wasm;
-    this.baseUrl = baseUrl;
-    this._memory = null;
-    this.nextFetchId = 1;
-    this._fetchCapacity = 256;
-    this._fetchIds = new Float64Array(this._fetchCapacity);
-    this._fetchIds.fill(-1);
-    this._fetches = new Array(this._fetchCapacity).fill(null);
-    this._pendingFetchCount = 0;
-    this._callCapacity = 256;
-    this._callIds = new Float64Array(this._callCapacity);
-    this._callIds.fill(-1);
-    this._callResolves = new Array(this._callCapacity).fill(null);
-    this._callRejects = new Array(this._callCapacity).fill(null);
-    this._pendingCallCount = 0;
-    this._taskIdCounter = 0;
-    this._pumpScheduled = false;
-    this._completionLimit = 32;
-    this._lastPollCompletions = 0;
-    this._totalCompletions = 0;
-    this._completionLimitHits = 0;
-  }
-  async call(method, args) {
-    const taskId = this._nextTaskId();
-    const slot = taskId % this._callCapacity;
-    if (this._callIds[slot] !== -1)
-      throw new Error("async worker: fixed task capacity exhausted");
-    return new Promise((resolve, reject) => {
-      this._callIds[slot] = taskId;
-      this._callResolves[slot] = resolve;
-      this._callRejects[slot] = reject;
-      this._pendingCallCount++;
-      if (this.serveAsync(method, args, taskId) < 0) {
-        this._releaseCallSlot(slot);
-        reject(new Error("async worker: serveAsync failed"));
-        return;
-      }
-      this._schedulePump();
-    });
-  }
-  _schedulePump() {
-    if (this._pumpScheduled || this._pendingCallCount === 0)
-      return;
-    this._pumpScheduled = true;
-    setTimeout(() => {
-      this._pumpScheduled = false;
-      if (this._pendingCallCount === 0)
-        return;
-      this.poll();
-      this._schedulePump();
-    }, 0);
-  }
-  serveAsync(method, args, taskId = this._nextTaskId()) {
-    const inPtr = this.w.afterglow_wasm_input_ptr();
-    const inSize = this.w.afterglow_wasm_input_size();
-    if (args.length + 12 > inSize) {
-      console.error("async worker: args too large for input scratch");
-      return -1;
-    }
-    const view = new DataView((this._memory || this.w.memory).buffer, inPtr, 12 + args.length);
-    view.setUint32(0, method, true);
-    view.setBigUint64(4, BigInt(taskId), true);
-    new Uint8Array((this._memory || this.w.memory).buffer, inPtr + 12, args.length).set(args);
-    const r = this.w.afterglow_wasm_serve_async(method, inPtr + 12, args.length, BigInt(taskId));
-    if (r < 0)
-      return -1;
-    return taskId;
-  }
-  poll(maxCompletions = this._completionLimit) {
-    this.w.afterglow_wasm_tick();
-    const outPtr = this.w.afterglow_wasm_output_ptr();
-    const outSize = this.w.afterglow_wasm_output_size();
-    const memory = this._memory || this.w.memory;
-    let drained = 0;
-    while (drained < maxCompletions) {
-      const n = this.w.afterglow_wasm_drain_completion(outPtr, outSize);
-      if (n < 0)
-        break;
-      if (n < 8)
-        continue;
-      const taskId = Number(new DataView(memory.buffer, outPtr, 8).getBigUint64(0, true));
-      const responseBytes = new Uint8Array(memory.buffer, outPtr + 8, n - 8).slice();
-      drained++;
-      const slot = taskId % this._callCapacity;
-      if (this._callIds[slot] === taskId) {
-        const resolve = this._callResolves[slot];
-        const reject = this._callRejects[slot];
-        this._releaseCallSlot(slot);
-        try {
-          resolve(unwrapResponse(responseBytes));
-        } catch (e) {
-          reject(e);
-        }
-      }
-    }
-    this._lastPollCompletions = drained;
-    this._totalCompletions += drained;
-    if (drained === maxCompletions)
-      this._completionLimitHits++;
-    return drained;
-  }
-  fetchStart(urlPtr, urlLen) {
-    const url = new TextDecoder().decode(Uint8Array.from(new Uint8Array((this._memory || this.w.memory).buffer, urlPtr, urlLen)));
-    const fullUrl = this._resolveUrl(url);
-    return this._registerFetch(new PendingFetch(fullUrl));
-  }
-  fetchPoll(fetchId, outPtr, outMax) {
-    const pending = this._getFetch(fetchId);
-    if (!pending)
-      return -1;
-    if (!pending.resolved)
-      return -1;
-    this._releaseFetch(fetchId);
-    if (pending.error) {
-      return 0;
-    }
-    if (pending.bytes.length > outMax)
-      return -2;
-    new Uint8Array((this._memory || this.w.memory).buffer, outPtr, outMax).set(pending.bytes);
-    return pending.bytes.length;
-  }
-  headStart(urlPtr, urlLen) {
-    const url = new TextDecoder().decode(Uint8Array.from(new Uint8Array((this._memory || this.w.memory).buffer, urlPtr, urlLen)));
-    const fullUrl = this._resolveUrl(url);
-    return this._registerFetch(new HeadFetch(fullUrl));
-  }
-  headPoll(fetchId, outPtr, outMax) {
-    const pending = this._getFetch(fetchId);
-    if (!pending)
-      return -2;
-    if (!pending.resolved)
-      return -1;
-    this._releaseFetch(fetchId);
-    if (pending.error || pending.contentLength === null || outMax < 8)
-      return -2;
-    new DataView((this._memory || this.w.memory).buffer, outPtr, 8).setBigUint64(0, BigInt(pending.contentLength), true);
-    return 8;
-  }
-  rangeStart(urlPtr, urlLen, offset, len) {
-    const url = new TextDecoder().decode(Uint8Array.from(new Uint8Array((this._memory || this.w.memory).buffer, urlPtr, urlLen)));
-    const fullUrl = this._resolveUrl(url);
-    return this._registerFetch(new RangeFetch(fullUrl, offset, len));
-  }
-  _registerFetch(fetch2) {
-    for (let probe = 0;probe < this._fetchCapacity; probe++) {
-      const id = this.nextFetchId++;
-      const slot = id % this._fetchCapacity;
-      if (this._fetchIds[slot] !== -1)
-        continue;
-      this._fetchIds[slot] = id;
-      this._fetches[slot] = fetch2;
-      this._pendingFetchCount++;
-      return id;
-    }
-    return 0;
-  }
-  _getFetch(id) {
-    const slot = id % this._fetchCapacity;
-    return this._fetchIds[slot] === id ? this._fetches[slot] : null;
-  }
-  _releaseFetch(id) {
-    const slot = id % this._fetchCapacity;
-    if (this._fetchIds[slot] !== id)
-      return;
-    this._fetchIds[slot] = -1;
-    this._fetches[slot] = null;
-    this._pendingFetchCount--;
-  }
-  _releaseCallSlot(slot) {
-    this._callIds[slot] = -1;
-    this._callResolves[slot] = null;
-    this._callRejects[slot] = null;
-    this._pendingCallCount--;
-  }
-  _nextTaskId() {
-    return ++this._taskIdCounter;
-  }
-  _resolveUrl(path) {
-    if (!this.baseUrl)
-      return path;
-    const p = path.startsWith("/") ? path.slice(1) : path;
-    const sep = this.baseUrl.endsWith("/") ? "" : "/";
-    return `${this.baseUrl}${sep}${p}`;
-  }
-}
-function asyncWorkerImports(driver, memory) {
-  driver._memory = memory;
-  return {
-    env: {
-      memory,
-      notify_worker: () => {},
-      performance_now: () => performance.now(),
-      ag_fetch_start: (urlPtr, urlLen) => driver.fetchStart(urlPtr, urlLen),
-      ag_fetch_poll: (fetchId, outPtr, outMax) => driver.fetchPoll(fetchId, outPtr, outMax),
-      ag_fetch_head_start: (urlPtr, urlLen) => driver.headStart(urlPtr, urlLen),
-      ag_fetch_head_poll: (fetchId, outPtr, outMax) => driver.headPoll(fetchId, outPtr, outMax),
-      ag_fetch_range_start: (urlPtr, urlLen, offset, len) => driver.rangeStart(urlPtr, urlLen, offset, len)
-    }
-  };
-}
-
-// crates/afterglow-web/web/src/workers/rpc.ts
-var TIMEOUT_MS = 5000;
-function decodeVarint2(bytes, off) {
-  let r = 0;
-  for (let shift = 0;shift < 35; shift += 7) {
-    if (off >= bytes.length)
-      throw new Error("postcard varint truncated");
-    const b = bytes[off++];
-    if (shift === 28 && b & 240)
-      throw new Error("postcard varint overflows u32");
-    r += (b & 127) * 2 ** shift;
-    if (!(b & 128))
-      return [r >>> 0, off];
-  }
-  throw new Error("postcard varint overflows u32");
-}
-function unwrapResponse2(bytes) {
-  const [variant, off] = decodeVarint2(bytes, 0);
-  if (variant === 0) {
-    const [plen, poff] = decodeVarint2(bytes, off);
-    if (poff + plen > bytes.length)
-      throw new Error("RPC response truncated");
-    return bytes.subarray(poff, poff + plen);
-  }
-  const [method, moff] = decodeVarint2(bytes, off);
-  const [mlen, eoff] = decodeVarint2(bytes, moff);
-  if (eoff + mlen > bytes.length)
-    throw new Error("RPC error truncated");
-  const msg = new TextDecoder().decode(bytes.subarray(eoff, eoff + mlen));
-  throw new Error(`RPC ${variant === 1 ? "server" : "decode"} error (method ${method}): ${msg}`);
-}
-
-class Rpc {
-  static async create({ mainWasmUrl, workerJsUrl, workerWasmUrl, timeoutMs }) {
-    const memory = new WebAssembly.Memory({ shared: true, initial: 256, maximum: 1024 });
-    const worker = new Worker(workerJsUrl, { type: "module" });
-    let rpc = null;
-    try {
-      const { exports: wasm } = await WebAssembly.instantiate(await WebAssembly.compile(await (await fetch(mainWasmUrl)).arrayBuffer()), { env: { memory, notify_worker: () => worker.postMessage("wake") } });
-      wasm.init_ring_buffers();
-      rpc = new Rpc(wasm, memory, worker, { timeoutMs });
-      worker.postMessage({
-        type: "init",
-        sab: memory.buffer,
-        reqBase: wasm.get_request_ptr(),
-        respBase: wasm.get_response_ptr(),
-        bufSize: wasm.get_buffer_size(),
-        wasmUrl: workerWasmUrl
-      });
-      await rpc._initPromise;
-      worker.postMessage({ type: "run" });
-      return rpc;
-    } catch (e) {
-      if (rpc)
-        rpc.terminate();
-      else
-        worker.terminate();
-      throw e;
-    }
-  }
-  constructor(wasm, memory, worker, opts = {}) {
-    this.w = wasm;
-    this.mem = memory;
-    this.worker = worker;
-    this.scratch = wasm.get_scratch_ptr();
-    this.scratchLen = wasm.get_scratch_size();
-    this.pending = null;
-    this._resolve = null;
-    this._reject = null;
-    this._fatal = null;
-    this._terminated = false;
-    this.timeoutMs = opts.timeoutMs ?? TIMEOUT_MS;
-    this._initPromise = new Promise((res, rej) => {
-      this._resolve = res;
-      this._reject = rej;
-    });
-    this._initTimer = setTimeout(() => this._fail(new Error("worker init timeout")), this.timeoutMs);
-    worker.onmessage = (e) => this._onmsg(e.data);
-    worker.onerror = (e) => this._fail(new Error("worker: " + (e && e.message || e)));
-  }
-  _onmsg(d) {
-    if (this._fatal)
-      return;
-    if (d && d.type === "ready") {
-      clearTimeout(this._initTimer);
-      const r = this._resolve;
-      this._resolve = this._reject = null;
-      if (r)
-        r();
-      return;
-    }
-    if (d && d.type === "error") {
-      this._fail(this._reject ? new Error("worker init: " + (d.message || "error")) : new Error(d.message || "worker error"));
-      return;
-    }
-    if (this.pending)
-      this._readResponse();
-  }
-  async call(method, args) {
-    if (this._fatal)
-      throw this._fatal;
-    if (this.pending)
-      throw new Error("RPC busy: one in-flight call at a time");
-    const len = 4 + args.length;
-    if (len > this.scratchLen)
-      throw new Error("request too large for scratch");
-    const view = new Uint8Array(this.mem.buffer, this.scratch, len);
-    view[0] = method & 255;
-    view[1] = method >>> 8 & 255;
-    view[2] = method >>> 16 & 255;
-    view[3] = method >>> 24 & 255;
-    view.set(args, 4);
-    if (this.w.write_frame(this.scratch, len) !== 0)
-      throw new Error("write_frame failed (ring full)");
-    return new Promise((resolve, reject) => {
-      this.pending = { resolve, reject };
-      this.pending.timer = setTimeout(() => this._fail(new Error("RPC timeout")), this.timeoutMs);
-    });
-  }
-  _readResponse() {
-    const n = this.w.read_response(this.scratch, this.scratchLen);
-    const p = this.pending;
-    this.pending = null;
-    if (p)
-      clearTimeout(p.timer);
-    if (!p)
-      return;
-    if (n < 0) {
-      p.reject(new Error("read_response returned " + n));
-      return;
-    }
-    try {
-      p.resolve(unwrapResponse2(new Uint8Array(this.mem.buffer, this.scratch, n)));
-    } catch (e) {
-      p.reject(e);
-    }
-  }
-  _fail(err) {
-    if (this._fatal)
-      return;
-    this._fatal = err;
-    clearTimeout(this._initTimer);
-    if (this._reject) {
-      const r = this._reject;
-      this._resolve = this._reject = null;
-      r(err);
-    }
-    if (this.pending) {
-      const p = this.pending;
-      this.pending = null;
-      clearTimeout(p.timer);
-      p.reject(err);
-    }
-  }
-  terminate() {
-    this._fail(new Error("terminated"));
-    if (!this._terminated) {
-      this._terminated = true;
-      this.worker.terminate();
-    }
-  }
-}
-
-// crates/afterglow-web/web/src/workers/meshopt.client.ts
-class MeshoptClient {
-  rpc;
-  closed = false;
-  static async spawn(workerWasmUrl = "meshopt.wasm", baseUrl = "") {
-    const driver = new AsyncWorker(null, baseUrl);
-    const memory = new WebAssembly.Memory({ shared: true, initial: 256, maximum: 1024 });
-    const { instance: instance2 } = await WebAssembly.instantiate(await (await fetch(workerWasmUrl)).arrayBuffer(), asyncWorkerImports(driver, memory));
-    driver.w = instance2.exports;
-    instance2.exports.afterglow_wasm_init();
-    return new MeshoptClient(driver);
-  }
-  static async spawnThreaded(opts = {}) {
-    const rpc = await Rpc.create({
-      mainWasmUrl: opts.mainWasmUrl ?? "afterglow_web.wasm",
-      workerJsUrl: opts.workerJsUrl ?? "worker.js",
-      workerWasmUrl: opts.workerWasmUrl ?? "meshopt.wasm",
-      timeoutMs: opts.timeoutMs
-    });
-    return new MeshoptClient(rpc);
-  }
-  poll() {
-    this.rpc.poll?.();
-  }
-  constructor(rpc) {
-    this.rpc = rpc;
-  }
-  close() {
-    if (this.closed)
-      return;
-    this.closed = true;
-    this.rpc.terminate?.();
-  }
-  async simplify(indices, positions, positionStride, targetIndexCount, targetError) {
-    const args = concat(encodeU32Vec(indices), encodeF32Vec(positions), encodeU32(positionStride), encodeU32(targetIndexCount), encodeF32(targetError));
-    const resp = await this.rpc.call(0, args);
-    return decodeU32Vec(resp, 0)[0];
-  }
-  async simplifySloppy(indices, positions, positionStride, targetIndexCount, targetError) {
-    const args = concat(encodeU32Vec(indices), encodeF32Vec(positions), encodeU32(positionStride), encodeU32(targetIndexCount), encodeF32(targetError));
-    const resp = await this.rpc.call(1, args);
-    return decodeU32Vec(resp, 0)[0];
-  }
-  async simplifyWithUvs(indices, positions, positionStride, uvs, uvStride, uvWeight, targetIndexCount, targetError) {
-    const args = concat(encodeU32Vec(indices), encodeF32Vec(positions), encodeU32(positionStride), encodeF32Vec(uvs), encodeU32(uvStride), encodeF32(uvWeight), encodeU32(targetIndexCount), encodeF32(targetError));
-    const resp = await this.rpc.call(2, args);
-    return decodeU32Vec(resp, 0)[0];
-  }
-  async optimizeVertexCache(indices, vertexCount) {
-    const args = concat(encodeU32Vec(indices), encodeU32(vertexCount));
-    const resp = await this.rpc.call(3, args);
-    return decodeU32Vec(resp, 0)[0];
-  }
-  async optimizeOverdraw(indices, positions, positionStride, threshold) {
-    const args = concat(encodeU32Vec(indices), encodeF32Vec(positions), encodeU32(positionStride), encodeF32(threshold));
-    const resp = await this.rpc.call(4, args);
-    return decodeU32Vec(resp, 0)[0];
-  }
-  async encodeIndexBuffer(indices, vertexCount) {
-    const args = concat(encodeU32Vec(indices), encodeU32(vertexCount));
-    const resp = await this.rpc.call(5, args);
-    return decodeBytes(resp, 0)[0];
-  }
-  async decodeIndexBuffer(buffer2, indexCount) {
-    const args = concat(encodeBytes(buffer2), encodeU32(indexCount));
-    const resp = await this.rpc.call(6, args);
-    return decodeU32Vec(resp, 0)[0];
-  }
-  async encodeVertexBuffer(vertices, vertexSize) {
-    const args = concat(encodeBytes(vertices), encodeU32(vertexSize));
-    const resp = await this.rpc.call(7, args);
-    return decodeBytes(resp, 0)[0];
-  }
-  async decodeVertexBuffer(buffer2, vertexCount, vertexSize) {
-    const args = concat(encodeBytes(buffer2), encodeU32(vertexCount), encodeU32(vertexSize));
-    const resp = await this.rpc.call(8, args);
-    return decodeBytes(resp, 0)[0];
-  }
-  async generateVertexRemap(indices, vertices, vertexSize) {
-    const args = concat(encodeU32Vec(indices), encodeBytes(vertices), encodeU32(vertexSize));
-    const resp = await this.rpc.call(9, args);
-    return decodeU32Vec(resp, 0)[0];
-  }
-  async stripify(indices, vertexCount, restartIndex) {
-    const args = concat(encodeU32Vec(indices), encodeU32(vertexCount), encodeU32(restartIndex));
-    const resp = await this.rpc.call(10, args);
-    return decodeU32Vec(resp, 0)[0];
-  }
-  async buildMeshlets(indices, positions, positionStride, maxVertices, maxTriangles, coneWeight) {
-    const args = concat(encodeU32Vec(indices), encodeF32Vec(positions), encodeU32(positionStride), encodeU32(maxVertices), encodeU32(maxTriangles), encodeF32(coneWeight));
-    const resp = await this.rpc.call(11, args);
-    return decodeBytes(resp, 0)[0];
-  }
-  async analyzeVertexCache(indices, vertexCount) {
-    const args = concat(encodeU32Vec(indices), encodeU32(vertexCount));
-    const resp = await this.rpc.call(12, args);
-    return decodeF32Vec(resp, 0)[0];
-  }
-  async quantizeHalf(value) {
-    const args = encodeF32(value);
-    const resp = await this.rpc.call(13, args);
-    return decodeU16(resp, 0)[0];
-  }
-}
-
-// crates/afterglow-web/web/src/workers/texture.client.ts
-class TextureClient {
-  rpc;
-  closed = false;
-  static async spawn(workerWasmUrl = "texture.wasm", baseUrl = "") {
-    const driver = new AsyncWorker(null, baseUrl);
-    const memory = new WebAssembly.Memory({ shared: true, initial: 256, maximum: 1024 });
-    const { instance: instance2 } = await WebAssembly.instantiate(await (await fetch(workerWasmUrl)).arrayBuffer(), asyncWorkerImports(driver, memory));
-    driver.w = instance2.exports;
-    instance2.exports.afterglow_wasm_init();
-    return new TextureClient(driver);
-  }
-  static async spawnThreaded(opts = {}) {
-    const rpc = await Rpc.create({
-      mainWasmUrl: opts.mainWasmUrl ?? "afterglow_web.wasm",
-      workerJsUrl: opts.workerJsUrl ?? "worker.js",
-      workerWasmUrl: opts.workerWasmUrl ?? "texture.wasm",
-      timeoutMs: opts.timeoutMs
-    });
-    return new TextureClient(rpc);
-  }
-  poll() {
-    this.rpc.poll?.();
-  }
-  constructor(rpc) {
-    this.rpc = rpc;
-  }
-  close() {
-    if (this.closed)
-      return;
-    this.closed = true;
-    this.rpc.terminate?.();
-  }
-  async transcode(data, targetFormat) {
-    const args = concat(encodeBytes(data), encodeU32(targetFormat));
-    const resp = await this.rpc.call(0, args);
-    return decodeBytes(resp, 0)[0];
-  }
-  async generateMips(data, width, height) {
-    const args = concat(encodeBytes(data), encodeU32(width), encodeU32(height));
-    const resp = await this.rpc.call(1, args);
-    return decodeBytes(resp, 0)[0];
-  }
-  async downscale(data, width, height, targetWidth, targetHeight) {
-    const args = concat(encodeBytes(data), encodeU32(width), encodeU32(height), encodeU32(targetWidth), encodeU32(targetHeight));
-    const resp = await this.rpc.call(2, args);
-    return decodeBytes(resp, 0)[0];
-  }
-}
-
-// crates/afterglow-web/web/src/engine/assets/big-parser.ts
-function decodeVarint3(bytes, off) {
-  let r = 0;
-  for (let shift = 0;shift < 56; shift += 7) {
-    if (off >= bytes.length)
-      throw new Error("postcard varint truncated");
-    const b = bytes[off++];
-    r += (b & 127) * 2 ** shift;
-    if (!(b & 128))
-      return [r, off];
-  }
-  throw new Error("postcard varint overflows");
-}
 function decodeU32(bytes, off) {
-  return decodeVarint3(bytes, off);
+  return decodeVarint(bytes, off);
 }
 function decodeU64(bytes, off) {
   let result = 0n;
@@ -64072,12 +63494,12 @@ function decodeU64(bytes, off) {
   throw new Error("postcard u64 varint overflows");
 }
 function decodeString(bytes, off) {
-  const [len, o] = decodeVarint3(bytes, off);
+  const [len, o] = decodeVarint(bytes, off);
   const str = new TextDecoder().decode(bytes.subarray(o, o + len));
   return [str, o + len];
 }
 function decodeVec(bytes, off, decodeFn) {
-  const [len, o] = decodeVarint3(bytes, off);
+  const [len, o] = decodeVarint(bytes, off);
   const result = [];
   let pos = o;
   for (let i = 0;i < len; i++) {
@@ -64389,15 +63811,10 @@ function createFetchRangeLoader(baseUrl = "") {
         throw new RangeError("asset range must use non-negative safe integers");
       if (len === 0)
         return new Uint8Array(0);
-      const response = await fetch(url(path), {
-        headers: { Range: `bytes=${offset}-${offset + len - 1}` }
-      });
-      if (response.status !== 206)
-        throw new Error(`asset range fetch expected 206, got ${response.status}: ${path}`);
-      const bytes = new Uint8Array(await response.arrayBuffer());
-      if (bytes.byteLength !== len)
-        throw new Error(`asset range returned ${bytes.byteLength} bytes; expected ${len}: ${path}`);
-      return bytes;
+      return (await fetchByteRanges(url(path), [{ offset, length: len }]))[0];
+    },
+    async readBulk(path, ranges) {
+      return fetchByteRanges(url(path), ranges);
     }
   };
 }
@@ -64442,7 +63859,7 @@ class BigContainerAssetLoader {
   }
   poll() {}
 }
-function createPageDataProvider(loader, header, textureWorkers, format, cache2, transcodeQueueCapacity = 64) {
+function expandVtDirectories(header) {
   const directories = new Map;
   for (let assetId = 0;assetId < header.assets.length; assetId++) {
     const asset = header.assets[assetId];
@@ -64471,14 +63888,259 @@ function createPageDataProvider(loader, header, textureWorkers, format, cache2, 
       tailSize: source.tail?.size ?? 0
     });
   }
+  return directories;
+}
+class BoundedBulkReadQueue {
+  loader;
+  slots = new Array(BULK_RANGE_CAPACITY);
+  free = new Uint16Array(BULK_RANGE_CAPACITY);
+  freeTop = 0;
+  queued = [
+    new Uint16Array(BULK_RANGE_CAPACITY),
+    new Uint16Array(BULK_RANGE_CAPACITY)
+  ];
+  heads = new Uint16Array(2);
+  tails = new Uint16Array(2);
+  counts = new Uint16Array(2);
+  ready = new Uint8Array(2);
+  timers = [null, null];
+  inFlight = 0;
+  inFlightBytes = 0;
+  closed = false;
+  reads = 0;
+  totalReadMs = 0;
+  maxReadMs = 0;
+  urgentBatches = 0;
+  qualityBatches = 0;
+  rejected = 0;
+  canceled = 0;
+  stats = {
+    reads: 0,
+    averageReadMs: 0,
+    maxReadMs: 0,
+    queued: 0,
+    inFlight: 0,
+    inFlightBytes: 0,
+    urgentBatches: 0,
+    qualityBatches: 0,
+    rejected: 0,
+    canceled: 0
+  };
+  constructor(loader) {
+    this.loader = loader;
+    for (let index = BULK_RANGE_CAPACITY - 1;index >= 0; index--) {
+      this.slots[index] = {
+        path: "",
+        offset: 0,
+        length: 0,
+        signal: undefined,
+        resolve: null,
+        reject: null
+      };
+      this.free[this.freeTop++] = index;
+    }
+  }
+  tierIndex(tier) {
+    return tier === "urgent" ? 0 : 1;
+  }
+  deadlineMs(tier) {
+    return tier === 0 ? 1 : 100;
+  }
+  read(path, offset, length2, tier, signal) {
+    return new Promise((resolve, reject) => {
+      if (this.closed) {
+        this.rejected++;
+        reject(new Error("bulk page reader is closed"));
+        return;
+      }
+      if (signal?.aborted) {
+        this.canceled++;
+        reject(new Error("VT page load canceled before batching"));
+        return;
+      }
+      if (this.freeTop === 0) {
+        this.rejected++;
+        reject(new Error("bulk page queue capacity exceeded"));
+        return;
+      }
+      const slotIndex = this.free[--this.freeTop];
+      const slot = this.slots[slotIndex];
+      slot.path = path;
+      slot.offset = offset;
+      slot.length = length2;
+      slot.signal = signal;
+      slot.resolve = resolve;
+      slot.reject = reject;
+      const lane = this.tierIndex(tier);
+      this.queued[lane][this.tails[lane]] = slotIndex;
+      this.tails[lane] = (this.tails[lane] + 1) % BULK_RANGE_CAPACITY;
+      this.counts[lane]++;
+      if (this.timers[lane] === null) {
+        this.timers[lane] = setTimeout(() => {
+          this.timers[lane] = null;
+          this.ready[lane] = 1;
+          this.pump();
+        }, this.deadlineMs(lane));
+      }
+      if (this.counts[lane] === BULK_RANGE_CAPACITY) {
+        this.ready[lane] = 1;
+        this.pump();
+      }
+    });
+  }
+  release(slotIndex) {
+    const slot = this.slots[slotIndex];
+    slot.path = "";
+    slot.signal = undefined;
+    slot.resolve = null;
+    slot.reject = null;
+    this.free[this.freeTop++] = slotIndex;
+  }
+  pop(lane) {
+    const index = this.queued[lane][this.heads[lane]];
+    this.heads[lane] = (this.heads[lane] + 1) % BULK_RANGE_CAPACITY;
+    this.counts[lane]--;
+    return index;
+  }
+  clearLaneTimer(lane) {
+    const timer = this.timers[lane];
+    if (timer !== null)
+      clearTimeout(timer);
+    this.timers[lane] = null;
+  }
+  pump() {
+    while (this.inFlight < 2 && this.inFlightBytes < BULK_IN_FLIGHT_MAX_BYTES) {
+      const lane = this.ready[0] !== 0 && this.counts[0] !== 0 ? 0 : this.ready[1] !== 0 && this.counts[1] !== 0 ? 1 : -1;
+      if (lane < 0)
+        return;
+      const indices = [];
+      const ranges = [];
+      while (this.counts[lane] !== 0 && indices.length < BULK_RANGE_CAPACITY) {
+        const slotIndex = this.queued[lane][this.heads[lane]];
+        const slot = this.slots[slotIndex];
+        if (slot.signal?.aborted) {
+          this.pop(lane);
+          this.canceled++;
+          slot.reject?.(new Error("VT page load canceled while batched"));
+          this.release(slotIndex);
+          continue;
+        }
+        const candidate = { offset: slot.offset, length: slot.length };
+        ranges.push(candidate);
+        if (estimatedBulkResponseBytes(ranges) > BULK_RESPONSE_MAX_BYTES) {
+          ranges.pop();
+          if (indices.length === 0) {
+            this.pop(lane);
+            this.rejected++;
+            slot.reject?.(new RangeError("one VT page exceeds bulk response capacity"));
+            this.release(slotIndex);
+            continue;
+          }
+          break;
+        }
+        indices.push(this.pop(lane));
+      }
+      if (this.counts[lane] === 0) {
+        this.ready[lane] = 0;
+        this.clearLaneTimer(lane);
+      }
+      if (indices.length === 0)
+        continue;
+      const expectedBytes = estimatedBulkResponseBytes(ranges);
+      if (this.inFlightBytes + expectedBytes > BULK_IN_FLIGHT_MAX_BYTES)
+        return;
+      this.dispatch(indices, ranges, expectedBytes, lane);
+    }
+  }
+  dispatch(indices, ranges, expectedBytes, lane) {
+    this.inFlight++;
+    this.inFlightBytes += expectedBytes;
+    if (lane === 0)
+      this.urgentBatches++;
+    else
+      this.qualityBatches++;
+    const startedAt = performance.now();
+    const request = this.loader.readBulk ? this.loader.readBulk(ranges) : Promise.all(indices.map((slotIndex, index) => {
+      const slot = this.slots[slotIndex];
+      const range2 = ranges[index];
+      return this.loader.read(`${slot.path}.big`, range2.offset, range2.length);
+    }));
+    request.then((parts) => {
+      if (parts.length !== indices.length)
+        throw new Error(`bulk response returned ${parts.length} parts; expected ${indices.length}`);
+      const readMs = performance.now() - startedAt;
+      this.reads++;
+      this.totalReadMs += readMs;
+      this.maxReadMs = Math.max(this.maxReadMs, readMs);
+      for (let index = 0;index < indices.length; index++) {
+        const slotIndex = indices[index];
+        const slot = this.slots[slotIndex];
+        const bytes = parts[index];
+        if (bytes.byteLength !== slot.length)
+          slot.reject?.(new Error(`bulk page returned ${bytes.byteLength} bytes; expected ${slot.length}`));
+        else if (this.closed || slot.signal?.aborted) {
+          this.canceled++;
+          slot.reject?.(new Error("VT page load canceled after bulk read"));
+        } else
+          slot.resolve?.(bytes);
+        this.release(slotIndex);
+      }
+    }).catch((error2) => {
+      for (const slotIndex of indices) {
+        this.slots[slotIndex].reject?.(error2);
+        this.release(slotIndex);
+      }
+    }).finally(() => {
+      this.inFlight--;
+      this.inFlightBytes -= expectedBytes;
+      this.pump();
+    });
+  }
+  close() {
+    if (this.closed)
+      return;
+    this.closed = true;
+    for (let lane = 0;lane < 2; lane++) {
+      this.clearLaneTimer(lane);
+      while (this.counts[lane] !== 0) {
+        const slotIndex = this.pop(lane);
+        this.canceled++;
+        this.slots[slotIndex].reject?.(new Error("bulk page reader closed"));
+        this.release(slotIndex);
+      }
+      this.ready[lane] = 0;
+    }
+  }
+  getStats() {
+    const stats = this.stats;
+    stats.reads = this.reads;
+    stats.averageReadMs = this.reads === 0 ? 0 : this.totalReadMs / this.reads;
+    stats.maxReadMs = this.maxReadMs;
+    stats.queued = this.counts[0] + this.counts[1];
+    stats.inFlight = this.inFlight;
+    stats.inFlightBytes = this.inFlightBytes;
+    stats.urgentBatches = this.urgentBatches;
+    stats.qualityBatches = this.qualityBatches;
+    stats.rejected = this.rejected;
+    stats.canceled = this.canceled;
+    return stats;
+  }
+}
+function createPageDataProvider(loader, header, textureWorkers, format, cache2, transcodeQueueCapacity = 64) {
+  const directories = expandVtDirectories(header);
   const transcoder = new BoundedTranscoderPool(textureWorkers, transcodeQueueCapacity);
-  let reads = 0;
-  let totalReadMs = 0;
-  let maxReadMs = 0;
+  const bulkReads = new BoundedBulkReadQueue(loader);
   const stats = {
     reads: 0,
     averageReadMs: 0,
     maxReadMs: 0,
+    bulkQueued: 0,
+    bulkInFlight: 0,
+    bulkInFlightBytes: 0,
+    urgentBatches: 0,
+    qualityBatches: 0,
+    bulkRejected: 0,
+    bulkCanceled: 0,
     workerCount: textureWorkers.length,
     activeTranscodes: 0,
     queuedTranscodes: 0,
@@ -64535,12 +64197,7 @@ function createPageDataProvider(loader, header, textureWorkers, format, cache2, 
       if (cached && cached.byteLength === expectedBytes)
         return cached;
     }
-    const readStartedAt = performance.now();
-    const pageData = await loader.read(path + ".big", offset, size);
-    const readMs = performance.now() - readStartedAt;
-    reads++;
-    totalReadMs += readMs;
-    maxReadMs = Math.max(maxReadMs, readMs);
+    const pageData = await bulkReads.read(path, offset, size, req.batchTier ?? "urgent", signal);
     if (signal?.aborted)
       throw new Error("VT page load canceled after read");
     if (directory.encoding === "RawRgba8") {
@@ -64570,11 +64227,20 @@ function createPageDataProvider(loader, header, textureWorkers, format, cache2, 
       cache2.put(cacheKey, payload);
     return payload;
   };
+  provider.close = () => bulkReads.close();
   provider.getStats = () => {
     const transcode = transcoder.getStats();
-    stats.reads = reads;
-    stats.averageReadMs = reads === 0 ? 0 : totalReadMs / reads;
-    stats.maxReadMs = maxReadMs;
+    const read = bulkReads.getStats();
+    stats.reads = read.reads;
+    stats.averageReadMs = read.averageReadMs;
+    stats.maxReadMs = read.maxReadMs;
+    stats.bulkQueued = read.queued;
+    stats.bulkInFlight = read.inFlight;
+    stats.bulkInFlightBytes = read.inFlightBytes;
+    stats.urgentBatches = read.urgentBatches;
+    stats.qualityBatches = read.qualityBatches;
+    stats.bulkRejected = read.rejected;
+    stats.bulkCanceled = read.canceled;
     stats.workerCount = transcode.workerCount;
     stats.activeTranscodes = transcode.active;
     stats.queuedTranscodes = transcode.queued;
@@ -64607,6 +64273,807 @@ function createPageDataProvider(loader, header, textureWorkers, format, cache2, 
     return stats;
   };
   return provider;
+}
+
+// crates/afterglow-web/web/src/engine/assets/platform-range-loader.ts
+var ARENA_SLOT_BYTES = 4 * 1024 * 1024;
+var COPY_CHUNK_BYTES = 512 * 1024;
+var MAX_BULK_SPANS = 256;
+function nativeOps() {
+  if (typeof Deno !== "object" || Deno === null)
+    return null;
+  const ops = Deno.core?.ops;
+  return typeof ops?.op_native_asset_size === "function" && typeof ops.op_native_asset_read_handle === "function" && typeof ops.op_native_asset_read_many_handle === "function" && typeof ops.op_afterglow_arena_view === "function" ? ops : null;
+}
+function validateRead(offset, length2) {
+  if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length2) || length2 < 0)
+    throw new RangeError("asset range must use non-negative safe integers");
+}
+function viewHandle(ops, words) {
+  if (words.length < 4)
+    throw new Error("native asset worker returned truncated handle metadata");
+  const region = words[0] ?? -1;
+  const slot = words[1] ?? -1;
+  const length2 = words[2] ?? -1;
+  const generation = words[3] ?? -1;
+  if (![region, slot, length2, generation].every(Number.isInteger))
+    throw new Error("native asset worker returned invalid handle metadata");
+  const bytes = ops.op_afterglow_arena_view({ region, slot, length: length2, generation });
+  if (bytes.byteLength !== length2)
+    throw new Error("native asset arena view length mismatch");
+  return bytes;
+}
+function packSpans(ranges) {
+  if (ranges.length === 0 || ranges.length > MAX_BULK_SPANS)
+    throw new RangeError(`native bulk read requires 1..${MAX_BULK_SPANS} spans`);
+  const packed = new Uint8Array(ranges.length * 12);
+  const view = new DataView(packed.buffer);
+  let total = 0;
+  for (let index = 0;index < ranges.length; index++) {
+    const range2 = ranges[index];
+    validateRead(range2.offset, range2.length);
+    total += range2.length;
+    if (!Number.isSafeInteger(total) || total > ARENA_SLOT_BYTES)
+      throw new RangeError(`native bulk read exceeds ${ARENA_SLOT_BYTES} bytes`);
+    view.setBigUint64(index * 12, BigInt(range2.offset), true);
+    view.setUint32(index * 12 + 8, range2.length, true);
+  }
+  return packed;
+}
+function createNativeRangeLoader(ops) {
+  const identity = async (path) => ({
+    size: await ops.op_native_asset_size(path),
+    etag: null,
+    lastModified: null
+  });
+  const read = async (path, offset, length2) => {
+    validateRead(offset, length2);
+    if (length2 === 0)
+      return new Uint8Array(0);
+    if (length2 <= ARENA_SLOT_BYTES) {
+      return viewHandle(ops, await ops.op_native_asset_read_handle(path, BigInt(offset), length2));
+    }
+    const output2 = new Uint8Array(length2);
+    let written = 0;
+    while (written < length2) {
+      const requested = Math.min(COPY_CHUNK_BYTES, length2 - written);
+      const chunk = await ops.op_native_asset_read_copy(path, BigInt(offset + written), requested);
+      output2.set(chunk, written);
+      written += chunk.byteLength;
+      if (chunk.byteLength !== requested)
+        return output2.subarray(0, written);
+    }
+    return output2;
+  };
+  return {
+    async load(path) {
+      const size = await ops.op_native_asset_size(path);
+      return read(path, 0, size);
+    },
+    async size(path) {
+      return ops.op_native_asset_size(path);
+    },
+    identity,
+    read,
+    async readBulk(path, ranges) {
+      const metadata = await ops.op_native_asset_read_many_handle(path, packSpans(ranges));
+      if (metadata.length !== 4 + ranges.length)
+        throw new Error("native bulk read returned invalid part metadata");
+      const bytes = viewHandle(ops, metadata);
+      const parts = new Array(ranges.length);
+      let offset = 0;
+      for (let index = 0;index < ranges.length; index++) {
+        const length2 = metadata[4 + index] ?? -1;
+        if (!Number.isInteger(length2) || length2 < 0 || offset + length2 > bytes.byteLength)
+          throw new Error("native bulk read returned invalid part length");
+        parts[index] = bytes.subarray(offset, offset + length2);
+        offset += length2;
+      }
+      if (offset !== bytes.byteLength)
+        throw new Error("native bulk read metadata does not cover its arena view");
+      return parts;
+    }
+  };
+}
+function createPlatformRangeLoader(baseUrl = "") {
+  const ops = nativeOps();
+  return ops === null ? createFetchRangeLoader(baseUrl) : createNativeRangeLoader(ops);
+}
+
+// crates/afterglow-web/web/src/workers/codec.ts
+function encodeVarint(n) {
+  const b = [];
+  do {
+    let x = n & 127;
+    n = Math.floor(n / 128);
+    if (n)
+      x |= 128;
+    b.push(x);
+  } while (n);
+  return b;
+}
+function decodeVarint2(bytes, off) {
+  let r = 0;
+  for (let shift = 0;shift < 56; shift += 7) {
+    if (off >= bytes.length)
+      throw new Error("postcard varint truncated");
+    const b = bytes[off++];
+    r += (b & 127) * 2 ** shift;
+    if (!(b & 128))
+      return [r, off];
+  }
+  throw new Error("postcard varint overflows");
+}
+function concat(...arrs) {
+  const out = new Uint8Array(arrs.reduce((s, a) => s + a.length, 0));
+  let o = 0;
+  for (const a of arrs) {
+    out.set(a, o);
+    o += a.length;
+  }
+  return out;
+}
+function decodeU16(bytes, off) {
+  return decodeVarint2(bytes, off);
+}
+function encodeU32(n) {
+  return new Uint8Array(encodeVarint(n));
+}
+function encodeF32(x) {
+  const b = new Uint8Array(4);
+  new DataView(b.buffer).setFloat32(0, x, true);
+  return b;
+}
+function encodeBytes(b) {
+  return concat(encodeVarint(b.length), b);
+}
+function decodeBytes(bytes, off) {
+  const [len, o] = decodeVarint2(bytes, off);
+  const end = o + len;
+  if (end > bytes.length)
+    throw new Error("postcard bytes truncated");
+  return [bytes.subarray(o, end), end];
+}
+function encodeF32Vec(vec) {
+  const v = encodeVarint(vec.length);
+  const out = new Uint8Array(v.length + vec.length * 4);
+  out.set(v, 0);
+  const dv = new DataView(out.buffer, out.byteOffset + v.length, vec.length * 4);
+  for (let i = 0;i < vec.length; i++)
+    dv.setFloat32(i * 4, vec[i], true);
+  return out;
+}
+function decodeF32Vec(bytes, off) {
+  const [n, o] = decodeVarint2(bytes, off);
+  const end = o + n * 4;
+  if (end > bytes.length)
+    throw new Error("postcard f32 vec truncated");
+  const out = new Float32Array(n);
+  const dv = new DataView(bytes.buffer, bytes.byteOffset + o, n * 4);
+  for (let i = 0;i < n; i++)
+    out[i] = dv.getFloat32(i * 4, true);
+  return [out, end];
+}
+function encodeU32Vec(vec) {
+  const parts = [encodeVarint(vec.length)];
+  for (let i = 0;i < vec.length; i++)
+    parts.push(encodeVarint(vec[i]));
+  return concat(...parts);
+}
+function decodeU32Vec(bytes, off) {
+  const [n, o] = decodeVarint2(bytes, off);
+  const out = new Uint32Array(n);
+  let pos = o;
+  for (let i = 0;i < n; i++) {
+    const [val, next] = decodeVarint2(bytes, pos);
+    out[i] = val;
+    pos = next;
+  }
+  return [out, pos];
+}
+function unwrapResponse(bytes) {
+  const [variant, off] = decodeVarint2(bytes, 0);
+  if (variant === 0) {
+    const [plen, poff] = decodeVarint2(bytes, off);
+    if (poff + plen > bytes.length)
+      throw new Error("RPC response truncated");
+    return bytes.subarray(poff, poff + plen);
+  }
+  const [method, moff] = decodeVarint2(bytes, off);
+  const [mlen, eoff] = decodeVarint2(bytes, moff);
+  if (eoff + mlen > bytes.length)
+    throw new Error("RPC error truncated");
+  const msg = new TextDecoder().decode(Uint8Array.from(bytes.subarray(eoff, eoff + mlen)));
+  throw new Error(`RPC ${variant === 1 ? "server" : "decode"} error (method ${method}): ${msg}`);
+}
+
+// crates/afterglow-web/web/src/workers/async-worker.ts
+class PendingFetch {
+  constructor(url) {
+    this.promise = fetch(url);
+    this.resolved = false;
+    this.bytes = null;
+    this.error = null;
+    this.promise.then(async (resp) => {
+      if (!resp.ok) {
+        this.error = new Error(`fetch ${resp.status}: ${url}`);
+      } else {
+        this.bytes = new Uint8Array(await resp.arrayBuffer());
+      }
+      this.resolved = true;
+    }).catch((e) => {
+      this.error = e;
+      this.resolved = true;
+    });
+  }
+}
+
+class HeadFetch {
+  constructor(url) {
+    this.promise = fetch(url, { method: "HEAD" });
+    this.resolved = false;
+    this.contentLength = null;
+    this.error = null;
+    this.promise.then((resp) => {
+      if (!resp.ok) {
+        this.error = new Error(`HEAD ${resp.status}: ${url}`);
+      } else {
+        const cl = resp.headers.get("Content-Length");
+        this.contentLength = cl ? parseInt(cl, 10) : null;
+      }
+      this.resolved = true;
+    }).catch((e) => {
+      this.error = e;
+      this.resolved = true;
+    });
+  }
+}
+
+class RangeFetch {
+  constructor(url, offset, len) {
+    const start = Number(offset);
+    const end = start + Number(len) - 1;
+    this.promise = fetch(url, { headers: { Range: `bytes=${start}-${end}` } });
+    this.resolved = false;
+    this.bytes = null;
+    this.error = null;
+    this.promise.then(async (resp) => {
+      if (!resp.ok && resp.status !== 206) {
+        this.error = new Error(`range fetch ${resp.status}: ${url}`);
+      } else {
+        this.bytes = new Uint8Array(await resp.arrayBuffer());
+      }
+      this.resolved = true;
+    }).catch((e) => {
+      this.error = e;
+      this.resolved = true;
+    });
+  }
+}
+
+class AsyncWorker {
+  constructor(wasm, baseUrl = "") {
+    this.w = wasm;
+    this.baseUrl = baseUrl;
+    this._memory = null;
+    this.nextFetchId = 1;
+    this._fetchCapacity = 256;
+    this._fetchIds = new Float64Array(this._fetchCapacity);
+    this._fetchIds.fill(-1);
+    this._fetches = new Array(this._fetchCapacity).fill(null);
+    this._pendingFetchCount = 0;
+    this._callCapacity = 256;
+    this._callIds = new Float64Array(this._callCapacity);
+    this._callIds.fill(-1);
+    this._callResolves = new Array(this._callCapacity).fill(null);
+    this._callRejects = new Array(this._callCapacity).fill(null);
+    this._pendingCallCount = 0;
+    this._taskIdCounter = 0;
+    this._pumpScheduled = false;
+    this._completionLimit = 32;
+    this._lastPollCompletions = 0;
+    this._totalCompletions = 0;
+    this._completionLimitHits = 0;
+  }
+  async call(method, args) {
+    const taskId = this._nextTaskId();
+    const slot = taskId % this._callCapacity;
+    if (this._callIds[slot] !== -1)
+      throw new Error("async worker: fixed task capacity exhausted");
+    return new Promise((resolve, reject) => {
+      this._callIds[slot] = taskId;
+      this._callResolves[slot] = resolve;
+      this._callRejects[slot] = reject;
+      this._pendingCallCount++;
+      if (this.serveAsync(method, args, taskId) < 0) {
+        this._releaseCallSlot(slot);
+        reject(new Error("async worker: serveAsync failed"));
+        return;
+      }
+      this._schedulePump();
+    });
+  }
+  _schedulePump() {
+    if (this._pumpScheduled || this._pendingCallCount === 0)
+      return;
+    this._pumpScheduled = true;
+    setTimeout(() => {
+      this._pumpScheduled = false;
+      if (this._pendingCallCount === 0)
+        return;
+      this.poll();
+      this._schedulePump();
+    }, 0);
+  }
+  serveAsync(method, args, taskId = this._nextTaskId()) {
+    const inPtr = this.w.afterglow_wasm_input_ptr();
+    const inSize = this.w.afterglow_wasm_input_size();
+    if (args.length + 12 > inSize) {
+      console.error("async worker: args too large for input scratch");
+      return -1;
+    }
+    const view = new DataView((this._memory || this.w.memory).buffer, inPtr, 12 + args.length);
+    view.setUint32(0, method, true);
+    view.setBigUint64(4, BigInt(taskId), true);
+    new Uint8Array((this._memory || this.w.memory).buffer, inPtr + 12, args.length).set(args);
+    const r = this.w.afterglow_wasm_serve_async(method, inPtr + 12, args.length, BigInt(taskId));
+    if (r < 0)
+      return -1;
+    return taskId;
+  }
+  poll(maxCompletions = this._completionLimit) {
+    this.w.afterglow_wasm_tick();
+    const outPtr = this.w.afterglow_wasm_output_ptr();
+    const outSize = this.w.afterglow_wasm_output_size();
+    const memory = this._memory || this.w.memory;
+    let drained = 0;
+    while (drained < maxCompletions) {
+      const n = this.w.afterglow_wasm_drain_completion(outPtr, outSize);
+      if (n < 0)
+        break;
+      if (n < 8)
+        continue;
+      const taskId = Number(new DataView(memory.buffer, outPtr, 8).getBigUint64(0, true));
+      const responseBytes = new Uint8Array(memory.buffer, outPtr + 8, n - 8).slice();
+      drained++;
+      const slot = taskId % this._callCapacity;
+      if (this._callIds[slot] === taskId) {
+        const resolve = this._callResolves[slot];
+        const reject = this._callRejects[slot];
+        this._releaseCallSlot(slot);
+        try {
+          resolve(unwrapResponse(responseBytes));
+        } catch (e) {
+          reject(e);
+        }
+      }
+    }
+    this._lastPollCompletions = drained;
+    this._totalCompletions += drained;
+    if (drained === maxCompletions)
+      this._completionLimitHits++;
+    return drained;
+  }
+  fetchStart(urlPtr, urlLen) {
+    const url = new TextDecoder().decode(Uint8Array.from(new Uint8Array((this._memory || this.w.memory).buffer, urlPtr, urlLen)));
+    const fullUrl = this._resolveUrl(url);
+    return this._registerFetch(new PendingFetch(fullUrl));
+  }
+  fetchPoll(fetchId, outPtr, outMax) {
+    const pending = this._getFetch(fetchId);
+    if (!pending)
+      return -1;
+    if (!pending.resolved)
+      return -1;
+    this._releaseFetch(fetchId);
+    if (pending.error) {
+      return 0;
+    }
+    if (pending.bytes.length > outMax)
+      return -2;
+    new Uint8Array((this._memory || this.w.memory).buffer, outPtr, outMax).set(pending.bytes);
+    return pending.bytes.length;
+  }
+  headStart(urlPtr, urlLen) {
+    const url = new TextDecoder().decode(Uint8Array.from(new Uint8Array((this._memory || this.w.memory).buffer, urlPtr, urlLen)));
+    const fullUrl = this._resolveUrl(url);
+    return this._registerFetch(new HeadFetch(fullUrl));
+  }
+  headPoll(fetchId, outPtr, outMax) {
+    const pending = this._getFetch(fetchId);
+    if (!pending)
+      return -2;
+    if (!pending.resolved)
+      return -1;
+    this._releaseFetch(fetchId);
+    if (pending.error || pending.contentLength === null || outMax < 8)
+      return -2;
+    new DataView((this._memory || this.w.memory).buffer, outPtr, 8).setBigUint64(0, BigInt(pending.contentLength), true);
+    return 8;
+  }
+  rangeStart(urlPtr, urlLen, offset, len) {
+    const url = new TextDecoder().decode(Uint8Array.from(new Uint8Array((this._memory || this.w.memory).buffer, urlPtr, urlLen)));
+    const fullUrl = this._resolveUrl(url);
+    return this._registerFetch(new RangeFetch(fullUrl, offset, len));
+  }
+  _registerFetch(fetch2) {
+    for (let probe = 0;probe < this._fetchCapacity; probe++) {
+      const id = this.nextFetchId++;
+      const slot = id % this._fetchCapacity;
+      if (this._fetchIds[slot] !== -1)
+        continue;
+      this._fetchIds[slot] = id;
+      this._fetches[slot] = fetch2;
+      this._pendingFetchCount++;
+      return id;
+    }
+    return 0;
+  }
+  _getFetch(id) {
+    const slot = id % this._fetchCapacity;
+    return this._fetchIds[slot] === id ? this._fetches[slot] : null;
+  }
+  _releaseFetch(id) {
+    const slot = id % this._fetchCapacity;
+    if (this._fetchIds[slot] !== id)
+      return;
+    this._fetchIds[slot] = -1;
+    this._fetches[slot] = null;
+    this._pendingFetchCount--;
+  }
+  _releaseCallSlot(slot) {
+    this._callIds[slot] = -1;
+    this._callResolves[slot] = null;
+    this._callRejects[slot] = null;
+    this._pendingCallCount--;
+  }
+  _nextTaskId() {
+    return ++this._taskIdCounter;
+  }
+  _resolveUrl(path) {
+    if (!this.baseUrl)
+      return path;
+    const p = path.startsWith("/") ? path.slice(1) : path;
+    const sep = this.baseUrl.endsWith("/") ? "" : "/";
+    return `${this.baseUrl}${sep}${p}`;
+  }
+}
+function asyncWorkerImports(driver, memory) {
+  driver._memory = memory;
+  return {
+    env: {
+      memory,
+      notify_worker: () => {},
+      performance_now: () => performance.now(),
+      ag_fetch_start: (urlPtr, urlLen) => driver.fetchStart(urlPtr, urlLen),
+      ag_fetch_poll: (fetchId, outPtr, outMax) => driver.fetchPoll(fetchId, outPtr, outMax),
+      ag_fetch_head_start: (urlPtr, urlLen) => driver.headStart(urlPtr, urlLen),
+      ag_fetch_head_poll: (fetchId, outPtr, outMax) => driver.headPoll(fetchId, outPtr, outMax),
+      ag_fetch_range_start: (urlPtr, urlLen, offset, len) => driver.rangeStart(urlPtr, urlLen, offset, len)
+    }
+  };
+}
+
+// crates/afterglow-web/web/src/workers/rpc.ts
+var TIMEOUT_MS = 5000;
+
+class Rpc {
+  static async create({ mainWasmUrl, workerJsUrl, workerWasmUrl, timeoutMs, workerInit = null }) {
+    const memory = new WebAssembly.Memory({ shared: true, initial: 256, maximum: 1024 });
+    const worker = new Worker(workerJsUrl, { type: "module" });
+    let rpc = null;
+    try {
+      const { exports: wasm } = await WebAssembly.instantiate(await WebAssembly.compile(await (await fetch(mainWasmUrl)).arrayBuffer()), { env: { memory, notify_worker: () => worker.postMessage("wake") } });
+      wasm.init_ring_buffers();
+      rpc = new Rpc(wasm, memory, worker, { timeoutMs });
+      worker.postMessage({
+        type: "init",
+        sab: memory.buffer,
+        reqBase: wasm.get_request_ptr(),
+        respBase: wasm.get_response_ptr(),
+        bufSize: wasm.get_buffer_size(),
+        wasmUrl: workerWasmUrl,
+        workerInit
+      });
+      await rpc._initPromise;
+      worker.postMessage({ type: "run" });
+      return rpc;
+    } catch (e) {
+      if (rpc)
+        rpc.terminate();
+      else
+        worker.terminate();
+      throw e;
+    }
+  }
+  constructor(wasm, memory, worker, opts = {}) {
+    this.w = wasm;
+    this.mem = memory;
+    this.worker = worker;
+    this.scratch = wasm.get_scratch_ptr();
+    this.scratchLen = wasm.get_scratch_size();
+    this.pending = null;
+    this._resolve = null;
+    this._reject = null;
+    this._fatal = null;
+    this._terminated = false;
+    this.timeoutMs = opts.timeoutMs ?? TIMEOUT_MS;
+    this._initPromise = new Promise((res, rej) => {
+      this._resolve = res;
+      this._reject = rej;
+    });
+    this._initTimer = setTimeout(() => this._fail(new Error("worker init timeout")), this.timeoutMs);
+    worker.onmessage = (e) => this._onmsg(e.data);
+    worker.onerror = (e) => this._fail(new Error("worker: " + (e && e.message || e)));
+  }
+  _onmsg(d) {
+    if (this._fatal)
+      return;
+    if (d && d.type === "ready") {
+      clearTimeout(this._initTimer);
+      const r = this._resolve;
+      this._resolve = this._reject = null;
+      if (r)
+        r();
+      return;
+    }
+    if (d && d.type === "error") {
+      this._fail(this._reject ? new Error("worker init: " + (d.message || "error")) : new Error(d.message || "worker error"));
+      return;
+    }
+    if (this.pending)
+      this._readResponse();
+  }
+  async call(method, args) {
+    if (this._fatal)
+      throw this._fatal;
+    if (this.pending)
+      throw new Error("RPC busy: one in-flight call at a time");
+    const len = 4 + args.length;
+    if (len > this.scratchLen)
+      throw new Error("request too large for scratch");
+    const view = new Uint8Array(this.mem.buffer, this.scratch, len);
+    view[0] = method & 255;
+    view[1] = method >>> 8 & 255;
+    view[2] = method >>> 16 & 255;
+    view[3] = method >>> 24 & 255;
+    view.set(args, 4);
+    if (this.w.write_frame(this.scratch, len) !== 0)
+      throw new Error("write_frame failed (ring full)");
+    return new Promise((resolve, reject) => {
+      this.pending = { resolve, reject };
+      this.pending.timer = setTimeout(() => this._fail(new Error("RPC timeout")), this.timeoutMs);
+    });
+  }
+  _readResponse() {
+    const n = this.w.read_response(this.scratch, this.scratchLen);
+    const p = this.pending;
+    this.pending = null;
+    if (p)
+      clearTimeout(p.timer);
+    if (!p)
+      return;
+    if (n < 0) {
+      p.reject(new Error("read_response returned " + n));
+      return;
+    }
+    try {
+      p.resolve(unwrapResponse(new Uint8Array(this.mem.buffer, this.scratch, n)));
+    } catch (e) {
+      p.reject(e);
+    }
+  }
+  _fail(err) {
+    if (this._fatal)
+      return;
+    this._fatal = err;
+    clearTimeout(this._initTimer);
+    if (this._reject) {
+      const r = this._reject;
+      this._resolve = this._reject = null;
+      r(err);
+    }
+    if (this.pending) {
+      const p = this.pending;
+      this.pending = null;
+      clearTimeout(p.timer);
+      p.reject(err);
+    }
+  }
+  terminate() {
+    this._fail(new Error("terminated"));
+    if (!this._terminated) {
+      this._terminated = true;
+      this.worker.terminate();
+    }
+  }
+}
+
+// crates/afterglow-web/web/src/workers/meshopt.client.ts
+class MeshoptClient {
+  rpc;
+  closed = false;
+  static async spawn(workerWasmUrl = "meshopt.wasm", baseUrl = "") {
+    const driver = new AsyncWorker(null, baseUrl);
+    const memory = new WebAssembly.Memory({ shared: true, initial: 256, maximum: 1024 });
+    const { instance: instance2 } = await WebAssembly.instantiate(await (await fetch(workerWasmUrl)).arrayBuffer(), asyncWorkerImports(driver, memory));
+    driver.w = instance2.exports;
+    instance2.exports.afterglow_wasm_init();
+    return new MeshoptClient(driver);
+  }
+  static async spawnThreaded(opts = {}) {
+    const rpc = await Rpc.create({
+      mainWasmUrl: opts.mainWasmUrl ?? "afterglow_rpc.wasm",
+      workerJsUrl: opts.workerJsUrl ?? "worker.js",
+      workerWasmUrl: opts.workerWasmUrl ?? "meshopt.wasm",
+      timeoutMs: opts.timeoutMs
+    });
+    return new MeshoptClient(rpc);
+  }
+  poll() {
+    this.rpc.poll?.();
+  }
+  constructor(rpc) {
+    this.rpc = rpc;
+  }
+  close() {
+    if (this.closed)
+      return;
+    this.closed = true;
+    this.rpc.terminate?.();
+  }
+  async simplify(indices, positions, positionStride, targetIndexCount, targetError) {
+    const args = concat(encodeU32Vec(indices), encodeF32Vec(positions), encodeU32(positionStride), encodeU32(targetIndexCount), encodeF32(targetError));
+    const resp = await this.rpc.call(0, args);
+    return decodeU32Vec(resp, 0)[0];
+  }
+  async simplifySloppy(indices, positions, positionStride, targetIndexCount, targetError) {
+    const args = concat(encodeU32Vec(indices), encodeF32Vec(positions), encodeU32(positionStride), encodeU32(targetIndexCount), encodeF32(targetError));
+    const resp = await this.rpc.call(1, args);
+    return decodeU32Vec(resp, 0)[0];
+  }
+  async simplifyWithUvs(indices, positions, positionStride, uvs, uvStride, uvWeight, targetIndexCount, targetError) {
+    const args = concat(encodeU32Vec(indices), encodeF32Vec(positions), encodeU32(positionStride), encodeF32Vec(uvs), encodeU32(uvStride), encodeF32(uvWeight), encodeU32(targetIndexCount), encodeF32(targetError));
+    const resp = await this.rpc.call(2, args);
+    return decodeU32Vec(resp, 0)[0];
+  }
+  async optimizeVertexCache(indices, vertexCount) {
+    const args = concat(encodeU32Vec(indices), encodeU32(vertexCount));
+    const resp = await this.rpc.call(3, args);
+    return decodeU32Vec(resp, 0)[0];
+  }
+  async optimizeOverdraw(indices, positions, positionStride, threshold) {
+    const args = concat(encodeU32Vec(indices), encodeF32Vec(positions), encodeU32(positionStride), encodeF32(threshold));
+    const resp = await this.rpc.call(4, args);
+    return decodeU32Vec(resp, 0)[0];
+  }
+  async encodeIndexBuffer(indices, vertexCount) {
+    const args = concat(encodeU32Vec(indices), encodeU32(vertexCount));
+    const resp = await this.rpc.call(5, args);
+    return decodeBytes(resp, 0)[0];
+  }
+  async decodeIndexBuffer(buffer2, indexCount) {
+    const args = concat(encodeBytes(buffer2), encodeU32(indexCount));
+    const resp = await this.rpc.call(6, args);
+    return decodeU32Vec(resp, 0)[0];
+  }
+  async encodeVertexBuffer(vertices, vertexSize) {
+    const args = concat(encodeBytes(vertices), encodeU32(vertexSize));
+    const resp = await this.rpc.call(7, args);
+    return decodeBytes(resp, 0)[0];
+  }
+  async decodeVertexBuffer(buffer2, vertexCount, vertexSize) {
+    const args = concat(encodeBytes(buffer2), encodeU32(vertexCount), encodeU32(vertexSize));
+    const resp = await this.rpc.call(8, args);
+    return decodeBytes(resp, 0)[0];
+  }
+  async generateVertexRemap(indices, vertices, vertexSize) {
+    const args = concat(encodeU32Vec(indices), encodeBytes(vertices), encodeU32(vertexSize));
+    const resp = await this.rpc.call(9, args);
+    return decodeU32Vec(resp, 0)[0];
+  }
+  async stripify(indices, vertexCount, restartIndex) {
+    const args = concat(encodeU32Vec(indices), encodeU32(vertexCount), encodeU32(restartIndex));
+    const resp = await this.rpc.call(10, args);
+    return decodeU32Vec(resp, 0)[0];
+  }
+  async buildMeshlets(indices, positions, positionStride, maxVertices, maxTriangles, coneWeight) {
+    const args = concat(encodeU32Vec(indices), encodeF32Vec(positions), encodeU32(positionStride), encodeU32(maxVertices), encodeU32(maxTriangles), encodeF32(coneWeight));
+    const resp = await this.rpc.call(11, args);
+    return decodeBytes(resp, 0)[0];
+  }
+  async analyzeVertexCache(indices, vertexCount) {
+    const args = concat(encodeU32Vec(indices), encodeU32(vertexCount));
+    const resp = await this.rpc.call(12, args);
+    return decodeF32Vec(resp, 0)[0];
+  }
+  async quantizeHalf(value) {
+    const args = encodeF32(value);
+    const resp = await this.rpc.call(13, args);
+    return decodeU16(resp, 0)[0];
+  }
+}
+
+// crates/afterglow-web/web/src/workers/native-transport.ts
+class NativeRpcTransport {
+  workerId;
+  constructor(workerId) {
+    this.workerId = workerId;
+  }
+  call(method, args) {
+    return Deno.core.ops.op_afterglow_rpc_call_async(this.workerId, method, args);
+  }
+}
+
+// crates/afterglow-web/web/src/workers/texture.client.ts
+class TextureClient {
+  rpc;
+  closed = false;
+  static async spawn(workerWasmUrl = "texture.wasm", baseUrl = "") {
+    const driver = new AsyncWorker(null, baseUrl);
+    const memory = new WebAssembly.Memory({ shared: true, initial: 256, maximum: 1024 });
+    const { instance: instance2 } = await WebAssembly.instantiate(await (await fetch(workerWasmUrl)).arrayBuffer(), asyncWorkerImports(driver, memory));
+    driver.w = instance2.exports;
+    instance2.exports.afterglow_wasm_init();
+    return new TextureClient(driver);
+  }
+  static async spawnThreaded(opts = {}) {
+    const rpc = await Rpc.create({
+      mainWasmUrl: opts.mainWasmUrl ?? "afterglow_rpc.wasm",
+      workerJsUrl: opts.workerJsUrl ?? "worker.js",
+      workerWasmUrl: opts.workerWasmUrl ?? "texture.wasm",
+      timeoutMs: opts.timeoutMs
+    });
+    return new TextureClient(rpc);
+  }
+  poll() {
+    this.rpc.poll?.();
+  }
+  constructor(rpc) {
+    this.rpc = rpc;
+  }
+  close() {
+    if (this.closed)
+      return;
+    this.closed = true;
+    this.rpc.terminate?.();
+  }
+  async transcode(data, targetFormat) {
+    const args = concat(encodeBytes(data), encodeU32(targetFormat));
+    const resp = await this.rpc.call(0, args);
+    return decodeBytes(resp, 0)[0];
+  }
+  async generateMips(data, width, height) {
+    const args = concat(encodeBytes(data), encodeU32(width), encodeU32(height));
+    const resp = await this.rpc.call(1, args);
+    return decodeBytes(resp, 0)[0];
+  }
+  async downscale(data, width, height, targetWidth, targetHeight) {
+    const args = concat(encodeBytes(data), encodeU32(width), encodeU32(height), encodeU32(targetWidth), encodeU32(targetHeight));
+    const resp = await this.rpc.call(2, args);
+    return decodeBytes(resp, 0)[0];
+  }
+}
+
+// crates/afterglow-web/web/src/engine/assets/platform-workers.ts
+var NATIVE_TEXTURE_WORKER_FIRST = 1;
+var NATIVE_TEXTURE_WORKER_COUNT = 4;
+var NATIVE_MESHOPT_WORKER = 5;
+function hasNativeWorkerTransport() {
+  const deno = globalThis.Deno;
+  return typeof deno?.core?.ops?.op_afterglow_rpc_call_async === "function";
+}
+async function createPlatformTextureTranscoder(index) {
+  if (!hasNativeWorkerTransport())
+    return TextureClient.spawnThreaded({ workerWasmUrl: "texture.wasm", timeoutMs: 1e4 });
+  if (!Number.isInteger(index) || index < 0 || index >= NATIVE_TEXTURE_WORKER_COUNT)
+    throw new RangeError(`native texture worker index must be 0..${NATIVE_TEXTURE_WORKER_COUNT - 1}`);
+  return new TextureClient(new NativeRpcTransport(NATIVE_TEXTURE_WORKER_FIRST + index));
+}
+async function createPlatformMeshOptimizer() {
+  if (!hasNativeWorkerTransport())
+    return MeshoptClient.spawnThreaded({ workerWasmUrl: "meshopt.wasm", timeoutMs: 1e4 });
+  return new MeshoptClient(new NativeRpcTransport(NATIVE_MESHOPT_WORKER));
 }
 
 // crates/afterglow-web/web/src/engine/virtual-texturing/virtual-texture-layout.ts
@@ -64657,7 +65124,8 @@ var ATLAS_HEIGHT = ATLAS_PAGES_Y * SLOT_SIZE;
 var MAX_MIP = 10;
 var QUALITY_PRIORITY_LANE_COUNT = (MAX_MIP + 1) * 2;
 var MATERIAL_CHANNEL_PRIORITY_COUNT = 3;
-var PRIORITY_LANE_COUNT = QUALITY_PRIORITY_LANE_COUNT * MATERIAL_CHANNEL_PRIORITY_COUNT;
+var BATCH_TIER_PRIORITY_COUNT = QUALITY_PRIORITY_LANE_COUNT * MATERIAL_CHANNEL_PRIORITY_COUNT;
+var PRIORITY_LANE_COUNT = BATCH_TIER_PRIORITY_COUNT * 2;
 function packedPageCoordinates(textureId, mip, x, y, tail = false) {
   const local = tail ? 268435456 : (mip & 63 | (x & 2047) << 6 | (y & 2047) << 17) >>> 0;
   return textureId * 536870912 + local;
@@ -65261,6 +65729,13 @@ class VirtualTextureStore {
     pageReads: 0,
     averagePageReadMs: 0,
     maxPageReadMs: 0,
+    bulkQueued: 0,
+    bulkInFlight: 0,
+    bulkInFlightBytes: 0,
+    urgentBatches: 0,
+    qualityBatches: 0,
+    bulkRejected: 0,
+    bulkCanceled: 0,
     transcodeWorkers: 0,
     activeTranscodes: 0,
     queuedTranscodes: 0,
@@ -65586,6 +66061,7 @@ class VirtualTextureStore {
     page.x = req.x;
     page.y = req.y;
     page.tail = req.tail;
+    page.batchTier = req.batchTier;
     page.pinned = pinned;
     page.cacheKey = key;
     pendingRecord.generation = generation;
@@ -65645,24 +66121,28 @@ class VirtualTextureStore {
     if (entry)
       this.queuePageLoad(entry, req, pageTable, pinned);
   }
-  addFeedbackPage(textureId, entry, source, mip, x, y, tail, capacity, channelPriority) {
+  addFeedbackPage(textureId, entry, source, mip, x, y, tail, capacity, channelPriority, batchTier) {
     const key = packedPageCoordinates(entry.textureId, mip, x, y, tail);
+    const qualityDepth = tail ? 0 : Math.min(MAX_MIP, entry.maxMip - mip);
+    const centralOrLarge = (source.screenPriority ?? 0) <= 96 || (source.coverage ?? 1) >= 4;
+    const candidatePriority = (batchTier === "quality" ? BATCH_TIER_PRIORITY_COUNT : 0) + channelPriority * QUALITY_PRIORITY_LANE_COUNT + qualityDepth * 2 + (centralOrLarge ? 0 : 1);
     const existing = this.feedbackScratchKeys.get(key);
     if (existing !== undefined) {
       const request2 = this.feedbackScratch[existing];
       request2.screenPriority = Math.min(request2.screenPriority ?? 255, source.screenPriority ?? 0);
       request2.coverage = Math.min(65535, (request2.coverage ?? 1) + (source.coverage ?? 1));
       request2.channelPriority = Math.min(request2.channelPriority ?? channelPriority, channelPriority);
+      if (batchTier === "urgent")
+        request2.batchTier = "urgent";
+      request2.priorityTier = Math.min(request2.priorityTier ?? candidatePriority, candidatePriority);
       if (request2.screenPriority <= 96 || request2.coverage >= 4)
-        request2.priorityTier = (request2.priorityTier ?? 1) & ~1;
+        request2.priorityTier &= ~1;
       return true;
     }
     if (this.feedbackScratchCount >= capacity)
       return false;
     const index = this.feedbackScratchCount++;
     const request = this.feedbackScratch[index];
-    const qualityDepth = tail ? 0 : Math.min(MAX_MIP, entry.maxMip - mip);
-    const centralOrLarge = (source.screenPriority ?? 0) <= 96 || (source.coverage ?? 1) >= 4;
     request.textureId = textureId;
     request.path = entry.path;
     request.mip = mip;
@@ -65672,7 +66152,8 @@ class VirtualTextureStore {
     request.screenPriority = source.screenPriority ?? 0;
     request.coverage = source.coverage ?? 1;
     request.channelPriority = channelPriority;
-    request.priorityTier = channelPriority * QUALITY_PRIORITY_LANE_COUNT + qualityDepth * 2 + (centralOrLarge ? 0 : 1);
+    request.batchTier = batchTier;
+    request.priorityTier = candidatePriority;
     this.feedbackScratchKeys.set(key, index);
     return true;
   }
@@ -65682,21 +66163,21 @@ class VirtualTextureStore {
     if (!entry || !pageTable || !this.isValidEntryRequest(entry, source))
       return true;
     if (source.tail === true)
-      return this.addFeedbackPage(textureId, entry, source, source.mip, 0, 0, true, capacity, channelPriority);
+      return this.addFeedbackPage(textureId, entry, source, source.mip, 0, 0, true, capacity, channelPriority, "urgent");
     const desiredMip = Math.min(entry.maxMip, source.mip + bias);
     const desiredX = source.x >> desiredMip - source.mip;
     const desiredY = source.y >> desiredMip - source.mip;
     if (pageTable.isResidentAt(desiredMip, desiredX, desiredY))
-      return this.addFeedbackPage(textureId, entry, source, desiredMip, desiredX, desiredY, false, capacity, channelPriority);
-    let fallbackMip = desiredMip + 1;
-    while (fallbackMip <= entry.maxMip && !pageTable.isResidentAt(fallbackMip, desiredX >> fallbackMip - desiredMip, desiredY >> fallbackMip - desiredMip))
-      fallbackMip++;
-    for (let mip = Math.min(entry.maxMip, fallbackMip - 1);mip >= desiredMip; mip--) {
-      const shift = mip - desiredMip;
-      if (!this.addFeedbackPage(textureId, entry, source, mip, desiredX >> shift, desiredY >> shift, false, capacity, channelPriority))
-        return false;
-    }
-    return true;
+      return this.addFeedbackPage(textureId, entry, source, desiredMip, desiredX, desiredY, false, capacity, channelPriority, "quality");
+    const urgentMip = Math.min(entry.maxMip, desiredMip + 2);
+    const urgentShift = urgentMip - desiredMip;
+    const urgentX = desiredX >> urgentShift;
+    const urgentY = desiredY >> urgentShift;
+    if (!pageTable.isResidentAt(urgentMip, urgentX, urgentY) && !this.addFeedbackPage(textureId, entry, source, urgentMip, urgentX, urgentY, false, capacity, channelPriority, "urgent"))
+      return false;
+    if (urgentMip === desiredMip)
+      return true;
+    return this.addFeedbackPage(textureId, entry, source, desiredMip, desiredX, desiredY, false, capacity, channelPriority, "quality");
   }
   buildEffectiveFeedback(feedback) {
     const capacity = Math.max(1, this.cache.totalSlots - this.cache.pinnedSlots);
@@ -65777,6 +66258,7 @@ class VirtualTextureStore {
     target.coverage = source.coverage;
     target.channelPriority = source.channelPriority;
     target.priorityTier = source.priorityTier;
+    target.batchTier = source.batchTier;
   }
   linkScheduledTail(index, priority) {
     const tail = this.priorityTails[priority];
@@ -65845,7 +66327,8 @@ class VirtualTextureStore {
     if (existing !== undefined) {
       this.copyRequest(this.scheduledRequests[existing], request);
       const agePromotion = this.feedbackEpoch - this.scheduledSince[existing] >> 2;
-      const channelFloor = (request.channelPriority ?? 0) * QUALITY_PRIORITY_LANE_COUNT;
+      const tierFloor = request.batchTier === "quality" ? BATCH_TIER_PRIORITY_COUNT : 0;
+      const channelFloor = tierFloor + (request.channelPriority ?? 0) * QUALITY_PRIORITY_LANE_COUNT;
       const priority = Math.max(channelFloor, (request.priorityTier ?? PRIORITY_LANE_COUNT - 1) - agePromotion);
       this.moveScheduled(existing, priority);
       this.scheduledLastSeen[existing] = this.feedbackEpoch;
@@ -66198,6 +66681,13 @@ class VirtualTextureStore {
       stats.pageReads = provider.reads;
       stats.averagePageReadMs = provider.averageReadMs;
       stats.maxPageReadMs = provider.maxReadMs;
+      stats.bulkQueued = provider.bulkQueued;
+      stats.bulkInFlight = provider.bulkInFlight;
+      stats.bulkInFlightBytes = provider.bulkInFlightBytes;
+      stats.urgentBatches = provider.urgentBatches;
+      stats.qualityBatches = provider.qualityBatches;
+      stats.bulkRejected = provider.bulkRejected;
+      stats.bulkCanceled = provider.bulkCanceled;
       stats.transcodeWorkers = provider.workerCount;
       stats.activeTranscodes = provider.activeTranscodes;
       stats.queuedTranscodes = provider.queuedTranscodes;
@@ -66513,18 +67003,19 @@ class BigAssetSession {
       throw new RangeError("BIG session workerCount must be positive");
     if (!Number.isInteger(options.transcodeQueueCapacity) || options.transcodeQueueCapacity <= 0)
       throw new RangeError("BIG session transcode queue capacity must be positive");
-    const source = options.source ?? createFetchRangeLoader();
+    const source = options.source ?? createPlatformRangeLoader();
     const workers = [];
     try {
       const header = await readBigHeader(source, options.containerPath, options.maxHeaderBytes);
-      const createTranscoder = options.createTranscoder ?? (() => TextureClient.spawnThreaded({ workerWasmUrl: "texture.wasm", timeoutMs: 1e4 }));
+      const createTranscoder = options.createTranscoder ?? createPlatformTextureTranscoder;
       for (let index = 0;index < options.workerCount; index++)
         workers.push(await createTranscoder(index));
       const clients = workers;
       const containerLoader = {
         load: (path) => source.load(path),
         size: (path) => source.size(path),
-        read: (_path, offset, length2) => source.read(options.containerPath, offset, length2)
+        read: (_path, offset, length2) => source.read(options.containerPath, offset, length2),
+        readBulk: source.readBulk ? (ranges) => source.readBulk(options.containerPath, ranges) : undefined
       };
       const pageProvider = createPageDataProvider(containerLoader, header, clients, options.format, options.cache, options.transcodeQueueCapacity);
       return new BigAssetSession(source, options.containerPath, header, options.format, workers, options.createMeshOptimizer, pageProvider);
@@ -66545,7 +67036,7 @@ class BigAssetSession {
       throw new Error("cannot create an asset store from a closed BIG session");
     if (this.assetStore || this.meshOptimizer)
       throw new Error("BIG session already created its asset store");
-    const createOptimizer = this.createMeshOptimizer ?? (() => MeshoptClient.spawnThreaded({ workerWasmUrl: "meshopt.wasm", timeoutMs: 1e4 }));
+    const createOptimizer = this.createMeshOptimizer ?? createPlatformMeshOptimizer;
     const optimizer = await createOptimizer();
     if (this.closed) {
       await optimizer.close();
@@ -66585,6 +67076,7 @@ class BigAssetSession {
     this.assetStore?.dispose();
     this.assetStore = null;
     this.store?.dispose();
+    this.pageProvider.close();
     this.store = null;
     let firstError = null;
     if (this.meshOptimizer) {
@@ -69351,8 +69843,8 @@ class EngineMemory {
     this.phase = 1 /* Warmup */;
   }
   sealGameplay() {
-    if (this.phase !== 1 /* Warmup */ && this.phase !== 3 /* LoadingScreen */)
-      throw new Error("EngineMemory can seal only after warmup/loading");
+    if (this.phase !== 1 /* Warmup */)
+      throw new Error("EngineMemory can seal only after warmup");
     this.phase = 2 /* GameplaySealed */;
   }
   beginFrame() {
@@ -69473,7 +69965,7 @@ var FrameBudgetRes = defineResource("frameBudget", () => new FrameBudget);
 
 // crates/afterglow-web/web/src/engine/core/frame.ts
 function prepareAfterglowFrame(frame, workerInput, adapter, vtInput, memory, budget) {
-  if (memory && memory.phase !== 2 /* GameplaySealed */ && memory.phase !== 3 /* LoadingScreen */)
+  if (memory && memory.phase !== 2 /* GameplaySealed */)
     throw new Error("EngineMemory must be sealed before frame orchestration");
   memory?.beginFrame();
   budget?.beginFrame(frame.frameId, frame.deltaSeconds * 1000);
@@ -69678,7 +70170,7 @@ class EngineRuntime {
     this.passCount = 0;
     this.adapter.dispose();
     this.client = null;
-    this.memory.phase = 4 /* Shutdown */;
+    this.memory.phase = 3 /* Shutdown */;
     this.mutableState = 5 /* Shutdown */;
   }
   tick(timestamp) {
@@ -69701,6 +70193,7 @@ class EngineRuntime {
       }
     } catch (error2) {
       this.diagnostics.tryRecord(1 /* RuntimeState */, 0 /* Runtime */, error2);
+      console.error("[afterglow] runtime frame failed:", error2 instanceof Error ? error2.stack : String(error2));
       this.mutableState = 4 /* Stopped */;
       return;
     }
@@ -72650,7 +73143,7 @@ Errors ${runtime.diagnostics.count}`);
     }
     return map;
   };
-  const source = createFetchRangeLoader(), identity = await source.identity("dungeon.big");
+  const source = createPlatformRangeLoader(), identity = await source.identity("dungeon.big");
   const device = host.device, format = device.features.has("texture-compression-bc") ? 0 : device.features.has("texture-compression-astc") ? 1 : FORMAT_RGBA;
   const adapterInfo = host.adapterInfo;
   let cache3;

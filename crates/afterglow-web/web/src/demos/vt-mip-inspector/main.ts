@@ -1,8 +1,102 @@
-import{generateStonePage,VT_PAGE_SIZE,VT_PAGE_BORDER,VT_SLOT_SIZE}from'../../engine/virtual-texturing/procedural-vt.ts';
-const seed=0x9e37,baseMip=7,virtualCrop=32768,grid=document.querySelector('#grid');
-function direct(mip){const size=virtualCrop>>mip,pages=Math.ceil(size/VT_PAGE_SIZE),data=new Uint8ClampedArray(size*size*4);for(let py=0;py<pages;py++)for(let px=0;px<pages;px++){const p=generateStonePage(seed,mip,px,py,131072);for(let y=0;y<Math.min(VT_PAGE_SIZE,size-py*VT_PAGE_SIZE);y++){const src=((y+VT_PAGE_BORDER)*VT_SLOT_SIZE+VT_PAGE_BORDER)*4,dst=((py*VT_PAGE_SIZE+y)*size+px*VT_PAGE_SIZE)*4;data.set(p.subarray(src,src+Math.min(VT_PAGE_SIZE,size-px*VT_PAGE_SIZE)*4),dst)}}return{size,data}}
-function down(src){const size=src.size>>1,out=new Uint8ClampedArray(size*size*4);for(let y=0;y<size;y++)for(let x=0;x<size;x++)for(let c=0;c<4;c++){let n=0;for(let oy=0;oy<2;oy++)for(let ox=0;ox<2;ox++)n+=src.data[(((y*2+oy)*src.size+x*2+ox)*4+c)];out[(y*size+x)*4+c]=Math.round(n/4)}return{size,data:out}}
-function bmp(img){const row=img.size*4,bytes=new Uint8Array(54+row*img.size),v=new DataView(bytes.buffer);bytes.set([66,77]);v.setUint32(2,bytes.length,true);v.setUint32(10,54,true);v.setUint32(14,40,true);v.setInt32(18,img.size,true);v.setInt32(22,img.size,true);v.setUint16(26,1,true);v.setUint16(28,32,true);v.setUint32(34,row*img.size,true);for(let y=0;y<img.size;y++)for(let x=0;x<img.size;x++){const s=(y*img.size+x)*4,d=54+((img.size-1-y)*img.size+x)*4;bytes[d]=img.data[s+2];bytes[d+1]=img.data[s+1];bytes[d+2]=img.data[s];bytes[d+3]=255}return URL.createObjectURL(new Blob([bytes],{type:'image/bmp'}))}
-function panel(title,img){const p=document.createElement('div');p.className='panel';p.innerHTML=`<b>${title}</b><br>${img.size}×${img.size}`;const view=document.createElement('img');view.className='view';view.src=bmp(img);p.append(view);grid.append(p)}
-const addLabel=text=>{const e=document.createElement('div');e.className='label';e.textContent=text;grid.append(e)};
-const levels=[];levels[7]=direct(7);for(let m=8;m<=10;m++)levels[m]=down(levels[m-1]);grid.append(document.createElement('div'));for(let m=8;m<=10;m++){const e=document.createElement('div');e.innerHTML=`<b>Mip ${m}</b>`;grid.append(e)}addLabel('independent');for(let m=8;m<=10;m++)panel('runtime',direct(m));addLabel('box chain');for(let m=8;m<=10;m++)panel('filtered',levels[m]);
+import {
+  generateStonePage,
+  VT_PAGE_SIZE,
+  VT_PAGE_BORDER,
+  VT_SLOT_SIZE,
+} from "../../engine/virtual-texturing/procedural-vt.ts";
+const seed = 0x9e37,
+  baseMip = 7,
+  virtualCrop = 32768,
+  grid = document.querySelector("#grid");
+function direct(mip) {
+  const size = virtualCrop >> mip,
+    pages = Math.ceil(size / VT_PAGE_SIZE),
+    data = new Uint8ClampedArray(size * size * 4);
+  for (let py = 0; py < pages; py++)
+    for (let px = 0; px < pages; px++) {
+      const p = generateStonePage(seed, mip, px, py, 131072);
+      for (
+        let y = 0;
+        y < Math.min(VT_PAGE_SIZE, size - py * VT_PAGE_SIZE);
+        y++
+      ) {
+        const src = ((y + VT_PAGE_BORDER) * VT_SLOT_SIZE + VT_PAGE_BORDER) * 4,
+          dst = ((py * VT_PAGE_SIZE + y) * size + px * VT_PAGE_SIZE) * 4;
+        data.set(
+          p.subarray(
+            src,
+            src + Math.min(VT_PAGE_SIZE, size - px * VT_PAGE_SIZE) * 4,
+          ),
+          dst,
+        );
+      }
+    }
+  return { size, data };
+}
+function down(src) {
+  const size = src.size >> 1,
+    out = new Uint8ClampedArray(size * size * 4);
+  for (let y = 0; y < size; y++)
+    for (let x = 0; x < size; x++)
+      for (let c = 0; c < 4; c++) {
+        let n = 0;
+        for (let oy = 0; oy < 2; oy++)
+          for (let ox = 0; ox < 2; ox++)
+            n += src.data[((y * 2 + oy) * src.size + x * 2 + ox) * 4 + c];
+        out[(y * size + x) * 4 + c] = Math.round(n / 4);
+      }
+  return { size, data: out };
+}
+function bmp(img) {
+  const row = img.size * 4,
+    bytes = new Uint8Array(54 + row * img.size),
+    v = new DataView(bytes.buffer);
+  bytes.set([66, 77]);
+  v.setUint32(2, bytes.length, true);
+  v.setUint32(10, 54, true);
+  v.setUint32(14, 40, true);
+  v.setInt32(18, img.size, true);
+  v.setInt32(22, img.size, true);
+  v.setUint16(26, 1, true);
+  v.setUint16(28, 32, true);
+  v.setUint32(34, row * img.size, true);
+  for (let y = 0; y < img.size; y++)
+    for (let x = 0; x < img.size; x++) {
+      const s = (y * img.size + x) * 4,
+        d = 54 + ((img.size - 1 - y) * img.size + x) * 4;
+      bytes[d] = img.data[s + 2];
+      bytes[d + 1] = img.data[s + 1];
+      bytes[d + 2] = img.data[s];
+      bytes[d + 3] = 255;
+    }
+  return URL.createObjectURL(new Blob([bytes], { type: "image/bmp" }));
+}
+function panel(title, img) {
+  const p = document.createElement("div");
+  p.className = "panel";
+  p.innerHTML = `<b>${title}</b><br>${img.size}×${img.size}`;
+  const view = document.createElement("img");
+  view.className = "view";
+  view.src = bmp(img);
+  p.append(view);
+  grid.append(p);
+}
+const addLabel = (text) => {
+  const e = document.createElement("div");
+  e.className = "label";
+  e.textContent = text;
+  grid.append(e);
+};
+const levels = [];
+levels[7] = direct(7);
+for (let m = 8; m <= 10; m++) levels[m] = down(levels[m - 1]);
+grid.append(document.createElement("div"));
+for (let m = 8; m <= 10; m++) {
+  const e = document.createElement("div");
+  e.innerHTML = `<b>Mip ${m}</b>`;
+  grid.append(e);
+}
+addLabel("independent");
+for (let m = 8; m <= 10; m++) panel("runtime", direct(m));
+addLabel("box chain");
+for (let m = 8; m <= 10; m++) panel("filtered", levels[m]);

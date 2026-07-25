@@ -53,6 +53,7 @@ describe('EngineMemory fixed storage', () => {
     memory.warmup();
     memory.sealGameplay();
     expect(memory.phase).toBe(EnginePhase.GameplaySealed);
+    expect(() => memory.sealGameplay()).toThrow('only after warmup');
     memory.frame.allocate(16);
     memory.beginFrame();
     expect(memory.frame.used).toBe(0);

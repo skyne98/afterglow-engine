@@ -20,6 +20,12 @@ assert!(client.apply_force(3, 0.0, 9.8, 0.0)?);
 writes a shutdown frame, wakes the worker, waits up to 2 s, and joins the
 thread.
 
+For a service-owned bounded device clock, the lower-level
+`spawn_worker_loop_with_idle` variant executes a non-blocking, allocation-free
+idle hook on that same OS worker thread while the request ring is empty. Native
+EngineAudio uses it to fill a fixed PCM ring; ordinary services should retain
+the generated `spawn_worker` path.
+
 ## Starting it under CEF
 
 `spawn_worker` creates an OS thread, and **spawning threads before CEF's
@@ -39,9 +45,10 @@ AppBuilder::new()
 `execute_process` and CEF init. Spawn the worker, hand it off, and return — the
 worker runs on its own thread. See [The AppBuilder API](../window/app-builder.md).
 
-If you don't need a native worker, leave `on_ready` unset and use the
-page-driven `SharedArrayBuffer` transport instead (the `minimal` example does
-this) — see [Web Workers](./web-workers.md).
+For a service with a native implementation, CEF must use this native backend;
+do not substitute its WASM/Web Worker build because CEF happens to host a page.
+The page-driven `SharedArrayBuffer` transport is the public-web backend and may
+also be used by explicitly page-only diagnostics such as `minimal`.
 
 ## Events
 

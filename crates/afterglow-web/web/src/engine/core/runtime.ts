@@ -268,6 +268,7 @@ export class EngineRuntime<TAdapter extends RuntimeRenderAdapter = RuntimeRender
       }
     } catch (error) {
       this.diagnostics.tryRecord(DiagnosticCode.RuntimeState, DiagnosticSource.Runtime, error);
+      console.error('[afterglow] runtime frame failed:', error instanceof Error ? error.stack : String(error)); // @alloc-allowed reason=FatalDiagnostic issue=DME-044 expires=2026-10-01
       this.mutableState = RuntimeState.Stopped;
       return;
     }

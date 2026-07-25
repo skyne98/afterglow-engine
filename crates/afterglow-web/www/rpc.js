@@ -1,61 +1,15 @@
-// crates/afterglow-web/web/src/workers/rpc.ts
-var TIMEOUT_MS = 5000;
-function encodeVarint(n) {
-  const b = [];
-  do {
-    let x = n & 127;
-    n = Math.floor(n / 128);
-    if (n)
-      x |= 128;
-    b.push(x);
-  } while (n);
-  return b;
-}
+// crates/afterglow-web/web/src/workers/codec.ts
 function decodeVarint(bytes, off) {
   let r = 0;
-  for (let shift = 0;shift < 35; shift += 7) {
+  for (let shift = 0;shift < 56; shift += 7) {
     if (off >= bytes.length)
       throw new Error("postcard varint truncated");
     const b = bytes[off++];
-    if (shift === 28 && b & 240)
-      throw new Error("postcard varint overflows u32");
     r += (b & 127) * 2 ** shift;
     if (!(b & 128))
-      return [r >>> 0, off];
+      return [r, off];
   }
-  throw new Error("postcard varint overflows u32");
-}
-function concat(...arrs) {
-  const out = new Uint8Array(arrs.reduce((s, a) => s + a.length, 0));
-  let o = 0;
-  for (const a of arrs) {
-    out.set(a, o);
-    o += a.length;
-  }
-  return out;
-}
-function encodeF32Vec(vec) {
-  const v = encodeVarint(vec.length), out = new Uint8Array(v.length + vec.length * 4);
-  out.set(v, 0);
-  const dv = new DataView(out.buffer, out.byteOffset + v.length, vec.length * 4);
-  for (let i = 0;i < vec.length; i++)
-    dv.setFloat32(i * 4, vec[i], true);
-  return out;
-}
-function encodeF32(x) {
-  const b = new Uint8Array(4);
-  new DataView(b.buffer).setFloat32(0, x, true);
-  return b;
-}
-function decodeF32Vec(bytes) {
-  const [n, off] = decodeVarint(bytes, 0);
-  if (n > Math.floor((bytes.length - off) / 4))
-    throw new Error("postcard f32 vector truncated");
-  const out = new Float32Array(n);
-  const dv = new DataView(bytes.buffer, bytes.byteOffset + off, n * 4);
-  for (let i = 0;i < n; i++)
-    out[i] = dv.getFloat32(i * 4, true);
-  return out;
+  throw new Error("postcard varint overflows");
 }
 function unwrapResponse(bytes) {
   const [variant, off] = decodeVarint(bytes, 0);
@@ -69,12 +23,15 @@ function unwrapResponse(bytes) {
   const [mlen, eoff] = decodeVarint(bytes, moff);
   if (eoff + mlen > bytes.length)
     throw new Error("RPC error truncated");
-  const msg = new TextDecoder().decode(bytes.subarray(eoff, eoff + mlen));
+  const msg = new TextDecoder().decode(Uint8Array.from(bytes.subarray(eoff, eoff + mlen)));
   throw new Error(`RPC ${variant === 1 ? "server" : "decode"} error (method ${method}): ${msg}`);
 }
 
+// crates/afterglow-web/web/src/workers/rpc.ts
+var TIMEOUT_MS = 5000;
+
 class Rpc {
-  static async create({ mainWasmUrl, workerJsUrl, workerWasmUrl, timeoutMs }) {
+  static async create({ mainWasmUrl, workerJsUrl, workerWasmUrl, timeoutMs, workerInit = null }) {
     const memory = new WebAssembly.Memory({ shared: true, initial: 256, maximum: 1024 });
     const worker = new Worker(workerJsUrl, { type: "module" });
     let rpc = null;
@@ -88,7 +45,8 @@ class Rpc {
         reqBase: wasm.get_request_ptr(),
         respBase: wasm.get_response_ptr(),
         bufSize: wasm.get_buffer_size(),
-        wasmUrl: workerWasmUrl
+        wasmUrl: workerWasmUrl,
+        workerInit
       });
       await rpc._initPromise;
       worker.postMessage({ type: "run" });
@@ -204,12 +162,5 @@ class Rpc {
   }
 }
 export {
-  unwrapResponse,
-  encodeVarint,
-  encodeF32Vec,
-  encodeF32,
-  decodeVarint,
-  decodeF32Vec,
-  concat,
   Rpc
 };

@@ -19,22 +19,24 @@ import { fileURLToPath } from 'node:url';
 
 const rpcSrc = readFileSync(fileURLToPath(new URL('../www/rpc.js', import.meta.url)), 'utf8');
 const rpcModule = await import('data:text/javascript;base64,' + Buffer.from(rpcSrc, 'utf8').toString('base64'));
-const { Rpc, decodeVarint, decodeF32Vec, unwrapResponse } = rpcModule;
+const { Rpc } = rpcModule;
+const codecSrc = readFileSync(fileURLToPath(new URL('../www/codec.js', import.meta.url)), 'utf8');
+const { decodeVarint, decodeF32Vec, unwrapResponse } = await import('data:text/javascript;base64,' + Buffer.from(codecSrc, 'utf8').toString('base64'));
 const ringSrc = readFileSync(fileURLToPath(new URL('../www/ring-buf.js', import.meta.url)), 'utf8');
 const { rdU32, wrU32, xfer } = await import('data:text/javascript;base64,' + Buffer.from(ringSrc, 'utf8').toString('base64'));
 
 // --- codec and ring helpers ------------------------------------------------
 
-test('postcard varints reject truncation and u32 overflow', () => {
+test('postcard varints reject truncation and overflow', () => {
   assert.throws(() => decodeVarint(new Uint8Array([0x80]), 0), /truncated/);
-  assert.throws(() => decodeVarint(new Uint8Array([0xff, 0xff, 0xff, 0xff, 0x10]), 0), /overflows/);
+  assert.throws(() => decodeVarint(new Uint8Array([0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]), 0), /overflows/);
   assert.deepEqual(decodeVarint(new Uint8Array([0xac, 0x02]), 0), [300, 2]);
 });
 
 test('response and f32-vector decoders reject truncated payloads', () => {
   assert.throws(() => unwrapResponse(new Uint8Array([0, 3, 1])), /truncated/);
   assert.throws(() => unwrapResponse(new Uint8Array([1, 0, 4, 65])), /truncated/);
-  assert.throws(() => decodeF32Vec(new Uint8Array([2, 0, 0, 0, 0])), /truncated/);
+  assert.throws(() => decodeF32Vec(new Uint8Array([2, 0, 0, 0, 0]), 0), /truncated/);
 });
 
 test('ring helpers preserve wrapped u32 and payload transfers', () => {

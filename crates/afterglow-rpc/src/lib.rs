@@ -18,7 +18,8 @@
 //!   server error, a decode failure, or a unit/zero-byte result are all
 //!   distinguishable from a successful payload.
 //! - **Native**: [`native`] — OS threads + a compact heap-backed allocation.
-//! - **Web**: `afterglow-web` — `SharedArrayBuffer`-backed wasm memory.
+//! - **Web**: [`wasm`] — `SharedArrayBuffer`-backed wasm memory + the
+//!   main-thread transport exports consumed by JS.
 //!
 //! Interfaces are defined once in Rust; the `afterglow-rpc-macros` `#[rpc]`
 //! macro generates the server trait (with a provided `serve` dispatch), the
@@ -31,56 +32,29 @@ use std::sync::atomic::{AtomicU32, Ordering};
 #[cfg(not(target_arch = "wasm32"))]
 pub mod allocation;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod handle;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod native;
-
-/// Shared support for the thin service ABI emitted by `#[rpc(worker = ...)]`.
 #[cfg(target_arch = "wasm32")]
-pub mod wasm {
-    use std::cell::UnsafeCell;
+pub mod wasm;
 
-    use crate::{Response, RpcResult, encode, make_response};
-
-    /// Fixed scratch storage whose address is exported to the JS worker.
-    #[repr(C, align(4))]
-    pub struct Scratch<const N: usize>(UnsafeCell<[u8; N]>);
-    // SAFETY: one worker instance accesses each scratch region synchronously.
-    unsafe impl<const N: usize> Sync for Scratch<N> {}
-
-    impl<const N: usize> Default for Scratch<N> {
-        fn default() -> Self {
-            Self(UnsafeCell::new([0; N]))
-        }
-    }
-
-    impl<const N: usize> Scratch<N> {
-        pub const fn new() -> Self {
-            Self(UnsafeCell::new([0; N]))
-        }
-        pub fn ptr(&self) -> usize {
-            self.0.get().cast::<u8>() as usize
-        }
-        pub const fn size(&self) -> usize {
-            N
-        }
-    }
-
-    /// Encode a service result as a response envelope into `out`. Oversized
-    /// responses are replaced by a compact error envelope.
-    pub fn write_response(method: u32, result: RpcResult<Vec<u8>>, out: &mut [u8]) -> i32 {
-        let env = make_response(method, result);
-        let bytes = match encode(&env) {
-            Ok(bytes) if bytes.len() <= out.len() => bytes,
-            _ => match encode(&Response::Server {
-                method,
-                message: "response too large".into(),
-            }) {
-                Ok(bytes) if bytes.len() <= out.len() => bytes,
-                _ => return -1,
-            },
-        };
-        out[..bytes.len()].copy_from_slice(&bytes);
-        bytes.len() as i32
-    }
+/// A region in shared memory: the payload unit that crosses the ring instead
+/// of bytes. Postcard-encodable as a normal arg (no new wire format). Available
+/// on both targets so `#[rpc]` traits can take/return `Handle`; the [`handle`]
+/// arena that backs it is native-only (web crosses payloads as bytes).
+///
+/// `generation` distinguishes a live lease from a stale handle into a reused
+/// slot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Handle {
+    /// Arena instance id (for multi-arena hosts).
+    pub region: u32,
+    /// Slot index within the arena.
+    pub slot: u32,
+    /// Valid bytes the writer placed in the slot (set on handoff).
+    pub length: u32,
+    /// Lease generation; a stale generation is rejected by the reader.
+    pub generation: u32,
 }
 
 pub type RpcResult<T> = Result<T, RpcError>;
@@ -405,6 +379,31 @@ impl<'a> RingBuffer<'a> {
             )));
         }
         Ok(payload_len)
+    }
+
+    /// Return whether a payload frame can be written immediately without
+    /// advancing either cursor. This is a producer-side admission check; only
+    /// the SPSC producer may call it.
+    pub fn can_write(&self, payload_len: usize) -> RpcResult<bool> {
+        if payload_len > (u32::MAX as usize).saturating_sub(4) {
+            return Err(RpcError::CorruptFrame(
+                "payload length overflows u32".into(),
+            ));
+        }
+        let frame_len = 4 + payload_len as u32;
+        let cap = self.capacity;
+        if frame_len > cap {
+            return Ok(false);
+        }
+        let w = self.header.write_idx.load(Ordering::Relaxed);
+        let r = self.header.read_idx.load(Ordering::Acquire);
+        let used = w.wrapping_sub(r);
+        if used > cap {
+            return Err(RpcError::CorruptFrame(format!(
+                "used {used} > capacity {cap}"
+            )));
+        }
+        Ok(frame_len <= cap - used)
     }
 
     /// Write a framed message `[len: u32][payload]`. Returns `Err(BufferFull)`

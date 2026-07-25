@@ -6,6 +6,9 @@ license.workspace = true
 publish = false
 description = "afterglow RPC runtime: ring buffer transport + postcard codec"
 
+[lib]
+crate-type = ["cdylib", "rlib"]
+
 [dependencies]
 postcard.workspace = true
 serde.workspace = true

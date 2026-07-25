@@ -87,10 +87,27 @@ four fixed workers, and sixteen bounded queued connections per worker.
 Open <http://localhost:8787/worker-test.html> to verify the round trip. Check
 in the console: `self.crossOriginIsolated === true`.
 
-### Production
+### Caddy origin (HTTP/1.1, HTTP/2, HTTP/3)
 
-Configure your real web server (nginx, a CDN, etc.) to send the same three
-headers on every response from your game's origin.
+`deploy/web/Caddyfile` is the static-origin configuration. It applies the
+three isolation headers and `Accept-Ranges: bytes`, keeps HTTP/1.1 persistent,
+and explicitly enables `h1 h2 h3`. HTTP/2/3 multiplex ranges over one
+connection per player; HTTP/3 uses QUIC's negotiated idle timeout rather than
+an HTTP `Connection: keep-alive` header.
+
+For the local single-client gate:
+
+```sh
+nix-shell shell.nix --run \
+  'caddy run --config deploy/web/Caddyfile --adapter caddyfile'
+```
+
+This defaults to `https://localhost:8443` with Caddy's local CA and deliberately
+has no privileged port-80 redirect listener. A public origin sets
+`AFTERGLOW_WEB_ADDRESS` to its DNS hostname, uses Caddy's normal ACME TLS, and
+must expose both TCP and UDP on its HTTPS port. QUIC-blocked clients fall back
+to HTTP/2 or HTTP/1.1. `coep_server` remains development-only; never deploy its
+four blocking workers as the public asset server.
 
 > **Subresource caveat:** `Cross-Origin-Embedder-Policy: require-corp` means
 > every cross-origin resource must opt in with

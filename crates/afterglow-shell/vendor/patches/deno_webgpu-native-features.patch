@@ -1,0 +1,129 @@
+--- a/adapter.rs
++++ b/adapter.rs
+@@ -96,9 +96,15 @@
+   ) -> v8::Global<v8::Object> {
+     self.features.get(scope, |scope| {
+       let features = self.instance.adapter_features(self.id);
+-      // Only expose WebGPU features, not wgpu native-only features
+-      let features = features & wgpu_types::Features::all_webgpu_mask();
+-      GPUSupportedFeatures::new(scope, features)
++      // SUBGROUP is standardized by WebGPU but remains in wgpu's native-only
++      // mask while standards-alignment issue gfx-rs/wgpu#5555 is open.
++      let features = features
++        & (wgpu_types::Features::all_webgpu_mask()
++          | wgpu_types::Features::SUBGROUP);
++      // wgpu currently returns only core-defaulting native adapters; Deno's
++      // feature_level option is parsed but compatibility mode is not yet
++      // implemented (gfx-rs/wgpu#8124).
++      GPUSupportedFeatures::new(scope, features, true)
+     })
+   }
+ 
+@@ -118,10 +124,13 @@
+     #[webidl] descriptor: GPUDeviceDescriptor,
+   ) -> Result<v8::Global<v8::Value>, CreateDeviceError> {
+     let supported_features = self.instance.adapter_features(self.id);
++    let core_features_and_limits = descriptor
++      .required_features
++      .contains(&GPUFeatureName::CoreFeaturesAndLimits);
+     let required_features = descriptor
+       .required_features
+       .iter()
+-      .map(|f| wgpu_types::Features::from(*f))
++      .filter_map(|feature| feature.as_wgpu())
+       .fold(wgpu_types::Features::empty(), BitOr::bitor);
+ 
+     // External textures are a required part of WebGPU, and `external-texture`
+@@ -210,6 +219,7 @@
+       lost_promise: v8::Global::new(scope, lost_promise),
+       limits: SameObject::new(),
+       features: SameObject::new(),
++      core_features_and_limits,
+       weak: std::sync::OnceLock::new(),
+       has_active_capture: std::cell::RefCell::new(false),
+     };
+@@ -478,6 +488,7 @@
+   pub fn new(
+     scope: &mut v8::PinScope<'_, '_>,
+     features: wgpu_types::Features,
++    core_features_and_limits: bool,
+   ) -> Self {
+     let set = v8::Set::new(scope);
+ 
+@@ -485,6 +496,10 @@
+       let key = v8::String::new(scope, feature.as_str().unwrap()).unwrap();
+       set.add(scope, key.into());
+     }
++    if core_features_and_limits {
++      let key = v8::String::new(scope, "core-features-and-limits").unwrap();
++      set.add(scope, key.into());
++    }
+ 
+     Self(v8::Global::new(scope, <v8::Local<v8::Value>>::from(set)))
+   }
+--- a/device.rs
++++ b/device.rs
+@@ -55,6 +55,7 @@
+   pub label: String,
+ 
+   pub features: SameObject<GPUSupportedFeatures>,
++  pub core_features_and_limits: bool,
+   pub limits: SameObject<GPUSupportedLimits>,
+   pub adapter_info: Rc<SameObject<GPUAdapterInfo>>,
+ 
+@@ -114,7 +115,11 @@
+   ) -> v8::Global<v8::Object> {
+     self.features.get(scope, |scope| {
+       let features = self.instance.device_features(self.id);
+-      GPUSupportedFeatures::new(scope, features)
++      GPUSupportedFeatures::new(
++        scope,
++        features,
++        self.core_features_and_limits,
++      )
+     })
+   }
+ 
+--- a/webidl.rs
++++ b/webidl.rs
+@@ -374,7 +374,10 @@
+     _options: &Self::Options,
+   ) -> Result<Self, WebIdlError> {
+     let s = value.to_rust_string_lossy(scope);
+-    s.parse().map(Self).map_err(|()| {
++    if s == "core-features-and-limits" {
++      return Ok(Self::CoreFeaturesAndLimits);
++    }
++    s.parse().map(Self::Wgpu).map_err(|()| {
+       WebIdlError::new(
+         prefix,
+         context,
+@@ -389,15 +392,21 @@
+ 
+ /// A WebGPU optional feature.
+ ///
+-/// Named after the WebIDL enum, which represents features as strings, but we store the
+-/// feature as bitflag, which must always have exactly one bit set (across both the WebGPU
+-/// and wgpu native features).
++/// Named after the WebIDL enum, which represents features as strings. Most
++/// values map directly to a single wgpu feature bit. Core feature-level support
++/// is represented separately until wgpu implements compatibility adapters.
+ #[derive(Clone, Copy, Hash, Eq, PartialEq)]
+-pub struct GPUFeatureName(wgpu_types::Features);
++pub enum GPUFeatureName {
++  Wgpu(wgpu_types::Features),
++  CoreFeaturesAndLimits,
++}
+ 
+-impl From<GPUFeatureName> for wgpu_types::Features {
+-  fn from(value: GPUFeatureName) -> wgpu_types::Features {
+-    value.0
++impl GPUFeatureName {
++  pub fn as_wgpu(self) -> Option<wgpu_types::Features> {
++    match self {
++      Self::Wgpu(feature) => Some(feature),
++      Self::CoreFeaturesAndLimits => None,
++    }
+   }
+ }
+ 

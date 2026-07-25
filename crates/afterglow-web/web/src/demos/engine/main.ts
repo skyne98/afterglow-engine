@@ -1,15 +1,25 @@
-import * as THREE from 'three/webgpu';
+import * as THREE from "three/webgpu";
 import {
-  EngineRuntime, RegistrationStatus, RenderTier, RendererHost,
-  benchFromUrl, formatBenchResults,
-  type EngineFrameClient, type RenderFrame,
-} from '../../engine/index.ts';
+  EngineRuntime,
+  RegistrationStatus,
+  RenderTier,
+  RendererHost,
+  benchFromUrl,
+  formatBenchResults,
+  type EngineFrameClient,
+  type RenderFrame,
+} from "../../engine/index.ts";
 
 const ENTITY_COUNT = 5_000;
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0a0c10);
 
-const camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.1, 5_000);
+const camera = new THREE.PerspectiveCamera(
+  75,
+  innerWidth / innerHeight,
+  0.1,
+  5_000,
+);
 camera.position.set(0, 200, 600);
 camera.lookAt(0, 0, 0);
 
@@ -39,10 +49,11 @@ const geometry = new THREE.BoxGeometry(4, 4, 4);
 const descriptor = adapter.registry.register({
   tier: RenderTier.Instanced,
   geometry,
-  createMaterial: () => new THREE.MeshStandardMaterial({ metalness: 0.1, roughness: 0.8 }),
+  createMaterial: () =>
+    new THREE.MeshStandardMaterial({ metalness: 0.1, roughness: 0.8 }),
   shardCapacity: ENTITY_COUNT,
   maxShards: 1,
-  boundsPolicy: 'dynamic-disable-three-culling',
+  boundsPolicy: "dynamic-disable-three-culling",
 });
 
 const entities = new Uint32Array(ENTITY_COUNT);
@@ -58,10 +69,16 @@ for (let index = 0; index < ENTITY_COUNT; index++) {
   const radius = 200 + Math.random() * 300;
   const theta = Math.random() * Math.PI * 2;
   const phi = Math.acos(2 * Math.random() - 1);
-  adapter.transform.positionX[entity] = radius * Math.sin(phi) * Math.cos(theta);
-  adapter.transform.positionY[entity] = radius * Math.sin(phi) * Math.sin(theta);
+  adapter.transform.positionX[entity] =
+    radius * Math.sin(phi) * Math.cos(theta);
+  adapter.transform.positionY[entity] =
+    radius * Math.sin(phi) * Math.sin(theta);
   adapter.transform.positionZ[entity] = radius * Math.cos(phi);
-  euler.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
+  euler.set(
+    Math.random() * Math.PI,
+    Math.random() * Math.PI,
+    Math.random() * Math.PI,
+  );
   quaternion.setFromEuler(euler);
   adapter.transform.rotationX[entity] = quaternion.x;
   adapter.transform.rotationY[entity] = quaternion.y;
@@ -89,14 +106,18 @@ const rendererHost = await RendererHost.create({
   runtime.dispose();
   throw error;
 });
-if (runtime.registerRenderPass(rendererHost) !== RegistrationStatus.Registered) {
+if (
+  runtime.registerRenderPass(rendererHost) !== RegistrationStatus.Registered
+) {
   rendererHost.dispose();
   runtime.dispose();
-  throw new Error('main render pass capacity was not reserved');
+  throw new Error("main render pass capacity was not reserved");
 }
 
 const benchmark = benchFromUrl({
-  onDone(result) { console.log(`[bench] ${formatBenchResults(result)}`); },
+  onDone(result) {
+    console.log(`[bench] ${formatBenchResults(result)}`);
+  },
 });
 /** @alloc-effect none */
 function updateFrame(frame: Readonly<RenderFrame>): void {
@@ -106,9 +127,12 @@ function updateFrame(frame: Readonly<RenderFrame>): void {
     const x = adapter.transform.positionX[entity] ?? 0;
     const z = adapter.transform.positionZ[entity] ?? 0;
     const angle = 0.002 + Math.sin(elapsed + index * 0.01) * 0.001;
-    adapter.transform.positionX[entity] = x * Math.cos(angle) - z * Math.sin(angle);
-    adapter.transform.positionZ[entity] = x * Math.sin(angle) + z * Math.cos(angle);
-    adapter.transform.positionY[entity] = (adapter.transform.positionY[entity] ?? 0) +
+    adapter.transform.positionX[entity] =
+      x * Math.cos(angle) - z * Math.sin(angle);
+    adapter.transform.positionZ[entity] =
+      x * Math.sin(angle) + z * Math.cos(angle);
+    adapter.transform.positionY[entity] =
+      (adapter.transform.positionY[entity] ?? 0) +
       Math.sin(elapsed * 2 + index * 0.1) * 0.5;
     adapter.markTransformDirty(entity);
   }
@@ -120,8 +144,7 @@ function updateFrame(frame: Readonly<RenderFrame>): void {
 
   if (benchmark) {
     benchmark.tick(elapsed * 1000);
-    if (benchmark.hasPendingResults)
-      benchmark.finish(); // @alloc-allowed reason=DiagnosticCapture issue=DME-013 expires=2026-10-01
+    if (benchmark.hasPendingResults) benchmark.finish(); // @alloc-allowed reason=DiagnosticCapture issue=DME-013 expires=2026-10-01
   }
 }
 

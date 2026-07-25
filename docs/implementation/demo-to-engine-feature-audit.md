@@ -1,5 +1,11 @@
 # Demo/example → engine feature audit
 
+> **Stale.** `afterglow-cef` and its five example launchers have been removed.
+> References to `afterglow-cef/examples/*.rs` and `AppBuilder` below are
+> historical. Rehoming the demos under `afterglow-shell` is tracked in
+> `docs/implementation/shell-promotion-plan.md` (gate G3). This audit is
+> retained as the design record of the demo→engine feature mapping.
+
 **Date:** 2026-07-16
 
 Concrete remediation tasks, dependency order, tests, CI ratchets, and final

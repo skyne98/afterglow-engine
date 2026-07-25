@@ -1,0 +1,115 @@
+{
+  "schema": 1,
+  "date": "2026-07-19",
+  "status": "prototype-gate-not-production-integration",
+  "host": {
+    "cpu": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "logicalCpus": 32,
+    "gpu": "NVIDIA GeForce RTX 3090",
+    "browser": "Chromium 150.0.7871.100",
+    "sampleRate": 48000,
+    "quantumFrames": 128
+  },
+  "architecture": {
+    "dspThread": "Emscripten Wasm AudioWorklet real-time thread",
+    "flags": ["-sAUDIO_WORKLET=1", "-sWASM_WORKERS=1", "-pthread", "-msimd128", "-O3"],
+    "steamAudio": "4.8.1 hybrid",
+    "voiceSlots": 128,
+    "initializedReflectionSlots": 64,
+    "activeDirectHrtfVoices": 32,
+    "gpuLoad": "same-page 1200x800 hardware-WebGPU clear submitted every requestAnimationFrame"
+  },
+  "runs": [
+    {
+      "activeReflectionVoices": 32,
+      "measuredCallbacks": 12448,
+      "steadyCallbackMaxMs": 2.0,
+      "steadyCallbacksOver2_667Ms": 0,
+      "callbackErrors": 0,
+      "callbackMaxGapMs": 9.0,
+      "steadyRafSamples": 240,
+      "steadyRafMeanMs": 6.95,
+      "steadyRafP99Ms": 6.95,
+      "steadyRafMaxMs": 6.95,
+      "steadyRafIntervalsBelow120Fps": 0,
+      "outputEnergyLastQuantum": 0.6607875227928162,
+      "outputPeakLastQuantum": 0.007562797982245684,
+      "physicalMonitorWaveform": {
+        "durationSeconds": 5,
+        "frames": 240000,
+        "channels": 2,
+        "nonzeroSamples": 471290,
+        "rmsI16": 22.97859828550616,
+        "peakI16": 108,
+        "longestInternalZeroFrames": 5,
+        "longestInternalZeroMs": 0.10416666666666667
+      },
+      "result": "pass-short-gate"
+    },
+    {
+      "activeReflectionVoices": 16,
+      "concurrentSimulation": {
+        "publication": "fixed lock-free latest-value triple buffer",
+        "directHz": 5,
+        "reflectionHz": 1,
+        "directUpdatesIncludingPrePlayback": 379,
+        "reflectionUpdatesIncludingPrePlayback": 76,
+        "errors": 0,
+        "maxCombinedUpdateMs": 27.264
+      },
+      "measuredCallbacks": 22456,
+      "steadyCallbackMaxMs": 1.0,
+      "steadyCallbacksOver2_667Ms": 0,
+      "callbackErrors": 0,
+      "callbackMaxGapMs": 10.0,
+      "steadyRafSamples": 240,
+      "steadyRafMeanMs": 6.95,
+      "steadyRafP99Ms": 6.955,
+      "steadyRafMaxMs": 6.955,
+      "steadyRafIntervalsBelow120Fps": 0,
+      "physicalMonitorWaveform": {
+        "durationSeconds": 5,
+        "frames": 240000,
+        "channels": 2,
+        "nonzeroSamples": 473708,
+        "rmsI16": 31.180021715301397,
+        "peakI16": 215,
+        "longestInternalZeroFrames": 4,
+        "longestInternalZeroMs": 0.08333333333333333
+      },
+      "result": "pass-concurrent-simulation-short-gate"
+    },
+    {
+      "activeReflectionVoices": 32,
+      "concurrentSimulation": {
+        "directHz": 5,
+        "reflectionHz": 1,
+        "errors": 0
+      },
+      "measuredCallbacks": 13108,
+      "steadyCallbackMaxMs": 2.0,
+      "steadyCallbacksOver2_667Ms": 0,
+      "callbackErrors": 0,
+      "rafMeanMsIncludingForegroundThrottling": 28.195739376770536,
+      "rafMaxMs": 1007.75,
+      "result": "reject-combined-render-budget"
+    },
+    {
+      "activeReflectionVoices": 64,
+      "measuredCallbacks": 13104,
+      "steadyCallbackMaxMs": 3.0,
+      "steadyCallbacksOver2_667Ms": 1,
+      "callbackErrors": 0,
+      "callbackMaxGapMs": 7.0,
+      "result": "reject-deadline"
+    }
+  ],
+  "notes": [
+    "The first 256 callbacks are treated as AudioContext/device warm-up and excluded from max/over-budget counters.",
+    "Callback gap is diagnostic only: WebAudio may render in bursts ahead of physical presentation. Physical monitor capture is the audible-gap check.",
+    "The first 32-active run was static after one initial simulation. Concurrent simulation changed the selected system tier to 16 active reflections.",
+    "The concurrent gate separates 5 Hz direct from 1 Hz reflection simulation and atomically publishes immutable scalar/transform snapshots. Steam's convolution IR uses its own upstream TripleBuffer<OverlapSaveFIR>.",
+    "The concurrent gate proves race-free publication at the C ABI boundary but does not yet use the unified Rust RPC service as its simulation owner.",
+    "The WebGPU loop intentionally creates ordinary command objects to load the foreground renderer; it is not engine hot-path source."
+  ]
+}

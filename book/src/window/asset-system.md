@@ -1,23 +1,35 @@
 # The Asset System
 
+> **Stale.** `afterglow-cef` and its CEF scheme handler / native range bridge
+> have been removed. The CEF-specific prose below is retained as design context;
+> the native shell's asset-root loader is an open parity gate (G1) tracked in
+> `docs/implementation/shell-promotion-plan.md`. Treat references to the CEF
+> scheme, the native bridge, and `AppBuilder::on_ready` as historical. The
+> authoritative current state is `docs/api/asset-system.md`.
+
 afterglow-engine has a streaming, range-capable asset system that works on
 both backends. Assets are served from the filesystem (native) or over HTTP
 (web), with no whole-file buffering and partial reads at arbitrary offsets.
 
-## Two layers
+## Current layers
 
-1. **Serving layer** — browser `fetch` hits this. The CEF scheme handler
-   (native) and the web HTTP dev server both stream via
-   `AssetSource::read_at` and support `Range` requests.
-2. **Asset loader worker** — the **single portable entry point** for loading
-   assets from the render thread (and Rust subsystems). Works on both native
-   (`FsSource`/`pread`) and web (JS-imported `fetch`). The render thread uses
-   the generated `AssetLoaderClient` TS client on both backends.
+1. **Serving layer** — the live browser BIG/VT path. Public web uses HTTP Fetch
+   + Range. CEF uses scheme Fetch for singleton reads and a private bounded
+   process-message bridge for bulk ranges. Both ultimately stream from
+   `AssetSource::read_at`.
+2. **Asset loader worker API** — a generated async service available to native
+   Rust consumers. It is not currently the entry point used by
+   `BigAssetSession`; the two browser targets do not currently share one
+   `AssetLoaderClient` path.
+3. **Texture transcode service** — public web uses generated WASM Web Workers.
+   CEF currently does the same, but this is a known target-boundary defect:
+   `afterglow-texture` has a native implementation and must run through its
+   generated native client and an OS worker started from `AppBuilder::on_ready`.
 
 ## `AssetSource` — the streaming primitive
 
 ```rust
-pub trait AssetSource: Send + Sync {
+pub trait AssetSource {
     fn len(&self) -> u64;
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<usize>;  // 0 at EOF
     fn etag(&self) -> Option<String>;
@@ -71,10 +83,35 @@ animated bone deformation.
 
 ## Range support
 
-Both serving backends parse the HTTP `Range` header (single-range only):
-`bytes=0-499`, `bytes=500-`, `bytes=-500`. A range request produces `206
-Partial Content` with `Content-Range`; no range → `200` full (also streamed).
-Multi-range falls back to `200` full.
+CEF bulk asset reads bypass `fetch` through an internal native bridge. The
+browser process merges spans that are already adjacent in supplied order and
+transfers one shared-memory response to the renderer. A bounded renderer-local
+thread performs the V8 sandbox's one required copy; returned page arrays are
+zero-copy views over the resulting buffer. An explicitly source-sorted
+fox-laptop diagnostic measured **950.2 MiB/s median**, about 2.15× the prior
+441.2 MiB/s custom-scheme/fetch result, with no drops at its intended batch
+cadences. The live `BigAssetSession` provider does not yet wire that source-
+sorting helper, so this is not current gameplay-provider throughput.
+
+The bridge and web transport share hard bounds: 256 spans, 4 MiB per complete
+response, two responses, and 8 MiB total in flight. The live provider currently
+preserves scheduler/admission order; only the separate diagnostic/helper source-
+sorts. The bridge merges adjacent spans only when they arrive adjacent. Single
+header/model reads
+remain on the scheme/HTTP path, so they cannot race the bridge's two global bulk
+slots. Capacity exhaustion rejects
+immediately instead of growing a queue. The bridge is CEF-only; public web uses
+explicit non-overlapping HTTP multi-ranges and receives standard `206
+multipart/byteranges` responses. The CEF scheme and development server can
+still serve those standard responses, while Caddy supplies the same format
+from its static-file implementation. Ordinary single ranges (`bytes=0-499`,
+`bytes=500-`, and `bytes=-500`) remain supported.
+
+In-flight HTTP and CEF bulk reads currently have no response deadline and do not
+receive VT abort signals; cancellation takes effect at stage boundaries. The
+Rust development server also reads request headers only once into 8 KiB and
+closes every connection, so use it only locally. `deploy/web/Caddyfile` is the
+production web-serving profile.
 
 ## Where the code lives
 
@@ -85,18 +122,17 @@ Asset serving code is split across 5 places, each with a distinct role:
 | `afterglow-assets/src/` (`lib.rs`, `source.rs`, `range.rs`) | **The shared core.** `AssetSource` trait, `FsSource`/`BytesSource`, `parse_range`, `AssetRoot`/`resolve` (confinement), `guess_mime`. Both backends build on this — no backend-specific logic here. |
 | `afterglow-cef/src/resources.rs` | **CEF scheme adapter.** Resolves a path to an `AssetSource`, drives CEF's `ResourceHandler` (`open`/`skip`/`read`/`response_headers`). Sets COOP/COEP + `Accept-Ranges`. |
 | `afterglow-web/src/dev_server.rs` | **HTTP adapter + bounded server.** Parses `Range` → `206`/`Content-Range`, streams via `stream_body()`, and runs fixed workers with bounded per-worker queues through `DevAssetServer`. |
-| `afterglow-assets-worker/src/` (`lib.rs`, `fetch.rs`) | **The portable asset loader.** `#[rpc]` async worker that works on both backends. Native: `FsSource`/`pread`. Web: JS-imported `fetch` (the `fetch.rs` bridge). The render thread uses the generated `AssetLoaderClient` TS client on both. |
+| `afterglow-assets-worker/src/` (`lib.rs`, `fetch.rs`) | **Generated asset-loader service.** Native builds read through `FsSource`; a web fetch ABI exists, but the live browser BIG/VT path currently bypasses this service and uses the serving-layer range loader. |
 | `afterglow-web/web/src/workers/async-worker.ts` | **Web async worker driver.** Authored TypeScript that drives the wasm async worker executor (`tick` + bounded `drain_completion`) and provides the `ag_fetch_start`/`ag_fetch_poll` imports. |
 
 **The principle:** the *what* (streaming reads, ranges, confinement, MIME) lives
 in `afterglow-assets`; the *how to deliver it* (CEF vs HTTP vs RPC) lives in
 each adapter. No streaming/range logic is duplicated across adapters.
 
-## The asset loader worker (both backends)
+## The asset loader worker API
 
-The `afterglow-assets-worker` crate is the **single portable entry point**
-for asset loading. It's an `#[rpc]` async singleton worker that works on both
-backends:
+The `afterglow-assets-worker` crate provides an `#[rpc]` async singleton with
+full-load, size, and positional-read methods:
 
 ```rust
 #[rpc(worker = AssetLoaderWorker, singleton)]
@@ -107,9 +143,10 @@ pub trait AssetLoader {
 }
 ```
 
-The render thread uses the generated `AssetLoaderClient` (TS) — the same client
-on both backends. The `singleton` flag means `spawn_worker()` takes no arguments
-(constructs via `Default`); the asset root is set once via `set_asset_root`.
+The macro generates both a native Rust client and a TypeScript client. They are
+target-specific backends, not permission to run the WASM client in CEF. The
+`singleton` flag means native `spawn_worker()` takes no arguments (constructs
+via `Default`); the asset root is set once via `set_asset_root`.
 
 ```rust
 // Set the root once (e.g. from AppBuilder::on_ready).
@@ -133,11 +170,12 @@ let bytes: Vec<u8> = chunk.await?;
 See [Defining a Service](../workers/defining-a-service.md) for the `singleton` flag
 and the async-vs-sync comparison table.
 
-### Using it from TypeScript (render thread)
+### Generated TypeScript client
 
-The generated `AssetLoaderClient` has a static `spawn()` that does all the
-wasm instantiation, memory setup, and fetch-import wiring internally — you get
-back a ready-to-use client:
+A generated `AssetLoaderClient.spawn()` can instantiate the WASM service and
+its Fetch imports. This is a public-web-capable API, but it is not the path used
+by `BigAssetSession` today and it is not a permitted CEF replacement for the
+native service:
 
 ```ts
 import { AssetLoaderClient } from './assetloader.client.js';
@@ -165,12 +203,15 @@ function frame() {
 requestAnimationFrame(frame);
 ```
 
-On native (CEF), the same code runs — `fetch('asset_loader.wasm')` hits the
-`afterglow://` scheme, and `fetch('textures/sky.png')` inside the worker hits
-the same scheme (streamed via `FsSource`/`pread`). On web, both hit the HTTP
-dev server or your production origin. The code is identical.
+On public web, these fetches hit the development server or production origin.
+On CEF, do **not** instantiate `assetloader.wasm` merely because the page can
+fetch it. A composed CEF asset-loader service must be spawned natively from
+`AppBuilder::on_ready`. The live BIG tile path currently uses the generic CEF
+range bridge directly, while its texture transcode stage incorrectly remains a
+WASM Web Worker; both facts are tracked as implementation status rather than
+presented as target policy.
 
-The poll model (how `await` resolves under the hood) is documented in
+The poll model is documented in
 [Defining a Service](../workers/defining-a-service.md).
 
 ## Next

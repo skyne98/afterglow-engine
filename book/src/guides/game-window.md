@@ -1,5 +1,12 @@
 # Building a Game Window
 
+> **Removed.** `afterglow-cef` and its `AppBuilder` have been removed; this
+> walkthrough targets the deleted CEF host. `afterglow-shell` is the sole native
+> host but does not yet expose a production game bootstrap API or asset-root
+> loading. A replacement walkthrough is tracked in
+> `docs/implementation/shell-promotion-plan.md` (gates G1 + G3). The code
+> below no longer compiles.
+
 An end-to-end walkthrough: a native CEF window with WebGPU, an embedded page,
 and an asset filesystem root.
 
@@ -79,9 +86,9 @@ static PHYSICS: OnceLock<PhysicsClient<afterglow_rpc::native::WorkerTransport>> 
 ```
 
 The callback must not block — spawn the worker, hand the client off, and return.
-If you don't need a native worker, leave `on_ready` unset and drive the worker
-from the page over `SharedArrayBuffer` instead (no Rust spawn needed) — see
-[Web Workers](../workers/web-workers.md).
+CEF services that have native implementations must be spawned here; their
+WASM/Web Worker build is not a CEF fallback. `SharedArrayBuffer` workers are for
+the public-web target and explicitly page-only diagnostics.
 
 > **CLI flags win.** Flags like `--ozone-platform=x11` and `--disable-gpu-vsync`
 > are only added by the shell if not already present, so you can override the

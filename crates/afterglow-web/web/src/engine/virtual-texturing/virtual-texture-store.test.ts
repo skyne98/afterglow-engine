@@ -233,10 +233,10 @@ describe('VirtualTextureStore residency identity', () => {
     expect(layouts.some(layout => layout.bytesPerRow === 136 * 4 && layout.rowsPerImage === 136)).toBe(true);
   });
 
-  test('expands albedo feedback with albedo-first priority and independent default mip biases', async () => {
-    const calls: Array<{ path: string; mip: number }> = [];
+  test('expands albedo feedback with urgent parents before albedo-first exact promotion', async () => {
+    const calls: Array<{ path: string; mip: number; tier: string | undefined }> = [];
     const store = new VT.VirtualTextureStore(loader, async (path, req) => {
-      calls.push({ path, mip: req.mip });
+      calls.push({ path, mip: req.mip, tier: req.batchTier });
       return new Uint8Array(PAGE_BYTES);
     });
     store.loadMaterialSet(
@@ -252,7 +252,10 @@ describe('VirtualTextureStore residency identity', () => {
     expect(Math.min(...calls.filter(call => call.path === 'normal').map(call => call.mip))).toBe(1);
     expect(Math.min(...calls.filter(call => call.path === 'rough').map(call => call.mip))).toBe(2);
     expect(Math.min(...calls.filter(call => call.path === 'ao').map(call => call.mip))).toBe(2);
-    expect(calls.slice(0, 4).every(call => call.path === 'color')).toBe(true);
+    const firstQuality = calls.findIndex(call => call.tier === 'quality');
+    expect(firstQuality).toBeGreaterThan(0);
+    expect(calls.slice(0, firstQuality).every(call => call.tier === 'urgent')).toBe(true);
+    expect(calls[firstQuality].path).toBe('color');
   });
 
   test('accepts material-configurable channel mip biases', async () => {
@@ -417,10 +420,10 @@ describe('VirtualTextureStore residency identity', () => {
     }
     const first = store.processFeedback(feedback);
     expect(first.loaded).toBe(0);
-    expect(first.queuedRequests).toBe(64);
+    expect(first.queuedRequests).toBe(32);
     for (let frame = 0; frame < 8; frame++) store.poll();
-    expect(calls.filter(call => call.startsWith('persistent:3:'))).toHaveLength(16);
-    expect(calls).toHaveLength(64);
+    expect(calls.filter(call => call.startsWith('persistent:2:'))).toHaveLength(16);
+    expect(calls).toHaveLength(32);
     expect(store.getStats().scheduledRequests).toBe(0);
   });
 
@@ -449,14 +452,13 @@ describe('VirtualTextureStore residency identity', () => {
       store.poll();
       await flush();
     }
-    expect(calls.slice(0, 7)).toEqual([
-      { mip: 3, x: 2, y: 2 },
-      { mip: 3, x: 3, y: 3 },
+    expect(calls.slice(0, 6)).toEqual([
+      { mip: 2, x: 0, y: 0 },
       { mip: 2, x: 4, y: 4 },
       { mip: 2, x: 6, y: 6 },
-      { mip: 1, x: 8, y: 8 },
-      { mip: 1, x: 12, y: 12 },
       { mip: 0, x: 0, y: 0 },
+      { mip: 0, x: 16, y: 16 },
+      { mip: 0, x: 24, y: 24 },
     ]);
   });
 
@@ -559,7 +561,7 @@ describe('VirtualTextureStore residency identity', () => {
     await flush();
     store.poll();
     expect(store.getStats().pendingPages).toBe(64);
-    expect(calls).toContain('preempt-5:3:0:0');
+    expect(calls).toContain('preempt-5:2:0:0');
   });
 
   test('coarsens progressive feedback only when its working set exceeds atlas capacity', async () => {

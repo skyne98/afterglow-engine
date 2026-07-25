@@ -4,16 +4,21 @@
 **Question:** Is there a "React Native"-style native runtime that lets a
 web-based Three.js engine run natively on Linux and ship on Steam?
 
-**Verdict (corrected):** There *is* a React-Native-style native runtime for
-WebGPU — **`react-native-webgpu`** (Dawn-backed, works with React Three Fiber)
-— but it covers **iOS, Android, macOS, visionOS only, not Linux/Windows**.
-For the Linux + Steam target specifically, the practical answer remains a
-**desktop webview wrapper**: **Electron** (or NW.js / CEF). **Tauri is not
-viable on Linux for WebGPU** because it uses system WebKitGTK, which has not
-shipped WebGPU.
+**Project update (2026-07-23):** Afterglow now has its own demonstrated Linux
+native runtime, [`afterglow-shell`](../../crates/afterglow-shell/README.md).
+It runs unmodified Three.js WebGPU modules in rusty_v8, presents directly with
+winit/wgpu, and implements the DOM/CSS HUD through LinkeDOM, Blitz, and Vello.
+It is the intended long-term replacement for CEF. CEF remains the transition
+host until asset packaging, native-worker composition, shipping APIs, and
+release hardware/soak gates are complete.
 
-See §6 below for the `react-native-webgpu` / React Three Fiber path (the
-mobile + macOS native story that *complements* Electron on desktop).
+The external-runtime comparison below remains the historical basis for why an
+in-project runtime was pursued. `react-native-webgpu` covers iOS, Android,
+macOS, and visionOS but not Linux/Windows; Electron/NW.js/CEF remain the mature
+third-party desktop wrappers. Tauri is still not viable on Linux for WebGPU
+because WebKitGTK has not shipped it.
+
+See §6 below for the `react-native-webgpu` / React Three Fiber path.
 
 ---
 

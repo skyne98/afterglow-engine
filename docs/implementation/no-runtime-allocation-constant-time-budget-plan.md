@@ -17,6 +17,9 @@ Related documents:
 - [`../audits/virtual-texture-vertical-slice-2026-07-15.md`](../audits/virtual-texture-vertical-slice-2026-07-15.md)
 - [`demo-to-engine-feature-audit.md`](demo-to-engine-feature-audit.md)
 - [`demo-engine-migration-execution-plan.md`](demo-engine-migration-execution-plan.md)
+- [`spatial-audio-integration-plan.md`](spatial-audio-integration-plan.md)
+- [`box3d-physics-integration-plan.md`](box3d-physics-integration-plan.md)
+- [`editor-plan.md`](editor-plan.md)
 
 ---
 
@@ -87,7 +90,6 @@ export const enum EnginePhase {
   Bootstrap,       // capacities, worlds, workers, arenas, renderer
   Warmup,          // pipelines/materials, first GPU resources, pool filling
   GameplaySealed,  // no engine general allocation on hot paths
-  LoadingScreen,   // explicit larger budgets; allocation still tracked
   Shutdown,
 }
 ```
@@ -114,10 +116,15 @@ variant before sealing.
 - Browser APIs known to allocate are only invoked by explicit budgeted boundary
   systems, never accidentally from arbitrary frame code.
 
-### LoadingScreen
+### Continuous gameplay streaming
 
-Allows explicitly declared slow work with higher budgets. It is not a loophole:
-all allocation is still counted and reason-tagged.
+The engine has no loading-screen phase. After warm-up, assets, world/acoustic
+tiles and derived state stream through fixed-capacity arenas, pools and rings
+with explicit byte/operation/time budgets, cancellation, stale generations and
+atomic publication. Expensive geometry/acceleration work is performed offline
+wherever possible. Unavoidable browser Fetch/codec allocation remains behind a
+tracked slow-path permit, but workers do not regain permission for general
+allocation after seal.
 
 ---
 

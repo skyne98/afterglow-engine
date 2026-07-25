@@ -11,7 +11,7 @@ export class PhysicsClient {
   /// and returns a ready-to-use client.
   static async spawn(opts: { mainWasmUrl?: string; workerJsUrl?: string; workerWasmUrl?: string; timeoutMs?: number } = {}): Promise<PhysicsClient> {
     const rpc = await Rpc.create({
-      mainWasmUrl: opts.mainWasmUrl ?? 'afterglow_web.wasm',
+      mainWasmUrl: opts.mainWasmUrl ?? 'afterglow_rpc.wasm',
       workerJsUrl: opts.workerJsUrl ?? 'worker.js',
       workerWasmUrl: opts.workerWasmUrl ?? 'physics.wasm',
       timeoutMs: opts.timeoutMs,

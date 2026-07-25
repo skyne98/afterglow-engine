@@ -3,7 +3,7 @@ import { describe, expect, test } from 'bun:test';
 const root = new URL('../', import.meta.url);
 const cpp = await Bun.file(new URL('dynamic-benchmark.cpp', root)).text();
 const directCpp = await Bun.file(new URL('benchmark.cpp', root)).text();
-const tracer = await Bun.file(new URL('obvhs-tracer/src/lib.rs', root)).text();
+const tracer = await Bun.file(new URL('../../../crates/afterglow-obvhs-tracer/src/lib.rs', import.meta.url)).text();
 const build = await Bun.file(new URL('build.sh', root)).text();
 const nativeBuild = await Bun.file(new URL('build-native.sh', root)).text();
 const nativeRunner = await Bun.file(new URL('native-dynamic-benchmark.cpp', root)).text();
@@ -14,6 +14,11 @@ const bistroWasm = await Bun.file(new URL('bistro-benchmark.cpp', root)).text();
 const bistroWorker = await Bun.file(new URL('src/bistro-worker.ts', root)).text();
 const bistroMain = await Bun.file(new URL('src/bistro-main.ts', root)).text();
 const readme = await Bun.file(new URL('README.md', root)).text();
+const audioWorker = await Bun.file(new URL('../../../crates/afterglow-audio-worker/src/lib.rs', import.meta.url)).text();
+const audioHost = await Bun.file(new URL('../../../crates/afterglow-web/web/src/workers/audio-worker.ts', import.meta.url)).text();
+const audioClient = await Bun.file(new URL('../../../crates/afterglow-web/web/src/workers/engineaudioservice.client.ts', import.meta.url)).text();
+const audioWorklet = await Bun.file(new URL('../../../crates/afterglow-web/web/src/engine/audio/audio-worklet.ts', import.meta.url)).text();
+const wasmAudioWorklet = await Bun.file(new URL('audio-worklet-gate.cpp', root)).text();
 const evidence = await Bun.file(new URL('../../../docs/benchmarks/steam-audio-wasm-dynamic-fox-laptop-2026-07-18.json', import.meta.url)).json();
 const manySourceEvidence = await Bun.file(new URL('../../../docs/benchmarks/steam-audio-wasm-many-sources-fox-laptop-2026-07-18.json', import.meta.url)).json();
 const nativeEvidence = await Bun.file(new URL('../../../docs/benchmarks/steam-audio-native-many-sources-fox-laptop-2026-07-18.json', import.meta.url)).json();
@@ -23,8 +28,108 @@ const bistroEmbreeEvidence = await Bun.file(new URL('../../../docs/benchmarks/st
 const obvhsEvidence = await Bun.file(new URL('../../../docs/benchmarks/steam-audio-wasm-obvhs-fox-laptop-2026-07-18.json', import.meta.url)).json();
 const threadedObvhsEvidence = await Bun.file(new URL('../../../docs/benchmarks/steam-audio-wasm-obvhs-simd-pthreads-fox-laptop-2026-07-18.json', import.meta.url)).json();
 const bistroWasmEvidence = await Bun.file(new URL('../../../docs/benchmarks/steam-audio-wasm-bistro-full-package-fox-laptop-2026-07-19.json', import.meta.url)).json();
+const workletEvidence = await Bun.file(new URL('../../../docs/benchmarks/steam-audio-wasm-audio-worklet-gate-fox-workstation-2026-07-19.json', import.meta.url)).json();
+const unifiedWorkerEvidence = await Bun.file(new URL('../../../docs/benchmarks/steam-audio-unified-worker-web-profile-fox-workstation-2026-07-19.json', import.meta.url)).json();
+const realAssetEvidence = await Bun.file(new URL('../../../docs/benchmarks/steam-audio-real-assets-fox-workstation-2026-07-18.json', import.meta.url)).json();
 
 describe('fully dynamic Steam Audio WASM prototype', () => {
+  test('uses one unified Rust RPC service for the Worker to AudioWorklet gate', () => {
+    expect(audioWorker).toContain('#[rpc(worker = EngineAudioWorker)]');
+    expect(audioWorker).toContain('afterglow_audio_pump');
+    expect(audioWorker).toContain('afterglow_steam_audio_render_quantum');
+    expect(build).toContain('libafterglow_audio_worker.a');
+    expect(build).toContain('engine-audio-rpc.js');
+    expect(build).toContain('CARGO_BUILD_JOBS="$build_jobs"');
+    expect(cpp).toContain('IPL_REFLECTIONEFFECTTYPE_HYBRID');
+    expect(cpp).toContain('kMaxEngineReflectionVoiceCount = 64');
+    expect(cpp).toContain('gSpatialDirectVoiceLimit = static_cast<int>(reflectionVoices)');
+    expect(cpp).toContain('afterglow_steam_audio_register_sound');
+    expect(cpp).toContain('residentSample(*resident, control.cursor + sample');
+    expect(cpp).toContain('afterglow_steam_audio_load_acoustic_scene');
+    expect(cpp).toContain('afterglow_obvhs_create_indexed');
+    expect(cpp).toContain('gActiveReflectionEffectLimit.store(\n        static_cast<int>(reflectionVoices)');
+    expect(cpp).toContain('afterglow_steam_audio_set_active_reflection_voices');
+    expect(audioHost).toContain('afterglow_wasm_serve_frame');
+    expect(audioHost).toContain('afterglow_audio_pump');
+    expect(audioHost).toContain('afterglow_audio_simulate_motion');
+    expect(audioHost).toContain('nextSimulationMs = performance.now() + 1_000');
+    expect(audioClient).toContain('async crossfadeTo(');
+    expect(audioClient).toContain('async setVoiceVolume(');
+    expect(audioClient).toContain('async loadWav(data: Uint8Array, looped: boolean)');
+    expect(audioClient).toContain('async beginWavUpload(');
+    expect(audioClient).toContain('async beginAcousticSceneUpload(');
+    expect(audioWorker).toContain('VoiceScheduler');
+    expect(audioWorker).toContain('fn crossfade_to(');
+    expect(audioWorklet).not.toContain('postMessage');
+  });
+  test('runs deadline DSP in an Emscripten real-time Wasm AudioWorklet gate', () => {
+    expect(build).toContain('-sAUDIO_WORKLET=1 -sWASM_WORKERS=1');
+    expect(wasmAudioWorklet).toContain('emscripten_start_wasm_audio_worklet_thread_async');
+    expect(wasmAudioWorklet).toContain('afterglow_steam_audio_render_quantum()');
+    expect(wasmAudioWorklet).toContain('processAudio');
+    expect(wasmAudioWorklet).toContain('runSimulationWorker');
+    expect(wasmAudioWorklet).toContain('gSimulationThread = std::thread');
+    expect(cpp).toContain('publishSimulationSnapshot');
+    expect(cpp).toContain('consumeSimulationSnapshot');
+    expect(cpp).toContain('gSnapshotMiddleIndex.exchange');
+    expect(wasmAudioWorklet).toContain('updateIndex % 5');
+    expect(wasmAudioWorklet).toContain('std::chrono::milliseconds(200)');
+    const renderQuantum = cpp.slice(
+      cpp.indexOf('int afterglow_steam_audio_render_quantum()'),
+      cpp.indexOf('const float* afterglow_steam_audio_pcm_ptr()'),
+    );
+    expect(renderQuantum).toContain('consumeSimulationSnapshot()');
+    expect(renderQuantum).not.toContain('gOutputs[');
+    expect(renderQuantum).not.toContain('gSourceInputs[');
+    expect(renderQuantum).not.toContain('gSharedInputs.listener');
+    expect(wasmAudioWorklet).not.toMatch(/new |malloc|postMessage/);
+  });
+
+  test('ties the selected unified Worker profile to device and render evidence', () => {
+    expect(unifiedWorkerEvidence.architecture.voiceCapacity).toBe(16);
+    expect(unifiedWorkerEvidence.architecture.completeWorldPhysicalVoiceCapacity).toBe(4);
+    expect(unifiedWorkerEvidence.architecture.transport).toContain('eight-quantum');
+    expect(unifiedWorkerEvidence.run.callbacks).toBeGreaterThan(30_000);
+    expect(unifiedWorkerEvidence.run.simulationUpdates).toBeGreaterThan(100);
+    expect(unifiedWorkerEvidence.run.underruns).toBe(0);
+    expect(unifiedWorkerEvidence.run.sequenceErrors).toBe(0);
+    expect(unifiedWorkerEvidence.run.pumpOverBudget).toBe(0);
+    expect(unifiedWorkerEvidence.voiceSchedulerValidation.activeWorldPhysicalVoices).toBe(4);
+    expect(unifiedWorkerEvidence.voiceSchedulerValidation.completedVoiceFades).toBe(1);
+    expect(unifiedWorkerEvidence.voiceSchedulerValidation.underruns).toBe(0);
+    expect(unifiedWorkerEvidence.voiceSchedulerValidation.physicalMonitorWaveform.longestInternalZeroMs)
+      .toBeLessThan(1);
+    expect(unifiedWorkerEvidence.residentSoundValidation.loadedResidentSounds).toBe(1);
+    expect(unifiedWorkerEvidence.residentSoundValidation.residentSoundBytes).toBe(38_400);
+    expect(unifiedWorkerEvidence.residentSoundValidation.underruns).toBe(0);
+    expect(unifiedWorkerEvidence.residentSoundValidation.physicalMonitorWaveform.longestInternalZeroMs)
+      .toBeLessThan(1);
+    expect(unifiedWorkerEvidence.conclusion.selectedProductionCandidate).toBe(true);
+  });
+
+  test('selects render-ahead depth using coupled real sounds and real environments', () => {
+    expect(realAssetEvidence.assets.sounds.files).toHaveLength(5);
+    expect(realAssetEvidence.assets.environments.scenes).toHaveLength(3);
+    expect(realAssetEvidence.nativeRejectedFourQuanta.every((run: { underruns: number }) => run.underruns > 0)).toBe(true);
+    expect(realAssetEvidence.nativeAcceptedEightQuanta.every((run: { underruns: number; sequenceErrors: number; longestZeroMs: number }) =>
+      run.underruns === 0 && run.sequenceErrors === 0 && run.longestZeroMs === 0)).toBe(true);
+    expect(realAssetEvidence.webRealSoundSet.underruns).toBe(0);
+    expect(realAssetEvidence.conclusion.selectedNativeRenderAheadQuanta).toBe(8);
+  });
+
+  test('ties concurrent AudioWorklet admission to physical and render evidence', () => {
+    const accepted = workletEvidence.runs.find(
+      (run: { result: string }) => run.result === 'pass-concurrent-simulation-short-gate',
+    );
+    expect(accepted.activeReflectionVoices).toBe(16);
+    expect(accepted.measuredCallbacks).toBeGreaterThan(20_000);
+    expect(accepted.steadyCallbacksOver2_667Ms).toBe(0);
+    expect(accepted.callbackErrors).toBe(0);
+    expect(accepted.concurrentSimulation.errors).toBe(0);
+    expect(accepted.steadyRafP99Ms).toBeLessThan(8.333);
+    expect(accepted.physicalMonitorWaveform.longestInternalZeroMs).toBeLessThan(1);
+  });
+
   test('uses the allocation-free obvhs custom scene without baked data', () => {
     expect(cpp).toContain('input.baked = IPL_FALSE');
     expect(cpp).toContain('IPL_SCENETYPE_CUSTOM');

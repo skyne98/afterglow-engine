@@ -1,26 +1,31 @@
-# `afterglow-assets` API — shared asset-path/MIME helpers
+# `afterglow-assets` API — confinement, MIME, and streaming byte sources
 
-> Status: working; API checked against the 2026-07-10 source.
+> Status: working; API checked against the 2026-07-22 source.
 
 ## Purpose
 
-`afterglow-assets` is the single owner of the two pieces of security-sensitive
-resource logic the engine's two resource servers need:
+`afterglow-assets` owns the security-sensitive resource primitives shared by
+the engine's two serving backends:
 
 - [`guess_mime`]: MIME type from a path extension.
 - [`AssetRoot`]: a canonicalized root reused across requests.
 - [`resolve`]: one-shot secure resolution beneath an asset root.
+- [`AssetSource`], [`FsSource`], and [`BytesSource`]: positional streaming bytes.
+- the bounded single-range and multipart-range parsers.
 
-It is deliberately tiny: **no third-party dependencies, no HTTP types, and no
-file-content reads**. URL paths are consistently percent-decoded as UTF-8 and
-callers read the resolved path themselves.
+The confinement module remains dependency-free and performs no file-content
+reads. The crate as a whole does read content: native `FsSource` owns cached,
+positional `pread`, while `BytesSource` wraps embedded bytes. It contains no HTTP
+framework types; the shell and the web server adapt these primitives to their
+own request APIs. URL paths are consistently percent-decoded as UTF-8.
 Both resource backends consume it:
 
-- [`afterglow-cef`](cef-shell.md) serves embedded bytes and/or FS files through
-  the `afterglow://local/` custom scheme;
 - the `afterglow-web` dev server (`crates/afterglow-web/src/dev_server.rs`, used
   by the `coep_server` example) serves files over plain HTTP — see
   [`web-shared-memory.md`](web-shared-memory.md).
+- the native `afterglow-shell` host will consume `FsSource`/`BytesSource`
+  through an equivalent asset-root loader once that gate lands (see
+  `docs/implementation/shell-promotion-plan.md`).
 
 Every miss, escape, and unreadable path maps to `None` so callers answer a
 uniform 404 without leaking which check failed.
@@ -94,9 +99,12 @@ rejected. The cost is that **the file must exist** to be resolved
 (`canonicalize` fails on missing paths), which is the desired 404 behavior
 anyway.
 
-## Caller-owned reads and 404 policy
+## Resolution, streaming reads, and 404 policy
 
-`resolve` does no I/O beyond `canonicalize`. Callers own the actual byte read:
+`resolve` does no I/O beyond `canonicalize`. Callers may open the returned path
+themselves, but serving code should normally use `AssetRoot::open_source()` or
+the fixed-capacity `AssetSourceCache` documented in
+[`asset-system.md`](asset-system.md):
 
 ```rust
 use afterglow_assets::{guess_mime, resolve};
@@ -106,7 +114,9 @@ let root = afterglow_assets::AssetRoot::new("/srv/assets").unwrap();
 match root.resolve("/index.html?v=2") {
     Some(path) => {
         let mime = guess_mime("/index.html");
-        let body = std::fs::read(&path)?; // caller decides error policy
+        // Low-level confinement example. Serving adapters normally stream this
+        // path through FsSource instead of buffering it with std::fs::read.
+        let body = std::fs::read(&path)?;
         // serve `body` as `mime`
     }
     None => /* answer 404 — do not distinguish miss/escape/unreadable */,
@@ -116,12 +126,9 @@ match root.resolve("/index.html?v=2") {
 Every failure mode (traversal escape, root-only path, missing file, unreadable
 path, symlink escape) collapses to `None`. Callers should answer a uniform 404
 for `None` and **never** report which check failed, to avoid leaking filesystem
-layout. Both backends follow this: CEF returns `404 not found` as `text/plain`;
-the web dev server returns `404 Not Found`.
+layout. Both backends follow this: the web dev server returns `404 Not Found`.
 
 ## Cross-links
 
-- [`cef-shell.md`](cef-shell.md) — the `afterglow://local/` resource handler that
-  calls `resolve` / `guess_mime` for the FS-fallback path.
 - [`web-shared-memory.md`](web-shared-memory.md) — the `coep_server` dev server
   shares the same resolution path and COOP/COEP requirements.

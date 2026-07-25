@@ -2,3 +2,7 @@ node_modules/
 assets/*.wasm
 assets/dungeon.big
 assets/rigged-vt.big
+# Authored comms TS lives in afterglow-rpc/web/src/workers/ (comms crate owns it);
+# xtask copies these two here so generated clients + tests resolve ./codec.ts + ./rpc.ts.
+src/workers/codec.ts
+src/workers/rpc.ts

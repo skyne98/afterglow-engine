@@ -1,15 +1,15 @@
 # latency-tool — automated input→present latency measurement
 
-Measures **input→present** latency for the cef-rs prototype via the Chrome
-DevTools Protocol (CDP), fully automated and reproducible (no hardware).
+Measures **input→present** latency for the afterglow-shell native host via the
+Chrome DevTools Protocol (CDP), fully automated and reproducible (no hardware).
 
 ## What it measures
 
 `input event (blink dispatch) → next SkiaRenderer::SwapBuffers (frame present)`,
 all in Chromium's trace clock (no wall-clock alignment). It:
 
-1. Connects to CEF's browser-level CDP endpoint (`/json/version` → `webSocketDebuggerUrl`).
-2. Finds the page target via `Target.getTargets` + `Target.attachToTarget` (CEF Views
+1. Connects to the host's browser-level CDP endpoint (`/json/version` → `webSocketDebuggerUrl`).
+2. Finds the page target via `Target.getTargets` + `Target.attachToTarget` (Views
    browsers aren't listed in `/json/list`).
 3. `Tracing.start` (blink/cc/gpu/… categories).
 4. For N iterations: `Input.dispatchMouseEvent` (synthetic click) — the input events
@@ -29,12 +29,9 @@ reliably and reproducibly: renderer input handling → compositor → present.
 ## Run
 
 ```sh
-cd prototype/cef-webgpu
-# 1. Launch the app with CDP enabled (AFTERGLOW_DEVTOOLS=9222):
-env CEF_PATH="$PWD/target/debug" AFTERGLOW_DEVTOOLS=9222 nix-shell shell.nix --run \
-  "./target/debug/afterglow-cef-webgpu --ozone-platform=x11" &
+# 1. Launch the afterglow-shell host with CDP enabled.
 # 2. Wait for CDP, then run the tool:
-./latency-tool/target/release/latency-tool
+./target/release/latency-tool
 ```
 
 ## Empirical result (this machine: NVIDIA Ampere, X11/XWayland, vsync-on)

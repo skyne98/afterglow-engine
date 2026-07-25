@@ -13,8 +13,8 @@
 //! - [`range::parse_range`]: single-range HTTP `Range` parsing shared by both
 //!   backends.
 //!
-//! No third-party dependencies. The confinement logic (`resolve`) performs
-//! canonicalization but no content reads; the streaming sources (`source`
+//! The confinement logic (`resolve`) performs canonicalization but no content
+//! reads; the streaming sources (`source`
 //! module) own the reads. Every miss, escape, and unreadable path maps to
 //! `None` so callers can answer a uniform 404 without leaking which check
 //! failed.
@@ -22,12 +22,17 @@
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
+pub mod multipart;
 pub mod range;
 pub mod source;
 
+pub use multipart::{
+    ByteRange, MAX_BULK_RANGES, MAX_BULK_RESPONSE_BYTES, MULTIPART_BOUNDARY,
+    MULTIPART_CONTENT_TYPE, MultiRangeSpec, MultipartSource, parse_multi_range,
+};
+pub use source::{AssetSource, AssetSourceProvider, BytesSource};
 #[cfg(not(target_arch = "wasm32"))]
-pub use source::FsSource;
-pub use source::{AssetSource, BytesSource};
+pub use source::{AssetSourceCache, FsSource};
 
 /// Guess a MIME type from a path's extension.
 ///
@@ -70,6 +75,10 @@ impl AssetRoot {
     /// Resolve and open a URL path as a streaming [`FsSource`] (native only).
     /// Returns `None` if the path is missing/escaped/unreadable — callers
     /// answer a uniform 404.
+    ///
+    /// This is the uncached path: it canonicalizes + opens + stats on every
+    /// call. For many small reads against one container, wrap the root in an
+    /// [`AssetSourceCache`](source::AssetSourceCache) instead.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn open_source(&self, url_path: &str) -> Option<FsSource> {
         let path = self.resolve(url_path)?;
@@ -78,6 +87,16 @@ impl AssetRoot {
 
     pub fn as_path(&self) -> &Path {
         &self.0
+    }
+}
+
+/// Uncached provider: canonicalize + open + stat on every call. For many small
+/// reads against one container, use [`AssetSourceCache`] instead.
+#[cfg(not(target_arch = "wasm32"))]
+impl AssetSourceProvider for AssetRoot {
+    fn open_source(&self, url_path: &str) -> Option<Box<dyn AssetSource + Send + Sync>> {
+        AssetRoot::open_source(self, url_path)
+            .map(|s| Box::new(s) as Box<dyn AssetSource + Send + Sync>)
     }
 }
 
@@ -171,7 +190,7 @@ mod tests {
 
     /// A scratch directory removed on drop. Unique per call so parallel tests
     /// never collide. No third-party `tempfile` dependency, matching the
-    /// pattern already used in `afterglow-cef` and `afterglow-web`.
+    /// pattern already used in `afterglow-web`.
     struct Scratch(PathBuf);
 
     impl Scratch {

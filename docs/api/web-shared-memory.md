@@ -1,11 +1,11 @@
-# `afterglow-web` API — shared-memory worker transport
+# `afterglow-rpc` wasm — shared-memory worker transport
 
 > Status: working; API checked against the 2026-07-18 source.
 
 ## Architecture
 
 The page owns a shared `WebAssembly.Memory` backed by `SharedArrayBuffer`. An
-`afterglow-web` wasm instance exposes the page-side request/response ring API.
+`afterglow-rpc` wasm instance exposes the page-side request/response ring API.
 A Web Worker receives the SAB once during initialization and reads/writes those
 rings with matching `Atomics` and wrap-safe framing logic.
 
@@ -50,8 +50,34 @@ Cross-Origin-Resource-Policy: same-origin
 ```
 
 `crates/afterglow-web/examples/coep_server.rs` serves these headers for local
-development. Path/MIME resolution and canonical confinement are shared with the
-CEF scheme handler via [`afterglow-assets`](assets.md).
+development. It is a bounded HTTP/1.1-close test server, not a public origin.
+Path/MIME resolution and canonical confinement are shared with the web dev
+server via [`afterglow-assets`](assets.md).
+
+## Caddy HTTP/1.1, HTTP/2, and HTTP/3 origin
+
+`deploy/web/Caddyfile` is the static-origin configuration. It explicitly
+supports `h1 h2 h3`, leaves HTTP/1.1 persistent (it never sends
+`Connection: close`), and applies the three isolation headers plus
+`Accept-Ranges: bytes`. HTTP/2 and HTTP/3 multiplex all page ranges through one
+connection; HTTP/3 uses QUIC and its negotiated idle timeout, so a
+`Connection: keep-alive` header must not be emitted there.
+
+For the single-client local gate, Caddy listens at `https://localhost:8443`
+and uses its local CA without a privileged port-80 redirect listener:
+
+```sh
+nix-shell shell.nix --run \
+  'caddy run --config deploy/web/Caddyfile --adapter caddyfile'
+```
+
+A public deployment sets `AFTERGLOW_WEB_ADDRESS` to its DNS hostname and must
+expose TCP and UDP on its HTTPS port. It uses normal Caddy/ACME TLS; HTTP/3
+falls back transparently to HTTP/2 or HTTP/1.1 when QUIC is unavailable. The
+local CEF H3 benchmark uses a narrow certificate-SPKI allowlist and a forced
+localhost QUIC origin because Chromium does not accept a custom local CA for
+normal Alt-Svc-to-QUIC promotion. Those switches are test-only and are never a
+production certificate policy.
 
 ## Memory contract
 
@@ -78,7 +104,7 @@ The page-side module currently contains:
 Use exported pointers and sizes. Their offsets are linker-controlled and must
 never be hard-coded.
 
-## Page-side wasm exports (`afterglow_web.wasm`)
+## Page-side wasm exports (`afterglow_rpc.wasm`)
 
 ### Initialization and layout
 
@@ -142,7 +168,7 @@ same payload transport.
 
 ```js
 const rpc = await Rpc.create({
-  mainWasmUrl: 'afterglow_web.wasm',
+  mainWasmUrl: 'afterglow_rpc.wasm',
   workerJsUrl: 'worker.js',
   workerWasmUrl: 'physics_worker.wasm',
   timeoutMs: 5000, // optional; default 5000
@@ -216,7 +242,7 @@ cargo run -p xtask wasm
 Optimized artifacts for benchmarking/shipping:
 
 ```sh
-cargo build -p afterglow-web --target wasm32-unknown-unknown \
+cargo build -p afterglow-rpc --target wasm32-unknown-unknown \
   -Zbuild-std=core,alloc,std,panic_abort --profile wasm-release
 cargo build -p afterglow-rpc-demo --target wasm32-unknown-unknown \
   -Zbuild-std=core,alloc,std,panic_abort --profile wasm-release

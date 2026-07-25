@@ -1,0 +1,192 @@
+{
+  "schemaVersion": 1,
+  "benchmark": "Unified EngineAudio real sound set through full-resolution real acoustic environments",
+  "date": "2026-07-18",
+  "host": {
+    "name": "fox-workstation",
+    "cpu": "AMD Ryzen 9 9950X3D",
+    "os": "Linux 6.18.38"
+  },
+  "assets": {
+    "sounds": {
+      "source": "Steam Audio 4.8.1 SDK test audio",
+      "files": [
+        "abcd.wav",
+        "counting.wav",
+        "impulse.wav",
+        "ozymandias.wav",
+        "pinknoise.wav"
+      ],
+      "sourceFormat": "mono 44.1 kHz float32 WAV",
+      "testFormat": "ffmpeg-resampled mono 48 kHz PCM16 WAV",
+      "residentBytes": 7518980
+    },
+    "environments": {
+      "source": "Amazon Lumberyard Bistro v5.2 (CC-BY 4.0)",
+      "url": "https://developer.nvidia.com/bistro",
+      "scenes": [
+        "BistroExterior",
+        "BistroInterior",
+        "BistroInterior_Wine"
+      ]
+    }
+  },
+  "method": {
+    "voices": "four complete world-physical voices plus one dry voice, each gain 0.2",
+    "simulation": "512 rays, 2 bounces, 500 ms hybrid reflections, one update per second",
+    "sink": "independent 128-frame native sink thread; hybrid sleep/spin deadline pacing",
+    "secondsPerScene": 10
+  },
+  "nativeRejectedFourQuanta": [
+    {
+      "scene": "BistroExterior.acoustic",
+      "targetQuanta": 4,
+      "sceneBytes": 71421336,
+      "vertices": 2883642,
+      "triangles": 2832120,
+      "sounds": 5,
+      "residentBytes": 7518980,
+      "seconds": 10,
+      "callbacks": 3750,
+      "underruns": 27,
+      "sequenceErrors": 0,
+      "pumpMeanMs": 0.08594702308105208,
+      "pumpMaxMs": 0.71805,
+      "simulationUpdates": 11,
+      "nonzeroSamples": 953088,
+      "rms": 0.013841397664694595,
+      "peak": 0.42702082,
+      "longestZeroMs": 10.666666666666666
+    },
+    {
+      "scene": "BistroInterior.acoustic",
+      "targetQuanta": 4,
+      "sceneBytes": 23366297,
+      "vertices": 813359,
+      "triangles": 1046609,
+      "sounds": 5,
+      "residentBytes": 7518980,
+      "seconds": 10,
+      "callbacks": 3750,
+      "underruns": 22,
+      "sequenceErrors": 0,
+      "pumpMeanMs": 0.11679266898954703,
+      "pumpMaxMs": 1.581903,
+      "simulationUpdates": 11,
+      "nonzeroSamples": 954368,
+      "rms": 0.013089312973009583,
+      "peak": 0.42714366,
+      "longestZeroMs": 8
+    },
+    {
+      "scene": "BistroInterior_Wine.acoustic",
+      "targetQuanta": 4,
+      "sceneBytes": 29930363,
+      "vertices": 1063841,
+      "triangles": 1320323,
+      "sounds": 5,
+      "residentBytes": 7518980,
+      "seconds": 10,
+      "callbacks": 3750,
+      "underruns": 26,
+      "sequenceErrors": 0,
+      "pumpMeanMs": 0.10587389213844915,
+      "pumpMaxMs": 1.933835,
+      "simulationUpdates": 11,
+      "nonzeroSamples": 953344,
+      "rms": 0.017150085926322018,
+      "peak": 0.4272982,
+      "longestZeroMs": 13.333333333333334
+    }
+  ],
+  "nativeAcceptedEightQuanta": [
+    {
+      "scene": "BistroExterior.acoustic",
+      "sceneBytes": 71421336,
+      "vertices": 2883642,
+      "triangles": 2832120,
+      "sounds": 5,
+      "residentBytes": 7518980,
+      "seconds": 10,
+      "callbacks": 3750,
+      "underruns": 0,
+      "sequenceErrors": 0,
+      "pumpMeanMs": 0.11305339499600746,
+      "pumpMaxMs": 2.035136,
+      "simulationUpdates": 11,
+      "nonzeroSamples": 960000,
+      "rms": 0.01353069384780595,
+      "peak": 0.42702082,
+      "longestZeroMs": 0,
+      "targetQuanta": 8
+    },
+    {
+      "scene": "BistroInterior.acoustic",
+      "sceneBytes": 23366297,
+      "vertices": 813359,
+      "triangles": 1046609,
+      "sounds": 5,
+      "residentBytes": 7518980,
+      "seconds": 10,
+      "callbacks": 3750,
+      "underruns": 0,
+      "sequenceErrors": 0,
+      "pumpMeanMs": 0.10529053713068938,
+      "pumpMaxMs": 1.616959,
+      "simulationUpdates": 11,
+      "nonzeroSamples": 960000,
+      "rms": 0.013124060296456267,
+      "peak": 0.42714366,
+      "longestZeroMs": 0,
+      "targetQuanta": 8
+    },
+    {
+      "scene": "BistroInterior_Wine.acoustic",
+      "sceneBytes": 29930363,
+      "vertices": 1063841,
+      "triangles": 1320323,
+      "sounds": 5,
+      "residentBytes": 7518980,
+      "seconds": 10,
+      "callbacks": 3750,
+      "underruns": 0,
+      "sequenceErrors": 0,
+      "pumpMeanMs": 0.10967569105907397,
+      "pumpMaxMs": 1.832785,
+      "simulationUpdates": 11,
+      "nonzeroSamples": 960000,
+      "rms": 0.017583644856621575,
+      "peak": 0.4272982,
+      "longestZeroMs": 0,
+      "targetQuanta": 8
+    }
+  ],
+  "webRealSoundSet": {
+    "environment": "generated 10K-triangle room",
+    "targetQuanta": 8,
+    "seconds": 30,
+    "callbacks": 11244,
+    "underruns": 0,
+    "sequenceErrors": 0,
+    "pumpOverBudget": 0,
+    "pumpMeanMs": 0.10084473871311767,
+    "pumpMaxMs": 2.195,
+    "simulationUpdates": 31,
+    "loadedResidentSounds": 5,
+    "residentSoundBytes": 7518980,
+    "activeVoices": 5,
+    "activeWorldPhysicalVoices": 4,
+    "physicalCapture": {
+      "seconds": 5,
+      "nonzeroSamples": 476096,
+      "rmsI16": 52.385175821345996,
+      "peakI16": 246,
+      "longestInternalZeroMs": 0.08333333333333333
+    }
+  },
+  "conclusion": {
+    "selectedNativeRenderAheadQuanta": 8,
+    "reason": "Four quanta produced 22-27 underruns per 10-second scene while full-scene reflection simulation blocked the sole worker; eight quanta produced zero across all three scenes.",
+    "webFullBistroStatus": "not accepted: the normal 256 MiB web module did not complete the full Bistro Interior upload/build control call within the bounded test; production web needs cooked structural proxies and bounded tile streaming rather than full render geometry."
+  }
+}

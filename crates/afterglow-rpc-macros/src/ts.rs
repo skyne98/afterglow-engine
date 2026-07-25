@@ -289,7 +289,7 @@ pub fn generate_client(tr: &ItemTrait, is_async: bool) -> syn::Result<String> {
             format!("  /// Spawn the service in a real Web Worker using the shared-ring transport."),
             format!("  static async spawnThreaded(opts: {{ mainWasmUrl?: string; workerJsUrl?: string; workerWasmUrl?: string; timeoutMs?: number }} = {{}}): Promise<{client_name}> {{"),
             format!("    const rpc = await Rpc.create({{"),
-            format!("      mainWasmUrl: opts.mainWasmUrl ?? 'afterglow_web.wasm',"),
+            format!("      mainWasmUrl: opts.mainWasmUrl ?? 'afterglow_rpc.wasm',"),
             format!("      workerJsUrl: opts.workerJsUrl ?? 'worker.js',"),
             format!("      workerWasmUrl: opts.workerWasmUrl ?? '{wasm_default}',"),
             format!("      timeoutMs: opts.timeoutMs,"),
@@ -308,7 +308,7 @@ pub fn generate_client(tr: &ItemTrait, is_async: bool) -> syn::Result<String> {
             format!("  /// and returns a ready-to-use client."),
             format!("  static async spawn(opts: {{ mainWasmUrl?: string; workerJsUrl?: string; workerWasmUrl?: string; timeoutMs?: number }} = {{}}): Promise<{client_name}> {{"),
             format!("    const rpc = await Rpc.create({{"),
-            format!("      mainWasmUrl: opts.mainWasmUrl ?? 'afterglow_web.wasm',"),
+            format!("      mainWasmUrl: opts.mainWasmUrl ?? 'afterglow_rpc.wasm',"),
             format!("      workerJsUrl: opts.workerJsUrl ?? 'worker.js',"),
             format!("      workerWasmUrl: opts.workerWasmUrl ?? '{wasm_default}',"),
             format!("      timeoutMs: opts.timeoutMs,"),
@@ -344,7 +344,7 @@ pub fn write_client(name: &str, source: &str) {
     let Some(dir) = std::env::var_os("CARGO_MANIFEST_DIR") else {
         return;
     };
-    let ts_dir = Path::new(&dir).join("ts");
+    let ts_dir = Path::new(&dir).join("gen");
     let _ = std::fs::create_dir_all(&ts_dir);
     let file = ts_dir.join(format!("{}.client.ts", name.to_lowercase()));
     // Idempotent: skip write if unchanged (avoids touching mtimes).

@@ -8,6 +8,8 @@ sdk="$cache/sdk"
 dist="$prototype/dist-native"
 version=v4.8.1
 archive="$cache/steamaudio.zip"
+build_jobs=$(nproc)
+export CARGO_BUILD_JOBS="$build_jobs"
 
 for command in c++ curl unzip cargo; do
   command -v "$command" >/dev/null || { echo "missing build command: $command" >&2; exit 1; }
@@ -26,13 +28,13 @@ fi
 
 tracer_target="$cache/obvhs-tracer-target"
 CARGO_TARGET_DIR="$tracer_target" \
-  cargo build --manifest-path "$prototype/obvhs-tracer/Cargo.toml" --release
+  cargo build --manifest-path "$root/crates/afterglow-obvhs-tracer/Cargo.toml" --release
 tracer_library="$tracer_target/release/libafterglow_obvhs_tracer.a"
 
 mkdir -p "$dist"
 c++ -std=c++20 -O3 -march=x86-64-v3 -pthread \
   -I "$sdk" \
-  -I "$prototype/obvhs-tracer/include" \
+  -I "$root/crates/afterglow-obvhs-tracer/include" \
   "$prototype/dynamic-benchmark.cpp" \
   "$prototype/native-dynamic-benchmark.cpp" \
   "$tracer_library" \

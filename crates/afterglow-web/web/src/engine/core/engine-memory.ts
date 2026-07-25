@@ -23,7 +23,6 @@ export enum EnginePhase {
   Bootstrap,
   Warmup,
   GameplaySealed,
-  LoadingScreen,
   Shutdown,
 }
 
@@ -202,8 +201,8 @@ export class EngineMemory {
   }
 
   sealGameplay(): void {
-    if (this.phase !== EnginePhase.Warmup && this.phase !== EnginePhase.LoadingScreen)
-      throw new Error('EngineMemory can seal only after warmup/loading');
+    if (this.phase !== EnginePhase.Warmup)
+      throw new Error('EngineMemory can seal only after warmup');
     this.phase = EnginePhase.GameplaySealed;
   }
 

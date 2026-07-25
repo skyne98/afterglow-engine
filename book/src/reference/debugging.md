@@ -2,45 +2,41 @@
 
 The most common failures and how to spot them.
 
-## CEF app won't start / GPU process crash
+> `afterglow-cef` has been removed. The CEF-specific GPU-process,
+> `CEF_PATH`, `execute_process`, and `--ozone-platform=x11` caveats below are
+> retained as historical context only — `afterglow-shell` is the sole native
+> host. See `docs/implementation/shell-promotion-plan.md` for its parity gates.
 
-1. **Pass `--ozone-platform=x11`.** Wayland + Vulkan are incompatible in CEF 149.
-2. **Check `CEF_PATH`** points at the right CEF distro (the devshell pins it to
-   `target/debug`). A stale `CEF_PATH` mismatches the CEF API version.
-3. **Don't spawn threads before `execute_process`.** It crashes the GPU
-   process. Use `AppBuilder::on_ready` (or spawn from within the CEF message
-   loop).
-4. **Source the devshell.** `shell.nix` provides libvulkan, GTK, NSS, etc.
-5. The `libudev` version warning is harmless (libudev-zero).
+## Native shell won't start / no WebGPU adapter
 
-## `libcef.so: cannot open shared object file`
-
-You tried to run the binary **outside the devshell**. It needs the devshell's
-`LD_LIBRARY_PATH`. Always run through
-`nix-shell shell.nix --run "./target/debug/examples/minimal …"`.
+1. **Source the devshell.** `shell.nix` provides libvulkan, Mesa, libGL, etc.
+2. **Check `VK_ICD_FILENAMES`** points at the real GPU ICD, not SwiftShader.
+   On NixOS the devshell sets this via `/run/opengl-driver`.
+3. **Check `DISPLAY`** is set (the app runs under X11/XWayland).
+4. The shell fails closed on device loss — never accept a software/WebGL
+   fallback path.
 
 ## SharedArrayBuffer not available
 
 The page must be cross-origin isolated. Check
 `self.crossOriginIsolated === true` in the JS console.
 
-- **On CEF:** the `afterglow://` scheme handler sets the COOP/COEP/CORP headers
-  on every response.
 - **On web:** use the `coep_server` example or configure your web server with
-  the same headers. See [Web (Wasm)](../building/web.md).
+  COOP/COEP/CORP headers. See [Web (Wasm)](../building/web.md).
+- **On the native shell:** the host is single-process; confirm whether
+  isolation is required once the G1 asset-root gate lands
+  (`docs/implementation/shell-promotion-plan.md`).
 
 ## WebGPU shows a software adapter (SwiftShader)
 
-CEF bundles its own `libvulkan.so.1` + SwiftShader (a software Vulkan with **no
-surface extensions** — GPU/WebGPU init fails on it). The devshell forces the real
-system `libvulkan` ahead of `$CEF_PATH` in `LD_LIBRARY_PATH`. On NixOS it also
-sets `VK_ICD_FILENAMES`. If you see SwiftShader or `WebGPU adapter: ?`:
+The shell presents through Deno WebGPU → wgpu-core → the system Vulkan loader.
+If you see SwiftShader or `WebGPU adapter: ?`:
 
 - re-source the devshell,
-- confirm `LD_LIBRARY_PATH` lists the real Vulkan loader before `$CEF_PATH`,
+- confirm `LD_LIBRARY_PATH` lists the real Vulkan loader,
 - on NixOS, confirm `VK_ICD_FILENAMES` points at the real ICDs.
 
-The working example prints the real adapter, e.g. `WebGPU adapter: amd/rdna-2`.
+The working shell prints the real adapter, e.g. `WebGPU adapter: amd/rdna-2`.
 
 ## Wasm module doesn't share memory
 
@@ -52,17 +48,10 @@ cargo (cargo searches up from cwd, not down). Then:
   `env.memory` when instantiating.
 - The JS memory's `maximum` must be ≤ the module's `--max-memory` (64 MiB).
 
-## `v8_value_create_array_buffer` returns None
-
-This is the **V8 sandbox** — compiled into CEF 149, not toggleable at runtime.
-`CefV8Value::CreateArrayBuffer` (external backing store) always returns
-nullptr. Use `CreateArrayBufferWithCopy` instead (one memcpy). This only affects
-the CEF native path; the web `SharedArrayBuffer` path has no such issue.
-
 ## `latency-tool eval` times out
 
 The page may be running a synchronous JS task. Use `awaitPromise: true` and
-ensure the JS yields to the event loop. Also note CEF Views browsers don't
+ensure the JS yields to the event loop. Native-shell pages don't necessarily
 appear in `/json/list` — `latency-tool` uses `Target.getTargets` +
 `Target.attachToTarget` instead. Navigate via `latency-tool nav <url>`.
 
@@ -70,9 +59,8 @@ appear in `/json/list` — `latency-tool` uses `Target.getTargets` +
 
 | Symptom | Look at |
 |---|---|
-| Scheme/asset serving | `crates/afterglow-cef/src/resources.rs`, `crates/afterglow-assets/` |
-| GPU/X11 flags | `crates/afterglow-cef/src/flags.rs` |
-| CEF startup / `on_ready` | `crates/afterglow-cef/src/runtime.rs`, `config.rs` |
+| Asset serving | `crates/afterglow-assets/`, `crates/afterglow-web/src/dev_server.rs` |
+| Native presenter / WebGPU | `crates/afterglow-shell/src/main.rs`, `native_browser.rs` |
 | Ring buffer correctness | `crates/afterglow-rpc/src/lib.rs` |
 | Macro generation | `crates/afterglow-rpc-macros/` |
 | Web transport | `crates/afterglow-web/src/lib.rs`, `www/worker.js`, `www/rpc.js` |

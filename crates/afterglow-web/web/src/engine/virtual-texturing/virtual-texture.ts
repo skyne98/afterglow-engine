@@ -44,7 +44,8 @@ export const ATLAS_HEIGHT = ATLAS_PAGES_Y * SLOT_SIZE;
 const MAX_MIP = 10;              // supports up to 2^10 = 1024 pages per side
 const QUALITY_PRIORITY_LANE_COUNT = (MAX_MIP + 1) * 2; // exact quality rung × center/edge
 const MATERIAL_CHANNEL_PRIORITY_COUNT = 3; // albedo, normal/emissive, scalar masks
-const PRIORITY_LANE_COUNT = QUALITY_PRIORITY_LANE_COUNT * MATERIAL_CHANNEL_PRIORITY_COUNT;
+const BATCH_TIER_PRIORITY_COUNT = QUALITY_PRIORITY_LANE_COUNT * MATERIAL_CHANNEL_PRIORITY_COUNT;
+const PRIORITY_LANE_COUNT = BATCH_TIER_PRIORITY_COUNT * 2; // urgent parents before exact quality
 const FEEDBACK_SCALE = 0.125;    // feedback at 1/8 screen resolution
 
 // ============================================================================
@@ -58,6 +59,8 @@ export interface PageRequest {
   y: number;
   /** Selects the packed sub-page mip tail instead of a regular virtual page. */
   tail?: boolean;
+  /** Internal bulk-fetch deadline: coarse restoration or exact promotion. */
+  batchTier?: 'urgent' | 'quality';
 }
 
 /** Globally unique page request emitted by feedback. */
@@ -206,6 +209,13 @@ interface PageDataProviderTelemetry {
   reads: number;
   averageReadMs: number;
   maxReadMs: number;
+  bulkQueued: number;
+  bulkInFlight: number;
+  bulkInFlightBytes: number;
+  urgentBatches: number;
+  qualityBatches: number;
+  bulkRejected: number;
+  bulkCanceled: number;
   workerCount: number;
   activeTranscodes: number;
   queuedTranscodes: number;
@@ -888,7 +898,7 @@ export class VirtualTextureStore {
   private scheduledByKey: FixedPageSlotMap;
   private scheduledCount = 0;
   private feedbackEpoch = 0;
-  /** Two absent 36 Hz feedback epochs tolerate readback jitter but drop old views quickly. */
+  /** Drop after two absent snapshots; elapsed time depends on the caller's feedback cadence. */
   private readonly staleFeedbackEpochs = 2;
   private staleCancellations = 0;
   private priorityPreemptions = 0;
@@ -929,6 +939,8 @@ export class VirtualTextureStore {
     tuningBestSafeUploadsPerPoll: 0, tuningBestSafeUploadBudgetMs: 0,
     scheduleBudgetExhaustions: 0, uploadBudgetExhaustions: 0,
     pageReads: 0, averagePageReadMs: 0, maxPageReadMs: 0,
+    bulkQueued: 0, bulkInFlight: 0, bulkInFlightBytes: 0,
+    urgentBatches: 0, qualityBatches: 0, bulkRejected: 0, bulkCanceled: 0,
     transcodeWorkers: 0, activeTranscodes: 0, queuedTranscodes: 0,
     completedTranscodes: 0, averageTranscodeQueueMs: 0, maxTranscodeQueueMs: 0,
     averageTranscodeMs: 0, maxTranscodeMs: 0,
@@ -1340,6 +1352,7 @@ export class VirtualTextureStore {
     page.x = req.x;
     page.y = req.y;
     page.tail = req.tail;
+    page.batchTier = req.batchTier;
     page.pinned = pinned;
     page.cacheKey = key;
     pendingRecord.generation = generation;
@@ -1415,23 +1428,29 @@ export class VirtualTextureStore {
     tail: boolean,
     capacity: number,
     channelPriority: number,
+    batchTier: 'urgent' | 'quality',
   ): boolean {
     const key = packedPageCoordinates(entry.textureId, mip, x, y, tail);
+    const qualityDepth = tail ? 0 : Math.min(MAX_MIP, entry.maxMip - mip);
+    const centralOrLarge = (source.screenPriority ?? 0) <= 96 || (source.coverage ?? 1) >= 4;
+    const candidatePriority = (batchTier === 'quality' ? BATCH_TIER_PRIORITY_COUNT : 0) +
+      channelPriority * QUALITY_PRIORITY_LANE_COUNT +
+      qualityDepth * 2 + (centralOrLarge ? 0 : 1);
     const existing = this.feedbackScratchKeys.get(key);
     if (existing !== undefined) {
       const request = this.feedbackScratch[existing];
       request.screenPriority = Math.min(request.screenPriority ?? 255, source.screenPriority ?? 0);
       request.coverage = Math.min(0xffff, (request.coverage ?? 1) + (source.coverage ?? 1));
       request.channelPriority = Math.min(request.channelPriority ?? channelPriority, channelPriority);
+      if (batchTier === 'urgent') request.batchTier = 'urgent';
+      request.priorityTier = Math.min(request.priorityTier ?? candidatePriority, candidatePriority);
       if (request.screenPriority <= 96 || request.coverage >= 4)
-        request.priorityTier = (request.priorityTier ?? 1) & ~1;
+        request.priorityTier &= ~1;
       return true;
     }
     if (this.feedbackScratchCount >= capacity) return false;
     const index = this.feedbackScratchCount++;
     const request = this.feedbackScratch[index];
-    const qualityDepth = tail ? 0 : Math.min(MAX_MIP, entry.maxMip - mip);
-    const centralOrLarge = (source.screenPriority ?? 0) <= 96 || (source.coverage ?? 1) >= 4;
     request.textureId = textureId;
     request.path = entry.path;
     request.mip = mip;
@@ -1441,8 +1460,8 @@ export class VirtualTextureStore {
     request.screenPriority = source.screenPriority ?? 0;
     request.coverage = source.coverage ?? 1;
     request.channelPriority = channelPriority;
-    request.priorityTier = channelPriority * QUALITY_PRIORITY_LANE_COUNT +
-      qualityDepth * 2 + (centralOrLarge ? 0 : 1);
+    request.batchTier = batchTier;
+    request.priorityTier = candidatePriority;
     this.feedbackScratchKeys.set(key, index);
     return true;
   }
@@ -1458,35 +1477,37 @@ export class VirtualTextureStore {
     const pageTable = this.pageTablesById[textureId];
     if (!entry || !pageTable || !this.isValidEntryRequest(entry, source)) return true;
     if (source.tail === true)
-      return this.addFeedbackPage(textureId, entry, source, source.mip, 0, 0, true, capacity, channelPriority);
+      return this.addFeedbackPage(
+        textureId, entry, source, source.mip, 0, 0, true,
+        capacity, channelPriority, 'urgent',
+      );
 
     const desiredMip = Math.min(entry.maxMip, source.mip + bias);
     const desiredX = source.x >> (desiredMip - source.mip);
     const desiredY = source.y >> (desiredMip - source.mip);
     if (pageTable.isResidentAt(desiredMip, desiredX, desiredY))
       return this.addFeedbackPage(
-        textureId, entry, source, desiredMip, desiredX, desiredY, false, capacity, channelPriority,
+        textureId, entry, source, desiredMip, desiredX, desiredY, false,
+        capacity, channelPriority, 'quality',
       );
 
-    let fallbackMip = desiredMip + 1;
-    while (fallbackMip <= entry.maxMip &&
-           !pageTable.isResidentAt(
-             fallbackMip,
-             desiredX >> (fallbackMip - desiredMip),
-             desiredY >> (fallbackMip - desiredMip),
-           )) fallbackMip++;
-
-    // Enqueue the whole missing chain now instead of waiting for another GPU
-    // feedback roundtrip after every rung. Fixed priority lanes still dispatch
-    // coarse restoration before middle/high/ultra upgrades.
-    for (let mip = Math.min(entry.maxMip, fallbackMip - 1); mip >= desiredMip; mip--) {
-      const shift = mip - desiredMip;
-      if (!this.addFeedbackPage(
-        textureId, entry, source, mip, desiredX >> shift, desiredY >> shift,
-        false, capacity, channelPriority,
-      )) return false;
-    }
-    return true;
+    // Restore one explicitly low-quality parent quickly, then promote straight
+    // to the exact requested page through the 100 ms quality window. Existing
+    // resident coarser/tail pages remain immediately sampleable in the shader.
+    const urgentMip = Math.min(entry.maxMip, desiredMip + 2);
+    const urgentShift = urgentMip - desiredMip;
+    const urgentX = desiredX >> urgentShift;
+    const urgentY = desiredY >> urgentShift;
+    if (!pageTable.isResidentAt(urgentMip, urgentX, urgentY) &&
+        !this.addFeedbackPage(
+          textureId, entry, source, urgentMip, urgentX, urgentY, false,
+          capacity, channelPriority, 'urgent',
+        )) return false;
+    if (urgentMip === desiredMip) return true;
+    return this.addFeedbackPage(
+      textureId, entry, source, desiredMip, desiredX, desiredY, false,
+      capacity, channelPriority, 'quality',
+    );
   }
   // @hot-no-alloc-end VirtualTextureStore.addFeedbackRequest
 
@@ -1580,6 +1601,7 @@ export class VirtualTextureStore {
     target.coverage = source.coverage;
     target.channelPriority = source.channelPriority;
     target.priorityTier = source.priorityTier;
+    target.batchTier = source.batchTier;
   }
 
   private linkScheduledTail(index: number, priority: number): void {
@@ -1646,7 +1668,9 @@ export class VirtualTextureStore {
     if (existing !== undefined) {
       this.copyRequest(this.scheduledRequests[existing], request);
       const agePromotion = (this.feedbackEpoch - this.scheduledSince[existing]) >> 2;
-      const channelFloor = (request.channelPriority ?? 0) * QUALITY_PRIORITY_LANE_COUNT;
+      const tierFloor = request.batchTier === 'quality' ? BATCH_TIER_PRIORITY_COUNT : 0;
+      const channelFloor = tierFloor +
+        (request.channelPriority ?? 0) * QUALITY_PRIORITY_LANE_COUNT;
       const priority = Math.max(
         channelFloor,
         (request.priorityTier ?? PRIORITY_LANE_COUNT - 1) - agePromotion,
@@ -2068,6 +2092,13 @@ export class VirtualTextureStore {
       stats.pageReads = provider.reads;
       stats.averagePageReadMs = provider.averageReadMs;
       stats.maxPageReadMs = provider.maxReadMs;
+      stats.bulkQueued = provider.bulkQueued;
+      stats.bulkInFlight = provider.bulkInFlight;
+      stats.bulkInFlightBytes = provider.bulkInFlightBytes;
+      stats.urgentBatches = provider.urgentBatches;
+      stats.qualityBatches = provider.qualityBatches;
+      stats.bulkRejected = provider.bulkRejected;
+      stats.bulkCanceled = provider.bulkCanceled;
       stats.transcodeWorkers = provider.workerCount;
       stats.activeTranscodes = provider.activeTranscodes;
       stats.queuedTranscodes = provider.queuedTranscodes;

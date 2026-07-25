@@ -4,13 +4,9 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish = false
-description = "Web target for afterglow-engine: SharedArrayBuffer-backed shared memory, Web Workers"
-
-[lib]
-crate-type = ["cdylib", "rlib"]
+description = "Web target for afterglow-engine: COOP/COEP dev server + authored TypeScript runtime"
 
 [dependencies]
-afterglow-rpc = { path = "../afterglow-rpc" }
 
 [[example]]
 name = "coep_server"

@@ -58,8 +58,7 @@ var EnginePhase;
   EnginePhase2[EnginePhase2["Bootstrap"] = 0] = "Bootstrap";
   EnginePhase2[EnginePhase2["Warmup"] = 1] = "Warmup";
   EnginePhase2[EnginePhase2["GameplaySealed"] = 2] = "GameplaySealed";
-  EnginePhase2[EnginePhase2["LoadingScreen"] = 3] = "LoadingScreen";
-  EnginePhase2[EnginePhase2["Shutdown"] = 4] = "Shutdown";
+  EnginePhase2[EnginePhase2["Shutdown"] = 3] = "Shutdown";
 })(EnginePhase ||= {});
 
 class LinearArena {
@@ -205,8 +204,8 @@ class EngineMemory {
     this.phase = 1 /* Warmup */;
   }
   sealGameplay() {
-    if (this.phase !== 1 /* Warmup */ && this.phase !== 3 /* LoadingScreen */)
-      throw new Error("EngineMemory can seal only after warmup/loading");
+    if (this.phase !== 1 /* Warmup */)
+      throw new Error("EngineMemory can seal only after warmup");
     this.phase = 2 /* GameplaySealed */;
   }
   beginFrame() {

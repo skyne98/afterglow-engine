@@ -5,16 +5,160 @@ per deployment target:
 
 | Target | Steam scene type | Backend |
 |---|---|---|
-| Native CEF worker | `IPL_SCENETYPE_EMBREE` | Steam Audio's embedded Embree 4.4 |
-| Web Worker | `IPL_SCENETYPE_CUSTOM` | Rust `obvhs` 0.3.2 medium-build CWBVH8 |
+| Native CEF and other native hosts | `IPL_SCENETYPE_EMBREE` | Steam Audio's embedded Embree 4.4 |
+| Public web Worker only | `IPL_SCENETYPE_CUSTOM` | Rust `obvhs` 0.3.2 medium-build CWBVH8 |
 
 This API currently lives in `prototype/steam-audio-wasm`; it is the validated
 contract for promotion into an engine audio worker. It uses no baked acoustic
-data.
+data. The production promotion sequence, asset contract, rings, AudioWorklet,
+frame integration, and release gates are specified in
+[`../implementation/spatial-audio-integration-plan.md`](../implementation/spatial-audio-integration-plan.md).
+That design makes `EngineAudio` required and sole. One fixed Worker/context runs
+Steam simulation, direct/HRTF/hybrid DSP and final mixing into a bounded final-
+PCM ring on both targets. Native uses 128 total/16 complete world-physical
+voices and eight quanta; public web uses 16 total/4 complete world-physical
+voices and eight quanta. CEF uses the generated native RPC client, an OS worker,
+native Steam Audio/Embree, a native PCM ring and native device callback. Public
+web uses the generated WASM RPC Worker and a minimal PCM-consuming AudioWorklet. CEF
+must never instantiate the audio service as WASM or a Web Worker. Parametric reflection remains an explicit
+low-quality tier. Any fatal audio
+fault disables all audio and emits a high-severity diagnostic. Acoustic tiles
+stream automatically around the listener from pipeline-built traversal data,
+while runtime shape state uses the shared prebuilt Box3D-style primitive,
+convex and fixed-topology compound set.
+
+## Integration-gate API (not public gameplay API)
+
+`crates/afterglow-audio-worker` now defines the single
+`#[rpc(worker = EngineAudioWorker)]` service used by Gate 0. On native targets,
+`AudioWorkerConfig::default()` selects the accepted eight-quantum render-ahead
+depth. The generated `EngineAudioServiceClient::spawn_worker` uses
+`afterglow-rpc::native` and a real OS thread; a regression test exercises that
+transport. On public web, the generated TypeScript client uses the web SAB
+transport. Generated lifecycle methods are `configure`, `start`, `stop`, `updateMotion`,
+`runSimulation`, `stats`, and `shutdown`. The current integration-gate voice
+methods append stable method IDs for `spawn2d`, `spawnAt`, `spawnAttached`,
+`spawnSpatialOnly`, `spawnListenerRelative`, `crossfade`, `crossfadeTo`,
+`setVoiceVolume`, `pauseVoice`, `resumeVoice`, and `stopVoice`, followed by the
+warm-up-only `loadWav` and `unloadSound` resident-asset methods. Large assets use
+bounded sequential `beginWavUpload`/`appendWavUpload`/`finishWavUpload` and
+`beginAcousticSceneUpload`/`appendAcousticSceneUpload`/
+`finishAcousticSceneUpload` calls over the same RPC ring. Sound and voice
+IDs use separate packed index+generation handle spaces; zero is invalid. Control
+methods return `0` on success; `configure`,
+`updateMotion`, and `runSimulation` return `-1` on validation/backend failure;
+`start` returns `-1` before configuration and `-2` after a latched fatal fault.
+`stats` currently returns a fixed `Float64Array` in this order: sample clock,
+rendered quanta, simulation updates, energy, peak, last impulse sample, target
+quanta, voice capacity, reflection capacity, four producer counts, running,
+fatal, active spatial voices, active reflection voices, active scheduled voices,
+active world-physical voices, rejected total capacity, rejected physical
+capacity, stale handles, completed fades, loaded resident sounds, and resident
+PCM bytes, acoustic vertices, acoustic triangles, and acoustic scene bytes.
+Device-rate
+`afterglow_audio_pump`, `afterglow_audio_simulate_motion`, and the fixed PCM
+pointer exports operate on the exact state owned by that RPC service; they are
+bounded host-clock hooks, not a second protocol. The web worker only runs a
+simulation tick after restoring the final PCM ring to target depth. The `steam-audio` feature owns the thin
+C FFI RAII wrapper. Without it, deterministic Rust PCM exercises service state.
+The fixed scheduler reserves leading backend slots for complete world-physical
+voices and the remaining slots for explicitly nonphysical placements, so dry
+voices cannot crowd out the acoustic capacity. It performs no partial physical
+downgrade. Volume/pause/stop ramps advance on the 48 kHz sample clock;
+crossfades are equal-power and atomically retain the outgoing voice if the
+incoming slot cannot be reserved. Backend gain changes interpolate within each
+128-frame quantum. `loadWav` strictly accepts mono or stereo 48 kHz RIFF/WAVE
+PCM16, PCM24, PCM32, or finite float32. It rejects malformed chunks, unsupported
+sample rates/formats, sound-pool exhaustion, and resident-byte-capacity overflow.
+The fixed limits are 64 resident sounds and 32 MiB on web / 256 MiB native.
+Loading and unloading require a configured but stopped worker, and unload rejects
+stale or in-use handles. Stable boxed PCM remains owned by Rust while the Steam
+mixer reads it directly; looping is sample-clock exact, while one-shots release
+their voice automatically after their final quantum. Diagnostic IDs 1..=16
+remain aliases of the four synthetic producer families. Acoustic scene upload
+accepts the checked `AGBIST1` indexed geometry fixture and atomically replaces
+the Steam scene before playback; native uses Embree and web uses the custom
+obvhs callbacks. The real-assets gate loaded all three full-resolution Bistro
+scenes natively. Full Bistro did not fit the bounded normal web integration gate;
+web production still requires structural proxies and tile streaming. Cooked `Sound` metadata,
+BIG asset reads, and the allocation-free page command facade remain to be
+implemented before these methods are the final public game API. Attached entity
+IDs are retained by the scheduler, but ECS pose publication is likewise pending.
+
+The native gate uses `NativeAudioRuntime::spawn`: the generated RPC service runs
+on an OS thread, an idle hook fills a fixed `afterglow-rpc` native PCM ring, and
+a no-allocation device callback drains arbitrary even stereo callback lengths.
+It has reached the physical device with native Steam Audio/Embree. Final
+`AppBuilder::on_ready` CEF composition is not yet implemented and must not be
+claimed as integrated. `NativeAudioRuntime` exposes the typed RPC `client`,
+`events`, one `NativePcmReader`, and shared `NativeAudioTelemetry`.
+`NativePcmReader::read_interleaved` preserves partial-quantum state when a device
+requests less or more than 128 frames and emits silence on empty/malformed input.
+Telemetry reports rendered frames, full-ring polls, malformed/sequence faults,
+device callbacks/underruns, and pump total/max nanoseconds. Call
+`NativeAudioTelemetry::arm` immediately before starting the physical stream so
+pre-start callbacks neither consume PCM nor count false underruns.
+
+The public-web final-PCM SAB uses the exact `afterglow-rpc::RingBuffer` 12-byte
+header (`capacity_bytes`, atomic `write_bytes`, atomic `read_bytes`) and two-to-
+eight fixed framed slots; the selected web candidate uses eight. Each frame is
+`[payload_len:u32][sequence:u32][128 interleaved stereo f32 frames]`; fixed
+atomic telemetry follows the ring storage. Publication/consumption use monotonic
+byte counters; the AudioWorklet
+checks sequence, writes silence on empty/fatal state, and notifies the worker
+through a consumption epoch. It allocates and posts no messages in `process()`.
+Telemetry includes callbacks, rendered quanta, underruns, sequence errors,
+atomic wake hits/misses, pump mean/max/deadline misses and a fatal latch.
+
+Native initializes 128 scheduled voices and 16 complete world-physical effects.
+Its historical four-quantum synthetic-scene physical-device gate completed 600
+seconds with zero underruns, but full-resolution Bistro invalidated that depth:
+four quanta dropped 22–27 callbacks per 10-second scene when reflection
+simulation occupied the sole worker. Eight quanta completed all three scenes
+with zero underruns and is now the native default.
+Public web initializes 16 scheduled voices and 4 complete world-physical
+effects. The earlier four-quantum/16-wet profile failed because a 15.97 ms Worker
+interval exceeded 10.67 ms. The reduced 16/4 profile with eight quanta now passed
+a short same-page hardware-WebGPU run: 38,900 callbacks and 104 Worker-owned
+simulation updates with zero underruns, sequence/fatal errors or pump deadline
+misses; pump mean/max was 0.095/2.265 ms. Physical capture had no internal zero
+span above 0.063 ms. A second public-web run loaded the five official Steam
+Audio SDK speech/noise/impulse WAVs (7,518,980 resident PCM bytes): 11,244
+callbacks, zero underruns/errors/deadline misses, and a 0.083 ms physical-capture
+internal zero span. This satisfies the bounded 60-second public-web gate.
+
+`real_asset_audio_gate` validates coupled real content natively. It chunk-loads
+all five sounds and each official full-resolution Bistro v5.2 environment,
+places four sounds through the complete physical chain plus one dry sound, and
+runs 512×2 reflections every second. At four quanta, Exterior/Interior/Wine
+produced 27/22/26 underruns over 3,750 callbacks each. At eight quanta all three
+produced zero underruns, sequence errors, or silent frames; pump maxima were
+2.04/1.62/1.83 ms. The checked scene payloads are 71,421,336 / 23,366,297 /
+29,930,363 bytes and contain 2,832,120 / 1,046,609 / 1,320,323 triangles.
+`docs/benchmarks/steam-audio-real-assets-fox-workstation-2026-07-18.json` is the
+raw record. Reproduce after cooking/downsampling the licensed source assets:
+
+```sh
+nix-shell -p assimp pkg-config --run \
+  './prototype/steam-audio-wasm/build-native-bistro.sh'
+# Resample the SDK WAV fixtures to mono 48 kHz PCM16 under target/real-audio-48k.
+nix-shell shell.nix --run \
+  'cargo run --release -p afterglow-audio-worker --features steam-audio \
+   --example real_asset_audio_gate -- \
+   target/bistro-source target/real-audio-48k /tmp/real-audio.json'
+```
+
+The normal 256 MiB web module did not complete full Bistro Interior
+inside the bounded integration test; this confirms that public web needs cooked
+structural proxies and streamed acoustic tiles, not full render geometry.
+
+The Emscripten Wasm-AudioWorklet-DSP path remains research evidence only. It is
+not the production ownership model and will be deleted after the unified Worker
+path clears its long gate.
 
 ## Web custom-tracer ABI
 
-`obvhs-tracer/include/afterglow_obvhs_tracer.h` exposes:
+`crates/afterglow-obvhs-tracer/include/afterglow_obvhs_tracer.h` exposes:
 
 ```c
 int32_t afterglow_obvhs_create(
@@ -87,7 +231,7 @@ The web build uses:
 
 ```sh
 RUSTFLAGS='-C target-feature=+atomics,+bulk-memory,+mutable-globals,+simd128' cargo build \
-  --manifest-path prototype/steam-audio-wasm/obvhs-tracer/Cargo.toml \
+  --manifest-path crates/afterglow-obvhs-tracer/Cargo.toml \
   --release --target wasm32-unknown-emscripten \
   -Zbuild-std=core,alloc,std,panic_abort
 ```

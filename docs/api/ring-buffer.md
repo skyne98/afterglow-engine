@@ -88,7 +88,7 @@ an `Arc<Vec<u8>>`. Consuming `split` creates exactly one `RingProducer` and one
 Public half methods:
 
 ```rust
-RingProducer::{write, capacity}
+RingProducer::{write, can_write, capacity}
 RingConsumer::{read, read_into, peek_len, has_data, capacity}
 ```
 
@@ -110,6 +110,14 @@ spawn_worker_loop(impl_, capacity, |server, method, args| {
     server.serve(method, args)
 })
 ```
+
+`spawn_worker_loop_with_idle` / `run_worker_loop_with_idle` add a bounded
+non-blocking idle hook and park duration while preserving the same generated
+client transport. The hook executes on the service OS thread only while its
+request ring is empty. It exists for fixed-work device-clock producers such as
+native EngineAudio PCM filling; it must not block or allocate. `can_write`
+admits a fixed payload before expensive production so a full output ring never
+advances or drops producer state.
 
 `WorkerTransport` implements `Transport::call`. A call:
 

@@ -1,6 +1,13 @@
 # The AppBuilder API
 
-`AppBuilder` is the only configuration API for the native shell. You build one,
+> **Removed.** `afterglow-cef` and its `AppBuilder` have been removed.
+> `afterglow-shell` is the sole native host but does not yet expose a
+> production game bootstrap API. This chapter is retained as the design
+> reference for the forthcoming `ShellBuilder`; the replacement API is tracked
+> in `docs/implementation/shell-promotion-plan.md` (gate G3). The code below
+> no longer compiles.
+
+`AppBuilder` was the configuration API for the native shell. You build one,
 call `.run()`, and it blocks until the window closes.
 
 ```rust
@@ -71,9 +78,11 @@ the worker runs on its own thread. Calling `on_ready` again replaces any
 previously set callback (last wins; the replaced callback is dropped without
 running).
 
-If you don't need a native worker, leave `on_ready` unset and drive the worker
-from the page over `SharedArrayBuffer` instead (the `minimal` example does
-this — no Rust spawn needed). See [Native Workers](../workers/native-workers.md).
+A CEF service with a native implementation must use this native spawn path; do
+not replace it with the service's WASM/Web Worker build. `SharedArrayBuffer`
+workers remain the public-web backend and are permitted in CEF only for
+explicitly page-only diagnostics such as `minimal`. See
+[Native Workers](../workers/native-workers.md).
 
 ## `on_console`
 

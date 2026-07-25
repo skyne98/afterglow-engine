@@ -1,5 +1,15 @@
 # Virtual-texture vertical-slice audit — 2026-07-15
 
+> **2026-07-22 follow-up:** the remediation history below remains useful, but
+> two later integration claims were found incomplete. The source-sorting
+> `createPageRangeReader()` is not wired into the live `BigAssetSession` page
+> provider, whose bulk queue preserves admission order, and CEF still starts
+> `afterglow-texture` through WASM Web Workers instead of its mandatory native
+> client/OS worker. The current stale window is two feedback snapshots, not the
+> historical sixteen-snapshot setting discussed below. See
+> `docs/api/virtual-texturing.md` and `docs/api/asset-system.md` for the current
+> surface.
+
 ## Executive summary
 
 The current virtual-texture (VT) vertical slice is **functionally correct enough

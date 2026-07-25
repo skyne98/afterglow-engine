@@ -8,7 +8,7 @@ discipline primitives for the engine migration described in
 
 ```ts
 enum EnginePhase {
-  Bootstrap, Warmup, GameplaySealed, LoadingScreen, Shutdown,
+  Bootstrap, Warmup, GameplaySealed, Shutdown,
 }
 
 class LinearArena {
@@ -54,8 +54,11 @@ class EngineMemory {
 function defineEngineMemoryResource(config: EngineMemoryConfig): Resource<EngineMemory>;
 ```
 
-Constructors allocate backing buffers during bootstrap. Arena/pool operations
-and structural-ring push/drain only mutate preallocated storage. Ring admission
+Constructors allocate backing buffers during bootstrap. The engine has no
+loading-screen phase: after warm-up, continuous asset/world streaming must use
+fixed pools/arenas/rings, bounded budgets and atomic publication without
+re-enabling general worker allocation. Arena/pool operations and structural-ring
+push/drain only mutate preallocated storage. Ring admission
 returns `RingPushStatus.CapacityExceeded`; bounded drain preserves the queued
 suffix for a later frame. Storage never grows implicitly.
 

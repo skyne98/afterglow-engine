@@ -43,6 +43,35 @@ nix-shell shell.nix --run "cargo run -p xtask -- serve"
 Open <http://localhost:8787/worker-bench.html>. It runs the same service-RPC
 sweep over the `SharedArrayBuffer` transport and reports latency + bandwidth.
 
+## Browser VT range transport
+
+The diagnostic `range-bench.html` reads all pages of `Rock064_Color.png` (96.8
+MiB). CEF exercises the native shared-message range bridge; web profiles use
+the real Chromium multipart-fetch path and report
+`PerformanceResourceTiming.nextHopProtocol`. Run one profile at a time on a
+single graphical client:
+
+```sh
+nix-shell shell.nix --run "scripts/bench/bench-caddy-browser.sh afterglow"
+nix-shell shell.nix --run "scripts/bench/bench-caddy-browser.sh h1-close"
+nix-shell shell.nix --run "scripts/bench/bench-caddy-browser.sh h1"
+nix-shell shell.nix --run "scripts/bench/bench-caddy-browser.sh h2"
+nix-shell shell.nix --run "scripts/bench/bench-caddy-browser.sh h3"
+```
+
+`afterglow` exercises CEF's native bridge with an explicitly source-sorted
+diagnostic workload (so it has no network protocol in resource timing). That
+transport primitive passed the 900 MiB/s median gate at 950.2 MiB/s. The live
+`BigAssetSession` provider currently preserves scheduler/admission order and
+has not wired the sorting helper, so do not cite this as gameplay-provider
+throughput until the live-provider gate is rerun. `h1-close` is the old bounded
+development server; `h1`, `h2`, and `h3` are the local Caddy origin. The H3 profile verifies `h3` in browser resource timing and
+uses only a localhost certificate-SPKI allowlist plus forced QUIC origin, which
+are test-only accommodations for Caddy's local CA. Use
+`BENCH_CONCURRENCY=1..32` and `BENCH_COALESCE_MIB=0..16` to run diagnostic
+sweeps; neither changes gameplay policy. Results and methodology live in
+`docs/benchmarks/web-range-transport-fox-laptop-2026-07-21.md`.
+
 ## `latency-tool`: input → present
 
 `latency-tool` is a CDP-based diagnostic for the CEF DevTools endpoint. Attach
