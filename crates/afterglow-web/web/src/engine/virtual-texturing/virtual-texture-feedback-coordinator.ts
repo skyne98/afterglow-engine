@@ -88,21 +88,22 @@ export class VirtualTextureFeedbackCoordinator implements EngineRenderPass, Rend
   private registeredPassCount = 0;
   private awaitingPassCount = 0;
   private discardAwaiting = false;
+  private nextFeedbackSeconds = 0;
   private sealed = false;
   private disposed = false;
 
   constructor(
     private readonly renderer: FeedbackRenderer,
     private readonly store: CoordinatedFeedbackStore,
-    capacities: { renderables: number; passes: number; cadence: number; scale?: number },
+    capacities: { renderables: number; passes: number; cadenceMs: number; scale?: number },
   ) {
     if (!Number.isInteger(capacities.renderables) || capacities.renderables <= 0)
       throw new RangeError('feedback renderable capacity must be positive');
     if (!Number.isInteger(capacities.passes) || capacities.passes <= 0)
       throw new RangeError('feedback pass capacity must be positive');
-    if (!Number.isInteger(capacities.cadence) || capacities.cadence <= 0)
+    if (!Number.isFinite(capacities.cadenceMs) || capacities.cadenceMs <= 0)
       throw new RangeError('feedback cadence must be positive');
-    this.cadence = capacities.cadence;
+    this.cadenceMs = capacities.cadenceMs;
     this.passes = new Array<VirtualTextureFeedbackPass>(capacities.passes);
     this.renderables = new Array<RenderableSlot>(capacities.renderables);
     this.heldResults = new Array<Map<number, VirtualPageRequest> | null>(capacities.passes).fill(null);
@@ -118,7 +119,7 @@ export class VirtualTextureFeedbackCoordinator implements EngineRenderPass, Rend
     this.pixelScale = firstPass.pixelScale;
   }
 
-  readonly cadence: number;
+  readonly cadenceMs: number;
 
   register(renderable: FeedbackRenderable): FeedbackRegistrationStatus {
     if (this.sealed) return FeedbackRegistrationStatus.Sealed;
@@ -265,7 +266,8 @@ export class VirtualTextureFeedbackCoordinator implements EngineRenderPass, Rend
 
   render(frame: Readonly<RenderFrame>): void {
     this.feedbackSubmitUs = 0;
-    if (this.disposed || frame.frameId % this.cadence !== 0) return;
+    if (this.disposed || frame.elapsedSeconds < this.nextFeedbackSeconds) return;
+    this.nextFeedbackSeconds = frame.elapsedSeconds + this.cadenceMs / 1000;
     const started = performance.now();
     if (this.awaitingPassCount !== 0) {
       this.stats.deferredSnapshots++;

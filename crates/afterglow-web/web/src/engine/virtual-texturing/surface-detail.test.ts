@@ -332,7 +332,7 @@ describe('Dungeon POM integration assets and limits', () => {
     expect(source).not.toContain('host.assertHeightTextureFormat');
     expect(source).not.toContain(compact('TextureLoader().loadAsync(`dungeon-height'));
     expect(hasAdapter('three.vec2(1, -1)')).toBe(true);
-    expect(has('VT_QUALITY_BIAS=0, FEEDBACK_INTERVAL=8')).toBe(true);
+    expect(has('VT_QUALITY_BIAS=0, FEEDBACK_CADENCE_MS=55')).toBe(true);
     expect(source).not.toContain('VT_LOD_BIAS');
     expect(hasAdapter('feedbackPixelScale: three.uniform(feedbackPixelScale)')).toBe(true);
     expect(hasAdapter('sampleUv = usePom ? displacedUv() : gradientUv')).toBe(true);

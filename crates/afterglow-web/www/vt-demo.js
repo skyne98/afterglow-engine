@@ -69302,6 +69302,7 @@ class VirtualTextureFeedbackCoordinator {
   registeredPassCount = 0;
   awaitingPassCount = 0;
   discardAwaiting = false;
+  nextFeedbackSeconds = 0;
   sealed = false;
   disposed = false;
   constructor(renderer, store, capacities) {
@@ -69311,9 +69312,9 @@ class VirtualTextureFeedbackCoordinator {
       throw new RangeError("feedback renderable capacity must be positive");
     if (!Number.isInteger(capacities.passes) || capacities.passes <= 0)
       throw new RangeError("feedback pass capacity must be positive");
-    if (!Number.isInteger(capacities.cadence) || capacities.cadence <= 0)
+    if (!Number.isFinite(capacities.cadenceMs) || capacities.cadenceMs <= 0)
       throw new RangeError("feedback cadence must be positive");
-    this.cadence = capacities.cadence;
+    this.cadenceMs = capacities.cadenceMs;
     this.passes = new Array(capacities.passes);
     this.renderables = new Array(capacities.renderables);
     this.heldResults = new Array(capacities.passes).fill(null);
@@ -69329,7 +69330,7 @@ class VirtualTextureFeedbackCoordinator {
       throw new Error("feedback coordinator failed to reserve its first pass");
     this.pixelScale = firstPass.pixelScale;
   }
-  cadence;
+  cadenceMs;
   register(renderable) {
     if (this.sealed)
       return 3 /* Sealed */;
@@ -69463,8 +69464,9 @@ class VirtualTextureFeedbackCoordinator {
   }
   render(frame) {
     this.feedbackSubmitUs = 0;
-    if (this.disposed || frame.frameId % this.cadence !== 0)
+    if (this.disposed || frame.elapsedSeconds < this.nextFeedbackSeconds)
       return;
+    this.nextFeedbackSeconds = frame.elapsedSeconds + this.cadenceMs / 1000;
     const started = performance.now();
     if (this.awaitingPassCount !== 0) {
       this.stats.deferredSnapshots++;
@@ -70100,7 +70102,7 @@ WASD pan · wheel zoom · O overview · P pixel`);
   const entry = store.getEntry(path);
   if (!entry)
     throw new Error("procedural VT registration failed");
-  coordinator = new VirtualTextureFeedbackCoordinator(rendererHost.renderer, store, { renderables: 1, passes: 1, cadence: 1, scale: 0.125 });
+  coordinator = new VirtualTextureFeedbackCoordinator(rendererHost.renderer, store, { renderables: 1, passes: 1, cadenceMs: 55, scale: 0.125 });
   coordinator.resize(rendererHost.renderer.domElement.width, rendererHost.renderer.domElement.height);
   const quad = new Mesh(new PlaneGeometry(12, 10), new MeshStandardMaterial({ roughness: 0.9, metalness: 0 }));
   scene.add(quad);

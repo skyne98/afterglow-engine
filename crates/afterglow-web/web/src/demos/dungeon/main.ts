@@ -41,7 +41,7 @@ import {
 } from "../../engine/diagnostics/index.ts";
 
 const VT_QUALITY_BIAS = 0,
-  FEEDBACK_INTERVAL = 8;
+  FEEDBACK_CADENCE_MS = 55;
 const POM_MIN_LAYERS = 8,
   POM_MAX_LAYERS = 32,
   POM_HEIGHT_SCALE = 0.05,
@@ -131,7 +131,7 @@ try {
   coordinator = new VirtualTextureFeedbackCoordinator(host.renderer, store, {
     renderables: 1,
     passes: 1,
-    cadence: FEEDBACK_INTERVAL,
+    cadenceMs: FEEDBACK_CADENCE_MS,
     scale: 0.125,
   });
   const activeCoordinator = coordinator;
@@ -459,6 +459,10 @@ try {
   runtime.start({ update: updateFrame });
   const step = (count = 1): Promise<void> =>
     steps.wait(runtime.frame.frameId, Math.max(1, count | 0));
+  async function stepForMilliseconds(milliseconds: number): Promise<void> {
+    const deadline = performance.now() + milliseconds;
+    do { await step(1); } while (performance.now() < deadline);
+  }
   function atlasFeedback(
     groups: number,
     start = 0,
@@ -522,7 +526,7 @@ try {
         )
           break;
         if (name !== "cold") store.processFeedback(feedback);
-        await step(FEEDBACK_INTERVAL);
+        await stepForMilliseconds(FEEDBACK_CADENCE_MS);
       }
       if (name === "churn") {
         const before = store.getStats().residentEvictions,
@@ -540,7 +544,7 @@ try {
           )
             break;
           store.processFeedback(replacement);
-          await step(FEEDBACK_INTERVAL);
+          await stepForMilliseconds(FEEDBACK_CADENCE_MS);
         }
       }
       return {

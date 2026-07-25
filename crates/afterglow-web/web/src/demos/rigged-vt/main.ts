@@ -38,7 +38,7 @@ import {
   publishDevHarness,
 } from "../../engine/diagnostics/index.ts";
 
-const FEEDBACK_INTERVAL = 8;
+const FEEDBACK_CADENCE_MS = 55;
 const MODEL_LAYER = 1;
 const MODEL_HEIGHT = 2.55;
 const MODEL_CAPACITY = 32;
@@ -179,7 +179,7 @@ try {
   feedbackCoordinator = new VirtualTextureFeedbackCoordinator(
     rendererHost.renderer,
     store,
-    { renderables: 2, passes: 8, cadence: FEEDBACK_INTERVAL, scale: 0.125 },
+    { renderables: 2, passes: 8, cadenceMs: FEEDBACK_CADENCE_MS, scale: 0.125 },
   );
   feedbackCoordinator.resize(
     rendererHost.renderer.domElement.width,

@@ -74811,6 +74811,7 @@ class VirtualTextureFeedbackCoordinator {
   registeredPassCount = 0;
   awaitingPassCount = 0;
   discardAwaiting = false;
+  nextFeedbackSeconds = 0;
   sealed = false;
   disposed = false;
   constructor(renderer, store, capacities) {
@@ -74820,9 +74821,9 @@ class VirtualTextureFeedbackCoordinator {
       throw new RangeError("feedback renderable capacity must be positive");
     if (!Number.isInteger(capacities.passes) || capacities.passes <= 0)
       throw new RangeError("feedback pass capacity must be positive");
-    if (!Number.isInteger(capacities.cadence) || capacities.cadence <= 0)
+    if (!Number.isFinite(capacities.cadenceMs) || capacities.cadenceMs <= 0)
       throw new RangeError("feedback cadence must be positive");
-    this.cadence = capacities.cadence;
+    this.cadenceMs = capacities.cadenceMs;
     this.passes = new Array(capacities.passes);
     this.renderables = new Array(capacities.renderables);
     this.heldResults = new Array(capacities.passes).fill(null);
@@ -74838,7 +74839,7 @@ class VirtualTextureFeedbackCoordinator {
       throw new Error("feedback coordinator failed to reserve its first pass");
     this.pixelScale = firstPass.pixelScale;
   }
-  cadence;
+  cadenceMs;
   register(renderable) {
     if (this.sealed)
       return 3 /* Sealed */;
@@ -74972,8 +74973,9 @@ class VirtualTextureFeedbackCoordinator {
   }
   render(frame) {
     this.feedbackSubmitUs = 0;
-    if (this.disposed || frame.frameId % this.cadence !== 0)
+    if (this.disposed || frame.elapsedSeconds < this.nextFeedbackSeconds)
       return;
+    this.nextFeedbackSeconds = frame.elapsedSeconds + this.cadenceMs / 1000;
     const started = performance.now();
     if (this.awaitingPassCount !== 0) {
       this.stats.deferredSnapshots++;
@@ -75357,7 +75359,7 @@ class TextHud {
   }
 }
 // crates/afterglow-web/web/src/demos/rigged-vt/main.ts
-var FEEDBACK_INTERVAL = 8;
+var FEEDBACK_CADENCE_MS = 55;
 var MODEL_LAYER = 1;
 var MODEL_HEIGHT = 2.55;
 var MODEL_CAPACITY = 32;
@@ -75632,7 +75634,7 @@ try {
   const firstAsset = requireReadyAsset(firstHandle.asset);
   const secondAsset = requireReadyAsset(secondHandle.asset);
   const store = session.createVirtualTextureStore(device);
-  feedbackCoordinator = new VirtualTextureFeedbackCoordinator(rendererHost.renderer, store, { renderables: 2, passes: 8, cadence: FEEDBACK_INTERVAL, scale: 0.125 });
+  feedbackCoordinator = new VirtualTextureFeedbackCoordinator(rendererHost.renderer, store, { renderables: 2, passes: 8, cadenceMs: FEEDBACK_CADENCE_MS, scale: 0.125 });
   feedbackCoordinator.resize(rendererHost.renderer.domElement.width, rendererHost.renderer.domElement.height);
   const firstPivot = new Group;
   const secondPivot = new Group;

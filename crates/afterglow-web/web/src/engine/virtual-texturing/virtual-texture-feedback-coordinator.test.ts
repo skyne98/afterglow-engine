@@ -107,7 +107,7 @@ describe('VirtualTextureFeedbackCoordinator', () => {
     const second = deferredRead();
     renderer.reads.push(first, second);
     const coordinator = new VirtualTextureFeedbackCoordinator(renderer, store, {
-      renderables: 1, passes: 2, cadence: 1,
+      renderables: 1, passes: 2, cadenceMs: 1,
     });
     coordinator.resize(800, 600);
     const renderable = new FakeRenderable(2);
@@ -132,7 +132,7 @@ describe('VirtualTextureFeedbackCoordinator', () => {
 
   test('has fixed registration capacity and rejects late registration', () => {
     const coordinator = new VirtualTextureFeedbackCoordinator(new FakeRenderer(), new FakeStore(), {
-      renderables: 1, passes: 2, cadence: 8,
+      renderables: 1, passes: 2, cadenceMs: 8,
     });
     expect(coordinator.register(new FakeRenderable(0))).toBe(FeedbackRegistrationStatus.InvalidPassCount);
     expect(coordinator.register(new FakeRenderable(2))).toBe(FeedbackRegistrationStatus.Registered);
@@ -146,7 +146,7 @@ describe('VirtualTextureFeedbackCoordinator', () => {
     const originalTarget = new THREE.RenderTarget(1, 1);
     renderer.target = originalTarget;
     const coordinator = new VirtualTextureFeedbackCoordinator(renderer, new FakeStore(), {
-      renderables: 1, passes: 2, cadence: 1,
+      renderables: 1, passes: 2, cadenceMs: 1,
     });
     const renderable = new FakeRenderable(2);
     coordinator.register(renderable);
@@ -162,7 +162,7 @@ describe('VirtualTextureFeedbackCoordinator', () => {
   test('resolves one logical frame into scene, output, feedback, and total', async () => {
     const renderer = new FakeRenderer();
     const coordinator = new VirtualTextureFeedbackCoordinator(renderer, new FakeStore(), {
-      renderables: 1, passes: 2, cadence: 1,
+      renderables: 1, passes: 2, cadenceMs: 1,
     });
     renderer.timestampFrames.push(8, 9);
     renderer.timestamps.set('r:1:1:f8', 99);
@@ -188,7 +188,7 @@ describe('VirtualTextureFeedbackCoordinator', () => {
     const renderer = new FakeRenderer();
     renderer.needsFrameBufferTarget = false;
     const coordinator = new VirtualTextureFeedbackCoordinator(renderer, new FakeStore(), {
-      renderables: 1, passes: 1, cadence: 1,
+      renderables: 1, passes: 1, cadenceMs: 1,
     });
     renderer.timestampFrames.push(10);
     renderer.timestamps.set('r:1:2:f10', 3);
@@ -207,7 +207,7 @@ describe('VirtualTextureFeedbackCoordinator', () => {
   test('reports unavailable timing deterministically when no frame resolved', async () => {
     const renderer = new FakeRenderer();
     const coordinator = new VirtualTextureFeedbackCoordinator(renderer, new FakeStore(), {
-      renderables: 1, passes: 1, cadence: 1,
+      renderables: 1, passes: 1, cadenceMs: 1,
     });
     const out = {
       gpuTimingValid: true, resolvedFrameId: 99, gpuSceneMs: 99,
@@ -220,12 +220,41 @@ describe('VirtualTextureFeedbackCoordinator', () => {
     });
   });
 
+  test('uses a 55 ms monotonic cadence without catch-up bursts', async () => {
+    const renderer = new FakeRenderer();
+    const reads = [deferredRead(), deferredRead(), deferredRead()];
+    renderer.reads.push(...reads);
+    const coordinator = new VirtualTextureFeedbackCoordinator(renderer, new FakeStore(), {
+      renderables: 1, passes: 1, cadenceMs: 55,
+    });
+    coordinator.register(new FakeRenderable(1));
+    coordinator.render({ frameId: 0, deltaSeconds: 0, elapsedSeconds: 0 });
+    expect(renderer.renders).toBe(1);
+    reads[0]!.resolve(new Uint32Array([0, 0]));
+    await flushReads(); coordinator.poll();
+    coordinator.render({ frameId: 7, deltaSeconds: 1 / 144, elapsedSeconds: 0.05 });
+    expect(renderer.renders).toBe(1);
+    coordinator.render({ frameId: 8, deltaSeconds: 1 / 144, elapsedSeconds: 0.056 });
+    expect(renderer.renders).toBe(2);
+    reads[1]!.resolve(new Uint32Array([0, 0]));
+    await flushReads(); coordinator.poll();
+    coordinator.render({ frameId: 30, deltaSeconds: 0.444, elapsedSeconds: 0.5 });
+    expect(renderer.renders).toBe(3);
+    reads[2]!.resolve(new Uint32Array([0, 0]));
+    await flushReads(); coordinator.poll();
+    coordinator.render({ frameId: 31, deltaSeconds: 0.001, elapsedSeconds: 0.501 });
+    expect(renderer.renders).toBe(3);
+    expect(() => new VirtualTextureFeedbackCoordinator(renderer, new FakeStore(), {
+      renderables: 1, passes: 1, cadenceMs: 0,
+    })).toThrow('cadence');
+  });
+
   test('restores all state when feedback rendering throws', () => {
     const renderer = new FakeRenderer();
     renderer.reads.push(deferredRead());
     renderer.throwOnRender = true;
     const coordinator = new VirtualTextureFeedbackCoordinator(renderer, new FakeStore(), {
-      renderables: 1, passes: 1, cadence: 1,
+      renderables: 1, passes: 1, cadenceMs: 1,
     });
     const renderable = new FakeRenderable(1);
     coordinator.register(renderable);

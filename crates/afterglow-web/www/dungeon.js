@@ -72362,6 +72362,7 @@ class VirtualTextureFeedbackCoordinator {
   registeredPassCount = 0;
   awaitingPassCount = 0;
   discardAwaiting = false;
+  nextFeedbackSeconds = 0;
   sealed = false;
   disposed = false;
   constructor(renderer, store, capacities) {
@@ -72371,9 +72372,9 @@ class VirtualTextureFeedbackCoordinator {
       throw new RangeError("feedback renderable capacity must be positive");
     if (!Number.isInteger(capacities.passes) || capacities.passes <= 0)
       throw new RangeError("feedback pass capacity must be positive");
-    if (!Number.isInteger(capacities.cadence) || capacities.cadence <= 0)
+    if (!Number.isFinite(capacities.cadenceMs) || capacities.cadenceMs <= 0)
       throw new RangeError("feedback cadence must be positive");
-    this.cadence = capacities.cadence;
+    this.cadenceMs = capacities.cadenceMs;
     this.passes = new Array(capacities.passes);
     this.renderables = new Array(capacities.renderables);
     this.heldResults = new Array(capacities.passes).fill(null);
@@ -72389,7 +72390,7 @@ class VirtualTextureFeedbackCoordinator {
       throw new Error("feedback coordinator failed to reserve its first pass");
     this.pixelScale = firstPass.pixelScale;
   }
-  cadence;
+  cadenceMs;
   register(renderable) {
     if (this.sealed)
       return 3 /* Sealed */;
@@ -72523,8 +72524,9 @@ class VirtualTextureFeedbackCoordinator {
   }
   render(frame) {
     this.feedbackSubmitUs = 0;
-    if (this.disposed || frame.frameId % this.cadence !== 0)
+    if (this.disposed || frame.elapsedSeconds < this.nextFeedbackSeconds)
       return;
+    this.nextFeedbackSeconds = frame.elapsedSeconds + this.cadenceMs / 1000;
     const started = performance.now();
     if (this.awaitingPassCount !== 0) {
       this.stats.deferredSnapshots++;
@@ -72779,7 +72781,7 @@ class TextHud {
 }
 // crates/afterglow-web/web/src/demos/dungeon/main.ts
 var VT_QUALITY_BIAS = 0;
-var FEEDBACK_INTERVAL = 8;
+var FEEDBACK_CADENCE_MS = 55;
 var POM_MIN_LAYERS = 8;
 var POM_MAX_LAYERS = 32;
 var POM_HEIGHT_SCALE = 0.05;
@@ -72939,7 +72941,7 @@ Errors ${runtime.diagnostics.count}`);
   coordinator = new VirtualTextureFeedbackCoordinator(host.renderer, store, {
     renderables: 1,
     passes: 1,
-    cadence: FEEDBACK_INTERVAL,
+    cadenceMs: FEEDBACK_CADENCE_MS,
     scale: 0.125
   });
   const activeCoordinator = coordinator;
@@ -73096,6 +73098,12 @@ Errors ${runtime.diagnostics.count}`);
   bootstrap.defer(() => shutdown.dispose());
   runtime.start({ update: updateFrame });
   const step3 = (count = 1) => steps.wait(runtime.frame.frameId, Math.max(1, count | 0));
+  async function stepForMilliseconds(milliseconds) {
+    const deadline = performance.now() + milliseconds;
+    do {
+      await step3(1);
+    } while (performance.now() < deadline);
+  }
   async function waitIdle(timeout = 60000) {
     const end = performance.now() + timeout;
     while (performance.now() < end) {
@@ -73122,7 +73130,7 @@ Errors ${runtime.diagnostics.count}`);
           break;
         if (name !== "cold")
           store.processFeedback(feedback);
-        await step3(FEEDBACK_INTERVAL);
+        await stepForMilliseconds(FEEDBACK_CADENCE_MS);
       }
       if (name === "churn") {
         const before = store.getStats().residentEvictions, replacement = atlasFeedback(Math.ceil(total / 3), 3072);
@@ -73134,7 +73142,7 @@ Errors ${runtime.diagnostics.count}`);
           if (s.residentEvictions > before && !s.pendingPages && !s.scheduledRequests && !s.readyUploads)
             break;
           store.processFeedback(replacement);
-          await step3(FEEDBACK_INTERVAL);
+          await stepForMilliseconds(FEEDBACK_CADENCE_MS);
         }
       }
       return {

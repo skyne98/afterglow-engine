@@ -90,7 +90,7 @@ try {
   coordinator = new VirtualTextureFeedbackCoordinator(
     rendererHost.renderer,
     store,
-    { renderables: 1, passes: 1, cadence: 1, scale: 0.125 },
+    { renderables: 1, passes: 1, cadenceMs: 55, scale: 0.125 },
   );
   coordinator.resize(
     rendererHost.renderer.domElement.width,
