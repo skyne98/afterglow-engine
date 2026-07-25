@@ -3,6 +3,10 @@ import {
   BigContainerAssetLoader, BoundedTranscoderPool, createFetchRangeLoader, createPageDataProvider, createPageRangeReader, findVTPageChunk,
   getVirtualTextureDimensions, type BigHeader,
 } from './big-parser.ts';
+import {
+  EngineTraceDescriptor, ENGINE_METRIC_DESCRIPTORS, ENGINE_TRACE_DESCRIPTORS,
+} from '../telemetry/catalog.ts';
+import { EngineTelemetry, TELEMETRY_RECORD_BYTES } from '../telemetry/telemetry.ts';
 
 const flush = () => new Promise(resolve => setTimeout(resolve, 0));
 
@@ -370,6 +374,34 @@ describe('BoundedTranscoderPool', () => {
     await expect(second).rejects.toThrow('canceled before dispatch');
     expect(calls).toBe(1);
     expect(maxActive).toBe(1);
+  });
+
+  test('records input bytes rather than queue duration in the telemetry schema', async () => {
+    let tick = 1;
+    const telemetry = new EngineTelemetry(
+      ENGINE_TRACE_DESCRIPTORS,
+      ENGINE_METRIC_DESCRIPTORS,
+      new ArrayBuffer(TELEMETRY_RECORD_BYTES * 8),
+      new Float64Array(192),
+      () => tick++,
+    );
+    telemetry.trace.arm(1);
+    const pool = new BoundedTranscoderPool([{
+      async transcode() { return new Uint8Array(16); },
+    }], 1, telemetry);
+    await pool.submit(new Uint8Array(37), 4, undefined, 99);
+    telemetry.trace.stop();
+    const snapshot = telemetry.trace.snapshot();
+    if (snapshot === null) throw new Error('missing telemetry snapshot');
+    const words = new Uint32Array(snapshot.buffer);
+    let queueEnd = -1;
+    for (let index = 0; index < snapshot.count; index++) {
+      if (words[index * 10 + 8] === EngineTraceDescriptor.TextureTranscodeQueue &&
+          (words[index * 10 + 9]! & 0xff) === 5) queueEnd = index;
+    }
+    expect(queueEnd).toBeGreaterThanOrEqual(0);
+    expect(words[queueEnd * 10 + 4]).toBe(37);
+    expect(words[queueEnd * 10 + 5]).toBe(0);
   });
 
   test('dispatches concurrently across independent workers', async () => {

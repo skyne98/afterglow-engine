@@ -44250,7 +44250,7 @@ class TelemetryRecorder {
   captureEpoch = 0;
   length = 0;
   droppedRecords = 0;
-  constructor(descriptors, buffer2, clock = () => performance.now() * 1000, ticksPerSecond = 1e6) {
+  constructor(descriptors, buffer2, clock = () => performance.now() * 1e6, ticksPerSecond = 1e9) {
     this.descriptors = descriptors;
     this.buffer = buffer2;
     this.clock = clock;

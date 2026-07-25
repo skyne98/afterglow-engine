@@ -296,6 +296,9 @@ All engine work must move toward these non-negotiable requirements:
 - Use semver for crate versions
 - Use semantic commits (feat, fix, chore, refactor, docs, test, etc.)
 - Agent must always maintain a docs/api/ directory with notes describing the fully up-to-date engine API surface per system
+- Keep all Afterglow-specific research, benchmark evidence, implementation notes,
+  and API documentation in this repository. Do not create or update external
+  knowledge-base repositories for Afterglow work.
 - Agent must always keep the user-facing mdBook (`book/`) in sync with engine changes — when a crate's public API, behavior, flags, build steps, or performance numbers change, update the relevant `book/src/` chapter in the same change. The book is the front door; `docs/api/` is the source-checked reference. When the two disagree, `docs/api/` is canonical — fix the book. Build/serve locally with `cd book && nix-shell -p mdbook mdbook-mermaid --run "mdbook serve --open"`
 - Write extensive unit and regression tests; do not rely on memory, write tests for everything
 - Legacy code is bad; delete legacy code, embrace new code and systems

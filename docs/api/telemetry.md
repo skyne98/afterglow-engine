@@ -148,9 +148,10 @@ telemetry.trace.encodeBatchInto(callerBuffer, sourceId, clockDomain);
 ```
 
 The TypeScript hot API uses non-negative safe-integer ticks, correlation IDs,
-and arguments and splits them into low/high `u32` words. It does not use
-`BigInt`, closures, promises, dynamic strings, or new typed-array views while
-recording.
+and arguments and splits them into low/high `u32` words. The browser clock is
+monotonic nanoseconds with a declared `1_000_000_000` ticks/second. It does not
+use `BigInt`, closures, promises, dynamic strings, or new typed-array views
+while recording.
 
 `EngineMemoryConfig` requires explicit `telemetryRecords` and
 `telemetryMetricCells` capacities. `EngineRuntime` constructs one
@@ -166,6 +167,11 @@ VT page loads, atlas/page-table upload publication, and whole-scene mesh
 optimization. These paths share numeric page/request correlations. Always-on
 metrics include asset bytes/read latency, RPC calls/latency, VT requested/
 loaded/failed pages, upload latency, and transcode latency.
+
+The Dungeon diagnostic profile reserves 65,536 records (2.5 MiB). Its accepted
+RTX 3090 nine-pose VT capture wrote 24,850 records with zero drops and zero
+unmatched spans. Raw AGTB evidence and methodology are in
+`docs/benchmarks/dungeon-vt-unified-telemetry-rtx3090-2026-07-25.*`.
 
 ## Current integration boundary
 

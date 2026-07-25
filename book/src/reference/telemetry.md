@@ -61,8 +61,14 @@ const output = new Uint8Array(runtime.telemetry.trace.encodedBatchBytes());
 runtime.telemetry.trace.encodeBatchInto(output, 1, 1);
 ```
 
-The output is an `AGTB` v1 batch. A full capture preserves existing records,
-drops new records, and reports the exact dropped count. It never blocks or grows.
+The output is an `AGTB` v1 batch. Browser records use monotonic nanoseconds and
+declare a 1 GHz tick rate. A full capture preserves existing records, drops new
+records, and reports the exact dropped count. It never blocks or grows.
+
+Dungeon reserves 65,536 records (2.5 MiB) for diagnostic captures. A measured
+RTX 3090 nine-pose VT run wrote 24,850 records with no drops or unmatched spans.
+It identified the 100 ms quality batching window and texture-worker queueing—not
+bulk I/O or atlas upload—as the dominant page-latency components.
 
 ## Rust producers
 

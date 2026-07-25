@@ -502,7 +502,7 @@ class BoundedTranscoderPool {
         continue;
       }
       const queueMs = performance.now() - job.queuedAt;
-      this.telemetry?.trace.asyncEnd(16 /* TextureTranscodeQueue */, job.correlation, Math.max(1, Math.floor(queueMs * 1e6)), job.format);
+      this.telemetry?.trace.asyncEnd(16 /* TextureTranscodeQueue */, job.correlation, job.data.byteLength, job.format);
       this.totalQueueMs += queueMs;
       this.maxQueueMs = Math.max(this.maxQueueMs, queueMs);
       this.workerBusy[workerIndex] = 1;

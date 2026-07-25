@@ -304,6 +304,14 @@ atlas write, and page-table publication. Web Fetch and native arena-backed
 range operations feed the same descriptors; native worker-internal `pread` and
 arena lease subspans remain a separate adapter gate.
 
+The first accepted unified profile (`docs/benchmarks/dungeon-vt-unified-
+telemetry-rtx3090-2026-07-25.md`) found 149.0 ms mean / 231.4 ms p99 complete
+page latency on a fresh-cache RTX 3090 traversal. The dominant components were
+the configured bulk batching window (56.9 ms mean) and transcode queue (81.8 ms
+mean), versus 3.0 ms bulk I/O, 11.4 ms transcode execution, and 0.028 ms upload/
+page-table publication. The run loaded 973 pages with no failures and emitted
+24,850 records without drops or unmatched spans.
+
 ## Asset containers
 
 The compact `VirtualTextureDirectory` was introduced in container v5 and is

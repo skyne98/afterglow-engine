@@ -79,8 +79,8 @@ export class TelemetryRecorder {
   constructor(
     readonly descriptors: readonly TelemetryDescriptor[],
     readonly buffer: ArrayBuffer,
-    private readonly clock: TelemetryClock = () => performance.now() * 1_000,
-    readonly ticksPerSecond = 1_000_000,
+    private readonly clock: TelemetryClock = () => performance.now() * 1_000_000,
+    readonly ticksPerSecond = 1_000_000_000,
   ) {
     if (buffer.byteLength === 0 || buffer.byteLength % TELEMETRY_RECORD_BYTES !== 0)
       throw new RangeError('telemetry trace buffer must contain a positive whole number of 40-byte records');

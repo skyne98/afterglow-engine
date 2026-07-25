@@ -62758,7 +62758,7 @@ class TelemetryRecorder {
   captureEpoch = 0;
   length = 0;
   droppedRecords = 0;
-  constructor(descriptors, buffer2, clock = () => performance.now() * 1000, ticksPerSecond = 1e6) {
+  constructor(descriptors, buffer2, clock = () => performance.now() * 1e6, ticksPerSecond = 1e9) {
     this.descriptors = descriptors;
     this.buffer = buffer2;
     this.clock = clock;
@@ -64058,7 +64058,7 @@ class BoundedTranscoderPool {
         continue;
       }
       const queueMs = performance.now() - job.queuedAt;
-      this.telemetry?.trace.asyncEnd(16 /* TextureTranscodeQueue */, job.correlation, Math.max(1, Math.floor(queueMs * 1e6)), job.format);
+      this.telemetry?.trace.asyncEnd(16 /* TextureTranscodeQueue */, job.correlation, job.data.byteLength, job.format);
       this.totalQueueMs += queueMs;
       this.maxQueueMs = Math.max(this.maxQueueMs, queueMs);
       this.workerBusy[workerIndex] = 1;
@@ -73595,7 +73595,7 @@ var runtime = EngineRuntime.forScene({
     workerCompletions: 8,
     assetRequests: 8,
     vtRequests: 512,
-    telemetryRecords: 16384,
+    telemetryRecords: 65536,
     telemetryMetricCells: 512
   },
   diagnosticCapacity: 128,

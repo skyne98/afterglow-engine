@@ -449,7 +449,7 @@ export class BoundedTranscoderPool {
       const queueMs = performance.now() - job.queuedAt;
       this.telemetry?.trace.asyncEnd(
         EngineTraceDescriptor.TextureTranscodeQueue, job.correlation,
-        Math.max(1, Math.floor(queueMs * 1_000_000)), job.format,
+        job.data.byteLength, job.format,
       );
       this.totalQueueMs += queueMs;
       this.maxQueueMs = Math.max(this.maxQueueMs, queueMs);

@@ -211,7 +211,16 @@ visual demo retains a global bridge or architecture-baseline exception. Its BIG
 session feeds unified page-load, cache, bulk-wait/read, RPC, transcode, upload,
 and page-table publication spans into `runtime.telemetry`. Diagnostic clients
 can call `traceArm()`, run a bounded scenario, call `traceStop()`, and retrieve
-the `AGTB` batch with `traceBatch()` through `window.__afterglowDungeon`.
+the `AGTB` batch with `traceBatch()` through `window.__afterglowDungeon`. The
+65,536-record Dungeon capture buffer is 2.5 MiB and remains prefix-preserving.
+
+A fresh-cache RTX 3090 nine-pose capture loaded 973 pages with no failures while
+582 scenario frames held 6.955 ms p99 and 13.900 ms maximum. Complete page-load
+latency was 149.0 ms mean / 231.4 ms p99: the 56.9 ms mean bulk batching wait
+and 81.8 ms mean texture queue wait dominated the 3.0 ms bulk read, 11.4 ms
+transcode, and 0.028 ms atlas publication stages. The accepted AGTB contained
+24,850 records with zero drops and zero unmatched spans; raw evidence is under
+`docs/benchmarks/dungeon-vt-unified-telemetry-rtx3090-2026-07-25.*`.
 
 Click for raw mouse look; use **WASD**, **Shift**, **P**, **R**, and **1–3** for
 movement, sprint, prewarmed close-range POM toggle, reset, and deterministic

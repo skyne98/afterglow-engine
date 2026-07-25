@@ -31,6 +31,7 @@ describe('TelemetryRecorder', () => {
   test('requires fixed whole-record storage', () => {
     expect(() => new TelemetryRecorder(descriptors, new ArrayBuffer(0))).toThrow(RangeError);
     expect(() => new TelemetryRecorder(descriptors, new ArrayBuffer(TELEMETRY_RECORD_BYTES + 1))).toThrow(RangeError);
+    expect(new TelemetryRecorder(descriptors, new ArrayBuffer(TELEMETRY_RECORD_BYTES)).ticksPerSecond).toBe(1_000_000_000);
   });
 
   test('does not read the clock while disabled or category-filtered', () => {
