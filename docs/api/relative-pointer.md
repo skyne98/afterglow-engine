@@ -26,6 +26,9 @@ The element calls this automatically for primary pointer gestures. It remains
 public for other user-gesture controls. It requests Pointer Lock 2 with
 `{ unadjustedMovement: true }`, bypassing operating-system mouse acceleration.
 Rejection or a synchronous legacy-browser failure retries ordinary pointer lock.
+The native shell first requests winit locked mode. On X11, where winit does not
+implement that mode, it uses a hidden confined pointer while continuing to
+consume XInput2 raw-motion deltas; failure of both modes rejects the request.
 
 ### `getStatus(): Readonly<RelativePointerStatus>`
 

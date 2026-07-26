@@ -89,6 +89,9 @@ The shell currently provides:
 - computed CSS, layout, box metrics, focus, hover, active state, and scrolling;
 - pointer, mouse, wheel, keyboard, pointer capture, pointer lock, and native CSS
   cursors; locked relative motion is always retargeted to the lock element;
+  Wayland uses winit locked mode, while X11 falls back to a hidden confined
+  pointer plus XInput2 raw-motion events because winit does not implement X11
+  `CursorGrabMode::Locked`;
 - `ResizeObserver`, `IntersectionObserver`, and `matchMedia`; the final physical
   window size is synchronized once after renderer readiness, even when the
   initial configure event arrived during startup;

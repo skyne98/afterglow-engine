@@ -483,13 +483,30 @@ fn resize_native_surface(
     Ok(())
 }
 
+fn acquire_pointer_grab<E>(
+    mut set_mode: impl FnMut(CursorGrabMode) -> Result<(), E>,
+) -> Result<CursorGrabMode, (E, E)> {
+    match set_mode(CursorGrabMode::Locked) {
+        Ok(()) => Ok(CursorGrabMode::Locked),
+        Err(locked_error) => match set_mode(CursorGrabMode::Confined) {
+            Ok(()) => Ok(CursorGrabMode::Confined),
+            Err(confined_error) => Err((locked_error, confined_error)),
+        },
+    }
+}
+
 #[op2(fast)]
 fn op_request_pointer_lock(state: &mut OpState) -> Result<(), JsErrorBox> {
     let pointer_lock = state.borrow::<NativePointerLock>();
-    pointer_lock
-        .window
-        .set_cursor_grab(CursorGrabMode::Locked)
-        .map_err(|error| JsErrorBox::generic(format!("lock native pointer: {error}")))?;
+    let mode = acquire_pointer_grab(|mode| pointer_lock.window.set_cursor_grab(mode))
+        .map_err(|(locked, confined)| {
+            JsErrorBox::generic(format!(
+                "lock native pointer: locked mode failed ({locked}); confined fallback failed ({confined})"
+            ))
+        })?;
+    if mode == CursorGrabMode::Confined {
+        eprintln!("afterglow-shell pointer lock using confined X11 raw-motion fallback");
+    }
     pointer_lock.window.set_cursor_visible(false);
     pointer_lock.locked.store(true, Ordering::Release);
     Ok(())
@@ -2152,6 +2169,29 @@ impl ApplicationHandler<HostEvent> for App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pointer_grab_prefers_locked_and_falls_back_to_confined() {
+        let mut attempts = Vec::new();
+        let selected = acquire_pointer_grab(|mode| {
+            attempts.push(mode);
+            if mode == CursorGrabMode::Locked {
+                Err("unsupported")
+            } else {
+                Ok(())
+            }
+        });
+        assert_eq!(selected, Ok(CursorGrabMode::Confined));
+        assert_eq!(attempts, [CursorGrabMode::Locked, CursorGrabMode::Confined]);
+
+        attempts.clear();
+        let selected = acquire_pointer_grab(|mode| {
+            attempts.push(mode);
+            Ok::<(), &str>(())
+        });
+        assert_eq!(selected, Ok(CursorGrabMode::Locked));
+        assert_eq!(attempts, [CursorGrabMode::Locked]);
+    }
 
     #[test]
     fn keyboard_physical_codes_match_the_browser_api() {

@@ -54,7 +54,8 @@ and input all run against the native environment. After renderer readiness the
 host synchronizes the current physical window size once, so startup configure
 events cannot leave the game at its fallback dimensions. Pointer-locked relative
 motion is routed to the lock element rather than the hidden cursor's stale hit
-target.
+target. Wayland uses winit's locked mode; X11 uses a hidden confined pointer with
+XInput2 raw motion because winit does not implement X11 locked mode.
 
 Startup does not block the native event loop while a module performs top-level
 await. winit presentation turns drive a fixed-capacity `requestAnimationFrame`
