@@ -164,6 +164,41 @@ Mechanism remains separated from policy:
 The asset provider never learns camera, center, distance, mip semantics, or
 material channels.
 
+### 3.1 Burst behavior: 800 pages in one feedback epoch
+
+“Detected,” “scheduled,” and “admitted” are distinct states. A feedback epoch
+may detect 800 unique pages, but it can never admit 800 pages into the async
+pipeline:
+
+1. Feedback decoding deduplicates the 800 observations.
+2. Material-channel/parent expansion writes only into fixed scratch storage. If
+   the expanded working set exceeds physical-atlas capacity, the existing
+   capacity LOD bias is increased and the set is rebuilt at coarser mips. If it
+   still cannot fit at maximum bias, deterministic scheduler-overflow telemetry
+   is emitted and omitted pages continue sampling their pinned tail.
+3. The persistent scheduler stores at most its bootstrap capacity and orders
+   candidates by the perceptual score.
+4. One `poll()` admits at most the existing eight-page operation budget and
+   0.25 ms scheduling budget.
+5. The complete admitted pipeline holds at most 16 pages / 2 MiB. Once full,
+   scheduling stops until a generation completes or acknowledges cancellation.
+6. Bulk/transcode/upload stages therefore see at most admitted work, never the
+   original 800-page burst. Existing transport and upload budgets remain in
+   force.
+7. The next completed predicted-feedback epoch promotes/demotes retained
+   candidates. Requests absent from two completed epochs become stale and are
+   removed. Camera motion therefore replaces obsolete backlog instead of
+   accumulating it.
+
+There is no promise to refine all 800 pages by the next frame. The pinned tail
+and resident parents provide valid coarse sampling while the highest-value
+pages refine over later frames. If the camera becomes static, the scheduler
+progressively drains the retained set. If it keeps moving, low-value obsolete
+pages normally expire before admission.
+
+Any path that calls the page provider for all 800 pages directly is an admission-
+boundary bug and must fail a vertical test; it is not an alternate burst mode.
+
 ## 4. Code explicitly removed from the earlier plan
 
 Do not implement:
