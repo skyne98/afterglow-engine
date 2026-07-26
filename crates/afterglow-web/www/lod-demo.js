@@ -45474,49 +45474,16 @@ class BoundedBulkReadQueue {
 }
 
 // crates/afterglow-web/web/src/engine/assets/platform-range-loader.ts
-var ARENA_SLOT_BYTES = 4 * 1024 * 1024;
 var COPY_CHUNK_BYTES = 512 * 1024;
-var MAX_BULK_SPANS = 256;
 function nativeOps() {
   if (typeof Deno !== "object" || Deno === null)
     return null;
   const ops = Deno.core?.ops;
-  return typeof ops?.op_native_asset_size === "function" && typeof ops.op_native_asset_read_handle === "function" && typeof ops.op_native_asset_read_many_handle === "function" && typeof ops.op_afterglow_arena_view === "function" ? ops : null;
+  return typeof ops?.op_native_asset_size === "function" && typeof ops.op_native_asset_read_copy === "function" ? ops : null;
 }
 function validateRead(offset, length2) {
   if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length2) || length2 < 0)
     throw new RangeError("asset range must use non-negative safe integers");
-}
-function viewHandle(ops, words) {
-  if (words.length < 4)
-    throw new Error("native asset worker returned truncated handle metadata");
-  const region = words[0] ?? -1;
-  const slot = words[1] ?? -1;
-  const length2 = words[2] ?? -1;
-  const generation = words[3] ?? -1;
-  if (![region, slot, length2, generation].every(Number.isInteger))
-    throw new Error("native asset worker returned invalid handle metadata");
-  const bytes = ops.op_afterglow_arena_view({ region, slot, length: length2, generation });
-  if (bytes.byteLength !== length2)
-    throw new Error("native asset arena view length mismatch");
-  return bytes;
-}
-function packSpans(ranges) {
-  if (ranges.length === 0 || ranges.length > MAX_BULK_SPANS)
-    throw new RangeError(`native bulk read requires 1..${MAX_BULK_SPANS} spans`);
-  const packed = new Uint8Array(ranges.length * 12);
-  const view = new DataView(packed.buffer);
-  let total = 0;
-  for (let index = 0;index < ranges.length; index++) {
-    const range = ranges[index];
-    validateRead(range.offset, range.length);
-    total += range.length;
-    if (!Number.isSafeInteger(total) || total > ARENA_SLOT_BYTES)
-      throw new RangeError(`native bulk read exceeds ${ARENA_SLOT_BYTES} bytes`);
-    view.setBigUint64(index * 12, BigInt(range.offset), true);
-    view.setUint32(index * 12 + 8, range.length, true);
-  }
-  return packed;
 }
 function createNativeRangeLoader(ops) {
   const identity = async (path) => ({
@@ -45528,9 +45495,8 @@ function createNativeRangeLoader(ops) {
     validateRead(offset, length2);
     if (length2 === 0)
       return new Uint8Array(0);
-    if (length2 <= ARENA_SLOT_BYTES) {
-      return viewHandle(ops, await ops.op_native_asset_read_handle(path, BigInt(offset), length2));
-    }
+    if (length2 <= COPY_CHUNK_BYTES)
+      return ops.op_native_asset_read_copy(path, BigInt(offset), length2);
     const output2 = new Uint8Array(length2);
     let written = 0;
     while (written < length2) {
@@ -45554,22 +45520,7 @@ function createNativeRangeLoader(ops) {
     identity,
     read,
     async readBulk(path, ranges) {
-      const metadata = await ops.op_native_asset_read_many_handle(path, packSpans(ranges));
-      if (metadata.length !== 4 + ranges.length)
-        throw new Error("native bulk read returned invalid part metadata");
-      const bytes = viewHandle(ops, metadata);
-      const parts = new Array(ranges.length);
-      let offset = 0;
-      for (let index = 0;index < ranges.length; index++) {
-        const length2 = metadata[4 + index] ?? -1;
-        if (!Number.isInteger(length2) || length2 < 0 || offset + length2 > bytes.byteLength)
-          throw new Error("native bulk read returned invalid part length");
-        parts[index] = bytes.subarray(offset, offset + length2);
-        offset += length2;
-      }
-      if (offset !== bytes.byteLength)
-        throw new Error("native bulk read metadata does not cover its arena view");
-      return parts;
+      return Promise.all(ranges.map((range) => read(path, range.offset, range.length)));
     }
   };
 }
@@ -45650,7 +45601,7 @@ function instrumentRangeLoader(loader, telemetry) {
         telemetry.trace.asyncEnd(11 /* AssetBulkRead */, correlation, bytes, parts.length);
         return parts;
       } catch (error2) {
-        telemetry.trace.asyncEnd(11 /* AssetBulkRead */, correlation, 0, 0);
+        telemetry.trace.asyncEnd(11 /* AssetBulkRead */, correlation, 0, 1);
         throw error2;
       } finally {
         duration(startedAt);
@@ -46304,15 +46255,28 @@ class NativeRpcTransport {
 }
 
 // crates/afterglow-web/web/src/engine/assets/platform-workers.ts
-var NATIVE_MESHOPT_WORKER = 5;
+function nativeOps2() {
+  return globalThis.Deno?.core?.ops;
+}
 function hasNativeWorkerTransport() {
-  const deno = globalThis.Deno;
-  return typeof deno?.core?.ops?.op_afterglow_rpc_call_async === "function";
+  return typeof nativeOps2()?.op_afterglow_rpc_call_async === "function";
+}
+function nativeWorkerIds(service) {
+  const resolve = nativeOps2()?.op_afterglow_worker_ids;
+  if (typeof resolve !== "function")
+    throw new Error("native worker manifest op is unavailable");
+  const ids = resolve(service);
+  if (!Array.isArray(ids) || ids.some((id) => !Number.isInteger(id) || id < 0))
+    throw new Error(`native worker manifest is invalid for ${service}`);
+  return ids;
 }
 async function createPlatformMeshOptimizer(telemetry) {
   if (!hasNativeWorkerTransport())
     return MeshoptClient.spawnThreaded({ workerWasmUrl: "meshopt.wasm", timeoutMs: 1e4 });
-  return new MeshoptClient(new NativeRpcTransport(NATIVE_MESHOPT_WORKER, telemetry));
+  const ids = nativeWorkerIds("meshopt");
+  if (ids.length !== 1)
+    throw new Error(`native meshopt service requires exactly one worker; found ${ids.length}`);
+  return new MeshoptClient(new NativeRpcTransport(ids[0], telemetry));
 }
 
 // crates/afterglow-web/web/src/engine/presentation/static-lod.ts

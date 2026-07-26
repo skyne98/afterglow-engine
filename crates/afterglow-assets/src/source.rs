@@ -123,6 +123,132 @@ pub trait AssetSourceProvider {
     fn open_source(&self, url_path: &str) -> Option<Box<dyn AssetSource + Send + Sync>>;
 }
 
+/// Stable identifier for a source retained by an [`AssetSourceTable`].
+///
+/// Handles carry both a slot and a generation. A stale handle therefore cannot
+/// address a source installed into the same slot after the table is cleared.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AssetSourceHandle(u32);
+
+impl AssetSourceHandle {
+    const SLOT_BITS: u32 = 16;
+    const SLOT_MASK: u32 = (1 << Self::SLOT_BITS) - 1;
+
+    fn new(slot: usize, generation: u16) -> Self {
+        Self(((generation as u32) << Self::SLOT_BITS) | slot as u32)
+    }
+
+    fn slot(self) -> usize {
+        (self.0 & Self::SLOT_MASK) as usize
+    }
+
+    fn generation(self) -> u16 {
+        (self.0 >> Self::SLOT_BITS) as u16
+    }
+
+    /// Wire representation used by RPC descriptors.
+    pub fn into_raw(self) -> u32 {
+        self.0
+    }
+
+    /// Reconstruct a handle received through an RPC descriptor.
+    pub fn from_raw(raw: u32) -> Self {
+        Self(raw)
+    }
+}
+
+struct AssetSourceEntry {
+    path: String,
+    generation: u16,
+    source: Box<dyn AssetSource + Send + Sync>,
+}
+
+/// Fixed-capacity table of already-confined, open positional byte sources.
+///
+/// Opening is a bootstrap operation and may allocate. Reads use a numeric
+/// generational handle, perform no path processing, and never grow the table.
+/// The table is policy-free: callers decide which paths to retain and how to
+/// react when capacity is exhausted.
+pub struct AssetSourceTable {
+    entries: Vec<Option<AssetSourceEntry>>,
+    generations: Vec<u16>,
+}
+
+impl AssetSourceTable {
+    /// Create an empty table with exactly `capacity` slots.
+    pub fn new(capacity: usize) -> Self {
+        assert!(
+            capacity > 0 && capacity <= u16::MAX as usize,
+            "source table capacity must be 1..=65535"
+        );
+        let mut entries = Vec::with_capacity(capacity);
+        entries.resize_with(capacity, || None);
+        Self {
+            entries,
+            generations: vec![1; capacity],
+        }
+    }
+
+    /// Open or reuse one confined source. Returns `None` for a missing source
+    /// or when every fixed slot is occupied.
+    pub fn open(
+        &mut self,
+        provider: &dyn AssetSourceProvider,
+        path: &str,
+    ) -> Option<AssetSourceHandle> {
+        if let Some((slot, entry)) = self.entries.iter().enumerate().find_map(|(slot, entry)| {
+            entry
+                .as_ref()
+                .filter(|entry| entry.path == path)
+                .map(|entry| (slot, entry))
+        }) {
+            return Some(AssetSourceHandle::new(slot, entry.generation));
+        }
+        let slot = self.entries.iter().position(Option::is_none)?;
+        let source = provider.open_source(path)?;
+        let generation = self.generations[slot];
+        self.entries[slot] = Some(AssetSourceEntry {
+            path: path.to_owned(),
+            generation,
+            source,
+        });
+        Some(AssetSourceHandle::new(slot, generation))
+    }
+
+    /// Read from a retained source. `None` means the handle is stale or
+    /// malformed; I/O errors are returned unchanged.
+    pub fn read_at(
+        &self,
+        handle: AssetSourceHandle,
+        offset: u64,
+        output: &mut [u8],
+    ) -> Option<io::Result<usize>> {
+        let entry = self.entries.get(handle.slot())?.as_ref()?;
+        (entry.generation == handle.generation()).then(|| entry.source.read_at(offset, output))
+    }
+
+    /// Drop all sources and invalidate every outstanding handle.
+    pub fn clear(&mut self) {
+        for (slot, entry) in self.entries.iter_mut().enumerate() {
+            *entry = None;
+            let next = self.generations[slot].wrapping_add(1);
+            self.generations[slot] = if next == 0 { 1 } else { next };
+        }
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.iter().filter(|entry| entry.is_some()).count()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.iter().all(Option::is_none)
+    }
+}
+
 /// A shared, `pread`-safe file source. Cheap to clone (one `Arc` refcount);
 /// `read_at` is positional so concurrent reads on clones need no cursor or lock.
 #[cfg(not(target_arch = "wasm32"))]
@@ -404,6 +530,35 @@ mod tests {
         // b replaces the sole slot, dropping a's retained descriptor.
         assert_eq!(cache.open_source("/b.txt").unwrap().len(), 1);
         assert_eq!(cache.open_source("/a.txt").unwrap().len(), 5);
+        let _ = std::fs::remove_dir_all(&root_dir);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn source_table_reuses_paths_bounds_capacity_and_rejects_stale_handles() {
+        let root_dir =
+            std::env::temp_dir().join(format!("ag-source-table-{}", std::process::id(),));
+        let _ = std::fs::remove_dir_all(&root_dir);
+        std::fs::create_dir_all(&root_dir).unwrap();
+        std::fs::write(root_dir.join("a.txt"), b"alpha").unwrap();
+        std::fs::write(root_dir.join("b.txt"), b"bravo").unwrap();
+        let root = crate::AssetRoot::new(&root_dir).unwrap();
+        let provider = AssetSourceCache::new(root);
+        let mut table = AssetSourceTable::new(1);
+
+        let first = table.open(&provider, "/a.txt").expect("open first source");
+        assert_eq!(table.open(&provider, "/a.txt"), Some(first));
+        assert!(table.open(&provider, "/b.txt").is_none());
+        let mut bytes = [0u8; 5];
+        assert_eq!(table.read_at(first, 0, &mut bytes).unwrap().unwrap(), 5);
+        assert_eq!(&bytes, b"alpha");
+
+        table.clear();
+        assert!(table.read_at(first, 0, &mut bytes).is_none());
+        let second = table.open(&provider, "/b.txt").expect("reopen after clear");
+        assert_ne!(first, second);
+        assert_eq!(table.read_at(second, 0, &mut bytes).unwrap().unwrap(), 5);
+        assert_eq!(&bytes, b"bravo");
         let _ = std::fs::remove_dir_all(&root_dir);
     }
 

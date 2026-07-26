@@ -79,7 +79,7 @@ async function main() {
     async transcode(): Promise<Uint8Array> { return NOOP_FRAME; },
   }));
 
-  // BigAssetSession's containerLoader ignores the per-asset path and always
+  // EngineAssets' containerLoader ignores the per-asset path and always
   // reads from the session container; mirror that so `loader.read(path+'.big')`
   // hits dungeon.big.
   const containerLoader = {

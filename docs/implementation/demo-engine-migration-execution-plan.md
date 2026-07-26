@@ -79,7 +79,7 @@ Implemented on 2026-07-17:
 - DME-020 mechanism: fixed-capacity `VirtualTextureFeedbackCoordinator`,
   exception-safe renderer state, and atomic multi-pass feedback publication are
   implemented and tested;
-- DME-021 mechanism: `BigAssetSession` now owns bounded header admission,
+- DME-021 mechanism: `EngineAssets` now owns bounded header admission,
   transcoder startup/rollback, raw assets, one VT store, and reverse shutdown;
 - DME-022: `parseGLTFAsset` retains stable parser material indices;
   `VirtualGltfBinding` owns fixed-capacity replacement, factors/alpha/depth,
@@ -92,7 +92,7 @@ Implemented on 2026-07-17:
 - DME-025: fixed model collection, exact deformed bounds, pivot normalization,
   bounded animation actions, and disposable skeleton diagnostics are implemented;
 - DME-031: `rigged-vt-demo.ts` is canonical on `EngineRuntime`, `RendererHost`,
-  `BigAssetSession`, stable-index bindings, model utilities, and the atomic
+  `EngineAssets`, stable-index bindings, model utilities, and the atomic
   feedback coordinator. Its image-free 463,702,085-byte `.big` cook and both
   animated models pass the real-GPU regression with zero post-seal pipelines;
 - DME-034 foundation: fixed action input, frame-step automation, bounded browser
@@ -114,7 +114,7 @@ Implemented on 2026-07-17:
   hysteresis. Its real-GPU trajectory passes levels `0,1,2,3,2,1,0` with one
   visible mesh and no diagnostics;
 - DME-030: Dungeon is canonical on `EngineRuntime`, `RendererHost`,
-  `BigAssetSession`, `VirtualTextureFeedbackCoordinator`, bounded input,
+  `EngineAssets`, `VirtualTextureFeedbackCoordinator`, bounded input,
   diagnostics, frame stepping, and shutdown ownership. The architecture
   baseline is deleted and release status is `conformant`;
 - DME-041: `xtask serve` replaces the thread-per-connection example with an
@@ -527,14 +527,15 @@ shadow suppression. All state restoration uses `try/finally`.
 
 Update `docs/api/virtual-texturing.md` and the book in the same change.
 
-### DME-021 — Owned BIG asset session
+### DME-021 — Owned engine asset composition
 
 **New file**
 
-`web/src/engine/assets/big-asset-session.ts`
+`web/src/engine/assets/engine-assets.ts`
 
-`BigAssetSession.open()` must accept explicit worker, request, byte-in-flight,
-completion, and cache capacities. It owns:
+`EngineAssets.open()` must accept explicit request, byte-in-flight, completion,
+and cache capacities. Worker topology is platform-selected and bounded by page
+admission; an explicit count remains only for tests/profile experiments. It owns:
 
 - range source and parsed header;
 - raw `AssetStore` loader;
@@ -662,7 +663,7 @@ Replace local infrastructure with:
 
 - `EngineRuntime`;
 - `RendererHost` diagnostics/profiling;
-- `BigAssetSession`;
+- `EngineAssets`;
 - `VirtualTextureFeedbackCoordinator`;
 - `createVirtualPomMaterialPair()`;
 - bounded action input from DME-034.

@@ -105,6 +105,57 @@ describe('import boundary contract', () => {
   });
 });
 
+describe('native asset/worker boundary contract', () => {
+  test('keeps concrete service composition out of the generic shell bridge', async () => {
+    const bridge = await Bun.file(new URL(
+      'crates/afterglow-shell/src/rpc_bridge.rs', repositoryRoot,
+    )).text();
+    const production = bridge.split('#[cfg(test)]')[0]!;
+    expect(production).not.toContain('use afterglow_texture');
+    expect(production).not.toContain('use afterglow_meshopt');
+    expect(production).not.toContain('op_afterglow_arena_view');
+    expect(production).toContain('register_named_async');
+  });
+
+  test('publishes worker manifests instead of TypeScript worker ids', async () => {
+    const workers = await Bun.file(new URL(
+      'crates/afterglow-web/web/src/engine/assets/platform-workers.ts', repositoryRoot,
+    )).text();
+    expect(workers).toContain("nativeWorkerIds('texture')");
+    expect(workers).toContain("nativeWorkerIds('meshopt')");
+    expect(workers).not.toContain('NATIVE_TEXTURE_WORKER_FIRST');
+    expect(workers).not.toContain('NATIVE_MESHOPT_WORKER');
+  });
+
+  test('keeps native physical-core topology in bootstrap instead of demos', async () => {
+    const shell = await Bun.file(new URL(
+      'crates/afterglow-shell/src/main.rs', repositoryRoot,
+    )).text();
+    expect(shell).toContain('num_cpus::get_physical()');
+    expect(shell).toContain('NATIVE_TEXTURE_WORKER_CAP: usize = 16');
+    for (const path of [
+      'crates/afterglow-web/web/src/demos/dungeon/main.ts',
+      'crates/afterglow-web/web/src/demos/rigged-vt/main.ts',
+    ]) {
+      const demo = await Bun.file(new URL(path, repositoryRoot)).text();
+      expect(demo).not.toContain('navigator.hardwareConcurrency');
+      expect(demo).not.toMatch(/\bworkerCount\s*:/);
+    }
+  });
+
+  test('uses the decomposed asset API with no legacy session wrapper', async () => {
+    const barrel = await Bun.file(new URL(
+      'crates/afterglow-web/web/src/engine/assets/index.ts', repositoryRoot,
+    )).text();
+    expect(barrel).toContain('EngineAssets');
+    expect(barrel).toContain('BigContainer');
+    expect(barrel).not.toContain('BigAssetSession');
+    expect(await Bun.file(new URL(
+      'crates/afterglow-web/web/src/engine/assets/big-asset-session.ts', repositoryRoot,
+    )).exists()).toBe(false);
+  });
+});
+
 describe('bundle identity contract', () => {
   test('detects duplicate bundled Three.js cores', () => {
     const marker = '// node_modules/three/build/three.core.js';

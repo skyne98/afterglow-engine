@@ -1,55 +1,65 @@
 # `afterglow-assets` + `afterglow-assets-worker` API — streaming assets + async loader
 
-> Status: working with one audited integration gap; API checked against the
-> 2026-07-22 source. The live BIG provider does not yet source-sort bulk spans.
-> `afterglow-cef` has been removed; the native target boundary and native
-> worker composition are tracked in `docs/implementation/shell-promotion-plan.md`.
+> Status: working on public web and the native shell; API checked against the
+> 2026-07-26 source. Native Basis page reads and transcoding are composed inside
+> real OS workers, so encoded VT source bytes never enter V8. Public-web bulk
+> spans still preserve admission order rather than using the separate source-
+> sorting helper.
 
-## Browser BIG asset session
+## Engine asset composition
 
-`afterglow-web/web/src/engine/assets/big-asset-session.ts` provides `BigAssetSession`, the
-bootstrap owner for one seekable `.big` source. `open()` requires explicit
-`workerCount`, `transcodeQueueCapacity`, `maxPendingPages`, `maxPendingBytes`,
-`urgentBatchDeadlineMs`, `focusBatchDeadlineMs`, `peripheralBatchDeadlineMs`,
-`maxHeaderBytes`, and target
-GPU format. Engine-owned typed transcoders are the default; tests/platform
-adapters may inject a factory. Optional `telemetry` connects session startup,
-platform range reads, worker round trips, transcode, mesh optimization, and VT
-publication to the unified trace. It validates the 16-byte prefix and configured header bound
-before starting workers, parses the header once, constructs the direct raw-asset
-loader and VT page provider, and rolls workers back in reverse order after any
-startup failure.
+The browser asset surface is deliberately split into three owners:
+
+- `big-container.ts` provides `BigContainer`, an immutable format/index view. It
+  owns no workers, renderer state, queues, or platform policy.
+- `owned-worker-pool.ts` provides the generic fixed service-lifetime mechanism:
+  positive fixed count, reverse startup rollback, reverse idempotent shutdown,
+  and first-error reporting.
+- `engine-assets.ts` provides `EngineAssets`, the public composition owner. It
+  joins a container, the platform texture pool, the page provider, and at most
+  one asset/VT store without exposing transports to games.
+
+`EngineAssets.open()` requires `transcodeQueueCapacity`, `maxPendingPages`, `maxPendingBytes`,
+`urgentBatchDeadlineMs`, `focusBatchDeadlineMs`,
+`peripheralBatchDeadlineMs`, `maxHeaderBytes`, and target GPU format. The
+waiting texture capacity plus active worker count must cover every admitted VT
+page, so capacity pressure is deferred by admission rather than reported as a
+page failure. Optional telemetry connects startup, platform reads, worker round
+trips, transcode, mesh optimization, and VT publication. Header validation and
+`BigContainer` construction complete before any worker starts.
 
 The public browser barrel is `web/src/engine/assets/index.ts`. The policy-free
 `readBigHeader(source, path, maxHeaderBytes)` primitive performs the shared
 bounded prefix/header read used by both VT/model archives and static meshes; no
-consumer duplicates container validation. The session currently creates typed transcoder clients through
-`spawnThreaded()` and closes every client in reverse order. Games never
-construct `Rpc`, select worker scripts, or terminate raw transports.
-`createTranscoder` is the platform/test injection boundary.
+consumer duplicates container validation. Public web creates typed transcoder clients through `spawnThreaded()`.
+Games never construct `Rpc`, select worker scripts, use numeric worker IDs, or
+terminate raw transports. `createTranscoder` remains a test/platform injection
+boundary.
 
-**Native target:** `afterglow-shell` detects its native op bridge and constructs
-generated texture/meshopt clients over `NativeRpcTransport`; the shell bootstrap
-owns their real OS workers. Public web retains `spawnThreaded()` WASM workers.
-The optional unified telemetry records the native page-side RPC round trip;
-worker-internal server/codec spans remain the next adapter gate.
+**Native target:** the application bootstrap registers named `texture` and
+`meshopt` services in the shell's generic `WorkerRegistry`. TypeScript resolves
+the bootstrap manifest instead of embedding worker IDs. Each texture worker
+opens the confined BIG source once through `AssetSourceTable`; runtime page jobs
+carry only `{source, offset, length, format}`. The worker performs `pread` and
+Basis transcode in native memory and returns only the final GPU-format page.
+The native application spawns `min(physical cores, 16)` texture workers and
+`EngineAssets` consumes at most `maxPendingPages` entries from that manifest.
+On the current 16-core/32-thread host this is 16 workers. Public web retains its
+bounded two-to-four-worker Fetch/WASM profile. `workerCount` is only an optional
+test/profile override; normal games do not choose platform topology.
+
 `createAssetStore(capacity, completionsPerPoll)` starts and owns the standard
-mesh optimizer and binds a fixed-capacity
-`AssetStore` to the session's raw loader, so demos do not reconstruct container
-ownership. A session creates at most one `VirtualTextureStore`; a second request or a
-request after shutdown fails deterministically. Only one session-owned
-`AssetStore` is allowed. `close()` first disposes its asset and VT stores, is
-idempotent, closes all workers in reverse order even when one close fails, and reports stable
-started/close-error/closed telemetry. There is no persistent derived-page cache
-or storage fallback. The session applies every configured capacity/deadline
-instead of an implicit provider default.
+mesh optimizer and binds a fixed-capacity `AssetStore` to `BigContainer`'s raw
+loader. `EngineAssets` creates at most one `VirtualTextureStore` and one
+`AssetStore`. `close()` disposes stores, closes the page provider, then closes
+mesh and texture services in reverse order. There is no persistent derived-page
+cache or storage fallback.
 
 ```ts
-const session = await BigAssetSession.open({
+const engineAssets = await EngineAssets.open({
   containerPath: 'world.big',
   format,
-  workerCount: 4,
-  transcodeQueueCapacity: 12,
+  transcodeQueueCapacity: 16,
   maxPendingPages: 16,
   maxPendingBytes: 2 * 1024 * 1024,
   urgentBatchDeadlineMs: 1,
@@ -58,17 +68,17 @@ const session = await BigAssetSession.open({
   maxHeaderBytes: 2 * 1024 * 1024,
   telemetry: runtime.telemetry,
 });
-const assets = await session.createAssetStore(64, 8);
-const store = session.createVirtualTextureStore(device, tuning);
+const assets = await engineAssets.createAssetStore(64, 8);
+const store = engineAssets.createVirtualTextureStore(device, tuning);
 ```
 
 `createFetchRangeLoader()` also exposes `readBulk(path, ranges)`. Public web
 uses standard multipart HTTP ranges for both singleton and bulk reads; the
-former CEF native shared-message bridge has been removed. The live session
-page provider preserves scheduler/admission order. It does **not** currently
+former CEF native shared-message bridge has been removed. The public-web page
+provider preserves scheduler/admission order. It does **not** currently
 source-sort spans. `createPageRangeReader()` contains a separate source-sorting
-implementation and restores caller order by page index, but `BigAssetSession`
-does not call it. The session's page provider owns a fixed 256-slot three-tier queue: mip+2 parent misses open a
+implementation and restores caller order by page index, but the public-web
+provider does not call it. The web page provider owns a fixed 256-slot three-tier queue: mip+2 parent misses open a
 non-resettable 1 ms window; high-importance exact pages use 16 ms; lower-
 importance exact pages currently use a provisional 64 ms peripheral window.
 Each response is at most 4 MiB
@@ -148,15 +158,35 @@ asset is replaced; producers must call `invalidate(path)` or `clear()` after a
 rebuild. The web dev server constructs one default-16 cache shared by its
 request handlers and retains the `.big` descriptor across requests.
 
-### Native range bridge (removed)
+### `AssetSourceTable`
 
-The CEF shared-message bridge (`readCefNativeRanges` /
-`afterglowNativeReadRanges`) and the `afterglow://local/` scheme handler in
-`afterglow-cef/src/resources.rs` have been removed with `afterglow-cef`. The
-web target's `createFetchRangeLoader` now routes both singleton and bulk reads
-through standards-based HTTP Fetch + Range. A native equivalent for the
-`afterglow-shell` host (asset-root loader + optional native range read) is an
-open parity gate — see `docs/implementation/shell-promotion-plan.md`.
+```rust
+pub struct AssetSourceHandle(u32); // slot + generation
+pub struct AssetSourceTable { /* fixed retained source slots */ }
+impl AssetSourceTable {
+    pub fn new(capacity: usize) -> Self;
+    pub fn open(&mut self, provider: &dyn AssetSourceProvider, path: &str)
+        -> Option<AssetSourceHandle>;
+    pub fn read_at(&self, handle: AssetSourceHandle, offset: u64, output: &mut [u8])
+        -> Option<io::Result<usize>>;
+    pub fn clear(&mut self);
+}
+```
+
+`open` is bootstrap-only and may allocate a retained path/source. Runtime reads
+use a numeric handle, perform no path resolution, and cannot grow the table.
+`clear` advances every generation, so stale descriptors fail rather than
+addressing a replacement source.
+
+### Native JS-visible range adapter
+
+`createPlatformRangeLoader()` selects the native asset ops under
+`afterglow-shell`. JS-visible bytes use generated `AssetLoaderClient::read`
+responses, split into at most 512 KiB ring payloads. Returned arrays are
+V8-owned; there is no reusable native arena lease whose capacity depends on
+V8 garbage collection. Native Basis VT pages bypass this adapter entirely and
+use the source-backed texture service. Public web routes singleton and bulk
+reads through standards-based HTTP Fetch + Range.
 
 ## Bounded bulk ranges (`afterglow-assets::multipart`)
 
@@ -193,12 +223,13 @@ this parser for ordinary requests.
 
 ## Serving layer
 
-### Native shell asset loader (pending)
+### Native shell asset loader
 
-The `afterglow-shell` host does not yet expose an equivalent asset-root loader;
-serving on the native target is an open parity gate tracked in
-`docs/implementation/shell-promotion-plan.md`. The previous CEF scheme handler
-(`afterglow-cef/src/resources.rs`) has been removed.
+The shell confines its asset root once, starts the generated native asset client
+on a real OS thread, and exposes bounded `size`/`read` ops. Concrete texture and
+mesh worker composition belongs to the application bootstrap; `rpc_bridge.rs`
+contains only the generic registry and op adapter. The previous CEF scheme
+handler has been removed.
 
 ### Web HTTP dev server (`afterglow-web/src/dev_server.rs`)
 
@@ -225,19 +256,15 @@ transport-level abort. VT cancellation is checked before dispatch and after
 completion, but an in-flight stalled response can retain one of the fixed slots
 indefinitely.
 
-## Asset-loader worker versus the live BIG path
+## Asset-loader worker versus texture-source composition
 
-`afterglow-assets-worker` provides generated native and TypeScript clients, but
-it is **not** the entry point used by `BigAssetSession` today. The live BIG/VT
-path uses `createFetchRangeLoader`: public web issues HTTP Fetch + Range for
-both singleton and bulk reads (the former CEF native bridge has been removed).
-`afterglow-assets-worker` remains available to Rust/native consumers and
-retains up to 16 open `FsSource` handles, but claims that every render-thread
-asset load passes through `AssetLoaderClient` are incorrect.
-
-Target policy remains unchanged: when this service is composed into the native
-shell, it must use its generated native client and OS worker, not
-`assetloader.wasm`. Public web may use the serving-layer Fetch path.
+JS-visible native headers, resident textures, and raw model ranges use the
+generated native `AssetLoaderClient`. Native Basis VT pages take the more direct
+source-backed texture path: each texture worker retains a confined numeric
+source handle and performs `pread` plus transcode without an intermediate V8
+payload. Both compose the generic `afterglow-assets` source primitives; neither
+instantiates WASM on the native target. Public web continues to use serving-
+layer Fetch for BIG ranges.
 
 ## Engine `AssetStore`
 
@@ -246,6 +273,27 @@ interns a path during manifest/bootstrap and returns a numeric `AssetId`; it
 returns `-1` rather than growing past capacity. `tryLoadAsset(id, parser)` uses
 direct `Uint8Array` state and object-handle tables. The game-facing `load(path,
 parser)` wrapper performs registration and throws on capacity exhaustion.
+
+## Source-backed texture worker
+
+`afterglow-texture::Texture` retains its byte-transform methods and adds two
+native source-composition methods:
+
+```rust
+async fn open_source(path: String) -> RpcResult<u32>;
+async fn transcode_range(
+    source: u32, offset: u64, len: u32, target_format: u32,
+) -> RpcResult<Vec<u8>>;
+```
+
+`open_source` is bootstrap-only and returns an `AssetSourceTable` generational
+handle local to that worker. Each worker preallocates one 4 MiB input scratch;
+`transcode_range` reads exactly `len` confined bytes into it, rejects overflow,
+stale handles, or truncation, and passes the bounded slice to the normal Basis
+transcoder. The wasm implementation rejects these methods;
+public web uses `transcode(data, format)` after Fetch. The generated TS client
+exposes `openSource` and `transcodeRange`, but only the platform adapter calls
+them.
 
 ## Resident (non-virtual) textures
 
@@ -345,7 +393,7 @@ pub trait AssetLoader {
     async fn read(path: String, offset: u64, len: u32) -> RpcResult<Vec<u8>>;
 }
 
-pub struct AssetLoaderWorker { /* singleton root + 16-source native cache */ }
+pub struct AssetLoaderWorker { /* singleton fixed-capacity AssetSourceCache */ }
 impl AssetLoaderWorker {
     pub fn set_asset_root(root: AssetRoot);
 }
@@ -410,7 +458,8 @@ Spawns a worker thread with an `async-executor::LocalExecutor`. The loop:
 1. Drains request frames.
 2. Spawns `serve_async(impl, method, args)` on the executor.
 3. When a task completes: writes `[task_id][Response]` to the response ring,
-   unparks the client.
+   unparks the client. A full response ring applies bounded retry/backpressure;
+   a completion is never dropped.
 4. Ticks the executor (`executor.try_tick()`).
 
 ### `ServeFuture`

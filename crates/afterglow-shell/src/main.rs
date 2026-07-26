@@ -721,11 +721,9 @@ deno_core::extension!(
         op_engine_ready,
         afterglow_shell::rpc_bridge::op_afterglow_rpc_call,
         afterglow_shell::rpc_bridge::op_afterglow_rpc_call_async,
-        afterglow_shell::rpc_bridge::op_afterglow_arena_view,
+        afterglow_shell::rpc_bridge::op_afterglow_worker_ids,
         afterglow_shell::rpc_bridge::op_native_asset_size,
         afterglow_shell::rpc_bridge::op_native_asset_read_copy,
-        afterglow_shell::rpc_bridge::op_native_asset_read_handle,
-        afterglow_shell::rpc_bridge::op_native_asset_read_many_handle,
     ],
 );
 
@@ -1096,6 +1094,58 @@ struct App {
     builder: afterglow_shell::builder::ShellBuilder,
 }
 
+const NATIVE_TEXTURE_WORKER_CAP: usize = 16;
+
+fn native_texture_worker_count(physical_cores: usize, available_threads: usize) -> usize {
+    physical_cores
+        .max(1)
+        .min(available_threads.max(1))
+        .min(NATIVE_TEXTURE_WORKER_CAP)
+}
+
+fn compose_engine_workers(state: &mut OpState) {
+    use afterglow_meshopt::{MeshoptServer, MeshoptWorker};
+    use afterglow_rpc_demo::{PhysicsServer, PhysicsWorker};
+    use afterglow_texture::{TextureServer, TextureWorker};
+
+    let registry = &mut state.borrow_mut::<afterglow_shell::rpc_bridge::WorkerRegistry>();
+    let (physics, _events) = afterglow_rpc::native::spawn_worker_loop(
+        PhysicsWorker,
+        1 << 20,
+        |worker: &mut PhysicsWorker, method, args| worker.serve(method, args),
+    )
+    .expect("spawn native Physics worker");
+    registry.register(0, Box::new(physics));
+
+    let available_threads = std::thread::available_parallelism()
+        .map(std::num::NonZeroUsize::get)
+        .unwrap_or(1);
+    let texture_worker_count =
+        native_texture_worker_count(num_cpus::get_physical(), available_threads);
+    for index in 0..texture_worker_count {
+        let id = u32::try_from(index + 1).expect("native Texture worker id");
+        let (texture, _events) = afterglow_rpc::native::spawn_async_worker_loop(
+            TextureWorker::default(),
+            1 << 20,
+            |worker: &TextureWorker, method, args| worker.serve_async(method, args),
+        )
+        .expect("spawn native Texture worker");
+        registry.register_named_async("texture", id, Arc::new(texture));
+    }
+    eprintln!(
+        "afterglow-shell composed {texture_worker_count} native texture workers ({available_threads} logical threads available)"
+    );
+
+    let meshopt_id = u32::try_from(texture_worker_count + 1).expect("native Meshopt worker id");
+    let (meshopt, _events) = afterglow_rpc::native::spawn_async_worker_loop(
+        MeshoptWorker,
+        1 << 20,
+        |worker: &MeshoptWorker, method, args| worker.serve_async(method, args),
+    )
+    .expect("spawn native Meshopt worker");
+    registry.register_named_async("meshopt", meshopt_id, Arc::new(meshopt));
+}
+
 impl App {
     const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -1105,8 +1155,8 @@ impl App {
             queued: AtomicBool::new(false),
         });
         let runtime_waker = Waker::from(runtime_wake.clone());
-        let builder = afterglow_shell::builder::ShellBuilder::new()
-            .with_workers(afterglow_shell::builder::ShellBuilder::reference_composition());
+        let builder =
+            afterglow_shell::builder::ShellBuilder::new().with_workers(compose_engine_workers);
         let startup_timeout = std::env::var("AFTERGLOW_STARTUP_TIMEOUT_MS")
             .ok()
             .and_then(|value| value.parse::<u64>().ok())
@@ -1768,9 +1818,6 @@ impl ApplicationHandler<HostEvent> for App {
             state.put::<afterglow_shell::rpc_bridge::WorkerRegistry>(
                 afterglow_shell::rpc_bridge::WorkerRegistry::new(),
             );
-            state.put::<afterglow_shell::rpc_bridge::ArenaRegistry>(
-                afterglow_shell::rpc_bridge::ArenaRegistry::new(),
-            );
             let asset_root_path = self.builder.asset_root.clone().unwrap_or_else(|| {
                 self.game_module
                     .parent()
@@ -1779,16 +1826,12 @@ impl ApplicationHandler<HostEvent> for App {
             });
             let asset_root = afterglow_assets::AssetRoot::new(&asset_root_path)
                 .unwrap_or_else(|| panic!("invalid native asset root {asset_root_path:?}"));
+            afterglow_texture::TextureWorker::set_asset_root(asset_root.clone());
             afterglow_shell::rpc_bridge::register_native_assets(&mut state, asset_root);
-            // Run the worker-composition hook (ShellBuilder::with_workers) —
-            // spawns the engine's native workers (assets/texture/audio/…)
-            // into the registry. Defaults to the reference Physics worker.
+            // The application bootstrap explicitly composes concrete native
+            // services; the shell bridge itself owns no reference workers.
             if let Some(hook) = self.builder.take_workers() {
                 hook(&mut state);
-            } else {
-                let mut registry =
-                    state.borrow_mut::<afterglow_shell::rpc_bridge::WorkerRegistry>();
-                afterglow_shell::rpc_bridge::register_physics(&mut registry, 0);
             }
             afterglow_shell::native_browser::install_state(
                 &mut state,
@@ -2169,6 +2212,14 @@ impl ApplicationHandler<HostEvent> for App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_texture_workers_match_physical_cores_with_fixed_limits() {
+        assert_eq!(native_texture_worker_count(16, 32), 16);
+        assert_eq!(native_texture_worker_count(32, 32), 16);
+        assert_eq!(native_texture_worker_count(8, 4), 4);
+        assert_eq!(native_texture_worker_count(0, 0), 1);
+    }
 
     #[test]
     fn pointer_grab_prefers_locked_and_falls_back_to_confined() {

@@ -317,7 +317,7 @@ provider creation, tuning, and store construction. At audit time Dungeon also
 built a derived-cache namespace and fallback locally; that subsystem has since
 been removed.
 
-Add `BigAssetSession.open(options)` with explicit capacities and policy hooks.
+Add `EngineAssets.open(options)` with explicit capacities and policy hooks.
 It should own the range source, parsed header, raw asset loader, bounded
 transcoder worker pool, selected GPU format, page provider, telemetry, and
 shutdown. This historical audit also proposed a generic persistent cache and
@@ -572,7 +572,7 @@ subsystems:
 
 ### Phase 3 — asset and worker ownership
 
-1. Implement `BigAssetSession` and bounded worker-pool ownership.
+1. Implement `EngineAssets` and bounded worker-pool ownership.
 2. Move persistent derived-cache setup behind explicit session policy.
 3. Migrate dungeon and rigged VT bootstrap.
 

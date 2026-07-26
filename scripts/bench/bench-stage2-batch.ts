@@ -33,7 +33,7 @@ async function main() {
   const asset = header.assets.find(a => a.name === ASSET)?.virtualTexture;
   if (!asset) throw new Error(`asset ${ASSET} not found`);
 
-  // BigAssetSession's containerLoader ignores the per-asset path and always
+  // EngineAssets' containerLoader ignores the per-asset path and always
   // reads the session container; mirror that so `loader.read(path+'.big')`
   // hits dungeon.big.
   const source: { read(p: string, o: number, l: number): Promise<Uint8Array> } = {

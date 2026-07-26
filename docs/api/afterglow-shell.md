@@ -176,14 +176,35 @@ upstream references are maintained in
 `vendor/afterglow-shell-blitz/THREE_NATIVE_PIN` and carries tested
 browser-layout/paint fixes.
 
+## Native service composition
+
+`ShellBuilder::with_workers` is the generic application-bootstrap hook. The
+shell library provides `WorkerRegistry`, named service metadata, and the Deno op
+adapter; it does not register concrete texture, mesh, physics, or game services.
+The command-line application explicitly composes its reference workers after
+asset-root confinement and before gameplay startup.
+
+Authored TypeScript asks `op_afterglow_worker_ids(service)` for bootstrap-
+ordered IDs and constructs generated clients over `NativeRpcTransport`. Worker
+numbers therefore belong exclusively to Rust bootstrap. Payload calls still use
+the generated SPSC rings.
+
+The native asset worker serves JS-visible `size`/`read` operations in bounded
+512 KiB chunks. The reference application composes `min(physical CPU cores,
+16)` texture workers; on the current 16-core/32-thread host it publishes 16.
+`EngineAssets` bounds consumption of that manifest by its 16-page admission
+capacity. Each worker retains a confined generational source handle and performs
+BIG range reads plus Basis transcode without exposing encoded page bytes to V8.
+Public web remains capped at two to four WASM workers. No native service uses a
+Web Worker or WASM implementation.
+
 ## Native host status
 
 `afterglow-cef` has been removed. `afterglow-shell` is the sole native host and
-native deployment target. The remaining parity work — equivalent Afterglow
-asset-root and packaged-resource loading, native `afterglow-rpc` worker
-composition without web-worker fallback, a production game
-bootstrap/configuration API, and release hardware/soak/input/resize/device-loss/
-Steam integration evidence — is tracked in
+native deployment target. Asset-root loading and native texture/mesh worker
+composition are implemented. The remaining release work includes packaged-
+resource policy, long hardware soaks, input/resize/device-loss evidence, direct
+native VT atlas upload evaluation, and Steam integration; these gates remain in
 `docs/implementation/shell-promotion-plan.md`.
 
 There is no fallback to a Chromium/CEF host or to modified client code.

@@ -64,10 +64,15 @@ fallback. Any exception requires an explicit user decision recorded before
 implementation. Tests and target-specific documentation must enforce this
 boundary.
 
-**Open gap:** the shell does not yet compose native `afterglow-rpc` workers
-(audio, assets, texture, meshopt) or expose a production game bootstrap API.
-Until that lands, there is no native host that wires native worker clients.
-Do not paper over this by instantiating worker WASM on the native target. See
+**Current boundary:** the shell application bootstrap composes native asset,
+texture, and meshopt workers and publishes named service manifests; authored TS
+contains no worker IDs. The reference native bootstrap spawns one texture
+worker per physical CPU core capped at 16, and `EngineAssets` consumes at most
+its admitted-page capacity. Native texture workers retain confined source
+handles and perform BIG `pread` + Basis transcode without exposing encoded bytes
+to V8.
+Native audio composition and the final production game bootstrap/package policy
+remain open. Do not paper over either gap by instantiating worker WASM. See
 `docs/implementation/shell-promotion-plan.md`.
 
 ### Crate structure
@@ -82,10 +87,10 @@ Do not paper over this by instantiating worker WASM on the native target. See
 | `afterglow-obvhs-tracer` | Rust obvhs CWBVH8 implementation of Steam Audio's four custom-scene callbacks; linked into the unified audio worker module. |
 | `afterglow-basis-encoder` | Offline-only official Basis Universal C++ UASTC encoder used by `afterglow-pipeline`; never linked into runtime or wasm crates. |
 | `afterglow-pipeline` | Offline cook: confines and embeds external glTF packages, packs self-contained GLBs, extracts images into paged/UASTC VTs, emits R16 displacement, and writes seekable `.big` v6 containers (the bundled Dungeon VT remains readable v5). |
-| `afterglow-assets-worker` | Asset loader worker: `#[rpc(worker = AssetLoaderWorker)]` with async `load`, `size`, and `read`. Uses the async `#[rpc]` poll model + `async-executor`. Native builds read through `FsSource`; public-web BIG/VT loading currently uses the serving-layer Fetch + Range path. |
-| `afterglow-assets` | Shared asset-path/MIME helpers (`AssetRoot`, `decode_url_path`, `guess_mime`, `resolve`) for the native shell asset loader and web dev server. Plus streaming `AssetSource` trait + `FsSource`/`BytesSource` + `Range` parser. No deps or file-content reads in the confinement module; `FsSource` owns streaming reads via `pread`. The single security boundary for FS asset confinement. |
+| `afterglow-assets-worker` | Asset loader worker: `#[rpc(worker = AssetLoaderWorker)]` with async `load`, `size`, and `read`. Uses the async `#[rpc]` poll model + `async-executor`. Native JS-visible reads use bounded ring payloads through a fixed `AssetSourceCache`; native Basis VT pages instead stay inside source-backed texture workers. Public web uses serving-layer Fetch + Range. |
+| `afterglow-assets` | Shared asset-path/MIME helpers (`AssetRoot`, `decode_url_path`, `guess_mime`, `resolve`) for the native shell asset loader and web dev server. Plus policy-free streaming `AssetSource`, `FsSource`/`BytesSource`, fixed `AssetSourceCache`, generational `AssetSourceTable`, and range parsing. `FsSource` owns positional `pread`; this is the single FS confinement boundary. |
 | `afterglow-web` | Authored TypeScript runtime: shared-ring worker bridge, fixed runtime storage, packed-GLB AssetStore loading with rig-preserving runtime meshopt, VT sampling/feedback/material adapters, and demos. Plus the native COOP/COEP dev server. No longer hosts the transport wasm (that moved to `afterglow-rpc`). No wasm-bindgen. |
-| `afterglow-shell` | The sole native Three.js/WebGPU runtime and native deployment target: rusty_v8 + Deno WebGPU, direct winit/wgpu presentation, LinkeDOM/Blitz browser environment, and Vello GPU HUD. Asset-root loading, native `afterglow-rpc` worker composition, and a production game bootstrap API are open parity gates — see `docs/implementation/shell-promotion-plan.md`. |
+| `afterglow-shell` | The sole native Three.js/WebGPU runtime and native deployment target: rusty_v8 + Deno WebGPU, direct winit/wgpu presentation, LinkeDOM/Blitz browser environment, and Vello GPU HUD. Its generic registry exposes bootstrap-named native services; the application explicitly composes assets/texture/meshopt OS workers. Audio, packaging, and release gates remain. |
 | `latency-tool` | CDP-based input→present latency measurement. |
 | `xtask` | Build orchestrator: `build`, `wasm`, `check`, `test`, `bench`. |
 
@@ -94,9 +99,9 @@ Do not paper over this by instantiating worker WASM on the native target. See
 `afterglow-shell` is the sole native host (`afterglow-cef` has been removed).
 It executes unmodified Three.js modules in rusty_v8, presents through the same
 wgpu-core device used by Deno WebGPU, and composites its LinkeDOM/Blitz HUD
-with Vello. The remaining parity gates (asset-root loading, native worker
-composition, game bootstrap API, release evidence) are tracked in
-`docs/implementation/shell-promotion-plan.md`.
+with Vello. Asset-root loading and native asset/texture/meshopt composition are
+implemented. Native audio, final game/package policy, and release evidence are
+tracked in `docs/implementation/shell-promotion-plan.md`.
 
 ### Web target build
 
@@ -354,8 +359,8 @@ All engine work must move toward these non-negotiable requirements:
   copy into `CefV8BackingStore`, then a zero-copy V8 ownership transfer. The
   source-sorted 4 MiB × two transport diagnostic measured 950.2 MiB/s median on
   fox-laptop with correct bytes, AMD/RDNA2 WebGPU, and no diagnostic-cadence
-  frame drops. The live `BigAssetSession` provider does not yet wire that
-  source-sorting helper, so this result is not evidence for its current request order.
+  frame drops. The current public-web `EngineAssets` provider does not wire that
+  source-sorting helper, so this historical CEF result is not evidence for its request order.
 - `docs/research/performance-benchmarks.md` — Optimized communication results
   (2026-07-10): 64B service RPC is 2.4µs native vs 10.9µs web; 64KiB
   service RPC is 76.4µs / 1,636 MiB/s native vs 106.5µs / 1,174 MiB/s web.
@@ -499,14 +504,15 @@ All engine work must move toward these non-negotiable requirements:
 - `docs/implementation/comms-unification-plan.md` — current priority.
   Consolidates worker comms (split across `afterglow-rpc`, `afterglow-web`, and
   `afterglow-rpc-macros`, with the postcard codec hand-duplicated in TS) into one
-  source of truth, lands the zero-copy native worker layer (shared arena,
-  generational handles, GPU resource table, worker↔worker `HandleQueue`), and
+  source of truth, lands explicit native ownership (generational source/GPU
+  handles and worker↔worker queues without GC-controlled capacity), and
   retires hand-written `rpc.ts` in favor of macro-generated transport + codec.
   Standardized per-crate `gen/` output. Decisions locked 2026-07-25.
 - `docs/implementation/shell-promotion-plan.md` — native host parity after CEF
   removal. Gates: asset-root loader, native `afterglow-rpc` worker composition,
-  game bootstrap API, release evidence. Depends on the comms unification G2
-  (handle/arena) for zero-copy worker integration.
+  game bootstrap API, release evidence. Asset-root plus source-backed texture
+  composition are complete; audio, packaging, direct atlas upload evaluation,
+  and release soaks remain.
 - `docs/implementation/spatial-audio-integration-plan.md` — current priority.
   `EngineAudio` is required and owns one target-profiled pool for resident,
   streamed, procedural, ambience, dialogue, music, and live voice-chat PCM. One

@@ -804,7 +804,41 @@ where
                         let mut completion = Vec::with_capacity(8 + env_bytes.len());
                         completion.extend_from_slice(&task_id.to_le_bytes());
                         completion.extend_from_slice(&env_bytes);
-                        let _ = resp_arc.view().write(&completion);
+                        if completion.len().saturating_add(4) > resp_arc.capacity as usize {
+                            let small = Response::Server {
+                                method,
+                                message: format!(
+                                    "response of {} bytes exceeds ring capacity {}",
+                                    completion.len(),
+                                    resp_arc.capacity,
+                                ),
+                            };
+                            let small = crate::encode(&small).unwrap_or_default();
+                            completion.clear();
+                            completion.extend_from_slice(&task_id.to_le_bytes());
+                            completion.extend_from_slice(&small);
+                        }
+                        // A full response ring is backpressure, never permission
+                        // to drop a completion: doing so leaves the matching
+                        // client Future pending forever. Yield this task back to
+                        // the local executor between retries so the outer worker
+                        // loop can still observe shutdown and other requests.
+                        let written = std::future::poll_fn(|context| {
+                            match resp_arc.view().write(&completion) {
+                                Ok(()) => Poll::Ready(Ok(())),
+                                Err(RpcError::BufferFull) => {
+                                    client_thread.unpark();
+                                    context.waker().wake_by_ref();
+                                    Poll::Pending
+                                }
+                                Err(error) => Poll::Ready(Err(error)),
+                            }
+                        })
+                        .await;
+                        if let Err(error) = written {
+                            eprintln!("[afterglow] async response ring error: {error}");
+                            return;
+                        }
                         client_thread.unpark();
                     })
                     .detach();
@@ -1033,6 +1067,66 @@ mod tests {
             t.resp.has_data(),
             "stale response must not have been consumed by the second call"
         );
+    }
+
+    #[test]
+    fn async_response_backpressure_never_drops_large_completions() {
+        let (transport, _events) =
+            spawn_async_worker_loop((), 1 << 20, |_worker: &(), method, _args| {
+                Box::pin(async move { Ok(vec![method as u8; 600 * 1024]) })
+            })
+            .unwrap();
+        let mut futures = (1..=4)
+            .map(|method| Some(transport.call_async(method, &[]).unwrap()))
+            .collect::<Vec<_>>();
+        let mut completed = 0;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let waker = Waker::noop();
+        let mut context = Context::from_waker(waker);
+        while completed != futures.len() {
+            transport.poll();
+            for (index, future) in futures.iter_mut().enumerate() {
+                let Some(pending) = future else { continue };
+                if let Poll::Ready(result) = Pin::new(pending).poll(&mut context) {
+                    let bytes = result.unwrap();
+                    assert_eq!(bytes.len(), 600 * 1024);
+                    assert!(bytes.iter().all(|byte| *byte == (index + 1) as u8));
+                    *future = None;
+                    completed += 1;
+                }
+            }
+            assert!(
+                Instant::now() < deadline,
+                "large async completions timed out"
+            );
+            thread::park_timeout(Duration::from_micros(100));
+        }
+    }
+
+    #[test]
+    fn oversized_async_response_resolves_as_error_instead_of_hanging() {
+        let (transport, _events) =
+            spawn_async_worker_loop((), 256, |_worker: &(), _method, _args| {
+                Box::pin(async { Ok(vec![7; 1024]) })
+            })
+            .unwrap();
+        let mut future = transport.call_async(3, &[]).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let waker = Waker::noop();
+        let mut context = Context::from_waker(waker);
+        loop {
+            transport.poll();
+            if let Poll::Ready(result) = Pin::new(&mut future).poll(&mut context) {
+                let error = result.unwrap_err().to_string();
+                assert!(error.contains("exceeds ring capacity"), "{error}");
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "oversized async response timed out"
+            );
+            thread::park_timeout(Duration::from_micros(100));
+        }
     }
 
     #[test]

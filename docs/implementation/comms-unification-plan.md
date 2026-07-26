@@ -168,13 +168,15 @@ larger macro effort; the codec is already single-source + cross-boundary tested)
   comms (asset loader → texture, physics → audio). Direct Rust-to-Rust, no
   renderer hop. Native-only.
 
-**Arena→JS zero-copy path verified (2026-07-25).** `op_afterglow_arena_view`
-  (in `afterglow-shell/src/rpc_bridge.rs`) leases an `Arena` slot and returns a
-  V8 `Uint8Array` backed *externally* by the slot's memory via
-  `v8::ArrayBuffer::new_backing_store_from_ptr` (deleter releases the slot on
-  GC/isolate-teardown). JsRuntime test proves JS reads the native slot in place
-  and the slot is released on teardown. The load-bearing unknown (V8 external
-  backing store over native memory) is confirmed.
+**Arena→JS experiment retired (2026-07-26).** The external V8 backing store
+worked technically, but its 16 reusable slots were released only by GC. Native
+VT stalled around 48 pages, then failed/retried every new page. It also copied
+the supposedly zero-copy view immediately into generated texture RPC arguments.
+The op, asset handle methods, and arena tests were deleted. Native texture
+workers now retain confined generational sources and perform `pread` + transcode
+without exposing encoded bytes to JS. JS-visible raw ranges use bounded
+V8-owned ring responses. Future zero-copy work must use explicit native
+ownership or direct GPU upload, never GC-controlled capacity.
 
 **HandleQueue done (2026-07-25).** `afterglow-rpc/src/handle.rs` has a lock-free
   SPSC `HandleQueue` for worker↔worker comms (asset loader → texture, physics →

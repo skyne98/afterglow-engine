@@ -1,221 +1,137 @@
 # `afterglow-shell` promotion plan — native host parity after CEF removal
 
-> Status: active. `afterglow-cef` has been removed (2026-07-25). This plan is
-> the canonical sequence for bringing `afterglow-shell` to full native-host
-> parity and re-establishing the release gates that ran under CEF.
+> Status: active, updated 2026-07-26. `afterglow-shell` is the sole native host.
+> Asset-root loading and native asset/texture/mesh composition are implemented;
+> audio, packaging, diagnostics, and release evidence remain.
 
-## Context
+## Boundary
 
-`afterglow-cef` was the transitional Chromium/cef-rs native host. It has been
-removed in full: the crate, its five example launchers, the CEF native range
-bridge (`afterglowNativeReadRanges` / `cef-native-range.ts`), the CEF GPU soak
-scripts, `shell.nix` CEF wiring, the `cef` workspace dependency, and
-`docs/api/cef-shell.md`. The research notes under `docs/research/cef-*.md`
-remain as the historical decision record.
+Native targets use generated native `afterglow-rpc` clients on real OS threads.
+They never instantiate an engine service as WASM or a Web Worker. Public web is
+the only WASM/Web Worker fallback.
 
-`afterglow-shell` (rusty_v8 + Deno WebGPU/wgpu-core + winit + LinkeDOM +
-Blitz + Vello) is now the **sole** native host. It is not yet at parity: it
-presents Three.js WebGPU and a Vello HUD, but it does not compose native
-`afterglow-rpc` workers, load Afterglow asset roots, expose a production game
-bootstrap API, or carry release evidence. Until the gates below close, there is
-**no** native host that wires native worker clients, and the engine's GPU soak
-harnesses are offline.
+The shell library is a host mechanism. It provides the winit/rusty_v8/WebGPU
+environment, a generic worker registry, named bootstrap metadata, and Deno op
+adapters. Concrete game services are selected by explicit application
+bootstrap, not by `rpc_bridge.rs` or authored TypeScript.
 
-The native target boundary is unchanged and non-negotiable: native targets use
-generated native `afterglow-rpc` clients on real OS threads; they never
-instantiate a service as WASM or a Web Worker. Closing these gates must not be
-"shortcut" by moving worker services back into WASM on the native target.
+## Gates
 
-## Gates (ordered)
+### G1 — Asset-root loading ✅
 
-Each gate is independently mergeable. Do not skip ahead.
+The shell canonically confines one `AssetRoot` before module evaluation. The
+generated native `AssetLoaderClient` serves JS-visible `size` and positional
+`read` calls on a real OS worker. `createPlatformRangeLoader()` selects those
+ops and splits large V8-owned responses into at most 512 KiB ring payloads.
 
-### G1 — Asset-root loader + packaged-resource serving
+Native BIG header, resident texture, and raw GLB reads are working. The removed
+CEF scheme/range bridge is not reintroduced.
 
-The shell must serve embedded-first / FS-fallback assets through an
-`afterglow-assets`-backed loader equivalent to the removed `afterglow://`
-scheme.
+Acceptance evidence:
 
-**Started (2026-07-25): page loading.** The shell now loads built demo HTML
-pages from `www/` (not just `native_game.ts`): `extract_module_script` handles
-external `<script type="module" src="...">` (the afterglow demos) in addition
-to inline module scripts (official three.js). The shell provides
-`globalThis.location` (a `URL` over the page's file URL). Verified: `engine-demo.html`
-loads + its built JS module evaluates on the RTX 3090 (adapter confirmed).
+- generated Dungeon HTML/modules load from `www/`;
+- `dungeon.big`, resident blue noise, displacement, and raw assets load through
+  the confined root;
+- no whole BIG file is copied for a page range;
+- no reusable native slot is released by V8 GC.
 
-**Done (2026-07-25): production host scheduling for `runtime.warm()`.**
-The root cause was Three.js `renderer.compileAsync()` yielding through rAF while
-the old synchronous module evaluator could not admit a presentation turn. The
-prototype loop that ignored deno errors has been deleted.
+Remaining G1 release work: packaged embedded-first source policy.
 
-winit is now the persistent outer scheduler. Game-module evaluation is stored
-in `App` and advances non-blockingly across real redraws; startup/frame/input/
-resize paths poll one bounded deno_core turn instead of running to idle. A real
-coalesced winit waker replaces the no-op waker, and errors propagate unchanged
-to a nonzero fatal exit. The authored `raf.ts` queue has 1,024 fixed slots, O(1)
-request/cancel, shared timestamps, next-frame registration, deterministic
-overflow and telemetry. One `ExternalOpsTracker` token keeps deno_core alive
-while callbacks remain pending. The host no longer invokes the renderer through
-a parallel direct-frame path.
+### G2 — Native worker composition (assets/texture/mesh complete)
 
-Verified on the RTX 3090: `native_game.ts` reports `OP_BRIDGE_OK`; a two-await
-probe advances on separate redraw timestamps; and a rejected-TLA sentinel
-preserves its original error and exits nonzero. The fixed-rAF Bun regression
-covers ordering, cancellation, callback exception isolation, capacity and
-overflow.
+`ShellBuilder::with_workers` is the explicit pre-gameplay composition hook.
+The command-line application currently registers:
 
-The correct pure-rAF gate showed that presentation-granularity continuation was
-too coarse: `engine-demo.html` had not completed real Three.js `compileAsync`
-after 90 active seconds. The user therefore explicitly admitted only the
-standards-shaped `scheduler.yield()` subset, backed by `deno_web::op_defer` and
-the bounded Tokio/winit turn; `postTask` and `TaskController` remain absent.
-10,000 continuation probes completed in 193.3 ms, and the real 5,000-entity
-engine demo reached renderer readiness in 145 active ms under the default
-30-second deadline. The Scheduler API-shape/asynchrony regression passes. G1's
-scheduling blocker is closed; release soak/hardware evidence remains G4.
+- Physics reference worker: id 0;
+- four named Texture workers: ids 1–4;
+- one named Meshopt worker: id 5;
+- the singleton native AssetLoader service.
 
-A decision on whether to reintroduce a native range-read bridge for `.big` bulk
-reads (the removed `readCefNativeRanges` path) or rely on the in-process
-`FsSource` + serving-layer path is still open (D2 in the removal discussion);
-recommended default is the in-process `FsSource` path.
+IDs are Rust bootstrap details. `WorkerRegistry::register_named_async()` stores
+service order, and authored TypeScript resolves `op_afterglow_worker_ids()`.
+There are no worker-number constants in the web engine.
 
-- A shell host op (or in-process loader) that resolves `AssetRoot` paths via
-  `afterglow-assets::resolve` and streams `FsSource`/`BytesSource` bytes into
-  the JS module loader and `fetch` polyfill.
-- COOP/COEP-equivalent isolation so `SharedArrayBuffer` works on the native
-  target (the shell is single-process; confirm whether headers are needed or
-  whether SAB is available by construction).
-- A decision on whether to reintroduce a native range-read bridge for `.big`
-  bulk reads (the removed `readCefNativeRanges` path) or rely on the in-process
-  `FsSource` + serving-layer path. **Open decision** — see D2 in the removal
-  discussion; recommended default is the in-process `FsSource` path (no V8
-  sandbox, no shared-memory bridge needed) unless a measurement shows bulk read
-  is a bottleneck.
+`NativeRpcTransport` drives asynchronous generated clients through
+`op_afterglow_rpc_call_async`. A full async response ring retries under bounded
+backpressure; completions are never silently dropped.
 
-Acceptance: `big-parser.ts`'s `createFetchRangeLoader` works against the shell
-host for both singleton and bulk reads of a cooked `.big`, with no CEF code.
+#### Native VT composition
 
-### G2 — Native `afterglow-rpc` worker composition
+Every texture worker opens a confined BIG source during bootstrap and retains a
+generational `AssetSourceHandle` in a fixed `AssetSourceTable`. Runtime page
+jobs contain only:
 
-The shell must spawn native worker clients (audio, assets, texture, meshopt)
-from an explicit native bootstrap hook — the equivalent of CEF's
-`AppBuilder::on_ready`. **Depends on `docs/implementation/comms-unification-plan.md`**
-(G2 handle/arena for zero-copy, G6 GPU table + worker↔worker queue). Concrete
-work:
+```text
+source, offset, length, target_format
+```
 
-**Started (2026-07-25): the op bridge.** `afterglow-shell/src/rpc_bridge.rs`
-exposes a `WorkerRegistry` (in `OpState`) + `op_afterglow_rpc_call` — the
-same `Transport::call(method, args)` surface the web transport exposes,
-returning a V8 `Uint8Array` via ownership transfer (no memcpy). Registered in
-`engine_ext`; `WorkerRegistry` put in `OpState` at startup. Proven via 6 unit
-tests: a native `Physics` worker round-trips (`step(vec![0,1,2], 0.5)` →
-`[0.5,1.5,2.5]`) through `WorkerRegistry::call`; unknown worker id + unknown
-method are clean errors; an async worker round-trips through the blocking-poll
-wrapper; a JsRuntime test proves JS reads a native arena slot in place via V8
-external backing store (zero copy) + the slot releases on GC/teardown.
+The OS worker performs `pread` and Basis transcode. Encoded source bytes never
+enter V8. Only the final GPU-format page crosses back for the current Three.js
+atlas upload.
 
-**End-to-end on the GPU (2026-07-25).** The shell runs on the fox-workstation's
-NVIDIA RTX 3090 via Wayland (adapter confirmed; the first-frame "Invalid Surface
-Status" is a one-time Wayland configure hiccup, recovered on frame 2). A
-Physics worker is spawned natively at startup (`register_physics`); a JS probe
-module calls `op_afterglow_rpc_call(0, 0, args)` from a real run and logs
-`OP_BRIDGE_OK [0.5,1.5,2.5]`. The full native worker composition path is
-proven end-to-end on the real GPU. (`NativeRpcTransport` TS lets the generated
-TS clients call the op; `op_afterglow_arena_view` provides the zero-copy arena
-path; `block_on_async_call` handles async workers.)
+The previous native arena/V8 external-backing path was deleted. It tied a
+16-slot capacity to garbage collection and, despite its local zero-copy view,
+immediately copied bytes into generated texture RPC arguments.
 
-**Remaining for G2:**
-- spawn real engine workers (assets, texture, audio) from a bootstrap hook +
-  assign stable ids;
-- `op_rpc_call_async` (await the `Oneshot` on deno_core's tokio) for async
-  workers (`AsyncWorkerTransport`);
-- `op_rpc_drain_events`;
-- a `NativeRpcTransport` TS class so the generated clients call the op;
-- the shared-arena zero-copy path: worker writes an `afterglow_rpc::handle::Arena`
-  slot, returns a `Handle`, the op creates a V8 external ArrayBuffer over the slot
-  (verify the rusty_v8 0.149.4 external-backing-store API at this step).
+Acceptance evidence (2026-07-26, RTX 3090):
 
-- A shell bootstrap boundary that fires after the winit window + wgpu device are
-  ready and before gameplay sealing.
-- Generated native `Client::spawn_worker` calls wired for each service the
-  loaded game requests.
-- The `BigAssetSession` target-aware factory fix: on the native target,
-  `afterglow-texture` runs as an OS worker via its generated native client, not
-  `texture.wasm` Web Workers. This closes the audited `BigAssetSession` defect
-  that previously existed under CEF.
-- A native CDP/DevTools endpoint (or equivalent) so `latency-tool` and
-  `?bench=300` can attach.
+- Dungeon renderer ready in approximately 395 active ms;
+- 400 native range-transcode calls completed in a 15-second smoke run;
+- zero VT page failures;
+- the run passed the former approximately 48-page/16-arena-slot wall;
+- no texture WASM worker was selected.
 
-Acceptance: a native-shell run loads `dungeon.big` through
-`AssetLoaderClient` (native) and transcodes VT pages through the native texture
-worker, with no WASM worker on the native target.
+Remaining G2 work:
 
-### G3 — Production game bootstrap / configuration API ✅
+- compose native audio through the same bootstrap;
+- decide direct native atlas upload only after measuring the remaining final-
+  page transfer;
+- event-drain API if a composed service requires JS-visible events.
 
-**Done (2026-07-25).** `afterglow-shell/src/builder.rs` provides `ShellBuilder`:
-`root` (HTML/module path), `size`, `title`, `devtools` port, + a
-`with_workers(FnOnce(&mut OpState))` composition hook — the native equivalent
-of CEF's `AppBuilder::on_ready`. The shell's `main` constructs a `ShellBuilder`
-with `reference_composition()` (spawns Physics id 0 + the real `Texture`
-transcoder id 1 natively at startup). The hook runs after the winit window +
-wgpu device are ready, before gameplay sealing.
+### G3 — Production bootstrap/configuration ✅
 
-**Real engine service composed:** the `Texture` transcoder (async `#[rpc]`,
-Basis → BC7/ASTC/etc.) is spawned natively + registered via the hook — a real
-non-demo service. Unit test proves it composes + dispatches (unknown method →
-"unknown method" from the texture worker). The shell run on the 3090 composes
-both Physics + Texture (`OP_BRIDGE_OK`).
+`ShellBuilder` configures root page, asset root, size, title, DevTools port, and
+one worker-composition hook. The shell runs winit as the persistent scheduler,
+advances module evaluation non-blockingly, and propagates runtime errors to a
+fatal exit.
 
-**Remaining:** rehome the five removed example launchers (`minimal`, `dungeon`,
-`lod-demo`, `vt-demo`, `rigged-vt-demo`) as one-liner `ShellBuilder` programs
-(they were 12-line `AppBuilder` wrappers; the former `compileAsync` blocker is
-closed). Composing `assets` + `audio` workers through the same hook is
-the G2-finish (the hook structure is in place; `register_texture` is the
-reference for `register_assets`/`register_audio`).
+The shell library owns no reference worker lifecycle. The binary/application
+bootstrap explicitly composes the services it needs.
 
-Acceptance: each of the five demo pages launches and renders under the shell
-with hardware WebGPU (NVIDIA RTX 3090 on this workstation), no WebGL fallback.
+Remaining product work is packaging policy rather than a second bootstrap API.
 
 ### G4 — Release evidence re-establishment
 
-Rehome the GPU soak/validation harnesses that were deleted with CEF:
+Re-create or retarget the removed CEF harnesses against the shell:
 
-- `scripts/test-vt-gpu.sh`, `scripts/test-dungeon-gpu.sh`,
-  `scripts/test-rigged-vt-gpu.sh`, `scripts/test-lod-gpu.sh`,
-  `scripts/run-dungeon.sh`, and the dungeon soak scripts — re-created against
-  the shell host.
-- Re-run the canonical evidence: VT feedback validation (9,216 pixels), the
-  600-frame rAF timing per scenario, the sealed VT 10/30/60-min soaks, the
-  low-core POM 680M gate, and the audio native gate (currently open — see
-  `docs/implementation/spatial-audio-integration-plan.md`).
-- `latency-tool` re-targeted and re-measured against the shell's CDP endpoint.
+- VT feedback validation and 600-frame scenarios;
+- Dungeon and rigged-VT correctness;
+- 10/30/60-minute stable/traverse/thrash soaks;
+- low-core POM Radeon 680M gate;
+- input, resize, suspend, and device-loss gates;
+- native audio physical-device gate;
+- latency-tool attachment through a shell diagnostics endpoint.
 
-Acceptance: the release-gate evidence in `docs/benchmarks/` and AGENTS.md is
-re-cited against the shell host, not the removed CEF host. Stale CEF-era
-numbers must be re-run or explicitly marked historical.
+Acceptance: evidence in `docs/benchmarks/` is re-cited against the shell. Old
+CEF numbers remain explicitly historical until repeated.
 
 ### G5 — Documentation completion
 
-- Rewrite the `book/` chapters that gave CEF build/setup commands
-  (`setup/prerequisites.md`, `setup/verify.md`, `building/native.md`,
-  `building/afterglow-shell.md`, `window/app-builder.md`,
-  `guides/game-window.md`, `reference/crate-map.md`, `reference/debugging.md`,
-  `reference/further-reading.md`, `window/asset-system.md`,
-  `window/virtual-texturing.md`) to use the shell host. **The book currently
-  tells users to run a deleted crate — this is the highest-priority doc debt.**
-- Complete the `docs/api/asset-system.md` native-loader rewrite (the CEF bridge
-  prose is now trimmed to removal notes; the native shell loader from G1 must
-  be documented once it exists).
-- Re-establish a native-target contract test in `scripts/contracts.test.ts`
-  (the removed `native CEF target contract` block enforced the no-WASM-on-native
-  rule; re-author it against the shell once G2 lands).
-- Update `docs/implementation/demo-to-engine-feature-audit.md` (references the
-  removed `afterglow-cef/examples/*.rs` entrypoints).
-- Refresh `AGENTS.md` benchmarks/soak numbers once G4 re-runs them.
+`docs/api/asset-system.md`, `docs/api/virtual-texturing.md`,
+`docs/api/afterglow-shell.md`, and the corresponding book chapters describe the
+source-backed native path. Remaining chapters that still offer CEF commands must
+be migrated or clearly labeled historical.
 
-## Out of scope for this plan
+A permanent contract must enforce:
 
-- Audio native composition final CEF integration — the audio plan's native gate
-  is separately tracked in `docs/implementation/spatial-audio-integration-plan.md`.
-  CEF removal means that gate now targets the shell, not CEF.
-- Box3D physics, editor — still deferred behind audio.
+- native engine services never spawn WASM/Web Workers;
+- demos import public engine APIs only;
+- authored TypeScript contains no native worker IDs;
+- generated `www/` output has no drift;
+- native VT encoded bytes do not pass through the JS range loader.
+
+## Out of scope
+
+- Native audio implementation details are owned by
+  `docs/implementation/spatial-audio-integration-plan.md`.
+- Box3D and the editor remain deferred behind audio.

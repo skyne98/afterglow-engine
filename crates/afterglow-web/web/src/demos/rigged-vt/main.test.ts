@@ -45,7 +45,7 @@ describe('pipeline-packed rigged VT demo', () => {
   test('uses canonical ownership, stable material indices, exact animated feedback, and inertial controls', async () => {
     const source = await Bun.file(new URL('./main.ts', import.meta.url)).text();
     expect(source).toContain('EngineRuntime.forScene({');
-    expect(source).toContain('await BigAssetSession.open({');
+    expect(source).toContain('await EngineAssets.open({');
     expect(source).not.toContain('createTranscoder');
     expect(source).not.toContain('TextureClient');
     expect(source).not.toContain('Rpc.create(');

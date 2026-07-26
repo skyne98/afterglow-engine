@@ -60,17 +60,6 @@ pub trait AssetLoader {
     /// is the handle — each call opens independently (pread/fetch has no
     /// cursor state, so this is efficient).
     async fn read(path: String, offset: u64, len: u32) -> RpcResult<Vec<u8>>;
-
-    /// Native zero-copy read. The worker writes directly into a shared arena
-    /// slot and returns `[region, slot, length, generation]`. Web callers use
-    /// `read`; the public-web target has separate wasm memories.
-    async fn read_handle(path: String, offset: u64, len: u32) -> RpcResult<Vec<u32>>;
-
-    /// Native zero-copy scatter read. `spans` is a packed sequence of
-    /// `[offset:u64 LE][length:u32 LE]`. The worker concatenates source spans
-    /// into one arena slot and returns the four handle words followed by each
-    /// actual part length. Maximum 256 spans and one arena slot total.
-    async fn read_many_handle(path: String, spans: Vec<u8>) -> RpcResult<Vec<u32>>;
 }
 
 /// The concrete worker impl. On native, reads from the asset root set via
@@ -79,71 +68,21 @@ pub trait AssetLoader {
 /// [`set_asset_root`]: AssetLoaderWorker::set_asset_root
 pub struct AssetLoaderWorker {
     #[cfg(not(target_arch = "wasm32"))]
-    root: Option<AssetRoot>,
-    #[cfg(not(target_arch = "wasm32"))]
-    sources: std::sync::Arc<std::sync::Mutex<NativeSourceCache>>,
-    #[cfg(not(target_arch = "wasm32"))]
-    arena: Option<std::sync::Arc<afterglow_rpc::handle::Arena>>,
+    sources: Option<std::sync::Arc<afterglow_assets::AssetSourceCache>>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-const NATIVE_SOURCE_CACHE_CAPACITY: usize = 16;
-
-/// Fixed-capacity round-robin cache of open positional-read handles. Container
-/// page reads reuse the same file descriptor instead of reopening per range.
-#[cfg(not(target_arch = "wasm32"))]
-struct NativeSourceCache {
-    entries: Vec<Option<(String, std::sync::Arc<afterglow_assets::FsSource>)>>,
-    next: usize,
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-impl NativeSourceCache {
-    fn new() -> Self {
-        let mut entries = Vec::with_capacity(NATIVE_SOURCE_CACHE_CAPACITY);
-        entries.resize_with(NATIVE_SOURCE_CACHE_CAPACITY, || None);
-        Self { entries, next: 0 }
-    }
-
-    fn open(
-        &mut self,
-        root: &AssetRoot,
-        path: &str,
-    ) -> Option<std::sync::Arc<afterglow_assets::FsSource>> {
-        for entry in &self.entries {
-            if let Some((cached_path, source)) = entry {
-                if cached_path == path {
-                    return Some(source.clone());
-                }
-            }
-        }
-        let source = std::sync::Arc::new(root.open_source(path)?);
-        self.entries[self.next] = Some((path.to_owned(), source.clone()));
-        self.next = (self.next + 1) % self.entries.len();
-        Some(source)
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-static ASSET_ROOT: std::sync::OnceLock<AssetRoot> = std::sync::OnceLock::new();
-#[cfg(not(target_arch = "wasm32"))]
-static NATIVE_ARENA: std::sync::OnceLock<std::sync::Arc<afterglow_rpc::handle::Arena>> =
+static ASSET_SOURCES: std::sync::OnceLock<std::sync::Arc<afterglow_assets::AssetSourceCache>> =
     std::sync::OnceLock::new();
-
-pub const NATIVE_ARENA_MAX_SPANS: usize = 256;
 
 impl AssetLoaderWorker {
     /// Set the asset root for the singleton worker. Call this once before
     /// `AssetLoaderClient::spawn_worker()` (e.g. from `AppBuilder::on_ready`).
     #[cfg(not(target_arch = "wasm32"))]
     pub fn set_asset_root(root: AssetRoot) {
-        let _ = ASSET_ROOT.set(root);
-    }
-
-    /// Install the fixed native bulk arena before spawning the singleton.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn set_native_arena(arena: std::sync::Arc<afterglow_rpc::handle::Arena>) {
-        let _ = NATIVE_ARENA.set(arena);
+        let _ = ASSET_SOURCES.set(std::sync::Arc::new(
+            afterglow_assets::AssetSourceCache::new(root),
+        ));
     }
 }
 
@@ -153,9 +92,7 @@ impl AssetLoaderWorker {
 impl Default for AssetLoaderWorker {
     fn default() -> Self {
         Self {
-            root: ASSET_ROOT.get().cloned(),
-            sources: std::sync::Arc::new(std::sync::Mutex::new(NativeSourceCache::new())),
-            arena: NATIVE_ARENA.get().cloned(),
+            sources: ASSET_SOURCES.get().cloned(),
         }
     }
 }
@@ -168,24 +105,22 @@ impl Default for AssetLoaderWorker {
 
 impl AssetLoaderServer for AssetLoaderWorker {
     fn load(&self, path: String) -> ServeFuture {
-        // The trait method takes `&self` but the future is `'static`, so we
-        // can't borrow `self`. Clone what each path needs.
-        #[cfg(not(target_arch = "wasm32"))]
-        let root = self.root.clone();
         #[cfg(not(target_arch = "wasm32"))]
         let sources = self.sources.clone();
         Box::pin(async move {
             #[cfg(not(target_arch = "wasm32"))]
             {
-                let root = root.ok_or_else(|| {
+                let sources = sources.ok_or_else(|| {
                     afterglow_rpc::RpcError::Server("asset worker has no root".into())
                 })?;
-                let src = sources.lock().unwrap().open(&root, &path).ok_or_else(|| {
-                    afterglow_rpc::RpcError::Server(format!("asset not found: {path}"))
-                })?;
+                let src =
+                    afterglow_assets::AssetSourceProvider::open_source(sources.as_ref(), &path)
+                        .ok_or_else(|| {
+                            afterglow_rpc::RpcError::Server(format!("asset not found: {path}"))
+                        })?;
                 let mut buf = vec![0u8; src.len() as usize];
-                use afterglow_assets::AssetSource;
-                src.read_at(0, &mut buf)?;
+                let n = src.read_at(0, &mut buf)?;
+                buf.truncate(n);
                 afterglow_rpc::encode(&buf)
             }
             #[cfg(target_arch = "wasm32")]
@@ -197,19 +132,18 @@ impl AssetLoaderServer for AssetLoaderWorker {
 
     fn size(&self, path: String) -> ServeFuture {
         #[cfg(not(target_arch = "wasm32"))]
-        let root = self.root.clone();
-        #[cfg(not(target_arch = "wasm32"))]
         let sources = self.sources.clone();
         Box::pin(async move {
             #[cfg(not(target_arch = "wasm32"))]
             {
-                let root = root.ok_or_else(|| {
+                let sources = sources.ok_or_else(|| {
                     afterglow_rpc::RpcError::Server("asset worker has no root".into())
                 })?;
-                let src = sources.lock().unwrap().open(&root, &path).ok_or_else(|| {
-                    afterglow_rpc::RpcError::Server(format!("asset not found: {path}"))
-                })?;
-                use afterglow_assets::AssetSource;
+                let src =
+                    afterglow_assets::AssetSourceProvider::open_source(sources.as_ref(), &path)
+                        .ok_or_else(|| {
+                            afterglow_rpc::RpcError::Server(format!("asset not found: {path}"))
+                        })?;
                 afterglow_rpc::encode(&src.len())
             }
             #[cfg(target_arch = "wasm32")]
@@ -221,19 +155,18 @@ impl AssetLoaderServer for AssetLoaderWorker {
 
     fn read(&self, path: String, offset: u64, len: u32) -> ServeFuture {
         #[cfg(not(target_arch = "wasm32"))]
-        let root = self.root.clone();
-        #[cfg(not(target_arch = "wasm32"))]
         let sources = self.sources.clone();
         Box::pin(async move {
             #[cfg(not(target_arch = "wasm32"))]
             {
-                let root = root.ok_or_else(|| {
+                let sources = sources.ok_or_else(|| {
                     afterglow_rpc::RpcError::Server("asset worker has no root".into())
                 })?;
-                let src = sources.lock().unwrap().open(&root, &path).ok_or_else(|| {
-                    afterglow_rpc::RpcError::Server(format!("asset not found: {path}"))
-                })?;
-                use afterglow_assets::AssetSource;
+                let src =
+                    afterglow_assets::AssetSourceProvider::open_source(sources.as_ref(), &path)
+                        .ok_or_else(|| {
+                            afterglow_rpc::RpcError::Server(format!("asset not found: {path}"))
+                        })?;
                 let mut buf = vec![0u8; len as usize];
                 let n = src.read_at(offset, &mut buf)?;
                 buf.truncate(n);
@@ -242,134 +175,6 @@ impl AssetLoaderServer for AssetLoaderWorker {
             #[cfg(target_arch = "wasm32")]
             {
                 crate::fetch::fetch_range(&path, offset, len).await
-            }
-        })
-    }
-
-    fn read_handle(&self, path: String, offset: u64, len: u32) -> ServeFuture {
-        #[cfg(not(target_arch = "wasm32"))]
-        let root = self.root.clone();
-        #[cfg(not(target_arch = "wasm32"))]
-        let sources = self.sources.clone();
-        #[cfg(not(target_arch = "wasm32"))]
-        let arena = self.arena.clone();
-        Box::pin(async move {
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                let root = root.ok_or_else(|| {
-                    afterglow_rpc::RpcError::Server("asset worker has no root".into())
-                })?;
-                let arena = arena.ok_or_else(|| {
-                    afterglow_rpc::RpcError::Server("asset worker has no native arena".into())
-                })?;
-                if len as usize > arena.slot_size() {
-                    return Err(afterglow_rpc::RpcError::Server(format!(
-                        "asset read {len} exceeds arena slot {}",
-                        arena.slot_size()
-                    )));
-                }
-                let src = sources.lock().unwrap().open(&root, &path).ok_or_else(|| {
-                    afterglow_rpc::RpcError::Server(format!("asset not found: {path}"))
-                })?;
-                let mut slot = arena.acquire().ok_or_else(|| {
-                    afterglow_rpc::RpcError::Server("native asset arena capacity exceeded".into())
-                })?;
-                use afterglow_assets::AssetSource;
-                let n = src.read_at(offset, &mut slot.bytes()[..len as usize])?;
-                let handle = slot.handoff(n as u32);
-                afterglow_rpc::encode(&vec![
-                    handle.region,
-                    handle.slot,
-                    handle.length,
-                    handle.generation,
-                ])
-            }
-            #[cfg(target_arch = "wasm32")]
-            {
-                let _ = (path, offset, len);
-                Err(afterglow_rpc::RpcError::Server(
-                    "arena handles are native-only".into(),
-                ))
-            }
-        })
-    }
-
-    fn read_many_handle(&self, path: String, spans: Vec<u8>) -> ServeFuture {
-        #[cfg(not(target_arch = "wasm32"))]
-        let root = self.root.clone();
-        #[cfg(not(target_arch = "wasm32"))]
-        let sources = self.sources.clone();
-        #[cfg(not(target_arch = "wasm32"))]
-        let arena = self.arena.clone();
-        Box::pin(async move {
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                if spans.is_empty()
-                    || spans.len() % 12 != 0
-                    || spans.len() / 12 > NATIVE_ARENA_MAX_SPANS
-                {
-                    return Err(afterglow_rpc::RpcError::Server(
-                        "native asset spans must contain 1..256 packed entries".into(),
-                    ));
-                }
-                let root = root.ok_or_else(|| {
-                    afterglow_rpc::RpcError::Server("asset worker has no root".into())
-                })?;
-                let arena = arena.ok_or_else(|| {
-                    afterglow_rpc::RpcError::Server("asset worker has no native arena".into())
-                })?;
-                let mut total = 0usize;
-                for span in spans.chunks_exact(12) {
-                    let len = u32::from_le_bytes(span[8..12].try_into().unwrap()) as usize;
-                    total = total.checked_add(len).ok_or_else(|| {
-                        afterglow_rpc::RpcError::Server("native asset span total overflow".into())
-                    })?;
-                }
-                if total > arena.slot_size() {
-                    return Err(afterglow_rpc::RpcError::Server(format!(
-                        "asset span total {total} exceeds arena slot {}",
-                        arena.slot_size()
-                    )));
-                }
-                let src = sources.lock().unwrap().open(&root, &path).ok_or_else(|| {
-                    afterglow_rpc::RpcError::Server(format!("asset not found: {path}"))
-                })?;
-                let mut slot = arena.acquire().ok_or_else(|| {
-                    afterglow_rpc::RpcError::Server("native asset arena capacity exceeded".into())
-                })?;
-                let mut destination = 0usize;
-                let mut lengths = Vec::with_capacity(spans.len() / 12);
-                use afterglow_assets::AssetSource;
-                for span in spans.chunks_exact(12) {
-                    let offset = u64::from_le_bytes(span[0..8].try_into().unwrap());
-                    let requested = u32::from_le_bytes(span[8..12].try_into().unwrap()) as usize;
-                    let n = src.read_at(
-                        offset,
-                        &mut slot.bytes()[destination..destination + requested],
-                    )?;
-                    destination += n;
-                    lengths.push(n as u32);
-                    if n != requested {
-                        break;
-                    }
-                }
-                let handle = slot.handoff(destination as u32);
-                let mut metadata = Vec::with_capacity(4 + lengths.len());
-                metadata.extend_from_slice(&[
-                    handle.region,
-                    handle.slot,
-                    handle.length,
-                    handle.generation,
-                ]);
-                metadata.extend_from_slice(&lengths);
-                afterglow_rpc::encode(&metadata)
-            }
-            #[cfg(target_arch = "wasm32")]
-            {
-                let _ = (path, spans);
-                Err(afterglow_rpc::RpcError::Server(
-                    "arena handles are native-only".into(),
-                ))
             }
         })
     }
@@ -401,28 +206,6 @@ mod tests {
     }
 
     #[test]
-    fn native_source_cache_reuses_handles_and_stays_fixed_capacity() {
-        let dir = std::env::temp_dir().join(format!("ag-source-cache-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        for index in 0..=NATIVE_SOURCE_CACHE_CAPACITY {
-            std::fs::write(dir.join(format!("{index}.bin")), [index as u8]).unwrap();
-        }
-        let root = AssetRoot::new(&dir).unwrap();
-        let mut cache = NativeSourceCache::new();
-        let first = cache.open(&root, "0.bin").unwrap();
-        let same = cache.open(&root, "0.bin").unwrap();
-        assert!(std::sync::Arc::ptr_eq(&first, &same));
-        for index in 1..=NATIVE_SOURCE_CACHE_CAPACITY {
-            cache.open(&root, &format!("{index}.bin")).unwrap();
-        }
-        assert_eq!(cache.entries.len(), NATIVE_SOURCE_CACHE_CAPACITY);
-        let reopened = cache.open(&root, "0.bin").unwrap();
-        assert!(!std::sync::Arc::ptr_eq(&first, &reopened));
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
     fn singleton_full_lifecycle() {
         use std::io::Write;
         let dir = std::env::temp_dir().join(format!("ag-asset-worker-{}", std::process::id()));
@@ -433,8 +216,6 @@ mod tests {
         let root = AssetRoot::new(&dir).unwrap();
 
         AssetLoaderWorker::set_asset_root(root.clone());
-        let arena = afterglow_rpc::handle::Arena::new(2, 4, 64);
-        AssetLoaderWorker::set_native_arena(arena.clone());
 
         // 1. First spawn.
         let client = AssetLoaderClient::spawn_worker().unwrap();
@@ -451,62 +232,25 @@ mod tests {
         let chunk: Vec<u8> = drive(&client, client.read("test.txt".into(), 6, 5).unwrap()).unwrap();
         assert_eq!(chunk, b"asset");
 
-        // 5. Native zero-copy single and scatter reads return arena handles.
-        let words: Vec<u32> = drive(
-            &client,
-            client.read_handle("test.txt".into(), 6, 5).unwrap(),
-        )
-        .unwrap();
-        let handle = afterglow_rpc::Handle {
-            region: words[0],
-            slot: words[1],
-            length: words[2],
-            generation: words[3],
-        };
-        let lease = arena.read(handle).unwrap();
-        assert_eq!(lease.bytes(), b"asset");
-        drop(lease);
-
-        let mut spans = Vec::new();
-        spans.extend_from_slice(&0_u64.to_le_bytes());
-        spans.extend_from_slice(&5_u32.to_le_bytes());
-        spans.extend_from_slice(&6_u64.to_le_bytes());
-        spans.extend_from_slice(&5_u32.to_le_bytes());
-        let words: Vec<u32> = drive(
-            &client,
-            client.read_many_handle("test.txt".into(), spans).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(&words[4..], &[5, 5]);
-        let handle = afterglow_rpc::Handle {
-            region: words[0],
-            slot: words[1],
-            length: words[2],
-            generation: words[3],
-        };
-        let lease = arena.read(handle).unwrap();
-        assert_eq!(lease.bytes(), b"helloasset");
-        drop(lease);
-
-        // 6. Read at EOF → empty.
+        // 5. Read at EOF → empty.
         let eof: Vec<u8> = drive(&client, client.read("test.txt".into(), 11, 10).unwrap()).unwrap();
         assert!(eof.is_empty(), "read at EOF should return empty");
 
-        // 7. Read past end → partial.
+        // 6. Read past end → partial.
         let tail: Vec<u8> =
             drive(&client, client.read("test.txt".into(), 9, 100).unwrap()).unwrap();
         assert_eq!(tail, b"et", "partial read at end");
 
-        // 8. Missing asset → error.
+        // 7. Missing asset → error.
         let result = drive(&client, client.load("nope.bin".into()).unwrap());
         assert!(result.is_err());
 
-        // 9. Second spawn shares the worker.
+        // 8. Second spawn shares the worker.
         let client2 = AssetLoaderClient::spawn_worker().unwrap();
         let bytes2: Vec<u8> = drive(&client2, client2.load("test.txt".into()).unwrap()).unwrap();
         assert_eq!(bytes2, b"hello asset");
 
-        // 10. Concurrent multi-threaded.
+        // 9. Concurrent multi-threaded.
         let handles: Vec<_> = (0..4)
             .map(|i| {
                 let c = client.clone();
@@ -521,7 +265,7 @@ mod tests {
             h.join().unwrap();
         }
 
-        // 11. Drop all → worker dies, re-spawn.
+        // 10. Drop all → worker dies, re-spawn.
         drop(client);
         drop(client2);
         let client3 = AssetLoaderClient::spawn_worker().unwrap();

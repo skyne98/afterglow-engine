@@ -41,5 +41,5 @@ quality requirements.
 
 At runtime, `afterglow-texture` transcodes each requested UASTC page to BC7,
 ASTC, or RGBA according to adapter support. Public web uses its WASM worker;
-CEF must use the generated native worker, whose `BigAssetSession` composition is
+CEF must use the generated native worker, whose `EngineAssets` composition is
 currently incomplete.

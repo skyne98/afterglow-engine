@@ -66505,7 +66505,8 @@ class VirtualTextureStore {
       this.telemetry?.metrics.counterAdd(9 /* VtPagesFailed */, 1);
       this.telemetry?.trace.asyncEnd(13 /* VtPageLoad */, key, 0, 1);
       this.failedLoads++;
-      console.error(`[VT] Failed to load page ${path} mip=${page.mip} (${page.x},${page.y}):`, error2);
+      const message = error2 instanceof Error ? error2.message : String(error2);
+      console.error(`[VT] Failed to load page ${path} mip=${page.mip} (${page.x},${page.y}): ${message}`);
     });
     return true;
   }

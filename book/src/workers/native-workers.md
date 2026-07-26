@@ -106,7 +106,9 @@ let client2 = client.clone();
 The ring buffer is SPSC, but a singleton shared across N threads means N
 producers. `AsyncWorkerTransport` wraps the ring halves in `Mutex`es,
 serializing writes at the mutex level (microsecond holds — never during an
-`await`). Multiple threads can call `call_async` / `poll` concurrently.
+`await`). Multiple threads can call `call_async` / `poll` concurrently. If the
+bounded response ring is full, the worker retries under backpressure; it never
+drops a completion and strand its matching future.
 
 See [Defining a Service](./defining-a-service.md) for the `singleton` flag
 and [The Asset System](../window/asset-system.md) for the asset loader.

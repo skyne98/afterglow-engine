@@ -68908,12 +68908,28 @@ class BoundedTranscoderPool {
     this.workerBusy = new Uint8Array(workers.length);
   }
   submit(data, format, signal, correlation = 0) {
+    return this.enqueue(data, 0, data.byteLength, format, signal, correlation);
+  }
+  submitSourceRange(offset, length2, format, signal, correlation = 0) {
+    return this.enqueue(null, offset, length2, format, signal, correlation);
+  }
+  enqueue(data, offset, length2, format, signal, correlation) {
     if (this.count === this.jobs.length)
       return Promise.reject(new Error("VT transcode queue capacity exceeded"));
     const traceCorrelation = correlation || this.telemetry?.nextCorrelation(5 /* Texture */) || 0;
-    this.telemetry?.trace.asyncBegin(16 /* TextureTranscodeQueue */, traceCorrelation, data.byteLength, format);
+    this.telemetry?.trace.asyncBegin(16 /* TextureTranscodeQueue */, traceCorrelation, length2, format);
     return new Promise((resolve, reject) => {
-      this.jobs[this.tail] = { data, format, correlation: traceCorrelation, signal, queuedAt: performance.now(), resolve, reject };
+      this.jobs[this.tail] = {
+        data,
+        offset,
+        length: length2,
+        format,
+        correlation: traceCorrelation,
+        signal,
+        queuedAt: performance.now(),
+        resolve,
+        reject
+      };
       this.tail = (this.tail + 1) % this.jobs.length;
       this.count++;
       this.pump();
@@ -68934,7 +68950,7 @@ class BoundedTranscoderPool {
         continue;
       }
       const queueMs = performance.now() - job.queuedAt;
-      this.telemetry?.trace.asyncEnd(16 /* TextureTranscodeQueue */, job.correlation, job.data.byteLength, job.format);
+      this.telemetry?.trace.asyncEnd(16 /* TextureTranscodeQueue */, job.correlation, job.length, job.format);
       this.totalQueueMs += queueMs;
       this.maxQueueMs = Math.max(this.maxQueueMs, queueMs);
       this.workerBusy[workerIndex] = 1;
@@ -68946,15 +68962,18 @@ class BoundedTranscoderPool {
     const startedAt = performance.now();
     let status = 1;
     let outputBytes = 0;
-    this.telemetry?.trace.asyncBegin(17 /* TextureTranscode */, job.correlation, job.data.byteLength, job.format);
+    this.telemetry?.trace.asyncBegin(17 /* TextureTranscode */, job.correlation, job.length, job.format);
     try {
-      const result = await this.workers[workerIndex].transcode(job.data, job.format);
+      const worker = this.workers[workerIndex];
+      const result = job.data === null ? await worker.transcodeSourceRange?.(job.offset, job.length, job.format) : await worker.transcode(job.data, job.format);
+      if (result === undefined)
+        throw new Error("texture worker does not support source-backed transcoding");
       outputBytes = result.byteLength;
       status = 0;
       if (job.signal?.aborted)
         job.reject(new Error("VT transcode canceled after dispatch"));
       else
-        job.resolve(result.slice());
+        job.resolve(worker.responseIsOwned ? result : result.slice());
     } catch (error2) {
       job.reject(error2);
     } finally {
@@ -69390,6 +69409,7 @@ function createPageDataProvider(loader, header, textureWorkers, format, config, 
   }
   const directories = expandVtDirectories(header);
   const transcoder = new BoundedTranscoderPool(textureWorkers, config.transcodeQueueCapacity, telemetry);
+  const sourceBackedWorkers = textureWorkers.every((worker) => typeof worker.transcodeSourceRange === "function");
   const bulkReads = new BoundedBulkReadQueue(loader, config.urgentBatchDeadlineMs, config.focusBatchDeadlineMs, config.peripheralBatchDeadlineMs, telemetry);
   const stats = {
     reads: 0,
@@ -69432,18 +69452,23 @@ function createPageDataProvider(loader, header, textureWorkers, format, config, 
     if (!directory || size === 0)
       throw new Error(`VT page not found: ${path} mip=${req.mip} (${req.x},${req.y})`);
     const correlation = req.cacheKey ?? telemetry?.nextCorrelation(3 /* VirtualTexture */) ?? 0;
-    const pageData = await bulkReads.read(path, offset, size, req.batchTier ?? "urgent", signal, correlation);
-    if (signal?.aborted)
-      throw new Error("VT page load canceled after read");
-    if (directory.encoding === "RawRgba8") {
-      if (format !== 4) {
-        throw new Error(`VT page ${path} is raw RGBA8 but GPU format ${format} requires Basis encoding`);
+    let transcoded;
+    if (directory.encoding !== "RawRgba8" && sourceBackedWorkers) {
+      transcoded = await transcoder.submitSourceRange(offset, size, format, signal, correlation);
+    } else {
+      const pageData = await bulkReads.read(path, offset, size, req.batchTier ?? "urgent", signal, correlation);
+      if (signal?.aborted)
+        throw new Error("VT page load canceled after read");
+      if (directory.encoding === "RawRgba8") {
+        if (format !== 4) {
+          throw new Error(`VT page ${path} is raw RGBA8 but GPU format ${format} requires Basis encoding`);
+        }
+        return pageData;
       }
-      return pageData;
+      if (pageData.byteLength < 2 || pageData[0] !== 115 || pageData[1] !== 66)
+        throw new Error(`invalid Basis page range for ${path}: bytes=${pageData.byteLength}, magic=${pageData[0]},${pageData[1]}`);
+      transcoded = await transcoder.submit(pageData, format, signal, correlation);
     }
-    if (pageData.byteLength < 2 || pageData[0] !== 115 || pageData[1] !== 66)
-      throw new Error(`invalid Basis page range for ${path}: bytes=${pageData.byteLength}, magic=${pageData[0]},${pageData[1]}`);
-    const transcoded = await transcoder.submit(pageData, format, signal, correlation);
     if (signal?.aborted)
       throw new Error("VT page load canceled after transcode");
     if (transcoded.byteLength < 16)
@@ -69485,50 +69510,36 @@ function createPageDataProvider(loader, header, textureWorkers, format, config, 
   return provider;
 }
 
+// crates/afterglow-web/web/src/engine/assets/big-container.ts
+class BigContainer {
+  source;
+  path;
+  header;
+  rawAssets;
+  constructor(source, path, header) {
+    this.source = source;
+    this.path = path;
+    this.header = header;
+    this.rawAssets = new BigContainerAssetLoader(source, path, header);
+  }
+  static async open(source, path, maxHeaderBytes) {
+    if (!path)
+      throw new RangeError("BIG container path is required");
+    const header = await readBigHeader(source, path, maxHeaderBytes);
+    return new BigContainer(source, path, header);
+  }
+}
 // crates/afterglow-web/web/src/engine/assets/platform-range-loader.ts
-var ARENA_SLOT_BYTES = 4 * 1024 * 1024;
 var COPY_CHUNK_BYTES = 512 * 1024;
-var MAX_BULK_SPANS = 256;
 function nativeOps() {
   if (typeof Deno !== "object" || Deno === null)
     return null;
   const ops = Deno.core?.ops;
-  return typeof ops?.op_native_asset_size === "function" && typeof ops.op_native_asset_read_handle === "function" && typeof ops.op_native_asset_read_many_handle === "function" && typeof ops.op_afterglow_arena_view === "function" ? ops : null;
+  return typeof ops?.op_native_asset_size === "function" && typeof ops.op_native_asset_read_copy === "function" ? ops : null;
 }
 function validateRead(offset, length2) {
   if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length2) || length2 < 0)
     throw new RangeError("asset range must use non-negative safe integers");
-}
-function viewHandle(ops, words) {
-  if (words.length < 4)
-    throw new Error("native asset worker returned truncated handle metadata");
-  const region = words[0] ?? -1;
-  const slot = words[1] ?? -1;
-  const length2 = words[2] ?? -1;
-  const generation = words[3] ?? -1;
-  if (![region, slot, length2, generation].every(Number.isInteger))
-    throw new Error("native asset worker returned invalid handle metadata");
-  const bytes = ops.op_afterglow_arena_view({ region, slot, length: length2, generation });
-  if (bytes.byteLength !== length2)
-    throw new Error("native asset arena view length mismatch");
-  return bytes;
-}
-function packSpans(ranges) {
-  if (ranges.length === 0 || ranges.length > MAX_BULK_SPANS)
-    throw new RangeError(`native bulk read requires 1..${MAX_BULK_SPANS} spans`);
-  const packed = new Uint8Array(ranges.length * 12);
-  const view = new DataView(packed.buffer);
-  let total = 0;
-  for (let index = 0;index < ranges.length; index++) {
-    const range2 = ranges[index];
-    validateRead(range2.offset, range2.length);
-    total += range2.length;
-    if (!Number.isSafeInteger(total) || total > ARENA_SLOT_BYTES)
-      throw new RangeError(`native bulk read exceeds ${ARENA_SLOT_BYTES} bytes`);
-    view.setBigUint64(index * 12, BigInt(range2.offset), true);
-    view.setUint32(index * 12 + 8, range2.length, true);
-  }
-  return packed;
 }
 function createNativeRangeLoader(ops) {
   const identity = async (path) => ({
@@ -69540,9 +69551,8 @@ function createNativeRangeLoader(ops) {
     validateRead(offset, length2);
     if (length2 === 0)
       return new Uint8Array(0);
-    if (length2 <= ARENA_SLOT_BYTES) {
-      return viewHandle(ops, await ops.op_native_asset_read_handle(path, BigInt(offset), length2));
-    }
+    if (length2 <= COPY_CHUNK_BYTES)
+      return ops.op_native_asset_read_copy(path, BigInt(offset), length2);
     const output2 = new Uint8Array(length2);
     let written = 0;
     while (written < length2) {
@@ -69566,22 +69576,7 @@ function createNativeRangeLoader(ops) {
     identity,
     read,
     async readBulk(path, ranges) {
-      const metadata = await ops.op_native_asset_read_many_handle(path, packSpans(ranges));
-      if (metadata.length !== 4 + ranges.length)
-        throw new Error("native bulk read returned invalid part metadata");
-      const bytes = viewHandle(ops, metadata);
-      const parts = new Array(ranges.length);
-      let offset = 0;
-      for (let index = 0;index < ranges.length; index++) {
-        const length2 = metadata[4 + index] ?? -1;
-        if (!Number.isInteger(length2) || length2 < 0 || offset + length2 > bytes.byteLength)
-          throw new Error("native bulk read returned invalid part length");
-        parts[index] = bytes.subarray(offset, offset + length2);
-        offset += length2;
-      }
-      if (offset !== bytes.byteLength)
-        throw new Error("native bulk read metadata does not cover its arena view");
-      return parts;
+      return Promise.all(ranges.map((range2) => read(path, range2.offset, range2.length)));
     }
   };
 }
@@ -69662,7 +69657,7 @@ function instrumentRangeLoader(loader, telemetry) {
         telemetry.trace.asyncEnd(11 /* AssetBulkRead */, correlation, bytes, parts.length);
         return parts;
       } catch (error2) {
-        telemetry.trace.asyncEnd(11 /* AssetBulkRead */, correlation, 0, 0);
+        telemetry.trace.asyncEnd(11 /* AssetBulkRead */, correlation, 0, 1);
         throw error2;
       } finally {
         duration(startedAt);
@@ -69715,10 +69710,20 @@ function decodeU16(bytes, off) {
 function encodeU32(n) {
   return new Uint8Array(encodeVarint(n));
 }
+function decodeU322(bytes, off) {
+  return decodeVarint2(bytes, off);
+}
+function encodeU64(n) {
+  return new Uint8Array(encodeVarint(n));
+}
 function encodeF32(x2) {
   const b2 = new Uint8Array(4);
   new DataView(b2.buffer).setFloat32(0, x2, true);
   return b2;
+}
+function encodeString(s) {
+  const enc = new TextEncoder().encode(s);
+  return concat(encodeVarint(enc.length), enc);
 }
 function encodeBytes(b2) {
   return concat(encodeVarint(b2.length), b2);
@@ -70363,27 +70368,129 @@ class TextureClient {
     const resp = await this.rpc.call(2, args);
     return decodeBytes(resp, 0)[0];
   }
+  async openSource(path) {
+    const args = encodeString(path);
+    const resp = await this.rpc.call(3, args);
+    return decodeU322(resp, 0)[0];
+  }
+  async transcodeRange(source, offset, len, targetFormat) {
+    const args = concat(encodeU32(source), encodeU64(offset), encodeU32(len), encodeU32(targetFormat));
+    const resp = await this.rpc.call(4, args);
+    return decodeBytes(resp, 0)[0];
+  }
 }
 
 // crates/afterglow-web/web/src/engine/assets/platform-workers.ts
-var NATIVE_TEXTURE_WORKER_FIRST = 1;
-var NATIVE_TEXTURE_WORKER_COUNT = 4;
-var NATIVE_MESHOPT_WORKER = 5;
-function hasNativeWorkerTransport() {
-  const deno = globalThis.Deno;
-  return typeof deno?.core?.ops?.op_afterglow_rpc_call_async === "function";
+function nativeOps2() {
+  return globalThis.Deno?.core?.ops;
 }
-async function createPlatformTextureTranscoder(index, telemetry) {
+function hasNativeWorkerTransport() {
+  return typeof nativeOps2()?.op_afterglow_rpc_call_async === "function";
+}
+function nativeWorkerIds(service) {
+  const resolve = nativeOps2()?.op_afterglow_worker_ids;
+  if (typeof resolve !== "function")
+    throw new Error("native worker manifest op is unavailable");
+  const ids = resolve(service);
+  if (!Array.isArray(ids) || ids.some((id) => !Number.isInteger(id) || id < 0))
+    throw new Error(`native worker manifest is invalid for ${service}`);
+  return ids;
+}
+function platformTextureWorkerCount(maxWorkers) {
+  if (!Number.isInteger(maxWorkers) || maxWorkers <= 0)
+    throw new RangeError("texture worker limit must be positive");
+  if (hasNativeWorkerTransport()) {
+    const available = nativeWorkerIds("texture").length;
+    if (available === 0)
+      throw new Error("native texture worker manifest is empty");
+    return Math.min(available, maxWorkers);
+  }
+  const hardwareThreads = globalThis.navigator?.hardwareConcurrency || 4;
+  return Math.min(maxWorkers, Math.max(2, Math.min(4, Math.floor(hardwareThreads / 2))));
+}
+async function createPlatformTextureTranscoder(index, sourcePath, telemetry) {
   if (!hasNativeWorkerTransport())
     return TextureClient.spawnThreaded({ workerWasmUrl: "texture.wasm", timeoutMs: 1e4 });
-  if (!Number.isInteger(index) || index < 0 || index >= NATIVE_TEXTURE_WORKER_COUNT)
-    throw new RangeError(`native texture worker index must be 0..${NATIVE_TEXTURE_WORKER_COUNT - 1}`);
-  return new TextureClient(new NativeRpcTransport(NATIVE_TEXTURE_WORKER_FIRST + index, telemetry));
+  const ids = nativeWorkerIds("texture");
+  if (!Number.isInteger(index) || index < 0 || index >= ids.length)
+    throw new RangeError(`native texture worker index must be 0..${ids.length - 1}`);
+  const client = new TextureClient(new NativeRpcTransport(ids[index], telemetry));
+  const source = await client.openSource(sourcePath);
+  return {
+    responseIsOwned: true,
+    transcode(data, targetFormat) {
+      return client.transcode(data, targetFormat);
+    },
+    transcodeSourceRange(offset, length2, targetFormat) {
+      return client.transcodeRange(source, offset, length2, targetFormat);
+    },
+    close() {
+      client.close();
+    }
+  };
 }
 async function createPlatformMeshOptimizer(telemetry) {
   if (!hasNativeWorkerTransport())
     return MeshoptClient.spawnThreaded({ workerWasmUrl: "meshopt.wasm", timeoutMs: 1e4 });
-  return new MeshoptClient(new NativeRpcTransport(NATIVE_MESHOPT_WORKER, telemetry));
+  const ids = nativeWorkerIds("meshopt");
+  if (ids.length !== 1)
+    throw new Error(`native meshopt service requires exactly one worker; found ${ids.length}`);
+  return new MeshoptClient(new NativeRpcTransport(ids[0], telemetry));
+}
+
+// crates/afterglow-web/web/src/engine/assets/owned-worker-pool.ts
+class OwnedWorkerPool {
+  owned;
+  stats = { closeErrors: 0, closed: false };
+  closed = false;
+  constructor(owned) {
+    this.owned = owned;
+  }
+  static async start(count, create) {
+    if (!Number.isInteger(count) || count <= 0)
+      throw new RangeError("worker pool count must be positive");
+    const workers = [];
+    try {
+      for (let index = 0;index < count; index++)
+        workers.push(await create(index));
+      return new OwnedWorkerPool(workers);
+    } catch (error2) {
+      for (let index = workers.length - 1;index >= 0; index--) {
+        try {
+          await workers[index]?.close();
+        } catch (closeError) {
+          if (error2 instanceof Error && error2.cause === undefined)
+            error2.cause = closeError;
+        }
+      }
+      throw error2;
+    }
+  }
+  get workers() {
+    return this.owned;
+  }
+  get size() {
+    return this.owned.length;
+  }
+  async close() {
+    if (this.closed)
+      return;
+    this.closed = true;
+    let firstError = null;
+    for (let index = this.owned.length - 1;index >= 0; index--) {
+      try {
+        await this.owned[index]?.close();
+      } catch (error2) {
+        this.stats.closeErrors++;
+        if (firstError === null)
+          firstError = error2;
+      }
+    }
+    this.owned.length = 0;
+    this.stats.closed = true;
+    if (firstError !== null)
+      throw firstError;
+  }
 }
 
 // crates/afterglow-web/web/src/engine/virtual-texturing/virtual-texture-layout.ts
@@ -71460,7 +71567,8 @@ class VirtualTextureStore {
       this.telemetry?.metrics.counterAdd(9 /* VtPagesFailed */, 1);
       this.telemetry?.trace.asyncEnd(13 /* VtPageLoad */, key, 0, 1);
       this.failedLoads++;
-      console.error(`[VT] Failed to load page ${path} mip=${page.mip} (${page.x},${page.y}):`, error2);
+      const message = error2 instanceof Error ? error2.message : String(error2);
+      console.error(`[VT] Failed to load page ${path} mip=${page.mip} (${page.x},${page.y}): ${message}`);
     });
     return true;
   }
@@ -72368,93 +72476,86 @@ fn vtFeedback(
 }
 `;
 
-// crates/afterglow-web/web/src/engine/assets/big-asset-session.ts
-class BigAssetSession {
-  source;
-  containerPath;
-  header;
+// crates/afterglow-web/web/src/engine/assets/engine-assets.ts
+class EngineAssets {
+  container;
   format;
-  workers;
+  textureWorkers;
   createMeshOptimizer;
   telemetry;
   vtCapacities;
-  rawAssets;
   pageProvider;
   stats = { workersStarted: 0, closeErrors: 0, closed: false };
   closed = false;
   assetStore = null;
   meshOptimizer = null;
   store = null;
-  constructor(source, containerPath, header, format, workers, createMeshOptimizer, telemetry, vtCapacities, pageProvider) {
-    this.source = source;
-    this.containerPath = containerPath;
-    this.header = header;
+  constructor(container, format, textureWorkers, createMeshOptimizer, telemetry, vtCapacities, pageProvider) {
+    this.container = container;
     this.format = format;
-    this.workers = workers;
+    this.textureWorkers = textureWorkers;
     this.createMeshOptimizer = createMeshOptimizer;
     this.telemetry = telemetry;
     this.vtCapacities = vtCapacities;
-    this.rawAssets = new BigContainerAssetLoader(source, containerPath, header);
     this.pageProvider = pageProvider;
-    this.stats.workersStarted = workers.length;
+    this.stats.workersStarted = textureWorkers.size;
+  }
+  get source() {
+    return this.container.source;
+  }
+  get containerPath() {
+    return this.container.path;
+  }
+  get header() {
+    return this.container.header;
+  }
+  get rawAssets() {
+    return this.container.rawAssets;
   }
   static async open(options) {
-    if (!options.containerPath)
-      throw new RangeError("BIG session requires a container path");
-    if (!Number.isInteger(options.workerCount) || options.workerCount <= 0)
-      throw new RangeError("BIG session workerCount must be positive");
-    if (!Number.isInteger(options.transcodeQueueCapacity) || options.transcodeQueueCapacity <= 0)
-      throw new RangeError("BIG session transcode queue capacity must be positive");
-    if (!Number.isInteger(options.urgentBatchDeadlineMs) || options.urgentBatchDeadlineMs < 0 || !Number.isInteger(options.focusBatchDeadlineMs) || options.focusBatchDeadlineMs < 0 || !Number.isInteger(options.peripheralBatchDeadlineMs) || options.peripheralBatchDeadlineMs < 0 || options.urgentBatchDeadlineMs > options.focusBatchDeadlineMs || options.focusBatchDeadlineMs > options.peripheralBatchDeadlineMs)
-      throw new RangeError("BIG session bulk deadlines are invalid");
-    if (!Number.isInteger(options.maxPendingPages) || options.maxPendingPages <= 0 || !Number.isInteger(options.maxPendingBytes) || options.maxPendingBytes <= 0)
-      throw new RangeError("BIG session VT pending capacities must be positive integers");
+    const workerCount = validateOptions(options);
     const correlation = options.telemetry?.nextCorrelation(4 /* Asset */) ?? 0;
-    options.telemetry?.trace.asyncBegin(8 /* SessionOpen */, correlation, options.workerCount, 0);
+    options.telemetry?.trace.asyncBegin(8 /* SessionOpen */, correlation, workerCount, 0);
     const source = options.source ?? createPlatformRangeLoader("", options.telemetry);
-    const workers = [];
+    let workerPool = null;
     try {
-      const header = await readBigHeader(source, options.containerPath, options.maxHeaderBytes);
-      for (let index = 0;index < options.workerCount; index++)
-        workers.push(options.createTranscoder ? await options.createTranscoder(index) : await createPlatformTextureTranscoder(index, options.telemetry));
-      const clients = workers;
+      const container = await BigContainer.open(source, options.containerPath, options.maxHeaderBytes);
+      workerPool = await OwnedWorkerPool.start(workerCount, (index) => options.createTranscoder ? options.createTranscoder(index) : createPlatformTextureTranscoder(index, container.path, options.telemetry));
       const containerLoader = {
         load: (path) => source.load(path),
         size: (path) => source.size(path),
-        read: (_path, offset, length2) => source.read(options.containerPath, offset, length2),
-        readBulk: source.readBulk ? (ranges) => source.readBulk(options.containerPath, ranges) : undefined
+        read: (_path, offset, length2) => source.read(container.path, offset, length2),
+        readBulk: source.readBulk ? (ranges) => source.readBulk(container.path, ranges) : undefined
       };
-      const pageProvider = createPageDataProvider(containerLoader, header, clients, options.format, {
+      const pageProvider = createPageDataProvider(containerLoader, container.header, workerPool.workers, options.format, {
         transcodeQueueCapacity: options.transcodeQueueCapacity,
         urgentBatchDeadlineMs: options.urgentBatchDeadlineMs,
         focusBatchDeadlineMs: options.focusBatchDeadlineMs,
         peripheralBatchDeadlineMs: options.peripheralBatchDeadlineMs
       }, options.telemetry);
-      const session = new BigAssetSession(source, options.containerPath, header, options.format, workers, options.createMeshOptimizer, options.telemetry, { maxPendingPages: options.maxPendingPages, maxPendingBytes: options.maxPendingBytes }, pageProvider);
-      options.telemetry?.trace.asyncEnd(8 /* SessionOpen */, correlation, workers.length, 0);
-      return session;
+      const assets = new EngineAssets(container, options.format, workerPool, options.createMeshOptimizer, options.telemetry, { maxPendingPages: options.maxPendingPages, maxPendingBytes: options.maxPendingBytes }, pageProvider);
+      options.telemetry?.trace.asyncEnd(8 /* SessionOpen */, correlation, workerPool.size, 0);
+      return assets;
     } catch (error2) {
-      for (let index = workers.length - 1;index >= 0; index--) {
-        try {
-          await workers[index]?.close();
-        } catch (closeError) {
-          if (error2 instanceof Error && error2.cause === undefined)
-            error2.cause = closeError;
-        }
+      try {
+        await workerPool?.close();
+      } catch (closeError) {
+        if (error2 instanceof Error && error2.cause === undefined)
+          error2.cause = closeError;
       }
-      options.telemetry?.trace.asyncEnd(8 /* SessionOpen */, correlation, workers.length, 1);
+      options.telemetry?.trace.asyncEnd(8 /* SessionOpen */, correlation, workerPool?.size ?? 0, 1);
       throw error2;
     }
   }
   async createAssetStore(capacity = 64, maxCompletionsPerPoll = 32) {
     if (this.closed)
-      throw new Error("cannot create an asset store from a closed BIG session");
+      throw new Error("cannot create an asset store from closed EngineAssets");
     if (this.assetStore || this.meshOptimizer)
-      throw new Error("BIG session already created its asset store");
+      throw new Error("EngineAssets already created its asset store");
     const optimizer = this.createMeshOptimizer ? await this.createMeshOptimizer() : await createPlatformMeshOptimizer(this.telemetry);
     if (this.closed) {
       await optimizer.close();
-      throw new Error("BIG session closed while creating its asset store");
+      throw new Error("EngineAssets closed while creating its asset store");
     }
     try {
       this.assetStore = new AssetStore(this.rawAssets, optimizer, capacity, maxCompletionsPerPoll, this.telemetry);
@@ -72473,9 +72574,9 @@ class BigAssetSession {
   }
   createVirtualTextureStore(device, tuning) {
     if (this.closed)
-      throw new Error("cannot create a VT store from a closed BIG session");
+      throw new Error("cannot create a VT store from closed EngineAssets");
     if (this.store)
-      throw new Error("BIG session already created its VT store");
+      throw new Error("EngineAssets already created its VT store");
     const loader = {
       read: (_path, offset, length2) => this.source.read(this.containerPath, offset, length2),
       poll() {}
@@ -72502,20 +72603,33 @@ class BigAssetSession {
       }
       this.meshOptimizer = null;
     }
-    for (let index = this.workers.length - 1;index >= 0; index--) {
-      try {
-        await this.workers[index]?.close();
-      } catch (error2) {
-        this.stats.closeErrors++;
-        if (firstError === null)
-          firstError = error2;
-      }
+    try {
+      await this.textureWorkers.close();
+    } catch (error2) {
+      if (firstError === null)
+        firstError = error2;
     }
-    this.workers.length = 0;
+    this.stats.closeErrors += this.textureWorkers.stats.closeErrors;
     this.stats.closed = true;
     if (firstError !== null)
       throw firstError;
   }
+}
+function validateOptions(options) {
+  if (!options.containerPath)
+    throw new RangeError("EngineAssets requires a container path");
+  if (options.workerCount !== undefined && (!Number.isInteger(options.workerCount) || options.workerCount <= 0))
+    throw new RangeError("EngineAssets workerCount must be positive");
+  if (!Number.isInteger(options.transcodeQueueCapacity) || options.transcodeQueueCapacity <= 0)
+    throw new RangeError("EngineAssets transcode queue capacity must be positive");
+  if (!Number.isInteger(options.urgentBatchDeadlineMs) || options.urgentBatchDeadlineMs < 0 || !Number.isInteger(options.focusBatchDeadlineMs) || options.focusBatchDeadlineMs < 0 || !Number.isInteger(options.peripheralBatchDeadlineMs) || options.peripheralBatchDeadlineMs < 0 || options.urgentBatchDeadlineMs > options.focusBatchDeadlineMs || options.focusBatchDeadlineMs > options.peripheralBatchDeadlineMs)
+    throw new RangeError("EngineAssets bulk deadlines are invalid");
+  if (!Number.isInteger(options.maxPendingPages) || options.maxPendingPages <= 0 || !Number.isInteger(options.maxPendingBytes) || options.maxPendingBytes <= 0)
+    throw new RangeError("EngineAssets VT pending capacities must be positive integers");
+  const workerCount = options.workerCount ?? platformTextureWorkerCount(options.maxPendingPages);
+  if (options.transcodeQueueCapacity + workerCount < options.maxPendingPages)
+    throw new RangeError("EngineAssets transcode capacity must cover every admitted VT page");
+  return workerCount;
 }
 // crates/afterglow-web/web/src/engine/assets/height-texture.ts
 var HEIGHT_R16_MAGIC = new Uint8Array([65, 71, 82, 49, 54, 76, 69, 1]);
@@ -75863,13 +75977,11 @@ try {
   };
   const device = rendererHost.device;
   const format = device.features.has("texture-compression-bc") ? 0 : device.features.has("texture-compression-astc") ? 1 : FORMAT_RGBA;
-  const workerCount = Math.max(2, Math.min(4, Math.floor((navigator.hardwareConcurrency || 4) / 2)));
-  const session = await BigAssetSession.open({
+  const session = await EngineAssets.open({
     containerPath: "rigged-vt.big",
     telemetry: runtime.telemetry,
     format,
-    workerCount,
-    transcodeQueueCapacity: 12,
+    transcodeQueueCapacity: 16,
     urgentBatchDeadlineMs: 1,
     focusBatchDeadlineMs: 16,
     peripheralBatchDeadlineMs: 64,

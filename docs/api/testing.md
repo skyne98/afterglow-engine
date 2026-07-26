@@ -64,21 +64,20 @@ remain because they express engine invariants not reliably observable in short
 runtime tests. Generic compiler diagnostics and stylistic escape-hatch inventories
 are not conformance or release gates.
 
-## Open asset/VT gate gaps (2026-07-22)
+## Open asset/VT gate gaps (2026-07-26)
 
-The existing tests prove the source-sorting `createPageRangeReader()` helper and
-the bounded `BigAssetSession` provider independently, but no vertical test proves
-that the live session provider uses the helper—it currently does not. The
-950.2 MiB/s CEF result is an explicitly sorted transport diagnostic, not that
-missing vertical gate. Add a shuffled live-provider test that asserts source
-ordering, adjacent `pread` collapse, caller-order restoration, and response
-bounds before promoting the benchmark to gameplay evidence.
+Unit and contract tests now enforce the decomposed `BigContainer` /
+`OwnedWorkerPool` / `EngineAssets` boundary, named worker manifests, absence of
+native worker IDs in TypeScript, and removal of the GC-released native asset
+arena. Rust tests cover generational source handles, confined source-backed
+transcoding, and response-ring backpressure with four 600 KiB completions.
 
-CEF GPU scripts also do not currently reject `texture.wasm` Web Worker startup.
-A mandatory target-boundary gate must prove that CEF starts the generated native
-`afterglow-texture` client from `AppBuilder::on_ready`, and that public web still
-uses the generated WASM worker. The CEF release artifact/startup path must fail
-if an engine service with a native implementation is instantiated as WASM.
-The same target-boundary gate is required for `afterglow-shell` before it can
-replace CEF: native engine services must be generated native clients backed by
-OS workers, never the public-web WASM worker path.
+A native Dungeon smoke run completed 400 source-backed transcodes with zero page
+failures. The remaining release gate is a long native soak with telemetry and
+resident-page publication evidence, followed by the measured decision on direct
+worker atlas upload.
+
+On public web, tests prove the source-sorting `createPageRangeReader()` helper
+and the bounded provider independently, but the live provider still preserves
+admission order. Add a shuffled live-provider test before attributing source-
+sorted benchmark throughput to gameplay.

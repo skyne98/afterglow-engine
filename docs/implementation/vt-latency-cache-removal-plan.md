@@ -22,8 +22,10 @@ Baseline evidence:
 
 This plan removes the persistent derived-page cache and fixes measured VT
 latency by reducing batching delay and bounding admission to actual transcode
-throughput. It does not add another cache, increase worker count, alter the BIG
-format, or change atlas/upload policy. The decision-gated follow-up
+throughput. It does not add another cache, increase the public-web worker
+profile, alter the BIG format, or change atlas/upload policy. A separately
+approved 2026-07-26 native profile uses physical-core workers capped by the
+16-page admission limit. The decision-gated follow-up
 `predicted-perceptual-vt-scheduling-plan.md` investigates one 100 ms predicted
 feedback camera, a bounded perceptual center/distance/coverage/resident-gap
 score, and one longer peripheral batch lane; it is not part of this accepted
@@ -40,8 +42,9 @@ acceptance constants; changing one requires a new explicit decision.
 | Urgent bulk deadline | 1 ms | 0–4 ms | Parent/tail recovery latency versus request coalescing |
 | Exact/quality bulk deadline | 16 ms | 8 ms latency-first; 32 ms request-count-first | Visible detail latency versus HTTP multipart request count |
 | Public-web transcode workers | Keep 4 maximum | 6 or 8 | More workers consume separate WASM memories and CPU; queueing should be fixed before scaling |
+| Native transcode workers (approved 2026-07-26) | One OS worker per physical core, capped at 16 and by admitted pages | Logical-thread count or public-web cap | Uses native CPU parallelism without creating workers that cannot receive admitted work |
 | Total admitted page loads | 16 | 12 or 20 | Lower values cancel stale work earlier; higher values increase queue latency |
-| Transcode waiting slots | 12, plus 4 active workers = 16 total | 8 or 16 waiting | Must match total admitted work without rejecting valid submissions |
+| Transcode waiting slots | 16 fixed slots; active workers are platform-selected | 8 or 12 waiting | Waiting plus active capacity must cover all admitted work without rejecting valid submissions |
 | Pending-byte cap | 2 MiB | 1–4 MiB | Must fit 16 uncompressed RGBA pages and remain explicitly bounded |
 | Feedback cadence | 55 ms monotonic interval | 33 or 66 ms | Detection latency versus feedback render/readback frequency |
 | Source sorting | Leave unchanged in this change | Wire source-sorted provider | RTX profile showed 3 ms reads; do not mix an unmeasured transport change into this latency fix |
@@ -76,7 +79,7 @@ feedback snapshot (~55 ms cadence)
   -> at most 16 admitted page generations / 2 MiB
   -> urgent 1 ms or quality 16 ms non-resettable bulk lane
   -> at most two / 8 MiB bulk responses in flight
-  -> four active transcoders + at most twelve waiting jobs
+  -> platform-selected transcoders (web 2–4; native up to 16) + 16-slot waiting ring
   -> fixed ready-upload ring
   -> at most four uploads per poll
   -> page-table publication
@@ -148,10 +151,10 @@ symbol.
 
 ### 5.2 Remove cache ownership from BIG sessions
 
-In `big-asset-session.ts`:
+In `engine-assets.ts`:
 
 1. Remove the `PersistentBlobCache` import.
-2. Remove `cache?: PersistentBlobCache` from `BigAssetSessionOptions`.
+2. Remove `cache?: PersistentBlobCache` from `EngineAssetsOptions`.
 3. Remove the cache argument passed to `createPageDataProvider`.
 4. Update startup tests to prove unknown/legacy cache wiring is absent rather
    than silently ignored.
@@ -189,7 +192,7 @@ In `demos/dungeon/main.ts`:
    only if another validated consumer exists; otherwise delete the call.
 3. Delete `PersistentBlobCache.open`, the 1 GiB/65,536-entry/64-write settings,
    and warning fallback.
-4. Remove `cache` from `BigAssetSession.open`.
+4. Remove `cache` from `EngineAssets.open`.
 5. Remove persistent cache values from the dev-harness output/HUD if present.
 
 The resulting demo must not touch OPFS during startup or traversal.
@@ -290,9 +293,9 @@ private readonly maxPendingBytes = 8 * 1024 * 1024;
 
 Store validated constructor values instead.
 
-### 6.2 Thread capacities through `BigAssetSession`
+### 6.2 Thread capacities through `EngineAssets`
 
-Add required fields to `BigAssetSessionOptions`:
+Add required fields to `EngineAssetsOptions`:
 
 ```ts
 maxPendingPages: number;
@@ -312,11 +315,11 @@ maxPendingBytes: 2 * 1024 * 1024,
 Update every direct `VirtualTextureStore` construction in tests/demos with an
 explicit capacity object. This explicitly includes:
 
-- `BigAssetSession.createVirtualTextureStore`;
+- `EngineAssets.createVirtualTextureStore`;
 - `createProceduralVirtualTextureStore` in
   `engine/virtual-texturing/index.ts` and its public signature;
 - `demos/vt/main.ts`;
-- `demos/rigged-vt/main.ts` through its required `BigAssetSessionOptions`;
+- `demos/rigged-vt/main.ts` through its required `EngineAssetsOptions`;
 - every construction in `virtual-texture-store.test.ts` and related binding
   tests.
 
@@ -327,20 +330,14 @@ add optional defaults to reduce edit count.
 ### 6.3 Set transcode waiting capacity correctly
 
 `BoundedTranscoderPool`'s capacity counts waiting jobs, not active workers.
-Use:
-
-```ts
-workerCount: 4,
-transcodeQueueCapacity: 12,
-```
-
-Four active + twelve waiting independently bounds the transcode stage to the
-same maximum size as the sixteen-page whole-pipeline admission ceiling. These
+Production leaves worker selection to `EngineAssets`: public web chooses two to
+four workers, while native consumes the physical-core manifest up to the
+sixteen-page admission ceiling. The configured waiting ring is 16 jobs. These
 are separate capacities: admitted pages may still be waiting on bulk I/O or
 ready upload, so do not assert that every admitted page occupies a transcode
-slot. Validate in `BigAssetSession.open` that
-`transcodeQueueCapacity >= 1`; do not derive it silently from worker count
-because ownership must remain explicit.
+slot. Validate in `EngineAssets.open` that the waiting capacity plus active
+workers covers admitted work. `workerCount` remains available only as an
+explicit test/profile override.
 
 ### 6.4 Admission behavior
 
@@ -395,7 +392,7 @@ Validation:
 - urgent deadline <= quality deadline;
 - reject invalid values before creating timers/workers.
 
-Add required deadline fields to `BigAssetSessionOptions`, build the config once
+Add required deadline fields to `EngineAssetsOptions`, build the config once
 at bootstrap, and pass it to the provider.
 
 Dungeon values after approval:
@@ -406,9 +403,9 @@ urgentBatchDeadlineMs: 1,
 qualityBatchDeadlineMs: 16,
 ```
 
-Update every `BigAssetSession.open` call, especially Dungeon,
+Update every `EngineAssets.open` call, especially Dungeon,
 `demos/rigged-vt/main.ts`, and all five constructions in
-`big-asset-session.test.ts`. Update all direct provider constructions in
+`engine-assets.test.ts`. Update all direct provider constructions in
 `big-parser.test.ts` to use the config object instead of the old positional
 cache/queue arguments. Required options mean omission must be a TypeScript
 error.

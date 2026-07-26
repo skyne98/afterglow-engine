@@ -62,7 +62,7 @@ nix-shell shell.nix --run "scripts/bench/bench-caddy-browser.sh h3"
 `afterglow` exercises CEF's native bridge with an explicitly source-sorted
 diagnostic workload (so it has no network protocol in resource timing). That
 transport primitive passed the 900 MiB/s median gate at 950.2 MiB/s. The live
-`BigAssetSession` provider currently preserves scheduler/admission order and
+`EngineAssets` provider currently preserves scheduler/admission order and
 has not wired the sorting helper, so do not cite this as gameplay-provider
 throughput until the live-provider gate is rerun. `h1-close` is the old bounded
 development server; `h1`, `h2`, and `h3` are the local Caddy origin. The H3 profile verifies `h3` in browser resource timing and

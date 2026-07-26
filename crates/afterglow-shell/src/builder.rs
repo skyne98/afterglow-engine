@@ -4,8 +4,7 @@
 //! the worker-composition hook: a closure that registers the engine's native
 //! `afterglow-rpc` workers (assets, texture, audio, …) into the
 //! [`WorkerRegistry`](crate::rpc_bridge::WorkerRegistry) at startup. The
-//! op-bridge (`op_afterglow_rpc_call` / `op_afterglow_arena_view`) then exposes
-//! them to JS.
+//! op-bridge (`op_afterglow_rpc_call_async`) then exposes them to JS.
 //!
 //! This is the native equivalent of CEF's `AppBuilder::on_ready`: the host
 //! composes native workers once the winit window + wgpu device are ready, before
@@ -17,11 +16,9 @@ use std::path::PathBuf;
 use deno_core::OpState;
 
 /// A worker-composition hook: registers native workers at startup. Receives
-/// `OpState` so it can borrow the [`WorkerRegistry`] / [`ArenaRegistry`] it
-/// needs.
+/// `OpState` so it can borrow the [`WorkerRegistry`] it needs.
 ///
 /// [`WorkerRegistry`]: crate::rpc_bridge::WorkerRegistry
-/// [`ArenaRegistry`]: crate::rpc_bridge::ArenaRegistry
 pub type WorkerCompositionHook = Box<dyn FnOnce(&mut OpState)>;
 
 /// Bootstrap configuration for the native shell.
@@ -82,11 +79,10 @@ impl ShellBuilder {
     }
     /// Register the worker-composition hook. The closure runs at startup, after
     /// the winit window + wgpu device are ready, with `OpState` to populate the
-    /// [`WorkerRegistry`] + [`ArenaRegistry`]. This is where the engine's
-    /// native workers (assets, texture, audio, …) are composed.
+    /// [`WorkerRegistry`]. This is where the engine's native workers (assets,
+    /// texture, audio, …) are composed.
     ///
     /// [`WorkerRegistry`]: crate::rpc_bridge::WorkerRegistry
-    /// [`ArenaRegistry`]: crate::rpc_bridge::ArenaRegistry
     pub fn with_workers<F>(mut self, compose: F) -> Self
     where
         F: FnOnce(&mut OpState) + 'static,
@@ -99,20 +95,6 @@ impl ShellBuilder {
     pub fn take_workers(&mut self) -> Option<WorkerCompositionHook> {
         self.workers.take()
     }
-
-    /// The reference composition: demo Physics (id 0), four native texture
-    /// transcoders (ids 1..=4), and one native mesh optimizer (id 5). The
-    /// native asset worker is composed separately with its typed arena client.
-    pub fn reference_composition() -> impl FnOnce(&mut OpState) + 'static {
-        move |state| {
-            let mut registry = state.borrow_mut::<crate::rpc_bridge::WorkerRegistry>();
-            crate::rpc_bridge::register_physics(&mut registry, 0);
-            for id in 1..=4 {
-                crate::rpc_bridge::register_texture(&mut registry, id);
-            }
-            crate::rpc_bridge::register_meshopt(&mut registry, 5);
-        }
-    }
 }
 
 /// Compose a real engine async worker (the texture transcoder, asset loader,
@@ -123,9 +105,11 @@ impl ShellBuilder {
 /// thread + the worker thread.
 pub fn register_async_worker(
     state: &mut OpState,
+    service: impl Into<String>,
     id: u32,
     transport: std::sync::Arc<afterglow_rpc::native::AsyncWorkerTransport>,
 ) {
-    let mut registry = state.borrow_mut::<crate::rpc_bridge::WorkerRegistry>();
-    registry.register_async(id, transport);
+    state
+        .borrow_mut::<crate::rpc_bridge::WorkerRegistry>()
+        .register_named_async(service, id, transport);
 }

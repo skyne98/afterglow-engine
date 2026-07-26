@@ -30,7 +30,9 @@ pub use multipart::{
     ByteRange, MAX_BULK_RANGES, MAX_BULK_RESPONSE_BYTES, MULTIPART_BOUNDARY,
     MULTIPART_CONTENT_TYPE, MultiRangeSpec, MultipartSource, parse_multi_range,
 };
-pub use source::{AssetSource, AssetSourceProvider, BytesSource};
+pub use source::{
+    AssetSource, AssetSourceHandle, AssetSourceProvider, AssetSourceTable, BytesSource,
+};
 #[cfg(not(target_arch = "wasm32"))]
 pub use source::{AssetSourceCache, FsSource};
 

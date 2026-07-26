@@ -40,6 +40,7 @@ afterglow-texture = { path = "../afterglow-texture" }
 afterglow-meshopt = { path = "../afterglow-meshopt" }
 wgpu-types = "29.0.1"
 half = "2"
+num_cpus = "1.17"
 # LinkeDOM remains the JavaScript DOM; Blitz supplies the browser's native
 # CSS cascade, layout, and complete headless page compositor.
 blitz-dom = { version = "=0.3.0-beta.1", default-features = false, features = ["svg"] }

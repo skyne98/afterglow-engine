@@ -145,6 +145,45 @@ describe('.big v5 compact VT directories', () => {
     ]);
   });
 
+  test('source-backed workers bypass JavaScript range reads for Basis pages', async () => {
+    const basisHeader: BigHeader = {
+      version: 5, dataOffset: 64n,
+      assets: [{
+        name: 'tiles', assetType: 'VirtualTexture', chunks: [],
+        virtualTexture: {
+          width: 128, height: 128, encoding: 'Basis',
+          mips: [{ mip: 0, pagesX: 1, pagesY: 1, offset: 512n, pageSizes: [37] }],
+          tail: null,
+        },
+      }],
+    };
+    let reads = 0;
+    const loader = {
+      async read() { reads++; throw new Error('native source bytes entered JavaScript'); },
+      async load() { return new Uint8Array(); }, async size() { return 0; },
+    };
+    const ranges: Array<[number, number, number]> = [];
+    const worker = {
+      async transcode() { throw new Error('byte transcode path was not expected'); },
+      async transcodeSourceRange(offset: number, length: number, format: number) {
+        ranges.push([offset, length, format]);
+        const output = new Uint8Array(24);
+        const view = new DataView(output.buffer);
+        view.setUint32(0, 1, true);
+        view.setUint32(4, 136, true);
+        view.setUint32(8, 136, true);
+        view.setUint32(12, 8, true);
+        output.fill(9, 16);
+        return output;
+      },
+    };
+    const provider = createPageDataProvider(loader, basisHeader, [worker], 0, TEST_PIPELINE);
+    expect(await provider('tiles', { mip: 0, x: 0, y: 0 })).toEqual(new Uint8Array(8).fill(9));
+    expect(ranges).toEqual([[512, 37, 0]]);
+    expect(reads).toBe(0);
+    provider.close();
+  });
+
   test('urgent misses share one non-contiguous bulk response', async () => {
     const batchHeader: BigHeader = {
       version: 5, dataOffset: 64n,
@@ -471,6 +510,15 @@ describe('BoundedTranscoderPool', () => {
     const second = queue.submit(new Uint8Array(), 0);
     expect((await first)[0]).toBe(1);
     expect((await second)[0]).toBe(2);
+  });
+
+  test('moves explicitly owned native responses without another page copy', async () => {
+    const output = new Uint8Array([4, 5, 6]);
+    const queue = new BoundedTranscoderPool([{
+      responseIsOwned: true,
+      async transcode() { return output; },
+    }], 1);
+    expect(await queue.submit(new Uint8Array(), 0)).toBe(output);
   });
 
   test('has a fixed waiting capacity', async () => {

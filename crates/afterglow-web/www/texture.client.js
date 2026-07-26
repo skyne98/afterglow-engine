@@ -34,6 +34,16 @@ function concat(...arrs) {
 function encodeU32(n) {
   return new Uint8Array(encodeVarint(n));
 }
+function decodeU32(bytes, off) {
+  return decodeVarint(bytes, off);
+}
+function encodeU64(n) {
+  return new Uint8Array(encodeVarint(n));
+}
+function encodeString(s) {
+  const enc = new TextEncoder().encode(s);
+  return concat(encodeVarint(enc.length), enc);
+}
 function encodeBytes(b) {
   return concat(encodeVarint(b.length), b);
 }
@@ -508,6 +518,16 @@ class TextureClient {
   async downscale(data, width, height, targetWidth, targetHeight) {
     const args = concat(encodeBytes(data), encodeU32(width), encodeU32(height), encodeU32(targetWidth), encodeU32(targetHeight));
     const resp = await this.rpc.call(2, args);
+    return decodeBytes(resp, 0)[0];
+  }
+  async openSource(path) {
+    const args = encodeString(path);
+    const resp = await this.rpc.call(3, args);
+    return decodeU32(resp, 0)[0];
+  }
+  async transcodeRange(source, offset, len, targetFormat) {
+    const args = concat(encodeU32(source), encodeU64(offset), encodeU32(len), encodeU32(targetFormat));
+    const resp = await this.rpc.call(4, args);
     return decodeBytes(resp, 0)[0];
   }
 }

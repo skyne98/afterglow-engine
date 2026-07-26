@@ -479,12 +479,28 @@ class BoundedTranscoderPool {
     this.workerBusy = new Uint8Array(workers.length);
   }
   submit(data, format, signal, correlation = 0) {
+    return this.enqueue(data, 0, data.byteLength, format, signal, correlation);
+  }
+  submitSourceRange(offset, length, format, signal, correlation = 0) {
+    return this.enqueue(null, offset, length, format, signal, correlation);
+  }
+  enqueue(data, offset, length, format, signal, correlation) {
     if (this.count === this.jobs.length)
       return Promise.reject(new Error("VT transcode queue capacity exceeded"));
     const traceCorrelation = correlation || this.telemetry?.nextCorrelation(5 /* Texture */) || 0;
-    this.telemetry?.trace.asyncBegin(16 /* TextureTranscodeQueue */, traceCorrelation, data.byteLength, format);
+    this.telemetry?.trace.asyncBegin(16 /* TextureTranscodeQueue */, traceCorrelation, length, format);
     return new Promise((resolve, reject) => {
-      this.jobs[this.tail] = { data, format, correlation: traceCorrelation, signal, queuedAt: performance.now(), resolve, reject };
+      this.jobs[this.tail] = {
+        data,
+        offset,
+        length,
+        format,
+        correlation: traceCorrelation,
+        signal,
+        queuedAt: performance.now(),
+        resolve,
+        reject
+      };
       this.tail = (this.tail + 1) % this.jobs.length;
       this.count++;
       this.pump();
@@ -505,7 +521,7 @@ class BoundedTranscoderPool {
         continue;
       }
       const queueMs = performance.now() - job.queuedAt;
-      this.telemetry?.trace.asyncEnd(16 /* TextureTranscodeQueue */, job.correlation, job.data.byteLength, job.format);
+      this.telemetry?.trace.asyncEnd(16 /* TextureTranscodeQueue */, job.correlation, job.length, job.format);
       this.totalQueueMs += queueMs;
       this.maxQueueMs = Math.max(this.maxQueueMs, queueMs);
       this.workerBusy[workerIndex] = 1;
@@ -517,15 +533,18 @@ class BoundedTranscoderPool {
     const startedAt = performance.now();
     let status = 1;
     let outputBytes = 0;
-    this.telemetry?.trace.asyncBegin(17 /* TextureTranscode */, job.correlation, job.data.byteLength, job.format);
+    this.telemetry?.trace.asyncBegin(17 /* TextureTranscode */, job.correlation, job.length, job.format);
     try {
-      const result = await this.workers[workerIndex].transcode(job.data, job.format);
+      const worker = this.workers[workerIndex];
+      const result = job.data === null ? await worker.transcodeSourceRange?.(job.offset, job.length, job.format) : await worker.transcode(job.data, job.format);
+      if (result === undefined)
+        throw new Error("texture worker does not support source-backed transcoding");
       outputBytes = result.byteLength;
       status = 0;
       if (job.signal?.aborted)
         job.reject(new Error("VT transcode canceled after dispatch"));
       else
-        job.resolve(result.slice());
+        job.resolve(worker.responseIsOwned ? result : result.slice());
     } catch (error) {
       job.reject(error);
     } finally {
@@ -1140,6 +1159,7 @@ function createPageDataProvider(loader, header, textureWorkers, format, config, 
   }
   const directories = expandVtDirectories(header);
   const transcoder = new BoundedTranscoderPool(textureWorkers, config.transcodeQueueCapacity, telemetry);
+  const sourceBackedWorkers = textureWorkers.every((worker) => typeof worker.transcodeSourceRange === "function");
   const bulkReads = new BoundedBulkReadQueue(loader, config.urgentBatchDeadlineMs, config.focusBatchDeadlineMs, config.peripheralBatchDeadlineMs, telemetry);
   const stats = {
     reads: 0,
@@ -1182,18 +1202,23 @@ function createPageDataProvider(loader, header, textureWorkers, format, config, 
     if (!directory || size === 0)
       throw new Error(`VT page not found: ${path} mip=${req.mip} (${req.x},${req.y})`);
     const correlation = req.cacheKey ?? telemetry?.nextCorrelation(3 /* VirtualTexture */) ?? 0;
-    const pageData = await bulkReads.read(path, offset, size, req.batchTier ?? "urgent", signal, correlation);
-    if (signal?.aborted)
-      throw new Error("VT page load canceled after read");
-    if (directory.encoding === "RawRgba8") {
-      if (format !== 4) {
-        throw new Error(`VT page ${path} is raw RGBA8 but GPU format ${format} requires Basis encoding`);
+    let transcoded;
+    if (directory.encoding !== "RawRgba8" && sourceBackedWorkers) {
+      transcoded = await transcoder.submitSourceRange(offset, size, format, signal, correlation);
+    } else {
+      const pageData = await bulkReads.read(path, offset, size, req.batchTier ?? "urgent", signal, correlation);
+      if (signal?.aborted)
+        throw new Error("VT page load canceled after read");
+      if (directory.encoding === "RawRgba8") {
+        if (format !== 4) {
+          throw new Error(`VT page ${path} is raw RGBA8 but GPU format ${format} requires Basis encoding`);
+        }
+        return pageData;
       }
-      return pageData;
+      if (pageData.byteLength < 2 || pageData[0] !== 115 || pageData[1] !== 66)
+        throw new Error(`invalid Basis page range for ${path}: bytes=${pageData.byteLength}, magic=${pageData[0]},${pageData[1]}`);
+      transcoded = await transcoder.submit(pageData, format, signal, correlation);
     }
-    if (pageData.byteLength < 2 || pageData[0] !== 115 || pageData[1] !== 66)
-      throw new Error(`invalid Basis page range for ${path}: bytes=${pageData.byteLength}, magic=${pageData[0]},${pageData[1]}`);
-    const transcoded = await transcoder.submit(pageData, format, signal, correlation);
     if (signal?.aborted)
       throw new Error("VT page load canceled after transcode");
     if (transcoded.byteLength < 16)

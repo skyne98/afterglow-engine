@@ -7,7 +7,7 @@ import {
   type RenderFrame,
 } from "../../engine/index.ts";
 import {
-  BigAssetSession,
+  EngineAssets,
   getVirtualTextureDimensions,
 } from "../../engine/assets/index.ts";
 import {
@@ -135,16 +135,11 @@ try {
     : device.features.has("texture-compression-astc")
       ? 1
       : FORMAT_RGBA;
-  const workerCount = Math.max(
-    2,
-    Math.min(4, Math.floor((navigator.hardwareConcurrency || 4) / 2)),
-  );
-  const session = await BigAssetSession.open({
+  const session = await EngineAssets.open({
     containerPath: "rigged-vt.big",
     telemetry: runtime.telemetry,
     format,
-    workerCount,
-    transcodeQueueCapacity: 12,
+    transcodeQueueCapacity: 16,
     urgentBatchDeadlineMs: 1,
     focusBatchDeadlineMs: 16,
     peripheralBatchDeadlineMs: 64,

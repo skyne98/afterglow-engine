@@ -1,11 +1,11 @@
 # Virtual Texturing
 
-> **Partly stale.** `afterglow-cef` and its example launchers have been
-> removed; the CEF-specific transport prose and the `cargo build --example
-> vt-demo -p afterglow-cef` command below no longer apply. The VT engine itself
-> is unchanged. Rehoming the demo launchers under the shell host is tracked in
-> `docs/implementation/shell-promotion-plan.md` (gates G3 + G4). The
-> authoritative current state is `docs/api/virtual-texturing.md`.
+> **Current status:** public web uses Fetch plus WASM texture workers. The
+> native shell uses source-backed OS texture workers: encoded Basis pages stay
+> in native memory from confined `pread` through transcode. A 2026-07-26 Dungeon
+> smoke run completed 400 native page transcodes with zero page failures;
+> long-soak release validation remains open. The checked reference is
+> `docs/api/virtual-texturing.md`.
 
 Afterglow's texture path uses a shared physical atlas instead of allocating one
 GPU texture per asset. Textures are divided into 128x128 payload pages with a
@@ -81,8 +81,9 @@ remain visible immediately; intermediate ancestor requests are not created.
 Pages absent from two newer feedback snapshots expire, approximately 110 ms
 plus frame/readback quantization at any refresh rate. Newly important work can mark a strictly worse pending
 load canceled, but its slot remains occupied until the asynchronous stage
-acknowledges cancellation. In-flight Fetch/CEF reads currently have neither
-transport abort propagation nor a response deadline. Atlas/page-table commits
+acknowledges cancellation. In-flight public-web Fetch currently has neither transport abort propagation
+nor a response deadline. Native source-backed jobs are one-in-flight per worker
+and use ring backpressure rather than dropping completions. Atlas/page-table commits
 are governed by the central `VirtualTextureTuning` resource. Its configuration
 is partial, so setting only `atlasMaxDimension` retains every upload default.
 The cap is rounded down to a whole 136-texel slot grid; zero selects the device
@@ -101,14 +102,12 @@ evict useful pages. At most 16 jobs and 2 MiB of expected output may be pending;
 stage budget exhaustion is reported rather than allowing an unbounded burst.
 Pinned startup overflow remains in the highest-priority fixed scheduler until
 resident and is not canceled by feedback staleness.
-The serving client also owns a fixed 256-slot bulk queue. The live provider
-currently preserves scheduler/admission order. A separate page-range helper
-source-sorts and restores caller order, but `BigAssetSession` does not yet wire
-it in. CEF therefore merges only spans already adjacent in supplied order;
-public web issues a standard HTTP multi-range request and validates the
-multipart response. Both paths cap complete responses at 4 MiB and permit at
-most two responses / 8 MiB in flight. The accepted 950.2 MiB/s native transport
-result used the explicitly sorted diagnostic and is not live-provider evidence. Because color and data channels share one linear atlas, material nodes explicitly decode albedo with
+The public-web serving client owns a fixed 256-slot bulk queue. The live
+provider preserves scheduler/admission order; a separate page-range helper can
+source-sort and restore caller order but is not yet wired into that provider.
+HTTP multipart responses are capped at 4 MiB with at most two / 8 MiB in flight.
+Native Basis pages bypass this queue and send only fixed source-range
+descriptors to the OS texture workers. Because color and data channels share one linear atlas, material nodes explicitly decode albedo with
 Three.js `sRGBTransferEOTF`; normal and packed masks remain linear. The cook
 currently box-filters every role in byte space and always clamps global-edge
 border texels. Linear-light albedo mips, renormalized normal mips, and seam-
@@ -131,18 +130,16 @@ rectangular and non-power-of-two sources—filters their mips, and emits 128x128
 payloads with four-texel neighbor borders. Partial edge pages clamp only at the
 real image boundary. Levels from
 64x64 through 1x1 are packed into one permanently resident mip-tail slot rather
-than wasting one physical slot per tiny level. Every complete slot is encoded
-independently as UASTC Basis offline, then transcoded on demand to BC7, ASTC, or
-RGBA. Public web uses optimized texture WASM Web Workers over the shared-memory
-ring transport, so transcoding does not block the page thread. The current CEF
-session also starts those workers, but this is a known architecture defect:
-CEF must use `afterglow-texture`'s generated native client and an OS worker
-started through `AppBuilder::on_ready`.
+than wasting one physical slot per tiny level. Every complete slot is encoded independently as UASTC Basis offline, then
+transcoded on demand to BC7, ASTC, or RGBA. Public web uses optimized texture
+WASM Web Workers over the shared-memory ring. The native shell discovers named
+services from application bootstrap and uses generated clients over real OS
+workers. Encoded native source bytes never enter V8.
 
 ## Demos
 
 The canonical model VT demo runs on `EngineRuntime`, `RendererHost`,
-`BigAssetSession`, stable-index material bindings, and atomic feedback. Its cook
+`EngineAssets`, stable-index material bindings, and atomic feedback. Its cook
 extracts image pages, preserves sampling metadata in an ignored extension, and
 removes browser image payloads from the runtime GLBs; the current `.big` shrank
 from roughly 633 MiB to 463,702,085 bytes. Press **1** for the first animated rig
@@ -170,8 +167,10 @@ It displays a 262,144×262,144 terrain texture (256 GiB
 logical RGBA), while generating only requested bordered pages:
 
 ```sh
-nix-shell shell.nix --run "cargo run -p afterglow-shell"  # native host (CEF launcher removed)
-nix-shell shell.nix --run "./target/debug/examples/vt-demo --ozone-platform=x11"
+bun scripts/build-web.ts
+nix-shell shell.nix --run "cargo build --release -p afterglow-shell"
+nix-shell shell.nix --run \
+  "./target/release/afterglow-shell crates/afterglow-web/www/dungeon.html"
 ```
 
 Run the automated real-GPU regression with `DISPLAY=:0 ./scripts/test-vt-gpu.sh`.
@@ -191,8 +190,9 @@ and AO PNGs and runs the generic asset pipeline once to produce the ignored
 latency. Urgent mip+2 restoration batches for at most 1 ms; perceptually
 important exact work batches for 16 ms and lower-importance exact work currently
 uses a provisional 64 ms peripheral lane. There is no persistent derived-page cache: every
-nonresident page uses source read and transcode. The selected profile admits at
-most 16 pages/2 MiB, uses four active workers plus twelve waiting jobs, and
+nonresident page uses source read and transcode. The selected profile admits at most 16 pages/2 MiB and reserves sixteen
+waiting jobs in addition to the active worker slots, so every admitted page has
+a bounded pipeline slot. It
 submits one feedback view predicted 100 ms ahead on a 55 ms monotonic cadence.
 Aligned PBR
 channels share one albedo feedback stream while loading and evicting
@@ -214,7 +214,7 @@ bun scripts/profile-dungeon-vt.ts --cdp 127.0.0.1:9333 \
 ```
 
 Dungeon is a canonical `EngineRuntime` consumer using `RendererHost`,
-`BigAssetSession`, the feedback coordinator, and bounded input/diagnostics. No
+`EngineAssets`, the feedback coordinator, and bounded input/diagnostics. No
 visual demo retains a global bridge or architecture-baseline exception. Its BIG
 session feeds unified feedback, scheduler, page-load, bulk-wait/read, RPC,
 transcode, upload, and page-table publication spans into `runtime.telemetry`. Diagnostic clients
@@ -292,9 +292,10 @@ tasks, and GPU errors remained zero. The historical timestamp record's 0.149 ms
 0.018 ms feedback pass remains valid.
 
 The corrected close-wall streaming measurement bypassed the former page-side
-AssetLoader latency and used four WASM texture workers on fox-laptop. It is
-renderer/web-worker evidence, not validation of the still-missing native CEF
-texture-worker composition. Forty-eight new physical PBR pages settled in
+AssetLoader latency and used four WASM texture workers on fox-laptop. It remains
+public-web renderer/worker evidence. Native composition is now implemented and
+has separate 400-page zero-failure smoke evidence, but no equivalent long native
+soak yet. In the historical web run, forty-eight new physical PBR pages settled in
 283.29 ms; a larger unseen view showed its first
 page at 79.32 ms and first 12 coarse-priority pages at 132.75 ms. Mean page
 admission-to-ready latency fell from 445.81 ms to 26.25 ms, with zero failed

@@ -12,11 +12,11 @@ hard transport bounds are listed below.
 | Browser fetch slots | 256 | Fetch registration returns `0` |
 | AssetStore IDs | 1,024 default | `AssetAdmission.CapacityExceeded` / path wrapper throws |
 | AssetStore publication | ring = asset capacity; 32/poll | Deferred suffix remains queued; counters record high-water/overflow |
-| Native open asset sources | 16 | Round-robin descriptor replacement |
+| Native open asset sources | 16 per source table | Open fails deterministically when every slot is occupied; generations reject stale handles |
 | VT scheduler | physical atlas slot count | Typed counters report overflow; visible generations persist |
 | VT in-flight pages | 16 and 2 MiB | Admission defers in the fixed scheduler; pinned bootstrap overflow is retained there |
 | VT ready uploads | 16 | Fixed completion ownership |
-| VT transcode workers / waiting ring | 2–4 independent SPSC workers / 12 waiting jobs | Admission cap prevents valid queue overflow; each worker remains one-in-flight |
+| VT transcode workers / waiting ring | Native: `min(physical cores, 16, maxPendingPages)` active workers; web: 2–4 / 16 waiting jobs | Admission cap prevents valid queue overflow; each worker remains one-in-flight |
 | VT bulk deadlines | 1 ms urgent parent / 16 ms focus exact / provisional 64 ms peripheral exact, non-resettable | Ready lane dispatches in urgent→focus→peripheral order within transport byte/span bounds |
 | VT upload commit | adaptive 1–4 pages and 0.10–0.35 ms/poll; starts 2 / 0.20 ms | Ready suffix deferred; overload resets promoted settings |
 | VT scheduling | up to 8 admissions/poll inside the 16-page total cap; 0.25 ms/poll; 150 perceptual/kind/channel lanes | Highest nonempty coverage+predicted-center+camera-distance+resident-gap lane resumes next frame |

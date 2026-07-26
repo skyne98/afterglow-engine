@@ -5,11 +5,13 @@ The web engine's virtual-texture implementation lives in
 physical atlas, packed page-table entries, LRU residency, mip fallback, and a
 fixed per-frame page upload budget.
 
-> **Audit status (updated 2026-07-25): bounded no-cache correctness
+> **Audit status (updated 2026-07-26): bounded no-cache correctness
 > prototype, not yet a fully validated two-target release.** Persistent derived
 > caching was removed; admission, queueing, deadlines, and feedback cadence are
-> explicit. The live BIG provider still does not wire the source-sorting helper,
-> and native-shell Dungeon validation remains open. See
+> explicit. Native source-backed Dungeon smoke validation completed 400 page
+> transcodes beyond the former 48-page arena wall with zero page failures; long
+> native soaks and direct GPU atlas upload remain open. The public-web provider
+> still does not wire the source-sorting helper. See
 > [`../audits/virtual-texture-vertical-slice-2026-07-15.md`](../audits/virtual-texture-vertical-slice-2026-07-15.md).
 
 ## Public surface
@@ -53,7 +55,7 @@ fixed per-frame page upload budget.
   incompatible WebGPU queue boundary.
 - `unloadTexture(path)` cancels pending generations and releases owned slots.
 - `dispose()` idempotently unloads every texture, disposes page-table/atlas
-  textures, and clears native GPU references; `BigAssetSession.close()` owns it.
+  textures, and clears native GPU references; `EngineAssets.close()` owns it.
 - `poll()` advances asynchronous page work.
 - `getEntry(path)` exposes the read-only per-texture descriptor needed to bind
   its page table in engine materials. `atlasWidth`, `atlasHeight`,
@@ -249,34 +251,38 @@ slot remains occupied until the asynchronous stage acknowledges cancellation;
 this is not immediate replacement. Cancellation propagates through an
 `AbortSignal`: queued jobs stop before read/transcode stage boundaries, while an
 already-running read or one-in-flight RPC may finish and its stale generation is
-discarded. HTTP Fetch and the CEF bridge do not currently receive the signal or
-apply a response deadline, so a stalled transport can retain bounded capacity
-indefinitely.
-`createFetchRangeLoader().readBulk()` automatically selects the bounded CEF
-shared-message bridge when its private renderer binding exists; web targets
-issue a standard HTTP multi-range request and parse one
-`multipart/byteranges` response. The live `BigAssetSession` provider currently
-dispatches spans in scheduler/admission order. A separate
+discarded. Public-web HTTP Fetch does not currently receive the signal or apply
+a response deadline, so a stalled transport can retain bounded capacity
+indefinitely. Native source-backed RPC jobs are one-in-flight per worker and
+complete under ring backpressure; cancellation still takes effect only at job
+boundaries.
+On public web, `createFetchRangeLoader().readBulk()` issues a standard HTTP
+multi-range request and parses one `multipart/byteranges` response. The live
+provider dispatches spans in scheduler/admission order. A separate
 `createPageRangeReader()` helper source-sorts and restores caller order, but it
-is not wired into the provider. CEF therefore merges only spans already adjacent
-in admission order. Caddy supports multipart ranges through its static file
-server; CEF and the development server can also
-stream that compatibility format through `afterglow-assets::MultipartSource`.
-A fixed 256-slot client queue, 4 MiB complete-response cap,
-two-response/8 MiB in-flight cap, and non-overlapping range validation make
-overflow deterministic. It avoids routing
-tiny page ranges through the page-side AssetLoader wasm executor. A fixed
-12-entry waiting ring dispatches across two to four independent WASM texture
-workers (four on machines exposing eight or more logical CPUs). Each worker
-remains one-in-flight/SPSC-safe and owns its response before reuse. This is the
-public-web backend; `afterglow-shell` composes generated native clients and real
-OS workers instead. Physical slots are acquired only
+is not wired into that provider. Caddy and the development server stream the
+bounded multipart format. A fixed 256-slot client queue, 4 MiB complete-response
+cap, two-response/8 MiB in-flight cap, and non-overlapping range validation make
+overflow deterministic.
+
+Public web uses a fixed 16-entry waiting ring across two to four independent
+WASM texture workers. Native application bootstrap publishes one real OS
+texture worker per physical CPU core, capped at 16; `EngineAssets` consumes no
+more workers than its `maxPendingPages` admission bound. On the current
+16-core/32-thread host all 16 admitted pages can transcode concurrently. Each
+native worker retains a confined `AssetSourceTable` handle. A page job carries only source handle, offset, length,
+and format; `pread` and Basis transcode complete without exposing encoded bytes
+to V8. The final GPU-format page crosses once for the current Three.js atlas
+upload. Texture waiting slots plus active workers must cover all 16 admitted
+pages, so full capacity is handled by admission rather than failed/retried
+pages. Physical slots are acquired only
 after page bytes are ready, so a slow range read or transcode cannot evict useful
-resident data while it is pending. Upload currently copies every completed page
-into the full CPU atlas shadow before `GPUQueue.writeTexture`, even after the
-native GPU atlas is attached. Together with generated RPC encoding and two
-owned-output slices, this is bounded but remains an intentionally documented
-copy/memory optimization target.
+resident data while it is pending. Native op responses transfer independent
+Rust `Vec` ownership into V8, so the transcode pool moves them directly rather
+than taking another page slice; public-web reusable wasm response scratch still
+requires one ownership copy. Upload currently copies every completed page into
+the full CPU atlas shadow before `GPUQueue.writeTexture`. That shadow write and
+the final V8/GPU boundary remain measured optimization candidates.
 
 Runtime work is bounded to 16 pending pages and 2 MiB of expected output. The
 pending table, 16-entry ready-upload ring, scheduler, resident atlas slots, and
@@ -306,13 +312,14 @@ are exposed by `getStats()`. `getStats()` updates and returns one
 stable preallocated object and is safe for per-frame telemetry; the allocating
 `getDebugSnapshot()` is intended only for explicit diagnostics.
 
-When a `BigAssetSession` receives `runtime.telemetry`, armed unified captures
+When a `EngineAssets` receives `runtime.telemetry`, armed unified captures
 also correlate each page through feedback detection, scheduler wait, page load,
 bulk timer wait, bulk source dispatch, transcode queue, transcode execution,
 ready-upload work, atlas write, and page-table publication. Publication records
 the numeric frame whose later render pass can first sample the committed entry.
-Web Fetch and native arena-backed range operations feed the same descriptors; native worker-internal `pread` and
-arena lease subspans remain a separate adapter gate.
+Web Fetch stages report bulk wait/read plus transcode spans. Native source-
+backed jobs report the transcode RPC directly; their worker-internal `pread`
+does not create a V8 range-read span.
 
 The pre-removal baseline profile (`docs/benchmarks/dungeon-vt-unified-
 telemetry-rtx3090-2026-07-25.md`) found 149.0 ms mean / 231.4 ms p99 complete
@@ -356,7 +363,7 @@ the supported outer version, and the configured header-byte cap, but does not
 yet fully validate decoded directory invariants, duplicate asset names, exact
 decoder consumption, safe cumulative offsets, or every payload span against
 the container's identity size. Malformed-container bootstrap hardening remains
-open. `createFetchRangeLoader(baseUrl?)` returns the browser/CEF serving-layer
+open. `createFetchRangeLoader(baseUrl?)` returns the public-web serving-layer
 `load`/`size`/`identity`/`read`/`readBulk`
 implementation. `read` requires one exact 206 response; `readBulk` emits up to
 256 explicit spans and validates each returned multipart `Content-Range` in
@@ -402,9 +409,9 @@ normal, and a packed linear mask page (`R=roughness`, `G=ambient occlusion`).
 `afterglow-pipeline pack-masks <roughness> <ao> <output>` performs this offline,
 reducing each material from four streamed channels to three and sharing one
 shader sample for both masks. The shared atlas remains linear for data channels, while the albedo node applies Three.js `sRGBTransferEOTF` explicitly
-before feeding the PBR color input. Basis transcoding runs in a real Web Worker
-through the shared-memory ring transport, never in the page's frame loop. The
-demo uses optimized `wasm-release` workers.
+before feeding the PBR color input. Basis transcoding runs in a real Web Worker through the shared-memory ring on
+public web. The native shell uses source-backed OS workers and never runs the
+WASM service. Neither backend transcodes in the page's frame loop.
 
 Both demonstrations use the engine `VirtualTextureStore`, `VT_SAMPLE_WGSL`,
 packed page tables, request scheduler, incremental writes, and one physical
@@ -420,7 +427,7 @@ texture (256 GiB logical RGBA), with WASD pan, overview, one-texel zoom, and
 deterministic programmatic control. Three independent real-GPU launches pass
 all raw-feedback, compressed/uncompressed upload, and residency trajectories.
 
-`rigged-vt-demo` (canonical `EngineRuntime` consumer) uses `BigAssetSession`, which loads two image-free GLBs from the same `.big`
+`rigged-vt-demo` (canonical `EngineRuntime` consumer) uses `EngineAssets`, which loads two image-free GLBs from the same `.big`
 container as their extracted virtual material channels; the cook reduced the
 current container from roughly 633 MiB to 463,702,085 bytes. Stable parser
 indices drive `VirtualGltfBinding`, and one coordinator publishes atomic
@@ -441,7 +448,7 @@ post-seal pipelines. Model 1 is KallMor's “Decraniated (Low Poly
 Retro Pixel),” CC BY 4.0; model 2 is CC BY-NC 4.0.
 
 `dungeon` (canonical `EngineRuntime` consumer) uses
-`RendererHost`, `BigAssetSession`, `VirtualTextureFeedbackCoordinator`, bounded
+`RendererHost`, `EngineAssets`, `VirtualTextureFeedbackCoordinator`, bounded
 input/diagnostics, and engine-owned POM materials. It is a first-person corridor dungeon using
 three downloaded 8K PBR sets across twelve wall instances. Two sets are
 8192×8192 and one is natively rectangular at 8192×4096. Albedo, OpenGL normal,
@@ -458,25 +465,19 @@ Interactive controls are WASD, Shift sprint, raw pointer-lock mouse look, POM
 `look`, `step`, `waitForIdle`, allocation-free `telemetry`, `errorCount`,
 `snapshot`, and `runScenario`.
 
-> **Launcher status:** the `afterglow-cef` example launchers and their GPU
-> soak scripts have been removed with `afterglow-cef`. The demo pages themselves
-> (`vt-demo.html`, `rigged-vt-demo.html`, `dungeon.html`) still exist under
-> `crates/afterglow-web/www`; they await rehoming as shell-launched pages — see
-> `docs/implementation/shell-promotion-plan.md`. The commands below are retained
-> as historical evidence of the validated configurations.
+The generated pages run directly under the native shell:
 
 ```sh
-# Native host launch awaits the shell promotion (afterglow-cef launchers removed).
-# Historical launcher shape:
-#   nix-shell shell.nix --run "cargo build --example vt-demo -p afterglow-cef"
-#   nix-shell shell.nix --run "cargo build --example rigged-vt-demo -p afterglow-cef"
-#   DISPLAY=:0 ./target/debug/examples/rigged-vt-demo --ozone-platform=x11
-# Soak scripts removed: test-rigged-vt-gpu.sh, run-dungeon.sh, test-dungeon-gpu.sh,
-# soak-dungeon.sh. Re-establish under the shell host as a promotion work item.
+bun scripts/build-web.ts
+nix-shell shell.nix --run "cargo build --release -p afterglow-shell"
+nix-shell shell.nix --run \
+  "./target/release/afterglow-shell crates/afterglow-web/www/dungeon.html"
 ```
-# Deterministic occupancy states (run cold → half → full → churn in one process):
-./scripts/baseline-vt-atlas.sh half vt-atlas-half.log
-```
+
+The 2026-07-26 source-backed smoke run completed 400 native page transcodes with
+zero page failures, beyond the removed arena path's approximately 48-page wall.
+This is correctness evidence, not a replacement for the historical CEF GPU/soak
+numbers or a completed native release soak.
 
 ## GPU timing diagnostics
 
@@ -532,8 +533,8 @@ frame; resolved keys are explicitly cleared during short GPU captures.
 
 ## Real-GPU regression
 
-`scripts/test-vt-gpu.sh` launches the CEF/WebGPU demo and executes its CDP
-self-test. It performs three independent CEF launches. Within every launch it
+The historical `scripts/test-vt-gpu.sh` evidence used the former CEF/WebGPU
+demo and CDP self-test. It performed three independent launches. Within each it
 renders and precisely reads back 1,024 `RG32Uint` feedback pixels from eastward,
 westward, and rotated raster directions; follows eastbound, westbound, and
 diagonal trajectories across overview, paged, and one-texel LODs; byte-verifies

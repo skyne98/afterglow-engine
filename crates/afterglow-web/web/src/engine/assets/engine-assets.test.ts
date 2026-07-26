@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import {
-  BigAssetSession,
+  EngineAssets,
   type OwnedMeshOptimizer,
   type OwnedTextureTranscoder,
-} from './big-asset-session.ts';
+} from './engine-assets.ts';
 import type { FetchRangeLoader } from './big-parser.ts';
 
 function minimalContainer(dataOffset = 19): Uint8Array {
@@ -47,14 +47,14 @@ function optimizer(events: string[]): OwnedMeshOptimizer {
   };
 }
 
-describe('BigAssetSession', () => {
+describe('EngineAssets', () => {
   test('owns parsed header, fixed workers, raw loader, one VT store, and reverse shutdown', async () => {
     const events: string[] = [];
-    const session = await BigAssetSession.open({
+    const session = await EngineAssets.open({
       containerPath: 'scene.big',
       format: 4,
       workerCount: 2,
-      transcodeQueueCapacity: 8, urgentBatchDeadlineMs: 1, focusBatchDeadlineMs: 16, peripheralBatchDeadlineMs: 64,
+      transcodeQueueCapacity: 16, urgentBatchDeadlineMs: 1, focusBatchDeadlineMs: 16, peripheralBatchDeadlineMs: 64,
       maxPendingPages: 16,
       maxPendingBytes: 2 * 1024 * 1024,
       maxHeaderBytes: 1024,
@@ -77,11 +77,37 @@ describe('BigAssetSession', () => {
     expect(() => session.createVirtualTextureStore()).toThrow('closed');
   });
 
+  test('uses the bounded native worker manifest when no override is provided', async () => {
+    const events: string[] = [];
+    (globalThis as typeof globalThis & { Deno?: unknown }).Deno = { core: { ops: {
+      op_afterglow_worker_ids: (service: string) => service === 'texture' ? [7, 8, 9] : [],
+      async op_afterglow_rpc_call_async() { return new Uint8Array(); },
+    } } };
+    try {
+      const assets = await EngineAssets.open({
+        containerPath: 'scene.big', format: 4,
+        transcodeQueueCapacity: 2, urgentBatchDeadlineMs: 1,
+        focusBatchDeadlineMs: 16, peripheralBatchDeadlineMs: 64,
+        maxPendingPages: 2, maxPendingBytes: 2 * 1024 * 1024,
+        maxHeaderBytes: 1024, source: source(minimalContainer()),
+        async createTranscoder(index) {
+          events.push(`open-${index}`);
+          return worker(index, events);
+        },
+      });
+      expect(assets.stats.workersStarted).toBe(2);
+      await assets.close();
+      expect(events).toEqual(['open-0', 'open-1', 'close-1', 'close-0']);
+    } finally {
+      delete (globalThis as typeof globalThis & { Deno?: unknown }).Deno;
+    }
+  });
+
   test('rejects an oversized header before spawning workers', async () => {
     let workers = 0;
-    await expect(BigAssetSession.open({
+    await expect(EngineAssets.open({
       containerPath: 'bad.big', format: 4, workerCount: 1,
-      transcodeQueueCapacity: 1, urgentBatchDeadlineMs: 1, focusBatchDeadlineMs: 16, peripheralBatchDeadlineMs: 64, maxPendingPages: 16, maxPendingBytes: 2 * 1024 * 1024, maxHeaderBytes: 64,
+      transcodeQueueCapacity: 16, urgentBatchDeadlineMs: 1, focusBatchDeadlineMs: 16, peripheralBatchDeadlineMs: 64, maxPendingPages: 16, maxPendingBytes: 2 * 1024 * 1024, maxHeaderBytes: 64,
       source: source(minimalContainer(128)),
       async createTranscoder() { workers++; return worker(0, []); },
     })).rejects.toThrow('exceeds configured capacity');
@@ -90,9 +116,9 @@ describe('BigAssetSession', () => {
 
   test('rolls back already-started workers after a later startup failure', async () => {
     const events: string[] = [];
-    await expect(BigAssetSession.open({
+    await expect(EngineAssets.open({
       containerPath: 'scene.big', format: 4, workerCount: 3,
-      transcodeQueueCapacity: 2, urgentBatchDeadlineMs: 1, focusBatchDeadlineMs: 16, peripheralBatchDeadlineMs: 64, maxPendingPages: 16, maxPendingBytes: 2 * 1024 * 1024, maxHeaderBytes: 1024,
+      transcodeQueueCapacity: 16, urgentBatchDeadlineMs: 1, focusBatchDeadlineMs: 16, peripheralBatchDeadlineMs: 64, maxPendingPages: 16, maxPendingBytes: 2 * 1024 * 1024, maxHeaderBytes: 1024,
       source: source(minimalContainer()),
       async createTranscoder(index) {
         events.push(`open-${index}`);
@@ -105,9 +131,9 @@ describe('BigAssetSession', () => {
 
   test('continues closing workers and reports the first close failure', async () => {
     const events: string[] = [];
-    const session = await BigAssetSession.open({
+    const session = await EngineAssets.open({
       containerPath: 'scene.big', format: 4, workerCount: 2,
-      transcodeQueueCapacity: 2, urgentBatchDeadlineMs: 1, focusBatchDeadlineMs: 16, peripheralBatchDeadlineMs: 64, maxPendingPages: 16, maxPendingBytes: 2 * 1024 * 1024, maxHeaderBytes: 1024,
+      transcodeQueueCapacity: 16, urgentBatchDeadlineMs: 1, focusBatchDeadlineMs: 16, peripheralBatchDeadlineMs: 64, maxPendingPages: 16, maxPendingBytes: 2 * 1024 * 1024, maxHeaderBytes: 1024,
       source: source(minimalContainer()),
       async createTranscoder(index) { return worker(index, events, index === 1); },
     });
@@ -122,23 +148,29 @@ describe('BigAssetSession', () => {
     const badSource = source(minimalContainer());
     const originalRead = badSource.read;
     badSource.read = async (...args) => { reads++; return originalRead(...args); };
-    await expect(BigAssetSession.open({
+    await expect(EngineAssets.open({
       containerPath: 'scene.big', format: 4, workerCount: 0,
-      transcodeQueueCapacity: 1, urgentBatchDeadlineMs: 1, focusBatchDeadlineMs: 16, peripheralBatchDeadlineMs: 64, maxPendingPages: 16, maxPendingBytes: 2 * 1024 * 1024, maxHeaderBytes: 1024,
+      transcodeQueueCapacity: 16, urgentBatchDeadlineMs: 1, focusBatchDeadlineMs: 16, peripheralBatchDeadlineMs: 64, maxPendingPages: 16, maxPendingBytes: 2 * 1024 * 1024, maxHeaderBytes: 1024,
       source: badSource, async createTranscoder() { return worker(0, []); },
     })).rejects.toThrow('workerCount');
-    await expect(BigAssetSession.open({
+    await expect(EngineAssets.open({
       containerPath: 'scene.big', format: 4, workerCount: 1,
-      transcodeQueueCapacity: 1, urgentBatchDeadlineMs: 1, focusBatchDeadlineMs: 16, peripheralBatchDeadlineMs: 64, maxPendingPages: 0,
+      transcodeQueueCapacity: 16, urgentBatchDeadlineMs: 1, focusBatchDeadlineMs: 16, peripheralBatchDeadlineMs: 64, maxPendingPages: 0,
       maxPendingBytes: 2 * 1024 * 1024, maxHeaderBytes: 1024,
       source: badSource, async createTranscoder() { return worker(0, []); },
     })).rejects.toThrow('pending capacities');
-    await expect(BigAssetSession.open({
+    await expect(EngineAssets.open({
       containerPath: 'scene.big', format: 4, workerCount: 1,
-      transcodeQueueCapacity: 1, urgentBatchDeadlineMs: 17, focusBatchDeadlineMs: 16, peripheralBatchDeadlineMs: 64,
+      transcodeQueueCapacity: 16, urgentBatchDeadlineMs: 17, focusBatchDeadlineMs: 16, peripheralBatchDeadlineMs: 64,
       maxPendingPages: 16, maxPendingBytes: 2 * 1024 * 1024, maxHeaderBytes: 1024,
       source: badSource, async createTranscoder() { return worker(0, []); },
     })).rejects.toThrow('deadlines');
+    await expect(EngineAssets.open({
+      containerPath: 'scene.big', format: 4, workerCount: 1,
+      transcodeQueueCapacity: 1, urgentBatchDeadlineMs: 1, focusBatchDeadlineMs: 16, peripheralBatchDeadlineMs: 64,
+      maxPendingPages: 16, maxPendingBytes: 2 * 1024 * 1024, maxHeaderBytes: 1024,
+      source: badSource, async createTranscoder() { return worker(0, []); },
+    })).rejects.toThrow('cover every admitted VT page');
     expect(reads).toBe(0);
   });
 });

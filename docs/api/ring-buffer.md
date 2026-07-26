@@ -155,6 +155,18 @@ shorter `response_deadline` to exercise the timeout path without sleeping. The
 `timeout_poisons_transport_and_rejects_stale_response` test is the regression
 for the stale-reply guarantee.
 
+### Async completion backpressure
+
+`AsyncWorkerTransport` supports multiple task IDs in flight. A completed worker
+task retries its bounded response-ring write when the ring is full, waking the
+client and yielding to the worker's local executor between attempts. The outer
+loop can therefore still process shutdown. It does not allocate an overflow
+queue and never discards a completion: dropping one would leave the matching
+`Oneshot`/JavaScript promise pending forever. A completion larger than the ring
+is replaced by a small server-error envelope. Regression tests fill a 1 MiB ring
+with four 600 KiB results and separately require an oversized result to resolve
+as an error rather than hang.
+
 ### Events
 
 ```rust

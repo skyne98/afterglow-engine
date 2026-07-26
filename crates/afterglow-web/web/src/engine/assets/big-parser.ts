@@ -370,7 +370,9 @@ export function findVTPageChunk(
 }
 
 interface TranscodeJob {
-  data: Uint8Array;
+  data: Uint8Array | null;
+  offset: number;
+  length: number;
   format: number;
   correlation: number;
   signal: AbortSignal | undefined;
@@ -400,7 +402,11 @@ export class BoundedTranscoderPool {
 
   constructor(
     private readonly workers: readonly {
+      readonly responseIsOwned?: true;
       transcode(data: Uint8Array, targetFormat: number): Promise<Uint8Array>;
+      transcodeSourceRange?(
+        offset: number, length: number, targetFormat: number,
+      ): Promise<Uint8Array>;
     }[],
     capacity: number,
     private readonly telemetry?: EngineTelemetry,
@@ -417,13 +423,37 @@ export class BoundedTranscoderPool {
     signal?: AbortSignal,
     correlation = 0,
   ): Promise<Uint8Array> {
+    return this.enqueue(data, 0, data.byteLength, format, signal, correlation);
+  }
+
+  submitSourceRange(
+    offset: number,
+    length: number,
+    format: number,
+    signal?: AbortSignal,
+    correlation = 0,
+  ): Promise<Uint8Array> {
+    return this.enqueue(null, offset, length, format, signal, correlation);
+  }
+
+  private enqueue(
+    data: Uint8Array | null,
+    offset: number,
+    length: number,
+    format: number,
+    signal: AbortSignal | undefined,
+    correlation: number,
+  ): Promise<Uint8Array> {
     if (this.count === this.jobs.length) return Promise.reject(new Error('VT transcode queue capacity exceeded'));
     const traceCorrelation = correlation || this.telemetry?.nextCorrelation(EngineTelemetryCategory.Texture) || 0;
     this.telemetry?.trace.asyncBegin(
-      EngineTraceDescriptor.TextureTranscodeQueue, traceCorrelation, data.byteLength, format,
+      EngineTraceDescriptor.TextureTranscodeQueue, traceCorrelation, length, format,
     );
     return new Promise((resolve, reject) => {
-      this.jobs[this.tail] = { data, format, correlation: traceCorrelation, signal, queuedAt: performance.now(), resolve, reject };
+      this.jobs[this.tail] = {
+        data, offset, length, format, correlation: traceCorrelation,
+        signal, queuedAt: performance.now(), resolve, reject,
+      };
       this.tail = (this.tail + 1) % this.jobs.length;
       this.count++;
       this.pump();
@@ -448,7 +478,7 @@ export class BoundedTranscoderPool {
       const queueMs = performance.now() - job.queuedAt;
       this.telemetry?.trace.asyncEnd(
         EngineTraceDescriptor.TextureTranscodeQueue, job.correlation,
-        job.data.byteLength, job.format,
+        job.length, job.format,
       );
       this.totalQueueMs += queueMs;
       this.maxQueueMs = Math.max(this.maxQueueMs, queueMs);
@@ -463,16 +493,22 @@ export class BoundedTranscoderPool {
     let status = 1;
     let outputBytes = 0;
     this.telemetry?.trace.asyncBegin(
-      EngineTraceDescriptor.TextureTranscode, job.correlation, job.data.byteLength, job.format,
+      EngineTraceDescriptor.TextureTranscode, job.correlation, job.length, job.format,
     );
     try {
-      const result = await this.workers[workerIndex].transcode(job.data, job.format);
+      const worker = this.workers[workerIndex]!;
+      const result = job.data === null
+        ? await worker.transcodeSourceRange?.(job.offset, job.length, job.format)
+        : await worker.transcode(job.data, job.format);
+      if (result === undefined)
+        throw new Error('texture worker does not support source-backed transcoding');
       outputBytes = result.byteLength;
       status = 0;
       if (job.signal?.aborted) job.reject(new Error('VT transcode canceled after dispatch'));
-      // Each worker owns one reusable response scratch. Copy before that same
-      // worker receives its next call; other workers may complete independently.
-      else job.resolve(result.slice());
+      // Public-web transports expose reusable wasm scratch and must copy before
+      // the next call. Native op responses transfer independent Vec ownership
+      // into V8 and can move directly to the upload queue.
+      else job.resolve(worker.responseIsOwned ? result : result.slice());
     } catch (error) {
       job.reject(error);
     } finally {
@@ -1278,7 +1314,13 @@ class BoundedBulkReadQueue {
 export function createPageDataProvider(
   loader: BulkReadLoader & { load(path: string): Promise<Uint8Array>; size(path: string): Promise<number> },
   header: BigHeader,
-  textureWorkers: readonly { transcode(data: Uint8Array, targetFormat: number): Promise<Uint8Array> }[],
+  textureWorkers: readonly {
+    readonly responseIsOwned?: true;
+    transcode(data: Uint8Array, targetFormat: number): Promise<Uint8Array>;
+    transcodeSourceRange?(
+      offset: number, length: number, targetFormat: number,
+    ): Promise<Uint8Array>;
+  }[],
   format: number,
   config: Readonly<PagePipelineConfig>,
   telemetry?: EngineTelemetry,
@@ -1294,6 +1336,9 @@ export function createPageDataProvider(
   const directories = expandVtDirectories(header);
 
   const transcoder = new BoundedTranscoderPool(textureWorkers, config.transcodeQueueCapacity, telemetry);
+  const sourceBackedWorkers = textureWorkers.every(
+    worker => typeof worker.transcodeSourceRange === 'function',
+  );
   const bulkReads = new BoundedBulkReadQueue(
     loader,
     config.urgentBatchDeadlineMs,
@@ -1337,31 +1382,40 @@ export function createPageDataProvider(
     const correlation = (req as { cacheKey?: number }).cacheKey ??
       telemetry?.nextCorrelation(EngineTelemetryCategory.VirtualTexture) ?? 0;
 
-    const pageData = await bulkReads.read(
-      path,
-      offset,
-      size,
-      req.batchTier ?? 'urgent',
-      signal,
-      correlation,
-    );
-    if (signal?.aborted) throw new Error('VT page load canceled after read');
+    let transcoded: Uint8Array;
+    if (directory.encoding !== 'RawRgba8' && sourceBackedWorkers) {
+      // Native workers own the confined source and consume only this fixed
+      // descriptor. Encoded Basis bytes never enter V8.
+      transcoded = await transcoder.submitSourceRange(
+        offset, size, format, signal, correlation,
+      );
+    } else {
+      const pageData = await bulkReads.read(
+        path,
+        offset,
+        size,
+        req.batchTier ?? 'urgent',
+        signal,
+        correlation,
+      );
+      if (signal?.aborted) throw new Error('VT page load canceled after read');
 
-    if (directory.encoding === 'RawRgba8') {
-      if (format !== 4) {
-        throw new Error(`VT page ${path} is raw RGBA8 but GPU format ${format} requires Basis encoding`);
+      if (directory.encoding === 'RawRgba8') {
+        if (format !== 4) {
+          throw new Error(`VT page ${path} is raw RGBA8 but GPU format ${format} requires Basis encoding`);
+        }
+        return pageData;
       }
-      return pageData;
-    }
 
-    // The worker returns [count][width][height][length][data]...; a VT page
-    // consumes only the first image payload, never the serialization header.
-    if (pageData.byteLength < 2 || pageData[0] !== 0x73 || pageData[1] !== 0x42)
-      throw new Error(`invalid Basis page range for ${path}: bytes=${pageData.byteLength}, magic=${pageData[0]},${pageData[1]}`);
-    // Each SPSC worker permits one in-flight transcode. The fixed pool dispatches
-    // independently without an unbounded Promise chain and drops canceled jobs
-    // before they reach a worker.
-    const transcoded = await transcoder.submit(pageData, format, signal, correlation);
+      // The worker returns [count][width][height][length][data]...; a VT page
+      // consumes only the first image payload, never the serialization header.
+      if (pageData.byteLength < 2 || pageData[0] !== 0x73 || pageData[1] !== 0x42)
+        throw new Error(`invalid Basis page range for ${path}: bytes=${pageData.byteLength}, magic=${pageData[0]},${pageData[1]}`);
+      // Each SPSC worker permits one in-flight transcode. The fixed pool dispatches
+      // independently without an unbounded Promise chain and drops canceled jobs
+      // before they reach a worker.
+      transcoded = await transcoder.submit(pageData, format, signal, correlation);
+    }
     if (signal?.aborted) throw new Error('VT page load canceled after transcode');
     if (transcoded.byteLength < 16) throw new Error('truncated transcoded VT page');
     const view = new DataView(transcoded.buffer, transcoded.byteOffset, transcoded.byteLength);

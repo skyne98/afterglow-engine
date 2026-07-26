@@ -525,7 +525,7 @@ new VirtualTextureFeedbackCoordinator(renderer, store, {
   predictionHorizonMs: 100,
 });
 
-await BigAssetSession.open({
+await EngineAssets.open({
   // existing options...
   urgentBatchDeadlineMs: 1,
   focusBatchDeadlineMs: 16,
@@ -643,7 +643,7 @@ Expected authored changes:
 - one small internal predictor module and colocated test;
 - `big-parser.ts`
   - third timer/lane and stats only;
-- `big-asset-session.ts`
+- `engine-assets.ts`
   - one peripheral deadline option;
 - profile/replay scripts
   - tier-2 and score-bucket decoding;

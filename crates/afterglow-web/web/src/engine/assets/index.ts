@@ -7,12 +7,13 @@ export {
   parseMultipartByteRanges,
   type AssetByteRange,
 } from './bulk-range.ts';
+export { BigContainer } from './big-container.ts';
 export {
-  BigAssetSession,
-  type BigAssetSessionOptions,
+  EngineAssets,
+  type EngineAssetsOptions,
   type OwnedMeshOptimizer,
   type OwnedTextureTranscoder,
-} from './big-asset-session.ts';
+} from './engine-assets.ts';
 export { createPlatformRangeLoader as createAssetRangeSource } from './platform-range-loader.ts';
 export {
   createPageRangeReader,

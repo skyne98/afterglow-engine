@@ -189,7 +189,7 @@ Implemented now:
 Still to be composed:
 
 - generated RPC server-side flow endpoints and worker-local batch draining;
-- native worker-internal `pread`, arena lease, and codec scopes;
+- native worker-internal source-backed `pread` and codec scopes;
 - audio callback/simulation adapters;
 - shell capture control/file output;
 - `GpuProfiler` timestamp ingestion;

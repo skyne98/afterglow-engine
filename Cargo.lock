@@ -149,6 +149,7 @@ dependencies = [
  "futures-util",
  "half",
  "image",
+ "num_cpus",
  "pollster 0.3.0",
  "raw-window-handle",
  "reqwest",
@@ -171,6 +172,7 @@ version = "0.1.0"
 name = "afterglow-texture"
 version = "0.1.0"
 dependencies = [
+ "afterglow-assets",
  "afterglow-rpc",
  "afterglow-rpc-macros",
  "async-executor",
