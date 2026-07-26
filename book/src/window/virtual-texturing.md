@@ -229,8 +229,13 @@ latency fell to 42.02 ms mean / 58.40 ms p99; bulk wait was 9.11/16.45 ms and
 transcode queueing 18.89/34.55 ms. All 582 frames stayed within 13.895 ms, with
 zero failures, trace drops, or unmatched spans. Source bytes fell 13%; requests
 rose 2.94× versus the former 100 ms batch policy. A tested 24 ms deadline still
-missed the request gate and regressed latency, so 16 ms remains selected.
-Evidence: `docs/benchmarks/dungeon-vt-no-cache-rtx3090-2026-07-25.md`.
+missed the request gate and regressed latency. Deterministic trace replay then
+reproduced all 156 requests: source sorting reduced modeled adjacent read runs
+31% but not request count, while mip-deficit/channel grouping also stayed at
+156. The 16 ms policy remains selected; reaching 2× requires a different
+buffering or source-format trade-off. Evidence:
+`docs/benchmarks/dungeon-vt-no-cache-rtx3090-2026-07-25.md` and
+`docs/benchmarks/dungeon-vt-trace-replay-rtx3090-2026-07-25.md`.
 
 Click for raw mouse look; use **WASD**, **Shift**, **P**, **R**, and **1–3** for
 movement, sprint, prewarmed close-range POM toggle, reset, and deterministic

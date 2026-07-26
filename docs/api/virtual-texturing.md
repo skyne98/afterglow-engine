@@ -320,8 +320,12 @@ improved admitted page latency to 42.02 ms mean / 58.40 ms p99, bulk wait to
 and a 26,861-record trace with zero drops/unmatched spans. Source bytes fell
 13%, while bulk request count rose from 53 to 156; that 2.94× count is the sole
 unaccepted RTX plan gate. A measured 24 ms deadline reduced requests only to
-124 while violating latency/frame targets, so the approved 16 ms policy remains
-selected pending an explicit request-count-policy decision.
+124 while violating latency/frame targets. A deterministic replay of the
+committed trace reproduced all 156 requests: source sorting reduced modeled
+adjacent source runs by 30.9% but did not change request count, and mip-deficit/
+channel-affinity sensitivity also remained at 156. The approved 16 ms policy
+therefore remains selected pending an explicit request-count-policy decision;
+meeting 2× requires a different buffering, prefetch, or cooked-superpage policy.
 
 ## Asset containers
 

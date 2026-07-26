@@ -83,6 +83,15 @@ produced a 48.65 ms frame maximum. It was rejected and not committed. A 32 ms
 variant was not run because its deadline necessarily violates the <=20 ms
 batch-wait gate and moves farther from the latency objective.
 
+The follow-up deterministic trace replay
+(`dungeon-vt-trace-replay-rtx3090-2026-07-25.md`) reproduced all 156 requests.
+Source sorting reduced modeled adjacent source runs 740 → 511 (−30.9%) but
+left requests at 156. Mip-deficit priority and bounded cross-channel affinity
+also left their modeled control at 156; those priority numbers are sensitivity
+only because AGTB does not record resident fallback mip or every feedback
+refresh. The 106-request target therefore requires a different buffering,
+prefetch, or source-superpage policy—not a source-order or scheduler tie-break.
+
 Keep the approved 16 ms policy unless the user explicitly prioritizes request
 count over measured visible latency. The 2× request-count gate therefore remains
 the sole unaccepted RTX criterion pending that decision.

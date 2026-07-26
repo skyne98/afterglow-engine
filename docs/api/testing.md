@@ -16,6 +16,19 @@ tests, the afterglow-shell DOM API contract, focused conformance contracts, and 
 `crates/afterglow-web/web/src` plus the Steam Audio WASM prototype. Every
 colocated web `*.test.ts` is discovered without a subsystem/demo path allowlist.
 
+The offline Dungeon AGTB batching experiment is independently reproducible:
+
+```sh
+bun test scripts/replay-dungeon-vt.test.ts
+bun scripts/replay-dungeon-vt.ts \
+  --trace docs/benchmarks/dungeon-vt-no-cache-teleport-rtx3090-2026-07-25.agtb
+```
+
+It validates the fixed 1/16 ms deadline replay against recorded dispatch count,
+then reports source-order run merging and explicitly non-causal priority/grouping
+sensitivity. It never rewrites baseline evidence or promotes modeled priority
+latency to real-GPU evidence.
+
 ## Test levels
 
 - **Unit tests** cover one bounded primitive, codec, parser, queue, allocator, or

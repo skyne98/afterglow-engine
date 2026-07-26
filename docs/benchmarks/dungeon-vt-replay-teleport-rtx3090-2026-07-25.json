@@ -1,0 +1,43 @@
+{
+  "trace": "docs/benchmarks/dungeon-vt-no-cache-teleport-rtx3090-2026-07-25.agtb",
+  "successfulPageReads": 1074,
+  "canceledBeforeDispatch": 2,
+  "recordedBulkRequests": 156,
+  "replayedBulkRequests": 156,
+  "meanSpansPerRequest": 6.884615384615385,
+  "callerOrderedSourceRuns": 740,
+  "sourceSortedRuns": 511,
+  "sourceRunReductionPercent": 30.945945945945947,
+  "sourceSortedBulkRequests": 156,
+  "prioritySensitivity": {
+    "caveat": "Static sensitivity only: AGTB omits feedback refreshes and current resident fallback mip.",
+    "currentPriorityReschedule": {
+      "batches": 156,
+      "meanSpans": 6.884615384615385,
+      "admissionMeanMs": 214.8942318556797,
+      "admissionP95Ms": 429.85,
+      "admissionP99Ms": 494.240001,
+      "admissionMaxMs": 1716.200001,
+      "reorderedRequests": 567
+    },
+    "mipDeficitFirst": {
+      "batches": 156,
+      "meanSpans": 6.884615384615385,
+      "admissionMeanMs": 214.8942318556797,
+      "admissionP95Ms": 429.845,
+      "admissionP99Ms": 494.14,
+      "admissionMaxMs": 1758,
+      "reorderedRequests": 718
+    },
+    "mipDeficitAndChannelAffinity": {
+      "batches": 156,
+      "meanSpans": 6.884615384615385,
+      "admissionMeanMs": 214.8942318556797,
+      "admissionP95Ms": 429.845,
+      "admissionP99Ms": 494.14,
+      "admissionMaxMs": 1758,
+      "reorderedRequests": 745
+    }
+  },
+  "conclusion": "Source sorting reduces underlying adjacent read runs but cannot reduce HTTP/bridge bulk-request count; priority/grouping sensitivity leaves modeled request count unchanged from its control."
+}

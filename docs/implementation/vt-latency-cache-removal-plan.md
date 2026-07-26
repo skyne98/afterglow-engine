@@ -10,7 +10,9 @@ Implementation result:
 - Traverse and teleport latency/frame/trace gates pass on RTX 3090.
 - Bulk requests are 2.94× the pre-removal hostile baseline versus the provisional
   2× gate. A 24 ms experiment still reached 2.34× and regressed latency/frame
-  maxima; 16 ms remains selected pending explicit acceptance of the exception.
+  maxima. Deterministic source-order/grouping/mip-priority replay reproduced
+  156 requests; sorting cut adjacent source runs 30.9% but not request count.
+  The 16 ms policy remains selected pending explicit acceptance of the exception.
 
 Baseline evidence:
 
@@ -651,7 +653,10 @@ After sealed gameplay:
 - If queue p99 remains above 40 ms with 16 total admitted jobs, inspect stage
   correlations for capacity-accounting bugs before increasing workers.
 - If 16 ms batching exceeds the 2x request-count gate, test 24 then 32 ms; do
-  not return directly to 100 ms.
+  not return directly to 100 ms. The RTX follow-up rejected 24 ms and proved
+  source sorting plus priority/grouping cannot change request count at the
+  existing admission/deadline opportunities. Reopen buffering, prefetch, or
+  cooked-superpage policy rather than repeating those tie-break experiments.
 - If four workers remain throughput-limited after admission/backpressure is
   correct, benchmark six workers as a separate product/memory decision.
 - If 55 ms feedback regresses GPU/frame timing, test 66 ms; do not restore a
