@@ -62,6 +62,12 @@ Run an official Three.js document directly:
 cargo run -p afterglow-shell -- /path/to/three.js/examples/webgpu_clearcoat.html
 ```
 
+Run the generated Dungeon deployment through the native host in release mode:
+
+```sh
+cargo run --release -p afterglow-shell -- crates/afterglow-web/www/dungeon.html
+```
+
 HTML loading extracts the document's `type="importmap"` and
 `type="module"` scripts, resolves `three` and `three/addons/` from that map,
 and evaluates the module unchanged. Files, data URLs, blobs, and HTTPS assets
@@ -81,8 +87,11 @@ The shell currently provides:
 - WebGPU canvas presentation and external-image texture uploads;
 - LinkeDOM DOM mutation and event dispatch;
 - computed CSS, layout, box metrics, focus, hover, active state, and scrolling;
-- pointer, mouse, wheel, keyboard, pointer capture, and native CSS cursors;
-- `ResizeObserver`, `IntersectionObserver`, and `matchMedia`;
+- pointer, mouse, wheel, keyboard, pointer capture, pointer lock, and native CSS
+  cursors; locked relative motion is always retargeted to the lock element;
+- `ResizeObserver`, `IntersectionObserver`, and `matchMedia`; the final physical
+  window size is synchronized once after renderer readiness, even when the
+  initial configure event arrived during startup;
 - image decode, `createImageBitmap`, Blob, Storage, KTX2/Draco workers, and a
   software Canvas2D environment;
 - GPU-rendered text, synthetic bold faces, text shadows, SVG, and page chrome;

@@ -632,7 +632,10 @@ globalThis.__dispatchBrowserPointerEvent = (type, init = {}) => {
   const clientY = Number(init.clientY ?? init.y ?? previousPosition?.y ?? 0);
   pointerPositions.set(pointerId, { x: clientX, y: clientY });
   const captured = pointerCaptures.get(pointerId);
-  const target = captured?.isConnected ? captured : document.elementFromPoint(clientX, clientY);
+  // Pointer Lock retargets relative motion to the locked element regardless of
+  // the hidden cursor's last hit-test position.
+  const target = __pointerLockElement?.isConnected ? __pointerLockElement
+    : captured?.isConnected ? captured : document.elementFromPoint(clientX, clientY);
   const button = Number(init.button ?? (type === 'pointermove' ? -1 : 0));
   const defaultButtons = type === 'pointerdown' ? 1 << Math.max(0, button)
     : type === 'pointerup' || type === 'pointercancel' ? 0 : pointerDownTargets.has(pointerId) ? 1 : 0;

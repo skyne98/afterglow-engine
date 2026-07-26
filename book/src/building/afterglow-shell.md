@@ -41,9 +41,20 @@ cargo run -p afterglow-shell -- \
   /tmp/threejs/examples/webgpu_clearcoat.html
 ```
 
+Run the generated Dungeon deployment in release mode:
+
+```sh
+cargo run --release -p afterglow-shell -- \
+  crates/afterglow-web/www/dungeon.html
+```
+
 The shell reads the document's import map and module script and executes them
 unchanged. OrbitControls, Inspector, asset loading, animation loops, HTML/CSS,
-and input all run against the native environment.
+and input all run against the native environment. After renderer readiness the
+host synchronizes the current physical window size once, so startup configure
+events cannot leave the game at its fallback dimensions. Pointer-locked relative
+motion is routed to the lock element rather than the hidden cursor's stale hit
+target.
 
 Startup does not block the native event loop while a module performs top-level
 await. winit presentation turns drive a fixed-capacity `requestAnimationFrame`

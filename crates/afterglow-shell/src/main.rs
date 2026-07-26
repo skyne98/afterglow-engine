@@ -354,6 +354,10 @@ impl PendingResize {
     fn is_due(&self, now: Instant) -> bool {
         now >= self.deadline
     }
+
+    fn can_apply(&self, now: Instant, engine_ready: bool) -> bool {
+        engine_ready && self.is_due(now)
+    }
 }
 
 #[op2(fast)]
@@ -1061,6 +1065,7 @@ struct App {
     pending_relative_move: [f64; 2],
     pointer_locked: Arc<AtomicBool>,
     pending_resize: Option<PendingResize>,
+    initial_size_synced: bool,
     host_trace: bool,
     host_trace_last: Instant,
     host_redraws: u64,
@@ -1121,6 +1126,7 @@ impl App {
             pending_relative_move: [0.0, 0.0],
             pointer_locked: Arc::new(AtomicBool::new(false)),
             pending_resize: None,
+            initial_size_synced: false,
             host_trace: std::env::var_os("AFTERGLOW_HOST_TRACE").is_some(),
             host_trace_last: Instant::now(),
             host_redraws: 0,
@@ -1425,6 +1431,18 @@ impl App {
 
         let ready =
             self.ready.load(Ordering::Acquire) && self.lifecycle.phase() == RuntimePhase::Running;
+        // Startup configure/resize events can arrive before Three has installed
+        // resizeEngineGame. Synchronize the final physical size once readiness
+        // is published instead of requiring a manual user resize.
+        if ready && !self.initial_size_synced {
+            self.initial_size_synced = true;
+            self.pending_resize = None;
+            if let Some(window) = &self.window {
+                let size = window.inner_size();
+                let scale_factor = window.scale_factor();
+                self.apply_resize(size.width, size.height, scale_factor);
+            }
+        }
         if evaluation_complete && ready && !self.startup_reported {
             self.startup_reported = true;
             eprintln!(
@@ -1512,11 +1530,10 @@ impl App {
     }
 
     fn flush_resize(&mut self) {
-        let due = self
-            .pending_resize
-            .as_ref()
-            .is_some_and(|resize| resize.is_due(Instant::now()));
-        if !due {
+        let can_apply = self.pending_resize.as_ref().is_some_and(|resize| {
+            resize.can_apply(Instant::now(), self.ready.load(Ordering::Acquire))
+        });
+        if !can_apply {
             return;
         }
         let resize = self.pending_resize.take().unwrap();
@@ -2157,6 +2174,8 @@ mod tests {
         let first = PendingResize::trailing(800, 600, 1.0, start);
         assert!(!first.is_due(start + Duration::from_millis(174)));
         assert!(first.is_due(start + Duration::from_millis(175)));
+        assert!(!first.can_apply(start + Duration::from_millis(175), false));
+        assert!(first.can_apply(start + Duration::from_millis(175), true));
 
         let replacement_time = start + Duration::from_millis(100);
         let replacement = PendingResize::trailing(1280, 720, 1.0, replacement_time);

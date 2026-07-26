@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 
 let snapshot = null;
 let focused = 0;
+let pointerLocks = 0;
 const nodeByAttributeId = (id) => snapshot.nodes.find((node) =>
   node.attributes?.some((attribute) => attribute.localName === 'id' && attribute.value === id)
 );
@@ -54,6 +55,8 @@ globalThis.Deno = { core: { ops: {
   op_browser_set_focus(id) { const changed = focused !== id; focused = id; return changed; },
   op_browser_set_pointer_state() { return false; },
   op_browser_set_scroll() { return false; },
+  op_request_pointer_lock() { pointerLocks++; },
+  op_exit_pointer_lock() { pointerLocks--; },
   op_set_fetch_state() {}, op_set_loaded_asset_bytes() {},
   op_create_capture_canvas() { return {}; }, op_bind_canvas_node() {}, op_resize_canvas() {},
 } } };
@@ -106,5 +109,21 @@ button.addEventListener('click', () => pointerEvents.push('click'));
 __dispatchBrowserPointerEvent('pointerdown', { clientX: 12, clientY: 12, pointerId: 1 });
 __dispatchBrowserPointerEvent('pointerup', { clientX: 12, clientY: 12, pointerId: 1 });
 assert.deepEqual(pointerEvents, ['pointerdown', 'mousedown', 'click']);
+
+const box = document.getElementById('box');
+let lockedMoves = 0;
+box.addEventListener('mousemove', () => { lockedMoves++; });
+await box.requestPointerLock({ unadjustedMovement: true });
+assert.equal(document.pointerLockElement, box);
+assert.equal(pointerLocks, 1);
+// The native cursor can remain over another node while locked; relative motion
+// must still target the lock element.
+__dispatchBrowserPointerEvent('pointermove', {
+  clientX: 12, clientY: 12, movementX: 4, movementY: -2, pointerId: 1,
+});
+assert.equal(lockedMoves, 1);
+box.exitPointerLock();
+assert.equal(document.pointerLockElement, null);
+assert.equal(pointerLocks, 0);
 
 console.log('dom_setup API tests passed');
