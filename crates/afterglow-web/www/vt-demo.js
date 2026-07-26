@@ -65477,16 +65477,54 @@ var ATLAS_PAGES_Y = 15;
 var ATLAS_WIDTH = ATLAS_PAGES_X * SLOT_SIZE;
 var ATLAS_HEIGHT = ATLAS_PAGES_Y * SLOT_SIZE;
 var MAX_MIP = 10;
-var QUALITY_PRIORITY_LANE_COUNT = (MAX_MIP + 1) * 2;
+var SCORE_COVERAGE_CAP = 255;
+var MAX_PIXEL_PERCEPTUAL_WEIGHT = 15;
+var MAX_PERCEPTUAL_WEIGHT = SCORE_COVERAGE_CAP * MAX_PIXEL_PERCEPTUAL_WEIGHT;
+var MAX_PAGE_SCORE = SCORE_COVERAGE_CAP * (MAX_PIXEL_PERCEPTUAL_WEIGHT + 7);
+var IMPORTANCE_LEVEL_MAX = 24;
+var IMPORTANCE_BUCKET_COUNT = IMPORTANCE_LEVEL_MAX + 1;
+var MAX_SCORE_EXPONENT = 31 - Math.clz32(MAX_PAGE_SCORE);
+var TOP_SCORE_BASE = 1 << MAX_SCORE_EXPONENT;
+var TOP_SCORE_SPLIT = TOP_SCORE_BASE + Math.ceil((MAX_PAGE_SCORE - TOP_SCORE_BASE + 1) / 2);
+var FOCUS_IMPORTANCE_BUCKET_MAX = 12;
+var PAGE_KIND_PRIORITY_COUNT = 2;
 var MATERIAL_CHANNEL_PRIORITY_COUNT = 3;
-var BATCH_TIER_PRIORITY_COUNT = QUALITY_PRIORITY_LANE_COUNT * MATERIAL_CHANNEL_PRIORITY_COUNT;
-var PRIORITY_LANE_COUNT = BATCH_TIER_PRIORITY_COUNT * 2;
+var PRIORITY_LANE_COUNT = IMPORTANCE_BUCKET_COUNT * PAGE_KIND_PRIORITY_COUNT * MATERIAL_CHANNEL_PRIORITY_COUNT;
 function packedPageCoordinates(textureId, mip, x2, y2, tail = false) {
   const local = tail ? 268435456 : (mip & 63 | (x2 & 2047) << 6 | (y2 & 2047) << 17) >>> 0;
   return textureId * 536870912 + local;
 }
 function packedPageIdentity(textureId, req) {
   return packedPageCoordinates(textureId, req.mip, req.x, req.y, req.tail);
+}
+function perceptualImportanceBucket(weight) {
+  const bounded = Math.max(1, Math.min(MAX_PAGE_SCORE, Math.floor(weight)));
+  const exponent = 31 - Math.clz32(bounded);
+  let level;
+  if (exponent === 0)
+    level = 0;
+  else if (exponent < MAX_SCORE_EXPONENT)
+    level = exponent * 2 - 1 + (bounded >>> exponent - 1 & 1);
+  else
+    level = bounded < TOP_SCORE_SPLIT ? IMPORTANCE_LEVEL_MAX - 1 : IMPORTANCE_LEVEL_MAX;
+  return IMPORTANCE_LEVEL_MAX - level;
+}
+function sourcePerceptualWeight(source) {
+  const coverage = Math.min(SCORE_COVERAGE_CAP, source.coverage ?? 1);
+  const centerCloseness = 7 - Math.min(7, (source.screenPriority ?? 255) >>> 5);
+  return Math.min(MAX_PERCEPTUAL_WEIGHT, source.perceptualWeight ?? coverage * (1 + centerCloseness));
+}
+function perceptualPriority(perceptualWeight, coverage, residentMipGap, parent, channelPriority) {
+  const pageWeight = Math.min(MAX_PAGE_SCORE, perceptualWeight + Math.min(SCORE_COVERAGE_CAP, coverage) * residentMipGap);
+  const bucket = perceptualImportanceBucket(pageWeight);
+  const pageKind = parent ? 0 : 1;
+  return (bucket * PAGE_KIND_PRIORITY_COUNT + pageKind) * MATERIAL_CHANNEL_PRIORITY_COUNT + channelPriority;
+}
+function pageBatchTier(parent, priority) {
+  if (parent)
+    return "urgent";
+  const importanceBucket = Math.floor(priority / (PAGE_KIND_PRIORITY_COUNT * MATERIAL_CHANNEL_PRIORITY_COUNT));
+  return importanceBucket <= FOCUS_IMPORTANCE_BUCKET_MAX ? "focus" : "peripheral";
 }
 function packEntry(resident, physX, physY) {
   return (resident ? 1 : 0) | (physX & 255) << 1 | (physY & 255) << 9;
@@ -66002,7 +66040,6 @@ class VirtualTextureStore {
   scheduledRequests;
   scheduledActive;
   scheduledLastSeen;
-  scheduledSince;
   scheduledPriority;
   scheduledTraceActive;
   scheduledNext;
@@ -66091,7 +66128,8 @@ class VirtualTextureStore {
     bulkInFlight: 0,
     bulkInFlightBytes: 0,
     urgentBatches: 0,
-    qualityBatches: 0,
+    focusBatches: 0,
+    peripheralBatches: 0,
     bulkRejected: 0,
     bulkCanceled: 0,
     transcodeWorkers: 0,
@@ -66127,7 +66165,6 @@ class VirtualTextureStore {
     this.scheduledRequests = new Array(schedulerCapacity);
     this.scheduledActive = new Uint8Array(schedulerCapacity);
     this.scheduledLastSeen = new Uint32Array(schedulerCapacity);
-    this.scheduledSince = new Uint32Array(schedulerCapacity);
     this.scheduledPriority = new Uint8Array(schedulerCapacity);
     this.scheduledTraceActive = new Uint8Array(schedulerCapacity);
     this.scheduledNext = new Int32Array(schedulerCapacity);
@@ -66495,22 +66532,32 @@ class VirtualTextureStore {
       });
     }
   }
-  addFeedbackPage(textureId, entry, source, mip, x2, y2, tail, capacity, channelPriority, batchTier) {
+  residentMipGap(entry, pageTable, mip, x2, y2, tail) {
+    if (tail)
+      return 0;
+    for (let fallbackMip = mip;fallbackMip <= entry.maxMip; fallbackMip++) {
+      const shift = fallbackMip - mip;
+      if (pageTable.isResidentAt(fallbackMip, x2 >> shift, y2 >> shift))
+        return Math.min(7, fallbackMip - mip);
+    }
+    const tailMip = entry.tailFirstMip ?? entry.maxMip + 1;
+    return Math.min(7, Math.max(0, tailMip - mip));
+  }
+  addFeedbackPage(textureId, entry, source, mip, x2, y2, tail, capacity, channelPriority, parent) {
     const key = packedPageCoordinates(entry.textureId, mip, x2, y2, tail);
-    const qualityDepth = tail ? 0 : Math.min(MAX_MIP, entry.maxMip - mip);
-    const centralOrLarge = (source.screenPriority ?? 0) <= 96 || (source.coverage ?? 1) >= 4;
-    const candidatePriority = (batchTier === "quality" ? BATCH_TIER_PRIORITY_COUNT : 0) + channelPriority * QUALITY_PRIORITY_LANE_COUNT + qualityDepth * 2 + (centralOrLarge ? 0 : 1);
+    const sourceCoverage = source.coverage ?? 1;
+    const sourceWeight = sourcePerceptualWeight(source);
+    const residentMipGap = this.residentMipGap(entry, this.pageTablesById[textureId], mip, x2, y2, tail);
     const existing = this.feedbackScratchKeys.get(key);
     if (existing !== undefined) {
       const request2 = this.feedbackScratch[existing];
-      request2.screenPriority = Math.min(request2.screenPriority ?? 255, source.screenPriority ?? 0);
-      request2.coverage = Math.min(65535, (request2.coverage ?? 1) + (source.coverage ?? 1));
+      request2.screenPriority = Math.min(request2.screenPriority ?? 255, source.screenPriority ?? 255);
+      request2.coverage = Math.min(65535, (request2.coverage ?? 1) + sourceCoverage);
+      request2.perceptualWeight = Math.min(MAX_PERCEPTUAL_WEIGHT, (request2.perceptualWeight ?? 1) + sourceWeight);
+      request2.residentMipGap = Math.max(request2.residentMipGap ?? 0, residentMipGap);
       request2.channelPriority = Math.min(request2.channelPriority ?? channelPriority, channelPriority);
-      if (batchTier === "urgent")
-        request2.batchTier = "urgent";
-      request2.priorityTier = Math.min(request2.priorityTier ?? candidatePriority, candidatePriority);
-      if (request2.screenPriority <= 96 || request2.coverage >= 4)
-        request2.priorityTier &= ~1;
+      request2.priorityTier = perceptualPriority(request2.perceptualWeight, request2.coverage, request2.residentMipGap, parent, request2.channelPriority);
+      request2.batchTier = pageBatchTier(parent, request2.priorityTier);
       return true;
     }
     if (this.feedbackScratchCount >= capacity)
@@ -66523,11 +66570,13 @@ class VirtualTextureStore {
     request.x = x2;
     request.y = y2;
     request.tail = tail ? true : undefined;
-    request.screenPriority = source.screenPriority ?? 0;
-    request.coverage = source.coverage ?? 1;
+    request.screenPriority = source.screenPriority ?? 255;
+    request.coverage = sourceCoverage;
+    request.perceptualWeight = sourceWeight;
+    request.residentMipGap = residentMipGap;
     request.channelPriority = channelPriority;
-    request.batchTier = batchTier;
-    request.priorityTier = candidatePriority;
+    request.priorityTier = perceptualPriority(sourceWeight, sourceCoverage, residentMipGap, parent, channelPriority);
+    request.batchTier = pageBatchTier(parent, request.priorityTier);
     this.feedbackScratchKeys.set(key, index);
     return true;
   }
@@ -66537,21 +66586,21 @@ class VirtualTextureStore {
     if (!entry || !pageTable || !this.isValidEntryRequest(entry, source))
       return true;
     if (source.tail === true)
-      return this.addFeedbackPage(textureId, entry, source, source.mip, 0, 0, true, capacity, channelPriority, "urgent");
+      return this.addFeedbackPage(textureId, entry, source, source.mip, 0, 0, true, capacity, channelPriority, true);
     const desiredMip = Math.min(entry.maxMip, source.mip + bias);
     const desiredX = source.x >> desiredMip - source.mip;
     const desiredY = source.y >> desiredMip - source.mip;
     if (pageTable.isResidentAt(desiredMip, desiredX, desiredY))
-      return this.addFeedbackPage(textureId, entry, source, desiredMip, desiredX, desiredY, false, capacity, channelPriority, "quality");
+      return this.addFeedbackPage(textureId, entry, source, desiredMip, desiredX, desiredY, false, capacity, channelPriority, false);
     const urgentMip = Math.min(entry.maxMip, desiredMip + 2);
     const urgentShift = urgentMip - desiredMip;
     const urgentX = desiredX >> urgentShift;
     const urgentY = desiredY >> urgentShift;
-    if (!pageTable.isResidentAt(urgentMip, urgentX, urgentY) && !this.addFeedbackPage(textureId, entry, source, urgentMip, urgentX, urgentY, false, capacity, channelPriority, "urgent"))
+    if (!pageTable.isResidentAt(urgentMip, urgentX, urgentY) && !this.addFeedbackPage(textureId, entry, source, urgentMip, urgentX, urgentY, false, capacity, channelPriority, true))
       return false;
     if (urgentMip === desiredMip)
       return true;
-    return this.addFeedbackPage(textureId, entry, source, desiredMip, desiredX, desiredY, false, capacity, channelPriority, "quality");
+    return this.addFeedbackPage(textureId, entry, source, desiredMip, desiredX, desiredY, false, capacity, channelPriority, false);
   }
   buildEffectiveFeedback(feedback) {
     const capacity = Math.max(1, this.cache.totalSlots - this.cache.pinnedSlots);
@@ -66630,6 +66679,8 @@ class VirtualTextureStore {
     target.tail = source.tail;
     target.screenPriority = source.screenPriority;
     target.coverage = source.coverage;
+    target.perceptualWeight = source.perceptualWeight;
+    target.residentMipGap = source.residentMipGap;
     target.channelPriority = source.channelPriority;
     target.priorityTier = source.priorityTier;
     target.batchTier = source.batchTier;
@@ -66699,17 +66750,13 @@ class VirtualTextureStore {
     const pending = this.getPending(key);
     if (pending) {
       pending.lastSeen = this.feedbackEpoch;
-      pending.priorityTier = Math.min(pending.priorityTier, request.priorityTier ?? PRIORITY_LANE_COUNT - 1);
+      pending.priorityTier = request.priorityTier ?? PRIORITY_LANE_COUNT - 1;
       return;
     }
     const existing = this.scheduledByKey.get(key);
     if (existing !== undefined) {
       this.copyRequest(this.scheduledRequests[existing], request);
-      const agePromotion = this.feedbackEpoch - this.scheduledSince[existing] >> 2;
-      const tierFloor = request.batchTier === "quality" ? BATCH_TIER_PRIORITY_COUNT : 0;
-      const channelFloor = tierFloor + (request.channelPriority ?? 0) * QUALITY_PRIORITY_LANE_COUNT;
-      const priority2 = Math.max(channelFloor, (request.priorityTier ?? PRIORITY_LANE_COUNT - 1) - agePromotion);
-      this.moveScheduled(existing, priority2);
+      this.moveScheduled(existing, request.priorityTier ?? PRIORITY_LANE_COUNT - 1);
       this.scheduledLastSeen[existing] = this.feedbackEpoch;
       return;
     }
@@ -66722,7 +66769,6 @@ class VirtualTextureStore {
     this.copyRequest(this.scheduledRequests[index], request);
     this.scheduledActive[index] = 1;
     this.scheduledLastSeen[index] = this.feedbackEpoch;
-    this.scheduledSince[index] = this.feedbackEpoch;
     this.linkScheduledTail(index, request.priorityTier ?? PRIORITY_LANE_COUNT - 1);
     this.scheduledByKey.set(key, index);
     this.scheduledCount++;
@@ -66751,6 +66797,10 @@ class VirtualTextureStore {
       const index = this.priorityHeads[priority];
       inspected++;
       const request = this.scheduledRequests[index];
+      if (!request.pinned && this.scheduledLastSeen[index] < this.feedbackEpoch && priority !== PRIORITY_LANE_COUNT - 1) {
+        this.moveScheduled(index, PRIORITY_LANE_COUNT - 1);
+        continue;
+      }
       if (!request.pinned && this.feedbackEpoch - this.scheduledLastSeen[index] >= this.staleFeedbackEpochs) {
         this.removeScheduled(index, 2 /* Stale */);
         this.staleCancellations++;
@@ -66781,7 +66831,11 @@ class VirtualTextureStore {
       if (this.pendingActive[slot] === 0)
         continue;
       const pending = this.pendingRecords[slot];
-      if (pending.page.pinned || pending.canceled || this.feedbackEpoch - pending.lastSeen < this.staleFeedbackEpochs)
+      if (pending.page.pinned || pending.canceled)
+        continue;
+      if (pending.lastSeen < this.feedbackEpoch)
+        pending.priorityTier = PRIORITY_LANE_COUNT - 1;
+      if (this.feedbackEpoch - pending.lastSeen < this.staleFeedbackEpochs)
         continue;
       pending.canceled = true;
       pending.controller?.abort("VT request left the visibility window");
@@ -67080,7 +67134,8 @@ class VirtualTextureStore {
       stats.bulkInFlight = provider.bulkInFlight;
       stats.bulkInFlightBytes = provider.bulkInFlightBytes;
       stats.urgentBatches = provider.urgentBatches;
-      stats.qualityBatches = provider.qualityBatches;
+      stats.focusBatches = provider.focusBatches;
+      stats.peripheralBatches = provider.peripheralBatches;
       stats.bulkRejected = provider.bulkRejected;
       stats.bulkCanceled = provider.bulkCanceled;
       stats.transcodeWorkers = provider.workerCount;
@@ -67312,7 +67367,10 @@ fn vtFeedback(
   maxMip: f32,
   qualityBias: f32,
   addressMode: u32,
-  textureId: u32
+  textureId: u32,
+  viewDistance: f32,
+  cameraNear: f32,
+  cameraFar: f32
 ) -> vec2u {
   // Derivatives are measured per reduced-resolution feedback pixel. Convert
   // them back to physical display-pixel derivatives before selecting a mip.
@@ -67336,9 +67394,18 @@ fn vtFeedback(
   let mip_size = max(floor(virtualSize * mip_scale), vec2f(1.0));
   let page_coords = min(floor(addressed_uv * mip_size / 128.0), curr_page_grid - 1.0);
 
-  // RG32Uint: word 0 carries valid + 6-bit mip + 11-bit X/Y;
+  let safeNear = max(cameraNear, 1e-6);
+  let safeFar = max(cameraFar, safeNear + 1e-6);
+  let logRange = max(log2(safeFar / safeNear), 1e-6);
+  let normalizedDistance = clamp(
+    log2(max(viewDistance, safeNear) / safeNear) / logRange, 0.0, 1.0
+  );
+  let cameraCloseness = u32(round((1.0 - normalizedDistance) * 7.0));
+
+  // RG32Uint: word 0 carries valid + 3-bit camera closeness + 6-bit mip + 11-bit X/Y;
   // word 1 carries the full virtual-texture identity.
   let packed = 0x80000000u |
+               ((cameraCloseness & 0x7u) << 28) |
                (mip_level & 0x3Fu) |
                ((u32(page_coords.x) & 0x7FFu) << 6) |
                ((u32(page_coords.y) & 0x7FFu) << 17);
@@ -68858,7 +68925,10 @@ function createVirtualGltfMaterialPair(three, store, set, feedbackPixelScale, op
       maxMip: three.float(descriptor.entry.maxMip),
       qualityBias: three.float(qualityBias + (aligned ? 0 : mipBiases[descriptor.role])),
       addressMode: roleAddress(descriptor.role),
-      textureId: three.uint(descriptor.entry.textureId)
+      textureId: three.uint(descriptor.entry.textureId),
+      viewDistance: three.positionView.length(),
+      cameraNear: three.cameraNear,
+      cameraFar: three.cameraFar
     }))();
     return feedbackMaterial2;
   });
@@ -69028,7 +69098,10 @@ function createVirtualPomMaterialPair(three, store, set, heightTexture, feedback
         maxMip: three.float(set.albedo.maxMip),
         qualityBias: three.float(qualityBias),
         addressMode: three.uint(addressMode),
-        textureId: three.uint(set.albedo.textureId)
+        textureId: three.uint(set.albedo.textureId),
+        viewDistance: three.positionView.length(),
+        cameraNear: three.cameraNear,
+        cameraFar: three.cameraFar
       });
     })();
     return material;
@@ -69175,6 +69248,8 @@ class VirtualPomSceneBinding {
   }
 }
 // crates/afterglow-web/web/src/engine/virtual-texturing/virtual-texture-feedback-pass.ts
+var SCORE_COVERAGE_CAP2 = 255;
+
 class VirtualTextureFeedbackPass {
   scale;
   pixelScale = new Vector2(1, 1);
@@ -69271,10 +69346,16 @@ class VirtualTextureFeedbackPass {
         const normalizedX = (pixelX + 0.5) * 2 / this.width - 1;
         const normalizedY = (pixelY + 0.5) * 2 / this.height - 1;
         const screenPriority = Math.min(255, Math.floor((normalizedX * normalizedX + normalizedY * normalizedY) * 128));
+        const centerCloseness = 7 - Math.min(7, screenPriority >>> 5);
+        const cameraCloseness = packed >>> 28 & 7;
+        const pixelWeight = 1 + centerCloseness + cameraCloseness;
         const existing = requests.get(key);
         if (existing) {
           existing.screenPriority = Math.min(existing.screenPriority ?? 255, screenPriority);
-          existing.coverage = Math.min(65535, (existing.coverage ?? 1) + 1);
+          const coverage = existing.coverage ?? 1;
+          if (coverage < SCORE_COVERAGE_CAP2)
+            existing.perceptualWeight = (existing.perceptualWeight ?? 1) + pixelWeight;
+          existing.coverage = Math.min(65535, coverage + 1);
           continue;
         }
         const request = this.requestPool[requestCount++];
@@ -69286,6 +69367,7 @@ class VirtualTextureFeedbackPass {
         request.tail = tail ? true : undefined;
         request.screenPriority = screenPriority;
         request.coverage = 1;
+        request.perceptualWeight = pixelWeight;
         request.priorityTier = undefined;
         requests.set(key, request);
         this.seenMips[mip] = 1;
@@ -69317,6 +69399,107 @@ class VirtualTextureFeedbackPass {
     this.requestPool.length = 0;
   }
 }
+// crates/afterglow-web/web/src/engine/virtual-texturing/predicted-feedback-camera.ts
+var MAX_SAMPLE_SECONDS = 0.1;
+var MAX_ANGULAR_STEP = Math.PI * 0.5;
+var MAX_TRANSLATION_FAR_FRACTION = 0.25;
+
+class PredictedFeedbackCamera {
+  horizonMs;
+  camera;
+  resetCount = 0;
+  previousPosition = new Vector3;
+  currentPosition = new Vector3;
+  predictedPosition = new Vector3;
+  previousQuaternion = new Quaternion;
+  currentQuaternion = new Quaternion;
+  predictedQuaternion = new Quaternion;
+  currentScale = new Vector3(1, 1, 1);
+  lastSeconds = 0;
+  initialized = false;
+  constructor(source, horizonMs) {
+    this.horizonMs = horizonMs;
+    if (!Number.isFinite(horizonMs) || horizonMs <= 0)
+      throw new RangeError("feedback prediction horizon must be positive");
+    this.camera = source.clone(false);
+    this.copyCurrentCamera(source);
+  }
+  sample(source, elapsedSeconds) {
+    source.updateWorldMatrix(true, false);
+    source.matrixWorld.decompose(this.currentPosition, this.currentQuaternion, this.currentScale);
+    this.copyCurrentCamera(source);
+    if (!this.initialized) {
+      this.initialized = true;
+      this.previousPosition.copy(this.currentPosition);
+      this.previousQuaternion.copy(this.currentQuaternion);
+      this.lastSeconds = elapsedSeconds;
+      this.publishCurrentPose();
+      return this.camera;
+    }
+    const dt = elapsedSeconds - this.lastSeconds;
+    const far = Math.max(1, source.far ?? 1);
+    const translation = this.previousPosition.distanceTo(this.currentPosition);
+    const rotation = this.previousQuaternion.angleTo(this.currentQuaternion);
+    const reset = !Number.isFinite(dt) || dt <= 0 || dt > MAX_SAMPLE_SECONDS || translation > far * MAX_TRANSLATION_FAR_FRACTION || rotation > MAX_ANGULAR_STEP;
+    if (reset) {
+      if (dt !== 0)
+        this.resetCount++;
+      this.publishCurrentPose();
+    } else {
+      const factor = 1 + this.horizonMs / (dt * 1000);
+      this.predictedPosition.copy(this.previousPosition).lerp(this.currentPosition, factor);
+      this.predictedQuaternion.slerpQuaternions(this.previousQuaternion, this.currentQuaternion, factor);
+      this.publishPose(this.predictedPosition, this.predictedQuaternion);
+    }
+    this.previousPosition.copy(this.currentPosition);
+    this.previousQuaternion.copy(this.currentQuaternion);
+    this.lastSeconds = elapsedSeconds;
+    return this.camera;
+  }
+  copyCurrentCamera(source) {
+    this.camera.projectionMatrix.copy(source.projectionMatrix);
+    this.camera.projectionMatrixInverse.copy(source.projectionMatrixInverse);
+    this.camera.coordinateSystem = source.coordinateSystem;
+    this.camera.layers.mask = source.layers.mask;
+    const sourcePerspective = source;
+    const targetPerspective = this.camera;
+    if (sourcePerspective.isPerspectiveCamera === true && targetPerspective.isPerspectiveCamera === true) {
+      targetPerspective.near = sourcePerspective.near;
+      targetPerspective.far = sourcePerspective.far;
+      targetPerspective.fov = sourcePerspective.fov;
+      targetPerspective.aspect = sourcePerspective.aspect;
+      targetPerspective.zoom = sourcePerspective.zoom;
+      targetPerspective.focus = sourcePerspective.focus;
+      targetPerspective.filmGauge = sourcePerspective.filmGauge;
+      targetPerspective.filmOffset = sourcePerspective.filmOffset;
+    }
+    const sourceOrthographic = source;
+    const targetOrthographic = this.camera;
+    if (sourceOrthographic.isOrthographicCamera === true && targetOrthographic.isOrthographicCamera === true) {
+      targetOrthographic.near = sourceOrthographic.near;
+      targetOrthographic.far = sourceOrthographic.far;
+      targetOrthographic.left = sourceOrthographic.left;
+      targetOrthographic.right = sourceOrthographic.right;
+      targetOrthographic.top = sourceOrthographic.top;
+      targetOrthographic.bottom = sourceOrthographic.bottom;
+      targetOrthographic.zoom = sourceOrthographic.zoom;
+    }
+    this.camera.parent = null;
+    this.camera.matrixAutoUpdate = true;
+    this.camera.matrixWorldAutoUpdate = true;
+  }
+  publishCurrentPose() {
+    this.publishPose(this.currentPosition, this.currentQuaternion);
+  }
+  publishPose(position, quaternion) {
+    this.camera.position.copy(position);
+    this.camera.quaternion.copy(quaternion);
+    this.camera.scale.copy(this.currentScale);
+    this.camera.updateMatrix();
+    this.camera.updateMatrixWorld(true);
+  }
+}
+
 // crates/afterglow-web/web/src/engine/virtual-texturing/virtual-texture-feedback-coordinator.ts
 class VirtualTextureFeedbackCoordinator {
   renderer;
@@ -69330,7 +69513,8 @@ class VirtualTextureFeedbackCoordinator {
     discardedSnapshots: 0,
     deferredSnapshots: 0,
     registrationOverflows: 0,
-    activePasses: 0
+    activePasses: 0,
+    predictorResets: 0
   };
   passes;
   renderables;
@@ -69355,14 +69539,17 @@ class VirtualTextureFeedbackCoordinator {
       throw new RangeError("feedback pass capacity must be positive");
     if (!Number.isFinite(capacities.cadenceMs) || capacities.cadenceMs <= 0)
       throw new RangeError("feedback cadence must be positive");
+    if (!Number.isFinite(capacities.predictionHorizonMs) || capacities.predictionHorizonMs <= 0)
+      throw new RangeError("feedback prediction horizon must be positive");
     this.cadenceMs = capacities.cadenceMs;
+    this.predictionHorizonMs = capacities.predictionHorizonMs;
     this.passes = new Array(capacities.passes);
     this.renderables = new Array(capacities.renderables);
     this.heldResults = new Array(capacities.passes).fill(null);
     for (let index = 0;index < capacities.passes; index++)
       this.passes[index] = new VirtualTextureFeedbackPass(capacities.scale ?? 0.125);
     for (let index = 0;index < capacities.renderables; index++)
-      this.renderables[index] = { renderable: null, passOffset: 0 };
+      this.renderables[index] = { renderable: null, predictor: null, passOffset: 0 };
     this.activeRenderable = new Int32Array(capacities.passes);
     this.activeLocalPass = new Uint16Array(capacities.passes);
     this.feedbackContextIds = new Int32Array(capacities.passes);
@@ -69372,6 +69559,7 @@ class VirtualTextureFeedbackCoordinator {
     this.pixelScale = firstPass.pixelScale;
   }
   cadenceMs;
+  predictionHorizonMs;
   register(renderable) {
     if (this.sealed)
       return 3 /* Sealed */;
@@ -69385,6 +69573,7 @@ class VirtualTextureFeedbackCoordinator {
     if (!slot)
       return 1 /* CapacityExceeded */;
     slot.renderable = renderable;
+    slot.predictor = new PredictedFeedbackCamera(renderable.feedbackCamera, this.predictionHorizonMs);
     slot.passOffset = this.registeredPassCount;
     this.registeredPassCount += renderable.feedbackPassCount;
     this.renderableCount++;
@@ -69406,6 +69595,7 @@ class VirtualTextureFeedbackCoordinator {
         const renderable = record?.renderable;
         if (!record || !renderable)
           continue;
+        const feedbackCamera = record.predictor?.sample(renderable.feedbackCamera, 0) ?? renderable.feedbackCamera;
         for (let localPass = 0;localPass < renderable.feedbackPassCount; localPass++) {
           const pass3 = this.passes[record.passOffset + localPass];
           if (!pass3)
@@ -69413,8 +69603,8 @@ class VirtualTextureFeedbackCoordinator {
           renderable.beginFeedbackPass(localPass);
           try {
             this.renderer.setRenderTarget(pass3.target);
-            await this.renderer.compileAsync(renderable.feedbackScene, renderable.feedbackCamera);
-            this.renderer.render(renderable.feedbackScene, renderable.feedbackCamera);
+            await this.renderer.compileAsync(renderable.feedbackScene, feedbackCamera);
+            this.renderer.render(renderable.feedbackScene, feedbackCamera);
           } finally {
             renderable.endFeedbackPass(localPass);
           }
@@ -69507,7 +69697,19 @@ class VirtualTextureFeedbackCoordinator {
   render(frame) {
     this.feedbackSubmitUs = 0;
     this.lastRenderFrameId = frame.frameId;
-    if (this.disposed || frame.elapsedSeconds < this.nextFeedbackSeconds)
+    if (this.disposed)
+      return;
+    let predictorResets = 0;
+    for (let index = 0;index < this.renderableCount; index++) {
+      const slot = this.renderables[index];
+      const renderable = slot?.renderable;
+      if (!slot || !renderable || !slot.predictor)
+        continue;
+      slot.predictor.sample(renderable.feedbackCamera, frame.elapsedSeconds);
+      predictorResets += slot.predictor.resetCount;
+    }
+    this.stats.predictorResets = predictorResets;
+    if (frame.elapsedSeconds < this.nextFeedbackSeconds)
       return;
     this.nextFeedbackSeconds = frame.elapsedSeconds + this.cadenceMs / 1000;
     const started = performance.now();
@@ -69542,14 +69744,15 @@ class VirtualTextureFeedbackCoordinator {
     let submitted = 0;
     try {
       for (let index = 0;index < activeCount; index++) {
-        const renderable = this.renderables[this.activeRenderable[index] ?? -1]?.renderable;
+        const slot = this.renderables[this.activeRenderable[index] ?? -1];
+        const renderable = slot?.renderable;
         const localPass = this.activeLocalPass[index] ?? 0;
         const pass3 = this.passes[index];
-        if (!renderable || !pass3)
+        if (!slot || !renderable || !pass3)
           continue;
         renderable.beginFeedbackPass(localPass);
         try {
-          if (pass3.submit(this.renderer, renderable.feedbackScene, renderable.feedbackCamera, this.store))
+          if (pass3.submit(this.renderer, renderable.feedbackScene, slot.predictor?.camera ?? renderable.feedbackCamera, this.store))
             submitted++;
         } finally {
           renderable.endFeedbackPass(localPass);
@@ -69598,8 +69801,10 @@ class VirtualTextureFeedbackCoordinator {
       this.passes[index]?.dispose();
     for (let index = 0;index < this.renderables.length; index++) {
       const slot = this.renderables[index];
-      if (slot)
+      if (slot) {
         slot.renderable = null;
+        slot.predictor = null;
+      }
     }
     for (let index = 0;index < this.heldResults.length; index++)
       this.heldResults[index] = null;
@@ -70145,7 +70350,7 @@ WASD pan · wheel zoom · O overview · P pixel`);
   const entry = store.getEntry(path);
   if (!entry)
     throw new Error("procedural VT registration failed");
-  coordinator = new VirtualTextureFeedbackCoordinator(rendererHost.renderer, store, { renderables: 1, passes: 1, cadenceMs: 55, scale: 0.125 });
+  coordinator = new VirtualTextureFeedbackCoordinator(rendererHost.renderer, store, { renderables: 1, passes: 1, cadenceMs: 55, predictionHorizonMs: 100, scale: 0.125 });
   coordinator.resize(rendererHost.renderer.domElement.width, rendererHost.renderer.domElement.height);
   const quad = new Mesh(new PlaneGeometry(12, 10), new MeshStandardMaterial({ roughness: 0.9, metalness: 0 }));
   scene.add(quad);

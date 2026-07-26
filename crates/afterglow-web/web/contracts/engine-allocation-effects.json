@@ -53,6 +53,7 @@
     "telemetry/telemetry.ts": "pooled",
     "virtual-texturing/index.ts": "budgeted",
     "virtual-texturing/procedural-vt.ts": "budgeted",
+    "virtual-texturing/predicted-feedback-camera.ts": "bootstrap",
     "virtual-texturing/surface-detail.ts": "none",
     "virtual-texturing/virtual-gltf-binding.ts": "bootstrap",
     "virtual-texturing/virtual-material-binding.ts": "bootstrap",

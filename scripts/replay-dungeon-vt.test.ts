@@ -48,18 +48,23 @@ describe('Dungeon VT trace replay', () => {
     expect(decodePageIdentity(textureId * 0x2000_0000 + 0x1000_0000).tail).toBe(true);
   });
 
-  test('replays independent non-resetting urgent and quality deadlines', () => {
+  test('replays independent non-resetting urgent, focus, and peripheral deadlines', () => {
     const batches = replayBatches([
       request({ key: 1, timestamp: 0, lane: 1 }),
       request({ key: 2, timestamp: 5_000_000, lane: 1 }),
       request({ key: 3, timestamp: 500_000, lane: 0 }),
       request({ key: 4, timestamp: 17_000_000, lane: 1 }),
+      request({ key: 5, timestamp: 0, lane: 2 }),
+      request({ key: 6, timestamp: 63_000_000, lane: 2 }),
+      request({ key: 7, timestamp: 65_000_000, lane: 2 }),
     ]);
     expect(batches.map(batch => ({ lane: batch.lane, keys: batch.requests.map(value => value.key) })))
       .toEqual([
         { lane: 0, keys: [3] },
         { lane: 1, keys: [1, 2] },
         { lane: 1, keys: [4] },
+        { lane: 2, keys: [5, 6] },
+        { lane: 2, keys: [7] },
       ]);
   });
 

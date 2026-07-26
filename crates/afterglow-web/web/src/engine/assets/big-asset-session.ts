@@ -33,7 +33,8 @@ export interface BigAssetSessionOptions {
   workerCount: number;
   transcodeQueueCapacity: number;
   urgentBatchDeadlineMs: number;
-  qualityBatchDeadlineMs: number;
+  focusBatchDeadlineMs: number;
+  peripheralBatchDeadlineMs: number;
   maxPendingPages: number;
   maxPendingBytes: number;
   maxHeaderBytes: number;
@@ -78,8 +79,10 @@ export class BigAssetSession {
     if (!Number.isInteger(options.transcodeQueueCapacity) || options.transcodeQueueCapacity <= 0)
       throw new RangeError('BIG session transcode queue capacity must be positive');
     if (!Number.isInteger(options.urgentBatchDeadlineMs) || options.urgentBatchDeadlineMs < 0 ||
-        !Number.isInteger(options.qualityBatchDeadlineMs) || options.qualityBatchDeadlineMs < 0 ||
-        options.urgentBatchDeadlineMs > options.qualityBatchDeadlineMs)
+        !Number.isInteger(options.focusBatchDeadlineMs) || options.focusBatchDeadlineMs < 0 ||
+        !Number.isInteger(options.peripheralBatchDeadlineMs) || options.peripheralBatchDeadlineMs < 0 ||
+        options.urgentBatchDeadlineMs > options.focusBatchDeadlineMs ||
+        options.focusBatchDeadlineMs > options.peripheralBatchDeadlineMs)
       throw new RangeError('BIG session bulk deadlines are invalid');
     if (!Number.isInteger(options.maxPendingPages) || options.maxPendingPages <= 0 ||
         !Number.isInteger(options.maxPendingBytes) || options.maxPendingBytes <= 0)
@@ -116,7 +119,8 @@ export class BigAssetSession {
         {
           transcodeQueueCapacity: options.transcodeQueueCapacity,
           urgentBatchDeadlineMs: options.urgentBatchDeadlineMs,
-          qualityBatchDeadlineMs: options.qualityBatchDeadlineMs,
+          focusBatchDeadlineMs: options.focusBatchDeadlineMs,
+          peripheralBatchDeadlineMs: options.peripheralBatchDeadlineMs,
         },
         options.telemetry,
       );

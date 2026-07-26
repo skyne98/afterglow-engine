@@ -39,11 +39,12 @@ fixed per-frame page upload budget.
   resident channel requests. If an albedo is shared by several materials, the
   finest requested bias per channel wins.
 - `processFeedback(feedback)` accepts globally identified requests
-  `{ path, mip, x, y, screenPriority?, coverage? }` and merges them into a
-  fixed persistent priority scheduler. `screenPriority` ranges from 0 at the
-  screen center to 255 at the edge/corners; `coverage` is the feedback-pixel
-  count. `VirtualTextureFeedbackPass` supplies both automatically. `poll()`
-  dispatches and commits one bounded scheduling quantum per frame.
+  `{ path, mip, x, y, screenPriority?, coverage?, perceptualWeight? }` and
+  merges them into a fixed persistent priority scheduler. The production
+  feedback pass supplies a bounded perceptual weight combining predicted-center
+  proximity, logarithmic camera closeness, and coverage; material expansion adds
+  each channel's desired-to-nearest-resident mip gap. `poll()` dispatches and
+  commits one bounded scheduling quantum per frame.
 - `attachRenderer(renderer)` binds the actual Three.js backend textures so
   atlas-slot and packed-page-table changes use `GPUQueue.writeTexture`. Packed
   page-table writes reuse one preallocated `Uint32Array` instead of creating
@@ -64,7 +65,10 @@ fixed per-frame page upload budget.
 - `VirtualTextureFeedbackCoordinator(renderer, store, capacities)` is the
   application-facing feedback owner. Capacities explicitly bound registered
   renderables and total channel passes; `cadenceMs` is the monotonic submission
-  interval and `scale` selects target size. A
+  interval, `predictionHorizonMs` is the required future-pose horizon (100 ms in
+  authored demos), and `scale` selects target size. One bootstrap-cloned camera
+  per renderable is extrapolated from allocation-free world position/quaternion
+  history; invalid, suspended, or teleport-like samples reset to current pose. A
   `FeedbackRenderable` supplies its scene/camera, fixed pass count, active state,
   and begin/end material hooks. The coordinator preallocates all low-level
   passes, owns resize/warm/seal/disposal, disables and restores shadows, and
@@ -87,8 +91,9 @@ fixed per-frame page upload budget.
   when no newer readback has completed, distinguishing that state from a
   completed readback containing zero pages. Readback decoding alternates two
   retained Maps, uses request objects pooled at `resize()`, and reuses fixed mip
-  scratch. Duplicate pixels retain the closest-to-center sample and accumulate
-  bounded screen coverage. `canSubmit` supports atomic preflight, and render
+  scratch. Each pixel contributes `1 + centerCloseness + cameraCloseness` to its
+  page; duplicate pixels accumulate that weight for at most 255 samples while
+  diagnostic coverage continues to 65,535. `canSubmit` supports atomic preflight, and render
   target restoration is exception-safe.
 - `getDebugSnapshot()`, `setDebugPaused()`, `setDebugPageBudget()`, and
   `VirtualTextureDebugController` support reusable atlas and slow-residency UIs.
@@ -150,11 +155,12 @@ feedback.
 
 Material feedback identity remains the albedo texture ID for aligned sets. The
 store expands that request through a bootstrap-only fixed channel descriptor:
-texture ID, mip bias, and channel class. One hundred thirty-two fixed scheduler
-lanes first separate urgent parent restoration from exact-quality promotion,
-then preserve albedo → normal/emissive → scalar-mask and coarse/center ordering
-inside each tier. Waiting-request aging is clamped to its tier/channel floor and
-cannot make a 16 ms quality promotion outrank pending urgent restoration.
+texture ID, mip bias, and channel class. One hundred fifty fixed scheduler lanes
+encode 25 perceptual importance buckets, parent/exact kind, and albedo →
+normal/emissive → scalar-mask order. Importance is the bounded integer adaptation
+of coverage + predicted-center + camera-distance + resident-mip-gap evidence
+documented in `docs/research/virtual-texture-perceptual-priority-score.md`.
+There is no sort or cross-bucket aging.
 
 Residency and eviction are not grouped. Each channel walks its own page table,
 falls back to its own pinned tail, and consumes or releases one physical slot.
@@ -202,9 +208,11 @@ a refresh-dependent frame count. Completed worker jobs are committed through
 the centrally tuned bounded upload queue rather than
 issuing an unbounded burst of atlas and page-table writes between frames.
 
-Feedback uses `RG32Uint`: word zero stores valid, six mip bits, and eleven bits
-for each page coordinate; word one stores the full virtual-texture ID. This
-supports the 2048x2048 page grid of a 256K texture without aliasing identities.
+Feedback uses `RG32Uint`: word zero stores valid, three camera-closeness bits,
+six mip bits, and eleven bits for each page coordinate; word one stores the full
+virtual-texture ID. Camera closeness is logarithmically normalized between the
+active predicted camera's near/far planes. This supports the 2048x2048 page grid
+of a 256K texture without aliasing identities or another readback target.
 
 ## Residency and frame budgets
 
@@ -224,16 +232,18 @@ do not construct per-feedback Maps, channel objects, or string keys. A fixed-
 capacity persistent scheduler retains feedback that does not fit in one frame's
 dispatch budget. For each missing desired page it emits at most two requests:
 an urgent mip+2 parent (clamped to the terminal paged mip) and the exact page.
-The parent uses a non-resettable 1 ms maximum batch window; exact promotion uses
-a non-resettable 16 ms maximum window. Existing resident coarser pages and the
-pinned tail remain immediately sampleable. Tier/channel/quality/center lanes
-avoid sorting and allocation; visible waiting requests age only within their
-tier/channel floor.
+The parent uses a non-resettable 1 ms maximum batch window. High-importance exact
+promotion uses 16 ms; lower-importance exact work currently uses the provisional
+64 ms peripheral lane pending 32/48/64 ms real-GPU selection. Existing resident
+coarser pages and the pinned tail remain immediately sampleable. Perceptual/
+kind/channel lanes avoid sorting and allocation.
 
 Requests absent from two newer feedback snapshots are removed. Dungeon submits
 on a 55 ms monotonic cadence, so expiry is approximately 110 ms plus discrete
-frame/readback timing at any refresh rate. Newly important center/coarse-
-restoration work marks a strictly worse non-pinned load canceled when the
+frame/readback timing at any refresh rate. Work absent from the newest predicted
+epoch is demoted before admission; the fixed pending scan also demotes at most
+16 records. Newly important perceptual work marks a strictly worse non-pinned
+load canceled when the
 16-entry table is full, but the
 slot remains occupied until the asynchronous stage acknowledges cancellation;
 this is not immediate replacement. Cancellation propagates through an
@@ -290,7 +300,7 @@ promoted cap immediately rolls back to the independently validated two-page /
 ring for a later rAF rather than turning a full-residency replacement into a
 presentation burst. Rejected admissions, stale cancellations, priority
 preemptions, resident hits/misses/evictions, queue bytes, range-read latency,
-bulk queued/in-flight bytes, urgent/quality batch counts, bulk rejects/cancels,
+bulk queued/in-flight bytes, urgent/focus/peripheral batch counts, bulk rejects/cancels,
 transcode worker/queue/runtime telemetry, upload CPU time, and budget exhaustion
 are exposed by `getStats()`. `getStats()` updates and returns one
 stable preallocated object and is safe for per-frame telemetry; the allocating
@@ -323,9 +333,13 @@ unaccepted RTX plan gate. A measured 24 ms deadline reduced requests only to
 124 while violating latency/frame targets. A deterministic replay of the
 committed trace reproduced all 156 requests: source sorting reduced modeled
 adjacent source runs by 30.9% but did not change request count, and mip-deficit/
-channel-affinity sensitivity also remained at 156. The approved 16 ms policy
-therefore remains selected pending an explicit request-count-policy decision;
-meeting 2× requires a different buffering, prefetch, or cooked-superpage policy.
+channel-affinity sensitivity also remained at 156. That evidence remains the
+historical no-prediction baseline. The current predicted-perceptual candidate
+keeps 16 ms for high-importance exact work and routes lower importance through a
+provisional 64 ms lane. Its bucket-12 focus/peripheral boundary is also a
+measurement candidate, not accepted policy; no RTX/680M result may be attributed
+to either choice until score histograms, the 32/48/64 ms comparison, and the
+non-regression gates are recorded.
 
 ## Asset containers
 
@@ -350,7 +364,7 @@ request order. `identity` exposes source size/ETag/Last-Modified to generic
 serving-layer consumers.
 `createPageDataProvider(loader, header, textureWorkers, format, config,
 telemetry?)` accepts a fixed worker list plus explicit transcode queue and
-urgent/quality deadline policy, expands each compact size vector into fixed
+urgent/focus/peripheral deadline policy, expands each compact size vector into fixed
 `Float64Array` offsets and `Uint32Array` sizes, and exposes a stable
 `getStats()` view for read/transcode stages. There is no persistent derived-page
 cache: every nonresident page follows source read then Basis transcode. Page

@@ -161,8 +161,8 @@ records the complete frame, worker poll, VT update, structural command, pose,
 render preparation, game update, and render-pass spans.
 
 The default catalog also covers BIG session startup, source size/identity,
-single and bulk range reads, native page-side RPC round trips, feedback
-detection, scheduler wait, bulk-queue wait/dispatch, texture queue/transcode,
+single and bulk range reads, native page-side RPC round trips, perceptual
+feedback detection, scheduler wait, three-tier bulk-queue wait/dispatch, texture queue/transcode,
 complete VT page loads, atlas/page-table upload publication, and whole-scene
 mesh optimization. Descriptor IDs 19–20 remain reserved solely to decode
 historical pre-removal cache captures; current code emits neither. These paths share numeric page/request correlations. Always-on

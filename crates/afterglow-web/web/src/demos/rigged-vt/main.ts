@@ -146,7 +146,8 @@ try {
     workerCount,
     transcodeQueueCapacity: 12,
     urgentBatchDeadlineMs: 1,
-    qualityBatchDeadlineMs: 16,
+    focusBatchDeadlineMs: 16,
+    peripheralBatchDeadlineMs: 64,
     maxPendingPages: 16,
     maxPendingBytes: 2 * 1024 * 1024,
     maxHeaderBytes: 2 * 1024 * 1024,
@@ -179,7 +180,10 @@ try {
   feedbackCoordinator = new VirtualTextureFeedbackCoordinator(
     rendererHost.renderer,
     store,
-    { renderables: 2, passes: 8, cadenceMs: FEEDBACK_CADENCE_MS, scale: 0.125 },
+    {
+      renderables: 2, passes: 8, cadenceMs: FEEDBACK_CADENCE_MS,
+      predictionHorizonMs: 100, scale: 0.125,
+    },
   );
   feedbackCoordinator.resize(
     rendererHost.renderer.domElement.width,

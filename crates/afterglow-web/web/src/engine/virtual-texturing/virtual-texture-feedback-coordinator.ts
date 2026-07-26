@@ -1,4 +1,4 @@
-import type * as THREE from 'three';
+import * as THREE from 'three';
 import type { EngineRenderPass } from '../core/runtime.ts';
 import type { RenderWorkerInput } from '../core/frame.ts';
 import {
@@ -7,6 +7,7 @@ import {
 } from './virtual-texture-feedback-pass.ts';
 import type { VirtualPageRequest } from './virtual-texture.ts';
 import type { RenderFrame } from '../core/types.ts';
+import { PredictedFeedbackCamera } from './predicted-feedback-camera.ts';
 
 export const enum FeedbackRegistrationStatus {
   Registered = 0,
@@ -49,6 +50,7 @@ interface CoordinatedFeedbackStore extends FeedbackTextureStore {
 
 interface RenderableSlot {
   renderable: FeedbackRenderable | null;
+  predictor: PredictedFeedbackCamera | null;
   passOffset: number;
 }
 
@@ -78,6 +80,7 @@ export class VirtualTextureFeedbackCoordinator implements EngineRenderPass, Rend
     deferredSnapshots: 0,
     registrationOverflows: 0,
     activePasses: 0,
+    predictorResets: 0,
   };
 
   private readonly passes: VirtualTextureFeedbackPass[];
@@ -98,7 +101,13 @@ export class VirtualTextureFeedbackCoordinator implements EngineRenderPass, Rend
   constructor(
     private readonly renderer: FeedbackRenderer,
     private readonly store: CoordinatedFeedbackStore,
-    capacities: { renderables: number; passes: number; cadenceMs: number; scale?: number },
+    capacities: {
+      renderables: number;
+      passes: number;
+      cadenceMs: number;
+      predictionHorizonMs: number;
+      scale?: number;
+    },
   ) {
     if (!Number.isInteger(capacities.renderables) || capacities.renderables <= 0)
       throw new RangeError('feedback renderable capacity must be positive');
@@ -106,14 +115,17 @@ export class VirtualTextureFeedbackCoordinator implements EngineRenderPass, Rend
       throw new RangeError('feedback pass capacity must be positive');
     if (!Number.isFinite(capacities.cadenceMs) || capacities.cadenceMs <= 0)
       throw new RangeError('feedback cadence must be positive');
+    if (!Number.isFinite(capacities.predictionHorizonMs) || capacities.predictionHorizonMs <= 0)
+      throw new RangeError('feedback prediction horizon must be positive');
     this.cadenceMs = capacities.cadenceMs;
+    this.predictionHorizonMs = capacities.predictionHorizonMs;
     this.passes = new Array<VirtualTextureFeedbackPass>(capacities.passes);
     this.renderables = new Array<RenderableSlot>(capacities.renderables);
     this.heldResults = new Array<Map<number, VirtualPageRequest> | null>(capacities.passes).fill(null);
     for (let index = 0; index < capacities.passes; index++)
       this.passes[index] = new VirtualTextureFeedbackPass(capacities.scale ?? 0.125);
     for (let index = 0; index < capacities.renderables; index++)
-      this.renderables[index] = { renderable: null, passOffset: 0 };
+      this.renderables[index] = { renderable: null, predictor: null, passOffset: 0 };
     this.activeRenderable = new Int32Array(capacities.passes);
     this.activeLocalPass = new Uint16Array(capacities.passes);
     this.feedbackContextIds = new Int32Array(capacities.passes);
@@ -123,6 +135,7 @@ export class VirtualTextureFeedbackCoordinator implements EngineRenderPass, Rend
   }
 
   readonly cadenceMs: number;
+  readonly predictionHorizonMs: number;
 
   register(renderable: FeedbackRenderable): FeedbackRegistrationStatus {
     if (this.sealed) return FeedbackRegistrationStatus.Sealed;
@@ -136,6 +149,7 @@ export class VirtualTextureFeedbackCoordinator implements EngineRenderPass, Rend
     const slot = this.renderables[this.renderableCount];
     if (!slot) return FeedbackRegistrationStatus.CapacityExceeded;
     slot.renderable = renderable;
+    slot.predictor = new PredictedFeedbackCamera(renderable.feedbackCamera, this.predictionHorizonMs);
     slot.passOffset = this.registeredPassCount;
     this.registeredPassCount += renderable.feedbackPassCount;
     this.renderableCount++;
@@ -156,14 +170,16 @@ export class VirtualTextureFeedbackCoordinator implements EngineRenderPass, Rend
         const record = this.renderables[recordIndex];
         const renderable = record?.renderable;
         if (!record || !renderable) continue;
+        const feedbackCamera = record.predictor?.sample(renderable.feedbackCamera, 0) ??
+          renderable.feedbackCamera;
         for (let localPass = 0; localPass < renderable.feedbackPassCount; localPass++) {
           const pass = this.passes[record.passOffset + localPass];
           if (!pass) continue;
           renderable.beginFeedbackPass(localPass);
           try {
             this.renderer.setRenderTarget(pass.target);
-            await this.renderer.compileAsync(renderable.feedbackScene, renderable.feedbackCamera);
-            this.renderer.render(renderable.feedbackScene, renderable.feedbackCamera);
+            await this.renderer.compileAsync(renderable.feedbackScene, feedbackCamera);
+            this.renderer.render(renderable.feedbackScene, feedbackCamera);
           } finally {
             renderable.endFeedbackPass(localPass);
           }
@@ -271,7 +287,17 @@ export class VirtualTextureFeedbackCoordinator implements EngineRenderPass, Rend
   render(frame: Readonly<RenderFrame>): void {
     this.feedbackSubmitUs = 0;
     this.lastRenderFrameId = frame.frameId;
-    if (this.disposed || frame.elapsedSeconds < this.nextFeedbackSeconds) return;
+    if (this.disposed) return;
+    let predictorResets = 0;
+    for (let index = 0; index < this.renderableCount; index++) {
+      const slot = this.renderables[index];
+      const renderable = slot?.renderable;
+      if (!slot || !renderable || !slot.predictor) continue;
+      slot.predictor.sample(renderable.feedbackCamera, frame.elapsedSeconds);
+      predictorResets += slot.predictor.resetCount;
+    }
+    this.stats.predictorResets = predictorResets;
+    if (frame.elapsedSeconds < this.nextFeedbackSeconds) return;
     this.nextFeedbackSeconds = frame.elapsedSeconds + this.cadenceMs / 1000;
     const started = performance.now();
     if (this.awaitingPassCount !== 0) {
@@ -303,14 +329,16 @@ export class VirtualTextureFeedbackCoordinator implements EngineRenderPass, Rend
     let submitted = 0;
     try {
       for (let index = 0; index < activeCount; index++) {
-        const renderable = this.renderables[this.activeRenderable[index] ?? -1]?.renderable;
+        const slot = this.renderables[this.activeRenderable[index] ?? -1];
+        const renderable = slot?.renderable;
         const localPass = this.activeLocalPass[index] ?? 0;
         const pass = this.passes[index];
-        if (!renderable || !pass) continue;
+        if (!slot || !renderable || !pass) continue;
         renderable.beginFeedbackPass(localPass);
         try {
           if (pass.submit(
-            this.renderer, renderable.feedbackScene, renderable.feedbackCamera, this.store,
+            this.renderer, renderable.feedbackScene,
+            slot.predictor?.camera ?? renderable.feedbackCamera, this.store,
           )) submitted++;
         } finally {
           renderable.endFeedbackPass(localPass);
@@ -352,7 +380,10 @@ export class VirtualTextureFeedbackCoordinator implements EngineRenderPass, Rend
     for (let index = 0; index < this.passes.length; index++) this.passes[index]?.dispose();
     for (let index = 0; index < this.renderables.length; index++) {
       const slot = this.renderables[index];
-      if (slot) slot.renderable = null;
+      if (slot) {
+        slot.renderable = null;
+        slot.predictor = null;
+      }
     }
     for (let index = 0; index < this.heldResults.length; index++) this.heldResults[index] = null;
     this.awaitingPassCount = 0;

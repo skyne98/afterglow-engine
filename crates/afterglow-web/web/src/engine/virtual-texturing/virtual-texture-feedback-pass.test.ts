@@ -13,6 +13,8 @@ describe('VirtualTextureFeedbackPass reuse', () => {
     expect(VT_FEEDBACK_WGSL).toContain('dpdx(gradientUV * virtualSize) * feedbackPixelScale.x');
     expect(VT_FEEDBACK_WGSL).toContain('dpdy(gradientUV * virtualSize) * feedbackPixelScale.y');
     expect(VT_FEEDBACK_WGSL).toContain('addressMode: u32');
+    expect(VT_FEEDBACK_WGSL).toContain('viewDistance: f32');
+    expect(VT_FEEDBACK_WGSL).toContain('(cameraCloseness & 0x7u) << 28');
     expect(VT_FEEDBACK_WGSL).toContain('addressed_uv = fract(sampleUV)');
     expect(VT_FEEDBACK_WGSL).not.toContain('dpdx(sampleUV');
   });
@@ -37,7 +39,7 @@ describe('VirtualTextureFeedbackPass reuse', () => {
       textureId: 3, path: 'page', textureMaxMip: 2, maxMip: 2,
       tailFirstMip: null, pageTableLayout: layout,
     };
-    const encoded = encodeFeedback(3, 0, 1, 2);
+    const encoded = encodeFeedback(3, 0, 1, 2, 4);
     const words = new Uint32Array([...encoded, ...encoded, ...encoded]);
     const renderer = {
       getRenderTarget: () => null,
@@ -48,7 +50,7 @@ describe('VirtualTextureFeedbackPass reuse', () => {
     pass.submit(renderer as never, {} as never, {} as never, store as never);
     await flush();
     const request = pass.consume()!.values().next().value;
-    expect(request).toMatchObject({ screenPriority: 0, coverage: 3 });
+    expect(request).toMatchObject({ screenPriority: 0, coverage: 3, perceptualWeight: 34 });
     pass.dispose();
   });
 

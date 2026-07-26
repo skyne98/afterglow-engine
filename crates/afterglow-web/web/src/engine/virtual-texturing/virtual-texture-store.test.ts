@@ -70,6 +70,21 @@ describe('VirtualTextureStore residency identity', () => {
     expect(VT.VT_SAMPLE_FROM_LEVEL_WGSL).toContain('tailEntry');
   });
 
+  test('quantizes every bounded perceptual weight into 25 monotonic buckets', () => {
+    const seen = new Set<number>();
+    let previous = VT.perceptualImportanceBucket(1);
+    seen.add(previous);
+    for (let weight = 2; weight <= 5610; weight++) {
+      const bucket = VT.perceptualImportanceBucket(weight);
+      expect(bucket).toBeLessThanOrEqual(previous);
+      seen.add(bucket);
+      previous = bucket;
+    }
+    expect(VT.perceptualImportanceBucket(1)).toBe(24);
+    expect(VT.perceptualImportanceBucket(5610)).toBe(0);
+    expect(seen.size).toBe(25);
+  });
+
   test('atlas-only tuning override preserves upload defaults and drains a constrained store', async () => {
     const tuning = new VT.VirtualTextureTuning({ atlasMaxDimension: VT.SLOT_SIZE * 4 });
     expect(tuning.atlasMaxDimension).toBe(VT.SLOT_SIZE * 4);
@@ -304,7 +319,7 @@ describe('VirtualTextureStore residency identity', () => {
     expect(layouts.some(layout => layout.bytesPerRow === 136 * 4 && layout.rowsPerImage === 136)).toBe(true);
   });
 
-  test('expands albedo feedback with urgent parents before albedo-first exact promotion', async () => {
+  test('expands perceptual albedo demand while preserving channel mip biases', async () => {
     const calls: Array<{ path: string; mip: number; tier: string | undefined }> = [];
     const store = new VT.VirtualTextureStore(loader, TEST_CAPACITIES, async (path, req) => {
       calls.push({ path, mip: req.mip, tier: req.batchTier });
@@ -315,7 +330,10 @@ describe('VirtualTextureStore residency identity', () => {
       { width: 4096, height: 4096 },
     );
     await settle(store); calls.length = 0;
-    const request: VirtualPageRequest = { path: 'color', mip: 0, x: 0, y: 0 };
+    const request: VirtualPageRequest = {
+      path: 'color', mip: 0, x: 0, y: 0,
+      screenPriority: 0, coverage: 8, perceptualWeight: 120,
+    };
     store.processFeedback(new Map([['visible', request]]));
     await settle(store);
     expect(new Set(calls.map(call => call.path))).toEqual(new Set(['color', 'normal', 'rough', 'ao']));
@@ -323,10 +341,10 @@ describe('VirtualTextureStore residency identity', () => {
     expect(Math.min(...calls.filter(call => call.path === 'normal').map(call => call.mip))).toBe(1);
     expect(Math.min(...calls.filter(call => call.path === 'rough').map(call => call.mip))).toBe(2);
     expect(Math.min(...calls.filter(call => call.path === 'ao').map(call => call.mip))).toBe(2);
-    const firstQuality = calls.findIndex(call => call.tier === 'quality');
-    expect(firstQuality).toBeGreaterThan(0);
-    expect(calls.slice(0, firstQuality).every(call => call.tier === 'urgent')).toBe(true);
-    expect(calls[firstQuality].path).toBe('color');
+    expect(calls.some(call => call.tier === 'urgent')).toBe(true);
+    expect(calls.some(call => call.tier === 'focus')).toBe(true);
+    expect(calls[0]).toMatchObject({ path: 'color', mip: 2, tier: 'urgent' });
+    expect(calls.find(call => call.tier === 'focus')).toMatchObject({ path: 'color', mip: 0 });
   });
 
   test('accepts material-configurable channel mip biases', async () => {
@@ -498,7 +516,7 @@ describe('VirtualTextureStore residency identity', () => {
     expect(store.getStats().scheduledRequests).toBe(0);
   });
 
-  test('prioritizes coarse restoration, then screen center, before ultra upgrades', async () => {
+  test('prioritizes perceptual quality correction before lower-value restoration', async () => {
     const calls: Array<{ mip: number; x: number; y: number }> = [];
     const store = new VT.VirtualTextureStore(loader, TEST_CAPACITIES, async (_path, req) => {
       calls.push({ mip: req.mip, x: req.x, y: req.y });
@@ -524,13 +542,63 @@ describe('VirtualTextureStore residency identity', () => {
       await flush();
     }
     expect(calls.slice(0, 6)).toEqual([
+      { mip: 0, x: 16, y: 16 },
       { mip: 2, x: 0, y: 0 },
       { mip: 2, x: 4, y: 4 },
-      { mip: 2, x: 6, y: 6 },
       { mip: 0, x: 0, y: 0 },
-      { mip: 0, x: 16, y: 16 },
       { mip: 0, x: 24, y: 24 },
+      { mip: 2, x: 6, y: 6 },
     ]);
+  });
+
+  test('balances predicted center against camera-close edge detail', async () => {
+    const firstCalls: Array<{ mip: number; x: number }> = [];
+    const edgeStore = new VT.VirtualTextureStore(loader, TEST_CAPACITIES, async (_path, req) => {
+      firstCalls.push({ mip: req.mip, x: req.x });
+      return new Uint8Array(PAGE_BYTES);
+    });
+    edgeStore.loadTexture('balanced-edge', { width: 4096, height: 4096 });
+    await settle(edgeStore);
+    firstCalls.length = 0;
+    edgeStore.setDebugPageBudget(1);
+    edgeStore.processFeedback(new Map([
+      ['deep-center', {
+        path: 'balanced-edge', mip: 0, x: 0, y: 0,
+        coverage: 1, perceptualWeight: 8,
+      }],
+      ['close-edge', {
+        path: 'balanced-edge', mip: 0, x: 16, y: 0,
+        coverage: 1, perceptualWeight: 15,
+      }],
+    ]));
+    edgeStore.poll();
+    await flush();
+    expect(firstCalls[0]?.x).toBeGreaterThan(0);
+
+    const inverseCalls: Array<{ mip: number; x: number }> = [];
+    const centerStore = new VT.VirtualTextureStore(loader, TEST_CAPACITIES, async (_path, req) => {
+      inverseCalls.push({ mip: req.mip, x: req.x });
+      return new Uint8Array(PAGE_BYTES);
+    });
+    centerStore.loadTexture('balanced-center', { width: 4096, height: 4096 });
+    await settle(centerStore);
+    inverseCalls.length = 0;
+    centerStore.setDebugPageBudget(1);
+    centerStore.processFeedback(new Map([
+      ['distant-edge', {
+        path: 'balanced-center', mip: 0, x: 16, y: 0,
+        coverage: 1, perceptualWeight: 8,
+      }],
+      ['close-center', {
+        path: 'balanced-center', mip: 0, x: 0, y: 0,
+        coverage: 1, perceptualWeight: 15,
+      }],
+    ]));
+    centerStore.poll();
+    await flush();
+    expect(inverseCalls[0]?.x).toBe(0);
+    edgeStore.dispose();
+    centerStore.dispose();
   });
 
   test('cooperatively cancels stale reads before they enter later stages', async () => {
@@ -635,7 +703,7 @@ describe('VirtualTextureStore residency identity', () => {
     await flush();
     store.poll();
     expect(store.getStats().pendingPages).toBe(64);
-    expect(calls).toContain('preempt-5:2:0:0');
+    expect(calls).toContain('preempt-5:0:0:0');
   });
 
   test('coarsens progressive feedback only when its working set exceeds atlas capacity', async () => {

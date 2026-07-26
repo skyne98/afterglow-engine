@@ -46,6 +46,15 @@ describe('Dungeon VT profile AGTB decoder', () => {
     expect(() => validateAgtb(wrongRate)).toThrow('tick rate');
   });
 
+  test('decodes perceptual priority buckets and three bulk tiers', () => {
+    const profile = aggregateAgtb(batch([
+      { timestamp: 1, correlation: 9, descriptor: 22, phase: 1, argument0: 12 },
+      { timestamp: 2, correlation: 10, descriptor: 14, phase: 4, argument1: 2 },
+    ]));
+    expect(profile.perceptualPriorityBuckets[2]).toBe(1);
+    expect(profile.bulkWaitTierStarts).toEqual([0, 0, 1]);
+  });
+
   test('pairs correlated spans and reports status and unmatched starts', () => {
     const complete = batch([
       { timestamp: 100, correlation: 7, descriptor: 13, phase: 4 },

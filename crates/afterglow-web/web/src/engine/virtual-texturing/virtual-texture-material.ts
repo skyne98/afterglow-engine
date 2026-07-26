@@ -241,6 +241,7 @@ export function createVirtualGltfMaterialPair(
       maxMip: three.float(descriptor.entry.maxMip),
       qualityBias: three.float(qualityBias + (aligned ? 0 : mipBiases[descriptor.role])),
       addressMode: roleAddress(descriptor.role), textureId: three.uint(descriptor.entry.textureId),
+      viewDistance: three.positionView.length(), cameraNear: three.cameraNear, cameraFar: three.cameraFar,
     }))();
     return feedbackMaterial;
   });
@@ -423,7 +424,8 @@ export function createVirtualPomMaterialPair(
         sampleUV: sampleUv, gradientUV: gradientUv, feedbackPixelScale: three.uniform(feedbackPixelScale),
         virtualSize, pageGrid, maxMip: three.float(set.albedo.maxMip),
         qualityBias: three.float(qualityBias), addressMode: three.uint(addressMode),
-        textureId: three.uint(set.albedo.textureId),
+        textureId: three.uint(set.albedo.textureId), viewDistance: three.positionView.length(),
+        cameraNear: three.cameraNear, cameraFar: three.cameraFar,
       });
     })();
     return material;

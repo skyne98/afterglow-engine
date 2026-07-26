@@ -58,21 +58,26 @@ to physical screen pixels before mip selection. Quality bias zero therefore
 keeps approximately one to two source texels per screen pixel across arbitrary
 texture dimensions, DPR, UV tiling, and feedback resolution; quality bias no
 longer compensates for pass scale. Dungeon uses a 55 ms monotonic feedback
-cadence, independent of refresh rate.
-The pass retains each page's nearest-to-center sample and pixel coverage. The store adds capacity fitting, progressive quality
-selection, priority admission, bounded scheduling/upload budgets, and fixed
-second-chance clock residency.
+cadence and one camera pose extrapolated 100 ms ahead, independent of refresh
+rate. Invalid/suspended/teleport-like history resets to current pose.
+The feedback word uses its three formerly spare bits for logarithmic camera
+closeness. Each pixel contributes coverage plus equal predicted-center and
+camera-distance weight; the store adds each channel's desired-to-resident mip
+gap before capacity fitting, priority admission, bounded scheduling/upload
+budgets, and fixed second-chance clock residency.
 Resident lookup/touch is O(1); it does not scan or rebuild an LRU as the atlas
 fills. Feedback expansion and capacity fitting reuse preallocated numeric
 scratch records rather than constructing per-frame maps and channel objects. A
 fixed persistent scheduler keeps requests that exceed one frame's budget.
-One hundred thirty-two fixed-array lanes put urgent parent restoration before
-exact promotion, then prioritize albedo, normal/emissive, scalar data, quality,
-and center/coverage. Aging cannot cross a tier/channel boundary. Each miss emits
-at most a mip+2 parent with a non-resettable 1 ms maximum batch window and the
-exact page with a non-resettable 16 ms window. Existing coarser pages and the
-pinned tail remain visible immediately; intermediate ancestor requests are not
-created. Waiting requests age upward within their floor to prevent starvation.
+One hundred fifty fixed-array lanes encode 25 perceptual importance buckets,
+parent/exact kind, and albedo/normal/scalar channel order. The score follows
+publicly documented Zhang/Cesium/RAGE mechanisms and is quantized without a sort
+or runtime allocation. Each miss emits at most a mip+2 parent with a
+non-resettable 1 ms batch window and one exact page. High-importance exact work
+uses 16 ms; lower-importance exact work currently uses a provisional 64 ms lane.
+The bucket-12 focus/peripheral split and the deadline remain measurement
+candidates pending score histograms and the 32/48/64 ms GPU gate. Existing coarser pages and the pinned tail
+remain visible immediately; intermediate ancestor requests are not created.
 Pages absent from two newer feedback snapshots expire, approximately 110 ms
 plus frame/readback quantization at any refresh rate. Newly important work can mark a strictly worse pending
 load canceled, but its slot remains occupied until the asynchronous stage
@@ -183,11 +188,13 @@ The `dungeon` example is a minimal first-person corridor using three scanned
 and AO PNGs and runs the generic asset pipeline once to produce the ignored
 `www/dungeon.big` deployment asset. At runtime bounded serving-layer multi-range fetches and a fixed two-to-four
 `TextureWorker` pool stream pages without the former page-side AssetLoader
-latency. Urgent mip+2 restoration batches for at most 1 ms; exact promotion
-batches for at most 16 ms. There is no persistent derived-page cache: every
+latency. Urgent mip+2 restoration batches for at most 1 ms; perceptually
+important exact work batches for 16 ms and lower-importance exact work currently
+uses a provisional 64 ms peripheral lane. There is no persistent derived-page cache: every
 nonresident page uses source read and transcode. The selected profile admits at
 most 16 pages/2 MiB, uses four active workers plus twelve waiting jobs, and
-submits feedback on a 55 ms monotonic cadence. Aligned PBR
+submits one feedback view predicted 100 ms ahead on a 55 ms monotonic cadence.
+Aligned PBR
 channels share one albedo feedback stream while loading and evicting
 independently. The scheduler gives diffuse pages strict priority over
 normal/emissive and scalar-mask pages; `MeshStandardNodeMaterial` samples each
@@ -232,8 +239,9 @@ rose 2.94× versus the former 100 ms batch policy. A tested 24 ms deadline still
 missed the request gate and regressed latency. Deterministic trace replay then
 reproduced all 156 requests: source sorting reduced modeled adjacent read runs
 31% but not request count, while mip-deficit/channel grouping also stayed at
-156. The 16 ms policy remains selected; reaching 2× requires a different
-buffering or source-format trade-off. Evidence:
+156. Those values remain the historical no-prediction baseline. The current
+predicted-perceptual 16/64 ms candidate has not yet passed its RTX/680M gate and
+must not inherit these performance claims. Evidence:
 `docs/benchmarks/dungeon-vt-no-cache-rtx3090-2026-07-25.md` and
 `docs/benchmarks/dungeon-vt-trace-replay-rtx3090-2026-07-25.md`.
 

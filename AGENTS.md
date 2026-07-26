@@ -489,12 +489,13 @@ All engine work must move toward these non-negotiable requirements:
 - `docs/implementation/vt-latency-cache-removal-plan.md` — core no-cache VT
   latency implementation and RTX 3090 validation are complete; the explicit
   request-count exception, Radeon 680M profiles, and long soaks remain open.
-- `docs/implementation/predicted-perceptual-vt-scheduling-plan.md` — minimal,
-  decision-gated follow-up: predict one feedback camera 100 ms ahead; score each
-  page from equal center, distance, coverage, and resident-mip-gap terms; keep
-  the existing bounded FIFO pipeline after admission; and measure one longer
-  peripheral batch lane. No downstream mutable-priority framework is admitted
-  without a measured failure of this KISS version.
+- `docs/implementation/predicted-perceptual-vt-scheduling-plan.md` — minimal
+  implementation: predict one feedback camera 100 ms ahead; score each page from
+  equal center, distance, coverage, and resident-mip-gap terms; keep the bounded
+  FIFO pipeline after admission; and route low-importance exact work through a
+  provisional 64 ms peripheral lane. Unit implementation is present; 32/48/64
+  ms selection, RTX/680M profiles, and soaks remain open. No downstream mutable-
+  priority framework is admitted without a measured failure of this KISS version.
 - `docs/implementation/comms-unification-plan.md` — current priority.
   Consolidates worker comms (split across `afterglow-rpc`, `afterglow-web`, and
   `afterglow-rpc-macros`, with the postcard codec hand-duplicated in TS) into one

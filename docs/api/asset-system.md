@@ -10,7 +10,8 @@
 `afterglow-web/web/src/engine/assets/big-asset-session.ts` provides `BigAssetSession`, the
 bootstrap owner for one seekable `.big` source. `open()` requires explicit
 `workerCount`, `transcodeQueueCapacity`, `maxPendingPages`, `maxPendingBytes`,
-`urgentBatchDeadlineMs`, `qualityBatchDeadlineMs`, `maxHeaderBytes`, and target
+`urgentBatchDeadlineMs`, `focusBatchDeadlineMs`, `peripheralBatchDeadlineMs`,
+`maxHeaderBytes`, and target
 GPU format. Engine-owned typed transcoders are the default; tests/platform
 adapters may inject a factory. Optional `telemetry` connects session startup,
 platform range reads, worker round trips, transcode, mesh optimization, and VT
@@ -52,7 +53,8 @@ const session = await BigAssetSession.open({
   maxPendingPages: 16,
   maxPendingBytes: 2 * 1024 * 1024,
   urgentBatchDeadlineMs: 1,
-  qualityBatchDeadlineMs: 16,
+  focusBatchDeadlineMs: 16,
+  peripheralBatchDeadlineMs: 64, // provisional until the 32/48/64 GPU gate
   maxHeaderBytes: 2 * 1024 * 1024,
   telemetry: runtime.telemetry,
 });
@@ -66,13 +68,14 @@ former CEF native shared-message bridge has been removed. The live session
 page provider preserves scheduler/admission order. It does **not** currently
 source-sort spans. `createPageRangeReader()` contains a separate source-sorting
 implementation and restores caller order by page index, but `BigAssetSession`
-does not call it. The session's page provider owns a fixed 256-slot
-two-tier queue: mip+2 parent misses open a non-resettable 1 ms maximum window;
-exact pages open a non-resettable 16 ms window. Each response is at most 4 MiB
+does not call it. The session's page provider owns a fixed 256-slot three-tier queue: mip+2 parent misses open a
+non-resettable 1 ms window; high-importance exact pages use 16 ms; lower-
+importance exact pages currently use a provisional 64 ms peripheral window.
+Each response is at most 4 MiB
 and at most two responses / 8 MiB are in flight. `close()` rejects queued work
 and prevents late raw bytes from entering a closed transcoder pool. Stable
-telemetry reports queue depth, in-flight response bytes, urgent/quality batches,
-rejects, and cancellations.
+telemetry reports queue depth, in-flight response bytes, urgent/focus/peripheral
+batches, rejects, and cancellations.
 
 ## Streaming sources (`afterglow-assets::source`)
 

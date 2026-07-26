@@ -12,7 +12,7 @@ const flush = () => new Promise(resolve => setTimeout(resolve, 0));
 const TEST_PIPELINE = {
   transcodeQueueCapacity: 64,
   urgentBatchDeadlineMs: 1,
-  qualityBatchDeadlineMs: 16,
+  focusBatchDeadlineMs: 16, peripheralBatchDeadlineMs: 64,
 } as const;
 
 describe('browser range loader', () => {
@@ -108,12 +108,20 @@ describe('.big v5 compact VT directories', () => {
     };
     expect(() => createPageDataProvider(loader, header, [{
       async transcode() { return new Uint8Array(); },
-    }], 4, { transcodeQueueCapacity: 0, urgentBatchDeadlineMs: 1, qualityBatchDeadlineMs: 16 }))
+    }], 4, { transcodeQueueCapacity: 0, urgentBatchDeadlineMs: 1, focusBatchDeadlineMs: 16, peripheralBatchDeadlineMs: 64 }))
       .toThrow('page-pipeline');
     expect(() => createPageDataProvider(loader, header, [{
       async transcode() { return new Uint8Array(); },
-    }], 4, { transcodeQueueCapacity: 1, urgentBatchDeadlineMs: 17, qualityBatchDeadlineMs: 16 }))
-      .toThrow('page-pipeline');
+    }], 4, {
+      transcodeQueueCapacity: 1, urgentBatchDeadlineMs: 17,
+      focusBatchDeadlineMs: 16, peripheralBatchDeadlineMs: 64,
+    })).toThrow('page-pipeline');
+    expect(() => createPageDataProvider(loader, header, [{
+      async transcode() { return new Uint8Array(); },
+    }], 4, {
+      transcodeQueueCapacity: 1, urgentBatchDeadlineMs: 1,
+      focusBatchDeadlineMs: 16, peripheralBatchDeadlineMs: 15,
+    })).toThrow('page-pipeline');
   });
 
   test('expands direct typed-array offsets once for runtime range reads', async () => {
@@ -183,7 +191,7 @@ describe('.big v5 compact VT directories', () => {
     provider.close();
   });
 
-  test('quality batching opens one non-resettable 16 ms window', async () => {
+  test('focus and peripheral batching open independent non-resettable windows', async () => {
     const batchHeader: BigHeader = {
       version: 5, dataOffset: 64n,
       assets: [{
@@ -216,13 +224,20 @@ describe('.big v5 compact VT directories', () => {
       async transcode() { throw new Error('raw pages do not transcode'); },
     }], 4, TEST_PIPELINE);
     try {
-      const first = provider('tiles', { mip: 0, x: 0, y: 0, batchTier: 'quality' });
-      const second = provider('tiles', { mip: 0, x: 1, y: 0, batchTier: 'quality' });
+      const first = provider('tiles', { mip: 0, x: 0, y: 0, batchTier: 'focus' });
+      const second = provider('tiles', { mip: 0, x: 1, y: 0, batchTier: 'focus' });
       expect(delays).toEqual([16]);
       callbacks[0]();
       await Promise.all([first, second]);
       expect(bulks).toHaveLength(1);
       expect(bulks[0]).toHaveLength(2);
+      const peripheral = provider(
+        'tiles', { mip: 0, x: 0, y: 0, batchTier: 'peripheral' },
+      );
+      expect(delays).toEqual([16, 64]);
+      callbacks[1]();
+      await peripheral;
+      expect(bulks).toHaveLength(2);
     } finally {
       globalThis.setTimeout = originalSetTimeout;
       provider.close();

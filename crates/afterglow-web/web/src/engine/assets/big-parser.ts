@@ -649,7 +649,8 @@ export interface PageProviderStats {
   bulkInFlight: number;
   bulkInFlightBytes: number;
   urgentBatches: number;
-  qualityBatches: number;
+  focusBatches: number;
+  peripheralBatches: number;
   bulkRejected: number;
   bulkCanceled: number;
   workerCount: number;
@@ -662,13 +663,14 @@ export interface PageProviderStats {
   maxTranscodeMs: number;
 }
 
-export type PageLoadTier = 'urgent' | 'quality';
+export type PageLoadTier = 'urgent' | 'focus' | 'peripheral';
 
 export interface PagePipelineConfig {
   /** Waiting jobs only; active workers are separate. */
   transcodeQueueCapacity: number;
   urgentBatchDeadlineMs: number;
-  qualityBatchDeadlineMs: number;
+  focusBatchDeadlineMs: number;
+  peripheralBatchDeadlineMs: number;
 }
 
 export type VirtualTexturePageProvider = ((
@@ -972,10 +974,10 @@ interface BulkReadSlot {
   reject: ((error: unknown) => void) | null;
 }
 
-/** Fixed-capacity two-deadline raw-byte queue. Timers are opened by the first
+/** Fixed-capacity three-deadline raw-byte queue. Timers are opened by the first
  * miss and never reset, so continuous arrivals cannot postpone a lane's ready
  * deadline. Dispatch still gives ready urgent work strict priority; sustained
- * urgent demand can defer the quality lane. */
+ * urgent demand can defer the focus and peripheral lanes. */
 class BoundedBulkReadQueue {
   private readonly slots: BulkReadSlot[] = new Array(BULK_RANGE_CAPACITY);
   private readonly free = new Uint16Array(BULK_RANGE_CAPACITY);
@@ -983,12 +985,13 @@ class BoundedBulkReadQueue {
   private readonly queued = [
     new Uint16Array(BULK_RANGE_CAPACITY),
     new Uint16Array(BULK_RANGE_CAPACITY),
+    new Uint16Array(BULK_RANGE_CAPACITY),
   ];
-  private readonly heads = new Uint16Array(2);
-  private readonly tails = new Uint16Array(2);
-  private readonly counts = new Uint16Array(2);
-  private readonly ready = new Uint8Array(2);
-  private readonly timers: Array<ReturnType<typeof setTimeout> | null> = [null, null];
+  private readonly heads = new Uint16Array(3);
+  private readonly tails = new Uint16Array(3);
+  private readonly counts = new Uint16Array(3);
+  private readonly ready = new Uint8Array(3);
+  private readonly timers: Array<ReturnType<typeof setTimeout> | null> = [null, null, null];
   private inFlight = 0;
   private inFlightBytes = 0;
   private closed = false;
@@ -996,19 +999,22 @@ class BoundedBulkReadQueue {
   private totalReadMs = 0;
   private maxReadMs = 0;
   private urgentBatches = 0;
-  private qualityBatches = 0;
+  private focusBatches = 0;
+  private peripheralBatches = 0;
   private rejected = 0;
   private canceled = 0;
   private readonly stats = {
     reads: 0, averageReadMs: 0, maxReadMs: 0, queued: 0,
-    inFlight: 0, inFlightBytes: 0, urgentBatches: 0, qualityBatches: 0,
+    inFlight: 0, inFlightBytes: 0,
+    urgentBatches: 0, focusBatches: 0, peripheralBatches: 0,
     rejected: 0, canceled: 0,
   };
 
   constructor(
     private readonly loader: BulkReadLoader,
     private readonly urgentDeadlineMs: number,
-    private readonly qualityDeadlineMs: number,
+    private readonly focusDeadlineMs: number,
+    private readonly peripheralDeadlineMs: number,
     private readonly telemetry?: EngineTelemetry,
   ) {
     for (let index = BULK_RANGE_CAPACITY - 1; index >= 0; index--) {
@@ -1019,9 +1025,12 @@ class BoundedBulkReadQueue {
     }
   }
 
-  private tierIndex(tier: PageLoadTier): number { return tier === 'urgent' ? 0 : 1; }
+  private tierIndex(tier: PageLoadTier): number {
+    return tier === 'urgent' ? 0 : tier === 'focus' ? 1 : 2;
+  }
   private deadlineMs(tier: number): number {
-    return tier === 0 ? this.urgentDeadlineMs : this.qualityDeadlineMs;
+    return tier === 0 ? this.urgentDeadlineMs :
+      tier === 1 ? this.focusDeadlineMs : this.peripheralDeadlineMs;
   }
 
   read(
@@ -1101,7 +1110,9 @@ class BoundedBulkReadQueue {
     while (this.inFlight < 2 && this.inFlightBytes < BULK_IN_FLIGHT_MAX_BYTES) {
       const lane = this.ready[0] !== 0 && this.counts[0] !== 0
         ? 0
-        : this.ready[1] !== 0 && this.counts[1] !== 0 ? 1 : -1;
+        : this.ready[1] !== 0 && this.counts[1] !== 0
+          ? 1
+          : this.ready[2] !== 0 && this.counts[2] !== 0 ? 2 : -1;
       if (lane < 0) return;
       const indices: number[] = [];
       const ranges: AssetByteRange[] = [];
@@ -1156,7 +1167,8 @@ class BoundedBulkReadQueue {
     this.inFlight++;
     this.inFlightBytes += expectedBytes;
     if (lane === 0) this.urgentBatches++;
-    else this.qualityBatches++;
+    else if (lane === 1) this.focusBatches++;
+    else this.peripheralBatches++;
     const startedAt = performance.now();
     const batchCorrelation = this.telemetry?.nextCorrelation(EngineTelemetryCategory.Asset) ?? 0;
     for (let index = 0; index < indices.length; index++) {
@@ -1218,7 +1230,7 @@ class BoundedBulkReadQueue {
   close(): void {
     if (this.closed) return;
     this.closed = true;
-    for (let lane = 0; lane < 2; lane++) {
+    for (let lane = 0; lane < 3; lane++) {
       this.clearLaneTimer(lane);
       while (this.counts[lane] !== 0) {
         const slotIndex = this.pop(lane);
@@ -1242,7 +1254,8 @@ class BoundedBulkReadQueue {
     inFlight: number;
     inFlightBytes: number;
     urgentBatches: number;
-    qualityBatches: number;
+    focusBatches: number;
+    peripheralBatches: number;
     rejected: number;
     canceled: number;
   }> {
@@ -1250,11 +1263,12 @@ class BoundedBulkReadQueue {
     stats.reads = this.reads;
     stats.averageReadMs = this.reads === 0 ? 0 : this.totalReadMs / this.reads;
     stats.maxReadMs = this.maxReadMs;
-    stats.queued = this.counts[0] + this.counts[1];
+    stats.queued = this.counts[0] + this.counts[1] + this.counts[2];
     stats.inFlight = this.inFlight;
     stats.inFlightBytes = this.inFlightBytes;
     stats.urgentBatches = this.urgentBatches;
-    stats.qualityBatches = this.qualityBatches;
+    stats.focusBatches = this.focusBatches;
+    stats.peripheralBatches = this.peripheralBatches;
     stats.rejected = this.rejected;
     stats.canceled = this.canceled;
     return stats;
@@ -1271,20 +1285,27 @@ export function createPageDataProvider(
 ): VirtualTexturePageProvider {
   if (!Number.isInteger(config.transcodeQueueCapacity) || config.transcodeQueueCapacity < 1 ||
       !Number.isInteger(config.urgentBatchDeadlineMs) || config.urgentBatchDeadlineMs < 0 ||
-      !Number.isInteger(config.qualityBatchDeadlineMs) || config.qualityBatchDeadlineMs < 0 ||
-      config.urgentBatchDeadlineMs > config.qualityBatchDeadlineMs) {
+      !Number.isInteger(config.focusBatchDeadlineMs) || config.focusBatchDeadlineMs < 0 ||
+      !Number.isInteger(config.peripheralBatchDeadlineMs) || config.peripheralBatchDeadlineMs < 0 ||
+      config.urgentBatchDeadlineMs > config.focusBatchDeadlineMs ||
+      config.focusBatchDeadlineMs > config.peripheralBatchDeadlineMs) {
     throw new RangeError('invalid VT page-pipeline configuration');
   }
   const directories = expandVtDirectories(header);
 
   const transcoder = new BoundedTranscoderPool(textureWorkers, config.transcodeQueueCapacity, telemetry);
   const bulkReads = new BoundedBulkReadQueue(
-    loader, config.urgentBatchDeadlineMs, config.qualityBatchDeadlineMs, telemetry,
+    loader,
+    config.urgentBatchDeadlineMs,
+    config.focusBatchDeadlineMs,
+    config.peripheralBatchDeadlineMs,
+    telemetry,
   );
   const stats: PageProviderStats = {
     reads: 0, averageReadMs: 0, maxReadMs: 0,
     bulkQueued: 0, bulkInFlight: 0, bulkInFlightBytes: 0,
-    urgentBatches: 0, qualityBatches: 0, bulkRejected: 0, bulkCanceled: 0,
+    urgentBatches: 0, focusBatches: 0, peripheralBatches: 0,
+    bulkRejected: 0, bulkCanceled: 0,
     workerCount: textureWorkers.length, activeTranscodes: 0, queuedTranscodes: 0,
     completedTranscodes: 0, averageTranscodeQueueMs: 0, maxTranscodeQueueMs: 0,
     averageTranscodeMs: 0, maxTranscodeMs: 0,
@@ -1363,7 +1384,8 @@ export function createPageDataProvider(
     stats.bulkInFlight = read.inFlight;
     stats.bulkInFlightBytes = read.inFlightBytes;
     stats.urgentBatches = read.urgentBatches;
-    stats.qualityBatches = read.qualityBatches;
+    stats.focusBatches = read.focusBatches;
+    stats.peripheralBatches = read.peripheralBatches;
     stats.bulkRejected = read.rejected;
     stats.bulkCanceled = read.canceled;
     stats.workerCount = transcode.workerCount;

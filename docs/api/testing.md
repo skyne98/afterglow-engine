@@ -32,8 +32,12 @@ latency to real-GPU evidence.
 ## Test levels
 
 - **Unit tests** cover one bounded primitive, codec, parser, queue, allocator, or
-  state transition and its deterministic failure behavior. Unified telemetry
-  additionally gates its Rust/TypeScript 40-byte ABI, batch corruption,
+  state transition and its deterministic failure behavior. VT unit coverage
+  additionally gates three-bit feedback distance packing, bounded perceptual
+  accumulation, monotonic mapping of every 1–5,610 score across all 25 buckets,
+  close-edge/deep-center balance,
+  camera pose extrapolation/reset, and independent urgent/focus/peripheral
+  deadlines. Unified telemetry additionally gates its Rust/TypeScript 40-byte ABI, batch corruption,
   capture transitions, category filtering, overflow, metric cells, clock
   mapping, streaming export, and enabled/disabled no-allocation paths.
 - **Vertical-integration tests** cross the real ownership boundary for a feature.

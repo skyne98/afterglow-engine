@@ -12,7 +12,8 @@ const PHASE_ASYNC_BEGIN = 4;
 const PHASE_ASYNC_END = 5;
 const SCHEDULER_ADMITTED = 0;
 const URGENT_DEADLINE_NS = 1_000_000;
-const QUALITY_DEADLINE_NS = 16_000_000;
+const FOCUS_DEADLINE_NS = 16_000_000;
+const PERIPHERAL_DEADLINE_NS = 64_000_000;
 const QUALITY_TIER_BASE = 66;
 const CHANNEL_LANES = 22;
 const MAX_MIP = 10;
@@ -54,14 +55,14 @@ export interface ReplayRequest extends DecodedPageIdentity {
   admittedAt: number;
   timestamp: number;
   bytes: number;
-  lane: 0 | 1;
+  lane: 0 | 1 | 2;
   priority: number;
   sourceOffset: number;
   dispatched: boolean;
 }
 
 export interface ReplayBatch {
-  lane: 0 | 1;
+  lane: 0 | 1 | 2;
   openedAt: number;
   dispatchedAt: number;
   requests: ReplayRequest[];
@@ -150,7 +151,7 @@ interface BulkOperation {
   timestamp: number;
   completedAt: number;
   bytes: number;
-  lane: 0 | 1;
+  lane: 0 | 1 | 2;
   dispatched: boolean;
 }
 
@@ -189,7 +190,7 @@ function extractOperations(records: readonly TraceRecord[]): {
           timestamp: record.timestamp,
           completedAt: 0,
           bytes: record.argument0,
-          lane: record.argument1 === 0 ? 0 : 1,
+          lane: record.argument1 === 0 ? 0 : record.argument1 === 1 ? 1 : 2,
           dispatched: false,
         };
         bulkStarts.set(record.correlation, operation);
@@ -279,21 +280,28 @@ function buildRequests(
  * affect batch formation for these captures. */
 export function replayBatches(input: readonly ReplayRequest[]): ReplayBatch[] {
   const requests = [...input].sort((left, right) => left.timestamp - right.timestamp);
-  const queued: [ReplayRequest[], ReplayRequest[]] = [[], []];
-  const openedAt = [Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY];
-  const deadline = [Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY];
+  const queued: [ReplayRequest[], ReplayRequest[], ReplayRequest[]] = [[], [], []];
+  const openedAt = [
+    Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY,
+  ];
+  const deadline = [
+    Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY,
+  ];
   const batches: ReplayBatch[] = [];
   let next = 0;
-  while (next < requests.length || Number.isFinite(deadline[0]) || Number.isFinite(deadline[1])) {
+  while (next < requests.length || deadline.some(Number.isFinite)) {
     const arrival = next < requests.length ? requests[next].timestamp : Number.POSITIVE_INFINITY;
-    const readyLane: 0 | 1 = deadline[0] <= deadline[1] ? 0 : 1;
+    const readyLane: 0 | 1 | 2 = deadline[0] <= deadline[1] && deadline[0] <= deadline[2]
+      ? 0 : deadline[1] <= deadline[2] ? 1 : 2;
     if (arrival <= deadline[readyLane]) {
       const request = requests[next++];
       const lane = request.lane;
       queued[lane].push(request);
       if (!Number.isFinite(deadline[lane])) {
         openedAt[lane] = request.timestamp;
-        deadline[lane] = request.timestamp + (lane === 0 ? URGENT_DEADLINE_NS : QUALITY_DEADLINE_NS);
+        const wait = lane === 0 ? URGENT_DEADLINE_NS :
+          lane === 1 ? FOCUS_DEADLINE_NS : PERIPHERAL_DEADLINE_NS;
+        deadline[lane] = request.timestamp + wait;
       }
     } else {
       if (queued[readyLane].length !== 0) {

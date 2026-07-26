@@ -77,10 +77,14 @@ export function aggregateAgtb(bytes: Uint8Array): {
   header: AgtbHeader;
   unmatchedStarts: number;
   stages: TraceStageSummary[];
+  perceptualPriorityBuckets: number[];
+  bulkWaitTierStarts: number[];
 } {
   const header = validateAgtb(bytes);
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const starts = new Map<string, number[]>();
+  const perceptualPriorityBuckets = new Array<number>(25).fill(0);
+  const bulkWaitTierStarts = new Array<number>(3).fill(0);
   const raw = TRACE_NAMES.map(name => ({
     name, records: 0, operations: 0, durations: [] as number[], argument0Total: 0,
     statuses: {} as Record<string, number>,
@@ -92,6 +96,16 @@ export function aggregateAgtb(bytes: Uint8Array): {
     if (!stage) continue;
     stage.records++;
     const phase = view.getUint8(base + 36);
+    if (descriptor === 22 && phase === 1) {
+      const priority = u64(view, base + 16);
+      const bucket = Math.floor(priority / 6);
+      if (bucket >= 0 && bucket < perceptualPriorityBuckets.length)
+        perceptualPriorityBuckets[bucket]++;
+    }
+    if (descriptor === 14 && phase === 4) {
+      const tier = u64(view, base + 24);
+      if (tier >= 0 && tier < bulkWaitTierStarts.length) bulkWaitTierStarts[tier]++;
+    }
     const correlationLow = view.getUint32(base + 8, true);
     const correlationHigh = view.getUint32(base + 12, true);
     const key = `${descriptor}:${correlationHigh}:${correlationLow}`;
@@ -133,7 +147,9 @@ export function aggregateAgtb(bytes: Uint8Array): {
       statuses: stage.statuses,
     };
   });
-  return { header, unmatchedStarts, stages };
+  return {
+    header, unmatchedStarts, stages, perceptualPriorityBuckets, bulkWaitTierStarts,
+  };
 }
 
 class CdpSession {

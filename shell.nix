@@ -27,7 +27,7 @@ let
 in
 pkgs.mkShell {
   packages = runtimeLibs ++ [
-    pkgs.patchelf pkgs.mold pkgs.clang pkgs.bun pkgs.caddy
+    pkgs.patchelf pkgs.mold pkgs.clang pkgs.bun pkgs.nodejs pkgs.caddy
     # Stylo generates its property tables while building afterglow-shell.
     pkgs.python3
   ];

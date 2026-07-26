@@ -16,7 +16,7 @@ game-facing APIs necessarily allocate.
 | Surface detail / POM | `none` hot path | GPU fragment work only; resident height textures allocated at bootstrap | 8–32 bounded view layers + 8 bounded light-shadow steps, no radial fade; prewarmed base/POM material references |
 | Basis transcode | `budgeted` | Codec output and postcard response vectors | Shared 64-job ring over 2–4 independent one-in-flight workers; output bytes counted by VT admission |
 | Image/model parse + meshopt | `budgeted` | GLTF/Three objects, copied worker arguments/results, replacement index buffers | Fixed AssetStore IDs/completion ring; bootstrap/warm-up only; skinned optimization preserves vertex identity |
-| VT material construction | `bootstrap` | Three node/material/uniform objects and shader pipelines | Fixed visible/feedback pair; both variants prewarmed before seal |
+| VT material/prediction construction | `bootstrap` | Three node/material/uniform objects, shader pipelines, and one cloned feedback camera per renderable | Fixed variants/clones prewarmed before seal; pose sampling/extrapolation reuses vectors/quaternions |
 | Feedback readback | `budgeted` | Three/WebGPU asynchronous readback buffer | One outstanding readback; two retained maps and pooled requests |
 | Renderer pipeline compile | `bootstrap` | Browser/Dawn pipeline implementation | Declared variant warm-up; post-seal pipeline monitor |
 | Native rAF callback registration | `gameFacing` | User/Three callback references are retained until the presentation turn | Fixed 1,024-slot bootstrap queue; O(1) request/cancel, deterministic overflow and high-water telemetry; no growing `Map` or per-frame callback snapshot allocation |

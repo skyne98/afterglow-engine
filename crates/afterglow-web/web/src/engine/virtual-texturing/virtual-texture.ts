@@ -44,10 +44,22 @@ export const ATLAS_PAGES_Y = 15;
 export const ATLAS_WIDTH = ATLAS_PAGES_X * SLOT_SIZE;
 export const ATLAS_HEIGHT = ATLAS_PAGES_Y * SLOT_SIZE;
 const MAX_MIP = 10;              // supports up to 2^10 = 1024 pages per side
-const QUALITY_PRIORITY_LANE_COUNT = (MAX_MIP + 1) * 2; // exact quality rung × center/edge
+const SCORE_COVERAGE_CAP = 255;
+const MAX_PIXEL_PERCEPTUAL_WEIGHT = 15; // coverage 1 + center 7 + camera distance 7
+const MAX_PERCEPTUAL_WEIGHT = SCORE_COVERAGE_CAP * MAX_PIXEL_PERCEPTUAL_WEIGHT;
+const MAX_PAGE_SCORE = SCORE_COVERAGE_CAP * (MAX_PIXEL_PERCEPTUAL_WEIGHT + 7);
+const IMPORTANCE_LEVEL_MAX = 24; // two buckets per power-of-two interval through 5,610
+const IMPORTANCE_BUCKET_COUNT = IMPORTANCE_LEVEL_MAX + 1;
+const MAX_SCORE_EXPONENT = 31 - Math.clz32(MAX_PAGE_SCORE);
+const TOP_SCORE_BASE = 1 << MAX_SCORE_EXPONENT;
+const TOP_SCORE_SPLIT = TOP_SCORE_BASE + Math.ceil((MAX_PAGE_SCORE - TOP_SCORE_BASE + 1) / 2);
+// Provisional until the recorded score histogram and 32/48/64 ms GPU gate select
+// the shortest peripheral policy without center-latency or source-byte regression.
+const FOCUS_IMPORTANCE_BUCKET_MAX = 12;
+const PAGE_KIND_PRIORITY_COUNT = 2; // coarse restoration parent before exact page
 const MATERIAL_CHANNEL_PRIORITY_COUNT = 3; // albedo, normal/emissive, scalar masks
-const BATCH_TIER_PRIORITY_COUNT = QUALITY_PRIORITY_LANE_COUNT * MATERIAL_CHANNEL_PRIORITY_COUNT;
-const PRIORITY_LANE_COUNT = BATCH_TIER_PRIORITY_COUNT * 2; // urgent parents before exact quality
+const PRIORITY_LANE_COUNT =
+  IMPORTANCE_BUCKET_COUNT * PAGE_KIND_PRIORITY_COUNT * MATERIAL_CHANNEL_PRIORITY_COUNT;
 const FEEDBACK_SCALE = 0.125;    // feedback at 1/8 screen resolution
 
 const enum SchedulerWaitStatus {
@@ -62,6 +74,8 @@ const enum SchedulerWaitStatus {
 // Types
 // ============================================================================
 
+export type PageBatchTier = 'urgent' | 'focus' | 'peripheral';
+
 /** A page request: which virtual page at which mip level is needed. */
 export interface PageRequest {
   mip: number;
@@ -70,7 +84,7 @@ export interface PageRequest {
   /** Selects the packed sub-page mip tail instead of a regular virtual page. */
   tail?: boolean;
   /** Internal bulk-fetch deadline: coarse restoration or exact promotion. */
-  batchTier?: 'urgent' | 'quality';
+  batchTier?: PageBatchTier;
   /** Internal bootstrap request; pinned residency is never evicted. */
   pinned?: boolean;
 }
@@ -85,6 +99,10 @@ export interface VirtualPageRequest extends PageRequest {
   screenPriority?: number;
   /** Number of feedback pixels covered by this page in the latest readback. */
   coverage?: number;
+  /** Sum of bounded per-pixel coverage + predicted-center + camera-distance weight. */
+  perceptualWeight?: number;
+  /** Desired-to-nearest-resident mip gap, clamped to the perceptual score range. */
+  residentMipGap?: number;
   /** Internal material-channel class; 0=albedo, 1=normal/emissive, 2=scalar data. */
   channelPriority?: number;
   /** Internal fixed-lane admission priority; 0 is highest. */
@@ -121,6 +139,52 @@ function packedPageCoordinates(
 
 function packedPageIdentity(textureId: number, req: PageRequest): number {
   return packedPageCoordinates(textureId, req.mip, req.x, req.y, req.tail);
+}
+
+/** Fixed two-buckets-per-octave perceptual importance; zero is highest. */
+export function perceptualImportanceBucket(weight: number): number {
+  const bounded = Math.max(1, Math.min(MAX_PAGE_SCORE, Math.floor(weight)));
+  const exponent = 31 - Math.clz32(bounded);
+  let level: number;
+  if (exponent === 0) level = 0;
+  else if (exponent < MAX_SCORE_EXPONENT)
+    level = exponent * 2 - 1 + ((bounded >>> (exponent - 1)) & 1);
+  else level = bounded < TOP_SCORE_SPLIT ? IMPORTANCE_LEVEL_MAX - 1 : IMPORTANCE_LEVEL_MAX;
+  return IMPORTANCE_LEVEL_MAX - level;
+}
+
+function sourcePerceptualWeight(source: VirtualPageRequest): number {
+  const coverage = Math.min(SCORE_COVERAGE_CAP, source.coverage ?? 1);
+  const centerCloseness = 7 - Math.min(7, (source.screenPriority ?? 255) >>> 5);
+  return Math.min(
+    MAX_PERCEPTUAL_WEIGHT,
+    source.perceptualWeight ?? coverage * (1 + centerCloseness),
+  );
+}
+
+function perceptualPriority(
+  perceptualWeight: number,
+  coverage: number,
+  residentMipGap: number,
+  parent: boolean,
+  channelPriority: number,
+): number {
+  const pageWeight = Math.min(
+    MAX_PAGE_SCORE,
+    perceptualWeight + Math.min(SCORE_COVERAGE_CAP, coverage) * residentMipGap,
+  );
+  const bucket = perceptualImportanceBucket(pageWeight);
+  const pageKind = parent ? 0 : 1;
+  return (bucket * PAGE_KIND_PRIORITY_COUNT + pageKind) *
+    MATERIAL_CHANNEL_PRIORITY_COUNT + channelPriority;
+}
+
+function pageBatchTier(parent: boolean, priority: number): PageBatchTier {
+  if (parent) return 'urgent';
+  const importanceBucket = Math.floor(
+    priority / (PAGE_KIND_PRIORITY_COUNT * MATERIAL_CHANNEL_PRIORITY_COUNT),
+  );
+  return importanceBucket <= FOCUS_IMPORTANCE_BUCKET_MAX ? 'focus' : 'peripheral';
 }
 
 function packEntry(resident: boolean, physX: number, physY: number): number {
@@ -225,7 +289,8 @@ interface PageDataProviderTelemetry {
   bulkInFlight: number;
   bulkInFlightBytes: number;
   urgentBatches: number;
-  qualityBatches: number;
+  focusBatches: number;
+  peripheralBatches: number;
   bulkRejected: number;
   bulkCanceled: number;
   workerCount: number;
@@ -886,7 +951,6 @@ export class VirtualTextureStore {
   private scheduledRequests: VirtualPageRequest[];
   private scheduledActive: Uint8Array;
   private scheduledLastSeen: Uint32Array;
-  private scheduledSince: Uint32Array;
   private scheduledPriority: Uint8Array;
   private scheduledTraceActive: Uint8Array;
   private scheduledNext: Int32Array;
@@ -941,7 +1005,8 @@ export class VirtualTextureStore {
     scheduleBudgetExhaustions: 0, uploadBudgetExhaustions: 0,
     pageReads: 0, averagePageReadMs: 0, maxPageReadMs: 0,
     bulkQueued: 0, bulkInFlight: 0, bulkInFlightBytes: 0,
-    urgentBatches: 0, qualityBatches: 0, bulkRejected: 0, bulkCanceled: 0,
+    urgentBatches: 0, focusBatches: 0, peripheralBatches: 0,
+    bulkRejected: 0, bulkCanceled: 0,
     transcodeWorkers: 0, activeTranscodes: 0, queuedTranscodes: 0,
     completedTranscodes: 0, averageTranscodeQueueMs: 0, maxTranscodeQueueMs: 0,
     averageTranscodeMs: 0, maxTranscodeMs: 0,
@@ -981,7 +1046,6 @@ export class VirtualTextureStore {
     this.scheduledRequests = new Array(schedulerCapacity);
     this.scheduledActive = new Uint8Array(schedulerCapacity);
     this.scheduledLastSeen = new Uint32Array(schedulerCapacity);
-    this.scheduledSince = new Uint32Array(schedulerCapacity);
     this.scheduledPriority = new Uint8Array(schedulerCapacity);
     this.scheduledTraceActive = new Uint8Array(schedulerCapacity);
     this.scheduledNext = new Int32Array(schedulerCapacity);
@@ -1455,6 +1519,24 @@ export class VirtualTextureStore {
   }
 
   // @hot-no-alloc-begin VirtualTextureStore.addFeedbackRequest
+  private residentMipGap(
+    entry: VirtualTextureEntry,
+    pageTable: PageTable,
+    mip: number,
+    x: number,
+    y: number,
+    tail: boolean,
+  ): number {
+    if (tail) return 0;
+    for (let fallbackMip = mip; fallbackMip <= entry.maxMip; fallbackMip++) {
+      const shift = fallbackMip - mip;
+      if (pageTable.isResidentAt(fallbackMip, x >> shift, y >> shift))
+        return Math.min(7, fallbackMip - mip);
+    }
+    const tailMip = entry.tailFirstMip ?? entry.maxMip + 1;
+    return Math.min(7, Math.max(0, tailMip - mip));
+  }
+
   private addFeedbackPage(
     textureId: number,
     entry: VirtualTextureEntry,
@@ -1465,24 +1547,33 @@ export class VirtualTextureStore {
     tail: boolean,
     capacity: number,
     channelPriority: number,
-    batchTier: 'urgent' | 'quality',
+    parent: boolean,
   ): boolean {
     const key = packedPageCoordinates(entry.textureId, mip, x, y, tail);
-    const qualityDepth = tail ? 0 : Math.min(MAX_MIP, entry.maxMip - mip);
-    const centralOrLarge = (source.screenPriority ?? 0) <= 96 || (source.coverage ?? 1) >= 4;
-    const candidatePriority = (batchTier === 'quality' ? BATCH_TIER_PRIORITY_COUNT : 0) +
-      channelPriority * QUALITY_PRIORITY_LANE_COUNT +
-      qualityDepth * 2 + (centralOrLarge ? 0 : 1);
+    const sourceCoverage = source.coverage ?? 1;
+    const sourceWeight = sourcePerceptualWeight(source);
+    const residentMipGap = this.residentMipGap(
+      entry, this.pageTablesById[textureId]!, mip, x, y, tail,
+    );
     const existing = this.feedbackScratchKeys.get(key);
     if (existing !== undefined) {
       const request = this.feedbackScratch[existing];
-      request.screenPriority = Math.min(request.screenPriority ?? 255, source.screenPriority ?? 0);
-      request.coverage = Math.min(0xffff, (request.coverage ?? 1) + (source.coverage ?? 1));
+      request.screenPriority = Math.min(request.screenPriority ?? 255, source.screenPriority ?? 255);
+      request.coverage = Math.min(0xffff, (request.coverage ?? 1) + sourceCoverage);
+      request.perceptualWeight = Math.min(
+        MAX_PERCEPTUAL_WEIGHT,
+        (request.perceptualWeight ?? 1) + sourceWeight,
+      );
+      request.residentMipGap = Math.max(request.residentMipGap ?? 0, residentMipGap);
       request.channelPriority = Math.min(request.channelPriority ?? channelPriority, channelPriority);
-      if (batchTier === 'urgent') request.batchTier = 'urgent';
-      request.priorityTier = Math.min(request.priorityTier ?? candidatePriority, candidatePriority);
-      if (request.screenPriority <= 96 || request.coverage >= 4)
-        request.priorityTier &= ~1;
+      request.priorityTier = perceptualPriority(
+        request.perceptualWeight,
+        request.coverage,
+        request.residentMipGap,
+        parent,
+        request.channelPriority,
+      );
+      request.batchTier = pageBatchTier(parent, request.priorityTier);
       return true;
     }
     if (this.feedbackScratchCount >= capacity) return false;
@@ -1494,11 +1585,15 @@ export class VirtualTextureStore {
     request.x = x;
     request.y = y;
     request.tail = tail ? true : undefined;
-    request.screenPriority = source.screenPriority ?? 0;
-    request.coverage = source.coverage ?? 1;
+    request.screenPriority = source.screenPriority ?? 255;
+    request.coverage = sourceCoverage;
+    request.perceptualWeight = sourceWeight;
+    request.residentMipGap = residentMipGap;
     request.channelPriority = channelPriority;
-    request.batchTier = batchTier;
-    request.priorityTier = candidatePriority;
+    request.priorityTier = perceptualPriority(
+      sourceWeight, sourceCoverage, residentMipGap, parent, channelPriority,
+    );
+    request.batchTier = pageBatchTier(parent, request.priorityTier);
     this.feedbackScratchKeys.set(key, index);
     return true;
   }
@@ -1516,7 +1611,7 @@ export class VirtualTextureStore {
     if (source.tail === true)
       return this.addFeedbackPage(
         textureId, entry, source, source.mip, 0, 0, true,
-        capacity, channelPriority, 'urgent',
+        capacity, channelPriority, true,
       );
 
     const desiredMip = Math.min(entry.maxMip, source.mip + bias);
@@ -1525,11 +1620,11 @@ export class VirtualTextureStore {
     if (pageTable.isResidentAt(desiredMip, desiredX, desiredY))
       return this.addFeedbackPage(
         textureId, entry, source, desiredMip, desiredX, desiredY, false,
-        capacity, channelPriority, 'quality',
+        capacity, channelPriority, false,
       );
 
     // Restore one explicitly low-quality parent quickly, then promote straight
-    // to the exact requested page through the 100 ms quality window. Existing
+    // to the exact requested page through the bounded focus/peripheral window. Existing
     // resident coarser/tail pages remain immediately sampleable in the shader.
     const urgentMip = Math.min(entry.maxMip, desiredMip + 2);
     const urgentShift = urgentMip - desiredMip;
@@ -1538,12 +1633,12 @@ export class VirtualTextureStore {
     if (!pageTable.isResidentAt(urgentMip, urgentX, urgentY) &&
         !this.addFeedbackPage(
           textureId, entry, source, urgentMip, urgentX, urgentY, false,
-          capacity, channelPriority, 'urgent',
+          capacity, channelPriority, true,
         )) return false;
     if (urgentMip === desiredMip) return true;
     return this.addFeedbackPage(
       textureId, entry, source, desiredMip, desiredX, desiredY, false,
-      capacity, channelPriority, 'quality',
+      capacity, channelPriority, false,
     );
   }
   // @hot-no-alloc-end VirtualTextureStore.addFeedbackRequest
@@ -1636,6 +1731,8 @@ export class VirtualTextureStore {
     target.tail = source.tail;
     target.screenPriority = source.screenPriority;
     target.coverage = source.coverage;
+    target.perceptualWeight = source.perceptualWeight;
+    target.residentMipGap = source.residentMipGap;
     target.channelPriority = source.channelPriority;
     target.priorityTier = source.priorityTier;
     target.batchTier = source.batchTier;
@@ -1705,24 +1802,13 @@ export class VirtualTextureStore {
     const pending = this.getPending(key);
     if (pending) {
       pending.lastSeen = this.feedbackEpoch;
-      pending.priorityTier = Math.min(
-        pending.priorityTier,
-        request.priorityTier ?? PRIORITY_LANE_COUNT - 1,
-      );
+      pending.priorityTier = request.priorityTier ?? PRIORITY_LANE_COUNT - 1;
       return;
     }
     const existing = this.scheduledByKey.get(key);
     if (existing !== undefined) {
       this.copyRequest(this.scheduledRequests[existing], request);
-      const agePromotion = (this.feedbackEpoch - this.scheduledSince[existing]) >> 2;
-      const tierFloor = request.batchTier === 'quality' ? BATCH_TIER_PRIORITY_COUNT : 0;
-      const channelFloor = tierFloor +
-        (request.channelPriority ?? 0) * QUALITY_PRIORITY_LANE_COUNT;
-      const priority = Math.max(
-        channelFloor,
-        (request.priorityTier ?? PRIORITY_LANE_COUNT - 1) - agePromotion,
-      );
-      this.moveScheduled(existing, priority);
+      this.moveScheduled(existing, request.priorityTier ?? PRIORITY_LANE_COUNT - 1);
       this.scheduledLastSeen[existing] = this.feedbackEpoch;
       return;
     }
@@ -1735,7 +1821,6 @@ export class VirtualTextureStore {
     this.copyRequest(this.scheduledRequests[index], request);
     this.scheduledActive[index] = 1;
     this.scheduledLastSeen[index] = this.feedbackEpoch;
-    this.scheduledSince[index] = this.feedbackEpoch;
     this.linkScheduledTail(index, request.priorityTier ?? PRIORITY_LANE_COUNT - 1);
     this.scheduledByKey.set(key, index);
     this.scheduledCount++;
@@ -1768,6 +1853,11 @@ export class VirtualTextureStore {
       const index = this.priorityHeads[priority];
       inspected++;
       const request = this.scheduledRequests[index];
+      if (!request.pinned && this.scheduledLastSeen[index] < this.feedbackEpoch &&
+          priority !== PRIORITY_LANE_COUNT - 1) {
+        this.moveScheduled(index, PRIORITY_LANE_COUNT - 1);
+        continue;
+      }
       if (!request.pinned &&
           this.feedbackEpoch - this.scheduledLastSeen[index] >= this.staleFeedbackEpochs) {
         this.removeScheduled(index, SchedulerWaitStatus.Stale);
@@ -1803,8 +1893,10 @@ export class VirtualTextureStore {
     for (let slot = 0; slot < this.pendingRecords.length; slot++) {
       if (this.pendingActive[slot] === 0) continue;
       const pending = this.pendingRecords[slot];
-      if (pending.page.pinned || pending.canceled ||
-          this.feedbackEpoch - pending.lastSeen < this.staleFeedbackEpochs) continue;
+      if (pending.page.pinned || pending.canceled) continue;
+      if (pending.lastSeen < this.feedbackEpoch)
+        pending.priorityTier = PRIORITY_LANE_COUNT - 1;
+      if (this.feedbackEpoch - pending.lastSeen < this.staleFeedbackEpochs) continue;
       pending.canceled = true;
       pending.controller?.abort('VT request left the visibility window');
       // The provider/cancellation continuation owns final slot release.
@@ -2177,7 +2269,8 @@ export class VirtualTextureStore {
       stats.bulkInFlight = provider.bulkInFlight;
       stats.bulkInFlightBytes = provider.bulkInFlightBytes;
       stats.urgentBatches = provider.urgentBatches;
-      stats.qualityBatches = provider.qualityBatches;
+      stats.focusBatches = provider.focusBatches;
+      stats.peripheralBatches = provider.peripheralBatches;
       stats.bulkRejected = provider.bulkRejected;
       stats.bulkCanceled = provider.bulkCanceled;
       stats.transcodeWorkers = provider.workerCount;
@@ -2436,7 +2529,10 @@ fn vtFeedback(
   maxMip: f32,
   qualityBias: f32,
   addressMode: u32,
-  textureId: u32
+  textureId: u32,
+  viewDistance: f32,
+  cameraNear: f32,
+  cameraFar: f32
 ) -> vec2u {
   // Derivatives are measured per reduced-resolution feedback pixel. Convert
   // them back to physical display-pixel derivatives before selecting a mip.
@@ -2460,9 +2556,18 @@ fn vtFeedback(
   let mip_size = max(floor(virtualSize * mip_scale), vec2f(1.0));
   let page_coords = min(floor(addressed_uv * mip_size / 128.0), curr_page_grid - 1.0);
 
-  // RG32Uint: word 0 carries valid + 6-bit mip + 11-bit X/Y;
+  let safeNear = max(cameraNear, 1e-6);
+  let safeFar = max(cameraFar, safeNear + 1e-6);
+  let logRange = max(log2(safeFar / safeNear), 1e-6);
+  let normalizedDistance = clamp(
+    log2(max(viewDistance, safeNear) / safeNear) / logRange, 0.0, 1.0
+  );
+  let cameraCloseness = u32(round((1.0 - normalizedDistance) * 7.0));
+
+  // RG32Uint: word 0 carries valid + 3-bit camera closeness + 6-bit mip + 11-bit X/Y;
   // word 1 carries the full virtual-texture identity.
   let packed = 0x80000000u |
+               ((cameraCloseness & 0x7u) << 28) |
                (mip_level & 0x3Fu) |
                ((u32(page_coords.x) & 0x7FFu) << 6) |
                ((u32(page_coords.y) & 0x7FFu) << 17);

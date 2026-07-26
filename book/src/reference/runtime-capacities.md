@@ -10,8 +10,8 @@ The sealed defaults are intentionally finite:
 | Native open sources | 16 |
 | VT in flight | 16 pages / 2 MiB |
 | VT transcode waiting | 12 jobs behind 2–4 active workers |
-| VT bulk deadlines | 1 ms urgent / 16 ms exact-quality |
-| VT feedback | 55 ms cadence / one readback |
+| VT bulk deadlines | 1 ms urgent / 16 ms focus / provisional 64 ms peripheral |
+| VT feedback | 55 ms cadence / one readback / 100 ms camera prediction |
 | VT uploads | adaptive, at most 4 pages / 0.35 ms |
 | VT admissions | at most 8 per poll / 0.25 ms inside the 16-page cap |
 | Structural changes | 256 per frame |

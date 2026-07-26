@@ -59,7 +59,7 @@ registers the path and throws if the configured asset capacity is exhausted.
 
 `BigAssetSession.open()` is the browser bootstrap owner for one `.big`
 container. It requires explicit worker count, transcode waiting capacity,
-VT pending page/byte capacities, urgent/quality batch deadlines, and maximum
+VT pending page/byte capacities, urgent/focus/peripheral batch deadlines, and maximum
 header bytes; validates them before spawning its standard
 typed transcoder workers; owns
 the raw loader and VT page provider; and rolls partial startup back in reverse

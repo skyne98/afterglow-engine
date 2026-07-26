@@ -868,20 +868,22 @@ function createPageRangeReader(loader, header, readConcurrency = 16) {
 class BoundedBulkReadQueue {
   loader;
   urgentDeadlineMs;
-  qualityDeadlineMs;
+  focusDeadlineMs;
+  peripheralDeadlineMs;
   telemetry;
   slots = new Array(BULK_RANGE_CAPACITY);
   free = new Uint16Array(BULK_RANGE_CAPACITY);
   freeTop = 0;
   queued = [
     new Uint16Array(BULK_RANGE_CAPACITY),
+    new Uint16Array(BULK_RANGE_CAPACITY),
     new Uint16Array(BULK_RANGE_CAPACITY)
   ];
-  heads = new Uint16Array(2);
-  tails = new Uint16Array(2);
-  counts = new Uint16Array(2);
-  ready = new Uint8Array(2);
-  timers = [null, null];
+  heads = new Uint16Array(3);
+  tails = new Uint16Array(3);
+  counts = new Uint16Array(3);
+  ready = new Uint8Array(3);
+  timers = [null, null, null];
   inFlight = 0;
   inFlightBytes = 0;
   closed = false;
@@ -889,7 +891,8 @@ class BoundedBulkReadQueue {
   totalReadMs = 0;
   maxReadMs = 0;
   urgentBatches = 0;
-  qualityBatches = 0;
+  focusBatches = 0;
+  peripheralBatches = 0;
   rejected = 0;
   canceled = 0;
   stats = {
@@ -900,14 +903,16 @@ class BoundedBulkReadQueue {
     inFlight: 0,
     inFlightBytes: 0,
     urgentBatches: 0,
-    qualityBatches: 0,
+    focusBatches: 0,
+    peripheralBatches: 0,
     rejected: 0,
     canceled: 0
   };
-  constructor(loader, urgentDeadlineMs, qualityDeadlineMs, telemetry) {
+  constructor(loader, urgentDeadlineMs, focusDeadlineMs, peripheralDeadlineMs, telemetry) {
     this.loader = loader;
     this.urgentDeadlineMs = urgentDeadlineMs;
-    this.qualityDeadlineMs = qualityDeadlineMs;
+    this.focusDeadlineMs = focusDeadlineMs;
+    this.peripheralDeadlineMs = peripheralDeadlineMs;
     this.telemetry = telemetry;
     for (let index = BULK_RANGE_CAPACITY - 1;index >= 0; index--) {
       this.slots[index] = {
@@ -923,10 +928,10 @@ class BoundedBulkReadQueue {
     }
   }
   tierIndex(tier) {
-    return tier === "urgent" ? 0 : 1;
+    return tier === "urgent" ? 0 : tier === "focus" ? 1 : 2;
   }
   deadlineMs(tier) {
-    return tier === 0 ? this.urgentDeadlineMs : this.qualityDeadlineMs;
+    return tier === 0 ? this.urgentDeadlineMs : tier === 1 ? this.focusDeadlineMs : this.peripheralDeadlineMs;
   }
   read(path, offset, length, tier, signal, correlation = 0) {
     const traceCorrelation = correlation || this.telemetry?.nextCorrelation(3 /* VirtualTexture */) || 0;
@@ -995,7 +1000,7 @@ class BoundedBulkReadQueue {
   }
   pump() {
     while (this.inFlight < 2 && this.inFlightBytes < BULK_IN_FLIGHT_MAX_BYTES) {
-      const lane = this.ready[0] !== 0 && this.counts[0] !== 0 ? 0 : this.ready[1] !== 0 && this.counts[1] !== 0 ? 1 : -1;
+      const lane = this.ready[0] !== 0 && this.counts[0] !== 0 ? 0 : this.ready[1] !== 0 && this.counts[1] !== 0 ? 1 : this.ready[2] !== 0 && this.counts[2] !== 0 ? 2 : -1;
       if (lane < 0)
         return;
       const indices = [];
@@ -1044,8 +1049,10 @@ class BoundedBulkReadQueue {
     this.inFlightBytes += expectedBytes;
     if (lane === 0)
       this.urgentBatches++;
+    else if (lane === 1)
+      this.focusBatches++;
     else
-      this.qualityBatches++;
+      this.peripheralBatches++;
     const startedAt = performance.now();
     const batchCorrelation = this.telemetry?.nextCorrelation(4 /* Asset */) ?? 0;
     for (let index = 0;index < indices.length; index++) {
@@ -1098,7 +1105,7 @@ class BoundedBulkReadQueue {
     if (this.closed)
       return;
     this.closed = true;
-    for (let lane = 0;lane < 2; lane++) {
+    for (let lane = 0;lane < 3; lane++) {
       this.clearLaneTimer(lane);
       while (this.counts[lane] !== 0) {
         const slotIndex = this.pop(lane);
@@ -1116,23 +1123,24 @@ class BoundedBulkReadQueue {
     stats.reads = this.reads;
     stats.averageReadMs = this.reads === 0 ? 0 : this.totalReadMs / this.reads;
     stats.maxReadMs = this.maxReadMs;
-    stats.queued = this.counts[0] + this.counts[1];
+    stats.queued = this.counts[0] + this.counts[1] + this.counts[2];
     stats.inFlight = this.inFlight;
     stats.inFlightBytes = this.inFlightBytes;
     stats.urgentBatches = this.urgentBatches;
-    stats.qualityBatches = this.qualityBatches;
+    stats.focusBatches = this.focusBatches;
+    stats.peripheralBatches = this.peripheralBatches;
     stats.rejected = this.rejected;
     stats.canceled = this.canceled;
     return stats;
   }
 }
 function createPageDataProvider(loader, header, textureWorkers, format, config, telemetry) {
-  if (!Number.isInteger(config.transcodeQueueCapacity) || config.transcodeQueueCapacity < 1 || !Number.isInteger(config.urgentBatchDeadlineMs) || config.urgentBatchDeadlineMs < 0 || !Number.isInteger(config.qualityBatchDeadlineMs) || config.qualityBatchDeadlineMs < 0 || config.urgentBatchDeadlineMs > config.qualityBatchDeadlineMs) {
+  if (!Number.isInteger(config.transcodeQueueCapacity) || config.transcodeQueueCapacity < 1 || !Number.isInteger(config.urgentBatchDeadlineMs) || config.urgentBatchDeadlineMs < 0 || !Number.isInteger(config.focusBatchDeadlineMs) || config.focusBatchDeadlineMs < 0 || !Number.isInteger(config.peripheralBatchDeadlineMs) || config.peripheralBatchDeadlineMs < 0 || config.urgentBatchDeadlineMs > config.focusBatchDeadlineMs || config.focusBatchDeadlineMs > config.peripheralBatchDeadlineMs) {
     throw new RangeError("invalid VT page-pipeline configuration");
   }
   const directories = expandVtDirectories(header);
   const transcoder = new BoundedTranscoderPool(textureWorkers, config.transcodeQueueCapacity, telemetry);
-  const bulkReads = new BoundedBulkReadQueue(loader, config.urgentBatchDeadlineMs, config.qualityBatchDeadlineMs, telemetry);
+  const bulkReads = new BoundedBulkReadQueue(loader, config.urgentBatchDeadlineMs, config.focusBatchDeadlineMs, config.peripheralBatchDeadlineMs, telemetry);
   const stats = {
     reads: 0,
     averageReadMs: 0,
@@ -1141,7 +1149,8 @@ function createPageDataProvider(loader, header, textureWorkers, format, config, 
     bulkInFlight: 0,
     bulkInFlightBytes: 0,
     urgentBatches: 0,
-    qualityBatches: 0,
+    focusBatches: 0,
+    peripheralBatches: 0,
     bulkRejected: 0,
     bulkCanceled: 0,
     workerCount: textureWorkers.length,
@@ -1209,7 +1218,8 @@ function createPageDataProvider(loader, header, textureWorkers, format, config, 
     stats.bulkInFlight = read.inFlight;
     stats.bulkInFlightBytes = read.inFlightBytes;
     stats.urgentBatches = read.urgentBatches;
-    stats.qualityBatches = read.qualityBatches;
+    stats.focusBatches = read.focusBatches;
+    stats.peripheralBatches = read.peripheralBatches;
     stats.bulkRejected = read.rejected;
     stats.bulkCanceled = read.canceled;
     stats.workerCount = transcode.workerCount;

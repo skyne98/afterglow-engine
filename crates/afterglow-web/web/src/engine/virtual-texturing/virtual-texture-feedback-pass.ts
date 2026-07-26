@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import { pagesAtMipAxis } from './virtual-texture-layout.ts';
 import type { VirtualPageRequest, VirtualTextureEntry } from './virtual-texture.ts';
 
+const SCORE_COVERAGE_CAP = 255;
+
 export interface FeedbackTextureStore {
   getEntryById(textureId: number): VirtualTextureEntry | undefined;
 }
@@ -123,10 +125,16 @@ export class VirtualTextureFeedbackPass {
           const screenPriority = Math.min(255, Math.floor(
             (normalizedX * normalizedX + normalizedY * normalizedY) * 128,
           ));
+          const centerCloseness = 7 - Math.min(7, screenPriority >>> 5);
+          const cameraCloseness = (packed >>> 28) & 0x7;
+          const pixelWeight = 1 + centerCloseness + cameraCloseness;
           const existing = requests.get(key);
           if (existing) {
             existing.screenPriority = Math.min(existing.screenPriority ?? 255, screenPriority);
-            existing.coverage = Math.min(0xffff, (existing.coverage ?? 1) + 1);
+            const coverage = existing.coverage ?? 1;
+            if (coverage < SCORE_COVERAGE_CAP)
+              existing.perceptualWeight = (existing.perceptualWeight ?? 1) + pixelWeight;
+            existing.coverage = Math.min(0xffff, coverage + 1);
             continue;
           }
           const request = this.requestPool[requestCount++];
@@ -138,6 +146,7 @@ export class VirtualTextureFeedbackPass {
           request.tail = tail ? true : undefined;
           request.screenPriority = screenPriority;
           request.coverage = 1;
+          request.perceptualWeight = pixelWeight;
           request.priorityTier = undefined;
           requests.set(key, request);
           this.seenMips[mip] = 1;

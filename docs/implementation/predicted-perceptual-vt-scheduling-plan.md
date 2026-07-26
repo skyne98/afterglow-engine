@@ -1,7 +1,8 @@
 # Predicted perceptual VT scheduling plan
 
-Status: **minimal redesign; implementation blocked on the decisions in section
-2**.
+Status: **P1–P6 accepted 2026-07-25; minimal implementation landed, generated
+artifact/unit gates pending final run; 32/48/64 ms real-GPU selection and target
+acceptance remain open**.
 
 This plan replaces the current binary center priority with one small perceptual
 page score evaluated from the camera pose expected 100 ms in the future. The
@@ -43,9 +44,9 @@ This supersedes the earlier absolute “center is always number one” rule. A d
 corridor at screen center should compete with camera-close detail near the edge.
 No single factor is absolute.
 
-## 2. Decisions required before runtime implementation
+## 2. Selected decisions
 
-### P1. Perceptual score — recommended default
+### P1. Perceptual score — selected
 
 Use equal 3-bit contributions:
 
@@ -75,7 +76,7 @@ Alternative: make center or distance lexicographically dominant. Rejected by
 default because it recreates the deep-center or close-edge failure in the other
 direction.
 
-### P2. Distance normalization — recommended default
+### P2. Distance normalization — selected
 
 Pack logarithmic camera-relative distance between the active camera's near and
 far planes:
@@ -92,9 +93,9 @@ the near plane.
 Technical alternative to measure: linear near/far normalization. Accept it only
 if corridor/edge captures show a better priority distribution on both GPUs.
 
-### P3. Already-admitted work — blocking KISS trade-off
+### P3. Already-admitted work — selected KISS trade-off
 
-**Recommended default:** priority is guaranteed at scheduler admission. The
+Priority is guaranteed at scheduler admission. The
 fixed 16-page admitted pipeline remains bounded FIFO after admission. A newly
 important page preempts a worse pending generation through the existing abort
 path, but already-running I/O/transcode/GPU work finishes or is discarded.
@@ -104,7 +105,7 @@ queues. That requires new handles/indexes and movable queues at every stage. Do
 not implement it unless traces show unacceptable center/foreground inversion
 under the minimal version.
 
-### P4. Feedback mode — recommended default
+### P4. Feedback mode — selected
 
 Use one predicted feedback pass in production. When motion history is invalid,
 predicted pose equals current pose.
@@ -114,21 +115,22 @@ because it doubles feedback scene rendering/readback and requires merge policy.
 A temporary diagnostic build may render both during a measurement, but no dual
 production path remains.
 
-### P5. Peripheral batching — measured technical decision
+### P5. Peripheral batching — 64 ms candidate implemented; measurement open
 
 Keep:
 
 - urgent parent deadline: 1 ms;
 - high-importance exact deadline: 16 ms.
 
-Add one low-importance exact lane and test 32, 48, and 64 ms non-resetting
-deadlines. Select the shortest deadline that materially reduces total requests
+The implementation currently uses a 64 ms low-importance exact lane and must
+still compare 32, 48, and 64 ms non-resetting deadlines. Select the shortest deadline that materially reduces total requests
 without making predicted pages publish after the actual camera reaches them.
 
-The boundary between high and low importance is selected from recorded score
-histograms, not guessed. Do not expose it as a runtime slider.
+The implemented bucket-12 boundary is provisional so the candidate can emit
+three-lane traces. Select the accepted boundary from recorded score histograms;
+do not expose it as a runtime slider.
 
-### P6. Bandwidth and rollout — recommended default
+### P6. Bandwidth and rollout — selected
 
 - Maximum additional source bytes: +5% versus matching no-prediction run.
 - Prototype is explicitly enabled only in benchmark builds.
@@ -136,8 +138,8 @@ histograms, not guessed. Do not expose it as a runtime slider.
   scheduler globally and delete the prototype switch.
 - Do not retain permanent legacy/predicted scheduler modes.
 
-A response of **“accept P1–P6 defaults”** authorizes implementation. P2/P5 still
-require their stated measurements before final values are promoted.
+The user authorized P1–P6 on 2026-07-25. P5 still requires its stated
+measurements before 64 ms is promoted from candidate to accepted policy.
 
 ## 3. Minimal architecture
 
@@ -526,8 +528,8 @@ new VirtualTextureFeedbackCoordinator(renderer, store, {
 await BigAssetSession.open({
   // existing options...
   urgentBatchDeadlineMs: 1,
-  qualityBatchDeadlineMs: 16,
-  peripheralBatchDeadlineMs: selectedValue,
+  focusBatchDeadlineMs: 16,
+  peripheralBatchDeadlineMs: 64, // provisional candidate
 });
 ```
 
@@ -755,4 +757,6 @@ Proposed commits:
 5. `test(vt): gate predicted perceptual streaming`
 6. `docs(vt): publish perceptual scheduling results`
 
-Implementation does not begin until P1–P6 are accepted or explicitly changed.
+Core implementation is present; release promotion remains blocked on focused
+artifact/allocation gates, the 32/48/64 ms comparison, both target GPUs, and the
+required soaks.

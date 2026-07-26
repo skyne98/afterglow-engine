@@ -17,11 +17,11 @@ hard transport bounds are listed below.
 | VT in-flight pages | 16 and 2 MiB | Admission defers in the fixed scheduler; pinned bootstrap overflow is retained there |
 | VT ready uploads | 16 | Fixed completion ownership |
 | VT transcode workers / waiting ring | 2–4 independent SPSC workers / 12 waiting jobs | Admission cap prevents valid queue overflow; each worker remains one-in-flight |
-| VT bulk deadlines | 1 ms urgent / 16 ms exact-quality, non-resettable | Ready lane dispatches within transport byte/span bounds |
+| VT bulk deadlines | 1 ms urgent parent / 16 ms focus exact / provisional 64 ms peripheral exact, non-resettable | Ready lane dispatches in urgent→focus→peripheral order within transport byte/span bounds |
 | VT upload commit | adaptive 1–4 pages and 0.10–0.35 ms/poll; starts 2 / 0.20 ms | Ready suffix deferred; overload resets promoted settings |
-| VT scheduling | up to 8 admissions/poll inside the 16-page total cap; 0.25 ms/poll; 132 priority lanes | Highest nonempty tier/channel/quality/center lane resumes next frame |
+| VT scheduling | up to 8 admissions/poll inside the 16-page total cap; 0.25 ms/poll; 150 perceptual/kind/channel lanes | Highest nonempty coverage+predicted-center+camera-distance+resident-gap lane resumes next frame |
 | VT stale horizon | 2 feedback epochs (~110 ms plus frame/readback quantization) | Read/transcode canceled or stale output discarded |
-| Feedback cadence/readback | 55 ms monotonic / 1 outstanding | No catch-up burst; submit defers until prior readback is consumed |
+| Feedback cadence/readback | 55 ms monotonic / 1 outstanding; camera predicted 100 ms | No catch-up burst; invalid/suspended/teleport-like prediction resets to current pose |
 | Structural renderer slice | 256/frame | Fixed ring suffix retained |
 | Dirty root slice | 4,096/frame | Dirty flags remain on ring suffix |
 | Hierarchy rebuild | 512 ops and 0.2 ms/frame | Double-buffered old order remains published |
