@@ -18,6 +18,12 @@ fundamentally different rendering technique where:
 2. A **feedback pass** tells the CPU which pages the GPU needs
 3. The CPU loads/transcodes pages on demand and updates the page table
 
+The follow-up
+[`virtual-texture-perceptual-priority-score.md`](virtual-texture-perceptual-priority-score.md)
+audits the known-good priority mechanisms selected for Afterglow's predicted
+streaming experiment: Zhang et al.'s additive fragment coverage/distance/
+displayed-quality weight, Cesium foveation, and RAGE resident-mip deficit.
+
 ---
 
 ## 1. Existing Three.js VT Efforts

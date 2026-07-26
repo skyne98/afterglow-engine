@@ -386,6 +386,11 @@ All engine work must move toward these non-negotiable requirements:
   official public contract audit of SVT/RVT producers, explicit request states,
   layers/physical groups, finalizers, page tables, pools, feedback, sampling,
   and the implementation questions blocked by EULA-gated source access.
+- `docs/research/virtual-texture-perceptual-priority-score.md` — Source audit and
+  minimal score selected for predicted VT demand: Zhang et al.'s evaluated
+  per-fragment coverage/distance/displayed-mip weight, Cesium's foveated center,
+  and RAGE's desired-versus-resident mip gap, adapted to one bounded integer
+  page weight without sorting or another feedback target.
 - `docs/research/surface-detail-low-end-fallbacks.md` — Surface-detail/POM
   fallback evaluation and integrated result: normal/one-tap fallback tiers,
   measured low-core 680M boundary, resident matching height, and bounded VT
@@ -484,12 +489,12 @@ All engine work must move toward these non-negotiable requirements:
 - `docs/implementation/vt-latency-cache-removal-plan.md` — core no-cache VT
   latency implementation and RTX 3090 validation are complete; the explicit
   request-count exception, Radeon 680M profiles, and long soaks remain open.
-- `docs/implementation/predicted-foveated-vt-scheduling-plan.md` — decision-gated
-  follow-up: predict the camera 100 ms ahead, make expected-center radial rank
-  primary, propagate reprioritization through bounded bulk/transcode/upload
-  queues, and measure a longer peripheral batch lane. No implementation begins
-  until its current-view, within-ring, peripheral-bandwidth, and prediction-miss
-  policies are explicitly resolved.
+- `docs/implementation/predicted-perceptual-vt-scheduling-plan.md` — minimal,
+  decision-gated follow-up: predict one feedback camera 100 ms ahead; score each
+  page from equal center, distance, coverage, and resident-mip-gap terms; keep
+  the existing bounded FIFO pipeline after admission; and measure one longer
+  peripheral batch lane. No downstream mutable-priority framework is admitted
+  without a measured failure of this KISS version.
 - `docs/implementation/comms-unification-plan.md` — current priority.
   Consolidates worker comms (split across `afterglow-rpc`, `afterglow-web`, and
   `afterglow-rpc-macros`, with the postcard codec hand-duplicated in TS) into one

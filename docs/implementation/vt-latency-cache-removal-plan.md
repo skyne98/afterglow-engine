@@ -24,9 +24,10 @@ This plan removes the persistent derived-page cache and fixes measured VT
 latency by reducing batching delay and bounding admission to actual transcode
 throughput. It does not add another cache, increase worker count, alter the BIG
 format, or change atlas/upload policy. The decision-gated follow-up
-`predicted-foveated-vt-scheduling-plan.md` investigates 100 ms camera prediction,
-strict radial priority, end-to-end reprioritization, and longer peripheral
-batching; it is not part of this accepted implementation.
+`predicted-perceptual-vt-scheduling-plan.md` investigates one 100 ms predicted
+feedback camera, a bounded perceptual center/distance/coverage/resident-gap
+score, and one longer peripheral batch lane; it is not part of this accepted
+implementation.
 
 ## 1. Blocking product decisions
 
