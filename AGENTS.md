@@ -378,6 +378,14 @@ All engine work must move toward these non-negotiable requirements:
   architecture and Afterglow lessons; neither engine implements file-backed
   asset-page streaming, and neither terrain VT uses sparse mapping for demand
   residency.
+- `docs/research/id-tech-virtual-texturing-audit.md` — Official Doom 3 GPL
+  `idMegaTexture` source audit plus id-authored RAGE paper/talk synthesis:
+  offline layout, feedback, compression/cache/transcode, replacement,
+  publication ordering, overload policy, quality, and evidence limits.
+- `docs/research/unreal-engine-virtual-texturing-public-audit.md` — UE 5.8
+  official public contract audit of SVT/RVT producers, explicit request states,
+  layers/physical groups, finalizers, page tables, pools, feedback, sampling,
+  and the implementation questions blocked by EULA-gated source access.
 - `docs/research/surface-detail-low-end-fallbacks.md` — Surface-detail/POM
   fallback evaluation and integrated result: normal/one-tap fallback tiers,
   measured low-core 680M boundary, resident matching height, and bounded VT

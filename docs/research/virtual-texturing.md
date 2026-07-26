@@ -122,7 +122,11 @@ TSL supports:
 
 ### shlomnissan/virtual-textures (C++/OpenGL, 2025)
 
-A minimal, clean VT prototype. Not WebGPU, but the best reference implementation.
+A minimal, clean VT prototype. Not WebGPU; it is the best concise reference for
+software page-table/atlas sampling, but not the best end-to-end streaming or
+production-policy reference. See the later
+[id Tech audit](id-tech-virtual-texturing-audit.md) and
+[Unreal public-interface audit](unreal-engine-virtual-texturing-public-audit.md).
 
 **Architecture:**
 
@@ -213,13 +217,21 @@ streaming per texture) than true virtual texturing.
 
 ### Other engines
 
-- **Unreal Engine** — VTex (virtual texturing) system since UE4.19. Page table + atlas + feedback. Source available.
+- **Unreal Engine** — production SVT since UE4.19: cooked tiles, page tables,
+  fixed physical pools, feedback, disk-capable producers, and controlled
+  finalization. Full implementation source is EULA-gated and was not available
+  to the current audit identity; official public contracts are analyzed in
+  [Unreal Engine virtual texturing](unreal-engine-virtual-texturing-public-audit.md).
 - **Unity** — Texture2DArray + mipmap streaming, not full VT
 - **O3DE** — no VT found
 
 ---
 
 ## 5. id Tech / Doom
+
+The detailed follow-up is [id Software virtual texturing](id-tech-virtual-texturing-audit.md).
+It distinguishes the GPL id Tech 4 camera clipmap from the unreleased but
+extensively documented production RAGE asset-VT system.
 
 ### Sean Barrett — "Sparse Virtual Textures" (GDC 2008)
 
