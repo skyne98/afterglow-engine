@@ -3,7 +3,8 @@
 Status: working prototype (2026-08-02)
 Location: `prototype/character-editor/`
 Related: `assets/character-rig/` (assets + licenses),
-`docs/research/open-license-character-rig-in-game-editor.md` (license research).
+`docs/research/open-license-character-rig-in-game-editor.md` (license research),
+and `docs/research/direct-manipulation-character-creator-ux.md` (editor UX).
 
 This note records the **full process**: the environment setup, each pipeline
 iteration, the errors and the corrections, and the final implementation.
@@ -188,6 +189,8 @@ copy `src/mpfb` there); PunkElvs proxies in
 
 ## 8. Open items / next steps
 
+- Select the patent-review path before direct body manipulation. The recommended
+  default is fixed hotspots plus explicit operations and synchronized controls.
 - Add an audio or phoneme timeline that drives the Meta viseme set.
 - Wings + tails (CC-BY) via MPFB sub-rigs.
 - Real textures/materials (currently flat skin material).
