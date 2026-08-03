@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Afterglow — Character Editor Prototype</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <div id="viewport">
+        <div id="loading">Loading character…</div>
+      </div>
+
+      <aside id="panel">
+        <header>
+          <h1>Character Editor</h1>
+          <p class="sub">MakeHuman/MPFB2 base · morphs + skeleton · Three.js WebGL</p>
+        </header>
+
+        <section id="load-section">
+          <h2>Character</h2>
+          <input id="file-input" type="file" accept=".glb,.gltf" hidden />
+          <div class="row">
+            <button id="load-btn">Load glTF/GLB</button>
+            <button id="randomize-btn" title="Randomize morphs">🎲 Randomize</button>
+            <button id="reset-btn" title="Reset morphs">Reset</button>
+          </div>
+          <div id="char-meta" class="meta"></div>
+        </section>
+
+        <section id="sex-section">
+          <h2>Sex &amp; Ethnicity</h2>
+          <div class="row">
+            <button id="male-btn" class="primary">Male body</button>
+            <button id="female-btn" class="primary">Female body</button>
+          </div>
+          <div class="row" style="margin-top:8px">
+            <select id="ethnicity-select" style="flex:1;background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px">
+              <option value="caucasian">Caucasian</option>
+              <option value="asian">Asian</option>
+              <option value="african">African</option>
+            </select>
+          </div>
+          <p class="sub" style="margin-top:6px">Genital proxy body + full morph set; body morphed live (no runtime refit).</p>
+        </section>
+
+        <section id="face-section">
+          <h2>Face preview</h2>
+          <div class="row">
+            <button id="face-focus-btn" type="button">Focus face</button>
+            <button id="face-reset-btn" type="button">Reset face</button>
+          </div>
+          <label class="preview-field">
+            <span>Expression</span>
+            <select id="expression-preset-select"></select>
+          </label>
+          <label class="preview-field">
+            <span>Speech shape</span>
+            <select id="speech-preset-select"></select>
+          </label>
+          <p class="sub">Expression and speech previews combine. They do not change body controls.</p>
+        </section>
+
+        <section id="morph-section">
+          <h2>Morphs <span id="morph-count"></span></h2>
+          <div id="zone-selection" class="zone-selection">
+            <span>Hover or click a body zone.</span>
+            <button id="zone-clear-btn" type="button">All controls</button>
+          </div>
+          <div id="morph-list" class="scroll"></div>
+        </section>
+
+        <section id="bone-section">
+          <h2>Bones <span id="bone-count"></span></h2>
+          <div id="bone-list" class="scroll"></div>
+        </section>
+
+        <section id="parts-section">
+          <h2>Body parts</h2>
+          <div id="parts-list" class="scroll"></div>
+        </section>
+
+        <section id="render-section">
+          <h2>Rendering</h2>
+          <div class="part-row"><input id="smooth-toggle" type="checkbox" checked /><label>Smooth shading</label></div>
+          <div class="part-row"><input id="wireframe-toggle" type="checkbox" /><label>Wireframe</label></div>
+          <div class="part-row"><input id="skeleton-toggle" type="checkbox" /><label>Skeleton</label></div>
+        </section>
+
+        <footer id="status">Waiting for a character…</footer>
+      </aside>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,21 @@
+{
+  "name": "character-editor-prototype",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "gen:character": "bun scripts/gen-makehuman.ts",
+    "validate:character": "bun scripts/validate-character-glb.ts",
+    "test": "bun test src/*.test.ts && bun run validate:character && bunx tsc --noEmit"
+  },
+  "dependencies": {
+    "three": "0.185.1"
+  },
+  "devDependencies": {
+    "@types/three": "0.183.1",
+    "typescript": "5.9.3",
+    "vite": "^6.0.0"
+  }
+}
