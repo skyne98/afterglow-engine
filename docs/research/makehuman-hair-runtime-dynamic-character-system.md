@@ -1074,13 +1074,14 @@ and `ponytail01`. It keeps a shared 733-vertex compact driver and 201 sparse
 structural target streams. Expressions and visemes do not change hair rest fit.
 
 Both styles use interpolated main-rig weights. The ponytail has no secondary
-motion yet. A fitted 376-vertex `scalp` cap covers transparent card gaps. The
+motion yet. A fitted 369-vertex PunkElvs scalp cap covers transparent card gaps. The
 first cap test incorrectly used the large `helper-hair` fitting cage and looked
 like a second hairstyle. That path was removed.
 
-The PunkElvs scalp can extend in front of the fitted cap. The prototype masks
-proxy vertices that have two or more `scalp` parents. The fitted cap replaces
-that area for bald and hair states.
+A cap from the base-body scalp does not close an opening in the different
+PunkElvs topology. The corrected prototype duplicates the exact PunkElvs scalp
+faces and their MHCLO bindings. A per-corner body mask removes only those same
+faces, and the duplicate replaces them for bald and hair states.
 
 MPFB parity validation accepts a neutral maximum error below `3e-6` Blender
 units and checks live movement for `head-scale-horiz-incr`. A 100-update browser

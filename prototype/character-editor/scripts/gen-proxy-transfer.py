@@ -134,10 +134,9 @@ for style_id, style_label in HAIR_STYLES:
     hair.data.name = f"Hair-{style_id}"
     hair_assets.append((style_id, style_label, hair, hair_mhclo, binding_sources))
 
-# The card assets have transparent gaps. Keep the base scalp surface as a
-# fitted dark cap so the visible body does not show through those gaps.
-# Do not use helper-hair here. It is a large fitting cage and looks like a
-# second hairstyle when rendered.
+# The card assets have transparent gaps. Duplicate the applicable scalp faces
+# from the visible PunkElvs proxy, not from the different hm08 topology. The
+# duplicate is an exact replacement for the body faces that the hair masks.
 scalp_group = b.vertex_groups.get("scalp")
 if not scalp_group:
     raise RuntimeError("the hm08 scalp group is missing")
@@ -145,24 +144,28 @@ scalp_candidates = {
     vertex.index for vertex in b.data.vertices
     if any(membership.group == scalp_group.index for membership in vertex.groups)
 }
+proxy_scalp_vertices = {
+    vertex for vertex, binding in mhclo.verts.items()
+    if sum(source in scalp_candidates for source in binding["verts"]) >= 2
+}
 scalp_source_faces = [
-    tuple(polygon.vertices) for polygon in b.data.polygons
-    if all(vertex in scalp_candidates for vertex in polygon.vertices)
+    tuple(polygon.vertices) for polygon in proxy.data.polygons
+    if all(vertex in proxy_scalp_vertices for vertex in polygon.vertices)
 ]
+if len(scalp_source_faces) < 100:
+    raise RuntimeError(f"proxy scalp face set is too small ({len(scalp_source_faces)})")
 scalp_sources = sorted({vertex for face in scalp_source_faces for vertex in face})
 scalp_local = {source: local for local, source in enumerate(scalp_sources)}
 scalp_faces = [tuple(scalp_local[vertex] for vertex in face) for face in scalp_source_faces]
-scalp_key = b.shape_key_add(name="temporary_scalp_capture", from_mix=True)
-scalp_vertices = [tuple(scalp_key.data[source].co) for source in scalp_sources]
-b.shape_key_remove(scalp_key)
+scalp_vertices = [tuple(proxy.data.vertices[source].co) for source in scalp_sources]
 scalp_mesh = bpy.data.meshes.new("Hair-scalp")
 scalp_mesh.from_pydata(scalp_vertices, [], scalp_faces)
 scalp_mesh.update()
 scalp = bpy.data.objects.new("Hair-scalp", scalp_mesh)
 bpy.context.collection.objects.link(scalp)
-scalp_groups = {group.index: scalp.vertex_groups.new(name=group.name) for group in b.vertex_groups}
+scalp_groups = {group.index: scalp.vertex_groups.new(name=group.name) for group in proxy.vertex_groups}
 for local, source in enumerate(scalp_sources):
-    for membership in b.data.vertices[source].groups:
+    for membership in proxy.data.vertices[source].groups:
         scalp_groups[membership.group].add([local], membership.weight, 'REPLACE')
 scalp.parent = rig
 scalp_modifier = scalp.modifiers.new(name="Armature", type='ARMATURE')
@@ -194,7 +197,13 @@ def max_displacement(a, b):
 
 # Cook one compact hm08 driver shared by both selected styles. The MHCLO parser
 # has already converted source offsets to Blender coordinates.
-driver_sources = set(scalp_sources)
+driver_sources = set()
+for source in scalp_sources:
+    driver_sources.update(mhclo.verts[source]["verts"])
+for scale in (mhclo.x_scale, mhclo.y_scale, mhclo.z_scale):
+    if not scale:
+        raise RuntimeError("proxy MHCLO data has no axis scale")
+    driver_sources.update(scale[:2])
 for _, _, _, hair_mhclo, _ in hair_assets:
     for binding in hair_mhclo.verts.values():
         driver_sources.update(binding["verts"])
@@ -431,11 +440,7 @@ refit()
 P0 = proxy_coords()
 H0 = face_helper_coords()
 D0 = mixed_driver_coords()
-scalp_record = {
-    "mesh": scalp.name,
-    "vertexCount": len(scalp_sources),
-    "drivers": [driver_local[source] for source in scalp_sources],
-}
+scalp_record = cook_hair_style("scalp", "Scalp", scalp, mhclo, scalp_sources, D0)
 hair_style_records = [
     cook_hair_style(style_id, label, hair, hair_mhclo, binding_sources, D0)
     for style_id, label, hair, hair_mhclo, binding_sources in hair_assets
@@ -558,18 +563,21 @@ for local, source in enumerate(face_helper_source_vertices):
         helper_groups[membership.group].add([local], membership.weight, 'REPLACE')
 
 skin_color = (0.58, 0.36, 0.22, 1.0)
-proxy_colors = proxy.data.color_attributes.new(name="Color", type='FLOAT_COLOR', domain='POINT')
-masked_scalp_vertices = 0
-for vertex, datum in enumerate(proxy_colors.data):
-    binding = mhclo.verts[vertex]
-    scalp_parents = sum(source in scalp_candidates for source in binding["verts"])
-    alpha = 0.0 if scalp_parents >= 2 else 1.0
-    masked_scalp_vertices += 1 if alpha == 0.0 else 0
-    datum.color_srgb = (skin_color[0], skin_color[1], skin_color[2], alpha)
-if masked_scalp_vertices < 100:
-    raise RuntimeError(f"proxy scalp mask is too small ({masked_scalp_vertices})")
-helper_colors = helper_mesh.color_attributes.new(name="Color", type='FLOAT_COLOR', domain='POINT')
-for local, source in enumerate(face_helper_source_vertices):
+scalp_face_keys = set(scalp_source_faces)
+proxy_colors = proxy.data.color_attributes.new(name="Color", type='FLOAT_COLOR', domain='CORNER')
+masked_scalp_corners = 0
+for polygon in proxy.data.polygons:
+    alpha = 0.0 if tuple(polygon.vertices) in scalp_face_keys else 1.0
+    for loop_index in polygon.loop_indices:
+        proxy_colors.data[loop_index].color_srgb = (
+            skin_color[0], skin_color[1], skin_color[2], alpha,
+        )
+        masked_scalp_corners += 1 if alpha == 0.0 else 0
+if masked_scalp_corners < 300:
+    raise RuntimeError(f"proxy scalp mask is too small ({masked_scalp_corners})")
+helper_colors = helper_mesh.color_attributes.new(name="Color", type='FLOAT_COLOR', domain='CORNER')
+for loop in helper_mesh.loops:
+    source = face_helper_source_vertices[loop.vertex_index]
     memberships = {b.vertex_groups[item.group].name for item in b.data.vertices[source].groups}
     if "helper-tongue" in memberships:
         color = (0.65, 0.12, 0.16, 1.0)
@@ -577,7 +585,7 @@ for local, source in enumerate(face_helper_source_vertices):
         color = (0.95, 0.92, 0.80, 1.0)
     else:
         color = (0.95, 0.95, 0.95, 1.0)
-    helper_colors.data[local].color_srgb = color
+    helper_colors.data[loop.index].color_srgb = color
 
 for item in bpy.context.scene.objects:
     item.select_set(False)

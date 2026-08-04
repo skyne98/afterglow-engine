@@ -148,9 +148,11 @@ The first clipping correction used `helper-hair` as a cap. That was incorrect,
 because `helper-hair` is a large fitting cage that looked like a second
 hairstyle. The final cap uses the fitted `scalp` surface.
 
-The PunkElvs proxy scalp can extend in front of that cap. The generator marks
-proxy vertices with two or more scalp parents as transparent. The cap replaces
-that area with skin color for None and hair color for either selected style.
+The base-body scalp and PunkElvs proxy have different topology. Thus, a cap from
+the base body can leave top and rear holes. The final generator duplicates the
+exact PunkElvs scalp faces and their MHCLO bindings. A per-corner mask removes
+only those same body faces. The duplicate replaces them with skin color for None
+and hair color for either selected style.
 
 `ponytail01` currently uses interpolated body-rig weights. It has no SpringChain
 or imported ponytail sub-rig in this prototype.

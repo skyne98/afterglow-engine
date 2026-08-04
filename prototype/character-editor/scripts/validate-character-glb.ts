@@ -92,7 +92,7 @@ function readVec3(glb: Glb, accessorIndex: number): Float32Array {
   return output;
 }
 
-function countTransparentColors(glb: Glb, accessorIndex: number): number {
+function readTransparentColors(glb: Glb, accessorIndex: number): Uint8Array {
   const { json, bin } = glb;
   const accessor = json.accessors[accessorIndex];
   if (accessor.type !== 'VEC4' || accessor.bufferView === undefined) {
@@ -102,7 +102,7 @@ function countTransparentColors(glb: Glb, accessorIndex: number): number {
   const componentSize = accessor.componentType === 5121 ? 1 : accessor.componentType === 5123 ? 2 : 4;
   const stride = view.byteStride ?? componentSize * 4;
   const base = (view.byteOffset ?? 0) + (accessor.byteOffset ?? 0) + componentSize * 3;
-  let transparent = 0;
+  const transparent = new Uint8Array(accessor.count);
   for (let vertex = 0; vertex < accessor.count; vertex++) {
     const offset = base + vertex * stride;
     const alpha = accessor.componentType === 5121
@@ -110,7 +110,7 @@ function countTransparentColors(glb: Glb, accessorIndex: number): number {
       : accessor.componentType === 5123
         ? bin.readUInt16LE(offset) / 0xffff
         : bin.readFloatLE(offset);
-    if (alpha < 0.5) transparent++;
+    transparent[vertex] = alpha < 0.5 ? 1 : 0;
   }
   return transparent;
 }
@@ -159,7 +159,8 @@ function validateBody(sex: 'male' | 'female'): void {
   }
   if (vertices > 25_000) throw new Error(`${sex}: flat polygon split returned (${vertices} vertices)`);
   if (primitive.attributes.COLOR_0 === undefined) throw new Error(`${sex}: face-helper colors are missing`);
-  const transparentScalpVertices = countTransparentColors(glb, primitive.attributes.COLOR_0);
+  const transparentScalpMask = readTransparentColors(glb, primitive.attributes.COLOR_0);
+  const transparentScalpVertices = transparentScalpMask.reduce((sum, value) => sum + value, 0);
   if (transparentScalpVertices < 100 || transparentScalpVertices > 2_000) {
     throw new Error(`${sex}: incorrect proxy scalp mask (${transparentScalpVertices})`);
   }
@@ -229,6 +230,20 @@ function validateBody(sex: 'male' | 'female'): void {
   const scalpNode = glb.json.nodes.find((node: any) => node.mesh === scalpMeshIndex && node.skin !== undefined);
   if (!scalpNode) throw new Error(`${sex}: fitted scalp is not skinned`);
   const scalpPositions = readVec3(glb, scalpPrimitive.attributes.POSITION);
+  const scalpPositionKeys = new Set<string>();
+  for (let offset = 0; offset < scalpPositions.length; offset += 3) {
+    scalpPositionKeys.add(
+      `${scalpPositions[offset].toFixed(6)}/${scalpPositions[offset + 1].toFixed(6)}/${scalpPositions[offset + 2].toFixed(6)}`,
+    );
+  }
+  for (let vertex = 0; vertex < transparentScalpMask.length; vertex++) {
+    if (!transparentScalpMask[vertex]) continue;
+    const offset = vertex * 3;
+    const key = `${basePositions[offset].toFixed(6)}/${basePositions[offset + 1].toFixed(6)}/${basePositions[offset + 2].toFixed(6)}`;
+    if (!scalpPositionKeys.has(key)) {
+      throw new Error(`${sex}: a masked body position has no exact scalp replacement`);
+    }
+  }
   const fittedScalp = new Float32Array(scalpPositions.length);
   hairFit.fitScalp(fittedScalp);
   let scalpError = 0;

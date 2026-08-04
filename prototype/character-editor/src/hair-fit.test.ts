@@ -15,9 +15,19 @@ function fixture(): HairFitDocument {
       wide: [1, 2, 0, 0],
     },
     scalp: {
+      id: 'scalp',
+      label: 'Scalp',
       mesh: 'Hair-scalp',
       vertexCount: 2,
-      drivers: [1, 3],
+      parents: [1, 1, 1, 3, 3, 3],
+      weights: [1, 0, 0, 1, 0, 0],
+      offsets: [0, 0, 0, 0, 0, 0],
+      scales: [
+        [0, 1, 2, 0],
+        [0, 2, 3, 1],
+        [0, 3, 4, 2],
+      ],
+      neutralMaximumError: 0,
     },
     styles: [{
       id: 'test',
@@ -63,6 +73,6 @@ describe('HairFitRuntime', () => {
   test('rejects an out-of-range compact driver index', () => {
     const document = fixture();
     document.styles[0].parents[2] = 4;
-    expect(() => new HairFitRuntime(document, ['wide'])).toThrow('style parent');
+    expect(() => new HairFitRuntime(document, ['wide'])).toThrow('surface parent');
   });
 });
