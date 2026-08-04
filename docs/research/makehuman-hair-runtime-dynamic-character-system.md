@@ -811,6 +811,182 @@ After sealing:
 Exact capacities are product policy. Do not lock them before the target
 character count and hair library are selected.
 
+# Permissive implementation audit
+
+## Result
+
+A permissive implementation exists. **Humentity** is the strongest reference.
+Its code is available under the user's choice of MIT or Apache-2.0.
+
+Afterglow does not need to derive runtime code from GPL or AGPL source. It can
+adapt the permissive Humentity fitting core, keep the required license notice,
+and validate the result against the public `MHCLO` format and MPFB output.
+
+No permissive implementation found in this audit is a correct drop-in
+Afterglow component. The fitting loop is small, but each project has different
+coordinate, allocation, mesh, and rig assumptions.
+
+## Humentity
+
+Repository:
+
+<https://github.com/emberlightstudios/Humentity>
+
+Pinned audit revision:
+
+`1cd7b005d73ec07c9fa1127fdee6059564dcb8d1`
+
+License:
+
+- MIT or Apache-2.0, at the user's choice.
+- The same dual license existed when its current `MHCLO` parser first appeared
+  in revision `7785791bfd76b5906058dcf06fae5d260fc75da2`.
+
+Relevant functions:
+
+- `src/loaders/mhclo.rs` parses exact and three-parent mappings, X/Y/Z scale
+  records, tags, deletion ranges, and the `material` line inside the vertex
+  section.
+- `src/assets.rs::shape_mesh_from_helpers_mhclo` evaluates the weighted parent
+  positions and scaled offset.
+- The same function recalculates normals and tangents and corrects duplicated
+  OBJ vertices at UV seams.
+- `src/rigs.rs::set_asset_rig_arrays` transfers body-rig weights through the
+  `MHCLO` map.
+- The project builds body parts, clothes, and hair at runtime in Bevy.
+
+The geometric fit follows the necessary operation:
+
+```text
+P = sum(parent_position[i] * map_weight[i]) + axis_scale * map_offset
+```
+
+Humentity is the best legal and technical source for the core operation, but
+its current code still needs correction for Afterglow:
+
+- It allocates Bevy meshes, vectors, maps, and sets during mesh construction.
+- It normalizes the three source map weights. Official files already sum to
+  approximately one, and Afterglow can preserve the source values.
+- Its rig-weight code pads fewer than four influences by repeating the first
+  influence before normalization. With two or three different bones, this can
+  change their effective relative weights.
+- It has synthetic and application use, but this audit found no complete
+  MPFB-parity suite for the ten standard hair assets.
+- Its runtime template model bakes a small selected morph set. It is not the
+  fixed-array live refit system that Afterglow needs.
+
+Thus, use Humentity's permissive geometric implementation as the licensed
+reference. Do not import its Bevy runtime or copy its rig-weight code without a
+correction.
+
+## bevy_make_human
+
+Repository:
+
+<https://github.com/slyedoc/bevy_make_human>
+
+Pinned audit revision:
+
+`6d6652051db9795f4bb0f7b3ef5f27cbe217316c`
+
+License:
+
+- MIT or Apache-2.0, at the user's choice.
+- Included MakeHuman assets are identified separately as CC0.
+
+Its `src/loaders/mhclo.rs` contains both a parser and
+`MhcloAsset::apply_to_base`. The function evaluates three-parent interpolation,
+axis scale, offsets, and an optional triangle-normal push.
+
+This is a useful second permissive reference. It is an early WIP, and its
+README says that customization is not yet ideal. Its coordinate signs and 0.1
+unit conversion are specific to its Bevy OBJ path. The optional normal push is
+not part of the source `MHCLO` fit and must not become an implicit Afterglow
+policy.
+
+## OxiHuman
+
+Repository:
+
+<https://github.com/cool-japan/oxihuman>
+
+Pinned audit revision:
+
+`603b446854c3d5a9ca478214e7b85008d54786b9`
+
+License:
+
+- Apache-2.0.
+
+OxiHuman explicitly labels its clothing fit as an independent implementation
+of documented `MHCLO` semantics. This is useful provenance evidence, but its
+current implementation is incomplete:
+
+- It interprets `verts 0` as an expected vertex count. In standard `MHCLO`, the
+  zero is the start index, not the number of mappings.
+- It accepts only nine-field mappings and not exact one-field mappings.
+- It does not parse or apply X/Y/Z offset scales.
+- It keeps source normals instead of recalculating fitted normals.
+
+A standard hair file has `verts 0` and then thousands of mappings. The current
+OxiHuman parser will reject that file because it expected zero mappings.
+Therefore, do not use this implementation as the correctness base.
+
+## Other implementations
+
+| Project | License result | Technical result | Decision |
+|---|---|---|---|
+| `makehuman.js` by Mark-André Hopf | AGPL-3.0-or-later | Complete TypeScript proxy system | Do not copy into Afterglow |
+| `makehuman-js/makehuman-js` | Package states AGPLv3 | Browser character library | Do not copy into Afterglow |
+| `NitroxNova/humanizer` | AGPL-3.0 | Runtime Godot character system | Do not copy into Afterglow |
+| `pdcamargo/retro-engine` | No license file or package license | Good allocation-free TypeScript fitter and tests | No permission to copy |
+| `slyedoc/bevy_make_human` | MIT or Apache-2.0 | Complete basic fitter, early WIP | Secondary reference |
+| `emberlightstudios/Humentity` | MIT or Apache-2.0 | Most complete permissive fitter | Primary reference |
+| `cool-japan/oxihuman` | Apache-2.0 | Incomplete standard-file support | Provenance only |
+
+A public repository without a license does not give reuse permission. The
+Retro Engine code cannot be used unless its owner adds a suitable license or
+gives explicit permission.
+
+## Recommended license path
+
+1. Use Humentity under MIT or Apache-2.0 as the licensed implementation
+   reference.
+2. Keep its copyright and license notice in Afterglow's third-party notices.
+3. Adapt only the small geometric semantics to fixed TypeScript arrays.
+4. Use the public MakeHuman format documents to define accepted input.
+5. Use MPFB only as an offline golden-output oracle.
+6. Write Afterglow-specific parsing, validation, packing, update, and telemetry
+   code.
+7. Do not inspect or translate the AGPL TypeScript implementations during that
+   work.
+
+This path is legally clearer than making pseudocode from GPL code. MIT and
+Apache-2.0 expressly permit modification and redistribution when their terms
+are obeyed. A legal review is still recommended for the final notice and
+provenance record.
+
+## Correctness gates for the permissive port
+
+The port is not accepted until golden tests cover:
+
+- All ten standard CC0 hair assets.
+- Exact one-parent and weighted three-parent mappings.
+- Signed weights below zero and above one without clamping.
+- The `material` line that occurs after `verts 0` in standard hair files.
+- All three scale records and coordinate conversion.
+- Neutral, head-width, head-height, head-depth, age, sex, weight, and
+  asymmetry shapes.
+- OBJ vertices split at UV seams.
+- Recalculated positions, normals, and tangents.
+- Correct top-four skeleton-weight selection and normalization without
+  duplicated influence padding.
+- Bitwise-stable packed records and bounded runtime errors.
+
+For each test shape, compare Afterglow positions with a Blender/MPFB fixture.
+Use an explicit maximum position error and normal-angle error. Do not approve
+the port from code review alone.
+
 # Recommended implementation path
 
 ## Gate 1: offline conversion
@@ -931,6 +1107,23 @@ measured gates above.
   <https://github.com/makehumancommunity/makehuman-assets/tree/8cf9645b975a98eea056b140df11a1d278da0d10/base/hair>
 - Upstream ponytail sub-rig commit:
   <https://github.com/makehumancommunity/makehuman-assets/commit/6349afc4e656fe2c591778464f9304d2527ec613>
+
+## Permissive implementations
+
+- Humentity dual MIT/Apache-2.0 license:
+  <https://github.com/emberlightstudios/Humentity/blob/1cd7b005d73ec07c9fa1127fdee6059564dcb8d1/LICENSE>
+- Humentity `MHCLO` parser:
+  <https://github.com/emberlightstudios/Humentity/blob/1cd7b005d73ec07c9fa1127fdee6059564dcb8d1/src/loaders/mhclo.rs>
+- Humentity fitting function:
+  <https://github.com/emberlightstudios/Humentity/blob/1cd7b005d73ec07c9fa1127fdee6059564dcb8d1/src/assets.rs>
+- Humentity rig-weight transfer:
+  <https://github.com/emberlightstudios/Humentity/blob/1cd7b005d73ec07c9fa1127fdee6059564dcb8d1/src/rigs.rs>
+- `bevy_make_human` dual MIT/Apache-2.0 license and fitter:
+  <https://github.com/slyedoc/bevy_make_human/blob/6d6652051db9795f4bb0f7b3ef5f27cbe217316c/LICENSE-MIT>
+  <https://github.com/slyedoc/bevy_make_human/blob/6d6652051db9795f4bb0f7b3ef5f27cbe217316c/src/loaders/mhclo.rs>
+- OxiHuman Apache-2.0 independent implementation:
+  <https://github.com/cool-japan/oxihuman/blob/603b446854c3d5a9ca478214e7b85008d54786b9/LICENSE>
+  <https://github.com/cool-japan/oxihuman/blob/603b446854c3d5a9ca478214e7b85008d54786b9/crates/oxihuman-mesh/src/clothing.rs>
 
 ## Runtime standards and references
 
