@@ -1,6 +1,6 @@
 # Runtime character bake and compact runtime plan
 
-**Status:** proposed for user decisions
+**Status:** in progress, core algorithm slice implemented
 **Date:** 2026-08-02
 **Scope:** built-in character baking, live structural edits, compact finished
 characters, fitted equipment, hair, rig rest data, and bounded publication.
@@ -39,6 +39,23 @@ native OS-worker composition, and a bounded blob store.
 
 The important missing parts are a generic complete model record, a character
 baker, a multi-primitive atomic model publication, and fixed character pools.
+
+### Progress
+
+The first algorithm slice now exists in `afterglow-character`:
+
+- Fixed-array SurfaceWrap fitting with signed weights and axis scales.
+- Complete and incremental sparse-target evaluation.
+- Piecewise macro-state and precomputed product evaluation.
+- Corrected top-four skin-weight transfer without repeated padding.
+- Area-weighted normal rebuilding.
+- Tracked no-allocation tests for the hot operations.
+- MPFB golden parity for 26 sampled CC0 `short04` vertices in neutral and
+  `head-scale-horiz-incr` states.
+
+The crate has 14 passing unit tests. The real-hair fit error limit is `3e-6`
+Blender units. Source parsing, complete macro tables, tangents, rig-rest fitting,
+and worker integration remain open.
 
 ## 1. Locked direction
 
