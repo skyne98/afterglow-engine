@@ -1,6 +1,6 @@
 # Runtime character bake and compact runtime plan
 
-**Status:** in progress, core algorithm slice implemented
+**Status:** proposed for user decisions
 **Date:** 2026-08-02
 **Scope:** built-in character baking, live structural edits, compact finished
 characters, fitted equipment, hair, rig rest data, and bounded publication.
@@ -40,22 +40,19 @@ native OS-worker composition, and a bounded blob store.
 The important missing parts are a generic complete model record, a character
 baker, a multi-primitive atomic model publication, and fixed character pools.
 
-### Progress
+### Prototype algorithm evidence
 
-The first algorithm slice now exists in `afterglow-character`:
+`prototype/character-editor/bake-core-rs` contains an isolated Rust prototype
+for the difficult bake algorithms. It is not an engine crate, workspace member,
+worker, public API, or accepted runtime design.
 
-- Fixed-array SurfaceWrap fitting with signed weights and axis scales.
-- Complete and incremental sparse-target evaluation.
-- Piecewise macro-state and precomputed product evaluation.
-- Corrected top-four skin-weight transfer without repeated padding.
-- Area-weighted normal rebuilding.
-- Tracked no-allocation tests for the hot operations.
-- MPFB golden parity for 26 sampled CC0 `short04` vertices in neutral and
-  `head-scale-horiz-incr` states.
+The prototype tests signed SurfaceWrap fitting, sparse-target evaluation,
+macro products, corrected skin transfer, and normal rebuilding. It also has
+no-allocation checks and MPFB parity for 26 sampled CC0 `short04` vertices.
 
-The crate has 14 passing unit tests. The real-hair fit error limit is `3e-6`
-Blender units. Source parsing, complete macro tables, tangents, rig-rest fitting,
-and worker integration remain open.
+All 14 tests pass. The real-hair fit error limit is `3e-6` Blender units. Source
+parsing, complete macro tables, tangents, rig-rest fitting, and worker
+integration remain open.
 
 ## 1. Locked direction
 

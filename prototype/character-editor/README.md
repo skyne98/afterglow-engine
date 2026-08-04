@@ -75,6 +75,21 @@ Validate the generated GLBs and the TypeScript source:
 bun run test
 ```
 
+## Bake-core Rust prototype
+
+`bake-core-rs/` tests the difficult source-to-bake algorithms separately from
+the engine. It is not an engine crate, workspace member, worker, or public API.
+
+It contains fixed-array SurfaceWrap fitting, sparse-target evaluation, macro
+products, corrected skin transfer, and normal rebuilding. Its tests include
+caller-owned-memory checks and MPFB parity for the CC0 `short04` hair asset.
+
+Run it with:
+
+```sh
+cargo test --manifest-path prototype/character-editor/bake-core-rs/Cargo.toml
+```
+
 ## Why proxy + offline transfer
 
 MakeHuman genitals exist only on **proxy topology** (an alternate pelvis mesh).
@@ -109,7 +124,8 @@ morph mesh — genitals and body morphs together, no refit, no base mesh.
 - [x] Add expression and complete viseme preview libraries.
 - [x] Research The Sims 4 and BDO direct-manipulation editors.
 - [x] Audit MakeHuman hair fitting, rigging, and runtime physics needs.
-- [ ] Prototype runtime SurfaceWrap and authored SpringChain hair.
+- [x] Prototype fixed-workspace SurfaceWrap and related bake algorithms.
+- [ ] Prototype authored SpringChain hair.
 - [ ] Select a patent-review path before direct body manipulation.
 - [ ] Add an audio or phoneme timeline that drives Meta visemes.
 - [ ] Wings + tails (CC-BY) via MPFB sub-rigs.

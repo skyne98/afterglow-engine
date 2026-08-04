@@ -8,7 +8,6 @@ members = [
     "crates/afterglow-assets",
     "crates/afterglow-assets-worker",
     "crates/afterglow-basis-encoder",
-    "crates/afterglow-character",
     "crates/afterglow-meshopt",
     "crates/afterglow-pipeline",
     "crates/afterglow-rpc",

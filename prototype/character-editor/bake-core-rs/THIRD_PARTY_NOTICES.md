@@ -1,6 +1,6 @@
 # Third-party notices
 
-`afterglow-character` uses these co-primary implementation references:
+The character bake-core prototype uses these co-primary implementation references:
 
 - Humentity, revision `1cd7b005d73ec07c9fa1127fdee6059564dcb8d1`:
   <https://github.com/emberlightstudios/Humentity>

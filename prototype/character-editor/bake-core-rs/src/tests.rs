@@ -1,10 +1,11 @@
 use std::alloc::System;
 
-use afterglow_rpc::allocation::{TrackingAllocator, assert_no_alloc};
-
 use crate::*;
 
+mod allocation;
 mod short04_golden;
+
+use allocation::{TrackingAllocator, assert_no_alloc};
 
 #[global_allocator]
 static ALLOCATOR: TrackingAllocator<System> = TrackingAllocator::new(System);

@@ -61,13 +61,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "afterglow-character"
-version = "0.1.0"
-dependencies = [
- "afterglow-rpc",
-]
-
-[[package]]
 name = "afterglow-meshopt"
 version = "0.1.0"
 dependencies = [

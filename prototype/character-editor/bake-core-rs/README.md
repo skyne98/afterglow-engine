@@ -1,8 +1,8 @@
-# Character bake core
+# Character bake-core prototype
 
-`afterglow-character` supplies the fixed-workspace algorithms for compact
-character baking. It does not yet supply source-pack parsing, RPC workers,
-Three.js publication, or the public `CharacterSystem`.
+This isolated prototype tests fixed-workspace algorithms for compact character
+baking. It is not an engine crate, workspace member, worker, public API, or
+accepted runtime design.
 
 ## SurfaceWrap
 
@@ -80,9 +80,9 @@ result. It reports triangle, degenerate-triangle, and isolated-vertex counts.
 
 ## Allocation and failure
 
-All algorithm output uses caller-owned slices. Unit tests use the
-`afterglow-rpc` tracking allocator and prove that the accepted hot operations do
-not allocate.
+All algorithm output uses caller-owned slices. Unit tests use a local
+thread-specific allocation counter and prove that the accepted hot operations
+do not allocate.
 
 Errors use `CharacterBakeError`. Length, index, finite-value, scale, sparse
 order, macro, triangle, and skin failures are deterministic.
@@ -99,13 +99,12 @@ The fixture includes negative and greater-than-one mapping weights.
 Run:
 
 ```sh
-nix-shell shell.nix --run "cargo test -p afterglow-character"
-nix-shell shell.nix --run \
-  "cargo clippy -p afterglow-character --lib --no-deps -- -D warnings"
+cargo test --manifest-path prototype/character-editor/bake-core-rs/Cargo.toml
+cargo clippy --manifest-path prototype/character-editor/bake-core-rs/Cargo.toml \
+  --lib --no-deps -- -D warnings
 ```
 
 ## Provenance
 
 Humentity and `bevy_make_human` are the co-primary N1 permissive references.
-`crates/afterglow-character/THIRD_PARTY_NOTICES.md` records their pinned
-revisions and MIT notices.
+`THIRD_PARTY_NOTICES.md` records their pinned revisions and MIT notices.

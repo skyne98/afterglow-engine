@@ -1,0 +1,9 @@
+[package]
+name = "afterglow-character-bake-prototype"
+version = "0.0.0"
+edition = "2024"
+publish = false
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/skyne98/afterglow-engine"
+
+[workspace]

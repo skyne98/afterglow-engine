@@ -46,7 +46,6 @@
 - [Incremental Hierarchy](./reference/hierarchy.md)
 - [Renderer Sealing](./reference/renderer-sealing.md)
 - [Model Presentation](./reference/model-presentation.md)
-- [Character Baking](./reference/character-baking.md)
 - [Dynamic Audio](./reference/dynamic-audio.md)
 - [Demo Input and Automation](./reference/demo-input-harness.md)
 - [Allocation Boundaries](./reference/allocation-boundaries.md)

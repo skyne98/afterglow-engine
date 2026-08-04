@@ -12,7 +12,6 @@ truth.
 | `afterglow-assets` | Shared confinement/MIME plus positional streaming primitives (`AssetSource`, `FsSource`, `BytesSource`) and bounded range parsing. The single security boundary for FS assets. |
 | `afterglow-assets-worker` | Generated async `load`/`size`/`read` service. Native builds use `FsSource`; the live browser BIG/VT path currently uses the serving-layer range loader instead. |
 | `afterglow-basis-encoder` | Offline-only UASTC encoder used by the asset pipeline; isolates the official C++ Basis encoder from runtime and wasm crates. |
-| `afterglow-character` | Fixed-workspace SurfaceWrap, sparse-target, macro-weight, skin-transfer, and normal-rebuild algorithms for compact character baking. |
 | `afterglow-pipeline` | Confines/embeds external glTF packages, packs self-contained GLBs, extracts images, cooks resident 8-bit R8 displacement + blue-noise dither textures into `.big` containers, builds bordered VT pages and packed mip tails, UASTC-encodes slots, and writes seekable `.big` containers. |
 | `afterglow-texture` | Pure-Rust runtime worker that transcodes Basis pages to BC7, ASTC, ETC, or RGBA. Public web uses its WASM worker; the native shell must use its generated native worker, but that composition is not yet wired (see `docs/implementation/shell-promotion-plan.md`). |
 | `afterglow-web` | Wasm target and authored TypeScript runtime: shared-ring workers, packed model loading, rig-preserving runtime meshopt, VT materials/feedback, fixed engine memory, and demos. |
@@ -78,7 +77,6 @@ cargo run -p xtask bench   # run the native ring buffer stress test
 |---|---|
 | Run the native shell | `crates/afterglow-shell/src/main.rs` |
 | Understand asset serving | `crates/afterglow-assets/`, `crates/afterglow-web/src/dev_server.rs` |
-| Understand character fitting | `crates/afterglow-character/`, `docs/api/character-bake-core.md` |
 | See a worker service | `crates/afterglow-rpc-demo/src/lib.rs` |
 | Use the `#[rpc]` macro | `crates/afterglow-rpc-macros/src/lib.rs` |
 | Call a worker from TypeScript | `crates/afterglow-web/web/src/workers/` |

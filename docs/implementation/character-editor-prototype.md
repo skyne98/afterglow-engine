@@ -114,6 +114,16 @@ character editor** (base + morphs + skeleton) plus **genitals**.
 
 ## 5. Final implementation
 
+### `bake-core-rs/` (isolated Rust prototype)
+
+This directory tests fixed-array SurfaceWrap fitting, sparse-target evaluation,
+macro products, corrected skin transfer, and normal rebuilding. It is not an
+engine crate, workspace member, worker, public API, or accepted runtime design.
+
+The 14 tests include no-allocation checks and an MPFB golden fixture for 26
+sampled CC0 `short04` hair vertices. The neutral and head-width fit error limit
+is `3e-6` Blender units.
+
 ### `scripts/gen-proxy-transfer.py` (Blender headless)
 Per sex:
 1. `HumanService.create_human()` + `add_builtin_rig(game_engine)`.
@@ -169,6 +179,9 @@ bun install
 bun run gen:character       # regenerate both proxy bodies (Blender headless)
 bun run test                # validate GLBs and TypeScript
 bunx vite                    # dev server (prints port; e.g. 5175)
+
+# From the repository root:
+cargo test --manifest-path prototype/character-editor/bake-core-rs/Cargo.toml
 ```
 
 One-time prerequisites: Blender 5.x on PATH; MPFB extension installed to
