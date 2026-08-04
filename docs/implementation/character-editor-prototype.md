@@ -4,8 +4,9 @@ Status: working prototype (2026-08-02)
 Location: `prototype/character-editor/`
 Related: `assets/character-rig/` (assets + licenses),
 `docs/research/open-license-character-rig-in-game-editor.md` (license research),
-`docs/research/direct-manipulation-character-creator-ux.md` (editor UX), and
-`docs/research/makehuman-hair-runtime-dynamic-character-system.md` (runtime hair).
+`docs/research/direct-manipulation-character-creator-ux.md` (editor UX),
+`docs/research/makehuman-hair-runtime-dynamic-character-system.md` (runtime hair),
+and `docs/implementation/runtime-character-bake-plan.md` (production bake path).
 
 This note records the **full process**: the environment setup, each pipeline
 iteration, the errors and the corrections, and the final implementation.
@@ -192,8 +193,9 @@ copy `src/mpfb` there); PunkElvs proxies in
 
 - Select the patent-review path before direct body manipulation. The recommended
   default is fixed hotspots plus explicit operations and synchronized controls.
-- Prototype a generic runtime SurfaceWrap for hair. Use Humentity and
-  `bevy_make_human` as the co-primary N1 permissive implementation references.
+- Implement the fixed source-to-bake path in
+  `runtime-character-bake-plan.md`. Use Humentity and `bevy_make_human` as the
+  co-primary N1 permissive implementation references.
 - Add authored SpringChain data to moving long hair. Short hair stays rigid to
   the main body rig.
 - Add an audio or phoneme timeline that drives the Meta viseme set.
