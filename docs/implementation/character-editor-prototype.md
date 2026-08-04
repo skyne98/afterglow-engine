@@ -192,8 +192,8 @@ copy `src/mpfb` there); PunkElvs proxies in
 
 - Select the patent-review path before direct body manipulation. The recommended
   default is fixed hotspots plus explicit operations and synchronized controls.
-- Prototype a generic runtime SurfaceWrap for hair. Do not duplicate all body
-  morph targets into every hairstyle.
+- Prototype a generic runtime SurfaceWrap for hair. Use Humentity and
+  `bevy_make_human` as the co-primary N1 permissive implementation references.
 - Add authored SpringChain data to moving long hair. Short hair stays rigid to
   the main body rig.
 - Add an audio or phoneme timeline that drives the Meta viseme set.

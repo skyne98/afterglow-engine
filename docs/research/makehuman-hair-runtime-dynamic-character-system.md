@@ -815,12 +815,14 @@ character count and hair library are selected.
 
 ## Result
 
-A permissive implementation exists. **Humentity** is the strongest reference.
-Its code is available under the user's choice of MIT or Apache-2.0.
+Permissive implementations exist. **Decision locked 2026-08-02:** Humentity and
+`bevy_make_human` are the co-primary **N1 implementation references**. Both are
+available under the user's choice of MIT or Apache-2.0.
 
 Afterglow does not need to derive runtime code from GPL or AGPL source. It can
-adapt the permissive Humentity fitting core, keep the required license notice,
-and validate the result against the public `MHCLO` format and MPFB output.
+adapt these permissive fitting implementations, keep the required license
+notices, and validate the result against the public `MHCLO` format and MPFB
+output.
 
 No permissive implementation found in this audit is a correct drop-in
 Afterglow component. The fitting loop is small, but each project has different
@@ -861,8 +863,8 @@ The geometric fit follows the necessary operation:
 P = sum(parent_position[i] * map_weight[i]) + axis_scale * map_offset
 ```
 
-Humentity is the best legal and technical source for the core operation, but
-its current code still needs correction for Afterglow:
+Humentity supplies the more complete end-to-end path, but its current code
+still needs correction for Afterglow:
 
 - It allocates Bevy meshes, vectors, maps, and sets during mesh construction.
 - It normalizes the three source map weights. Official files already sum to
@@ -875,9 +877,9 @@ its current code still needs correction for Afterglow:
 - Its runtime template model bakes a small selected morph set. It is not the
   fixed-array live refit system that Afterglow needs.
 
-Thus, use Humentity's permissive geometric implementation as the licensed
-reference. Do not import its Bevy runtime or copy its rig-weight code without a
-correction.
+Thus, use Humentity for the complete path and `bevy_make_human` for an
+independent implementation comparison. Do not import either Bevy runtime, and
+do not copy Humentity's rig-weight code without a correction.
 
 ## bevy_make_human
 
@@ -898,11 +900,11 @@ Its `src/loaders/mhclo.rs` contains both a parser and
 `MhcloAsset::apply_to_base`. The function evaluates three-parent interpolation,
 axis scale, offsets, and an optional triangle-normal push.
 
-This is a useful second permissive reference. It is an early WIP, and its
-README says that customization is not yet ideal. Its coordinate signs and 0.1
-unit conversion are specific to its Bevy OBJ path. The optional normal push is
-not part of the source `MHCLO` fit and must not become an implicit Afterglow
-policy.
+This is the second co-primary N1 implementation reference. It is also an early
+WIP, and its README says that customization is not yet ideal. Its coordinate
+signs and 0.1 unit conversion are specific to its Bevy OBJ path. The optional
+normal push is not part of the source `MHCLO` fit and must not become an
+implicit Afterglow policy.
 
 ## OxiHuman
 
@@ -940,8 +942,8 @@ Therefore, do not use this implementation as the correctness base.
 | `makehuman-js/makehuman-js` | Package states AGPLv3 | Browser character library | Do not copy into Afterglow |
 | `NitroxNova/humanizer` | AGPL-3.0 | Runtime Godot character system | Do not copy into Afterglow |
 | `pdcamargo/retro-engine` | No license file or package license | Good allocation-free TypeScript fitter and tests | No permission to copy |
-| `slyedoc/bevy_make_human` | MIT or Apache-2.0 | Complete basic fitter, early WIP | Secondary reference |
-| `emberlightstudios/Humentity` | MIT or Apache-2.0 | Most complete permissive fitter | Primary reference |
+| `slyedoc/bevy_make_human` | MIT or Apache-2.0 | Complete basic fitter, early WIP | Co-primary N1 reference |
+| `emberlightstudios/Humentity` | MIT or Apache-2.0 | Most complete permissive fitter | Co-primary N1 reference |
 | `cool-japan/oxihuman` | Apache-2.0 | Incomplete standard-file support | Provenance only |
 
 A public repository without a license does not give reuse permission. The
@@ -950,10 +952,11 @@ gives explicit permission.
 
 ## Recommended license path
 
-1. Use Humentity under MIT or Apache-2.0 as the licensed implementation
-   reference.
-2. Keep its copyright and license notice in Afterglow's third-party notices.
-3. Adapt only the small geometric semantics to fixed TypeScript arrays.
+1. Use Humentity and `bevy_make_human` under MIT or Apache-2.0 as the licensed
+   N1 implementation references.
+2. Keep both copyright and license notices in Afterglow's third-party notices.
+3. Compare both implementations before adapting the geometric semantics to
+   fixed TypeScript arrays.
 4. Use the public MakeHuman format documents to define accepted input.
 5. Use MPFB only as an offline golden-output oracle.
 6. Write Afterglow-specific parsing, validation, packing, update, and telemetry
