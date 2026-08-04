@@ -4,7 +4,8 @@ Status: working prototype (2026-08-02)
 Location: `prototype/character-editor/`
 Related: `assets/character-rig/` (assets + licenses),
 `docs/research/open-license-character-rig-in-game-editor.md` (license research),
-and `docs/research/direct-manipulation-character-creator-ux.md` (editor UX).
+`docs/research/direct-manipulation-character-creator-ux.md` (editor UX), and
+`docs/research/makehuman-hair-runtime-dynamic-character-system.md` (runtime hair).
 
 This note records the **full process**: the environment setup, each pipeline
 iteration, the errors and the corrections, and the final implementation.
@@ -191,6 +192,10 @@ copy `src/mpfb` there); PunkElvs proxies in
 
 - Select the patent-review path before direct body manipulation. The recommended
   default is fixed hotspots plus explicit operations and synchronized controls.
+- Prototype a generic runtime SurfaceWrap for hair. Do not duplicate all body
+  morph targets into every hairstyle.
+- Add authored SpringChain data to moving long hair. Short hair stays rigid to
+  the main body rig.
 - Add an audio or phoneme timeline that drives the Meta viseme set.
 - Wings + tails (CC-BY) via MPFB sub-rigs.
 - Real textures/materials (currently flat skin material).

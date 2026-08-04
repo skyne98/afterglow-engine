@@ -31,6 +31,22 @@ rig through **Rigify**, and export to **glTF** (skinned mesh + shape keys).
 | `proxies/punkelvs_female` (`elvs_femaleproxy1.proxy/.obj/.mhw`) | 2.6M | CC-BY | female proxy: simplified vulva |
 | `genitalia/` (see ledger below) | mixed | see below | community proxies |
 
+## Standard hair audit
+
+`makehuman_system_assets_cc0.zip` contains ten CC0 card-mesh styles:
+`afro01`, `bob01`, `bob02`, `braid01`, `long01`, `ponytail01`, `short01`,
+`short02`, `short03`, and `short04`. Together they have 27,117 vertices and
+18,943 faces.
+
+Each hair vertex has an `MHCLO` three-parent surface-wrap record. The ten styles
+use only 1,601 unique `hm08` body or helper vertices. Thus, they can refit to a
+runtime body shape if the engine keeps a compact deformed `hm08` driver.
+
+The local ZIP has no hair sub-rig or custom-weight sidecars. The upstream CC0
+`makehuman-assets` repository adds `ponytail01.mpfbskel` and `ponytail01.mhw`:
+one root plus five ponytail bones. See
+`docs/research/makehuman-hair-runtime-dynamic-character-system.md`.
+
 Downloaded `genitalia/` ledger (each page verified 2026-08-02):
 
 | File | License | Verdict |

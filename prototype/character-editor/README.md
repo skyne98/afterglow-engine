@@ -93,6 +93,8 @@ morph mesh — genitals and body morphs together, no refit, no base mesh.
 - License research: `docs/research/open-license-character-rig-in-game-editor.md`.
 - Direct-manipulation UX research:
   `docs/research/direct-manipulation-character-creator-ux.md`.
+- Runtime MakeHuman hair research:
+  `docs/research/makehuman-hair-runtime-dynamic-character-system.md`.
 
 ## Status / next steps
 
@@ -106,6 +108,8 @@ morph mesh — genitals and body morphs together, no refit, no base mesh.
 - [x] Add eyes, teeth, and tongue geometry for face animation.
 - [x] Add expression and complete viseme preview libraries.
 - [x] Research The Sims 4 and BDO direct-manipulation editors.
+- [x] Audit MakeHuman hair fitting, rigging, and runtime physics needs.
+- [ ] Prototype runtime SurfaceWrap and authored SpringChain hair.
 - [ ] Select a patent-review path before direct body manipulation.
 - [ ] Add an audio or phoneme timeline that drives Meta visemes.
 - [ ] Wings + tails (CC-BY) via MPFB sub-rigs.
