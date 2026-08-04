@@ -559,8 +559,15 @@ for local, source in enumerate(face_helper_source_vertices):
 
 skin_color = (0.58, 0.36, 0.22, 1.0)
 proxy_colors = proxy.data.color_attributes.new(name="Color", type='FLOAT_COLOR', domain='POINT')
-for datum in proxy_colors.data:
-    datum.color_srgb = skin_color
+masked_scalp_vertices = 0
+for vertex, datum in enumerate(proxy_colors.data):
+    binding = mhclo.verts[vertex]
+    scalp_parents = sum(source in scalp_candidates for source in binding["verts"])
+    alpha = 0.0 if scalp_parents >= 2 else 1.0
+    masked_scalp_vertices += 1 if alpha == 0.0 else 0
+    datum.color_srgb = (skin_color[0], skin_color[1], skin_color[2], alpha)
+if masked_scalp_vertices < 100:
+    raise RuntimeError(f"proxy scalp mask is too small ({masked_scalp_vertices})")
 helper_colors = helper_mesh.color_attributes.new(name="Color", type='FLOAT_COLOR', domain='POINT')
 for local, source in enumerate(face_helper_source_vertices):
     memberships = {b.vertex_groups[item.group].name for item in b.data.vertices[source].groups}

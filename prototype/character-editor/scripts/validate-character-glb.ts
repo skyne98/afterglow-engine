@@ -92,6 +92,29 @@ function readVec3(glb: Glb, accessorIndex: number): Float32Array {
   return output;
 }
 
+function countTransparentColors(glb: Glb, accessorIndex: number): number {
+  const { json, bin } = glb;
+  const accessor = json.accessors[accessorIndex];
+  if (accessor.type !== 'VEC4' || accessor.bufferView === undefined) {
+    throw new Error(`accessor ${accessorIndex}: expected color VEC4`);
+  }
+  const view = json.bufferViews[accessor.bufferView];
+  const componentSize = accessor.componentType === 5121 ? 1 : accessor.componentType === 5123 ? 2 : 4;
+  const stride = view.byteStride ?? componentSize * 4;
+  const base = (view.byteOffset ?? 0) + (accessor.byteOffset ?? 0) + componentSize * 3;
+  let transparent = 0;
+  for (let vertex = 0; vertex < accessor.count; vertex++) {
+    const offset = base + vertex * stride;
+    const alpha = accessor.componentType === 5121
+      ? bin.readUInt8(offset) / 0xff
+      : accessor.componentType === 5123
+        ? bin.readUInt16LE(offset) / 0xffff
+        : bin.readFloatLE(offset);
+    if (alpha < 0.5) transparent++;
+  }
+  return transparent;
+}
+
 function maximumDisplacement(values: Float32Array, label: string): number {
   let maximum = 0;
   for (let offset = 0; offset < values.length; offset += 3) {
@@ -136,6 +159,10 @@ function validateBody(sex: 'male' | 'female'): void {
   }
   if (vertices > 25_000) throw new Error(`${sex}: flat polygon split returned (${vertices} vertices)`);
   if (primitive.attributes.COLOR_0 === undefined) throw new Error(`${sex}: face-helper colors are missing`);
+  const transparentScalpVertices = countTransparentColors(glb, primitive.attributes.COLOR_0);
+  if (transparentScalpVertices < 100 || transparentScalpVertices > 2_000) {
+    throw new Error(`${sex}: incorrect proxy scalp mask (${transparentScalpVertices})`);
+  }
   const faceCategories = new Map<string, number>();
   for (const control of controls) {
     if (control.category.startsWith('expression-') || control.category.startsWith('speech-')) {

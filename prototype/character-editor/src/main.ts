@@ -275,7 +275,7 @@ class CharacterEditor {
           roughness: 0.9,
           side: THREE.DoubleSide,
         });
-        mesh.visible = this.hairStyleSelect.value !== 'none';
+        mesh.visible = true;
         this.scalpMesh = mesh;
       } else if (hairStyle) {
         const texture = this.textureLoader.load(`hair-${hairStyle}-diffuse.png?v=${CHARACTER_ASSET_REVISION}`);
@@ -295,6 +295,7 @@ class CharacterEditor {
         // Face-helper vertex colors distinguish the eyes, teeth, and tongue.
         const vertexColors = mesh.geometry.getAttribute('color') !== undefined;
         mesh.material = new THREE.MeshStandardMaterial({
+          alphaTest: 0.5,
           color: vertexColors ? 0xffffff : 0xc9a27e,
           roughness: 0.6,
           vertexColors,
@@ -354,8 +355,8 @@ class CharacterEditor {
   private setHairStyle(styleId: string): void {
     for (const [id, mesh] of this.hairMeshes) mesh.visible = id === styleId;
     if (this.scalpMesh) {
-      this.scalpMesh.visible = styleId !== 'none';
-      const color = styleId === 'short04' ? 0x090a0c : 0x2a1710;
+      this.scalpMesh.visible = true;
+      const color = styleId === 'none' ? 0x945c38 : styleId === 'short04' ? 0x090a0c : 0x2a1710;
       (this.scalpMesh.material as THREE.MeshStandardMaterial).color.setHex(color);
     }
     if (styleId === 'none') {
@@ -373,30 +374,25 @@ class CharacterEditor {
   }
 
   private updateHairGeometry(style?: HairStyleRuntime): void {
-    if (!this.hairFit) return;
+    if (!this.hairFit || !this.scalpMesh) return;
+    const scalpPositions = this.scalpMesh.geometry.getAttribute('position');
+    if (!scalpPositions || !(scalpPositions.array instanceof Float32Array)) return;
+    this.hairFit.fitScalp(scalpPositions.array);
+    scalpPositions.needsUpdate = true;
+    this.scalpMesh.geometry.computeVertexNormals();
+    this.scalpMesh.geometry.computeBoundingBox();
+    this.scalpMesh.geometry.computeBoundingSphere();
+
     const selected = style ?? this.hairFit.style(this.hairStyleSelect.value);
     if (!selected) return;
     const mesh = this.hairMeshes.get(selected.id);
     const positions = mesh?.geometry.getAttribute('position');
-    const scalpPositions = this.scalpMesh?.geometry.getAttribute('position');
-    if (
-      !mesh
-      || !positions
-      || !(positions.array instanceof Float32Array)
-      || !this.scalpMesh
-      || !scalpPositions
-      || !(scalpPositions.array instanceof Float32Array)
-    ) return;
+    if (!mesh || !positions || !(positions.array instanceof Float32Array)) return;
     this.hairFit.fit(selected, positions.array);
-    this.hairFit.fitScalp(scalpPositions.array);
     positions.needsUpdate = true;
-    scalpPositions.needsUpdate = true;
     mesh.geometry.computeVertexNormals();
     mesh.geometry.computeBoundingBox();
     mesh.geometry.computeBoundingSphere();
-    this.scalpMesh.geometry.computeVertexNormals();
-    this.scalpMesh.geometry.computeBoundingBox();
-    this.scalpMesh.geometry.computeBoundingSphere();
   }
 
   private populatePresetSelect(select: HTMLSelectElement, presets: readonly FacePreset[]): void {

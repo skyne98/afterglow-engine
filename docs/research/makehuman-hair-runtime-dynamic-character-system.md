@@ -1078,6 +1078,10 @@ motion yet. A fitted 376-vertex `scalp` cap covers transparent card gaps. The
 first cap test incorrectly used the large `helper-hair` fitting cage and looked
 like a second hairstyle. That path was removed.
 
+The PunkElvs scalp can extend in front of the fitted cap. The prototype masks
+proxy vertices that have two or more `scalp` parents. The fitted cap replaces
+that area for bald and hair states.
+
 MPFB parity validation accepts a neutral maximum error below `3e-6` Blender
 units and checks live movement for `head-scale-horiz-incr`. A 100-update browser
 diagnostic measured 0.202 ms mean for `short04` and 0.630 ms for `ponytail01`,

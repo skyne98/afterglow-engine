@@ -19,8 +19,9 @@ Features:
 - **Face preview library**: 17 expression compositions and all 35 speech shapes.
 - **Hair selection**: None, CC0 `short04`, or CC0 `ponytail01`.
 - **Live hair fitting**: a 733-vertex compact body driver updates both styles
-  and their fitted scalp cap for structural controls. Expressions and visemes do
-  not change the hair rest shape.
+  and their fitted scalp cap for structural controls. A cooked proxy-scalp mask
+  prevents the visible body from clipping through the cards. Expressions and
+  visemes do not change the hair rest shape.
 - **Smooth shading** + **Wireframe** rendering toggles.
 - **Clickable body zones**: hover shows a generated color paint; click filters
   the panel to controls for that zone. Left/right areas stay separate.
