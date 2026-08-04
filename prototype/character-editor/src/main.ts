@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { HairFitRuntime, type HairFitDocument, type HairStyleRuntime } from './hair-fit.ts';
 import { controlBelongsToZone, selectTriangleCategory } from './zone-utils.ts';
 import {
   EXPRESSION_PRESETS,
@@ -49,7 +50,7 @@ interface ZoneHit {
 }
 
 const DEFAULT_BODY = 'character_female';
-const CHARACTER_ASSET_REVISION = '2026-08-03-face-controls-v7';
+const CHARACTER_ASSET_REVISION = '2026-08-05-hair-v1';
 type Ethnic = 'caucasian' | 'asian' | 'african';
 
 class CharacterEditor {
@@ -58,11 +59,16 @@ class CharacterEditor {
   private camera!: THREE.PerspectiveCamera;
   private controls!: OrbitControls;
   private loader = new GLTFLoader();
+  private textureLoader = new THREE.TextureLoader();
 
   private root?: THREE.Group;
   private morphNames: string[] = [];
   private controlSpecs: MorphControlSpec[] = [];
   private skinnedMeshes: THREE.SkinnedMesh[] = [];
+  private bodyMeshes: THREE.SkinnedMesh[] = [];
+  private hairMeshes = new Map<string, THREE.SkinnedMesh>();
+  private scalpMesh?: THREE.SkinnedMesh;
+  private hairFit?: HairFitRuntime;
   private meshZones: MeshZoneData[] = [];
   private hoveredZone?: ZoneHit;
   private selectedZone?: ZoneHit;
@@ -88,6 +94,7 @@ class CharacterEditor {
   private zoneSelectionEl = document.getElementById('zone-selection') as HTMLDivElement;
   private expressionPresetSelect = document.getElementById('expression-preset-select') as HTMLSelectElement;
   private speechPresetSelect = document.getElementById('speech-preset-select') as HTMLSelectElement;
+  private hairStyleSelect = document.getElementById('hair-style-select') as HTMLSelectElement;
 
   constructor() {
     this.initViewport();
@@ -162,6 +169,7 @@ class CharacterEditor {
     });
     document.getElementById('male-btn')!.addEventListener('click', () => this.loadBody('character_male'));
     document.getElementById('female-btn')!.addEventListener('click', () => this.loadBody('character_female'));
+    this.hairStyleSelect.addEventListener('change', () => this.setHairStyle(this.hairStyleSelect.value));
     const es = document.getElementById('ethnicity-select') as HTMLSelectElement;
     es.addEventListener('change', () => this.setEthnicity(es.value as Ethnic));
     const np = document.getElementById('smooth-toggle') as HTMLInputElement;
@@ -189,16 +197,19 @@ class CharacterEditor {
     const assetQuery = `?v=${CHARACTER_ASSET_REVISION}`;
     try {
       await this.loadFromUrl(`${glb}${assetQuery}`);
-      const [morphResponse, controlResponse] = await Promise.all([
+      const [morphResponse, controlResponse, hairFitResponse] = await Promise.all([
         fetch(`${base}.morphs.json${assetQuery}`, { cache: 'no-store' }),
         fetch(`${base}.controls.json${assetQuery}`, { cache: 'no-store' }),
+        fetch(`${base}.hair-fit.json${assetQuery}`, { cache: 'no-store' }),
       ]);
-      if (morphResponse.ok && controlResponse.ok) {
+      if (morphResponse.ok && controlResponse.ok && hairFitResponse.ok) {
         const names = (await morphResponse.json()) as string[];
         const controls = (await controlResponse.json()) as MorphControlSpec[];
+        const hairFit = (await hairFitResponse.json()) as HairFitDocument;
+        this.setHairFitData(hairFit, names);
         this.setMorphData(names, controls);
       } else {
-        this.showStatus(`${glb} loaded (no control sidecar).`);
+        this.showStatus(`${glb} loaded (one or more sidecars are missing).`);
       }
     } catch (e) {
       this.showStatus(`Could not load ${glb}: ${(e as Error).message}`);
@@ -235,6 +246,7 @@ class CharacterEditor {
     this.clearZoneState();
     if (this.root) this.scene.remove(this.root);
     this.setSkeletonVisible(false);
+    this.hairFit = undefined;
     this.root = scene;
     scene.scale.setScalar(1);
     this.scene.add(scene);
@@ -250,18 +262,46 @@ class CharacterEditor {
 
   private collectMeshes(obj: THREE.Object3D): void {
     this.skinnedMeshes = [];
+    this.bodyMeshes = [];
+    this.hairMeshes.clear();
+    this.scalpMesh = undefined;
     obj.traverse((o) => {
-      if ((o as THREE.SkinnedMesh).isSkinnedMesh) {
-        const m = o as THREE.SkinnedMesh;
+      if (!(o as THREE.SkinnedMesh).isSkinnedMesh) return;
+      const mesh = o as THREE.SkinnedMesh;
+      const hairStyle = mesh.name.startsWith('Hair-') ? mesh.name.slice('Hair-'.length) : '';
+      if (hairStyle === 'scalp') {
+        mesh.material = new THREE.MeshStandardMaterial({
+          color: 0x15100d,
+          roughness: 0.9,
+          side: THREE.DoubleSide,
+        });
+        mesh.visible = this.hairStyleSelect.value !== 'none';
+        this.scalpMesh = mesh;
+      } else if (hairStyle) {
+        const texture = this.textureLoader.load(`hair-${hairStyle}-diffuse.png?v=${CHARACTER_ASSET_REVISION}`);
+        texture.colorSpace = THREE.SRGBColorSpace;
+        texture.flipY = false;
+        mesh.material = new THREE.MeshStandardMaterial({
+          alphaTest: 0.2,
+          color: 0xffffff,
+          map: texture,
+          roughness: 0.75,
+          side: THREE.DoubleSide,
+          transparent: true,
+        });
+        mesh.visible = hairStyle === this.hairStyleSelect.value;
+        this.hairMeshes.set(hairStyle, mesh);
+      } else {
         // Face-helper vertex colors distinguish the eyes, teeth, and tongue.
-        const vertexColors = m.geometry.getAttribute('color') !== undefined;
-        m.material = new THREE.MeshStandardMaterial({
+        const vertexColors = mesh.geometry.getAttribute('color') !== undefined;
+        mesh.material = new THREE.MeshStandardMaterial({
           color: vertexColors ? 0xffffff : 0xc9a27e,
           roughness: 0.6,
           vertexColors,
         });
-        this.skinnedMeshes.push(m);
+        this.bodyMeshes.push(mesh);
       }
+      this.skinnedMeshes.push(mesh);
     });
   }
 
@@ -286,6 +326,77 @@ class CharacterEditor {
     this.setEthnicity(ethnicity);
     this.applyFacePreset(EXPRESSION_PRESETS[this.expressionPresetSelect.selectedIndex], 'expression-', false);
     this.applyFacePreset(SPEECH_PRESETS[this.speechPresetSelect.selectedIndex], 'speech-', false);
+  }
+
+  private setHairFitData(document: HairFitDocument, morphNames: readonly string[]): void {
+    const hairFit = new HairFitRuntime(document, morphNames);
+    const scalpPositions = this.scalpMesh?.geometry.getAttribute('position');
+    if (
+      !this.scalpMesh
+      || this.scalpMesh.name !== hairFit.scalp.mesh
+      || !scalpPositions
+      || scalpPositions.count !== hairFit.scalp.vertexCount
+      || !(scalpPositions.array instanceof Float32Array)
+    ) {
+      throw new Error(`Hair scalp mesh ${hairFit.scalp.mesh} does not match its fit data.`);
+    }
+    for (const style of hairFit.styles) {
+      const mesh = this.hairMeshes.get(style.id);
+      const positions = mesh?.geometry.getAttribute('position');
+      if (!mesh || !positions || positions.count !== style.vertexCount || !(positions.array instanceof Float32Array)) {
+        throw new Error(`Hair mesh ${style.mesh} does not match its fit data.`);
+      }
+    }
+    this.hairFit = hairFit;
+    this.setHairStyle(this.hairStyleSelect.value);
+  }
+
+  private setHairStyle(styleId: string): void {
+    for (const [id, mesh] of this.hairMeshes) mesh.visible = id === styleId;
+    if (this.scalpMesh) {
+      this.scalpMesh.visible = styleId !== 'none';
+      const color = styleId === 'short04' ? 0x090a0c : 0x2a1710;
+      (this.scalpMesh.material as THREE.MeshStandardMaterial).color.setHex(color);
+    }
+    if (styleId === 'none') {
+      this.showStatus('Hair: None.');
+      return;
+    }
+    if (!this.hairFit) return;
+    const style = this.hairFit.style(styleId);
+    if (!style) {
+      this.showStatus(`Hair style ${styleId} is not available.`);
+      return;
+    }
+    this.updateHairGeometry(style);
+    this.showStatus(`Hair: ${style.label}.`);
+  }
+
+  private updateHairGeometry(style?: HairStyleRuntime): void {
+    if (!this.hairFit) return;
+    const selected = style ?? this.hairFit.style(this.hairStyleSelect.value);
+    if (!selected) return;
+    const mesh = this.hairMeshes.get(selected.id);
+    const positions = mesh?.geometry.getAttribute('position');
+    const scalpPositions = this.scalpMesh?.geometry.getAttribute('position');
+    if (
+      !mesh
+      || !positions
+      || !(positions.array instanceof Float32Array)
+      || !this.scalpMesh
+      || !scalpPositions
+      || !(scalpPositions.array instanceof Float32Array)
+    ) return;
+    this.hairFit.fit(selected, positions.array);
+    this.hairFit.fitScalp(scalpPositions.array);
+    positions.needsUpdate = true;
+    scalpPositions.needsUpdate = true;
+    mesh.geometry.computeVertexNormals();
+    mesh.geometry.computeBoundingBox();
+    mesh.geometry.computeBoundingSphere();
+    this.scalpMesh.geometry.computeVertexNormals();
+    this.scalpMesh.geometry.computeBoundingBox();
+    this.scalpMesh.geometry.computeBoundingSphere();
   }
 
   private populatePresetSelect(select: HTMLSelectElement, presets: readonly FacePreset[]): void {
@@ -384,17 +495,19 @@ class CharacterEditor {
     this.morphCountEl.textContent = String(this.morphHandles.length);
   }
 
-  private applyMorphIndex(index: number, amount: number): void {
-    if (index < 0) return;
+  private applyMorphIndex(index: number, amount: number): boolean {
+    if (index < 0) return false;
     for (const mesh of this.skinnedMeshes) {
       const influences = mesh.morphTargetInfluences;
       if (influences && index < influences.length) influences[index] = amount;
     }
+    return this.hairFit?.setTarget(index, amount) ?? false;
   }
 
   private applyMorphControl(handle: MorphHandle, amount: number): void {
-    this.applyMorphIndex(handle.negativeIndex, Math.max(-amount, 0));
-    this.applyMorphIndex(handle.positiveIndex, Math.max(amount, 0));
+    const negativeChanged = this.applyMorphIndex(handle.negativeIndex, Math.max(-amount, 0));
+    const positiveChanged = this.applyMorphIndex(handle.positiveIndex, Math.max(amount, 0));
+    if (negativeChanged || positiveChanged) this.updateHairGeometry();
     handle.valSpan.textContent = amount.toFixed(2);
   }
 
@@ -402,8 +515,9 @@ class CharacterEditor {
   private setEthnicity(e: Ethnic): void {
     const asian = this.morphNames.findIndex((n) => n.startsWith('asian-'));
     const african = this.morphNames.findIndex((n) => n.startsWith('african-'));
-    this.applyMorphIndex(asian, e === 'asian' ? 1 : 0);
-    this.applyMorphIndex(african, e === 'african' ? 1 : 0);
+    const asianChanged = this.applyMorphIndex(asian, e === 'asian' ? 1 : 0);
+    const africanChanged = this.applyMorphIndex(african, e === 'african' ? 1 : 0);
+    if (asianChanged || africanChanged) this.updateHairGeometry();
   }
 
   // --------------------------------------------------------------- body zones
@@ -423,7 +537,7 @@ class CharacterEditor {
     const bilateral = new Set(this.controlSpecs.filter((spec) => spec.label.endsWith('(left)')).map((spec) => spec.category));
     const indexByName = new Map(this.morphNames.map((name, index) => [name, index]));
 
-    for (const source of this.skinnedMeshes) {
+    for (const source of this.bodyMeshes) {
       const positions = source.geometry.getAttribute('position');
       const index = source.geometry.getIndex();
       const targets = source.geometry.morphAttributes.position;
@@ -704,7 +818,7 @@ class CharacterEditor {
   private buildPartsUI(): void {
     this.partsList.innerHTML = '';
     const seen = new Set<string>();
-    for (const m of this.skinnedMeshes) {
+    for (const m of this.bodyMeshes) {
       const name = m.name || 'mesh';
       if (seen.has(name)) continue;
       seen.add(name);
@@ -719,8 +833,8 @@ class CharacterEditor {
       cb.addEventListener('change', () => { m.visible = cb.checked; });
       this.partsList.appendChild(row);
     }
-    if (this.skinnedMeshes.length === 0) {
-      this.partsList.innerHTML = '<div class="muted">No skinned meshes.</div>';
+    if (this.bodyMeshes.length === 0) {
+      this.partsList.innerHTML = '<div class="muted">No skinned body meshes.</div>';
     }
   }
 

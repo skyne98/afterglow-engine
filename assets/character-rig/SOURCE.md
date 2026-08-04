@@ -47,6 +47,10 @@ The local ZIP has no hair sub-rig or custom-weight sidecars. The upstream CC0
 one root plus five ponytail bones. See
 `docs/research/makehuman-hair-runtime-dynamic-character-system.md`.
 
+The character prototype extracts `short04` and `ponytail01` from this ZIP. It
+commits their CC0 diffuse textures beside generated GLBs and uses interpolated
+main-rig weights for both styles.
+
 Downloaded `genitalia/` ledger (each page verified 2026-08-02):
 
 | File | License | Verdict |

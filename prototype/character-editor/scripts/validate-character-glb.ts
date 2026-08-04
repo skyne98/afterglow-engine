@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { HairFitRuntime, type HairFitDocument } from '../src/hair-fit.ts';
 
 interface Glb {
   json: any;
@@ -111,8 +112,13 @@ function validateBody(sex: 'male' | 'female'): void {
     negative: string;
     positive: string;
   }>;
+  const hairFitDocument = JSON.parse(
+    readFileSync(join(publicDir, `character_${sex}.hair-fit.json`), 'utf8'),
+  ) as HairFitDocument;
   const glb = loadGlb(path);
-  const primitive = glb.json.meshes[0].primitives[0];
+  const bodyMeshIndex = glb.json.meshes.findIndex((mesh: any) => mesh.primitives[0].targets?.length > 0);
+  if (bodyMeshIndex < 0) throw new Error(`${sex}: no body morph mesh`);
+  const primitive = glb.json.meshes[bodyMeshIndex].primitives[0];
   const targets = primitive.targets as Array<{ POSITION: number; NORMAL?: number }>;
   const expectedMorphs = sex === 'male' ? 691 : 689;
   const expectedControls = sex === 'male' ? 423 : 422;
@@ -181,7 +187,76 @@ function validateBody(sex: 'male' | 'female'): void {
     }
   }
 
-  console.log(`${sex}: ${vertices} vertices, ${targets.length} morphs, displacement ${minimum.toFixed(6)}-${maximum.toFixed(6)}`);
+  const hairFit = new HairFitRuntime(hairFitDocument, names);
+  if (hairFit.styles.length !== 2 || hairFitDocument.targets['head-scale-horiz-incr'] === undefined) {
+    throw new Error(`${sex}: incorrect hair-fit style or structural-target set`);
+  }
+  for (const faceTarget of faceTargetNames) {
+    if (hairFitDocument.targets[faceTarget] !== undefined) {
+      throw new Error(`${sex}: transient face target ${faceTarget} changes hair rest fit`);
+    }
+  }
+  const scalpMeshIndex = glb.json.meshes.findIndex((mesh: any) => mesh.name === hairFit.scalp.mesh);
+  if (scalpMeshIndex < 0) throw new Error(`${sex}: missing fitted scalp mesh`);
+  const scalpPrimitive = glb.json.meshes[scalpMeshIndex].primitives[0];
+  const scalpNode = glb.json.nodes.find((node: any) => node.mesh === scalpMeshIndex && node.skin !== undefined);
+  if (!scalpNode) throw new Error(`${sex}: fitted scalp is not skinned`);
+  const scalpPositions = readVec3(glb, scalpPrimitive.attributes.POSITION);
+  const fittedScalp = new Float32Array(scalpPositions.length);
+  hairFit.fitScalp(fittedScalp);
+  let scalpError = 0;
+  for (let offset = 0; offset < fittedScalp.length; offset++) {
+    scalpError = Math.max(scalpError, Math.abs(fittedScalp[offset] - scalpPositions[offset]));
+  }
+  if (scalpError > 3e-6) throw new Error(`${sex}: neutral scalp fit error ${scalpError}`);
+
+  for (const style of hairFit.styles) {
+    const meshIndex = glb.json.meshes.findIndex((mesh: any) => mesh.name === style.mesh);
+    if (meshIndex < 0) throw new Error(`${sex}: missing hair mesh ${style.mesh}`);
+    const hairPrimitive = glb.json.meshes[meshIndex].primitives[0];
+    if (hairPrimitive.targets?.length || hairPrimitive.attributes.TEXCOORD_0 === undefined) {
+      throw new Error(`${sex}/${style.id}: incorrect hair primitive`);
+    }
+    const skinnedNode = glb.json.nodes.find((node: any) => node.mesh === meshIndex && node.skin !== undefined);
+    if (!skinnedNode) throw new Error(`${sex}/${style.id}: hair is not skinned`);
+    const positions = readVec3(glb, hairPrimitive.attributes.POSITION);
+    if (positions.length !== style.vertexCount * 3) {
+      throw new Error(`${sex}/${style.id}: hair vertex count differs from fit data`);
+    }
+    const fitted = new Float32Array(positions.length);
+    hairFit.fit(style, fitted);
+    let fitError = 0;
+    for (let offset = 0; offset < fitted.length; offset++) {
+      fitError = Math.max(fitError, Math.abs(fitted[offset] - positions[offset]));
+    }
+    if (fitError > 3e-6) throw new Error(`${sex}/${style.id}: neutral fit error ${fitError}`);
+    const headScale = names.indexOf('head-scale-horiz-incr');
+    if (headScale < 0 || !hairFit.setTarget(headScale, 1)) {
+      throw new Error(`${sex}/${style.id}: no dynamic head-width fit target`);
+    }
+    const changed = new Float32Array(positions.length);
+    hairFit.fit(style, changed);
+    let maximumFitMovement = 0;
+    for (let offset = 0; offset < changed.length; offset += 3) {
+      maximumFitMovement = Math.max(
+        maximumFitMovement,
+        Math.hypot(
+          changed[offset] - fitted[offset],
+          changed[offset + 1] - fitted[offset + 1],
+          changed[offset + 2] - fitted[offset + 2],
+        ),
+      );
+    }
+    if (maximumFitMovement < 0.005 || !hairFit.setTarget(headScale, 0)) {
+      throw new Error(`${sex}/${style.id}: head-width fit did not move or reset`);
+    }
+    readFileSync(join(publicDir, `hair-${style.id}-diffuse.png`));
+  }
+
+  console.log(
+    `${sex}: ${vertices} body vertices, ${targets.length} morphs, `
+    + `${hairFit.styles.length} hair styles, displacement ${minimum.toFixed(6)}-${maximum.toFixed(6)}`,
+  );
 }
 
 validateBody('male');

@@ -1067,6 +1067,25 @@ Only after the prior gates pass:
 - Add the character editor hair library.
 - Add release soaks with repeated body edits and hair swaps.
 
+# Prototype result (2026-08-05)
+
+The isolated character editor now has a CPU SurfaceWrap slice for CC0 `short04`
+and `ponytail01`. It keeps a shared 733-vertex compact driver and 201 sparse
+structural target streams. Expressions and visemes do not change hair rest fit.
+
+Both styles use interpolated main-rig weights. The ponytail has no secondary
+motion yet. A fitted 376-vertex `scalp` cap covers transparent card gaps. The
+first cap test incorrectly used the large `helper-hair` fitting cage and looked
+like a second hairstyle. That path was removed.
+
+MPFB parity validation accepts a neutral maximum error below `3e-6` Blender
+units and checks live movement for `head-scale-horiz-incr`. A 100-update browser
+diagnostic measured 0.202 ms mean for `short04` and 0.630 ms for `ponytail01`,
+including normal and bound rebuilds. These numbers are prototype evidence only.
+
+This does not complete the production gates. The code remains under
+`prototype/character-editor/` and is not an engine crate or public API.
+
 # Decisions before implementation
 
 The following product decisions remain open:

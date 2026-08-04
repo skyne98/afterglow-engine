@@ -124,6 +124,33 @@ The 14 tests include no-allocation checks and an MPFB golden fixture for 26
 sampled CC0 `short04` hair vertices. The neutral and head-width fit error limit
 is `3e-6` Blender units.
 
+### Hair selection and live fit
+
+The prototype offers None, CC0 `short04`, and CC0 `ponytail01`. The generated
+character GLB contains both body-rig-skinned card meshes and one dark scalp cap.
+Only the selected style and the cap are visible.
+
+A 733-vertex compact `hm08` driver serves both styles and the cap. The sidecar
+contains 201 structural target streams. It excludes all expression and viseme
+targets, because transient face animation does not change hair rest shape.
+
+The runtime applies sparse driver changes incrementally, evaluates signed MHCLO
+SurfaceWrap records, converts Blender coordinates to glTF Y-up coordinates,
+rebuilds normals, and updates the selected geometry. Validation compares both
+neutral fits with MPFB and requires movement for `head-scale-horiz-incr`.
+
+A local browser diagnostic alternated that head-width control 100 times. Mean
+complete input-update time was 0.202 ms for `short04` and 0.630 ms for
+`ponytail01`, including normal and bound rebuilds. This is prototype evidence,
+not an engine acceptance benchmark.
+
+The first clipping correction used `helper-hair` as a cap. That was incorrect,
+because `helper-hair` is a large fitting cage that looked like a second
+hairstyle. The final cap uses the fitted `scalp` surface.
+
+`ponytail01` currently uses interpolated body-rig weights. It has no SpringChain
+or imported ponytail sub-rig in this prototype.
+
 ### `scripts/gen-proxy-transfer.py` (Blender headless)
 Per sex:
 1. `HumanService.create_human()` + `add_builtin_rig(game_engine)`.
@@ -135,7 +162,10 @@ Per sex:
 6. Replace the Caucasian macro with each ethnicity macro and capture the fit.
 7. Append the base eyes, teeth, and tongue with vertex colors and rig weights.
 8. Restore Caucasian, make all polygons smooth, and create `Basis` plus targets.
-9. Export the mesh, rig, morph-name sidecar, and logical-control sidecar.
+9. Fit and body-rig-skin `short04` and `ponytail01`.
+10. Cook their shared compact driver, structural deltas, signed bindings, and
+    fitted scalp cap.
+11. Export the mesh, rig, morph-name, logical-control, and hair-fit sidecars.
 
 The exporter does not include normal morphs. Their sparse data caused unchanged
 surfaces to receive incorrect black shading in Three.js. Smooth base normals
