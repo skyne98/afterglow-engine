@@ -130,23 +130,25 @@ The prototype offers None, CC0 `short04`, and CC0 `ponytail01`. The generated
 character GLB contains both body-rig-skinned card meshes and one dark scalp cap.
 Only the selected style and the cap are visible.
 
-A 733-vertex compact `hm08` driver serves both styles and the cap. The sidecar
-contains 201 structural target streams. It excludes all expression and viseme
-targets, because transient face animation does not change hair rest shape.
+A 733-vertex compact `hm08` driver fits the exact PunkElvs scalp. Each hair
+style then fits to that proxy scalp. The sidecar contains 201 structural target
+streams. It excludes all expression and viseme targets, because transient face
+animation does not change hair rest shape.
 
-The runtime applies sparse driver changes incrementally, evaluates signed MHCLO
-SurfaceWrap records, converts Blender coordinates to glTF Y-up coordinates,
-rebuilds normals, and updates the selected geometry. Validation compares both
-neutral fits with MPFB and requires movement for `head-scale-horiz-incr`.
+The generator binds each hair vertex to its nearest proxy-scalp triangle. It
+also supplies 8 mm minimum clearance for vertices within 30 mm of the scalp.
+The generator transfers rig weights from the same proxy triangle.
 
-A local browser diagnostic alternated that head-width control 100 times. Mean
-complete input-update time was 0.202 ms for `short04` and 0.630 ms for
-`ponytail01`, including normal and bound rebuilds. This is prototype evidence,
-not an engine acceptance benchmark.
+The runtime applies sparse driver changes incrementally. It first evaluates the
+PunkElvs scalp and then evaluates the selected hair from that surface. It also
+converts Blender coordinates to glTF Y-up coordinates, rebuilds normals, and
+updates the selected geometry. Validation compares neutral fits and verifies
+that `head-scale-horiz-incr` produces the same proxy-scalp positions as the body
+morph. The prior direct-hm08 browser times do not apply to this two-stage fit.
 
 The first clipping correction used `helper-hair` as a cap. That was incorrect,
 because `helper-hair` is a large fitting cage that looked like a second
-hairstyle. The final cap uses the fitted `scalp` surface.
+hairstyle. The final cap uses exact PunkElvs scalp faces.
 
 The base-body scalp and PunkElvs proxy have different topology. Thus, a cap from
 the base body can leave top and rear holes. The final generator duplicates the
@@ -154,7 +156,7 @@ exact PunkElvs scalp faces and their MHCLO bindings. A per-corner mask removes
 only those same body faces. The duplicate replaces them with skin color for None
 and hair color for either selected style.
 
-`ponytail01` currently uses interpolated body-rig weights. It has no SpringChain
+`ponytail01` currently uses interpolated proxy-scalp rig weights. It has no SpringChain
 or imported ponytail sub-rig in this prototype.
 
 ### `scripts/gen-proxy-transfer.py` (Blender headless)
@@ -168,9 +170,9 @@ Per sex:
 6. Replace the Caucasian macro with each ethnicity macro and capture the fit.
 7. Append the base eyes, teeth, and tongue with vertex colors and rig weights.
 8. Restore Caucasian, make all polygons smooth, and create `Basis` plus targets.
-9. Fit and body-rig-skin `short04` and `ponytail01`.
-10. Cook their shared compact driver, structural deltas, signed bindings, and
-    fitted scalp cap.
+9. Bind both hairstyles to the PunkElvs scalp and transfer its rig weights.
+10. Cook the compact hm08 driver, the two-stage bindings, structural deltas, and
+    exact proxy-scalp cap.
 11. Export the mesh, rig, morph-name, logical-control, and hair-fit sidecars.
 
 The exporter does not include normal morphs. Their sparse data caused unchanged
@@ -180,8 +182,8 @@ remain active for all position morphs.
 Verified output:
 | Body | vertices | triangles | morphs | genitals |
 |------|---------:|----------:|-------:|----------|
-| male | 18,104 | 33,392 | 691 | penis |
-| female | 17,432 | 32,424 | 689 | vulva |
+| male | 18,187 | 33,392 | 691 | penis |
+| female | 17,515 | 32,424 | 689 | vulva |
 
 Smooth polygons reduce the prior flat export from approximately 63,000 split
 face-corner vertices to approximately 17,000 shared vertices.

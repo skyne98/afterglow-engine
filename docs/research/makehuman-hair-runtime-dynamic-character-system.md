@@ -1073,20 +1073,25 @@ The isolated character editor now has a CPU SurfaceWrap slice for CC0 `short04`
 and `ponytail01`. It keeps a shared 733-vertex compact driver and 201 sparse
 structural target streams. Expressions and visemes do not change hair rest fit.
 
-Both styles use interpolated main-rig weights. The ponytail has no secondary
-motion yet. A fitted 369-vertex PunkElvs scalp cap covers transparent card gaps. The
-first cap test incorrectly used the large `helper-hair` fitting cage and looked
-like a second hairstyle. That path was removed.
+The direct hm08 hair fit was not compatible with the outer PunkElvs surface.
+The corrected two-stage fit first evaluates a 369-vertex PunkElvs scalp. It then
+fits each style from the nearest scalp triangle. The bake supplies 8 mm minimum
+clearance within 30 mm of the scalp and transfers rig weights from that same
+triangle. The ponytail has no secondary motion yet.
+
+The fitted PunkElvs scalp cap covers transparent card gaps. The first cap test
+incorrectly used the large `helper-hair` fitting cage and looked like a second
+hairstyle. That path was removed.
 
 A cap from the base-body scalp does not close an opening in the different
 PunkElvs topology. The corrected prototype duplicates the exact PunkElvs scalp
 faces and their MHCLO bindings. A per-corner body mask removes only those same
 faces, and the duplicate replaces them for bald and hair states.
 
-MPFB parity validation accepts a neutral maximum error below `3e-6` Blender
-units and checks live movement for `head-scale-horiz-incr`. A 100-update browser
-diagnostic measured 0.202 ms mean for `short04` and 0.630 ms for `ponytail01`,
-including normal and bound rebuilds. These numbers are prototype evidence only.
+Validation accepts a neutral maximum error below `3e-6` Blender units. It also
+verifies that `head-scale-horiz-incr` gives the same dynamic proxy-scalp
+positions as the body morph. The prior direct-hm08 browser times do not apply
+to this two-stage fit.
 
 This does not complete the production gates. The code remains under
 `prototype/character-editor/` and is not an engine crate or public API.

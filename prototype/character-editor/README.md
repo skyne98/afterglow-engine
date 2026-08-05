@@ -18,10 +18,10 @@ Features:
   Meta visemes, with eyes, teeth, and tongue geometry.
 - **Face preview library**: 17 expression compositions and all 35 speech shapes.
 - **Hair selection**: None, CC0 `short04`, or CC0 `ponytail01`.
-- **Live hair fitting**: a 733-vertex compact body driver updates both styles
-  and their fitted scalp cap for structural controls. A cooked proxy-scalp mask
-  prevents the visible body from clipping through the cards. Expressions and
-  visemes do not change the hair rest shape.
+- **Live hair fitting**: a 733-vertex compact body driver first updates the
+  PunkElvs scalp. Both styles then fit to that visible proxy surface with an
+  8 mm minimum scalp clearance. Expressions and visemes do not change the hair
+  rest shape.
 - **Smooth shading** + **Wireframe** rendering toggles.
 - **Clickable body zones**: hover shows a generated color paint; click filters
   the panel to controls for that zone. Left/right areas stay separate.
@@ -70,8 +70,9 @@ This runs `scripts/gen-proxy-transfer.py` for male and female. Each run:
 7. adds the eyes, teeth, and tongue,
 8. creates smooth proxy-native morph targets and control sidecars,
 9. extracts `short04` and `ponytail01` from the local CC0 system pack,
-10. exports both body-rig-skinned styles plus a fitted scalp cap and compact
-    SurfaceWrap sidecar.
+10. binds both styles and their rig weights to the PunkElvs scalp,
+11. exports both styles plus an exact scalp cap and two-stage SurfaceWrap
+    sidecar.
 
 Requires (one-time): Blender 5.x on `PATH` and the MPFB extension installed at
 `~/.config/blender/5.2/extensions/user_default/mpfb`. PunkElvs proxies and the

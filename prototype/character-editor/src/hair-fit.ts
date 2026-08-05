@@ -104,12 +104,13 @@ export class HairFitRuntime {
   readonly driver: Float32Array;
   readonly scalp: HairStyleRuntime;
   readonly styles: readonly HairStyleRuntime[];
+  private readonly scalpDriver: Float32Array;
   private readonly morphWeights: Float32Array;
   private readonly targetByMorph: Array<Float32Array | undefined>;
   private readonly styleById = new Map<string, HairStyleRuntime>();
 
   constructor(document: HairFitDocument, morphNames: readonly string[]) {
-    if (document.version !== 1 || !Number.isInteger(document.driverVertexCount) || document.driverVertexCount <= 0) {
+    if (document.version !== 2 || !Number.isInteger(document.driverVertexCount) || document.driverVertexCount <= 0) {
       fail('version or driver count');
     }
     if (document.driverNeutral.length !== document.driverVertexCount * 3 || !finite(document.driverNeutral)) {
@@ -117,6 +118,8 @@ export class HairFitRuntime {
     }
     this.driver = new Float32Array(document.driverNeutral);
     this.scalp = parseSurface(document.scalp, document.driverVertexCount);
+    this.scalpDriver = new Float32Array(this.scalp.vertexCount * 3);
+    this.fitFrom(this.scalp, this.driver, this.scalpDriver, false);
     this.morphWeights = new Float32Array(morphNames.length);
     this.targetByMorph = new Array(morphNames.length);
 
@@ -135,7 +138,7 @@ export class HairFitRuntime {
 
     this.styles = document.styles.map((source) => {
       if (this.styleById.has(source.id)) fail('style identity');
-      const style = parseSurface(source, document.driverVertexCount);
+      const style = parseSurface(source, this.scalp.vertexCount);
       this.styleById.set(style.id, style);
       return style;
     });
@@ -161,18 +164,33 @@ export class HairFitRuntime {
       this.driver[driverOffset + 1] += target[offset + 2] * difference;
       this.driver[driverOffset + 2] += target[offset + 3] * difference;
     }
+    this.fitFrom(this.scalp, this.driver, this.scalpDriver, false);
     return true;
   }
 
   fitScalp(output: Float32Array): void {
-    this.fit(this.scalp, output);
+    if (output.length !== this.scalpDriver.length) fail('scalp output');
+    for (let component = 0; component < output.length; component += 3) {
+      output[component] = this.scalpDriver[component];
+      output[component + 1] = this.scalpDriver[component + 2];
+      output[component + 2] = -this.scalpDriver[component + 1];
+    }
   }
 
   fit(style: HairStyleRuntime, output: Float32Array): void {
+    this.fitFrom(style, this.scalpDriver, output, true);
+  }
+
+  private fitFrom(
+    style: HairStyleRuntime,
+    source: Float32Array,
+    output: Float32Array,
+    yUp: boolean,
+  ): void {
     if (output.length !== style.vertexCount * 3) fail(`output ${style.id}`);
-    const scaleX = calculateScale(this.driver, style.scales[0]);
-    const scaleY = calculateScale(this.driver, style.scales[1]);
-    const scaleZ = calculateScale(this.driver, style.scales[2]);
+    const scaleX = calculateScale(source, style.scales[0]);
+    const scaleY = calculateScale(source, style.scales[1]);
+    const scaleZ = calculateScale(source, style.scales[2]);
     for (let vertex = 0; vertex < style.vertexCount; vertex++) {
       const component = vertex * 3;
       let x = style.offsets[component] * scaleX;
@@ -182,14 +200,13 @@ export class HairFitRuntime {
         const binding = component + parent;
         const driver = style.parents[binding] * 3;
         const weight = style.weights[binding];
-        x += this.driver[driver] * weight;
-        y += this.driver[driver + 1] * weight;
-        z += this.driver[driver + 2] * weight;
+        x += source[driver] * weight;
+        y += source[driver + 1] * weight;
+        z += source[driver + 2] * weight;
       }
-      // Blender exports glTF with Y up: (x, y, z) becomes (x, z, -y).
       output[component] = x;
-      output[component + 1] = z;
-      output[component + 2] = -y;
+      output[component + 1] = yUp ? z : y;
+      output[component + 2] = yUp ? -y : z;
     }
   }
 }

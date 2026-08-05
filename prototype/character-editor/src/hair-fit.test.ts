@@ -3,7 +3,7 @@ import { HairFitRuntime, type HairFitDocument } from './hair-fit.ts';
 
 function fixture(): HairFitDocument {
   return {
-    version: 1,
+    version: 2,
     driverVertexCount: 4,
     driverNeutral: [
       0, 0, 0,
@@ -18,10 +18,10 @@ function fixture(): HairFitDocument {
       id: 'scalp',
       label: 'Scalp',
       mesh: 'Hair-scalp',
-      vertexCount: 2,
-      parents: [1, 1, 1, 3, 3, 3],
-      weights: [1, 0, 0, 1, 0, 0],
-      offsets: [0, 0, 0, 0, 0, 0],
+      vertexCount: 4,
+      parents: [0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 3],
+      weights: [1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0],
+      offsets: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
       scales: [
         [0, 1, 2, 0],
         [0, 2, 3, 1],
@@ -65,9 +65,9 @@ describe('HairFitRuntime', () => {
     expect([...output]).toEqual([5, 2, -0.5]);
     expect(runtime.setTarget(0, 0)).toBe(false);
 
-    const scalp = new Float32Array(6);
+    const scalp = new Float32Array(12);
     runtime.fitScalp(scalp);
-    expect([...scalp]).toEqual([4, 0, -0, 0, 8, -0]);
+    expect([...scalp]).toEqual([0, 0, -0, 4, 0, -0, 0, 0, -6, 0, 8, -0]);
   });
 
   test('rejects an out-of-range compact driver index', () => {

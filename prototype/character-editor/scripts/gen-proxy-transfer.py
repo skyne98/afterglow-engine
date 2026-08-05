@@ -20,6 +20,8 @@ Env: SEX=male|female, CHAR_OUT=path.glb, FACE_TARGET_ROOT=pack directory,
 """
 import importlib, sys, os, bpy, json, glob, re
 from array import array
+from mathutils import Vector
+from mathutils.bvhtree import BVHTree
 
 def dyn(pkg, key):
     for m in sys.modules:
@@ -148,12 +150,17 @@ proxy_scalp_vertices = {
     vertex for vertex, binding in mhclo.verts.items()
     if sum(source in scalp_candidates for source in binding["verts"]) >= 2
 }
-scalp_source_faces = [
+scalp_source_polygons = [
     tuple(polygon.vertices) for polygon in proxy.data.polygons
     if all(vertex in proxy_scalp_vertices for vertex in polygon.vertices)
 ]
-if len(scalp_source_faces) < 100:
-    raise RuntimeError(f"proxy scalp face set is too small ({len(scalp_source_faces)})")
+if len(scalp_source_polygons) < 100:
+    raise RuntimeError(f"proxy scalp face set is too small ({len(scalp_source_polygons)})")
+scalp_source_faces = [
+    (polygon[0], polygon[index], polygon[index + 1])
+    for polygon in scalp_source_polygons
+    for index in range(1, len(polygon) - 1)
+]
 scalp_sources = sorted({vertex for face in scalp_source_faces for vertex in face})
 scalp_local = {source: local for local, source in enumerate(scalp_sources)}
 scalp_faces = [tuple(scalp_local[vertex] for vertex in face) for face in scalp_source_faces]
@@ -278,6 +285,106 @@ def cook_hair_style(style_id, label, hair, hair_mhclo, binding_sources, neutral_
         "offsets": offsets,
         "scales": scales,
         "neutralMaximumError": maximum_error,
+    }
+
+HAIR_SCALP_CLEARANCE = 0.008
+HAIR_CLEARANCE_RANGE = 0.03
+
+def triangle_weights(point, first, second, third):
+    edge0 = second - first
+    edge1 = third - first
+    relative = point - first
+    dot00 = edge0.dot(edge0)
+    dot01 = edge0.dot(edge1)
+    dot11 = edge1.dot(edge1)
+    dot20 = relative.dot(edge0)
+    dot21 = relative.dot(edge1)
+    denominator = dot00 * dot11 - dot01 * dot01
+    if abs(denominator) < 1.0e-12:
+        raise RuntimeError("the proxy scalp has a degenerate triangle")
+    second_weight = (dot11 * dot20 - dot01 * dot21) / denominator
+    third_weight = (dot00 * dot21 - dot01 * dot20) / denominator
+    return (1.0 - second_weight - third_weight, second_weight, third_weight)
+
+def cook_proxy_bound_style(style_id, label, hair):
+    if any(len(face) != 3 for face in scalp_faces):
+        raise RuntimeError("the proxy scalp must contain only triangles")
+    scalp_coords = [vertex.co.copy() for vertex in scalp.data.vertices]
+    scalp_center = sum(scalp_coords, Vector()) / len(scalp_coords)
+    scalp_tree = BVHTree.FromPolygons(scalp_coords, scalp_faces, all_triangles=True)
+    scales = []
+    for axis in range(3):
+        first = min(range(len(scalp_coords)), key=lambda index: scalp_coords[index][axis])
+        second = max(range(len(scalp_coords)), key=lambda index: scalp_coords[index][axis])
+        distance = abs(scalp_coords[first][axis] - scalp_coords[second][axis])
+        if distance <= 1.0e-6:
+            raise RuntimeError(f"the proxy scalp has no axis {axis} scale")
+        scales.append([first, second, distance, axis])
+
+    parents = []
+    weights = []
+    offsets = []
+    bindings = []
+    corrected_count = 0
+    maximum_shift = 0.0
+    for vertex in hair.data.vertices:
+        point = vertex.co.copy()
+        nearest, normal, face_index, distance = scalp_tree.find_nearest(point)
+        if nearest is None or normal is None or face_index is None:
+            raise RuntimeError(f"{style_id} has no proxy-scalp binding")
+        if normal.dot(nearest - scalp_center) < 0.0:
+            normal.negate()
+        signed_clearance = (point - nearest).dot(normal)
+        if distance <= HAIR_CLEARANCE_RANGE and signed_clearance < HAIR_SCALP_CLEARANCE:
+            shift = HAIR_SCALP_CLEARANCE - signed_clearance
+            point += normal * shift
+            vertex.co = point
+            corrected_count += 1
+            maximum_shift = max(maximum_shift, shift)
+        face = scalp_faces[face_index]
+        binding_weights = triangle_weights(nearest, *(scalp_coords[index] for index in face))
+        offset = point - nearest
+        parents.extend(face)
+        weights.extend(binding_weights)
+        offsets.extend((offset.x, offset.y, offset.z))
+        bindings.append((face, binding_weights))
+    hair.data.update()
+
+    hair.vertex_groups.clear()
+    hair_groups = {
+        group.index: hair.vertex_groups.new(name=group.name)
+        for group in proxy.vertex_groups
+    }
+    for vertex, (face, binding_weights) in enumerate(bindings):
+        bone_weights = {}
+        for parent, surface_weight in zip(face, binding_weights):
+            source = scalp_sources[parent]
+            for membership in proxy.data.vertices[source].groups:
+                bone_weights[membership.group] = (
+                    bone_weights.get(membership.group, 0.0)
+                    + surface_weight * membership.weight
+                )
+        total = sum(max(weight, 0.0) for weight in bone_weights.values())
+        if total <= 1.0e-8:
+            raise RuntimeError(f"{style_id} vertex {vertex} has no proxy rig weights")
+        for group, weight in bone_weights.items():
+            if weight > 0.0:
+                hair_groups[group].add([vertex], weight / total, 'REPLACE')
+
+    print(
+        f"> {style_id}: proxy-scalp binding corrected {corrected_count}/"
+        f"{len(hair.data.vertices)} vertices, maximum shift {maximum_shift:.6f}"
+    )
+    return {
+        "id": style_id,
+        "label": label,
+        "mesh": hair.name,
+        "vertexCount": len(hair.data.vertices),
+        "parents": parents,
+        "weights": weights,
+        "offsets": offsets,
+        "scales": scales,
+        "neutralMaximumError": 0.0,
     }
 
 # Keep the base-mesh eyes, teeth, and tongue. The PunkElvs body proxy does not
@@ -442,8 +549,8 @@ H0 = face_helper_coords()
 D0 = mixed_driver_coords()
 scalp_record = cook_hair_style("scalp", "Scalp", scalp, mhclo, scalp_sources, D0)
 hair_style_records = [
-    cook_hair_style(style_id, label, hair, hair_mhclo, binding_sources, D0)
-    for style_id, label, hair, hair_mhclo, binding_sources in hair_assets
+    cook_proxy_bound_style(style_id, label, hair)
+    for style_id, label, hair, _, _ in hair_assets
 ]
 driver_targets = {}
 
@@ -563,7 +670,7 @@ for local, source in enumerate(face_helper_source_vertices):
         helper_groups[membership.group].add([local], membership.weight, 'REPLACE')
 
 skin_color = (0.58, 0.36, 0.22, 1.0)
-scalp_face_keys = set(scalp_source_faces)
+scalp_face_keys = set(scalp_source_polygons)
 proxy_colors = proxy.data.color_attributes.new(name="Color", type='FLOAT_COLOR', domain='CORNER')
 masked_scalp_corners = 0
 for polygon in proxy.data.polygons:
@@ -635,7 +742,7 @@ with open(OUT.replace(".glb", ".morphs.json"), "w") as f:
 with open(OUT.replace(".glb", ".controls.json"), "w") as f:
     json.dump(control_specs, f)
 hair_fit = {
-    "version": 1,
+    "version": 2,
     "driverVertexCount": len(driver_sources),
     "driverNeutral": list(D0),
     "targets": driver_targets,

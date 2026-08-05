@@ -252,6 +252,35 @@ function validateBody(sex: 'male' | 'female'): void {
   }
   if (scalpError > 3e-6) throw new Error(`${sex}: neutral scalp fit error ${scalpError}`);
 
+  const headScale = names.indexOf('head-scale-horiz-incr');
+  if (headScale < 0 || !hairFit.setTarget(headScale, 1)) {
+    throw new Error(`${sex}: no dynamic head-width fit target`);
+  }
+  const headScaleDelta = readVec3(glb, targets[headScale].POSITION);
+  const bodyByPosition = new Map<string, number>();
+  for (let offset = 0; offset < basePositions.length; offset += 3) {
+    bodyByPosition.set(
+      `${basePositions[offset].toFixed(6)}/${basePositions[offset + 1].toFixed(6)}/${basePositions[offset + 2].toFixed(6)}`,
+      offset,
+    );
+  }
+  const changedScalp = new Float32Array(scalpPositions.length);
+  hairFit.fitScalp(changedScalp);
+  let changedScalpError = 0;
+  for (let offset = 0; offset < scalpPositions.length; offset += 3) {
+    const bodyOffset = bodyByPosition.get(
+      `${scalpPositions[offset].toFixed(6)}/${scalpPositions[offset + 1].toFixed(6)}/${scalpPositions[offset + 2].toFixed(6)}`,
+    );
+    if (bodyOffset === undefined) throw new Error(`${sex}: no body source for a scalp vertex`);
+    for (let component = 0; component < 3; component++) {
+      const expected = basePositions[bodyOffset + component] + headScaleDelta[bodyOffset + component];
+      changedScalpError = Math.max(changedScalpError, Math.abs(changedScalp[offset + component] - expected));
+    }
+  }
+  if (changedScalpError > 3e-6 || !hairFit.setTarget(headScale, 0)) {
+    throw new Error(`${sex}: dynamic proxy-scalp fit error ${changedScalpError}`);
+  }
+
   for (const style of hairFit.styles) {
     const meshIndex = glb.json.meshes.findIndex((mesh: any) => mesh.name === style.mesh);
     if (meshIndex < 0) throw new Error(`${sex}: missing hair mesh ${style.mesh}`);
@@ -272,8 +301,7 @@ function validateBody(sex: 'male' | 'female'): void {
       fitError = Math.max(fitError, Math.abs(fitted[offset] - positions[offset]));
     }
     if (fitError > 3e-6) throw new Error(`${sex}/${style.id}: neutral fit error ${fitError}`);
-    const headScale = names.indexOf('head-scale-horiz-incr');
-    if (headScale < 0 || !hairFit.setTarget(headScale, 1)) {
+    if (!hairFit.setTarget(headScale, 1)) {
       throw new Error(`${sex}/${style.id}: no dynamic head-width fit target`);
     }
     const changed = new Float32Array(positions.length);
