@@ -50,7 +50,7 @@ interface ZoneHit {
 }
 
 const DEFAULT_BODY = 'character_female';
-const CHARACTER_ASSET_REVISION = '2026-08-05-hair-v2';
+const CHARACTER_ASSET_REVISION = '2026-08-05-hair-v3';
 type Ethnic = 'caucasian' | 'asian' | 'african';
 
 class CharacterEditor {
@@ -67,7 +67,6 @@ class CharacterEditor {
   private skinnedMeshes: THREE.SkinnedMesh[] = [];
   private bodyMeshes: THREE.SkinnedMesh[] = [];
   private hairMeshes = new Map<string, THREE.SkinnedMesh>();
-  private scalpMesh?: THREE.SkinnedMesh;
   private hairFit?: HairFitRuntime;
   private meshZones: MeshZoneData[] = [];
   private hoveredZone?: ZoneHit;
@@ -264,20 +263,11 @@ class CharacterEditor {
     this.skinnedMeshes = [];
     this.bodyMeshes = [];
     this.hairMeshes.clear();
-    this.scalpMesh = undefined;
     obj.traverse((o) => {
       if (!(o as THREE.SkinnedMesh).isSkinnedMesh) return;
       const mesh = o as THREE.SkinnedMesh;
       const hairStyle = mesh.name.startsWith('Hair-') ? mesh.name.slice('Hair-'.length) : '';
-      if (hairStyle === 'scalp') {
-        mesh.material = new THREE.MeshStandardMaterial({
-          color: 0x15100d,
-          roughness: 0.9,
-          side: THREE.DoubleSide,
-        });
-        mesh.visible = true;
-        this.scalpMesh = mesh;
-      } else if (hairStyle) {
+      if (hairStyle) {
         const texture = this.textureLoader.load(`hair-${hairStyle}-diffuse.png?v=${CHARACTER_ASSET_REVISION}`);
         texture.colorSpace = THREE.SRGBColorSpace;
         texture.flipY = false;
@@ -295,7 +285,6 @@ class CharacterEditor {
         // Face-helper vertex colors distinguish the eyes, teeth, and tongue.
         const vertexColors = mesh.geometry.getAttribute('color') !== undefined;
         mesh.material = new THREE.MeshStandardMaterial({
-          alphaTest: 0.5,
           color: vertexColors ? 0xffffff : 0xc9a27e,
           roughness: 0.6,
           vertexColors,
@@ -331,16 +320,6 @@ class CharacterEditor {
 
   private setHairFitData(document: HairFitDocument, morphNames: readonly string[]): void {
     const hairFit = new HairFitRuntime(document, morphNames);
-    const scalpPositions = this.scalpMesh?.geometry.getAttribute('position');
-    if (
-      !this.scalpMesh
-      || this.scalpMesh.name !== hairFit.scalp.mesh
-      || !scalpPositions
-      || scalpPositions.count !== hairFit.scalp.vertexCount
-      || !(scalpPositions.array instanceof Float32Array)
-    ) {
-      throw new Error(`Hair scalp mesh ${hairFit.scalp.mesh} does not match its fit data.`);
-    }
     for (const style of hairFit.styles) {
       const mesh = this.hairMeshes.get(style.id);
       const positions = mesh?.geometry.getAttribute('position');
@@ -354,11 +333,6 @@ class CharacterEditor {
 
   private setHairStyle(styleId: string): void {
     for (const [id, mesh] of this.hairMeshes) mesh.visible = id === styleId;
-    if (this.scalpMesh) {
-      this.scalpMesh.visible = true;
-      const color = styleId === 'none' ? 0x945c38 : styleId === 'short04' ? 0x090a0c : 0x2a1710;
-      (this.scalpMesh.material as THREE.MeshStandardMaterial).color.setHex(color);
-    }
     if (styleId === 'none') {
       this.showStatus('Hair: None.');
       return;
@@ -374,15 +348,7 @@ class CharacterEditor {
   }
 
   private updateHairGeometry(style?: HairStyleRuntime): void {
-    if (!this.hairFit || !this.scalpMesh) return;
-    const scalpPositions = this.scalpMesh.geometry.getAttribute('position');
-    if (!scalpPositions || !(scalpPositions.array instanceof Float32Array)) return;
-    this.hairFit.fitScalp(scalpPositions.array);
-    scalpPositions.needsUpdate = true;
-    this.scalpMesh.geometry.computeVertexNormals();
-    this.scalpMesh.geometry.computeBoundingBox();
-    this.scalpMesh.geometry.computeBoundingSphere();
-
+    if (!this.hairFit) return;
     const selected = style ?? this.hairFit.style(this.hairStyleSelect.value);
     if (!selected) return;
     const mesh = this.hairMeshes.get(selected.id);

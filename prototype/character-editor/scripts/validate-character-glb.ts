@@ -159,10 +159,9 @@ function validateBody(sex: 'male' | 'female'): void {
   }
   if (vertices > 25_000) throw new Error(`${sex}: flat polygon split returned (${vertices} vertices)`);
   if (primitive.attributes.COLOR_0 === undefined) throw new Error(`${sex}: face-helper colors are missing`);
-  const transparentScalpMask = readTransparentColors(glb, primitive.attributes.COLOR_0);
-  const transparentScalpVertices = transparentScalpMask.reduce((sum, value) => sum + value, 0);
-  if (transparentScalpVertices < 100 || transparentScalpVertices > 2_000) {
-    throw new Error(`${sex}: incorrect proxy scalp mask (${transparentScalpVertices})`);
+  const transparentColors = readTransparentColors(glb, primitive.attributes.COLOR_0);
+  if (transparentColors.some((value) => value !== 0)) {
+    throw new Error(`${sex}: body colors contain an unsupported geometry mask`);
   }
   const faceCategories = new Map<string, number>();
   for (const control of controls) {
@@ -224,62 +223,8 @@ function validateBody(sex: 'male' | 'female'): void {
       throw new Error(`${sex}: transient face target ${faceTarget} changes hair rest fit`);
     }
   }
-  const scalpMeshIndex = glb.json.meshes.findIndex((mesh: any) => mesh.name === hairFit.scalp.mesh);
-  if (scalpMeshIndex < 0) throw new Error(`${sex}: missing fitted scalp mesh`);
-  const scalpPrimitive = glb.json.meshes[scalpMeshIndex].primitives[0];
-  const scalpNode = glb.json.nodes.find((node: any) => node.mesh === scalpMeshIndex && node.skin !== undefined);
-  if (!scalpNode) throw new Error(`${sex}: fitted scalp is not skinned`);
-  const scalpPositions = readVec3(glb, scalpPrimitive.attributes.POSITION);
-  const scalpPositionKeys = new Set<string>();
-  for (let offset = 0; offset < scalpPositions.length; offset += 3) {
-    scalpPositionKeys.add(
-      `${scalpPositions[offset].toFixed(6)}/${scalpPositions[offset + 1].toFixed(6)}/${scalpPositions[offset + 2].toFixed(6)}`,
-    );
-  }
-  for (let vertex = 0; vertex < transparentScalpMask.length; vertex++) {
-    if (!transparentScalpMask[vertex]) continue;
-    const offset = vertex * 3;
-    const key = `${basePositions[offset].toFixed(6)}/${basePositions[offset + 1].toFixed(6)}/${basePositions[offset + 2].toFixed(6)}`;
-    if (!scalpPositionKeys.has(key)) {
-      throw new Error(`${sex}: a masked body position has no exact scalp replacement`);
-    }
-  }
-  const fittedScalp = new Float32Array(scalpPositions.length);
-  hairFit.fitScalp(fittedScalp);
-  let scalpError = 0;
-  for (let offset = 0; offset < fittedScalp.length; offset++) {
-    scalpError = Math.max(scalpError, Math.abs(fittedScalp[offset] - scalpPositions[offset]));
-  }
-  if (scalpError > 3e-6) throw new Error(`${sex}: neutral scalp fit error ${scalpError}`);
-
   const headScale = names.indexOf('head-scale-horiz-incr');
-  if (headScale < 0 || !hairFit.setTarget(headScale, 1)) {
-    throw new Error(`${sex}: no dynamic head-width fit target`);
-  }
-  const headScaleDelta = readVec3(glb, targets[headScale].POSITION);
-  const bodyByPosition = new Map<string, number>();
-  for (let offset = 0; offset < basePositions.length; offset += 3) {
-    bodyByPosition.set(
-      `${basePositions[offset].toFixed(6)}/${basePositions[offset + 1].toFixed(6)}/${basePositions[offset + 2].toFixed(6)}`,
-      offset,
-    );
-  }
-  const changedScalp = new Float32Array(scalpPositions.length);
-  hairFit.fitScalp(changedScalp);
-  let changedScalpError = 0;
-  for (let offset = 0; offset < scalpPositions.length; offset += 3) {
-    const bodyOffset = bodyByPosition.get(
-      `${scalpPositions[offset].toFixed(6)}/${scalpPositions[offset + 1].toFixed(6)}/${scalpPositions[offset + 2].toFixed(6)}`,
-    );
-    if (bodyOffset === undefined) throw new Error(`${sex}: no body source for a scalp vertex`);
-    for (let component = 0; component < 3; component++) {
-      const expected = basePositions[bodyOffset + component] + headScaleDelta[bodyOffset + component];
-      changedScalpError = Math.max(changedScalpError, Math.abs(changedScalp[offset + component] - expected));
-    }
-  }
-  if (changedScalpError > 3e-6 || !hairFit.setTarget(headScale, 0)) {
-    throw new Error(`${sex}: dynamic proxy-scalp fit error ${changedScalpError}`);
-  }
+  if (headScale < 0) throw new Error(`${sex}: no dynamic head-width fit target`);
 
   for (const style of hairFit.styles) {
     const meshIndex = glb.json.meshes.findIndex((mesh: any) => mesh.name === style.mesh);

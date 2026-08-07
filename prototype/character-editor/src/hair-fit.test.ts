@@ -3,7 +3,7 @@ import { HairFitRuntime, type HairFitDocument } from './hair-fit.ts';
 
 function fixture(): HairFitDocument {
   return {
-    version: 2,
+    version: 3,
     driverVertexCount: 4,
     driverNeutral: [
       0, 0, 0,
@@ -14,10 +14,10 @@ function fixture(): HairFitDocument {
     targets: {
       wide: [1, 2, 0, 0],
     },
-    scalp: {
-      id: 'scalp',
-      label: 'Scalp',
-      mesh: 'Hair-scalp',
+    proxy: {
+      id: 'proxy',
+      label: 'Proxy support',
+      mesh: 'Hair-proxy-support',
       vertexCount: 4,
       parents: [0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 3],
       weights: [1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0],
@@ -65,14 +65,15 @@ describe('HairFitRuntime', () => {
     expect([...output]).toEqual([5, 2, -0.5]);
     expect(runtime.setTarget(0, 0)).toBe(false);
 
-    const scalp = new Float32Array(12);
-    runtime.fitScalp(scalp);
-    expect([...scalp]).toEqual([0, 0, -0, 4, 0, -0, 0, 0, -6, 0, 8, -0]);
   });
 
-  test('rejects an out-of-range compact driver index', () => {
-    const document = fixture();
-    document.styles[0].parents[2] = 4;
-    expect(() => new HairFitRuntime(document, ['wide'])).toThrow('surface parent');
+  test('rejects out-of-range parent and scale indices', () => {
+    const parentDocument = fixture();
+    parentDocument.styles[0].parents[2] = 4;
+    expect(() => new HairFitRuntime(parentDocument, ['wide'])).toThrow('surface parent');
+
+    const scaleDocument = fixture();
+    scaleDocument.styles[0].scales[0][1] = 4;
+    expect(() => new HairFitRuntime(scaleDocument, ['wide'])).toThrow('surface scale');
   });
 });

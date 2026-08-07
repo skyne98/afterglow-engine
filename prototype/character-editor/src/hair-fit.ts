@@ -15,7 +15,7 @@ export interface HairFitDocument {
   driverVertexCount: number;
   driverNeutral: number[];
   targets: Record<string, number[]>;
-  scalp: HairStyleDocument;
+  proxy: HairStyleDocument;
   styles: HairStyleDocument[];
 }
 
@@ -50,7 +50,11 @@ function calculateScale(
   return Math.abs(driver[first] - driver[second]) / scale[2];
 }
 
-function parseSurface(source: HairStyleDocument, driverVertexCount: number): HairStyleRuntime {
+function parseSurface(
+  source: HairStyleDocument,
+  parentVertexCount: number,
+  scaleVertexCount = parentVertexCount,
+): HairStyleRuntime {
   if (!source.id || !source.mesh) fail('surface identity');
   if (!Number.isInteger(source.vertexCount) || source.vertexCount <= 0) fail(`surface count ${source.id}`);
   const componentCount = source.vertexCount * 3;
@@ -65,7 +69,7 @@ function parseSurface(source: HairStyleDocument, driverVertexCount: number): Hai
     fail(`surface arrays ${source.id}`);
   }
   for (const parent of source.parents) {
-    if (!Number.isInteger(parent) || parent < 0 || parent >= driverVertexCount || parent > 0xffff) {
+    if (!Number.isInteger(parent) || parent < 0 || parent >= parentVertexCount || parent > 0xffff) {
       fail(`surface parent ${source.id}`);
     }
   }
@@ -78,8 +82,8 @@ function parseSurface(source: HairStyleDocument, driverVertexCount: number): Hai
       || !Number.isInteger(scale[1])
       || scale[0] < 0
       || scale[1] < 0
-      || scale[0] >= driverVertexCount
-      || scale[1] >= driverVertexCount
+      || scale[0] >= scaleVertexCount
+      || scale[1] >= scaleVertexCount
       || !(scale[2] > 0)
       || !Number.isInteger(scale[3])
       || scale[3] < 0
@@ -102,24 +106,24 @@ function parseSurface(source: HairStyleDocument, driverVertexCount: number): Hai
 
 export class HairFitRuntime {
   readonly driver: Float32Array;
-  readonly scalp: HairStyleRuntime;
+  readonly proxy: HairStyleRuntime;
   readonly styles: readonly HairStyleRuntime[];
-  private readonly scalpDriver: Float32Array;
+  private readonly proxyDriver: Float32Array;
   private readonly morphWeights: Float32Array;
   private readonly targetByMorph: Array<Float32Array | undefined>;
   private readonly styleById = new Map<string, HairStyleRuntime>();
 
   constructor(document: HairFitDocument, morphNames: readonly string[]) {
-    if (document.version !== 2 || !Number.isInteger(document.driverVertexCount) || document.driverVertexCount <= 0) {
+    if (document.version !== 3 || !Number.isInteger(document.driverVertexCount) || document.driverVertexCount <= 0) {
       fail('version or driver count');
     }
     if (document.driverNeutral.length !== document.driverVertexCount * 3 || !finite(document.driverNeutral)) {
       fail('neutral driver');
     }
     this.driver = new Float32Array(document.driverNeutral);
-    this.scalp = parseSurface(document.scalp, document.driverVertexCount);
-    this.scalpDriver = new Float32Array(this.scalp.vertexCount * 3);
-    this.fitFrom(this.scalp, this.driver, this.scalpDriver, false);
+    this.proxy = parseSurface(document.proxy, document.driverVertexCount);
+    this.proxyDriver = new Float32Array(this.proxy.vertexCount * 3);
+    this.fitFrom(this.proxy, this.driver, this.driver, this.proxyDriver, false);
     this.morphWeights = new Float32Array(morphNames.length);
     this.targetByMorph = new Array(morphNames.length);
 
@@ -138,7 +142,7 @@ export class HairFitRuntime {
 
     this.styles = document.styles.map((source) => {
       if (this.styleById.has(source.id)) fail('style identity');
-      const style = parseSurface(source, this.scalp.vertexCount);
+      const style = parseSurface(source, this.proxy.vertexCount, document.driverVertexCount);
       this.styleById.set(style.id, style);
       return style;
     });
@@ -164,33 +168,25 @@ export class HairFitRuntime {
       this.driver[driverOffset + 1] += target[offset + 2] * difference;
       this.driver[driverOffset + 2] += target[offset + 3] * difference;
     }
-    this.fitFrom(this.scalp, this.driver, this.scalpDriver, false);
+    this.fitFrom(this.proxy, this.driver, this.driver, this.proxyDriver, false);
     return true;
   }
 
-  fitScalp(output: Float32Array): void {
-    if (output.length !== this.scalpDriver.length) fail('scalp output');
-    for (let component = 0; component < output.length; component += 3) {
-      output[component] = this.scalpDriver[component];
-      output[component + 1] = this.scalpDriver[component + 2];
-      output[component + 2] = -this.scalpDriver[component + 1];
-    }
-  }
-
   fit(style: HairStyleRuntime, output: Float32Array): void {
-    this.fitFrom(style, this.scalpDriver, output, true);
+    this.fitFrom(style, this.proxyDriver, this.driver, output, true);
   }
 
   private fitFrom(
     style: HairStyleRuntime,
     source: Float32Array,
+    scaleSource: Float32Array,
     output: Float32Array,
     yUp: boolean,
   ): void {
     if (output.length !== style.vertexCount * 3) fail(`output ${style.id}`);
-    const scaleX = calculateScale(source, style.scales[0]);
-    const scaleY = calculateScale(source, style.scales[1]);
-    const scaleZ = calculateScale(source, style.scales[2]);
+    const scaleX = calculateScale(scaleSource, style.scales[0]);
+    const scaleY = calculateScale(scaleSource, style.scales[1]);
+    const scaleZ = calculateScale(scaleSource, style.scales[2]);
     for (let vertex = 0; vertex < style.vertexCount; vertex++) {
       const component = vertex * 3;
       let x = style.offsets[component] * scaleX;
