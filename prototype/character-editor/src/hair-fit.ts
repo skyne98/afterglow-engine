@@ -3,6 +3,7 @@ export interface HairStyleDocument {
   label: string;
   mesh: string;
   vertexCount: number;
+  sources?: number[];
   parents: number[];
   weights: number[];
   offsets: number[];
@@ -24,6 +25,7 @@ export interface HairStyleRuntime {
   readonly label: string;
   readonly mesh: string;
   readonly vertexCount: number;
+  readonly sources?: Uint8Array;
   readonly parents: Uint16Array;
   readonly weights: Float32Array;
   readonly offsets: Float32Array;
@@ -54,6 +56,7 @@ function parseSurface(
   source: HairStyleDocument,
   parentVertexCount: number,
   scaleVertexCount = parentVertexCount,
+  alternativeParentVertexCount?: number,
 ): HairStyleRuntime {
   if (!source.id || !source.mesh) fail('surface identity');
   if (!Number.isInteger(source.vertexCount) || source.vertexCount <= 0) fail(`surface count ${source.id}`);
@@ -68,8 +71,19 @@ function parseSurface(
   ) {
     fail(`surface arrays ${source.id}`);
   }
-  for (const parent of source.parents) {
-    if (!Number.isInteger(parent) || parent < 0 || parent >= parentVertexCount || parent > 0xffff) {
+  if (source.sources !== undefined) {
+    if (source.sources.length !== source.vertexCount || alternativeParentVertexCount === undefined) {
+      fail(`surface sources ${source.id}`);
+    }
+    for (const value of source.sources) {
+      if (value !== 0 && value !== 1) fail(`surface source ${source.id}`);
+    }
+  }
+  for (let offset = 0; offset < source.parents.length; offset++) {
+    const parent = source.parents[offset];
+    const vertex = Math.floor(offset / 3);
+    const limit = source.sources?.[vertex] === 1 ? alternativeParentVertexCount! : parentVertexCount;
+    if (!Number.isInteger(parent) || parent < 0 || parent >= limit || parent > 0xffff) {
       fail(`surface parent ${source.id}`);
     }
   }
@@ -97,6 +111,7 @@ function parseSurface(
     label: source.label,
     mesh: source.mesh,
     vertexCount: source.vertexCount,
+    sources: source.sources === undefined ? undefined : new Uint8Array(source.sources),
     parents: new Uint16Array(source.parents),
     weights: new Float32Array(source.weights),
     offsets: new Float32Array(source.offsets),
@@ -114,7 +129,7 @@ export class HairFitRuntime {
   private readonly styleById = new Map<string, HairStyleRuntime>();
 
   constructor(document: HairFitDocument, morphNames: readonly string[]) {
-    if (document.version !== 3 || !Number.isInteger(document.driverVertexCount) || document.driverVertexCount <= 0) {
+    if (document.version !== 4 || !Number.isInteger(document.driverVertexCount) || document.driverVertexCount <= 0) {
       fail('version or driver count');
     }
     if (document.driverNeutral.length !== document.driverVertexCount * 3 || !finite(document.driverNeutral)) {
@@ -123,7 +138,7 @@ export class HairFitRuntime {
     this.driver = new Float32Array(document.driverNeutral);
     this.proxy = parseSurface(document.proxy, document.driverVertexCount);
     this.proxyDriver = new Float32Array(this.proxy.vertexCount * 3);
-    this.fitFrom(this.proxy, this.driver, this.driver, this.proxyDriver, false);
+    this.fitFrom(this.proxy, this.driver, undefined, this.driver, this.proxyDriver, false);
     this.morphWeights = new Float32Array(morphNames.length);
     this.targetByMorph = new Array(morphNames.length);
 
@@ -142,7 +157,12 @@ export class HairFitRuntime {
 
     this.styles = document.styles.map((source) => {
       if (this.styleById.has(source.id)) fail('style identity');
-      const style = parseSurface(source, this.proxy.vertexCount, document.driverVertexCount);
+      const style = parseSurface(
+        source,
+        document.driverVertexCount,
+        document.driverVertexCount,
+        this.proxy.vertexCount,
+      );
       this.styleById.set(style.id, style);
       return style;
     });
@@ -168,17 +188,18 @@ export class HairFitRuntime {
       this.driver[driverOffset + 1] += target[offset + 2] * difference;
       this.driver[driverOffset + 2] += target[offset + 3] * difference;
     }
-    this.fitFrom(this.proxy, this.driver, this.driver, this.proxyDriver, false);
+    this.fitFrom(this.proxy, this.driver, undefined, this.driver, this.proxyDriver, false);
     return true;
   }
 
   fit(style: HairStyleRuntime, output: Float32Array): void {
-    this.fitFrom(style, this.proxyDriver, this.driver, output, true);
+    this.fitFrom(style, this.driver, this.proxyDriver, this.driver, output, true);
   }
 
   private fitFrom(
     style: HairStyleRuntime,
     source: Float32Array,
+    alternativeSource: Float32Array | undefined,
     scaleSource: Float32Array,
     output: Float32Array,
     yUp: boolean,
@@ -189,6 +210,7 @@ export class HairFitRuntime {
     const scaleZ = calculateScale(scaleSource, style.scales[2]);
     for (let vertex = 0; vertex < style.vertexCount; vertex++) {
       const component = vertex * 3;
+      const parentSource = style.sources?.[vertex] === 1 ? alternativeSource! : source;
       let x = style.offsets[component] * scaleX;
       let y = style.offsets[component + 1] * scaleY;
       let z = style.offsets[component + 2] * scaleZ;
@@ -196,9 +218,9 @@ export class HairFitRuntime {
         const binding = component + parent;
         const driver = style.parents[binding] * 3;
         const weight = style.weights[binding];
-        x += source[driver] * weight;
-        y += source[driver + 1] * weight;
-        z += source[driver + 2] * weight;
+        x += parentSource[driver] * weight;
+        y += parentSource[driver + 1] * weight;
+        z += parentSource[driver + 2] * weight;
       }
       output[component] = x;
       output[component + 1] = yUp ? z : y;

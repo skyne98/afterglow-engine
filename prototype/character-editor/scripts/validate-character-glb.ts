@@ -215,8 +215,26 @@ function validateBody(sex: 'male' | 'female'): void {
   }
 
   const hairFit = new HairFitRuntime(hairFitDocument, names);
-  if (hairFit.styles.length !== 2 || hairFitDocument.targets['head-scale-horiz-incr'] === undefined) {
+  const expectedHairStyles = [
+    'afro01', 'bob01', 'bob02', 'braid01', 'long01',
+    'ponytail01', 'short01', 'short02', 'short03', 'short04',
+  ];
+  if (
+    hairFit.styles.map((style) => style.id).join('/') !== expectedHairStyles.join('/')
+    || hairFitDocument.targets['head-scale-horiz-incr'] === undefined
+  ) {
     throw new Error(`${sex}: incorrect hair-fit style or structural-target set`);
+  }
+  for (const style of hairFit.styles) {
+    const direct = style.sources?.reduce((sum, value) => sum + (value === 0 ? 1 : 0), 0) ?? 0;
+    const composed = style.vertexCount - direct;
+    if (
+      (['bob01', 'braid01', 'long01'].includes(style.id) && direct !== style.vertexCount)
+      || (style.id === 'ponytail01' && (direct === 0 || composed === 0))
+      || (!['bob01', 'braid01', 'long01', 'ponytail01'].includes(style.id) && composed !== style.vertexCount)
+    ) {
+      throw new Error(`${sex}/${style.id}: incorrect helper/proxy binding domains`);
+    }
   }
   for (const faceTarget of faceTargetNames) {
     if (hairFitDocument.targets[faceTarget] !== undefined) {

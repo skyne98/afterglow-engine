@@ -13,7 +13,7 @@
  * Output: public/character_male.glb + character_female.glb (+ sidecars)
  */
 import { $ } from 'bun';
-import { copyFileSync, existsSync, mkdtempSync, renameSync, rmSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdtempSync, readdirSync, renameSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -26,17 +26,28 @@ const downloads = join(root, '..', '..', 'assets', 'character-rig', 'downloads')
 const proxies = join(downloads, 'proxies');
 const faceTargets = join(downloads, 'functional');
 const systemAssets = join(downloads, 'makehuman_system_assets_cc0.zip');
-const hairStyles = ['short04', 'ponytail01'] as const;
+const hairStyles = [
+  'afro01',
+  'bob01',
+  'bob02',
+  'braid01',
+  'long01',
+  'ponytail01',
+  'short01',
+  'short02',
+  'short03',
+  'short04',
+] as const;
 if (!existsSync(systemAssets)) throw new Error(`Missing ${systemAssets}`);
 
 const extracted = mkdtempSync(join(tmpdir(), 'afterglow-character-hair-'));
 try {
   for (const style of hairStyles) {
     await $`unzip -q -o ${systemAssets} ${`hair/${style}/*`} -d ${extracted}`;
-    copyFileSync(
-      join(extracted, 'hair', style, `${style}_diffuse.png`),
-      join(dir, `hair-${style}-diffuse.png`),
-    );
+    const styleDirectory = join(extracted, 'hair', style);
+    const diffuse = readdirSync(styleDirectory).find((name) => name.endsWith('_diffuse.png'));
+    if (!diffuse) throw new Error(`Missing diffuse texture for ${style}`);
+    copyFileSync(join(styleDirectory, diffuse), join(dir, `hair-${style}-diffuse.png`));
   }
 
   for (const sex of ['male', 'female']) {
@@ -72,4 +83,4 @@ try {
 } finally {
   rmSync(extracted, { force: true, recursive: true });
 }
-console.log('Done: male and female characters with short and long hair in public/.');
+console.log('Done: male and female characters with ten hair styles in public/.');

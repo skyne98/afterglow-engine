@@ -126,21 +126,24 @@ is `3e-6` Blender units.
 
 ### Hair selection and live fit
 
-The prototype offers None, CC0 `short04`, and CC0 `ponytail01`. The generated
-character GLB contains both body-rig-skinned card meshes. It does not remove,
-mask, offset, or replace head geometry.
+The prototype offers None and all ten CC0 system hairstyles: `afro01`, `bob01`,
+`bob02`, `braid01`, `long01`, `ponytail01`, and `short01` through `short04`.
+The generated character GLB contains all ten body-rig-skinned card meshes. It
+does not remove, mask, offset, or replace head geometry.
 
-The hair and PunkElvs assets each define an MHCLO SurfaceWrap from hm08. The
-generator composes those two authored maps. For each hair vertex, it finds the
-hair anchor on the offset-free PunkElvs anchor surface. It then adds the exact
-PunkElvs displacement at that point and preserves the authored hair offset.
-The generator also interpolates rig weights from the same proxy triangle.
-There is no clearance constant or generated scalp cap.
+The body-bound hair and PunkElvs assets each define an MHCLO SurfaceWrap from
+hm08. The generator composes those two authored maps. For each body-bound hair
+vertex, it finds the hair anchor on the offset-free PunkElvs anchor surface. It
+then adds the exact PunkElvs displacement at that point and preserves the
+authored hair offset. The generator also interpolates rig weights from the same
+proxy triangle. Vertices authored against the hm08 `helper-hair` deformation
+cage keep that direct binding. There is no clearance constant or generated
+scalp cap.
 
-The male sidecar has 763 compact hm08 drivers and 794 proxy-support vertices.
-The female sidecar has 811 drivers and 760 support vertices. Their sparse target
-stream counts are 293 and 222. Expressions and visemes do not change hair rest
-shape.
+The male sidecar has 1,603 compact hm08 drivers and 1,281 proxy-support
+vertices. The female sidecar has 1,637 drivers and 1,227 support vertices. Their
+sparse target stream counts are 406 and 333. Expressions and visemes do not
+change hair rest shape.
 
 The runtime applies sparse driver changes incrementally. It first evaluates the
 necessary PunkElvs support vertices and then evaluates the selected hair. It
@@ -148,12 +151,14 @@ also converts Blender coordinates to glTF Y-up coordinates, rebuilds normals,
 and updates the selected geometry. Validation compares the complete composed
 neutral fit and requires movement for `head-scale-horiz-incr`.
 
-Earlier tests used `helper-hair`, a base scalp cap, a proxy scalp mask, and a
-clearance. Those approaches changed or hid geometry instead of composing the
-two source maps. All of them were removed.
+Earlier tests rendered `helper-hair` as a cap, used generated scalp caps, masked
+the proxy scalp, or added clearance. Those approaches changed or hid geometry.
+All of them were removed. The authored `helper-hair` bindings remain because the
+cage is a source-defined deformation mechanism.
 
-`ponytail01` currently uses interpolated proxy-scalp rig weights. It has no SpringChain
-or imported ponytail sub-rig in this prototype.
+`bob01`, `braid01`, and `long01` use direct helper-cage bindings. `ponytail01`
+uses both helper-cage and composed proxy bindings. Long sections have no
+SpringChain or imported sub-rig in this prototype.
 
 ### `scripts/gen-proxy-transfer.py` (Blender headless)
 Per sex:
@@ -166,9 +171,9 @@ Per sex:
 6. Replace the Caucasian macro with each ethnicity macro and capture the fit.
 7. Append the base eyes, teeth, and tongue with vertex colors and rig weights.
 8. Restore Caucasian, make all polygons smooth, and create `Basis` plus targets.
-9. Compose each hair SurfaceWrap with the PunkElvs SurfaceWrap.
-10. Transfer rig weights from the composed proxy triangles and cook the compact
-    two-stage records.
+9. Keep helper-cage bindings and compose body bindings with PunkElvs.
+10. Transfer rig weights from composed proxy triangles and cook mixed-source
+    records for all ten styles.
 11. Export the mesh, rig, morph-name, logical-control, and hair-fit sidecars.
 
 The exporter does not include normal morphs. Their sparse data caused unchanged

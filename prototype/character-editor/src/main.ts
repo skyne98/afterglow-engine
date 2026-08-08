@@ -50,7 +50,7 @@ interface ZoneHit {
 }
 
 const DEFAULT_BODY = 'character_female';
-const CHARACTER_ASSET_REVISION = '2026-08-05-hair-v3';
+const CHARACTER_ASSET_REVISION = '2026-08-05-hair-v4';
 type Ethnic = 'caucasian' | 'asian' | 'african';
 
 class CharacterEditor {

@@ -1069,27 +1069,28 @@ Only after the prior gates pass:
 
 # Prototype result (2026-08-05)
 
-The isolated character editor now has a CPU SurfaceWrap slice for CC0 `short04`
-and `ponytail01`. Expressions and visemes do not change hair rest fit.
+The isolated character editor now has a CPU SurfaceWrap slice for all ten CC0
+system hairstyles. Expressions and visemes do not change hair rest fit.
 
-The hair and PunkElvs assets each define an authored hm08 SurfaceWrap. The
-corrected bake composes those maps. It finds each hair anchor on the offset-free
-PunkElvs anchor surface, adds the exact proxy displacement there, and preserves
-the authored hair offset. It also transfers rig weights from the same proxy
-triangle. The runtime evaluates only the proxy vertices that those composed
-bindings use.
+Body-bound hair and PunkElvs each define an authored hm08 SurfaceWrap. The bake
+composes those maps. It finds each hair anchor on the offset-free PunkElvs
+anchor surface, adds the exact proxy displacement there, and preserves the
+authored hair offset. It also transfers rig weights from the same proxy
+triangle. Vertices authored against the hm08 `helper-hair` deformation cage
+keep that direct binding. The runtime evaluates only the proxy and base vertices
+that these mixed-source records use.
 
-The male record has 763 compact hm08 drivers, 794 proxy-support vertices, and
-293 sparse target streams. The female record has 811 drivers, 760 support
-vertices, and 222 streams. The ponytail has no secondary motion yet.
+The male record has 1,603 compact hm08 drivers, 1,281 proxy-support vertices,
+and 406 sparse target streams. The female record has 1,637 drivers, 1,227
+support vertices, and 333 streams. Long sections have no secondary motion yet.
 
-Earlier tests used `helper-hair`, a base scalp cap, a proxy scalp mask, and an
-8 mm clearance. Those paths changed or hid geometry instead of composing the
-source maps. The corrected bake removes all of them.
+Earlier tests rendered `helper-hair`, generated scalp caps, masked the scalp, or
+added an 8 mm clearance. Those paths changed or hid geometry and were removed.
+The authored helper-cage bindings remain as source-defined deformation data.
 
 Validation accepts a complete composed neutral error below `3e-6` Blender
 units and requires live movement for `head-scale-horiz-incr`. The prior
-direct-hm08 browser times do not apply to this two-stage fit.
+direct-hm08 browser times do not apply to this mixed-source fit.
 
 This does not complete the production gates. The code remains under
 `prototype/character-editor/` and is not an engine crate or public API.

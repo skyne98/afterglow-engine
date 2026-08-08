@@ -45,8 +45,16 @@ PROXY_ROOT = os.environ.get("PROXY_ROOT", "")
 FACE_TARGET_ROOT = os.environ.get("FACE_TARGET_ROOT", "")
 HAIR_ROOT = os.environ.get("HAIR_ROOT", "")
 HAIR_STYLES = (
-    ("short04", "Short 04"),
+    ("afro01", "Afro 01"),
+    ("bob01", "Bob 01"),
+    ("bob02", "Bob 02"),
+    ("braid01", "Braid 01"),
+    ("long01", "Long 01"),
     ("ponytail01", "Ponytail 01"),
+    ("short01", "Short 01"),
+    ("short02", "Short 02"),
+    ("short03", "Short 03"),
+    ("short04", "Short 04"),
 )
 
 def split_hair_for_runtime(hair):
@@ -168,26 +176,58 @@ def triangle_weights(point, first, second, third):
     third_weight = (dot00 * dot21 - dot01 * dot20) / denominator
     return (1.0 - second_weight - third_weight, second_weight, third_weight)
 
+helper_hair_group = b.vertex_groups.get("helper-hair")
+if not helper_hair_group:
+    raise RuntimeError("the hm08 helper-hair group is missing")
+helper_hair_sources = {
+    vertex.index for vertex in b.data.vertices
+    if any(membership.group == helper_hair_group.index for membership in vertex.groups)
+}
+
 def prepare_composed_hair():
     base_coords = mixed_base_coords()
     proxy_anchors = [binding_anchor(mhclo.verts[index], base_coords) for index in range(len(proxy.data.vertices))]
-    proxy_faces = [
-        (polygon.vertices[0], polygon.vertices[index], polygon.vertices[index + 1])
-        for polygon in proxy.data.polygons
-        for index in range(1, len(polygon.vertices) - 1)
-    ]
+    proxy_faces = []
+    for polygon in proxy.data.polygons:
+        for index in range(1, len(polygon.vertices) - 1):
+            face = (polygon.vertices[0], polygon.vertices[index], polygon.vertices[index + 1])
+            first, second, third = (proxy_anchors[parent] for parent in face)
+            if (second - first).cross(third - first).length_squared > 1.0e-12:
+                proxy_faces.append(face)
     anchor_tree = BVHTree.FromPolygons(proxy_anchors, proxy_faces, all_triangles=True)
     support_sources = set()
     prepared = {}
     for style_id, _, hair, hair_mhclo, binding_sources in hair_assets:
         style_bindings = []
+        original_group_names = {
+            group.index: group.name for group in hair.vertex_groups
+        }
+        original_weights = [
+            [(membership.group, membership.weight) for membership in vertex.groups]
+            for vertex in hair.data.vertices
+        ]
         hair.vertex_groups.clear()
         hair_groups = {
-            group.index: hair.vertex_groups.new(name=group.name)
+            group.name: hair.vertex_groups.new(name=group.name)
             for group in proxy.vertex_groups
         }
         for vertex, binding_source in enumerate(binding_sources):
             hair_binding = hair_mhclo.verts[binding_source]
+            uses_helper = sum(
+                source in helper_hair_sources for source in hair_binding["verts"]
+            ) >= 2
+            if uses_helper:
+                face = tuple(hair_binding["verts"])
+                weights = tuple(hair_binding["weights"])
+                style_bindings.append((0, face, weights))
+                for group_index, weight in original_weights[vertex]:
+                    group_name = original_group_names[group_index]
+                    target_group = hair_groups.get(group_name)
+                    if target_group is None:
+                        raise RuntimeError(f"{style_id} uses unknown rig group {group_name}")
+                    target_group.add([vertex], weight, 'REPLACE')
+                continue
+
             hair_anchor = binding_anchor(hair_binding, base_coords)
             nearest, _, face_index, _ = anchor_tree.find_nearest(hair_anchor)
             if nearest is None or face_index is None:
@@ -204,21 +244,22 @@ def prepare_composed_hair():
             )
             hair.data.vertices[vertex].co += proxy_position - proxy_anchor
             support_sources.update(face)
-            style_bindings.append((face, weights))
+            style_bindings.append((1, face, weights))
 
             bone_weights = {}
             for parent, surface_weight in zip(face, weights):
                 for membership in proxy.data.vertices[parent].groups:
-                    bone_weights[membership.group] = (
-                        bone_weights.get(membership.group, 0.0)
+                    group_name = proxy.vertex_groups[membership.group].name
+                    bone_weights[group_name] = (
+                        bone_weights.get(group_name, 0.0)
                         + surface_weight * membership.weight
                     )
             total = sum(max(weight, 0.0) for weight in bone_weights.values())
             if total <= 1.0e-8:
                 raise RuntimeError(f"{style_id} vertex {vertex} has no proxy rig weights")
-            for group, weight in bone_weights.items():
+            for group_name, weight in bone_weights.items():
                 if weight > 0.0:
-                    hair_groups[group].add([vertex], weight / total, 'REPLACE')
+                    hair_groups[group_name].add([vertex], weight / total, 'REPLACE')
         hair.data.update()
         prepared[style_id] = style_bindings
     return sorted(support_sources), prepared
@@ -251,6 +292,10 @@ def max_displacement(a, b):
 driver_sources = set()
 for source in proxy_support_sources:
     driver_sources.update(mhclo.verts[source]["verts"])
+for bindings in prepared_hair_bindings.values():
+    for source_kind, parents, _ in bindings:
+        if source_kind == 0:
+            driver_sources.update(parents)
 for scale in (mhclo.x_scale, mhclo.y_scale, mhclo.z_scale):
     if not scale:
         raise RuntimeError("proxy MHCLO data has no axis scale")
@@ -332,18 +377,26 @@ def cook_hair_style(style_id, label, hair, hair_mhclo, binding_sources, neutral_
 def cook_composed_style(style_id, label, hair, hair_mhclo, bindings, neutral_driver, support_local):
     scales = effective_scale_record(hair_mhclo)
     scale_values = effective_scales(neutral_driver, scales)
+    sources = []
     parents = []
     weights = []
     offsets = []
     maximum_error = 0.0
-    for vertex, (face, binding_weights) in enumerate(bindings):
-        local_parents = [support_local[source] for source in face]
+    for vertex, (source_kind, face, binding_weights) in enumerate(bindings):
+        if source_kind == 0:
+            local_parents = [driver_local[source] for source in face]
+            source_positions = neutral_driver
+        else:
+            local_parents = [support_local[source] for source in face]
+            source_positions = proxy_support_neutral
         surface = Vector()
-        for parent, weight in zip(face, binding_weights):
-            surface += proxy.data.vertices[parent].co * weight
+        for parent, weight in zip(local_parents, binding_weights):
+            source_offset = parent * 3
+            surface += Vector(source_positions[source_offset:source_offset + 3]) * weight
         actual = hair.data.vertices[vertex].co
         offset = actual - surface
         normalized_offset = [offset[axis] / scale_values[axis] for axis in range(3)]
+        sources.append(source_kind)
         parents.extend(local_parents)
         weights.extend(binding_weights)
         offsets.extend(normalized_offset)
@@ -351,7 +404,7 @@ def cook_composed_style(style_id, label, hair, hair_mhclo, bindings, neutral_dri
         for parent, weight in zip(local_parents, binding_weights):
             source_offset = parent * 3
             for axis in range(3):
-                fitted[axis] += proxy_support_neutral[source_offset + axis] * weight
+                fitted[axis] += source_positions[source_offset + axis] * weight
         maximum_error = max(
             maximum_error,
             ((actual.x - fitted[0]) ** 2 + (actual.y - fitted[1]) ** 2 + (actual.z - fitted[2]) ** 2) ** 0.5,
@@ -363,6 +416,7 @@ def cook_composed_style(style_id, label, hair, hair_mhclo, bindings, neutral_dri
         "label": label,
         "mesh": hair.name,
         "vertexCount": len(hair.data.vertices),
+        "sources": sources,
         "parents": parents,
         "weights": weights,
         "offsets": offsets,
@@ -740,7 +794,7 @@ with open(OUT.replace(".glb", ".morphs.json"), "w") as f:
 with open(OUT.replace(".glb", ".controls.json"), "w") as f:
     json.dump(control_specs, f)
 hair_fit = {
-    "version": 3,
+    "version": 4,
     "driverVertexCount": len(driver_sources),
     "driverNeutral": list(D0),
     "targets": driver_targets,

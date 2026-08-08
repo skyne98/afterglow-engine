@@ -47,9 +47,9 @@ The local ZIP has no hair sub-rig or custom-weight sidecars. The upstream CC0
 one root plus five ponytail bones. See
 `docs/research/makehuman-hair-runtime-dynamic-character-system.md`.
 
-The character prototype extracts `short04` and `ponytail01` from this ZIP. It
-commits their CC0 diffuse textures beside generated GLBs and uses interpolated
-main-rig weights for both styles.
+The character prototype extracts all ten styles from this ZIP. It commits their
+CC0 diffuse textures beside the generated GLBs. It keeps authored helper-cage
+bindings and composes body-bound records with the PunkElvs proxy.
 
 Downloaded `genitalia/` ledger (each page verified 2026-08-02):
 

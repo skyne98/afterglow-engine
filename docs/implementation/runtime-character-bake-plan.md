@@ -51,10 +51,11 @@ macro products, corrected skin transfer, and normal rebuilding. It also has
 no-allocation checks and MPFB parity for 26 sampled CC0 `short04` vertices.
 
 All 14 Rust tests pass. The real-hair fit error limit is `3e-6` Blender units.
-The character editor also has a TypeScript CPU-fit slice for CC0 `short04` and
-`ponytail01`. It composes each hair MHCLO map with the PunkElvs MHCLO map and
-transfers rig weights from the composed proxy triangles. It does not mask the
-head or add a clearance. This remains prototype code.
+The character editor also has a TypeScript CPU-fit slice for all ten CC0 system
+hairstyles. It keeps authored helper-cage bindings and composes body-bound MHCLO
+records with PunkElvs. It transfers rig weights from the composed proxy
+triangles. It does not mask the head or add a clearance. This remains prototype
+code.
 
 Source parsing, complete macro tables, tangents, rig-rest fitting, SpringChain,
 and worker integration remain open.

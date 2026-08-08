@@ -3,7 +3,7 @@ import { HairFitRuntime, type HairFitDocument } from './hair-fit.ts';
 
 function fixture(): HairFitDocument {
   return {
-    version: 3,
+    version: 4,
     driverVertexCount: 4,
     driverNeutral: [
       0, 0, 0,
@@ -34,6 +34,7 @@ function fixture(): HairFitDocument {
       label: 'Test',
       mesh: 'Hair-test',
       vertexCount: 1,
+      sources: [1],
       parents: [0, 1, 2],
       weights: [-0.25, 1, 0.25],
       offsets: [0.5, -0.5, 1],
@@ -75,5 +76,9 @@ describe('HairFitRuntime', () => {
     const scaleDocument = fixture();
     scaleDocument.styles[0].scales[0][1] = 4;
     expect(() => new HairFitRuntime(scaleDocument, ['wide'])).toThrow('surface scale');
+
+    const sourceDocument = fixture();
+    sourceDocument.styles[0].sources![0] = 2;
+    expect(() => new HairFitRuntime(sourceDocument, ['wide'])).toThrow('surface source');
   });
 });
