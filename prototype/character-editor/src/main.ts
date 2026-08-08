@@ -33,6 +33,8 @@ interface ZonePaint {
   label: string;
   color: number;
   index: THREE.BufferAttribute;
+  /** Control labels whose morphs have the most local displacement in this zone. */
+  localControls: string[];
 }
 
 interface MeshZoneData {
@@ -498,6 +500,12 @@ class CharacterEditor {
     }
     const bilateral = new Set(this.controlSpecs.filter((spec) => spec.label.endsWith('(left)')).map((spec) => spec.category));
     const indexByName = new Map(this.morphNames.map((name, index) => [name, index]));
+    // Map a morph target name to its human control label for local lists.
+    const labelByTarget = new Map<string, string>();
+    for (const spec of this.controlSpecs) {
+      if (spec.negative) labelByTarget.set(spec.negative, spec.label);
+      if (spec.positive) labelByTarget.set(spec.positive, spec.label);
+    }
 
     for (const source of this.bodyMeshes) {
       const positions = source.geometry.getAttribute('position');
@@ -582,26 +590,82 @@ class CharacterEditor {
       let colorIndex = 0;
       for (const [id, values] of zoneIndices) {
         const info = zoneInfo.get(id)!;
+        const localControls = this.localControlsForZone(values, targets, indexByName, labelByTarget);
         const paint = {
           id,
           category: info.category,
           label: info.label,
           color: palette[colorIndex++ % palette.length],
           index: new THREE.Uint32BufferAttribute(values, 1),
+          localControls,
         };
         zones.push(paint);
         paintById.set(id, paint);
       }
       const triangleZones = triangleZoneIds.map((id) => id ? paintById.get(id) : undefined);
       const hitMesh = this.createZoneHitMesh(source);
-      const hoverOverlay = this.createZoneOverlay(source, 0.5);
-      const selectedOverlay = this.createZoneOverlay(source, 0.3);
+      const hoverOverlay = this.createZoneOverlay(source, 0.18);
+      const selectedOverlay = this.createZoneOverlay(source, 0.18);
       this.meshZones.push({ source, hitMesh, triangleZones, zones, hoverOverlay, selectedOverlay });
     }
   }
 
-  private createZoneHitMesh(source: THREE.SkinnedMesh): THREE.Mesh {
-    const geometry = new THREE.BufferGeometry();
+  /**
+   * Compute the human control labels local to a zone. A morph is local to the
+   * zone when a large fraction of its total body displacement lies inside the
+   * zone's vertices (locality ratio). Ranking by locality rather than by raw
+   * displacement keeps whole-body morphs (age, height) from hiding the true
+   * breast/face/nose controls on their own zone.
+   */
+  private localControlsForZone(
+    zoneVertices: number[],
+    targets: Array<THREE.BufferAttribute | THREE.InterleavedBufferAttribute>,
+    indexByName: Map<string, number>,
+    labelByTarget: Map<string, string>,
+  ): string[] {
+    const unique = new Set(zoneVertices);
+    const vertexArray = [...unique];
+    // Per-morph: displacement summed inside the zone AND over the whole body.
+    const zoneEnergy = new Map<number, number>();
+    const bodyEnergy = new Map<number, number>();
+    for (const name of labelByTarget.keys()) {
+      const targetIndex = indexByName.get(name);
+      if (targetIndex === undefined) continue;
+      const target = targets[targetIndex];
+      if (!target) continue;
+      let bodySum = 0;
+      for (let vertex = 0; vertex < target.count; vertex++) {
+        bodySum += Math.hypot(target.getX(vertex), target.getY(vertex), target.getZ(vertex));
+      }
+      if (bodySum <= 1e-9) continue;
+      let zoneSum = 0;
+      for (const vertex of vertexArray) {
+        if (vertex >= target.count) continue;
+        zoneSum += Math.hypot(target.getX(vertex), target.getY(vertex), target.getZ(vertex));
+      }
+      bodyEnergy.set(targetIndex, bodySum);
+      if (zoneSum > 0) zoneEnergy.set(targetIndex, zoneSum);
+    }
+    if (zoneEnergy.size === 0) return [];
+    // Locality = zone share of the morph's total displacement. Higher = more
+    // local to this zone. Rank controls by their best (most local) morph.
+    const byLabel = new Map<string, number>();
+    for (const [targetIndex, zoneSum] of zoneEnergy) {
+      const name = this.morphNames[targetIndex];
+      const label = labelByTarget.get(name);
+      if (label === undefined) continue;
+      const bodySum = bodyEnergy.get(targetIndex) ?? 0;
+      const locality = zoneSum / bodySum;
+      if (locality > (byLabel.get(label) ?? 0)) byLabel.set(label, locality);
+    }
+    const ranked = [...byLabel.entries()].sort((a, b) => b[1] - a[1]);
+    if (ranked.length === 0) return [];
+    // Keep controls whose locality is at least 40% of the most-local control.
+    const cut = Math.max(0.4 * ranked[0][1], 0.05);
+    return ranked.filter(([, locality]) => locality >= cut).map(([label]) => label);
+  }
+
+  private createZoneHitMesh(source: THREE.SkinnedMesh): THREE.Mesh {    const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', source.geometry.getAttribute('position'));
     geometry.setIndex(source.geometry.getIndex());
     geometry.computeBoundingSphere();
@@ -698,15 +762,16 @@ class CharacterEditor {
     this.zonePointerPending = false;
     const hit = this.zoneAtPoint(event.clientX, event.clientY);
     if (!hit) return;
-    for (const data of this.meshZones) data.selectedOverlay.visible = false;
+    // No persistent selected overlay: keep the body unobstructed so slider
+    // effects and the hover highlight stay clearly visible.
     this.selectedZone = hit;
-    hit.meshData.selectedOverlay.geometry.setIndex(hit.zone.index);
-    (hit.meshData.selectedOverlay.material as THREE.MeshBasicMaterial).color.setHex(hit.zone.color);
-    hit.meshData.selectedOverlay.visible = true;
-    hit.meshData.hoverOverlay.visible = false;
     this.setZoneSelectionText(`Selected: ${hit.zone.label}`, hit.zone.color);
+    // Show the list of morphs local to this zone, not the whole category.
+    const section = document.querySelector<HTMLElement>('#morph-section h2 span');
     this.filterMorphControls(hit.zone.category);
-    this.showStatus(`Selected ${hit.zone.label} zone.`);
+    this.filterMorphControlsByLabels(hit.zone.localControls);
+    if (section) section.textContent = `${hit.zone.localControls.length} local`;
+    this.showStatus(`Selected ${hit.zone.label}: ${hit.zone.localControls.join(', ')}`);
   }
 
   private clearZoneSelection(): void {
@@ -714,6 +779,8 @@ class CharacterEditor {
     this.selectedZone = undefined;
     this.setZoneSelectionText('Hover or click a body zone.');
     this.filterMorphControls();
+    const section = document.querySelector<HTMLElement>('#morph-section h2 span');
+    if (section) section.textContent = String(this.morphHandles.length);
   }
 
   private clearZoneState(): void {
@@ -752,6 +819,23 @@ class CharacterEditor {
       heading.style.display = hasVisible ? '' : 'none';
     }
     this.morphCountEl.textContent = category ? `${visible}/${this.morphHandles.length}` : String(this.morphHandles.length);
+  }
+
+  /** Show only morph rows whose control label is in the local list. */
+  private filterMorphControlsByLabels(labels: string[]): void {
+    const set = new Set(labels);
+    let visible = 0;
+    for (const handle of this.morphHandles) {
+      const show = set.has(handle.spec.label);
+      handle.row.style.display = show ? '' : 'none';
+      if (show) visible++;
+    }
+    for (const heading of Array.from(this.morphList.querySelectorAll<HTMLElement>('.morph-category'))) {
+      const headingCategory = heading.textContent ?? '';
+      const hasVisible = this.morphHandles.some((handle) => handle.spec.category === headingCategory && handle.row.style.display !== 'none');
+      heading.style.display = hasVisible ? '' : 'none';
+    }
+    this.morphCountEl.textContent = `${visible}/${this.morphHandles.length}`;
   }
 
   private buildBoneUI(): void {
