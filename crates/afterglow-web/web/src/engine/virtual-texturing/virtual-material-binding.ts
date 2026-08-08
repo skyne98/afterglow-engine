@@ -6,15 +6,19 @@ import {
   type VirtualGltfMaterialOptions,
   type VirtualGltfMaterialPair,
 } from './virtual-texture-material.ts';
-import type { VirtualMaterialSet, VirtualTextureStore } from './virtual-texture.ts';
+import {
+  RESOLVE_VIRTUAL_MATERIAL,
+  type VirtualTextureMaterialSet,
+  type VirtualTextureSystem,
+} from './virtual-texture-system.ts';
 
 export interface VirtualMaterialBindingOptions {
   scene: THREE.Scene;
   camera: THREE.Camera;
   root: THREE.Object3D;
   mesh: THREE.Mesh;
-  store: VirtualTextureStore;
-  set: VirtualMaterialSet;
+  textures: VirtualTextureSystem;
+  set: Readonly<VirtualTextureMaterialSet>;
   feedbackPixelScale: THREE.Vector2;
   material?: Readonly<VirtualGltfMaterialOptions>;
 }
@@ -31,8 +35,9 @@ export class VirtualMaterialBinding implements FeedbackRenderable {
 
   constructor(private readonly options: VirtualMaterialBindingOptions) {
     const runtime = Object.assign({}, THREE, TSL);
+    const resolved = options.textures[RESOLVE_VIRTUAL_MATERIAL](options.set);
     this.pair = createVirtualGltfMaterialPair(
-      runtime, options.store, options.set, options.feedbackPixelScale, options.material,
+      runtime, resolved.store, resolved.set, options.feedbackPixelScale, options.material,
     );
     this.feedbackScene = options.scene;
     this.feedbackCamera = options.camera;

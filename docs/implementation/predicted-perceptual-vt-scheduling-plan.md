@@ -641,7 +641,7 @@ Expected authored changes:
 - `virtual-texture-feedback-coordinator.ts`
   - fixed pose history, camera clone, 100 ms predicted submission;
 - one small internal predictor module and colocated test;
-- `big-parser.ts`
+- `deadline-range-batcher.ts` and `vt-page-provider.ts`
   - third timer/lane and stats only;
 - `engine-assets.ts`
   - one peripheral deadline option;

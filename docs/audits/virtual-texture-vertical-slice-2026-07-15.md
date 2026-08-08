@@ -1,14 +1,13 @@
 # Virtual-texture vertical-slice audit — 2026-07-15
 
-> **2026-07-22 follow-up:** the remediation history below remains useful, but
-> two later integration claims were found incomplete. The source-sorting
-> `createPageRangeReader()` is not wired into the live public-web `EngineAssets` page
-> provider, whose bulk queue preserves admission order, and CEF still starts
-> `afterglow-texture` through WASM Web Workers instead of its mandatory native
-> client/OS worker. The current stale window is two feedback snapshots, not the
-> historical sixteen-snapshot setting discussed below. See
-> `docs/api/virtual-texturing.md` and `docs/api/asset-system.md` for the current
-> surface.
+> **2026-07-26 follow-up:** the remediation history below remains useful. The
+> live public-web provider intentionally preserves admission order; the explicit
+> `createSourceSortedPageReader()` diagnostic policy shares its immutable page
+> directory but is not the live scheduler. The native shell now uses source-
+> backed OS texture workers rather than WASM. The current stale window is two
+> feedback snapshots, not the historical sixteen-snapshot setting discussed
+> below. See `docs/api/virtual-texturing.md` and `docs/api/asset-system.md` for
+> the current surface.
 
 ## Executive summary
 
@@ -189,7 +188,9 @@ This audit follows data from offline source files to final Three.js PBR shading.
 
 ### Runtime indexing, RPC, and transcoding
 
-- `crates/afterglow-web/web/src/engine/assets/big-parser.ts`
+- `crates/afterglow-web/web/src/engine/assets/big-format.ts`
+- `crates/afterglow-web/web/src/engine/assets/vt-page-directory.ts`
+- `crates/afterglow-web/web/src/engine/assets/vt-page-provider.ts`
 - `crates/afterglow-web/www/rpc.js`
 - `crates/afterglow-web/www/worker.js`
 - `crates/afterglow-texture/src/lib.rs`
@@ -388,7 +389,9 @@ heuristics spread through the engine.
 
 #### VT-A05: `.big` page lookup is linear in chunk count
 
-**Code:** `findVTPageChunk()` and `findVTMipTailChunk()` in `big-parser.ts`.
+**Historical code:** `findVTPageChunk()` and `findVTMipTailChunk()`, now in
+`big-format.ts`. Runtime lookup was replaced by the direct-indexed
+`VtPageDirectory` in `vt-page-directory.ts`.
 
 Every requested page performs:
 

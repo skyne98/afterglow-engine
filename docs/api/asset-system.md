@@ -8,16 +8,20 @@
 
 ## Engine asset composition
 
-The browser asset surface is deliberately split into three owners:
+The browser asset surface has one owner and focused mechanisms:
 
-- `big-container.ts` provides `BigContainer`, an immutable format/index view. It
-  owns no workers, renderer state, queues, or platform policy.
-- `owned-worker-pool.ts` provides the generic fixed service-lifetime mechanism:
-  positive fixed count, reverse startup rollback, reverse idempotent shutdown,
-  and first-error reporting.
-- `engine-assets.ts` provides `EngineAssets`, the public composition owner. It
-  joins a container, the platform texture pool, the page provider, and at most
-  one asset/VT store without exposing transports to games.
+- `big-format.ts` decodes and validates BIG metadata.
+- `asset-range.ts` defines deployment byte sources; `big-container.ts` binds one
+  source/path into the authoritative `BigContainer` index and range view.
+- `vt-page-directory.ts` expands compact VT offsets once. Both the live provider
+  and explicit source-sorted tool consume this one index.
+- `deadline-range-batcher.ts`, `bounded-transcoder-pool.ts`, and
+  `vt-page-provider.ts` own bounded deadline batching, transcode dispatch, and
+  final page decoding respectively.
+- `owned-worker-pool.ts` provides generic reverse-order service lifetime.
+- `engine-assets.ts` is the sole composition owner for the container, platform
+  texture pool, page provider, and at most one asset store, model system, and
+  `VirtualTextureSystem`.
 
 `EngineAssets.open()` requires `transcodeQueueCapacity`, `maxPendingPages`, `maxPendingBytes`,
 `urgentBatchDeadlineMs`, `focusBatchDeadlineMs`,
@@ -48,12 +52,18 @@ On the current 16-core/32-thread host this is 16 workers. Public web retains its
 bounded two-to-four-worker Fetch/WASM profile. `workerCount` is only an optional
 test/profile override; normal games do not choose platform topology.
 
-`createAssetStore(capacity, completionsPerPoll)` starts and owns the standard
-mesh optimizer and binds a fixed-capacity `AssetStore` to `BigContainer`'s raw
-loader. `EngineAssets` creates at most one `VirtualTextureStore` and one
-`AssetStore`. `close()` disposes stores, closes the page provider, then closes
-mesh and texture services in reverse order. There is no persistent derived-page
-cache or storage fallback.
+`createAssetStore(capacity, completionsPerPoll)` binds a fixed-capacity
+`AssetStore` to `BigContainer`'s raw loader. `createModelSystem(options)` creates
+the unified cooked/RAM model and LOD owner. `options.geometryArena` is mandatory;
+the model system creates and owns its fixed prewarmed geometry slots, and no
+unbounded publication branch exists. Both share the one engine-owned
+meshoptimizer service rather than spawning parallel decoder/optimizer
+lifecycles. `EngineAssets` creates at most one `VirtualTextureSystem`, asset
+store, and model system. The old low-level store constructor is deleted.
+`close()` disposes consumers, closes the page provider, then closes mesh
+and texture services in reverse order. There is no persistent derived-page
+cache or hidden storage fallback; explicit mutable saves compose the separate
+generic `PersistentBlobStore`.
 
 ```ts
 const engineAssets = await EngineAssets.open({
@@ -68,17 +78,55 @@ const engineAssets = await EngineAssets.open({
   maxHeaderBytes: 2 * 1024 * 1024,
   telemetry: runtime.telemetry,
 });
+const header = engineAssets.container.header;
 const assets = await engineAssets.createAssetStore(64, 8);
-const store = engineAssets.createVirtualTextureStore(device, tuning);
+const models = await engineAssets.createModelSystem({
+  maxModels: 256,
+  maxPendingOptimizations: 8,
+  maxResidentCpuBytes: 256 * 1024 * 1024,
+  completionsPerPoll: 2,
+  ratios: [1, 0.5, 0.25, 0.1],
+  targetError: 0.02,
+  geometryArena: { buckets: [{
+    slots: 1024,
+    maxVertices: 65536,
+    maxIndices: 196608,
+    maxGroups: 8,
+    indexKind: 'u32',
+    attributes: [
+      { name: 'position', itemSize: 3, kind: 'f32' },
+      { name: 'normal', itemSize: 3, kind: 'f32' },
+      { name: 'uv', itemSize: 2, kind: 'f32' },
+    ],
+    morphAttributes: [],
+  }] },
+});
+const textures = engineAssets.createVirtualTextureSystem({
+  maxTextures: 4096,
+  maxMutablePageRefreshesPerPoll: 2,
+  device,
+  pools: [
+    { format: 'bc7-rgba-unorm-srgb', capacities: {
+      maxPendingPages: 16, maxPendingBytes: 2 * 1024 * 1024,
+    }, tuning },
+    { format: 'rgba8unorm', capacities: {
+      maxPendingPages: 16, maxPendingBytes: 2 * 1024 * 1024,
+    } },
+  ],
+});
+const wall = textures.createTexture(wallDescriptor, engineAssets.pageProvider, 'Wall_Color');
 ```
+
+`BigContainer` is the only container metadata/source surface; `EngineAssets`
+does not duplicate `header`, `source`, `path`, or `rawAssets` getters.
 
 `createFetchRangeLoader()` also exposes `readBulk(path, ranges)`. Public web
 uses standard multipart HTTP ranges for both singleton and bulk reads; the
 former CEF native shared-message bridge has been removed. The public-web page
-provider preserves scheduler/admission order. It does **not** currently
-source-sort spans. `createPageRangeReader()` contains a separate source-sorting
-implementation and restores caller order by page index, but the public-web
-provider does not call it. The web page provider owns a fixed 256-slot three-tier queue: mip+2 parent misses open a
+provider preserves scheduler/admission order. It does **not** source-sort spans.
+`createSourceSortedPageReader()` is an explicitly named diagnostic/tool policy;
+it uses the same `VtPageDirectory`, sorts resolved spans, and restores caller
+order without duplicating BIG page resolution. The web page provider owns a fixed 256-slot three-tier queue: mip+2 parent misses open a
 non-resettable 1 ms window; high-importance exact pages use 16 ms; lower-
 importance exact pages currently use a provisional 64 ms peripheral window.
 Each response is at most 4 MiB
@@ -266,6 +314,15 @@ payload. Both compose the generic `afterglow-assets` source primitives; neither
 instantiates WASM on the native target. Public web continues to use serving-
 layer Fetch for BIG ranges.
 
+## Shared streamed-resource handles
+
+Textures and models use `FixedResourceRegistry`, a fixed-capacity numeric
+slot/generation table. A released and reused slot always receives a new
+handle generation, so delayed texture/model work cannot publish into a
+replacement resource. Source adapters remain specialized—texture pages and
+model geometry have different processing/publication—but share this ownership
+primitive.
+
 ## Engine `AssetStore`
 
 `AssetStore` has a fixed capacity (1,024 by default). `registerAsset(path)`
@@ -376,12 +433,14 @@ container range requests. `AssetStore.loadOptimizedGLTF(path, gltfLoader)` then:
    image indices, UV channels, transforms, and sampler state without decoding
    an imported browser image.
 
-Vertex identity never changes, so `JOINTS_0`, `WEIGHTS_0`, normals, tangents,
-UVs, arbitrary attributes, morph targets, bind matrices, and animation tracks
-remain attached to the same vertices. Material-group ranges are optimized
-independently. Runtime LOD simplification is intentionally disabled for skinned
-scenes until the worker's simplification error metric includes skin weights;
-position/UV-only simplification would be visually unsafe during deformation.
+The initial `loadOptimizedGLTF()` reorder preserves vertex identity. Primitives
+registered with `ModelSystem` then use meshoptimizer's generic attribute-aware
+simplifier for every rigid, skinned, and morphed model. UVs, normals, continuous
+skin weights, tangents, colors, and a morph envelope contribute to collapse
+error; incompatible coincident joint sets are locked. Every source attribute
+and morph target follows the resulting compact remap, material groups remain
+independent, and all levels share the complete skeleton and animation graph.
+See `docs/api/static-lod.md`.
 
 ## Asset loader worker (`afterglow-assets-worker`)
 

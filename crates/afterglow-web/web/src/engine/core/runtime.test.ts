@@ -1,8 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import { EnginePhase, type EngineMemoryConfig } from './engine-memory.ts';
 import {
-  EngineRuntime, RegistrationStatus, RuntimeState,
-  type AnimationScheduler, type EngineRenderPass, type RuntimeRenderAdapter,
+  EngineRuntime, RegistrationStatus, RuntimeReadinessStage, RuntimeState,
+  type AnimationScheduler, type EngineRenderPass, type RuntimeReadinessSnapshot,
+  type RuntimeRenderAdapter,
 } from './runtime.ts';
 import type { RenderFrame } from './types.ts';
 import { TelemetryPhase } from '../telemetry/index.ts';
@@ -15,7 +16,7 @@ const memory: EngineMemoryConfig = {
   assetRequests: 4,
   vtRequests: 4,
   telemetryRecords: 64,
-  telemetryMetricCells: 192,
+  telemetryMetricCells: 256,
 };
 
 class FakeScheduler implements AnimationScheduler {
@@ -53,7 +54,11 @@ class FakeAdapter implements RuntimeRenderAdapter {
 class FakePass implements EngineRenderPass {
   disposed = 0;
   sealed = 0;
-  constructor(private readonly name: string, private readonly events: string[]) {}
+  constructor(
+    private readonly name: string,
+    private readonly events: string[],
+    readonly presentation = false,
+  ) {}
   async warm(): Promise<void> { this.events.push(`warm-${this.name}`); }
   seal(): void { this.sealed++; this.events.push(`seal-${this.name}`); }
   render(): void { this.events.push(`render-${this.name}`); }
@@ -63,6 +68,7 @@ class FakePass implements EngineRenderPass {
 function createRuntime(options: {
   workers?: number;
   passes?: number;
+  owners?: number;
   events?: string[];
 } = {}): { runtime: EngineRuntime; scheduler: FakeScheduler; adapter: FakeAdapter; events: string[] } {
   const events = options.events ?? [];
@@ -74,7 +80,9 @@ function createRuntime(options: {
     diagnosticCapacity: 4,
     maxWorkerInputs: options.workers ?? 1,
     maxRenderPasses: options.passes ?? 1,
+    maxOwnedResources: options.owners ?? 0,
     scheduler,
+    shutdownTarget: null,
   });
   return { runtime, scheduler, adapter, events };
 }
@@ -84,6 +92,8 @@ describe('EngineRuntime', () => {
     const { runtime, scheduler, adapter } = createRuntime();
     expect(runtime.state).toBe(RuntimeState.Bootstrap);
     expect(() => runtime.start({ update() {} })).toThrow('gameplay seal');
+    expect(runtime.registerRenderPass(new FakePass('main', [], true)))
+      .toBe(RegistrationStatus.Registered);
     runtime.enterWarmup();
     expect(runtime.state).toBe(RuntimeState.Warmup);
     await runtime.warm();
@@ -93,6 +103,7 @@ describe('EngineRuntime', () => {
     expect(adapter.isGameplaySealed).toBe(true);
     runtime.start({ update() {} });
     expect(runtime.state).toBe(RuntimeState.Running);
+    expect(runtime.readinessStage).toBe(RuntimeReadinessStage.Starting);
     expect(scheduler.requests).toBe(1);
     runtime.stop();
     expect(runtime.state).toBe(RuntimeState.Stopped);
@@ -112,7 +123,7 @@ describe('EngineRuntime', () => {
       drainStructuralCommands() { events.push('structural'); },
       drainPoseBatches() { events.push('poses'); },
     })).toBe(RegistrationStatus.Registered);
-    const first = new FakePass('first', events);
+    const first = new FakePass('first', events, true);
     const second = new FakePass('second', events);
     expect(runtime.registerRenderPass(first)).toBe(RegistrationStatus.Registered);
     expect(runtime.registerRenderPass(second)).toBe(RegistrationStatus.Registered);
@@ -132,6 +143,20 @@ describe('EngineRuntime', () => {
     expect(Object.is(observed, runtime.frame)).toBe(true);
     expect(runtime.frame.frameId).toBe(1);
     expect(runtime.frame.deltaSeconds).toBeCloseTo(1 / 60);
+    expect(runtime.isGameReady).toBe(true);
+    const readiness: RuntimeReadinessSnapshot = {
+      stage: RuntimeReadinessStage.Bootstrap,
+      firstUpdateFrame: 0,
+      firstPresentationFrame: 0,
+      fatalDiagnostics: 0,
+    };
+    runtime.readReadinessInto(readiness);
+    expect(readiness).toEqual({
+      stage: RuntimeReadinessStage.GameReady,
+      firstUpdateFrame: 1,
+      firstPresentationFrame: 1,
+      fatalDiagnostics: 0,
+    });
     const identity = runtime.frame;
     scheduler.fire(116);
     expect(runtime.frame).toBe(identity);
@@ -143,6 +168,58 @@ describe('EngineRuntime', () => {
     expect(snapshot?.count).toBeGreaterThan(20);
     if (snapshot === null) throw new Error('telemetry snapshot missing');
     expect(new Uint32Array(snapshot.buffer)[9]).toBe(TelemetryPhase.SpanBegin);
+  });
+
+  test('withholds GameReady until registered bootstrap publication is complete', async () => {
+    const { runtime, scheduler } = createRuntime();
+    let ready = false;
+    runtime.registerWorker({ poll() {}, isBootstrapReady() { return ready; } });
+    runtime.registerRenderPass(new FakePass('main', [], true));
+    runtime.enterWarmup();
+    await runtime.warm();
+    runtime.sealGameplay();
+    runtime.start({ update() {} });
+    scheduler.fire(1);
+    expect(runtime.readinessStage).toBe(RuntimeReadinessStage.Starting);
+    ready = true;
+    scheduler.fire(17);
+    expect(runtime.readinessStage).toBe(RuntimeReadinessStage.GameReady);
+  });
+
+  test('publishes strict native game readiness exactly once after the complete first frame', async () => {
+    let readySignals = 0;
+    const global = globalThis as typeof globalThis & { Deno?: unknown };
+    global.Deno = { core: { ops: { op_afterglow_game_ready() { readySignals++; } } } };
+    try {
+      const { runtime, scheduler } = createRuntime();
+      runtime.registerRenderPass(new FakePass('main', [], true));
+      runtime.enterWarmup();
+      await runtime.warm();
+      runtime.sealGameplay();
+      runtime.start({ update() {} });
+      scheduler.fire(1);
+      scheduler.fire(17);
+      expect(runtime.isGameReady).toBe(true);
+      expect(readySignals).toBe(1);
+    } finally {
+      delete global.Deno;
+    }
+  });
+
+  test('requires exactly one presentation pass and rejects duplicate presentation ownership', async () => {
+    const { runtime } = createRuntime({ passes: 2 });
+    expect(runtime.registerRenderPass(new FakePass('main', [], true)))
+      .toBe(RegistrationStatus.Registered);
+    expect(runtime.registerRenderPass(new FakePass('duplicate', [], true)))
+      .toBe(RegistrationStatus.PresentationAlreadyRegistered);
+    runtime.enterWarmup();
+    await runtime.warm();
+    runtime.sealGameplay();
+
+    const missing = createRuntime();
+    missing.runtime.enterWarmup();
+    await missing.runtime.warm();
+    expect(() => missing.runtime.sealGameplay()).toThrow('presentation render pass');
   });
 
   test('returns typed registration overflow and rejects registration after bootstrap', () => {
@@ -157,18 +234,21 @@ describe('EngineRuntime', () => {
 
   test('stops and records a bounded diagnostic when frame code throws', async () => {
     const { runtime, scheduler } = createRuntime();
+    runtime.registerRenderPass(new FakePass('main', [], true));
     runtime.enterWarmup();
     await runtime.warm();
     runtime.sealGameplay();
     runtime.start({ update() { throw new Error('frame failure'); } });
     scheduler.fire(1);
     expect(runtime.state).toBe(RuntimeState.Stopped);
+    expect(runtime.readinessStage).toBe(RuntimeReadinessStage.Fatal);
     expect(runtime.diagnostics.count).toBe(1);
     expect(scheduler.requests).toBe(1);
   });
 
   test('stopping during update does not schedule another frame', async () => {
     const { runtime, scheduler } = createRuntime();
+    runtime.registerRenderPass(new FakePass('main', [], true));
     runtime.enterWarmup();
     await runtime.warm();
     runtime.sealGameplay();
@@ -178,11 +258,20 @@ describe('EngineRuntime', () => {
     expect(scheduler.requests).toBe(1);
   });
 
-  test('disposes render passes in reverse registration order', () => {
-    const { runtime, events } = createRuntime({ passes: 2 });
+  test('owns bootstrap resources and closes them before passes in reverse order', async () => {
+    const { runtime, events } = createRuntime({ passes: 2, owners: 2 });
     runtime.registerRenderPass(new FakePass('first', events));
     runtime.registerRenderPass(new FakePass('second', events));
-    runtime.dispose();
-    expect(events).toEqual(['dispose-second', 'dispose-first', 'adapter-dispose']);
+    expect(runtime.ownDisposable({ dispose() { events.push('dispose-owner'); } }))
+      .toBe(RegistrationStatus.Registered);
+    expect(runtime.ownCloseable({ async close() { events.push('close-owner'); } }))
+      .toBe(RegistrationStatus.Registered);
+    expect(runtime.ownDisposable({ dispose() {} })).toBe(RegistrationStatus.CapacityExceeded);
+    await runtime.close();
+    expect(events).toEqual([
+      'close-owner', 'dispose-owner', 'dispose-second', 'dispose-first', 'adapter-dispose',
+    ]);
+    await runtime.close();
+    expect(events.filter(event => event === 'close-owner')).toHaveLength(1);
   });
 });

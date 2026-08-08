@@ -1,9 +1,7 @@
 import * as THREE from "three/webgpu";
 import {
   EngineRuntime,
-  RegistrationStatus,
   RenderTier,
-  RendererHost,
   benchFromUrl,
   formatBenchResults,
   type EngineFrameClient,
@@ -28,8 +26,9 @@ const key = scene.children[0];
 if (key instanceof THREE.DirectionalLight) key.position.set(100, 200, 100);
 scene.add(new THREE.AmbientLight(0x404060, 0.5));
 
-const runtime = EngineRuntime.forScene({
+const runtime = await EngineRuntime.forScene({
   scene,
+  camera,
   entityCapacity: ENTITY_COUNT,
   memory: {
     frameScratchBytes: 64 * 1024,
@@ -44,6 +43,11 @@ const runtime = EngineRuntime.forScene({
   diagnosticCapacity: 64,
   maxWorkerInputs: 0,
   maxRenderPasses: 1,
+  maxOwnedResources: 0,
+  renderer: {
+    parameters: { antialias: true },
+    onResize: resizeCamera,
+  },
 });
 const adapter = runtime.adapter;
 
@@ -59,6 +63,13 @@ const descriptor = adapter.registry.register({
 });
 
 const entities = new Uint32Array(ENTITY_COUNT);
+let randomState = 0x6d2b79f5;
+function random(): number {
+  randomState ^= randomState << 13;
+  randomState ^= randomState >>> 17;
+  randomState ^= randomState << 5;
+  return (randomState >>> 0) / 0x1_0000_0000;
+}
 const euler = new THREE.Euler();
 const quaternion = new THREE.Quaternion();
 for (let index = 0; index < ENTITY_COUNT; index++) {
@@ -68,25 +79,25 @@ for (let index = 0; index < ENTITY_COUNT; index++) {
   adapter.addRenderRef(entity, descriptor);
   adapter.markStructural(entity);
 
-  const radius = 200 + Math.random() * 300;
-  const theta = Math.random() * Math.PI * 2;
-  const phi = Math.acos(2 * Math.random() - 1);
+  const radius = 200 + random() * 300;
+  const theta = random() * Math.PI * 2;
+  const phi = Math.acos(2 * random() - 1);
   adapter.transform.positionX[entity] =
     radius * Math.sin(phi) * Math.cos(theta);
   adapter.transform.positionY[entity] =
     radius * Math.sin(phi) * Math.sin(theta);
   adapter.transform.positionZ[entity] = radius * Math.cos(phi);
   euler.set(
-    Math.random() * Math.PI,
-    Math.random() * Math.PI,
-    Math.random() * Math.PI,
+    random() * Math.PI,
+    random() * Math.PI,
+    random() * Math.PI,
   );
   quaternion.setFromEuler(euler);
   adapter.transform.rotationX[entity] = quaternion.x;
   adapter.transform.rotationY[entity] = quaternion.y;
   adapter.transform.rotationZ[entity] = quaternion.z;
   adapter.transform.rotationW[entity] = quaternion.w;
-  const scale = 0.5 + Math.random() * 1.5;
+  const scale = 0.5 + random() * 1.5;
   adapter.transform.scaleX[entity] = scale;
   adapter.transform.scaleY[entity] = scale;
   adapter.transform.scaleZ[entity] = scale;
@@ -96,24 +107,6 @@ for (let index = 0; index < ENTITY_COUNT; index++) {
 function resizeCamera(width: number, height: number): void {
   camera.aspect = width / height;
   camera.updateProjectionMatrix();
-}
-
-const rendererHost = await RendererHost.create({
-  scene,
-  camera,
-  diagnostics: runtime.diagnostics,
-  parameters: { antialias: true },
-  onResize: resizeCamera,
-}).catch((error: unknown) => {
-  runtime.dispose();
-  throw error;
-});
-if (
-  runtime.registerRenderPass(rendererHost) !== RegistrationStatus.Registered
-) {
-  rendererHost.dispose();
-  runtime.dispose();
-  throw new Error("main render pass capacity was not reserved");
 }
 
 const benchmark = benchFromUrl({
@@ -156,3 +149,5 @@ adapter.warmAllDescriptors();
 await runtime.warm();
 runtime.sealGameplay();
 runtime.start(frameClient);
+
+export { runtime as demoRuntime };

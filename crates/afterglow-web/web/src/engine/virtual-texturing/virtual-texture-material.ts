@@ -8,15 +8,14 @@ import type {
   VirtualTextureEntry,
   VirtualTextureStore,
 } from './virtual-texture.ts';
+import { DEFAULT_VIRTUAL_MATERIAL_MIP_BIASES } from './virtual-texture.ts';
+import { PAGE_BORDER, PAGE_SIZE } from './virtual-texture-format.ts';
 import {
-  DEFAULT_VIRTUAL_MATERIAL_MIP_BIASES,
-  PAGE_BORDER,
-  PAGE_SIZE,
   VT_DESIRED_MIP_WGSL,
   VT_FEEDBACK_WGSL,
   VT_SAMPLE_FROM_LEVEL_WGSL,
   VT_SAMPLE_WGSL,
-} from './virtual-texture.ts';
+} from './virtual-texture-shaders.ts';
 import { POM_SELF_SHADOW_WGSL, POM_UV_WGSL } from './surface-detail.ts';
 
 /** WebGPU address mode values shared by the VT sampling and feedback shaders. */

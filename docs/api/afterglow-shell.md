@@ -59,7 +59,8 @@ cargo run -p afterglow-shell
 Run an official Three.js document directly:
 
 ```sh
-cargo run -p afterglow-shell -- /path/to/three.js/examples/webgpu_clearcoat.html
+cargo run -p afterglow-shell -- --compat-three \
+  /path/to/three.js/examples/webgpu_clearcoat.html
 ```
 
 Run the generated Dungeon deployment through the native host in release mode:
@@ -68,9 +69,30 @@ Run the generated Dungeon deployment through the native host in release mode:
 cargo run --release -p afterglow-shell -- crates/afterglow-web/www/dungeon.html
 ```
 
+Diagnostic artifacts can request one final composited-surface capture. The host
+preallocates a fixed staging buffer before gameplay, waits 30 complete frames
+after strict `GameReady`, maps only on the diagnostic slow path, writes PNG, and exits after
+ordered V8/GPU/window teardown:
+
+```sh
+AFTERGLOW_CAPTURE_PATH=/tmp/dungeon.png \
+AFTERGLOW_WINDOW_WIDTH=1280 AFTERGLOW_WINDOW_HEIGHT=720 \
+  cargo run -p afterglow-shell -- \
+  crates/afterglow-web/www/diagnostic-dungeon.html
+```
+
+`AFTERGLOW_CAPTURE_MAX_WIDTH`/`HEIGHT` bound the staging allocation (defaults
+4096×2160); `AFTERGLOW_CAPTURE_READY_FRAMES` overrides the 30-frame settling
+period. Production launches omit `AFTERGLOW_CAPTURE_PATH` and allocate no
+readback buffer.
+
 HTML loading extracts the document's `type="importmap"` and
 `type="module"` scripts, resolves `three` and `three/addons/` from that map,
-and evaluates the module unchanged. Files, data URLs, blobs, and HTTPS assets
+and evaluates the module unchanged. `--compat-three` is the explicit isolated
+compatibility profile: its first successful presentation may satisfy host
+readiness. Authored engine pages omit the flag and become ready only when
+`EngineRuntime` emits `op_afterglow_game_ready` after a complete post-seal game
+update and presentation with zero fatal diagnostics. Files, data URLs, blobs, and HTTPS assets
 are loaded by the runtime environment.
 
 The presenter creates the native surface through the same wgpu-core `Global`
@@ -93,7 +115,7 @@ The shell currently provides:
   pointer plus XInput2 raw-motion events because winit does not implement X11
   `CursorGrabMode::Locked`;
 - `ResizeObserver`, `IntersectionObserver`, and `matchMedia`; the final physical
-  window size is synchronized once after renderer readiness, even when the
+  window size is synchronized once after game readiness, even when the
   initial configure event arrived during startup;
 - image decode, `createImageBitmap`, Blob, Storage, KTX2/Draco workers, and a
   software Canvas2D environment;
@@ -102,7 +124,9 @@ The shell currently provides:
   handling;
 - browser-cadenced `requestAnimationFrame`: a fixed 1,024-callback queue with
   O(1) cancellation, deterministic overflow, shared frame timestamps, and
-  deno_core external-operation tracking during top-level awaits;
+  deno_core external-operation tracking during top-level awaits. Each admitted
+  presentation deadline is anchored to the current host instant, so startup
+  wake bursts cannot accumulate future frame delays;
 - the explicitly admitted `scheduler.yield()` subset, implemented as a deferred
   deno/winit task continuation. `scheduler.postTask` and `TaskController` are
   intentionally absent.

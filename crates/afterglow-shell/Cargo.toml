@@ -38,6 +38,7 @@ afterglow-assets = { path = "../afterglow-assets" }
 afterglow-assets-worker = { path = "../afterglow-assets-worker" }
 afterglow-texture = { path = "../afterglow-texture" }
 afterglow-meshopt = { path = "../afterglow-meshopt" }
+afterglow-storage-worker = { path = "../afterglow-storage-worker" }
 wgpu-types = "29.0.1"
 half = "2"
 num_cpus = "1.17"

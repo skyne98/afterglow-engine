@@ -1,15 +1,15 @@
-# Demo Input and Automation
+# Demo Input and Diagnostic Builds
 
-Canonical visual demos use bounded ownership helpers instead of open-ended key,
-waiter, error, and listener collections:
+Visual game bundles use `BoundedKeyboardInput` for fixed action state and
+`TextHud` for game-owned text. Renderer construction, page teardown, global
+error capture, readiness, and reverse shutdown belong to `EngineRuntime`.
 
-- `BootstrapGuard` provides fixed-capacity reverse rollback for partial startup.
-- `BoundedKeyboardInput` maps fixed actions into preallocated down/pressed bits.
-- `FrameStepHarness` provides fixed-capacity out-of-band frame waits.
-- `BrowserErrorCapture` routes browser failures into bounded engine diagnostics.
-- `TextHud` isolates diagnostic DOM writes from frame orchestration.
-- `publishDevHarness` exposes automation without a global engine bridge.
-- `PageShutdown` owns page-teardown listener cleanup.
+Production bundles contain no `window.__afterglow*` globals, frame waiters, or
+scenario/capture controls. Separate `diagnostic-*.html` pages load diagnostic
+entrypoints built from the same game modules. Only those artifacts install the
+versioned `globalThis.__afterglowDiagnosticV1` protocol.
 
-These utilities are for demos and diagnostics. Game input policy remains game
-code, while the engine primitives make capacity and lifecycle explicit.
+The protocol waits for strict `GameReady`, snapshots adapter/readiness/dimension
+state, reports fatal diagnostics and post-seal pipeline violations, and performs
+idempotent shutdown. Artifact contracts and the deletion ledger prevent the old
+per-demo bootstrap and automation surfaces from returning.

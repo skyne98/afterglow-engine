@@ -1,9 +1,17 @@
 # Virtual texturing
 
-The web engine's virtual-texture implementation lives in
-`crates/afterglow-web/web/src/engine/virtual-texturing/virtual-texture.ts`. It provides a shared
-physical atlas, packed page-table entries, LRU residency, mip fallback, and a
-fixed per-frame page upload budget.
+The web engine's VT core is split by responsibility:
+
+- `virtual-texture.ts`: residency, scheduling, atlas/page-table publication;
+- `virtual-texture-tuning.ts`: bounded adaptive upload policy;
+- `virtual-texture-shaders.ts`: WGSL contracts;
+- `virtual-texture-format.ts` and `virtual-texture-request.ts`: format/layout
+  constants and request scoring/identity;
+- `virtual-texture-residency.ts` and `fixed-page-slot-map.ts`: physical clock
+  cache, page-table state, and fixed numeric lookup;
+- `assets/vt-page-directory.ts`: immutable BIG page-range index;
+- `assets/deadline-range-batcher.ts`, `bounded-transcoder-pool.ts`, and
+  `vt-page-provider.ts`: bounded I/O and transcode stages.
 
 > **Audit status (updated 2026-07-26): bounded no-cache correctness
 > prototype, not yet a fully validated two-target release.** Persistent derived
@@ -16,6 +24,60 @@ fixed per-frame page upload budget.
 
 ## Public surface
 
+### Generic texture namespace
+
+`VirtualTextureSystem(options)` is the public composition surface for static,
+procedural, and mutable textures. It owns a fixed generational handle registry
+and one explicitly configured atlas pool per storage format. Current pool
+formats are RGBA8 linear/sRGB interpretation, R8, R16-float, BC7, and ASTC;
+compressed pools are source-only while mutable RAM textures require an
+uncompressed pool.
+
+- `createTexture(descriptor, source, sourceKey?)` binds any page source to an
+  opaque `VirtualTextureHandle`. `sourceKey` lets a generated runtime identity
+  route to an immutable BIG asset name without exposing paths to shaders.
+- `createMemoryTexture(descriptor, capacities)` creates a fixed-capacity sparse
+  canonical RAM source. Capacities include canonical/derived pages, dirty
+  revisions, and leased asynchronous output pages. Untouched pages read as a
+  configured default texel.
+- `writeMemoryRegion(handle, x, y, width, height, bytes, bytesPerRow?)`
+  preflights canonical-page and dirty-queue capacity before mutation. It marks
+  overlapping border pages and every paged mip revision.
+- `poll()` regenerates a bounded dirty prefix into persistent scratch, replaces
+  resident pages in their existing physical slots, and then advances ordinary
+  source work. An older
+  in-flight page is retained and refreshed after publication; genuinely
+  nonresident pages simply read current RAM when later demanded. Asynchronous
+  demand reads lease output from a fixed `PagePayloadPool`; commit, cancellation,
+  stale discard, and failure release the lease.
+- `saveMemoryTexture(handle, key, store)` and `loadMemoryTexture(...)` explicitly
+  persist/restore portable sparse canonical snapshots through the generic
+  [`PersistentBlobStore`](persistent-blob-store.md). Decode and capacity
+  preflight complete before a restored handle is published.
+- `readTextureInfo(handle, out)` copies immutable texture/address metadata into
+  caller-owned output without exposing a physical pool; `destroyTexture(handle)`
+  rejects stale generations and releases source/residency ownership.
+- `attachRenderer(renderer)` attaches every configured atlas pool, and the
+  system itself can be passed to `VirtualTextureFeedbackCoordinator`; globally
+  assigned texture IDs let one multilayer feedback sequence route requests to
+  several format pools without collisions.
+
+`MemoryVirtualTextureSource` supports RGBA8, R8, and R16-float canonical texels,
+clamp/repeat/mirror border generation, sparse fixed page storage, and explicit
+linear-color, normal-renormalizing, or scalar mip filtering. Runtime painting,
+undo, networking, and persistence remain consumer policy; they write canonical
+regions and do not own atlas slots.
+
+`virtualTextureNode(three, view, options)` returns `rawValue`, a descriptor-
+interpreted `value` (sRGB pools convert to linear), and a matching `feedback()`
+producer. It has no PBR role semantics. Arbitrary
+TSL shaders can therefore mix disk-backed and RAM-backed layers while
+`VirtualShaderBinding` owns a fixed-capacity list of matching feedback
+materials. Address mode is fixed by the texture descriptor because it controls
+stored borders.
+
+### Internal residency mechanisms and public coordinators
+
 - `VirtualTextureTuning(config?)` owns the central bounded atlas/page-table
   commit policy. `VirtualTextureTuningRes` is the ECS resource definition.
   Configuration is partial: omitted fields retain the defaults, including when
@@ -25,8 +87,10 @@ fixed per-frame page upload budget.
   immediately returns to the independently validated baseline.
   `atlasMaxDimension` caps the physical atlas to the largest whole 136-texel
   slot grid at or below that dimension; zero uses the device limit.
-- `VirtualTextureStore(loader, capacities, pageDataProvider?, format?, device?,
-  tuning?, telemetry?)` requires `VirtualTextureRuntimeCapacities {
+- `VirtualTextureStore(capacities, pageDataProvider?, format?, device?, tuning?,
+  telemetry?)` is an internal low-level residency mechanism composed only by
+  `VirtualTextureSystem`. It is not exported by the public VT barrel and game
+  code cannot construct it. It requires `VirtualTextureRuntimeCapacities {
   maxPendingPages, maxPendingBytes }` during bootstrap and accepts the shared
   tuning instance. `recordFrameTime(milliseconds)` feeds the tuner without
   allocation; `getStats()` exposes active limits and downshift/recovery
@@ -53,6 +117,9 @@ fixed per-frame page upload budget.
   per-update subarray views. Atlas page uploads require bytes backed by an owned
   `ArrayBuffer`; a `SharedArrayBuffer` view is rejected rather than passed to an
   incompatible WebGPU queue boundary.
+- `replaceResidentPage(path, request, bytes)` refreshes a mutable page in its
+  existing slot without invalidating its page-table identity; nonresident pages
+  remain source-backed.
 - `unloadTexture(path)` cancels pending generations and releases owned slots.
 - `dispose()` idempotently unloads every texture, disposes page-table/atlas
   textures, and clears native GPU references; `EngineAssets.close()` owns it.
@@ -84,8 +151,9 @@ fixed per-frame page upload budget.
 - `VirtualTextureStore.processFeedbackBatch(maps, count)` merges several maps as
   one visibility epoch using preallocated expansion/deduplication scratch. It
   does not build a transient merged `Map`.
-- `VirtualTextureFeedbackPass(scale?)` is the low-level target/readback primitive
-  used by the coordinator. It renders a supplied feedback-material scene into an
+- `VirtualTextureFeedbackPass(scale?)` is the internal low-level target/readback
+  primitive used by the coordinator. It is not exported by the public barrel. It
+  renders a supplied feedback-material scene into an
   `RG32Uint` target and performs non-blocking readback.
   `resize(displayWidth, displayHeight)` updates the target and stable
   `pixelScale: Vector2` (`feedback pixels / physical display pixels`) used by
@@ -101,10 +169,10 @@ fixed per-frame page upload budget.
   `VirtualTextureDebugController` support reusable atlas and slow-residency UIs.
   Stats include ready uploads, rejected admissions, queue capacity, stage time
   budgets, and budget-exhaustion counts.
-- `VirtualTextureRes` is the ECS resource definition.
 - `detectBestTextureFormat(adapter?)` selects BC7, ASTC, or RGBA fallback.
-- `VT_SAMPLE_WGSL` and `VT_FEEDBACK_WGSL` contain the sampling and feedback
-  shader functions. `VT_DESIRED_MIP_WGSL` calculates one channel's requested
+- Internal `VT_SAMPLE_WGSL` and `VT_FEEDBACK_WGSL` implement the public
+  `virtualTextureNode()` contract without requiring consumers to reproduce
+  bindings. `VT_DESIRED_MIP_WGSL` calculates one channel's requested
   mip from stable derivatives plus its explicit bias.
   `VT_SAMPLE_FROM_LEVEL_WGSL` starts a displaced sample at that channel's level,
   walks only its page table to coarser resident pages, then uses its pinned tail
@@ -112,9 +180,10 @@ fixed per-frame page upload budget.
   emissive, and scalar data may therefore resolve different mip levels. Clock
   eviction removes only the selected physical page.
 
-`AssetStore.setVirtualTextureStore(store)` routes subsequent `loadTexture()`
-assets into VT storage, but a shared atlas texture is not directly sampleable as
-a conventional `material.map`. Materials must use VT page-table nodes.
+`AssetStore` has no texture-residency owner and no `loadTexture()` policy switch.
+Resident textures use the resident-texture API; virtual textures use
+`VirtualTextureSystem`. A shared atlas texture is not directly sampleable as a
+conventional `material.map`; materials must use VT page-table nodes.
 `createVirtualGltfMaterialPair(THREE, store, set, feedbackPixelScale, options)`
 builds matched visible/feedback `MeshStandardNodeMaterial` variants for glTF
 base color plus optional normal and packed metallic/roughness channels. Aligned
@@ -126,8 +195,11 @@ same object (temporarily swapping the prewarmed material), not a bind-pose proxy
 
 The tree-shakeable public barrel is `web/src/engine/virtual-texturing/index.ts`.
 `parseGLTFAsset()` records `GLTFParser.associations` as a stable
-`materialIndices` map. `VirtualGltfBinding.create(asset, store, options)` uses
-those indices—not material names—to join primitives to cooked texture layouts.
+`materialIndices` map. `VirtualGltfBinding.create(asset, textures, options)`
+uses those indices—not material names—to join primitives to cooked texture
+layouts. Image resolution and material sets contain only opaque
+`VirtualTextureHandle`s; an internal symbol capability resolves the physical
+pool inside engine binding modules.
 It has an explicit primitive capacity, creates one pair per source material,
 and preserves standard scalar/color/alpha/depth/side factors plus factor-only
 KHR material transmission through a physical node material. Source texture UV
@@ -140,9 +212,9 @@ The binding disposes replaced imported textures and materials
 and atomically restores primitive visibility/materials around every feedback
 pass. Materials without virtual base color remain visible
 normally and are hidden only during feedback. `VirtualMaterialBinding` provides the same prewarmed visible/feedback ownership
-for one procedural mesh without inventing a glTF asset. The public procedural
-store factory likewise keeps direct `VirtualTextureStore` construction out of
-visual entrypoints.
+for one procedural mesh without inventing a glTF asset. All source kinds enter
+through `VirtualTextureSystem`; visual entrypoints cannot construct physical
+stores.
 
 Missing indices, duplicate
 layouts, unsupported/non-PBR material replacement, unavailable images, and
@@ -258,9 +330,10 @@ complete under ring backpressure; cancellation still takes effect only at job
 boundaries.
 On public web, `createFetchRangeLoader().readBulk()` issues a standard HTTP
 multi-range request and parses one `multipart/byteranges` response. The live
-provider dispatches spans in scheduler/admission order. A separate
-`createPageRangeReader()` helper source-sorts and restores caller order, but it
-is not wired into that provider. Caddy and the development server stream the
+provider dispatches spans in scheduler/admission order.
+`createSourceSortedPageReader()` is an explicit diagnostic/tool policy. It
+shares the production `VtPageDirectory`, source-sorts resolved spans, and
+restores caller order; it is intentionally not the live scheduling policy. Caddy and the development server stream the
 bounded multipart format. A fixed 256-slot client queue, 4 MiB complete-response
 cap, two-response/8 MiB in-flight cap, and non-overlapping range validation make
 overflow deterministic.
@@ -369,11 +442,11 @@ implementation. `read` requires one exact 206 response; `readBulk` emits up to
 256 explicit spans and validates each returned multipart `Content-Range` in
 request order. `identity` exposes source size/ETag/Last-Modified to generic
 serving-layer consumers.
-`createPageDataProvider(loader, header, textureWorkers, format, config,
-telemetry?)` accepts a fixed worker list plus explicit transcode queue and
-urgent/focus/peripheral deadline policy, expands each compact size vector into fixed
-`Float64Array` offsets and `Uint32Array` sizes, and exposes a stable
-`getStats()` view for read/transcode stages. There is no persistent derived-page
+`VtPageDirectory(header)` expands each compact size vector into fixed
+`Float64Array` offsets and `Uint32Array` sizes once. `createPageDataProvider(
+containerRanges, header, textureWorkers, format, config, telemetry?)` accepts a
+container-bound range source, fixed worker list, and explicit transcode/deadline
+policy. It exposes a stable `getStats()` view for read/transcode stages. There is no persistent derived-page
 cache: every nonresident page follows source read then Basis transcode. Page
 lookup is direct `y * pagesX + x` indexing. The production nine-channel dungeon header fell from 764,192 bytes in
 v4 to 123,768 bytes in v5, safely below the 1 MiB RPC output limit. v4 is
@@ -413,7 +486,8 @@ before feeding the PBR color input. Basis transcoding runs in a real Web Worker 
 public web. The native shell uses source-backed OS workers and never runs the
 WASM service. Neither backend transcodes in the page's frame loop.
 
-Both demonstrations use the engine `VirtualTextureStore`, `VT_SAMPLE_WGSL`,
+Both demonstrations use the public `VirtualTextureSystem` over the internal
+residency pool and shader contract,
 packed page tables, request scheduler, incremental writes, and one physical
 atlas sized to the largest whole 136×136-slot grid allowed by the GPU's reported
 `maxTextureDimension2D`. On the current adapter this is 8,160×8,160 (60×60 =
@@ -421,13 +495,15 @@ atlas sized to the largest whole 136×136-slot grid allowed by the GPU's reporte
 or page-table implementation; no demo uses persistent derived-page storage.
 
 `vt-demo` (canonical `EngineRuntime` consumer) uses
-the procedural store factory, generic `VirtualMaterialBinding`, renderer host,
+the generic `VirtualMaterialBinding`, renderer host,
 and feedback coordinator. It displays one procedural 262,144×262,144 terrain
 texture (256 GiB logical RGBA), with WASD pan, overview, one-texel zoom, and
 deterministic programmatic control. Three independent real-GPU launches pass
 all raw-feedback, compressed/uncompressed upload, and residency trajectories.
 
-`rigged-vt-demo` (canonical `EngineRuntime` consumer) uses `EngineAssets`, which loads two image-free GLBs from the same `.big`
+`rigged-vt-demo` (canonical `EngineRuntime` consumer) uses `EngineAssets` plus
+one `VirtualTextureSystem` format pool; generated texture identities route to
+immutable BIG source keys without leaking those keys into feedback. It loads two image-free GLBs from the same `.big`
 container as their extracted virtual material channels; the cook reduced the
 current container from roughly 633 MiB to 463,702,085 bytes. Stable parser
 indices drive `VirtualGltfBinding`, and one coordinator publishes atomic
@@ -448,7 +524,7 @@ post-seal pipelines. Model 1 is KallMor's “Decraniated (Low Poly
 Retro Pixel),” CC BY 4.0; model 2 is CC BY-NC 4.0.
 
 `dungeon` (canonical `EngineRuntime` consumer) uses
-`RendererHost`, `EngineAssets`, `VirtualTextureFeedbackCoordinator`, bounded
+`RendererHost`, `EngineAssets`, one `VirtualTextureSystem` format pool, `VirtualTextureFeedbackCoordinator`, bounded
 input/diagnostics, and engine-owned POM materials. It is a first-person corridor dungeon using
 three downloaded 8K PBR sets across twelve wall instances. Two sets are
 8192×8192 and one is natively rectangular at 8192×4096. Albedo, OpenGL normal,
@@ -534,7 +610,9 @@ frame; resolved keys are explicitly cleared during short GPU captures.
 ## Real-GPU regression
 
 The historical `scripts/test-vt-gpu.sh` evidence used the former CEF/WebGPU
-demo and CDP self-test. It performed three independent launches. Within each it
+demo and CDP self-test. That script is no longer present and the command below
+is not a current validation lane. The historical run performed three independent
+launches. Within each it
 renders and precisely reads back 1,024 `RG32Uint` feedback pixels from eastward,
 westward, and rotated raster directions; follows eastbound, westbound, and
 diagonal trajectories across overview, paged, and one-texel LODs; byte-verifies
@@ -542,9 +620,9 @@ three RGBA writes at top-left, bottom-right, and interior locations; and submits
 three supported compressed writes at corresponding atlas locations. Uncaptured
 WebGPU validation errors and device loss fail the test.
 
-```sh
-DISPLAY=:0 ./scripts/test-vt-gpu.sh
-```
+The manifest-driven `cargo run -p xtask -- visual` replacement is required by
+the convergence plan and has not landed yet. Until it does, this historical
+result cannot be refreshed as release evidence.
 
 On fox-laptop's Radeon 680M/RADV adapter, BC7 was selected. All three independent
 launches passed; each launch validated all three directional feedback scenarios,

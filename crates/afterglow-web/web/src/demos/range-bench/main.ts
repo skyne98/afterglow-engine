@@ -1,10 +1,9 @@
+import { createFetchRangeLoader, readBigHeader } from "../../engine/assets/asset-range.ts";
+import { findVTPageChunk } from "../../engine/assets/big-format.ts";
 import {
-  createFetchRangeLoader,
-  createPageRangeReader,
-  findVTPageChunk,
-  readBigHeader,
+  createSourceSortedPageReader,
   type PageReadRequest,
-} from "../../engine/assets/big-parser.ts";
+} from "../../engine/assets/source-sorted-page-reader.ts";
 
 const CONTAINER = "dungeon.big";
 const ASSET = "Rock064_Color.png";
@@ -109,9 +108,9 @@ async function run(): Promise<RangeBenchResult> {
   const startedAt = performance.now();
   let rangeReads = 0;
   if (maxCoalesceBytes === 0) {
-    const reader = createPageRangeReader({
-      read: (_path, offset, length) => source.read(CONTAINER, offset, length),
-      readBulk: (_path, ranges) => source.readBulk!(CONTAINER, ranges),
+    const reader = createSourceSortedPageReader({
+      read: (offset, length) => source.read(CONTAINER, offset, length),
+      readBulk: ranges => source.readBulk!(CONTAINER, ranges),
     }, header, concurrency);
     const pages = await reader.readBatch(requests);
     for (const page of pages) if (page.byteLength === 0) throw new Error("empty range response");

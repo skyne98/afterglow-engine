@@ -1,6 +1,10 @@
 #!/usr/bin/env bun
 
-import { parseBigHeader, type BigHeader, type VirtualTextureDirectory } from '../crates/afterglow-web/web/src/engine/assets/big-parser.ts';
+import {
+  parseBigHeader,
+  type BigHeader,
+  type VirtualTextureDirectory,
+} from '../crates/afterglow-web/web/src/engine/assets/big-format.ts';
 import { validateAgtb } from './profile-dungeon-vt.ts';
 
 const HEADER_BYTES = 40;

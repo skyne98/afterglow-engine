@@ -187,6 +187,74 @@ industry-standard runtime core for believable gameplay blending. For the
 web/wasm target, orangeduck/Motion-Matching (MIT) is the most deployable
 (working emscripten demo). EMM satisfies permissive + 2025+.
 
+### Corrected verdict — top SOTA physics-body controllers ARE permissive
+Deeper dig recovered "hidden" licenses:
+- **MaskedMimic** (SIGGRAPH 2024) — official code is in **NVlabs/ProtoMotions**
+  (the xbpeng URL is dead), which is **Apache-2.0**. Current SOTA animation->
+  physics body, and permissive.
+- **BeyondMimic** (2025) — repo `HybridRobotics/whole_body_tracking` has a
+  British-spelled `LICENCE` (GitHub detector missed it): **MIT**. Newest SOTA
+  + permissive.
+- CMU family: UHC / PHC / SMPLSim = BSD-3 (permissive); PULSE / PHC_MJX have
+  genuinely no license file.
+
+So the top physics-body controllers are available permissive: MaskedMimic
+(Apache-2.0, current SOTA) and BeyondMimic (MIT, newest). Let me record.
+
+## Runtime candidate: Motion Matching (very interesting)
+Motion Matching is a top candidate for the engine runtime: smooth blending
+among canned clips, physics-agnostic, permissive, compiles to wasm. Best
+sources:
+- **orangeduck/Motion-Matching** (MIT) — canonical Motion + Learned Motion
+  Matching, training code, wasm demo.
+- **Environment-aware Motion Matching (EMM)** (MIT, SIGGRAPH Asia 2025) — adds
+  obstacle/agent/environment awareness (crouch-under-block / wall-hug).
+- Unity/Godot/Bevy ports (MIT / Apache-2.0).
+
+## Box3D feasibility for RL physics control (2026-08-03, REVISED)
+
+### Decisive paper — "Can RL for Continuous Control Generalize Across Physics
+Engines?" (Mohammed & Valdenegro-Toro, arXiv 2010.14444)
+- **Mostly NO: policies usually fail across engines**, even for the "same"
+  task, because engine dynamics differ.
+- **But transfer is NOT impossible**: it depends on the TASK, not the
+  algorithm, and is a SPECTRUM.
+- **MuJoCo is the best engine to transfer FROM**: MuJoCo-trained policies
+  transferred passably to Bullet (inverted pendulum, half-cheetah, ant; up to
+  ~60-100% of source perf); PyBullet-trained policies generalized poorly.
+- Generalization is **brittle and seed-dependent**.
+Implication: a high-fidelity training sim (IsaacLab, like MuJoCo) is a GOOD
+source; zero-shot cross-engine transfer is plausible but imperfect.
+
+### Domain randomization is the modern tool that makes it robust
+- **RMA (Rapid Motor Adaptation)** — dynamics-randomizer network, robust to
+  unseen dynamics, zero-shot to hardware (arXiv 2107.04034).
+- **PolySim** (arXiv 2510.01708) — trains over MULTIPLE simulators with
+  dynamics randomization, making policies robust across many engines — directly
+  validates the "train robust, deploy on Box3D" idea.
+- **IsaacLab Sim-to-Sim Policy Transfer** — Nvidia supports transferring
+  policies between Isaac physics backends (Newton vs PhysX).
+- DR background: Sim-to-Real survey (2009.13303), Understanding DR
+  (2110.03239), Generalizing DR for Zero-Shot Transfer (Berkeley),
+  Humanoid-Gym, awesome-cross-domain-policy-transfer (IJCAI'24 index).
+
+### Revised conclusion (corrects earlier pessimistic note)
+- **Deployment on Box3D is feasible in principle**: train a DR-robust policy in
+  IsaacLab (optionally multi-sim DR / PolySim-style), then run **inference-only**
+  on Box3D (small ~20 MiB policy, wasm-friendly). Same playbook as BeyondMimic's
+  sim2real.
+- **Not zero-risk**: cross-engine transfer is empirically imperfect/
+  seed-brittle; Box3D's solver (soft contacts, SMPL spherical joints not
+  native) may fall outside the DR envelope.
+- **Treat as a measured prototype gate**: (a) verify Box3D dynamics fit a
+  tuned DR range, (b) bridge the joint/action interface (torque-direct or
+  PD-target adapter), (c) measure fall/balance across seeds and scenes.
+
+### Box3D specifics (open item)
+Box3D (Erin Catto, MIT, C17, ~916 KB wasm) is a lightweight rigid-body engine.
+Whether it natively expresses SMPL spherical-joint torque control must be
+verified before committing (drives the torque-direct vs PD-target choice).
+
 ### Corrected verdict
 Permissive **and** 2025+ is satisfied only by **generation** models (MARDM,
 Anytop, Kimodo-code). There is **no lightweight permissive runtime animation

@@ -2,7 +2,6 @@ import * as THREE from "three/webgpu";
 import {
   EngineAssets,
   createAssetRangeSource,
-  getVirtualTextureDimensions,
   loadResidentTexture,
   readBigHeader,
 } from "../../engine/assets/index.ts";
@@ -12,7 +11,6 @@ import {
   Profiling,
   ProfilingRes,
   RegistrationStatus,
-  RendererHost,
   type RenderFrame,
   type ProfilingFrame,
   type ProfilingHost,
@@ -30,15 +28,9 @@ import {
   VirtualTextureFeedbackCoordinator,
   VirtualTextureTuning,
   validatePomShaderWarmup,
+  type VirtualTextureInfo,
 } from "../../engine/virtual-texturing/index.ts";
-import {
-  BootstrapGuard,
-  BrowserErrorCapture,
-  FrameStepHarness,
-  PageShutdown,
-  TextHud,
-  publishDevHarness,
-} from "../../engine/diagnostics/index.ts";
+import { TextHud } from "../../engine/diagnostics/index.ts";
 
 const VT_QUALITY_BIAS = 0,
   FEEDBACK_CADENCE_MS = 55;
@@ -60,8 +52,10 @@ const camera = new THREE.PerspectiveCamera(
   60,
 );
 camera.rotation.order = "YXZ";
-const runtime = EngineRuntime.forScene({
+let coordinator: VirtualTextureFeedbackCoordinator | null = null;
+const runtime = await EngineRuntime.forScene({
   scene,
+  camera,
   entityCapacity: 1,
   memory: {
     frameScratchBytes: 16384,
@@ -76,27 +70,17 @@ const runtime = EngineRuntime.forScene({
   diagnosticCapacity: 128,
   maxWorkerInputs: 1,
   maxRenderPasses: 2,
+  maxOwnedResources: 4,
+  renderer: {
+    parameters: { antialias: false, trackTimestamp: false },
+    onResize: resizeCamera,
+  },
 });
-let coordinator: VirtualTextureFeedbackCoordinator | null = null;
 function resizeCamera(width: number, height: number): void {
   camera.aspect = width / height;
   camera.updateProjectionMatrix();
-  const ratio = Math.min(2, Math.max(0.1, devicePixelRatio));
-  coordinator?.resize(width * ratio, height * ratio);
 }
-const host = await RendererHost.create({
-  scene,
-  camera,
-  diagnostics: runtime.diagnostics,
-  parameters: { antialias: false, trackTimestamp: false },
-  onResize: resizeCamera,
-}).catch((error: unknown) => {
-  runtime.dispose();
-  throw error;
-});
-const bootstrap = new BootstrapGuard(20);
-bootstrap.defer(() => host.dispose());
-bootstrap.defer(() => runtime.dispose());
+const host = runtime.rendererHost;
 try {
   const source = createAssetRangeSource("", runtime.telemetry);
   const device = host.device,
@@ -105,7 +89,7 @@ try {
       : device.features.has("texture-compression-astc")
         ? 1
         : FORMAT_RGBA;
-  const session = await EngineAssets.open({
+  const engineAssets = await EngineAssets.open({
     containerPath: "dungeon.big",
     telemetry: runtime.telemetry,
     format,
@@ -118,13 +102,24 @@ try {
     maxHeaderBytes: 2 * 1024 * 1024,
     source,
   });
-  bootstrap.defer(() => session.close());
-  const store = session.createVirtualTextureStore(
+  if (runtime.ownCloseable(engineAssets) !== RegistrationStatus.Registered)
+    throw new Error("Dungeon asset owner capacity exceeded");
+  const storageFormat = format === 0
+    ? "bc7-rgba-unorm"
+    : format === 1
+      ? "astc-4x4-unorm"
+      : "rgba8unorm";
+  const store = engineAssets.createVirtualTextureSystem({
+    maxTextures: 16,
+    maxMutablePageRefreshesPerPoll: 2,
     device,
-    new VirtualTextureTuning({ atlasMaxDimension: 53 * SLOT_SIZE }),
-  );
-  bootstrap.defer(() => store.dispose());
-  coordinator = new VirtualTextureFeedbackCoordinator(host.renderer, store, {
+    pools: [{
+      format: storageFormat,
+      capacities: { maxPendingPages: 16, maxPendingBytes: 2 * 1024 * 1024 },
+      tuning: new VirtualTextureTuning({ atlasMaxDimension: 53 * SLOT_SIZE }),
+    }],
+  });
+  coordinator = runtime.createVirtualTextureFeedback(store, {
     renderables: 1,
     passes: 1,
     cadenceMs: FEEDBACK_CADENCE_MS,
@@ -132,10 +127,6 @@ try {
     scale: 0.125,
   });
   const activeCoordinator = coordinator;
-  activeCoordinator.resize(
-    host.renderer.domElement.width,
-    host.renderer.domElement.height,
-  );
   // Resident blue-noise dither tile for the POM ray-start jitter. Loaded before
   // the binding so it can be baked into the material options at construction.
   const residentThree = THREE as unknown as Parameters<
@@ -155,7 +146,7 @@ try {
   ).texture as unknown as THREE.Texture;
   const pomBinding = new VirtualPomSceneBinding({
     camera,
-    store,
+    textures: store,
     feedbackPixelScale: coordinator.pixelScale,
     capacity: 12,
     material: {
@@ -174,7 +165,8 @@ try {
       blueNoiseTile: 64,
     },
   });
-  bootstrap.defer(() => pomBinding.dispose());
+  if (runtime.ownDisposable(pomBinding) !== RegistrationStatus.Registered)
+    throw new Error("Dungeon POM owner capacity exceeded");
   if (
     coordinator.register(pomBinding) !== FeedbackRegistrationStatus.Registered
   )
@@ -221,14 +213,20 @@ try {
       ),
     ),
   );
+  const registerTexture = (path: string) => {
+    const handle = engineAssets.registerVirtualTexture(
+      path, storageFormat, "repeat", true,
+    );
+    if (handle === 0) throw new Error(`virtual texture capacity exceeded: ${path}`);
+    return handle;
+  };
   const sets = materialNames.map((name) => {
-    const paths = {
-        albedo: `${name}_Color.png`,
-        normal: `${name}_NormalGL.png`,
-        masks: `${name}_Masks.png`,
-      },
-      dimensions = getVirtualTextureDimensions(session.header, paths.albedo);
-    return store.loadMaterialSet(paths, { ...dimensions, mipTail: true });
+    const set = {
+      albedo: registerTexture(`${name}_Color.png`),
+      normal: registerTexture(`${name}_NormalGL.png`),
+      masks: registerTexture(`${name}_Masks.png`),
+    };
+    return set;
   });
   const segments: Array<readonly [number, number, number, number]> = [
     [-8, -8, 8, -8],
@@ -280,26 +278,21 @@ try {
   pomBinding.seal();
   const PLAYER_RADIUS = 0.28,
     pose = { x: -5.5, z: -5.5, yaw: 0, pitch: 0 };
-  let programmatic = false,
-    pomEnabled = true,
-    hudVisible = true,
+  let pomEnabled = true,
     smoothedDt = 1 / 60;
   const input = new BoundedKeyboardInput();
-  bootstrap.defer(() => input.dispose());
+  if (runtime.ownDisposable(input) !== RegistrationStatus.Registered)
+    throw new Error("Dungeon input owner capacity exceeded");
   const relativePointer = new RelativePointerInput(
     host.renderer.domElement,
     (x, y) => {
-      if (!programmatic) {
-        pose.yaw -= x * 0.002;
-        pose.pitch = Math.max(-1.45, Math.min(1.45, pose.pitch - y * 0.002));
-      }
+      pose.yaw -= x * 0.002;
+      pose.pitch = Math.max(-1.45, Math.min(1.45, pose.pitch - y * 0.002));
     },
   );
-  bootstrap.defer(() => relativePointer.dispose());
-  const errors = new BrowserErrorCapture(runtime.diagnostics);
-  bootstrap.defer(() => errors.dispose());
-  const steps = new FrameStepHarness(64),
-    hud = new TextHud(document.getElementById("hud"));
+  if (runtime.ownDisposable(relativePointer) !== RegistrationStatus.Registered)
+    throw new Error("Dungeon pointer owner capacity exceeded");
+  const hud = new TextHud(document.getElementById("hud"));
   const timing = {
     vtCpuUs: 0,
     renderSubmitUs: 0,
@@ -381,7 +374,7 @@ try {
       dt = Math.min(0.05, frame.deltaSeconds);
     smoothedDt = smoothedDt * 0.95 + dt * 0.05;
     coordinator?.recordFrameTime(dt * 1000);
-    if (!programmatic) {
+    {
       let f =
           (input.isDown(DemoInputAction.ZoomIn) ? 1 : 0) -
           (input.isDown(DemoInputAction.ZoomOut) ? 1 : 0),
@@ -408,7 +401,6 @@ try {
     camera.rotation.set(pose.pitch, pose.yaw, 0);
     camera.updateMatrixWorld();
     lamp.position.set(pose.x, 3.1, pose.z);
-    steps.poll(frame.frameId);
     timing.vtCpuUs = coordinator?.vtCpuUs ?? 0;
     timing.renderSubmitUs = host.renderSubmitUs;
     timing.feedbackSubmitUs = coordinator?.feedbackSubmitUs ?? 0;
@@ -416,14 +408,8 @@ try {
     // Gather profiling (renderer.info + GPU pass timings) off the hot path.
     // Fire-and-forget: info snapshot is immediate; GPU readback resolves later.
     if (frame.frameId % 15 === 0) void profiling.gather(frame.frameId); // @alloc-allowed reason=DiagnosticGpuReadback issue=DME-034 expires=2026-10-01
-    if (hudVisible && frame.frameId % 15 === 0) updateHud(); // @alloc-allowed reason=DiagnosticHud issue=DME-034 expires=2026-10-01
+    if (frame.frameId % 15 === 0) updateHud(); // @alloc-allowed reason=DiagnosticHud issue=DME-034 expires=2026-10-01
   } // @alloc-allowed reason=DiagnosticHud issue=DME-034 expires=2026-10-01
-  if (
-    runtime.registerWorker(coordinator) !== RegistrationStatus.Registered ||
-    runtime.registerRenderPass(host) !== RegistrationStatus.Registered ||
-    runtime.registerRenderPass(coordinator) !== RegistrationStatus.Registered
-  )
-    throw new Error("Dungeon runtime capacity exceeded");
   runtime.enterWarmup();
   profiling.setEnabled(true);
   await validatePomShaderWarmup(host, async () => {
@@ -437,237 +423,18 @@ try {
     await runtime.warm();
   });
   host.renderer.render(scene, camera);
-  host.attachVirtualTextureStore(store);
   // R8unorm height is universally filterable; no float32-filterable feature
   // gate or post-warm-up format assertion is required (unlike the former
   // r32float-from-r16 path).
   runtime.sealGameplay();
-  const shutdown = new PageShutdown(() => {
-    runtime.stop();
-    relativePointer.dispose();
-    input.dispose();
-    errors.dispose();
-    pomBinding.dispose();
-    store.dispose();
-    void session.close();
-    runtime.dispose();
-  });
-  bootstrap.defer(() => shutdown.dispose());
   runtime.start({ update: updateFrame });
-  const step = (count = 1): Promise<void> =>
-    steps.wait(runtime.frame.frameId, Math.max(1, count | 0));
-  async function stepForMilliseconds(milliseconds: number): Promise<void> {
-    const deadline = performance.now() + milliseconds;
-    do { await step(1); } while (performance.now() < deadline);
-  }
-  function atlasFeedback(
-    groups: number,
-    start = 0,
-  ): Map<number, { path: string; mip: number; x: number; y: number }> {
-    const map = new Map(),
-      entries = sets.map((set) => set.albedo);
-    for (let i = 0; i < groups; i++) {
-      const entry = entries[i % entries.length];
-      if (!entry) continue;
-      const local = start + Math.floor(i / entries.length),
-        page = local % (entry.pageGridX * entry.pageGridY);
-      map.set(i, {
-        path: entry.path,
-        mip: 0,
-        x: page % entry.pageGridX,
-        y: Math.floor(page / entry.pageGridX),
-      });
-    }
-    return map;
-  }
-  async function waitIdle(timeout = 60000): Promise<boolean> {
-    const end = performance.now() + timeout;
-    while (performance.now() < end) {
-      const s = store.getStats();
-      if (!s.pendingPages && !s.scheduledRequests && !s.readyUploads)
-        return true;
-      await step(1);
-    }
-    return false;
-  }
-  async function runAtlasScenario(
-    name: string,
-    timeout = 120000,
-  ): Promise<object> {
-    if (!["cold", "half", "full", "churn"].includes(name))
-      throw new Error(`unknown atlas scenario ${name}`);
-    programmatic = true;
-    pomBinding.setFeedbackEnabled(false);
-    try {
-      const initial = store.getStats(),
-        total = initial.atlasSlotsTotal,
-        target =
-          name === "half"
-            ? Math.floor(total / 2)
-            : name === "cold"
-              ? initial.atlasSlotsUsed
-              : Math.floor(total * 0.995),
-        feedback = atlasFeedback(
-          Math.ceil(Math.max(0, target - initial.atlasSlotsUsed) / 3) + 32,
-          name === "half" ? 0 : 1024,
-        );
-      if (name !== "cold") store.processFeedback(feedback);
-      let end = performance.now() + timeout;
-      while (performance.now() < end) {
-        const s = store.getStats();
-        if (
-          s.atlasSlotsUsed >= target &&
-          !s.pendingPages &&
-          !s.scheduledRequests &&
-          !s.readyUploads
-        )
-          break;
-        if (name !== "cold") store.processFeedback(feedback);
-        await stepForMilliseconds(FEEDBACK_CADENCE_MS);
-      }
-      if (name === "churn") {
-        const before = store.getStats().residentEvictions,
-          replacement = atlasFeedback(Math.ceil(total / 3), 3072);
-        for (let epoch = 0; epoch < 17; epoch++)
-          store.processFeedback(replacement);
-        end = performance.now() + timeout;
-        while (performance.now() < end) {
-          const s = store.getStats();
-          if (
-            s.residentEvictions > before &&
-            !s.pendingPages &&
-            !s.scheduledRequests &&
-            !s.readyUploads
-          )
-            break;
-          store.processFeedback(replacement);
-          await stepForMilliseconds(FEEDBACK_CADENCE_MS);
-        }
-      }
-      return {
-        name,
-        target,
-        ...store.getStats(),
-        timing: { ...timing },
-        errors: runtime.diagnostics.count,
-      };
-    } finally {
-      pomBinding.setFeedbackEnabled(true);
-    }
-  }
-  const scenarios: Record<string, () => void> = {
-    forward: () => setPose(-5.5, -5.5, 0, 0),
-    reverse: () => setPose(5.5, -5.5, Math.PI, 0),
-    corner: () => setPose(5.8, 6.4, -Math.PI / 2, -0.2),
-  };
-  const pipelineStats = {
-    renderPipelines: 0,
-    computePipelines: 0,
-    renderPipelineViolations: 0,
-    computePipelineViolations: 0,
-  };
-  publishDevHarness("__afterglowDungeon", {
-    ready: () => true,
-    telemetry: () => store.getStats(),
-    traceArm: (epoch = 1) => runtime.telemetry.trace.arm(epoch),
-    traceStop: () => {
-      if (!runtime.telemetry.trace.stop()) return null;
-      return runtime.telemetry.trace.snapshot();
-    },
-    traceBatch: () => {
-      const bytes = new Uint8Array(runtime.telemetry.trace.encodedBatchBytes());
-      const written = runtime.telemetry.trace.encodeBatchInto(bytes, 1, 1);
-      return written > 0 ? bytes : null;
-    },
-    timing: () => timing,
-    inputStatus: () => relativePointer.getStatus(),
-    pomStatus: () => ({
-      enabled: pomEnabled,
-      minLayers: POM_MIN_LAYERS,
-      maxLayers: POM_MAX_LAYERS,
-      heightScale: POM_HEIGHT_SCALE,
-      maxOffsetRatio: POM_MAX_OFFSET_RATIO,
-      maxDistance: POM_MAX_DISTANCE,
-      selfShadowSteps: POM_SHADOW_STEPS,
-      selfShadowStrength: POM_SHADOW_STRENGTH,
-      heightSource: "resident R8 displacement (ambientCG)",
-      heightFormat: "r8unorm",
-    }),
-    /** Latest gathered profiling frame (renderer.info counts + GPU pass ms). */
-    profilingSnapshot: () => {
-      const out: ProfilingFrame[] = [];
-      profiling.latest(1, out);
-      return out[0] ?? null;
-    },
-    /** Chrome-tracing JSON of all gathered frames (paste into chrome://tracing). */
-    profilingTrace: () => profiling.exportChromeTrace(),
-    setPomEnabled,
-    setFeedbackEnabled: (enabled: boolean) =>
-      pomBinding.setFeedbackEnabled(enabled),
-    pipelineTelemetry: () => {
-      const seal = host.sealMonitor;
-      pipelineStats.renderPipelines = seal.renderPipelines;
-      pipelineStats.computePipelines = seal.computePipelines;
-      pipelineStats.renderPipelineViolations = seal.renderPipelineViolations;
-      pipelineStats.computePipelineViolations = seal.computePipelineViolations;
-      return pipelineStats;
-    },
-    resolveGpuTimings: async () =>
-      coordinator?.resolveGpuTimings(timing) ?? timing,
-    setGpuTimingEnabled: (enabled: boolean) =>
-      coordinator?.setGpuTimingEnabled(enabled),
-    /** Validate the engine's GpuProfiler against the real WebGPU device.
-     *  One-line call to an engine-owned self-test (no demo boilerplate). */
-    validateGpuProfiler: () => GpuProfiler.validate(host.device, host.device.queue),
-    errorCount: () => runtime.diagnostics.count,
-    runAtlasScenario,
-    snapshot: () => ({
-      pose: { ...pose },
-      ...store.getDebugSnapshot(),
-      requests: 0,
-      feedbackMips: [],
-      errors: errors.snapshot(),
-    }),
-    setProgrammatic: (enabled: boolean) => {
-      programmatic = enabled;
-      input.programmatic = enabled;
-      input.clear();
-    },
-    setHudVisible: (visible: boolean) => {
-      hudVisible = visible;
-      hud.setVisible(visible);
-    },
-    setPose,
-    getPose: () => ({ ...pose }),
-    move,
-    look: (yaw: number, pitch: number) =>
-      setPose(pose.x, pose.z, pose.yaw + yaw, pose.pitch + pitch),
-    step,
-    waitForIdle: waitIdle,
-    runScenario: async (name: string) => {
-      const scenario = scenarios[name];
-      if (!scenario) throw new Error(`unknown scenario ${name}`);
-      programmatic = true;
-      scenario();
-      await step(120);
-      await waitIdle();
-      await step(16);
-      await waitIdle();
-      return {
-        pose: { ...pose },
-        ...store.getDebugSnapshot(),
-        errors: errors.snapshot(),
-      };
-    },
-  });
-  bootstrap.release();
   console.log("afterglow-engine: canonical Dungeon started");
 } catch (error) {
-  try {
-    await bootstrap.rollback();
-  } catch (cleanup) {
-    if (error instanceof Error && error.cause === undefined)
-      error.cause = cleanup;
+  try { await runtime.close(); }
+  catch (cleanup) {
+    if (error instanceof Error && error.cause === undefined) error.cause = cleanup;
   }
   throw error;
 }
+
+export { runtime as demoRuntime };

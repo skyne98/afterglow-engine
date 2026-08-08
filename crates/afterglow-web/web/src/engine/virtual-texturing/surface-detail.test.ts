@@ -305,8 +305,11 @@ describe('Dungeon POM integration assets and limits', () => {
     const has = (needle: string): boolean => source.includes(compact(needle));
     expect(has('POM_MIN_LAYERS=8,POM_MAX_LAYERS=32')).toBe(true);
     expect(has('POM_HEIGHT_SCALE=0.05,POM_MAX_OFFSET_RATIO=2,POM_MAX_DISTANCE=0,POM_SHADOW_STEPS=8,POM_SHADOW_BIAS=0.01,POM_SHADOW_STRENGTH=0.82')).toBe(true);
-    // Height is now a resident 8-bit R8 texture (not the former r32float-from-r16).
-    expect(has("heightSource: \"resident R8 displacement (ambientCG)\", heightFormat: \"r8unorm\"")).toBe(true);
+    // Height is a resident 8-bit R8 texture loaded through the unified BIG path,
+    // not the former browser-decoded or r32float-from-r16 side channel.
+    expect(has('Resident(non-VT)8-bitR8heightfield')).toBe(true);
+    expect(has('"dungeon-height.big"')).toBe(true);
+    expect(has('loadResidentTexture(residentThree,heightSource,heightHeader')).toBe(true);
     const adapterRaw = await Bun.file(new URL('./virtual-texture-material.ts', import.meta.url)).text();
     const adapter = compact(adapterRaw);
     const hasAdapter = (needle: string): boolean => adapter.includes(compact(needle));

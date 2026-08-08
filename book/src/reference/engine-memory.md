@@ -60,18 +60,21 @@ The conformance command runs several independent gates:
 
 - the authoritative browser artifact/page inventory;
 - visual-demo architecture checks and canonical/legacy status validation;
+- the convergence deletion ledger, which prevents removed paths from returning;
 - hot allocation-effect checks;
 - generated JavaScript drift checks.
 
 The architecture checker rejects demo-owned frame loops, renderer/runtime
 construction, generated worker-client/RPC assembly, BIG/VT/POM/glTF infrastructure, engine globals, private
 Three access, unbounded control collections, direct diagnostic UI, and untyped
-frame callbacks. Conformant releases cannot carry a legacy state, architecture
-baseline, or bridge. Generic compiler/style debt is not release-gated; unit and
-vertical tests establish implementation behavior. `release-gate` additionally
-builds the book and requires recent, artifact-hash-
-matched real-GPU results for every visual demo plus stable/traverse/thrash
-Dungeon soaks of at least ten minutes.
+frame callbacks. The repository is currently `converging`: canonical source
+architecture does not claim completed visual/runtime conformance. Conformant
+releases cannot carry a legacy state, architecture baseline, or bridge. Generic
+compiler/style debt is not release-gated; unit and vertical tests establish
+implementation behavior. `release-gate` additionally builds the book and
+requires evidence schema v2: web/native screenshots and `GameReady` for every
+visual demo, coherent dimensions, semantic/reference pixel checks, bounded
+resource/queue results, and five 30-minute plateaued soak scenarios per target.
 
 The allocation lint covers explicitly marked hot regions and cross-checks them
 against `engine-allocation-effects.json`. Budgeted-boundary calls require an

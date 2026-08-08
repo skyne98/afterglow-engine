@@ -14,20 +14,38 @@ system:
   active clip.
 - `SkeletonDebugAdapter` owns helper visibility, scene attachment, and disposal.
 
-## Static mesh LOD
+## Unified model LOD
 
-The offline pipeline command `static-lod <model.gltf|glb> <output.big>` cooks a
-single static triangle primitive into compressed 100%, 50%, 25%, and 10% mesh
-records. Skins and morph targets are rejected rather than simplified with the
-wrong semantics.
+`ModelSystem` gives cooked disk models and runtime RAM models the same bounded,
+generational handles and stable revision views. Cooked records enter through
+`loadCookedModel()` and `adoptCookedModel()`; runtime geometry enters through
+`createRuntimeModel()` and is processed asynchronously by the engine-owned
+meshoptimizer service. Complete revisions publish atomically while previous
+levels remain renderable.
 
-At bootstrap, `loadStaticMesh()` validates and decodes the fixed chain, closes
-its decoder, and returns a disposable `StaticMeshAsset` containing only fixed
-geometry levels. `LodSet` selects one precreated mesh from normalized projected coverage, with explicit
-capacity and hysteresis. Selection performs no allocation and leaves exactly
-one level visible. The canonical LOD demo uses one CC0 Avocado model and its GPU
-regression verifies transitions `0,1,2,3,2,1,0` in both camera directions.
+Rigid, skinned, and morphed primitives all receive LODs. Meshoptimizer evaluates
+UV, normal, skin-weight, tangent, color, and morph-envelope error while locking
+incompatible joint seams. Every base attribute, joint/weight stream, and morph
+target follows the same compact remap. `ModelLodBinding` keeps the complete
+skeleton and animation graph shared by all levels and switches one visible mesh
+using projected coverage plus hysteresis; bone reduction is not performed.
 
-Games still choose presentation height, active clip, whether to ground, camera,
-lighting, and shadow policy. Capacity failure occurs during bootstrap instead of
-silently growing model bookkeeping during gameplay.
+The compact `static-lod` cook currently remains a rigid one-primitive disk
+adapter. Full parsed glTF rigs enter the same `ModelSystem` through RAM until the
+compact cooked format carries complete rig/morph metadata. The canonical
+Avocado demo uses `loadCookedModel() -> ModelSystem.adoptCookedModel() ->
+ModelSystem.createBinding()` and never constructs a geometry arena itself.
+
+Games still choose presentation height, active clip, grounding, camera,
+lighting, and shadow policy. Active model count, pending optimizer work, CPU
+geometry bytes, completion publication, and LOD count all have explicit
+capacities. CPU geometry bytes are enforced. Asset composition uses
+`EngineAssets.createModelSystem()`; standalone cooked presentation uses
+`await ModelSystem.open()` and registers that closeable owner with the runtime.
+Every `ModelSystem` requires a
+`geometryArena` bucket configuration and owns those fixed, prewarmed
+Three-compatible slots; there is no unbounded engine-model mode. Complete LOD
+publications swap atomically, while Three still creates the physical WebGPU
+buffers. Every rigid,
+skinned, and morph bucket must be rendered during warm-up, and current GPU/soak
+evidence remains a release gate.

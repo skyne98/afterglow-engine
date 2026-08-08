@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { countBundledThreeCoreCopies, validateWebContracts } from './check-web-contracts.ts';
+import { validateConvergenceDeletions } from './check-convergence-deletions.ts';
 import { scanTypeScript } from './lint-demo-architecture.ts';
 import { importBoundaryErrors } from './lint-import-boundaries.ts';
 
@@ -75,6 +76,10 @@ describe('web artifact/conformance contract', () => {
     expect(errors.some((error) => error.includes('conformant release may not retain legacy-bridge'))).toBe(true);
   });
 
+  test('accepts canonical source architecture while the release converges', async () => {
+    expect(await validateWebContracts(await fixture({ releaseStatus: 'converging' }))).toEqual([]);
+  });
+
   test('rejects false conformant release claims', async () => {
     const errors = await validateWebContracts(await fixture({
       releaseStatus: 'conformant', conformance: { 'src/demo.ts': 'legacy' },
@@ -82,11 +87,50 @@ describe('web artifact/conformance contract', () => {
     expect(errors.some((error) => error.includes('conformant release has legacy demos'))).toBe(true);
   });
 
+  test('rejects obsolete migration status', async () => {
+    const errors = await validateWebContracts(await fixture({ releaseStatus: 'migration' }));
+    expect(errors.some((error) => error.includes('invalid releaseStatus migration'))).toBe(true);
+  });
+
   test('rejects stale conformance entries', async () => {
     const errors = await validateWebContracts(await fixture({
-      releaseStatus: 'migration', conformance: { 'src/demo.ts': 'legacy', 'gone.ts': 'legacy' },
+      releaseStatus: 'converging', conformance: { 'src/demo.ts': 'legacy', 'gone.ts': 'legacy' },
     }));
     expect(errors.some((error) => error.includes('stale/non-visual entrypoint gone.ts'))).toBe(true);
+  });
+});
+
+describe('convergence deletion ledger', () => {
+  async function ledgerFixture(status: 'pending' | 'removed', source: string): Promise<string> {
+    const root = await mkdtemp(join(tmpdir(), 'afterglow-deletions-'));
+    temporary.push(root);
+    const contracts = join(root, 'crates/afterglow-web/web/contracts');
+    const engine = join(root, 'crates/afterglow-web/web/src/engine');
+    await mkdir(contracts, { recursive: true });
+    await mkdir(engine, { recursive: true });
+    await writeFile(join(engine, 'legacy.ts'), source);
+    await writeFile(join(contracts, 'convergence-deletions.json'), JSON.stringify({
+      version: 1,
+      items: [{
+        id: 'CUE-DEL-001', status, description: 'legacy symbol',
+        roots: ['crates/afterglow-web/web/src/engine'], literals: ['legacyPath'],
+      }],
+    }));
+    return root;
+  }
+
+  test('keeps pending debt visible', async () => {
+    expect(await validateConvergenceDeletions(await ledgerFixture('pending', 'legacyPath();'))).toEqual([]);
+  });
+
+  test('rejects reintroduction after removal', async () => {
+    const errors = await validateConvergenceDeletions(await ledgerFixture('removed', 'legacyPath();'));
+    expect(errors.some((error) => error.includes('removed symbol/path was reintroduced'))).toBe(true);
+  });
+
+  test('requires an absent pending item to ratchet to removed', async () => {
+    const errors = await validateConvergenceDeletions(await ledgerFixture('pending', 'export {};'));
+    expect(errors.some((error) => error.includes('mark it removed'))).toBe(true);
   });
 });
 
@@ -105,6 +149,54 @@ describe('import boundary contract', () => {
   });
 });
 
+describe('runtime readiness boundary contract', () => {
+  test('keeps strict engine readiness separate from compatibility first-present readiness', async () => {
+    const runtime = await Bun.file(new URL(
+      'crates/afterglow-web/web/src/engine/core/runtime.ts', repositoryRoot,
+    )).text();
+    const shell = await Bun.file(new URL(
+      'crates/afterglow-shell/src/main.rs', repositoryRoot,
+    )).text();
+    expect(runtime).toContain('RuntimeReadinessStage.GameReady');
+    expect(runtime).toContain('op_afterglow_game_ready');
+    expect(shell).toContain('fn op_afterglow_game_ready');
+    expect(shell).toContain('self.compatibility_mode && !self.ready.load');
+    expect(shell).toContain('--compat-three requires an HTML example path');
+    expect(shell).not.toContain('if self.official_example && !self.ready.load');
+  });
+
+  test('keeps native capture diagnostic-only and copies the final composited surface', async () => {
+    const shell = await Bun.file(new URL(
+      'crates/afterglow-shell/src/main.rs', repositoryRoot,
+    )).text();
+    const canvas = await Bun.file(new URL(
+      'crates/afterglow-shell/vendor/deno_webgpu/canvas.rs', repositoryRoot,
+    )).text();
+    expect(shell).toContain('AFTERGLOW_CAPTURE_PATH');
+    expect(shell).toContain('Afterglow diagnostic surface capture');
+    expect(shell).toContain('copy_texture_to_buffer');
+    expect(shell).toContain('AFTERGLOW_CAPTURE_READY_FRAMES');
+    expect(canvas).toContain('usage: usage | wgpu_types::TextureUsages::COPY_SRC');
+  });
+
+  test('ships one diagnostic protocol and no production demo globals', async () => {
+    const protocol = await Bun.file(new URL(
+      'crates/afterglow-web/web/src/engine/diagnostics/visual-protocol.ts', repositoryRoot,
+    )).text();
+    expect(protocol).toContain("'__afterglowDiagnosticV1'");
+    for (const path of [
+      'dungeon/main.ts', 'rigged-vt/main.ts', 'vt/main.ts', 'engine/main.ts', 'lod/main.ts',
+    ]) {
+      const source = await Bun.file(new URL(
+        `crates/afterglow-web/web/src/demos/${path}`, repositoryRoot,
+      )).text();
+      expect(source).not.toContain('__afterglow');
+      expect(source).not.toContain('publishDevHarness');
+      expect(source).not.toContain('FrameStepHarness');
+    }
+  });
+});
+
 describe('native asset/worker boundary contract', () => {
   test('keeps concrete service composition out of the generic shell bridge', async () => {
     const bridge = await Bun.file(new URL(
@@ -117,12 +209,35 @@ describe('native asset/worker boundary contract', () => {
     expect(production).toContain('register_named_async');
   });
 
+  test('keeps public-web OPFS payloads inside the shared-ring Worker', async () => {
+    const platform = await Bun.file(new URL(
+      'crates/afterglow-web/web/src/engine/streaming/platform-persistent-blob-store.ts', repositoryRoot,
+    )).text();
+    const backend = await Bun.file(new URL(
+      'crates/afterglow-web/web/src/engine/streaming/web-persistent-blob-backend.ts', repositoryRoot,
+    )).text();
+    const worker = await Bun.file(new URL(
+      'crates/afterglow-web/web/src/workers/storage-worker.ts', repositoryRoot,
+    )).text();
+    expect(platform).toContain('WebPersistentBlobBackend.open');
+    expect(platform).not.toContain('OpfsPersistentBlobBackend');
+    expect(backend).toContain("workerJsUrl: 'storage-worker.js'");
+    expect(backend).toContain('BlobStorageClient.spawnThreaded');
+    expect(worker).toContain("self.postMessage('wake')");
+    expect(worker).not.toMatch(/postMessage\([^)]*(bytes|responseData|args)/);
+  });
+
   test('publishes worker manifests instead of TypeScript worker ids', async () => {
     const workers = await Bun.file(new URL(
       'crates/afterglow-web/web/src/engine/assets/platform-workers.ts', repositoryRoot,
     )).text();
     expect(workers).toContain("nativeWorkerIds('texture')");
     expect(workers).toContain("nativeWorkerIds('meshopt')");
+    const storage = await Bun.file(new URL(
+      'crates/afterglow-web/web/src/engine/streaming/native-persistent-blob-backend.ts', repositoryRoot,
+    )).text();
+    expect(storage).toContain("op_afterglow_worker_ids('storage')");
+    expect(storage).toContain('NativeRpcTransport');
     expect(workers).not.toContain('NATIVE_TEXTURE_WORKER_FIRST');
     expect(workers).not.toContain('NATIVE_MESHOPT_WORKER');
   });
@@ -133,6 +248,10 @@ describe('native asset/worker boundary contract', () => {
     )).text();
     expect(shell).toContain('num_cpus::get_physical()');
     expect(shell).toContain('NATIVE_TEXTURE_WORKER_CAP: usize = 16');
+    expect(shell).toContain('builder::register_async_worker');
+    expect(shell).toContain('"storage"');
+    expect(shell).toContain('BlobStorageWorker::default()');
+    expect(shell).not.toContain('registry.register_named_async');
     for (const path of [
       'crates/afterglow-web/web/src/demos/dungeon/main.ts',
       'crates/afterglow-web/web/src/demos/rigged-vt/main.ts',
@@ -140,6 +259,8 @@ describe('native asset/worker boundary contract', () => {
       const demo = await Bun.file(new URL(path, repositoryRoot)).text();
       expect(demo).not.toContain('navigator.hardwareConcurrency');
       expect(demo).not.toMatch(/\bworkerCount\s*:/);
+      expect(demo).not.toContain('createVirtualTextureStore');
+      expect(demo).toContain('createVirtualTextureSystem');
     }
   });
 
@@ -152,6 +273,70 @@ describe('native asset/worker boundary contract', () => {
     expect(barrel).not.toContain('BigAssetSession');
     expect(await Bun.file(new URL(
       'crates/afterglow-web/web/src/engine/assets/big-asset-session.ts', repositoryRoot,
+    )).exists()).toBe(false);
+    expect(await Bun.file(new URL(
+      'crates/afterglow-web/web/src/engine/assets/big-parser.ts', repositoryRoot,
+    )).exists()).toBe(false);
+  });
+
+  test('keeps VT mechanisms decomposed with one container index and ownership path', async () => {
+    const root = 'crates/afterglow-web/web/src/engine/';
+    const engineAssets = await Bun.file(new URL(
+      `${root}assets/engine-assets.ts`, repositoryRoot,
+    )).text();
+    const provider = await Bun.file(new URL(
+      `${root}assets/vt-page-provider.ts`, repositoryRoot,
+    )).text();
+    const sortedReader = await Bun.file(new URL(
+      `${root}assets/source-sorted-page-reader.ts`, repositoryRoot,
+    )).text();
+    const store = await Bun.file(new URL(
+      `${root}virtual-texturing/virtual-texture.ts`, repositoryRoot,
+    )).text();
+    expect(engineAssets).not.toMatch(/\n\s*get (source|containerPath|header|rawAssets)\(/);
+    expect(engineAssets).not.toContain('poll(): void {}');
+    expect(provider).toContain('new VtPageDirectory(header)');
+    expect(sortedReader).toContain('new VtPageDirectory(header)');
+    expect(store).not.toContain('private loader:');
+    expect(provider.split('\n').length).toBeLessThan(250);
+    expect(store.split('\n').length).toBeLessThan(1_700);
+  });
+
+  test('shares bounded handles across mutable textures and deformation-aware model LODs', async () => {
+    const root = 'crates/afterglow-web/web/src/engine/';
+    const vtBarrel = await Bun.file(new URL(
+      `${root}virtual-texturing/index.ts`, repositoryRoot,
+    )).text();
+    const modelBarrel = await Bun.file(new URL(
+      `${root}presentation/index.ts`, repositoryRoot,
+    )).text();
+    const modelLod = await Bun.file(new URL(
+      `${root}presentation/model-lod.ts`, repositoryRoot,
+    )).text();
+    const textureNodes = await Bun.file(new URL(
+      `${root}virtual-texturing/virtual-texture-nodes.ts`, repositoryRoot,
+    )).text();
+    const assetStore = await Bun.file(new URL(
+      `${root}assets/asset-store.ts`, repositoryRoot,
+    )).text();
+    expect(vtBarrel).toContain('VirtualTextureSystem');
+    expect(vtBarrel).toContain('MemoryVirtualTextureSource');
+    expect(vtBarrel).toContain('virtualTextureNode');
+    expect(modelBarrel).toContain('ModelSystem');
+    expect(modelBarrel).toContain('ModelLodBinding');
+    expect(modelLod).toContain('simplifyWithAttributes');
+    expect(modelLod).toContain("geometry.morphAttributes");
+    expect(textureNodes).toContain('readonly rawValue');
+    expect(textureNodes).toContain('sRGBTransferEOTF');
+    expect(vtBarrel).toContain('MemoryTexturePersistenceStatus');
+    const geometryArena = await Bun.file(new URL(
+      `${root}presentation/geometry-arena.ts`, repositoryRoot,
+    )).text();
+    expect(geometryArena).toContain('class GeometryArena');
+    expect(geometryArena).toContain('activeGpuBytes');
+    expect(assetStore).not.toContain('loadModel(path:');
+    expect(await Bun.file(new URL(
+      `${root}presentation/static-lod.ts`, repositoryRoot,
     )).exists()).toBe(false);
   });
 });

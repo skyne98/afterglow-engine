@@ -1,5 +1,5 @@
 // VirtualTextureStore — manages the shared physical atlas, page table,
-// LRU cache, GPU-feedback residency, and upload budget for all virtual textures.
+// second-chance cache, GPU-feedback residency, and upload budget for all virtual textures.
 //
 // ALL sampled textures in the engine go through this store. There are no
 // separate "normal" textures — everything is a page in the atlas.
@@ -7,7 +7,7 @@
 // Architecture:
 //   .big file → [page chunks at seekable offsets]
 //                    ↓
-//   AssetLoader.read(path, offset, len) → raw page data
+//   PageDataProvider(path, request) → final GPU-format page data
 //                    ↓
 //   GPU feedback → deduplicate/capacity-fit → copy missing pages to atlas
 //                    ↓
@@ -18,9 +18,51 @@
 
 import * as THREE from 'three';
 import { AssetHandle } from '../assets/asset-handle.ts';
-import { Resource, defineResource } from '../core/resource.ts';
+import type { FixedByteLease } from '../streaming/fixed-byte-lease-pool.ts';
 import { EngineMetric, EngineTraceDescriptor } from '../telemetry/catalog.ts';
 import { TelemetryRecordStatus, type EngineTelemetry } from '../telemetry/telemetry.ts';
+import { FixedPageSlotMap } from './fixed-page-slot-map.ts';
+import {
+  ATLAS_WIDTH,
+  FORMAT_ASTC,
+  FORMAT_BC7,
+  FORMAT_R16F,
+  FORMAT_RGBA,
+  PAGE_SIZE,
+  SLOT_BLOCKS_Y,
+  SLOT_SIZE,
+  isCompressedTextureFormat,
+  isPageTableEntryResident as isResident,
+  packPageTableEntry as packEntry,
+  uncompressedBytesPerTexel,
+  threeFormat,
+} from './virtual-texture-format.ts';
+import {
+  PageCache,
+  PageTable,
+  type PageSlot,
+} from './virtual-texture-residency.ts';
+import {
+  MATERIAL_CHANNEL_PRIORITY_COUNT,
+  MAX_MIP,
+  MAX_PAGE_SCORE,
+  MAX_PERCEPTUAL_WEIGHT,
+  PAGE_KIND_PRIORITY_COUNT,
+  PRIORITY_LANE_COUNT,
+  SCORE_COVERAGE_CAP,
+  packedPageCoordinates,
+  packedPageIdentity,
+  pageBatchTier,
+  perceptualPriority,
+  sourcePerceptualWeight,
+  type CachedPage,
+  type PageRequest,
+  type VirtualPageRequest,
+} from './virtual-texture-request.ts';
+import {
+  VirtualTextureTuning,
+  type VirtualTextureRuntimeCapacities,
+} from './virtual-texture-tuning.ts';
 import {
   PackedPageTableLayout,
   assertVirtualTextureDimensions,
@@ -34,33 +76,7 @@ import {
 // Constants
 // ============================================================================
 
-export const PAGE_SIZE = 128;           // texels per page (payload, excluding border)
-export const PAGE_BORDER = 4;           // border texels PER SIDE (for bilinear/aniso)
-export const SLOT_SIZE = PAGE_SIZE + PAGE_BORDER * 2; // 136 texels per physical slot
-// Conservative dimensions used when a device is not supplied (notably tests).
-// Runtime stores with a GPUDevice use its maximum 2D dimension instead.
-export const ATLAS_PAGES_X = 15;
-export const ATLAS_PAGES_Y = 15;
-export const ATLAS_WIDTH = ATLAS_PAGES_X * SLOT_SIZE;
-export const ATLAS_HEIGHT = ATLAS_PAGES_Y * SLOT_SIZE;
-const MAX_MIP = 10;              // supports up to 2^10 = 1024 pages per side
-const SCORE_COVERAGE_CAP = 255;
-const MAX_PIXEL_PERCEPTUAL_WEIGHT = 15; // coverage 1 + center 7 + camera distance 7
-const MAX_PERCEPTUAL_WEIGHT = SCORE_COVERAGE_CAP * MAX_PIXEL_PERCEPTUAL_WEIGHT;
-const MAX_PAGE_SCORE = SCORE_COVERAGE_CAP * (MAX_PIXEL_PERCEPTUAL_WEIGHT + 7);
-const IMPORTANCE_LEVEL_MAX = 24; // two buckets per power-of-two interval through 5,610
-const IMPORTANCE_BUCKET_COUNT = IMPORTANCE_LEVEL_MAX + 1;
-const MAX_SCORE_EXPONENT = 31 - Math.clz32(MAX_PAGE_SCORE);
-const TOP_SCORE_BASE = 1 << MAX_SCORE_EXPONENT;
-const TOP_SCORE_SPLIT = TOP_SCORE_BASE + Math.ceil((MAX_PAGE_SCORE - TOP_SCORE_BASE + 1) / 2);
-// Provisional until the recorded score histogram and 32/48/64 ms GPU gate select
-// the shortest peripheral policy without center-latency or source-byte regression.
-const FOCUS_IMPORTANCE_BUCKET_MAX = 12;
-const PAGE_KIND_PRIORITY_COUNT = 2; // coarse restoration parent before exact page
-const MATERIAL_CHANNEL_PRIORITY_COUNT = 3; // albedo, normal/emissive, scalar masks
-const PRIORITY_LANE_COUNT =
-  IMPORTANCE_BUCKET_COUNT * PAGE_KIND_PRIORITY_COUNT * MATERIAL_CHANNEL_PRIORITY_COUNT;
-const FEEDBACK_SCALE = 0.125;    // feedback at 1/8 screen resolution
+const FEEDBACK_SCALE = 0.125;
 
 const enum SchedulerWaitStatus {
   Admitted = 0,
@@ -68,170 +84,6 @@ const enum SchedulerWaitStatus {
   Stale = 2,
   Invalid = 3,
   Unloaded = 4,
-}
-
-// ============================================================================
-// Types
-// ============================================================================
-
-export type PageBatchTier = 'urgent' | 'focus' | 'peripheral';
-
-/** A page request: which virtual page at which mip level is needed. */
-export interface PageRequest {
-  mip: number;
-  x: number;
-  y: number;
-  /** Selects the packed sub-page mip tail instead of a regular virtual page. */
-  tail?: boolean;
-  /** Internal bulk-fetch deadline: coarse restoration or exact promotion. */
-  batchTier?: PageBatchTier;
-  /** Internal bootstrap request; pinned residency is never evicted. */
-  pinned?: boolean;
-}
-
-/** Globally unique page request emitted by feedback. */
-export interface VirtualPageRequest extends PageRequest {
-  /** Stable numeric hot-path identity. External callers may omit before admission. */
-  textureId?: number;
-  /** Asset path retained for providers and game-facing diagnostics. */
-  path: string;
-  /** 0 is screen center and 255 is the farthest edge/corner. */
-  screenPriority?: number;
-  /** Number of feedback pixels covered by this page in the latest readback. */
-  coverage?: number;
-  /** Sum of bounded per-pixel coverage + predicted-center + camera-distance weight. */
-  perceptualWeight?: number;
-  /** Desired-to-nearest-resident mip gap, clamped to the perceptual score range. */
-  residentMipGap?: number;
-  /** Internal material-channel class; 0=albedo, 1=normal/emissive, 2=scalar data. */
-  channelPriority?: number;
-  /** Internal fixed-lane admission priority; 0 is highest. */
-  priorityTier?: number;
-}
-
-interface CachedPage extends VirtualPageRequest {
-  /** Precomputed numeric identity; never rebuilt while touching/evicting. */
-  cacheKey: number;
-  /** Pinned pages are never selected for eviction. */
-  pinned: boolean;
-}
-
-/** A physical page slot in the atlas. */
-interface PageSlot {
-  x: number;
-  y: number;
-}
-
-/** Page table entry — bit-packed u32 (matches WGSL shader format). */
-function packedPageCoordinates(
-  textureId: number,
-  mip: number,
-  x: number,
-  y: number,
-  tail = false,
-): number {
-  const local = tail
-    ? 0x10000000
-    : ((mip & 0x3f) | ((x & 0x7ff) << 6) | ((y & 0x7ff) << 17)) >>> 0;
-  // 29 local bits leave exact integer space for over 16 million texture IDs.
-  return textureId * 0x20000000 + local;
-}
-
-function packedPageIdentity(textureId: number, req: PageRequest): number {
-  return packedPageCoordinates(textureId, req.mip, req.x, req.y, req.tail);
-}
-
-/** Fixed two-buckets-per-octave perceptual importance; zero is highest. */
-export function perceptualImportanceBucket(weight: number): number {
-  const bounded = Math.max(1, Math.min(MAX_PAGE_SCORE, Math.floor(weight)));
-  const exponent = 31 - Math.clz32(bounded);
-  let level: number;
-  if (exponent === 0) level = 0;
-  else if (exponent < MAX_SCORE_EXPONENT)
-    level = exponent * 2 - 1 + ((bounded >>> (exponent - 1)) & 1);
-  else level = bounded < TOP_SCORE_SPLIT ? IMPORTANCE_LEVEL_MAX - 1 : IMPORTANCE_LEVEL_MAX;
-  return IMPORTANCE_LEVEL_MAX - level;
-}
-
-function sourcePerceptualWeight(source: VirtualPageRequest): number {
-  const coverage = Math.min(SCORE_COVERAGE_CAP, source.coverage ?? 1);
-  const centerCloseness = 7 - Math.min(7, (source.screenPriority ?? 255) >>> 5);
-  return Math.min(
-    MAX_PERCEPTUAL_WEIGHT,
-    source.perceptualWeight ?? coverage * (1 + centerCloseness),
-  );
-}
-
-function perceptualPriority(
-  perceptualWeight: number,
-  coverage: number,
-  residentMipGap: number,
-  parent: boolean,
-  channelPriority: number,
-): number {
-  const pageWeight = Math.min(
-    MAX_PAGE_SCORE,
-    perceptualWeight + Math.min(SCORE_COVERAGE_CAP, coverage) * residentMipGap,
-  );
-  const bucket = perceptualImportanceBucket(pageWeight);
-  const pageKind = parent ? 0 : 1;
-  return (bucket * PAGE_KIND_PRIORITY_COUNT + pageKind) *
-    MATERIAL_CHANNEL_PRIORITY_COUNT + channelPriority;
-}
-
-function pageBatchTier(parent: boolean, priority: number): PageBatchTier {
-  if (parent) return 'urgent';
-  const importanceBucket = Math.floor(
-    priority / (PAGE_KIND_PRIORITY_COUNT * MATERIAL_CHANNEL_PRIORITY_COUNT),
-  );
-  return importanceBucket <= FOCUS_IMPORTANCE_BUCKET_MAX ? 'focus' : 'peripheral';
-}
-
-function packEntry(resident: boolean, physX: number, physY: number): number {
-  return (resident ? 1 : 0) | ((physX & 0xFF) << 1) | ((physY & 0xFF) << 9);
-}
-function isResident(entry: number): boolean { return (entry & 1) !== 0; }
-function getPhysX(entry: number): number { return (entry >> 1) & 0xFF; }
-function getPhysY(entry: number): number { return (entry >> 9) & 0xFF; }
-
-// Compressed format block sizes (4×4 texel blocks)
-const BLOCK_SIZE = 4;
-// BC7 = 16 bytes per 4×4 block. ASTC 4×4 = 16 bytes. RGBA8 = 64 bytes (4×4×4).
-const BC7_BYTES_PER_BLOCK = 16;
-const ASTC_BYTES_PER_BLOCK = 16;
-const RGBA_BYTES_PER_BLOCK = BLOCK_SIZE * BLOCK_SIZE * 4; // 64
-
-// Slots in compressed blocks
-const SLOT_BLOCKS_X = SLOT_SIZE / BLOCK_SIZE; // 34
-const SLOT_BLOCKS_Y = SLOT_SIZE / BLOCK_SIZE; // 34
-
-
-/** Texture format constants — match afterglow-texture worker */
-export const FORMAT_BC7 = 0;
-export const FORMAT_ASTC = 1;
-export const FORMAT_RGBA = 4;
-
-/** Detect the best texture format for the current GPU. */
-export async function detectBestTextureFormat(adapter?: GPUAdapter | null): Promise<number> {
-  if (adapter) {
-    const f = adapter.features;
-    if (f.has('texture-compression-bc')) return FORMAT_BC7;
-    if (f.has('texture-compression-astc')) return FORMAT_ASTC;
-  }
-  return FORMAT_RGBA;
-}
-
-/** Get bytes per compressed block for a format. */
-function bytesPerBlock(format: number): number {
-  if (format === FORMAT_BC7 || format === FORMAT_ASTC) return BC7_BYTES_PER_BLOCK;
-  return RGBA_BYTES_PER_BLOCK;
-}
-
-/** Get the Three.js format constant for a format. */
-function threeFormat(format: number): THREE.CompressedPixelFormat {
-  if (format === FORMAT_BC7) return THREE.RGBA_BPTC_Format;
-  if (format === FORMAT_ASTC) return THREE.RGBA_ASTC_4x4_Format;
-  throw new RangeError(`unsupported compressed texture format ${format}`);
 }
 
 /** A virtual texture descriptor — created by loadTexture(). */
@@ -279,6 +131,7 @@ interface ReadyPageUpload {
   page: CachedPage;
   req: PageRequest;
   data: Uint8Array;
+  lease: FixedByteLease | null;
 }
 
 interface PageDataProviderTelemetry {
@@ -303,7 +156,9 @@ interface PageDataProviderTelemetry {
   maxTranscodeMs: number;
 }
 
-export type PageDataProvider = ((path: string, req: PageRequest, signal?: AbortSignal) => Promise<Uint8Array>) & {
+export type PageDataResult = Uint8Array | FixedByteLease;
+
+export type PageDataProvider = ((path: string, req: PageRequest, signal?: AbortSignal) => Promise<PageDataResult>) & {
   getStats?(): Readonly<PageDataProviderTelemetry>;
 };
 
@@ -344,529 +199,6 @@ interface MaterialStreamChannel {
 }
 
 // ============================================================================
-// Page Table
-// ============================================================================
-
-class PageTable {
-  private count = 0;
-
-  constructor(
-    private readonly layout: PackedPageTableLayout,
-    private readonly entries: Uint32Array,
-  ) {}
-
-  private index(req: PageRequest): number {
-    return packedPageTableIndex(this.layout, req.mip, req.x, req.y);
-  }
-
-  get(req: PageRequest): number {
-    return this.entries[this.index(req)];
-  }
-
-  setResident(req: PageRequest, slot: PageSlot): void {
-    const index = this.index(req);
-    if (!isResident(this.entries[index])) this.count++;
-    this.entries[index] = packEntry(true, slot.x, slot.y);
-  }
-
-  setEvicted(req: PageRequest): void {
-    const index = this.index(req);
-    if (isResident(this.entries[index])) this.count--;
-    this.entries[index] = 0;
-  }
-
-  isResident(req: PageRequest): boolean {
-    return isResident(this.get(req));
-  }
-
-  isResidentAt(mip: number, x: number, y: number): boolean {
-    return isResident(this.entries[packedPageTableIndex(this.layout, mip, x, y)]);
-  }
-
-  get residentCount(): number { return this.count; }
-}
-
-// ============================================================================
-// Page Cache (Physical Atlas + fixed clock)
-// ============================================================================
-
-/** Fixed open-addressed numeric page-key map. Never resizes after bootstrap. */
-class FixedPageSlotMap {
-  private readonly keys: Float64Array;
-  private readonly values: Uint32Array;
-  private readonly states: Uint8Array; // 0 empty, 1 occupied, 2 tombstone
-  private readonly mask: number;
-
-  constructor(minCapacity: number) {
-    let capacity = 1;
-    while (capacity < minCapacity * 2) capacity <<= 1;
-    this.keys = new Float64Array(capacity);
-    this.values = new Uint32Array(capacity);
-    this.states = new Uint8Array(capacity);
-    this.mask = capacity - 1;
-  }
-
-  private hash(key: number): number {
-    return (((key >>> 0) ^ Math.floor(key / 0x100000000)) * 2654435761) >>> 0;
-  }
-
-  // @hot-no-alloc-begin FixedPageSlotMap.get
-  get(key: number): number | undefined {
-    let index = this.hash(key) & this.mask;
-    for (let probe = 0; probe <= this.mask; probe++) {
-      const state = this.states[index];
-      if (state === 0) return undefined;
-      if (state === 1 && this.keys[index] === key) return this.values[index];
-      index = (index + 1) & this.mask;
-    }
-    return undefined;
-  }
-  // @hot-no-alloc-end FixedPageSlotMap.get
-
-  // @hot-no-alloc-begin FixedPageSlotMap.set
-  set(key: number, value: number): void {
-    let index = this.hash(key) & this.mask;
-    let tombstone = -1;
-    for (let probe = 0; probe <= this.mask; probe++) {
-      const state = this.states[index];
-      if (state === 1 && this.keys[index] === key) {
-        this.values[index] = value;
-        return;
-      }
-      if (state === 2 && tombstone < 0) tombstone = index;
-      if (state === 0) {
-        const target = tombstone < 0 ? index : tombstone;
-        this.keys[target] = key;
-        this.values[target] = value;
-        this.states[target] = 1;
-        return;
-      }
-      index = (index + 1) & this.mask;
-    }
-    if (tombstone >= 0) {
-      this.keys[tombstone] = key;
-      this.values[tombstone] = value;
-      this.states[tombstone] = 1;
-      return;
-    }
-    throw new Error('fixed VT page map capacity exceeded');
-  }
-  // @hot-no-alloc-end FixedPageSlotMap.set
-
-  // @hot-no-alloc-begin FixedPageSlotMap.delete
-  clear(): void {
-    for (let index = 0; index < this.states.length; index++) this.states[index] = 0;
-  }
-
-  delete(key: number): boolean {
-    let index = this.hash(key) & this.mask;
-    for (let probe = 0; probe <= this.mask; probe++) {
-      const state = this.states[index];
-      if (state === 0) return false;
-      if (state === 1 && this.keys[index] === key) {
-        this.states[index] = 2;
-        return true;
-      }
-      index = (index + 1) & this.mask;
-    }
-    return false;
-  }
-  // @hot-no-alloc-end FixedPageSlotMap.delete
-}
-
-class PageCache {
-  private format: number;
-  readonly pagesX: number;
-  readonly pagesY: number;
-  readonly width: number;
-  readonly height: number;
-  /** Atlas pixel data (compressed blocks or RGBA8). */
-  atlas: Uint8Array;
-  /** Bytes per row in the atlas (for the selected format). */
-  atlasBytesPerRow: number;
-  /** Bytes per slot row. */
-  slotBytesPerRow: number;
-  /** Slot data size in bytes (for one page). */
-  slotDataSize: number;
-  /** Fixed slot records and O(1) page-key lookup. */
-  private slots: CachedPage[] = [];
-  private slotActive: Uint8Array;
-  private slotCoords: PageSlot[] = [];
-  private slotByKey: FixedPageSlotMap;
-  /** Reservation and second-chance clock state. */
-  private reserved: Uint8Array;
-  private referenced: Uint8Array;
-  private clockHand = 0;
-  /** Fixed-capacity free-index stack. */
-  private freeSlots: Uint32Array;
-  private freeTop = 0;
-  private usedCount = 0;
-  private pinnedCount = 0;
-  private acquireResult: { slot: PageSlot; evicted: CachedPage | null };
-  constructor(format: number = FORMAT_RGBA, maxTextureDimension = ATLAS_WIDTH) {
-    this.format = format;
-    this.pagesX = Math.max(1, Math.floor(maxTextureDimension / SLOT_SIZE));
-    this.pagesY = this.pagesX;
-    this.width = this.pagesX * SLOT_SIZE;
-    this.height = this.pagesY * SLOT_SIZE;
-    const blocksX = this.width / BLOCK_SIZE, blocksY = this.height / BLOCK_SIZE;
-    const bpb = bytesPerBlock(format);
-    if (format === FORMAT_RGBA) {
-      this.atlasBytesPerRow = this.width * 4;
-      this.slotBytesPerRow = SLOT_SIZE * 4;
-      this.slotDataSize = SLOT_SIZE * SLOT_SIZE * 4;
-      this.atlas = new Uint8Array(this.width * this.height * 4);
-    } else {
-      this.atlasBytesPerRow = blocksX * bpb;
-      this.slotBytesPerRow = SLOT_BLOCKS_X * bpb;
-      this.slotDataSize = SLOT_BLOCKS_X * SLOT_BLOCKS_Y * bpb;
-      this.atlas = new Uint8Array(blocksX * blocksY * bpb);
-    }
-
-    this.slotByKey = new FixedPageSlotMap(this.pagesX * this.pagesY);
-    this.reserved = new Uint8Array(this.pagesX * this.pagesY);
-    this.referenced = new Uint8Array(this.pagesX * this.pagesY);
-    this.slotActive = new Uint8Array(this.pagesX * this.pagesY);
-    this.freeSlots = new Uint32Array(this.pagesX * this.pagesY);
-    for (let y = 0; y < this.pagesY; y++) {
-      for (let x = 0; x < this.pagesX; x++) {
-        this.slots.push({ path: '', mip: 0, x: 0, y: 0, pinned: false, cacheKey: 0 });
-        this.slotCoords.push({ x, y });
-        this.freeSlots[this.freeTop++] = y * this.pagesX + x;
-      }
-    }
-    this.acquireResult = { slot: this.slotCoords[0], evicted: null };
-  }
-
-  /** O(1) cache touch: set one second-chance reference bit. */
-  // @hot-no-alloc-begin PageCache.touch
-  touch(cacheKey: number): void {
-    const slot = this.slotByKey.get(cacheKey);
-    if (slot !== undefined) this.referenced[slot] = 1;
-  }
-  // @hot-no-alloc-end PageCache.touch
-
-  /** Acquire from the free stack or a bounded second-chance clock scan. */
-  // @hot-no-alloc-begin PageCache.acquire
-  acquire(req: CachedPage): { slot: PageSlot; evicted: CachedPage | null } {
-    let slotIdx: number | undefined = this.freeTop === 0 ? undefined : this.freeSlots[--this.freeTop];
-    let evicted: CachedPage | null = null;
-    if (slotIdx === undefined) {
-      // Two bounded passes are sufficient: pass one clears reference bits;
-      // pass two selects the first unpinned resident page.
-      const limit = this.slots.length * 2;
-      for (let scanned = 0; scanned < limit; scanned++) {
-        const candidate = this.clockHand;
-        this.clockHand = (this.clockHand + 1) % this.slots.length;
-        const page = this.slots[candidate];
-        if (this.slotActive[candidate] === 0 || this.reserved[candidate] !== 0 || page.pinned) continue;
-        if (this.referenced[candidate] !== 0) {
-          this.referenced[candidate] = 0;
-          continue;
-        }
-        slotIdx = candidate;
-        evicted = page;
-        this.slotByKey.delete(page.cacheKey);
-        this.slotActive[candidate] = 0;
-        this.usedCount--;
-        break;
-      }
-    }
-    if (slotIdx === undefined) throw new Error('No evictable VT atlas slot');
-    this.reserved[slotIdx] = 1;
-    this.acquireResult.slot = this.slotCoords[slotIdx];
-    this.acquireResult.evicted = evicted;
-    return this.acquireResult;
-  }
-  // @hot-no-alloc-end PageCache.acquire
-
-  /** Write page data into a slot and mark as resident. */
-  commit(req: CachedPage, slot: PageSlot, data: Uint8Array) {
-    const rows = this.format === FORMAT_RGBA ? SLOT_SIZE : SLOT_BLOCKS_Y;
-    const dstXBytes = this.format === FORMAT_RGBA
-      ? slot.x * SLOT_SIZE * 4
-      : slot.x * SLOT_BLOCKS_X * (this.slotBytesPerRow / SLOT_BLOCKS_X);
-    const dstY = this.format === FORMAT_RGBA ? slot.y * SLOT_SIZE : slot.y * SLOT_BLOCKS_Y;
-
-    for (let row = 0; row < rows; row++) {
-      const srcOffset = row * this.slotBytesPerRow;
-      const dstOffset = (dstY + row) * this.atlasBytesPerRow + dstXBytes;
-      this.atlas.set(data.subarray(srcOffset, srcOffset + this.slotBytesPerRow), dstOffset);
-    }
-
-    const slotIdx = slot.y * this.pagesX + slot.x;
-    if (this.reserved[slotIdx] === 0 || this.slotActive[slotIdx] !== 0)
-      throw new Error('VT slot commit without a unique reservation');
-    this.reserved[slotIdx] = 0;
-    this.referenced[slotIdx] = 1;
-    const resident = this.slots[slotIdx];
-    resident.textureId = req.textureId;
-    resident.path = req.path;
-    resident.mip = req.mip;
-    resident.x = req.x;
-    resident.y = req.y;
-    resident.tail = req.tail;
-    resident.pinned = req.pinned;
-    resident.cacheKey = req.cacheKey;
-    this.slotActive[slotIdx] = 1;
-    this.slotByKey.set(req.cacheKey, slotIdx);
-    this.usedCount++;
-    if (req.pinned) this.pinnedCount++;
-  }
-
-
-  /** Remove one committed unpinned page by numeric identity. */
-  evictByKey(cacheKey: number): CachedPage | null {
-    const index = this.slotByKey.get(cacheKey);
-    if (index === undefined) return null;
-    const page = this.slots[index];
-    if (this.slotActive[index] === 0 || page.pinned || this.reserved[index] !== 0) return null;
-    this.slotByKey.delete(cacheKey);
-    this.slotActive[index] = 0;
-    this.referenced[index] = 0;
-    this.usedCount--;
-    this.freeSlots[this.freeTop++] = index;
-    return page;
-  }
-
-  /** Remove every resident page owned by one virtual texture (structural path). */
-  removeTexture(path: string): void {
-    for (let index = 0; index < this.slots.length; index++) {
-      const page = this.slots[index];
-      if (this.slotActive[index] === 0 || page.path !== path) continue;
-      this.slotByKey.delete(page.cacheKey);
-      this.slotActive[index] = 0;
-      this.referenced[index] = 0;
-      this.usedCount--;
-      if (page.pinned) this.pinnedCount--;
-      this.freeSlots[this.freeTop++] = index;
-    }
-  }
-
-  get usedSlots(): number { return this.usedCount; }
-  get pinnedSlots(): number { return this.pinnedCount; }
-  get freeSlotCount(): number { return this.freeTop; }
-  get reservedSlots(): number {
-    let count = 0;
-    for (let i = 0; i < this.reserved.length; i++) if (this.reserved[i] !== 0) count++;
-    return count;
-  }
-  get totalSlots(): number { return this.pagesX * this.pagesY; }
-}
-
-// ============================================================================
-// Central VT upload tuning
-// ============================================================================
-
-/** Bootstrap-owned fixed storage for asynchronous VT page generations. */
-export interface VirtualTextureRuntimeCapacities {
-  maxPendingPages: number;
-  maxPendingBytes: number;
-}
-
-/** Bootstrap-only policy for bounded per-frame atlas/page-table commits. */
-export interface VirtualTextureTuningConfig {
-  minUploadsPerPoll: number;
-  baselineUploadsPerPoll: number;
-  maxUploadsPerPoll: number;
-  minUploadBudgetMs: number;
-  baselineUploadBudgetMs: number;
-  maxUploadBudgetMs: number;
-  uploadBudgetStepMs: number;
-  targetFrameMs: number;
-  overloadMultiplier: number;
-  overloadSamples: number;
-  sampleWindow: number;
-  stableWindowsBeforeProbe: number;
-  probeCooldownWindows: number;
-  /** Cap the physical atlas dimension (texels) below the device's
-   *  maxTextureDimension2D. Useful on iGPUs where the default (max 2D
-   *  dimension, e.g. 16384 -> ~1 GB atlas) blows the small VRAM carve-out
-   *  and saturates shared memory bandwidth. 0 = use device max. */
-  atlasMaxDimension?: number;
-}
-
-export const DEFAULT_VIRTUAL_TEXTURE_TUNING: Readonly<VirtualTextureTuningConfig> = {
-  minUploadsPerPoll: 1,
-  baselineUploadsPerPoll: 2,
-  maxUploadsPerPoll: 4,
-  minUploadBudgetMs: 0.10,
-  baselineUploadBudgetMs: 0.20,
-  maxUploadBudgetMs: 0.35,
-  uploadBudgetStepMs: 0.05,
-  targetFrameMs: 1000 / 60,
-  overloadMultiplier: 1.25,
-  overloadSamples: 2,
-  sampleWindow: 15,
-  stableWindowsBeforeProbe: 1,
-  probeCooldownWindows: 60,
-};
-
-/**
- * Central, allocation-free VT upload tuner. It discovers throughput only under
- * real backlog: after several clean windows it probes one bounded step above
- * the configured device caps. A repeated presentation miss rolls any promoted
- * setting back immediately to the independently validated baseline and applies
- * a cooldown, so powerful devices can climb while
- * weaker devices do not continuously oscillate around a failing cap.
- */
-export class VirtualTextureTuning {
-  readonly minUploadsPerPoll: number;
-  readonly baselineUploadsPerPoll: number;
-  readonly maxUploadsPerPoll: number;
-  readonly minUploadBudgetMs: number;
-  readonly baselineUploadBudgetMs: number;
-  readonly maxUploadBudgetMs: number;
-  readonly uploadBudgetStepMs: number;
-  readonly targetFrameMs: number;
-  readonly overloadFrameMs: number;
-  readonly overloadSamples: number;
-  readonly sampleWindow: number;
-  readonly stableWindowsBeforeProbe: number;
-  readonly probeCooldownWindows: number;
-  /** Physical atlas dimension cap (0 = device max). See VirtualTextureTuningConfig. */
-  readonly atlasMaxDimension: number;
-  uploadsPerPoll: number;
-  uploadBudgetMs: number;
-  bestSafeUploadsPerPoll: number;
-  bestSafeUploadBudgetMs: number;
-  private samples = 0;
-  private overloaded = 0;
-  private stableWindows = 0;
-  private cooldownWindows = 0;
-  private probing = false;
-  downshifts = 0;
-  recoveries = 0;
-  probes = 0;
-  probeRejections = 0;
-
-  constructor(config: Readonly<Partial<VirtualTextureTuningConfig>> = DEFAULT_VIRTUAL_TEXTURE_TUNING) {
-    const cfg: Readonly<VirtualTextureTuningConfig> = { ...DEFAULT_VIRTUAL_TEXTURE_TUNING, ...config };
-    const integers = [cfg.minUploadsPerPoll, cfg.baselineUploadsPerPoll,
-      cfg.maxUploadsPerPoll, cfg.overloadSamples, cfg.sampleWindow,
-      cfg.stableWindowsBeforeProbe, cfg.probeCooldownWindows];
-    if (integers.some(value => !Number.isInteger(value) || value < 1) ||
-        cfg.minUploadsPerPoll > cfg.baselineUploadsPerPoll ||
-        cfg.baselineUploadsPerPoll > cfg.maxUploadsPerPoll ||
-        !Number.isFinite(cfg.minUploadBudgetMs) || !Number.isFinite(cfg.baselineUploadBudgetMs) ||
-        !Number.isFinite(cfg.maxUploadBudgetMs) || cfg.minUploadBudgetMs <= 0 ||
-        cfg.minUploadBudgetMs > cfg.baselineUploadBudgetMs ||
-        cfg.baselineUploadBudgetMs > cfg.maxUploadBudgetMs ||
-        !Number.isFinite(cfg.uploadBudgetStepMs) || cfg.uploadBudgetStepMs <= 0 ||
-        !Number.isFinite(cfg.targetFrameMs) || cfg.targetFrameMs <= 0 ||
-        !Number.isFinite(cfg.overloadMultiplier) || cfg.overloadMultiplier <= 1)
-      throw new RangeError('invalid virtual-texture tuning configuration');
-    this.minUploadsPerPoll = cfg.minUploadsPerPoll;
-    this.baselineUploadsPerPoll = cfg.baselineUploadsPerPoll;
-    this.maxUploadsPerPoll = cfg.maxUploadsPerPoll;
-    this.minUploadBudgetMs = cfg.minUploadBudgetMs;
-    this.baselineUploadBudgetMs = cfg.baselineUploadBudgetMs;
-    this.maxUploadBudgetMs = cfg.maxUploadBudgetMs;
-    this.uploadBudgetStepMs = cfg.uploadBudgetStepMs;
-    this.targetFrameMs = cfg.targetFrameMs;
-    this.overloadFrameMs = cfg.targetFrameMs * cfg.overloadMultiplier;
-    this.overloadSamples = cfg.overloadSamples;
-    this.sampleWindow = cfg.sampleWindow;
-    this.stableWindowsBeforeProbe = cfg.stableWindowsBeforeProbe;
-    this.probeCooldownWindows = cfg.probeCooldownWindows;
-    this.atlasMaxDimension = cfg.atlasMaxDimension ?? 0;
-    this.uploadsPerPoll = cfg.baselineUploadsPerPoll;
-    this.uploadBudgetMs = cfg.baselineUploadBudgetMs;
-    this.bestSafeUploadsPerPoll = cfg.baselineUploadsPerPoll;
-    this.bestSafeUploadBudgetMs = cfg.baselineUploadBudgetMs;
-  }
-
-  private resetWindow(): void {
-    this.samples = 0;
-    this.overloaded = 0;
-  }
-
-  private lowerOneStep(): void {
-    if (this.uploadsPerPoll > this.minUploadsPerPoll) {
-      this.uploadsPerPoll--;
-    } else {
-      this.uploadBudgetMs = Math.max(this.minUploadBudgetMs, this.uploadBudgetMs - this.uploadBudgetStepMs);
-    }
-    this.bestSafeUploadsPerPoll = this.uploadsPerPoll;
-    this.bestSafeUploadBudgetMs = this.uploadBudgetMs;
-    this.downshifts++;
-  }
-
-  private probeOneStep(): boolean {
-    if (this.uploadsPerPoll < this.maxUploadsPerPoll) {
-      this.uploadsPerPoll++;
-    } else if (this.uploadBudgetMs < this.maxUploadBudgetMs) {
-      this.uploadBudgetMs = Math.min(this.maxUploadBudgetMs, this.uploadBudgetMs + this.uploadBudgetStepMs);
-    } else {
-      return false;
-    }
-    this.probing = true;
-    this.probes++;
-    return true;
-  }
-
-  // @hot-no-alloc-begin VirtualTextureTuning.recordFrameTime
-  recordFrameTime(frameMs: number, backlog: number): void {
-    if (!Number.isFinite(frameMs) || frameMs <= 0) {
-      this.stableWindows = 0;
-      this.resetWindow();
-      return;
-    }
-    // Preserve evidence across short empty gaps: gameplay streaming arrives in
-    // bursts, and resetting here prevented any burst from calibrating the cap.
-    if (backlog <= 0) return;
-    this.samples++;
-    if (frameMs > this.overloadFrameMs) this.overloaded++;
-    if (this.samples < this.sampleWindow) return;
-
-    if (this.overloaded >= this.overloadSamples) {
-      // The bootstrap baseline was independently validated. Any promoted cap
-      // that starts missing presentation deadlines abandons its whole probe
-      // ladder at once; only a failing baseline tightens one step further.
-      if (this.probing || this.uploadsPerPoll > this.baselineUploadsPerPoll ||
-          this.uploadBudgetMs > this.baselineUploadBudgetMs) {
-        this.uploadsPerPoll = this.baselineUploadsPerPoll;
-        this.uploadBudgetMs = this.baselineUploadBudgetMs;
-        this.bestSafeUploadsPerPoll = this.baselineUploadsPerPoll;
-        this.bestSafeUploadBudgetMs = this.baselineUploadBudgetMs;
-        this.probing = false;
-        this.probeRejections++;
-      } else {
-        this.lowerOneStep();
-      }
-      this.stableWindows = 0;
-      this.cooldownWindows = this.probeCooldownWindows;
-    } else if (this.overloaded === 0) {
-      if (this.probing) {
-        this.bestSafeUploadsPerPoll = this.uploadsPerPoll;
-        this.bestSafeUploadBudgetMs = this.uploadBudgetMs;
-        this.probing = false;
-        this.recoveries++;
-        this.stableWindows = 0;
-      } else if (this.cooldownWindows > 0) {
-        this.cooldownWindows--;
-        this.stableWindows = 0;
-      } else {
-        this.stableWindows++;
-        if (this.stableWindows >= this.stableWindowsBeforeProbe) {
-          this.probeOneStep();
-          this.stableWindows = 0;
-        }
-      }
-    } else {
-      this.stableWindows = 0;
-    }
-    this.resetWindow();
-  }
-  // @hot-no-alloc-end VirtualTextureTuning.recordFrameTime
-}
-
-export const VirtualTextureTuningRes = defineResource<VirtualTextureTuning>(
-  'virtualTextureTuning',
-  () => new VirtualTextureTuning(),
-);
-
-// ============================================================================
 // Virtual Texture Store
 // ============================================================================
 
@@ -877,13 +209,9 @@ export const VirtualTextureTuningRes = defineResource<VirtualTextureTuning>(
  * ALL sampled textures go through this store. The atlas and page table are
  * shared GPU textures. Each virtual texture has its own page table.
  *
- * Usage:
- *   const vt = VirtualTextureRes.get(world);
- *   const handle = vt.loadTexture('terrain');
- *   // handle.asset = shared atlas texture
- *   // handle.generation increments when pages are loaded/evicted
- *
- * The VT store reads page data from the .big file via the pageDataProvider.
+ * This is the physical pool behind `VirtualTextureSystem`; game code obtains
+ * generational system handles and never installs the pool as an ECS resource.
+ * The pool reads page data from the .big file via the pageDataProvider.
  * Pages are transcoded from Basis to the optimal GPU format on load.
  */
 export class VirtualTextureStore {
@@ -915,9 +243,6 @@ export class VirtualTextureStore {
 
   /** The shared page cache (atlas + fixed second-chance clock). */
   private cache: PageCache;
-
-  /** The asset loader (for reading page data from .big). */
-  private loader: { read(path: string, offset: number, len: number): Promise<Uint8Array>; poll(): void };
 
   /** Page data loader (returns raw page bytes for a given request). */
   private pageDataProvider?: PageDataProvider;
@@ -1013,7 +338,6 @@ export class VirtualTextureStore {
   };
 
   constructor(
-    loader: { read(path: string, offset: number, len: number): Promise<Uint8Array>; poll(): void },
     capacities: Readonly<VirtualTextureRuntimeCapacities>,
     pageDataProvider?: PageDataProvider,
     format?: number,
@@ -1021,7 +345,6 @@ export class VirtualTextureStore {
     tuning?: VirtualTextureTuning,
     private readonly telemetry?: EngineTelemetry,
   ) {
-    this.loader = loader;
     this.pageDataProvider = pageDataProvider;
     this.format = format ?? FORMAT_RGBA;
     this.device = device ?? null;
@@ -1073,7 +396,9 @@ export class VirtualTextureStore {
     this.readyUploads = new Array(this.maxPendingPages);
     for (let index = 0; index < this.readyUploads.length; index++) {
       const page = { path: '', mip: 0, x: 0, y: 0, pinned: false, cacheKey: 0 };
-      this.readyUploads[index] = { key: 0, generation: 0, page, req: page, data: new Uint8Array(0) };
+      this.readyUploads[index] = {
+        key: 0, generation: 0, page, req: page, data: new Uint8Array(0), lease: null,
+      };
     }
     this.feedbackScratch = new Array(schedulerCapacity + 1);
     this.feedbackScratchKeys = new FixedPageSlotMap(schedulerCapacity + 1);
@@ -1086,14 +411,17 @@ export class VirtualTextureStore {
       this.scheduledFree[this.scheduledFreeTop++] = index;
     }
 
-    // Create the shared atlas texture
-    if (this.format === FORMAT_RGBA) {
-      // Uncompressed: use DataTexture (simple, works everywhere)
+    // Create the shared atlas texture.
+    if (!isCompressedTextureFormat(this.format)) {
+      const data = this.format === FORMAT_R16F
+        ? new Uint16Array(this.cache.atlas.buffer)
+        : this.cache.atlas;
       this.atlasTexture = new THREE.DataTexture(
-        this.cache.atlas,
+        data,
         this.atlasWidth,
         this.atlasHeight,
-        THREE.RGBAFormat,
+        this.format === FORMAT_RGBA ? THREE.RGBAFormat : THREE.RedFormat,
+        this.format === FORMAT_R16F ? THREE.HalfFloatType : THREE.UnsignedByteType,
       );
       (this.atlasTexture as THREE.DataTexture).minFilter = THREE.LinearFilter;
       (this.atlasTexture as THREE.DataTexture).magFilter = THREE.LinearFilter;
@@ -1162,7 +490,7 @@ export class VirtualTextureStore {
    */
   loadTexture(
     path: string,
-    options?: { width?: number; height?: number; mipTail?: boolean },
+    options?: { width?: number; height?: number; mipTail?: boolean; textureId?: number },
   ): AssetHandle<THREE.Texture> {
     const width = options?.width ?? 4096;
     const height = options?.height ?? 4096;
@@ -1189,8 +517,11 @@ export class VirtualTextureStore {
     pageTableTexture.generateMipmaps = false;
     pageTableTexture.needsUpdate = true;
 
-    const textureId = this.nextTextureId++;
-    if (textureId > 0xffffffff) throw new Error('virtual texture ID space exhausted');
+    const textureId = options?.textureId ?? this.nextTextureId++;
+    if (!Number.isInteger(textureId) || textureId < 1 || textureId > 0xffffffff ||
+        this.entriesById[textureId])
+      throw new Error('virtual texture ID is invalid, exhausted, or already registered');
+    this.nextTextureId = Math.max(this.nextTextureId, textureId + 1);
     const entry: VirtualTextureEntry = {
       textureId,
       path,
@@ -1440,13 +771,20 @@ export class VirtualTextureStore {
     );
     // `req` may be a reusable scheduler scratch record. `page` is the owned
     // immutable copy retained for this asynchronous generation.
-    this.pageDataProvider(path, page, controller.signal).then(data => {
+    this.pageDataProvider(path, page, controller.signal).then(result => {
+      const lease = result instanceof Uint8Array ? null : result;
+      const data = result instanceof Uint8Array ? result : result.bytes;
       if (data.byteLength !== this.cache.slotDataSize) {
+        lease?.release();
         throw new RangeError(`VT page ${key} has ${data.byteLength} bytes; expected ${this.cache.slotDataSize}`);
       }
       const pending = this.getPending(key);
-      if (!pending || pending.generation !== generation) return;
+      if (!pending || pending.generation !== generation) {
+        lease?.release();
+        return;
+      }
       if (pending.canceled) {
+        lease?.release();
         this.telemetry?.trace.asyncEnd(EngineTraceDescriptor.VtPageLoad, key, 0, 2);
         this.deletePending(key);
         return;
@@ -1456,6 +794,7 @@ export class VirtualTextureStore {
       this.totalLoadMs += loadMs;
       this.maxLoadMs = Math.max(this.maxLoadMs, loadMs);
       if (!pending.page.pinned && this.feedbackEpoch - pending.lastSeen >= this.staleFeedbackEpochs) {
+        lease?.release();
         this.telemetry?.trace.asyncEnd(EngineTraceDescriptor.VtPageLoad, key, 0, 3);
         this.deletePending(key);
         this.staleCancellations++;
@@ -1464,14 +803,17 @@ export class VirtualTextureStore {
       // Completion can happen at any point between frames. Defer atlas and
       // page-table writes to poll() so a fast worker cannot burst dozens of
       // GPU queue submissions into one presentation interval.
-      if (this.readyUploadCount >= this.readyUploads.length)
+      if (this.readyUploadCount >= this.readyUploads.length) {
+        lease?.release();
         throw new Error('VT ready-upload ring capacity exceeded');
-      const ready = this.readyUploads[this.readyUploadTail];
+      }
+      const ready = this.readyUploads[this.readyUploadTail]!;
       ready.key = key;
       ready.generation = generation;
       ready.page = page;
       ready.req = page;
       ready.data = data;
+      ready.lease = lease;
       this.readyUploadTail = (this.readyUploadTail + 1) % this.readyUploads.length;
       this.readyUploadCount++;
       this.telemetry?.metrics.counterAdd(EngineMetric.VtPagesLoaded, 1);
@@ -2049,6 +1391,8 @@ export class VirtualTextureStore {
     this.gpuPageTables.clear();
     this.gpuAtlasTexture = null;
     this.device = null;
+    for (let index = 0; index < this.readyUploads.length; index++)
+      this.releaseReadyPayload(this.readyUploads[index]!);
     this.readyUploadCount = 0;
     this.readyUploadHead = 0;
     this.readyUploadTail = 0;
@@ -2062,6 +1406,27 @@ export class VirtualTextureStore {
   /** Resolve the stable ID emitted by the RG32Uint feedback pass. */
   getEntryById(textureId: number): VirtualTextureEntry | undefined {
     return this.entriesById[textureId >>> 0] ?? undefined;
+  }
+
+  /**
+   * Atomically refresh an already-resident page in its existing physical slot.
+   * Nonresident pages remain source-backed and will observe the new content on
+   * their next ordinary demand. Callers must bound generation and invocation.
+   */
+  replaceResidentPage(path: string, request: Readonly<PageRequest>, data: Uint8Array): boolean {
+    const entry = this.entries.get(path);
+    if (!entry) return false;
+    const key = packedPageIdentity(entry.textureId, request);
+    const slot = this.cache.replaceByKey(key, data);
+    if (!slot) return false;
+    this.writePage(slot, data);
+    this.completedUploads++;
+    return true;
+  }
+
+  isPagePending(path: string, request: Readonly<PageRequest>): boolean {
+    const entry = this.entries.get(path);
+    return entry ? this.pendingByKey.get(packedPageIdentity(entry.textureId, request)) !== undefined : false;
   }
 
   /**
@@ -2084,9 +1449,12 @@ export class VirtualTextureStore {
           origin: { x: slot.x * SLOT_SIZE, y: slot.y * SLOT_SIZE },
         },
         uploadData,
-        this.format === FORMAT_RGBA
-          ? { bytesPerRow: SLOT_SIZE * 4, rowsPerImage: SLOT_SIZE }
-          : { bytesPerRow: this.cache.slotBytesPerRow, rowsPerImage: SLOT_BLOCKS_Y },
+        isCompressedTextureFormat(this.format)
+          ? { bytesPerRow: this.cache.slotBytesPerRow, rowsPerImage: SLOT_BLOCKS_Y }
+          : {
+              bytesPerRow: SLOT_SIZE * uncompressedBytesPerTexel(this.format),
+              rowsPerImage: SLOT_SIZE,
+            },
         { width: SLOT_SIZE, height: SLOT_SIZE },
       );
     } else {
@@ -2094,6 +1462,11 @@ export class VirtualTextureStore {
       // pages use the same queue.writeTexture subregion path above.
       this.atlasTexture.needsUpdate = true;
     }
+  }
+
+  private releaseReadyPayload(ready: ReadyPageUpload): void {
+    ready.lease?.release();
+    ready.lease = null;
   }
 
   /** Frame whose later render pass can first sample pages published by poll(). */
@@ -2110,27 +1483,33 @@ export class VirtualTextureStore {
 
   /** Poll workers and commit a bounded number of completed uploads per frame. */
   poll() {
-    this.loader.poll();
     const deadline = performance.now() + this.tuning.uploadBudgetMs;
     for (let count = 0; count < this.tuning.uploadsPerPoll && this.readyUploadCount !== 0; count++) {
       if (count !== 0 && performance.now() >= deadline) {
         this.uploadBudgetExhaustions++;
         break;
       }
-      const ready = this.readyUploads[this.readyUploadHead];
+      const ready = this.readyUploads[this.readyUploadHead]!;
       this.readyUploadHead = (this.readyUploadHead + 1) % this.readyUploads.length;
       this.readyUploadCount--;
       const pending = this.getPending(ready.key);
-      if (!pending || pending.generation !== ready.generation) continue;
+      if (!pending || pending.generation !== ready.generation) {
+        this.releaseReadyPayload(ready);
+        continue;
+      }
       if (pending.canceled) {
         this.deletePending(ready.key);
+        this.releaseReadyPayload(ready);
         continue;
       }
       this.deletePending(ready.key);
       const textureId = ready.page.textureId ?? 0;
       const entry = this.entriesById[textureId];
       const pageTable = this.pageTablesById[textureId];
-      if (!entry || !pageTable || (ready.req.tail ? isResident(entry.tailEntry) : pageTable.isResident(ready.req))) continue;
+      if (!entry || !pageTable || (ready.req.tail ? isResident(entry.tailEntry) : pageTable.isResident(ready.req))) {
+        this.releaseReadyPayload(ready);
+        continue;
+      }
 
       const uploadStartedAt = performance.now();
       this.telemetry?.trace.spanBegin(
@@ -2147,6 +1526,7 @@ export class VirtualTextureStore {
       } catch {
         this.telemetry?.trace.spanEnd(EngineTraceDescriptor.VtUpload, ready.key, 0, 1);
         this.rejectedAdmissions++;
+        this.releaseReadyPayload(ready);
         continue;
       }
 
@@ -2175,6 +1555,7 @@ export class VirtualTextureStore {
       this.completedUploads++;
       this.totalUploadMs += uploadMs;
       this.maxUploadMs = Math.max(this.maxUploadMs, uploadMs);
+      this.releaseReadyPayload(ready);
     }
     this.schedulePendingRequests();
   }
@@ -2287,291 +1668,3 @@ export class VirtualTextureStore {
   }
   // @hot-no-alloc-end VirtualTextureStore.getStats
 }
-
-// ============================================================================
-// ECS Resource
-// ============================================================================
-
-export const VirtualTextureRes = defineResource<VirtualTextureStore>('virtualTexture', () => {
-  throw new Error('VirtualTextureStore not initialized. Set it with explicit runtime capacities during bootstrap.');
-});
-
-// ============================================================================
-// WGSL Shaders (for the material system)
-// ============================================================================
-
-/**
- * The VT sampling shader. Override material.colorNode with this.
- *
- * Source: [SHLOM] material.frag, validated in prototype.
- * Uses wgslFn() for pure WGSL — TSL handles binding plumbing.
- */
-export const VT_SAMPLE_WGSL = /* wgsl */ `
-fn vtSample(
-  pageTable: texture_2d<u32>,
-  atlas: texture_2d<f32>,
-  atlasSampler: sampler,
-  uv: vec2f,
-  virtualSize: vec2f,
-  pageGrid: vec2f,
-  pageSize: f32,
-  pageBorder: f32,
-  atlasSize: vec2f,
-  maxMip: f32,
-  textureMaxMip: f32,
-  mipBias: f32,
-  filterMode: u32,
-  addressMode: u32
-) -> vec4f {
-  // 0 = clamp, 1 = repeat, 2 = mirrored repeat.
-  var addressed_uv = clamp(uv, vec2f(0.0), vec2f(0.99999994));
-  if (addressMode == 1u) {
-    addressed_uv = fract(uv);
-  } else if (addressMode == 2u) {
-    let period = uv - floor(uv * 0.5) * 2.0;
-    addressed_uv = select(period, 2.0 - period, period > vec2f(1.0));
-    addressed_uv = clamp(addressed_uv, vec2f(0.0), vec2f(0.99999994));
-  }
-
-  // Compute desired mip level from the original continuous derivatives.
-  let dx = dpdx(uv * virtualSize);
-  let dy = dpdy(uv * virtualSize);
-  let texel_footprint = max(dot(dx, dx), dot(dy, dy));
-  let mip_float = clamp(
-    0.5 * log2(max(texel_footprint, 1e-8)) + mipBias,
-    0.0,
-    textureMaxMip
-  );
-  let desired_level = i32(mip_float);
-
-  // Mips below 128x128 share one pinned physical slot. The entry is stored in
-  // the otherwise-unused x=1 texel of the terminal page-table row.
-  if (desired_level > i32(maxMip)) {
-    var tail_offset = 0.0;
-    for (var level = 0; level < i32(maxMip); level = level + 1) {
-      tail_offset += max(1.0, ceil(pageGrid.y / exp2(f32(level))));
-    }
-    let tail_entry = textureLoad(pageTable, vec2i(1, i32(tail_offset)), 0).r;
-    if ((tail_entry & 1u) != 0u) {
-      let delta = desired_level - i32(maxMip);
-      var rect_origin = vec2f(0.0);
-      if (delta == 2) { rect_origin = vec2f(72.0, 0.0); }
-      else if (delta == 3) { rect_origin = vec2f(112.0, 0.0); }
-      else if (delta == 4) { rect_origin = vec2f(72.0, 40.0); }
-      else if (delta == 5) { rect_origin = vec2f(88.0, 40.0); }
-      else if (delta == 6) { rect_origin = vec2f(100.0, 40.0); }
-      else if (delta >= 7) { rect_origin = vec2f(110.0, 40.0); }
-      let tail_size = max(vec2f(1.0), floor(virtualSize / exp2(f32(desired_level))));
-      let tail_x = (tail_entry >> 1) & 0xFFu;
-      let tail_y = (tail_entry >> 9) & 0xFFu;
-      let slot_origin = vec2f(f32(tail_x), f32(tail_y)) * (pageSize + pageBorder * 2.0);
-      let tail_texel = slot_origin + rect_origin + pageBorder + addressed_uv * tail_size;
-      let tail_uv = tail_texel / atlasSize;
-      let tail_scale = tail_size / atlasSize;
-      if (filterMode == 1u) {
-        return textureLoad(atlas, vec2i(clamp(floor(tail_texel), vec2f(0.0), atlasSize - 1.0)), 0);
-      }
-      return textureSampleGrad(atlas, atlasSampler, tail_uv, dpdx(uv) * tail_scale, dpdy(uv) * tail_scale);
-    }
-  }
-
-  var mip_level = min(desired_level, i32(maxMip));
-  let max_level = i32(maxMip);
-
-  // Walk from desired mip up, looking for resident page
-  var is_resident = false;
-  var entry = 0u;
-  var curr_page_grid = vec2f(0.0);
-  var curr_mip_size = virtualSize;
-  var page_coords = vec2i(0);
-
-  for (var m = mip_level; m <= max_level; m = m + 1) {
-    let mip_scale = exp2(-f32(m));
-    curr_page_grid = max(ceil(pageGrid * mip_scale), vec2f(1.0));
-    curr_mip_size = max(floor(virtualSize * mip_scale), vec2f(1.0));
-    page_coords = vec2i(min(floor(addressed_uv * curr_mip_size / pageSize), curr_page_grid - 1.0));
-    var mip_offset = 0.0;
-    for (var level = 0; level < m; level = level + 1) {
-      mip_offset += max(1.0, ceil(pageGrid.y / exp2(f32(level))));
-    }
-    entry = textureLoad(pageTable, vec2i(page_coords.x, page_coords.y + i32(mip_offset)), 0).r;
-    if ((entry & 1u) != 0u) {
-      is_resident = true;
-      mip_level = m;
-      break;
-    }
-  }
-
-  if (!is_resident) {
-    return vec4f(0.5, 0.5, 0.5, 1.0);
-  }
-
-  // Compute physical atlas UV
-  let physX = (entry >> 1) & 0xFFu;
-  let physY = (entry >> 9) & 0xFFu;
-  let local_texel = addressed_uv * curr_mip_size - vec2f(page_coords) * pageSize;
-  let page_origin = vec2f(f32(physX), f32(physY)) * (pageSize + pageBorder * 2.0);
-  let sample_texel = page_origin + pageBorder + local_texel;
-  let atlas_uv = sample_texel / atlasSize;
-
-  // Atlas-space gradients preserve anisotropy without allowing the GPU to
-  // derive across an unrelated neighboring physical slot.
-  let gradient_scale = curr_mip_size / atlasSize;
-  let atlas_dx = dpdx(uv) * gradient_scale;
-  let atlas_dy = dpdy(uv) * gradient_scale;
-  if (filterMode == 1u) {
-    return textureLoad(atlas, vec2i(clamp(floor(sample_texel), vec2f(0.0), atlasSize - 1.0)), 0);
-  }
-  return textureSampleGrad(atlas, atlasSampler, atlas_uv, atlas_dx, atlas_dy);
-}
-`;
-
-/** Select one channel's requested mip from stable base-UV derivatives. */
-export const VT_DESIRED_MIP_WGSL = /* wgsl */ `
-fn vtDesiredMip(
-  gradientUV: vec2f,
-  virtualSize: vec2f,
-  textureMaxMip: f32,
-  mipBias: f32
-) -> f32 {
-  let dx = dpdx(gradientUV * virtualSize);
-  let dy = dpdy(gradientUV * virtualSize);
-  let footprint = max(dot(dx, dx), dot(dy, dy));
-  return clamp(0.5 * log2(max(footprint, 1e-8)) + mipBias, 0.0, textureMaxMip);
-}
-`;
-
-/** Sample a displaced UV from one channel's requested level, walking to its own fallback. */
-export const VT_SAMPLE_FROM_LEVEL_WGSL = /* wgsl */ `
-fn vtSampleFromLevel(
-  pageTable: texture_2d<u32>, atlas: texture_2d<f32>, atlasSampler: sampler,
-  sampleUV: vec2f, gradientUV: vec2f,
-  virtualSize: vec2f, pageGrid: vec2f, pageSize: f32, pageBorder: f32,
-  atlasSize: vec2f, maxMip: f32, resolvedMip: f32, addressMode: u32
-) -> vec4f {
-  var addressedUV = clamp(sampleUV, vec2f(0.0), vec2f(0.99999994));
-  if (addressMode == 1u) {
-    addressedUV = fract(sampleUV);
-  } else if (addressMode == 2u) {
-    let period = sampleUV - floor(sampleUV * 0.5) * 2.0;
-    addressedUV = select(period, 2.0 - period, period > vec2f(1.0));
-    addressedUV = clamp(addressedUV, vec2f(0.0), vec2f(0.99999994));
-  }
-
-  let requested = i32(resolvedMip);
-  let maxLevel = i32(maxMip);
-  var entry = 0u;
-  var selected = -1;
-  var selectedPage = vec2i(0);
-  var selectedSize = vec2f(1.0);
-  if (requested <= maxLevel) {
-    for (var mip = max(0, requested); mip <= maxLevel; mip = mip + 1) {
-      let scale = exp2(-f32(mip));
-      let grid = max(ceil(pageGrid * scale), vec2f(1.0));
-      let mipSize = max(floor(virtualSize * scale), vec2f(1.0));
-      let page = vec2i(min(floor(addressedUV * mipSize / pageSize), grid - 1.0));
-      var offset = 0.0;
-      for (var level = 0; level < mip; level = level + 1) {
-        offset += max(1.0, ceil(pageGrid.y / exp2(f32(level))));
-      }
-      let candidate = textureLoad(pageTable, vec2i(page.x, page.y + i32(offset)), 0).r;
-      if ((candidate & 1u) != 0u) {
-        entry = candidate; selected = mip; selectedPage = page; selectedSize = mipSize;
-        break;
-      }
-    }
-  }
-
-  if (selected >= 0) {
-    let local = addressedUV * selectedSize - vec2f(selectedPage) * pageSize;
-    let origin = vec2f(f32((entry >> 1) & 0xFFu), f32((entry >> 9) & 0xFFu)) * (pageSize + pageBorder * 2.0);
-    let atlasUV = (origin + pageBorder + local) / atlasSize;
-    let gradientScale = selectedSize / atlasSize;
-    return textureSampleGrad(atlas, atlasSampler, atlasUV,
-      dpdx(gradientUV) * gradientScale, dpdy(gradientUV) * gradientScale);
-  }
-
-  var tailOffset = 0.0;
-  for (var level = 0; level < maxLevel; level = level + 1) {
-    tailOffset += max(1.0, ceil(pageGrid.y / exp2(f32(level))));
-  }
-  let tailEntry = textureLoad(pageTable, vec2i(1, i32(tailOffset)), 0).r;
-  if ((tailEntry & 1u) == 0u) { return vec4f(0.5, 0.5, 0.5, 1.0); }
-  let tailMip = max(maxLevel + 1, requested);
-  let delta = tailMip - maxLevel;
-  var rectOrigin = vec2f(0.0);
-  if (delta == 2) { rectOrigin = vec2f(72.0, 0.0); }
-  else if (delta == 3) { rectOrigin = vec2f(112.0, 0.0); }
-  else if (delta == 4) { rectOrigin = vec2f(72.0, 40.0); }
-  else if (delta == 5) { rectOrigin = vec2f(88.0, 40.0); }
-  else if (delta == 6) { rectOrigin = vec2f(100.0, 40.0); }
-  else if (delta >= 7) { rectOrigin = vec2f(110.0, 40.0); }
-  let tailSize = max(vec2f(1.0), floor(virtualSize / exp2(f32(tailMip))));
-  let slot = vec2f(f32((tailEntry >> 1) & 0xFFu), f32((tailEntry >> 9) & 0xFFu)) * (pageSize + pageBorder * 2.0);
-  let atlasUV = (slot + rectOrigin + pageBorder + addressedUV * tailSize) / atlasSize;
-  let gradientScale = tailSize / atlasSize;
-  return textureSampleGrad(atlas, atlasSampler, atlasUV,
-    dpdx(gradientUV) * gradientScale, dpdy(gradientUV) * gradientScale);
-}
-`;
-
-/**
- * The feedback shader. Renders to a low-res target, writing page IDs.
- *
- * Source: [SHLOM] feedback.frag, validated in prototype.
- */
-export const VT_FEEDBACK_WGSL = /* wgsl */ `
-fn vtFeedback(
-  sampleUV: vec2f,
-  gradientUV: vec2f,
-  feedbackPixelScale: vec2f,
-  virtualSize: vec2f,
-  pageGrid: vec2f,
-  maxMip: f32,
-  qualityBias: f32,
-  addressMode: u32,
-  textureId: u32,
-  viewDistance: f32,
-  cameraNear: f32,
-  cameraFar: f32
-) -> vec2u {
-  // Derivatives are measured per reduced-resolution feedback pixel. Convert
-  // them back to physical display-pixel derivatives before selecting a mip.
-  // Keeping gradientUV separate prevents repeat/POM discontinuities from
-  // corrupting the screen-space footprint.
-  let dx = dpdx(gradientUV * virtualSize) * feedbackPixelScale.x;
-  let dy = dpdy(gradientUV * virtualSize) * feedbackPixelScale.y;
-  let texel_footprint = max(dot(dx, dx), dot(dy, dy));
-  let mip_level = u32(clamp(0.5 * log2(max(texel_footprint, 1e-8)) + qualityBias, 0.0, maxMip));
-
-  var addressed_uv = clamp(sampleUV, vec2f(0.0), vec2f(0.99999994));
-  if (addressMode == 1u) {
-    addressed_uv = fract(sampleUV);
-  } else if (addressMode == 2u) {
-    let period = sampleUV - floor(sampleUV * 0.5) * 2.0;
-    addressed_uv = select(period, 2.0 - period, period > vec2f(1.0));
-    addressed_uv = clamp(addressed_uv, vec2f(0.0), vec2f(0.99999994));
-  }
-  let mip_scale = exp2(-f32(mip_level));
-  let curr_page_grid = max(ceil(pageGrid * mip_scale), vec2f(1.0));
-  let mip_size = max(floor(virtualSize * mip_scale), vec2f(1.0));
-  let page_coords = min(floor(addressed_uv * mip_size / 128.0), curr_page_grid - 1.0);
-
-  let safeNear = max(cameraNear, 1e-6);
-  let safeFar = max(cameraFar, safeNear + 1e-6);
-  let logRange = max(log2(safeFar / safeNear), 1e-6);
-  let normalizedDistance = clamp(
-    log2(max(viewDistance, safeNear) / safeNear) / logRange, 0.0, 1.0
-  );
-  let cameraCloseness = u32(round((1.0 - normalizedDistance) * 7.0));
-
-  // RG32Uint: word 0 carries valid + 3-bit camera closeness + 6-bit mip + 11-bit X/Y;
-  // word 1 carries the full virtual-texture identity.
-  let packed = 0x80000000u |
-               ((cameraCloseness & 0x7u) << 28) |
-               (mip_level & 0x3Fu) |
-               ((u32(page_coords.x) & 0x7FFu) << 6) |
-               ((u32(page_coords.y) & 0x7FFu) << 17);
-  return vec2u(packed, textureId);
-}
-`;

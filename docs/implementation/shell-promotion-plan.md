@@ -2,7 +2,9 @@
 
 > Status: active, updated 2026-07-26. `afterglow-shell` is the sole native host.
 > Asset-root loading and native asset/texture/mesh composition are implemented;
-> audio, packaging, diagnostics, and release evidence remain.
+> audio, packaging, diagnostics, and release evidence remain. Final lifecycle,
+> readiness, visual evidence, and deletion ordering are owned by
+> [`clean-unified-engine-convergence-plan.md`](clean-unified-engine-convergence-plan.md).
 
 ## Boundary
 

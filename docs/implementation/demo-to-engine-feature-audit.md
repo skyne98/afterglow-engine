@@ -408,7 +408,7 @@ to undeclared `texHandle` at line 227 when textures are not ready.
 This demo exercises a legacy/custom `AssetStore.loadModel` path rather than the
 new glTF scene path. Decide one architecture:
 
-- preferably delete the custom path and add a static-mesh `LodSet` produced by
+- preferably delete the custom path and add a `ModelLodBinding` produced by
   the offline pipeline, with fixed levels, error/coverage thresholds, residency
   policy, and a bounded selector integrated with render descriptors;
 - keep skinned simplification disabled until deformation-aware error exists;

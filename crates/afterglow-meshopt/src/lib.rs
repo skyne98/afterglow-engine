@@ -82,6 +82,21 @@ pub trait Meshopt {
         target_error: f32,
     ) -> RpcResult<Vec<u32>>;
 
+    /// Simplify against arbitrary continuous vertex attributes. `vertex_lock`
+    /// is empty or one byte per vertex and preserves discrete seams such as
+    /// incompatible skin-joint influence sets.
+    async fn simplify_with_attributes(
+        indices: Vec<u32>,
+        positions: Vec<f32>,
+        position_stride: u32,
+        attributes: Vec<f32>,
+        attribute_stride: u32,
+        attribute_weights: Vec<f32>,
+        vertex_lock: Vec<u8>,
+        target_index_count: u32,
+        target_error: f32,
+    ) -> RpcResult<Vec<u32>>;
+
     // --- Optimization ---
 
     /// Reorder triangles for GPU vertex cache efficiency (FIFO cache).
@@ -236,6 +251,55 @@ impl MeshoptServer for MeshoptWorker {
                 &uvs,
                 uv_stride as usize,
                 &weights,
+                target_index_count as usize,
+                target_error,
+            );
+            afterglow_rpc::encode(&simplified)
+        })
+    }
+
+    fn simplify_with_attributes(
+        &self,
+        indices: Vec<u32>,
+        positions: Vec<f32>,
+        position_stride: u32,
+        attributes: Vec<f32>,
+        attribute_stride: u32,
+        attribute_weights: Vec<f32>,
+        vertex_lock: Vec<u8>,
+        target_index_count: u32,
+        target_error: f32,
+    ) -> ServeFuture {
+        Box::pin(async move {
+            if position_stride == 0 || position_stride % 4 != 0 ||
+                attribute_stride == 0 || attribute_stride % 4 != 0
+            {
+                return Err(afterglow_rpc::RpcError::Server(
+                    "position and attribute strides must be positive multiples of four".into(),
+                ));
+            }
+            let position_components = position_stride as usize / 4;
+            let attribute_components = attribute_stride as usize / 4;
+            let vertex_count = positions.len() / position_components;
+            if positions.len() % position_components != 0 || attribute_components > 16 ||
+                attributes.len() != vertex_count * attribute_components ||
+                attribute_weights.len() != attribute_components ||
+                (!vertex_lock.is_empty() && vertex_lock.len() != vertex_count) ||
+                indices.len() % 3 != 0 || indices.iter().any(|&index| index as usize >= vertex_count) ||
+                target_index_count == 0 || target_index_count as usize > indices.len()
+            {
+                return Err(afterglow_rpc::RpcError::Server(
+                    "attribute-aware simplification inputs are invalid or inconsistent".into(),
+                ));
+            }
+            let (simplified, _, _) = safe::simplify_with_attributes_locked(
+                &indices,
+                &positions,
+                position_stride as usize,
+                &attributes,
+                attribute_stride as usize,
+                &attribute_weights,
+                &vertex_lock,
                 target_index_count as usize,
                 target_error,
             );

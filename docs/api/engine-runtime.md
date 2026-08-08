@@ -7,17 +7,39 @@ and render passes.
 
 ## Lifecycle
 
+Execution state remains:
+
 ```text
 Bootstrap -> Warmup -> GameplaySealed -> Running <-> Stopped -> Shutdown
 ```
 
+A separate observable readiness state is stricter:
+
+```text
+Bootstrap -> Warmup -> GameplaySealed -> Starting -> GameReady
+                                              \-> Suspended/Fatal -> Shutdown
+```
+
+`GameReady` requires one successful game update, one successful designated
+presentation pass in the same post-seal frame, every registered worker's required
+bootstrap publication to be complete, and zero recorded/dropped fatal diagnostics.
+For virtual textures this includes required startup residency. First surface
+presentation alone is not engine readiness.
+
 `EngineRuntime` constructs and owns one `EngineMemory`, one `FrameBudget`, one
 fixed `EngineDiagnostics`, a fixed worker-input table, and a fixed render-pass
-table. `EngineRuntime.forScene()` also constructs and owns the scene's
-`RenderAdapter` at an explicit entity capacity. The runtime eagerly installs
+table. `await EngineRuntime.forScene()` also constructs and owns the scene's
+`RenderAdapter` and `RendererHost` at explicit capacities. Demos never construct,
+attach, or register the renderer themselves. The runtime eagerly installs
 memory and budget resources in the adapter world through a `ResourceManifest`.
 
-During bootstrap, callers register worker inputs and render passes. Registration
+The scene constructor accepts `scene`, `camera`, renderer viewport/options,
+`maxOwnedResources`, and the normal memory/worker/pass capacities. Runtime-owned
+resources are admitted with `ownDisposable()` or `ownCloseable()`; `close()`
+unwinds them in reverse order before render passes and awaits asynchronous worker
+shutdown. A built-in page teardown listener invokes the same idempotent path.
+
+During bootstrap, engine subsystems register worker inputs and render passes. Registration
 returns:
 
 ```ts
@@ -25,10 +47,19 @@ enum RegistrationStatus {
   Registered,
   CapacityExceeded,
   RuntimeSealed,
+  PresentationAlreadyRegistered,
 }
 ```
 
-No registration storage grows. Late registration is rejected.
+No registration storage grows. Late registration is rejected. Exactly one pass
+must set `presentation = true`; duplicate ownership is rejected and sealing
+without a presentation pass fails before mutating sealed state.
+
+`createVirtualTextureFeedback(system, capacities)` atomically creates the one
+feedback coordinator, registers its worker/pass records, performs the first real
+atlas-initializing render during warm-up, attaches all pools, and owns physical
+feedback resize. Games only register their material bindings with the returned
+coordinator.
 
 Call `enterWarmup()`, then `await warm()`, then `sealGameplay()`. Sealing occurs
 in this order:
@@ -53,9 +84,15 @@ Each frame executes:
    synchronous `render()`; later passes share that identity, and no render
    promise is created per gameplay frame.
 
-A frame exception is stored in the bounded diagnostics ring and stops the loop.
-Stopping during update does not schedule another frame. `dispose()` is
-idempotent, disposes render passes in reverse order, disposes the adapter, and
+After the first complete frame, `readReadinessInto(out)` copies readiness stage,
+first update/presentation frame IDs, and fatal count into caller-owned output.
+On the native target the transition emits `op_afterglow_game_ready`; the shell's
+first-present readiness is reserved for explicit `--compat-three` runs. A frame exception, global page error/rejection, uncaptured GPU error, or device
+loss immediately invalidates readiness, enters `Fatal`, stops the loop, and
+installs one bounded fatal panel. Stopping during update enters `Suspended` and
+does not schedule another frame. `dispose()` is the synchronous bootstrap/test
+path. `await close()` is the normal path: it awaits closeable owners in reverse
+order, disposes synchronous owners and render passes, disposes the adapter, and
 moves memory/runtime to shutdown.
 
 ## Interfaces
@@ -67,6 +104,7 @@ interface EngineFrameClient {
 }
 
 interface EngineRenderPass {
+  readonly presentation?: boolean; // exactly one true
   warm?(): Promise<void>;
   seal?(): void;
   render(frame: Readonly<RenderFrame>): void;
@@ -93,5 +131,6 @@ cargo run -p xtask conformance
 ```
 
 The tests cover lifecycle transitions, deterministic order, fixed registration
-overflow, stable frame identity, stop-during-update, exception capture,
+overflow, unique presentation ownership, `GameReady` frame IDs, fatal readiness
+invalidation, stable frame identity, stop-during-update, exception capture,
 idempotent shutdown, and reverse pass disposal.

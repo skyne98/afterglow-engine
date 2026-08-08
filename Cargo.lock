@@ -130,6 +130,7 @@ dependencies = [
  "afterglow-meshopt",
  "afterglow-rpc",
  "afterglow-rpc-demo",
+ "afterglow-storage-worker",
  "afterglow-texture",
  "anyrender",
  "anyrender_vello",
@@ -162,6 +163,16 @@ dependencies = [
  "wgpu-core",
  "wgpu-types",
  "winit",
+]
+
+[[package]]
+name = "afterglow-storage-worker"
+version = "0.1.0"
+dependencies = [
+ "afterglow-rpc",
+ "afterglow-rpc-macros",
+ "async-executor",
+ "serde",
 ]
 
 [[package]]

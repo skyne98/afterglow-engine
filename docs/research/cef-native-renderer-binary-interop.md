@@ -2,17 +2,14 @@
 
 **Investigated:** 2026-07-21  
 **Target:** CEF/Chromium 149 (`cef` 149.3.0+149.0.6)  
-**Status:** selected direction; transport primitive implemented, native-service
-composition and live source-sorted provider wiring incomplete
+**Status:** historical evidence; CEF was removed in favor of `afterglow-shell`
 
-> **Implementation audit (2026-07-22):** the accepted benchmark explicitly
-> source-sorted page spans, but `BigAssetSession`'s live
-> `BoundedBulkReadQueue` currently preserves scheduler/admission order and does
-> not call the sorting helper. The browser bridge merges only ranges already
-> adjacent in the supplied order. It also reads `FsSource` directly rather than
-> forwarding service work through generated native clients, and CEF VT
-> transcoding still defaults to `texture.wasm` Web Workers. These are gaps
-> against the decision below; they do not revise it.
+> **Implementation update (2026-07-26):** the accepted benchmark explicitly
+> source-sorted page spans. The current `createSourceSortedPageReader()` shares
+> the immutable `VtPageDirectory`, while live `EngineAssets` intentionally
+> preserves admission order. Native VT now uses generated native clients and
+> source-backed OS texture workers; the CEF bridge described below no longer
+> exists in production.
 
 ## Question
 

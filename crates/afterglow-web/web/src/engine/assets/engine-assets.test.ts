@@ -4,7 +4,7 @@ import {
   type OwnedMeshOptimizer,
   type OwnedTextureTranscoder,
 } from './engine-assets.ts';
-import type { FetchRangeLoader } from './big-parser.ts';
+import type { FetchRangeLoader } from './asset-range.ts';
 
 function minimalContainer(dataOffset = 19): Uint8Array {
   const bytes = new Uint8Array(Math.max(19, dataOffset));
@@ -48,9 +48,9 @@ function optimizer(events: string[]): OwnedMeshOptimizer {
 }
 
 describe('EngineAssets', () => {
-  test('owns parsed header, fixed workers, raw loader, one VT store, and reverse shutdown', async () => {
+  test('owns parsed header, fixed workers, raw loader, model system, and reverse shutdown', async () => {
     const events: string[] = [];
-    const session = await EngineAssets.open({
+    const engineAssets = await EngineAssets.open({
       containerPath: 'scene.big',
       format: 4,
       workerCount: 2,
@@ -62,19 +62,33 @@ describe('EngineAssets', () => {
       async createTranscoder(index) { events.push(`open-${index}`); return worker(index, events); },
       async createMeshOptimizer() { events.push('open-mesh'); return optimizer(events); },
     });
-    expect(session.header.version).toBe(5);
-    expect(session.stats.workersStarted).toBe(2);
-    const assets = await session.createAssetStore(3, 2);
-    expect(assets.assetLoader).toBe(session.rawAssets);
-    await expect(session.createAssetStore()).rejects.toThrow('already created');
-    const store = session.createVirtualTextureStore();
-    expect(store).toBeDefined();
-    expect(() => session.createVirtualTextureStore()).toThrow('already created');
-    await session.close();
-    await session.close();
+    expect(engineAssets.container.header.version).toBe(5);
+    expect(engineAssets.stats.servicesStarted).toBe(2);
+    const assets = await engineAssets.createAssetStore(3, 2);
+    expect(assets.assetLoader).toBe(engineAssets.container.rawAssets);
+    await expect(engineAssets.createAssetStore()).rejects.toThrow('already created');
+    const models = await engineAssets.createModelSystem({
+      maxModels: 2, maxPendingOptimizations: 1, maxResidentCpuBytes: 1024,
+      completionsPerPoll: 1, ratios: [1, 0.5], targetError: 0.02,
+      geometryArena: { buckets: [{
+        slots: 2, maxVertices: 4, maxIndices: 6, maxGroups: 1, indexKind: 'u16',
+        attributes: [{ name: 'position', itemSize: 3, kind: 'f32' }], morphAttributes: [],
+      }] },
+    });
+    expect(models.activeModels).toBe(0);
+    await expect(engineAssets.createModelSystem({
+      maxModels: 1, maxPendingOptimizations: 1, maxResidentCpuBytes: 1,
+      completionsPerPoll: 1, ratios: [1], targetError: 0.02,
+      geometryArena: { buckets: [{
+        slots: 1, maxVertices: 3, maxIndices: 3, maxGroups: 1, indexKind: 'u16',
+        attributes: [{ name: 'position', itemSize: 3, kind: 'f32' }], morphAttributes: [],
+      }] },
+    })).rejects.toThrow('already created');
+    expect(engineAssets.stats.servicesStarted).toBe(3);
+    await engineAssets.close();
+    await engineAssets.close();
     expect(events).toEqual(['open-0', 'open-1', 'open-mesh', 'close-mesh', 'close-1', 'close-0']);
-    expect(session.stats.closed).toBe(true);
-    expect(() => session.createVirtualTextureStore()).toThrow('closed');
+    expect(engineAssets.stats.closed).toBe(true);
   });
 
   test('uses the bounded native worker manifest when no override is provided', async () => {
@@ -95,7 +109,7 @@ describe('EngineAssets', () => {
           return worker(index, events);
         },
       });
-      expect(assets.stats.workersStarted).toBe(2);
+      expect(assets.stats.servicesStarted).toBe(2);
       await assets.close();
       expect(events).toEqual(['open-0', 'open-1', 'close-1', 'close-0']);
     } finally {
@@ -131,16 +145,16 @@ describe('EngineAssets', () => {
 
   test('continues closing workers and reports the first close failure', async () => {
     const events: string[] = [];
-    const session = await EngineAssets.open({
+    const engineAssets = await EngineAssets.open({
       containerPath: 'scene.big', format: 4, workerCount: 2,
       transcodeQueueCapacity: 16, urgentBatchDeadlineMs: 1, focusBatchDeadlineMs: 16, peripheralBatchDeadlineMs: 64, maxPendingPages: 16, maxPendingBytes: 2 * 1024 * 1024, maxHeaderBytes: 1024,
       source: source(minimalContainer()),
       async createTranscoder(index) { return worker(index, events, index === 1); },
     });
-    await expect(session.close()).rejects.toThrow('close failure 1');
+    await expect(engineAssets.close()).rejects.toThrow('close failure 1');
     expect(events).toEqual(['close-1', 'close-0']);
-    expect(session.stats.closeErrors).toBe(1);
-    expect(session.stats.closed).toBe(true);
+    expect(engineAssets.stats.closeErrors).toBe(1);
+    expect(engineAssets.stats.closed).toBe(true);
   });
 
   test('validates mandatory capacities before I/O', async () => {

@@ -1,8 +1,14 @@
 import { describe, expect, test } from 'bun:test';
+import { createFetchRangeLoader } from './asset-range.ts';
+import { BigContainerAssetLoader } from './big-container-asset-loader.ts';
 import {
-  BigContainerAssetLoader, BoundedTranscoderPool, createFetchRangeLoader, createPageDataProvider, createPageRangeReader, findVTPageChunk,
-  getVirtualTextureDimensions, type BigHeader,
-} from './big-parser.ts';
+  findVTPageChunk,
+  getVirtualTextureDimensions,
+  type BigHeader,
+} from './big-format.ts';
+import { createSourceSortedPageReader } from './source-sorted-page-reader.ts';
+import { BoundedTranscoderPool } from './bounded-transcoder-pool.ts';
+import { createPageDataProvider } from './vt-page-provider.ts';
 import {
   EngineTraceDescriptor, ENGINE_METRIC_DESCRIPTORS, ENGINE_TRACE_DESCRIPTORS,
 } from '../telemetry/catalog.ts';
@@ -86,11 +92,10 @@ describe('.big v5 compact VT directories', () => {
   test('does not retain derived pages between nonresident provider calls', async () => {
     let reads = 0;
     const loader = {
-      async read(_path: string, _offset: number, size: number) {
+      async read(_offset: number, length: number) {
         reads++;
-        return new Uint8Array(size).fill(reads);
+        return new Uint8Array(length).fill(reads);
       },
-      async load() { return new Uint8Array(); }, async size() { return 0; },
     };
     const provider = createPageDataProvider(loader, header, [{
       async transcode() { throw new Error('raw pages do not transcode'); },
@@ -101,11 +106,18 @@ describe('.big v5 compact VT directories', () => {
     provider.close();
   });
 
+  test('keeps the routed source path authoritative over owned request metadata', async () => {
+    const loader = { async read(_offset: number, length: number) { return new Uint8Array(length); } };
+    const provider = createPageDataProvider(loader, header, [{
+      async transcode() { throw new Error('raw pages do not transcode'); },
+    }], 4, TEST_PIPELINE);
+    const ownedRequest = { mip: 0, x: 1, y: 0, path: 'virtual://generated' };
+    expect((await provider('terrain', ownedRequest)).byteLength).toBe(20);
+    provider.close();
+  });
+
   test('rejects invalid page-pipeline capacities and deadline ordering', () => {
-    const loader = {
-      async read() { return new Uint8Array(); }, async load() { return new Uint8Array(); },
-      async size() { return 0; },
-    };
+    const loader = { async read() { return new Uint8Array(); } };
     expect(() => createPageDataProvider(loader, header, [{
       async transcode() { return new Uint8Array(); },
     }], 4, { transcodeQueueCapacity: 0, urgentBatchDeadlineMs: 1, focusBatchDeadlineMs: 16, peripheralBatchDeadlineMs: 64 }))
@@ -125,24 +137,19 @@ describe('.big v5 compact VT directories', () => {
   });
 
   test('expands direct typed-array offsets once for runtime range reads', async () => {
-    const reads: Array<[string, number, number]> = [];
+    const reads: Array<[number, number]> = [];
     const loader = {
-      async read(path: string, offset: number, size: number) {
-        reads.push([path, offset, size]);
-        return new Uint8Array(size);
+      async read(offset: number, length: number) {
+        reads.push([offset, length]);
+        return new Uint8Array(length);
       },
-      async load() { return new Uint8Array(); },
-      async size() { return 0; },
     };
     const provider = createPageDataProvider(loader, header, [{
       async transcode() { throw new Error('raw pages do not transcode'); },
     }], 4, TEST_PIPELINE);
     expect((await provider('terrain', { mip: 0, x: 1, y: 0 })).byteLength).toBe(20);
     expect((await provider('terrain', { mip: 1, x: 0, y: 0, tail: true })).byteLength).toBe(30);
-    expect(reads).toEqual([
-      ['terrain.big', 110, 20],
-      ['terrain.big', 130, 30],
-    ]);
+    expect(reads).toEqual([[110, 20], [130, 30]]);
   });
 
   test('source-backed workers bypass JavaScript range reads for Basis pages', async () => {
@@ -160,7 +167,6 @@ describe('.big v5 compact VT directories', () => {
     let reads = 0;
     const loader = {
       async read() { reads++; throw new Error('native source bytes entered JavaScript'); },
-      async load() { return new Uint8Array(); }, async size() { return 0; },
     };
     const ranges: Array<[number, number, number]> = [];
     const worker = {
@@ -198,9 +204,9 @@ describe('.big v5 compact VT directories', () => {
     };
     const bulks: Array<Array<{ offset: number; length: number }>> = [];
     const loader = {
-      async read(_path: string, offset: number, size: number) {
-        const bytes = new Uint8Array(size);
-        for (let index = 0; index < size; index++) bytes[index] = (offset + index) & 0xff;
+      async read(offset: number, length: number) {
+        const bytes = new Uint8Array(length);
+        for (let index = 0; index < length; index++) bytes[index] = (offset + index) & 0xff;
         return bytes;
       },
       async readBulk(ranges: readonly { offset: number; length: number }[]) {
@@ -211,7 +217,6 @@ describe('.big v5 compact VT directories', () => {
           return bytes;
         });
       },
-      async load() { return new Uint8Array(); }, async size() { return 0; },
     };
     const provider = createPageDataProvider(loader, batchHeader, [{
       async transcode() { throw new Error('raw pages do not transcode'); },
@@ -252,12 +257,11 @@ describe('.big v5 compact VT directories', () => {
     }) as typeof setTimeout;
     const bulks: Array<readonly { offset: number; length: number }[]> = [];
     const loader = {
-      async read(_path: string, _offset: number, size: number) { return new Uint8Array(size); },
+      async read(_offset: number, length: number) { return new Uint8Array(length); },
       async readBulk(ranges: readonly { offset: number; length: number }[]) {
         bulks.push(ranges);
         return ranges.map(range => new Uint8Array(range.length));
       },
-      async load() { return new Uint8Array(); }, async size() { return 0; },
     };
     const provider = createPageDataProvider(loader, batchHeader, [{
       async transcode() { throw new Error('raw pages do not transcode'); },
@@ -283,7 +287,7 @@ describe('.big v5 compact VT directories', () => {
     }
   });
 
-  test('PageRangeReader coalesces a shuffled batch into one read per row', async () => {
+  test('SourceSortedPageReader coalesces a shuffled batch into one read per row', async () => {
     const batchHeader: BigHeader = {
       version: 5, dataOffset: 64n,
       assets: [{
@@ -300,16 +304,16 @@ describe('.big v5 compact VT directories', () => {
         },
       }],
     };
-    const reads: Array<[string, number, number]> = [];
+    const reads: Array<[number, number]> = [];
     const loader = {
-      async read(path: string, offset: number, size: number) {
-        reads.push([path, offset, size]);
-        const buf = new Uint8Array(size);
-        for (let i = 0; i < size; i++) buf[i] = (offset + i) & 0xff;
+      async read(offset: number, length: number) {
+        reads.push([offset, length]);
+        const buf = new Uint8Array(length);
+        for (let i = 0; i < length; i++) buf[i] = (offset + i) & 0xff;
         return buf;
       },
     };
-    const reader = createPageRangeReader(loader, batchHeader, 4);
+    const reader = createSourceSortedPageReader(loader, batchHeader, 4);
     // Shuffled order: rows interleaved, non-monotonic x.
     const reqs = [
       { path: 'tiles', mip: 0, x: 3, y: 1 },
@@ -324,9 +328,9 @@ describe('.big v5 compact VT directories', () => {
     const out = await reader.readBatch(reqs);
     // Each row coalesces into exactly one 32-byte read → 2 reads total
     // (order is non-deterministic under concurrency; sort by offset).
-    expect([...reads].sort((a, b) => a[1] - b[1])).toEqual([
-      ['tiles.big', 200, 32],
-      ['tiles.big', 232, 32],
+    expect([...reads].sort((a, b) => a[0] - b[0])).toEqual([
+      [200, 32],
+      [232, 32],
     ]);
     expect(out).toHaveLength(8);
     // Correct per-page bytes in request order (offsets: row0=200,208,216,224; row1=232,240,248,256).
@@ -344,7 +348,7 @@ describe('.big v5 compact VT directories', () => {
     expect(s.runs).toBe(2);
   });
 
-  test('PageRangeReader sorts bulk spans but restores caller order', async () => {
+  test('SourceSortedPageReader sorts bulk spans but restores caller order', async () => {
     const batchHeader: BigHeader = {
       version: 5, dataOffset: 64n,
       assets: [{
@@ -358,13 +362,13 @@ describe('.big v5 compact VT directories', () => {
     };
     const bulks: Array<Array<{ offset: number; length: number }>> = [];
     const loader = {
-      async read(_path: string, _offset: number, size: number) { return new Uint8Array(size); },
-      async readBulk(_path: string, ranges: readonly { offset: number; length: number }[]) {
+      async read(_offset: number, length: number) { return new Uint8Array(length); },
+      async readBulk(ranges: readonly { offset: number; length: number }[]) {
         bulks.push(ranges.map(range => ({ ...range })));
         return ranges.map(range => new Uint8Array(range.length).fill(range.offset & 0xff));
       },
     };
-    const reader = createPageRangeReader(loader, batchHeader, 4);
+    const reader = createSourceSortedPageReader(loader, batchHeader, 4);
     const output = await reader.readBatch([
       { path: 'tiles', mip: 0, x: 3, y: 0 },
       { path: 'tiles', mip: 0, x: 0, y: 0 },
@@ -380,7 +384,7 @@ describe('.big v5 compact VT directories', () => {
     expect(output.map(bytes => bytes[0])).toEqual([224, 200, 216, 208]);
   });
 
-  test('PageRangeReader never mixes asset paths in one bulk request', async () => {
+  test('SourceSortedPageReader sorts all texture spans in one container', async () => {
     const makeAsset = (name: string, offset: bigint) => ({
       name, assetType: 'VirtualTexture' as const, chunks: [],
       virtualTexture: {
@@ -394,13 +398,13 @@ describe('.big v5 compact VT directories', () => {
       dataOffset: 64n,
       assets: [makeAsset('b', 100n), makeAsset('a', 200n)],
     };
-    const paths: string[] = [];
-    const reader = createPageRangeReader({
-      async read(_path: string, _offset: number, length: number) {
+    const bulks: Array<readonly { offset: number; length: number }[]> = [];
+    const reader = createSourceSortedPageReader({
+      async read(_offset: number, length: number) {
         return new Uint8Array(length);
       },
-      async readBulk(path: string, ranges: readonly { offset: number; length: number }[]) {
-        paths.push(path);
+      async readBulk(ranges: readonly { offset: number; length: number }[]) {
+        bulks.push(ranges);
         return ranges.map(range => new Uint8Array(range.length));
       },
     }, header, 2);
@@ -408,7 +412,10 @@ describe('.big v5 compact VT directories', () => {
       { path: 'b', mip: 0, x: 0, y: 0 },
       { path: 'a', mip: 0, x: 0, y: 0 },
     ]);
-    expect(paths.sort()).toEqual(['a.big', 'b.big']);
+    expect(bulks).toEqual([[
+      { offset: 100, length: 8 },
+      { offset: 200, length: 8 },
+    ]]);
   });
 });
 
@@ -449,7 +456,7 @@ describe('BoundedTranscoderPool', () => {
       ENGINE_TRACE_DESCRIPTORS,
       ENGINE_METRIC_DESCRIPTORS,
       new ArrayBuffer(TELEMETRY_RECORD_BYTES * 8),
-      new Float64Array(192),
+      new Float64Array(256),
       () => tick++,
     );
     telemetry.trace.arm(1);

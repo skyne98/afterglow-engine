@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { parseBigHeader } from '../../engine/assets/big-parser.ts';
+import { parseBigHeader } from '../../engine/assets/big-format.ts';
 
 const repository = new URL('../../../../../../', import.meta.url);
 
@@ -49,12 +49,12 @@ describe('pipeline-packed rigged VT demo', () => {
     expect(source).not.toContain('createTranscoder');
     expect(source).not.toContain('TextureClient');
     expect(source).not.toContain('Rpc.create(');
-    expect(source).toContain('await session.createAssetStore(4, 4)');
+    expect(source).toContain('await engineAssets.createAssetStore(4, 4)');
     expect(source).not.toContain('MeshoptClient');
     expect(source).toContain('assetStore.loadOptimizedGLTF(path, new GLTFLoader())');
     expect(source).toContain('await waitForPackedModel("model.glb")');
     expect(source).toContain('await waitForPackedModel("model-2.glb")');
-    expect(source).toContain('VirtualTextureFeedbackCoordinator(');
+    expect(source).toContain('runtime.createVirtualTextureFeedback(store');
     expect(source).toContain('VirtualGltfBinding.create(firstAsset');
     expect(source).toContain('VirtualGltfBinding.create(secondAsset');
     expect(source).toContain('new ModelPrimitives(MODEL_CAPACITY)');

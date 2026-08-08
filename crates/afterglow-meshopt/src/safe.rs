@@ -254,9 +254,40 @@ pub fn simplify_with_attributes(
     target_index_count: usize,
     target_error: f32,
 ) -> (Vec<u32>, usize, f32) {
-    let vertex_count = vertex_positions.len() / (vertex_positions_stride / 4);
+    simplify_with_attributes_locked(
+        indices, vertex_positions, vertex_positions_stride, vertex_attributes,
+        vertex_attributes_stride, attribute_weights, &[], target_index_count, target_error,
+    )
+}
+
+/// Attribute-aware simplification with optional per-vertex collapse locks.
+/// Locks preserve discontinuities such as incompatible skin-joint influence
+/// sets while continuous weights and morph deltas participate in error.
+pub fn simplify_with_attributes_locked(
+    indices: &[u32],
+    vertex_positions: &[f32],
+    vertex_positions_stride: usize,
+    vertex_attributes: &[f32],
+    vertex_attributes_stride: usize,
+    attribute_weights: &[f32],
+    vertex_lock: &[u8],
+    target_index_count: usize,
+    target_error: f32,
+) -> (Vec<u32>, usize, f32) {
+    assert!(vertex_positions_stride > 0 && vertex_positions_stride % 4 == 0);
+    assert!(vertex_attributes_stride > 0 && vertex_attributes_stride % 4 == 0);
+    let position_components = vertex_positions_stride / 4;
+    let attribute_components = vertex_attributes_stride / 4;
+    assert!(attribute_components <= 16);
+    assert_eq!(vertex_positions.len() % position_components, 0);
+    let vertex_count = vertex_positions.len() / position_components;
+    assert_eq!(vertex_attributes.len(), vertex_count * attribute_components);
+    assert_eq!(attribute_weights.len(), attribute_components);
+    assert!(vertex_lock.is_empty() || vertex_lock.len() == vertex_count);
+    assert!(indices.iter().all(|&index| (index as usize) < vertex_count));
     let mut out = vec![0u32; indices.len()];
     let mut result_error = 0.0f32;
+    let lock = if vertex_lock.is_empty() { std::ptr::null() } else { vertex_lock.as_ptr() };
     let actual = unsafe {
         ffi::meshopt_simplifyWithAttributes(
             out.as_mut_ptr(),
@@ -269,7 +300,7 @@ pub fn simplify_with_attributes(
             vertex_attributes_stride,
             attribute_weights.as_ptr(),
             attribute_weights.len(),
-            std::ptr::null(),
+            lock,
             target_index_count,
             target_error,
             ffi::meshopt_Simplify_None,

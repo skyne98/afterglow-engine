@@ -114,8 +114,12 @@ bypassing that partial coverage:
   rejects missing/stale entries, unknown JavaScript, inline authored scripts,
   unsafe paths, duplicate outputs, and false conformance claims.
 - `engine-conformance.json` records every visual entrypoint as `legacy` or
-  `canonical`; a conformant release cannot contain legacy entries or a debt
-  baseline.
+  `canonical` independently from release status. The repository is currently
+  `converging`; only a completed release may use `conformant`, which cannot
+  contain legacy entries or a debt baseline.
+- `convergence-deletions.json` records pending and removed convergence debt;
+  `check-convergence-deletions.ts` fails if removed paths return or an absent
+  pending item is not ratcheted to `removed`.
 - `lint-demo-architecture.ts` checks direct frame-loop ownership, lifecycle
   construction, VT feedback/BIG/POM/glTF replacement code, engine globals,
   private Three access, unbounded control collections, untyped callbacks, raw

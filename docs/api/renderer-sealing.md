@@ -22,8 +22,12 @@ compiles its scene/camera during runtime warm-up, implements `EngineRenderPass`,
 resets Three's counters and assigns `RenderFrame.frameId` at each external-loop
 frame boundary, and seals its `RendererSeal` when `EngineRuntime` seals
 registered passes.
-`attachVirtualTextureStore()` confines Three's private native-texture lookup to
-the host after one warm-up render. Initialization failure disposes
+`EngineRuntime.createVirtualTextureFeedback(system, capacities)` reserves the
+worker/pass records. During `runtime.warm()`, `RendererHost` performs the one
+real atlas-initializing render, attaches every internal format pool, and binds
+feedback resize to the physical canvas. Demos cannot call renderer attachment.
+Three's private native-texture lookup remains confined to the host, and physical
+stores never cross the public boundary. Initialization failure disposes
 the partially created renderer; `dispose()` is idempotent.
 
 `inspectShaderModulesDuring(operation, inspect)` is a bootstrap-only generated-

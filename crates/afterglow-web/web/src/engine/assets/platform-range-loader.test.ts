@@ -22,7 +22,7 @@ test('native JS-visible reads use bounded RPC-owned byte responses', async () =>
     ENGINE_TRACE_DESCRIPTORS,
     ENGINE_METRIC_DESCRIPTORS,
     new ArrayBuffer(40 * 32),
-    new Float64Array(192),
+    new Float64Array(256),
     () => 1,
   );
   telemetry.trace.arm(4);

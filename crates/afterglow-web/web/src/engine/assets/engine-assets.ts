@@ -1,8 +1,9 @@
+import type { FetchRangeLoader } from './asset-range.ts';
+import { getVirtualTextureDimensions } from './big-format.ts';
 import {
   createPageDataProvider,
-  type FetchRangeLoader,
   type VirtualTexturePageProvider,
-} from './big-parser.ts';
+} from './vt-page-provider.ts';
 import { BigContainer } from './big-container.ts';
 import { createPlatformRangeLoader } from './platform-range-loader.ts';
 import {
@@ -12,12 +13,16 @@ import {
 } from './platform-workers.ts';
 import { AssetStore } from './asset-store.ts';
 import { OwnedWorkerPool } from './owned-worker-pool.ts';
-import {
-  VirtualTextureStore, VirtualTextureTuning, type VirtualTextureRuntimeCapacities,
-} from '../virtual-texturing/virtual-texture.ts';
 import { EngineTelemetryCategory, EngineTraceDescriptor } from '../telemetry/catalog.ts';
 import type { EngineTelemetry } from '../telemetry/telemetry.ts';
 import type { OwnedMeshOptimizer, OwnedTextureTranscoder } from './service-types.ts';
+import { ModelSystem, type ModelSystemOptions } from '../presentation/model-system.ts';
+import {
+  VirtualTextureSystem,
+  type VirtualTextureHandle,
+  type VirtualTextureStorageFormat,
+  type VirtualTextureSystemOptions,
+} from '../virtual-texturing/virtual-texture-system.ts';
 
 export type { OwnedMeshOptimizer, OwnedTextureTranscoder } from './service-types.ts';
 
@@ -43,16 +48,17 @@ export interface EngineAssetsOptions {
 /** Public asset-system owner.
  *
  * `BigContainer` owns immutable format/index state, `OwnedWorkerPool` owns
- * service lifetime, and the VT store owns residency policy. This class only
+ * service lifetime, and `VirtualTextureSystem` owns residency policy. This class only
  * composes those public primitives and enforces reverse shutdown. */
 export class EngineAssets {
   readonly pageProvider: VirtualTexturePageProvider;
-  readonly stats = { workersStarted: 0, closeErrors: 0, closed: false };
+  readonly stats = { servicesStarted: 0, closeErrors: 0, closed: false };
 
   private closed = false;
   private assetStore: AssetStore | null = null;
   private meshOptimizer: OwnedMeshOptimizer | null = null;
-  private store: VirtualTextureStore | null = null;
+  private modelSystem: ModelSystem | null = null;
+  private textureSystem: VirtualTextureSystem | null = null;
 
   private constructor(
     readonly container: BigContainer,
@@ -60,23 +66,17 @@ export class EngineAssets {
     private readonly textureWorkers: OwnedWorkerPool<OwnedTextureTranscoder>,
     private readonly createMeshOptimizer: (() => Promise<OwnedMeshOptimizer>) | undefined,
     private readonly telemetry: EngineTelemetry | undefined,
-    private readonly vtCapacities: Readonly<VirtualTextureRuntimeCapacities>,
     pageProvider: VirtualTexturePageProvider,
   ) {
     this.pageProvider = pageProvider;
-    this.stats.workersStarted = textureWorkers.size;
+    this.stats.servicesStarted = textureWorkers.size;
   }
-
-  get source(): FetchRangeLoader { return this.container.source; }
-  get containerPath(): string { return this.container.path; }
-  get header() { return this.container.header; }
-  get rawAssets() { return this.container.rawAssets; }
 
   static async open(options: EngineAssetsOptions): Promise<EngineAssets> {
     const workerCount = validateOptions(options);
     const correlation = options.telemetry?.nextCorrelation(EngineTelemetryCategory.Asset) ?? 0;
     options.telemetry?.trace.asyncBegin(
-      EngineTraceDescriptor.SessionOpen, correlation, workerCount, 0,
+      EngineTraceDescriptor.AssetCompositionOpen, correlation, workerCount, 0,
     );
     const source = options.source ?? createPlatformRangeLoader('', options.telemetry);
     let workerPool: OwnedWorkerPool<OwnedTextureTranscoder> | null = null;
@@ -92,18 +92,8 @@ export class EngineAssets {
               index, container.path, options.telemetry,
             ),
       );
-      const containerLoader = {
-        load: (path: string): Promise<Uint8Array> => source.load(path),
-        size: (path: string): Promise<number> => source.size(path),
-        read: (_path: string, offset: number, length: number): Promise<Uint8Array> =>
-          source.read(container.path, offset, length),
-        readBulk: source.readBulk
-          ? (ranges: Parameters<NonNullable<FetchRangeLoader['readBulk']>>[1]): Promise<Uint8Array[]> =>
-              source.readBulk!(container.path, ranges)
-          : undefined,
-      };
       const pageProvider = createPageDataProvider(
-        containerLoader,
+        container.ranges,
         container.header,
         workerPool.workers,
         options.format,
@@ -117,12 +107,10 @@ export class EngineAssets {
       );
       const assets = new EngineAssets(
         container, options.format, workerPool,
-        options.createMeshOptimizer, options.telemetry,
-        { maxPendingPages: options.maxPendingPages, maxPendingBytes: options.maxPendingBytes },
-        pageProvider,
+        options.createMeshOptimizer, options.telemetry, pageProvider,
       );
       options.telemetry?.trace.asyncEnd(
-        EngineTraceDescriptor.SessionOpen, correlation, workerPool.size, 0,
+        EngineTraceDescriptor.AssetCompositionOpen, correlation, workerPool.size, 0,
       );
       return assets;
     } catch (error) {
@@ -131,10 +119,24 @@ export class EngineAssets {
         if (error instanceof Error && error.cause === undefined) error.cause = closeError;
       }
       options.telemetry?.trace.asyncEnd(
-        EngineTraceDescriptor.SessionOpen, correlation, workerPool?.size ?? 0, 1,
+        EngineTraceDescriptor.AssetCompositionOpen, correlation, workerPool?.size ?? 0, 1,
       );
       throw error;
     }
+  }
+
+  private async ensureMeshOptimizer(): Promise<OwnedMeshOptimizer> {
+    if (this.meshOptimizer) return this.meshOptimizer;
+    const optimizer = this.createMeshOptimizer
+      ? await this.createMeshOptimizer()
+      : await createPlatformMeshOptimizer(this.telemetry);
+    if (this.closed) {
+      await optimizer.close();
+      throw new Error('EngineAssets closed while creating its mesh processor');
+    }
+    this.meshOptimizer = optimizer;
+    this.stats.servicesStarted++;
+    return optimizer;
   }
 
   async createAssetStore(
@@ -142,52 +144,50 @@ export class EngineAssets {
     maxCompletionsPerPoll = 32,
   ): Promise<AssetStore> {
     if (this.closed) throw new Error('cannot create an asset store from closed EngineAssets');
-    if (this.assetStore || this.meshOptimizer)
-      throw new Error('EngineAssets already created its asset store');
-    const optimizer = this.createMeshOptimizer
-      ? await this.createMeshOptimizer()
-      : await createPlatformMeshOptimizer(this.telemetry);
-    if (this.closed) {
-      await optimizer.close();
-      throw new Error('EngineAssets closed while creating its asset store');
-    }
-    try {
-      this.assetStore = new AssetStore(
-        this.rawAssets, optimizer, capacity, maxCompletionsPerPoll, this.telemetry,
-      );
-      this.meshOptimizer = optimizer;
-      this.stats.workersStarted++;
-      return this.assetStore;
-    } catch (error) {
-      try { await optimizer.close(); }
-      catch (closeError) {
-        if (error instanceof Error && error.cause === undefined) error.cause = closeError;
-      }
-      throw error;
-    }
+    if (this.assetStore) throw new Error('EngineAssets already created its asset store');
+    const optimizer = await this.ensureMeshOptimizer();
+    this.assetStore = new AssetStore(
+      this.container.rawAssets, optimizer, capacity, maxCompletionsPerPoll, this.telemetry,
+    );
+    return this.assetStore;
   }
 
-  createVirtualTextureStore(
-    device?: GPUDevice,
-    tuning?: VirtualTextureTuning,
-  ): VirtualTextureStore {
-    if (this.closed) throw new Error('cannot create a VT store from closed EngineAssets');
-    if (this.store) throw new Error('EngineAssets already created its VT store');
-    const loader = {
-      read: (_path: string, offset: number, length: number): Promise<Uint8Array> =>
-        this.source.read(this.containerPath, offset, length),
-      poll(): void {},
-    };
-    this.store = new VirtualTextureStore(
-      loader,
-      this.vtCapacities,
-      this.pageProvider,
-      this.format,
-      device,
-      tuning ?? new VirtualTextureTuning(),
-      this.telemetry,
+  async createModelSystem(
+    options: Readonly<ModelSystemOptions>,
+  ): Promise<ModelSystem> {
+    if (this.closed) throw new Error('cannot create a model system from closed EngineAssets');
+    if (this.modelSystem) throw new Error('EngineAssets already created its model system');
+    const optimizer = await this.ensureMeshOptimizer();
+    this.modelSystem = new ModelSystem(optimizer, options, this.telemetry);
+    return this.modelSystem;
+  }
+
+  createVirtualTextureSystem(
+    options: Readonly<VirtualTextureSystemOptions>,
+  ): VirtualTextureSystem {
+    if (this.closed) throw new Error('cannot create a texture system from closed EngineAssets');
+    if (this.textureSystem)
+      throw new Error('EngineAssets already created its texture system');
+    const telemetry = options.telemetry ?? this.telemetry;
+    this.textureSystem = new VirtualTextureSystem(
+      telemetry ? { ...options, telemetry } : options,
     );
-    return this.store;
+    return this.textureSystem;
+  }
+
+  registerVirtualTexture(
+    sourceKey: string,
+    format: VirtualTextureStorageFormat,
+    addressMode: 'clamp' | 'repeat' | 'mirror-repeat',
+    mipTail = true,
+  ): VirtualTextureHandle | 0 {
+    if (!this.textureSystem) throw new Error('EngineAssets has no virtual texture system');
+    const dimensions = getVirtualTextureDimensions(this.container.header, sourceKey);
+    return this.textureSystem.createTexture(
+      { ...dimensions, format, addressMode, mipTail },
+      this.pageProvider,
+      sourceKey,
+    );
   }
 
   async close(): Promise<void> {
@@ -195,9 +195,11 @@ export class EngineAssets {
     this.closed = true;
     this.assetStore?.dispose();
     this.assetStore = null;
-    this.store?.dispose();
+    this.modelSystem?.dispose();
+    this.modelSystem = null;
+    this.textureSystem?.dispose();
+    this.textureSystem = null;
     this.pageProvider.close();
-    this.store = null;
     let firstError: unknown = null;
     if (this.meshOptimizer) {
       try { await this.meshOptimizer.close(); }

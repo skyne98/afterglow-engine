@@ -88,8 +88,9 @@ remain open. Do not paper over either gap by instantiating worker WASM. See
 | `afterglow-basis-encoder` | Offline-only official Basis Universal C++ UASTC encoder used by `afterglow-pipeline`; never linked into runtime or wasm crates. |
 | `afterglow-pipeline` | Offline cook: confines and embeds external glTF packages, packs self-contained GLBs, extracts images into paged/UASTC VTs, emits R16 displacement, and writes seekable `.big` v6 containers (the bundled Dungeon VT remains readable v5). |
 | `afterglow-assets-worker` | Asset loader worker: `#[rpc(worker = AssetLoaderWorker)]` with async `load`, `size`, and `read`. Uses the async `#[rpc]` poll model + `async-executor`. Native JS-visible reads use bounded ring payloads through a fixed `AssetSourceCache`; native Basis VT pages instead stay inside source-backed texture workers. Public web uses serving-layer Fetch + Range. |
+| `afterglow-storage-worker` | Generic native persistent-byte worker: bounded chunked `#[rpc(worker = BlobStorageWorker)]` transactions, two checksummed file generations, atomic pointer publication, and confined namespace/key paths. The native shell composes one real OS worker; public web uses the policy-equivalent OPFS backend. |
 | `afterglow-assets` | Shared asset-path/MIME helpers (`AssetRoot`, `decode_url_path`, `guess_mime`, `resolve`) for the native shell asset loader and web dev server. Plus policy-free streaming `AssetSource`, `FsSource`/`BytesSource`, fixed `AssetSourceCache`, generational `AssetSourceTable`, and range parsing. `FsSource` owns positional `pread`; this is the single FS confinement boundary. |
-| `afterglow-web` | Authored TypeScript runtime: shared-ring worker bridge, fixed runtime storage, packed-GLB AssetStore loading with rig-preserving runtime meshopt, VT sampling/feedback/material adapters, and demos. Plus the native COOP/COEP dev server. No longer hosts the transport wasm (that moved to `afterglow-rpc`). No wasm-bindgen. |
+| `afterglow-web` | Authored TypeScript runtime: shared-ring worker bridge, fixed runtime storage, generic disk/procedural/mutable-RAM VT sources and shader nodes, packed-GLB loading, and one deformation-aware meshopt LOD system for rigid/skinned/morphed models. Plus the native COOP/COEP dev server. No longer hosts the transport wasm (that moved to `afterglow-rpc`). No wasm-bindgen. |
 | `afterglow-shell` | The sole native Three.js/WebGPU runtime and native deployment target: rusty_v8 + Deno WebGPU, direct winit/wgpu presentation, LinkeDOM/Blitz browser environment, and Vello GPU HUD. Its generic registry exposes bootstrap-named native services; the application explicitly composes assets/texture/meshopt OS workers. Audio, packaging, and release gates remain. |
 | `latency-tool` | CDP-based input→present latency measurement. |
 | `xtask` | Build orchestrator: `build`, `wasm`, `check`, `test`, `bench`. |
@@ -501,6 +502,12 @@ All engine work must move toward these non-negotiable requirements:
   provisional 64 ms peripheral lane. Unit implementation is present; 32/48/64
   ms selection, RTX/680M profiles, and soaks remain open. No downstream mutable-
   priority framework is admitted without a measured failure of this KISS version.
+- `docs/implementation/unified-paged-resources-completion-plan.md` — approved
+  closure of the remaining model/texture work: bounded model GPU geometry,
+  generic cross-target blob persistence for mutable texture snapshots, cooked
+  rig/morph LOD records, allocation-free mutable page output, telemetry, demo
+  migration, and current web/native soaks. UPR-DEC-001–005 were accepted as
+  recommended on 2026-07-25.
 - `docs/implementation/comms-unification-plan.md` — current priority.
   Consolidates worker comms (split across `afterglow-rpc`, `afterglow-web`, and
   `afterglow-rpc-macros`, with the postcard codec hand-duplicated in TS) into one
@@ -547,6 +554,9 @@ All engine work must move toward these non-negotiable requirements:
   mdbook-mermaid --run "mdbook serve --open"`. Kept in sync with engine changes.
 - `docs/api/engine-memory.md` — sealed runtime phases, fixed arenas/pools,
   resource sealing, TypeScript artifact enforcement, and allocation linting.
+- `docs/api/persistent-blob-store.md` — generic bounded native/OPFS byte
+  persistence, atomic generations, capacities, telemetry, and mutable-texture
+  snapshot composition.
 - `docs/api/ring-buffer.md` — `afterglow-rpc` ring buffer + native transport
   (SPSC framing, owned halves, worker transport, events, poison/timeout).
 - `docs/api/rpc-macro.md` — `afterglow-rpc-macros` `#[rpc]` attribute: server/
@@ -568,8 +578,10 @@ All engine work must move toward these non-negotiable requirements:
 - `docs/api/telemetry.md` — unified fixed metrics and finite correlated traces, record/batch ABI, clocks, collection, export, TypeScript facade, and integration status.
 - `docs/api/hierarchy.md` — fixed linked topology and incremental double-buffered rebuild.
 - `docs/api/renderer-sealing.md` — descriptor pools, bounded renderer slices, warm-up, and pipeline seal.
-- `docs/api/virtual-texturing.md` — bounded VT residency, scheduling, shaders,
-  linked PBR materials, tuning, telemetry, and demos.
+- `docs/api/virtual-texturing.md` — generic disk/procedural/mutable-RAM texture
+  sources, format pools, shader nodes, bounded VT residency, tuning, and telemetry.
+- `docs/api/static-lod.md` — unified cooked/RAM model handles, deformation-aware
+  rigid/skinned/morphed meshopt LOD generation, revisions, and presentation binding.
 - `docs/api/pom.md` — bounded low-core POM, lossless resident R16 height fields,
   displaced VT fallback, Dungeon controls, and 680M validation.
 - `docs/api/relative-pointer.md` — raw relative pointer events and unadjusted

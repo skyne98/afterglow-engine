@@ -37,7 +37,7 @@ cargo run -p afterglow-shell
 Or pass an official Three.js HTML example:
 
 ```sh
-cargo run -p afterglow-shell -- \
+cargo run -p afterglow-shell -- --compat-three \
   /tmp/threejs/examples/webgpu_clearcoat.html
 ```
 
@@ -48,9 +48,27 @@ cargo run --release -p afterglow-shell -- \
   crates/afterglow-web/www/dungeon.html
 ```
 
+Diagnostic pages can capture the final native composition without creating a
+production readback path:
+
+```sh
+AFTERGLOW_CAPTURE_PATH=/tmp/dungeon.png \
+AFTERGLOW_WINDOW_WIDTH=1280 AFTERGLOW_WINDOW_HEIGHT=720 \
+  cargo run -p afterglow-shell -- \
+  crates/afterglow-web/www/diagnostic-dungeon.html
+```
+
+The host preallocates a fixed staging buffer before gameplay, captures only
+after 30 complete frames following strict `GameReady`, writes PNG on the
+diagnostic slow path, and exits with
+ordered GPU/V8/window teardown. Production launches omit the capture variable.
+
 The shell reads the document's import map and module script and executes them
-unchanged. OrbitControls, Inspector, asset loading, animation loops, HTML/CSS,
-and input all run against the native environment. After renderer readiness the
+unchanged. `--compat-three` explicitly selects the isolated arbitrary-Three.js
+profile, where first presentation is sufficient. Engine pages omit that flag
+and publish readiness only after `EngineRuntime` completes a post-seal game
+update and presentation with zero fatal diagnostics. OrbitControls, Inspector, asset loading, animation loops, HTML/CSS,
+and input all run against the native environment. After game readiness the
 host synchronizes the current physical window size once, so startup configure
 events cannot leave the game at its fallback dimensions. Pointer-locked relative
 motion is routed to the lock element rather than the hidden cursor's stale hit
@@ -62,7 +80,9 @@ await. winit presentation turns drive a fixed-capacity `requestAnimationFrame`
 queue, while deno_core is polled one bounded turn at a time. Top-level rAF
 awaits therefore progress without timers, source patches, or ignored runtime
 errors. The queue admits up to 1,024 callbacks per window and fails excess
-requests deterministically.
+requests deterministically. Presentation deadlines are anchored to the current
+host instant; repeated startup wakes cannot bank future intervals and leave the
+first gameplay frame stalled.
 
 The shell also exposes the explicitly admitted `scheduler.yield()` subset.
 Three.js uses it to split large `compileAsync()` workloads into deno/winit task

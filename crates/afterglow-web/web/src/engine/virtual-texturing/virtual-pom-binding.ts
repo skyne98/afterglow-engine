@@ -6,7 +6,11 @@ import {
   type VirtualPomMaterialOptions,
   type VirtualPomMaterialPair,
 } from './virtual-texture-material.ts';
-import type { VirtualMaterialSet, VirtualTextureStore } from './virtual-texture.ts';
+import {
+  RESOLVE_VIRTUAL_MATERIAL,
+  type VirtualTextureMaterialSet,
+  type VirtualTextureSystem,
+} from './virtual-texture-system.ts';
 
 interface PomRecord {
   readonly source: THREE.Mesh;
@@ -14,14 +18,22 @@ interface PomRecord {
   readonly pair: VirtualPomMaterialPair;
 }
 
+type VirtualPomPairFactory = (
+  textures: VirtualTextureSystem,
+  set: Readonly<VirtualTextureMaterialSet>,
+  heightTexture: THREE.Texture,
+  feedbackPixelScale: THREE.Vector2,
+  options?: Readonly<VirtualPomMaterialOptions>,
+) => VirtualPomMaterialPair;
+
 export interface VirtualPomSceneBindingOptions {
   camera: THREE.Camera;
-  store: VirtualTextureStore;
+  textures: VirtualTextureSystem;
   feedbackPixelScale: THREE.Vector2;
   capacity: number;
   material?: Readonly<VirtualPomMaterialOptions>;
   /** Test/tool injection; production uses the engine POM factory. */
-  createPair?: typeof createVirtualPomMaterialPair;
+  createPair?: VirtualPomPairFactory;
 }
 
 /** Fixed-capacity POM/base material and feedback owner for static meshes. */
@@ -43,14 +55,24 @@ export class VirtualPomSceneBinding implements FeedbackRenderable {
     this.records = new Array<PomRecord | null>(options.capacity).fill(null);
   }
 
-  add(mesh: THREE.Mesh, set: VirtualMaterialSet, heightTexture: THREE.Texture): VirtualPomMaterialPair {
+  add(
+    mesh: THREE.Mesh,
+    set: Readonly<VirtualTextureMaterialSet>,
+    heightTexture: THREE.Texture,
+  ): VirtualPomMaterialPair {
     if (this.sealed || this.disposed) throw new Error('cannot add to a sealed POM binding');
     if (this.count >= this.records.length) throw new RangeError('POM binding capacity exceeded');
     const source = mesh.material;
     if (Array.isArray(source)) throw new Error('POM binding requires one source material');
-    const runtime = Object.assign({}, THREE, TSL);
-    const pair = (this.options.createPair ?? createVirtualPomMaterialPair)(
-      runtime, this.options.store, set, heightTexture,
+    const pairFactory = this.options.createPair ?? ((textures, handles, height, pixelScale, material) => {
+      const runtime = Object.assign({}, THREE, TSL);
+      const resolved = textures[RESOLVE_VIRTUAL_MATERIAL](handles);
+      return createVirtualPomMaterialPair(
+        runtime, resolved.store, resolved.set, height, pixelScale, material,
+      );
+    });
+    const pair = pairFactory(
+      this.options.textures, set, heightTexture,
       this.options.feedbackPixelScale, this.options.material,
     );
     const feedback = new THREE.Mesh(mesh.geometry, pair.pomFeedbackMaterial);

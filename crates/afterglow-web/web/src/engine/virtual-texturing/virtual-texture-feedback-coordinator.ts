@@ -5,7 +5,7 @@ import {
   VirtualTextureFeedbackPass,
   type FeedbackTextureStore,
 } from './virtual-texture-feedback-pass.ts';
-import type { VirtualPageRequest } from './virtual-texture.ts';
+import type { VirtualPageRequest } from './virtual-texture-request.ts';
 import type { RenderFrame } from '../core/types.ts';
 import { PredictedFeedbackCamera } from './predicted-feedback-camera.ts';
 
@@ -46,12 +46,21 @@ interface CoordinatedFeedbackStore extends FeedbackTextureStore {
     mapCount: number,
   ): unknown;
   poll(): void;
+  isBootstrapReady?(): boolean;
 }
 
 interface RenderableSlot {
   renderable: FeedbackRenderable | null;
   predictor: PredictedFeedbackCamera | null;
   passOffset: number;
+}
+
+export interface VirtualTextureFeedbackOptions {
+  readonly renderables: number;
+  readonly passes: number;
+  readonly cadenceMs: number;
+  readonly predictionHorizonMs: number;
+  readonly scale?: number;
 }
 
 /** Fixed-capacity owner of feedback targets, snapshots, state, and atomic merge. */
@@ -97,17 +106,12 @@ export class VirtualTextureFeedbackCoordinator implements EngineRenderPass, Rend
   private lastRenderFrameId = -1;
   private sealed = false;
   private disposed = false;
+  private bootstrapPublicationReady = false;
 
   constructor(
     private readonly renderer: FeedbackRenderer,
     private readonly store: CoordinatedFeedbackStore,
-    capacities: {
-      renderables: number;
-      passes: number;
-      cadenceMs: number;
-      predictionHorizonMs: number;
-      scale?: number;
-    },
+    capacities: Readonly<VirtualTextureFeedbackOptions>,
   ) {
     if (!Number.isInteger(capacities.renderables) || capacities.renderables <= 0)
       throw new RangeError('feedback renderable capacity must be positive');
@@ -275,12 +279,16 @@ export class VirtualTextureFeedbackCoordinator implements EngineRenderPass, Rend
   /** @alloc-effect none */
   recordFrameTime(frameTimeMs: number): void { this.store.recordFrameTime(frameTimeMs); }
 
+  /** @alloc-effect none */
+  isBootstrapReady(): boolean { return this.bootstrapPublicationReady; }
+
   /** Worker-stage hook: publish only complete logical snapshots, then advance VT. */
   poll(): void {
     const started = performance.now();
     this.consumeCompletedSnapshot();
     this.store.setPublicationFrameId(this.lastRenderFrameId + 1);
     this.store.poll();
+    this.bootstrapPublicationReady = this.store.isBootstrapReady?.() ?? true;
     this.vtCpuUs = (performance.now() - started) * 1000;
   }
 

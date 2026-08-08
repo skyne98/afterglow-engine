@@ -113,97 +113,7 @@ async function fetchByteRanges(url, ranges) {
   return parseMultipartByteRanges(body, response.headers.get("content-type") ?? "", ranges);
 }
 
-// crates/afterglow-web/web/src/engine/core/resource.ts
-var RESOURCES = Symbol.for("afterglow-resources");
-var RESOURCES_SEALED = Symbol.for("afterglow-resources-sealed");
-function ensureStore(world) {
-  const w = world;
-  if (!w[RESOURCES])
-    w[RESOURCES] = {};
-  return w[RESOURCES];
-}
-
-class Resource {
-  name;
-  factory;
-  constructor(name, factory) {
-    this.name = name;
-    this.factory = factory;
-  }
-  get(world) {
-    const store = ensureStore(world);
-    if (!(this.name in store)) {
-      if (world[RESOURCES_SEALED] === true)
-        throw new Error(`resource ${this.name} was not initialized before gameplay seal`);
-      store[this.name] = this.factory();
-    }
-    return store[this.name];
-  }
-  set(world, value) {
-    ensureStore(world)[this.name] = value;
-  }
-  has(world) {
-    return this.name in ensureStore(world);
-  }
-  remove(world) {
-    delete ensureStore(world)[this.name];
-  }
-}
-function defineResource(name, factory) {
-  return new Resource(name, factory);
-}
-
-// crates/afterglow-web/web/src/engine/telemetry/telemetry.ts
-var TELEMETRY_RECORD_BYTES = 40;
-var TELEMETRY_RECORD_WORDS = TELEMETRY_RECORD_BYTES / 4;
-var TelemetryRes = defineResource("telemetry", () => {
-  throw new Error("Telemetry not initialized. Set TelemetryRes during bootstrap.");
-});
-
-// crates/afterglow-web/web/src/engine/telemetry/catalog.ts
-var ENGINE_TRACE_DESCRIPTORS = [
-  { category: 1 /* Frame */, categoryName: "frame", name: "frame", kind: 2 /* Span */, argument0: "frame_id", argument1: "delta_ns" },
-  { category: 2 /* Worker */, categoryName: "worker", name: "worker.poll", kind: 2 /* Span */, argument0: "stage", argument1: "elapsed_us" },
-  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.update", kind: 2 /* Span */, argument0: "stage", argument1: "elapsed_us" },
-  { category: 0 /* Runtime */, categoryName: "runtime", name: "structural.commands", kind: 2 /* Span */, argument0: "stage", argument1: "elapsed_us" },
-  { category: 0 /* Runtime */, categoryName: "runtime", name: "pose.batches", kind: 2 /* Span */, argument0: "stage", argument1: "elapsed_us" },
-  { category: 1 /* Frame */, categoryName: "frame", name: "render.prepare", kind: 2 /* Span */, argument0: "stage", argument1: "elapsed_us" },
-  { category: 0 /* Runtime */, categoryName: "runtime", name: "game.update", kind: 2 /* Span */, argument0: "frame_id" },
-  { category: 1 /* Frame */, categoryName: "frame", name: "render.passes", kind: 2 /* Span */, argument0: "frame_id" },
-  { category: 4 /* Asset */, categoryName: "asset", name: "asset.session.open", kind: 3 /* AsyncSpan */, argument0: "workers", argument1: "status" },
-  { category: 4 /* Asset */, categoryName: "asset", name: "asset.size", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "status" },
-  { category: 4 /* Asset */, categoryName: "asset", name: "asset.read", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "offset_or_status" },
-  { category: 4 /* Asset */, categoryName: "asset", name: "asset.read_bulk", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "spans" },
-  { category: 9 /* Rpc */, categoryName: "rpc", name: "rpc.call", kind: 3 /* AsyncSpan */, argument0: "method", argument1: "bytes" },
-  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.page_load", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "status" },
-  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.bulk_wait", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "tier" },
-  { category: 4 /* Asset */, categoryName: "asset", name: "asset.bulk_dispatch", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "spans" },
-  { category: 5 /* Texture */, categoryName: "texture", name: "texture.transcode_queue", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "format" },
-  { category: 5 /* Texture */, categoryName: "texture", name: "texture.transcode", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "format" },
-  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.upload", kind: 2 /* Span */, argument0: "bytes", argument1: "slot" },
-  { category: 4 /* Asset */, categoryName: "cache", name: "cache.read", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "hit" },
-  { category: 4 /* Asset */, categoryName: "cache", name: "cache.write", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "status" },
-  { category: 4 /* Asset */, categoryName: "asset", name: "mesh.optimize", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "status" },
-  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.feedback_detected", kind: 1 /* Instant */, argument0: "priority", argument1: "feedback_epoch" },
-  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.scheduler_wait", kind: 3 /* AsyncSpan */, argument0: "priority", argument1: "status" },
-  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.page_published", kind: 1 /* Instant */, argument0: "physical_slot", argument1: "eligible_frame_id" }
-];
-var ENGINE_METRIC_DESCRIPTORS = [
-  { category: 1 /* Frame */, categoryName: "frame", name: "frames", kind: 1 /* Counter */, unit: "count" },
-  { category: 1 /* Frame */, categoryName: "frame", name: "frame_delta_ns", kind: 4 /* HistogramLog2 */, unit: "nanoseconds" },
-  { category: 1 /* Frame */, categoryName: "frame", name: "frame_max_ns", kind: 3 /* Maximum */, unit: "nanoseconds" },
-  { category: 4 /* Asset */, categoryName: "asset", name: "asset_bytes_read", kind: 1 /* Counter */, unit: "bytes" },
-  { category: 4 /* Asset */, categoryName: "asset", name: "asset_read_ns", kind: 4 /* HistogramLog2 */, unit: "nanoseconds" },
-  { category: 9 /* Rpc */, categoryName: "rpc", name: "rpc_calls", kind: 1 /* Counter */, unit: "count" },
-  { category: 9 /* Rpc */, categoryName: "rpc", name: "rpc_duration_ns", kind: 4 /* HistogramLog2 */, unit: "nanoseconds" },
-  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt_pages_requested", kind: 1 /* Counter */, unit: "count" },
-  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt_pages_loaded", kind: 1 /* Counter */, unit: "count" },
-  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt_pages_failed", kind: 1 /* Counter */, unit: "count" },
-  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt_upload_ns", kind: 4 /* HistogramLog2 */, unit: "nanoseconds" },
-  { category: 5 /* Texture */, categoryName: "texture", name: "texture_transcode_ns", kind: 4 /* HistogramLog2 */, unit: "nanoseconds" }
-];
-
-// crates/afterglow-web/web/src/engine/assets/big-parser.ts
+// crates/afterglow-web/web/src/engine/assets/big-format.ts
 function decodeVarint(bytes, off) {
   let r = 0;
   for (let shift = 0;shift < 56; shift += 7) {
@@ -418,6 +328,8 @@ function findVTPageChunk(header, assetName, mip, pageX, pageY) {
     meta: { type: "VirtualTexturePage", mip, pageX, pageY, encoding: directory.encoding }
   };
 }
+
+// crates/afterglow-web/web/src/engine/assets/asset-range.ts
 async function readBigHeader(source, path, maxHeaderBytes) {
   if (!Number.isSafeInteger(maxHeaderBytes) || maxHeaderBytes < 16)
     throw new RangeError("BIG maxHeaderBytes must be at least 16");
@@ -480,79 +392,80 @@ function createFetchRangeLoader(baseUrl = "") {
   };
 }
 
-class BigContainerAssetLoader {
-  source;
-  containerPath;
-  assets = new Map;
-  constructor(source, containerPath, header) {
-    this.source = source;
-    this.containerPath = containerPath;
+// crates/afterglow-web/web/src/engine/assets/vt-page-directory.ts
+class VtPageDirectory {
+  textures = new Map;
+  constructor(header) {
     for (const asset of header.assets) {
-      if (asset.chunks.length !== 1 || asset.chunks[0].meta.type !== "Raw")
+      const source = asset.virtualTexture;
+      if (!source)
         continue;
-      const chunk = asset.chunks[0];
-      if (chunk.compression !== "None" || chunk.compressedSize !== chunk.uncompressedSize)
-        throw new Error(`raw BIG asset must be uncompressed: ${asset.name}`);
-      if (chunk.uncompressedSize > BigInt(Number.MAX_SAFE_INTEGER))
-        throw new RangeError(`raw BIG asset exceeds browser safe size: ${asset.name}`);
-      this.assets.set(asset.name, chunk);
-    }
-  }
-  chunk(path) {
-    const chunk = this.assets.get(path);
-    if (!chunk)
-      throw new Error(`raw BIG asset not found: ${path}`);
-    return chunk;
-  }
-  load(path) {
-    const chunk = this.chunk(path);
-    return this.source.read(this.containerPath, Number(chunk.offset), Number(chunk.uncompressedSize));
-  }
-  async size(path) {
-    return Number(this.chunk(path).uncompressedSize);
-  }
-  read(path, offset, length) {
-    const chunk = this.chunk(path);
-    const size = Number(chunk.uncompressedSize);
-    if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length < 0 || offset + length > size)
-      throw new RangeError(`raw BIG asset range exceeds ${path}: ${offset}+${length} > ${size}`);
-    return this.source.read(this.containerPath, Number(chunk.offset) + offset, length);
-  }
-  poll() {}
-}
-function expandVtDirectories(header) {
-  const directories = new Map;
-  for (let assetId = 0;assetId < header.assets.length; assetId++) {
-    const asset = header.assets[assetId];
-    const source = asset.virtualTexture;
-    if (!source)
-      continue;
-    let maxMip = 0;
-    for (const mip of source.mips)
-      maxMip = Math.max(maxMip, mip.mip);
-    const mips = new Array(maxMip + 1).fill(null);
-    for (const mip of source.mips) {
-      const sizes = Uint32Array.from(mip.pageSizes);
-      const offsets = new Float64Array(sizes.length);
-      let offset = Number(mip.offset);
-      for (let page = 0;page < sizes.length; page++) {
-        offsets[page] = offset;
-        offset += sizes[page];
+      let maxMip = 0;
+      for (const mip of source.mips)
+        maxMip = Math.max(maxMip, mip.mip);
+      const mips = new Array(maxMip + 1).fill(null);
+      for (const mip of source.mips) {
+        const sizes = Uint32Array.from(mip.pageSizes);
+        const offsets = new Float64Array(sizes.length);
+        let offset = Number(mip.offset);
+        for (let page = 0;page < sizes.length; page++) {
+          offsets[page] = offset;
+          offset += sizes[page] ?? 0;
+        }
+        mips[mip.mip] = {
+          pagesX: mip.pagesX,
+          pagesY: mip.pagesY,
+          offsets,
+          sizes
+        };
       }
-      mips[mip.mip] = { pagesX: mip.pagesX, pagesY: mip.pagesY, offsets, sizes };
+      this.textures.set(asset.name, {
+        encoding: source.encoding,
+        mips,
+        tailOffset: source.tail ? Number(source.tail.offset) : 0,
+        tailSize: source.tail?.size ?? 0
+      });
     }
-    directories.set(asset.name, {
-      assetId,
-      encoding: source.encoding,
-      mips,
-      tailOffset: source.tail ? Number(source.tail.offset) : 0,
-      tailSize: source.tail?.size ?? 0
-    });
   }
-  return directories;
+  resolve(address) {
+    const texture = this.textures.get(address.path);
+    if (!texture)
+      throw new Error(`VT directory not found: ${address.path}`);
+    let offset = 0;
+    let length = 0;
+    if (address.tail) {
+      offset = texture.tailOffset;
+      length = texture.tailSize;
+    } else {
+      const mip = texture.mips[address.mip];
+      if (!mip || address.x < 0 || address.y < 0 || address.x >= mip.pagesX || address.y >= mip.pagesY) {
+        throw new Error(`VT page out of range: ${address.path} mip=${address.mip} (${address.x},${address.y})`);
+      }
+      const page = address.y * mip.pagesX + address.x;
+      offset = mip.offsets[page] ?? 0;
+      length = mip.sizes[page] ?? 0;
+    }
+    if (length === 0) {
+      throw new Error(`VT page not found: ${address.path} mip=${address.mip} (${address.x},${address.y})`);
+    }
+    return {
+      path: address.path,
+      mip: address.mip,
+      x: address.x,
+      y: address.y,
+      tail: address.tail === true,
+      offset,
+      length,
+      encoding: texture.encoding
+    };
+  }
 }
-function createPageRangeReader(loader, header, readConcurrency = 16) {
-  const directories = expandVtDirectories(header);
+
+// crates/afterglow-web/web/src/engine/assets/source-sorted-page-reader.ts
+function createSourceSortedPageReader(loader, header, readConcurrency = 16) {
+  if (!Number.isInteger(readConcurrency) || readConcurrency < 1)
+    throw new RangeError("source-sorted page reader concurrency must be positive");
+  const directory = new VtPageDirectory(header);
   let reads = 0, totalReadMs = 0, maxReadMs = 0;
   let batches = 0, pagesRequested = 0, pagesCoalesced = 0, runs = 0;
   const stats = {
@@ -564,33 +477,17 @@ function createPageRangeReader(loader, header, readConcurrency = 16) {
     pagesCoalesced: 0,
     runs: 0
   };
-  const resolve = (req, index) => {
-    const dir = directories.get(req.path);
-    if (!dir)
-      throw new Error(`VT directory not found: ${req.path}`);
-    let offset = 0, size = 0;
-    if (req.tail) {
-      offset = dir.tailOffset;
-      size = dir.tailSize;
-    } else {
-      const mip = dir.mips[req.mip];
-      if (!mip || req.x < 0 || req.y < 0 || req.x >= mip.pagesX || req.y >= mip.pagesY)
-        throw new Error(`VT page out of range: ${req.path} mip=${req.mip} (${req.x},${req.y})`);
-      const page = req.y * mip.pagesX + req.x;
-      offset = mip.offsets[page];
-      size = mip.sizes[page];
-    }
-    if (size === 0)
-      throw new Error(`VT page not found: ${req.path} mip=${req.mip} (${req.x},${req.y})`);
-    return { index, path: req.path, mip: req.mip, x: req.x, y: req.y, tail: !!req.tail, offset, size };
-  };
+  const resolve = (request, index) => ({
+    ...directory.resolve(request),
+    index
+  });
   const coalesce = (group) => {
     const out = [];
     let runStart = 0;
     for (let i = 1;i <= group.length; i++) {
       const prev = group[i - 1];
       const cur = i < group.length ? group[i] : null;
-      const contiguous = cur !== null && cur.x === prev.x + 1 && cur.size === prev.size && cur.offset === prev.offset + prev.size;
+      const contiguous = cur !== null && cur.x === prev.x + 1 && cur.length === prev.length && cur.offset === prev.offset + prev.length;
       if (!contiguous) {
         out.push(group.slice(runStart, i));
         runStart = i;
@@ -606,17 +503,12 @@ function createPageRangeReader(loader, header, readConcurrency = 16) {
     const results = new Array(requests.length);
     const resolved = requests.map(resolve);
     if (loader.readBulk) {
-      const ordered = resolved.slice().sort((left, right) => left.path === right.path ? left.offset - right.offset : left.path.localeCompare(right.path));
+      const ordered = resolved.slice().sort((left, right) => left.offset - right.offset);
       const groups2 = [];
       let group = [];
       let ranges = [];
       for (const page of ordered) {
-        const candidate = { offset: page.offset, length: page.size };
-        if (group.length !== 0 && group[0].path !== page.path) {
-          groups2.push(group);
-          group = [];
-          ranges = [];
-        }
+        const candidate = { offset: page.offset, length: page.length };
         ranges.push(candidate);
         if (ranges.length > BULK_RANGE_CAPACITY || estimatedBulkResponseBytes(ranges) > BULK_RESPONSE_MAX_BYTES) {
           ranges.pop();
@@ -633,9 +525,9 @@ function createPageRangeReader(loader, header, readConcurrency = 16) {
       const readGroup = async (pages) => {
         if (signal?.aborted)
           throw new Error("batch read canceled");
-        const spans = pages.map((page) => ({ offset: page.offset, length: page.size }));
+        const spans = pages.map((page) => ({ offset: page.offset, length: page.length }));
         const readStartedAt = performance.now();
-        const parts = await loader.readBulk(pages[0].path + ".big", spans);
+        const parts = await loader.readBulk(spans);
         const readMs = performance.now() - readStartedAt;
         if (parts.length !== pages.length)
           throw new Error("bulk page response count mismatch");
@@ -646,7 +538,7 @@ function createPageRangeReader(loader, header, readConcurrency = 16) {
         if (pages.length > 1)
           pagesCoalesced += pages.length;
         for (let index = 0;index < pages.length; index++) {
-          if (parts[index].byteLength !== pages[index].size)
+          if (parts[index].byteLength !== pages[index].length)
             throw new Error("bulk page response length mismatch");
           results[pages[index].index] = parts[index];
         }
@@ -688,9 +580,9 @@ function createPageRangeReader(loader, header, readConcurrency = 16) {
       const runOffset = run[0].offset;
       let runSize = 0;
       for (const p of run)
-        runSize += p.size;
+        runSize += p.length;
       const readStartedAt = performance.now();
-      const batchData = await loader.read(run[0].path + ".big", runOffset, runSize);
+      const batchData = await loader.read(runOffset, runSize);
       const readMs = performance.now() - readStartedAt;
       reads++;
       totalReadMs += readMs;
@@ -700,8 +592,8 @@ function createPageRangeReader(loader, header, readConcurrency = 16) {
         pagesCoalesced += run.length;
       let rel = 0;
       for (const p of run) {
-        results[p.index] = batchData.subarray(rel, rel + p.size);
-        rel += p.size;
+        results[p.index] = batchData.subarray(rel, rel + p.length);
+        rel += p.length;
       }
     };
     let next = 0;
@@ -728,276 +620,6 @@ function createPageRangeReader(loader, header, readConcurrency = 16) {
       return stats;
     }
   };
-}
-
-class BoundedBulkReadQueue {
-  loader;
-  urgentDeadlineMs;
-  focusDeadlineMs;
-  peripheralDeadlineMs;
-  telemetry;
-  slots = new Array(BULK_RANGE_CAPACITY);
-  free = new Uint16Array(BULK_RANGE_CAPACITY);
-  freeTop = 0;
-  queued = [
-    new Uint16Array(BULK_RANGE_CAPACITY),
-    new Uint16Array(BULK_RANGE_CAPACITY),
-    new Uint16Array(BULK_RANGE_CAPACITY)
-  ];
-  heads = new Uint16Array(3);
-  tails = new Uint16Array(3);
-  counts = new Uint16Array(3);
-  ready = new Uint8Array(3);
-  timers = [null, null, null];
-  inFlight = 0;
-  inFlightBytes = 0;
-  closed = false;
-  reads = 0;
-  totalReadMs = 0;
-  maxReadMs = 0;
-  urgentBatches = 0;
-  focusBatches = 0;
-  peripheralBatches = 0;
-  rejected = 0;
-  canceled = 0;
-  stats = {
-    reads: 0,
-    averageReadMs: 0,
-    maxReadMs: 0,
-    queued: 0,
-    inFlight: 0,
-    inFlightBytes: 0,
-    urgentBatches: 0,
-    focusBatches: 0,
-    peripheralBatches: 0,
-    rejected: 0,
-    canceled: 0
-  };
-  constructor(loader, urgentDeadlineMs, focusDeadlineMs, peripheralDeadlineMs, telemetry) {
-    this.loader = loader;
-    this.urgentDeadlineMs = urgentDeadlineMs;
-    this.focusDeadlineMs = focusDeadlineMs;
-    this.peripheralDeadlineMs = peripheralDeadlineMs;
-    this.telemetry = telemetry;
-    for (let index = BULK_RANGE_CAPACITY - 1;index >= 0; index--) {
-      this.slots[index] = {
-        path: "",
-        offset: 0,
-        correlation: 0,
-        length: 0,
-        signal: undefined,
-        resolve: null,
-        reject: null
-      };
-      this.free[this.freeTop++] = index;
-    }
-  }
-  tierIndex(tier) {
-    return tier === "urgent" ? 0 : tier === "focus" ? 1 : 2;
-  }
-  deadlineMs(tier) {
-    return tier === 0 ? this.urgentDeadlineMs : tier === 1 ? this.focusDeadlineMs : this.peripheralDeadlineMs;
-  }
-  read(path, offset, length, tier, signal, correlation = 0) {
-    const traceCorrelation = correlation || this.telemetry?.nextCorrelation(3 /* VirtualTexture */) || 0;
-    return new Promise((resolve, reject) => {
-      if (this.closed) {
-        this.rejected++;
-        reject(new Error("bulk page reader is closed"));
-        return;
-      }
-      if (signal?.aborted) {
-        this.canceled++;
-        reject(new Error("VT page load canceled before batching"));
-        return;
-      }
-      if (this.freeTop === 0) {
-        this.rejected++;
-        reject(new Error("bulk page queue capacity exceeded"));
-        return;
-      }
-      const slotIndex = this.free[--this.freeTop];
-      const slot = this.slots[slotIndex];
-      slot.path = path;
-      slot.offset = offset;
-      slot.correlation = traceCorrelation;
-      slot.length = length;
-      this.telemetry?.trace.asyncBegin(14 /* VtBulkWait */, traceCorrelation, length, this.tierIndex(tier));
-      slot.signal = signal;
-      slot.resolve = resolve;
-      slot.reject = reject;
-      const lane = this.tierIndex(tier);
-      this.queued[lane][this.tails[lane]] = slotIndex;
-      this.tails[lane] = (this.tails[lane] + 1) % BULK_RANGE_CAPACITY;
-      this.counts[lane]++;
-      if (this.timers[lane] === null) {
-        this.timers[lane] = setTimeout(() => {
-          this.timers[lane] = null;
-          this.ready[lane] = 1;
-          this.pump();
-        }, this.deadlineMs(lane));
-      }
-      if (this.counts[lane] === BULK_RANGE_CAPACITY) {
-        this.ready[lane] = 1;
-        this.pump();
-      }
-    });
-  }
-  release(slotIndex) {
-    const slot = this.slots[slotIndex];
-    slot.path = "";
-    slot.signal = undefined;
-    slot.resolve = null;
-    slot.reject = null;
-    this.free[this.freeTop++] = slotIndex;
-  }
-  pop(lane) {
-    const index = this.queued[lane][this.heads[lane]];
-    this.heads[lane] = (this.heads[lane] + 1) % BULK_RANGE_CAPACITY;
-    this.counts[lane]--;
-    return index;
-  }
-  clearLaneTimer(lane) {
-    const timer = this.timers[lane];
-    if (timer !== null)
-      clearTimeout(timer);
-    this.timers[lane] = null;
-  }
-  pump() {
-    while (this.inFlight < 2 && this.inFlightBytes < BULK_IN_FLIGHT_MAX_BYTES) {
-      const lane = this.ready[0] !== 0 && this.counts[0] !== 0 ? 0 : this.ready[1] !== 0 && this.counts[1] !== 0 ? 1 : this.ready[2] !== 0 && this.counts[2] !== 0 ? 2 : -1;
-      if (lane < 0)
-        return;
-      const indices = [];
-      const ranges = [];
-      while (this.counts[lane] !== 0 && indices.length < BULK_RANGE_CAPACITY) {
-        const slotIndex = this.queued[lane][this.heads[lane]];
-        const slot = this.slots[slotIndex];
-        if (slot.signal?.aborted) {
-          this.pop(lane);
-          this.canceled++;
-          this.telemetry?.trace.asyncEnd(14 /* VtBulkWait */, slot.correlation, 0, lane);
-          slot.reject?.(new Error("VT page load canceled while batched"));
-          this.release(slotIndex);
-          continue;
-        }
-        const candidate = { offset: slot.offset, length: slot.length };
-        ranges.push(candidate);
-        if (estimatedBulkResponseBytes(ranges) > BULK_RESPONSE_MAX_BYTES) {
-          ranges.pop();
-          if (indices.length === 0) {
-            this.pop(lane);
-            this.rejected++;
-            this.telemetry?.trace.asyncEnd(14 /* VtBulkWait */, slot.correlation, 0, lane);
-            slot.reject?.(new RangeError("one VT page exceeds bulk response capacity"));
-            this.release(slotIndex);
-            continue;
-          }
-          break;
-        }
-        indices.push(this.pop(lane));
-      }
-      if (this.counts[lane] === 0) {
-        this.ready[lane] = 0;
-        this.clearLaneTimer(lane);
-      }
-      if (indices.length === 0)
-        continue;
-      const expectedBytes = estimatedBulkResponseBytes(ranges);
-      if (this.inFlightBytes + expectedBytes > BULK_IN_FLIGHT_MAX_BYTES)
-        return;
-      this.dispatch(indices, ranges, expectedBytes, lane);
-    }
-  }
-  dispatch(indices, ranges, expectedBytes, lane) {
-    this.inFlight++;
-    this.inFlightBytes += expectedBytes;
-    if (lane === 0)
-      this.urgentBatches++;
-    else if (lane === 1)
-      this.focusBatches++;
-    else
-      this.peripheralBatches++;
-    const startedAt = performance.now();
-    const batchCorrelation = this.telemetry?.nextCorrelation(4 /* Asset */) ?? 0;
-    for (let index = 0;index < indices.length; index++) {
-      const slot = this.slots[indices[index]];
-      this.telemetry?.trace.asyncEnd(14 /* VtBulkWait */, slot.correlation, slot.length, lane);
-    }
-    this.telemetry?.trace.asyncBegin(15 /* VtBulkDispatch */, batchCorrelation, expectedBytes, indices.length);
-    const request = this.loader.readBulk ? this.loader.readBulk(ranges) : Promise.all(indices.map((slotIndex, index) => {
-      const slot = this.slots[slotIndex];
-      const range = ranges[index];
-      return this.loader.read(`${slot.path}.big`, range.offset, range.length);
-    }));
-    request.then((parts) => {
-      if (parts.length !== indices.length)
-        throw new Error(`bulk response returned ${parts.length} parts; expected ${indices.length}`);
-      const readMs = performance.now() - startedAt;
-      let receivedBytes = 0;
-      for (let index = 0;index < parts.length; index++)
-        receivedBytes += parts[index]?.byteLength ?? 0;
-      this.telemetry?.trace.asyncEnd(15 /* VtBulkDispatch */, batchCorrelation, receivedBytes, parts.length);
-      this.reads++;
-      this.totalReadMs += readMs;
-      this.maxReadMs = Math.max(this.maxReadMs, readMs);
-      for (let index = 0;index < indices.length; index++) {
-        const slotIndex = indices[index];
-        const slot = this.slots[slotIndex];
-        const bytes = parts[index];
-        if (bytes.byteLength !== slot.length)
-          slot.reject?.(new Error(`bulk page returned ${bytes.byteLength} bytes; expected ${slot.length}`));
-        else if (this.closed || slot.signal?.aborted) {
-          this.canceled++;
-          slot.reject?.(new Error("VT page load canceled after bulk read"));
-        } else
-          slot.resolve?.(bytes);
-        this.release(slotIndex);
-      }
-    }).catch((error) => {
-      this.telemetry?.trace.asyncEnd(15 /* VtBulkDispatch */, batchCorrelation, 0, 0);
-      for (const slotIndex of indices) {
-        this.slots[slotIndex].reject?.(error);
-        this.release(slotIndex);
-      }
-    }).finally(() => {
-      this.inFlight--;
-      this.inFlightBytes -= expectedBytes;
-      this.pump();
-    });
-  }
-  close() {
-    if (this.closed)
-      return;
-    this.closed = true;
-    for (let lane = 0;lane < 3; lane++) {
-      this.clearLaneTimer(lane);
-      while (this.counts[lane] !== 0) {
-        const slotIndex = this.pop(lane);
-        const slot = this.slots[slotIndex];
-        this.canceled++;
-        this.telemetry?.trace.asyncEnd(14 /* VtBulkWait */, slot.correlation, 0, lane);
-        slot.reject?.(new Error("bulk page reader closed"));
-        this.release(slotIndex);
-      }
-      this.ready[lane] = 0;
-    }
-  }
-  getStats() {
-    const stats = this.stats;
-    stats.reads = this.reads;
-    stats.averageReadMs = this.reads === 0 ? 0 : this.totalReadMs / this.reads;
-    stats.maxReadMs = this.maxReadMs;
-    stats.queued = this.counts[0] + this.counts[1] + this.counts[2];
-    stats.inFlight = this.inFlight;
-    stats.inFlightBytes = this.inFlightBytes;
-    stats.urgentBatches = this.urgentBatches;
-    stats.focusBatches = this.focusBatches;
-    stats.peripheralBatches = this.peripheralBatches;
-    stats.rejected = this.rejected;
-    stats.canceled = this.canceled;
-    return stats;
-  }
 }
 
 // crates/afterglow-web/web/src/demos/range-bench/main.ts
@@ -1077,9 +699,9 @@ async function run() {
   const startedAt = performance.now();
   let rangeReads = 0;
   if (maxCoalesceBytes === 0) {
-    const reader = createPageRangeReader({
-      read: (_path, offset, length) => source.read(CONTAINER, offset, length),
-      readBulk: (_path, ranges) => source.readBulk(CONTAINER, ranges)
+    const reader = createSourceSortedPageReader({
+      read: (offset, length) => source.read(CONTAINER, offset, length),
+      readBulk: (ranges) => source.readBulk(CONTAINER, ranges)
     }, header, concurrency);
     const pages = await reader.readBatch(requests);
     for (const page of pages)

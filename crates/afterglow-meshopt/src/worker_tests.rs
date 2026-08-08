@@ -83,6 +83,46 @@ fn worker_simplify_sloppy() {
     assert!(simplified.len() <= indices.len());
 }
 
+#[test]
+fn worker_simplify_with_rig_attributes_and_locks() {
+    let (client, _) = MeshoptClient::spawn_worker(MeshoptWorker).unwrap();
+    let (indices, positions) = test_grid(12);
+    let vertex_count = positions.len() / 3;
+    let mut attributes = Vec::with_capacity(vertex_count * 5);
+    for vertex in 0..vertex_count {
+        let x = positions[vertex * 3];
+        let y = positions[vertex * 3 + 1];
+        attributes.extend_from_slice(&[x / 11.0, y / 11.0, x / 11.0, 1.0 - x / 11.0, y * 0.01]);
+    }
+    let mut locks = vec![0u8; vertex_count];
+    for y in 0..12usize {
+        locks[y * 12 + 5] = 1;
+        locks[y * 12 + 6] = 1;
+    }
+    let simplified: Vec<u32> = drive(&client, client
+        .simplify_with_attributes(
+            indices.clone(), positions, STRIDE, attributes, 20,
+            vec![1.0, 1.0, 2.0, 2.0, 1.0], locks,
+            (indices.len() / 2) as u32, 0.02,
+        )
+        .unwrap()).unwrap();
+    assert!(simplified.len() <= indices.len());
+    assert!(simplified.len() >= 3);
+    assert_eq!(simplified.len() % 3, 0);
+}
+
+#[test]
+fn worker_rejects_inconsistent_rig_attributes() {
+    let (client, _) = MeshoptClient::spawn_worker(MeshoptWorker).unwrap();
+    let (indices, positions) = test_grid(3);
+    let result: afterglow_rpc::RpcResult<Vec<u32>> = drive(&client, client
+        .simplify_with_attributes(
+            indices, positions, STRIDE, vec![0.0], 8, vec![1.0, 1.0], vec![], 3, 0.02,
+        )
+        .unwrap());
+    assert!(result.is_err());
+}
+
 // --- Optimize ---
 
 #[test]

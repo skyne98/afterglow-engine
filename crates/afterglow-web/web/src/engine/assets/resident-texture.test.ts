@@ -4,7 +4,7 @@ import {
   loadResidentTexture,
   residentTextureBytesPerTexel,
 } from './resident-texture.ts';
-import type { BigHeader, ChunkInfo, TextureFormat } from './big-parser.ts';
+import type { BigHeader, ChunkInfo, TextureFormat } from './big-format.ts';
 
 class FakeDataTexture {
   image: { data: Uint8Array; width: number; height: number };

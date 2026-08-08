@@ -7,7 +7,7 @@ export {
   parseMultipartByteRanges,
   type AssetByteRange,
 } from './bulk-range.ts';
-export { BigContainer } from './big-container.ts';
+export { BigContainer, type ContainerRangeSource } from './big-container.ts';
 export {
   EngineAssets,
   type EngineAssetsOptions,
@@ -15,13 +15,13 @@ export {
   type OwnedTextureTranscoder,
 } from './engine-assets.ts';
 export { createPlatformRangeLoader as createAssetRangeSource } from './platform-range-loader.ts';
+export { readBigHeader } from './asset-range.ts';
+export { getVirtualTextureDimensions } from './big-format.ts';
 export {
-  createPageRangeReader,
-  getVirtualTextureDimensions,
-  readBigHeader,
-  type PageRangeReader,
+  createSourceSortedPageReader,
   type PageReadRequest,
-} from './big-parser.ts';
+  type SourceSortedPageReader,
+} from './source-sorted-page-reader.ts';
 export { parseHeightR16, type HeightR16 } from './height-texture.ts';
 export {
   findResidentTextureChunk,

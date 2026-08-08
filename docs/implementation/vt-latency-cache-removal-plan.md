@@ -164,7 +164,7 @@ This is an intentional breaking TypeScript API removal.
 
 ### 5.3 Remove cache work from the page provider
 
-In `big-parser.ts`:
+In `vt-page-provider.ts`:
 
 1. Remove the `PersistentBlobCache` import.
 2. Remove the cache parameter from `createPageDataProvider`.
@@ -368,13 +368,14 @@ credit coupling only if the measured queue p99 gate fails.
 
 ### 7.1 Replace positional provider policy with a config object
 
-In `big-parser.ts`, define:
+In `vt-page-provider.ts`, define:
 
 ```ts
 export interface PagePipelineConfig {
   transcodeQueueCapacity: number;
   urgentBatchDeadlineMs: number;
-  qualityBatchDeadlineMs: number;
+  focusBatchDeadlineMs: number;
+  peripheralBatchDeadlineMs: number;
 }
 ```
 
@@ -389,7 +390,7 @@ Validation:
 
 - queue capacity is an integer >= 1;
 - deadlines are finite integer milliseconds >= 0;
-- urgent deadline <= quality deadline;
+- urgent deadline <= focus deadline <= peripheral deadline;
 - reject invalid values before creating timers/workers.
 
 Add required deadline fields to `EngineAssetsOptions`, build the config once
@@ -398,21 +399,22 @@ at bootstrap, and pass it to the provider.
 Dungeon values after approval:
 
 ```ts
-transcodeQueueCapacity: 12,
+transcodeQueueCapacity: 16,
 urgentBatchDeadlineMs: 1,
-qualityBatchDeadlineMs: 16,
+focusBatchDeadlineMs: 16,
+peripheralBatchDeadlineMs: 64,
 ```
 
 Update every `EngineAssets.open` call, especially Dungeon,
 `demos/rigged-vt/main.ts`, and all five constructions in
 `engine-assets.test.ts`. Update all direct provider constructions in
-`big-parser.test.ts` to use the config object instead of the old positional
+`vt-page-pipeline.test.ts` to use the config object instead of the old positional
 cache/queue arguments. Required options mean omission must be a TypeScript
 error.
 
-### 7.2 Parameterize `BoundedBulkReadQueue`
+### 7.2 Parameterize `DeadlineRangeBatcher`
 
-Change its constructor to retain the two validated deadlines. Replace:
+Change its constructor to retain the three validated deadlines. Replace:
 
 ```ts
 private deadlineMs(tier: number): number { return tier === 0 ? 1 : 100; }

@@ -2,7 +2,7 @@ import {
   createFetchRangeLoader,
   type AssetIdentity,
   type FetchRangeLoader,
-} from './big-parser.ts';
+} from './asset-range.ts';
 import type { AssetByteRange } from './bulk-range.ts';
 import { EngineMetric, EngineTelemetryCategory, EngineTraceDescriptor } from '../telemetry/catalog.ts';
 import type { EngineTelemetry } from '../telemetry/telemetry.ts';

@@ -3,15 +3,45 @@ import * as THREE from 'three/webgpu';
 import type { OptimizedGltfAsset, GltfMaterialTextureLayout } from '../assets/asset-store.ts';
 import { VirtualGltfBinding } from './virtual-gltf-binding.ts';
 import type { VirtualGltfMaterialOptions, VirtualGltfMaterialPair } from './virtual-texture-material.ts';
-import { VirtualTextureStore } from './virtual-texture.ts';
+import {
+  VirtualTextureSystem,
+  type VirtualTextureHandle,
+} from './virtual-texture-system.ts';
+import { SLOT_SIZE } from './virtual-texture-format.ts';
+import { VirtualTextureTuning } from './virtual-texture-tuning.ts';
 
-const loader = { async read() { return new Uint8Array(); }, poll() {} };
-const makeStore = (): VirtualTextureStore =>
-  new VirtualTextureStore(
-    loader,
-    { maxPendingPages: 16, maxPendingBytes: 2 * 1024 * 1024 },
-    async () => new Uint8Array(136 * 136 * 4),
-  );
+class TestTextures extends VirtualTextureSystem {
+  private readonly handles = new Map<string, VirtualTextureHandle>();
+
+  constructor() {
+    super({
+      maxTextures: 4,
+      maxMutablePageRefreshesPerPoll: 1,
+      device: {
+        limits: { maxTextureDimension2D: SLOT_SIZE * 4 },
+        queue: { writeTexture() {} },
+      } as unknown as GPUDevice,
+      pools: [{
+        format: 'rgba8unorm',
+        capacities: { maxPendingPages: 4, maxPendingBytes: 1024 * 1024 },
+        tuning: new VirtualTextureTuning({ atlasMaxDimension: SLOT_SIZE * 4 }),
+      }],
+    });
+  }
+
+  loadTexture(path: string, descriptor: { width: number; height: number }): void {
+    const handle = this.createTexture(
+      { ...descriptor, format: 'rgba8unorm', addressMode: 'clamp' },
+      async () => new Uint8Array(SLOT_SIZE * SLOT_SIZE * 4),
+    );
+    if (handle === 0) throw new Error('test texture capacity exceeded');
+    this.handles.set(path, handle);
+  }
+
+  getEntry(path: string): VirtualTextureHandle | undefined { return this.handles.get(path); }
+}
+
+const makeStore = (): TestTextures => new TestTextures();
 const layout = (index: number, image: number | null): GltfMaterialTextureLayout => ({
   index, name: 'duplicate', baseColorImage: image, metallicRoughnessImage: null,
   normalImage: null, emissiveImage: null,

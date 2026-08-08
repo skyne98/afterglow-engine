@@ -5,6 +5,17 @@ export {
 } from './core/diagnostics.ts';
 export { RenderAdapter, RenderAttachStatus } from './renderer/render-adapter.ts';
 export {
+  PersistentBlobStatus,
+  PersistentBlobStore,
+  type PersistentBlobBackend,
+  type PersistentBlobEntry,
+  type PersistentBlobReadResult,
+  type PersistentBlobStoreCapacities,
+  type PersistentBlobStoreStats,
+  type PersistentBlobWriteResult,
+} from './streaming/persistent-blob-store.ts';
+export { createPlatformPersistentBlobStore } from './streaming/platform-persistent-blob-store.ts';
+export {
   GpuProfiler,
   type GpuFrameScope,
   type GpuProfilerOptions,
@@ -14,13 +25,15 @@ export {
 export {
   RendererHost,
   type GpuAdapterIdentity,
+  type RendererDimensionSnapshot,
   type RendererHostOptions,
   type RendererViewport,
 } from './renderer/renderer-host.ts';
 export {
-  EngineRuntime, RegistrationStatus, RuntimeState,
+  EngineRuntime, RegistrationStatus, RuntimeReadinessStage, RuntimeState,
   type AnimationScheduler, type EngineFrameClient, type EngineRenderPass,
-  type EngineRuntimeOptions, type SceneEngineRuntimeOptions,
+  type EngineRuntimeOptions, type RuntimeCloseable, type RuntimeDisposable,
+  type RuntimeReadinessSnapshot, type SceneEngineRuntimeOptions,
 } from './core/runtime.ts';
 export { RenderTier, RenderDirty } from './core/types.ts';
 export type { EntityId, RenderDescriptorId, RenderFrame } from './core/types.ts';

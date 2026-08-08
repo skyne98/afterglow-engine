@@ -3,7 +3,7 @@ import { EngineDiagnostics, DiagnosticCode, DiagnosticSource } from '../core/dia
 import { RendererSeal } from './renderer-seal.ts';
 import type { EngineRenderPass } from '../core/runtime.ts';
 import type { RenderFrame } from '../core/types.ts';
-import type { VirtualTextureStore } from '../virtual-texturing/virtual-texture.ts';
+import type { VirtualTextureSystem } from '../virtual-texturing/virtual-texture-system.ts';
 import {
   createWebGPUOnlyRenderer,
   showWebGPUFailure,
@@ -58,7 +58,25 @@ export interface RendererHostOptions {
   factory?: WebGPUOnlyRendererFactory;
   maxPixelRatio?: number;
   onResize?: (width: number, height: number) => void;
+  onFatal?: (error: unknown) => void;
   showFailure?: boolean;
+}
+
+export interface RendererPhysicalViewport {
+  resize(displayWidth: number, displayHeight: number): void;
+}
+
+export interface RendererDimensionSnapshot {
+  logicalWidth: number;
+  logicalHeight: number;
+  pixelRatio: number;
+  canvasWidth: number;
+  canvasHeight: number;
+  surfaceWidth: number;
+  surfaceHeight: number;
+  feedbackWidth: number;
+  feedbackHeight: number;
+  cameraAspect: number;
 }
 
 function requireGpuDevice(renderer: WebGPUOnlyRenderer): GPUDevice {
@@ -80,6 +98,7 @@ function gpuErrorTarget(device: unknown): GpuErrorTarget | null {
 
 /** Owns one WebGPU-only Three renderer, viewport listeners, warmup, and seal. */
 export class RendererHost implements EngineRenderPass {
+  readonly presentation = true;
   readonly renderer: WebGPUOnlyRenderer;
   readonly device: GPUDevice;
   readonly adapterInfo: Readonly<GpuAdapterIdentity>;
@@ -96,8 +115,10 @@ export class RendererHost implements EngineRenderPass {
   private readonly maxPixelRatio: number;
   private readonly deviceTarget: GpuErrorTarget | null;
   private readonly resizeClient: ((width: number, height: number) => void) | undefined;
+  private readonly fatalClient: ((error: unknown) => void) | undefined;
   private readonly onResize: () => void;
   private readonly onGpuError: (event: Event) => void;
+  private physicalViewport: RendererPhysicalViewport | null = null;
   private unsubscribeResize: (() => void) | null = null;
   private disposed = false;
   private shaderInspectionActive = false;
@@ -122,6 +143,7 @@ export class RendererHost implements EngineRenderPass {
     this.viewport = options.viewport ?? new BrowserRendererViewport();
     this.maxPixelRatio = options.maxPixelRatio ?? 2;
     this.resizeClient = options.onResize;
+    this.fatalClient = options.onFatal;
     if (!Number.isFinite(this.maxPixelRatio) || this.maxPixelRatio <= 0)
       throw new RangeError('maxPixelRatio must be positive');
     this.sealMonitor = new RendererSeal(requirePipelineBackend(renderer));
@@ -131,12 +153,19 @@ export class RendererHost implements EngineRenderPass {
     this.onResize = (): void => this.resize();
     this.onGpuError = (event: Event): void => {
       this.diagnostics.tryRecord(DiagnosticCode.UncapturedGpuError, DiagnosticSource.Renderer, event);
+      this.fatalClient?.(event);
     };
     try {
       this.container.appendChild(renderer.domElement);
       this.resize();
       this.unsubscribeResize = this.viewport.subscribe(this.onResize);
       this.deviceTarget?.addEventListener('uncapturederror', this.onGpuError);
+      const lost = (this.device as Partial<GPUDevice>).lost;
+      if (lost) void lost.then(info => {
+        if (this.disposed) return;
+        this.diagnostics.tryRecord(DiagnosticCode.DeviceLost, DiagnosticSource.Renderer, info);
+        this.fatalClient?.(info);
+      }); // @alloc-allowed reason=DeviceLossBoundary issue=CUE-011 expires=2026-10-01
     } catch (error) {
       this.unsubscribeResize?.();
       this.unsubscribeResize = null;
@@ -169,18 +198,53 @@ export class RendererHost implements EngineRenderPass {
     this.renderer.setPixelRatio(ratio);
     this.renderer.setSize(width, height);
     this.resizeClient?.(width, height);
+    this.physicalViewport?.resize(this.renderer.domElement.width, this.renderer.domElement.height);
   }
 
-  attachVirtualTextureStore(store: VirtualTextureStore): void {
+  initializeVirtualTextures(
+    textures: Pick<VirtualTextureSystem, 'attachRenderer'>,
+    physicalViewport: RendererPhysicalViewport,
+  ): void {
+    if (this.disposed) throw new Error('cannot initialize textures on a disposed renderer host');
+    // Three allocates the atlas GPUTexture only on a real render; compileAsync
+    // alone does not publish the backend texture lookup used by subregion uploads.
+    this.renderer.render(this.scene, this.camera);
+    this.attachVirtualTextures(textures, physicalViewport);
+  }
+
+  private attachVirtualTextures(
+    textures: Pick<VirtualTextureSystem, 'attachRenderer'>,
+    physicalViewport?: RendererPhysicalViewport,
+  ): void {
     const backend = this.renderer.backend as unknown as { // @unsafe-cast reason=ThreePrivateTextureLookup issue=DME-040 expires=2026-10-01
       get(texture: unknown): { texture?: GPUTexture };
     };
-    store.attachRenderer({
+    textures.attachRenderer({
       backend: {
         device: this.device,
         get: (texture) => backend.get(texture),
       },
     });
+    if (physicalViewport) {
+      if (this.physicalViewport !== null)
+        throw new Error('renderer already owns a physical feedback viewport');
+      this.physicalViewport = physicalViewport;
+      physicalViewport.resize(this.renderer.domElement.width, this.renderer.domElement.height);
+    }
+  }
+
+  readDimensionsInto(out: RendererDimensionSnapshot): void {
+    out.logicalWidth = Math.max(1, this.viewport.width);
+    out.logicalHeight = Math.max(1, this.viewport.height);
+    out.pixelRatio = Math.min(this.maxPixelRatio, Math.max(0.1, this.viewport.pixelRatio));
+    out.canvasWidth = this.renderer.domElement.width;
+    out.canvasHeight = this.renderer.domElement.height;
+    out.surfaceWidth = out.canvasWidth;
+    out.surfaceHeight = out.canvasHeight;
+    out.feedbackWidth = this.physicalViewport ? out.canvasWidth : 0;
+    out.feedbackHeight = this.physicalViewport ? out.canvasHeight : 0;
+    const aspect = (this.camera as { aspect?: unknown }).aspect;
+    out.cameraAspect = typeof aspect === 'number' ? aspect : out.logicalWidth / out.logicalHeight;
   }
 
   async warm(): Promise<void> {
@@ -233,6 +297,7 @@ export class RendererHost implements EngineRenderPass {
     this.disposed = true;
     this.unsubscribeResize?.();
     this.unsubscribeResize = null;
+    this.physicalViewport = null;
     this.deviceTarget?.removeEventListener('uncapturederror', this.onGpuError);
     const canvas = this.renderer.domElement;
     if (canvas.parentNode === this.container) this.container.removeChild(canvas);

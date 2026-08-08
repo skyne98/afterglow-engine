@@ -1,35 +1,43 @@
-# Bounded demo input and automation
+# Bounded demo input and diagnostic builds
 
-Public browser barrels:
+## Product-side input and HUD
 
-- `web/src/engine/input/index.ts`
-- `web/src/engine/diagnostics/index.ts`
+`web/src/engine/input/index.ts` exports `BoundedKeyboardInput`, which owns its
+listeners and maps the closed `DemoInputAction` enum into fixed `Uint8Array`
+down/pressed tables. `isDown`, `consumePressed`, and `clear` allocate nothing;
+`dispose()` removes all listeners.
 
-These are reusable ownership mechanisms for visual entrypoints; they do not
-encode game controls or renderer policy.
+`web/src/engine/diagnostics/text-hud.ts` exports the small `TextHud` DOM writer.
+It contains no readiness, capture, lifecycle, or global automation policy.
 
-## `BoundedKeyboardInput`
+Lifecycle and fatal error ownership belong to `EngineRuntime`. Visual demos no
+longer construct `BootstrapGuard`, `PageShutdown`, `BrowserErrorCapture`, or
+frame-waiter objects.
 
-`BoundedKeyboardInput` owns keydown, keyup, and blur listener registration. It
-maps a closed `DemoInputAction` enum into fixed `Uint8Array` down/pressed tables.
-`isDown`, `consumePressed`, and `clear` are allocation-free. Repeats do not
-create extra transitions, blur clears state, and `dispose()` removes every
-listener. `programmatic` disables new keydown input for deterministic tests.
+## Separate diagnostic artifacts
 
-## Automation and diagnostics
+Production visual bundles contain no `window.__afterglow*` globals, frame
+waiters, scenario registries, or screenshot controls. The artifact manifest
+builds five separate diagnostic entrypoints under `www/diagnostic/` and five
+`diagnostic-*.html` pages.
 
-`BootstrapGuard(capacity)` stores cleanup callbacks in fixed slots and rolls a
-partially completed asynchronous bootstrap back in reverse order. `release()`
-commits ownership to the installed runtime/page-shutdown path.
+Those entrypoints install one typed protocol from
+`engine/diagnostics/visual-protocol.ts`:
 
-`FrameStepHarness(capacity)` stores frame targets and promise resolvers in fixed
-slots. Exhaustion throws instead of growing; polling compacts in place without
-`splice`. Promise construction/resolution is explicitly diagnostic and never a
-gameplay mechanism.
+```ts
+interface VisualDiagnosticProtocol {
+  readonly version: 1;
+  snapshot(): VisualDiagnosticSnapshot;
+  waitForGameReady(timeoutMs?: number): Promise<VisualDiagnosticSnapshot>;
+  shutdown(): Promise<void>;
+}
+```
 
-`BrowserErrorCapture` owns global error/rejection listeners and records into the
-runtime's bounded `EngineDiagnostics`. `snapshot()` allocates only when an
-external diagnostic client requests details. `TextHud` owns diagnostic DOM text
-writes. `publishDevHarness()` installs a test surface without visual entrypoints
-touching global engine namespaces. `PageShutdown` owns the one-shot page teardown
-listener and removes it on explicit disposal.
+Only diagnostic bundles publish `globalThis.__afterglowDiagnosticV1`.
+`snapshot()` reports strict readiness, logical/physical canvas and surface
+sizes, feedback size, adapter identity, fatal diagnostics, frame ID, and
+post-seal pipeline violations. `waitForGameReady()` rejects on fatal/shutdown or
+timeout; it never accepts a console phrase or first presentation as readiness.
+
+`check-web-contracts.ts`, the deletion ledger, and generated-bundle checks keep
+the protocol out of production artifacts.

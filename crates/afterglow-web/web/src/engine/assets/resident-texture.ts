@@ -6,7 +6,7 @@
 // feedback. The canonical use is the R8 height field consumed by the POM march,
 // kept out of VT so the march loop pays one direct fetch per step at mip 0.
 
-import type { BigHeader, ChunkInfo, TextureFormat } from './big-parser.ts';
+import type { BigHeader, ChunkInfo, TextureFormat } from './big-format.ts';
 
 /** Minimal Three constructor surface used to build a DataTexture. */
 export type ResidentTextureThree = {

@@ -13,8 +13,8 @@ services as WASM.
 | `afterglow-assets-worker` | Generated asynchronous `load`, `size`, and `read` service for JS-visible native bytes. |
 | `BigContainer` | Immutable BIG header/index and exact raw-asset ranges. Owns no workers or renderer state. |
 | `OwnedWorkerPool` | Generic fixed worker lifetime, startup rollback, and reverse shutdown. |
-| `EngineAssets` | Public composition owner for one cooked container, its engine-owned services, and asset/VT stores. |
-| `VirtualTextureStore` | Page scheduling, cancellation, residency, fallback, and publication policy. |
+| `EngineAssets` | Public composition owner for one cooked container, its engine-owned services, asset store, model system, and virtual-texture system. |
+| `VirtualTextureSystem` | Sole public texture namespace; opaque handles compose static, procedural, and mutable sources over internal format pools. |
 
 Games and demos use `EngineAssets`; they do not construct RPC transports,
 select worker scripts, depend on numeric worker IDs, or manage worker shutdown.
@@ -55,8 +55,42 @@ const engineAssets = await EngineAssets.open({
   telemetry: runtime.telemetry,
 });
 
+const header = engineAssets.container.header;
 const assets = await engineAssets.createAssetStore(64, 8);
-const virtualTextures = engineAssets.createVirtualTextureStore(device, tuning);
+const models = await engineAssets.createModelSystem({
+  maxModels: 256,
+  maxPendingOptimizations: 8,
+  maxResidentCpuBytes: 256 * 1024 * 1024,
+  completionsPerPoll: 2,
+  ratios: [1, 0.5, 0.25, 0.1],
+  targetError: 0.02,
+  geometryArena: { buckets: [{
+    slots: 1024,
+    maxVertices: 65536,
+    maxIndices: 196608,
+    maxGroups: 8,
+    indexKind: 'u32',
+    attributes: [
+      { name: 'position', itemSize: 3, kind: 'f32' },
+      { name: 'normal', itemSize: 3, kind: 'f32' },
+      { name: 'uv', itemSize: 2, kind: 'f32' },
+    ],
+    morphAttributes: [],
+  }] },
+});
+const virtualTextures = engineAssets.createVirtualTextureSystem({
+  maxTextures: 4096,
+  maxMutablePageRefreshesPerPoll: 2,
+  device,
+  pools: [
+    { format: 'bc7-rgba-unorm-srgb', capacities: {
+      maxPendingPages: 16, maxPendingBytes: 2 * 1024 * 1024,
+    }, tuning },
+    { format: 'rgba8unorm', capacities: {
+      maxPendingPages: 16, maxPendingBytes: 2 * 1024 * 1024,
+    } },
+  ],
+});
 ```
 
 The engine selects worker topology: native uses one OS texture worker per
@@ -67,8 +101,11 @@ page. Invalid capacities fail before I/O. Header parsing completes before any
 worker starts. Partial startup rolls back in reverse order, and `close()` is
 idempotent while still attempting every owned service after an error.
 
-`BigContainer` is available separately for tooling and consumers that only need
-format/index operations.
+`BigContainer` is the authoritative container surface. `EngineAssets` does not
+republish aliases for its header, source, path, or raw loader. Internally,
+BIG decoding, deployment ranges, the immutable VT page directory, deadline
+batching, transcode dispatch, and final page decoding live in separate focused
+modules.
 
 ## Native texture pages
 
@@ -115,9 +152,10 @@ bounded multipart response:
 - at most two responses / 8 MiB in flight;
 - strict multipart `Content-Range` validation.
 
-The public-web provider currently preserves scheduler order. The separate
-`createPageRangeReader()` primitive can source-sort spans and restore caller
-order, but is not yet connected to the production web page provider.
+The public-web provider preserves scheduler order. The explicit diagnostic/tool
+`createSourceSortedPageReader()` uses the same immutable `VtPageDirectory`, can
+source-sort spans, and restores caller order. It is intentionally not the live
+scheduling policy.
 
 Web texture transcoding uses generated WASM Web Workers. This is exclusively the
 public-web fallback and is never selected by the native shell.
@@ -127,11 +165,20 @@ public-web fallback and is never selected by the native shell.
 `AssetStore` has fixed asset and completion capacities. Bootstrap registration
 returns numeric `AssetId`s. Promise callbacks only enqueue fixed completion
 records; `poll()` publishes a bounded number per frame. Generation tokens
-prevent canceled or evicted reads from publishing stale results.
+prevent canceled or evicted reads from publishing stale results. It has no
+optional virtual-texture owner and no texture-loading policy switch: resident
+textures use the resident texture API and virtual textures use
+`VirtualTextureSystem`.
 
-Packed GLBs remain ordinary raw BIG assets. Runtime mesh optimization changes
-triangle index order only, preserving skins, morphs, attributes, material
-indices, and animation tracks.
+`ModelSystem` uses the same fixed generational ownership primitive as the new
+texture namespace. Cooked disk LODs and runtime RAM geometry share handles and
+atomic revisions. Runtime primitives—including skinned and morphed geometry—go
+through meshoptimizer's attribute-aware simplifier; all attributes and morph
+targets follow one compact remap while every LOD shares the complete skeleton.
+A mandatory ModelSystem-owned `GeometryArena` publishes those complete revisions
+into configured fixed, prewarmed Three-compatible slots without exposing
+renderer internals to games. Incompatible layouts or exhausted slots reject the
+whole revision while retaining the previous publication.
 
 ## Failure policy
 

@@ -13227,7 +13227,7 @@ var ENGINE_TRACE_DESCRIPTORS = [
   { category: 1 /* Frame */, categoryName: "frame", name: "render.prepare", kind: 2 /* Span */, argument0: "stage", argument1: "elapsed_us" },
   { category: 0 /* Runtime */, categoryName: "runtime", name: "game.update", kind: 2 /* Span */, argument0: "frame_id" },
   { category: 1 /* Frame */, categoryName: "frame", name: "render.passes", kind: 2 /* Span */, argument0: "frame_id" },
-  { category: 4 /* Asset */, categoryName: "asset", name: "asset.session.open", kind: 3 /* AsyncSpan */, argument0: "workers", argument1: "status" },
+  { category: 4 /* Asset */, categoryName: "asset", name: "asset.composition.open", kind: 3 /* AsyncSpan */, argument0: "workers", argument1: "status" },
   { category: 4 /* Asset */, categoryName: "asset", name: "asset.size", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "status" },
   { category: 4 /* Asset */, categoryName: "asset", name: "asset.read", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "offset_or_status" },
   { category: 4 /* Asset */, categoryName: "asset", name: "asset.read_bulk", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "spans" },
@@ -13243,7 +13243,14 @@ var ENGINE_TRACE_DESCRIPTORS = [
   { category: 4 /* Asset */, categoryName: "asset", name: "mesh.optimize", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "status" },
   { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.feedback_detected", kind: 1 /* Instant */, argument0: "priority", argument1: "feedback_epoch" },
   { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.scheduler_wait", kind: 3 /* AsyncSpan */, argument0: "priority", argument1: "status" },
-  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.page_published", kind: 1 /* Instant */, argument0: "physical_slot", argument1: "eligible_frame_id" }
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.page_published", kind: 1 /* Instant */, argument0: "physical_slot", argument1: "eligible_frame_id" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.mutable_write", kind: 1 /* Instant */, argument0: "bytes", argument1: "status" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.mutable_refresh", kind: 2 /* Span */, argument0: "pages", argument1: "remaining" },
+  { category: 10 /* Model */, categoryName: "model", name: "model.revision", kind: 3 /* AsyncSpan */, argument0: "revision", argument1: "status" },
+  { category: 10 /* Model */, categoryName: "model", name: "model.published", kind: 1 /* Instant */, argument0: "revision", argument1: "cpu_bytes" },
+  { category: 10 /* Model */, categoryName: "model", name: "geometry.upload", kind: 2 /* Span */, argument0: "bytes", argument1: "slot" },
+  { category: 11 /* Storage */, categoryName: "storage", name: "blob.read", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "status" },
+  { category: 11 /* Storage */, categoryName: "storage", name: "blob.write", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "status" }
 ];
 var ENGINE_METRIC_DESCRIPTORS = [
   { category: 1 /* Frame */, categoryName: "frame", name: "frames", kind: 1 /* Counter */, unit: "count" },
@@ -13257,22 +13264,25 @@ var ENGINE_METRIC_DESCRIPTORS = [
   { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt_pages_loaded", kind: 1 /* Counter */, unit: "count" },
   { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt_pages_failed", kind: 1 /* Counter */, unit: "count" },
   { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt_upload_ns", kind: 4 /* HistogramLog2 */, unit: "nanoseconds" },
-  { category: 5 /* Texture */, categoryName: "texture", name: "texture_transcode_ns", kind: 4 /* HistogramLog2 */, unit: "nanoseconds" }
+  { category: 5 /* Texture */, categoryName: "texture", name: "texture_transcode_ns", kind: 4 /* HistogramLog2 */, unit: "nanoseconds" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "mutable_texture_writes", kind: 1 /* Counter */, unit: "count" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "mutable_texture_bytes", kind: 1 /* Counter */, unit: "bytes" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "mutable_pages_published", kind: 1 /* Counter */, unit: "count" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "mutable_pages_deferred", kind: 1 /* Counter */, unit: "count" },
+  { category: 10 /* Model */, categoryName: "model", name: "model_revisions_queued", kind: 1 /* Counter */, unit: "count" },
+  { category: 10 /* Model */, categoryName: "model", name: "model_revisions_published", kind: 1 /* Counter */, unit: "count" },
+  { category: 10 /* Model */, categoryName: "model", name: "model_revisions_failed", kind: 1 /* Counter */, unit: "count" },
+  { category: 10 /* Model */, categoryName: "model", name: "model_cpu_bytes_high_water", kind: 3 /* Maximum */, unit: "bytes" },
+  { category: 10 /* Model */, categoryName: "model", name: "model_gpu_bytes_high_water", kind: 3 /* Maximum */, unit: "bytes" },
+  { category: 10 /* Model */, categoryName: "model", name: "geometry_upload_ns", kind: 4 /* HistogramLog2 */, unit: "nanoseconds" },
+  { category: 11 /* Storage */, categoryName: "storage", name: "blob_read_bytes", kind: 1 /* Counter */, unit: "bytes" },
+  { category: 11 /* Storage */, categoryName: "storage", name: "blob_write_bytes", kind: 1 /* Counter */, unit: "bytes" }
 ];
 
 // crates/afterglow-web/web/src/engine/assets/asset-store.ts
 var MAX_SINGLE_LOAD = 1 << 20;
 var CHUNK_SIZE = 512 * 1024;
-var DEFAULT_LOD_RATIOS = [1, 0.5, 0.25, 0.1];
-var DEFAULT_TARGET_ERROR = 0.02;
 var DEFAULT_ASSET_CAPACITY = 1024;
-async function parseTexture(bytes) {
-  const bitmap = await createImageBitmap(new Blob([bytes]));
-  const tex = new Texture(bitmap);
-  tex.needsUpdate = true;
-  tex.colorSpace = SRGBColorSpace;
-  return tex;
-}
 async function parseGLTFAsset(bytes, loader) {
   const buf = new ArrayBuffer(bytes.byteLength);
   new Uint8Array(buf).set(bytes);
@@ -13414,7 +13424,6 @@ class AssetStore {
   readyCount = 0;
   meshopt;
   loader;
-  vtStore = null;
   constructor(loader, meshopt, capacity = DEFAULT_ASSET_CAPACITY, maxCompletionsPerPoll = 32, telemetry) {
     this.maxCompletionsPerPoll = maxCompletionsPerPoll;
     this.telemetry = telemetry;
@@ -13435,12 +13444,6 @@ class AssetStore {
   }
   get assetLoader() {
     return this.loader;
-  }
-  setVirtualTextureStore(vt) {
-    this.vtStore = vt;
-  }
-  get virtualTextureStore() {
-    return this.vtStore;
   }
   poll() {
     this.loader.poll();
@@ -13676,139 +13679,6 @@ class AssetStore {
       return { ...parsed, meshOptimization, materialTextures };
     }, fallback);
   }
-  loadModel(path) {
-    return this.load(path, (bytes) => this.processModel(bytes, path));
-  }
-  async processModel(bytes, path) {
-    let meshes = [];
-    let textures = new Map;
-    try {
-      const scene = await parseGLTF(bytes);
-      scene.traverse((obj) => {
-        if (obj.isMesh && obj.geometry?.index) {
-          const geo = obj.geometry;
-          meshes.push({
-            indices: new Uint32Array(geo.index.array),
-            positions: new Float32Array(geo.attributes.position.array),
-            uvs: geo.attributes.uv ? new Float32Array(geo.attributes.uv.array) : new Float32Array(0)
-          });
-        }
-        if (obj.isMesh && obj.material?.map)
-          textures.set("diffuse", obj.material.map);
-      });
-    } catch {
-      meshes = this.parseMinimalGLB(bytes);
-    }
-    const stats = [];
-    const meshLods = [];
-    for (const mesh of meshes) {
-      const { lods, stat } = await this.optimizeMesh(mesh.indices, mesh.positions, mesh.uvs);
-      meshLods.push(lods);
-      if (stat)
-        stats.push(stat);
-    }
-    return { meshes: meshLods, textures, stats };
-  }
-  parseMinimalGLB(bytes) {
-    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-    if (view.getUint32(0, true) !== 1179937895)
-      throw new Error("not a GLB");
-    const totalLen = view.getUint32(8, true);
-    let off = 12;
-    let json = null;
-    let bin = null;
-    while (off < totalLen) {
-      const len = view.getUint32(off, true);
-      off += 4;
-      const type = view.getUint32(off, true);
-      off += 4;
-      if (type === 1313821514)
-        json = JSON.parse(new TextDecoder().decode(bytes.subarray(off, off + len)));
-      else if (type === 5130562)
-        bin = bytes.subarray(off, off + len);
-      off += len;
-    }
-    if (!json || !bin)
-      throw new Error("GLB missing JSON or BIN");
-    const accs = json.accessors || [];
-    const bvs = json.bufferViews || [];
-    const prims = json.meshes?.[0]?.primitives || [];
-    const meshes = [];
-    for (const prim of prims) {
-      const read = (aIdx, T) => {
-        if (aIdx === undefined)
-          return new T(0);
-        const a = accs[aIdx];
-        const bv = bvs[a.bufferView];
-        const o = (bv.byteOffset || 0) + (a.byteOffset || 0);
-        const comps = a.type === "VEC3" ? 3 : a.type === "VEC2" ? 2 : 1;
-        return new T(bin.buffer, bin.byteOffset + o, a.count * comps).slice();
-      };
-      meshes.push({
-        indices: read(prim.indices, Uint32Array),
-        positions: read(prim.attributes.POSITION, Float32Array),
-        uvs: prim.attributes.TEXCOORD_0 !== undefined ? read(prim.attributes.TEXCOORD_0, Float32Array) : new Float32Array(0)
-      });
-    }
-    return meshes;
-  }
-  async optimizeMesh(indices, positions, uvs) {
-    const vertexCount = positions.length / 3;
-    const originalTriangles = indices.length / 3;
-    const stride = 12;
-    const uvStride = 8;
-    if (!this.meshopt) {
-      return {
-        lods: [{ indices, positions, uvs, triangleCount: originalTriangles }]
-      };
-    }
-    const origStats = await this.meshopt.analyzeVertexCache(indices, vertexCount);
-    const originalAcmr = origStats[0];
-    let optimized = await this.meshopt.optimizeVertexCache(indices, vertexCount);
-    optimized = await this.meshopt.optimizeOverdraw(optimized, positions, stride, 1.05);
-    const optStats = await this.meshopt.analyzeVertexCache(optimized, vertexCount);
-    const optimizedAcmr = optStats[0];
-    const compressed = await this.meshopt.encodeIndexBuffer(optimized, vertexCount);
-    const lods = [];
-    for (const ratio of DEFAULT_LOD_RATIOS) {
-      if (ratio >= 1) {
-        lods.push({
-          indices: optimized,
-          positions,
-          uvs,
-          triangleCount: optimized.length / 3,
-          stats: ratio === 1 ? {
-            originalTriangles,
-            originalAcmr,
-            optimizedAcmr,
-            compressedIndexBytes: compressed.length,
-            uncompressedIndexBytes: optimized.length * 4
-          } : undefined
-        });
-      } else {
-        const targetTris = Math.max(4, Math.floor(originalTriangles * ratio));
-        const targetIndexCount = targetTris * 3;
-        const simplified = await this.meshopt.simplifyWithUvs(optimized, positions, stride, uvs, uvStride, 0.5, targetIndexCount, DEFAULT_TARGET_ERROR);
-        lods.push({ indices: simplified, positions, uvs, triangleCount: simplified.length / 3 });
-      }
-    }
-    return {
-      lods,
-      stat: {
-        originalTriangles,
-        originalAcmr,
-        optimizedAcmr,
-        compressedIndexBytes: compressed.length,
-        uncompressedIndexBytes: optimized.length * 4
-      }
-    };
-  }
-  loadTexture(path) {
-    if (this.vtStore) {
-      return this.vtStore.loadTexture(path);
-    }
-    return this.load(path, parseTexture, undefined);
-  }
   loadGLTF(path, loader) {
     return this.load(path, (bytes) => parseGLTF(bytes, loader), fallbackGroup());
   }
@@ -13903,7 +13773,6 @@ var AssetStoreRes = defineResource("assetStore", () => {
   throw new Error("AssetStore not initialized. Call AssetStoreRes.set(world, new AssetStore(loader, meshopt)).");
 });
 export {
-  parseTexture,
   parseJSON,
   parseGlbMaterialTextures,
   parseGLTFAsset,

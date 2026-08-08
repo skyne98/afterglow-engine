@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { VirtualTextureFeedbackPass } from './virtual-texture-feedback-pass.ts';
-import { VT_FEEDBACK_WGSL } from './virtual-texture.ts';
+import { VT_FEEDBACK_WGSL } from './virtual-texture-shaders.ts';
 import { createPackedPageTableLayout } from './virtual-texture-layout.ts';
 import { encodeFeedback } from './virtual-texture-feedback.ts';
 

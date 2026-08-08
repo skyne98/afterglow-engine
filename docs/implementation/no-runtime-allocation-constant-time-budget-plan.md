@@ -14,6 +14,7 @@ conformance gates in the execution plan.
 
 Related documents:
 
+- [`clean-unified-engine-convergence-plan.md`](clean-unified-engine-convergence-plan.md) — final ownership/deletion/readiness convergence umbrella
 - [`../audits/virtual-texture-vertical-slice-2026-07-15.md`](../audits/virtual-texture-vertical-slice-2026-07-15.md)
 - [`demo-to-engine-feature-audit.md`](demo-to-engine-feature-audit.md)
 - [`demo-engine-migration-execution-plan.md`](demo-engine-migration-execution-plan.md)

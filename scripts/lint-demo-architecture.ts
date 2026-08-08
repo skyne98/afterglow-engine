@@ -255,7 +255,8 @@ if (import.meta.main) {
   let baseline: ArchitectureBaseline;
   try { baseline = JSON.parse(await readFile(baselinePath, 'utf8')) as ArchitectureBaseline; }
   catch {
-    if (conformance.releaseStatus === 'conformant') baseline = { version: baselineVersion, findings: [] };
+    const hasLegacy = Object.values(conformance.visualEntrypoints).some((state) => state === 'legacy');
+    if (!hasLegacy) baseline = { version: baselineVersion, findings: [] };
     else { console.error('architecture baseline is missing; bootstrap it explicitly with --write-baseline'); process.exit(1); }
   }
   if (baseline.version !== baselineVersion || !Array.isArray(baseline.findings)) {

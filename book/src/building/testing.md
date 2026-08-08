@@ -1,6 +1,8 @@
 # Testing
 
-Afterglow prioritizes executable behavior across complete feature paths.
+Afterglow prioritizes executable behavior across complete feature paths. The
+repository is currently `converging`: canonical demo source architecture is
+separate from visual and release conformance.
 
 ```sh
 cargo run -p xtask -- test
@@ -32,15 +34,17 @@ Tests are organized in four levels:
    ```sh
    cargo build -p afterglow-shell --example browser_test
    ./target/debug/examples/browser_test /tmp/threejs webgpu_materials_basic /tmp/out.png
-
-   DISPLAY=:0 ./scripts/test-dungeon-gpu.sh
-   DISPLAY=:0 ./scripts/test-rigged-vt-gpu.sh
-   DISPLAY=:0 ./scripts/test-vt-gpu.sh
-   DISPLAY=:0 ./scripts/test-lod-gpu.sh
    ```
 
-4. **Release evidence** records current artifact hashes, adapter identity, every
-   visual demo, and the required Dungeon soaks. Validate it with:
+   Historical per-demo `scripts/test-*-gpu.sh` commands are absent and are not
+   valid lanes. A single manifest-driven `xtask visual` command is the required
+   replacement and remains a convergence gate.
+
+4. **Release evidence** schema v2 requires each visual demo on web and native,
+   current artifact and screenshot hashes, `GameReady`, coherent resize
+   dimensions, semantic plus tolerant-reference pixel checks, frame/resource/
+   queue results, and 30-minute plateaued soak scenarios. Version-one boolean
+   success records are rejected. Validate recorded evidence with:
 
    ```sh
    cargo run -p xtask -- release-gate

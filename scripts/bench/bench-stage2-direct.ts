@@ -13,9 +13,9 @@
 
 import {
   createFetchRangeLoader,
-  findVTPageChunk,
   readBigHeader,
-} from '../../crates/afterglow-web/web/src/engine/assets/big-parser.ts';
+} from '../../crates/afterglow-web/web/src/engine/assets/asset-range.ts';
+import { findVTPageChunk } from '../../crates/afterglow-web/web/src/engine/assets/big-format.ts';
 
 const FILE = process.env.BENCH_FILE ?? '/home/fox/dev/afterglow-engine/crates/afterglow-web/web/assets/dungeon.big';
 const BASE_URL = process.env.BENCH_BASE_URL ?? 'http://127.0.0.1:8787/';

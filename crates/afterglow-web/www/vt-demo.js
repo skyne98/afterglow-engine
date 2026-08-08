@@ -59237,6 +59237,673 @@ class RenderAdapter {
     this.uniqueObjects.length = 0;
   }
 }
+// crates/afterglow-web/web/src/engine/core/resource.ts
+var RESOURCES = Symbol.for("afterglow-resources");
+var RESOURCES_SEALED = Symbol.for("afterglow-resources-sealed");
+function ensureStore(world) {
+  const w4 = world;
+  if (!w4[RESOURCES])
+    w4[RESOURCES] = {};
+  return w4[RESOURCES];
+}
+
+class Resource {
+  name;
+  factory;
+  constructor(name, factory) {
+    this.name = name;
+    this.factory = factory;
+  }
+  get(world) {
+    const store = ensureStore(world);
+    if (!(this.name in store)) {
+      if (world[RESOURCES_SEALED] === true)
+        throw new Error(`resource ${this.name} was not initialized before gameplay seal`);
+      store[this.name] = this.factory();
+    }
+    return store[this.name];
+  }
+  set(world, value) {
+    ensureStore(world)[this.name] = value;
+  }
+  has(world) {
+    return this.name in ensureStore(world);
+  }
+  remove(world) {
+    delete ensureStore(world)[this.name];
+  }
+}
+function defineResource(name, factory) {
+  return new Resource(name, factory);
+}
+function initResources(world) {
+  ensureStore(world);
+}
+
+class ResourceManifest {
+  resources;
+  constructor(...resources) {
+    const names = new Set;
+    for (const resource of resources) {
+      if (names.has(resource.name))
+        throw new Error(`duplicate resource manifest entry ${resource.name}`);
+      names.add(resource.name);
+    }
+    this.resources = resources;
+  }
+  initialize(world) {
+    initResources(world);
+    for (const resource of this.resources)
+      resource.get(world);
+  }
+  seal(world) {
+    const missing = [];
+    for (const resource of this.resources)
+      if (!resource.has(world))
+        missing.push(resource.name);
+    if (missing.length !== 0)
+      throw new Error(`resources missing before gameplay seal: ${missing.join(", ")}`);
+    sealResources(world);
+  }
+  initializeAndSeal(world) {
+    this.initialize(world);
+    this.seal(world);
+  }
+}
+function sealResources(world) {
+  ensureStore(world);
+  world[RESOURCES_SEALED] = true;
+}
+
+// crates/afterglow-web/web/src/engine/telemetry/telemetry.ts
+var TELEMETRY_RECORD_BYTES = 40;
+var TELEMETRY_BATCH_HEADER_BYTES = 40;
+var TELEMETRY_BATCH_VERSION = 1;
+var TELEMETRY_RECORD_WORDS = TELEMETRY_RECORD_BYTES / 4;
+var U32_SCALE = 4294967296;
+var U32_MAX = 4294967295;
+var TELEMETRY_HISTOGRAM_BUCKETS = 32;
+class TelemetryRecorder {
+  descriptors;
+  buffer;
+  clock;
+  ticksPerSecond;
+  words;
+  bytes;
+  enabledDescriptors;
+  stableSnapshot;
+  captureState = 0 /* Idle */;
+  captureEpoch = 0;
+  length = 0;
+  droppedRecords = 0;
+  constructor(descriptors, buffer2, clock = () => performance.now() * 1e6, ticksPerSecond = 1e9) {
+    this.descriptors = descriptors;
+    this.buffer = buffer2;
+    this.clock = clock;
+    this.ticksPerSecond = ticksPerSecond;
+    if (buffer2.byteLength === 0 || buffer2.byteLength % TELEMETRY_RECORD_BYTES !== 0)
+      throw new RangeError("telemetry trace buffer must contain a positive whole number of 40-byte records");
+    if (!Number.isFinite(ticksPerSecond) || ticksPerSecond <= 0)
+      throw new RangeError("telemetry ticksPerSecond must be positive");
+    this.words = new Uint32Array(buffer2);
+    this.bytes = new Uint8Array(buffer2);
+    this.enabledDescriptors = new Uint8Array(descriptors.length);
+    this.stableSnapshot = {
+      epoch: 0,
+      count: 0,
+      capacity: buffer2.byteLength / TELEMETRY_RECORD_BYTES,
+      dropped: 0,
+      ticksPerSecond,
+      buffer: buffer2
+    };
+  }
+  get state() {
+    return this.captureState;
+  }
+  get count() {
+    return this.length;
+  }
+  get capacity() {
+    return this.stableSnapshot.capacity;
+  }
+  get dropped() {
+    return this.droppedRecords;
+  }
+  arm(epoch, categoryWords) {
+    if (this.captureState !== 0 /* Idle */ || !Number.isInteger(epoch) || epoch < 0 || epoch > U32_MAX)
+      return false;
+    this.captureEpoch = epoch;
+    this.length = 0;
+    this.droppedRecords = 0;
+    for (let index = 0;index < this.descriptors.length; index++) {
+      const category = this.descriptors[index]?.category ?? -1;
+      this.enabledDescriptors[index] = categoryWords === undefined ? 1 : ((categoryWords[category >>> 5] ?? 0) & 1 << (category & 31)) !== 0 ? 1 : 0;
+    }
+    this.captureState = 1 /* Armed */;
+    return true;
+  }
+  stop() {
+    if (this.captureState !== 1 /* Armed */)
+      return false;
+    this.captureState = 2 /* Frozen */;
+    return true;
+  }
+  snapshot() {
+    if (this.captureState !== 2 /* Frozen */)
+      return null;
+    this.stableSnapshot.epoch = this.captureEpoch;
+    this.stableSnapshot.count = this.length;
+    this.stableSnapshot.dropped = this.droppedRecords;
+    return this.stableSnapshot;
+  }
+  reset() {
+    if (this.captureState !== 2 /* Frozen */)
+      return false;
+    this.length = 0;
+    this.droppedRecords = 0;
+    this.enabledDescriptors.fill(0);
+    this.captureState = 0 /* Idle */;
+    return true;
+  }
+  encodedBatchBytes() {
+    return TELEMETRY_BATCH_HEADER_BYTES + this.length * TELEMETRY_RECORD_BYTES;
+  }
+  encodeBatchInto(output2, sourceId, clockDomain) {
+    if (this.captureState !== 2 /* Frozen */ || !Number.isInteger(sourceId) || sourceId < 0 || sourceId > U32_MAX || !Number.isInteger(clockDomain) || clockDomain < 0 || clockDomain > U32_MAX)
+      return 0;
+    const needed = this.encodedBatchBytes();
+    if (output2.length < needed)
+      return -needed;
+    output2[0] = 65;
+    output2[1] = 71;
+    output2[2] = 84;
+    output2[3] = 66;
+    this.writeU16(output2, 4, TELEMETRY_BATCH_VERSION);
+    this.writeU16(output2, 6, TELEMETRY_BATCH_HEADER_BYTES);
+    this.writeU32(output2, 8, sourceId);
+    this.writeU32(output2, 12, this.captureEpoch);
+    this.writeU32(output2, 16, clockDomain);
+    this.writeU32(output2, 20, 0);
+    this.writeU32(output2, 24, this.length);
+    this.writeU32(output2, 28, Math.min(U32_MAX, this.droppedRecords));
+    this.writeU64Number(output2, 32, this.ticksPerSecond);
+    const payloadBytes = this.length * TELEMETRY_RECORD_BYTES;
+    for (let index = 0;index < payloadBytes; index++)
+      output2[TELEMETRY_BATCH_HEADER_BYTES + index] = this.bytes[index] ?? 0;
+    return needed;
+  }
+  instant(descriptor, correlation, argument0 = 0, argument1 = 0) {
+    return this.record(descriptor, 1 /* Instant */, 1 /* Instant */, correlation, argument0, argument1);
+  }
+  spanBegin(descriptor, correlation, argument0 = 0, argument1 = 0) {
+    return this.record(descriptor, 2 /* Span */, 2 /* SpanBegin */, correlation, argument0, argument1);
+  }
+  spanEnd(descriptor, correlation, argument0 = 0, argument1 = 0) {
+    return this.record(descriptor, 2 /* Span */, 3 /* SpanEnd */, correlation, argument0, argument1);
+  }
+  asyncBegin(descriptor, correlation, argument0 = 0, argument1 = 0) {
+    return this.record(descriptor, 3 /* AsyncSpan */, 4 /* AsyncBegin */, correlation, argument0, argument1);
+  }
+  asyncEnd(descriptor, correlation, argument0 = 0, argument1 = 0) {
+    return this.record(descriptor, 3 /* AsyncSpan */, 5 /* AsyncEnd */, correlation, argument0, argument1);
+  }
+  flowStart(descriptor, correlation, argument0 = 0, argument1 = 0) {
+    return this.record(descriptor, 4 /* Flow */, 6 /* FlowStart */, correlation, argument0, argument1);
+  }
+  flowStep(descriptor, correlation, argument0 = 0, argument1 = 0) {
+    return this.record(descriptor, 4 /* Flow */, 7 /* FlowStep */, correlation, argument0, argument1);
+  }
+  flowEnd(descriptor, correlation, argument0 = 0, argument1 = 0) {
+    return this.record(descriptor, 4 /* Flow */, 8 /* FlowEnd */, correlation, argument0, argument1);
+  }
+  record(descriptor, expectedKind, phase, correlation, argument0, argument1) {
+    if (this.captureState !== 1 /* Armed */)
+      return 1 /* Disabled */;
+    if (!Number.isInteger(descriptor) || descriptor < 0 || descriptor >= this.descriptors.length)
+      return 3 /* InvalidDescriptor */;
+    if (this.descriptors[descriptor]?.kind !== expectedKind)
+      return 4 /* WrongDescriptorKind */;
+    if (this.enabledDescriptors[descriptor] === 0)
+      return 2 /* CategoryDisabled */;
+    if (this.length === this.capacity) {
+      this.droppedRecords++;
+      return 5 /* CapacityExceeded */;
+    }
+    const base = this.length * TELEMETRY_RECORD_WORDS;
+    this.writeU53(base, this.clock());
+    this.writeU53(base + 2, correlation);
+    this.writeU53(base + 4, argument0);
+    this.writeU53(base + 6, argument1);
+    this.words[base + 8] = descriptor;
+    this.words[base + 9] = phase;
+    this.length++;
+    return 0 /* Recorded */;
+  }
+  writeU53(word, value) {
+    const nonNegative = Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+    this.words[word] = nonNegative >>> 0;
+    this.words[word + 1] = Math.floor(nonNegative / U32_SCALE) >>> 0;
+  }
+  writeU16(output2, offset, value) {
+    output2[offset] = value;
+    output2[offset + 1] = value >>> 8;
+  }
+  writeU32(output2, offset, value) {
+    output2[offset] = value;
+    output2[offset + 1] = value >>> 8;
+    output2[offset + 2] = value >>> 16;
+    output2[offset + 3] = value >>> 24;
+  }
+  writeU64Number(output2, offset, value) {
+    const nonNegative = Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+    this.writeU32(output2, offset, nonNegative);
+    this.writeU32(output2, offset + 4, Math.floor(nonNegative / U32_SCALE));
+  }
+}
+class TelemetryMetricBank {
+  descriptors;
+  cells;
+  offsets;
+  requiredCells;
+  constructor(descriptors, cells) {
+    this.descriptors = descriptors;
+    this.cells = cells;
+    this.offsets = new Uint32Array(descriptors.length);
+    let required = 0;
+    for (let index = 0;index < descriptors.length; index++) {
+      this.offsets[index] = required;
+      required += descriptors[index]?.kind === 4 /* HistogramLog2 */ ? TELEMETRY_HISTOGRAM_BUCKETS : 1;
+    }
+    if (cells.length < required)
+      throw new RangeError(`telemetry metrics require ${required} cells, received ${cells.length}`);
+    this.requiredCells = required;
+  }
+  counterAdd(metric, delta) {
+    const offset = this.scalarOffset(metric, 1 /* Counter */);
+    if (offset < 0)
+      return this.metricFailure(metric, 1 /* Counter */);
+    this.cells[offset] = (this.cells[offset] ?? 0) + delta;
+    return 0 /* Updated */;
+  }
+  gaugeSet(metric, value) {
+    const offset = this.scalarOffset(metric, 2 /* Gauge */);
+    if (offset < 0)
+      return this.metricFailure(metric, 2 /* Gauge */);
+    this.cells[offset] = value;
+    return 0 /* Updated */;
+  }
+  maximum(metric, value) {
+    const offset = this.scalarOffset(metric, 3 /* Maximum */);
+    if (offset < 0)
+      return this.metricFailure(metric, 3 /* Maximum */);
+    if (value > (this.cells[offset] ?? 0))
+      this.cells[offset] = value;
+    return 0 /* Updated */;
+  }
+  histogramLog2(metric, value) {
+    if (!Number.isInteger(metric) || metric < 0 || metric >= this.descriptors.length)
+      return 1 /* InvalidMetric */;
+    if (this.descriptors[metric]?.kind !== 4 /* HistogramLog2 */)
+      return 2 /* WrongMetricKind */;
+    const bucket = value <= 0 ? 0 : Math.min(TELEMETRY_HISTOGRAM_BUCKETS - 1, Math.floor(Math.log2(value)));
+    const offset = (this.offsets[metric] ?? 0) + bucket;
+    this.cells[offset] = (this.cells[offset] ?? 0) + 1;
+    return 0 /* Updated */;
+  }
+  readCell(metric, bucket = 0) {
+    if (!Number.isInteger(metric) || metric < 0 || metric >= this.descriptors.length)
+      return 0;
+    const descriptor = this.descriptors[metric];
+    const count = descriptor?.kind === 4 /* HistogramLog2 */ ? TELEMETRY_HISTOGRAM_BUCKETS : 1;
+    if (!Number.isInteger(bucket) || bucket < 0 || bucket >= count)
+      return 0;
+    return this.cells[(this.offsets[metric] ?? 0) + bucket] ?? 0;
+  }
+  scalarOffset(metric, expected) {
+    if (!Number.isInteger(metric) || metric < 0 || metric >= this.descriptors.length)
+      return -1;
+    return this.descriptors[metric]?.kind === expected ? this.offsets[metric] ?? -1 : -1;
+  }
+  metricFailure(metric, expected) {
+    if (!Number.isInteger(metric) || metric < 0 || metric >= this.descriptors.length)
+      return 1 /* InvalidMetric */;
+    return this.descriptors[metric]?.kind === expected ? 1 /* InvalidMetric */ : 2 /* WrongMetricKind */;
+  }
+}
+
+class EngineTelemetry {
+  trace;
+  metrics;
+  correlationCounter = 1;
+  constructor(traceDescriptors, metricDescriptors, traceBuffer, metricCells, clock) {
+    this.trace = new TelemetryRecorder(traceDescriptors, traceBuffer, clock);
+    this.metrics = new TelemetryMetricBank(metricDescriptors, metricCells);
+  }
+  nextCorrelation(namespace = 0) {
+    const safeNamespace = Number.isInteger(namespace) && namespace >= 0 ? Math.min(1048575, namespace) : 0;
+    const local = this.correlationCounter;
+    this.correlationCounter = local === U32_MAX ? 1 : local + 1;
+    return safeNamespace * U32_SCALE + local;
+  }
+}
+var TelemetryRes = defineResource("telemetry", () => {
+  throw new Error("Telemetry not initialized. Set TelemetryRes during bootstrap.");
+});
+
+// crates/afterglow-web/web/src/engine/telemetry/catalog.ts
+var ENGINE_TRACE_DESCRIPTORS = [
+  { category: 1 /* Frame */, categoryName: "frame", name: "frame", kind: 2 /* Span */, argument0: "frame_id", argument1: "delta_ns" },
+  { category: 2 /* Worker */, categoryName: "worker", name: "worker.poll", kind: 2 /* Span */, argument0: "stage", argument1: "elapsed_us" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.update", kind: 2 /* Span */, argument0: "stage", argument1: "elapsed_us" },
+  { category: 0 /* Runtime */, categoryName: "runtime", name: "structural.commands", kind: 2 /* Span */, argument0: "stage", argument1: "elapsed_us" },
+  { category: 0 /* Runtime */, categoryName: "runtime", name: "pose.batches", kind: 2 /* Span */, argument0: "stage", argument1: "elapsed_us" },
+  { category: 1 /* Frame */, categoryName: "frame", name: "render.prepare", kind: 2 /* Span */, argument0: "stage", argument1: "elapsed_us" },
+  { category: 0 /* Runtime */, categoryName: "runtime", name: "game.update", kind: 2 /* Span */, argument0: "frame_id" },
+  { category: 1 /* Frame */, categoryName: "frame", name: "render.passes", kind: 2 /* Span */, argument0: "frame_id" },
+  { category: 4 /* Asset */, categoryName: "asset", name: "asset.composition.open", kind: 3 /* AsyncSpan */, argument0: "workers", argument1: "status" },
+  { category: 4 /* Asset */, categoryName: "asset", name: "asset.size", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "status" },
+  { category: 4 /* Asset */, categoryName: "asset", name: "asset.read", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "offset_or_status" },
+  { category: 4 /* Asset */, categoryName: "asset", name: "asset.read_bulk", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "spans" },
+  { category: 9 /* Rpc */, categoryName: "rpc", name: "rpc.call", kind: 3 /* AsyncSpan */, argument0: "method", argument1: "bytes" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.page_load", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "status" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.bulk_wait", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "tier" },
+  { category: 4 /* Asset */, categoryName: "asset", name: "asset.bulk_dispatch", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "spans" },
+  { category: 5 /* Texture */, categoryName: "texture", name: "texture.transcode_queue", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "format" },
+  { category: 5 /* Texture */, categoryName: "texture", name: "texture.transcode", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "format" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.upload", kind: 2 /* Span */, argument0: "bytes", argument1: "slot" },
+  { category: 4 /* Asset */, categoryName: "cache", name: "cache.read", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "hit" },
+  { category: 4 /* Asset */, categoryName: "cache", name: "cache.write", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "status" },
+  { category: 4 /* Asset */, categoryName: "asset", name: "mesh.optimize", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "status" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.feedback_detected", kind: 1 /* Instant */, argument0: "priority", argument1: "feedback_epoch" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.scheduler_wait", kind: 3 /* AsyncSpan */, argument0: "priority", argument1: "status" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.page_published", kind: 1 /* Instant */, argument0: "physical_slot", argument1: "eligible_frame_id" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.mutable_write", kind: 1 /* Instant */, argument0: "bytes", argument1: "status" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.mutable_refresh", kind: 2 /* Span */, argument0: "pages", argument1: "remaining" },
+  { category: 10 /* Model */, categoryName: "model", name: "model.revision", kind: 3 /* AsyncSpan */, argument0: "revision", argument1: "status" },
+  { category: 10 /* Model */, categoryName: "model", name: "model.published", kind: 1 /* Instant */, argument0: "revision", argument1: "cpu_bytes" },
+  { category: 10 /* Model */, categoryName: "model", name: "geometry.upload", kind: 2 /* Span */, argument0: "bytes", argument1: "slot" },
+  { category: 11 /* Storage */, categoryName: "storage", name: "blob.read", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "status" },
+  { category: 11 /* Storage */, categoryName: "storage", name: "blob.write", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "status" }
+];
+var FRAME_BUDGET_TRACE_DESCRIPTORS = [
+  1 /* WorkerPoll */,
+  2 /* VirtualTexture */,
+  3 /* StructuralCommands */,
+  4 /* PoseBatches */,
+  5 /* RenderPrepare */
+];
+var ENGINE_METRIC_DESCRIPTORS = [
+  { category: 1 /* Frame */, categoryName: "frame", name: "frames", kind: 1 /* Counter */, unit: "count" },
+  { category: 1 /* Frame */, categoryName: "frame", name: "frame_delta_ns", kind: 4 /* HistogramLog2 */, unit: "nanoseconds" },
+  { category: 1 /* Frame */, categoryName: "frame", name: "frame_max_ns", kind: 3 /* Maximum */, unit: "nanoseconds" },
+  { category: 4 /* Asset */, categoryName: "asset", name: "asset_bytes_read", kind: 1 /* Counter */, unit: "bytes" },
+  { category: 4 /* Asset */, categoryName: "asset", name: "asset_read_ns", kind: 4 /* HistogramLog2 */, unit: "nanoseconds" },
+  { category: 9 /* Rpc */, categoryName: "rpc", name: "rpc_calls", kind: 1 /* Counter */, unit: "count" },
+  { category: 9 /* Rpc */, categoryName: "rpc", name: "rpc_duration_ns", kind: 4 /* HistogramLog2 */, unit: "nanoseconds" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt_pages_requested", kind: 1 /* Counter */, unit: "count" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt_pages_loaded", kind: 1 /* Counter */, unit: "count" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt_pages_failed", kind: 1 /* Counter */, unit: "count" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt_upload_ns", kind: 4 /* HistogramLog2 */, unit: "nanoseconds" },
+  { category: 5 /* Texture */, categoryName: "texture", name: "texture_transcode_ns", kind: 4 /* HistogramLog2 */, unit: "nanoseconds" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "mutable_texture_writes", kind: 1 /* Counter */, unit: "count" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "mutable_texture_bytes", kind: 1 /* Counter */, unit: "bytes" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "mutable_pages_published", kind: 1 /* Counter */, unit: "count" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "mutable_pages_deferred", kind: 1 /* Counter */, unit: "count" },
+  { category: 10 /* Model */, categoryName: "model", name: "model_revisions_queued", kind: 1 /* Counter */, unit: "count" },
+  { category: 10 /* Model */, categoryName: "model", name: "model_revisions_published", kind: 1 /* Counter */, unit: "count" },
+  { category: 10 /* Model */, categoryName: "model", name: "model_revisions_failed", kind: 1 /* Counter */, unit: "count" },
+  { category: 10 /* Model */, categoryName: "model", name: "model_cpu_bytes_high_water", kind: 3 /* Maximum */, unit: "bytes" },
+  { category: 10 /* Model */, categoryName: "model", name: "model_gpu_bytes_high_water", kind: 3 /* Maximum */, unit: "bytes" },
+  { category: 10 /* Model */, categoryName: "model", name: "geometry_upload_ns", kind: 4 /* HistogramLog2 */, unit: "nanoseconds" },
+  { category: 11 /* Storage */, categoryName: "storage", name: "blob_read_bytes", kind: 1 /* Counter */, unit: "bytes" },
+  { category: 11 /* Storage */, categoryName: "storage", name: "blob_write_bytes", kind: 1 /* Counter */, unit: "bytes" }
+];
+
+// crates/afterglow-web/web/src/engine/streaming/persistent-blob-store.ts
+function validKey(key) {
+  return key.length > 0 && key.length <= 128 && /^[A-Za-z0-9._-]+$/.test(key);
+}
+
+class PersistentBlobStore {
+  backend;
+  capacities;
+  telemetry;
+  sizes = new Map;
+  busyKeys = new Set;
+  reservedBytes = 0;
+  reservedItems = 0;
+  closed = false;
+  stats = {
+    items: 0,
+    bytes: 0,
+    inFlightOperations: 0,
+    inFlightBytes: 0,
+    operationHighWater: 0,
+    inFlightByteHighWater: 0,
+    rejectedOperations: 0,
+    readOperations: 0,
+    writeOperations: 0,
+    removeOperations: 0,
+    ioErrors: 0
+  };
+  constructor(backend, capacities, telemetry) {
+    this.backend = backend;
+    this.capacities = capacities;
+    this.telemetry = telemetry;
+  }
+  static async open(backend, capacities, telemetry) {
+    if (!Number.isInteger(capacities.maxItems) || capacities.maxItems < 1 || !Number.isInteger(capacities.maxBytes) || capacities.maxBytes < 1 || !Number.isInteger(capacities.maxValueBytes) || capacities.maxValueBytes < 1 || capacities.maxValueBytes > capacities.maxBytes || !Number.isInteger(capacities.maxInFlightOperations) || capacities.maxInFlightOperations < 1 || !Number.isInteger(capacities.maxInFlightBytes) || capacities.maxInFlightBytes < 1)
+      throw new RangeError("invalid persistent blob-store capacities");
+    const store = new PersistentBlobStore(backend, capacities, telemetry);
+    const entries = await backend.list(capacities.maxValueBytes);
+    let bytes = 0;
+    for (const entry of entries) {
+      if (!validKey(entry.key) || !Number.isSafeInteger(entry.size) || entry.size < 0 || entry.size > capacities.maxValueBytes || store.sizes.has(entry.key)) {
+        await backend.close();
+        throw new Error("persistent blob backend returned a corrupt index");
+      }
+      bytes += entry.size;
+      if (store.sizes.size >= capacities.maxItems || bytes > capacities.maxBytes) {
+        await backend.close();
+        throw new Error("persistent blob backend exceeds configured capacity");
+      }
+      store.sizes.set(entry.key, entry.size);
+    }
+    store.refreshStats(bytes);
+    return store;
+  }
+  refreshStats(bytes) {
+    this.stats.items = this.sizes.size;
+    if (bytes !== undefined)
+      this.stats.bytes = bytes;
+  }
+  begin(key, bytes) {
+    if (this.closed)
+      return 11 /* Closed */;
+    if (!validKey(key))
+      return 2 /* InvalidKey */;
+    if (this.busyKeys.has(key))
+      return 8 /* KeyBusy */;
+    if (this.stats.inFlightOperations >= this.capacities.maxInFlightOperations) {
+      this.stats.rejectedOperations++;
+      return 6 /* OperationCapacityExceeded */;
+    }
+    if (this.stats.inFlightBytes + bytes > this.capacities.maxInFlightBytes) {
+      this.stats.rejectedOperations++;
+      return 7 /* InFlightByteCapacityExceeded */;
+    }
+    this.busyKeys.add(key);
+    this.stats.inFlightOperations++;
+    this.stats.inFlightBytes += bytes;
+    if (this.stats.inFlightOperations > this.stats.operationHighWater)
+      this.stats.operationHighWater = this.stats.inFlightOperations;
+    if (this.stats.inFlightBytes > this.stats.inFlightByteHighWater)
+      this.stats.inFlightByteHighWater = this.stats.inFlightBytes;
+    return 0 /* Ok */;
+  }
+  end(key, bytes) {
+    this.busyKeys.delete(key);
+    this.stats.inFlightOperations--;
+    this.stats.inFlightBytes -= bytes;
+  }
+  async get(key, maxBytes) {
+    if (!validKey(key))
+      return { status: 2 /* InvalidKey */, bytes: null };
+    if (!this.sizes.has(key))
+      return { status: 1 /* NotFound */, bytes: null };
+    if (!Number.isSafeInteger(maxBytes) || maxBytes < 0 || maxBytes > this.capacities.maxValueBytes)
+      return { status: 5 /* ValueCapacityExceeded */, bytes: null };
+    const admitted = this.begin(key, maxBytes);
+    if (admitted !== 0 /* Ok */)
+      return { status: admitted, bytes: null };
+    const correlation = this.telemetry?.nextCorrelation(11 /* Storage */) ?? 0;
+    this.telemetry?.trace.asyncBegin(30 /* BlobRead */, correlation, maxBytes, 0);
+    try {
+      const bytes = await this.backend.read(key, maxBytes);
+      if (bytes === null) {
+        this.telemetry?.trace.asyncEnd(30 /* BlobRead */, correlation, 0, 1);
+        return { status: 1 /* NotFound */, bytes: null };
+      }
+      if (bytes.byteLength > maxBytes || bytes.byteLength > this.capacities.maxValueBytes) {
+        this.telemetry?.trace.asyncEnd(30 /* BlobRead */, correlation, bytes.byteLength, 2);
+        return { status: 5 /* ValueCapacityExceeded */, bytes: null };
+      }
+      this.stats.readOperations++;
+      this.telemetry?.metrics.counterAdd(22 /* BlobReadBytes */, bytes.byteLength);
+      this.telemetry?.trace.asyncEnd(30 /* BlobRead */, correlation, bytes.byteLength, 0);
+      return { status: 0 /* Ok */, bytes };
+    } catch {
+      this.stats.ioErrors++;
+      this.telemetry?.trace.asyncEnd(30 /* BlobRead */, correlation, 0, 3);
+      return { status: 10 /* IoError */, bytes: null };
+    } finally {
+      this.end(key, maxBytes);
+    }
+  }
+  async putAtomic(key, bytes) {
+    if (bytes.byteLength > this.capacities.maxValueBytes)
+      return { status: 5 /* ValueCapacityExceeded */ };
+    const previous = this.sizes.get(key);
+    const newItem = previous === undefined;
+    const delta = Math.max(0, bytes.byteLength - (previous ?? 0));
+    if (newItem && this.sizes.size + this.reservedItems >= this.capacities.maxItems)
+      return { status: 3 /* ItemCapacityExceeded */ };
+    if (this.stats.bytes + this.reservedBytes + delta > this.capacities.maxBytes)
+      return { status: 4 /* ByteCapacityExceeded */ };
+    const admitted = this.begin(key, bytes.byteLength);
+    if (admitted !== 0 /* Ok */)
+      return { status: admitted };
+    this.reservedBytes += delta;
+    if (newItem)
+      this.reservedItems++;
+    const correlation = this.telemetry?.nextCorrelation(11 /* Storage */) ?? 0;
+    this.telemetry?.trace.asyncBegin(31 /* BlobWrite */, correlation, bytes.byteLength, 0);
+    try {
+      await this.backend.writeAtomic(key, bytes);
+      this.sizes.set(key, bytes.byteLength);
+      this.stats.bytes += bytes.byteLength - (previous ?? 0);
+      this.stats.writeOperations++;
+      this.refreshStats();
+      this.telemetry?.metrics.counterAdd(23 /* BlobWriteBytes */, bytes.byteLength);
+      this.telemetry?.trace.asyncEnd(31 /* BlobWrite */, correlation, bytes.byteLength, 0);
+      return { status: 0 /* Ok */ };
+    } catch {
+      this.stats.ioErrors++;
+      this.telemetry?.trace.asyncEnd(31 /* BlobWrite */, correlation, 0, 1);
+      return { status: 10 /* IoError */ };
+    } finally {
+      this.reservedBytes -= delta;
+      if (newItem)
+        this.reservedItems--;
+      this.end(key, bytes.byteLength);
+    }
+  }
+  async remove(key) {
+    if (!validKey(key))
+      return { status: 2 /* InvalidKey */ };
+    if (!this.sizes.has(key))
+      return { status: 1 /* NotFound */ };
+    const admitted = this.begin(key, 0);
+    if (admitted !== 0 /* Ok */)
+      return { status: admitted };
+    try {
+      const removed = await this.backend.remove(key);
+      if (!removed)
+        return { status: 1 /* NotFound */ };
+      const previous = this.sizes.get(key) ?? 0;
+      this.sizes.delete(key);
+      this.stats.bytes -= previous;
+      this.stats.removeOperations++;
+      this.refreshStats();
+      return { status: 0 /* Ok */ };
+    } catch {
+      this.stats.ioErrors++;
+      return { status: 10 /* IoError */ };
+    } finally {
+      this.end(key, 0);
+    }
+  }
+  async clear() {
+    if (this.closed)
+      return { status: 11 /* Closed */ };
+    if (this.stats.inFlightOperations !== 0)
+      return { status: 6 /* OperationCapacityExceeded */ };
+    try {
+      await this.backend.clear();
+      this.sizes.clear();
+      this.stats.bytes = 0;
+      this.refreshStats();
+      return { status: 0 /* Ok */ };
+    } catch {
+      this.stats.ioErrors++;
+      return { status: 10 /* IoError */ };
+    }
+  }
+  getStats() {
+    return this.stats;
+  }
+  async close() {
+    if (this.closed)
+      return;
+    this.closed = true;
+    await this.backend.close();
+  }
+}
+
+class MemoryPersistentBlobBackend {
+  values = new Map;
+  closed = false;
+  async list(_maxValueBytes) {
+    return Array.from(this.values, ([key, value]) => ({ key, size: value.byteLength }));
+  }
+  async read(key, maxBytes) {
+    const value = this.values.get(key);
+    if (!value)
+      return null;
+    if (value.byteLength > maxBytes)
+      throw new RangeError("stored value exceeds read capacity");
+    return value.slice();
+  }
+  async writeAtomic(key, bytes) {
+    if (this.closed)
+      throw new Error("backend is closed");
+    this.values.set(key, bytes.slice());
+  }
+  async remove(key) {
+    return this.values.delete(key);
+  }
+  async clear() {
+    this.values.clear();
+  }
+  async close() {
+    this.closed = true;
+  }
+}
+// crates/afterglow-web/web/src/engine/streaming/native-persistent-blob-backend.ts
+var RPC_CHUNK_BYTES = 512 * 1024;
+
+// crates/afterglow-web/web/src/engine/streaming/web-persistent-blob-backend.ts
+var RPC_CHUNK_BYTES2 = 512 * 1024;
 // crates/afterglow-web/web/src/engine/renderer/renderer-seal.ts
 class RendererSeal {
   backend;
@@ -59357,6 +60024,7 @@ function gpuErrorTarget(device) {
 }
 
 class RendererHost {
+  presentation = true;
   renderer;
   device;
   adapterInfo;
@@ -59372,8 +60040,10 @@ class RendererHost {
   maxPixelRatio;
   deviceTarget;
   resizeClient;
+  fatalClient;
   onResize;
   onGpuError;
+  physicalViewport = null;
   unsubscribeResize = null;
   disposed = false;
   shaderInspectionActive = false;
@@ -59396,6 +60066,7 @@ class RendererHost {
     this.viewport = options.viewport ?? new BrowserRendererViewport;
     this.maxPixelRatio = options.maxPixelRatio ?? 2;
     this.resizeClient = options.onResize;
+    this.fatalClient = options.onFatal;
     if (!Number.isFinite(this.maxPixelRatio) || this.maxPixelRatio <= 0)
       throw new RangeError("maxPixelRatio must be positive");
     this.sealMonitor = new RendererSeal(requirePipelineBackend(renderer));
@@ -59405,12 +60076,21 @@ class RendererHost {
     this.onResize = () => this.resize();
     this.onGpuError = (event) => {
       this.diagnostics.tryRecord(3 /* UncapturedGpuError */, 1 /* Renderer */, event);
+      this.fatalClient?.(event);
     };
     try {
       this.container.appendChild(renderer.domElement);
       this.resize();
       this.unsubscribeResize = this.viewport.subscribe(this.onResize);
       this.deviceTarget?.addEventListener("uncapturederror", this.onGpuError);
+      const lost = this.device.lost;
+      if (lost)
+        lost.then((info) => {
+          if (this.disposed)
+            return;
+          this.diagnostics.tryRecord(2 /* DeviceLost */, 1 /* Renderer */, info);
+          this.fatalClient?.(info);
+        });
     } catch (error2) {
       this.unsubscribeResize?.();
       this.unsubscribeResize = null;
@@ -59439,15 +60119,41 @@ class RendererHost {
     this.renderer.setPixelRatio(ratio);
     this.renderer.setSize(width, height);
     this.resizeClient?.(width, height);
+    this.physicalViewport?.resize(this.renderer.domElement.width, this.renderer.domElement.height);
   }
-  attachVirtualTextureStore(store) {
+  initializeVirtualTextures(textures, physicalViewport) {
+    if (this.disposed)
+      throw new Error("cannot initialize textures on a disposed renderer host");
+    this.renderer.render(this.scene, this.camera);
+    this.attachVirtualTextures(textures, physicalViewport);
+  }
+  attachVirtualTextures(textures, physicalViewport) {
     const backend = this.renderer.backend;
-    store.attachRenderer({
+    textures.attachRenderer({
       backend: {
         device: this.device,
         get: (texture2) => backend.get(texture2)
       }
     });
+    if (physicalViewport) {
+      if (this.physicalViewport !== null)
+        throw new Error("renderer already owns a physical feedback viewport");
+      this.physicalViewport = physicalViewport;
+      physicalViewport.resize(this.renderer.domElement.width, this.renderer.domElement.height);
+    }
+  }
+  readDimensionsInto(out) {
+    out.logicalWidth = Math.max(1, this.viewport.width);
+    out.logicalHeight = Math.max(1, this.viewport.height);
+    out.pixelRatio = Math.min(this.maxPixelRatio, Math.max(0.1, this.viewport.pixelRatio));
+    out.canvasWidth = this.renderer.domElement.width;
+    out.canvasHeight = this.renderer.domElement.height;
+    out.surfaceWidth = out.canvasWidth;
+    out.surfaceHeight = out.canvasHeight;
+    out.feedbackWidth = this.physicalViewport ? out.canvasWidth : 0;
+    out.feedbackHeight = this.physicalViewport ? out.canvasHeight : 0;
+    const aspect2 = this.camera.aspect;
+    out.cameraAspect = typeof aspect2 === "number" ? aspect2 : out.logicalWidth / out.logicalHeight;
   }
   async warm() {
     if (this.disposed)
@@ -59494,6 +60200,7 @@ class RendererHost {
     this.disposed = true;
     this.unsubscribeResize?.();
     this.unsubscribeResize = null;
+    this.physicalViewport = null;
     this.deviceTarget?.removeEventListener("uncapturederror", this.onGpuError);
     const canvas = this.renderer.domElement;
     if (canvas.parentNode === this.container)
@@ -59501,84 +60208,6 @@ class RendererHost {
     this.renderer.dispose();
   }
 }
-// crates/afterglow-web/web/src/engine/core/resource.ts
-var RESOURCES = Symbol.for("afterglow-resources");
-var RESOURCES_SEALED = Symbol.for("afterglow-resources-sealed");
-function ensureStore(world) {
-  const w4 = world;
-  if (!w4[RESOURCES])
-    w4[RESOURCES] = {};
-  return w4[RESOURCES];
-}
-
-class Resource {
-  name;
-  factory;
-  constructor(name, factory) {
-    this.name = name;
-    this.factory = factory;
-  }
-  get(world) {
-    const store = ensureStore(world);
-    if (!(this.name in store)) {
-      if (world[RESOURCES_SEALED] === true)
-        throw new Error(`resource ${this.name} was not initialized before gameplay seal`);
-      store[this.name] = this.factory();
-    }
-    return store[this.name];
-  }
-  set(world, value) {
-    ensureStore(world)[this.name] = value;
-  }
-  has(world) {
-    return this.name in ensureStore(world);
-  }
-  remove(world) {
-    delete ensureStore(world)[this.name];
-  }
-}
-function defineResource(name, factory) {
-  return new Resource(name, factory);
-}
-function initResources(world) {
-  ensureStore(world);
-}
-
-class ResourceManifest {
-  resources;
-  constructor(...resources) {
-    const names = new Set;
-    for (const resource of resources) {
-      if (names.has(resource.name))
-        throw new Error(`duplicate resource manifest entry ${resource.name}`);
-      names.add(resource.name);
-    }
-    this.resources = resources;
-  }
-  initialize(world) {
-    initResources(world);
-    for (const resource of this.resources)
-      resource.get(world);
-  }
-  seal(world) {
-    const missing = [];
-    for (const resource of this.resources)
-      if (!resource.has(world))
-        missing.push(resource.name);
-    if (missing.length !== 0)
-      throw new Error(`resources missing before gameplay seal: ${missing.join(", ")}`);
-    sealResources(world);
-  }
-  initializeAndSeal(world) {
-    this.initialize(world);
-    this.seal(world);
-  }
-}
-function sealResources(world) {
-  ensureStore(world);
-  world[RESOURCES_SEALED] = true;
-}
-
 // crates/afterglow-web/web/src/engine/core/engine-memory.ts
 var INVALID_MEMORY_OFFSET = -1;
 var INVALID_POOL_INDEX = 4294967295;
@@ -59901,569 +60530,6 @@ function prepareAfterglowFrame(frame, workerInput, adapter, vtInput, memory, bud
   adapter.prepareFrame(frame);
   budget?.endStage(4 /* RenderPrepare */);
 }
-
-// crates/afterglow-web/web/src/engine/telemetry/telemetry.ts
-var TELEMETRY_RECORD_BYTES = 40;
-var TELEMETRY_BATCH_HEADER_BYTES = 40;
-var TELEMETRY_BATCH_VERSION = 1;
-var TELEMETRY_RECORD_WORDS = TELEMETRY_RECORD_BYTES / 4;
-var U32_SCALE = 4294967296;
-var U32_MAX = 4294967295;
-var TELEMETRY_HISTOGRAM_BUCKETS = 32;
-class TelemetryRecorder {
-  descriptors;
-  buffer;
-  clock;
-  ticksPerSecond;
-  words;
-  bytes;
-  enabledDescriptors;
-  stableSnapshot;
-  captureState = 0 /* Idle */;
-  captureEpoch = 0;
-  length = 0;
-  droppedRecords = 0;
-  constructor(descriptors, buffer2, clock = () => performance.now() * 1e6, ticksPerSecond = 1e9) {
-    this.descriptors = descriptors;
-    this.buffer = buffer2;
-    this.clock = clock;
-    this.ticksPerSecond = ticksPerSecond;
-    if (buffer2.byteLength === 0 || buffer2.byteLength % TELEMETRY_RECORD_BYTES !== 0)
-      throw new RangeError("telemetry trace buffer must contain a positive whole number of 40-byte records");
-    if (!Number.isFinite(ticksPerSecond) || ticksPerSecond <= 0)
-      throw new RangeError("telemetry ticksPerSecond must be positive");
-    this.words = new Uint32Array(buffer2);
-    this.bytes = new Uint8Array(buffer2);
-    this.enabledDescriptors = new Uint8Array(descriptors.length);
-    this.stableSnapshot = {
-      epoch: 0,
-      count: 0,
-      capacity: buffer2.byteLength / TELEMETRY_RECORD_BYTES,
-      dropped: 0,
-      ticksPerSecond,
-      buffer: buffer2
-    };
-  }
-  get state() {
-    return this.captureState;
-  }
-  get count() {
-    return this.length;
-  }
-  get capacity() {
-    return this.stableSnapshot.capacity;
-  }
-  get dropped() {
-    return this.droppedRecords;
-  }
-  arm(epoch, categoryWords) {
-    if (this.captureState !== 0 /* Idle */ || !Number.isInteger(epoch) || epoch < 0 || epoch > U32_MAX)
-      return false;
-    this.captureEpoch = epoch;
-    this.length = 0;
-    this.droppedRecords = 0;
-    for (let index = 0;index < this.descriptors.length; index++) {
-      const category = this.descriptors[index]?.category ?? -1;
-      this.enabledDescriptors[index] = categoryWords === undefined ? 1 : ((categoryWords[category >>> 5] ?? 0) & 1 << (category & 31)) !== 0 ? 1 : 0;
-    }
-    this.captureState = 1 /* Armed */;
-    return true;
-  }
-  stop() {
-    if (this.captureState !== 1 /* Armed */)
-      return false;
-    this.captureState = 2 /* Frozen */;
-    return true;
-  }
-  snapshot() {
-    if (this.captureState !== 2 /* Frozen */)
-      return null;
-    this.stableSnapshot.epoch = this.captureEpoch;
-    this.stableSnapshot.count = this.length;
-    this.stableSnapshot.dropped = this.droppedRecords;
-    return this.stableSnapshot;
-  }
-  reset() {
-    if (this.captureState !== 2 /* Frozen */)
-      return false;
-    this.length = 0;
-    this.droppedRecords = 0;
-    this.enabledDescriptors.fill(0);
-    this.captureState = 0 /* Idle */;
-    return true;
-  }
-  encodedBatchBytes() {
-    return TELEMETRY_BATCH_HEADER_BYTES + this.length * TELEMETRY_RECORD_BYTES;
-  }
-  encodeBatchInto(output2, sourceId, clockDomain) {
-    if (this.captureState !== 2 /* Frozen */ || !Number.isInteger(sourceId) || sourceId < 0 || sourceId > U32_MAX || !Number.isInteger(clockDomain) || clockDomain < 0 || clockDomain > U32_MAX)
-      return 0;
-    const needed = this.encodedBatchBytes();
-    if (output2.length < needed)
-      return -needed;
-    output2[0] = 65;
-    output2[1] = 71;
-    output2[2] = 84;
-    output2[3] = 66;
-    this.writeU16(output2, 4, TELEMETRY_BATCH_VERSION);
-    this.writeU16(output2, 6, TELEMETRY_BATCH_HEADER_BYTES);
-    this.writeU32(output2, 8, sourceId);
-    this.writeU32(output2, 12, this.captureEpoch);
-    this.writeU32(output2, 16, clockDomain);
-    this.writeU32(output2, 20, 0);
-    this.writeU32(output2, 24, this.length);
-    this.writeU32(output2, 28, Math.min(U32_MAX, this.droppedRecords));
-    this.writeU64Number(output2, 32, this.ticksPerSecond);
-    const payloadBytes = this.length * TELEMETRY_RECORD_BYTES;
-    for (let index = 0;index < payloadBytes; index++)
-      output2[TELEMETRY_BATCH_HEADER_BYTES + index] = this.bytes[index] ?? 0;
-    return needed;
-  }
-  instant(descriptor, correlation, argument0 = 0, argument1 = 0) {
-    return this.record(descriptor, 1 /* Instant */, 1 /* Instant */, correlation, argument0, argument1);
-  }
-  spanBegin(descriptor, correlation, argument0 = 0, argument1 = 0) {
-    return this.record(descriptor, 2 /* Span */, 2 /* SpanBegin */, correlation, argument0, argument1);
-  }
-  spanEnd(descriptor, correlation, argument0 = 0, argument1 = 0) {
-    return this.record(descriptor, 2 /* Span */, 3 /* SpanEnd */, correlation, argument0, argument1);
-  }
-  asyncBegin(descriptor, correlation, argument0 = 0, argument1 = 0) {
-    return this.record(descriptor, 3 /* AsyncSpan */, 4 /* AsyncBegin */, correlation, argument0, argument1);
-  }
-  asyncEnd(descriptor, correlation, argument0 = 0, argument1 = 0) {
-    return this.record(descriptor, 3 /* AsyncSpan */, 5 /* AsyncEnd */, correlation, argument0, argument1);
-  }
-  flowStart(descriptor, correlation, argument0 = 0, argument1 = 0) {
-    return this.record(descriptor, 4 /* Flow */, 6 /* FlowStart */, correlation, argument0, argument1);
-  }
-  flowStep(descriptor, correlation, argument0 = 0, argument1 = 0) {
-    return this.record(descriptor, 4 /* Flow */, 7 /* FlowStep */, correlation, argument0, argument1);
-  }
-  flowEnd(descriptor, correlation, argument0 = 0, argument1 = 0) {
-    return this.record(descriptor, 4 /* Flow */, 8 /* FlowEnd */, correlation, argument0, argument1);
-  }
-  record(descriptor, expectedKind, phase, correlation, argument0, argument1) {
-    if (this.captureState !== 1 /* Armed */)
-      return 1 /* Disabled */;
-    if (!Number.isInteger(descriptor) || descriptor < 0 || descriptor >= this.descriptors.length)
-      return 3 /* InvalidDescriptor */;
-    if (this.descriptors[descriptor]?.kind !== expectedKind)
-      return 4 /* WrongDescriptorKind */;
-    if (this.enabledDescriptors[descriptor] === 0)
-      return 2 /* CategoryDisabled */;
-    if (this.length === this.capacity) {
-      this.droppedRecords++;
-      return 5 /* CapacityExceeded */;
-    }
-    const base = this.length * TELEMETRY_RECORD_WORDS;
-    this.writeU53(base, this.clock());
-    this.writeU53(base + 2, correlation);
-    this.writeU53(base + 4, argument0);
-    this.writeU53(base + 6, argument1);
-    this.words[base + 8] = descriptor;
-    this.words[base + 9] = phase;
-    this.length++;
-    return 0 /* Recorded */;
-  }
-  writeU53(word, value) {
-    const nonNegative = Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
-    this.words[word] = nonNegative >>> 0;
-    this.words[word + 1] = Math.floor(nonNegative / U32_SCALE) >>> 0;
-  }
-  writeU16(output2, offset, value) {
-    output2[offset] = value;
-    output2[offset + 1] = value >>> 8;
-  }
-  writeU32(output2, offset, value) {
-    output2[offset] = value;
-    output2[offset + 1] = value >>> 8;
-    output2[offset + 2] = value >>> 16;
-    output2[offset + 3] = value >>> 24;
-  }
-  writeU64Number(output2, offset, value) {
-    const nonNegative = Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
-    this.writeU32(output2, offset, nonNegative);
-    this.writeU32(output2, offset + 4, Math.floor(nonNegative / U32_SCALE));
-  }
-}
-class TelemetryMetricBank {
-  descriptors;
-  cells;
-  offsets;
-  requiredCells;
-  constructor(descriptors, cells) {
-    this.descriptors = descriptors;
-    this.cells = cells;
-    this.offsets = new Uint32Array(descriptors.length);
-    let required = 0;
-    for (let index = 0;index < descriptors.length; index++) {
-      this.offsets[index] = required;
-      required += descriptors[index]?.kind === 4 /* HistogramLog2 */ ? TELEMETRY_HISTOGRAM_BUCKETS : 1;
-    }
-    if (cells.length < required)
-      throw new RangeError(`telemetry metrics require ${required} cells, received ${cells.length}`);
-    this.requiredCells = required;
-  }
-  counterAdd(metric, delta) {
-    const offset = this.scalarOffset(metric, 1 /* Counter */);
-    if (offset < 0)
-      return this.metricFailure(metric, 1 /* Counter */);
-    this.cells[offset] = (this.cells[offset] ?? 0) + delta;
-    return 0 /* Updated */;
-  }
-  gaugeSet(metric, value) {
-    const offset = this.scalarOffset(metric, 2 /* Gauge */);
-    if (offset < 0)
-      return this.metricFailure(metric, 2 /* Gauge */);
-    this.cells[offset] = value;
-    return 0 /* Updated */;
-  }
-  maximum(metric, value) {
-    const offset = this.scalarOffset(metric, 3 /* Maximum */);
-    if (offset < 0)
-      return this.metricFailure(metric, 3 /* Maximum */);
-    if (value > (this.cells[offset] ?? 0))
-      this.cells[offset] = value;
-    return 0 /* Updated */;
-  }
-  histogramLog2(metric, value) {
-    if (!Number.isInteger(metric) || metric < 0 || metric >= this.descriptors.length)
-      return 1 /* InvalidMetric */;
-    if (this.descriptors[metric]?.kind !== 4 /* HistogramLog2 */)
-      return 2 /* WrongMetricKind */;
-    const bucket = value <= 0 ? 0 : Math.min(TELEMETRY_HISTOGRAM_BUCKETS - 1, Math.floor(Math.log2(value)));
-    const offset = (this.offsets[metric] ?? 0) + bucket;
-    this.cells[offset] = (this.cells[offset] ?? 0) + 1;
-    return 0 /* Updated */;
-  }
-  readCell(metric, bucket = 0) {
-    if (!Number.isInteger(metric) || metric < 0 || metric >= this.descriptors.length)
-      return 0;
-    const descriptor = this.descriptors[metric];
-    const count = descriptor?.kind === 4 /* HistogramLog2 */ ? TELEMETRY_HISTOGRAM_BUCKETS : 1;
-    if (!Number.isInteger(bucket) || bucket < 0 || bucket >= count)
-      return 0;
-    return this.cells[(this.offsets[metric] ?? 0) + bucket] ?? 0;
-  }
-  scalarOffset(metric, expected) {
-    if (!Number.isInteger(metric) || metric < 0 || metric >= this.descriptors.length)
-      return -1;
-    return this.descriptors[metric]?.kind === expected ? this.offsets[metric] ?? -1 : -1;
-  }
-  metricFailure(metric, expected) {
-    if (!Number.isInteger(metric) || metric < 0 || metric >= this.descriptors.length)
-      return 1 /* InvalidMetric */;
-    return this.descriptors[metric]?.kind === expected ? 1 /* InvalidMetric */ : 2 /* WrongMetricKind */;
-  }
-}
-
-class EngineTelemetry {
-  trace;
-  metrics;
-  correlationCounter = 1;
-  constructor(traceDescriptors, metricDescriptors, traceBuffer, metricCells, clock) {
-    this.trace = new TelemetryRecorder(traceDescriptors, traceBuffer, clock);
-    this.metrics = new TelemetryMetricBank(metricDescriptors, metricCells);
-  }
-  nextCorrelation(namespace = 0) {
-    const safeNamespace = Number.isInteger(namespace) && namespace >= 0 ? Math.min(1048575, namespace) : 0;
-    const local = this.correlationCounter;
-    this.correlationCounter = local === U32_MAX ? 1 : local + 1;
-    return safeNamespace * U32_SCALE + local;
-  }
-}
-var TelemetryRes = defineResource("telemetry", () => {
-  throw new Error("Telemetry not initialized. Set TelemetryRes during bootstrap.");
-});
-
-// crates/afterglow-web/web/src/engine/telemetry/catalog.ts
-var ENGINE_TRACE_DESCRIPTORS = [
-  { category: 1 /* Frame */, categoryName: "frame", name: "frame", kind: 2 /* Span */, argument0: "frame_id", argument1: "delta_ns" },
-  { category: 2 /* Worker */, categoryName: "worker", name: "worker.poll", kind: 2 /* Span */, argument0: "stage", argument1: "elapsed_us" },
-  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.update", kind: 2 /* Span */, argument0: "stage", argument1: "elapsed_us" },
-  { category: 0 /* Runtime */, categoryName: "runtime", name: "structural.commands", kind: 2 /* Span */, argument0: "stage", argument1: "elapsed_us" },
-  { category: 0 /* Runtime */, categoryName: "runtime", name: "pose.batches", kind: 2 /* Span */, argument0: "stage", argument1: "elapsed_us" },
-  { category: 1 /* Frame */, categoryName: "frame", name: "render.prepare", kind: 2 /* Span */, argument0: "stage", argument1: "elapsed_us" },
-  { category: 0 /* Runtime */, categoryName: "runtime", name: "game.update", kind: 2 /* Span */, argument0: "frame_id" },
-  { category: 1 /* Frame */, categoryName: "frame", name: "render.passes", kind: 2 /* Span */, argument0: "frame_id" },
-  { category: 4 /* Asset */, categoryName: "asset", name: "asset.session.open", kind: 3 /* AsyncSpan */, argument0: "workers", argument1: "status" },
-  { category: 4 /* Asset */, categoryName: "asset", name: "asset.size", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "status" },
-  { category: 4 /* Asset */, categoryName: "asset", name: "asset.read", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "offset_or_status" },
-  { category: 4 /* Asset */, categoryName: "asset", name: "asset.read_bulk", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "spans" },
-  { category: 9 /* Rpc */, categoryName: "rpc", name: "rpc.call", kind: 3 /* AsyncSpan */, argument0: "method", argument1: "bytes" },
-  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.page_load", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "status" },
-  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.bulk_wait", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "tier" },
-  { category: 4 /* Asset */, categoryName: "asset", name: "asset.bulk_dispatch", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "spans" },
-  { category: 5 /* Texture */, categoryName: "texture", name: "texture.transcode_queue", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "format" },
-  { category: 5 /* Texture */, categoryName: "texture", name: "texture.transcode", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "format" },
-  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.upload", kind: 2 /* Span */, argument0: "bytes", argument1: "slot" },
-  { category: 4 /* Asset */, categoryName: "cache", name: "cache.read", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "hit" },
-  { category: 4 /* Asset */, categoryName: "cache", name: "cache.write", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "status" },
-  { category: 4 /* Asset */, categoryName: "asset", name: "mesh.optimize", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "status" },
-  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.feedback_detected", kind: 1 /* Instant */, argument0: "priority", argument1: "feedback_epoch" },
-  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.scheduler_wait", kind: 3 /* AsyncSpan */, argument0: "priority", argument1: "status" },
-  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.page_published", kind: 1 /* Instant */, argument0: "physical_slot", argument1: "eligible_frame_id" }
-];
-var FRAME_BUDGET_TRACE_DESCRIPTORS = [
-  1 /* WorkerPoll */,
-  2 /* VirtualTexture */,
-  3 /* StructuralCommands */,
-  4 /* PoseBatches */,
-  5 /* RenderPrepare */
-];
-var ENGINE_METRIC_DESCRIPTORS = [
-  { category: 1 /* Frame */, categoryName: "frame", name: "frames", kind: 1 /* Counter */, unit: "count" },
-  { category: 1 /* Frame */, categoryName: "frame", name: "frame_delta_ns", kind: 4 /* HistogramLog2 */, unit: "nanoseconds" },
-  { category: 1 /* Frame */, categoryName: "frame", name: "frame_max_ns", kind: 3 /* Maximum */, unit: "nanoseconds" },
-  { category: 4 /* Asset */, categoryName: "asset", name: "asset_bytes_read", kind: 1 /* Counter */, unit: "bytes" },
-  { category: 4 /* Asset */, categoryName: "asset", name: "asset_read_ns", kind: 4 /* HistogramLog2 */, unit: "nanoseconds" },
-  { category: 9 /* Rpc */, categoryName: "rpc", name: "rpc_calls", kind: 1 /* Counter */, unit: "count" },
-  { category: 9 /* Rpc */, categoryName: "rpc", name: "rpc_duration_ns", kind: 4 /* HistogramLog2 */, unit: "nanoseconds" },
-  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt_pages_requested", kind: 1 /* Counter */, unit: "count" },
-  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt_pages_loaded", kind: 1 /* Counter */, unit: "count" },
-  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt_pages_failed", kind: 1 /* Counter */, unit: "count" },
-  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt_upload_ns", kind: 4 /* HistogramLog2 */, unit: "nanoseconds" },
-  { category: 5 /* Texture */, categoryName: "texture", name: "texture_transcode_ns", kind: 4 /* HistogramLog2 */, unit: "nanoseconds" }
-];
-// crates/afterglow-web/web/src/engine/core/runtime.ts
-class BrowserAnimationScheduler {
-  request(callback) {
-    return requestAnimationFrame(callback);
-  }
-  cancel(handle) {
-    cancelAnimationFrame(handle);
-  }
-}
-
-class FixedWorkerInputs {
-  capacity;
-  inputs;
-  count = 0;
-  constructor(capacity) {
-    this.capacity = capacity;
-    if (!Number.isInteger(capacity) || capacity < 0)
-      throw new RangeError("worker input capacity must be a non-negative integer");
-    this.inputs = new Array(capacity).fill(null);
-  }
-  get size() {
-    return this.count;
-  }
-  add(input) {
-    if (this.count === this.capacity)
-      return 1 /* CapacityExceeded */;
-    this.inputs[this.count++] = input;
-    return 0 /* Registered */;
-  }
-  poll() {
-    for (let index = 0;index < this.count; index++) {
-      const input = this.inputs[index];
-      if (input !== null && input !== undefined)
-        input.poll();
-    }
-  }
-  drainStructuralCommands(adapter) {
-    for (let index = 0;index < this.count; index++) {
-      const input = this.inputs[index];
-      if (input !== null && input !== undefined)
-        input.drainStructuralCommands?.(adapter);
-    }
-  }
-  drainPoseBatches(adapter) {
-    for (let index = 0;index < this.count; index++) {
-      const input = this.inputs[index];
-      if (input !== null && input !== undefined)
-        input.drainPoseBatches?.(adapter);
-    }
-  }
-}
-
-class EngineRuntime {
-  memory;
-  budget;
-  diagnostics;
-  telemetry;
-  mutableFrame = { frameId: 0, deltaSeconds: 0, elapsedSeconds: 0 };
-  workers;
-  passes;
-  scheduler;
-  manifest;
-  adapter;
-  vt;
-  onAnimationFrame;
-  passCount = 0;
-  client = null;
-  animationHandle = 0;
-  previousTimestamp = -1;
-  elapsedSeconds = 0;
-  mutableState = 0 /* Bootstrap */;
-  static forScene(options) {
-    const adapter = new RenderAdapter(options.scene, options.entityCapacity);
-    return new EngineRuntime({ ...options, adapter });
-  }
-  constructor(options) {
-    if (!Number.isInteger(options.maxRenderPasses) || options.maxRenderPasses < 1)
-      throw new RangeError("render pass capacity must be a positive integer");
-    this.adapter = options.adapter;
-    this.memory = new EngineMemory(options.memory);
-    this.telemetry = new EngineTelemetry(ENGINE_TRACE_DESCRIPTORS, ENGINE_METRIC_DESCRIPTORS, this.memory.telemetryTrace, this.memory.telemetryMetrics);
-    this.budget = new FrameBudget(options.frameBudget, undefined, {
-      recorder: this.telemetry.trace,
-      stageDescriptors: FRAME_BUDGET_TRACE_DESCRIPTORS
-    });
-    this.diagnostics = new EngineDiagnostics(options.diagnosticCapacity);
-    this.workers = new FixedWorkerInputs(options.maxWorkerInputs);
-    this.passes = new Array(options.maxRenderPasses).fill(null);
-    this.scheduler = options.scheduler ?? new BrowserAnimationScheduler;
-    this.vt = options.vt;
-    this.onAnimationFrame = (timestamp) => this.tick(timestamp);
-    const memoryResource = defineResource("engineMemory", () => this.memory);
-    const budgetResource = defineResource("frameBudget", () => this.budget);
-    memoryResource.set(this.adapter.world, this.memory);
-    budgetResource.set(this.adapter.world, this.budget);
-    TelemetryRes.set(this.adapter.world, this.telemetry);
-    this.manifest = new ResourceManifest(memoryResource, budgetResource, TelemetryRes, ...options.resources ?? []);
-    this.manifest.initialize(this.adapter.world);
-  }
-  get state() {
-    return this.mutableState;
-  }
-  get frame() {
-    return this.mutableFrame;
-  }
-  get registeredWorkers() {
-    return this.workers.size;
-  }
-  get registeredRenderPasses() {
-    return this.passCount;
-  }
-  registerWorker(input) {
-    if (this.mutableState !== 0 /* Bootstrap */)
-      return 2 /* RuntimeSealed */;
-    return this.workers.add(input);
-  }
-  registerRenderPass(pass2) {
-    if (this.mutableState !== 0 /* Bootstrap */)
-      return 2 /* RuntimeSealed */;
-    if (this.passCount === this.passes.length)
-      return 1 /* CapacityExceeded */;
-    this.passes[this.passCount++] = pass2;
-    return 0 /* Registered */;
-  }
-  enterWarmup() {
-    if (this.mutableState !== 0 /* Bootstrap */)
-      throw new Error("runtime can enter warmup only from bootstrap");
-    this.memory.warmup();
-    this.mutableState = 1 /* Warmup */;
-  }
-  async warm() {
-    if (this.mutableState !== 1 /* Warmup */)
-      throw new Error("runtime variants can be warmed only during warmup");
-    for (let index = 0;index < this.passCount; index++) {
-      const pass2 = this.passes[index];
-      if (pass2 !== null && pass2 !== undefined)
-        await pass2.warm?.();
-    }
-  }
-  sealGameplay() {
-    if (this.mutableState !== 1 /* Warmup */)
-      throw new Error("runtime can seal only after entering warmup");
-    this.adapter.sealGameplay();
-    this.memory.sealGameplay();
-    this.manifest.seal(this.adapter.world);
-    for (let index = 0;index < this.passCount; index++) {
-      const pass2 = this.passes[index];
-      if (pass2 !== null && pass2 !== undefined)
-        pass2.seal?.();
-    }
-    this.mutableState = 2 /* GameplaySealed */;
-  }
-  start(client) {
-    if (this.mutableState !== 2 /* GameplaySealed */ && this.mutableState !== 4 /* Stopped */)
-      throw new Error("runtime can start only after gameplay seal");
-    this.client = client;
-    this.previousTimestamp = -1;
-    this.mutableState = 3 /* Running */;
-    this.animationHandle = this.scheduler.request(this.onAnimationFrame);
-  }
-  stop() {
-    if (this.mutableState !== 3 /* Running */)
-      return;
-    this.mutableState = 4 /* Stopped */;
-    if (this.animationHandle !== 0)
-      this.scheduler.cancel(this.animationHandle);
-    this.animationHandle = 0;
-  }
-  dispose() {
-    if (this.mutableState === 5 /* Shutdown */)
-      return;
-    this.stop();
-    for (let index = this.passCount - 1;index >= 0; index--) {
-      const pass2 = this.passes[index];
-      if (pass2 !== null && pass2 !== undefined)
-        pass2.dispose();
-      this.passes[index] = null;
-    }
-    this.passCount = 0;
-    this.adapter.dispose();
-    this.client = null;
-    this.memory.phase = 3 /* Shutdown */;
-    this.mutableState = 5 /* Shutdown */;
-  }
-  tick(timestamp) {
-    if (this.mutableState !== 3 /* Running */ || this.client === null)
-      return;
-    this.animationHandle = 0;
-    const deltaSeconds = this.previousTimestamp < 0 ? 1 / 60 : Math.max(0, (timestamp - this.previousTimestamp) / 1000);
-    this.previousTimestamp = timestamp;
-    this.elapsedSeconds += deltaSeconds;
-    this.mutableFrame.frameId++;
-    this.mutableFrame.deltaSeconds = deltaSeconds;
-    this.mutableFrame.elapsedSeconds = this.elapsedSeconds;
-    const frameNanoseconds = Math.floor(deltaSeconds * 1e9);
-    this.telemetry.metrics.counterAdd(0 /* Frames */, 1);
-    this.telemetry.metrics.histogramLog2(1 /* FrameDeltaNs */, frameNanoseconds);
-    this.telemetry.metrics.maximum(2 /* FrameMaxNs */, frameNanoseconds);
-    this.telemetry.trace.spanBegin(0 /* Frame */, this.mutableFrame.frameId, this.mutableFrame.frameId, frameNanoseconds);
-    let gameSpanOpen = false;
-    let renderSpanOpen = false;
-    try {
-      prepareAfterglowFrame(this.mutableFrame, this.workers, this.adapter, this.vt, this.memory, this.budget);
-      this.telemetry.trace.spanBegin(6 /* GameUpdate */, this.mutableFrame.frameId, this.mutableFrame.frameId, 0);
-      gameSpanOpen = true;
-      this.client.update(this.mutableFrame);
-      this.telemetry.trace.spanEnd(6 /* GameUpdate */, this.mutableFrame.frameId, this.mutableFrame.frameId, 0);
-      gameSpanOpen = false;
-      this.telemetry.trace.spanBegin(7 /* RenderPasses */, this.mutableFrame.frameId, this.mutableFrame.frameId, 0);
-      renderSpanOpen = true;
-      for (let index = 0;index < this.passCount; index++) {
-        const pass2 = this.passes[index];
-        if (pass2 !== null && pass2 !== undefined)
-          pass2.render(this.mutableFrame);
-      }
-      this.telemetry.trace.spanEnd(7 /* RenderPasses */, this.mutableFrame.frameId, this.mutableFrame.frameId, 0);
-      renderSpanOpen = false;
-      this.telemetry.trace.spanEnd(0 /* Frame */, this.mutableFrame.frameId, this.mutableFrame.frameId, 0);
-    } catch (error2) {
-      this.budget.abortOpenStages();
-      if (gameSpanOpen)
-        this.telemetry.trace.spanEnd(6 /* GameUpdate */, this.mutableFrame.frameId, this.mutableFrame.frameId, 1);
-      if (renderSpanOpen)
-        this.telemetry.trace.spanEnd(7 /* RenderPasses */, this.mutableFrame.frameId, this.mutableFrame.frameId, 1);
-      this.telemetry.trace.spanEnd(0 /* Frame */, this.mutableFrame.frameId, this.mutableFrame.frameId, 1);
-      this.diagnostics.tryRecord(1 /* RuntimeState */, 0 /* Runtime */, error2);
-      console.error("[afterglow] runtime frame failed:", error2 instanceof Error ? error2.stack : String(error2));
-      this.mutableState = 4 /* Stopped */;
-      return;
-    }
-    if (this.mutableState === 3 /* Running */)
-      this.animationHandle = this.scheduler.request(this.onAnimationFrame);
-  }
-}
-// crates/afterglow-web/web/src/engine/profiling/profiling.ts
-var ProfilingRes = defineResource("profiling", () => {
-  throw new Error("Profiling not initialized. Call ProfilingRes.set(world, new Profiling(host)).");
-});
 // crates/afterglow-web/web/node_modules/three/build/three.module.js
 var alphahash_fragment = `#ifdef USE_ALPHAHASH
 	if ( diffuseColor.a < getAlphaHashThreshold( vPosition ) ) discard;
@@ -65412,25 +65478,6 @@ var DATA2 = new Uint16Array([
   1183
 ]);
 
-// crates/afterglow-web/web/src/engine/assets/asset-handle.ts
-class AssetHandle {
-  asset;
-  generation = 0;
-  state = "loading";
-  path;
-  constructor(path, fallback) {
-    this.path = path;
-    this.asset = fallback;
-  }
-  get isReady() {
-    return this.state === "ready";
-  }
-  get isError() {
-    return this.state === "error";
-  }
-  lod = -1;
-}
-
 // crates/afterglow-web/web/src/engine/virtual-texturing/virtual-texture-layout.ts
 function assertVirtualTextureDimensions(width, height) {
   for (const [name, value] of [["width", width], ["height", height]])
@@ -65468,136 +65515,1091 @@ function packedMipTailIndex(layout) {
   return layout.mipOffsets[layout.maxMip] * layout.storageWidth + 1;
 }
 
-// crates/afterglow-web/web/src/engine/virtual-texturing/virtual-texture.ts
-var PAGE_SIZE = 128;
-var PAGE_BORDER = 4;
-var SLOT_SIZE = PAGE_SIZE + PAGE_BORDER * 2;
-var ATLAS_PAGES_X = 15;
-var ATLAS_PAGES_Y = 15;
-var ATLAS_WIDTH = ATLAS_PAGES_X * SLOT_SIZE;
-var ATLAS_HEIGHT = ATLAS_PAGES_Y * SLOT_SIZE;
-var MAX_MIP = 10;
+// crates/afterglow-web/web/src/engine/virtual-texturing/virtual-texture-feedback-pass.ts
 var SCORE_COVERAGE_CAP = 255;
-var MAX_PIXEL_PERCEPTUAL_WEIGHT = 15;
-var MAX_PERCEPTUAL_WEIGHT = SCORE_COVERAGE_CAP * MAX_PIXEL_PERCEPTUAL_WEIGHT;
-var MAX_PAGE_SCORE = SCORE_COVERAGE_CAP * (MAX_PIXEL_PERCEPTUAL_WEIGHT + 7);
-var IMPORTANCE_LEVEL_MAX = 24;
-var IMPORTANCE_BUCKET_COUNT = IMPORTANCE_LEVEL_MAX + 1;
-var MAX_SCORE_EXPONENT = 31 - Math.clz32(MAX_PAGE_SCORE);
-var TOP_SCORE_BASE = 1 << MAX_SCORE_EXPONENT;
-var TOP_SCORE_SPLIT = TOP_SCORE_BASE + Math.ceil((MAX_PAGE_SCORE - TOP_SCORE_BASE + 1) / 2);
-var FOCUS_IMPORTANCE_BUCKET_MAX = 12;
-var PAGE_KIND_PRIORITY_COUNT = 2;
-var MATERIAL_CHANNEL_PRIORITY_COUNT = 3;
-var PRIORITY_LANE_COUNT = IMPORTANCE_BUCKET_COUNT * PAGE_KIND_PRIORITY_COUNT * MATERIAL_CHANNEL_PRIORITY_COUNT;
-function packedPageCoordinates(textureId, mip, x2, y2, tail = false) {
-  const local = tail ? 268435456 : (mip & 63 | (x2 & 2047) << 6 | (y2 & 2047) << 17) >>> 0;
-  return textureId * 536870912 + local;
-}
-function packedPageIdentity(textureId, req) {
-  return packedPageCoordinates(textureId, req.mip, req.x, req.y, req.tail);
-}
-function perceptualImportanceBucket(weight) {
-  const bounded = Math.max(1, Math.min(MAX_PAGE_SCORE, Math.floor(weight)));
-  const exponent = 31 - Math.clz32(bounded);
-  let level;
-  if (exponent === 0)
-    level = 0;
-  else if (exponent < MAX_SCORE_EXPONENT)
-    level = exponent * 2 - 1 + (bounded >>> exponent - 1 & 1);
-  else
-    level = bounded < TOP_SCORE_SPLIT ? IMPORTANCE_LEVEL_MAX - 1 : IMPORTANCE_LEVEL_MAX;
-  return IMPORTANCE_LEVEL_MAX - level;
-}
-function sourcePerceptualWeight(source) {
-  const coverage = Math.min(SCORE_COVERAGE_CAP, source.coverage ?? 1);
-  const centerCloseness = 7 - Math.min(7, (source.screenPriority ?? 255) >>> 5);
-  return Math.min(MAX_PERCEPTUAL_WEIGHT, source.perceptualWeight ?? coverage * (1 + centerCloseness));
-}
-function perceptualPriority(perceptualWeight, coverage, residentMipGap, parent, channelPriority) {
-  const pageWeight = Math.min(MAX_PAGE_SCORE, perceptualWeight + Math.min(SCORE_COVERAGE_CAP, coverage) * residentMipGap);
-  const bucket = perceptualImportanceBucket(pageWeight);
-  const pageKind = parent ? 0 : 1;
-  return (bucket * PAGE_KIND_PRIORITY_COUNT + pageKind) * MATERIAL_CHANNEL_PRIORITY_COUNT + channelPriority;
-}
-function pageBatchTier(parent, priority) {
-  if (parent)
-    return "urgent";
-  const importanceBucket = Math.floor(priority / (PAGE_KIND_PRIORITY_COUNT * MATERIAL_CHANNEL_PRIORITY_COUNT));
-  return importanceBucket <= FOCUS_IMPORTANCE_BUCKET_MAX ? "focus" : "peripheral";
-}
-function packEntry(resident, physX, physY) {
-  return (resident ? 1 : 0) | (physX & 255) << 1 | (physY & 255) << 9;
-}
-function isResident(entry) {
-  return (entry & 1) !== 0;
-}
-var BLOCK_SIZE = 4;
-var BC7_BYTES_PER_BLOCK = 16;
-var RGBA_BYTES_PER_BLOCK = BLOCK_SIZE * BLOCK_SIZE * 4;
-var SLOT_BLOCKS_X = SLOT_SIZE / BLOCK_SIZE;
-var SLOT_BLOCKS_Y = SLOT_SIZE / BLOCK_SIZE;
-var FORMAT_BC7 = 0;
-var FORMAT_ASTC = 1;
-var FORMAT_RGBA = 4;
-function bytesPerBlock(format) {
-  if (format === FORMAT_BC7 || format === FORMAT_ASTC)
-    return BC7_BYTES_PER_BLOCK;
-  return RGBA_BYTES_PER_BLOCK;
-}
-function threeFormat(format) {
-  if (format === FORMAT_BC7)
-    return RGBA_BPTC_Format;
-  if (format === FORMAT_ASTC)
-    return RGBA_ASTC_4x4_Format;
-  throw new RangeError(`unsupported compressed texture format ${format}`);
-}
-var DEFAULT_VIRTUAL_MATERIAL_MIP_BIASES = {
-  albedo: 0,
-  normal: 1,
-  masks: 2,
-  roughness: 2,
-  ao: 2,
-  emissive: 1
-};
 
-class PageTable {
-  layout;
-  entries;
+class VirtualTextureFeedbackPass {
+  scale;
+  pixelScale = new Vector2(1, 1);
+  target;
+  width = 1;
+  height = 1;
+  pending = false;
+  feedbackMaps = [
+    new Map,
+    new Map
+  ];
+  buildMapIndex = 0;
+  completed = null;
+  requestPool = [];
+  seenMips = new Uint8Array(64);
+  latestMips = [];
+  constructor(scale2 = 0.125) {
+    if (!(scale2 > 0 && scale2 <= 1))
+      throw new RangeError("feedback scale must be in (0, 1]");
+    this.scale = scale2;
+    this.target = new RenderTarget(1, 1, {
+      format: RGIntegerFormat,
+      type: UnsignedIntType,
+      minFilter: NearestFilter,
+      magFilter: NearestFilter,
+      generateMipmaps: false,
+      depthBuffer: true
+    });
+    this.target.texture.name = "afterglow-vt-feedback-rg32uint";
+  }
+  resize(displayWidth, displayHeight) {
+    if (!(displayWidth > 0 && displayHeight > 0))
+      throw new RangeError("display dimensions must be positive");
+    const width = Math.max(1, Math.ceil(displayWidth * this.scale));
+    const height = Math.max(1, Math.ceil(displayHeight * this.scale));
+    this.pixelScale.set(width / displayWidth, height / displayHeight);
+    if (width === this.width && height === this.height && this.requestPool.length >= width * height)
+      return;
+    this.width = width;
+    this.height = height;
+    this.target.setSize(width, height);
+    const capacity = width * height;
+    if (this.requestPool.length < capacity) {
+      const previous = this.requestPool.length;
+      this.requestPool.length = capacity;
+      for (let index = previous;index < capacity; index++)
+        this.requestPool[index] = { path: "", mip: 0, x: 0, y: 0 };
+    }
+  }
+  get canSubmit() {
+    return !this.pending && this.completed === null;
+  }
+  submit(renderer, feedbackScene, camera, store) {
+    if (!this.canSubmit)
+      return false;
+    const previous = renderer.getRenderTarget();
+    try {
+      renderer.setRenderTarget(this.target);
+      renderer.render(feedbackScene, camera);
+    } finally {
+      renderer.setRenderTarget(previous);
+    }
+    this.pending = true;
+    renderer.readRenderTargetPixelsAsync(this.target, 0, 0, this.width, this.height).then((raw) => {
+      const words = raw instanceof Uint32Array ? raw : new Uint32Array(raw.buffer, raw.byteOffset, Math.floor(raw.byteLength / 4));
+      const requests = this.feedbackMaps[this.buildMapIndex];
+      requests.clear();
+      for (let mip = 0;mip < this.seenMips.length; mip++)
+        this.seenMips[mip] = 0;
+      let requestCount = 0;
+      for (let index = 0;index + 1 < words.length; index += 2) {
+        const packed = words[index];
+        if ((packed & 2147483648) === 0)
+          continue;
+        const mip = packed & 63;
+        const x2 = packed >>> 6 & 2047;
+        const y2 = packed >>> 17 & 2047;
+        const entry = store.getEntryById(words[index + 1]);
+        if (!entry || mip > entry.textureMaxMip)
+          continue;
+        const tail = mip > entry.maxMip;
+        const gridWidth = tail ? 1 : pagesAtMipAxis(entry.pageTableLayout.width, mip);
+        const gridHeight = tail ? 1 : pagesAtMipAxis(entry.pageTableLayout.baseHeight, mip);
+        if (x2 >= gridWidth || y2 >= gridHeight)
+          continue;
+        const requestMip = tail ? entry.tailFirstMip : mip;
+        const requestX = tail ? 0 : x2;
+        const requestY = tail ? 0 : y2;
+        const local = tail ? 268435456 : (requestMip & 63 | (requestX & 2047) << 6 | (requestY & 2047) << 17) >>> 0;
+        const key = entry.textureId * 536870912 + local;
+        const pixel = index >> 1;
+        const pixelX = pixel % this.width;
+        const pixelY = Math.floor(pixel / this.width);
+        const normalizedX = (pixelX + 0.5) * 2 / this.width - 1;
+        const normalizedY = (pixelY + 0.5) * 2 / this.height - 1;
+        const screenPriority = Math.min(255, Math.floor((normalizedX * normalizedX + normalizedY * normalizedY) * 128));
+        const centerCloseness = 7 - Math.min(7, screenPriority >>> 5);
+        const cameraCloseness = packed >>> 28 & 7;
+        const pixelWeight = 1 + centerCloseness + cameraCloseness;
+        const existing = requests.get(key);
+        if (existing) {
+          existing.screenPriority = Math.min(existing.screenPriority ?? 255, screenPriority);
+          const coverage = existing.coverage ?? 1;
+          if (coverage < SCORE_COVERAGE_CAP)
+            existing.perceptualWeight = (existing.perceptualWeight ?? 1) + pixelWeight;
+          existing.coverage = Math.min(65535, coverage + 1);
+          continue;
+        }
+        const request = this.requestPool[requestCount++];
+        request.textureId = entry.textureId;
+        request.path = entry.path;
+        request.mip = requestMip;
+        request.x = requestX;
+        request.y = requestY;
+        request.tail = tail ? true : undefined;
+        request.screenPriority = screenPriority;
+        request.coverage = 1;
+        request.perceptualWeight = pixelWeight;
+        request.priorityTier = undefined;
+        requests.set(key, request);
+        this.seenMips[mip] = 1;
+      }
+      this.latestMips.length = 0;
+      for (let mip = 0;mip < this.seenMips.length; mip++)
+        if (this.seenMips[mip] !== 0)
+          this.latestMips.push(mip);
+      this.completed = requests;
+      this.buildMapIndex ^= 1;
+    }).catch((error2) => console.error("[VT] feedback readback failed:", error2)).finally(() => {
+      this.pending = false;
+    });
+    return true;
+  }
+  getLatestMips() {
+    return this.latestMips;
+  }
+  consume() {
+    const result = this.completed;
+    this.completed = null;
+    return result;
+  }
+  dispose() {
+    this.target.dispose();
+    this.feedbackMaps[0].clear();
+    this.feedbackMaps[1].clear();
+    this.completed = null;
+    this.requestPool.length = 0;
+  }
+}
+
+// crates/afterglow-web/web/src/engine/virtual-texturing/predicted-feedback-camera.ts
+var MAX_SAMPLE_SECONDS = 0.1;
+var MAX_ANGULAR_STEP = Math.PI * 0.5;
+var MAX_TRANSLATION_FAR_FRACTION = 0.25;
+
+class PredictedFeedbackCamera {
+  horizonMs;
+  camera;
+  resetCount = 0;
+  previousPosition = new Vector3;
+  currentPosition = new Vector3;
+  predictedPosition = new Vector3;
+  previousQuaternion = new Quaternion;
+  currentQuaternion = new Quaternion;
+  predictedQuaternion = new Quaternion;
+  currentScale = new Vector3(1, 1, 1);
+  lastSeconds = 0;
+  initialized = false;
+  constructor(source, horizonMs) {
+    this.horizonMs = horizonMs;
+    if (!Number.isFinite(horizonMs) || horizonMs <= 0)
+      throw new RangeError("feedback prediction horizon must be positive");
+    this.camera = source.clone(false);
+    this.copyCurrentCamera(source);
+  }
+  sample(source, elapsedSeconds) {
+    source.updateWorldMatrix(true, false);
+    source.matrixWorld.decompose(this.currentPosition, this.currentQuaternion, this.currentScale);
+    this.copyCurrentCamera(source);
+    if (!this.initialized) {
+      this.initialized = true;
+      this.previousPosition.copy(this.currentPosition);
+      this.previousQuaternion.copy(this.currentQuaternion);
+      this.lastSeconds = elapsedSeconds;
+      this.publishCurrentPose();
+      return this.camera;
+    }
+    const dt = elapsedSeconds - this.lastSeconds;
+    const far = Math.max(1, source.far ?? 1);
+    const translation = this.previousPosition.distanceTo(this.currentPosition);
+    const rotation = this.previousQuaternion.angleTo(this.currentQuaternion);
+    const reset = !Number.isFinite(dt) || dt <= 0 || dt > MAX_SAMPLE_SECONDS || translation > far * MAX_TRANSLATION_FAR_FRACTION || rotation > MAX_ANGULAR_STEP;
+    if (reset) {
+      if (dt !== 0)
+        this.resetCount++;
+      this.publishCurrentPose();
+    } else {
+      const factor = 1 + this.horizonMs / (dt * 1000);
+      this.predictedPosition.copy(this.previousPosition).lerp(this.currentPosition, factor);
+      this.predictedQuaternion.slerpQuaternions(this.previousQuaternion, this.currentQuaternion, factor);
+      this.publishPose(this.predictedPosition, this.predictedQuaternion);
+    }
+    this.previousPosition.copy(this.currentPosition);
+    this.previousQuaternion.copy(this.currentQuaternion);
+    this.lastSeconds = elapsedSeconds;
+    return this.camera;
+  }
+  copyCurrentCamera(source) {
+    this.camera.projectionMatrix.copy(source.projectionMatrix);
+    this.camera.projectionMatrixInverse.copy(source.projectionMatrixInverse);
+    this.camera.coordinateSystem = source.coordinateSystem;
+    this.camera.layers.mask = source.layers.mask;
+    const sourcePerspective = source;
+    const targetPerspective = this.camera;
+    if (sourcePerspective.isPerspectiveCamera === true && targetPerspective.isPerspectiveCamera === true) {
+      targetPerspective.near = sourcePerspective.near;
+      targetPerspective.far = sourcePerspective.far;
+      targetPerspective.fov = sourcePerspective.fov;
+      targetPerspective.aspect = sourcePerspective.aspect;
+      targetPerspective.zoom = sourcePerspective.zoom;
+      targetPerspective.focus = sourcePerspective.focus;
+      targetPerspective.filmGauge = sourcePerspective.filmGauge;
+      targetPerspective.filmOffset = sourcePerspective.filmOffset;
+    }
+    const sourceOrthographic = source;
+    const targetOrthographic = this.camera;
+    if (sourceOrthographic.isOrthographicCamera === true && targetOrthographic.isOrthographicCamera === true) {
+      targetOrthographic.near = sourceOrthographic.near;
+      targetOrthographic.far = sourceOrthographic.far;
+      targetOrthographic.left = sourceOrthographic.left;
+      targetOrthographic.right = sourceOrthographic.right;
+      targetOrthographic.top = sourceOrthographic.top;
+      targetOrthographic.bottom = sourceOrthographic.bottom;
+      targetOrthographic.zoom = sourceOrthographic.zoom;
+    }
+    this.camera.parent = null;
+    this.camera.matrixAutoUpdate = true;
+    this.camera.matrixWorldAutoUpdate = true;
+  }
+  publishCurrentPose() {
+    this.publishPose(this.currentPosition, this.currentQuaternion);
+  }
+  publishPose(position, quaternion) {
+    this.camera.position.copy(position);
+    this.camera.quaternion.copy(quaternion);
+    this.camera.scale.copy(this.currentScale);
+    this.camera.updateMatrix();
+    this.camera.updateMatrixWorld(true);
+  }
+}
+
+// crates/afterglow-web/web/src/engine/virtual-texturing/virtual-texture-feedback-coordinator.ts
+class VirtualTextureFeedbackCoordinator {
+  renderer;
+  store;
+  vtCpuUs = 0;
+  feedbackSubmitUs = 0;
+  pixelScale;
+  stats = {
+    submittedSnapshots: 0,
+    completedSnapshots: 0,
+    discardedSnapshots: 0,
+    deferredSnapshots: 0,
+    registrationOverflows: 0,
+    activePasses: 0,
+    predictorResets: 0
+  };
+  passes;
+  renderables;
+  activeRenderable;
+  activeLocalPass;
+  feedbackContextIds;
+  heldResults;
+  renderableCount = 0;
+  registeredPassCount = 0;
+  awaitingPassCount = 0;
+  discardAwaiting = false;
+  nextFeedbackSeconds = 0;
+  lastRenderFrameId = -1;
+  sealed = false;
+  disposed = false;
+  bootstrapPublicationReady = false;
+  constructor(renderer, store, capacities) {
+    this.renderer = renderer;
+    this.store = store;
+    if (!Number.isInteger(capacities.renderables) || capacities.renderables <= 0)
+      throw new RangeError("feedback renderable capacity must be positive");
+    if (!Number.isInteger(capacities.passes) || capacities.passes <= 0)
+      throw new RangeError("feedback pass capacity must be positive");
+    if (!Number.isFinite(capacities.cadenceMs) || capacities.cadenceMs <= 0)
+      throw new RangeError("feedback cadence must be positive");
+    if (!Number.isFinite(capacities.predictionHorizonMs) || capacities.predictionHorizonMs <= 0)
+      throw new RangeError("feedback prediction horizon must be positive");
+    this.cadenceMs = capacities.cadenceMs;
+    this.predictionHorizonMs = capacities.predictionHorizonMs;
+    this.passes = new Array(capacities.passes);
+    this.renderables = new Array(capacities.renderables);
+    this.heldResults = new Array(capacities.passes).fill(null);
+    for (let index = 0;index < capacities.passes; index++)
+      this.passes[index] = new VirtualTextureFeedbackPass(capacities.scale ?? 0.125);
+    for (let index = 0;index < capacities.renderables; index++)
+      this.renderables[index] = { renderable: null, predictor: null, passOffset: 0 };
+    this.activeRenderable = new Int32Array(capacities.passes);
+    this.activeLocalPass = new Uint16Array(capacities.passes);
+    this.feedbackContextIds = new Int32Array(capacities.passes);
+    const firstPass = this.passes[0];
+    if (!firstPass)
+      throw new Error("feedback coordinator failed to reserve its first pass");
+    this.pixelScale = firstPass.pixelScale;
+  }
+  cadenceMs;
+  predictionHorizonMs;
+  register(renderable) {
+    if (this.sealed)
+      return 3 /* Sealed */;
+    if (!Number.isInteger(renderable.feedbackPassCount) || renderable.feedbackPassCount <= 0)
+      return 2 /* InvalidPassCount */;
+    if (this.renderableCount === this.renderables.length || this.registeredPassCount + renderable.feedbackPassCount > this.passes.length) {
+      this.stats.registrationOverflows++;
+      return 1 /* CapacityExceeded */;
+    }
+    const slot = this.renderables[this.renderableCount];
+    if (!slot)
+      return 1 /* CapacityExceeded */;
+    slot.renderable = renderable;
+    slot.predictor = new PredictedFeedbackCamera(renderable.feedbackCamera, this.predictionHorizonMs);
+    slot.passOffset = this.registeredPassCount;
+    this.registeredPassCount += renderable.feedbackPassCount;
+    this.renderableCount++;
+    return 0 /* Registered */;
+  }
+  resize(displayWidth, displayHeight) {
+    for (let index = 0;index < this.passes.length; index++)
+      this.passes[index]?.resize(displayWidth, displayHeight);
+  }
+  async warm() {
+    if (this.disposed)
+      throw new Error("cannot warm a disposed feedback coordinator");
+    const previousTarget = this.renderer.getRenderTarget();
+    const shadows = this.renderer.shadowMap.enabled;
+    this.renderer.shadowMap.enabled = false;
+    try {
+      for (let recordIndex = 0;recordIndex < this.renderableCount; recordIndex++) {
+        const record = this.renderables[recordIndex];
+        const renderable = record?.renderable;
+        if (!record || !renderable)
+          continue;
+        const feedbackCamera = record.predictor?.sample(renderable.feedbackCamera, 0) ?? renderable.feedbackCamera;
+        for (let localPass = 0;localPass < renderable.feedbackPassCount; localPass++) {
+          const pass2 = this.passes[record.passOffset + localPass];
+          if (!pass2)
+            continue;
+          renderable.beginFeedbackPass(localPass);
+          try {
+            this.renderer.setRenderTarget(pass2.target);
+            await this.renderer.compileAsync(renderable.feedbackScene, feedbackCamera);
+            this.renderer.render(renderable.feedbackScene, feedbackCamera);
+          } finally {
+            renderable.endFeedbackPass(localPass);
+          }
+        }
+      }
+    } finally {
+      this.renderer.setRenderTarget(previousTarget);
+      this.renderer.shadowMap.enabled = shadows;
+    }
+  }
+  seal() {
+    this.sealed = true;
+  }
+  setGpuTimingEnabled(enabled) {
+    const renderer = this.renderer;
+    renderer.backend.trackTimestamp = enabled;
+    for (const pool of Object.values(renderer.backend.timestampQueryPool ?? {}))
+      if (pool)
+        pool.trackTimestamp = enabled;
+  }
+  async resolveGpuTimings(out) {
+    out.gpuTimingValid = false;
+    out.resolvedFrameId = -1;
+    out.gpuSceneMs = 0;
+    out.gpuOutputMs = 0;
+    out.gpuFeedbackMs = 0;
+    out.gpuTotalMs = 0;
+    const renderer = this.renderer;
+    let timestamps;
+    let frames;
+    try {
+      await renderer.resolveTimestampsAsync("render");
+      const contexts = renderer._renderContexts;
+      const pool = renderer.backend.timestampQueryPool?.render;
+      timestamps = pool?.timestamps;
+      frames = pool?.getTimestampFrames?.();
+      const resolvedFrame = frames?.[frames.length - 1];
+      if (!contexts || !timestamps || resolvedFrame === undefined || !Number.isInteger(resolvedFrame))
+        return out;
+      const outputContext = renderer.needsFrameBufferTarget === true ? contexts.get(null).id : -1;
+      this.feedbackContextIds.fill(-1);
+      for (let index = 0;index < this.passes.length; index++) {
+        const pass2 = this.passes[index];
+        if (pass2)
+          this.feedbackContextIds[index] = contexts.get(pass2.target).id;
+      }
+      let total = 0, output2 = 0, feedback = 0;
+      for (const [uid, duration] of timestamps) {
+        const match = /^r:\d+:(\d+):f(\d+)$/.exec(uid);
+        if (!match || Number(match[2]) !== resolvedFrame || !Number.isFinite(duration) || duration < 0)
+          continue;
+        const context2 = Number(match[1]);
+        total += duration;
+        if (context2 === outputContext) {
+          output2 += duration;
+          continue;
+        }
+        for (let index = 0;index < this.feedbackContextIds.length; index++) {
+          if (context2 === this.feedbackContextIds[index]) {
+            feedback += duration;
+            break;
+          }
+        }
+      }
+      out.gpuTimingValid = true;
+      out.resolvedFrameId = resolvedFrame;
+      out.gpuOutputMs = output2;
+      out.gpuFeedbackMs = feedback;
+      out.gpuTotalMs = total;
+      out.gpuSceneMs = Math.max(0, total - output2 - feedback);
+      return out;
+    } catch {
+      return out;
+    } finally {
+      timestamps?.clear();
+      if (frames)
+        frames.length = 0;
+    }
+  }
+  recordFrameTime(frameTimeMs) {
+    this.store.recordFrameTime(frameTimeMs);
+  }
+  isBootstrapReady() {
+    return this.bootstrapPublicationReady;
+  }
+  poll() {
+    const started = performance.now();
+    this.consumeCompletedSnapshot();
+    this.store.setPublicationFrameId(this.lastRenderFrameId + 1);
+    this.store.poll();
+    this.bootstrapPublicationReady = this.store.isBootstrapReady?.() ?? true;
+    this.vtCpuUs = (performance.now() - started) * 1000;
+  }
+  render(frame) {
+    this.feedbackSubmitUs = 0;
+    this.lastRenderFrameId = frame.frameId;
+    if (this.disposed)
+      return;
+    let predictorResets = 0;
+    for (let index = 0;index < this.renderableCount; index++) {
+      const slot = this.renderables[index];
+      const renderable = slot?.renderable;
+      if (!slot || !renderable || !slot.predictor)
+        continue;
+      slot.predictor.sample(renderable.feedbackCamera, frame.elapsedSeconds);
+      predictorResets += slot.predictor.resetCount;
+    }
+    this.stats.predictorResets = predictorResets;
+    if (frame.elapsedSeconds < this.nextFeedbackSeconds)
+      return;
+    this.nextFeedbackSeconds = frame.elapsedSeconds + this.cadenceMs / 1000;
+    const started = performance.now();
+    if (this.awaitingPassCount !== 0) {
+      this.stats.deferredSnapshots++;
+      return;
+    }
+    let activeCount = 0;
+    for (let recordIndex = 0;recordIndex < this.renderableCount; recordIndex++) {
+      const renderable = this.renderables[recordIndex]?.renderable;
+      if (!renderable || !renderable.isFeedbackActive())
+        continue;
+      for (let localPass = 0;localPass < renderable.feedbackPassCount; localPass++) {
+        if (activeCount >= this.passes.length)
+          break;
+        this.activeRenderable[activeCount] = recordIndex;
+        this.activeLocalPass[activeCount] = localPass;
+        activeCount++;
+      }
+    }
+    this.stats.activePasses = activeCount;
+    if (activeCount === 0)
+      return;
+    for (let index = 0;index < activeCount; index++) {
+      if (this.passes[index]?.canSubmit !== true) {
+        this.stats.deferredSnapshots++;
+        return;
+      }
+    }
+    const shadows = this.renderer.shadowMap.enabled;
+    this.renderer.shadowMap.enabled = false;
+    let submitted = 0;
+    try {
+      for (let index = 0;index < activeCount; index++) {
+        const slot = this.renderables[this.activeRenderable[index] ?? -1];
+        const renderable = slot?.renderable;
+        const localPass = this.activeLocalPass[index] ?? 0;
+        const pass2 = this.passes[index];
+        if (!slot || !renderable || !pass2)
+          continue;
+        renderable.beginFeedbackPass(localPass);
+        try {
+          if (pass2.submit(this.renderer, renderable.feedbackScene, slot.predictor?.camera ?? renderable.feedbackCamera, this.store))
+            submitted++;
+        } finally {
+          renderable.endFeedbackPass(localPass);
+        }
+      }
+    } finally {
+      this.renderer.shadowMap.enabled = shadows;
+    }
+    this.awaitingPassCount = submitted;
+    this.discardAwaiting = submitted !== activeCount;
+    if (submitted !== 0)
+      this.stats.submittedSnapshots++;
+    if (this.discardAwaiting)
+      this.stats.deferredSnapshots++;
+    this.feedbackSubmitUs = (performance.now() - started) * 1000;
+  }
+  consumeCompletedSnapshot() {
+    if (this.awaitingPassCount === 0)
+      return false;
+    let complete = true;
+    for (let index = 0;index < this.awaitingPassCount; index++) {
+      if (this.heldResults[index] === null)
+        this.heldResults[index] = this.passes[index]?.consume() ?? null;
+      if (this.heldResults[index] === null)
+        complete = false;
+    }
+    if (!complete)
+      return false;
+    if (this.discardAwaiting) {
+      this.stats.discardedSnapshots++;
+    } else {
+      this.store.processFeedbackBatch(this.heldResults, this.awaitingPassCount);
+      this.stats.completedSnapshots++;
+    }
+    for (let index = 0;index < this.awaitingPassCount; index++)
+      this.heldResults[index] = null;
+    this.awaitingPassCount = 0;
+    this.discardAwaiting = false;
+    return true;
+  }
+  dispose() {
+    if (this.disposed)
+      return;
+    this.disposed = true;
+    for (let index = 0;index < this.passes.length; index++)
+      this.passes[index]?.dispose();
+    for (let index = 0;index < this.renderables.length; index++) {
+      const slot = this.renderables[index];
+      if (slot) {
+        slot.renderable = null;
+        slot.predictor = null;
+      }
+    }
+    for (let index = 0;index < this.heldResults.length; index++)
+      this.heldResults[index] = null;
+    this.awaitingPassCount = 0;
+  }
+}
+
+// crates/afterglow-web/web/src/engine/core/runtime.ts
+class BrowserAnimationScheduler {
+  request(callback) {
+    return requestAnimationFrame(callback);
+  }
+  cancel(handle) {
+    cancelAnimationFrame(handle);
+  }
+}
+
+class FixedWorkerInputs {
+  capacity;
+  inputs;
   count = 0;
-  constructor(layout, entries) {
-    this.layout = layout;
-    this.entries = entries;
+  constructor(capacity) {
+    this.capacity = capacity;
+    if (!Number.isInteger(capacity) || capacity < 0)
+      throw new RangeError("worker input capacity must be a non-negative integer");
+    this.inputs = new Array(capacity).fill(null);
   }
-  index(req) {
-    return packedPageTableIndex(this.layout, req.mip, req.x, req.y);
-  }
-  get(req) {
-    return this.entries[this.index(req)];
-  }
-  setResident(req, slot) {
-    const index = this.index(req);
-    if (!isResident(this.entries[index]))
-      this.count++;
-    this.entries[index] = packEntry(true, slot.x, slot.y);
-  }
-  setEvicted(req) {
-    const index = this.index(req);
-    if (isResident(this.entries[index]))
-      this.count--;
-    this.entries[index] = 0;
-  }
-  isResident(req) {
-    return isResident(this.get(req));
-  }
-  isResidentAt(mip, x2, y2) {
-    return isResident(this.entries[packedPageTableIndex(this.layout, mip, x2, y2)]);
-  }
-  get residentCount() {
+  get size() {
     return this.count;
   }
+  get hasCapacity() {
+    return this.count < this.capacity;
+  }
+  add(input) {
+    if (this.count === this.capacity)
+      return 1 /* CapacityExceeded */;
+    this.inputs[this.count++] = input;
+    return 0 /* Registered */;
+  }
+  bootstrapReady() {
+    for (let index = 0;index < this.count; index++) {
+      const input = this.inputs[index];
+      if (input !== null && input !== undefined && input.isBootstrapReady?.() === false)
+        return false;
+    }
+    return true;
+  }
+  poll() {
+    for (let index = 0;index < this.count; index++) {
+      const input = this.inputs[index];
+      if (input !== null && input !== undefined)
+        input.poll();
+    }
+  }
+  drainStructuralCommands(adapter) {
+    for (let index = 0;index < this.count; index++) {
+      const input = this.inputs[index];
+      if (input !== null && input !== undefined)
+        input.drainStructuralCommands?.(adapter);
+    }
+  }
+  drainPoseBatches(adapter) {
+    for (let index = 0;index < this.count; index++) {
+      const input = this.inputs[index];
+      if (input !== null && input !== undefined)
+        input.drainPoseBatches?.(adapter);
+    }
+  }
+}
+class FixedOwnedResources {
+  capacity;
+  owners;
+  kinds;
+  count = 0;
+  constructor(capacity) {
+    this.capacity = capacity;
+    if (!Number.isInteger(capacity) || capacity < 0)
+      throw new RangeError("owned resource capacity must be a non-negative integer");
+    this.owners = new Array(capacity).fill(null);
+    this.kinds = new Uint8Array(capacity);
+  }
+  add(owner, kind) {
+    if (this.count === this.capacity)
+      return 1 /* CapacityExceeded */;
+    this.owners[this.count] = owner;
+    this.kinds[this.count] = kind;
+    this.count++;
+    return 0 /* Registered */;
+  }
+  disposeSync() {
+    for (let index = this.count - 1;index >= 0; index--) {
+      const owner = this.owners[index];
+      const kind = this.kinds[index] ?? 0 /* Disposable */;
+      this.owners[index] = null;
+      if (kind === 0 /* Disposable */)
+        owner?.dispose();
+      else
+        owner?.close();
+    }
+    this.count = 0;
+  }
+  async close() {
+    let firstError = null;
+    for (let index = this.count - 1;index >= 0; index--) {
+      const owner = this.owners[index];
+      const kind = this.kinds[index] ?? 0 /* Disposable */;
+      this.owners[index] = null;
+      try {
+        if (kind === 0 /* Disposable */)
+          owner?.dispose();
+        else
+          await owner?.close();
+      } catch (error2) {
+        if (firstError === null)
+          firstError = error2;
+      }
+    }
+    this.count = 0;
+    if (firstError !== null)
+      throw firstError;
+  }
 }
 
+class EngineRuntime {
+  memory;
+  budget;
+  diagnostics;
+  telemetry;
+  mutableFrame = { frameId: 0, deltaSeconds: 0, elapsedSeconds: 0 };
+  workers;
+  passes;
+  owners;
+  scheduler;
+  manifest;
+  shutdownTarget;
+  onBeforeUnload;
+  onGlobalError;
+  onUnhandledRejection;
+  adapter;
+  vt;
+  onAnimationFrame;
+  passCount = 0;
+  client = null;
+  animationHandle = 0;
+  previousTimestamp = -1;
+  elapsedSeconds = 0;
+  mutableState = 0 /* Bootstrap */;
+  mutableReadinessStage = 0 /* Bootstrap */;
+  presentationPass = -1;
+  firstUpdateFrame = 0;
+  firstPresentationFrame = 0;
+  nativeReadySignaled = false;
+  ownedRendererHost = null;
+  pendingTextureSystem = null;
+  pendingFeedbackCoordinator = null;
+  closing = null;
+  static async forScene(options) {
+    const adapter = new RenderAdapter(options.scene, options.entityCapacity);
+    const runtime = new EngineRuntime({ ...options, adapter });
+    try {
+      const host = await RendererHost.create({
+        ...options.renderer,
+        scene: options.scene,
+        camera: options.camera,
+        diagnostics: runtime.diagnostics,
+        onFatal: (error2) => runtime.fail(error2, 1 /* Renderer */)
+      });
+      const status = runtime.registerRenderPass(host);
+      if (status !== 0 /* Registered */)
+        throw new Error(`runtime could not own its presentation pass: ${status}`);
+      runtime.ownedRendererHost = host;
+      return runtime;
+    } catch (error2) {
+      runtime.dispose();
+      throw error2;
+    }
+  }
+  constructor(options) {
+    if (!Number.isInteger(options.maxRenderPasses) || options.maxRenderPasses < 1)
+      throw new RangeError("render pass capacity must be a positive integer");
+    this.adapter = options.adapter;
+    this.memory = new EngineMemory(options.memory);
+    this.telemetry = new EngineTelemetry(ENGINE_TRACE_DESCRIPTORS, ENGINE_METRIC_DESCRIPTORS, this.memory.telemetryTrace, this.memory.telemetryMetrics);
+    this.budget = new FrameBudget(options.frameBudget, undefined, {
+      recorder: this.telemetry.trace,
+      stageDescriptors: FRAME_BUDGET_TRACE_DESCRIPTORS
+    });
+    this.diagnostics = new EngineDiagnostics(options.diagnosticCapacity);
+    this.workers = new FixedWorkerInputs(options.maxWorkerInputs);
+    this.passes = new Array(options.maxRenderPasses).fill(null);
+    this.owners = new FixedOwnedResources(options.maxOwnedResources);
+    this.scheduler = options.scheduler ?? new BrowserAnimationScheduler;
+    const defaultShutdownTarget = typeof window === "object" ? window : null;
+    this.shutdownTarget = options.shutdownTarget === undefined ? defaultShutdownTarget : options.shutdownTarget;
+    this.onBeforeUnload = () => {
+      this.close();
+    };
+    this.onGlobalError = (event) => {
+      const error2 = event.error ?? event;
+      this.fail(error2, 5 /* Game */);
+    };
+    this.onUnhandledRejection = (event) => {
+      this.fail(event.reason ?? event, 5 /* Game */);
+    };
+    this.shutdownTarget?.addEventListener("beforeunload", this.onBeforeUnload);
+    this.shutdownTarget?.addEventListener("error", this.onGlobalError);
+    this.shutdownTarget?.addEventListener("unhandledrejection", this.onUnhandledRejection);
+    this.vt = options.vt;
+    this.onAnimationFrame = (timestamp) => this.tick(timestamp);
+    const memoryResource = defineResource("engineMemory", () => this.memory);
+    const budgetResource = defineResource("frameBudget", () => this.budget);
+    memoryResource.set(this.adapter.world, this.memory);
+    budgetResource.set(this.adapter.world, this.budget);
+    TelemetryRes.set(this.adapter.world, this.telemetry);
+    this.manifest = new ResourceManifest(memoryResource, budgetResource, TelemetryRes, ...options.resources ?? []);
+    this.manifest.initialize(this.adapter.world);
+  }
+  get state() {
+    return this.mutableState;
+  }
+  get readinessStage() {
+    return this.mutableReadinessStage;
+  }
+  get isGameReady() {
+    return this.mutableReadinessStage === 4 /* GameReady */;
+  }
+  get frame() {
+    return this.mutableFrame;
+  }
+  readReadinessInto(out) {
+    out.stage = this.mutableReadinessStage;
+    out.firstUpdateFrame = this.firstUpdateFrame;
+    out.firstPresentationFrame = this.firstPresentationFrame;
+    out.fatalDiagnostics = this.diagnostics.count + this.diagnostics.dropped;
+  }
+  get registeredWorkers() {
+    return this.workers.size;
+  }
+  get registeredRenderPasses() {
+    return this.passCount;
+  }
+  get rendererHost() {
+    if (!this.ownedRendererHost)
+      throw new Error("runtime was not created with a renderer host");
+    return this.ownedRendererHost;
+  }
+  ownDisposable(owner) {
+    if (this.mutableState !== 0 /* Bootstrap */)
+      return 2 /* RuntimeSealed */;
+    return this.owners.add(owner, 0 /* Disposable */);
+  }
+  ownCloseable(owner) {
+    if (this.mutableState !== 0 /* Bootstrap */)
+      return 2 /* RuntimeSealed */;
+    return this.owners.add(owner, 1 /* Closeable */);
+  }
+  registerWorker(input) {
+    if (this.mutableState !== 0 /* Bootstrap */)
+      return 2 /* RuntimeSealed */;
+    return this.workers.add(input);
+  }
+  registerRenderPass(pass2) {
+    if (this.mutableState !== 0 /* Bootstrap */)
+      return 2 /* RuntimeSealed */;
+    if (this.passCount === this.passes.length)
+      return 1 /* CapacityExceeded */;
+    if (pass2.presentation === true && this.presentationPass >= 0)
+      return 3 /* PresentationAlreadyRegistered */;
+    const index = this.passCount++;
+    this.passes[index] = pass2;
+    if (pass2.presentation === true)
+      this.presentationPass = index;
+    return 0 /* Registered */;
+  }
+  createVirtualTextureFeedback(textures, options) {
+    if (this.mutableState !== 0 /* Bootstrap */)
+      throw new Error("virtual-texture presentation must be configured during bootstrap");
+    if (!this.workers.hasCapacity || this.passCount === this.passes.length)
+      throw new Error("runtime virtual-texture registration capacity exceeded");
+    const host = this.rendererHost;
+    const coordinator = new VirtualTextureFeedbackCoordinator(host.renderer, textures, options);
+    try {
+      if (this.pendingTextureSystem !== null)
+        throw new Error("runtime already owns virtual-texture presentation");
+      if (this.workers.add(coordinator) !== 0 /* Registered */ || this.registerRenderPass(coordinator) !== 0 /* Registered */)
+        throw new Error("runtime virtual-texture registration failed after preflight");
+      this.pendingTextureSystem = textures;
+      this.pendingFeedbackCoordinator = coordinator;
+      return coordinator;
+    } catch (error2) {
+      coordinator.dispose();
+      throw error2;
+    }
+  }
+  enterWarmup() {
+    if (this.mutableState !== 0 /* Bootstrap */)
+      throw new Error("runtime can enter warmup only from bootstrap");
+    this.memory.warmup();
+    this.mutableState = 1 /* Warmup */;
+    this.mutableReadinessStage = 1 /* Warmup */;
+  }
+  async warm() {
+    if (this.mutableState !== 1 /* Warmup */)
+      throw new Error("runtime variants can be warmed only during warmup");
+    for (let index = 0;index < this.passCount; index++) {
+      const pass2 = this.passes[index];
+      if (pass2 !== null && pass2 !== undefined)
+        await pass2.warm?.();
+      if (index === this.presentationPass && this.pendingTextureSystem && this.pendingFeedbackCoordinator) {
+        this.rendererHost.initializeVirtualTextures(this.pendingTextureSystem, this.pendingFeedbackCoordinator);
+        this.pendingTextureSystem = null;
+        this.pendingFeedbackCoordinator = null;
+      }
+    }
+  }
+  sealGameplay() {
+    if (this.mutableState !== 1 /* Warmup */)
+      throw new Error("runtime can seal only after entering warmup");
+    if (this.presentationPass < 0)
+      throw new Error("runtime requires exactly one presentation render pass before seal");
+    this.adapter.sealGameplay();
+    this.memory.sealGameplay();
+    this.manifest.seal(this.adapter.world);
+    for (let index = 0;index < this.passCount; index++) {
+      const pass2 = this.passes[index];
+      if (pass2 !== null && pass2 !== undefined)
+        pass2.seal?.();
+    }
+    this.mutableState = 2 /* GameplaySealed */;
+    this.mutableReadinessStage = 2 /* GameplaySealed */;
+  }
+  start(client) {
+    if (this.mutableState !== 2 /* GameplaySealed */ && this.mutableState !== 4 /* Stopped */)
+      throw new Error("runtime can start only after gameplay seal");
+    if (this.diagnostics.count !== 0 || this.diagnostics.dropped !== 0) {
+      this.mutableState = 4 /* Stopped */;
+      this.mutableReadinessStage = 6 /* Fatal */;
+      throw new Error("runtime cannot start with fatal diagnostics");
+    }
+    this.client = client;
+    this.previousTimestamp = -1;
+    this.firstUpdateFrame = 0;
+    this.firstPresentationFrame = 0;
+    this.nativeReadySignaled = false;
+    this.mutableState = 3 /* Running */;
+    this.mutableReadinessStage = 3 /* Starting */;
+    this.animationHandle = this.scheduler.request(this.onAnimationFrame);
+  }
+  stop() {
+    if (this.mutableState !== 3 /* Running */)
+      return;
+    this.mutableState = 4 /* Stopped */;
+    if (this.mutableReadinessStage !== 6 /* Fatal */)
+      this.mutableReadinessStage = 5 /* Suspended */;
+    if (this.animationHandle !== 0)
+      this.scheduler.cancel(this.animationHandle);
+    this.animationHandle = 0;
+  }
+  dispose() {
+    if (this.mutableState === 5 /* Shutdown */)
+      return;
+    this.stop();
+    this.owners.disposeSync();
+    this.disposeCore();
+  }
+  close() {
+    if (this.closing)
+      return this.closing;
+    this.stop();
+    this.closing = this.closeOwnedAndDispose();
+    return this.closing;
+  }
+  async closeOwnedAndDispose() {
+    let failure = null;
+    try {
+      await this.owners.close();
+    } catch (error2) {
+      failure = error2;
+    }
+    this.disposeCore();
+    if (failure !== null)
+      throw failure;
+  }
+  disposeCore() {
+    if (this.mutableState === 5 /* Shutdown */)
+      return;
+    for (let index = this.passCount - 1;index >= 0; index--) {
+      const pass2 = this.passes[index];
+      if (pass2 !== null && pass2 !== undefined)
+        pass2.dispose();
+      this.passes[index] = null;
+    }
+    this.passCount = 0;
+    this.pendingTextureSystem = null;
+    this.pendingFeedbackCoordinator = null;
+    this.ownedRendererHost = null;
+    this.adapter.dispose();
+    this.client = null;
+    this.shutdownTarget?.removeEventListener("beforeunload", this.onBeforeUnload);
+    this.shutdownTarget?.removeEventListener("error", this.onGlobalError);
+    this.shutdownTarget?.removeEventListener("unhandledrejection", this.onUnhandledRejection);
+    this.memory.phase = 3 /* Shutdown */;
+    this.mutableState = 5 /* Shutdown */;
+    this.mutableReadinessStage = 7 /* Shutdown */;
+  }
+  fail(error2, source = 0 /* Runtime */) {
+    if (this.mutableState === 5 /* Shutdown */ || this.mutableReadinessStage === 6 /* Fatal */)
+      return;
+    if (this.diagnostics.count === 0 && this.diagnostics.dropped === 0)
+      this.diagnostics.tryRecord(1 /* RuntimeState */, source, error2);
+    this.stop();
+    this.mutableReadinessStage = 6 /* Fatal */;
+    this.showFatalPanel(error2);
+  }
+  showFatalPanel(error2) {
+    if (typeof document !== "object" || document.getElementById("afterglow-webgpu-failure") || document.getElementById("afterglow-runtime-fatal"))
+      return;
+    const panel = document.createElement("pre");
+    panel.id = "afterglow-runtime-fatal";
+    panel.textContent = `Afterglow stopped after a fatal engine error.
+
+${error2 instanceof Error ? error2.message : String(error2)}`;
+    panel.style.cssText = "position:fixed;inset:0;z-index:2147483647;box-sizing:border-box;margin:0;padding:24px;background:#11151c;color:#ff9a9a;font:16px/1.5 ui-monospace,monospace;white-space:pre-wrap";
+    document.body.appendChild(panel);
+  }
+  tick(timestamp) {
+    if (this.mutableState !== 3 /* Running */ || this.client === null)
+      return;
+    this.animationHandle = 0;
+    if (this.diagnostics.count !== 0 || this.diagnostics.dropped !== 0) {
+      this.fail(new Error("runtime stopped after a fatal diagnostic"));
+      return;
+    }
+    const deltaSeconds = this.previousTimestamp < 0 ? 1 / 60 : Math.max(0, (timestamp - this.previousTimestamp) / 1000);
+    this.previousTimestamp = timestamp;
+    this.elapsedSeconds += deltaSeconds;
+    this.mutableFrame.frameId++;
+    this.mutableFrame.deltaSeconds = deltaSeconds;
+    this.mutableFrame.elapsedSeconds = this.elapsedSeconds;
+    const frameNanoseconds = Math.floor(deltaSeconds * 1e9);
+    this.telemetry.metrics.counterAdd(0 /* Frames */, 1);
+    this.telemetry.metrics.histogramLog2(1 /* FrameDeltaNs */, frameNanoseconds);
+    this.telemetry.metrics.maximum(2 /* FrameMaxNs */, frameNanoseconds);
+    this.telemetry.trace.spanBegin(0 /* Frame */, this.mutableFrame.frameId, this.mutableFrame.frameId, frameNanoseconds);
+    let gameSpanOpen = false;
+    let renderSpanOpen = false;
+    try {
+      prepareAfterglowFrame(this.mutableFrame, this.workers, this.adapter, this.vt, this.memory, this.budget);
+      this.telemetry.trace.spanBegin(6 /* GameUpdate */, this.mutableFrame.frameId, this.mutableFrame.frameId, 0);
+      gameSpanOpen = true;
+      this.client.update(this.mutableFrame);
+      if (this.firstUpdateFrame === 0)
+        this.firstUpdateFrame = this.mutableFrame.frameId;
+      this.telemetry.trace.spanEnd(6 /* GameUpdate */, this.mutableFrame.frameId, this.mutableFrame.frameId, 0);
+      gameSpanOpen = false;
+      this.telemetry.trace.spanBegin(7 /* RenderPasses */, this.mutableFrame.frameId, this.mutableFrame.frameId, 0);
+      renderSpanOpen = true;
+      for (let index = 0;index < this.passCount; index++) {
+        const pass2 = this.passes[index];
+        if (pass2 !== null && pass2 !== undefined) {
+          pass2.render(this.mutableFrame);
+          if (index === this.presentationPass && this.firstPresentationFrame === 0)
+            this.firstPresentationFrame = this.mutableFrame.frameId;
+        }
+      }
+      this.telemetry.trace.spanEnd(7 /* RenderPasses */, this.mutableFrame.frameId, this.mutableFrame.frameId, 0);
+      renderSpanOpen = false;
+      this.telemetry.trace.spanEnd(0 /* Frame */, this.mutableFrame.frameId, this.mutableFrame.frameId, 0);
+      if (this.mutableState === 3 /* Running */ && this.mutableReadinessStage === 3 /* Starting */ && this.firstUpdateFrame !== 0 && this.firstPresentationFrame !== 0 && this.workers.bootstrapReady() && this.diagnostics.count === 0 && this.diagnostics.dropped === 0) {
+        this.mutableReadinessStage = 4 /* GameReady */;
+        this.publishNativeGameReady();
+      }
+    } catch (error2) {
+      this.budget.abortOpenStages();
+      if (gameSpanOpen)
+        this.telemetry.trace.spanEnd(6 /* GameUpdate */, this.mutableFrame.frameId, this.mutableFrame.frameId, 1);
+      if (renderSpanOpen)
+        this.telemetry.trace.spanEnd(7 /* RenderPasses */, this.mutableFrame.frameId, this.mutableFrame.frameId, 1);
+      this.telemetry.trace.spanEnd(0 /* Frame */, this.mutableFrame.frameId, this.mutableFrame.frameId, 1);
+      console.error("[afterglow] runtime frame failed:", error2 instanceof Error ? error2.stack : String(error2));
+      this.fail(error2);
+      return;
+    }
+    if (this.mutableState === 3 /* Running */)
+      this.animationHandle = this.scheduler.request(this.onAnimationFrame);
+  }
+  publishNativeGameReady() {
+    if (this.nativeReadySignaled)
+      return;
+    const native = globalThis;
+    const signal = native.Deno?.core?.ops?.op_afterglow_game_ready;
+    if (typeof signal !== "function")
+      return;
+    signal();
+    this.nativeReadySignaled = true;
+  }
+}
+// crates/afterglow-web/web/src/engine/profiling/profiling.ts
+var ProfilingRes = defineResource("profiling", () => {
+  throw new Error("Profiling not initialized. Call ProfilingRes.set(world, new Profiling(host)).");
+});
+// crates/afterglow-web/web/src/engine/assets/asset-handle.ts
+class AssetHandle {
+  asset;
+  generation = 0;
+  state = "loading";
+  path;
+  constructor(path, fallback) {
+    this.path = path;
+    this.asset = fallback;
+  }
+  get isReady() {
+    return this.state === "ready";
+  }
+  get isError() {
+    return this.state === "error";
+  }
+  lod = -1;
+}
+
+// crates/afterglow-web/web/src/engine/virtual-texturing/fixed-page-slot-map.ts
 class FixedPageSlotMap {
   keys;
   values;
@@ -65675,6 +66677,92 @@ class FixedPageSlotMap {
   }
 }
 
+// crates/afterglow-web/web/src/engine/virtual-texturing/virtual-texture-format.ts
+var PAGE_SIZE = 128;
+var PAGE_BORDER = 4;
+var SLOT_SIZE = PAGE_SIZE + PAGE_BORDER * 2;
+var ATLAS_PAGES_X = 15;
+var ATLAS_PAGES_Y = 15;
+var ATLAS_WIDTH = ATLAS_PAGES_X * SLOT_SIZE;
+var ATLAS_HEIGHT = ATLAS_PAGES_Y * SLOT_SIZE;
+var BLOCK_SIZE = 4;
+var COMPRESSED_BYTES_PER_BLOCK = 16;
+var SLOT_BLOCKS_X = SLOT_SIZE / BLOCK_SIZE;
+var SLOT_BLOCKS_Y = SLOT_SIZE / BLOCK_SIZE;
+var FORMAT_BC7 = 0;
+var FORMAT_ASTC = 1;
+var FORMAT_RGBA2 = 4;
+var FORMAT_R8 = 5;
+var FORMAT_R16F = 6;
+function isCompressedTextureFormat(format) {
+  return format === FORMAT_BC7 || format === FORMAT_ASTC;
+}
+function uncompressedBytesPerTexel(format) {
+  if (format === FORMAT_RGBA2)
+    return 4;
+  if (format === FORMAT_R8)
+    return 1;
+  if (format === FORMAT_R16F)
+    return 2;
+  throw new RangeError(`texture format ${format} is compressed or unsupported`);
+}
+function bytesPerBlock(format) {
+  if (isCompressedTextureFormat(format))
+    return COMPRESSED_BYTES_PER_BLOCK;
+  return BLOCK_SIZE * BLOCK_SIZE * uncompressedBytesPerTexel(format);
+}
+function threeFormat(format) {
+  if (format === FORMAT_BC7)
+    return RGBA_BPTC_Format;
+  if (format === FORMAT_ASTC)
+    return RGBA_ASTC_4x4_Format;
+  throw new RangeError(`unsupported compressed texture format ${format}`);
+}
+function packPageTableEntry(resident, physicalX, physicalY) {
+  return (resident ? 1 : 0) | (physicalX & 255) << 1 | (physicalY & 255) << 9;
+}
+function isPageTableEntryResident(entry) {
+  return (entry & 1) !== 0;
+}
+
+// crates/afterglow-web/web/src/engine/virtual-texturing/virtual-texture-residency.ts
+class PageTable {
+  layout;
+  entries;
+  count = 0;
+  constructor(layout, entries) {
+    this.layout = layout;
+    this.entries = entries;
+  }
+  index(req) {
+    return packedPageTableIndex(this.layout, req.mip, req.x, req.y);
+  }
+  get(req) {
+    return this.entries[this.index(req)];
+  }
+  setResident(req, slot) {
+    const index = this.index(req);
+    if (!isPageTableEntryResident(this.entries[index]))
+      this.count++;
+    this.entries[index] = packPageTableEntry(true, slot.x, slot.y);
+  }
+  setEvicted(req) {
+    const index = this.index(req);
+    if (isPageTableEntryResident(this.entries[index]))
+      this.count--;
+    this.entries[index] = 0;
+  }
+  isResident(req) {
+    return isPageTableEntryResident(this.get(req));
+  }
+  isResidentAt(mip, x2, y2) {
+    return isPageTableEntryResident(this.entries[packedPageTableIndex(this.layout, mip, x2, y2)]);
+  }
+  get residentCount() {
+    return this.count;
+  }
+}
+
 class PageCache {
   format;
   pagesX;
@@ -65705,11 +66793,12 @@ class PageCache {
     this.height = this.pagesY * SLOT_SIZE;
     const blocksX = this.width / BLOCK_SIZE, blocksY = this.height / BLOCK_SIZE;
     const bpb = bytesPerBlock(format);
-    if (format === FORMAT_RGBA) {
-      this.atlasBytesPerRow = this.width * 4;
-      this.slotBytesPerRow = SLOT_SIZE * 4;
-      this.slotDataSize = SLOT_SIZE * SLOT_SIZE * 4;
-      this.atlas = new Uint8Array(this.width * this.height * 4);
+    if (!isCompressedTextureFormat(format)) {
+      const bytesPerTexel = uncompressedBytesPerTexel(format);
+      this.atlasBytesPerRow = this.width * bytesPerTexel;
+      this.slotBytesPerRow = SLOT_SIZE * bytesPerTexel;
+      this.slotDataSize = SLOT_SIZE * SLOT_SIZE * bytesPerTexel;
+      this.atlas = new Uint8Array(this.width * this.height * bytesPerTexel);
     } else {
       this.atlasBytesPerRow = blocksX * bpb;
       this.slotBytesPerRow = SLOT_BLOCKS_X * bpb;
@@ -65765,15 +66854,21 @@ class PageCache {
     this.acquireResult.evicted = evicted;
     return this.acquireResult;
   }
-  commit(req, slot, data) {
-    const rows = this.format === FORMAT_RGBA ? SLOT_SIZE : SLOT_BLOCKS_Y;
-    const dstXBytes = this.format === FORMAT_RGBA ? slot.x * SLOT_SIZE * 4 : slot.x * SLOT_BLOCKS_X * (this.slotBytesPerRow / SLOT_BLOCKS_X);
-    const dstY = this.format === FORMAT_RGBA ? slot.y * SLOT_SIZE : slot.y * SLOT_BLOCKS_Y;
+  writeSlot(slot, data) {
+    if (data.byteLength !== this.slotDataSize)
+      throw new RangeError(`VT page has ${data.byteLength} bytes; expected ${this.slotDataSize}`);
+    const compressed = isCompressedTextureFormat(this.format);
+    const rows = compressed ? SLOT_BLOCKS_Y : SLOT_SIZE;
+    const dstXBytes = compressed ? slot.x * SLOT_BLOCKS_X * (this.slotBytesPerRow / SLOT_BLOCKS_X) : slot.x * this.slotBytesPerRow;
+    const dstY = compressed ? slot.y * SLOT_BLOCKS_Y : slot.y * SLOT_SIZE;
     for (let row = 0;row < rows; row++) {
       const srcOffset = row * this.slotBytesPerRow;
       const dstOffset = (dstY + row) * this.atlasBytesPerRow + dstXBytes;
       this.atlas.set(data.subarray(srcOffset, srcOffset + this.slotBytesPerRow), dstOffset);
     }
+  }
+  commit(req, slot, data) {
+    this.writeSlot(slot, data);
     const slotIdx = slot.y * this.pagesX + slot.x;
     if (this.reserved[slotIdx] === 0 || this.slotActive[slotIdx] !== 0)
       throw new Error("VT slot commit without a unique reservation");
@@ -65793,6 +66888,15 @@ class PageCache {
     this.usedCount++;
     if (req.pinned)
       this.pinnedCount++;
+  }
+  replaceByKey(cacheKey, data) {
+    const index = this.slotByKey.get(cacheKey);
+    if (index === undefined || this.slotActive[index] === 0 || this.reserved[index] !== 0)
+      return null;
+    const slot = this.slotCoords[index];
+    this.writeSlot(slot, data);
+    this.referenced[index] = 1;
+    return slot;
   }
   evictByKey(cacheKey) {
     const index = this.slotByKey.get(cacheKey);
@@ -65842,6 +66946,60 @@ class PageCache {
     return this.pagesX * this.pagesY;
   }
 }
+
+// crates/afterglow-web/web/src/engine/virtual-texturing/virtual-texture-request.ts
+var MAX_MIP = 10;
+var SCORE_COVERAGE_CAP2 = 255;
+var MAX_PIXEL_PERCEPTUAL_WEIGHT = 15;
+var MAX_PERCEPTUAL_WEIGHT = SCORE_COVERAGE_CAP2 * MAX_PIXEL_PERCEPTUAL_WEIGHT;
+var MAX_PAGE_SCORE = SCORE_COVERAGE_CAP2 * (MAX_PIXEL_PERCEPTUAL_WEIGHT + 7);
+var IMPORTANCE_LEVEL_MAX = 24;
+var IMPORTANCE_BUCKET_COUNT = IMPORTANCE_LEVEL_MAX + 1;
+var MAX_SCORE_EXPONENT = 31 - Math.clz32(MAX_PAGE_SCORE);
+var TOP_SCORE_BASE = 1 << MAX_SCORE_EXPONENT;
+var TOP_SCORE_SPLIT = TOP_SCORE_BASE + Math.ceil((MAX_PAGE_SCORE - TOP_SCORE_BASE + 1) / 2);
+var FOCUS_IMPORTANCE_BUCKET_MAX = 12;
+var PAGE_KIND_PRIORITY_COUNT = 2;
+var MATERIAL_CHANNEL_PRIORITY_COUNT = 3;
+var PRIORITY_LANE_COUNT = IMPORTANCE_BUCKET_COUNT * PAGE_KIND_PRIORITY_COUNT * MATERIAL_CHANNEL_PRIORITY_COUNT;
+function packedPageCoordinates(textureId, mip, x2, y2, tail = false) {
+  const local = tail ? 268435456 : (mip & 63 | (x2 & 2047) << 6 | (y2 & 2047) << 17) >>> 0;
+  return textureId * 536870912 + local;
+}
+function packedPageIdentity(textureId, request) {
+  return packedPageCoordinates(textureId, request.mip, request.x, request.y, request.tail);
+}
+function perceptualImportanceBucket(weight) {
+  const bounded = Math.max(1, Math.min(MAX_PAGE_SCORE, Math.floor(weight)));
+  const exponent = 31 - Math.clz32(bounded);
+  let level;
+  if (exponent === 0)
+    level = 0;
+  else if (exponent < MAX_SCORE_EXPONENT)
+    level = exponent * 2 - 1 + (bounded >>> exponent - 1 & 1);
+  else
+    level = bounded < TOP_SCORE_SPLIT ? IMPORTANCE_LEVEL_MAX - 1 : IMPORTANCE_LEVEL_MAX;
+  return IMPORTANCE_LEVEL_MAX - level;
+}
+function sourcePerceptualWeight(source) {
+  const coverage = Math.min(SCORE_COVERAGE_CAP2, source.coverage ?? 1);
+  const centerCloseness = 7 - Math.min(7, (source.screenPriority ?? 255) >>> 5);
+  return Math.min(MAX_PERCEPTUAL_WEIGHT, source.perceptualWeight ?? coverage * (1 + centerCloseness));
+}
+function perceptualPriority(perceptualWeight, coverage, residentMipGap, parent, channelPriority) {
+  const pageWeight = Math.min(MAX_PAGE_SCORE, perceptualWeight + Math.min(SCORE_COVERAGE_CAP2, coverage) * residentMipGap);
+  const bucket = perceptualImportanceBucket(pageWeight);
+  const pageKind = parent ? 0 : 1;
+  return (bucket * PAGE_KIND_PRIORITY_COUNT + pageKind) * MATERIAL_CHANNEL_PRIORITY_COUNT + channelPriority;
+}
+function pageBatchTier(parent, priority) {
+  if (parent)
+    return "urgent";
+  const importanceBucket = Math.floor(priority / (PAGE_KIND_PRIORITY_COUNT * MATERIAL_CHANNEL_PRIORITY_COUNT));
+  return importanceBucket <= FOCUS_IMPORTANCE_BUCKET_MAX ? "focus" : "peripheral";
+}
+
+// crates/afterglow-web/web/src/engine/virtual-texturing/virtual-texture-tuning.ts
 var DEFAULT_VIRTUAL_TEXTURE_TUNING = {
   minUploadsPerPoll: 1,
   baselineUploadsPerPoll: 2,
@@ -65995,6 +67153,16 @@ class VirtualTextureTuning {
 }
 var VirtualTextureTuningRes = defineResource("virtualTextureTuning", () => new VirtualTextureTuning);
 
+// crates/afterglow-web/web/src/engine/virtual-texturing/virtual-texture.ts
+var DEFAULT_VIRTUAL_MATERIAL_MIP_BIASES = {
+  albedo: 0,
+  normal: 1,
+  masks: 2,
+  roughness: 2,
+  ao: 2,
+  emissive: 1
+};
+
 class VirtualTextureStore {
   telemetry;
   atlasTexture;
@@ -66013,7 +67181,6 @@ class VirtualTextureStore {
   nextTextureId = 1;
   pageTables = new Map;
   cache;
-  loader;
   pageDataProvider;
   pendingRecords;
   pendingActive;
@@ -66141,11 +67308,10 @@ class VirtualTextureStore {
     averageTranscodeMs: 0,
     maxTranscodeMs: 0
   };
-  constructor(loader, capacities, pageDataProvider, format, device, tuning, telemetry) {
+  constructor(capacities, pageDataProvider, format, device, tuning, telemetry) {
     this.telemetry = telemetry;
-    this.loader = loader;
     this.pageDataProvider = pageDataProvider;
-    this.format = format ?? FORMAT_RGBA;
+    this.format = format ?? FORMAT_RGBA2;
     this.device = device ?? null;
     this.tuning = tuning ?? new VirtualTextureTuning;
     const deviceMax = device?.limits.maxTextureDimension2D ?? ATLAS_WIDTH;
@@ -66192,7 +67358,14 @@ class VirtualTextureStore {
     this.readyUploads = new Array(this.maxPendingPages);
     for (let index = 0;index < this.readyUploads.length; index++) {
       const page = { path: "", mip: 0, x: 0, y: 0, pinned: false, cacheKey: 0 };
-      this.readyUploads[index] = { key: 0, generation: 0, page, req: page, data: new Uint8Array(0) };
+      this.readyUploads[index] = {
+        key: 0,
+        generation: 0,
+        page,
+        req: page,
+        data: new Uint8Array(0),
+        lease: null
+      };
     }
     this.feedbackScratch = new Array(schedulerCapacity + 1);
     this.feedbackScratchKeys = new FixedPageSlotMap(schedulerCapacity + 1);
@@ -66204,8 +67377,9 @@ class VirtualTextureStore {
       this.scheduledPrevious[index] = -1;
       this.scheduledFree[this.scheduledFreeTop++] = index;
     }
-    if (this.format === FORMAT_RGBA) {
-      this.atlasTexture = new DataTexture(this.cache.atlas, this.atlasWidth, this.atlasHeight, RGBAFormat);
+    if (!isCompressedTextureFormat(this.format)) {
+      const data = this.format === FORMAT_R16F ? new Uint16Array(this.cache.atlas.buffer) : this.cache.atlas;
+      this.atlasTexture = new DataTexture(data, this.atlasWidth, this.atlasHeight, this.format === FORMAT_RGBA2 ? RGBAFormat : RedFormat, this.format === FORMAT_R16F ? HalfFloatType : UnsignedByteType);
       this.atlasTexture.minFilter = LinearFilter;
       this.atlasTexture.magFilter = LinearFilter;
       this.atlasTexture.generateMipmaps = false;
@@ -66259,9 +67433,10 @@ class VirtualTextureStore {
     pageTableTexture.magFilter = NearestFilter;
     pageTableTexture.generateMipmaps = false;
     pageTableTexture.needsUpdate = true;
-    const textureId = this.nextTextureId++;
-    if (textureId > 4294967295)
-      throw new Error("virtual texture ID space exhausted");
+    const textureId = options?.textureId ?? this.nextTextureId++;
+    if (!Number.isInteger(textureId) || textureId < 1 || textureId > 4294967295 || this.entriesById[textureId])
+      throw new Error("virtual texture ID is invalid, exhausted, or already registered");
+    this.nextTextureId = Math.max(this.nextTextureId, textureId + 1);
     const entry = {
       textureId,
       path,
@@ -66382,7 +67557,7 @@ class VirtualTextureStore {
   }
   isRequestResident(path, req, pageTable) {
     if (req.tail)
-      return isResident(this.entries.get(path)?.tailEntry ?? 0);
+      return isPageTableEntryResident(this.entries.get(path)?.tailEntry ?? 0);
     return pageTable.isResident(req);
   }
   getPending(key) {
@@ -66423,7 +67598,7 @@ class VirtualTextureStore {
   }
   queuePageLoad(entry, req, pageTable, pinned = false, priorityTier = PRIORITY_LANE_COUNT - 1) {
     const path = entry.path;
-    if (!this.pageDataProvider || (req.tail ? isResident(entry.tailEntry) : pageTable.isResident(req)) || !this.isValidEntryRequest(entry, req))
+    if (!this.pageDataProvider || (req.tail ? isPageTableEntryResident(entry.tailEntry) : pageTable.isResident(req)) || !this.isValidEntryRequest(entry, req))
       return false;
     if (this.pendingCount >= this.maxPendingPages || this.pendingBytes + this.cache.slotDataSize > this.maxPendingBytes) {
       if (!this.preemptWorstPending(priorityTier))
@@ -66459,14 +67634,20 @@ class VirtualTextureStore {
     this.pendingBytes += this.cache.slotDataSize;
     this.telemetry?.metrics.counterAdd(7 /* VtPagesRequested */, 1);
     this.telemetry?.trace.asyncBegin(13 /* VtPageLoad */, key, this.cache.slotDataSize, priorityTier);
-    this.pageDataProvider(path, page, controller.signal).then((data) => {
+    this.pageDataProvider(path, page, controller.signal).then((result) => {
+      const lease = result instanceof Uint8Array ? null : result;
+      const data = result instanceof Uint8Array ? result : result.bytes;
       if (data.byteLength !== this.cache.slotDataSize) {
+        lease?.release();
         throw new RangeError(`VT page ${key} has ${data.byteLength} bytes; expected ${this.cache.slotDataSize}`);
       }
       const pending = this.getPending(key);
-      if (!pending || pending.generation !== generation)
+      if (!pending || pending.generation !== generation) {
+        lease?.release();
         return;
+      }
       if (pending.canceled) {
+        lease?.release();
         this.telemetry?.trace.asyncEnd(13 /* VtPageLoad */, key, 0, 2);
         this.deletePending(key);
         return;
@@ -66476,19 +67657,23 @@ class VirtualTextureStore {
       this.totalLoadMs += loadMs;
       this.maxLoadMs = Math.max(this.maxLoadMs, loadMs);
       if (!pending.page.pinned && this.feedbackEpoch - pending.lastSeen >= this.staleFeedbackEpochs) {
+        lease?.release();
         this.telemetry?.trace.asyncEnd(13 /* VtPageLoad */, key, 0, 3);
         this.deletePending(key);
         this.staleCancellations++;
         return;
       }
-      if (this.readyUploadCount >= this.readyUploads.length)
+      if (this.readyUploadCount >= this.readyUploads.length) {
+        lease?.release();
         throw new Error("VT ready-upload ring capacity exceeded");
+      }
       const ready = this.readyUploads[this.readyUploadTail];
       ready.key = key;
       ready.generation = generation;
       ready.page = page;
       ready.req = page;
       ready.data = data;
+      ready.lease = lease;
       this.readyUploadTail = (this.readyUploadTail + 1) % this.readyUploads.length;
       this.readyUploadCount++;
       this.telemetry?.metrics.counterAdd(8 /* VtPagesLoaded */, 1);
@@ -66739,7 +67924,7 @@ class VirtualTextureStore {
     if (!entry || !pageTable || !this.isValidEntryRequest(entry, request))
       return;
     const key = this.pageKey(request);
-    if (request.tail ? isResident(entry.tailEntry) : pageTable.isResident(request)) {
+    if (request.tail ? isPageTableEntryResident(entry.tailEntry) : pageTable.isResident(request)) {
       this.residentHits++;
       this.cache.touch(key);
       const scheduled = this.scheduledByKey.get(key);
@@ -66814,7 +67999,7 @@ class VirtualTextureStore {
         this.removeScheduled(index, 3 /* Invalid */);
         continue;
       }
-      if (request.tail ? isResident(entry.tailEntry) : pageTable.isResident(request)) {
+      if (request.tail ? isPageTableEntryResident(entry.tailEntry) : pageTable.isResident(request)) {
         this.removeScheduled(index, 1 /* Resident */);
         continue;
       }
@@ -66893,7 +68078,7 @@ class VirtualTextureStore {
     }
   }
   updateMipTailEntry(path, slot) {
-    this.writeMipTailEntry(path, packEntry(true, slot.x, slot.y));
+    this.writeMipTailEntry(path, packPageTableEntry(true, slot.x, slot.y));
   }
   writePageTableEntry(path, req, value) {
     const entry = this.entries.get(path);
@@ -66916,7 +68101,7 @@ class VirtualTextureStore {
     }
   }
   updatePageTableTexture(path, req, slot) {
-    this.writePageTableEntry(path, req, packEntry(true, slot.x, slot.y));
+    this.writePageTableEntry(path, req, packPageTableEntry(true, slot.x, slot.y));
   }
   unloadTexture(path) {
     const unloading = this.entries.get(path);
@@ -66963,6 +68148,8 @@ class VirtualTextureStore {
     this.gpuPageTables.clear();
     this.gpuAtlasTexture = null;
     this.device = null;
+    for (let index = 0;index < this.readyUploads.length; index++)
+      this.releaseReadyPayload(this.readyUploads[index]);
     this.readyUploadCount = 0;
     this.readyUploadHead = 0;
     this.readyUploadTail = 0;
@@ -66973,6 +68160,22 @@ class VirtualTextureStore {
   getEntryById(textureId) {
     return this.entriesById[textureId >>> 0] ?? undefined;
   }
+  replaceResidentPage(path, request, data) {
+    const entry = this.entries.get(path);
+    if (!entry)
+      return false;
+    const key = packedPageIdentity(entry.textureId, request);
+    const slot = this.cache.replaceByKey(key, data);
+    if (!slot)
+      return false;
+    this.writePage(slot, data);
+    this.completedUploads++;
+    return true;
+  }
+  isPagePending(path, request) {
+    const entry = this.entries.get(path);
+    return entry ? this.pendingByKey.get(packedPageIdentity(entry.textureId, request)) !== undefined : false;
+  }
   writePage(slot, data) {
     if (this.gpuAtlasTexture && this.device) {
       if (!(data.buffer instanceof ArrayBuffer))
@@ -66981,10 +68184,17 @@ class VirtualTextureStore {
       this.device.queue.writeTexture({
         texture: this.gpuAtlasTexture,
         origin: { x: slot.x * SLOT_SIZE, y: slot.y * SLOT_SIZE }
-      }, uploadData, this.format === FORMAT_RGBA ? { bytesPerRow: SLOT_SIZE * 4, rowsPerImage: SLOT_SIZE } : { bytesPerRow: this.cache.slotBytesPerRow, rowsPerImage: SLOT_BLOCKS_Y }, { width: SLOT_SIZE, height: SLOT_SIZE });
+      }, uploadData, isCompressedTextureFormat(this.format) ? { bytesPerRow: this.cache.slotBytesPerRow, rowsPerImage: SLOT_BLOCKS_Y } : {
+        bytesPerRow: SLOT_SIZE * uncompressedBytesPerTexel(this.format),
+        rowsPerImage: SLOT_SIZE
+      }, { width: SLOT_SIZE, height: SLOT_SIZE });
     } else {
       this.atlasTexture.needsUpdate = true;
     }
+  }
+  releaseReadyPayload(ready) {
+    ready.lease?.release();
+    ready.lease = null;
   }
   setPublicationFrameId(frameId2) {
     this.publicationFrameId = Number.isSafeInteger(frameId2) && frameId2 >= 0 ? frameId2 : 0;
@@ -66993,7 +68203,6 @@ class VirtualTextureStore {
     this.tuning.recordFrameTime(frameMs, this.pendingCount + this.readyUploadCount + this.scheduledCount);
   }
   poll() {
-    this.loader.poll();
     const deadline = performance.now() + this.tuning.uploadBudgetMs;
     for (let count = 0;count < this.tuning.uploadsPerPoll && this.readyUploadCount !== 0; count++) {
       if (count !== 0 && performance.now() >= deadline) {
@@ -67004,18 +68213,23 @@ class VirtualTextureStore {
       this.readyUploadHead = (this.readyUploadHead + 1) % this.readyUploads.length;
       this.readyUploadCount--;
       const pending = this.getPending(ready.key);
-      if (!pending || pending.generation !== ready.generation)
+      if (!pending || pending.generation !== ready.generation) {
+        this.releaseReadyPayload(ready);
         continue;
+      }
       if (pending.canceled) {
         this.deletePending(ready.key);
+        this.releaseReadyPayload(ready);
         continue;
       }
       this.deletePending(ready.key);
       const textureId = ready.page.textureId ?? 0;
       const entry = this.entriesById[textureId];
       const pageTable = this.pageTablesById[textureId];
-      if (!entry || !pageTable || (ready.req.tail ? isResident(entry.tailEntry) : pageTable.isResident(ready.req)))
+      if (!entry || !pageTable || (ready.req.tail ? isPageTableEntryResident(entry.tailEntry) : pageTable.isResident(ready.req))) {
+        this.releaseReadyPayload(ready);
         continue;
+      }
       const uploadStartedAt = performance.now();
       this.telemetry?.trace.spanBegin(18 /* VtUpload */, ready.key, ready.data.byteLength, 0);
       let slot;
@@ -67029,6 +68243,7 @@ class VirtualTextureStore {
       } catch {
         this.telemetry?.trace.spanEnd(18 /* VtUpload */, ready.key, 0, 1);
         this.rejectedAdmissions++;
+        this.releaseReadyPayload(ready);
         continue;
       }
       this.cache.commit(ready.page, slot, ready.data);
@@ -67047,6 +68262,7 @@ class VirtualTextureStore {
       this.completedUploads++;
       this.totalUploadMs += uploadMs;
       this.maxUploadMs = Math.max(this.maxUploadMs, uploadMs);
+      this.releaseReadyPayload(ready);
     }
     this.schedulePendingRequests();
   }
@@ -67151,268 +68367,6 @@ class VirtualTextureStore {
     return stats;
   }
 }
-var VirtualTextureRes = defineResource("virtualTexture", () => {
-  throw new Error("VirtualTextureStore not initialized. Set it with explicit runtime capacities during bootstrap.");
-});
-var VT_SAMPLE_WGSL = `
-fn vtSample(
-  pageTable: texture_2d<u32>,
-  atlas: texture_2d<f32>,
-  atlasSampler: sampler,
-  uv: vec2f,
-  virtualSize: vec2f,
-  pageGrid: vec2f,
-  pageSize: f32,
-  pageBorder: f32,
-  atlasSize: vec2f,
-  maxMip: f32,
-  textureMaxMip: f32,
-  mipBias: f32,
-  filterMode: u32,
-  addressMode: u32
-) -> vec4f {
-  // 0 = clamp, 1 = repeat, 2 = mirrored repeat.
-  var addressed_uv = clamp(uv, vec2f(0.0), vec2f(0.99999994));
-  if (addressMode == 1u) {
-    addressed_uv = fract(uv);
-  } else if (addressMode == 2u) {
-    let period = uv - floor(uv * 0.5) * 2.0;
-    addressed_uv = select(period, 2.0 - period, period > vec2f(1.0));
-    addressed_uv = clamp(addressed_uv, vec2f(0.0), vec2f(0.99999994));
-  }
-
-  // Compute desired mip level from the original continuous derivatives.
-  let dx = dpdx(uv * virtualSize);
-  let dy = dpdy(uv * virtualSize);
-  let texel_footprint = max(dot(dx, dx), dot(dy, dy));
-  let mip_float = clamp(
-    0.5 * log2(max(texel_footprint, 1e-8)) + mipBias,
-    0.0,
-    textureMaxMip
-  );
-  let desired_level = i32(mip_float);
-
-  // Mips below 128x128 share one pinned physical slot. The entry is stored in
-  // the otherwise-unused x=1 texel of the terminal page-table row.
-  if (desired_level > i32(maxMip)) {
-    var tail_offset = 0.0;
-    for (var level = 0; level < i32(maxMip); level = level + 1) {
-      tail_offset += max(1.0, ceil(pageGrid.y / exp2(f32(level))));
-    }
-    let tail_entry = textureLoad(pageTable, vec2i(1, i32(tail_offset)), 0).r;
-    if ((tail_entry & 1u) != 0u) {
-      let delta = desired_level - i32(maxMip);
-      var rect_origin = vec2f(0.0);
-      if (delta == 2) { rect_origin = vec2f(72.0, 0.0); }
-      else if (delta == 3) { rect_origin = vec2f(112.0, 0.0); }
-      else if (delta == 4) { rect_origin = vec2f(72.0, 40.0); }
-      else if (delta == 5) { rect_origin = vec2f(88.0, 40.0); }
-      else if (delta == 6) { rect_origin = vec2f(100.0, 40.0); }
-      else if (delta >= 7) { rect_origin = vec2f(110.0, 40.0); }
-      let tail_size = max(vec2f(1.0), floor(virtualSize / exp2(f32(desired_level))));
-      let tail_x = (tail_entry >> 1) & 0xFFu;
-      let tail_y = (tail_entry >> 9) & 0xFFu;
-      let slot_origin = vec2f(f32(tail_x), f32(tail_y)) * (pageSize + pageBorder * 2.0);
-      let tail_texel = slot_origin + rect_origin + pageBorder + addressed_uv * tail_size;
-      let tail_uv = tail_texel / atlasSize;
-      let tail_scale = tail_size / atlasSize;
-      if (filterMode == 1u) {
-        return textureLoad(atlas, vec2i(clamp(floor(tail_texel), vec2f(0.0), atlasSize - 1.0)), 0);
-      }
-      return textureSampleGrad(atlas, atlasSampler, tail_uv, dpdx(uv) * tail_scale, dpdy(uv) * tail_scale);
-    }
-  }
-
-  var mip_level = min(desired_level, i32(maxMip));
-  let max_level = i32(maxMip);
-
-  // Walk from desired mip up, looking for resident page
-  var is_resident = false;
-  var entry = 0u;
-  var curr_page_grid = vec2f(0.0);
-  var curr_mip_size = virtualSize;
-  var page_coords = vec2i(0);
-
-  for (var m = mip_level; m <= max_level; m = m + 1) {
-    let mip_scale = exp2(-f32(m));
-    curr_page_grid = max(ceil(pageGrid * mip_scale), vec2f(1.0));
-    curr_mip_size = max(floor(virtualSize * mip_scale), vec2f(1.0));
-    page_coords = vec2i(min(floor(addressed_uv * curr_mip_size / pageSize), curr_page_grid - 1.0));
-    var mip_offset = 0.0;
-    for (var level = 0; level < m; level = level + 1) {
-      mip_offset += max(1.0, ceil(pageGrid.y / exp2(f32(level))));
-    }
-    entry = textureLoad(pageTable, vec2i(page_coords.x, page_coords.y + i32(mip_offset)), 0).r;
-    if ((entry & 1u) != 0u) {
-      is_resident = true;
-      mip_level = m;
-      break;
-    }
-  }
-
-  if (!is_resident) {
-    return vec4f(0.5, 0.5, 0.5, 1.0);
-  }
-
-  // Compute physical atlas UV
-  let physX = (entry >> 1) & 0xFFu;
-  let physY = (entry >> 9) & 0xFFu;
-  let local_texel = addressed_uv * curr_mip_size - vec2f(page_coords) * pageSize;
-  let page_origin = vec2f(f32(physX), f32(physY)) * (pageSize + pageBorder * 2.0);
-  let sample_texel = page_origin + pageBorder + local_texel;
-  let atlas_uv = sample_texel / atlasSize;
-
-  // Atlas-space gradients preserve anisotropy without allowing the GPU to
-  // derive across an unrelated neighboring physical slot.
-  let gradient_scale = curr_mip_size / atlasSize;
-  let atlas_dx = dpdx(uv) * gradient_scale;
-  let atlas_dy = dpdy(uv) * gradient_scale;
-  if (filterMode == 1u) {
-    return textureLoad(atlas, vec2i(clamp(floor(sample_texel), vec2f(0.0), atlasSize - 1.0)), 0);
-  }
-  return textureSampleGrad(atlas, atlasSampler, atlas_uv, atlas_dx, atlas_dy);
-}
-`;
-var VT_DESIRED_MIP_WGSL = `
-fn vtDesiredMip(
-  gradientUV: vec2f,
-  virtualSize: vec2f,
-  textureMaxMip: f32,
-  mipBias: f32
-) -> f32 {
-  let dx = dpdx(gradientUV * virtualSize);
-  let dy = dpdy(gradientUV * virtualSize);
-  let footprint = max(dot(dx, dx), dot(dy, dy));
-  return clamp(0.5 * log2(max(footprint, 1e-8)) + mipBias, 0.0, textureMaxMip);
-}
-`;
-var VT_SAMPLE_FROM_LEVEL_WGSL = `
-fn vtSampleFromLevel(
-  pageTable: texture_2d<u32>, atlas: texture_2d<f32>, atlasSampler: sampler,
-  sampleUV: vec2f, gradientUV: vec2f,
-  virtualSize: vec2f, pageGrid: vec2f, pageSize: f32, pageBorder: f32,
-  atlasSize: vec2f, maxMip: f32, resolvedMip: f32, addressMode: u32
-) -> vec4f {
-  var addressedUV = clamp(sampleUV, vec2f(0.0), vec2f(0.99999994));
-  if (addressMode == 1u) {
-    addressedUV = fract(sampleUV);
-  } else if (addressMode == 2u) {
-    let period = sampleUV - floor(sampleUV * 0.5) * 2.0;
-    addressedUV = select(period, 2.0 - period, period > vec2f(1.0));
-    addressedUV = clamp(addressedUV, vec2f(0.0), vec2f(0.99999994));
-  }
-
-  let requested = i32(resolvedMip);
-  let maxLevel = i32(maxMip);
-  var entry = 0u;
-  var selected = -1;
-  var selectedPage = vec2i(0);
-  var selectedSize = vec2f(1.0);
-  if (requested <= maxLevel) {
-    for (var mip = max(0, requested); mip <= maxLevel; mip = mip + 1) {
-      let scale = exp2(-f32(mip));
-      let grid = max(ceil(pageGrid * scale), vec2f(1.0));
-      let mipSize = max(floor(virtualSize * scale), vec2f(1.0));
-      let page = vec2i(min(floor(addressedUV * mipSize / pageSize), grid - 1.0));
-      var offset = 0.0;
-      for (var level = 0; level < mip; level = level + 1) {
-        offset += max(1.0, ceil(pageGrid.y / exp2(f32(level))));
-      }
-      let candidate = textureLoad(pageTable, vec2i(page.x, page.y + i32(offset)), 0).r;
-      if ((candidate & 1u) != 0u) {
-        entry = candidate; selected = mip; selectedPage = page; selectedSize = mipSize;
-        break;
-      }
-    }
-  }
-
-  if (selected >= 0) {
-    let local = addressedUV * selectedSize - vec2f(selectedPage) * pageSize;
-    let origin = vec2f(f32((entry >> 1) & 0xFFu), f32((entry >> 9) & 0xFFu)) * (pageSize + pageBorder * 2.0);
-    let atlasUV = (origin + pageBorder + local) / atlasSize;
-    let gradientScale = selectedSize / atlasSize;
-    return textureSampleGrad(atlas, atlasSampler, atlasUV,
-      dpdx(gradientUV) * gradientScale, dpdy(gradientUV) * gradientScale);
-  }
-
-  var tailOffset = 0.0;
-  for (var level = 0; level < maxLevel; level = level + 1) {
-    tailOffset += max(1.0, ceil(pageGrid.y / exp2(f32(level))));
-  }
-  let tailEntry = textureLoad(pageTable, vec2i(1, i32(tailOffset)), 0).r;
-  if ((tailEntry & 1u) == 0u) { return vec4f(0.5, 0.5, 0.5, 1.0); }
-  let tailMip = max(maxLevel + 1, requested);
-  let delta = tailMip - maxLevel;
-  var rectOrigin = vec2f(0.0);
-  if (delta == 2) { rectOrigin = vec2f(72.0, 0.0); }
-  else if (delta == 3) { rectOrigin = vec2f(112.0, 0.0); }
-  else if (delta == 4) { rectOrigin = vec2f(72.0, 40.0); }
-  else if (delta == 5) { rectOrigin = vec2f(88.0, 40.0); }
-  else if (delta == 6) { rectOrigin = vec2f(100.0, 40.0); }
-  else if (delta >= 7) { rectOrigin = vec2f(110.0, 40.0); }
-  let tailSize = max(vec2f(1.0), floor(virtualSize / exp2(f32(tailMip))));
-  let slot = vec2f(f32((tailEntry >> 1) & 0xFFu), f32((tailEntry >> 9) & 0xFFu)) * (pageSize + pageBorder * 2.0);
-  let atlasUV = (slot + rectOrigin + pageBorder + addressedUV * tailSize) / atlasSize;
-  let gradientScale = tailSize / atlasSize;
-  return textureSampleGrad(atlas, atlasSampler, atlasUV,
-    dpdx(gradientUV) * gradientScale, dpdy(gradientUV) * gradientScale);
-}
-`;
-var VT_FEEDBACK_WGSL = `
-fn vtFeedback(
-  sampleUV: vec2f,
-  gradientUV: vec2f,
-  feedbackPixelScale: vec2f,
-  virtualSize: vec2f,
-  pageGrid: vec2f,
-  maxMip: f32,
-  qualityBias: f32,
-  addressMode: u32,
-  textureId: u32,
-  viewDistance: f32,
-  cameraNear: f32,
-  cameraFar: f32
-) -> vec2u {
-  // Derivatives are measured per reduced-resolution feedback pixel. Convert
-  // them back to physical display-pixel derivatives before selecting a mip.
-  // Keeping gradientUV separate prevents repeat/POM discontinuities from
-  // corrupting the screen-space footprint.
-  let dx = dpdx(gradientUV * virtualSize) * feedbackPixelScale.x;
-  let dy = dpdy(gradientUV * virtualSize) * feedbackPixelScale.y;
-  let texel_footprint = max(dot(dx, dx), dot(dy, dy));
-  let mip_level = u32(clamp(0.5 * log2(max(texel_footprint, 1e-8)) + qualityBias, 0.0, maxMip));
-
-  var addressed_uv = clamp(sampleUV, vec2f(0.0), vec2f(0.99999994));
-  if (addressMode == 1u) {
-    addressed_uv = fract(sampleUV);
-  } else if (addressMode == 2u) {
-    let period = sampleUV - floor(sampleUV * 0.5) * 2.0;
-    addressed_uv = select(period, 2.0 - period, period > vec2f(1.0));
-    addressed_uv = clamp(addressed_uv, vec2f(0.0), vec2f(0.99999994));
-  }
-  let mip_scale = exp2(-f32(mip_level));
-  let curr_page_grid = max(ceil(pageGrid * mip_scale), vec2f(1.0));
-  let mip_size = max(floor(virtualSize * mip_scale), vec2f(1.0));
-  let page_coords = min(floor(addressed_uv * mip_size / 128.0), curr_page_grid - 1.0);
-
-  let safeNear = max(cameraNear, 1e-6);
-  let safeFar = max(cameraFar, safeNear + 1e-6);
-  let logRange = max(log2(safeFar / safeNear), 1e-6);
-  let normalizedDistance = clamp(
-    log2(max(viewDistance, safeNear) / safeNear) / logRange, 0.0, 1.0
-  );
-  let cameraCloseness = u32(round((1.0 - normalizedDistance) * 7.0));
-
-  // RG32Uint: word 0 carries valid + 3-bit camera closeness + 6-bit mip + 11-bit X/Y;
-  // word 1 carries the full virtual-texture identity.
-  let packed = 0x80000000u |
-               ((cameraCloseness & 0x7u) << 28) |
-               (mip_level & 0x3Fu) |
-               ((u32(page_coords.x) & 0x7FFu) << 6) |
-               ((u32(page_coords.y) & 0x7FFu) << 17);
-  return vec2u(packed, textureId);
-}
-`;
 
 // crates/afterglow-web/web/node_modules/three/build/three.tsl.js
 var exports_three_tsl = {};
@@ -68695,6 +69649,267 @@ var workgroupId2 = TSL.workgroupId;
 var workingToColorSpace2 = TSL.workingToColorSpace;
 var xor2 = TSL.xor;
 
+// crates/afterglow-web/web/src/engine/virtual-texturing/virtual-texture-shaders.ts
+var VT_SAMPLE_WGSL = `
+fn vtSample(
+  pageTable: texture_2d<u32>,
+  atlas: texture_2d<f32>,
+  atlasSampler: sampler,
+  uv: vec2f,
+  virtualSize: vec2f,
+  pageGrid: vec2f,
+  pageSize: f32,
+  pageBorder: f32,
+  atlasSize: vec2f,
+  maxMip: f32,
+  textureMaxMip: f32,
+  mipBias: f32,
+  filterMode: u32,
+  addressMode: u32
+) -> vec4f {
+  // 0 = clamp, 1 = repeat, 2 = mirrored repeat.
+  var addressed_uv = clamp(uv, vec2f(0.0), vec2f(0.99999994));
+  if (addressMode == 1u) {
+    addressed_uv = fract(uv);
+  } else if (addressMode == 2u) {
+    let period = uv - floor(uv * 0.5) * 2.0;
+    addressed_uv = select(period, 2.0 - period, period > vec2f(1.0));
+    addressed_uv = clamp(addressed_uv, vec2f(0.0), vec2f(0.99999994));
+  }
+
+  // Compute desired mip level from the original continuous derivatives.
+  let dx = dpdx(uv * virtualSize);
+  let dy = dpdy(uv * virtualSize);
+  let texel_footprint = max(dot(dx, dx), dot(dy, dy));
+  let mip_float = clamp(
+    0.5 * log2(max(texel_footprint, 1e-8)) + mipBias,
+    0.0,
+    textureMaxMip
+  );
+  let desired_level = i32(mip_float);
+
+  // Mips below 128x128 share one pinned physical slot. The entry is stored in
+  // the otherwise-unused x=1 texel of the terminal page-table row.
+  if (desired_level > i32(maxMip)) {
+    var tail_offset = 0.0;
+    for (var level = 0; level < i32(maxMip); level = level + 1) {
+      tail_offset += max(1.0, ceil(pageGrid.y / exp2(f32(level))));
+    }
+    let tail_entry = textureLoad(pageTable, vec2i(1, i32(tail_offset)), 0).r;
+    if ((tail_entry & 1u) != 0u) {
+      let delta = desired_level - i32(maxMip);
+      var rect_origin = vec2f(0.0);
+      if (delta == 2) { rect_origin = vec2f(72.0, 0.0); }
+      else if (delta == 3) { rect_origin = vec2f(112.0, 0.0); }
+      else if (delta == 4) { rect_origin = vec2f(72.0, 40.0); }
+      else if (delta == 5) { rect_origin = vec2f(88.0, 40.0); }
+      else if (delta == 6) { rect_origin = vec2f(100.0, 40.0); }
+      else if (delta >= 7) { rect_origin = vec2f(110.0, 40.0); }
+      let tail_size = max(vec2f(1.0), floor(virtualSize / exp2(f32(desired_level))));
+      let tail_x = (tail_entry >> 1) & 0xFFu;
+      let tail_y = (tail_entry >> 9) & 0xFFu;
+      let slot_origin = vec2f(f32(tail_x), f32(tail_y)) * (pageSize + pageBorder * 2.0);
+      let tail_texel = slot_origin + rect_origin + pageBorder + addressed_uv * tail_size;
+      let tail_uv = tail_texel / atlasSize;
+      let tail_scale = tail_size / atlasSize;
+      if (filterMode == 1u) {
+        return textureLoad(atlas, vec2i(clamp(floor(tail_texel), vec2f(0.0), atlasSize - 1.0)), 0);
+      }
+      return textureSampleGrad(atlas, atlasSampler, tail_uv, dpdx(uv) * tail_scale, dpdy(uv) * tail_scale);
+    }
+  }
+
+  var mip_level = min(desired_level, i32(maxMip));
+  let max_level = i32(maxMip);
+
+  // Walk from desired mip up, looking for resident page
+  var is_resident = false;
+  var entry = 0u;
+  var curr_page_grid = vec2f(0.0);
+  var curr_mip_size = virtualSize;
+  var page_coords = vec2i(0);
+
+  for (var m = mip_level; m <= max_level; m = m + 1) {
+    let mip_scale = exp2(-f32(m));
+    curr_page_grid = max(ceil(pageGrid * mip_scale), vec2f(1.0));
+    curr_mip_size = max(floor(virtualSize * mip_scale), vec2f(1.0));
+    page_coords = vec2i(min(floor(addressed_uv * curr_mip_size / pageSize), curr_page_grid - 1.0));
+    var mip_offset = 0.0;
+    for (var level = 0; level < m; level = level + 1) {
+      mip_offset += max(1.0, ceil(pageGrid.y / exp2(f32(level))));
+    }
+    entry = textureLoad(pageTable, vec2i(page_coords.x, page_coords.y + i32(mip_offset)), 0).r;
+    if ((entry & 1u) != 0u) {
+      is_resident = true;
+      mip_level = m;
+      break;
+    }
+  }
+
+  if (!is_resident) {
+    return vec4f(0.5, 0.5, 0.5, 1.0);
+  }
+
+  // Compute physical atlas UV
+  let physX = (entry >> 1) & 0xFFu;
+  let physY = (entry >> 9) & 0xFFu;
+  let local_texel = addressed_uv * curr_mip_size - vec2f(page_coords) * pageSize;
+  let page_origin = vec2f(f32(physX), f32(physY)) * (pageSize + pageBorder * 2.0);
+  let sample_texel = page_origin + pageBorder + local_texel;
+  let atlas_uv = sample_texel / atlasSize;
+
+  // Atlas-space gradients preserve anisotropy without allowing the GPU to
+  // derive across an unrelated neighboring physical slot.
+  let gradient_scale = curr_mip_size / atlasSize;
+  let atlas_dx = dpdx(uv) * gradient_scale;
+  let atlas_dy = dpdy(uv) * gradient_scale;
+  if (filterMode == 1u) {
+    return textureLoad(atlas, vec2i(clamp(floor(sample_texel), vec2f(0.0), atlasSize - 1.0)), 0);
+  }
+  return textureSampleGrad(atlas, atlasSampler, atlas_uv, atlas_dx, atlas_dy);
+}
+`;
+var VT_DESIRED_MIP_WGSL = `
+fn vtDesiredMip(
+  gradientUV: vec2f,
+  virtualSize: vec2f,
+  textureMaxMip: f32,
+  mipBias: f32
+) -> f32 {
+  let dx = dpdx(gradientUV * virtualSize);
+  let dy = dpdy(gradientUV * virtualSize);
+  let footprint = max(dot(dx, dx), dot(dy, dy));
+  return clamp(0.5 * log2(max(footprint, 1e-8)) + mipBias, 0.0, textureMaxMip);
+}
+`;
+var VT_SAMPLE_FROM_LEVEL_WGSL = `
+fn vtSampleFromLevel(
+  pageTable: texture_2d<u32>, atlas: texture_2d<f32>, atlasSampler: sampler,
+  sampleUV: vec2f, gradientUV: vec2f,
+  virtualSize: vec2f, pageGrid: vec2f, pageSize: f32, pageBorder: f32,
+  atlasSize: vec2f, maxMip: f32, resolvedMip: f32, addressMode: u32
+) -> vec4f {
+  var addressedUV = clamp(sampleUV, vec2f(0.0), vec2f(0.99999994));
+  if (addressMode == 1u) {
+    addressedUV = fract(sampleUV);
+  } else if (addressMode == 2u) {
+    let period = sampleUV - floor(sampleUV * 0.5) * 2.0;
+    addressedUV = select(period, 2.0 - period, period > vec2f(1.0));
+    addressedUV = clamp(addressedUV, vec2f(0.0), vec2f(0.99999994));
+  }
+
+  let requested = i32(resolvedMip);
+  let maxLevel = i32(maxMip);
+  var entry = 0u;
+  var selected = -1;
+  var selectedPage = vec2i(0);
+  var selectedSize = vec2f(1.0);
+  if (requested <= maxLevel) {
+    for (var mip = max(0, requested); mip <= maxLevel; mip = mip + 1) {
+      let scale = exp2(-f32(mip));
+      let grid = max(ceil(pageGrid * scale), vec2f(1.0));
+      let mipSize = max(floor(virtualSize * scale), vec2f(1.0));
+      let page = vec2i(min(floor(addressedUV * mipSize / pageSize), grid - 1.0));
+      var offset = 0.0;
+      for (var level = 0; level < mip; level = level + 1) {
+        offset += max(1.0, ceil(pageGrid.y / exp2(f32(level))));
+      }
+      let candidate = textureLoad(pageTable, vec2i(page.x, page.y + i32(offset)), 0).r;
+      if ((candidate & 1u) != 0u) {
+        entry = candidate; selected = mip; selectedPage = page; selectedSize = mipSize;
+        break;
+      }
+    }
+  }
+
+  if (selected >= 0) {
+    let local = addressedUV * selectedSize - vec2f(selectedPage) * pageSize;
+    let origin = vec2f(f32((entry >> 1) & 0xFFu), f32((entry >> 9) & 0xFFu)) * (pageSize + pageBorder * 2.0);
+    let atlasUV = (origin + pageBorder + local) / atlasSize;
+    let gradientScale = selectedSize / atlasSize;
+    return textureSampleGrad(atlas, atlasSampler, atlasUV,
+      dpdx(gradientUV) * gradientScale, dpdy(gradientUV) * gradientScale);
+  }
+
+  var tailOffset = 0.0;
+  for (var level = 0; level < maxLevel; level = level + 1) {
+    tailOffset += max(1.0, ceil(pageGrid.y / exp2(f32(level))));
+  }
+  let tailEntry = textureLoad(pageTable, vec2i(1, i32(tailOffset)), 0).r;
+  if ((tailEntry & 1u) == 0u) { return vec4f(0.5, 0.5, 0.5, 1.0); }
+  let tailMip = max(maxLevel + 1, requested);
+  let delta = tailMip - maxLevel;
+  var rectOrigin = vec2f(0.0);
+  if (delta == 2) { rectOrigin = vec2f(72.0, 0.0); }
+  else if (delta == 3) { rectOrigin = vec2f(112.0, 0.0); }
+  else if (delta == 4) { rectOrigin = vec2f(72.0, 40.0); }
+  else if (delta == 5) { rectOrigin = vec2f(88.0, 40.0); }
+  else if (delta == 6) { rectOrigin = vec2f(100.0, 40.0); }
+  else if (delta >= 7) { rectOrigin = vec2f(110.0, 40.0); }
+  let tailSize = max(vec2f(1.0), floor(virtualSize / exp2(f32(tailMip))));
+  let slot = vec2f(f32((tailEntry >> 1) & 0xFFu), f32((tailEntry >> 9) & 0xFFu)) * (pageSize + pageBorder * 2.0);
+  let atlasUV = (slot + rectOrigin + pageBorder + addressedUV * tailSize) / atlasSize;
+  let gradientScale = tailSize / atlasSize;
+  return textureSampleGrad(atlas, atlasSampler, atlasUV,
+    dpdx(gradientUV) * gradientScale, dpdy(gradientUV) * gradientScale);
+}
+`;
+var VT_FEEDBACK_WGSL = `
+fn vtFeedback(
+  sampleUV: vec2f,
+  gradientUV: vec2f,
+  feedbackPixelScale: vec2f,
+  virtualSize: vec2f,
+  pageGrid: vec2f,
+  maxMip: f32,
+  qualityBias: f32,
+  addressMode: u32,
+  textureId: u32,
+  viewDistance: f32,
+  cameraNear: f32,
+  cameraFar: f32
+) -> vec2u {
+  // Derivatives are measured per reduced-resolution feedback pixel. Convert
+  // them back to physical display-pixel derivatives before selecting a mip.
+  // Keeping gradientUV separate prevents repeat/POM discontinuities from
+  // corrupting the screen-space footprint.
+  let dx = dpdx(gradientUV * virtualSize) * feedbackPixelScale.x;
+  let dy = dpdy(gradientUV * virtualSize) * feedbackPixelScale.y;
+  let texel_footprint = max(dot(dx, dx), dot(dy, dy));
+  let mip_level = u32(clamp(0.5 * log2(max(texel_footprint, 1e-8)) + qualityBias, 0.0, maxMip));
+
+  var addressed_uv = clamp(sampleUV, vec2f(0.0), vec2f(0.99999994));
+  if (addressMode == 1u) {
+    addressed_uv = fract(sampleUV);
+  } else if (addressMode == 2u) {
+    let period = sampleUV - floor(sampleUV * 0.5) * 2.0;
+    addressed_uv = select(period, 2.0 - period, period > vec2f(1.0));
+    addressed_uv = clamp(addressed_uv, vec2f(0.0), vec2f(0.99999994));
+  }
+  let mip_scale = exp2(-f32(mip_level));
+  let curr_page_grid = max(ceil(pageGrid * mip_scale), vec2f(1.0));
+  let mip_size = max(floor(virtualSize * mip_scale), vec2f(1.0));
+  let page_coords = min(floor(addressed_uv * mip_size / 128.0), curr_page_grid - 1.0);
+
+  let safeNear = max(cameraNear, 1e-6);
+  let safeFar = max(cameraFar, safeNear + 1e-6);
+  let logRange = max(log2(safeFar / safeNear), 1e-6);
+  let normalizedDistance = clamp(
+    log2(max(viewDistance, safeNear) / safeNear) / logRange, 0.0, 1.0
+  );
+  let cameraCloseness = u32(round((1.0 - normalizedDistance) * 7.0));
+
+  // RG32Uint: word 0 carries valid + 3-bit camera closeness + 6-bit mip + 11-bit X/Y;
+  // word 1 carries the full virtual-texture identity.
+  let packed = 0x80000000u |
+               ((cameraCloseness & 0x7u) << 28) |
+               (mip_level & 0x3Fu) |
+               ((u32(page_coords.x) & 0x7FFu) << 6) |
+               ((u32(page_coords.y) & 0x7FFu) << 17);
+  return vec2u(packed, textureId);
+}
+`;
+
 // crates/afterglow-web/web/src/engine/virtual-texturing/surface-detail.ts
 var POM_UV_WGSL = `
 fn pomMarchUV(
@@ -69114,6 +70329,1130 @@ function createVirtualPomMaterialPair(three, store, set, heightTexture, feedback
     pomFeedbackMaterial: makeFeedback(true)
   };
 }
+
+// crates/afterglow-web/web/src/engine/streaming/fixed-resource-registry.ts
+var SLOT_BITS = 20;
+var SLOT_SCALE = 2 ** SLOT_BITS;
+var SLOT_MASK = SLOT_SCALE - 1;
+
+class FixedResourceRegistry {
+  capacity;
+  values;
+  generations;
+  free;
+  freeTop = 0;
+  count = 0;
+  constructor(capacity) {
+    this.capacity = capacity;
+    if (!Number.isInteger(capacity) || capacity < 1 || capacity > SLOT_MASK)
+      throw new RangeError(`stream resource capacity must be from 1 through ${SLOT_MASK}`);
+    this.values = new Array(capacity).fill(null);
+    this.generations = new Uint32Array(capacity);
+    this.free = new Uint32Array(capacity);
+    for (let slot = capacity - 1;slot >= 0; slot--)
+      this.free[this.freeTop++] = slot;
+  }
+  acquire(value) {
+    if (this.freeTop === 0)
+      return 0;
+    const slot = this.free[--this.freeTop] ?? 0;
+    let generation = (this.generations[slot] ?? 0) + 1 >>> 0;
+    if (generation === 0)
+      generation = 1;
+    this.generations[slot] = generation;
+    this.values[slot] = value;
+    this.count++;
+    return generation * SLOT_SCALE + slot + 1;
+  }
+  get(handle) {
+    const numeric = handle;
+    if (!Number.isSafeInteger(numeric) || numeric <= 0)
+      return null;
+    const encodedSlot = numeric % SLOT_SCALE;
+    if (encodedSlot === 0)
+      return null;
+    const slot = encodedSlot - 1;
+    const generation = Math.floor(numeric / SLOT_SCALE) >>> 0;
+    if (slot >= this.capacity || this.generations[slot] !== generation)
+      return null;
+    return this.values[slot] ?? null;
+  }
+  release(handle) {
+    const numeric = handle;
+    if (!Number.isSafeInteger(numeric) || numeric <= 0)
+      return null;
+    const encodedSlot = numeric % SLOT_SCALE;
+    if (encodedSlot === 0)
+      return null;
+    const slot = encodedSlot - 1;
+    const generation = Math.floor(numeric / SLOT_SCALE) >>> 0;
+    if (slot >= this.capacity || this.generations[slot] !== generation)
+      return null;
+    const value = this.values[slot] ?? null;
+    if (value === null)
+      return null;
+    this.values[slot] = null;
+    let nextGeneration = generation + 1 >>> 0;
+    if (nextGeneration === 0)
+      nextGeneration = 1;
+    this.generations[slot] = nextGeneration;
+    this.free[this.freeTop++] = slot;
+    this.count--;
+    return value;
+  }
+  valueAt(slot) {
+    return Number.isInteger(slot) && slot >= 0 && slot < this.capacity ? this.values[slot] ?? null : null;
+  }
+  get size() {
+    return this.count;
+  }
+  get freeCount() {
+    return this.freeTop;
+  }
+}
+
+// crates/afterglow-web/web/src/engine/streaming/fixed-byte-lease-pool.ts
+class ByteLease {
+  bytes;
+  slot;
+  owner;
+  inUse = false;
+  constructor(bytes, slot, owner) {
+    this.bytes = bytes;
+    this.slot = slot;
+    this.owner = owner;
+  }
+  release() {
+    return this.owner.release(this);
+  }
+}
+
+class FixedByteLeasePool {
+  capacity;
+  bytesPerLease;
+  leases;
+  free;
+  freeTop;
+  activeCount = 0;
+  highWaterCount = 0;
+  overflowCount = 0;
+  constructor(capacity, bytesPerLease) {
+    this.capacity = capacity;
+    this.bytesPerLease = bytesPerLease;
+    if (!Number.isInteger(capacity) || capacity < 1 || !Number.isInteger(bytesPerLease) || bytesPerLease < 1)
+      throw new RangeError("invalid fixed byte-lease pool capacity");
+    this.leases = new Array(capacity);
+    this.free = new Uint32Array(capacity);
+    this.freeTop = capacity;
+    for (let slot = 0;slot < capacity; slot++) {
+      this.leases[slot] = new ByteLease(new Uint8Array(bytesPerLease), slot, this);
+      this.free[slot] = capacity - slot - 1;
+    }
+  }
+  tryAcquire() {
+    if (this.freeTop === 0) {
+      this.overflowCount++;
+      return null;
+    }
+    const slot = this.free[--this.freeTop] ?? 0;
+    const lease = this.leases[slot];
+    lease.inUse = true;
+    this.activeCount++;
+    if (this.activeCount > this.highWaterCount)
+      this.highWaterCount = this.activeCount;
+    return lease;
+  }
+  release(lease) {
+    if (!lease.inUse || this.leases[lease.slot] !== lease)
+      return false;
+    lease.inUse = false;
+    this.free[this.freeTop++] = lease.slot;
+    this.activeCount--;
+    return true;
+  }
+  get active() {
+    return this.activeCount;
+  }
+  get highWater() {
+    return this.highWaterCount;
+  }
+  get overflows() {
+    return this.overflowCount;
+  }
+}
+
+// crates/afterglow-web/web/src/engine/virtual-texturing/memory-page-source.ts
+var PAGE_COORD_SCALE = 2048;
+var MIP_COORD_SCALE = PAGE_COORD_SCALE * PAGE_COORD_SCALE;
+function pageKey(mip, x2, y2) {
+  return mip * MIP_COORD_SCALE + y2 * PAGE_COORD_SCALE + x2 + 1;
+}
+function bytesPerTexel(format) {
+  if (format === "rgba8unorm")
+    return 4;
+  if (format === "r16float")
+    return 2;
+  return 1;
+}
+var HALF_CONVERSION_BUFFER = new ArrayBuffer(4);
+var HALF_CONVERSION_FLOAT = new Float32Array(HALF_CONVERSION_BUFFER);
+var HALF_CONVERSION_BITS = new Uint32Array(HALF_CONVERSION_BUFFER);
+function floatToHalf(value) {
+  HALF_CONVERSION_FLOAT[0] = value;
+  const bits = HALF_CONVERSION_BITS[0] ?? 0;
+  const sign4 = bits >>> 16 & 32768;
+  let exponent = (bits >>> 23 & 255) - 127 + 15;
+  let mantissa = bits & 8388607;
+  if (exponent <= 0) {
+    if (exponent < -10)
+      return sign4;
+    mantissa = (mantissa | 8388608) >>> 1 - exponent;
+    return sign4 | mantissa + 4096 >>> 13;
+  }
+  if (exponent >= 31)
+    return sign4 | 31744;
+  return sign4 | exponent << 10 | mantissa + 4096 >>> 13;
+}
+function srgbToLinear(value) {
+  return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+}
+function linearToSrgb(value) {
+  return value <= 0.0031308 ? value * 12.92 : 1.055 * value ** (1 / 2.4) - 0.055;
+}
+function halfToFloat(value) {
+  const sign4 = (value & 32768) !== 0 ? -1 : 1;
+  const exponent = value >>> 10 & 31;
+  const mantissa = value & 1023;
+  if (exponent === 0)
+    return sign4 * 2 ** -14 * (mantissa / 1024);
+  if (exponent === 31)
+    return mantissa === 0 ? sign4 * Infinity : Number.NaN;
+  return sign4 * 2 ** (exponent - 15) * (1 + mantissa / 1024);
+}
+
+class MemoryVirtualTextureSource {
+  provider;
+  bytesPerTexel;
+  maxMip;
+  pageBytes;
+  storage;
+  slotMip;
+  slotX;
+  slotY;
+  slotDirty;
+  slotRevision;
+  slotsByPage;
+  freeSlots;
+  freeTop = 0;
+  dirtyMip;
+  dirtyX;
+  dirtyY;
+  dirtyRevision;
+  dirtyKeys;
+  dirtyHead = 0;
+  dirtyTail = 0;
+  dirtyCount = 0;
+  revision = 0;
+  defaultTexel;
+  scratchTexel = new Float32Array(4);
+  scratchSample = new Float32Array(4);
+  refreshScratch;
+  outputPool;
+  dirtyPage = { mip: 0, x: 0, y: 0, revision: 0 };
+  options;
+  constructor(options) {
+    this.options = options.defaultTexel ? { ...options, defaultTexel: options.defaultTexel.slice() } : { ...options };
+    if (!Number.isInteger(options.width) || options.width < 1 || !Number.isInteger(options.height) || options.height < 1 || !Number.isInteger(options.pageCapacity) || options.pageCapacity < 1 || !Number.isInteger(options.dirtyCapacity) || options.dirtyCapacity < 1 || !Number.isInteger(options.outputCapacity) || options.outputCapacity < 1)
+      throw new RangeError("invalid memory virtual-texture capacities or dimensions");
+    this.bytesPerTexel = bytesPerTexel(options.format);
+    this.pageBytes = PAGE_SIZE * PAGE_SIZE * this.bytesPerTexel;
+    const outputBytes = SLOT_SIZE * SLOT_SIZE * this.bytesPerTexel;
+    this.refreshScratch = new Uint8Array(outputBytes);
+    this.outputPool = new FixedByteLeasePool(options.outputCapacity, outputBytes);
+    const pagesX = Math.ceil(options.width / PAGE_SIZE);
+    const pagesY = Math.ceil(options.height / PAGE_SIZE);
+    this.maxMip = Math.ceil(Math.log2(Math.max(pagesX, pagesY)));
+    if (pagesX > PAGE_COORD_SCALE || pagesY > PAGE_COORD_SCALE || this.maxMip > 31)
+      throw new RangeError("memory virtual texture exceeds page-coordinate limits");
+    this.defaultTexel = options.defaultTexel?.slice() ?? new Uint8Array(this.bytesPerTexel);
+    if (this.defaultTexel.byteLength !== this.bytesPerTexel)
+      throw new RangeError("default texel byte length does not match memory texture format");
+    this.storage = new Uint8Array(options.pageCapacity * this.pageBytes);
+    this.slotMip = new Uint8Array(options.pageCapacity);
+    this.slotX = new Uint16Array(options.pageCapacity);
+    this.slotY = new Uint16Array(options.pageCapacity);
+    this.slotDirty = new Uint8Array(options.pageCapacity);
+    this.slotRevision = new Uint32Array(options.pageCapacity);
+    this.slotsByPage = new FixedPageSlotMap(options.pageCapacity);
+    this.freeSlots = new Uint32Array(options.pageCapacity);
+    for (let slot = options.pageCapacity - 1;slot >= 0; slot--)
+      this.freeSlots[this.freeTop++] = slot;
+    this.dirtyMip = new Uint8Array(options.dirtyCapacity);
+    this.dirtyX = new Uint16Array(options.dirtyCapacity);
+    this.dirtyY = new Uint16Array(options.dirtyCapacity);
+    this.dirtyRevision = new Uint32Array(options.dirtyCapacity);
+    this.dirtyKeys = new FixedPageSlotMap(options.dirtyCapacity);
+    this.provider = async (_path, request) => {
+      const lease = this.outputPool.tryAcquire();
+      if (!lease)
+        throw new Error("memory virtual-texture output pool is full");
+      try {
+        this.readPageInto(request, lease.bytes);
+        return lease;
+      } catch (error2) {
+        lease.release();
+        throw error2;
+      }
+    };
+  }
+  pagesX(mip) {
+    return Math.ceil(Math.max(1, Math.ceil(this.options.width / 2 ** mip)) / PAGE_SIZE);
+  }
+  pagesY(mip) {
+    return Math.ceil(Math.max(1, Math.ceil(this.options.height / 2 ** mip)) / PAGE_SIZE);
+  }
+  slot(mip, x2, y2) {
+    return this.slotsByPage.get(pageKey(mip, x2, y2));
+  }
+  acquirePage(mip, x2, y2) {
+    const existing = this.slot(mip, x2, y2);
+    if (existing !== undefined)
+      return existing;
+    if (this.freeTop === 0)
+      return;
+    const slot = this.freeSlots[--this.freeTop] ?? 0;
+    this.slotMip[slot] = mip;
+    this.slotX[slot] = x2;
+    this.slotY[slot] = y2;
+    this.slotDirty[slot] = mip === 0 ? 0 : 1;
+    this.slotRevision[slot] = this.revision;
+    const start = slot * this.pageBytes;
+    for (let texel = 0;texel < PAGE_SIZE * PAGE_SIZE; texel++)
+      this.storage.set(this.defaultTexel, start + texel * this.bytesPerTexel);
+    this.slotsByPage.set(pageKey(mip, x2, y2), slot);
+    return slot;
+  }
+  countMissingForRegion(x2, y2, width, height) {
+    let missing = 0;
+    for (let mip = 0;mip <= this.maxMip; mip++) {
+      const scale2 = 2 ** mip;
+      const border = PAGE_BORDER * scale2;
+      const firstX = Math.max(0, Math.floor((x2 - border) / (PAGE_SIZE * scale2)));
+      const firstY = Math.max(0, Math.floor((y2 - border) / (PAGE_SIZE * scale2)));
+      const lastX = Math.min(this.pagesX(mip) - 1, Math.floor((x2 + width - 1 + border) / (PAGE_SIZE * scale2)));
+      const lastY = Math.min(this.pagesY(mip) - 1, Math.floor((y2 + height - 1 + border) / (PAGE_SIZE * scale2)));
+      for (let pageY = firstY;pageY <= lastY; pageY++)
+        for (let pageX = firstX;pageX <= lastX; pageX++)
+          if (this.slot(mip, pageX, pageY) === undefined)
+            missing++;
+    }
+    return missing;
+  }
+  countNewDirtyForRegion(x2, y2, width, height) {
+    let missing = 0;
+    for (let mip = 0;mip <= this.maxMip; mip++) {
+      const scale2 = 2 ** mip;
+      const border = PAGE_BORDER * scale2;
+      const firstX = Math.max(0, Math.floor((x2 - border) / (PAGE_SIZE * scale2)));
+      const firstY = Math.max(0, Math.floor((y2 - border) / (PAGE_SIZE * scale2)));
+      const lastX = Math.min(this.pagesX(mip) - 1, Math.floor((x2 + width - 1 + border) / (PAGE_SIZE * scale2)));
+      const lastY = Math.min(this.pagesY(mip) - 1, Math.floor((y2 + height - 1 + border) / (PAGE_SIZE * scale2)));
+      for (let pageY = firstY;pageY <= lastY; pageY++)
+        for (let pageX = firstX;pageX <= lastX; pageX++)
+          if (this.dirtyKeys.get(pageKey(mip, pageX, pageY)) === undefined)
+            missing++;
+    }
+    return missing;
+  }
+  markRegion(x2, y2, width, height) {
+    for (let mip = 0;mip <= this.maxMip; mip++) {
+      const scale2 = 2 ** mip;
+      const border = PAGE_BORDER * scale2;
+      const firstX = Math.max(0, Math.floor((x2 - border) / (PAGE_SIZE * scale2)));
+      const firstY = Math.max(0, Math.floor((y2 - border) / (PAGE_SIZE * scale2)));
+      const lastX = Math.min(this.pagesX(mip) - 1, Math.floor((x2 + width - 1 + border) / (PAGE_SIZE * scale2)));
+      const lastY = Math.min(this.pagesY(mip) - 1, Math.floor((y2 + height - 1 + border) / (PAGE_SIZE * scale2)));
+      for (let pageY = firstY;pageY <= lastY; pageY++) {
+        for (let pageX = firstX;pageX <= lastX; pageX++) {
+          const slot = this.acquirePage(mip, pageX, pageY);
+          if (mip > 0)
+            this.slotDirty[slot] = 1;
+          this.slotRevision[slot] = this.revision;
+          const key = pageKey(mip, pageX, pageY);
+          const existingDirty = this.dirtyKeys.get(key);
+          if (existingDirty !== undefined) {
+            this.dirtyRevision[existingDirty] = this.revision;
+            continue;
+          }
+          const dirtySlot = this.dirtyTail;
+          this.dirtyMip[dirtySlot] = mip;
+          this.dirtyX[dirtySlot] = pageX;
+          this.dirtyY[dirtySlot] = pageY;
+          this.dirtyRevision[dirtySlot] = this.revision;
+          this.dirtyKeys.set(key, dirtySlot);
+          this.dirtyTail = (dirtySlot + 1) % this.dirtyMip.length;
+          this.dirtyCount++;
+        }
+      }
+    }
+  }
+  writeRegion(x2, y2, width, height, source, bytesPerRow = width * this.bytesPerTexel) {
+    if (!Number.isInteger(x2) || !Number.isInteger(y2) || !Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1 || x2 < 0 || y2 < 0 || x2 + width > this.options.width || y2 + height > this.options.height || bytesPerRow < width * this.bytesPerTexel || source.byteLength < bytesPerRow * (height - 1) + width * this.bytesPerTexel)
+      return 1 /* InvalidRegion */;
+    const missingPages = this.countMissingForRegion(x2, y2, width, height);
+    if (missingPages > this.freeTop)
+      return 2 /* PageCapacityExceeded */;
+    const newDirty = this.countNewDirtyForRegion(x2, y2, width, height);
+    if (newDirty > this.dirtyMip.length - this.dirtyCount)
+      return 3 /* DirtyCapacityExceeded */;
+    this.revision = this.revision + 1 >>> 0 || 1;
+    this.markRegion(x2, y2, width, height);
+    for (let row = 0;row < height; row++) {
+      for (let column = 0;column < width; column++) {
+        const texelX = x2 + column, texelY = y2 + row;
+        const pageX = Math.floor(texelX / PAGE_SIZE), pageY = Math.floor(texelY / PAGE_SIZE);
+        const slot = this.slot(0, pageX, pageY);
+        const local = texelY % PAGE_SIZE * PAGE_SIZE + texelX % PAGE_SIZE;
+        const target = slot * this.pageBytes + local * this.bytesPerTexel;
+        const input = row * bytesPerRow + column * this.bytesPerTexel;
+        for (let byte = 0;byte < this.bytesPerTexel; byte++)
+          this.storage[target + byte] = source[input + byte] ?? 0;
+      }
+    }
+    return 0 /* Written */;
+  }
+  address(value, size) {
+    if (this.options.addressMode === "clamp")
+      return Math.max(0, Math.min(size - 1, value));
+    if (this.options.addressMode === "repeat")
+      return (value % size + size) % size;
+    const period = size * 2;
+    const wrapped = (value % period + period) % period;
+    return wrapped < size ? wrapped : period - 1 - wrapped;
+  }
+  decode(storageOffset, output3) {
+    if (this.options.format === "rgba8unorm") {
+      for (let component = 0;component < 4; component++)
+        output3[component] = (this.storage[storageOffset + component] ?? 0) / 255;
+    } else if (this.options.format === "r8unorm") {
+      output3[0] = (this.storage[storageOffset] ?? 0) / 255;
+    } else {
+      output3[0] = halfToFloat((this.storage[storageOffset] ?? 0) | (this.storage[storageOffset + 1] ?? 0) << 8);
+    }
+  }
+  encode(storageOffset, input) {
+    if (this.options.format === "rgba8unorm") {
+      for (let component = 0;component < 4; component++)
+        this.storage[storageOffset + component] = Math.max(0, Math.min(255, Math.round((input[component] ?? 0) * 255)));
+    } else if (this.options.format === "r8unorm") {
+      this.storage[storageOffset] = Math.max(0, Math.min(255, Math.round((input[0] ?? 0) * 255)));
+    } else {
+      const half = floatToHalf(input[0] ?? 0);
+      this.storage[storageOffset] = half & 255;
+      this.storage[storageOffset + 1] = half >>> 8;
+    }
+  }
+  ensureDerived(mip, x2, y2) {
+    const slot = this.slot(mip, x2, y2);
+    if (slot === undefined || mip === 0 || this.slotDirty[slot] === 0)
+      return slot;
+    const childMip = mip - 1;
+    for (let childY = y2 * 2;childY <= y2 * 2 + 1; childY++)
+      for (let childX = x2 * 2;childX <= x2 * 2 + 1; childX++)
+        this.ensureDerived(childMip, childX, childY);
+    const start = slot * this.pageBytes;
+    for (let localY = 0;localY < PAGE_SIZE; localY++) {
+      for (let localX = 0;localX < PAGE_SIZE; localX++) {
+        const sums = this.scratchTexel;
+        sums.fill(0);
+        for (let oy = 0;oy < 2; oy++) {
+          for (let ox = 0;ox < 2; ox++) {
+            this.readTexel(childMip, (x2 * PAGE_SIZE + localX) * 2 + ox, (y2 * PAGE_SIZE + localY) * 2 + oy, this.scratchSample);
+            for (let component = 0;component < this.bytesPerTexel; component++) {
+              const sample3 = this.scratchSample[component] ?? 0;
+              sums[component] = (sums[component] ?? 0) + (this.options.mipFilter === "linear-color" && this.options.format === "rgba8unorm" && component < 3 ? srgbToLinear(sample3) : sample3);
+            }
+          }
+        }
+        for (let component = 0;component < 4; component++)
+          sums[component] = (sums[component] ?? 0) / 4;
+        if (this.options.mipFilter === "linear-color" && this.options.format === "rgba8unorm") {
+          sums[0] = linearToSrgb(sums[0] ?? 0);
+          sums[1] = linearToSrgb(sums[1] ?? 0);
+          sums[2] = linearToSrgb(sums[2] ?? 0);
+        }
+        if (this.options.mipFilter === "normal" && this.options.format === "rgba8unorm") {
+          let nx = (sums[0] ?? 0) * 2 - 1;
+          let ny = (sums[1] ?? 0) * 2 - 1;
+          let nz = (sums[2] ?? 0) * 2 - 1;
+          const length3 = Math.hypot(nx, ny, nz) || 1;
+          nx /= length3;
+          ny /= length3;
+          nz /= length3;
+          sums[0] = nx * 0.5 + 0.5;
+          sums[1] = ny * 0.5 + 0.5;
+          sums[2] = nz * 0.5 + 0.5;
+        }
+        this.encode(start + (localY * PAGE_SIZE + localX) * this.bytesPerTexel, sums);
+      }
+    }
+    this.slotDirty[slot] = 0;
+    return slot;
+  }
+  readTexel(mip, x2, y2, output3) {
+    const width = Math.max(1, Math.ceil(this.options.width / 2 ** mip));
+    const height = Math.max(1, Math.ceil(this.options.height / 2 ** mip));
+    const addressedX = this.address(x2, width), addressedY = this.address(y2, height);
+    const pageX = Math.floor(addressedX / PAGE_SIZE), pageY = Math.floor(addressedY / PAGE_SIZE);
+    const slot = this.ensureDerived(mip, pageX, pageY);
+    output3.fill(0);
+    if (slot === undefined) {
+      if (this.options.format === "rgba8unorm")
+        for (let component = 0;component < 4; component++)
+          output3[component] = (this.defaultTexel[component] ?? 0) / 255;
+      else if (this.options.format === "r8unorm")
+        output3[0] = (this.defaultTexel[0] ?? 0) / 255;
+      else
+        output3[0] = halfToFloat((this.defaultTexel[0] ?? 0) | (this.defaultTexel[1] ?? 0) << 8);
+      return;
+    }
+    const local = addressedY % PAGE_SIZE * PAGE_SIZE + addressedX % PAGE_SIZE;
+    this.decode(slot * this.pageBytes + local * this.bytesPerTexel, output3);
+  }
+  readPageInto(request, output3) {
+    if (request.tail)
+      throw new Error("memory virtual textures use ordinary terminal pages, not packed tails");
+    if (request.mip < 0 || request.mip > this.maxMip || request.x < 0 || request.y < 0 || request.x >= this.pagesX(request.mip) || request.y >= this.pagesY(request.mip))
+      throw new RangeError("memory virtual-texture page is out of range");
+    const required = SLOT_SIZE * SLOT_SIZE * this.bytesPerTexel;
+    if (output3.byteLength !== required)
+      throw new RangeError(`memory virtual-texture output has ${output3.byteLength} bytes; expected ${required}`);
+    this.fillPageInto(request, output3);
+  }
+  fillPageInto(request, output3) {
+    this.ensureDerived(request.mip, request.x, request.y);
+    for (let slotY = 0;slotY < SLOT_SIZE; slotY++) {
+      for (let slotX = 0;slotX < SLOT_SIZE; slotX++) {
+        this.readTexel(request.mip, request.x * PAGE_SIZE + slotX - PAGE_BORDER, request.y * PAGE_SIZE + slotY - PAGE_BORDER, this.scratchSample);
+        const target = (slotY * SLOT_SIZE + slotX) * this.bytesPerTexel;
+        if (this.options.format === "rgba8unorm") {
+          for (let component = 0;component < 4; component++)
+            output3[target + component] = Math.round((this.scratchSample[component] ?? 0) * 255);
+        } else if (this.options.format === "r8unorm") {
+          output3[target] = Math.round((this.scratchSample[0] ?? 0) * 255);
+        } else {
+          const half = floatToHalf(this.scratchSample[0] ?? 0);
+          output3[target] = half & 255;
+          output3[target + 1] = half >>> 8;
+        }
+      }
+    }
+  }
+  readPage(request) {
+    const output3 = new Uint8Array(SLOT_SIZE * SLOT_SIZE * this.bytesPerTexel);
+    this.readPageInto(request, output3);
+    return output3;
+  }
+  drainDirty(limit, publish) {
+    let drained = 0;
+    while (drained < limit && this.dirtyCount !== 0) {
+      const slot = this.dirtyHead;
+      const mip = this.dirtyMip[slot] ?? 0;
+      const x2 = this.dirtyX[slot] ?? 0;
+      const y2 = this.dirtyY[slot] ?? 0;
+      const revision = this.dirtyRevision[slot] ?? 0;
+      this.dirtyPage.mip = mip;
+      this.dirtyPage.x = x2;
+      this.dirtyPage.y = y2;
+      this.dirtyPage.revision = revision;
+      this.fillPageInto(this.dirtyPage, this.refreshScratch);
+      if (!publish(this.dirtyPage, this.refreshScratch))
+        break;
+      this.dirtyKeys.delete(pageKey(mip, x2, y2));
+      this.dirtyHead = (slot + 1) % this.dirtyMip.length;
+      this.dirtyCount--;
+      drained++;
+    }
+    return drained;
+  }
+  get canonicalPageCount() {
+    let count = 0;
+    for (let slot = 0;slot < this.options.pageCapacity; slot++)
+      if (this.slotsByPage.get(pageKey(0, this.slotX[slot] ?? 0, this.slotY[slot] ?? 0)) === slot)
+        count++;
+    return count;
+  }
+  visitCanonicalPages(visitor) {
+    for (let slot = 0;slot < this.options.pageCapacity; slot++) {
+      if (this.slotsByPage.get(pageKey(0, this.slotX[slot] ?? 0, this.slotY[slot] ?? 0)) !== slot)
+        continue;
+      visitor(this.slotX[slot] ?? 0, this.slotY[slot] ?? 0, this.storage, slot * this.pageBytes, this.pageBytes);
+    }
+  }
+  restoreContentRevision(revision) {
+    if (!Number.isInteger(revision) || revision < 0 || revision > 4294967295)
+      throw new RangeError("invalid memory texture revision");
+    this.revision = revision >>> 0;
+    for (let slot = 0;slot < this.options.pageCapacity; slot++)
+      this.slotRevision[slot] = this.revision;
+  }
+  get pageCount() {
+    return this.options.pageCapacity - this.freeTop;
+  }
+  get pendingDirtyPages() {
+    return this.dirtyCount;
+  }
+  get contentRevision() {
+    return this.revision;
+  }
+  get activeOutputPages() {
+    return this.outputPool.active;
+  }
+  get outputPageHighWater() {
+    return this.outputPool.highWater;
+  }
+  get outputPageOverflows() {
+    return this.outputPool.overflows;
+  }
+}
+
+// crates/afterglow-web/web/src/engine/virtual-texturing/memory-texture-snapshot.ts
+var MAGIC = 1414350657;
+var VERSION = 1;
+var HEADER_BYTES = 44;
+var RECORD_HEADER_BYTES = 4;
+var FORMAT_TO_ID = {
+  rgba8unorm: 0,
+  "rgba8unorm-srgb": 1,
+  r8unorm: 2,
+  r16float: 3
+};
+var ID_TO_FORMAT = [
+  "rgba8unorm",
+  "rgba8unorm-srgb",
+  "r8unorm",
+  "r16float"
+];
+var ADDRESS_TO_ID = {
+  clamp: 0,
+  repeat: 1,
+  "mirror-repeat": 2
+};
+var ID_TO_ADDRESS = [
+  "clamp",
+  "repeat",
+  "mirror-repeat"
+];
+var FILTER_TO_ID = {
+  "linear-color": 0,
+  normal: 1,
+  scalar: 2
+};
+var ID_TO_FILTER = [
+  "linear-color",
+  "normal",
+  "scalar"
+];
+function bytesPerTexel2(format) {
+  if (format === "r8unorm")
+    return 1;
+  if (format === "r16float")
+    return 2;
+  if (format === "rgba8unorm" || format === "rgba8unorm-srgb")
+    return 4;
+  throw new Error("mutable texture snapshot cannot contain a compressed format");
+}
+function memoryFormat(format) {
+  if (format === "r8unorm")
+    return "r8unorm";
+  if (format === "r16float")
+    return "r16float";
+  return "rgba8unorm";
+}
+function crc32(bytes, start) {
+  let crc = 4294967295;
+  for (let index = start;index < bytes.byteLength; index++) {
+    crc ^= bytes[index] ?? 0;
+    for (let bit = 0;bit < 8; bit++)
+      crc = crc >>> 1 ^ ((crc & 1) !== 0 ? 3988292384 : 0);
+  }
+  return (crc ^ 4294967295) >>> 0;
+}
+function encodeMemoryTextureSnapshot(source, descriptor) {
+  const formatId = FORMAT_TO_ID[descriptor.format];
+  if (formatId === undefined)
+    throw new Error("mutable snapshot format is unsupported");
+  const pageBytes = PAGE_SIZE * PAGE_SIZE * source.bytesPerTexel;
+  const pages = [];
+  source.visitCanonicalPages((x2, y2, storage3, offset, length3) => {
+    pages.push({ x: x2, y: y2, storage: storage3, offset, length: length3 });
+  });
+  pages.sort((a, b2) => a.y - b2.y || a.x - b2.x);
+  const totalBytes = HEADER_BYTES + pages.length * (RECORD_HEADER_BYTES + pageBytes);
+  if (!Number.isSafeInteger(totalBytes))
+    throw new RangeError("mutable snapshot is too large");
+  const output3 = new Uint8Array(totalBytes);
+  const view = new DataView(output3.buffer);
+  view.setUint32(0, MAGIC, true);
+  view.setUint16(4, VERSION, true);
+  view.setUint8(6, formatId);
+  view.setUint8(7, ADDRESS_TO_ID[source.options.addressMode]);
+  view.setUint8(8, FILTER_TO_ID[source.options.mipFilter]);
+  const defaultTexel = source.options.defaultTexel ?? new Uint8Array(source.bytesPerTexel);
+  view.setUint8(9, defaultTexel.byteLength);
+  view.setUint32(12, descriptor.width, true);
+  view.setUint32(16, descriptor.height, true);
+  view.setUint32(20, source.contentRevision, true);
+  view.setUint32(24, pages.length, true);
+  view.setUint32(28, pageBytes, true);
+  view.setUint32(32, totalBytes, true);
+  output3.set(defaultTexel, 40);
+  let cursor = HEADER_BYTES;
+  for (const page of pages) {
+    view.setUint16(cursor, page.x, true);
+    view.setUint16(cursor + 2, page.y, true);
+    cursor += RECORD_HEADER_BYTES;
+    output3.set(page.storage.subarray(page.offset, page.offset + page.length), cursor);
+    cursor += pageBytes;
+  }
+  view.setUint32(36, crc32(output3, 40), true);
+  return output3;
+}
+function decodeMemoryTextureSnapshot(bytes, maxPages) {
+  if (!Number.isInteger(maxPages) || maxPages < 0)
+    throw new RangeError("invalid mutable snapshot page capacity");
+  if (bytes.byteLength < HEADER_BYTES)
+    throw new Error("mutable snapshot is truncated");
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (view.getUint32(0, true) !== MAGIC)
+    throw new Error("mutable snapshot magic is invalid");
+  if (view.getUint16(4, true) !== VERSION)
+    throw new Error("mutable snapshot version is unsupported");
+  const format = ID_TO_FORMAT[view.getUint8(6)];
+  const addressMode = ID_TO_ADDRESS[view.getUint8(7)];
+  const mipFilter = ID_TO_FILTER[view.getUint8(8)];
+  if (!format || !addressMode || !mipFilter)
+    throw new Error("mutable snapshot descriptor is invalid");
+  const defaultLength = view.getUint8(9);
+  const width = view.getUint32(12, true), height = view.getUint32(16, true);
+  const revision = view.getUint32(20, true), pageCount = view.getUint32(24, true);
+  const pageBytes = view.getUint32(28, true), totalBytes = view.getUint32(32, true);
+  if (width < 1 || height < 1 || pageCount > maxPages || width > PAGE_SIZE * 2048 || height > PAGE_SIZE * 2048)
+    throw new Error("mutable snapshot dimensions or page count exceed capacity");
+  const texelBytes = bytesPerTexel2(format);
+  if (defaultLength !== texelBytes || pageBytes !== PAGE_SIZE * PAGE_SIZE * texelBytes)
+    throw new Error("mutable snapshot texel layout is invalid");
+  const expected = HEADER_BYTES + pageCount * (RECORD_HEADER_BYTES + pageBytes);
+  if (totalBytes !== bytes.byteLength || expected !== bytes.byteLength)
+    throw new Error("mutable snapshot byte length is invalid");
+  if (view.getUint32(36, true) !== crc32(bytes, 40))
+    throw new Error("mutable snapshot checksum is invalid");
+  const defaultTexel = bytes.slice(40, 40 + defaultLength);
+  const pagesX = Math.ceil(width / PAGE_SIZE), pagesY = Math.ceil(height / PAGE_SIZE);
+  const seen = new Set;
+  const pages = new Array(pageCount);
+  let cursor = HEADER_BYTES;
+  for (let index = 0;index < pageCount; index++) {
+    const x2 = view.getUint16(cursor, true), y2 = view.getUint16(cursor + 2, true);
+    cursor += RECORD_HEADER_BYTES;
+    if (x2 >= pagesX || y2 >= pagesY)
+      throw new Error("mutable snapshot page coordinate is invalid");
+    const key = y2 * 2048 + x2;
+    if (seen.has(key))
+      throw new Error("mutable snapshot contains duplicate pages");
+    seen.add(key);
+    pages[index] = { x: x2, y: y2, bytes: bytes.slice(cursor, cursor + pageBytes) };
+    cursor += pageBytes;
+  }
+  return {
+    descriptor: { width, height, format, addressMode },
+    sourceOptions: { mipFilter, defaultTexel },
+    revision,
+    pages
+  };
+}
+function restoreMemoryTextureSnapshot(snapshot, capacities) {
+  const baseOptions = {
+    width: snapshot.descriptor.width,
+    height: snapshot.descriptor.height,
+    format: memoryFormat(snapshot.descriptor.format),
+    addressMode: snapshot.descriptor.addressMode,
+    mipFilter: snapshot.sourceOptions.mipFilter,
+    ...capacities
+  };
+  const source = new MemoryVirtualTextureSource(snapshot.sourceOptions.defaultTexel ? { ...baseOptions, defaultTexel: snapshot.sourceOptions.defaultTexel } : baseOptions);
+  for (const page of snapshot.pages) {
+    const x2 = page.x * PAGE_SIZE, y2 = page.y * PAGE_SIZE;
+    const width = Math.min(PAGE_SIZE, snapshot.descriptor.width - x2);
+    const height = Math.min(PAGE_SIZE, snapshot.descriptor.height - y2);
+    const status = source.writeRegion(x2, y2, width, height, page.bytes, PAGE_SIZE * source.bytesPerTexel);
+    if (status !== 0 /* Written */)
+      throw new Error(`mutable snapshot exceeds restore capacities: ${status}`);
+    while (source.pendingDirtyPages !== 0)
+      source.drainDirty(capacities.dirtyCapacity, () => true);
+  }
+  source.restoreContentRevision(snapshot.revision);
+  return source;
+}
+
+// crates/afterglow-web/web/src/engine/virtual-texturing/virtual-texture-system.ts
+var INSPECT_VIRTUAL_TEXTURE = Symbol("afterglow.inspectVirtualTexture");
+var RESOLVE_VIRTUAL_MATERIAL = Symbol("afterglow.resolveVirtualMaterial");
+function storeFormat(format) {
+  if (format === "r8unorm")
+    return FORMAT_R8;
+  if (format === "r16float")
+    return FORMAT_R16F;
+  if (format.startsWith("bc7-"))
+    return FORMAT_BC7;
+  if (format.startsWith("astc-"))
+    return FORMAT_ASTC;
+  return FORMAT_RGBA2;
+}
+function memoryFormat2(format) {
+  if (format === "r8unorm")
+    return "r8unorm";
+  if (format === "r16float")
+    return "r16float";
+  if (format === "rgba8unorm" || format === "rgba8unorm-srgb")
+    return "rgba8unorm";
+  throw new RangeError("mutable RAM virtual textures require an uncompressed pool");
+}
+
+class VirtualTextureSystem {
+  options;
+  registry;
+  pools = new Map;
+  poolList = [];
+  entriesById = [null];
+  storesById = [null];
+  nextPath = 1;
+  nextTextureId = 1;
+  disposed = false;
+  constructor(options) {
+    this.options = options;
+    if (!Number.isInteger(options.maxMutablePageRefreshesPerPoll) || options.maxMutablePageRefreshesPerPoll < 1)
+      throw new RangeError("mutable VT refresh capacity must be positive");
+    this.registry = new FixedResourceRegistry(options.maxTextures);
+    for (const config of options.pools) {
+      if (this.pools.has(config.format))
+        throw new Error(`duplicate VT pool: ${config.format}`);
+      const sources = new Map;
+      const provider = async (path, request, signal) => {
+        const route = sources.get(path);
+        if (!route)
+          throw new Error(`virtual texture source is unavailable: ${path}`);
+        return route.provider(route.sourceKey ?? path, request, signal);
+      };
+      const store = new VirtualTextureStore(config.capacities, provider, storeFormat(config.format), options.device, config.tuning ?? new VirtualTextureTuning, options.telemetry);
+      const pool = { format: config.format, sources, store };
+      this.pools.set(config.format, pool);
+      this.poolList.push(pool);
+    }
+    if (this.pools.size === 0)
+      throw new RangeError("at least one virtual texture pool is required");
+  }
+  createTexture(descriptor, source, sourceKey) {
+    if (this.disposed)
+      return 0;
+    const pool = this.pools.get(descriptor.format);
+    if (!pool || !Number.isInteger(descriptor.width) || descriptor.width < 1 || !Number.isInteger(descriptor.height) || descriptor.height < 1)
+      return 0;
+    const ownedDescriptor = { ...descriptor };
+    const path = `virtual://${this.nextPath++}`;
+    pool.sources.set(path, { provider: source, sourceKey: sourceKey ?? null });
+    const textureId = this.nextTextureId++;
+    pool.store.loadTexture(path, {
+      width: ownedDescriptor.width,
+      height: ownedDescriptor.height,
+      mipTail: ownedDescriptor.mipTail ?? false,
+      textureId
+    });
+    const entry = pool.store.getEntry(path);
+    if (!entry) {
+      pool.sources.delete(path);
+      return 0;
+    }
+    this.entriesById[textureId] = entry;
+    this.storesById[textureId] = pool.store;
+    const view = {
+      texture: 0,
+      descriptor: ownedDescriptor,
+      entry,
+      store: pool.store
+    };
+    let record;
+    const publish = (page, bytes) => this.publishMemoryPage(record, page, bytes);
+    record = {
+      handle: 0,
+      path,
+      descriptor: ownedDescriptor,
+      source,
+      memory: null,
+      pool,
+      view,
+      publish
+    };
+    const handle = this.registry.acquire(record);
+    if (handle === 0) {
+      pool.store.unloadTexture(path);
+      pool.sources.delete(path);
+      this.entriesById[textureId] = null;
+      this.storesById[textureId] = null;
+      return 0;
+    }
+    record.handle = handle;
+    view.texture = record.handle;
+    return record.handle;
+  }
+  createMemoryTexture(descriptor, sourceOptions) {
+    if (descriptor.mipTail)
+      throw new RangeError("mutable RAM textures use ordinary terminal pages");
+    const memory = new MemoryVirtualTextureSource({
+      ...sourceOptions,
+      width: descriptor.width,
+      height: descriptor.height,
+      format: memoryFormat2(descriptor.format),
+      addressMode: descriptor.addressMode
+    });
+    return this.registerMemorySource(descriptor, memory);
+  }
+  registerMemorySource(descriptor, memory) {
+    const handle = this.createTexture(descriptor, memory.provider);
+    if (handle === 0)
+      return 0;
+    const record = this.registry.get(handle);
+    if (!record)
+      return 0;
+    record.memory = memory;
+    return handle;
+  }
+  async saveMemoryTexture(handle, key, store) {
+    const record = this.registry.get(handle);
+    if (!record?.memory)
+      return 1 /* InvalidTexture */;
+    const bytes = encodeMemoryTextureSnapshot(record.memory, record.descriptor);
+    const result = await store.putAtomic(key, bytes);
+    return result.status === 0 /* Ok */ ? 0 /* Ok */ : 2 /* StorageFailure */;
+  }
+  async loadMemoryTexture(key, store, capacities, maxSnapshotBytes) {
+    const loaded = await store.get(key, maxSnapshotBytes);
+    if (loaded.status !== 0 /* Ok */ || loaded.bytes === null)
+      return {
+        status: 2 /* StorageFailure */,
+        storageStatus: loaded.status,
+        handle: 0
+      };
+    let snapshot;
+    try {
+      snapshot = decodeMemoryTextureSnapshot(loaded.bytes, capacities.pageCapacity);
+    } catch {
+      return {
+        status: 3 /* CorruptSnapshot */,
+        storageStatus: 0 /* Ok */,
+        handle: 0
+      };
+    }
+    try {
+      const memory = restoreMemoryTextureSnapshot(snapshot, capacities);
+      const handle = this.registerMemorySource(snapshot.descriptor, memory);
+      return handle === 0 ? {
+        status: 4 /* CapacityExceeded */,
+        storageStatus: 0 /* Ok */,
+        handle: 0
+      } : {
+        status: 0 /* Ok */,
+        storageStatus: 0 /* Ok */,
+        handle
+      };
+    } catch {
+      return {
+        status: 4 /* CapacityExceeded */,
+        storageStatus: 0 /* Ok */,
+        handle: 0
+      };
+    }
+  }
+  [INSPECT_VIRTUAL_TEXTURE](handle) {
+    return this.registry.get(handle)?.view ?? null;
+  }
+  readTextureInfo(handle, out) {
+    const record = this.registry.get(handle);
+    if (!record)
+      return false;
+    out.texture = record.handle;
+    out.textureId = record.view.entry.textureId;
+    out.sourceKey = record.view.entry.path;
+    out.width = record.descriptor.width;
+    out.height = record.descriptor.height;
+    out.pageGridX = record.view.entry.pageGridX;
+    out.pageGridY = record.view.entry.pageGridY;
+    return true;
+  }
+  getEntryById(textureId) {
+    return this.entriesById[textureId >>> 0] ?? undefined;
+  }
+  writeMemoryRegion(handle, x2, y2, width, height, source, bytesPerRow) {
+    const memory = this.registry.get(handle)?.memory;
+    if (!memory)
+      return null;
+    const status = memory.writeRegion(x2, y2, width, height, source, bytesPerRow);
+    this.options.telemetry?.trace.instant(25 /* MutableTextureWrite */, handle, source.byteLength, status);
+    if (status === 0 /* Written */) {
+      this.options.telemetry?.metrics.counterAdd(12 /* MutableTextureWrites */, 1);
+      this.options.telemetry?.metrics.counterAdd(13 /* MutableTextureBytes */, source.byteLength);
+    }
+    return status;
+  }
+  recordFrameTime(frameTimeMs) {
+    for (let pool = 0;pool < this.poolList.length; pool++)
+      this.poolList[pool].store.recordFrameTime(frameTimeMs);
+  }
+  setPublicationFrameId(frameId3) {
+    for (let pool = 0;pool < this.poolList.length; pool++)
+      this.poolList[pool].store.setPublicationFrameId(frameId3);
+  }
+  processFeedback(feedback) {
+    for (let pool = 0;pool < this.poolList.length; pool++)
+      this.poolList[pool].store.processFeedback(feedback);
+  }
+  processFeedbackBatch(maps, count) {
+    for (let pool = 0;pool < this.poolList.length; pool++)
+      this.poolList[pool].store.processFeedbackBatch(maps, count);
+  }
+  [RESOLVE_VIRTUAL_MATERIAL](handles, mipBiases) {
+    const resolve = (handle) => {
+      if (handle === undefined)
+        return;
+      const record = this.registry.get(handle);
+      if (!record)
+        throw new Error("virtual material contains a stale texture handle");
+      return record.view.entry;
+    };
+    const albedo = resolve(handles.albedo);
+    if (!albedo)
+      throw new Error("virtual material requires an albedo texture");
+    const set = { albedo };
+    const normal2 = resolve(handles.normal);
+    const masks = resolve(handles.masks);
+    const roughness3 = resolve(handles.roughness);
+    const ao = resolve(handles.ao);
+    const emissive3 = resolve(handles.emissive);
+    if (normal2)
+      set.normal = normal2;
+    if (masks)
+      set.masks = masks;
+    if (roughness3)
+      set.roughness = roughness3;
+    if (ao)
+      set.ao = ao;
+    if (emissive3)
+      set.emissive = emissive3;
+    let store = null;
+    for (const entry of [albedo, normal2, masks, roughness3, ao, emissive3]) {
+      if (!entry)
+        continue;
+      const candidate = this.storesById[entry.textureId];
+      if (!candidate)
+        throw new Error("virtual material texture is not owned by this system");
+      if (store && store !== candidate)
+        throw new Error("linked virtual material channels require one physical format pool");
+      store = candidate;
+    }
+    if (!store)
+      throw new Error("virtual material set has no registered textures");
+    store.linkMaterialSet(set, mipBiases);
+    return { store, set };
+  }
+  primaryStore() {
+    if (this.poolList.length !== 1)
+      throw new Error("aggregate VT diagnostics require exactly one format pool");
+    return this.poolList[0].store;
+  }
+  getStats() {
+    return this.primaryStore().getStats();
+  }
+  getDebugSnapshot() {
+    return this.primaryStore().getDebugSnapshot();
+  }
+  get atlasWidth() {
+    return this.primaryStore().atlasWidth;
+  }
+  get atlasHeight() {
+    return this.primaryStore().atlasHeight;
+  }
+  get rendererAttached() {
+    for (let pool = 0;pool < this.poolList.length; pool++)
+      if (!this.poolList[pool].store.gpuAtlasTexture)
+        return false;
+    return this.poolList.length !== 0;
+  }
+  isBootstrapReady() {
+    for (let pool = 0;pool < this.poolList.length; pool++) {
+      const stats = this.poolList[pool].store.getStats();
+      if (stats.failedLoads !== 0 || stats.pendingPages !== 0 || stats.readyUploads !== 0 || stats.scheduledRequests !== 0 || stats.bulkInFlight !== 0 || stats.atlasSlotsUsed < stats.textureCount)
+        return false;
+    }
+    return true;
+  }
+  poll() {
+    let remaining = this.options.maxMutablePageRefreshesPerPoll;
+    let published = 0;
+    let deferred = 0;
+    this.options.telemetry?.trace.spanBegin(26 /* MutablePageRefresh */, 0, this.options.maxMutablePageRefreshesPerPoll, 0);
+    for (let slot = 0;slot < this.registry.capacity; slot++) {
+      const record = this.registry.valueAt(slot);
+      if (!record?.memory)
+        continue;
+      if (remaining > 0) {
+        const drained = record.memory.drainDirty(remaining, record.publish);
+        published += drained;
+        remaining -= drained;
+      }
+      deferred += record.memory.pendingDirtyPages;
+    }
+    if (published > 0)
+      this.options.telemetry?.metrics.counterAdd(14 /* MutablePagesPublished */, published);
+    if (deferred > 0)
+      this.options.telemetry?.metrics.counterAdd(15 /* MutablePagesDeferred */, deferred);
+    this.options.telemetry?.trace.spanEnd(26 /* MutablePageRefresh */, 0, published, deferred);
+    for (let pool = 0;pool < this.poolList.length; pool++)
+      this.poolList[pool].store.poll();
+  }
+  publishMemoryPage(record, page, bytes) {
+    if (record.pool.store.replaceResidentPage(record.path, page, bytes))
+      return true;
+    return !record.pool.store.isPagePending(record.path, page);
+  }
+  destroyTexture(handle) {
+    const record = this.registry.release(handle);
+    if (!record)
+      return false;
+    record.pool.store.unloadTexture(record.path);
+    record.pool.sources.delete(record.path);
+    this.entriesById[record.view.entry.textureId] = null;
+    this.storesById[record.view.entry.textureId] = null;
+    return true;
+  }
+  attachRenderer(renderer) {
+    for (let pool = 0;pool < this.poolList.length; pool++)
+      this.poolList[pool].store.attachRenderer(renderer);
+  }
+  dispose() {
+    if (this.disposed)
+      return;
+    this.disposed = true;
+    for (let slot = 0;slot < this.registry.capacity; slot++) {
+      const record = this.registry.valueAt(slot);
+      if (record)
+        this.destroyTexture(record.handle);
+    }
+    for (let pool = 0;pool < this.poolList.length; pool++)
+      this.poolList[pool].store.dispose();
+    this.pools.clear();
+    this.poolList.length = 0;
+  }
+}
 // crates/afterglow-web/web/src/engine/virtual-texturing/virtual-material-binding.ts
 class VirtualMaterialBinding {
   options;
@@ -69127,7 +71466,8 @@ class VirtualMaterialBinding {
   constructor(options) {
     this.options = options;
     const runtime = Object.assign({}, exports_three_webgpu, exports_three_tsl);
-    this.pair = createVirtualGltfMaterialPair(runtime, options.store, options.set, options.feedbackPixelScale, options.material);
+    const resolved = options.textures[RESOLVE_VIRTUAL_MATERIAL](options.set);
+    this.pair = createVirtualGltfMaterialPair(runtime, resolved.store, resolved.set, options.feedbackPixelScale, options.material);
     this.feedbackScene = options.scene;
     this.feedbackCamera = options.camera;
     this.feedbackPassCount = this.pair.feedbackMaterials.length;
@@ -69192,8 +71532,12 @@ class VirtualPomSceneBinding {
     const source = mesh.material;
     if (Array.isArray(source))
       throw new Error("POM binding requires one source material");
-    const runtime = Object.assign({}, exports_three_webgpu, exports_three_tsl);
-    const pair = (this.options.createPair ?? createVirtualPomMaterialPair)(runtime, this.options.store, set, heightTexture, this.options.feedbackPixelScale, this.options.material);
+    const pairFactory = this.options.createPair ?? ((textures, handles, height, pixelScale, material) => {
+      const runtime = Object.assign({}, exports_three_webgpu, exports_three_tsl);
+      const resolved = textures[RESOLVE_VIRTUAL_MATERIAL](handles);
+      return createVirtualPomMaterialPair(runtime, resolved.store, resolved.set, height, pixelScale, material);
+    });
+    const pair = pairFactory(this.options.textures, set, heightTexture, this.options.feedbackPixelScale, this.options.material);
     const feedback = new Mesh(mesh.geometry, pair.pomFeedbackMaterial);
     feedback.position.copy(mesh.position);
     feedback.quaternion.copy(mesh.quaternion);
@@ -69246,570 +71590,6 @@ class VirtualPomSceneBinding {
       this.records[index] = null;
     }
     this.count = 0;
-  }
-}
-// crates/afterglow-web/web/src/engine/virtual-texturing/virtual-texture-feedback-pass.ts
-var SCORE_COVERAGE_CAP2 = 255;
-
-class VirtualTextureFeedbackPass {
-  scale;
-  pixelScale = new Vector2(1, 1);
-  target;
-  width = 1;
-  height = 1;
-  pending = false;
-  feedbackMaps = [
-    new Map,
-    new Map
-  ];
-  buildMapIndex = 0;
-  completed = null;
-  requestPool = [];
-  seenMips = new Uint8Array(64);
-  latestMips = [];
-  constructor(scale2 = 0.125) {
-    if (!(scale2 > 0 && scale2 <= 1))
-      throw new RangeError("feedback scale must be in (0, 1]");
-    this.scale = scale2;
-    this.target = new RenderTarget(1, 1, {
-      format: RGIntegerFormat,
-      type: UnsignedIntType,
-      minFilter: NearestFilter,
-      magFilter: NearestFilter,
-      generateMipmaps: false,
-      depthBuffer: true
-    });
-    this.target.texture.name = "afterglow-vt-feedback-rg32uint";
-  }
-  resize(displayWidth, displayHeight) {
-    if (!(displayWidth > 0 && displayHeight > 0))
-      throw new RangeError("display dimensions must be positive");
-    const width = Math.max(1, Math.ceil(displayWidth * this.scale));
-    const height = Math.max(1, Math.ceil(displayHeight * this.scale));
-    this.pixelScale.set(width / displayWidth, height / displayHeight);
-    if (width === this.width && height === this.height && this.requestPool.length >= width * height)
-      return;
-    this.width = width;
-    this.height = height;
-    this.target.setSize(width, height);
-    const capacity = width * height;
-    if (this.requestPool.length < capacity) {
-      const previous = this.requestPool.length;
-      this.requestPool.length = capacity;
-      for (let index = previous;index < capacity; index++)
-        this.requestPool[index] = { path: "", mip: 0, x: 0, y: 0 };
-    }
-  }
-  get canSubmit() {
-    return !this.pending && this.completed === null;
-  }
-  submit(renderer, feedbackScene, camera, store) {
-    if (!this.canSubmit)
-      return false;
-    const previous = renderer.getRenderTarget();
-    try {
-      renderer.setRenderTarget(this.target);
-      renderer.render(feedbackScene, camera);
-    } finally {
-      renderer.setRenderTarget(previous);
-    }
-    this.pending = true;
-    renderer.readRenderTargetPixelsAsync(this.target, 0, 0, this.width, this.height).then((raw) => {
-      const words = raw instanceof Uint32Array ? raw : new Uint32Array(raw.buffer, raw.byteOffset, Math.floor(raw.byteLength / 4));
-      const requests = this.feedbackMaps[this.buildMapIndex];
-      requests.clear();
-      for (let mip = 0;mip < this.seenMips.length; mip++)
-        this.seenMips[mip] = 0;
-      let requestCount = 0;
-      for (let index = 0;index + 1 < words.length; index += 2) {
-        const packed = words[index];
-        if ((packed & 2147483648) === 0)
-          continue;
-        const mip = packed & 63;
-        const x2 = packed >>> 6 & 2047;
-        const y2 = packed >>> 17 & 2047;
-        const entry = store.getEntryById(words[index + 1]);
-        if (!entry || mip > entry.textureMaxMip)
-          continue;
-        const tail = mip > entry.maxMip;
-        const gridWidth = tail ? 1 : pagesAtMipAxis(entry.pageTableLayout.width, mip);
-        const gridHeight = tail ? 1 : pagesAtMipAxis(entry.pageTableLayout.baseHeight, mip);
-        if (x2 >= gridWidth || y2 >= gridHeight)
-          continue;
-        const requestMip = tail ? entry.tailFirstMip : mip;
-        const requestX = tail ? 0 : x2;
-        const requestY = tail ? 0 : y2;
-        const local = tail ? 268435456 : (requestMip & 63 | (requestX & 2047) << 6 | (requestY & 2047) << 17) >>> 0;
-        const key = entry.textureId * 536870912 + local;
-        const pixel = index >> 1;
-        const pixelX = pixel % this.width;
-        const pixelY = Math.floor(pixel / this.width);
-        const normalizedX = (pixelX + 0.5) * 2 / this.width - 1;
-        const normalizedY = (pixelY + 0.5) * 2 / this.height - 1;
-        const screenPriority = Math.min(255, Math.floor((normalizedX * normalizedX + normalizedY * normalizedY) * 128));
-        const centerCloseness = 7 - Math.min(7, screenPriority >>> 5);
-        const cameraCloseness = packed >>> 28 & 7;
-        const pixelWeight = 1 + centerCloseness + cameraCloseness;
-        const existing = requests.get(key);
-        if (existing) {
-          existing.screenPriority = Math.min(existing.screenPriority ?? 255, screenPriority);
-          const coverage = existing.coverage ?? 1;
-          if (coverage < SCORE_COVERAGE_CAP2)
-            existing.perceptualWeight = (existing.perceptualWeight ?? 1) + pixelWeight;
-          existing.coverage = Math.min(65535, coverage + 1);
-          continue;
-        }
-        const request = this.requestPool[requestCount++];
-        request.textureId = entry.textureId;
-        request.path = entry.path;
-        request.mip = requestMip;
-        request.x = requestX;
-        request.y = requestY;
-        request.tail = tail ? true : undefined;
-        request.screenPriority = screenPriority;
-        request.coverage = 1;
-        request.perceptualWeight = pixelWeight;
-        request.priorityTier = undefined;
-        requests.set(key, request);
-        this.seenMips[mip] = 1;
-      }
-      this.latestMips.length = 0;
-      for (let mip = 0;mip < this.seenMips.length; mip++)
-        if (this.seenMips[mip] !== 0)
-          this.latestMips.push(mip);
-      this.completed = requests;
-      this.buildMapIndex ^= 1;
-    }).catch((error2) => console.error("[VT] feedback readback failed:", error2)).finally(() => {
-      this.pending = false;
-    });
-    return true;
-  }
-  getLatestMips() {
-    return this.latestMips;
-  }
-  consume() {
-    const result = this.completed;
-    this.completed = null;
-    return result;
-  }
-  dispose() {
-    this.target.dispose();
-    this.feedbackMaps[0].clear();
-    this.feedbackMaps[1].clear();
-    this.completed = null;
-    this.requestPool.length = 0;
-  }
-}
-// crates/afterglow-web/web/src/engine/virtual-texturing/predicted-feedback-camera.ts
-var MAX_SAMPLE_SECONDS = 0.1;
-var MAX_ANGULAR_STEP = Math.PI * 0.5;
-var MAX_TRANSLATION_FAR_FRACTION = 0.25;
-
-class PredictedFeedbackCamera {
-  horizonMs;
-  camera;
-  resetCount = 0;
-  previousPosition = new Vector3;
-  currentPosition = new Vector3;
-  predictedPosition = new Vector3;
-  previousQuaternion = new Quaternion;
-  currentQuaternion = new Quaternion;
-  predictedQuaternion = new Quaternion;
-  currentScale = new Vector3(1, 1, 1);
-  lastSeconds = 0;
-  initialized = false;
-  constructor(source, horizonMs) {
-    this.horizonMs = horizonMs;
-    if (!Number.isFinite(horizonMs) || horizonMs <= 0)
-      throw new RangeError("feedback prediction horizon must be positive");
-    this.camera = source.clone(false);
-    this.copyCurrentCamera(source);
-  }
-  sample(source, elapsedSeconds) {
-    source.updateWorldMatrix(true, false);
-    source.matrixWorld.decompose(this.currentPosition, this.currentQuaternion, this.currentScale);
-    this.copyCurrentCamera(source);
-    if (!this.initialized) {
-      this.initialized = true;
-      this.previousPosition.copy(this.currentPosition);
-      this.previousQuaternion.copy(this.currentQuaternion);
-      this.lastSeconds = elapsedSeconds;
-      this.publishCurrentPose();
-      return this.camera;
-    }
-    const dt = elapsedSeconds - this.lastSeconds;
-    const far = Math.max(1, source.far ?? 1);
-    const translation = this.previousPosition.distanceTo(this.currentPosition);
-    const rotation = this.previousQuaternion.angleTo(this.currentQuaternion);
-    const reset = !Number.isFinite(dt) || dt <= 0 || dt > MAX_SAMPLE_SECONDS || translation > far * MAX_TRANSLATION_FAR_FRACTION || rotation > MAX_ANGULAR_STEP;
-    if (reset) {
-      if (dt !== 0)
-        this.resetCount++;
-      this.publishCurrentPose();
-    } else {
-      const factor = 1 + this.horizonMs / (dt * 1000);
-      this.predictedPosition.copy(this.previousPosition).lerp(this.currentPosition, factor);
-      this.predictedQuaternion.slerpQuaternions(this.previousQuaternion, this.currentQuaternion, factor);
-      this.publishPose(this.predictedPosition, this.predictedQuaternion);
-    }
-    this.previousPosition.copy(this.currentPosition);
-    this.previousQuaternion.copy(this.currentQuaternion);
-    this.lastSeconds = elapsedSeconds;
-    return this.camera;
-  }
-  copyCurrentCamera(source) {
-    this.camera.projectionMatrix.copy(source.projectionMatrix);
-    this.camera.projectionMatrixInverse.copy(source.projectionMatrixInverse);
-    this.camera.coordinateSystem = source.coordinateSystem;
-    this.camera.layers.mask = source.layers.mask;
-    const sourcePerspective = source;
-    const targetPerspective = this.camera;
-    if (sourcePerspective.isPerspectiveCamera === true && targetPerspective.isPerspectiveCamera === true) {
-      targetPerspective.near = sourcePerspective.near;
-      targetPerspective.far = sourcePerspective.far;
-      targetPerspective.fov = sourcePerspective.fov;
-      targetPerspective.aspect = sourcePerspective.aspect;
-      targetPerspective.zoom = sourcePerspective.zoom;
-      targetPerspective.focus = sourcePerspective.focus;
-      targetPerspective.filmGauge = sourcePerspective.filmGauge;
-      targetPerspective.filmOffset = sourcePerspective.filmOffset;
-    }
-    const sourceOrthographic = source;
-    const targetOrthographic = this.camera;
-    if (sourceOrthographic.isOrthographicCamera === true && targetOrthographic.isOrthographicCamera === true) {
-      targetOrthographic.near = sourceOrthographic.near;
-      targetOrthographic.far = sourceOrthographic.far;
-      targetOrthographic.left = sourceOrthographic.left;
-      targetOrthographic.right = sourceOrthographic.right;
-      targetOrthographic.top = sourceOrthographic.top;
-      targetOrthographic.bottom = sourceOrthographic.bottom;
-      targetOrthographic.zoom = sourceOrthographic.zoom;
-    }
-    this.camera.parent = null;
-    this.camera.matrixAutoUpdate = true;
-    this.camera.matrixWorldAutoUpdate = true;
-  }
-  publishCurrentPose() {
-    this.publishPose(this.currentPosition, this.currentQuaternion);
-  }
-  publishPose(position, quaternion) {
-    this.camera.position.copy(position);
-    this.camera.quaternion.copy(quaternion);
-    this.camera.scale.copy(this.currentScale);
-    this.camera.updateMatrix();
-    this.camera.updateMatrixWorld(true);
-  }
-}
-
-// crates/afterglow-web/web/src/engine/virtual-texturing/virtual-texture-feedback-coordinator.ts
-class VirtualTextureFeedbackCoordinator {
-  renderer;
-  store;
-  vtCpuUs = 0;
-  feedbackSubmitUs = 0;
-  pixelScale;
-  stats = {
-    submittedSnapshots: 0,
-    completedSnapshots: 0,
-    discardedSnapshots: 0,
-    deferredSnapshots: 0,
-    registrationOverflows: 0,
-    activePasses: 0,
-    predictorResets: 0
-  };
-  passes;
-  renderables;
-  activeRenderable;
-  activeLocalPass;
-  feedbackContextIds;
-  heldResults;
-  renderableCount = 0;
-  registeredPassCount = 0;
-  awaitingPassCount = 0;
-  discardAwaiting = false;
-  nextFeedbackSeconds = 0;
-  lastRenderFrameId = -1;
-  sealed = false;
-  disposed = false;
-  constructor(renderer, store, capacities) {
-    this.renderer = renderer;
-    this.store = store;
-    if (!Number.isInteger(capacities.renderables) || capacities.renderables <= 0)
-      throw new RangeError("feedback renderable capacity must be positive");
-    if (!Number.isInteger(capacities.passes) || capacities.passes <= 0)
-      throw new RangeError("feedback pass capacity must be positive");
-    if (!Number.isFinite(capacities.cadenceMs) || capacities.cadenceMs <= 0)
-      throw new RangeError("feedback cadence must be positive");
-    if (!Number.isFinite(capacities.predictionHorizonMs) || capacities.predictionHorizonMs <= 0)
-      throw new RangeError("feedback prediction horizon must be positive");
-    this.cadenceMs = capacities.cadenceMs;
-    this.predictionHorizonMs = capacities.predictionHorizonMs;
-    this.passes = new Array(capacities.passes);
-    this.renderables = new Array(capacities.renderables);
-    this.heldResults = new Array(capacities.passes).fill(null);
-    for (let index = 0;index < capacities.passes; index++)
-      this.passes[index] = new VirtualTextureFeedbackPass(capacities.scale ?? 0.125);
-    for (let index = 0;index < capacities.renderables; index++)
-      this.renderables[index] = { renderable: null, predictor: null, passOffset: 0 };
-    this.activeRenderable = new Int32Array(capacities.passes);
-    this.activeLocalPass = new Uint16Array(capacities.passes);
-    this.feedbackContextIds = new Int32Array(capacities.passes);
-    const firstPass = this.passes[0];
-    if (!firstPass)
-      throw new Error("feedback coordinator failed to reserve its first pass");
-    this.pixelScale = firstPass.pixelScale;
-  }
-  cadenceMs;
-  predictionHorizonMs;
-  register(renderable) {
-    if (this.sealed)
-      return 3 /* Sealed */;
-    if (!Number.isInteger(renderable.feedbackPassCount) || renderable.feedbackPassCount <= 0)
-      return 2 /* InvalidPassCount */;
-    if (this.renderableCount === this.renderables.length || this.registeredPassCount + renderable.feedbackPassCount > this.passes.length) {
-      this.stats.registrationOverflows++;
-      return 1 /* CapacityExceeded */;
-    }
-    const slot = this.renderables[this.renderableCount];
-    if (!slot)
-      return 1 /* CapacityExceeded */;
-    slot.renderable = renderable;
-    slot.predictor = new PredictedFeedbackCamera(renderable.feedbackCamera, this.predictionHorizonMs);
-    slot.passOffset = this.registeredPassCount;
-    this.registeredPassCount += renderable.feedbackPassCount;
-    this.renderableCount++;
-    return 0 /* Registered */;
-  }
-  resize(displayWidth, displayHeight) {
-    for (let index = 0;index < this.passes.length; index++)
-      this.passes[index]?.resize(displayWidth, displayHeight);
-  }
-  async warm() {
-    if (this.disposed)
-      throw new Error("cannot warm a disposed feedback coordinator");
-    const previousTarget = this.renderer.getRenderTarget();
-    const shadows = this.renderer.shadowMap.enabled;
-    this.renderer.shadowMap.enabled = false;
-    try {
-      for (let recordIndex = 0;recordIndex < this.renderableCount; recordIndex++) {
-        const record = this.renderables[recordIndex];
-        const renderable = record?.renderable;
-        if (!record || !renderable)
-          continue;
-        const feedbackCamera = record.predictor?.sample(renderable.feedbackCamera, 0) ?? renderable.feedbackCamera;
-        for (let localPass = 0;localPass < renderable.feedbackPassCount; localPass++) {
-          const pass3 = this.passes[record.passOffset + localPass];
-          if (!pass3)
-            continue;
-          renderable.beginFeedbackPass(localPass);
-          try {
-            this.renderer.setRenderTarget(pass3.target);
-            await this.renderer.compileAsync(renderable.feedbackScene, feedbackCamera);
-            this.renderer.render(renderable.feedbackScene, feedbackCamera);
-          } finally {
-            renderable.endFeedbackPass(localPass);
-          }
-        }
-      }
-    } finally {
-      this.renderer.setRenderTarget(previousTarget);
-      this.renderer.shadowMap.enabled = shadows;
-    }
-  }
-  seal() {
-    this.sealed = true;
-  }
-  setGpuTimingEnabled(enabled) {
-    const renderer = this.renderer;
-    renderer.backend.trackTimestamp = enabled;
-    for (const pool of Object.values(renderer.backend.timestampQueryPool ?? {}))
-      if (pool)
-        pool.trackTimestamp = enabled;
-  }
-  async resolveGpuTimings(out) {
-    out.gpuTimingValid = false;
-    out.resolvedFrameId = -1;
-    out.gpuSceneMs = 0;
-    out.gpuOutputMs = 0;
-    out.gpuFeedbackMs = 0;
-    out.gpuTotalMs = 0;
-    const renderer = this.renderer;
-    let timestamps;
-    let frames;
-    try {
-      await renderer.resolveTimestampsAsync("render");
-      const contexts = renderer._renderContexts;
-      const pool = renderer.backend.timestampQueryPool?.render;
-      timestamps = pool?.timestamps;
-      frames = pool?.getTimestampFrames?.();
-      const resolvedFrame = frames?.[frames.length - 1];
-      if (!contexts || !timestamps || resolvedFrame === undefined || !Number.isInteger(resolvedFrame))
-        return out;
-      const outputContext = renderer.needsFrameBufferTarget === true ? contexts.get(null).id : -1;
-      this.feedbackContextIds.fill(-1);
-      for (let index = 0;index < this.passes.length; index++) {
-        const pass3 = this.passes[index];
-        if (pass3)
-          this.feedbackContextIds[index] = contexts.get(pass3.target).id;
-      }
-      let total = 0, output3 = 0, feedback = 0;
-      for (const [uid, duration] of timestamps) {
-        const match = /^r:\d+:(\d+):f(\d+)$/.exec(uid);
-        if (!match || Number(match[2]) !== resolvedFrame || !Number.isFinite(duration) || duration < 0)
-          continue;
-        const context3 = Number(match[1]);
-        total += duration;
-        if (context3 === outputContext) {
-          output3 += duration;
-          continue;
-        }
-        for (let index = 0;index < this.feedbackContextIds.length; index++) {
-          if (context3 === this.feedbackContextIds[index]) {
-            feedback += duration;
-            break;
-          }
-        }
-      }
-      out.gpuTimingValid = true;
-      out.resolvedFrameId = resolvedFrame;
-      out.gpuOutputMs = output3;
-      out.gpuFeedbackMs = feedback;
-      out.gpuTotalMs = total;
-      out.gpuSceneMs = Math.max(0, total - output3 - feedback);
-      return out;
-    } catch {
-      return out;
-    } finally {
-      timestamps?.clear();
-      if (frames)
-        frames.length = 0;
-    }
-  }
-  recordFrameTime(frameTimeMs) {
-    this.store.recordFrameTime(frameTimeMs);
-  }
-  poll() {
-    const started = performance.now();
-    this.consumeCompletedSnapshot();
-    this.store.setPublicationFrameId(this.lastRenderFrameId + 1);
-    this.store.poll();
-    this.vtCpuUs = (performance.now() - started) * 1000;
-  }
-  render(frame) {
-    this.feedbackSubmitUs = 0;
-    this.lastRenderFrameId = frame.frameId;
-    if (this.disposed)
-      return;
-    let predictorResets = 0;
-    for (let index = 0;index < this.renderableCount; index++) {
-      const slot = this.renderables[index];
-      const renderable = slot?.renderable;
-      if (!slot || !renderable || !slot.predictor)
-        continue;
-      slot.predictor.sample(renderable.feedbackCamera, frame.elapsedSeconds);
-      predictorResets += slot.predictor.resetCount;
-    }
-    this.stats.predictorResets = predictorResets;
-    if (frame.elapsedSeconds < this.nextFeedbackSeconds)
-      return;
-    this.nextFeedbackSeconds = frame.elapsedSeconds + this.cadenceMs / 1000;
-    const started = performance.now();
-    if (this.awaitingPassCount !== 0) {
-      this.stats.deferredSnapshots++;
-      return;
-    }
-    let activeCount = 0;
-    for (let recordIndex = 0;recordIndex < this.renderableCount; recordIndex++) {
-      const renderable = this.renderables[recordIndex]?.renderable;
-      if (!renderable || !renderable.isFeedbackActive())
-        continue;
-      for (let localPass = 0;localPass < renderable.feedbackPassCount; localPass++) {
-        if (activeCount >= this.passes.length)
-          break;
-        this.activeRenderable[activeCount] = recordIndex;
-        this.activeLocalPass[activeCount] = localPass;
-        activeCount++;
-      }
-    }
-    this.stats.activePasses = activeCount;
-    if (activeCount === 0)
-      return;
-    for (let index = 0;index < activeCount; index++) {
-      if (this.passes[index]?.canSubmit !== true) {
-        this.stats.deferredSnapshots++;
-        return;
-      }
-    }
-    const shadows = this.renderer.shadowMap.enabled;
-    this.renderer.shadowMap.enabled = false;
-    let submitted = 0;
-    try {
-      for (let index = 0;index < activeCount; index++) {
-        const slot = this.renderables[this.activeRenderable[index] ?? -1];
-        const renderable = slot?.renderable;
-        const localPass = this.activeLocalPass[index] ?? 0;
-        const pass3 = this.passes[index];
-        if (!slot || !renderable || !pass3)
-          continue;
-        renderable.beginFeedbackPass(localPass);
-        try {
-          if (pass3.submit(this.renderer, renderable.feedbackScene, slot.predictor?.camera ?? renderable.feedbackCamera, this.store))
-            submitted++;
-        } finally {
-          renderable.endFeedbackPass(localPass);
-        }
-      }
-    } finally {
-      this.renderer.shadowMap.enabled = shadows;
-    }
-    this.awaitingPassCount = submitted;
-    this.discardAwaiting = submitted !== activeCount;
-    if (submitted !== 0)
-      this.stats.submittedSnapshots++;
-    if (this.discardAwaiting)
-      this.stats.deferredSnapshots++;
-    this.feedbackSubmitUs = (performance.now() - started) * 1000;
-  }
-  consumeCompletedSnapshot() {
-    if (this.awaitingPassCount === 0)
-      return false;
-    let complete = true;
-    for (let index = 0;index < this.awaitingPassCount; index++) {
-      if (this.heldResults[index] === null)
-        this.heldResults[index] = this.passes[index]?.consume() ?? null;
-      if (this.heldResults[index] === null)
-        complete = false;
-    }
-    if (!complete)
-      return false;
-    if (this.discardAwaiting) {
-      this.stats.discardedSnapshots++;
-    } else {
-      this.store.processFeedbackBatch(this.heldResults, this.awaitingPassCount);
-      this.stats.completedSnapshots++;
-    }
-    for (let index = 0;index < this.awaitingPassCount; index++)
-      this.heldResults[index] = null;
-    this.awaitingPassCount = 0;
-    this.discardAwaiting = false;
-    return true;
-  }
-  dispose() {
-    if (this.disposed)
-      return;
-    this.disposed = true;
-    for (let index = 0;index < this.passes.length; index++)
-      this.passes[index]?.dispose();
-    for (let index = 0;index < this.renderables.length; index++) {
-      const slot = this.renderables[index];
-      if (slot) {
-        slot.renderable = null;
-        slot.predictor = null;
-      }
-    }
-    for (let index = 0;index < this.heldResults.length; index++)
-      this.heldResults[index] = null;
-    this.awaitingPassCount = 0;
   }
 }
 // crates/afterglow-web/web/src/engine/virtual-texturing/procedural-vt.ts
@@ -69893,13 +71673,6 @@ function generateTerrainPage(mip, pageX, pageY, virtualSize) {
     return [r, g2, b2];
   });
 }
-// crates/afterglow-web/web/src/engine/virtual-texturing/index.ts
-function createProceduralVirtualTextureStore(provider, device, capacities) {
-  return new VirtualTextureStore({ async read() {
-    return new Uint8Array;
-  }, poll() {} }, capacities, provider, FORMAT_RGBA, device);
-}
-
 // crates/afterglow-web/web/src/engine/input/input.ts
 function actionFor(event) {
   switch (event.code || event.key) {
@@ -70030,144 +71803,7 @@ class BoundedKeyboardInput {
     this.clear();
   }
 }
-// crates/afterglow-web/web/src/engine/diagnostics/dev-harness.ts
-class BootstrapGuard {
-  capacity;
-  cleanups;
-  count = 0;
-  constructor(capacity) {
-    this.capacity = capacity;
-    if (!Number.isInteger(capacity) || capacity <= 0)
-      throw new RangeError("bootstrap cleanup capacity must be positive");
-    this.cleanups = new Array(capacity).fill(null);
-  }
-  defer(cleanup) {
-    if (this.count === this.capacity)
-      throw new Error("bootstrap cleanup capacity exceeded");
-    this.cleanups[this.count++] = cleanup;
-  }
-  release() {
-    for (let index = 0;index < this.count; index++)
-      this.cleanups[index] = null;
-    this.count = 0;
-  }
-  async rollback() {
-    let firstError = null;
-    for (let index = this.count - 1;index >= 0; index--) {
-      const cleanup = this.cleanups[index];
-      this.cleanups[index] = null;
-      try {
-        await cleanup?.();
-      } catch (error2) {
-        if (firstError === null)
-          firstError = error2;
-      }
-    }
-    this.count = 0;
-    if (firstError !== null)
-      throw firstError;
-  }
-}
-
-class FrameStepHarness {
-  capacity;
-  targets;
-  resolvers;
-  count = 0;
-  constructor(capacity) {
-    this.capacity = capacity;
-    if (!Number.isInteger(capacity) || capacity <= 0)
-      throw new RangeError("frame-step capacity must be positive");
-    this.targets = new Float64Array(capacity);
-    this.resolvers = new Array(capacity).fill(null);
-  }
-  wait(currentFrame, count = 1) {
-    if (!Number.isInteger(count) || count <= 0)
-      throw new RangeError("frame-step count must be positive");
-    if (this.count === this.capacity)
-      throw new Error("frame-step capacity exceeded");
-    const slot = this.count++;
-    this.targets[slot] = currentFrame + count;
-    return new Promise((resolve) => {
-      this.resolvers[slot] = resolve;
-    });
-  }
-  poll(frame) {
-    let write = 0;
-    for (let read = 0;read < this.count; read++) {
-      const resolver = this.resolvers[read];
-      if (frame >= (this.targets[read] ?? Number.POSITIVE_INFINITY)) {
-        this.resolvers[read] = null;
-        resolver?.();
-        continue;
-      }
-      if (write !== read) {
-        this.targets[write] = this.targets[read] ?? 0;
-        this.resolvers[write] = resolver ?? null;
-        this.resolvers[read] = null;
-      }
-      write++;
-    }
-    this.count = write;
-  }
-}
-
-class BrowserErrorCapture {
-  diagnostics;
-  target;
-  record = { sequence: 0, code: 0 /* Unknown */, source: 5 /* Game */, detail: null };
-  onError;
-  onRejection;
-  disposed = false;
-  constructor(diagnostics2, target = window) {
-    this.diagnostics = diagnostics2;
-    this.target = target;
-    this.onError = (event) => {
-      diagnostics2.tryRecord(0 /* Unknown */, 5 /* Game */, event.error ?? event);
-    };
-    this.onRejection = (event) => {
-      diagnostics2.tryRecord(0 /* Unknown */, 5 /* Game */, event.reason);
-    };
-    target.addEventListener("error", this.onError);
-    target.addEventListener("unhandledrejection", this.onRejection);
-  }
-  snapshot() {
-    const result = [];
-    for (let index = 0;index < this.diagnostics.count; index++) {
-      if (this.diagnostics.readInto(index, this.record))
-        result.push(this.record.detail);
-    }
-    return result;
-  }
-  dispose() {
-    if (this.disposed)
-      return;
-    this.disposed = true;
-    this.target.removeEventListener("error", this.onError);
-    this.target.removeEventListener("unhandledrejection", this.onRejection);
-  }
-}
-
-class PageShutdown {
-  target;
-  onUnload;
-  disposed = false;
-  constructor(callback, target = window) {
-    this.target = target;
-    this.onUnload = () => callback();
-    target.addEventListener("beforeunload", this.onUnload, { once: true });
-  }
-  dispose() {
-    if (this.disposed)
-      return;
-    this.disposed = true;
-    this.target.removeEventListener("beforeunload", this.onUnload);
-  }
-}
-function publishDevHarness(name, value) {
-  Object.defineProperty(window, name, { configurable: true, value });
-}
-
+// crates/afterglow-web/web/src/engine/diagnostics/text-hud.ts
 class TextHud {
   element;
   constructor(element3) {
@@ -70182,80 +71818,6 @@ class TextHud {
       this.element.style.display = visible ? "" : "none";
   }
 }
-// crates/afterglow-web/web/src/engine/diagnostics/vt-gpu-test.ts
-async function testRawFeedback(device, direction) {
-  const transform = direction === "west" ? "vec2f(1.0-in.uv.x,in.uv.y)" : direction === "rotated" ? "vec2f(in.uv.y,1.0-in.uv.x)" : "in.uv";
-  const shader = device.createShaderModule({ code: `struct Out{@builtin(position) position:vec4f,@location(0) uv:vec2f};@vertex fn vs(@builtin(vertex_index)i:u32)->Out{var p=array<vec2f,3>(vec2f(-1,-1),vec2f(3,-1),vec2f(-1,3));var o:Out;o.position=vec4f(p[i],0,1);o.uv=p[i]*.5+.5;return o;}@fragment fn fs(in:Out)->@location(0) vec2u{let q=${transform};let x=u32(clamp(floor(q.x*2048.),0.,2047.));let y=u32(clamp(floor(q.y*2048.),0.,2047.));return vec2u(0x80000000u|(x<<6)|(y<<17),0x12345678u);}` });
-  const info = await shader.getCompilationInfo(), errors = info.messages.filter((x2) => x2.type === "error");
-  if (errors.length)
-    throw new Error(errors.map((x2) => x2.message).join(`
-`));
-  const pipeline = device.createRenderPipeline({ layout: "auto", vertex: { module: shader, entryPoint: "vs" }, fragment: { module: shader, entryPoint: "fs", targets: [{ format: "rg32uint" }] }, primitive: { topology: "triangle-list" } });
-  const tex = device.createTexture({ size: [32, 32], format: "rg32uint", usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC }), buffer3 = device.createBuffer({ size: 8192, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ }), encoder = device.createCommandEncoder(), pass3 = encoder.beginRenderPass({ colorAttachments: [{ view: tex.createView(), loadOp: "clear", storeOp: "store", clearValue: { r: 0, g: 0, b: 0, a: 0 } }] });
-  pass3.setPipeline(pipeline);
-  pass3.draw(3);
-  pass3.end();
-  encoder.copyTextureToBuffer({ texture: tex }, { buffer: buffer3, bytesPerRow: 256 }, [32, 32]);
-  device.queue.submit([encoder.finish()]);
-  await buffer3.mapAsync(GPUMapMode.READ);
-  const words = new Uint32Array(buffer3.getMappedRange());
-  let valid = 0, minX = 2048, maxX = -1, minY = 2048, maxY = -1;
-  const xs = new Set, ys = new Set;
-  for (let i = 0;i < words.length; i += 2)
-    if (words[i] & 2147483648 && words[i + 1] === 305419896) {
-      valid++;
-      const x2 = words[i] >>> 6 & 2047, y2 = words[i] >>> 17 & 2047;
-      xs.add(x2);
-      ys.add(y2);
-      minX = Math.min(minX, x2);
-      maxX = Math.max(maxX, x2);
-      minY = Math.min(minY, y2);
-      maxY = Math.max(maxY, y2);
-    }
-  buffer3.unmap();
-  buffer3.destroy();
-  tex.destroy();
-  if (valid !== 1024 || xs.size !== 32 || ys.size !== 32)
-    throw new Error(`feedback ${direction} mismatch`);
-  return { direction, valid, range: [minX, maxX, minY, maxY] };
-}
-async function testUploadLocations(device, atlasWidth, atlasHeight, slotSize) {
-  const result = { rgba: 0, compressed: 0, compressedFormat: "unsupported" }, tex = device.createTexture({ size: [64, 64], format: "rgba8unorm", usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.COPY_SRC }), origins = [[0, 0], [60, 60], [24, 36]];
-  for (let n = 0;n < 3; n++) {
-    const color3 = [17 + n, 83, 201, 255], pixels = new Uint8Array(64);
-    for (let i = 0;i < 64; i += 4)
-      pixels.set(color3, i);
-    device.queue.writeTexture({ texture: tex, origin: origins[n] }, pixels, { bytesPerRow: 16, rowsPerImage: 4 }, [4, 4]);
-    const b2 = device.createBuffer({ size: 1024, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ }), e = device.createCommandEncoder();
-    e.copyTextureToBuffer({ texture: tex, origin: origins[n] }, { buffer: b2, bytesPerRow: 256 }, [4, 4]);
-    device.queue.submit([e.finish()]);
-    await b2.mapAsync(GPUMapMode.READ);
-    const bytes = new Uint8Array(b2.getMappedRange());
-    for (let y2 = 0;y2 < 4; y2++)
-      for (let x2 = 0;x2 < 4; x2++)
-        for (let c = 0;c < 4; c++)
-          if (bytes[y2 * 256 + x2 * 4 + c] !== color3[c])
-            throw new Error(`RGBA mismatch ${n}/${x2}/${y2}/${c}`);
-    b2.unmap();
-    b2.destroy();
-    result.rgba++;
-  }
-  tex.destroy();
-  const compressed = device.features.has("texture-compression-bc") ? ["bc7", "bc7-rgba-unorm"] : device.features.has("texture-compression-astc") ? ["astc", "astc-4x4-unorm"] : null;
-  if (compressed) {
-    const t = device.createTexture({ size: [atlasWidth, atlasHeight], format: compressed[1], usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING }), o = [[0, 0], [atlasWidth - slotSize, atlasHeight - slotSize], [Math.floor(atlasWidth / slotSize / 2) * slotSize, Math.floor(atlasHeight / slotSize / 2) * slotSize]];
-    for (let n = 0;n < 3; n++) {
-      const blocks = new Uint8Array(34 * 34 * 16);
-      blocks.fill(31 + n);
-      device.queue.writeTexture({ texture: t, origin: o[n] }, blocks, { bytesPerRow: 544, rowsPerImage: 34 }, [slotSize, slotSize]);
-      result.compressed++;
-    }
-    t.destroy();
-    result.compressedFormat = compressed[0];
-  }
-  await device.queue.onSubmittedWorkDone();
-  return result;
-}
 // crates/afterglow-web/web/src/demos/vt/main.ts
 var VIRTUAL_SIZE = 262144;
 var scene = new Scene;
@@ -70263,8 +71825,10 @@ scene.background = new Color(658448);
 scene.add(new AmbientLight(8425632, 1.5));
 var camera = new OrthographicCamera(-7, 7, 5, -5, 0.1, 30);
 camera.position.z = 14;
-var runtime = EngineRuntime.forScene({
+var coordinator = null;
+var runtime = await EngineRuntime.forScene({
   scene,
+  camera,
   entityCapacity: 1,
   memory: {
     frameScratchBytes: 16 * 1024,
@@ -70278,9 +71842,13 @@ var runtime = EngineRuntime.forScene({
   },
   diagnosticCapacity: 64,
   maxWorkerInputs: 1,
-  maxRenderPasses: 2
+  maxRenderPasses: 2,
+  maxOwnedResources: 3,
+  renderer: {
+    parameters: { antialias: true },
+    onResize: resizeCamera
+  }
 });
-var coordinator = null;
 function resizeCamera(width, height) {
   const aspect2 = width / height;
   camera.left = -5 * aspect2;
@@ -70288,22 +71856,8 @@ function resizeCamera(width, height) {
   camera.top = 5;
   camera.bottom = -5;
   camera.updateProjectionMatrix();
-  const ratio = Math.min(2, Math.max(0.1, devicePixelRatio));
-  coordinator?.resize(width * ratio, height * ratio);
 }
-var rendererHost = await RendererHost.create({
-  scene,
-  camera,
-  diagnostics: runtime.diagnostics,
-  parameters: { antialias: true },
-  onResize: resizeCamera
-}).catch((error2) => {
-  runtime.dispose();
-  throw error2;
-});
-var bootstrap = new BootstrapGuard(12);
-bootstrap.defer(() => rendererHost.dispose());
-bootstrap.defer(() => runtime.dispose());
+var rendererHost = runtime.rendererHost;
 try {
   let updateUv = function() {
     const half = 0.5 / zoom;
@@ -70313,10 +71867,10 @@ try {
     uv3.setXY(3, camX + half, camY - half);
     uv3.needsUpdate = true;
   }, updateHud = function() {
-    const stats = store.getStats();
+    const stats = textures.getStats();
     hud.setText(`afterglow — Engine Virtual Texture
 ` + `262,144² terrain · 256 GiB logical RGBA
-` + `VirtualTextureStore · ${store.atlasWidth}² shared atlas
+` + `VirtualTextureSystem · ${textures.atlasWidth}² shared atlas
 ` + `UV ${camX.toFixed(3)}, ${camY.toFixed(3)} · zoom ${zoom.toFixed(1)}×
 ` + `Resident ${stats.atlasSlotsUsed}/${stats.atlasSlotsTotal} · pending ${stats.pendingPages}
 ` + `Errors ${runtime.diagnostics.count}
@@ -70338,21 +71892,36 @@ WASD pan · wheel zoom · O overview · P pixel`);
         zoom = VIRTUAL_SIZE;
     }
     updateUv();
-    frameSteps.poll(frame.frameId);
     if (frame.frameId % 15 === 0)
       updateHud();
-  }, step3 = function(count = 1) {
-    return frameSteps.wait(runtime.frame.frameId, Math.max(1, count | 0));
   };
-  const path = "procedural://terrain";
-  const store = createProceduralVirtualTextureStore(async (_path, request) => generateTerrainPage(request.mip, request.x, request.y, VIRTUAL_SIZE), rendererHost.device, { maxPendingPages: 16, maxPendingBytes: 2 * 1024 * 1024 });
-  bootstrap.defer(() => store.dispose());
-  store.loadTexture(path, { width: VIRTUAL_SIZE, height: VIRTUAL_SIZE });
-  const entry = store.getEntry(path);
-  if (!entry)
+  const textures = new VirtualTextureSystem({
+    maxTextures: 1,
+    maxMutablePageRefreshesPerPoll: 1,
+    device: rendererHost.device,
+    pools: [{
+      format: "rgba8unorm-srgb",
+      capacities: { maxPendingPages: 16, maxPendingBytes: 2 * 1024 * 1024 }
+    }]
+  });
+  if (runtime.ownDisposable(textures) !== 0 /* Registered */)
+    throw new Error("procedural VT owner capacity exceeded");
+  const texture3 = textures.createTexture({
+    width: VIRTUAL_SIZE,
+    height: VIRTUAL_SIZE,
+    format: "rgba8unorm-srgb",
+    addressMode: "clamp",
+    label: "procedural terrain"
+  }, async (_path, request) => generateTerrainPage(request.mip, request.x, request.y, VIRTUAL_SIZE));
+  if (texture3 === 0)
     throw new Error("procedural VT registration failed");
-  coordinator = new VirtualTextureFeedbackCoordinator(rendererHost.renderer, store, { renderables: 1, passes: 1, cadenceMs: 55, predictionHorizonMs: 100, scale: 0.125 });
-  coordinator.resize(rendererHost.renderer.domElement.width, rendererHost.renderer.domElement.height);
+  coordinator = runtime.createVirtualTextureFeedback(textures, {
+    renderables: 1,
+    passes: 1,
+    cadenceMs: 55,
+    predictionHorizonMs: 100,
+    scale: 0.125
+  });
   const quad = new Mesh(new PlaneGeometry(12, 10), new MeshStandardMaterial({ roughness: 0.9, metalness: 0 }));
   scene.add(quad);
   const binding = new VirtualMaterialBinding({
@@ -70360,20 +71929,19 @@ WASD pan · wheel zoom · O overview · P pixel`);
     camera,
     root: quad,
     mesh: quad,
-    store,
-    set: { albedo: entry },
+    textures,
+    set: { albedo: texture3 },
     feedbackPixelScale: coordinator.pixelScale,
     material: { roughnessFactor: 0.9, metalnessFactor: 0 }
   });
-  bootstrap.defer(() => binding.dispose());
-  if (coordinator.register(binding) !== 0 /* Registered */ || runtime.registerWorker(coordinator) !== 0 /* Registered */ || runtime.registerRenderPass(rendererHost) !== 0 /* Registered */ || runtime.registerRenderPass(coordinator) !== 0 /* Registered */)
-    throw new Error("procedural VT runtime capacity exceeded");
+  if (runtime.ownDisposable(binding) !== 0 /* Registered */)
+    throw new Error("procedural VT binding owner capacity exceeded");
+  if (coordinator.register(binding) !== 0 /* Registered */)
+    throw new Error("procedural VT feedback capacity exceeded");
   let camX = 0.5, camY = 0.5, zoom = 4;
   const input = new BoundedKeyboardInput;
-  bootstrap.defer(() => input.dispose());
-  const frameSteps = new FrameStepHarness(32);
-  const errors = new BrowserErrorCapture(runtime.diagnostics);
-  bootstrap.defer(() => errors.dispose());
+  if (runtime.ownDisposable(input) !== 0 /* Registered */)
+    throw new Error("procedural VT input owner capacity exceeded");
   const hud = new TextHud(document.getElementById("info"));
   const uv3 = quad.geometry.getAttribute("uv");
   runtime.enterWarmup();
@@ -70381,111 +71949,18 @@ WASD pan · wheel zoom · O overview · P pixel`);
   await runtime.warm();
   updateUv();
   rendererHost.renderer.render(scene, camera);
-  rendererHost.attachVirtualTextureStore(store);
   runtime.sealGameplay();
-  const shutdown = new PageShutdown(() => {
-    runtime.stop();
-    binding.dispose();
-    input.dispose();
-    errors.dispose();
-    store.dispose();
-    runtime.dispose();
-  });
-  bootstrap.defer(() => shutdown.dispose());
   runtime.start({ update: updateFrame });
-  publishDevHarness("__afterglowVtGpuTest", {
-    snapshot: () => ({
-      gpuReady: Boolean(store.gpuAtlasTexture),
-      resident: store.getDebugSnapshot().atlasSlotsUsed,
-      loaded: store.getDebugSnapshot().atlasSlotsUsed,
-      errors: errors.snapshot()
-    }),
-    setCamera(x2, y2, nextZoom) {
-      input.programmatic = true;
-      input.clear();
-      camX = Math.max(0, Math.min(1, x2));
-      camY = Math.max(0, Math.min(1, y2));
-      zoom = Math.max(0.5, Math.min(VIRTUAL_SIZE, nextZoom));
-    },
-    async run() {
-      input.programmatic = true;
-      for (let index = 0;index < 90; index++)
-        await step3(1);
-      if (!store.gpuAtlasTexture)
-        throw new Error("engine atlas not attached");
-      const feedbackRuns = [];
-      for (const direction of ["east", "west", "rotated"])
-        feedbackRuns.push(await testRawFeedback(rendererHost.device, direction));
-      const residencyRuns = [];
-      const scenarios = [
-        {
-          name: "eastbound",
-          points: [
-            { x: 0.08, y: 0.25, z: 8 },
-            { x: 0.5, y: 0.25, z: 16 },
-            { x: 0.92, y: 0.25, z: 32 }
-          ]
-        },
-        {
-          name: "westbound",
-          points: [
-            { x: 0.92, y: 0.75, z: 32 },
-            { x: 0.5, y: 0.75, z: 8 },
-            { x: 0.08, y: 0.75, z: 2 }
-          ]
-        },
-        {
-          name: "diagonal-lod",
-          points: [
-            { x: 0.08, y: 0.08, z: 0.5 },
-            { x: 0.5, y: 0.5, z: 64 },
-            { x: 0.92, y: 0.92, z: VIRTUAL_SIZE }
-          ]
-        }
-      ];
-      for (const scenario of scenarios) {
-        const before = store.getDebugSnapshot().atlasSlotsUsed;
-        const checkpoints = [];
-        for (const point of scenario.points) {
-          camX = point.x;
-          camY = point.y;
-          zoom = point.z;
-          await step3(35);
-          checkpoints.push({
-            ...point,
-            pages: store.getDebugSnapshot().atlasSlotsUsed
-          });
-        }
-        residencyRuns.push({
-          name: scenario.name,
-          before,
-          after: store.getDebugSnapshot().atlasSlotsUsed,
-          checkpoints
-        });
-      }
-      const uploads = await testUploadLocations(rendererHost.device, store.atlasWidth, store.atlasHeight, SLOT_SIZE);
-      await rendererHost.device.queue.onSubmittedWorkDone();
-      if (runtime.diagnostics.count !== 0)
-        throw new Error("VT GPU diagnostics are not empty");
-      return {
-        ok: true,
-        feedbackRuns,
-        uploads,
-        residencyRuns,
-        resident: store.getDebugSnapshot().atlasSlotsUsed,
-        virtualSize: VIRTUAL_SIZE,
-        atlas: [store.atlasWidth, store.atlasHeight]
-      };
-    }
-  });
-  bootstrap.release();
   console.log("afterglow-engine: canonical engine-backed VT demo started");
 } catch (error2) {
   try {
-    await bootstrap.rollback();
+    await runtime.close();
   } catch (cleanupError) {
     if (error2 instanceof Error && error2.cause === undefined)
       error2.cause = cleanupError;
   }
   throw error2;
 }
+export {
+  runtime as demoRuntime
+};

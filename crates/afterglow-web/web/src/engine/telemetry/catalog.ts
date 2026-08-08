@@ -16,6 +16,8 @@ export const enum EngineTelemetryCategory {
   Audio = 7,
   Host = 8,
   Rpc = 9,
+  Model = 10,
+  Storage = 11,
 }
 
 export const enum EngineTraceDescriptor {
@@ -27,7 +29,7 @@ export const enum EngineTraceDescriptor {
   RenderPrepare = 5,
   GameUpdate = 6,
   RenderPasses = 7,
-  SessionOpen = 8,
+  AssetCompositionOpen = 8,
   AssetSize = 9,
   AssetRead = 10,
   AssetBulkRead = 11,
@@ -46,6 +48,13 @@ export const enum EngineTraceDescriptor {
   VtFeedbackDetected = 22,
   VtSchedulerWait = 23,
   VtPagePublished = 24,
+  MutableTextureWrite = 25,
+  MutablePageRefresh = 26,
+  ModelRevision = 27,
+  ModelPublished = 28,
+  GeometryUpload = 29,
+  BlobRead = 30,
+  BlobWrite = 31,
 }
 
 export const ENGINE_TRACE_DESCRIPTORS: readonly TelemetryDescriptor[] = [
@@ -57,7 +66,7 @@ export const ENGINE_TRACE_DESCRIPTORS: readonly TelemetryDescriptor[] = [
   { category: EngineTelemetryCategory.Frame, categoryName: 'frame', name: 'render.prepare', kind: TelemetryDescriptorKind.Span, argument0: 'stage', argument1: 'elapsed_us' },
   { category: EngineTelemetryCategory.Runtime, categoryName: 'runtime', name: 'game.update', kind: TelemetryDescriptorKind.Span, argument0: 'frame_id' },
   { category: EngineTelemetryCategory.Frame, categoryName: 'frame', name: 'render.passes', kind: TelemetryDescriptorKind.Span, argument0: 'frame_id' },
-  { category: EngineTelemetryCategory.Asset, categoryName: 'asset', name: 'asset.session.open', kind: TelemetryDescriptorKind.AsyncSpan, argument0: 'workers', argument1: 'status' },
+  { category: EngineTelemetryCategory.Asset, categoryName: 'asset', name: 'asset.composition.open', kind: TelemetryDescriptorKind.AsyncSpan, argument0: 'workers', argument1: 'status' },
   { category: EngineTelemetryCategory.Asset, categoryName: 'asset', name: 'asset.size', kind: TelemetryDescriptorKind.AsyncSpan, argument0: 'bytes', argument1: 'status' },
   { category: EngineTelemetryCategory.Asset, categoryName: 'asset', name: 'asset.read', kind: TelemetryDescriptorKind.AsyncSpan, argument0: 'bytes', argument1: 'offset_or_status' },
   { category: EngineTelemetryCategory.Asset, categoryName: 'asset', name: 'asset.read_bulk', kind: TelemetryDescriptorKind.AsyncSpan, argument0: 'bytes', argument1: 'spans' },
@@ -75,6 +84,13 @@ export const ENGINE_TRACE_DESCRIPTORS: readonly TelemetryDescriptor[] = [
   { category: EngineTelemetryCategory.VirtualTexture, categoryName: 'vt', name: 'vt.feedback_detected', kind: TelemetryDescriptorKind.Instant, argument0: 'priority', argument1: 'feedback_epoch' },
   { category: EngineTelemetryCategory.VirtualTexture, categoryName: 'vt', name: 'vt.scheduler_wait', kind: TelemetryDescriptorKind.AsyncSpan, argument0: 'priority', argument1: 'status' },
   { category: EngineTelemetryCategory.VirtualTexture, categoryName: 'vt', name: 'vt.page_published', kind: TelemetryDescriptorKind.Instant, argument0: 'physical_slot', argument1: 'eligible_frame_id' },
+  { category: EngineTelemetryCategory.VirtualTexture, categoryName: 'vt', name: 'vt.mutable_write', kind: TelemetryDescriptorKind.Instant, argument0: 'bytes', argument1: 'status' },
+  { category: EngineTelemetryCategory.VirtualTexture, categoryName: 'vt', name: 'vt.mutable_refresh', kind: TelemetryDescriptorKind.Span, argument0: 'pages', argument1: 'remaining' },
+  { category: EngineTelemetryCategory.Model, categoryName: 'model', name: 'model.revision', kind: TelemetryDescriptorKind.AsyncSpan, argument0: 'revision', argument1: 'status' },
+  { category: EngineTelemetryCategory.Model, categoryName: 'model', name: 'model.published', kind: TelemetryDescriptorKind.Instant, argument0: 'revision', argument1: 'cpu_bytes' },
+  { category: EngineTelemetryCategory.Model, categoryName: 'model', name: 'geometry.upload', kind: TelemetryDescriptorKind.Span, argument0: 'bytes', argument1: 'slot' },
+  { category: EngineTelemetryCategory.Storage, categoryName: 'storage', name: 'blob.read', kind: TelemetryDescriptorKind.AsyncSpan, argument0: 'bytes', argument1: 'status' },
+  { category: EngineTelemetryCategory.Storage, categoryName: 'storage', name: 'blob.write', kind: TelemetryDescriptorKind.AsyncSpan, argument0: 'bytes', argument1: 'status' },
 ];
 
 export const FRAME_BUDGET_TRACE_DESCRIPTORS: readonly number[] = [
@@ -98,6 +114,18 @@ export const enum EngineMetric {
   VtPagesFailed = 9,
   VtUploadNs = 10,
   TextureTranscodeNs = 11,
+  MutableTextureWrites = 12,
+  MutableTextureBytes = 13,
+  MutablePagesPublished = 14,
+  MutablePagesDeferred = 15,
+  ModelRevisionsQueued = 16,
+  ModelRevisionsPublished = 17,
+  ModelRevisionsFailed = 18,
+  ModelCpuBytesHighWater = 19,
+  ModelGpuBytesHighWater = 20,
+  GeometryUploadNs = 21,
+  BlobReadBytes = 22,
+  BlobWriteBytes = 23,
 }
 
 export const ENGINE_METRIC_DESCRIPTORS: readonly TelemetryMetricDescriptor[] = [
@@ -113,4 +141,16 @@ export const ENGINE_METRIC_DESCRIPTORS: readonly TelemetryMetricDescriptor[] = [
   { category: EngineTelemetryCategory.VirtualTexture, categoryName: 'vt', name: 'vt_pages_failed', kind: TelemetryMetricKind.Counter, unit: 'count' },
   { category: EngineTelemetryCategory.VirtualTexture, categoryName: 'vt', name: 'vt_upload_ns', kind: TelemetryMetricKind.HistogramLog2, unit: 'nanoseconds' },
   { category: EngineTelemetryCategory.Texture, categoryName: 'texture', name: 'texture_transcode_ns', kind: TelemetryMetricKind.HistogramLog2, unit: 'nanoseconds' },
+  { category: EngineTelemetryCategory.VirtualTexture, categoryName: 'vt', name: 'mutable_texture_writes', kind: TelemetryMetricKind.Counter, unit: 'count' },
+  { category: EngineTelemetryCategory.VirtualTexture, categoryName: 'vt', name: 'mutable_texture_bytes', kind: TelemetryMetricKind.Counter, unit: 'bytes' },
+  { category: EngineTelemetryCategory.VirtualTexture, categoryName: 'vt', name: 'mutable_pages_published', kind: TelemetryMetricKind.Counter, unit: 'count' },
+  { category: EngineTelemetryCategory.VirtualTexture, categoryName: 'vt', name: 'mutable_pages_deferred', kind: TelemetryMetricKind.Counter, unit: 'count' },
+  { category: EngineTelemetryCategory.Model, categoryName: 'model', name: 'model_revisions_queued', kind: TelemetryMetricKind.Counter, unit: 'count' },
+  { category: EngineTelemetryCategory.Model, categoryName: 'model', name: 'model_revisions_published', kind: TelemetryMetricKind.Counter, unit: 'count' },
+  { category: EngineTelemetryCategory.Model, categoryName: 'model', name: 'model_revisions_failed', kind: TelemetryMetricKind.Counter, unit: 'count' },
+  { category: EngineTelemetryCategory.Model, categoryName: 'model', name: 'model_cpu_bytes_high_water', kind: TelemetryMetricKind.Maximum, unit: 'bytes' },
+  { category: EngineTelemetryCategory.Model, categoryName: 'model', name: 'model_gpu_bytes_high_water', kind: TelemetryMetricKind.Maximum, unit: 'bytes' },
+  { category: EngineTelemetryCategory.Model, categoryName: 'model', name: 'geometry_upload_ns', kind: TelemetryMetricKind.HistogramLog2, unit: 'nanoseconds' },
+  { category: EngineTelemetryCategory.Storage, categoryName: 'storage', name: 'blob_read_bytes', kind: TelemetryMetricKind.Counter, unit: 'bytes' },
+  { category: EngineTelemetryCategory.Storage, categoryName: 'storage', name: 'blob_write_bytes', kind: TelemetryMetricKind.Counter, unit: 'bytes' },
 ];

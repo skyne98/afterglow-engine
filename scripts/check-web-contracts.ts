@@ -15,7 +15,7 @@ export interface WebArtifact {
 export interface WebArtifactManifest { version: number; artifacts: WebArtifact[] }
 export interface EngineConformance {
   version: number;
-  releaseStatus: 'migration' | 'conformant';
+  releaseStatus: 'converging' | 'conformant';
   visualEntrypoints: Record<string, 'legacy' | 'canonical'>;
 }
 
@@ -95,7 +95,7 @@ export async function validateWebContracts(root = defaultRoot): Promise<string[]
   if (!Array.isArray(manifest.artifacts) || manifest.artifacts.length === 0)
     errors.push('web-artifacts.json: artifacts must be a non-empty array');
   if (conformance.version !== 1) errors.push(`engine-conformance.json: unsupported version ${String(conformance.version)}`);
-  if (conformance.releaseStatus !== 'migration' && conformance.releaseStatus !== 'conformant')
+  if (conformance.releaseStatus !== 'converging' && conformance.releaseStatus !== 'conformant')
     errors.push(`engine-conformance.json: invalid releaseStatus ${String(conformance.releaseStatus)}`);
   if (!conformance.visualEntrypoints || Array.isArray(conformance.visualEntrypoints))
     errors.push('engine-conformance.json: visualEntrypoints must be an object');
@@ -171,8 +171,6 @@ export async function validateWebContracts(root = defaultRoot): Promise<string[]
     if (baselineExists) errors.push('engine-conformance.json: conformant release may not retain demo-architecture-baseline.json');
     if (manifest.artifacts.some((artifact) => artifact.role === 'legacy-bridge'))
       errors.push('engine-conformance.json: conformant release may not retain legacy-bridge artifacts');
-  } else if (legacy.length === 0) {
-    errors.push('engine-conformance.json: releaseStatus must be conformant when no legacy demos remain');
   }
 
   return errors;

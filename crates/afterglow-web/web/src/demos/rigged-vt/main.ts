@@ -3,13 +3,9 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import {
   EngineRuntime,
   RegistrationStatus,
-  RendererHost,
   type RenderFrame,
 } from "../../engine/index.ts";
-import {
-  EngineAssets,
-  getVirtualTextureDimensions,
-} from "../../engine/assets/index.ts";
+import { EngineAssets } from "../../engine/assets/index.ts";
 import {
   AnimationSet,
   ModelCollectionStatus,
@@ -24,19 +20,14 @@ import {
   FORMAT_RGBA,
   VirtualGltfBinding,
   VirtualTextureFeedbackCoordinator,
+  type VirtualTextureHandle,
+  type VirtualTextureInfo,
 } from "../../engine/virtual-texturing/index.ts";
 import {
   BoundedKeyboardInput,
   DemoInputAction,
 } from "../../engine/input/index.ts";
-import {
-  BootstrapGuard,
-  BrowserErrorCapture,
-  FrameStepHarness,
-  PageShutdown,
-  TextHud,
-  publishDevHarness,
-} from "../../engine/diagnostics/index.ts";
+import { TextHud } from "../../engine/diagnostics/index.ts";
 
 const FEEDBACK_CADENCE_MS = 55;
 const MODEL_LAYER = 1;
@@ -89,8 +80,10 @@ const grid = new THREE.GridHelper(6, 12, 0x536072, 0x303640);
 grid.position.y = 0.002;
 scene.add(grid);
 
-const runtime = EngineRuntime.forScene({
+let feedbackCoordinator: VirtualTextureFeedbackCoordinator | null = null;
+const runtime = await EngineRuntime.forScene({
   scene,
+  camera,
   entityCapacity: 1,
   memory: {
     frameScratchBytes: 32 * 1024,
@@ -105,29 +98,19 @@ const runtime = EngineRuntime.forScene({
   diagnosticCapacity: 64,
   maxWorkerInputs: 1,
   maxRenderPasses: 2,
+  maxOwnedResources: 8,
+  renderer: {
+    parameters: { antialias: false, trackTimestamp: false },
+    onResize: resizeCamera,
+  },
 });
-let feedbackCoordinator: VirtualTextureFeedbackCoordinator | null = null;
 function resizeCamera(width: number, height: number): void {
   camera.aspect = width / height;
   camera.updateProjectionMatrix();
-  const ratio = Math.min(2, Math.max(0.1, devicePixelRatio));
-  feedbackCoordinator?.resize(width * ratio, height * ratio);
 }
-const rendererHost = await RendererHost.create({
-  scene,
-  camera,
-  diagnostics: runtime.diagnostics,
-  parameters: { antialias: false, trackTimestamp: false },
-  onResize: resizeCamera,
-}).catch((error: unknown) => {
-  runtime.dispose();
-  throw error;
-});
+const rendererHost = runtime.rendererHost;
 rendererHost.renderer.shadowMap.enabled = true;
 rendererHost.renderer.shadowMap.type = THREE.PCFShadowMap;
-const bootstrap = new BootstrapGuard(16);
-bootstrap.defer(() => rendererHost.dispose());
-bootstrap.defer(() => runtime.dispose());
 try {
   const device = rendererHost.device;
   const format = device.features.has("texture-compression-bc")
@@ -135,7 +118,7 @@ try {
     : device.features.has("texture-compression-astc")
       ? 1
       : FORMAT_RGBA;
-  const session = await EngineAssets.open({
+  const engineAssets = await EngineAssets.open({
     containerPath: "rigged-vt.big",
     telemetry: runtime.telemetry,
     format,
@@ -147,8 +130,9 @@ try {
     maxPendingBytes: 2 * 1024 * 1024,
     maxHeaderBytes: 2 * 1024 * 1024,
   });
-  bootstrap.defer(() => session.close());
-  const assetStore = await session.createAssetStore(4, 4);
+  if (runtime.ownCloseable(engineAssets) !== RegistrationStatus.Registered)
+    throw new Error("rigged VT asset owner capacity exceeded");
+  const assetStore = await engineAssets.createAssetStore(4, 4);
   async function waitForPackedModel(path: string) {
     const handle = assetStore.loadOptimizedGLTF(path, new GLTFLoader());
     while (handle.state === "loading") {
@@ -171,19 +155,24 @@ try {
   }
   const firstAsset = requireReadyAsset(firstHandle.asset);
   const secondAsset = requireReadyAsset(secondHandle.asset);
-  const store = session.createVirtualTextureStore(device);
-  feedbackCoordinator = new VirtualTextureFeedbackCoordinator(
-    rendererHost.renderer,
-    store,
-    {
-      renderables: 2, passes: 8, cadenceMs: FEEDBACK_CADENCE_MS,
-      predictionHorizonMs: 100, scale: 0.125,
-    },
-  );
-  feedbackCoordinator.resize(
-    rendererHost.renderer.domElement.width,
-    rendererHost.renderer.domElement.height,
-  );
+  const storageFormat = format === 0
+    ? "bc7-rgba-unorm"
+    : format === 1
+      ? "astc-4x4-unorm"
+      : "rgba8unorm";
+  const store = engineAssets.createVirtualTextureSystem({
+    maxTextures: 64,
+    maxMutablePageRefreshesPerPoll: 2,
+    device,
+    pools: [{
+      format: storageFormat,
+      capacities: { maxPendingPages: 16, maxPendingBytes: 2 * 1024 * 1024 },
+    }],
+  });
+  feedbackCoordinator = runtime.createVirtualTextureFeedback(store, {
+    renderables: 2, passes: 8, cadenceMs: FEEDBACK_CADENCE_MS,
+    predictionHorizonMs: 100, scale: 0.125,
+  });
 
   const firstPivot = new THREE.Group();
   const secondPivot = new THREE.Group();
@@ -243,13 +232,15 @@ try {
     firstAsset.animations,
     firstAsset.animations.length,
   );
-  bootstrap.defer(() => firstAnimations.dispose());
+  if (runtime.ownDisposable(firstAnimations) !== RegistrationStatus.Registered)
+    throw new Error("first animation owner capacity exceeded");
   const secondAnimations = new AnimationSet(
     secondAsset.scene,
     secondAsset.animations,
     secondAsset.animations.length,
   );
-  bootstrap.defer(() => secondAnimations.dispose());
+  if (runtime.ownDisposable(secondAnimations) !== RegistrationStatus.Registered)
+    throw new Error("second animation owner capacity exceeded");
   const firstClipIndex = 0;
   let secondClipIndex = secondAsset.animations.findIndex(
     (clip) => clip.name === "Idle",
@@ -272,18 +263,23 @@ try {
     new THREE.Vector3(),
   );
   const firstSkeleton = new SkeletonDebugAdapter(scene, firstAsset.scene);
-  bootstrap.defer(() => firstSkeleton.dispose());
+  if (runtime.ownDisposable(firstSkeleton) !== RegistrationStatus.Registered)
+    throw new Error("first skeleton owner capacity exceeded");
   const secondSkeleton = new SkeletonDebugAdapter(scene, secondAsset.scene);
-  bootstrap.defer(() => secondSkeleton.dispose());
+  if (runtime.ownDisposable(secondSkeleton) !== RegistrationStatus.Registered)
+    throw new Error("second skeleton owner capacity exceeded");
 
+  const imageEntries = new Map<string, VirtualTextureHandle>();
   function resolveImage(modelPath: string, imageIndex: number) {
     const path = `${modelPath}#image-${imageIndex}`;
-    let entry = store.getEntry(path);
-    if (entry) return entry;
-    const dimensions = getVirtualTextureDimensions(session.header, path);
-    store.loadTexture(path, { ...dimensions, mipTail: true });
-    entry = store.getEntry(path);
-    return entry;
+    const existing = imageEntries.get(path);
+    if (existing) return existing;
+    const handle = engineAssets.registerVirtualTexture(
+      path, storageFormat, "repeat", true,
+    );
+    if (handle === 0) throw new Error(`virtual texture capacity exceeded: ${path}`);
+    imageEntries.set(path, handle);
+    return handle;
   }
   const firstBinding = VirtualGltfBinding.create(firstAsset, store, {
     primitiveCapacity: MODEL_CAPACITY,
@@ -300,7 +296,8 @@ try {
     feedbackPixelScale: feedbackCoordinator.pixelScale,
     resolveImage: (index) => resolveImage("model.glb", index),
   });
-  bootstrap.defer(() => firstBinding.dispose());
+  if (runtime.ownDisposable(firstBinding) !== RegistrationStatus.Registered)
+    throw new Error("first virtual model binding owner capacity exceeded");
   const secondBinding = VirtualGltfBinding.create(secondAsset, store, {
     primitiveCapacity: MODEL_CAPACITY,
     feedbackScene: scene,
@@ -316,7 +313,8 @@ try {
     feedbackPixelScale: feedbackCoordinator.pixelScale,
     resolveImage: (index) => resolveImage("model-2.glb", index),
   });
-  bootstrap.defer(() => secondBinding.dispose());
+  if (runtime.ownDisposable(secondBinding) !== RegistrationStatus.Registered)
+    throw new Error("second virtual model binding owner capacity exceeded");
   if (
     feedbackCoordinator.register(firstBinding) !==
       FeedbackRegistrationStatus.Registered ||
@@ -324,16 +322,6 @@ try {
       FeedbackRegistrationStatus.Registered
   )
     throw new Error("feedback coordinator capacity exceeded");
-  if (
-    runtime.registerWorker(feedbackCoordinator) !==
-      RegistrationStatus.Registered ||
-    runtime.registerRenderPass(rendererHost) !==
-      RegistrationStatus.Registered ||
-    runtime.registerRenderPass(feedbackCoordinator) !==
-      RegistrationStatus.Registered
-  )
-    throw new Error("runtime registration capacity exceeded");
-
   const firstBaseImage = firstAsset.materialTextures.find(
     (layout) => layout.baseColorImage !== null,
   )?.baseColorImage;
@@ -347,14 +335,18 @@ try {
     secondBaseImage === null
   )
     throw new Error("packed model has no virtual base color");
-  const firstDimensions = getVirtualTextureDimensions(
-    session.header,
-    `model.glb#image-${firstBaseImage}`,
-  );
-  const secondDimensions = getVirtualTextureDimensions(
-    session.header,
-    `model-2.glb#image-${secondBaseImage}`,
-  );
+  const firstBaseTexture = resolveImage("model.glb", firstBaseImage);
+  const secondBaseTexture = resolveImage("model-2.glb", secondBaseImage);
+  const firstInfo: VirtualTextureInfo = {
+    texture: 0, textureId: 0, sourceKey: '', width: 0, height: 0,
+    pageGridX: 0, pageGridY: 0,
+  };
+  const secondInfo: VirtualTextureInfo = { ...firstInfo };
+  if (!store.readTextureInfo(firstBaseTexture, firstInfo) ||
+      !store.readTextureInfo(secondBaseTexture, secondInfo))
+    throw new Error("packed model base texture handle is stale");
+  const firstDimensions = { width: firstInfo.width, height: firstInfo.height };
+  const secondDimensions = { width: secondInfo.width, height: secondInfo.height };
   const firstBounds = new THREE.Box3(),
     secondBounds = new THREE.Box3();
   const firstVertex = new THREE.Vector3(),
@@ -384,10 +376,8 @@ try {
   let zoomVelocity = 0;
   let smoothedDt = 1 / 60;
   const input = new BoundedKeyboardInput();
-  const frameSteps = new FrameStepHarness(32);
-  bootstrap.defer(() => input.dispose());
-  const errorCapture = new BrowserErrorCapture(runtime.diagnostics);
-  bootstrap.defer(() => errorCapture.dispose());
+  if (runtime.ownDisposable(input) !== RegistrationStatus.Registered)
+    throw new Error("rigged VT input owner capacity exceeded");
   const hud = new TextHud(document.getElementById("hud"));
 
   /** @alloc-effect none */
@@ -501,7 +491,6 @@ try {
       Math.cos(orbitAngle) * cameraDistance,
     );
     camera.lookAt(0, 1.25, 0);
-    frameSteps.poll(frame.frameId);
     if (frame.frameId % 15 === 0) updateHud(); // @alloc-allowed reason=DiagnosticHud issue=DME-034 expires=2026-10-01
   }
 
@@ -522,129 +511,15 @@ try {
   setActiveModel(2);
   rendererHost.renderer.render(scene, camera);
   setActiveModel(1);
-  rendererHost.attachVirtualTextureStore(store);
   runtime.sealGameplay();
-  const shutdown = new PageShutdown(() => {
-    runtime.stop();
-    firstBinding.dispose();
-    secondBinding.dispose();
-    firstAnimations.dispose();
-    secondAnimations.dispose();
-    firstSkeleton.dispose();
-    secondSkeleton.dispose();
-    input.dispose();
-    errorCapture.dispose();
-    void session.close();
-    runtime.dispose();
-  });
-  bootstrap.defer(() => shutdown.dispose());
   runtime.start({ update: updateFrame });
 
-  function activeBoneCount(): number {
-    const primitives = activeModel === 0 ? firstPrimitives : secondPrimitives;
-    for (let index = 0; index < primitives.count; index++) {
-      const mesh = primitives.items[index];
-      if (mesh instanceof THREE.SkinnedMesh) return mesh.skeleton.bones.length;
-    }
-    return 0;
-  }
-  function setAnimationTime(seconds: number): void {
-    if (activeModel === 0) {
-      const duration = firstAsset.animations[firstClipIndex]?.duration ?? 1;
-      firstAnimations.setTime(Math.max(0, seconds) % duration);
-    } else {
-      const duration = secondAsset.animations[secondClipIndex]?.duration ?? 1;
-      secondAnimations.setTime(Math.max(0, seconds) % duration);
-    }
-  }
-  function status() {
-    const activeAsset = activeModel === 0 ? firstAsset : secondAsset;
-    const activePrimitives =
-      activeModel === 0 ? firstPrimitives : secondPrimitives;
-    const activeDimensions =
-      activeModel === 0 ? firstDimensions : secondDimensions;
-    const activeClip =
-      activeModel === 0
-        ? firstAsset.animations[firstClipIndex]
-        : secondAsset.animations[secondClipIndex];
-    const optimization = activeAsset.meshOptimization[0];
-    return {
-      activeModel: activeModel + 1,
-      meshes: activePrimitives.count,
-      skinnedMeshes: activeModel === 0 ? firstSkinnedCount : secondSkinnedCount,
-      bones: activeBoneCount(),
-      clip: activeClip?.name ?? "",
-      clipDuration: activeClip?.duration ?? 0,
-      animationEnabled,
-      feedbackEnabled,
-      skeletonVisible:
-        activeModel === 0
-          ? firstSkeleton.helper.visible
-          : secondSkeleton.helper.visible,
-      groundedMinY: activeModel === 0 ? firstGroundedMinY : secondGroundedMinY,
-      orbitAngle,
-      cameraDistance,
-      sourceWidth: activeDimensions.width,
-      sourceHeight: activeDimensions.height,
-      material: "virtual-gltf-metallic-roughness",
-      packedAsset: activeModel === 0 ? "model.glb" : "model-2.glb",
-      meshOptimized:
-        activeAsset.meshOptimization.length === activePrimitives.count,
-      originalAcmr: optimization?.originalAcmr ?? 0,
-      optimizedAcmr: optimization?.optimizedAcmr ?? 0,
-      preservedAttributes: optimization?.preservedAttributes ?? [],
-      sameMeshFeedback: true,
-      feedbackChannels:
-        activeModel === 0
-          ? firstBinding.feedbackPassCount
-          : secondBinding.feedbackPassCount,
-      shadows:
-        rendererHost.renderer.shadowMap.enabled &&
-        keyLight.castShadow &&
-        floor.receiveShadow,
-      shadowMapSize: keyLight.shadow.mapSize.x,
-      rendererSealed: rendererHost.sealMonitor.isSealed,
-      pipelineViolations: rendererHost.sealMonitor.violations,
-    };
-  }
-
-  publishDevHarness("__afterglowRiggedVT", {
-    setProgrammatic(enabled: boolean) {
-      input.programmatic = enabled;
-    },
-    setAnimationEnabled,
-    setAnimationTime,
-    measureBounds() {
-      const bounds =
-        activeModel === 0 ? measureFirstBounds() : measureSecondBounds();
-      return { minY: bounds.min.y, maxY: bounds.max.y };
-    },
-    setActiveModel,
-    setFeedbackEnabled,
-    setSkeletonVisible,
-    setView(angle: number, distance: number) {
-      orbitAngle = angle;
-      orbitVelocity = 0;
-      cameraDistance = Math.max(1.35, Math.min(8, distance));
-      zoomVelocity = 0;
-    },
-    step(count = 1) {
-      return frameSteps.wait(runtime.frame.frameId, count);
-    },
-    telemetry: () => store.getStats(),
-    debugSnapshot: () => store.getDebugSnapshot(),
-    feedbackMips: () => [],
-    errorCount: () => runtime.diagnostics.count,
-    errors: () => errorCapture.snapshot(),
-    status,
-  });
-  bootstrap.release();
 } catch (error) {
-  try {
-    await bootstrap.rollback();
-  } catch (cleanupError) {
-    if (error instanceof Error && error.cause === undefined)
-      error.cause = cleanupError;
+  try { await runtime.close(); }
+  catch (cleanupError) {
+    if (error instanceof Error && error.cause === undefined) error.cause = cleanupError;
   }
   throw error;
 }
+
+export { runtime as demoRuntime };

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { pagesAtMipAxis } from './virtual-texture-layout.ts';
-import type { VirtualPageRequest, VirtualTextureEntry } from './virtual-texture.ts';
+import type { VirtualTextureEntry } from './virtual-texture.ts';
+import type { VirtualPageRequest } from './virtual-texture-request.ts';
 
 const SCORE_COVERAGE_CAP = 255;
 

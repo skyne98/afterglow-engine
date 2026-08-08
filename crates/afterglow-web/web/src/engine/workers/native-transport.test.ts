@@ -31,7 +31,7 @@ describe('NativeRpcTransport', () => {
         ENGINE_TRACE_DESCRIPTORS,
         ENGINE_METRIC_DESCRIPTORS,
         new ArrayBuffer(40 * 8),
-        new Float64Array(192),
+        new Float64Array(256),
         () => 1,
       );
       telemetry.trace.arm(3);

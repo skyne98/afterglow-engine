@@ -4,6 +4,8 @@
 **Date:** 2026-07-16
 **Source audit:** [`demo-to-engine-feature-audit.md`](demo-to-engine-feature-audit.md)
 
+**Final convergence umbrella:** [`clean-unified-engine-convergence-plan.md`](clean-unified-engine-convergence-plan.md)
+
 ## 1. Objective
 
 Make every first-party visual demo a thin consumer of one canonical, bounded,
@@ -110,7 +112,7 @@ Implemented on 2026-07-17:
 - DME-040: no page consumes the global bridge; `engine-bundle-input.ts` and its
   generated `engine-bundle.js` artifact are deleted;
 - DME-033: `lod-demo.ts` is canonical and presents one CC0 Avocado using
-  offline meshopt-compressed records, fixed `LodSet` coverage selection, and
+  offline meshopt-compressed records, fixed `ModelLodBinding` coverage selection, and
   hysteresis. Its real-GPU trajectory passes levels `0,1,2,3,2,1,0` with one
   visible mesh and no diagnostics;
 - DME-030: Dungeon is canonical on `EngineRuntime`, `RendererHost`,
@@ -714,7 +716,7 @@ checks pass and the hot allocation call graph is clean.
 Delete the browser-generated GLB/custom legacy model path. Add:
 
 - offline static-mesh LOD records;
-- fixed `LodSet` descriptors;
+- fixed `ModelLodBinding` descriptors;
 - screen-error/coverage selection with hysteresis;
 - fixed-capacity residency/selection state;
 - explicit exclusion of skinned simplification.

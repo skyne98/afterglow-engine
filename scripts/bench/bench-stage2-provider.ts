@@ -12,10 +12,10 @@
 
 import {
   createFetchRangeLoader,
-  createPageDataProvider,
-  findVTPageChunk,
   readBigHeader,
-} from '../../crates/afterglow-web/web/src/engine/assets/big-parser.ts';
+} from '../../crates/afterglow-web/web/src/engine/assets/asset-range.ts';
+import { findVTPageChunk } from '../../crates/afterglow-web/web/src/engine/assets/big-format.ts';
+import { createPageDataProvider } from '../../crates/afterglow-web/web/src/engine/assets/vt-page-provider.ts';
 
 const BASE_URL = process.env.BENCH_BASE_URL ?? 'http://127.0.0.1:8787/';
 const CONTAINER = process.env.BENCH_CONTAINER ?? 'dungeon.big';
@@ -79,15 +79,21 @@ async function main() {
     async transcode(): Promise<Uint8Array> { return NOOP_FRAME; },
   }));
 
-  // EngineAssets' containerLoader ignores the per-asset path and always
-  // reads from the session container; mirror that so `loader.read(path+'.big')`
-  // hits dungeon.big.
-  const containerLoader = {
-    read: (_path: string, offset: number, len: number) => source.read(CONTAINER, offset, len),
-    load: (p: string) => source.load(p),
-    size: (p: string) => source.size(p),
+  const containerRanges = {
+    read: (offset: number, len: number) => source.read(CONTAINER, offset, len),
   };
-  const provider = createPageDataProvider(containerLoader, header, noopWorkers, FORMAT_BC7);
+  const provider = createPageDataProvider(
+    containerRanges,
+    header,
+    noopWorkers,
+    FORMAT_BC7,
+    {
+      transcodeQueueCapacity: 16,
+      urgentBatchDeadlineMs: 1,
+      focusBatchDeadlineMs: 16,
+      peripheralBatchDeadlineMs: 64,
+    },
+  );
 
   // Warm a few rows.
   await concurrent(reqs.slice(0, 128).map(r => () => provider(ASSET, r)), 8);

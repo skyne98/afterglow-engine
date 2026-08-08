@@ -5,6 +5,11 @@ export interface TextureTranscoder {
   /** True only when every response has independent immutable backing. */
   readonly responseIsOwned?: true;
   transcode(data: Uint8Array, targetFormat: number): Promise<Uint8Array>;
+  transcodeSourceRange?(
+    offset: number,
+    length: number,
+    targetFormat: number,
+  ): Promise<Uint8Array>;
 }
 
 /** Optional native capability: read and transcode a retained source range
@@ -18,11 +23,6 @@ export interface SourceTextureTranscoder extends TextureTranscoder {
 }
 
 export interface OwnedTextureTranscoder extends TextureTranscoder {
-  transcodeSourceRange?(
-    offset: number,
-    length: number,
-    targetFormat: number,
-  ): Promise<Uint8Array>;
   close(): void | Promise<void>;
 }
 

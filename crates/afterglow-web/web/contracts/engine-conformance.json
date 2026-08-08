@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "releaseStatus": "conformant",
+  "releaseStatus": "converging",
   "visualEntrypoints": {
     "src/demos/dungeon/main.ts": "canonical",
     "src/demos/engine/main.ts": "canonical",

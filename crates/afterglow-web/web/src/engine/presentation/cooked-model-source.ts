@@ -1,8 +1,6 @@
 import * as THREE from 'three/webgpu';
-import {
-  readBigHeader,
-  type ChunkInfo, type FetchRangeLoader,
-} from '../assets/big-parser.ts';
+import { readBigHeader, type FetchRangeLoader } from '../assets/asset-range.ts';
+import type { ChunkInfo } from '../assets/big-format.ts';
 import { createPlatformRangeLoader } from '../assets/platform-range-loader.ts';
 import { createPlatformMeshOptimizer } from '../assets/platform-workers.ts';
 
@@ -12,7 +10,7 @@ export interface MeshoptVertexDecoder {
 export interface OwnedMeshoptVertexDecoder extends MeshoptVertexDecoder {
   close(): void | Promise<void>;
 }
-export interface StaticMeshLoadOptions {
+export interface CookedModelLoadOptions {
   containerPath: string;
   assetName: string;
   maxHeaderBytes: number;
@@ -20,28 +18,41 @@ export interface StaticMeshLoadOptions {
   /** Test/platform injection; games use the engine-owned default worker. */
   createDecoder?(): Promise<OwnedMeshoptVertexDecoder>;
 }
-export interface StaticLodLevel {
+export interface CookedModelLevel {
   readonly geometry: THREE.BufferGeometry;
   readonly triangleCount: number;
 }
 
-/** Decoded static mesh data. Worker lifetime ends before this asset is returned. */
-export class StaticMeshAsset {
+/** Decoded cooked model LODs. Worker lifetime ends before this asset is returned. */
+export class CookedModelAsset {
   private disposed = false;
-  constructor(readonly levels: readonly StaticLodLevel[]) {}
+  private ownsLevels = true;
+  constructor(readonly levels: readonly CookedModelLevel[]) {}
+  /** Transfer decoded levels into ModelSystem without duplicate ownership. */
+  takeLevels(): readonly CookedModelLevel[] {
+    if (this.disposed || !this.ownsLevels) throw new Error('cooked model levels already released');
+    this.ownsLevels = false;
+    return this.levels;
+  }
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
-    for (const level of this.levels) level.geometry.dispose();
+    if (this.ownsLevels) for (const level of this.levels) level.geometry.dispose();
+    this.ownsLevels = false;
   }
 }
 
 async function createDefaultDecoder(): Promise<OwnedMeshoptVertexDecoder> {
-  return createPlatformMeshOptimizer();
+  const optimizer = await createPlatformMeshOptimizer();
+  if (!optimizer.decodeVertexBuffer) {
+    await optimizer.close();
+    throw new Error('platform mesh processor does not expose vertex decoding');
+  }
+  return optimizer as unknown as OwnedMeshoptVertexDecoder;
 }
 
-/** Load one offline-cooked static mesh and release its bootstrap decoder. */
-export async function loadStaticMesh(options: StaticMeshLoadOptions): Promise<StaticMeshAsset> {
+/** Load one offline-optimized model and release its bootstrap decoder. */
+export async function loadCookedModel(options: CookedModelLoadOptions): Promise<CookedModelAsset> {
   if (!options.containerPath || !options.assetName) throw new Error('static mesh source and asset names are required');
   const source = options.source ?? createPlatformRangeLoader();
   const header = await readBigHeader(source, options.containerPath, options.maxHeaderBytes);
@@ -53,13 +64,13 @@ export async function loadStaticMesh(options: StaticMeshLoadOptions): Promise<St
     if (chunks[index]?.lodLevel !== index) throw new Error('static mesh levels must be contiguous');
   }
   const decoder = await (options.createDecoder ?? createDefaultDecoder)();
-  const levels: StaticLodLevel[] = [];
+  const levels: CookedModelLevel[] = [];
   let closeAttempted = false;
   try {
     for (const chunk of chunks) levels.push(await decodeLevel(source, options.containerPath, chunk, decoder));
     closeAttempted = true;
     await decoder.close();
-    return new StaticMeshAsset(levels);
+    return new CookedModelAsset(levels);
   } catch (error) {
     for (const level of levels) level.geometry.dispose();
     if (!closeAttempted) {
@@ -72,7 +83,7 @@ export async function loadStaticMesh(options: StaticMeshLoadOptions): Promise<St
 
 async function decodeLevel(
   source: FetchRangeLoader, containerPath: string, chunk: ChunkInfo, decoder: MeshoptVertexDecoder,
-): Promise<StaticLodLevel> {
+): Promise<CookedModelLevel> {
   if (chunk.meta.type !== 'Mesh' || chunk.compression !== 'Meshopt')
     throw new Error('static LOD chunk has invalid metadata');
   const size = Number(chunk.uncompressedSize);
@@ -110,57 +121,6 @@ async function decodeLevel(
   geometry.computeVertexNormals();
   geometry.computeBoundingSphere();
   return { geometry, triangleCount: indexCount / 3 };
-}
-
-/** Fixed level selector using normalized projected coverage and hysteresis. */
-export class LodSet {
-  readonly meshes: readonly THREE.Mesh[];
-  private readonly thresholds: Float32Array;
-  private selected = 0;
-  constructor(
-    meshes: readonly THREE.Mesh[],
-    thresholds: readonly number[],
-    private readonly hysteresis: number,
-    capacity: number,
-  ) {
-    if (!Number.isInteger(capacity) || capacity <= 0 || meshes.length > capacity)
-      throw new RangeError('LOD level capacity exceeded');
-    if (meshes.length < 2 || thresholds.length !== meshes.length - 1)
-      throw new RangeError('LOD thresholds must separate every level');
-    if (!(hysteresis >= 0 && hysteresis < 1)) throw new RangeError('LOD hysteresis must be in [0, 1)');
-    for (let index = 0; index < thresholds.length; index++) {
-      const value = thresholds[index] ?? 0;
-      if (!(value > 0) || (index > 0 && value >= (thresholds[index - 1] ?? 0)))
-        throw new RangeError('LOD thresholds must be positive and strictly descending');
-    }
-    this.meshes = meshes.slice();
-    this.thresholds = new Float32Array(thresholds);
-    this.applyVisibility();
-  }
-  /** @alloc-effect none */
-  select(coverage: number): number {
-    while (this.selected > 0) {
-      const boundary = this.thresholds[this.selected - 1] ?? Number.POSITIVE_INFINITY;
-      if (coverage < boundary * (1 + this.hysteresis)) break;
-      this.selected--;
-    }
-    while (this.selected < this.meshes.length - 1) {
-      const boundary = this.thresholds[this.selected] ?? 0;
-      if (coverage >= boundary * (1 - this.hysteresis)) break;
-      this.selected++;
-    }
-    this.applyVisibility();
-    return this.selected;
-  }
-  /** @alloc-effect none */
-  level(): number { return this.selected; }
-  /** @alloc-effect none */
-  private applyVisibility(): void {
-    for (let index = 0; index < this.meshes.length; index++) {
-      const mesh = this.meshes[index];
-      if (mesh) mesh.visible = index === this.selected;
-    }
-  }
 }
 
 /** @alloc-effect none */

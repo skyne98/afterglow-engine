@@ -233,6 +233,7 @@ fn wasm(release: bool) -> i32 {
 fn conformance() -> i32 {
     for args in [
         &["scripts/check-web-contracts.ts"][..],
+        &["scripts/check-convergence-deletions.ts"][..],
         &["scripts/lint-demo-architecture.ts"][..],
         &["scripts/lint-import-boundaries.ts"][..],
         &["scripts/lint-hot-allocations.ts"][..],

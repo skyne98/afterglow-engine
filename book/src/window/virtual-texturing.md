@@ -13,8 +13,13 @@ four-texel border. The shader translates virtual UVs through a page table and
 falls back to a resident coarser mip while detailed pages stream in.
 
 This bounds texture memory and lets the runtime prioritize only visible pages.
-The atlas format is selected for the GPU: BC7 on supported desktop adapters,
-ASTC where available, and RGBA as the compatibility fallback.
+`VirtualTextureSystem` gives cooked disk textures, procedural sources, and
+mutable RAM textures the same opaque generational handles. Explicit atlas pools
+support RGBA8, R8, R16-float, BC7, and ASTC; only configured pools consume VRAM.
+Byte reading and generation belong to interchangeable page sources, while an
+internal physical pool owns residency. `VirtualTextureStore` and the raw
+feedback pass are not exported by the public barrel; games use only
+`VirtualTextureSystem`, opaque handles, bindings, and the coordinator.
 
 > **Current status:** the complete path is a correctness prototype. A July 2026
 > vertical-slice audit found progressive long-session lag from superlinear cache
@@ -25,9 +30,23 @@ ASTC where available, and RGBA as the compatibility fallback.
 > consolidated worker polling, and bounded admissions; persistent scheduling
 > and the remaining audit items are still in progress.
 
-Install a `VirtualTextureStore` on `AssetStore` to route subsequent
-`loadTexture()` calls into VT storage. The returned shared atlas is not a normal
-`material.map`: use a VT-aware node material. `createVirtualGltfMaterialPair`
+Static BIG adapters can register `EngineAssets.pageProvider` with a source asset
+key, while `createMemoryTexture()` creates a sparse fixed-capacity RAM source.
+`writeMemoryRegion()` preflights page/dirty capacity, updates canonical texels,
+regenerates affected borders and mips into persistent refresh scratch, and
+replaces resident pages without changing their physical identity. Demand reads
+lease bordered outputs from a fixed pool until upload, cancellation, or stale
+discard. Untouched paint pages consume no canonical
+page slot and evaluate to the configured default texel. Explicit save/load APIs
+write portable sparse snapshots through `PersistentBlobStore`; corrupt or
+over-capacity data is rejected before publishing a restored handle.
+
+`virtualTextureNode()` exposes matching visible-sample and feedback nodes for
+arbitrary TSL shaders. `VirtualShaderBinding` owns a fixed list of feedback
+materials, allowing one material to combine disk-backed base/normal layers with
+RAM-backed paint, damage, or mask layers without assigning PBR semantics to the
+VT core. The returned shared atlas is not a normal `material.map`: use a
+VT-aware node material. `createVirtualGltfMaterialPair`
 provides matched visible/feedback glTF base-color, optional normal, and optional
 metallic/roughness materials for static, instanced, skinned, and morphed
 geometry. `VirtualGltfBinding` joins cooked layouts by stable material indices
@@ -51,8 +70,9 @@ with `VirtualTextureFeedbackCoordinator`, which owns target capacity, cadence,
 warm-up, renderer-state restoration, and disposal. Multi-channel readbacks are
 published atomically through `processFeedbackBatch()` only after every pass in
 the logical snapshot completes, so one late channel cannot cancel another.
-`VirtualTextureFeedbackPass` is the coordinator's low-level reduced-resolution
-`RG32Uint` target and asynchronous readback primitive. It tracks the exact feedback-
+The coordinator internally owns its low-level reduced-resolution `RG32Uint`
+target and asynchronous readback primitive; that pass is not a public API. It
+tracks the exact feedback-
 to-physical-pixel scale after resize, so shader derivatives are converted back
 to physical screen pixels before mip selection. Quality bias zero therefore
 keeps approximately one to two source texels per screen pixel across arbitrary
@@ -103,8 +123,10 @@ stage budget exhaustion is reported rather than allowing an unbounded burst.
 Pinned startup overflow remains in the highest-priority fixed scheduler until
 resident and is not canceled by feedback staleness.
 The public-web serving client owns a fixed 256-slot bulk queue. The live
-provider preserves scheduler/admission order; a separate page-range helper can
-source-sort and restore caller order but is not yet wired into that provider.
+provider preserves scheduler/admission order. The explicit diagnostic/tool
+`createSourceSortedPageReader()` shares the same immutable page directory,
+source-sorts container spans, and restores caller order; it is intentionally not
+the live scheduling policy.
 HTTP multipart responses are capped at 4 MiB with at most two / 8 MiB in flight.
 Native Basis pages bypass this queue and send only fixed source-range
 descriptors to the OS texture workers. Because color and data channels share one linear atlas, material nodes explicitly decode albedo with
@@ -148,10 +170,11 @@ Sci-Fi Dragon Warrior: 18 skinned meshes, an Idle clip, and 45 independent
 virtual material images from 512² through 4096². The cook embeds its external
 `.gltf`/`.bin`/texture package before stripping image buffer views. Each model is
 range-packed into `.big`; images become `<model>#image-N` paged/UASTC textures.
-The session-owned `AssetStore` parses both and sends
-each material group's index range through the meshopt cache/overdraw worker. Only triangle order changes: joints, weights,
-normals, tangents, UVs, morph targets, bind matrices, and animation tracks keep
-their original vertex identity. The same animated `SkinnedMesh` is rendered
+The engine-owned `AssetStore` parses both and preserves the complete scene.
+Primitives registered with `ModelSystem` then receive deformation-aware LODs:
+UVs, normals, skin weights, tangents, colors, and morph envelopes participate in
+meshoptimizer error; joint seams are locked; every attribute and morph follows
+the compact remap. All levels share the complete skeleton and animation graph. The same animated `SkinnedMesh` is rendered
 with prewarmed visible and feedback materials, so page requests follow the
 current deformation rather than a bind-pose proxy. Animated meshes cast and
 receive a bounded 2048² directional PCF shadow, and the floor receives their
@@ -159,8 +182,9 @@ silhouette; reduced VT-feedback renders skip redundant shadow work. Use **W/S**
 to zoom and **A/D** to orbit with inertia; **B** shows the active skeleton.
 The real-GPU regression covers both rigs and reports zero post-seal pipelines.
 
-All demos use the production `VirtualTextureStore`, shader, scheduler, and
-packed page tables—there is no separate demo cache. The canonical `vt-demo`
+All demos use the public `VirtualTextureSystem`, opaque handles, engine
+bindings, scheduler, and packed page tables—there is no direct physical-store
+access or separate demo cache. The canonical `vt-demo`
 uses `EngineRuntime`, `RendererHost`, `VirtualMaterialBinding`, and the feedback
 coordinator, and its three-launch GPU regression passes every trajectory.
 It displays a 262,144×262,144 terrain texture (256 GiB
@@ -173,11 +197,14 @@ nix-shell shell.nix --run \
   "./target/release/afterglow-shell crates/afterglow-web/www/dungeon.html"
 ```
 
-Run the automated real-GPU regression with `DISPLAY=:0 ./scripts/test-vt-gpu.sh`.
-It validates feedback rendering/readback and compressed atlas subregion uploads
-on the active adapter. On fox-laptop, stable rendering, panning, and continuous
-streaming held 59.97 FPS with zero drops across each 600-frame measurement;
-extreme per-frame teleport/cache-thrash tests dropped one frame per 600.
+The former `scripts/test-vt-gpu.sh` command is absent and is not a current test
+lane. The convergence plan requires one manifest-driven `cargo run -p xtask --
+visual` replacement; until it lands, visual release evidence cannot be refreshed
+by a canonical command. Historically, that regression validated feedback
+rendering/readback and compressed atlas subregion uploads. On fox-laptop, stable
+rendering, panning, and continuous streaming held 59.97 FPS with zero drops
+across each 600-frame measurement; extreme per-frame teleport/cache-thrash tests
+dropped one frame per 600.
 
 Use **WASD** to pan, the mouse wheel to zoom, **P** for a one-texel view, and
 **O** for the full overview.
@@ -214,7 +241,7 @@ bun scripts/profile-dungeon-vt.ts --cdp 127.0.0.1:9333 \
 ```
 
 Dungeon is a canonical `EngineRuntime` consumer using `RendererHost`,
-`EngineAssets`, the feedback coordinator, and bounded input/diagnostics. No
+`EngineAssets`, one `VirtualTextureSystem` pool, the feedback coordinator, and bounded input/diagnostics. No
 visual demo retains a global bridge or architecture-baseline exception. Its BIG
 session feeds unified feedback, scheduler, page-load, bulk-wait/read, RPC,
 transcode, upload, and page-table publication spans into `runtime.telemetry`. Diagnostic clients

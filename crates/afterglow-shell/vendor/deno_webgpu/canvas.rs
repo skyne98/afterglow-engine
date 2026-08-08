@@ -295,7 +295,9 @@ impl GPUCanvasContext {
                 let SurfaceData { width, height, .. } = &*surface_data.borrow();
 
                 Ok(Descriptor::Surface(SurfaceConfiguration {
-                    usage,
+                    // Diagnostic native capture copies the final composited
+                    // surface into one fixed staging buffer before present.
+                    usage: usage | wgpu_types::TextureUsages::COPY_SRC,
                     format: configuration.format.clone().into(),
                     width: *width,
                     height: *height,

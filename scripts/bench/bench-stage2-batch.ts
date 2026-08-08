@@ -1,4 +1,4 @@
-// Stage-2 batch reader bench: confirms createPageRangeReader (the client-side
+// Stage-2 batch reader bench: confirms createSourceSortedPageReader (the client-side
 // batch-read primitive) is FAST. Requests ALL pages of one asset in RANDOM
 // order; the reader coalesces them into one range read per mip row regardless
 // of input order. No transcode (isolates the read path). Compare to the raw
@@ -10,11 +10,13 @@
 
 import {
   createFetchRangeLoader,
-  createPageRangeReader,
-  findVTPageChunk,
   readBigHeader,
+} from '../../crates/afterglow-web/web/src/engine/assets/asset-range.ts';
+import { findVTPageChunk } from '../../crates/afterglow-web/web/src/engine/assets/big-format.ts';
+import {
+  createSourceSortedPageReader,
   type PageReadRequest,
-} from '../../crates/afterglow-web/web/src/engine/assets/big-parser.ts';
+} from '../../crates/afterglow-web/web/src/engine/assets/source-sorted-page-reader.ts';
 
 const BASE_URL = process.env.BENCH_BASE_URL ?? 'http://127.0.0.1:8787/';
 const CONTAINER = process.env.BENCH_CONTAINER ?? 'dungeon.big';
@@ -65,8 +67,13 @@ async function main() {
 
   console.log(`\nreadConcurrency | MiB/s  | reads | pages/read | coalesced% | elapsed`);
   console.log('----------------+--------+-------+------------+------------+---------');
+  const containerRanges = {
+    read: (offset: number, length: number) => source.read(CONTAINER, offset, length),
+    readBulk: (ranges: readonly { offset: number; length: number }[]) =>
+      source.readBulk!(CONTAINER, ranges),
+  };
   for (const c of CONCURRENCIES) {
-    const reader = createPageRangeReader(source, header, c);
+    const reader = createSourceSortedPageReader(containerRanges, header, c);
     // warm
     await reader.readBatch(all.slice(0, 256));
     const t0 = performance.now();

@@ -12,7 +12,12 @@ import {
   type VirtualGltfTextureSampling,
   type VirtualTextureSampling,
 } from './virtual-texture-material.ts';
-import type { VirtualMaterialSet, VirtualTextureEntry, VirtualTextureStore } from './virtual-texture.ts';
+import {
+  RESOLVE_VIRTUAL_MATERIAL,
+  type VirtualTextureHandle,
+  type VirtualTextureMaterialSet,
+  type VirtualTextureSystem,
+} from './virtual-texture-system.ts';
 
 function collectMaterialTextures(material: THREE.Material, output: Set<THREE.Texture>): void {
   if (material instanceof THREE.MeshStandardMaterial) {
@@ -41,12 +46,12 @@ export interface VirtualGltfBindingOptions {
   exclusiveRoots?: readonly THREE.Object3D[];
   feedbackCamera: THREE.Camera;
   feedbackPixelScale: THREE.Vector2;
-  resolveImage(imageIndex: number): VirtualTextureEntry | undefined;
+  resolveImage(imageIndex: number): VirtualTextureHandle | undefined;
   addressMode?: VirtualTextureAddressMode;
   qualityBias?: number;
   pairFactory?: (
-    store: VirtualTextureStore,
-    set: VirtualMaterialSet,
+    textures: VirtualTextureSystem,
+    set: Readonly<VirtualTextureMaterialSet>,
     pixelScale: THREE.Vector2,
     options: Readonly<VirtualGltfMaterialOptions>,
   ) => VirtualGltfMaterialPair;
@@ -121,21 +126,22 @@ function materialOptions(
 
 function imageSet(
   layout: GltfMaterialTextureLayout,
-  resolve: (imageIndex: number) => VirtualTextureEntry | undefined,
-): VirtualMaterialSet | null {
+  resolve: (imageIndex: number) => VirtualTextureHandle | undefined,
+): VirtualTextureMaterialSet | null {
   if (layout.baseColorImage === null) return null;
   const albedo = resolve(layout.baseColorImage);
   if (!albedo) throw new Error(`virtual glTF image ${layout.baseColorImage} is unavailable`);
-  const optional = (index: number | null): VirtualTextureEntry | undefined =>
+  const optional = (index: number | null): VirtualTextureHandle | undefined =>
     index === null ? undefined : resolve(index);
-  const set: VirtualMaterialSet = { albedo };
   const normal = optional(layout.normalImage);
   const masks = optional(layout.metallicRoughnessImage);
   const emissive = optional(layout.emissiveImage);
-  if (normal) set.normal = normal;
-  if (masks) set.masks = masks;
-  if (emissive) set.emissive = emissive;
-  return set;
+  return {
+    albedo,
+    ...(normal ? { normal } : {}),
+    ...(masks ? { masks } : {}),
+    ...(emissive ? { emissive } : {}),
+  };
 }
 
 /** Stable-index glTF material replacement and exact feedback-state owner. */
@@ -172,7 +178,7 @@ export class VirtualGltfBinding implements FeedbackRenderable {
 
   static create(
     asset: OptimizedGltfAsset,
-    store: VirtualTextureStore,
+    textures: VirtualTextureSystem,
     options: VirtualGltfBindingOptions,
   ): VirtualGltfBinding {
     if (!Number.isInteger(options.primitiveCapacity) || options.primitiveCapacity <= 0)
@@ -190,8 +196,12 @@ export class VirtualGltfBinding implements FeedbackRenderable {
     let pairFactory = options.pairFactory;
     if (!pairFactory) {
       const runtime = Object.assign({}, THREE, TSL);
-      pairFactory = (targetStore, set, pixelScale, pairOptions) =>
-        createVirtualGltfMaterialPair(runtime, targetStore, set, pixelScale, pairOptions);
+      pairFactory = (targetTextures, handles, pixelScale, pairOptions) => {
+        const resolved = targetTextures[RESOLVE_VIRTUAL_MATERIAL](handles);
+        return createVirtualGltfMaterialPair(
+          runtime, resolved.store, resolved.set, pixelScale, pairOptions,
+        );
+      };
     }
     let recordCount = 0;
     let passCount = 1;
@@ -219,7 +229,10 @@ export class VirtualGltfBinding implements FeedbackRenderable {
             throw new Error(`virtual glTF material ${materialIndex} is not a standard PBR material`);
           const set = imageSet(layout, options.resolveImage);
           if (!set) throw new Error(`glTF material ${materialIndex} lost its base-color image`);
-          pair = pairFactory(store, set, options.feedbackPixelScale, materialOptions(source, layout, options));
+          pair = pairFactory(
+            textures, set, options.feedbackPixelScale,
+            materialOptions(source, layout, options),
+          );
           pairs[materialIndex] = pair;
           sources[materialIndex] = source;
           passCount = Math.max(passCount, pair.feedbackMaterials.length);

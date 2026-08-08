@@ -1,9 +1,12 @@
-import {
-  BigContainerAssetLoader,
-  readBigHeader,
-  type BigHeader,
-  type FetchRangeLoader,
-} from './big-parser.ts';
+import type { AssetByteRange } from './bulk-range.ts';
+import { BigContainerAssetLoader } from './big-container-asset-loader.ts';
+import { readBigHeader, type FetchRangeLoader } from './asset-range.ts';
+import type { BigHeader } from './big-format.ts';
+
+export interface ContainerRangeSource {
+  read(offset: number, length: number): Promise<Uint8Array>;
+  readBulk?: ((ranges: readonly AssetByteRange[]) => Promise<Uint8Array[]>) | undefined;
+}
 
 /** Parsed, indexed view of one cooked BIG container.
  *
@@ -12,6 +15,7 @@ import {
  * lookup. */
 export class BigContainer {
   readonly rawAssets: BigContainerAssetLoader;
+  readonly ranges: ContainerRangeSource;
 
   private constructor(
     readonly source: FetchRangeLoader,
@@ -19,6 +23,12 @@ export class BigContainer {
     readonly header: BigHeader,
   ) {
     this.rawAssets = new BigContainerAssetLoader(source, path, header);
+    this.ranges = {
+      read: (offset, length) => source.read(path, offset, length),
+      readBulk: source.readBulk
+        ? ranges => source.readBulk!(path, ranges)
+        : undefined,
+    };
   }
 
   static async open(

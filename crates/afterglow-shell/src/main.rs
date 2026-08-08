@@ -40,6 +40,19 @@ fn dom_physical_code(key: PhysicalKey) -> String {
     }
 }
 
+struct NativeSurfaceCapture {
+    path: std::path::PathBuf,
+    buffer: wgpu::Buffer,
+    maximum_width: u32,
+    maximum_height: u32,
+    complete: bool,
+    pending_width: u32,
+    pending_height: u32,
+    pending_bytes_per_row: u32,
+    ready_frames: u32,
+    required_ready_frames: u32,
+}
+
 struct GpuHudPresenter {
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -51,6 +64,7 @@ struct GpuHudPresenter {
     bind_group: wgpu::BindGroup,
     width: u32,
     height: u32,
+    capture: Option<NativeSurfaceCapture>,
 }
 
 impl GpuHudPresenter {
@@ -177,6 +191,40 @@ struct VertexOutput { @builtin(position) position: vec4f, @location(0) uv: vec2f
                 },
             ],
         });
+        let capture = std::env::var_os("AFTERGLOW_CAPTURE_PATH").map(|path| {
+            let maximum_width = std::env::var("AFTERGLOW_CAPTURE_MAX_WIDTH")
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(4096)
+                .max(width);
+            let maximum_height = std::env::var("AFTERGLOW_CAPTURE_MAX_HEIGHT")
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(2160)
+                .max(height);
+            let maximum_bytes_per_row = (maximum_width * 4).div_ceil(256) * 256;
+            let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Afterglow diagnostic surface capture"),
+                size: u64::from(maximum_bytes_per_row) * u64::from(maximum_height),
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            NativeSurfaceCapture {
+                path: path.into(),
+                buffer,
+                maximum_width,
+                maximum_height,
+                complete: false,
+                pending_width: 0,
+                pending_height: 0,
+                pending_bytes_per_row: 0,
+                ready_frames: 0,
+                required_ready_frames: std::env::var("AFTERGLOW_CAPTURE_READY_FRAMES")
+                    .ok()
+                    .and_then(|value| value.parse().ok())
+                    .unwrap_or(30),
+            }
+        });
         Ok(Self {
             device,
             queue,
@@ -188,6 +236,7 @@ struct VertexOutput { @builtin(position) position: vec4f, @location(0) uv: vec2f
             bind_group,
             width,
             height,
+            capture,
         })
     }
 
@@ -218,7 +267,8 @@ struct VertexOutput { @builtin(position) position: vec4f, @location(0) uv: vec2f
         &mut self,
         hud_scene: Option<afterglow_shell::native_browser::HudGpuScene>,
         surface_texture: &wgpu::Texture,
-    ) -> Result<(), String> {
+        capture_now: bool,
+    ) -> Result<bool, String> {
         if let Some(hud) = hud_scene {
             self.resize(hud.width, hud.height);
             self.renderer
@@ -263,7 +313,106 @@ struct VertexOutput { @builtin(position) position: vec4f, @location(0) uv: vec2f
             pass.set_bind_group(0, &self.bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
+        let mut capture_pending = false;
+        if capture_now {
+            if let Some(capture) = self.capture.as_mut().filter(|capture| !capture.complete) {
+                capture.ready_frames = capture.ready_frames.saturating_add(1);
+                if capture.ready_frames < capture.required_ready_frames {
+                    self.queue.submit([encoder.finish()]);
+                    return Ok(false);
+                }
+                if self.width > capture.maximum_width || self.height > capture.maximum_height {
+                    return Err(format!(
+                        "native capture {}x{} exceeds fixed {}x{} staging capacity",
+                        self.width, self.height, capture.maximum_width, capture.maximum_height,
+                    ));
+                }
+                let bytes_per_row = (self.width * 4).div_ceil(256) * 256;
+                encoder.copy_texture_to_buffer(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: surface_texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::TexelCopyBufferInfo {
+                        buffer: &capture.buffer,
+                        layout: wgpu::TexelCopyBufferLayout {
+                            offset: 0,
+                            bytes_per_row: Some(bytes_per_row),
+                            rows_per_image: Some(self.height),
+                        },
+                    },
+                    wgpu::Extent3d {
+                        width: self.width,
+                        height: self.height,
+                        depth_or_array_layers: 1,
+                    },
+                );
+                capture.pending_width = self.width;
+                capture.pending_height = self.height;
+                capture.pending_bytes_per_row = bytes_per_row;
+                capture_pending = true;
+            }
+        }
         self.queue.submit([encoder.finish()]);
+        Ok(capture_pending)
+    }
+
+    fn finish_capture(&mut self, format: wgpu::TextureFormat) -> Result<(), String> {
+        let Some(capture) = self.capture.as_mut().filter(|capture| !capture.complete) else {
+            return Ok(());
+        };
+        let mapped_size =
+            u64::from(capture.pending_bytes_per_row) * u64::from(capture.pending_height);
+        if mapped_size == 0 {
+            return Ok(());
+        }
+        let slice = capture.buffer.slice(0..mapped_size);
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        slice.map_async(wgpu::MapMode::Read, move |result| {
+            let _ = sender.send(result);
+        });
+        self.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .map_err(|error| format!("poll native capture: {error}"))?;
+        receiver
+            .recv()
+            .map_err(|error| format!("receive native capture map: {error}"))?
+            .map_err(|error| format!("map native capture: {error}"))?;
+        let mapped = slice.get_mapped_range();
+        let row_bytes = capture.pending_width as usize * 4;
+        let mut rgba = vec![0u8; row_bytes * capture.pending_height as usize];
+        for row in 0..capture.pending_height as usize {
+            let source = row * capture.pending_bytes_per_row as usize;
+            let target = row * row_bytes;
+            rgba[target..target + row_bytes].copy_from_slice(&mapped[source..source + row_bytes]);
+        }
+        if matches!(
+            format,
+            wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+        ) {
+            for pixel in rgba.chunks_exact_mut(4) {
+                pixel.swap(0, 2);
+            }
+        } else if !matches!(
+            format,
+            wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Rgba8UnormSrgb
+        ) {
+            return Err(format!("unsupported native capture format {format:?}"));
+        }
+        drop(mapped);
+        capture.buffer.unmap();
+        image::save_buffer(
+            &capture.path,
+            &rgba,
+            capture.pending_width,
+            capture.pending_height,
+            image::ColorType::Rgba8,
+        )
+        .map_err(|error| format!("write native capture {}: {error}", capture.path.display()))?;
+        capture.complete = true;
+        eprintln!("afterglow-shell captured {}", capture.path.display());
         Ok(())
     }
 }
@@ -358,6 +507,10 @@ impl PendingResize {
     fn can_apply(&self, now: Instant, engine_ready: bool) -> bool {
         engine_ready && self.is_due(now)
     }
+}
+
+fn frame_deadline_after_admission(now: Instant, frame_interval: Duration) -> Instant {
+    now + frame_interval
 }
 
 #[op2(fast)]
@@ -581,11 +734,12 @@ fn present_surface(state: &mut OpState, scope: &mut v8::PinScope) -> Result<bool
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
                 view_formats: &[],
             },
         )
     };
+    let capture_now = state.borrow::<EngineReady>().0.load(Ordering::Acquire);
     let surface = state.borrow_mut::<NativeSurface>();
     if surface.hud_presenter.is_none() {
         surface.hud_presenter = Some(unsafe {
@@ -600,13 +754,22 @@ fn present_surface(state: &mut OpState, scope: &mut v8::PinScope) -> Result<bool
             .map_err(JsErrorBox::generic)?
         });
     }
-    surface
+    let capture_pending = surface
         .hud_presenter
         .as_mut()
         .unwrap()
-        .render_and_composite(hud_scene, &surface_texture)
+        .render_and_composite(hud_scene, &surface_texture, capture_now)
         .map_err(JsErrorBox::generic)?;
-    context.present()
+    let presented = context.present()?;
+    if capture_pending {
+        surface
+            .hud_presenter
+            .as_mut()
+            .unwrap()
+            .finish_capture(format)
+            .map_err(JsErrorBox::generic)?;
+    }
+    Ok(presented)
 }
 
 #[op2(fast)]
@@ -685,18 +848,28 @@ fn op_device_lost(
         .map_err(|error| JsErrorBox::generic(error.to_string()))
 }
 
-#[op2(fast)]
-fn op_engine_ready(state: &mut OpState) -> Result<(), JsErrorBox> {
-    state
-        .borrow::<EngineReady>()
-        .0
-        .store(true, Ordering::Release);
+fn publish_runtime_ready(state: &mut OpState) -> Result<(), JsErrorBox> {
+    if state.borrow::<EngineReady>().0.swap(true, Ordering::AcqRel) {
+        return Ok(());
+    }
     let lifecycle = state.borrow::<Arc<RuntimeLifecycle>>();
     lifecycle
         .transition(RuntimePhase::ResourcesReady)
         .and_then(|_| lifecycle.transition(RuntimePhase::RendererReady))
         .and_then(|_| lifecycle.transition(RuntimePhase::Running))
         .map_err(|error| JsErrorBox::generic(error.to_string()))
+}
+
+/// Compatibility-only first-present readiness for unmodified Three.js examples.
+#[op2(fast)]
+fn op_engine_ready(state: &mut OpState) -> Result<(), JsErrorBox> {
+    publish_runtime_ready(state)
+}
+
+/// Strict engine readiness, emitted by EngineRuntime after its first complete frame.
+#[op2(fast)]
+fn op_afterglow_game_ready(state: &mut OpState) -> Result<(), JsErrorBox> {
+    publish_runtime_ready(state)
 }
 
 deno_core::extension!(
@@ -719,6 +892,7 @@ deno_core::extension!(
         op_device_ready,
         op_device_lost,
         op_engine_ready,
+        op_afterglow_game_ready,
         afterglow_shell::rpc_bridge::op_afterglow_rpc_call,
         afterglow_shell::rpc_bridge::op_afterglow_rpc_call_async,
         afterglow_shell::rpc_bridge::op_afterglow_worker_ids,
@@ -1068,6 +1242,7 @@ struct App {
     startup_last_active: Option<Instant>,
     startup_reported: bool,
     official_example: bool,
+    compatibility_mode: bool,
     fatal_error: Option<String>,
     ready: Arc<AtomicBool>,
     lifecycle: Arc<RuntimeLifecycle>,
@@ -1103,19 +1278,34 @@ fn native_texture_worker_count(physical_cores: usize, available_threads: usize) 
         .min(NATIVE_TEXTURE_WORKER_CAP)
 }
 
+fn native_storage_root() -> std::path::PathBuf {
+    if let Some(root) = std::env::var_os("AFTERGLOW_STORAGE_ROOT") {
+        return std::path::PathBuf::from(root);
+    }
+    if let Some(root) = std::env::var_os("XDG_DATA_HOME") {
+        return std::path::PathBuf::from(root).join("afterglow-engine/storage");
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        return std::path::PathBuf::from(home).join(".local/share/afterglow-engine/storage");
+    }
+    std::env::temp_dir().join("afterglow-engine-storage")
+}
+
 fn compose_engine_workers(state: &mut OpState) {
     use afterglow_meshopt::{MeshoptServer, MeshoptWorker};
     use afterglow_rpc_demo::{PhysicsServer, PhysicsWorker};
+    use afterglow_storage_worker::{BlobStorageServer, BlobStorageWorker};
     use afterglow_texture::{TextureServer, TextureWorker};
 
-    let registry = &mut state.borrow_mut::<afterglow_shell::rpc_bridge::WorkerRegistry>();
     let (physics, _events) = afterglow_rpc::native::spawn_worker_loop(
         PhysicsWorker,
         1 << 20,
         |worker: &mut PhysicsWorker, method, args| worker.serve(method, args),
     )
     .expect("spawn native Physics worker");
-    registry.register(0, Box::new(physics));
+    state
+        .borrow_mut::<afterglow_shell::rpc_bridge::WorkerRegistry>()
+        .register(0, Box::new(physics));
 
     let available_threads = std::thread::available_parallelism()
         .map(std::num::NonZeroUsize::get)
@@ -1130,7 +1320,7 @@ fn compose_engine_workers(state: &mut OpState) {
             |worker: &TextureWorker, method, args| worker.serve_async(method, args),
         )
         .expect("spawn native Texture worker");
-        registry.register_named_async("texture", id, Arc::new(texture));
+        afterglow_shell::builder::register_async_worker(state, "texture", id, Arc::new(texture));
     }
     eprintln!(
         "afterglow-shell composed {texture_worker_count} native texture workers ({available_threads} logical threads available)"
@@ -1143,7 +1333,28 @@ fn compose_engine_workers(state: &mut OpState) {
         |worker: &MeshoptWorker, method, args| worker.serve_async(method, args),
     )
     .expect("spawn native Meshopt worker");
-    registry.register_named_async("meshopt", meshopt_id, Arc::new(meshopt));
+    afterglow_shell::builder::register_async_worker(
+        state,
+        "meshopt",
+        meshopt_id,
+        Arc::new(meshopt),
+    );
+
+    BlobStorageWorker::set_storage_root(native_storage_root())
+        .expect("initialize native persistent storage root");
+    let storage_id = meshopt_id.checked_add(1).expect("native storage worker id");
+    let (storage, _events) = afterglow_rpc::native::spawn_async_worker_loop(
+        BlobStorageWorker::default(),
+        1 << 20,
+        |worker: &BlobStorageWorker, method, args| worker.serve_async(method, args),
+    )
+    .expect("spawn native BlobStorage worker");
+    afterglow_shell::builder::register_async_worker(
+        state,
+        "storage",
+        storage_id,
+        Arc::new(storage),
+    );
 }
 
 impl App {
@@ -1163,12 +1374,22 @@ impl App {
             .filter(|millis| *millis > 0)
             .map(Duration::from_millis)
             .unwrap_or(Self::STARTUP_TIMEOUT);
-        let game_module = std::env::args_os()
-            .nth(1)
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| {
-                std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("native_game.ts")
-            });
+        let mut arguments = std::env::args_os().skip(1);
+        let first = arguments.next();
+        let (compatibility_mode, game_module) =
+            if first.as_deref() == Some(std::ffi::OsStr::new("--compat-three")) {
+                let path = arguments
+                    .next()
+                    .expect("--compat-three requires an HTML example path");
+                (true, std::path::PathBuf::from(path))
+            } else {
+                (
+                    false,
+                    first.map(std::path::PathBuf::from).unwrap_or_else(|| {
+                        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("native_game.ts")
+                    }),
+                )
+            };
         Self {
             window: None,
             runtime: None,
@@ -1181,6 +1402,7 @@ impl App {
             startup_last_active: None,
             startup_reported: false,
             official_example: false,
+            compatibility_mode,
             fatal_error: None,
             ready: Arc::new(AtomicBool::new(false)),
             lifecycle: Arc::new(RuntimeLifecycle::new()),
@@ -1484,7 +1706,8 @@ impl App {
             self.flush_pointer_move();
         }
 
-        let evaluation_complete = if self.official_example && !self.ready.load(Ordering::Acquire) {
+        let evaluation_complete = if self.compatibility_mode && !self.ready.load(Ordering::Acquire)
+        {
             self.execute_static(
                 "<native-startup-frame>",
                 "__runNativeAnimationFrames(performance.now()); __syncBrowserDocument(false); if (Deno.core.ops.op_try_present_surface()) Deno.core.ops.op_engine_ready();",
@@ -1513,7 +1736,7 @@ impl App {
         if evaluation_complete && ready && !self.startup_reported {
             self.startup_reported = true;
             eprintln!(
-                "afterglow-shell renderer ready after {} active milliseconds ({})",
+                "afterglow-shell game ready after {} active milliseconds ({})",
                 self.startup_timeout
                     .saturating_sub(self.startup_remaining)
                     .as_millis(),
@@ -1549,7 +1772,12 @@ impl App {
                 window.inner_size()
             });
         eprintln!(
-            "[host-trace] redraws={} wakes={} pointer_moves={} resize_events={} resize_applies={} pending_resize={} window={}x{} surface={}x{} scale={} present_attempts={} presented={} {}",
+            "[host-trace] phase={:?} next_frame_ms={:.3} redraws={} wakes={} pointer_moves={} resize_events={} resize_applies={} pending_resize={} window={}x{} surface={}x{} scale={} present_attempts={} presented={} {}",
+            self.lifecycle.phase(),
+            self.next_frame_deadline
+                .saturating_duration_since(Instant::now())
+                .as_secs_f64()
+                * 1000.0,
             self.host_redraws,
             self.host_wakes,
             self.host_pointer_moves,
@@ -1689,12 +1917,25 @@ impl ApplicationHandler<HostEvent> for App {
             window.request_redraw();
             return;
         }
+        let capture_width = std::env::var("AFTERGLOW_WINDOW_WIDTH")
+            .ok()
+            .and_then(|value| value.parse::<u32>().ok())
+            .unwrap_or(1280)
+            .max(1);
+        let capture_height = std::env::var("AFTERGLOW_WINDOW_HEIGHT")
+            .ok()
+            .and_then(|value| value.parse::<u32>().ok())
+            .unwrap_or(720)
+            .max(1);
         let window = Arc::new(
             event_loop
                 .create_window(
                     Window::default_attributes()
                         .with_title("afterglow-shell")
-                        .with_inner_size(winit::dpi::PhysicalSize::new(1280, 720)),
+                        .with_inner_size(winit::dpi::PhysicalSize::new(
+                            capture_width,
+                            capture_height,
+                        )),
                 )
                 .expect("create native window"),
         );
@@ -1997,16 +2238,25 @@ impl ApplicationHandler<HostEvent> for App {
         // `request_redraw` is not itself paced by Wayland/wgpu. Admit one
         // browser rAF batch per monitor interval so redraw requests cannot
         // flood submissions and starve configure/input event processing.
-        let cadence_deadline = self.next_frame_deadline + self.frame_interval;
-        self.next_frame_deadline = if cadence_deadline > now {
-            cadence_deadline
-        } else {
-            now + self.frame_interval
-        };
+        // Anchor to the admission instant rather than adding to the previous
+        // deadline. request_redraw() itself wakes winit immediately; repeated
+        // startup/runtime wakes must never bank thousands of future intervals
+        // and leave an otherwise live game black after bootstrap completes.
+        self.next_frame_deadline = frame_deadline_after_admission(now, self.frame_interval);
         event_loop.set_control_flow(ControlFlow::WaitUntil(self.next_frame_deadline));
         if let Some(window) = &self.window {
             window.request_redraw();
         }
+    }
+
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        // Surface/GPU/V8 state must drop while the native window handles are
+        // still alive. Field-order destruction drops the window first, which
+        // is invalid for an acquired WebGPU surface on diagnostic auto-exit.
+        self.game_evaluation = None;
+        self.runtime = None;
+        self.tokio = None;
+        self.window = None;
     }
 
     fn device_event(&mut self, _event_loop: &ActiveEventLoop, _id: DeviceId, event: DeviceEvent) {
@@ -2202,6 +2452,10 @@ impl ApplicationHandler<HostEvent> for App {
                 self.host_redraws = self.host_redraws.saturating_add(1);
                 if let Err(error) = self.render() {
                     self.fail(event_loop, format!("native frame failed: {error}"));
+                } else if std::env::var_os("AFTERGLOW_CAPTURE_PATH")
+                    .is_some_and(|path| std::path::Path::new(&path).is_file())
+                {
+                    event_loop.exit();
                 }
             }
             _ => {}
@@ -2257,6 +2511,18 @@ mod tests {
             dom_physical_code(PhysicalKey::Code(KeyCode::Digit3)),
             "Digit3"
         );
+    }
+
+    #[test]
+    fn frame_deadline_never_accumulates_when_winit_wakes_repeatedly() {
+        let now = Instant::now();
+        let interval = Duration::from_millis(7);
+        let expected = now + interval;
+        let mut deadline = now;
+        for _ in 0..10_000 {
+            deadline = frame_deadline_after_admission(now, interval);
+        }
+        assert_eq!(deadline, expected);
     }
 
     #[test]

@@ -3,7 +3,7 @@
 // in a fixed order so promise/microtask timing never affects the render phase.
 
 import type { RenderFrame } from './types.ts';
-import type { VirtualPageRequest } from '../virtual-texturing/virtual-texture.ts';
+import type { VirtualPageRequest } from '../virtual-texturing/virtual-texture-request.ts';
 import { EnginePhase, type EngineMemory } from './engine-memory.ts';
 import { BudgetDecision, FrameBudget, FrameStage } from './frame-budget.ts';
 
@@ -18,6 +18,8 @@ export interface FrameRenderAdapter {
 export interface RenderWorkerInput {
   /** Poll for completed async worker calls (resolves pending promises). */
   poll(): void;
+  /** Startup readiness is withheld while required worker publication is pending. */
+  isBootstrapReady?(): boolean;
   /** Drain any structural commands (spawn/despawn/reparent) from workers. */
   drainStructuralCommands?(adapter: FrameRenderAdapter): void;
   /** Drain physics pose batches and apply to ECS. */

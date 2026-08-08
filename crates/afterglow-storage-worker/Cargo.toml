@@ -1,0 +1,16 @@
+[package]
+name = "afterglow-storage-worker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Bounded native persistent blob storage worker"
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+afterglow-rpc = { path = "../afterglow-rpc" }
+afterglow-rpc-macros = { path = "../afterglow-rpc-macros" }
+serde.workspace = true
+async-executor.workspace = true

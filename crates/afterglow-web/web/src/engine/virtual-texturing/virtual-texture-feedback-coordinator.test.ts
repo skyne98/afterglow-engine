@@ -5,7 +5,7 @@ import {
   VirtualTextureFeedbackCoordinator,
   type FeedbackRenderable,
 } from './virtual-texture-feedback-coordinator.ts';
-import type { VirtualPageRequest } from './virtual-texture.ts';
+import type { VirtualPageRequest } from './virtual-texture-request.ts';
 
 interface DeferredRead {
   promise: Promise<ArrayBufferView>;

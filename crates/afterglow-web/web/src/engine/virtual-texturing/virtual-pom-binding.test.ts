@@ -2,7 +2,11 @@ import { describe, expect, test } from 'bun:test';
 import * as THREE from 'three/webgpu';
 import { VirtualPomSceneBinding } from './virtual-pom-binding.ts';
 import type { VirtualPomMaterialPair } from './virtual-texture-material.ts';
-import type { VirtualMaterialSet, VirtualTextureStore } from './virtual-texture.ts';
+import type {
+  VirtualTextureHandle,
+  VirtualTextureMaterialSet,
+  VirtualTextureSystem,
+} from './virtual-texture-system.ts';
 
 function pair(): VirtualPomMaterialPair {
   return {
@@ -13,14 +17,16 @@ function pair(): VirtualPomMaterialPair {
   };
 }
 
-const store = {} as VirtualTextureStore; // @unsafe-cast reason=FactoryInjectedTestDouble issue=DME-024 expires=2026-10-01
-const set = {} as VirtualMaterialSet; // @unsafe-cast reason=FactoryInjectedTestDouble issue=DME-024 expires=2026-10-01
+const textures = {} as VirtualTextureSystem; // @unsafe-cast reason=FactoryInjectedTestDouble issue=DME-024 expires=2026-10-01
+const set: VirtualTextureMaterialSet = {
+  albedo: 1 as VirtualTextureHandle, // @unsafe-cast reason=FactoryInjectedTestHandle issue=DME-024 expires=2026-10-01
+};
 
 describe('VirtualPomSceneBinding', () => {
   test('owns fixed visible/feedback variants and toggles references', () => {
     const created: VirtualPomMaterialPair[] = [];
     const binding = new VirtualPomSceneBinding({
-      camera: new THREE.PerspectiveCamera(), store, feedbackPixelScale: new THREE.Vector2(1, 1),
+      camera: new THREE.PerspectiveCamera(), textures, feedbackPixelScale: new THREE.Vector2(1, 1),
       capacity: 1,
       createPair: () => { const value = pair(); created.push(value); return value; },
     });
@@ -49,7 +55,7 @@ describe('VirtualPomSceneBinding', () => {
 
   test('supports allocation-free feedback gating', () => {
     const binding = new VirtualPomSceneBinding({
-      camera: new THREE.PerspectiveCamera(), store, feedbackPixelScale: new THREE.Vector2(),
+      camera: new THREE.PerspectiveCamera(), textures, feedbackPixelScale: new THREE.Vector2(),
       capacity: 1, createPair: () => pair(),
     });
     expect(binding.isFeedbackActive()).toBe(true);

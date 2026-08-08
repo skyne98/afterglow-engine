@@ -1,0 +1,122 @@
+{
+  "version": 1,
+  "items": [
+    {
+      "id": "CUE-DEL-001",
+      "status": "removed",
+      "description": "legacy EngineAssets virtual-texture store constructor",
+      "roots": ["crates/afterglow-web/web/src"],
+      "literals": ["createVirtualTextureStore"]
+    },
+    {
+      "id": "CUE-DEL-002",
+      "status": "removed",
+      "description": "public physical VirtualTextureStore export",
+      "roots": ["crates/afterglow-web/web/src/engine/virtual-texturing/index.ts"],
+      "literals": ["VirtualTextureStore"]
+    },
+    {
+      "id": "CUE-DEL-003",
+      "status": "removed",
+      "description": "legacy ECS VirtualTextureRes resource",
+      "roots": ["crates/afterglow-web/web/src/engine/virtual-texturing"],
+      "literals": ["VirtualTextureRes"]
+    },
+    {
+      "id": "CUE-DEL-004",
+      "status": "removed",
+      "description": "AssetStore optional virtual-texture owner",
+      "roots": ["crates/afterglow-web/web/src/engine/assets/asset-store.ts"],
+      "literals": ["setVirtualTextureStore", "virtualTextureStore", "vtStore"]
+    },
+    {
+      "id": "CUE-DEL-005",
+      "status": "removed",
+      "description": "public raw feedback pass export",
+      "roots": ["crates/afterglow-web/web/src/engine/virtual-texturing/index.ts"],
+      "literals": ["VirtualTextureFeedbackPass"]
+    },
+    {
+      "id": "CUE-DEL-006",
+      "status": "removed",
+      "description": "duplicate duck-typed material store owner contracts",
+      "roots": [
+        "crates/afterglow-web/web/src/engine/virtual-texturing/virtual-gltf-binding.ts",
+        "crates/afterglow-web/web/src/engine/virtual-texturing/virtual-pom-binding.ts"
+      ],
+      "literals": ["VirtualMaterialStoreOwner"]
+    },
+    {
+      "id": "CUE-DEL-007",
+      "status": "removed",
+      "description": "demo access to physical virtual-texture views and stores",
+      "roots": ["crates/afterglow-web/web/src/demos"],
+      "literals": [".getView(", ".resolveMaterialStore(", ".attachVirtualTextureStore("]
+    },
+    {
+      "id": "CUE-DEL-008",
+      "status": "removed",
+      "description": "optional GeometryArena model publication",
+      "roots": ["crates/afterglow-web/web/src/engine/presentation/model-system.ts"],
+      "literals": ["geometryArena?:", "this.geometryArena?"]
+    },
+    {
+      "id": "CUE-DEL-009",
+      "status": "removed",
+      "description": "old rigid static-lod implementation",
+      "roots": ["crates/afterglow-web/web/src/engine/presentation"],
+      "literals": ["static-lod.ts", "static-lod.test.ts"],
+      "forbiddenPaths": [
+        "crates/afterglow-web/web/src/engine/presentation/static-lod.ts",
+        "crates/afterglow-web/web/src/engine/presentation/static-lod.test.ts"
+      ]
+    },
+    {
+      "id": "CUE-DEL-010",
+      "status": "removed",
+      "description": "page-side OPFS persistence implementation",
+      "roots": ["crates/afterglow-web/web/src/engine/streaming"],
+      "literals": ["OpfsPersistentBlobBackend"]
+    },
+    {
+      "id": "CUE-DEL-011",
+      "status": "removed",
+      "description": "demo-owned RendererHost construction",
+      "roots": ["crates/afterglow-web/web/src/demos"],
+      "literals": ["RendererHost.create("]
+    },
+    {
+      "id": "CUE-DEL-012",
+      "status": "removed",
+      "description": "demo bootstrap cleanup graph",
+      "roots": ["crates/afterglow-web/web/src/demos"],
+      "literals": ["BootstrapGuard", "PageShutdown"]
+    },
+    {
+      "id": "CUE-DEL-013",
+      "status": "removed",
+      "description": "production per-demo global diagnostic harnesses",
+      "roots": ["crates/afterglow-web/web/src/demos"],
+      "literals": ["publishDevHarness", "__afterglow"]
+    },
+    {
+      "id": "CUE-DEL-014",
+      "status": "removed",
+      "description": "legacy BigAssetSession wrapper",
+      "roots": ["crates/afterglow-web/web/src/engine/assets"],
+      "literals": ["BigAssetSession"],
+      "forbiddenPaths": ["crates/afterglow-web/web/src/engine/assets/big-asset-session.ts"]
+    },
+    {
+      "id": "CUE-DEL-015",
+      "status": "removed",
+      "description": "legacy BIG parser module",
+      "roots": ["crates/afterglow-web/web/src/engine/assets"],
+      "literals": ["big-parser.ts"],
+      "forbiddenPaths": [
+        "crates/afterglow-web/web/src/engine/assets/big-parser.ts",
+        "crates/afterglow-web/web/src/engine/assets/big-parser.test.ts"
+      ]
+    }
+  ]
+}

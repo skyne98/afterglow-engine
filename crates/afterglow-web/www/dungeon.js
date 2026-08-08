@@ -63022,7 +63022,7 @@ var ENGINE_TRACE_DESCRIPTORS = [
   { category: 1 /* Frame */, categoryName: "frame", name: "render.prepare", kind: 2 /* Span */, argument0: "stage", argument1: "elapsed_us" },
   { category: 0 /* Runtime */, categoryName: "runtime", name: "game.update", kind: 2 /* Span */, argument0: "frame_id" },
   { category: 1 /* Frame */, categoryName: "frame", name: "render.passes", kind: 2 /* Span */, argument0: "frame_id" },
-  { category: 4 /* Asset */, categoryName: "asset", name: "asset.session.open", kind: 3 /* AsyncSpan */, argument0: "workers", argument1: "status" },
+  { category: 4 /* Asset */, categoryName: "asset", name: "asset.composition.open", kind: 3 /* AsyncSpan */, argument0: "workers", argument1: "status" },
   { category: 4 /* Asset */, categoryName: "asset", name: "asset.size", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "status" },
   { category: 4 /* Asset */, categoryName: "asset", name: "asset.read", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "offset_or_status" },
   { category: 4 /* Asset */, categoryName: "asset", name: "asset.read_bulk", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "spans" },
@@ -63038,7 +63038,14 @@ var ENGINE_TRACE_DESCRIPTORS = [
   { category: 4 /* Asset */, categoryName: "asset", name: "mesh.optimize", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "status" },
   { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.feedback_detected", kind: 1 /* Instant */, argument0: "priority", argument1: "feedback_epoch" },
   { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.scheduler_wait", kind: 3 /* AsyncSpan */, argument0: "priority", argument1: "status" },
-  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.page_published", kind: 1 /* Instant */, argument0: "physical_slot", argument1: "eligible_frame_id" }
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.page_published", kind: 1 /* Instant */, argument0: "physical_slot", argument1: "eligible_frame_id" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.mutable_write", kind: 1 /* Instant */, argument0: "bytes", argument1: "status" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.mutable_refresh", kind: 2 /* Span */, argument0: "pages", argument1: "remaining" },
+  { category: 10 /* Model */, categoryName: "model", name: "model.revision", kind: 3 /* AsyncSpan */, argument0: "revision", argument1: "status" },
+  { category: 10 /* Model */, categoryName: "model", name: "model.published", kind: 1 /* Instant */, argument0: "revision", argument1: "cpu_bytes" },
+  { category: 10 /* Model */, categoryName: "model", name: "geometry.upload", kind: 2 /* Span */, argument0: "bytes", argument1: "slot" },
+  { category: 11 /* Storage */, categoryName: "storage", name: "blob.read", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "status" },
+  { category: 11 /* Storage */, categoryName: "storage", name: "blob.write", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "status" }
 ];
 var FRAME_BUDGET_TRACE_DESCRIPTORS = [
   1 /* WorkerPoll */,
@@ -63059,22 +63066,25 @@ var ENGINE_METRIC_DESCRIPTORS = [
   { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt_pages_loaded", kind: 1 /* Counter */, unit: "count" },
   { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt_pages_failed", kind: 1 /* Counter */, unit: "count" },
   { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt_upload_ns", kind: 4 /* HistogramLog2 */, unit: "nanoseconds" },
-  { category: 5 /* Texture */, categoryName: "texture", name: "texture_transcode_ns", kind: 4 /* HistogramLog2 */, unit: "nanoseconds" }
+  { category: 5 /* Texture */, categoryName: "texture", name: "texture_transcode_ns", kind: 4 /* HistogramLog2 */, unit: "nanoseconds" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "mutable_texture_writes", kind: 1 /* Counter */, unit: "count" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "mutable_texture_bytes", kind: 1 /* Counter */, unit: "bytes" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "mutable_pages_published", kind: 1 /* Counter */, unit: "count" },
+  { category: 3 /* VirtualTexture */, categoryName: "vt", name: "mutable_pages_deferred", kind: 1 /* Counter */, unit: "count" },
+  { category: 10 /* Model */, categoryName: "model", name: "model_revisions_queued", kind: 1 /* Counter */, unit: "count" },
+  { category: 10 /* Model */, categoryName: "model", name: "model_revisions_published", kind: 1 /* Counter */, unit: "count" },
+  { category: 10 /* Model */, categoryName: "model", name: "model_revisions_failed", kind: 1 /* Counter */, unit: "count" },
+  { category: 10 /* Model */, categoryName: "model", name: "model_cpu_bytes_high_water", kind: 3 /* Maximum */, unit: "bytes" },
+  { category: 10 /* Model */, categoryName: "model", name: "model_gpu_bytes_high_water", kind: 3 /* Maximum */, unit: "bytes" },
+  { category: 10 /* Model */, categoryName: "model", name: "geometry_upload_ns", kind: 4 /* HistogramLog2 */, unit: "nanoseconds" },
+  { category: 11 /* Storage */, categoryName: "storage", name: "blob_read_bytes", kind: 1 /* Counter */, unit: "bytes" },
+  { category: 11 /* Storage */, categoryName: "storage", name: "blob_write_bytes", kind: 1 /* Counter */, unit: "bytes" }
 ];
 
 // crates/afterglow-web/web/src/engine/assets/asset-store.ts
 var MAX_SINGLE_LOAD = 1 << 20;
 var CHUNK_SIZE = 512 * 1024;
-var DEFAULT_LOD_RATIOS = [1, 0.5, 0.25, 0.1];
-var DEFAULT_TARGET_ERROR = 0.02;
 var DEFAULT_ASSET_CAPACITY = 1024;
-async function parseTexture(bytes) {
-  const bitmap = await createImageBitmap(new Blob([bytes]));
-  const tex = new Texture(bitmap);
-  tex.needsUpdate = true;
-  tex.colorSpace = SRGBColorSpace;
-  return tex;
-}
 async function parseGLTFAsset(bytes, loader) {
   const buf = new ArrayBuffer(bytes.byteLength);
   new Uint8Array(buf).set(bytes);
@@ -63199,7 +63209,6 @@ class AssetStore {
   readyCount = 0;
   meshopt;
   loader;
-  vtStore = null;
   constructor(loader, meshopt, capacity = DEFAULT_ASSET_CAPACITY, maxCompletionsPerPoll = 32, telemetry) {
     this.maxCompletionsPerPoll = maxCompletionsPerPoll;
     this.telemetry = telemetry;
@@ -63220,12 +63229,6 @@ class AssetStore {
   }
   get assetLoader() {
     return this.loader;
-  }
-  setVirtualTextureStore(vt) {
-    this.vtStore = vt;
-  }
-  get virtualTextureStore() {
-    return this.vtStore;
   }
   poll() {
     this.loader.poll();
@@ -63461,139 +63464,6 @@ class AssetStore {
       return { ...parsed, meshOptimization, materialTextures };
     }, fallback);
   }
-  loadModel(path) {
-    return this.load(path, (bytes) => this.processModel(bytes, path));
-  }
-  async processModel(bytes, path) {
-    let meshes = [];
-    let textures = new Map;
-    try {
-      const scene = await parseGLTF(bytes);
-      scene.traverse((obj) => {
-        if (obj.isMesh && obj.geometry?.index) {
-          const geo = obj.geometry;
-          meshes.push({
-            indices: new Uint32Array(geo.index.array),
-            positions: new Float32Array(geo.attributes.position.array),
-            uvs: geo.attributes.uv ? new Float32Array(geo.attributes.uv.array) : new Float32Array(0)
-          });
-        }
-        if (obj.isMesh && obj.material?.map)
-          textures.set("diffuse", obj.material.map);
-      });
-    } catch {
-      meshes = this.parseMinimalGLB(bytes);
-    }
-    const stats = [];
-    const meshLods = [];
-    for (const mesh of meshes) {
-      const { lods, stat } = await this.optimizeMesh(mesh.indices, mesh.positions, mesh.uvs);
-      meshLods.push(lods);
-      if (stat)
-        stats.push(stat);
-    }
-    return { meshes: meshLods, textures, stats };
-  }
-  parseMinimalGLB(bytes) {
-    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-    if (view.getUint32(0, true) !== 1179937895)
-      throw new Error("not a GLB");
-    const totalLen = view.getUint32(8, true);
-    let off = 12;
-    let json = null;
-    let bin = null;
-    while (off < totalLen) {
-      const len = view.getUint32(off, true);
-      off += 4;
-      const type = view.getUint32(off, true);
-      off += 4;
-      if (type === 1313821514)
-        json = JSON.parse(new TextDecoder().decode(bytes.subarray(off, off + len)));
-      else if (type === 5130562)
-        bin = bytes.subarray(off, off + len);
-      off += len;
-    }
-    if (!json || !bin)
-      throw new Error("GLB missing JSON or BIN");
-    const accs = json.accessors || [];
-    const bvs = json.bufferViews || [];
-    const prims = json.meshes?.[0]?.primitives || [];
-    const meshes = [];
-    for (const prim of prims) {
-      const read = (aIdx, T2) => {
-        if (aIdx === undefined)
-          return new T2(0);
-        const a = accs[aIdx];
-        const bv = bvs[a.bufferView];
-        const o = (bv.byteOffset || 0) + (a.byteOffset || 0);
-        const comps = a.type === "VEC3" ? 3 : a.type === "VEC2" ? 2 : 1;
-        return new T2(bin.buffer, bin.byteOffset + o, a.count * comps).slice();
-      };
-      meshes.push({
-        indices: read(prim.indices, Uint32Array),
-        positions: read(prim.attributes.POSITION, Float32Array),
-        uvs: prim.attributes.TEXCOORD_0 !== undefined ? read(prim.attributes.TEXCOORD_0, Float32Array) : new Float32Array(0)
-      });
-    }
-    return meshes;
-  }
-  async optimizeMesh(indices, positions, uvs) {
-    const vertexCount = positions.length / 3;
-    const originalTriangles = indices.length / 3;
-    const stride = 12;
-    const uvStride = 8;
-    if (!this.meshopt) {
-      return {
-        lods: [{ indices, positions, uvs, triangleCount: originalTriangles }]
-      };
-    }
-    const origStats = await this.meshopt.analyzeVertexCache(indices, vertexCount);
-    const originalAcmr = origStats[0];
-    let optimized = await this.meshopt.optimizeVertexCache(indices, vertexCount);
-    optimized = await this.meshopt.optimizeOverdraw(optimized, positions, stride, 1.05);
-    const optStats = await this.meshopt.analyzeVertexCache(optimized, vertexCount);
-    const optimizedAcmr = optStats[0];
-    const compressed = await this.meshopt.encodeIndexBuffer(optimized, vertexCount);
-    const lods = [];
-    for (const ratio of DEFAULT_LOD_RATIOS) {
-      if (ratio >= 1) {
-        lods.push({
-          indices: optimized,
-          positions,
-          uvs,
-          triangleCount: optimized.length / 3,
-          stats: ratio === 1 ? {
-            originalTriangles,
-            originalAcmr,
-            optimizedAcmr,
-            compressedIndexBytes: compressed.length,
-            uncompressedIndexBytes: optimized.length * 4
-          } : undefined
-        });
-      } else {
-        const targetTris = Math.max(4, Math.floor(originalTriangles * ratio));
-        const targetIndexCount = targetTris * 3;
-        const simplified = await this.meshopt.simplifyWithUvs(optimized, positions, stride, uvs, uvStride, 0.5, targetIndexCount, DEFAULT_TARGET_ERROR);
-        lods.push({ indices: simplified, positions, uvs, triangleCount: simplified.length / 3 });
-      }
-    }
-    return {
-      lods,
-      stat: {
-        originalTriangles,
-        originalAcmr,
-        optimizedAcmr,
-        compressedIndexBytes: compressed.length,
-        uncompressedIndexBytes: optimized.length * 4
-      }
-    };
-  }
-  loadTexture(path) {
-    if (this.vtStore) {
-      return this.vtStore.loadTexture(path);
-    }
-    return this.load(path, parseTexture, undefined);
-  }
   loadGLTF(path, loader) {
     return this.load(path, (bytes) => parseGLTF(bytes, loader), fallbackGroup());
   }
@@ -63801,7 +63671,49 @@ async function fetchByteRanges(url, ranges) {
   }
   return parseMultipartByteRanges(body, response.headers.get("content-type") ?? "", ranges);
 }
-// crates/afterglow-web/web/src/engine/assets/big-parser.ts
+// crates/afterglow-web/web/src/engine/assets/big-container-asset-loader.ts
+class BigContainerAssetLoader {
+  source;
+  containerPath;
+  assets = new Map;
+  constructor(source, containerPath, header) {
+    this.source = source;
+    this.containerPath = containerPath;
+    for (const asset of header.assets) {
+      if (asset.chunks.length !== 1 || asset.chunks[0].meta.type !== "Raw")
+        continue;
+      const chunk = asset.chunks[0];
+      if (chunk.compression !== "None" || chunk.compressedSize !== chunk.uncompressedSize)
+        throw new Error(`raw BIG asset must be uncompressed: ${asset.name}`);
+      if (chunk.uncompressedSize > BigInt(Number.MAX_SAFE_INTEGER))
+        throw new RangeError(`raw BIG asset exceeds browser safe size: ${asset.name}`);
+      this.assets.set(asset.name, chunk);
+    }
+  }
+  chunk(path) {
+    const chunk = this.assets.get(path);
+    if (!chunk)
+      throw new Error(`raw BIG asset not found: ${path}`);
+    return chunk;
+  }
+  load(path) {
+    const chunk = this.chunk(path);
+    return this.source.read(this.containerPath, Number(chunk.offset), Number(chunk.uncompressedSize));
+  }
+  async size(path) {
+    return Number(this.chunk(path).uncompressedSize);
+  }
+  read(path, offset, length2) {
+    const chunk = this.chunk(path);
+    const size = Number(chunk.uncompressedSize);
+    if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length2) || length2 < 0 || offset + length2 > size)
+      throw new RangeError(`raw BIG asset range exceeds ${path}: ${offset}+${length2} > ${size}`);
+    return this.source.read(this.containerPath, Number(chunk.offset) + offset, length2);
+  }
+  poll() {}
+}
+
+// crates/afterglow-web/web/src/engine/assets/big-format.ts
 function decodeVarint(bytes, off) {
   let r = 0;
   for (let shift = 0;shift < 56; shift += 7) {
@@ -64002,6 +63914,363 @@ function getVirtualTextureDimensions(header, assetName) {
     throw new Error(`VT dimensions unavailable: ${assetName}`);
   return { width: directory.width, height: directory.height };
 }
+
+// crates/afterglow-web/web/src/engine/assets/asset-range.ts
+async function readBigHeader(source, path, maxHeaderBytes) {
+  if (!Number.isSafeInteger(maxHeaderBytes) || maxHeaderBytes < 16)
+    throw new RangeError("BIG maxHeaderBytes must be at least 16");
+  const prefix = await source.read(path, 0, 16);
+  if (prefix.byteLength !== 16)
+    throw new Error("BIG container prefix is truncated");
+  const view = new DataView(prefix.buffer, prefix.byteOffset, prefix.byteLength);
+  if (view.getUint32(0, true) !== BIG_MAGIC)
+    throw new Error("BIG container has invalid magic");
+  const version = view.getUint32(4, true);
+  if (version < BIG_MIN_READABLE_VERSION || version > BIG_VERSION) {
+    throw new Error(`BIG container version ${version} is unsupported`);
+  }
+  const dataOffset = Number(view.getBigUint64(8, true));
+  if (!Number.isSafeInteger(dataOffset) || dataOffset < 16 || dataOffset > maxHeaderBytes)
+    throw new RangeError(`BIG header size ${dataOffset} exceeds configured capacity ${maxHeaderBytes}`);
+  const bytes = await source.read(path, 0, dataOffset);
+  if (bytes.byteLength !== dataOffset)
+    throw new Error("BIG container header is truncated");
+  return parseBigHeader(bytes).header;
+}
+function createFetchRangeLoader(baseUrl = "") {
+  const url = (path) => baseUrl + path;
+  const identity = async (path) => {
+    const response = await fetch(url(path), { headers: { Range: "bytes=0-0" } });
+    if (response.status !== 206)
+      throw new Error(`asset identity range expected 206, got ${response.status}: ${path}`);
+    const contentRange = response.headers.get("content-range") ?? "";
+    const separator = contentRange.lastIndexOf("/");
+    const size = Number(separator < 0 ? "" : contentRange.slice(separator + 1));
+    if (!Number.isSafeInteger(size) || size < 1)
+      throw new Error(`asset identity has invalid content-range: ${path}`);
+    return {
+      size,
+      etag: response.headers.get("etag"),
+      lastModified: response.headers.get("last-modified")
+    };
+  };
+  return {
+    async load(path) {
+      const response = await fetch(url(path));
+      if (!response.ok)
+        throw new Error(`asset fetch ${response.status}: ${path}`);
+      return new Uint8Array(await response.arrayBuffer());
+    },
+    async size(path) {
+      return (await identity(path)).size;
+    },
+    identity,
+    async read(path, offset, len) {
+      if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(len) || len < 0)
+        throw new RangeError("asset range must use non-negative safe integers");
+      if (len === 0)
+        return new Uint8Array(0);
+      return (await fetchByteRanges(url(path), [{ offset, length: len }]))[0];
+    },
+    async readBulk(path, ranges) {
+      return fetchByteRanges(url(path), ranges);
+    }
+  };
+}
+
+// crates/afterglow-web/web/src/engine/assets/big-container.ts
+class BigContainer {
+  source;
+  path;
+  header;
+  rawAssets;
+  ranges;
+  constructor(source, path, header) {
+    this.source = source;
+    this.path = path;
+    this.header = header;
+    this.rawAssets = new BigContainerAssetLoader(source, path, header);
+    this.ranges = {
+      read: (offset, length2) => source.read(path, offset, length2),
+      readBulk: source.readBulk ? (ranges) => source.readBulk(path, ranges) : undefined
+    };
+  }
+  static async open(source, path, maxHeaderBytes) {
+    if (!path)
+      throw new RangeError("BIG container path is required");
+    const header = await readBigHeader(source, path, maxHeaderBytes);
+    return new BigContainer(source, path, header);
+  }
+}
+// crates/afterglow-web/web/src/engine/assets/deadline-range-batcher.ts
+class DeadlineRangeBatcher {
+  loader;
+  urgentDeadlineMs;
+  focusDeadlineMs;
+  peripheralDeadlineMs;
+  telemetry;
+  slots = new Array(BULK_RANGE_CAPACITY);
+  free = new Uint16Array(BULK_RANGE_CAPACITY);
+  freeTop = 0;
+  queued = [
+    new Uint16Array(BULK_RANGE_CAPACITY),
+    new Uint16Array(BULK_RANGE_CAPACITY),
+    new Uint16Array(BULK_RANGE_CAPACITY)
+  ];
+  heads = new Uint16Array(3);
+  tails = new Uint16Array(3);
+  counts = new Uint16Array(3);
+  ready = new Uint8Array(3);
+  timers = [null, null, null];
+  inFlight = 0;
+  inFlightBytes = 0;
+  closed = false;
+  reads = 0;
+  totalReadMs = 0;
+  maxReadMs = 0;
+  urgentBatches = 0;
+  focusBatches = 0;
+  peripheralBatches = 0;
+  rejected = 0;
+  canceled = 0;
+  stats = {
+    reads: 0,
+    averageReadMs: 0,
+    maxReadMs: 0,
+    queued: 0,
+    inFlight: 0,
+    inFlightBytes: 0,
+    urgentBatches: 0,
+    focusBatches: 0,
+    peripheralBatches: 0,
+    rejected: 0,
+    canceled: 0
+  };
+  constructor(loader, urgentDeadlineMs, focusDeadlineMs, peripheralDeadlineMs, telemetry) {
+    this.loader = loader;
+    this.urgentDeadlineMs = urgentDeadlineMs;
+    this.focusDeadlineMs = focusDeadlineMs;
+    this.peripheralDeadlineMs = peripheralDeadlineMs;
+    this.telemetry = telemetry;
+    for (let index = BULK_RANGE_CAPACITY - 1;index >= 0; index--) {
+      this.slots[index] = {
+        offset: 0,
+        correlation: 0,
+        length: 0,
+        signal: undefined,
+        resolve: null,
+        reject: null
+      };
+      this.free[this.freeTop++] = index;
+    }
+  }
+  tierIndex(tier) {
+    return tier === "urgent" ? 0 : tier === "focus" ? 1 : 2;
+  }
+  deadlineMs(tier) {
+    return tier === 0 ? this.urgentDeadlineMs : tier === 1 ? this.focusDeadlineMs : this.peripheralDeadlineMs;
+  }
+  read(offset, length2, tier, signal, correlation = 0) {
+    const traceCorrelation = correlation || this.telemetry?.nextCorrelation(3 /* VirtualTexture */) || 0;
+    return new Promise((resolve, reject) => {
+      if (this.closed) {
+        this.rejected++;
+        reject(new Error("bulk page reader is closed"));
+        return;
+      }
+      if (signal?.aborted) {
+        this.canceled++;
+        reject(new Error("VT page load canceled before batching"));
+        return;
+      }
+      if (this.freeTop === 0) {
+        this.rejected++;
+        reject(new Error("bulk page queue capacity exceeded"));
+        return;
+      }
+      const slotIndex = this.free[--this.freeTop];
+      const slot = this.slots[slotIndex];
+      slot.offset = offset;
+      slot.correlation = traceCorrelation;
+      slot.length = length2;
+      this.telemetry?.trace.asyncBegin(14 /* VtBulkWait */, traceCorrelation, length2, this.tierIndex(tier));
+      slot.signal = signal;
+      slot.resolve = resolve;
+      slot.reject = reject;
+      const lane = this.tierIndex(tier);
+      this.queued[lane][this.tails[lane]] = slotIndex;
+      this.tails[lane] = (this.tails[lane] + 1) % BULK_RANGE_CAPACITY;
+      this.counts[lane]++;
+      if (this.timers[lane] === null) {
+        this.timers[lane] = setTimeout(() => {
+          this.timers[lane] = null;
+          this.ready[lane] = 1;
+          this.pump();
+        }, this.deadlineMs(lane));
+      }
+      if (this.counts[lane] === BULK_RANGE_CAPACITY) {
+        this.ready[lane] = 1;
+        this.pump();
+      }
+    });
+  }
+  release(slotIndex) {
+    const slot = this.slots[slotIndex];
+    slot.signal = undefined;
+    slot.resolve = null;
+    slot.reject = null;
+    this.free[this.freeTop++] = slotIndex;
+  }
+  pop(lane) {
+    const index = this.queued[lane][this.heads[lane]];
+    this.heads[lane] = (this.heads[lane] + 1) % BULK_RANGE_CAPACITY;
+    this.counts[lane]--;
+    return index;
+  }
+  clearLaneTimer(lane) {
+    const timer = this.timers[lane];
+    if (timer !== null)
+      clearTimeout(timer);
+    this.timers[lane] = null;
+  }
+  pump() {
+    while (this.inFlight < 2 && this.inFlightBytes < BULK_IN_FLIGHT_MAX_BYTES) {
+      const lane = this.ready[0] !== 0 && this.counts[0] !== 0 ? 0 : this.ready[1] !== 0 && this.counts[1] !== 0 ? 1 : this.ready[2] !== 0 && this.counts[2] !== 0 ? 2 : -1;
+      if (lane < 0)
+        return;
+      const indices = [];
+      const ranges = [];
+      while (this.counts[lane] !== 0 && indices.length < BULK_RANGE_CAPACITY) {
+        const slotIndex = this.queued[lane][this.heads[lane]];
+        const slot = this.slots[slotIndex];
+        if (slot.signal?.aborted) {
+          this.pop(lane);
+          this.canceled++;
+          this.telemetry?.trace.asyncEnd(14 /* VtBulkWait */, slot.correlation, 0, lane);
+          slot.reject?.(new Error("VT page load canceled while batched"));
+          this.release(slotIndex);
+          continue;
+        }
+        const candidate = { offset: slot.offset, length: slot.length };
+        ranges.push(candidate);
+        if (estimatedBulkResponseBytes(ranges) > BULK_RESPONSE_MAX_BYTES) {
+          ranges.pop();
+          if (indices.length === 0) {
+            this.pop(lane);
+            this.rejected++;
+            this.telemetry?.trace.asyncEnd(14 /* VtBulkWait */, slot.correlation, 0, lane);
+            slot.reject?.(new RangeError("one VT page exceeds bulk response capacity"));
+            this.release(slotIndex);
+            continue;
+          }
+          break;
+        }
+        indices.push(this.pop(lane));
+      }
+      if (this.counts[lane] === 0) {
+        this.ready[lane] = 0;
+        this.clearLaneTimer(lane);
+      }
+      if (indices.length === 0)
+        continue;
+      const expectedBytes = estimatedBulkResponseBytes(ranges);
+      if (this.inFlightBytes + expectedBytes > BULK_IN_FLIGHT_MAX_BYTES)
+        return;
+      this.dispatch(indices, ranges, expectedBytes, lane);
+    }
+  }
+  dispatch(indices, ranges, expectedBytes, lane) {
+    this.inFlight++;
+    this.inFlightBytes += expectedBytes;
+    if (lane === 0)
+      this.urgentBatches++;
+    else if (lane === 1)
+      this.focusBatches++;
+    else
+      this.peripheralBatches++;
+    const startedAt = performance.now();
+    const batchCorrelation = this.telemetry?.nextCorrelation(4 /* Asset */) ?? 0;
+    for (let index = 0;index < indices.length; index++) {
+      const slot = this.slots[indices[index]];
+      this.telemetry?.trace.asyncEnd(14 /* VtBulkWait */, slot.correlation, slot.length, lane);
+    }
+    this.telemetry?.trace.asyncBegin(15 /* VtBulkDispatch */, batchCorrelation, expectedBytes, indices.length);
+    const request = this.loader.readBulk ? this.loader.readBulk(ranges) : Promise.all(indices.map((slotIndex, index) => {
+      const slot = this.slots[slotIndex];
+      const range2 = ranges[index];
+      return this.loader.read(range2.offset, range2.length);
+    }));
+    request.then((parts) => {
+      if (parts.length !== indices.length)
+        throw new Error(`bulk response returned ${parts.length} parts; expected ${indices.length}`);
+      const readMs = performance.now() - startedAt;
+      let receivedBytes = 0;
+      for (let index = 0;index < parts.length; index++)
+        receivedBytes += parts[index]?.byteLength ?? 0;
+      this.telemetry?.trace.asyncEnd(15 /* VtBulkDispatch */, batchCorrelation, receivedBytes, parts.length);
+      this.reads++;
+      this.totalReadMs += readMs;
+      this.maxReadMs = Math.max(this.maxReadMs, readMs);
+      for (let index = 0;index < indices.length; index++) {
+        const slotIndex = indices[index];
+        const slot = this.slots[slotIndex];
+        const bytes = parts[index];
+        if (bytes.byteLength !== slot.length)
+          slot.reject?.(new Error(`bulk page returned ${bytes.byteLength} bytes; expected ${slot.length}`));
+        else if (this.closed || slot.signal?.aborted) {
+          this.canceled++;
+          slot.reject?.(new Error("VT page load canceled after bulk read"));
+        } else
+          slot.resolve?.(bytes);
+        this.release(slotIndex);
+      }
+    }).catch((error2) => {
+      this.telemetry?.trace.asyncEnd(15 /* VtBulkDispatch */, batchCorrelation, 0, 0);
+      for (const slotIndex of indices) {
+        this.slots[slotIndex].reject?.(error2);
+        this.release(slotIndex);
+      }
+    }).finally(() => {
+      this.inFlight--;
+      this.inFlightBytes -= expectedBytes;
+      this.pump();
+    });
+  }
+  close() {
+    if (this.closed)
+      return;
+    this.closed = true;
+    for (let lane = 0;lane < 3; lane++) {
+      this.clearLaneTimer(lane);
+      while (this.counts[lane] !== 0) {
+        const slotIndex = this.pop(lane);
+        const slot = this.slots[slotIndex];
+        this.canceled++;
+        this.telemetry?.trace.asyncEnd(14 /* VtBulkWait */, slot.correlation, 0, lane);
+        slot.reject?.(new Error("bulk page reader closed"));
+        this.release(slotIndex);
+      }
+      this.ready[lane] = 0;
+    }
+  }
+  getStats() {
+    const stats = this.stats;
+    stats.reads = this.reads;
+    stats.averageReadMs = this.reads === 0 ? 0 : this.totalReadMs / this.reads;
+    stats.maxReadMs = this.maxReadMs;
+    stats.queued = this.counts[0] + this.counts[1] + this.counts[2];
+    stats.inFlight = this.inFlight;
+    stats.inFlightBytes = this.inFlightBytes;
+    stats.urgentBatches = this.urgentBatches;
+    stats.focusBatches = this.focusBatches;
+    stats.peripheralBatches = this.peripheralBatches;
+    stats.rejected = this.rejected;
+    stats.canceled = this.canceled;
+    return stats;
+  }
+}
+
+// crates/afterglow-web/web/src/engine/assets/bounded-transcoder-pool.ts
 class BoundedTranscoderPool {
   workers;
   telemetry;
@@ -64128,416 +64397,90 @@ class BoundedTranscoderPool {
     return stats;
   }
 }
-async function readBigHeader(source, path, maxHeaderBytes) {
-  if (!Number.isSafeInteger(maxHeaderBytes) || maxHeaderBytes < 16)
-    throw new RangeError("BIG maxHeaderBytes must be at least 16");
-  const prefix = await source.read(path, 0, 16);
-  if (prefix.byteLength !== 16)
-    throw new Error("BIG container prefix is truncated");
-  const view = new DataView(prefix.buffer, prefix.byteOffset, prefix.byteLength);
-  if (view.getUint32(0, true) !== BIG_MAGIC)
-    throw new Error("BIG container has invalid magic");
-  const version = view.getUint32(4, true);
-  if (version < BIG_MIN_READABLE_VERSION || version > BIG_VERSION) {
-    throw new Error(`BIG container version ${version} is unsupported`);
-  }
-  const dataOffset = Number(view.getBigUint64(8, true));
-  if (!Number.isSafeInteger(dataOffset) || dataOffset < 16 || dataOffset > maxHeaderBytes)
-    throw new RangeError(`BIG header size ${dataOffset} exceeds configured capacity ${maxHeaderBytes}`);
-  const bytes = await source.read(path, 0, dataOffset);
-  if (bytes.byteLength !== dataOffset)
-    throw new Error("BIG container header is truncated");
-  return parseBigHeader(bytes).header;
-}
-function createFetchRangeLoader(baseUrl = "") {
-  const url = (path) => baseUrl + path;
-  const identity = async (path) => {
-    const response = await fetch(url(path), { headers: { Range: "bytes=0-0" } });
-    if (response.status !== 206)
-      throw new Error(`asset identity range expected 206, got ${response.status}: ${path}`);
-    const contentRange = response.headers.get("content-range") ?? "";
-    const separator = contentRange.lastIndexOf("/");
-    const size = Number(separator < 0 ? "" : contentRange.slice(separator + 1));
-    if (!Number.isSafeInteger(size) || size < 1)
-      throw new Error(`asset identity has invalid content-range: ${path}`);
-    return {
-      size,
-      etag: response.headers.get("etag"),
-      lastModified: response.headers.get("last-modified")
-    };
-  };
-  return {
-    async load(path) {
-      const response = await fetch(url(path));
-      if (!response.ok)
-        throw new Error(`asset fetch ${response.status}: ${path}`);
-      return new Uint8Array(await response.arrayBuffer());
-    },
-    async size(path) {
-      return (await identity(path)).size;
-    },
-    identity,
-    async read(path, offset, len) {
-      if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(len) || len < 0)
-        throw new RangeError("asset range must use non-negative safe integers");
-      if (len === 0)
-        return new Uint8Array(0);
-      return (await fetchByteRanges(url(path), [{ offset, length: len }]))[0];
-    },
-    async readBulk(path, ranges) {
-      return fetchByteRanges(url(path), ranges);
-    }
-  };
+
+// crates/afterglow-web/web/src/engine/assets/service-types.ts
+function hasSourceTextureTranscoder(worker) {
+  return typeof worker.transcodeSourceRange === "function";
 }
 
-class BigContainerAssetLoader {
-  source;
-  containerPath;
-  assets = new Map;
-  constructor(source, containerPath, header) {
-    this.source = source;
-    this.containerPath = containerPath;
+// crates/afterglow-web/web/src/engine/assets/vt-page-directory.ts
+class VtPageDirectory {
+  textures = new Map;
+  constructor(header) {
     for (const asset of header.assets) {
-      if (asset.chunks.length !== 1 || asset.chunks[0].meta.type !== "Raw")
+      const source = asset.virtualTexture;
+      if (!source)
         continue;
-      const chunk = asset.chunks[0];
-      if (chunk.compression !== "None" || chunk.compressedSize !== chunk.uncompressedSize)
-        throw new Error(`raw BIG asset must be uncompressed: ${asset.name}`);
-      if (chunk.uncompressedSize > BigInt(Number.MAX_SAFE_INTEGER))
-        throw new RangeError(`raw BIG asset exceeds browser safe size: ${asset.name}`);
-      this.assets.set(asset.name, chunk);
-    }
-  }
-  chunk(path) {
-    const chunk = this.assets.get(path);
-    if (!chunk)
-      throw new Error(`raw BIG asset not found: ${path}`);
-    return chunk;
-  }
-  load(path) {
-    const chunk = this.chunk(path);
-    return this.source.read(this.containerPath, Number(chunk.offset), Number(chunk.uncompressedSize));
-  }
-  async size(path) {
-    return Number(this.chunk(path).uncompressedSize);
-  }
-  read(path, offset, length2) {
-    const chunk = this.chunk(path);
-    const size = Number(chunk.uncompressedSize);
-    if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length2) || length2 < 0 || offset + length2 > size)
-      throw new RangeError(`raw BIG asset range exceeds ${path}: ${offset}+${length2} > ${size}`);
-    return this.source.read(this.containerPath, Number(chunk.offset) + offset, length2);
-  }
-  poll() {}
-}
-function expandVtDirectories(header) {
-  const directories = new Map;
-  for (let assetId = 0;assetId < header.assets.length; assetId++) {
-    const asset = header.assets[assetId];
-    const source = asset.virtualTexture;
-    if (!source)
-      continue;
-    let maxMip = 0;
-    for (const mip of source.mips)
-      maxMip = Math.max(maxMip, mip.mip);
-    const mips = new Array(maxMip + 1).fill(null);
-    for (const mip of source.mips) {
-      const sizes = Uint32Array.from(mip.pageSizes);
-      const offsets = new Float64Array(sizes.length);
-      let offset = Number(mip.offset);
-      for (let page = 0;page < sizes.length; page++) {
-        offsets[page] = offset;
-        offset += sizes[page];
-      }
-      mips[mip.mip] = { pagesX: mip.pagesX, pagesY: mip.pagesY, offsets, sizes };
-    }
-    directories.set(asset.name, {
-      assetId,
-      encoding: source.encoding,
-      mips,
-      tailOffset: source.tail ? Number(source.tail.offset) : 0,
-      tailSize: source.tail?.size ?? 0
-    });
-  }
-  return directories;
-}
-class BoundedBulkReadQueue {
-  loader;
-  urgentDeadlineMs;
-  focusDeadlineMs;
-  peripheralDeadlineMs;
-  telemetry;
-  slots = new Array(BULK_RANGE_CAPACITY);
-  free = new Uint16Array(BULK_RANGE_CAPACITY);
-  freeTop = 0;
-  queued = [
-    new Uint16Array(BULK_RANGE_CAPACITY),
-    new Uint16Array(BULK_RANGE_CAPACITY),
-    new Uint16Array(BULK_RANGE_CAPACITY)
-  ];
-  heads = new Uint16Array(3);
-  tails = new Uint16Array(3);
-  counts = new Uint16Array(3);
-  ready = new Uint8Array(3);
-  timers = [null, null, null];
-  inFlight = 0;
-  inFlightBytes = 0;
-  closed = false;
-  reads = 0;
-  totalReadMs = 0;
-  maxReadMs = 0;
-  urgentBatches = 0;
-  focusBatches = 0;
-  peripheralBatches = 0;
-  rejected = 0;
-  canceled = 0;
-  stats = {
-    reads: 0,
-    averageReadMs: 0,
-    maxReadMs: 0,
-    queued: 0,
-    inFlight: 0,
-    inFlightBytes: 0,
-    urgentBatches: 0,
-    focusBatches: 0,
-    peripheralBatches: 0,
-    rejected: 0,
-    canceled: 0
-  };
-  constructor(loader, urgentDeadlineMs, focusDeadlineMs, peripheralDeadlineMs, telemetry) {
-    this.loader = loader;
-    this.urgentDeadlineMs = urgentDeadlineMs;
-    this.focusDeadlineMs = focusDeadlineMs;
-    this.peripheralDeadlineMs = peripheralDeadlineMs;
-    this.telemetry = telemetry;
-    for (let index = BULK_RANGE_CAPACITY - 1;index >= 0; index--) {
-      this.slots[index] = {
-        path: "",
-        offset: 0,
-        correlation: 0,
-        length: 0,
-        signal: undefined,
-        resolve: null,
-        reject: null
-      };
-      this.free[this.freeTop++] = index;
-    }
-  }
-  tierIndex(tier) {
-    return tier === "urgent" ? 0 : tier === "focus" ? 1 : 2;
-  }
-  deadlineMs(tier) {
-    return tier === 0 ? this.urgentDeadlineMs : tier === 1 ? this.focusDeadlineMs : this.peripheralDeadlineMs;
-  }
-  read(path, offset, length2, tier, signal, correlation = 0) {
-    const traceCorrelation = correlation || this.telemetry?.nextCorrelation(3 /* VirtualTexture */) || 0;
-    return new Promise((resolve, reject) => {
-      if (this.closed) {
-        this.rejected++;
-        reject(new Error("bulk page reader is closed"));
-        return;
-      }
-      if (signal?.aborted) {
-        this.canceled++;
-        reject(new Error("VT page load canceled before batching"));
-        return;
-      }
-      if (this.freeTop === 0) {
-        this.rejected++;
-        reject(new Error("bulk page queue capacity exceeded"));
-        return;
-      }
-      const slotIndex = this.free[--this.freeTop];
-      const slot = this.slots[slotIndex];
-      slot.path = path;
-      slot.offset = offset;
-      slot.correlation = traceCorrelation;
-      slot.length = length2;
-      this.telemetry?.trace.asyncBegin(14 /* VtBulkWait */, traceCorrelation, length2, this.tierIndex(tier));
-      slot.signal = signal;
-      slot.resolve = resolve;
-      slot.reject = reject;
-      const lane = this.tierIndex(tier);
-      this.queued[lane][this.tails[lane]] = slotIndex;
-      this.tails[lane] = (this.tails[lane] + 1) % BULK_RANGE_CAPACITY;
-      this.counts[lane]++;
-      if (this.timers[lane] === null) {
-        this.timers[lane] = setTimeout(() => {
-          this.timers[lane] = null;
-          this.ready[lane] = 1;
-          this.pump();
-        }, this.deadlineMs(lane));
-      }
-      if (this.counts[lane] === BULK_RANGE_CAPACITY) {
-        this.ready[lane] = 1;
-        this.pump();
-      }
-    });
-  }
-  release(slotIndex) {
-    const slot = this.slots[slotIndex];
-    slot.path = "";
-    slot.signal = undefined;
-    slot.resolve = null;
-    slot.reject = null;
-    this.free[this.freeTop++] = slotIndex;
-  }
-  pop(lane) {
-    const index = this.queued[lane][this.heads[lane]];
-    this.heads[lane] = (this.heads[lane] + 1) % BULK_RANGE_CAPACITY;
-    this.counts[lane]--;
-    return index;
-  }
-  clearLaneTimer(lane) {
-    const timer = this.timers[lane];
-    if (timer !== null)
-      clearTimeout(timer);
-    this.timers[lane] = null;
-  }
-  pump() {
-    while (this.inFlight < 2 && this.inFlightBytes < BULK_IN_FLIGHT_MAX_BYTES) {
-      const lane = this.ready[0] !== 0 && this.counts[0] !== 0 ? 0 : this.ready[1] !== 0 && this.counts[1] !== 0 ? 1 : this.ready[2] !== 0 && this.counts[2] !== 0 ? 2 : -1;
-      if (lane < 0)
-        return;
-      const indices = [];
-      const ranges = [];
-      while (this.counts[lane] !== 0 && indices.length < BULK_RANGE_CAPACITY) {
-        const slotIndex = this.queued[lane][this.heads[lane]];
-        const slot = this.slots[slotIndex];
-        if (slot.signal?.aborted) {
-          this.pop(lane);
-          this.canceled++;
-          this.telemetry?.trace.asyncEnd(14 /* VtBulkWait */, slot.correlation, 0, lane);
-          slot.reject?.(new Error("VT page load canceled while batched"));
-          this.release(slotIndex);
-          continue;
+      let maxMip = 0;
+      for (const mip of source.mips)
+        maxMip = Math.max(maxMip, mip.mip);
+      const mips = new Array(maxMip + 1).fill(null);
+      for (const mip of source.mips) {
+        const sizes = Uint32Array.from(mip.pageSizes);
+        const offsets = new Float64Array(sizes.length);
+        let offset = Number(mip.offset);
+        for (let page = 0;page < sizes.length; page++) {
+          offsets[page] = offset;
+          offset += sizes[page] ?? 0;
         }
-        const candidate = { offset: slot.offset, length: slot.length };
-        ranges.push(candidate);
-        if (estimatedBulkResponseBytes(ranges) > BULK_RESPONSE_MAX_BYTES) {
-          ranges.pop();
-          if (indices.length === 0) {
-            this.pop(lane);
-            this.rejected++;
-            this.telemetry?.trace.asyncEnd(14 /* VtBulkWait */, slot.correlation, 0, lane);
-            slot.reject?.(new RangeError("one VT page exceeds bulk response capacity"));
-            this.release(slotIndex);
-            continue;
-          }
-          break;
-        }
-        indices.push(this.pop(lane));
+        mips[mip.mip] = {
+          pagesX: mip.pagesX,
+          pagesY: mip.pagesY,
+          offsets,
+          sizes
+        };
       }
-      if (this.counts[lane] === 0) {
-        this.ready[lane] = 0;
-        this.clearLaneTimer(lane);
-      }
-      if (indices.length === 0)
-        continue;
-      const expectedBytes = estimatedBulkResponseBytes(ranges);
-      if (this.inFlightBytes + expectedBytes > BULK_IN_FLIGHT_MAX_BYTES)
-        return;
-      this.dispatch(indices, ranges, expectedBytes, lane);
+      this.textures.set(asset.name, {
+        encoding: source.encoding,
+        mips,
+        tailOffset: source.tail ? Number(source.tail.offset) : 0,
+        tailSize: source.tail?.size ?? 0
+      });
     }
   }
-  dispatch(indices, ranges, expectedBytes, lane) {
-    this.inFlight++;
-    this.inFlightBytes += expectedBytes;
-    if (lane === 0)
-      this.urgentBatches++;
-    else if (lane === 1)
-      this.focusBatches++;
-    else
-      this.peripheralBatches++;
-    const startedAt = performance.now();
-    const batchCorrelation = this.telemetry?.nextCorrelation(4 /* Asset */) ?? 0;
-    for (let index = 0;index < indices.length; index++) {
-      const slot = this.slots[indices[index]];
-      this.telemetry?.trace.asyncEnd(14 /* VtBulkWait */, slot.correlation, slot.length, lane);
+  resolve(address) {
+    const texture2 = this.textures.get(address.path);
+    if (!texture2)
+      throw new Error(`VT directory not found: ${address.path}`);
+    let offset = 0;
+    let length2 = 0;
+    if (address.tail) {
+      offset = texture2.tailOffset;
+      length2 = texture2.tailSize;
+    } else {
+      const mip = texture2.mips[address.mip];
+      if (!mip || address.x < 0 || address.y < 0 || address.x >= mip.pagesX || address.y >= mip.pagesY) {
+        throw new Error(`VT page out of range: ${address.path} mip=${address.mip} (${address.x},${address.y})`);
+      }
+      const page = address.y * mip.pagesX + address.x;
+      offset = mip.offsets[page] ?? 0;
+      length2 = mip.sizes[page] ?? 0;
     }
-    this.telemetry?.trace.asyncBegin(15 /* VtBulkDispatch */, batchCorrelation, expectedBytes, indices.length);
-    const request = this.loader.readBulk ? this.loader.readBulk(ranges) : Promise.all(indices.map((slotIndex, index) => {
-      const slot = this.slots[slotIndex];
-      const range2 = ranges[index];
-      return this.loader.read(`${slot.path}.big`, range2.offset, range2.length);
-    }));
-    request.then((parts) => {
-      if (parts.length !== indices.length)
-        throw new Error(`bulk response returned ${parts.length} parts; expected ${indices.length}`);
-      const readMs = performance.now() - startedAt;
-      let receivedBytes = 0;
-      for (let index = 0;index < parts.length; index++)
-        receivedBytes += parts[index]?.byteLength ?? 0;
-      this.telemetry?.trace.asyncEnd(15 /* VtBulkDispatch */, batchCorrelation, receivedBytes, parts.length);
-      this.reads++;
-      this.totalReadMs += readMs;
-      this.maxReadMs = Math.max(this.maxReadMs, readMs);
-      for (let index = 0;index < indices.length; index++) {
-        const slotIndex = indices[index];
-        const slot = this.slots[slotIndex];
-        const bytes = parts[index];
-        if (bytes.byteLength !== slot.length)
-          slot.reject?.(new Error(`bulk page returned ${bytes.byteLength} bytes; expected ${slot.length}`));
-        else if (this.closed || slot.signal?.aborted) {
-          this.canceled++;
-          slot.reject?.(new Error("VT page load canceled after bulk read"));
-        } else
-          slot.resolve?.(bytes);
-        this.release(slotIndex);
-      }
-    }).catch((error2) => {
-      this.telemetry?.trace.asyncEnd(15 /* VtBulkDispatch */, batchCorrelation, 0, 0);
-      for (const slotIndex of indices) {
-        this.slots[slotIndex].reject?.(error2);
-        this.release(slotIndex);
-      }
-    }).finally(() => {
-      this.inFlight--;
-      this.inFlightBytes -= expectedBytes;
-      this.pump();
-    });
-  }
-  close() {
-    if (this.closed)
-      return;
-    this.closed = true;
-    for (let lane = 0;lane < 3; lane++) {
-      this.clearLaneTimer(lane);
-      while (this.counts[lane] !== 0) {
-        const slotIndex = this.pop(lane);
-        const slot = this.slots[slotIndex];
-        this.canceled++;
-        this.telemetry?.trace.asyncEnd(14 /* VtBulkWait */, slot.correlation, 0, lane);
-        slot.reject?.(new Error("bulk page reader closed"));
-        this.release(slotIndex);
-      }
-      this.ready[lane] = 0;
+    if (length2 === 0) {
+      throw new Error(`VT page not found: ${address.path} mip=${address.mip} (${address.x},${address.y})`);
     }
-  }
-  getStats() {
-    const stats = this.stats;
-    stats.reads = this.reads;
-    stats.averageReadMs = this.reads === 0 ? 0 : this.totalReadMs / this.reads;
-    stats.maxReadMs = this.maxReadMs;
-    stats.queued = this.counts[0] + this.counts[1] + this.counts[2];
-    stats.inFlight = this.inFlight;
-    stats.inFlightBytes = this.inFlightBytes;
-    stats.urgentBatches = this.urgentBatches;
-    stats.focusBatches = this.focusBatches;
-    stats.peripheralBatches = this.peripheralBatches;
-    stats.rejected = this.rejected;
-    stats.canceled = this.canceled;
-    return stats;
+    return {
+      path: address.path,
+      mip: address.mip,
+      x: address.x,
+      y: address.y,
+      tail: address.tail === true,
+      offset,
+      length: length2,
+      encoding: texture2.encoding
+    };
   }
 }
+
+// crates/afterglow-web/web/src/engine/assets/vt-page-provider.ts
 function createPageDataProvider(loader, header, textureWorkers, format, config, telemetry) {
   if (!Number.isInteger(config.transcodeQueueCapacity) || config.transcodeQueueCapacity < 1 || !Number.isInteger(config.urgentBatchDeadlineMs) || config.urgentBatchDeadlineMs < 0 || !Number.isInteger(config.focusBatchDeadlineMs) || config.focusBatchDeadlineMs < 0 || !Number.isInteger(config.peripheralBatchDeadlineMs) || config.peripheralBatchDeadlineMs < 0 || config.urgentBatchDeadlineMs > config.focusBatchDeadlineMs || config.focusBatchDeadlineMs > config.peripheralBatchDeadlineMs) {
     throw new RangeError("invalid VT page-pipeline configuration");
   }
-  const directories = expandVtDirectories(header);
+  const directory = new VtPageDirectory(header);
   const transcoder = new BoundedTranscoderPool(textureWorkers, config.transcodeQueueCapacity, telemetry);
-  const sourceBackedWorkers = textureWorkers.every((worker) => typeof worker.transcodeSourceRange === "function");
-  const bulkReads = new BoundedBulkReadQueue(loader, config.urgentBatchDeadlineMs, config.focusBatchDeadlineMs, config.peripheralBatchDeadlineMs, telemetry);
+  const sourceBackedWorkers = textureWorkers.every(hasSourceTextureTranscoder);
+  const bulkReads = new DeadlineRangeBatcher(loader, config.urgentBatchDeadlineMs, config.focusBatchDeadlineMs, config.peripheralBatchDeadlineMs, telemetry);
   const stats = {
     reads: 0,
     averageReadMs: 0,
@@ -64562,31 +64505,16 @@ function createPageDataProvider(loader, header, textureWorkers, format, config, 
   const provider = async (path, req, signal) => {
     if (signal?.aborted)
       throw new Error("VT page load canceled before read");
-    const directory = directories.get(path);
-    let offset = 0;
-    let size = 0;
-    if (req.tail) {
-      offset = directory?.tailOffset ?? 0;
-      size = directory?.tailSize ?? 0;
-    } else {
-      const mip = directory?.mips[req.mip];
-      if (mip && req.x >= 0 && req.y >= 0 && req.x < mip.pagesX && req.y < mip.pagesY) {
-        const page = req.y * mip.pagesX + req.x;
-        offset = mip.offsets[page];
-        size = mip.sizes[page];
-      }
-    }
-    if (!directory || size === 0)
-      throw new Error(`VT page not found: ${path} mip=${req.mip} (${req.x},${req.y})`);
+    const page = directory.resolve({ ...req, path });
     const correlation = req.cacheKey ?? telemetry?.nextCorrelation(3 /* VirtualTexture */) ?? 0;
     let transcoded;
-    if (directory.encoding !== "RawRgba8" && sourceBackedWorkers) {
-      transcoded = await transcoder.submitSourceRange(offset, size, format, signal, correlation);
+    if (page.encoding !== "RawRgba8" && sourceBackedWorkers) {
+      transcoded = await transcoder.submitSourceRange(page.offset, page.length, format, signal, correlation);
     } else {
-      const pageData = await bulkReads.read(path, offset, size, req.batchTier ?? "urgent", signal, correlation);
+      const pageData = await bulkReads.read(page.offset, page.length, req.batchTier ?? "urgent", signal, correlation);
       if (signal?.aborted)
         throw new Error("VT page load canceled after read");
-      if (directory.encoding === "RawRgba8") {
+      if (page.encoding === "RawRgba8") {
         if (format !== 4) {
           throw new Error(`VT page ${path} is raw RGBA8 but GPU format ${format} requires Basis encoding`);
         }
@@ -64637,25 +64565,6 @@ function createPageDataProvider(loader, header, textureWorkers, format, config, 
   return provider;
 }
 
-// crates/afterglow-web/web/src/engine/assets/big-container.ts
-class BigContainer {
-  source;
-  path;
-  header;
-  rawAssets;
-  constructor(source, path, header) {
-    this.source = source;
-    this.path = path;
-    this.header = header;
-    this.rawAssets = new BigContainerAssetLoader(source, path, header);
-  }
-  static async open(source, path, maxHeaderBytes) {
-    if (!path)
-      throw new RangeError("BIG container path is required");
-    const header = await readBigHeader(source, path, maxHeaderBytes);
-    return new BigContainer(source, path, header);
-  }
-}
 // crates/afterglow-web/web/src/engine/assets/platform-range-loader.ts
 var COPY_CHUNK_BYTES = 512 * 1024;
 function nativeOps() {
@@ -65365,59 +65274,64 @@ class MeshoptClient {
     const resp = await this.rpc.call(2, args);
     return decodeU32Vec(resp, 0)[0];
   }
+  async simplifyWithAttributes(indices, positions, positionStride, attributes, attributeStride, attributeWeights, vertexLock, targetIndexCount, targetError) {
+    const args = concat(encodeU32Vec(indices), encodeF32Vec(positions), encodeU32(positionStride), encodeF32Vec(attributes), encodeU32(attributeStride), encodeF32Vec(attributeWeights), encodeBytes(vertexLock), encodeU32(targetIndexCount), encodeF32(targetError));
+    const resp = await this.rpc.call(3, args);
+    return decodeU32Vec(resp, 0)[0];
+  }
   async optimizeVertexCache(indices, vertexCount) {
     const args = concat(encodeU32Vec(indices), encodeU32(vertexCount));
-    const resp = await this.rpc.call(3, args);
+    const resp = await this.rpc.call(4, args);
     return decodeU32Vec(resp, 0)[0];
   }
   async optimizeOverdraw(indices, positions, positionStride, threshold) {
     const args = concat(encodeU32Vec(indices), encodeF32Vec(positions), encodeU32(positionStride), encodeF32(threshold));
-    const resp = await this.rpc.call(4, args);
+    const resp = await this.rpc.call(5, args);
     return decodeU32Vec(resp, 0)[0];
   }
   async encodeIndexBuffer(indices, vertexCount) {
     const args = concat(encodeU32Vec(indices), encodeU32(vertexCount));
-    const resp = await this.rpc.call(5, args);
+    const resp = await this.rpc.call(6, args);
     return decodeBytes(resp, 0)[0];
   }
   async decodeIndexBuffer(buffer2, indexCount) {
     const args = concat(encodeBytes(buffer2), encodeU32(indexCount));
-    const resp = await this.rpc.call(6, args);
+    const resp = await this.rpc.call(7, args);
     return decodeU32Vec(resp, 0)[0];
   }
   async encodeVertexBuffer(vertices, vertexSize) {
     const args = concat(encodeBytes(vertices), encodeU32(vertexSize));
-    const resp = await this.rpc.call(7, args);
+    const resp = await this.rpc.call(8, args);
     return decodeBytes(resp, 0)[0];
   }
   async decodeVertexBuffer(buffer2, vertexCount, vertexSize) {
     const args = concat(encodeBytes(buffer2), encodeU32(vertexCount), encodeU32(vertexSize));
-    const resp = await this.rpc.call(8, args);
+    const resp = await this.rpc.call(9, args);
     return decodeBytes(resp, 0)[0];
   }
   async generateVertexRemap(indices, vertices, vertexSize) {
     const args = concat(encodeU32Vec(indices), encodeBytes(vertices), encodeU32(vertexSize));
-    const resp = await this.rpc.call(9, args);
+    const resp = await this.rpc.call(10, args);
     return decodeU32Vec(resp, 0)[0];
   }
   async stripify(indices, vertexCount, restartIndex) {
     const args = concat(encodeU32Vec(indices), encodeU32(vertexCount), encodeU32(restartIndex));
-    const resp = await this.rpc.call(10, args);
+    const resp = await this.rpc.call(11, args);
     return decodeU32Vec(resp, 0)[0];
   }
   async buildMeshlets(indices, positions, positionStride, maxVertices, maxTriangles, coneWeight) {
     const args = concat(encodeU32Vec(indices), encodeF32Vec(positions), encodeU32(positionStride), encodeU32(maxVertices), encodeU32(maxTriangles), encodeF32(coneWeight));
-    const resp = await this.rpc.call(11, args);
+    const resp = await this.rpc.call(12, args);
     return decodeBytes(resp, 0)[0];
   }
   async analyzeVertexCache(indices, vertexCount) {
     const args = concat(encodeU32Vec(indices), encodeU32(vertexCount));
-    const resp = await this.rpc.call(12, args);
+    const resp = await this.rpc.call(13, args);
     return decodeF32Vec(resp, 0)[0];
   }
   async quantizeHalf(value) {
     const args = encodeF32(value);
-    const resp = await this.rpc.call(13, args);
+    const resp = await this.rpc.call(14, args);
     return decodeU16(resp, 0)[0];
   }
 }
@@ -65620,173 +65534,1351 @@ class OwnedWorkerPool {
   }
 }
 
-// crates/afterglow-web/web/src/engine/virtual-texturing/virtual-texture-layout.ts
-function assertVirtualTextureDimensions(width, height) {
-  for (const [name, value] of [["width", width], ["height", height]])
-    if (!Number.isSafeInteger(value) || value <= 0)
-      throw new RangeError(`virtual texture ${name} must be a positive safe integer`);
-}
-function createPackedPageTableLayout(pageGridX, pageGridY = pageGridX) {
-  for (const value of [pageGridX, pageGridY])
-    if (!Number.isSafeInteger(value) || value <= 0)
-      throw new RangeError("page grids must be positive integers");
-  const maxMip = Math.ceil(Math.log2(Math.max(pageGridX, pageGridY)));
-  const mipOffsets = new Uint32Array(maxMip + 1);
-  let height = 0;
-  for (let mip = 0;mip <= maxMip; mip++) {
-    mipOffsets[mip] = height;
-    height += pagesAtMipAxis(pageGridY, mip);
-  }
-  return { width: pageGridX, baseHeight: pageGridY, storageWidth: Math.max(2, pageGridX), height, maxMip, mipOffsets };
-}
-function pagesAtMipAxis(base, mip) {
-  return Math.max(1, Math.ceil(base / 2 ** mip));
-}
-function pageGridAtMip(layout, mip) {
-  if (!Number.isInteger(mip) || mip < 0 || mip > layout.maxMip)
-    throw new RangeError(`mip ${mip} is outside 0..${layout.maxMip}`);
-  return { width: pagesAtMipAxis(layout.width, mip), height: pagesAtMipAxis(layout.baseHeight, mip) };
-}
-function packedPageTableIndex(layout, mip, x, y) {
-  const grid = pageGridAtMip(layout, mip);
-  if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || y < 0 || x >= grid.width || y >= grid.height)
-    throw new RangeError(`page (${x},${y}) is outside mip ${mip}'s ${grid.width}x${grid.height} grid`);
-  return (layout.mipOffsets[mip] + y) * layout.storageWidth + x;
-}
-function packedMipTailIndex(layout) {
-  return layout.mipOffsets[layout.maxMip] * layout.storageWidth + 1;
-}
+// crates/afterglow-web/web/src/engine/streaming/fixed-resource-registry.ts
+var SLOT_BITS = 20;
+var SLOT_SCALE = 2 ** SLOT_BITS;
+var SLOT_MASK = SLOT_SCALE - 1;
 
-// crates/afterglow-web/web/src/engine/virtual-texturing/virtual-texture.ts
-var PAGE_SIZE = 128;
-var PAGE_BORDER = 4;
-var SLOT_SIZE = PAGE_SIZE + PAGE_BORDER * 2;
-var ATLAS_PAGES_X = 15;
-var ATLAS_PAGES_Y = 15;
-var ATLAS_WIDTH = ATLAS_PAGES_X * SLOT_SIZE;
-var ATLAS_HEIGHT = ATLAS_PAGES_Y * SLOT_SIZE;
-var MAX_MIP = 10;
-var SCORE_COVERAGE_CAP = 255;
-var MAX_PIXEL_PERCEPTUAL_WEIGHT = 15;
-var MAX_PERCEPTUAL_WEIGHT = SCORE_COVERAGE_CAP * MAX_PIXEL_PERCEPTUAL_WEIGHT;
-var MAX_PAGE_SCORE = SCORE_COVERAGE_CAP * (MAX_PIXEL_PERCEPTUAL_WEIGHT + 7);
-var IMPORTANCE_LEVEL_MAX = 24;
-var IMPORTANCE_BUCKET_COUNT = IMPORTANCE_LEVEL_MAX + 1;
-var MAX_SCORE_EXPONENT = 31 - Math.clz32(MAX_PAGE_SCORE);
-var TOP_SCORE_BASE = 1 << MAX_SCORE_EXPONENT;
-var TOP_SCORE_SPLIT = TOP_SCORE_BASE + Math.ceil((MAX_PAGE_SCORE - TOP_SCORE_BASE + 1) / 2);
-var FOCUS_IMPORTANCE_BUCKET_MAX = 12;
-var PAGE_KIND_PRIORITY_COUNT = 2;
-var MATERIAL_CHANNEL_PRIORITY_COUNT = 3;
-var PRIORITY_LANE_COUNT = IMPORTANCE_BUCKET_COUNT * PAGE_KIND_PRIORITY_COUNT * MATERIAL_CHANNEL_PRIORITY_COUNT;
-function packedPageCoordinates(textureId, mip, x, y, tail = false) {
-  const local = tail ? 268435456 : (mip & 63 | (x & 2047) << 6 | (y & 2047) << 17) >>> 0;
-  return textureId * 536870912 + local;
-}
-function packedPageIdentity(textureId, req) {
-  return packedPageCoordinates(textureId, req.mip, req.x, req.y, req.tail);
-}
-function perceptualImportanceBucket(weight) {
-  const bounded = Math.max(1, Math.min(MAX_PAGE_SCORE, Math.floor(weight)));
-  const exponent = 31 - Math.clz32(bounded);
-  let level;
-  if (exponent === 0)
-    level = 0;
-  else if (exponent < MAX_SCORE_EXPONENT)
-    level = exponent * 2 - 1 + (bounded >>> exponent - 1 & 1);
-  else
-    level = bounded < TOP_SCORE_SPLIT ? IMPORTANCE_LEVEL_MAX - 1 : IMPORTANCE_LEVEL_MAX;
-  return IMPORTANCE_LEVEL_MAX - level;
-}
-function sourcePerceptualWeight(source) {
-  const coverage = Math.min(SCORE_COVERAGE_CAP, source.coverage ?? 1);
-  const centerCloseness = 7 - Math.min(7, (source.screenPriority ?? 255) >>> 5);
-  return Math.min(MAX_PERCEPTUAL_WEIGHT, source.perceptualWeight ?? coverage * (1 + centerCloseness));
-}
-function perceptualPriority(perceptualWeight, coverage, residentMipGap, parent, channelPriority) {
-  const pageWeight = Math.min(MAX_PAGE_SCORE, perceptualWeight + Math.min(SCORE_COVERAGE_CAP, coverage) * residentMipGap);
-  const bucket = perceptualImportanceBucket(pageWeight);
-  const pageKind = parent ? 0 : 1;
-  return (bucket * PAGE_KIND_PRIORITY_COUNT + pageKind) * MATERIAL_CHANNEL_PRIORITY_COUNT + channelPriority;
-}
-function pageBatchTier(parent, priority) {
-  if (parent)
-    return "urgent";
-  const importanceBucket = Math.floor(priority / (PAGE_KIND_PRIORITY_COUNT * MATERIAL_CHANNEL_PRIORITY_COUNT));
-  return importanceBucket <= FOCUS_IMPORTANCE_BUCKET_MAX ? "focus" : "peripheral";
-}
-function packEntry(resident, physX, physY) {
-  return (resident ? 1 : 0) | (physX & 255) << 1 | (physY & 255) << 9;
-}
-function isResident(entry) {
-  return (entry & 1) !== 0;
-}
-var BLOCK_SIZE = 4;
-var BC7_BYTES_PER_BLOCK = 16;
-var RGBA_BYTES_PER_BLOCK = BLOCK_SIZE * BLOCK_SIZE * 4;
-var SLOT_BLOCKS_X = SLOT_SIZE / BLOCK_SIZE;
-var SLOT_BLOCKS_Y = SLOT_SIZE / BLOCK_SIZE;
-var FORMAT_BC7 = 0;
-var FORMAT_ASTC = 1;
-var FORMAT_RGBA = 4;
-function bytesPerBlock(format) {
-  if (format === FORMAT_BC7 || format === FORMAT_ASTC)
-    return BC7_BYTES_PER_BLOCK;
-  return RGBA_BYTES_PER_BLOCK;
-}
-function threeFormat(format) {
-  if (format === FORMAT_BC7)
-    return RGBA_BPTC_Format;
-  if (format === FORMAT_ASTC)
-    return RGBA_ASTC_4x4_Format;
-  throw new RangeError(`unsupported compressed texture format ${format}`);
-}
-var DEFAULT_VIRTUAL_MATERIAL_MIP_BIASES = {
-  albedo: 0,
-  normal: 1,
-  masks: 2,
-  roughness: 2,
-  ao: 2,
-  emissive: 1
-};
-
-class PageTable {
-  layout;
-  entries;
+class FixedResourceRegistry {
+  capacity;
+  values;
+  generations;
+  free;
+  freeTop = 0;
   count = 0;
-  constructor(layout, entries) {
-    this.layout = layout;
-    this.entries = entries;
+  constructor(capacity) {
+    this.capacity = capacity;
+    if (!Number.isInteger(capacity) || capacity < 1 || capacity > SLOT_MASK)
+      throw new RangeError(`stream resource capacity must be from 1 through ${SLOT_MASK}`);
+    this.values = new Array(capacity).fill(null);
+    this.generations = new Uint32Array(capacity);
+    this.free = new Uint32Array(capacity);
+    for (let slot = capacity - 1;slot >= 0; slot--)
+      this.free[this.freeTop++] = slot;
   }
-  index(req) {
-    return packedPageTableIndex(this.layout, req.mip, req.x, req.y);
+  acquire(value) {
+    if (this.freeTop === 0)
+      return 0;
+    const slot = this.free[--this.freeTop] ?? 0;
+    let generation = (this.generations[slot] ?? 0) + 1 >>> 0;
+    if (generation === 0)
+      generation = 1;
+    this.generations[slot] = generation;
+    this.values[slot] = value;
+    this.count++;
+    return generation * SLOT_SCALE + slot + 1;
   }
-  get(req) {
-    return this.entries[this.index(req)];
+  get(handle) {
+    const numeric = handle;
+    if (!Number.isSafeInteger(numeric) || numeric <= 0)
+      return null;
+    const encodedSlot = numeric % SLOT_SCALE;
+    if (encodedSlot === 0)
+      return null;
+    const slot = encodedSlot - 1;
+    const generation = Math.floor(numeric / SLOT_SCALE) >>> 0;
+    if (slot >= this.capacity || this.generations[slot] !== generation)
+      return null;
+    return this.values[slot] ?? null;
   }
-  setResident(req, slot) {
-    const index = this.index(req);
-    if (!isResident(this.entries[index]))
-      this.count++;
-    this.entries[index] = packEntry(true, slot.x, slot.y);
+  release(handle) {
+    const numeric = handle;
+    if (!Number.isSafeInteger(numeric) || numeric <= 0)
+      return null;
+    const encodedSlot = numeric % SLOT_SCALE;
+    if (encodedSlot === 0)
+      return null;
+    const slot = encodedSlot - 1;
+    const generation = Math.floor(numeric / SLOT_SCALE) >>> 0;
+    if (slot >= this.capacity || this.generations[slot] !== generation)
+      return null;
+    const value = this.values[slot] ?? null;
+    if (value === null)
+      return null;
+    this.values[slot] = null;
+    let nextGeneration = generation + 1 >>> 0;
+    if (nextGeneration === 0)
+      nextGeneration = 1;
+    this.generations[slot] = nextGeneration;
+    this.free[this.freeTop++] = slot;
+    this.count--;
+    return value;
   }
-  setEvicted(req) {
-    const index = this.index(req);
-    if (isResident(this.entries[index]))
-      this.count--;
-    this.entries[index] = 0;
+  valueAt(slot) {
+    return Number.isInteger(slot) && slot >= 0 && slot < this.capacity ? this.values[slot] ?? null : null;
   }
-  isResident(req) {
-    return isResident(this.get(req));
-  }
-  isResidentAt(mip, x, y) {
-    return isResident(this.entries[packedPageTableIndex(this.layout, mip, x, y)]);
-  }
-  get residentCount() {
+  get size() {
     return this.count;
   }
+  get freeCount() {
+    return this.freeTop;
+  }
 }
 
+// crates/afterglow-web/web/src/engine/presentation/geometry-arena.ts
+function makeArray(kind, length2) {
+  switch (kind) {
+    case "f32":
+      return new Float32Array(length2);
+    case "u32":
+      return new Uint32Array(length2);
+    case "u16":
+      return new Uint16Array(length2);
+    case "u8":
+      return new Uint8Array(length2);
+    case "i32":
+      return new Int32Array(length2);
+    case "i16":
+      return new Int16Array(length2);
+    case "i8":
+      return new Int8Array(length2);
+  }
+}
+function arrayKind(array2) {
+  if (array2 instanceof Float32Array)
+    return "f32";
+  if (array2 instanceof Uint32Array)
+    return "u32";
+  if (array2 instanceof Uint16Array)
+    return "u16";
+  if (array2 instanceof Uint8Array || array2 instanceof Uint8ClampedArray)
+    return "u8";
+  if (array2 instanceof Int32Array)
+    return "i32";
+  if (array2 instanceof Int16Array)
+    return "i16";
+  if (array2 instanceof Int8Array)
+    return "i8";
+  return null;
+}
+function markUpdated(attribute2, componentCount) {
+  attribute2.clearUpdateRanges();
+  attribute2.addUpdateRange(0, componentCount);
+  attribute2.needsUpdate = true;
+}
+function attributeBytes(layout, vertices) {
+  return makeArray(layout.kind, 0).BYTES_PER_ELEMENT * layout.itemSize * vertices;
+}
+function slotBytes(config) {
+  let bytes = config.maxIndices * (config.indexKind === "u16" ? 2 : 4);
+  for (const attribute2 of config.attributes)
+    bytes += attributeBytes(attribute2, config.maxVertices);
+  for (const morph of config.morphAttributes)
+    bytes += attributeBytes(morph, config.maxVertices) * morph.targets;
+  return bytes;
+}
+
+class GeometryArena {
+  options;
+  configs;
+  slots;
+  free;
+  freeTop;
+  stats = {
+    reservedSlots: 0,
+    activeSlots: 0,
+    slotHighWater: 0,
+    rejectedPublications: 0,
+    publicationCount: 0,
+    uploadBytes: 0,
+    reservedGpuBytes: 0,
+    activeGpuBytes: 0,
+    activeGpuByteHighWater: 0
+  };
+  disposed = false;
+  constructor(options) {
+    this.options = options;
+    if (options.buckets.length === 0)
+      throw new RangeError("geometry arena requires a bucket");
+    this.configs = options.buckets.map((config) => ({
+      ...config,
+      attributes: config.attributes.map((attribute2) => ({ ...attribute2 })),
+      morphAttributes: config.morphAttributes.map((attribute2) => ({ ...attribute2 }))
+    }));
+    this.slots = new Array(this.configs.length);
+    this.free = new Array(this.configs.length);
+    this.freeTop = new Uint32Array(this.configs.length);
+    for (let bucket = 0;bucket < this.configs.length; bucket++) {
+      const config = this.configs[bucket];
+      this.validateConfig(config);
+      const slots = new Array(config.slots);
+      const free = new Uint32Array(config.slots);
+      for (let slot = 0;slot < config.slots; slot++) {
+        slots[slot] = this.createSlot(bucket, slot, config);
+        free[slot] = config.slots - slot - 1;
+      }
+      this.slots[bucket] = slots;
+      this.free[bucket] = free;
+      this.freeTop[bucket] = config.slots;
+      this.stats.reservedSlots += config.slots;
+      this.stats.reservedGpuBytes += config.slots * slotBytes(config);
+    }
+  }
+  validateConfig(config) {
+    if (!Number.isInteger(config.slots) || config.slots < 1 || !Number.isInteger(config.maxVertices) || config.maxVertices < 1 || !Number.isInteger(config.maxIndices) || config.maxIndices < 3 || !Number.isInteger(config.maxGroups) || config.maxGroups < 1)
+      throw new RangeError("invalid geometry arena bucket capacity");
+    const names = new Set;
+    for (const attribute2 of config.attributes) {
+      if (!attribute2.name || names.has(attribute2.name) || !Number.isInteger(attribute2.itemSize) || attribute2.itemSize < 1 || attribute2.itemSize > 4)
+        throw new RangeError("invalid geometry arena attribute layout");
+      names.add(attribute2.name);
+    }
+    if (!names.has("position"))
+      throw new RangeError("geometry arena bucket requires position");
+    for (const morph of config.morphAttributes) {
+      if (!morph.name || !Number.isInteger(morph.targets) || morph.targets < 1 || !Number.isInteger(morph.itemSize) || morph.itemSize < 1 || morph.itemSize > 4)
+        throw new RangeError("invalid geometry arena morph layout");
+    }
+  }
+  createSlot(bucket, slot, config) {
+    const geometry = new BufferGeometry;
+    const indexArray = config.indexKind === "u16" ? new Uint16Array(config.maxIndices) : new Uint32Array(config.maxIndices);
+    const index = new BufferAttribute(indexArray, 1, false);
+    geometry.setIndex(index);
+    const attributes = new Array(config.attributes.length);
+    for (let index2 = 0;index2 < config.attributes.length; index2++) {
+      const layout = config.attributes[index2];
+      const attribute2 = new BufferAttribute(makeArray(layout.kind, config.maxVertices * layout.itemSize), layout.itemSize, layout.normalized ?? false);
+      geometry.setAttribute(layout.name, attribute2);
+      attributes[index2] = attribute2;
+    }
+    const morphAttributes = new Array(config.morphAttributes.length);
+    for (let attributeIndex = 0;attributeIndex < config.morphAttributes.length; attributeIndex++) {
+      const layout = config.morphAttributes[attributeIndex];
+      const targets = new Array(layout.targets);
+      for (let target = 0;target < layout.targets; target++) {
+        targets[target] = new BufferAttribute(makeArray(layout.kind, config.maxVertices * layout.itemSize), layout.itemSize, layout.normalized ?? false);
+      }
+      geometry.morphAttributes[layout.name] = targets;
+      morphAttributes[attributeIndex] = targets;
+    }
+    const groups = new Array(config.maxGroups);
+    for (let group = 0;group < groups.length; group++)
+      groups[group] = { start: 0, count: 0, materialIndex: 0 };
+    geometry.boundingBox = new Box3;
+    geometry.boundingSphere = new Sphere;
+    geometry.setDrawRange(0, 0);
+    return {
+      bucket,
+      slot,
+      generation: 0,
+      active: false,
+      activeBytes: 0,
+      geometry,
+      index,
+      attributes,
+      morphAttributes,
+      groups
+    };
+  }
+  compatibleBucket(geometry) {
+    const index = geometry.index;
+    const position = geometry.getAttribute("position");
+    if (!index || !position)
+      return -1;
+    for (let bucket = 0;bucket < this.configs.length; bucket++) {
+      const config = this.configs[bucket];
+      if ((this.freeTop[bucket] ?? 0) === 0 || position.count > config.maxVertices || index.count > config.maxIndices || geometry.groups.length > config.maxGroups || arrayKind(index.array) !== config.indexKind)
+        continue;
+      const sourceNames = Object.keys(geometry.attributes);
+      if (sourceNames.length !== config.attributes.length)
+        continue;
+      let compatible = true;
+      for (const layout of config.attributes) {
+        const attribute2 = geometry.getAttribute(layout.name);
+        if (!(attribute2 instanceof BufferAttribute) || attribute2.count !== position.count || attribute2.itemSize !== layout.itemSize || attribute2.normalized !== (layout.normalized ?? false) || arrayKind(attribute2.array) !== layout.kind) {
+          compatible = false;
+          break;
+        }
+      }
+      if (!compatible)
+        continue;
+      const sourceMorphs = geometry.morphAttributes;
+      const morphNames = Object.keys(sourceMorphs).filter((name) => (sourceMorphs[name]?.length ?? 0) > 0);
+      if (morphNames.length !== config.morphAttributes.length)
+        continue;
+      for (const layout of config.morphAttributes) {
+        const targets = sourceMorphs[layout.name];
+        if (!targets || targets.length !== layout.targets || targets.some((attribute2) => attribute2.count !== position.count || attribute2.itemSize !== layout.itemSize || attribute2.normalized !== (layout.normalized ?? false) || arrayKind(attribute2.array) !== layout.kind)) {
+          compatible = false;
+          break;
+        }
+      }
+      if (compatible)
+        return bucket;
+    }
+    return -1;
+  }
+  acquire(bucket) {
+    const top = (this.freeTop[bucket] ?? 0) - 1;
+    this.freeTop[bucket] = top;
+    const slotIndex = this.free[bucket][top] ?? 0;
+    const slot = this.slots[bucket][slotIndex];
+    slot.generation = slot.generation + 1 >>> 0 || 1;
+    slot.active = true;
+    this.stats.activeSlots++;
+    if (this.stats.activeSlots > this.stats.slotHighWater)
+      this.stats.slotHighWater = this.stats.activeSlots;
+    return slot;
+  }
+  copyInto(slot, source) {
+    const config = this.configs[slot.bucket];
+    const startedAt = performance.now();
+    const sourceIndex = source.index;
+    slot.index.array.set(sourceIndex.array, 0);
+    markUpdated(slot.index, sourceIndex.count);
+    let activeBytes = sourceIndex.array.byteLength;
+    for (let index = 0;index < config.attributes.length; index++) {
+      const layout = config.attributes[index];
+      const sourceAttribute = source.getAttribute(layout.name);
+      const target = slot.attributes[index];
+      target.array.set(sourceAttribute.array, 0);
+      markUpdated(target, sourceAttribute.count * sourceAttribute.itemSize);
+      activeBytes += sourceAttribute.array.byteLength;
+    }
+    for (let attributeIndex = 0;attributeIndex < config.morphAttributes.length; attributeIndex++) {
+      const layout = config.morphAttributes[attributeIndex];
+      const sourceTargets = source.morphAttributes[layout.name];
+      const targetTargets = slot.morphAttributes[attributeIndex];
+      for (let target = 0;target < layout.targets; target++) {
+        const sourceAttribute = sourceTargets[target];
+        const targetAttribute = targetTargets[target];
+        targetAttribute.array.set(sourceAttribute.array, 0);
+        markUpdated(targetAttribute, sourceAttribute.count * sourceAttribute.itemSize);
+        activeBytes += sourceAttribute.array.byteLength;
+      }
+    }
+    for (let group = 0;group < source.groups.length; group++) {
+      const from = source.groups[group], to = slot.groups[group];
+      to.start = from.start;
+      to.count = from.count;
+      to.materialIndex = from.materialIndex ?? 0;
+      slot.geometry.groups[group] = to;
+    }
+    slot.geometry.groups.length = source.groups.length;
+    slot.geometry.setDrawRange(0, sourceIndex.count);
+    slot.geometry.morphTargetsRelative = source.morphTargetsRelative;
+    if (!source.boundingBox)
+      source.computeBoundingBox();
+    if (!source.boundingSphere)
+      source.computeBoundingSphere();
+    slot.geometry.boundingBox.copy(source.boundingBox);
+    slot.geometry.boundingSphere.copy(source.boundingSphere);
+    slot.activeBytes = activeBytes;
+    this.stats.activeGpuBytes += activeBytes;
+    this.stats.uploadBytes += activeBytes;
+    if (this.stats.activeGpuBytes > this.stats.activeGpuByteHighWater)
+      this.stats.activeGpuByteHighWater = this.stats.activeGpuBytes;
+    const elapsedNs = Math.max(1, Math.floor((performance.now() - startedAt) * 1e6));
+    this.options.telemetry?.trace.spanBegin(29 /* GeometryUpload */, slot.generation, activeBytes, slot.slot);
+    this.options.telemetry?.trace.spanEnd(29 /* GeometryUpload */, slot.generation, activeBytes, slot.slot);
+    this.options.telemetry?.metrics.histogramLog2(21 /* GeometryUploadNs */, elapsedNs);
+    this.options.telemetry?.metrics.maximum(20 /* ModelGpuBytesHighWater */, this.stats.activeGpuBytes);
+    return activeBytes;
+  }
+  publish(levels) {
+    if (this.disposed || levels.length === 0)
+      return null;
+    const buckets = new Int32Array(levels.length);
+    const required = new Uint32Array(this.configs.length);
+    for (let level = 0;level < levels.length; level++) {
+      const bucket = this.compatibleBucket(levels[level].geometry);
+      if (bucket < 0) {
+        this.stats.rejectedPublications++;
+        return null;
+      }
+      buckets[level] = bucket;
+      required[bucket] = (required[bucket] ?? 0) + 1;
+    }
+    for (let bucket = 0;bucket < required.length; bucket++) {
+      if ((required[bucket] ?? 0) > (this.freeTop[bucket] ?? 0)) {
+        this.stats.rejectedPublications++;
+        return null;
+      }
+    }
+    const published = new Array(levels.length);
+    let bytes = 0;
+    let acquired = 0;
+    try {
+      for (let level = 0;level < levels.length; level++) {
+        const source = levels[level];
+        const slot = this.acquire(buckets[level]);
+        acquired++;
+        published[level] = {
+          geometry: slot.geometry,
+          ratio: source.ratio,
+          triangleCount: source.triangleCount,
+          arenaBucket: slot.bucket,
+          arenaSlot: slot.slot,
+          arenaGeneration: slot.generation
+        };
+        bytes += this.copyInto(slot, source.geometry);
+      }
+    } catch {
+      const rollback = published.slice(0, acquired).filter((level) => level !== undefined);
+      this.release({ levels: rollback, activeBytes: bytes, released: false });
+      this.stats.rejectedPublications++;
+      return null;
+    }
+    this.stats.publicationCount++;
+    return { levels: published, activeBytes: bytes, released: false };
+  }
+  release(publication) {
+    if (publication.released)
+      return false;
+    publication.released = true;
+    for (const level of publication.levels) {
+      const slot = this.slots[level.arenaBucket]?.[level.arenaSlot];
+      if (!slot || !slot.active || slot.generation !== level.arenaGeneration)
+        continue;
+      slot.active = false;
+      this.stats.activeSlots--;
+      this.stats.activeGpuBytes -= slot.activeBytes;
+      slot.activeBytes = 0;
+      slot.geometry.setDrawRange(0, 0);
+      slot.geometry.groups.length = 0;
+      const top = this.freeTop[level.arenaBucket] ?? 0;
+      this.free[level.arenaBucket][top] = level.arenaSlot;
+      this.freeTop[level.arenaBucket] = top + 1;
+    }
+    return true;
+  }
+  visitWarmGeometries(visitor) {
+    for (const bucket of this.slots)
+      for (const slot of bucket)
+        visitor(slot.geometry);
+  }
+  getStats() {
+    return this.stats;
+  }
+  dispose() {
+    if (this.disposed)
+      return;
+    this.disposed = true;
+    for (const bucket of this.slots)
+      for (const slot of bucket)
+        slot.geometry.dispose();
+  }
+}
+
+// crates/afterglow-web/web/src/engine/presentation/model-lod.ts
+function sourceIndices(geometry) {
+  const position = geometry.getAttribute("position");
+  if (!position)
+    throw new Error("model LOD requires a position attribute");
+  if (geometry.index) {
+    const result2 = new Uint32Array(geometry.index.count);
+    for (let index = 0;index < result2.length; index++)
+      result2[index] = geometry.index.getX(index);
+    return result2;
+  }
+  const result = new Uint32Array(position.count);
+  for (let index = 0;index < result.length; index++)
+    result[index] = index;
+  return result;
+}
+function positions(geometry) {
+  const source = geometry.getAttribute("position");
+  if (!source || source.itemSize < 3)
+    throw new Error("model LOD requires vec3 positions");
+  const result = new Float32Array(source.count * 3);
+  for (let index = 0;index < source.count; index++) {
+    result[index * 3] = source.getX(index);
+    result[index * 3 + 1] = source.getY(index);
+    result[index * 3 + 2] = source.getZ(index);
+  }
+  return result;
+}
+function appendAttribute(output2, outputStride, offset, attribute2, components) {
+  for (let vertex = 0;vertex < attribute2.count; vertex++) {
+    const target = vertex * outputStride + offset;
+    if (components > 0)
+      output2[target] = attribute2.getX(vertex);
+    if (components > 1)
+      output2[target + 1] = attribute2.getY(vertex);
+    if (components > 2)
+      output2[target + 2] = attribute2.getZ(vertex);
+    if (components > 3)
+      output2[target + 3] = attribute2.getW(vertex);
+  }
+}
+function errorAttributes(geometry, maxAttributes) {
+  const position = geometry.getAttribute("position");
+  if (!position)
+    throw new Error("model LOD requires positions");
+  if (!Number.isInteger(maxAttributes) || maxAttributes < 1 || maxAttributes > 16)
+    throw new RangeError("meshopt error-attribute capacity must be from 1 through 16");
+  const selected = [];
+  const add2 = (name, components, weight) => {
+    const attribute2 = geometry.getAttribute(name);
+    if (!attribute2 || selected.reduce((sum, item) => sum + item.components, 0) + components > maxAttributes)
+      return;
+    selected.push({ attribute: attribute2, components: Math.min(components, attribute2.itemSize), weight });
+  };
+  add2("uv", 2, 1);
+  add2("normal", 3, 0.5);
+  const skinIndices = geometry.getAttribute("skinIndex");
+  if (skinIndices) {
+    add2("skinWeight", 4, 2);
+    add2("skinIndex", 4, 4);
+  } else {
+    add2("uv1", 2, 0.5);
+    add2("tangent", 3, 0.25);
+    add2("color", 3, 0.25);
+  }
+  let stride = selected.reduce((sum, item) => sum + item.components, 0);
+  const morphPositions = geometry.morphAttributes.position ?? [];
+  const includeMorphEnvelope = morphPositions.length !== 0 && stride + 3 <= maxAttributes;
+  if (includeMorphEnvelope)
+    stride += 3;
+  if (stride === 0) {
+    stride = 1;
+  }
+  const values = new Float32Array(position.count * stride);
+  const weights = new Float32Array(stride);
+  let offset = 0;
+  for (const item of selected) {
+    appendAttribute(values, stride, offset, item.attribute, item.components);
+    for (let component = 0;component < item.components; component++)
+      weights[offset + component] = item.weight;
+    offset += item.components;
+  }
+  if (includeMorphEnvelope) {
+    for (let vertex = 0;vertex < position.count; vertex++) {
+      let x = 0, y = 0, z = 0;
+      for (const morph of morphPositions) {
+        const mx = morph.getX(vertex), my = morph.getY(vertex), mz = morph.getZ(vertex);
+        if (Math.abs(mx) > Math.abs(x))
+          x = mx;
+        if (Math.abs(my) > Math.abs(y))
+          y = my;
+        if (Math.abs(mz) > Math.abs(z))
+          z = mz;
+      }
+      const target = vertex * stride + offset;
+      values[target] = x;
+      values[target + 1] = y;
+      values[target + 2] = z;
+    }
+    weights[offset] = 1;
+    weights[offset + 1] = 1;
+    weights[offset + 2] = 1;
+  }
+  const locks = new Uint8Array(position.count);
+  const joints = skinIndices;
+  if (joints) {
+    const signatures = new Map;
+    for (let vertex = 0;vertex < position.count; vertex++) {
+      const key = `${position.getX(vertex)},${position.getY(vertex)},${position.getZ(vertex)}`;
+      const signature = `${joints.getX(vertex)},${joints.getY(vertex)},${joints.getZ(vertex)},${joints.getW(vertex)}`;
+      const previous = signatures.get(key);
+      if (previous && previous.joints !== signature) {
+        locks[previous.vertex] = 1;
+        locks[vertex] = 1;
+      } else if (!previous)
+        signatures.set(key, { vertex, joints: signature });
+    }
+  }
+  return { values, weights, stride: stride * 4, locks };
+}
+function groupRanges(geometry, indexCount) {
+  if (geometry.groups.length !== 0)
+    return geometry.groups.map((group) => ({
+      start: group.start,
+      count: group.count,
+      materialIndex: group.materialIndex ?? 0
+    }));
+  return [{ start: 0, count: indexCount, materialIndex: 0 }];
+}
+async function simplifyGroups(optimizer, geometry, indices, positionData, attributes, ratio, targetError) {
+  const output2 = [];
+  const groups = [];
+  for (const group of groupRanges(geometry, indices.length)) {
+    if (group.start % 3 !== 0 || group.count % 3 !== 0 || group.start + group.count > indices.length)
+      throw new Error("model LOD material groups must contain complete triangles");
+    const source = indices.slice(group.start, group.start + group.count);
+    const target = Math.max(3, Math.floor(source.length * ratio / 3) * 3);
+    const simplified = ratio >= 1 ? await optimizer.optimizeVertexCache(source, positionData.length / 3) : optimizer.simplifyWithAttributes ? await optimizer.simplifyWithAttributes(source, positionData, 12, attributes.values, attributes.stride, attributes.weights, attributes.locks, target, targetError) : await optimizer.simplifyWithUvs(source, positionData, 12, geometry.getAttribute("uv") ? Float32Array.from(geometry.getAttribute("uv").array) : new Float32Array(positionData.length / 3 * 2), 8, 1, target, targetError);
+    const cacheOptimized = await optimizer.optimizeVertexCache(simplified, positionData.length / 3);
+    const optimized = await optimizer.optimizeOverdraw(cacheOptimized, positionData, 12, 1.05);
+    const start = output2.length;
+    for (const index of optimized)
+      output2.push(index);
+    groups.push({ start, count: optimized.length, materialIndex: group.materialIndex });
+  }
+  return { indices: Uint32Array.from(output2), groups };
+}
+function cloneAttributeSubset(source, oldByNew) {
+  const ArrayType = source.array.constructor;
+  const output2 = new ArrayType(oldByNew.length * source.itemSize);
+  for (let targetVertex = 0;targetVertex < oldByNew.length; targetVertex++) {
+    const sourceVertex = oldByNew[targetVertex] ?? 0;
+    const target = targetVertex * source.itemSize;
+    if (source.itemSize > 0)
+      output2[target] = source.getX(sourceVertex);
+    if (source.itemSize > 1)
+      output2[target + 1] = source.getY(sourceVertex);
+    if (source.itemSize > 2)
+      output2[target + 2] = source.getZ(sourceVertex);
+    if (source.itemSize > 3)
+      output2[target + 3] = source.getW(sourceVertex);
+  }
+  return new BufferAttribute(output2, source.itemSize, source.normalized);
+}
+function compactGeometry(source, sourceIndices2, groups) {
+  const position = source.getAttribute("position");
+  if (!position)
+    throw new Error("model LOD requires positions");
+  const newByOld = new Int32Array(position.count);
+  newByOld.fill(-1);
+  const old = new Uint32Array(Math.min(position.count, sourceIndices2.length));
+  const indices = new Uint32Array(sourceIndices2.length);
+  let vertexCount = 0;
+  for (let index = 0;index < sourceIndices2.length; index++) {
+    const sourceVertex = sourceIndices2[index] ?? 0;
+    let targetVertex = newByOld[sourceVertex] ?? -1;
+    if (targetVertex < 0) {
+      targetVertex = vertexCount;
+      newByOld[sourceVertex] = targetVertex;
+      old[vertexCount++] = sourceVertex;
+    }
+    indices[index] = targetVertex;
+  }
+  const oldByNew = old.slice(0, vertexCount);
+  const geometry = new BufferGeometry;
+  geometry.setIndex(new BufferAttribute(indices, 1));
+  for (const name of Object.keys(source.attributes)) {
+    const attribute2 = source.getAttribute(name);
+    if (attribute2)
+      geometry.setAttribute(name, cloneAttributeSubset(attribute2, oldByNew));
+  }
+  const sourceMorphs = source.morphAttributes;
+  const targetMorphs = geometry.morphAttributes;
+  for (const [name, morphs] of Object.entries(sourceMorphs)) {
+    if (morphs)
+      targetMorphs[name] = morphs.map((morph) => cloneAttributeSubset(morph, oldByNew));
+  }
+  geometry.morphTargetsRelative = source.morphTargetsRelative;
+  for (const group of groups)
+    geometry.addGroup(group.start, group.count, group.materialIndex);
+  geometry.computeBoundingBox();
+  geometry.computeBoundingSphere();
+  return geometry;
+}
+async function buildModelGeometryLods(geometry, optimizer, options) {
+  if (options.ratios.length < 1 || options.ratios[0] !== 1 || options.ratios.some((ratio, index) => !(ratio > 0 && ratio <= 1) || index > 0 && ratio >= (options.ratios[index - 1] ?? 0)))
+    throw new RangeError("model LOD ratios must begin at one and strictly descend");
+  if (!(options.targetError > 0))
+    throw new RangeError("model LOD target error must be positive");
+  const indices = sourceIndices(geometry);
+  if (indices.length % 3 !== 0)
+    throw new Error("model LOD source must be a triangle list");
+  const positionData = positions(geometry);
+  const hasMorphs = Object.values(geometry.morphAttributes).some((morphs) => (morphs?.length ?? 0) !== 0);
+  if ((geometry.getAttribute("skinIndex") || hasMorphs) && !optimizer.simplifyWithAttributes)
+    throw new Error("rigged and morphed LODs require attribute-aware meshoptimizer support");
+  const attributes = errorAttributes(geometry, options.maxErrorAttributes ?? 16);
+  const levels = [];
+  try {
+    for (const ratio of options.ratios) {
+      const simplified = await simplifyGroups(optimizer, geometry, indices, positionData, attributes, ratio, options.targetError);
+      const compact = compactGeometry(geometry, simplified.indices, simplified.groups);
+      levels.push({ geometry: compact, ratio, triangleCount: simplified.indices.length / 3 });
+    }
+    return levels;
+  } catch (error2) {
+    for (const level of levels)
+      level.geometry.dispose();
+    throw error2;
+  }
+}
+
+class ModelLodBinding {
+  thresholds;
+  hysteresis;
+  ownsGeometries;
+  meshes;
+  selected = 0;
+  disposed = false;
+  constructor(source, levels, thresholds, hysteresis, ownsGeometries = true) {
+    this.thresholds = thresholds;
+    this.hysteresis = hysteresis;
+    this.ownsGeometries = ownsGeometries;
+    if (levels.length < 1 || thresholds.length !== levels.length - 1)
+      throw new RangeError("model LOD thresholds must separate every level");
+    if (!(hysteresis >= 0 && hysteresis < 1))
+      throw new RangeError("model LOD hysteresis must be in [0, 1)");
+    for (let index = 0;index < thresholds.length; index++) {
+      const threshold = thresholds[index] ?? 0;
+      if (!(threshold > 0) || index > 0 && threshold >= (thresholds[index - 1] ?? 0))
+        throw new RangeError("model LOD thresholds must be positive and strictly descending");
+    }
+    const meshes = [];
+    for (let level = 0;level < levels.length; level++) {
+      const mesh = source.clone(false);
+      mesh.geometry = levels[level].geometry;
+      mesh.material = source.material;
+      mesh.visible = level === 0;
+      if (source.isSkinnedMesh) {
+        const sourceSkin = source;
+        const skin = mesh;
+        skin.bind(sourceSkin.skeleton, sourceSkin.bindMatrix);
+        skin.bindMode = sourceSkin.bindMode;
+      }
+      mesh.morphTargetInfluences = source.morphTargetInfluences;
+      mesh.morphTargetDictionary = source.morphTargetDictionary;
+      meshes.push(mesh);
+    }
+    this.meshes = meshes;
+  }
+  select(coverage) {
+    while (this.selected > 0) {
+      const boundary = this.thresholds[this.selected - 1] ?? Number.POSITIVE_INFINITY;
+      if (coverage < boundary * (1 + this.hysteresis))
+        break;
+      this.selected--;
+    }
+    while (this.selected < this.meshes.length - 1) {
+      const boundary = this.thresholds[this.selected] ?? 0;
+      if (coverage >= boundary * (1 - this.hysteresis))
+        break;
+      this.selected++;
+    }
+    for (let level = 0;level < this.meshes.length; level++)
+      this.meshes[level].visible = level === this.selected;
+    return this.selected;
+  }
+  level() {
+    return this.selected;
+  }
+  dispose() {
+    if (this.disposed)
+      return;
+    this.disposed = true;
+    if (this.ownsGeometries)
+      for (const mesh of this.meshes)
+        mesh.geometry.dispose();
+  }
+}
+
+// crates/afterglow-web/web/src/engine/presentation/model-system.ts
+function geometryBytes(geometry) {
+  let bytes = geometry.index?.array.byteLength ?? 0;
+  for (const attribute2 of Object.values(geometry.attributes))
+    bytes += attribute2.array.byteLength;
+  for (const morphs of Object.values(geometry.morphAttributes))
+    if (morphs)
+      for (const morph of morphs)
+        bytes += morph.array.byteLength;
+  return bytes;
+}
+function disposeLevels(levels) {
+  for (const level of levels)
+    level.geometry.dispose();
+}
+
+class ModelSystem {
+  optimizer;
+  telemetry;
+  ownedOptimizer;
+  registry;
+  completionHandles;
+  completionTokens;
+  completionLevels;
+  completionErrors;
+  completionHead = 0;
+  completionTail = 0;
+  completionCount = 0;
+  pendingCount = 0;
+  residentBytes = 0;
+  disposed = false;
+  options;
+  geometryArena;
+  closed = false;
+  constructor(optimizer, options, telemetry, ownedOptimizer = null) {
+    this.optimizer = optimizer;
+    this.telemetry = telemetry;
+    this.ownedOptimizer = ownedOptimizer;
+    this.options = { ...options, ratios: Array.from(options.ratios) };
+    if (!Number.isInteger(options.maxModels) || options.maxModels < 1 || !Number.isInteger(options.maxPendingOptimizations) || options.maxPendingOptimizations < 1 || options.maxPendingOptimizations > options.maxModels || !Number.isInteger(options.maxResidentCpuBytes) || options.maxResidentCpuBytes < 1 || !Number.isInteger(options.completionsPerPoll) || options.completionsPerPoll < 1)
+      throw new RangeError("invalid model-system capacities");
+    this.geometryArena = new GeometryArena({
+      buckets: options.geometryArena.buckets,
+      ...telemetry ? { telemetry } : {}
+    });
+    this.registry = new FixedResourceRegistry(options.maxModels);
+    this.completionHandles = new Float64Array(options.maxModels);
+    this.completionTokens = new Uint32Array(options.maxModels);
+    this.completionLevels = new Array(options.maxModels).fill(null);
+    this.completionErrors = new Array(options.maxModels).fill(null);
+  }
+  static async open(options, telemetry) {
+    const optimizer = await createPlatformMeshOptimizer(telemetry);
+    try {
+      return new ModelSystem(optimizer, options, telemetry, optimizer);
+    } catch (error2) {
+      await optimizer.close();
+      throw error2;
+    }
+  }
+  createRuntimeModel(geometry) {
+    if (this.disposed || this.pendingCount === this.options.maxPendingOptimizations)
+      return 0;
+    const view = {
+      handle: 0,
+      status: "optimizing",
+      revision: 0,
+      levels: [],
+      residentBytes: 0
+    };
+    const record = {
+      handle: 0,
+      token: 0,
+      pending: false,
+      source: geometry,
+      publication: null,
+      view
+    };
+    const handle = this.registry.acquire(record);
+    if (handle === 0)
+      return 0;
+    record.handle = handle;
+    view.handle = record.handle;
+    this.startOptimization(record);
+    return record.handle;
+  }
+  adoptCookedModel(asset) {
+    if (this.disposed)
+      return 0;
+    const ratios = this.options.ratios;
+    const levels = asset.levels.map((level, index) => ({
+      geometry: level.geometry,
+      ratio: ratios[index] ?? Math.max(0.01, 1 / 2 ** index),
+      triangleCount: level.triangleCount
+    }));
+    let bytes = 0;
+    for (const level of levels)
+      bytes += geometryBytes(level.geometry);
+    if (this.residentBytes + bytes > this.options.maxResidentCpuBytes)
+      return 0;
+    const publication = this.geometryArena.publish(levels);
+    if (!publication)
+      return 0;
+    const publishedLevels = publication?.levels ?? levels;
+    const view = {
+      handle: 0,
+      status: "ready",
+      revision: 1,
+      levels: publishedLevels,
+      residentBytes: bytes
+    };
+    const record = {
+      handle: 0,
+      token: 1,
+      pending: false,
+      source: null,
+      publication,
+      view
+    };
+    const handle = this.registry.acquire(record);
+    if (handle === 0) {
+      this.geometryArena.release(publication);
+      return 0;
+    }
+    record.handle = handle;
+    view.handle = record.handle;
+    asset.takeLevels();
+    disposeLevels(levels);
+    this.residentBytes += bytes;
+    this.telemetry?.metrics.counterAdd(17 /* ModelRevisionsPublished */, 1);
+    this.telemetry?.metrics.maximum(19 /* ModelCpuBytesHighWater */, this.residentBytes);
+    this.telemetry?.trace.instant(28 /* ModelPublished */, record.handle, 1, bytes);
+    return record.handle;
+  }
+  reviseRuntimeModel(handle, geometry) {
+    const record = this.registry.get(handle);
+    if (!record || !record.source || record.pending || this.pendingCount === this.options.maxPendingOptimizations)
+      return false;
+    record.source = geometry;
+    record.view.status = "optimizing";
+    this.startOptimization(record);
+    return true;
+  }
+  startOptimization(record) {
+    const source = record.source;
+    if (!source)
+      return;
+    const token = ++record.token;
+    record.pending = true;
+    this.pendingCount++;
+    this.telemetry?.metrics.counterAdd(16 /* ModelRevisionsQueued */, 1);
+    this.telemetry?.trace.asyncBegin(27 /* ModelRevision */, this.revisionCorrelation(record.handle, token), token, 0);
+    buildModelGeometryLods(source, this.optimizer, this.options).then((levels) => this.enqueue(record.handle, token, levels, null), (error2) => this.enqueue(record.handle, token, null, error2));
+  }
+  revisionCorrelation(handle, token) {
+    return handle * 65536 + (token & 65535);
+  }
+  enqueue(handle, token, levels, error2) {
+    if (this.completionCount === this.completionHandles.length) {
+      if (levels)
+        disposeLevels(levels);
+      const record = this.registry.get(handle);
+      if (record && record.token === token) {
+        record.pending = false;
+        record.view.status = record.view.levels.length === 0 ? "error" : "ready";
+        this.pendingCount--;
+      }
+      this.telemetry?.metrics.counterAdd(18 /* ModelRevisionsFailed */, 1);
+      this.telemetry?.trace.asyncEnd(27 /* ModelRevision */, this.revisionCorrelation(handle, token), token, 4);
+      return;
+    }
+    const slot = this.completionTail;
+    this.completionHandles[slot] = handle;
+    this.completionTokens[slot] = token;
+    this.completionLevels[slot] = levels;
+    this.completionErrors[slot] = error2;
+    this.completionTail = (slot + 1) % this.completionHandles.length;
+    this.completionCount++;
+  }
+  poll() {
+    this.optimizer.poll();
+    for (let count = 0;count < this.options.completionsPerPoll && this.completionCount !== 0; count++) {
+      const slot = this.completionHead;
+      const handle = this.completionHandles[slot];
+      const token = this.completionTokens[slot] ?? 0;
+      const levels = this.completionLevels[slot];
+      const error2 = this.completionErrors[slot];
+      this.completionLevels[slot] = null;
+      this.completionErrors[slot] = null;
+      this.completionHead = (slot + 1) % this.completionHandles.length;
+      this.completionCount--;
+      const record = this.registry.get(handle);
+      if (!record || record.token !== token) {
+        if (levels)
+          disposeLevels(levels);
+        this.telemetry?.trace.asyncEnd(27 /* ModelRevision */, this.revisionCorrelation(handle, token), token, 2);
+        continue;
+      }
+      record.pending = false;
+      this.pendingCount--;
+      if (!levels || error2) {
+        record.view.status = record.view.levels.length === 0 ? "error" : "ready";
+        this.telemetry?.metrics.counterAdd(18 /* ModelRevisionsFailed */, 1);
+        this.telemetry?.trace.asyncEnd(27 /* ModelRevision */, this.revisionCorrelation(handle, token), token, 1);
+        continue;
+      }
+      let bytes = 0;
+      for (const level of levels)
+        bytes += geometryBytes(level.geometry);
+      const previousBytes = record.view.residentBytes;
+      if (this.residentBytes - previousBytes + bytes > this.options.maxResidentCpuBytes) {
+        disposeLevels(levels);
+        record.view.status = record.view.levels.length === 0 ? "error" : "ready";
+        this.telemetry?.metrics.counterAdd(18 /* ModelRevisionsFailed */, 1);
+        this.telemetry?.trace.asyncEnd(27 /* ModelRevision */, this.revisionCorrelation(handle, token), token, 3);
+        continue;
+      }
+      const publication = this.geometryArena.publish(levels);
+      if (!publication) {
+        disposeLevels(levels);
+        record.view.status = record.view.levels.length === 0 ? "error" : "ready";
+        this.telemetry?.metrics.counterAdd(18 /* ModelRevisionsFailed */, 1);
+        this.telemetry?.trace.asyncEnd(27 /* ModelRevision */, this.revisionCorrelation(handle, token), token, 5);
+        continue;
+      }
+      if (record.publication)
+        this.geometryArena.release(record.publication);
+      disposeLevels(levels);
+      record.publication = publication;
+      this.residentBytes = this.residentBytes - previousBytes + bytes;
+      record.view.levels = publication.levels;
+      record.view.residentBytes = bytes;
+      record.view.revision++;
+      record.view.status = "ready";
+      this.telemetry?.metrics.counterAdd(17 /* ModelRevisionsPublished */, 1);
+      this.telemetry?.metrics.maximum(19 /* ModelCpuBytesHighWater */, this.residentBytes);
+      this.telemetry?.trace.instant(28 /* ModelPublished */, handle, record.view.revision, bytes);
+      this.telemetry?.trace.asyncEnd(27 /* ModelRevision */, this.revisionCorrelation(handle, token), token, 0);
+    }
+  }
+  getView(handle) {
+    return this.registry.get(handle)?.view ?? null;
+  }
+  createBinding(handle, source, thresholds, hysteresis) {
+    const view = this.registry.get(handle)?.view;
+    return view?.status === "ready" ? new ModelLodBinding(source, view.levels, thresholds, hysteresis, false) : null;
+  }
+  destroyModel(handle) {
+    const record = this.registry.release(handle);
+    if (!record)
+      return false;
+    record.token++;
+    if (record.pending) {
+      record.pending = false;
+      this.pendingCount--;
+    }
+    this.residentBytes -= record.view.residentBytes;
+    if (record.publication)
+      this.geometryArena.release(record.publication);
+    record.publication = null;
+    record.view.levels = [];
+    record.view.residentBytes = 0;
+    return true;
+  }
+  dispose() {
+    if (this.disposed)
+      return;
+    this.disposed = true;
+    for (let slot = 0;slot < this.registry.capacity; slot++) {
+      const record = this.registry.valueAt(slot);
+      if (record)
+        this.destroyModel(record.handle);
+    }
+    while (this.completionCount !== 0) {
+      const slot = this.completionHead;
+      const levels = this.completionLevels[slot];
+      if (levels)
+        disposeLevels(levels);
+      this.telemetry?.trace.asyncEnd(27 /* ModelRevision */, this.revisionCorrelation(this.completionHandles[slot], this.completionTokens[slot] ?? 0), this.completionTokens[slot] ?? 0, 2);
+      this.completionLevels[slot] = null;
+      this.completionHead = (slot + 1) % this.completionHandles.length;
+      this.completionCount--;
+    }
+    this.geometryArena.dispose();
+  }
+  async close() {
+    if (this.closed)
+      return;
+    this.closed = true;
+    this.dispose();
+    await this.ownedOptimizer?.close();
+  }
+  getGeometryStats() {
+    return this.geometryArena.getStats();
+  }
+  get activeModels() {
+    return this.registry.size;
+  }
+  get pendingOptimizations() {
+    return this.pendingCount;
+  }
+  get residentCpuGeometryBytes() {
+    return this.residentBytes;
+  }
+}
+
+// crates/afterglow-web/web/src/engine/streaming/persistent-blob-store.ts
+function validKey(key) {
+  return key.length > 0 && key.length <= 128 && /^[A-Za-z0-9._-]+$/.test(key);
+}
+
+class PersistentBlobStore {
+  backend;
+  capacities;
+  telemetry;
+  sizes = new Map;
+  busyKeys = new Set;
+  reservedBytes = 0;
+  reservedItems = 0;
+  closed = false;
+  stats = {
+    items: 0,
+    bytes: 0,
+    inFlightOperations: 0,
+    inFlightBytes: 0,
+    operationHighWater: 0,
+    inFlightByteHighWater: 0,
+    rejectedOperations: 0,
+    readOperations: 0,
+    writeOperations: 0,
+    removeOperations: 0,
+    ioErrors: 0
+  };
+  constructor(backend, capacities, telemetry) {
+    this.backend = backend;
+    this.capacities = capacities;
+    this.telemetry = telemetry;
+  }
+  static async open(backend, capacities, telemetry) {
+    if (!Number.isInteger(capacities.maxItems) || capacities.maxItems < 1 || !Number.isInteger(capacities.maxBytes) || capacities.maxBytes < 1 || !Number.isInteger(capacities.maxValueBytes) || capacities.maxValueBytes < 1 || capacities.maxValueBytes > capacities.maxBytes || !Number.isInteger(capacities.maxInFlightOperations) || capacities.maxInFlightOperations < 1 || !Number.isInteger(capacities.maxInFlightBytes) || capacities.maxInFlightBytes < 1)
+      throw new RangeError("invalid persistent blob-store capacities");
+    const store = new PersistentBlobStore(backend, capacities, telemetry);
+    const entries = await backend.list(capacities.maxValueBytes);
+    let bytes = 0;
+    for (const entry of entries) {
+      if (!validKey(entry.key) || !Number.isSafeInteger(entry.size) || entry.size < 0 || entry.size > capacities.maxValueBytes || store.sizes.has(entry.key)) {
+        await backend.close();
+        throw new Error("persistent blob backend returned a corrupt index");
+      }
+      bytes += entry.size;
+      if (store.sizes.size >= capacities.maxItems || bytes > capacities.maxBytes) {
+        await backend.close();
+        throw new Error("persistent blob backend exceeds configured capacity");
+      }
+      store.sizes.set(entry.key, entry.size);
+    }
+    store.refreshStats(bytes);
+    return store;
+  }
+  refreshStats(bytes) {
+    this.stats.items = this.sizes.size;
+    if (bytes !== undefined)
+      this.stats.bytes = bytes;
+  }
+  begin(key, bytes) {
+    if (this.closed)
+      return 11 /* Closed */;
+    if (!validKey(key))
+      return 2 /* InvalidKey */;
+    if (this.busyKeys.has(key))
+      return 8 /* KeyBusy */;
+    if (this.stats.inFlightOperations >= this.capacities.maxInFlightOperations) {
+      this.stats.rejectedOperations++;
+      return 6 /* OperationCapacityExceeded */;
+    }
+    if (this.stats.inFlightBytes + bytes > this.capacities.maxInFlightBytes) {
+      this.stats.rejectedOperations++;
+      return 7 /* InFlightByteCapacityExceeded */;
+    }
+    this.busyKeys.add(key);
+    this.stats.inFlightOperations++;
+    this.stats.inFlightBytes += bytes;
+    if (this.stats.inFlightOperations > this.stats.operationHighWater)
+      this.stats.operationHighWater = this.stats.inFlightOperations;
+    if (this.stats.inFlightBytes > this.stats.inFlightByteHighWater)
+      this.stats.inFlightByteHighWater = this.stats.inFlightBytes;
+    return 0 /* Ok */;
+  }
+  end(key, bytes) {
+    this.busyKeys.delete(key);
+    this.stats.inFlightOperations--;
+    this.stats.inFlightBytes -= bytes;
+  }
+  async get(key, maxBytes) {
+    if (!validKey(key))
+      return { status: 2 /* InvalidKey */, bytes: null };
+    if (!this.sizes.has(key))
+      return { status: 1 /* NotFound */, bytes: null };
+    if (!Number.isSafeInteger(maxBytes) || maxBytes < 0 || maxBytes > this.capacities.maxValueBytes)
+      return { status: 5 /* ValueCapacityExceeded */, bytes: null };
+    const admitted = this.begin(key, maxBytes);
+    if (admitted !== 0 /* Ok */)
+      return { status: admitted, bytes: null };
+    const correlation = this.telemetry?.nextCorrelation(11 /* Storage */) ?? 0;
+    this.telemetry?.trace.asyncBegin(30 /* BlobRead */, correlation, maxBytes, 0);
+    try {
+      const bytes = await this.backend.read(key, maxBytes);
+      if (bytes === null) {
+        this.telemetry?.trace.asyncEnd(30 /* BlobRead */, correlation, 0, 1);
+        return { status: 1 /* NotFound */, bytes: null };
+      }
+      if (bytes.byteLength > maxBytes || bytes.byteLength > this.capacities.maxValueBytes) {
+        this.telemetry?.trace.asyncEnd(30 /* BlobRead */, correlation, bytes.byteLength, 2);
+        return { status: 5 /* ValueCapacityExceeded */, bytes: null };
+      }
+      this.stats.readOperations++;
+      this.telemetry?.metrics.counterAdd(22 /* BlobReadBytes */, bytes.byteLength);
+      this.telemetry?.trace.asyncEnd(30 /* BlobRead */, correlation, bytes.byteLength, 0);
+      return { status: 0 /* Ok */, bytes };
+    } catch {
+      this.stats.ioErrors++;
+      this.telemetry?.trace.asyncEnd(30 /* BlobRead */, correlation, 0, 3);
+      return { status: 10 /* IoError */, bytes: null };
+    } finally {
+      this.end(key, maxBytes);
+    }
+  }
+  async putAtomic(key, bytes) {
+    if (bytes.byteLength > this.capacities.maxValueBytes)
+      return { status: 5 /* ValueCapacityExceeded */ };
+    const previous = this.sizes.get(key);
+    const newItem = previous === undefined;
+    const delta = Math.max(0, bytes.byteLength - (previous ?? 0));
+    if (newItem && this.sizes.size + this.reservedItems >= this.capacities.maxItems)
+      return { status: 3 /* ItemCapacityExceeded */ };
+    if (this.stats.bytes + this.reservedBytes + delta > this.capacities.maxBytes)
+      return { status: 4 /* ByteCapacityExceeded */ };
+    const admitted = this.begin(key, bytes.byteLength);
+    if (admitted !== 0 /* Ok */)
+      return { status: admitted };
+    this.reservedBytes += delta;
+    if (newItem)
+      this.reservedItems++;
+    const correlation = this.telemetry?.nextCorrelation(11 /* Storage */) ?? 0;
+    this.telemetry?.trace.asyncBegin(31 /* BlobWrite */, correlation, bytes.byteLength, 0);
+    try {
+      await this.backend.writeAtomic(key, bytes);
+      this.sizes.set(key, bytes.byteLength);
+      this.stats.bytes += bytes.byteLength - (previous ?? 0);
+      this.stats.writeOperations++;
+      this.refreshStats();
+      this.telemetry?.metrics.counterAdd(23 /* BlobWriteBytes */, bytes.byteLength);
+      this.telemetry?.trace.asyncEnd(31 /* BlobWrite */, correlation, bytes.byteLength, 0);
+      return { status: 0 /* Ok */ };
+    } catch {
+      this.stats.ioErrors++;
+      this.telemetry?.trace.asyncEnd(31 /* BlobWrite */, correlation, 0, 1);
+      return { status: 10 /* IoError */ };
+    } finally {
+      this.reservedBytes -= delta;
+      if (newItem)
+        this.reservedItems--;
+      this.end(key, bytes.byteLength);
+    }
+  }
+  async remove(key) {
+    if (!validKey(key))
+      return { status: 2 /* InvalidKey */ };
+    if (!this.sizes.has(key))
+      return { status: 1 /* NotFound */ };
+    const admitted = this.begin(key, 0);
+    if (admitted !== 0 /* Ok */)
+      return { status: admitted };
+    try {
+      const removed = await this.backend.remove(key);
+      if (!removed)
+        return { status: 1 /* NotFound */ };
+      const previous = this.sizes.get(key) ?? 0;
+      this.sizes.delete(key);
+      this.stats.bytes -= previous;
+      this.stats.removeOperations++;
+      this.refreshStats();
+      return { status: 0 /* Ok */ };
+    } catch {
+      this.stats.ioErrors++;
+      return { status: 10 /* IoError */ };
+    } finally {
+      this.end(key, 0);
+    }
+  }
+  async clear() {
+    if (this.closed)
+      return { status: 11 /* Closed */ };
+    if (this.stats.inFlightOperations !== 0)
+      return { status: 6 /* OperationCapacityExceeded */ };
+    try {
+      await this.backend.clear();
+      this.sizes.clear();
+      this.stats.bytes = 0;
+      this.refreshStats();
+      return { status: 0 /* Ok */ };
+    } catch {
+      this.stats.ioErrors++;
+      return { status: 10 /* IoError */ };
+    }
+  }
+  getStats() {
+    return this.stats;
+  }
+  async close() {
+    if (this.closed)
+      return;
+    this.closed = true;
+    await this.backend.close();
+  }
+}
+
+class MemoryPersistentBlobBackend {
+  values = new Map;
+  closed = false;
+  async list(_maxValueBytes) {
+    return Array.from(this.values, ([key, value]) => ({ key, size: value.byteLength }));
+  }
+  async read(key, maxBytes) {
+    const value = this.values.get(key);
+    if (!value)
+      return null;
+    if (value.byteLength > maxBytes)
+      throw new RangeError("stored value exceeds read capacity");
+    return value.slice();
+  }
+  async writeAtomic(key, bytes) {
+    if (this.closed)
+      throw new Error("backend is closed");
+    this.values.set(key, bytes.slice());
+  }
+  async remove(key) {
+    return this.values.delete(key);
+  }
+  async clear() {
+    this.values.clear();
+  }
+  async close() {
+    this.closed = true;
+  }
+}
+
+// crates/afterglow-web/web/src/engine/streaming/fixed-byte-lease-pool.ts
+class ByteLease {
+  bytes;
+  slot;
+  owner;
+  inUse = false;
+  constructor(bytes, slot, owner) {
+    this.bytes = bytes;
+    this.slot = slot;
+    this.owner = owner;
+  }
+  release() {
+    return this.owner.release(this);
+  }
+}
+
+class FixedByteLeasePool {
+  capacity;
+  bytesPerLease;
+  leases;
+  free;
+  freeTop;
+  activeCount = 0;
+  highWaterCount = 0;
+  overflowCount = 0;
+  constructor(capacity, bytesPerLease) {
+    this.capacity = capacity;
+    this.bytesPerLease = bytesPerLease;
+    if (!Number.isInteger(capacity) || capacity < 1 || !Number.isInteger(bytesPerLease) || bytesPerLease < 1)
+      throw new RangeError("invalid fixed byte-lease pool capacity");
+    this.leases = new Array(capacity);
+    this.free = new Uint32Array(capacity);
+    this.freeTop = capacity;
+    for (let slot = 0;slot < capacity; slot++) {
+      this.leases[slot] = new ByteLease(new Uint8Array(bytesPerLease), slot, this);
+      this.free[slot] = capacity - slot - 1;
+    }
+  }
+  tryAcquire() {
+    if (this.freeTop === 0) {
+      this.overflowCount++;
+      return null;
+    }
+    const slot = this.free[--this.freeTop] ?? 0;
+    const lease = this.leases[slot];
+    lease.inUse = true;
+    this.activeCount++;
+    if (this.activeCount > this.highWaterCount)
+      this.highWaterCount = this.activeCount;
+    return lease;
+  }
+  release(lease) {
+    if (!lease.inUse || this.leases[lease.slot] !== lease)
+      return false;
+    lease.inUse = false;
+    this.free[this.freeTop++] = lease.slot;
+    this.activeCount--;
+    return true;
+  }
+  get active() {
+    return this.activeCount;
+  }
+  get highWater() {
+    return this.highWaterCount;
+  }
+  get overflows() {
+    return this.overflowCount;
+  }
+}
+
+// crates/afterglow-web/web/src/engine/virtual-texturing/fixed-page-slot-map.ts
 class FixedPageSlotMap {
   keys;
   values;
@@ -65864,6 +66956,743 @@ class FixedPageSlotMap {
   }
 }
 
+// crates/afterglow-web/web/src/engine/virtual-texturing/virtual-texture-format.ts
+var PAGE_SIZE = 128;
+var PAGE_BORDER = 4;
+var SLOT_SIZE = PAGE_SIZE + PAGE_BORDER * 2;
+var ATLAS_PAGES_X = 15;
+var ATLAS_PAGES_Y = 15;
+var ATLAS_WIDTH = ATLAS_PAGES_X * SLOT_SIZE;
+var ATLAS_HEIGHT = ATLAS_PAGES_Y * SLOT_SIZE;
+var BLOCK_SIZE = 4;
+var COMPRESSED_BYTES_PER_BLOCK = 16;
+var SLOT_BLOCKS_X = SLOT_SIZE / BLOCK_SIZE;
+var SLOT_BLOCKS_Y = SLOT_SIZE / BLOCK_SIZE;
+var FORMAT_BC7 = 0;
+var FORMAT_ASTC = 1;
+var FORMAT_RGBA2 = 4;
+var FORMAT_R8 = 5;
+var FORMAT_R16F = 6;
+function isCompressedTextureFormat(format) {
+  return format === FORMAT_BC7 || format === FORMAT_ASTC;
+}
+function uncompressedBytesPerTexel(format) {
+  if (format === FORMAT_RGBA2)
+    return 4;
+  if (format === FORMAT_R8)
+    return 1;
+  if (format === FORMAT_R16F)
+    return 2;
+  throw new RangeError(`texture format ${format} is compressed or unsupported`);
+}
+function bytesPerBlock(format) {
+  if (isCompressedTextureFormat(format))
+    return COMPRESSED_BYTES_PER_BLOCK;
+  return BLOCK_SIZE * BLOCK_SIZE * uncompressedBytesPerTexel(format);
+}
+function threeFormat(format) {
+  if (format === FORMAT_BC7)
+    return RGBA_BPTC_Format;
+  if (format === FORMAT_ASTC)
+    return RGBA_ASTC_4x4_Format;
+  throw new RangeError(`unsupported compressed texture format ${format}`);
+}
+function packPageTableEntry(resident, physicalX, physicalY) {
+  return (resident ? 1 : 0) | (physicalX & 255) << 1 | (physicalY & 255) << 9;
+}
+function isPageTableEntryResident(entry) {
+  return (entry & 1) !== 0;
+}
+
+// crates/afterglow-web/web/src/engine/virtual-texturing/memory-page-source.ts
+var PAGE_COORD_SCALE = 2048;
+var MIP_COORD_SCALE = PAGE_COORD_SCALE * PAGE_COORD_SCALE;
+function pageKey(mip, x, y) {
+  return mip * MIP_COORD_SCALE + y * PAGE_COORD_SCALE + x + 1;
+}
+function bytesPerTexel(format) {
+  if (format === "rgba8unorm")
+    return 4;
+  if (format === "r16float")
+    return 2;
+  return 1;
+}
+var HALF_CONVERSION_BUFFER = new ArrayBuffer(4);
+var HALF_CONVERSION_FLOAT = new Float32Array(HALF_CONVERSION_BUFFER);
+var HALF_CONVERSION_BITS = new Uint32Array(HALF_CONVERSION_BUFFER);
+function floatToHalf(value) {
+  HALF_CONVERSION_FLOAT[0] = value;
+  const bits = HALF_CONVERSION_BITS[0] ?? 0;
+  const sign3 = bits >>> 16 & 32768;
+  let exponent = (bits >>> 23 & 255) - 127 + 15;
+  let mantissa = bits & 8388607;
+  if (exponent <= 0) {
+    if (exponent < -10)
+      return sign3;
+    mantissa = (mantissa | 8388608) >>> 1 - exponent;
+    return sign3 | mantissa + 4096 >>> 13;
+  }
+  if (exponent >= 31)
+    return sign3 | 31744;
+  return sign3 | exponent << 10 | mantissa + 4096 >>> 13;
+}
+function srgbToLinear(value) {
+  return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+}
+function linearToSrgb(value) {
+  return value <= 0.0031308 ? value * 12.92 : 1.055 * value ** (1 / 2.4) - 0.055;
+}
+function halfToFloat(value) {
+  const sign3 = (value & 32768) !== 0 ? -1 : 1;
+  const exponent = value >>> 10 & 31;
+  const mantissa = value & 1023;
+  if (exponent === 0)
+    return sign3 * 2 ** -14 * (mantissa / 1024);
+  if (exponent === 31)
+    return mantissa === 0 ? sign3 * Infinity : Number.NaN;
+  return sign3 * 2 ** (exponent - 15) * (1 + mantissa / 1024);
+}
+
+class MemoryVirtualTextureSource {
+  provider;
+  bytesPerTexel;
+  maxMip;
+  pageBytes;
+  storage;
+  slotMip;
+  slotX;
+  slotY;
+  slotDirty;
+  slotRevision;
+  slotsByPage;
+  freeSlots;
+  freeTop = 0;
+  dirtyMip;
+  dirtyX;
+  dirtyY;
+  dirtyRevision;
+  dirtyKeys;
+  dirtyHead = 0;
+  dirtyTail = 0;
+  dirtyCount = 0;
+  revision = 0;
+  defaultTexel;
+  scratchTexel = new Float32Array(4);
+  scratchSample = new Float32Array(4);
+  refreshScratch;
+  outputPool;
+  dirtyPage = { mip: 0, x: 0, y: 0, revision: 0 };
+  options;
+  constructor(options) {
+    this.options = options.defaultTexel ? { ...options, defaultTexel: options.defaultTexel.slice() } : { ...options };
+    if (!Number.isInteger(options.width) || options.width < 1 || !Number.isInteger(options.height) || options.height < 1 || !Number.isInteger(options.pageCapacity) || options.pageCapacity < 1 || !Number.isInteger(options.dirtyCapacity) || options.dirtyCapacity < 1 || !Number.isInteger(options.outputCapacity) || options.outputCapacity < 1)
+      throw new RangeError("invalid memory virtual-texture capacities or dimensions");
+    this.bytesPerTexel = bytesPerTexel(options.format);
+    this.pageBytes = PAGE_SIZE * PAGE_SIZE * this.bytesPerTexel;
+    const outputBytes = SLOT_SIZE * SLOT_SIZE * this.bytesPerTexel;
+    this.refreshScratch = new Uint8Array(outputBytes);
+    this.outputPool = new FixedByteLeasePool(options.outputCapacity, outputBytes);
+    const pagesX = Math.ceil(options.width / PAGE_SIZE);
+    const pagesY = Math.ceil(options.height / PAGE_SIZE);
+    this.maxMip = Math.ceil(Math.log2(Math.max(pagesX, pagesY)));
+    if (pagesX > PAGE_COORD_SCALE || pagesY > PAGE_COORD_SCALE || this.maxMip > 31)
+      throw new RangeError("memory virtual texture exceeds page-coordinate limits");
+    this.defaultTexel = options.defaultTexel?.slice() ?? new Uint8Array(this.bytesPerTexel);
+    if (this.defaultTexel.byteLength !== this.bytesPerTexel)
+      throw new RangeError("default texel byte length does not match memory texture format");
+    this.storage = new Uint8Array(options.pageCapacity * this.pageBytes);
+    this.slotMip = new Uint8Array(options.pageCapacity);
+    this.slotX = new Uint16Array(options.pageCapacity);
+    this.slotY = new Uint16Array(options.pageCapacity);
+    this.slotDirty = new Uint8Array(options.pageCapacity);
+    this.slotRevision = new Uint32Array(options.pageCapacity);
+    this.slotsByPage = new FixedPageSlotMap(options.pageCapacity);
+    this.freeSlots = new Uint32Array(options.pageCapacity);
+    for (let slot = options.pageCapacity - 1;slot >= 0; slot--)
+      this.freeSlots[this.freeTop++] = slot;
+    this.dirtyMip = new Uint8Array(options.dirtyCapacity);
+    this.dirtyX = new Uint16Array(options.dirtyCapacity);
+    this.dirtyY = new Uint16Array(options.dirtyCapacity);
+    this.dirtyRevision = new Uint32Array(options.dirtyCapacity);
+    this.dirtyKeys = new FixedPageSlotMap(options.dirtyCapacity);
+    this.provider = async (_path, request) => {
+      const lease = this.outputPool.tryAcquire();
+      if (!lease)
+        throw new Error("memory virtual-texture output pool is full");
+      try {
+        this.readPageInto(request, lease.bytes);
+        return lease;
+      } catch (error2) {
+        lease.release();
+        throw error2;
+      }
+    };
+  }
+  pagesX(mip) {
+    return Math.ceil(Math.max(1, Math.ceil(this.options.width / 2 ** mip)) / PAGE_SIZE);
+  }
+  pagesY(mip) {
+    return Math.ceil(Math.max(1, Math.ceil(this.options.height / 2 ** mip)) / PAGE_SIZE);
+  }
+  slot(mip, x, y) {
+    return this.slotsByPage.get(pageKey(mip, x, y));
+  }
+  acquirePage(mip, x, y) {
+    const existing = this.slot(mip, x, y);
+    if (existing !== undefined)
+      return existing;
+    if (this.freeTop === 0)
+      return;
+    const slot = this.freeSlots[--this.freeTop] ?? 0;
+    this.slotMip[slot] = mip;
+    this.slotX[slot] = x;
+    this.slotY[slot] = y;
+    this.slotDirty[slot] = mip === 0 ? 0 : 1;
+    this.slotRevision[slot] = this.revision;
+    const start = slot * this.pageBytes;
+    for (let texel = 0;texel < PAGE_SIZE * PAGE_SIZE; texel++)
+      this.storage.set(this.defaultTexel, start + texel * this.bytesPerTexel);
+    this.slotsByPage.set(pageKey(mip, x, y), slot);
+    return slot;
+  }
+  countMissingForRegion(x, y, width, height) {
+    let missing = 0;
+    for (let mip = 0;mip <= this.maxMip; mip++) {
+      const scale2 = 2 ** mip;
+      const border = PAGE_BORDER * scale2;
+      const firstX = Math.max(0, Math.floor((x - border) / (PAGE_SIZE * scale2)));
+      const firstY = Math.max(0, Math.floor((y - border) / (PAGE_SIZE * scale2)));
+      const lastX = Math.min(this.pagesX(mip) - 1, Math.floor((x + width - 1 + border) / (PAGE_SIZE * scale2)));
+      const lastY = Math.min(this.pagesY(mip) - 1, Math.floor((y + height - 1 + border) / (PAGE_SIZE * scale2)));
+      for (let pageY = firstY;pageY <= lastY; pageY++)
+        for (let pageX = firstX;pageX <= lastX; pageX++)
+          if (this.slot(mip, pageX, pageY) === undefined)
+            missing++;
+    }
+    return missing;
+  }
+  countNewDirtyForRegion(x, y, width, height) {
+    let missing = 0;
+    for (let mip = 0;mip <= this.maxMip; mip++) {
+      const scale2 = 2 ** mip;
+      const border = PAGE_BORDER * scale2;
+      const firstX = Math.max(0, Math.floor((x - border) / (PAGE_SIZE * scale2)));
+      const firstY = Math.max(0, Math.floor((y - border) / (PAGE_SIZE * scale2)));
+      const lastX = Math.min(this.pagesX(mip) - 1, Math.floor((x + width - 1 + border) / (PAGE_SIZE * scale2)));
+      const lastY = Math.min(this.pagesY(mip) - 1, Math.floor((y + height - 1 + border) / (PAGE_SIZE * scale2)));
+      for (let pageY = firstY;pageY <= lastY; pageY++)
+        for (let pageX = firstX;pageX <= lastX; pageX++)
+          if (this.dirtyKeys.get(pageKey(mip, pageX, pageY)) === undefined)
+            missing++;
+    }
+    return missing;
+  }
+  markRegion(x, y, width, height) {
+    for (let mip = 0;mip <= this.maxMip; mip++) {
+      const scale2 = 2 ** mip;
+      const border = PAGE_BORDER * scale2;
+      const firstX = Math.max(0, Math.floor((x - border) / (PAGE_SIZE * scale2)));
+      const firstY = Math.max(0, Math.floor((y - border) / (PAGE_SIZE * scale2)));
+      const lastX = Math.min(this.pagesX(mip) - 1, Math.floor((x + width - 1 + border) / (PAGE_SIZE * scale2)));
+      const lastY = Math.min(this.pagesY(mip) - 1, Math.floor((y + height - 1 + border) / (PAGE_SIZE * scale2)));
+      for (let pageY = firstY;pageY <= lastY; pageY++) {
+        for (let pageX = firstX;pageX <= lastX; pageX++) {
+          const slot = this.acquirePage(mip, pageX, pageY);
+          if (mip > 0)
+            this.slotDirty[slot] = 1;
+          this.slotRevision[slot] = this.revision;
+          const key = pageKey(mip, pageX, pageY);
+          const existingDirty = this.dirtyKeys.get(key);
+          if (existingDirty !== undefined) {
+            this.dirtyRevision[existingDirty] = this.revision;
+            continue;
+          }
+          const dirtySlot = this.dirtyTail;
+          this.dirtyMip[dirtySlot] = mip;
+          this.dirtyX[dirtySlot] = pageX;
+          this.dirtyY[dirtySlot] = pageY;
+          this.dirtyRevision[dirtySlot] = this.revision;
+          this.dirtyKeys.set(key, dirtySlot);
+          this.dirtyTail = (dirtySlot + 1) % this.dirtyMip.length;
+          this.dirtyCount++;
+        }
+      }
+    }
+  }
+  writeRegion(x, y, width, height, source, bytesPerRow = width * this.bytesPerTexel) {
+    if (!Number.isInteger(x) || !Number.isInteger(y) || !Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1 || x < 0 || y < 0 || x + width > this.options.width || y + height > this.options.height || bytesPerRow < width * this.bytesPerTexel || source.byteLength < bytesPerRow * (height - 1) + width * this.bytesPerTexel)
+      return 1 /* InvalidRegion */;
+    const missingPages = this.countMissingForRegion(x, y, width, height);
+    if (missingPages > this.freeTop)
+      return 2 /* PageCapacityExceeded */;
+    const newDirty = this.countNewDirtyForRegion(x, y, width, height);
+    if (newDirty > this.dirtyMip.length - this.dirtyCount)
+      return 3 /* DirtyCapacityExceeded */;
+    this.revision = this.revision + 1 >>> 0 || 1;
+    this.markRegion(x, y, width, height);
+    for (let row = 0;row < height; row++) {
+      for (let column = 0;column < width; column++) {
+        const texelX = x + column, texelY = y + row;
+        const pageX = Math.floor(texelX / PAGE_SIZE), pageY = Math.floor(texelY / PAGE_SIZE);
+        const slot = this.slot(0, pageX, pageY);
+        const local = texelY % PAGE_SIZE * PAGE_SIZE + texelX % PAGE_SIZE;
+        const target = slot * this.pageBytes + local * this.bytesPerTexel;
+        const input = row * bytesPerRow + column * this.bytesPerTexel;
+        for (let byte = 0;byte < this.bytesPerTexel; byte++)
+          this.storage[target + byte] = source[input + byte] ?? 0;
+      }
+    }
+    return 0 /* Written */;
+  }
+  address(value, size) {
+    if (this.options.addressMode === "clamp")
+      return Math.max(0, Math.min(size - 1, value));
+    if (this.options.addressMode === "repeat")
+      return (value % size + size) % size;
+    const period = size * 2;
+    const wrapped = (value % period + period) % period;
+    return wrapped < size ? wrapped : period - 1 - wrapped;
+  }
+  decode(storageOffset, output2) {
+    if (this.options.format === "rgba8unorm") {
+      for (let component = 0;component < 4; component++)
+        output2[component] = (this.storage[storageOffset + component] ?? 0) / 255;
+    } else if (this.options.format === "r8unorm") {
+      output2[0] = (this.storage[storageOffset] ?? 0) / 255;
+    } else {
+      output2[0] = halfToFloat((this.storage[storageOffset] ?? 0) | (this.storage[storageOffset + 1] ?? 0) << 8);
+    }
+  }
+  encode(storageOffset, input) {
+    if (this.options.format === "rgba8unorm") {
+      for (let component = 0;component < 4; component++)
+        this.storage[storageOffset + component] = Math.max(0, Math.min(255, Math.round((input[component] ?? 0) * 255)));
+    } else if (this.options.format === "r8unorm") {
+      this.storage[storageOffset] = Math.max(0, Math.min(255, Math.round((input[0] ?? 0) * 255)));
+    } else {
+      const half = floatToHalf(input[0] ?? 0);
+      this.storage[storageOffset] = half & 255;
+      this.storage[storageOffset + 1] = half >>> 8;
+    }
+  }
+  ensureDerived(mip, x, y) {
+    const slot = this.slot(mip, x, y);
+    if (slot === undefined || mip === 0 || this.slotDirty[slot] === 0)
+      return slot;
+    const childMip = mip - 1;
+    for (let childY = y * 2;childY <= y * 2 + 1; childY++)
+      for (let childX = x * 2;childX <= x * 2 + 1; childX++)
+        this.ensureDerived(childMip, childX, childY);
+    const start = slot * this.pageBytes;
+    for (let localY = 0;localY < PAGE_SIZE; localY++) {
+      for (let localX = 0;localX < PAGE_SIZE; localX++) {
+        const sums = this.scratchTexel;
+        sums.fill(0);
+        for (let oy = 0;oy < 2; oy++) {
+          for (let ox = 0;ox < 2; ox++) {
+            this.readTexel(childMip, (x * PAGE_SIZE + localX) * 2 + ox, (y * PAGE_SIZE + localY) * 2 + oy, this.scratchSample);
+            for (let component = 0;component < this.bytesPerTexel; component++) {
+              const sample2 = this.scratchSample[component] ?? 0;
+              sums[component] = (sums[component] ?? 0) + (this.options.mipFilter === "linear-color" && this.options.format === "rgba8unorm" && component < 3 ? srgbToLinear(sample2) : sample2);
+            }
+          }
+        }
+        for (let component = 0;component < 4; component++)
+          sums[component] = (sums[component] ?? 0) / 4;
+        if (this.options.mipFilter === "linear-color" && this.options.format === "rgba8unorm") {
+          sums[0] = linearToSrgb(sums[0] ?? 0);
+          sums[1] = linearToSrgb(sums[1] ?? 0);
+          sums[2] = linearToSrgb(sums[2] ?? 0);
+        }
+        if (this.options.mipFilter === "normal" && this.options.format === "rgba8unorm") {
+          let nx = (sums[0] ?? 0) * 2 - 1;
+          let ny = (sums[1] ?? 0) * 2 - 1;
+          let nz = (sums[2] ?? 0) * 2 - 1;
+          const length2 = Math.hypot(nx, ny, nz) || 1;
+          nx /= length2;
+          ny /= length2;
+          nz /= length2;
+          sums[0] = nx * 0.5 + 0.5;
+          sums[1] = ny * 0.5 + 0.5;
+          sums[2] = nz * 0.5 + 0.5;
+        }
+        this.encode(start + (localY * PAGE_SIZE + localX) * this.bytesPerTexel, sums);
+      }
+    }
+    this.slotDirty[slot] = 0;
+    return slot;
+  }
+  readTexel(mip, x, y, output2) {
+    const width = Math.max(1, Math.ceil(this.options.width / 2 ** mip));
+    const height = Math.max(1, Math.ceil(this.options.height / 2 ** mip));
+    const addressedX = this.address(x, width), addressedY = this.address(y, height);
+    const pageX = Math.floor(addressedX / PAGE_SIZE), pageY = Math.floor(addressedY / PAGE_SIZE);
+    const slot = this.ensureDerived(mip, pageX, pageY);
+    output2.fill(0);
+    if (slot === undefined) {
+      if (this.options.format === "rgba8unorm")
+        for (let component = 0;component < 4; component++)
+          output2[component] = (this.defaultTexel[component] ?? 0) / 255;
+      else if (this.options.format === "r8unorm")
+        output2[0] = (this.defaultTexel[0] ?? 0) / 255;
+      else
+        output2[0] = halfToFloat((this.defaultTexel[0] ?? 0) | (this.defaultTexel[1] ?? 0) << 8);
+      return;
+    }
+    const local = addressedY % PAGE_SIZE * PAGE_SIZE + addressedX % PAGE_SIZE;
+    this.decode(slot * this.pageBytes + local * this.bytesPerTexel, output2);
+  }
+  readPageInto(request, output2) {
+    if (request.tail)
+      throw new Error("memory virtual textures use ordinary terminal pages, not packed tails");
+    if (request.mip < 0 || request.mip > this.maxMip || request.x < 0 || request.y < 0 || request.x >= this.pagesX(request.mip) || request.y >= this.pagesY(request.mip))
+      throw new RangeError("memory virtual-texture page is out of range");
+    const required = SLOT_SIZE * SLOT_SIZE * this.bytesPerTexel;
+    if (output2.byteLength !== required)
+      throw new RangeError(`memory virtual-texture output has ${output2.byteLength} bytes; expected ${required}`);
+    this.fillPageInto(request, output2);
+  }
+  fillPageInto(request, output2) {
+    this.ensureDerived(request.mip, request.x, request.y);
+    for (let slotY = 0;slotY < SLOT_SIZE; slotY++) {
+      for (let slotX = 0;slotX < SLOT_SIZE; slotX++) {
+        this.readTexel(request.mip, request.x * PAGE_SIZE + slotX - PAGE_BORDER, request.y * PAGE_SIZE + slotY - PAGE_BORDER, this.scratchSample);
+        const target = (slotY * SLOT_SIZE + slotX) * this.bytesPerTexel;
+        if (this.options.format === "rgba8unorm") {
+          for (let component = 0;component < 4; component++)
+            output2[target + component] = Math.round((this.scratchSample[component] ?? 0) * 255);
+        } else if (this.options.format === "r8unorm") {
+          output2[target] = Math.round((this.scratchSample[0] ?? 0) * 255);
+        } else {
+          const half = floatToHalf(this.scratchSample[0] ?? 0);
+          output2[target] = half & 255;
+          output2[target + 1] = half >>> 8;
+        }
+      }
+    }
+  }
+  readPage(request) {
+    const output2 = new Uint8Array(SLOT_SIZE * SLOT_SIZE * this.bytesPerTexel);
+    this.readPageInto(request, output2);
+    return output2;
+  }
+  drainDirty(limit, publish) {
+    let drained = 0;
+    while (drained < limit && this.dirtyCount !== 0) {
+      const slot = this.dirtyHead;
+      const mip = this.dirtyMip[slot] ?? 0;
+      const x = this.dirtyX[slot] ?? 0;
+      const y = this.dirtyY[slot] ?? 0;
+      const revision = this.dirtyRevision[slot] ?? 0;
+      this.dirtyPage.mip = mip;
+      this.dirtyPage.x = x;
+      this.dirtyPage.y = y;
+      this.dirtyPage.revision = revision;
+      this.fillPageInto(this.dirtyPage, this.refreshScratch);
+      if (!publish(this.dirtyPage, this.refreshScratch))
+        break;
+      this.dirtyKeys.delete(pageKey(mip, x, y));
+      this.dirtyHead = (slot + 1) % this.dirtyMip.length;
+      this.dirtyCount--;
+      drained++;
+    }
+    return drained;
+  }
+  get canonicalPageCount() {
+    let count = 0;
+    for (let slot = 0;slot < this.options.pageCapacity; slot++)
+      if (this.slotsByPage.get(pageKey(0, this.slotX[slot] ?? 0, this.slotY[slot] ?? 0)) === slot)
+        count++;
+    return count;
+  }
+  visitCanonicalPages(visitor) {
+    for (let slot = 0;slot < this.options.pageCapacity; slot++) {
+      if (this.slotsByPage.get(pageKey(0, this.slotX[slot] ?? 0, this.slotY[slot] ?? 0)) !== slot)
+        continue;
+      visitor(this.slotX[slot] ?? 0, this.slotY[slot] ?? 0, this.storage, slot * this.pageBytes, this.pageBytes);
+    }
+  }
+  restoreContentRevision(revision) {
+    if (!Number.isInteger(revision) || revision < 0 || revision > 4294967295)
+      throw new RangeError("invalid memory texture revision");
+    this.revision = revision >>> 0;
+    for (let slot = 0;slot < this.options.pageCapacity; slot++)
+      this.slotRevision[slot] = this.revision;
+  }
+  get pageCount() {
+    return this.options.pageCapacity - this.freeTop;
+  }
+  get pendingDirtyPages() {
+    return this.dirtyCount;
+  }
+  get contentRevision() {
+    return this.revision;
+  }
+  get activeOutputPages() {
+    return this.outputPool.active;
+  }
+  get outputPageHighWater() {
+    return this.outputPool.highWater;
+  }
+  get outputPageOverflows() {
+    return this.outputPool.overflows;
+  }
+}
+
+// crates/afterglow-web/web/src/engine/virtual-texturing/memory-texture-snapshot.ts
+var MAGIC = 1414350657;
+var VERSION = 1;
+var HEADER_BYTES = 44;
+var RECORD_HEADER_BYTES = 4;
+var FORMAT_TO_ID = {
+  rgba8unorm: 0,
+  "rgba8unorm-srgb": 1,
+  r8unorm: 2,
+  r16float: 3
+};
+var ID_TO_FORMAT = [
+  "rgba8unorm",
+  "rgba8unorm-srgb",
+  "r8unorm",
+  "r16float"
+];
+var ADDRESS_TO_ID = {
+  clamp: 0,
+  repeat: 1,
+  "mirror-repeat": 2
+};
+var ID_TO_ADDRESS = [
+  "clamp",
+  "repeat",
+  "mirror-repeat"
+];
+var FILTER_TO_ID = {
+  "linear-color": 0,
+  normal: 1,
+  scalar: 2
+};
+var ID_TO_FILTER = [
+  "linear-color",
+  "normal",
+  "scalar"
+];
+function bytesPerTexel2(format) {
+  if (format === "r8unorm")
+    return 1;
+  if (format === "r16float")
+    return 2;
+  if (format === "rgba8unorm" || format === "rgba8unorm-srgb")
+    return 4;
+  throw new Error("mutable texture snapshot cannot contain a compressed format");
+}
+function memoryFormat(format) {
+  if (format === "r8unorm")
+    return "r8unorm";
+  if (format === "r16float")
+    return "r16float";
+  return "rgba8unorm";
+}
+function crc32(bytes, start) {
+  let crc = 4294967295;
+  for (let index = start;index < bytes.byteLength; index++) {
+    crc ^= bytes[index] ?? 0;
+    for (let bit = 0;bit < 8; bit++)
+      crc = crc >>> 1 ^ ((crc & 1) !== 0 ? 3988292384 : 0);
+  }
+  return (crc ^ 4294967295) >>> 0;
+}
+function encodeMemoryTextureSnapshot(source, descriptor) {
+  const formatId = FORMAT_TO_ID[descriptor.format];
+  if (formatId === undefined)
+    throw new Error("mutable snapshot format is unsupported");
+  const pageBytes = PAGE_SIZE * PAGE_SIZE * source.bytesPerTexel;
+  const pages = [];
+  source.visitCanonicalPages((x, y, storage2, offset, length2) => {
+    pages.push({ x, y, storage: storage2, offset, length: length2 });
+  });
+  pages.sort((a, b) => a.y - b.y || a.x - b.x);
+  const totalBytes = HEADER_BYTES + pages.length * (RECORD_HEADER_BYTES + pageBytes);
+  if (!Number.isSafeInteger(totalBytes))
+    throw new RangeError("mutable snapshot is too large");
+  const output2 = new Uint8Array(totalBytes);
+  const view = new DataView(output2.buffer);
+  view.setUint32(0, MAGIC, true);
+  view.setUint16(4, VERSION, true);
+  view.setUint8(6, formatId);
+  view.setUint8(7, ADDRESS_TO_ID[source.options.addressMode]);
+  view.setUint8(8, FILTER_TO_ID[source.options.mipFilter]);
+  const defaultTexel = source.options.defaultTexel ?? new Uint8Array(source.bytesPerTexel);
+  view.setUint8(9, defaultTexel.byteLength);
+  view.setUint32(12, descriptor.width, true);
+  view.setUint32(16, descriptor.height, true);
+  view.setUint32(20, source.contentRevision, true);
+  view.setUint32(24, pages.length, true);
+  view.setUint32(28, pageBytes, true);
+  view.setUint32(32, totalBytes, true);
+  output2.set(defaultTexel, 40);
+  let cursor = HEADER_BYTES;
+  for (const page of pages) {
+    view.setUint16(cursor, page.x, true);
+    view.setUint16(cursor + 2, page.y, true);
+    cursor += RECORD_HEADER_BYTES;
+    output2.set(page.storage.subarray(page.offset, page.offset + page.length), cursor);
+    cursor += pageBytes;
+  }
+  view.setUint32(36, crc32(output2, 40), true);
+  return output2;
+}
+function decodeMemoryTextureSnapshot(bytes, maxPages) {
+  if (!Number.isInteger(maxPages) || maxPages < 0)
+    throw new RangeError("invalid mutable snapshot page capacity");
+  if (bytes.byteLength < HEADER_BYTES)
+    throw new Error("mutable snapshot is truncated");
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (view.getUint32(0, true) !== MAGIC)
+    throw new Error("mutable snapshot magic is invalid");
+  if (view.getUint16(4, true) !== VERSION)
+    throw new Error("mutable snapshot version is unsupported");
+  const format = ID_TO_FORMAT[view.getUint8(6)];
+  const addressMode = ID_TO_ADDRESS[view.getUint8(7)];
+  const mipFilter = ID_TO_FILTER[view.getUint8(8)];
+  if (!format || !addressMode || !mipFilter)
+    throw new Error("mutable snapshot descriptor is invalid");
+  const defaultLength = view.getUint8(9);
+  const width = view.getUint32(12, true), height = view.getUint32(16, true);
+  const revision = view.getUint32(20, true), pageCount = view.getUint32(24, true);
+  const pageBytes = view.getUint32(28, true), totalBytes = view.getUint32(32, true);
+  if (width < 1 || height < 1 || pageCount > maxPages || width > PAGE_SIZE * 2048 || height > PAGE_SIZE * 2048)
+    throw new Error("mutable snapshot dimensions or page count exceed capacity");
+  const texelBytes = bytesPerTexel2(format);
+  if (defaultLength !== texelBytes || pageBytes !== PAGE_SIZE * PAGE_SIZE * texelBytes)
+    throw new Error("mutable snapshot texel layout is invalid");
+  const expected = HEADER_BYTES + pageCount * (RECORD_HEADER_BYTES + pageBytes);
+  if (totalBytes !== bytes.byteLength || expected !== bytes.byteLength)
+    throw new Error("mutable snapshot byte length is invalid");
+  if (view.getUint32(36, true) !== crc32(bytes, 40))
+    throw new Error("mutable snapshot checksum is invalid");
+  const defaultTexel = bytes.slice(40, 40 + defaultLength);
+  const pagesX = Math.ceil(width / PAGE_SIZE), pagesY = Math.ceil(height / PAGE_SIZE);
+  const seen = new Set;
+  const pages = new Array(pageCount);
+  let cursor = HEADER_BYTES;
+  for (let index = 0;index < pageCount; index++) {
+    const x = view.getUint16(cursor, true), y = view.getUint16(cursor + 2, true);
+    cursor += RECORD_HEADER_BYTES;
+    if (x >= pagesX || y >= pagesY)
+      throw new Error("mutable snapshot page coordinate is invalid");
+    const key = y * 2048 + x;
+    if (seen.has(key))
+      throw new Error("mutable snapshot contains duplicate pages");
+    seen.add(key);
+    pages[index] = { x, y, bytes: bytes.slice(cursor, cursor + pageBytes) };
+    cursor += pageBytes;
+  }
+  return {
+    descriptor: { width, height, format, addressMode },
+    sourceOptions: { mipFilter, defaultTexel },
+    revision,
+    pages
+  };
+}
+function restoreMemoryTextureSnapshot(snapshot, capacities) {
+  const baseOptions = {
+    width: snapshot.descriptor.width,
+    height: snapshot.descriptor.height,
+    format: memoryFormat(snapshot.descriptor.format),
+    addressMode: snapshot.descriptor.addressMode,
+    mipFilter: snapshot.sourceOptions.mipFilter,
+    ...capacities
+  };
+  const source = new MemoryVirtualTextureSource(snapshot.sourceOptions.defaultTexel ? { ...baseOptions, defaultTexel: snapshot.sourceOptions.defaultTexel } : baseOptions);
+  for (const page of snapshot.pages) {
+    const x = page.x * PAGE_SIZE, y = page.y * PAGE_SIZE;
+    const width = Math.min(PAGE_SIZE, snapshot.descriptor.width - x);
+    const height = Math.min(PAGE_SIZE, snapshot.descriptor.height - y);
+    const status = source.writeRegion(x, y, width, height, page.bytes, PAGE_SIZE * source.bytesPerTexel);
+    if (status !== 0 /* Written */)
+      throw new Error(`mutable snapshot exceeds restore capacities: ${status}`);
+    while (source.pendingDirtyPages !== 0)
+      source.drainDirty(capacities.dirtyCapacity, () => true);
+  }
+  source.restoreContentRevision(snapshot.revision);
+  return source;
+}
+
+// crates/afterglow-web/web/src/engine/virtual-texturing/virtual-texture-layout.ts
+function assertVirtualTextureDimensions(width, height) {
+  for (const [name, value] of [["width", width], ["height", height]])
+    if (!Number.isSafeInteger(value) || value <= 0)
+      throw new RangeError(`virtual texture ${name} must be a positive safe integer`);
+}
+function createPackedPageTableLayout(pageGridX, pageGridY = pageGridX) {
+  for (const value of [pageGridX, pageGridY])
+    if (!Number.isSafeInteger(value) || value <= 0)
+      throw new RangeError("page grids must be positive integers");
+  const maxMip = Math.ceil(Math.log2(Math.max(pageGridX, pageGridY)));
+  const mipOffsets = new Uint32Array(maxMip + 1);
+  let height = 0;
+  for (let mip = 0;mip <= maxMip; mip++) {
+    mipOffsets[mip] = height;
+    height += pagesAtMipAxis(pageGridY, mip);
+  }
+  return { width: pageGridX, baseHeight: pageGridY, storageWidth: Math.max(2, pageGridX), height, maxMip, mipOffsets };
+}
+function pagesAtMipAxis(base, mip) {
+  return Math.max(1, Math.ceil(base / 2 ** mip));
+}
+function pageGridAtMip(layout, mip) {
+  if (!Number.isInteger(mip) || mip < 0 || mip > layout.maxMip)
+    throw new RangeError(`mip ${mip} is outside 0..${layout.maxMip}`);
+  return { width: pagesAtMipAxis(layout.width, mip), height: pagesAtMipAxis(layout.baseHeight, mip) };
+}
+function packedPageTableIndex(layout, mip, x, y) {
+  const grid = pageGridAtMip(layout, mip);
+  if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || y < 0 || x >= grid.width || y >= grid.height)
+    throw new RangeError(`page (${x},${y}) is outside mip ${mip}'s ${grid.width}x${grid.height} grid`);
+  return (layout.mipOffsets[mip] + y) * layout.storageWidth + x;
+}
+function packedMipTailIndex(layout) {
+  return layout.mipOffsets[layout.maxMip] * layout.storageWidth + 1;
+}
+
+// crates/afterglow-web/web/src/engine/virtual-texturing/virtual-texture-residency.ts
+class PageTable {
+  layout;
+  entries;
+  count = 0;
+  constructor(layout, entries) {
+    this.layout = layout;
+    this.entries = entries;
+  }
+  index(req) {
+    return packedPageTableIndex(this.layout, req.mip, req.x, req.y);
+  }
+  get(req) {
+    return this.entries[this.index(req)];
+  }
+  setResident(req, slot) {
+    const index = this.index(req);
+    if (!isPageTableEntryResident(this.entries[index]))
+      this.count++;
+    this.entries[index] = packPageTableEntry(true, slot.x, slot.y);
+  }
+  setEvicted(req) {
+    const index = this.index(req);
+    if (isPageTableEntryResident(this.entries[index]))
+      this.count--;
+    this.entries[index] = 0;
+  }
+  isResident(req) {
+    return isPageTableEntryResident(this.get(req));
+  }
+  isResidentAt(mip, x, y) {
+    return isPageTableEntryResident(this.entries[packedPageTableIndex(this.layout, mip, x, y)]);
+  }
+  get residentCount() {
+    return this.count;
+  }
+}
+
 class PageCache {
   format;
   pagesX;
@@ -65894,11 +67723,12 @@ class PageCache {
     this.height = this.pagesY * SLOT_SIZE;
     const blocksX = this.width / BLOCK_SIZE, blocksY = this.height / BLOCK_SIZE;
     const bpb = bytesPerBlock(format);
-    if (format === FORMAT_RGBA) {
-      this.atlasBytesPerRow = this.width * 4;
-      this.slotBytesPerRow = SLOT_SIZE * 4;
-      this.slotDataSize = SLOT_SIZE * SLOT_SIZE * 4;
-      this.atlas = new Uint8Array(this.width * this.height * 4);
+    if (!isCompressedTextureFormat(format)) {
+      const bytesPerTexel3 = uncompressedBytesPerTexel(format);
+      this.atlasBytesPerRow = this.width * bytesPerTexel3;
+      this.slotBytesPerRow = SLOT_SIZE * bytesPerTexel3;
+      this.slotDataSize = SLOT_SIZE * SLOT_SIZE * bytesPerTexel3;
+      this.atlas = new Uint8Array(this.width * this.height * bytesPerTexel3);
     } else {
       this.atlasBytesPerRow = blocksX * bpb;
       this.slotBytesPerRow = SLOT_BLOCKS_X * bpb;
@@ -65954,15 +67784,21 @@ class PageCache {
     this.acquireResult.evicted = evicted;
     return this.acquireResult;
   }
-  commit(req, slot, data) {
-    const rows = this.format === FORMAT_RGBA ? SLOT_SIZE : SLOT_BLOCKS_Y;
-    const dstXBytes = this.format === FORMAT_RGBA ? slot.x * SLOT_SIZE * 4 : slot.x * SLOT_BLOCKS_X * (this.slotBytesPerRow / SLOT_BLOCKS_X);
-    const dstY = this.format === FORMAT_RGBA ? slot.y * SLOT_SIZE : slot.y * SLOT_BLOCKS_Y;
+  writeSlot(slot, data) {
+    if (data.byteLength !== this.slotDataSize)
+      throw new RangeError(`VT page has ${data.byteLength} bytes; expected ${this.slotDataSize}`);
+    const compressed = isCompressedTextureFormat(this.format);
+    const rows = compressed ? SLOT_BLOCKS_Y : SLOT_SIZE;
+    const dstXBytes = compressed ? slot.x * SLOT_BLOCKS_X * (this.slotBytesPerRow / SLOT_BLOCKS_X) : slot.x * this.slotBytesPerRow;
+    const dstY = compressed ? slot.y * SLOT_BLOCKS_Y : slot.y * SLOT_SIZE;
     for (let row = 0;row < rows; row++) {
       const srcOffset = row * this.slotBytesPerRow;
       const dstOffset = (dstY + row) * this.atlasBytesPerRow + dstXBytes;
       this.atlas.set(data.subarray(srcOffset, srcOffset + this.slotBytesPerRow), dstOffset);
     }
+  }
+  commit(req, slot, data) {
+    this.writeSlot(slot, data);
     const slotIdx = slot.y * this.pagesX + slot.x;
     if (this.reserved[slotIdx] === 0 || this.slotActive[slotIdx] !== 0)
       throw new Error("VT slot commit without a unique reservation");
@@ -65982,6 +67818,15 @@ class PageCache {
     this.usedCount++;
     if (req.pinned)
       this.pinnedCount++;
+  }
+  replaceByKey(cacheKey, data) {
+    const index = this.slotByKey.get(cacheKey);
+    if (index === undefined || this.slotActive[index] === 0 || this.reserved[index] !== 0)
+      return null;
+    const slot = this.slotCoords[index];
+    this.writeSlot(slot, data);
+    this.referenced[index] = 1;
+    return slot;
   }
   evictByKey(cacheKey) {
     const index = this.slotByKey.get(cacheKey);
@@ -66031,6 +67876,60 @@ class PageCache {
     return this.pagesX * this.pagesY;
   }
 }
+
+// crates/afterglow-web/web/src/engine/virtual-texturing/virtual-texture-request.ts
+var MAX_MIP = 10;
+var SCORE_COVERAGE_CAP = 255;
+var MAX_PIXEL_PERCEPTUAL_WEIGHT = 15;
+var MAX_PERCEPTUAL_WEIGHT = SCORE_COVERAGE_CAP * MAX_PIXEL_PERCEPTUAL_WEIGHT;
+var MAX_PAGE_SCORE = SCORE_COVERAGE_CAP * (MAX_PIXEL_PERCEPTUAL_WEIGHT + 7);
+var IMPORTANCE_LEVEL_MAX = 24;
+var IMPORTANCE_BUCKET_COUNT = IMPORTANCE_LEVEL_MAX + 1;
+var MAX_SCORE_EXPONENT = 31 - Math.clz32(MAX_PAGE_SCORE);
+var TOP_SCORE_BASE = 1 << MAX_SCORE_EXPONENT;
+var TOP_SCORE_SPLIT = TOP_SCORE_BASE + Math.ceil((MAX_PAGE_SCORE - TOP_SCORE_BASE + 1) / 2);
+var FOCUS_IMPORTANCE_BUCKET_MAX = 12;
+var PAGE_KIND_PRIORITY_COUNT = 2;
+var MATERIAL_CHANNEL_PRIORITY_COUNT = 3;
+var PRIORITY_LANE_COUNT = IMPORTANCE_BUCKET_COUNT * PAGE_KIND_PRIORITY_COUNT * MATERIAL_CHANNEL_PRIORITY_COUNT;
+function packedPageCoordinates(textureId, mip, x, y, tail = false) {
+  const local = tail ? 268435456 : (mip & 63 | (x & 2047) << 6 | (y & 2047) << 17) >>> 0;
+  return textureId * 536870912 + local;
+}
+function packedPageIdentity(textureId, request) {
+  return packedPageCoordinates(textureId, request.mip, request.x, request.y, request.tail);
+}
+function perceptualImportanceBucket(weight) {
+  const bounded = Math.max(1, Math.min(MAX_PAGE_SCORE, Math.floor(weight)));
+  const exponent = 31 - Math.clz32(bounded);
+  let level;
+  if (exponent === 0)
+    level = 0;
+  else if (exponent < MAX_SCORE_EXPONENT)
+    level = exponent * 2 - 1 + (bounded >>> exponent - 1 & 1);
+  else
+    level = bounded < TOP_SCORE_SPLIT ? IMPORTANCE_LEVEL_MAX - 1 : IMPORTANCE_LEVEL_MAX;
+  return IMPORTANCE_LEVEL_MAX - level;
+}
+function sourcePerceptualWeight(source) {
+  const coverage = Math.min(SCORE_COVERAGE_CAP, source.coverage ?? 1);
+  const centerCloseness = 7 - Math.min(7, (source.screenPriority ?? 255) >>> 5);
+  return Math.min(MAX_PERCEPTUAL_WEIGHT, source.perceptualWeight ?? coverage * (1 + centerCloseness));
+}
+function perceptualPriority(perceptualWeight, coverage, residentMipGap, parent, channelPriority) {
+  const pageWeight = Math.min(MAX_PAGE_SCORE, perceptualWeight + Math.min(SCORE_COVERAGE_CAP, coverage) * residentMipGap);
+  const bucket = perceptualImportanceBucket(pageWeight);
+  const pageKind = parent ? 0 : 1;
+  return (bucket * PAGE_KIND_PRIORITY_COUNT + pageKind) * MATERIAL_CHANNEL_PRIORITY_COUNT + channelPriority;
+}
+function pageBatchTier(parent, priority) {
+  if (parent)
+    return "urgent";
+  const importanceBucket = Math.floor(priority / (PAGE_KIND_PRIORITY_COUNT * MATERIAL_CHANNEL_PRIORITY_COUNT));
+  return importanceBucket <= FOCUS_IMPORTANCE_BUCKET_MAX ? "focus" : "peripheral";
+}
+
+// crates/afterglow-web/web/src/engine/virtual-texturing/virtual-texture-tuning.ts
 var DEFAULT_VIRTUAL_TEXTURE_TUNING = {
   minUploadsPerPoll: 1,
   baselineUploadsPerPoll: 2,
@@ -66184,6 +68083,16 @@ class VirtualTextureTuning {
 }
 var VirtualTextureTuningRes = defineResource("virtualTextureTuning", () => new VirtualTextureTuning);
 
+// crates/afterglow-web/web/src/engine/virtual-texturing/virtual-texture.ts
+var DEFAULT_VIRTUAL_MATERIAL_MIP_BIASES = {
+  albedo: 0,
+  normal: 1,
+  masks: 2,
+  roughness: 2,
+  ao: 2,
+  emissive: 1
+};
+
 class VirtualTextureStore {
   telemetry;
   atlasTexture;
@@ -66202,7 +68111,6 @@ class VirtualTextureStore {
   nextTextureId = 1;
   pageTables = new Map;
   cache;
-  loader;
   pageDataProvider;
   pendingRecords;
   pendingActive;
@@ -66330,11 +68238,10 @@ class VirtualTextureStore {
     averageTranscodeMs: 0,
     maxTranscodeMs: 0
   };
-  constructor(loader, capacities, pageDataProvider, format, device, tuning, telemetry) {
+  constructor(capacities, pageDataProvider, format, device, tuning, telemetry) {
     this.telemetry = telemetry;
-    this.loader = loader;
     this.pageDataProvider = pageDataProvider;
-    this.format = format ?? FORMAT_RGBA;
+    this.format = format ?? FORMAT_RGBA2;
     this.device = device ?? null;
     this.tuning = tuning ?? new VirtualTextureTuning;
     const deviceMax = device?.limits.maxTextureDimension2D ?? ATLAS_WIDTH;
@@ -66381,7 +68288,14 @@ class VirtualTextureStore {
     this.readyUploads = new Array(this.maxPendingPages);
     for (let index = 0;index < this.readyUploads.length; index++) {
       const page = { path: "", mip: 0, x: 0, y: 0, pinned: false, cacheKey: 0 };
-      this.readyUploads[index] = { key: 0, generation: 0, page, req: page, data: new Uint8Array(0) };
+      this.readyUploads[index] = {
+        key: 0,
+        generation: 0,
+        page,
+        req: page,
+        data: new Uint8Array(0),
+        lease: null
+      };
     }
     this.feedbackScratch = new Array(schedulerCapacity + 1);
     this.feedbackScratchKeys = new FixedPageSlotMap(schedulerCapacity + 1);
@@ -66393,8 +68307,9 @@ class VirtualTextureStore {
       this.scheduledPrevious[index] = -1;
       this.scheduledFree[this.scheduledFreeTop++] = index;
     }
-    if (this.format === FORMAT_RGBA) {
-      this.atlasTexture = new DataTexture(this.cache.atlas, this.atlasWidth, this.atlasHeight, RGBAFormat);
+    if (!isCompressedTextureFormat(this.format)) {
+      const data = this.format === FORMAT_R16F ? new Uint16Array(this.cache.atlas.buffer) : this.cache.atlas;
+      this.atlasTexture = new DataTexture(data, this.atlasWidth, this.atlasHeight, this.format === FORMAT_RGBA2 ? RGBAFormat : RedFormat, this.format === FORMAT_R16F ? HalfFloatType : UnsignedByteType);
       this.atlasTexture.minFilter = LinearFilter;
       this.atlasTexture.magFilter = LinearFilter;
       this.atlasTexture.generateMipmaps = false;
@@ -66448,9 +68363,10 @@ class VirtualTextureStore {
     pageTableTexture.magFilter = NearestFilter;
     pageTableTexture.generateMipmaps = false;
     pageTableTexture.needsUpdate = true;
-    const textureId = this.nextTextureId++;
-    if (textureId > 4294967295)
-      throw new Error("virtual texture ID space exhausted");
+    const textureId = options?.textureId ?? this.nextTextureId++;
+    if (!Number.isInteger(textureId) || textureId < 1 || textureId > 4294967295 || this.entriesById[textureId])
+      throw new Error("virtual texture ID is invalid, exhausted, or already registered");
+    this.nextTextureId = Math.max(this.nextTextureId, textureId + 1);
     const entry = {
       textureId,
       path,
@@ -66571,7 +68487,7 @@ class VirtualTextureStore {
   }
   isRequestResident(path, req, pageTable) {
     if (req.tail)
-      return isResident(this.entries.get(path)?.tailEntry ?? 0);
+      return isPageTableEntryResident(this.entries.get(path)?.tailEntry ?? 0);
     return pageTable.isResident(req);
   }
   getPending(key) {
@@ -66612,7 +68528,7 @@ class VirtualTextureStore {
   }
   queuePageLoad(entry, req, pageTable, pinned = false, priorityTier = PRIORITY_LANE_COUNT - 1) {
     const path = entry.path;
-    if (!this.pageDataProvider || (req.tail ? isResident(entry.tailEntry) : pageTable.isResident(req)) || !this.isValidEntryRequest(entry, req))
+    if (!this.pageDataProvider || (req.tail ? isPageTableEntryResident(entry.tailEntry) : pageTable.isResident(req)) || !this.isValidEntryRequest(entry, req))
       return false;
     if (this.pendingCount >= this.maxPendingPages || this.pendingBytes + this.cache.slotDataSize > this.maxPendingBytes) {
       if (!this.preemptWorstPending(priorityTier))
@@ -66648,14 +68564,20 @@ class VirtualTextureStore {
     this.pendingBytes += this.cache.slotDataSize;
     this.telemetry?.metrics.counterAdd(7 /* VtPagesRequested */, 1);
     this.telemetry?.trace.asyncBegin(13 /* VtPageLoad */, key, this.cache.slotDataSize, priorityTier);
-    this.pageDataProvider(path, page, controller.signal).then((data) => {
+    this.pageDataProvider(path, page, controller.signal).then((result) => {
+      const lease = result instanceof Uint8Array ? null : result;
+      const data = result instanceof Uint8Array ? result : result.bytes;
       if (data.byteLength !== this.cache.slotDataSize) {
+        lease?.release();
         throw new RangeError(`VT page ${key} has ${data.byteLength} bytes; expected ${this.cache.slotDataSize}`);
       }
       const pending = this.getPending(key);
-      if (!pending || pending.generation !== generation)
+      if (!pending || pending.generation !== generation) {
+        lease?.release();
         return;
+      }
       if (pending.canceled) {
+        lease?.release();
         this.telemetry?.trace.asyncEnd(13 /* VtPageLoad */, key, 0, 2);
         this.deletePending(key);
         return;
@@ -66665,19 +68587,23 @@ class VirtualTextureStore {
       this.totalLoadMs += loadMs;
       this.maxLoadMs = Math.max(this.maxLoadMs, loadMs);
       if (!pending.page.pinned && this.feedbackEpoch - pending.lastSeen >= this.staleFeedbackEpochs) {
+        lease?.release();
         this.telemetry?.trace.asyncEnd(13 /* VtPageLoad */, key, 0, 3);
         this.deletePending(key);
         this.staleCancellations++;
         return;
       }
-      if (this.readyUploadCount >= this.readyUploads.length)
+      if (this.readyUploadCount >= this.readyUploads.length) {
+        lease?.release();
         throw new Error("VT ready-upload ring capacity exceeded");
+      }
       const ready = this.readyUploads[this.readyUploadTail];
       ready.key = key;
       ready.generation = generation;
       ready.page = page;
       ready.req = page;
       ready.data = data;
+      ready.lease = lease;
       this.readyUploadTail = (this.readyUploadTail + 1) % this.readyUploads.length;
       this.readyUploadCount++;
       this.telemetry?.metrics.counterAdd(8 /* VtPagesLoaded */, 1);
@@ -66928,7 +68854,7 @@ class VirtualTextureStore {
     if (!entry || !pageTable || !this.isValidEntryRequest(entry, request))
       return;
     const key = this.pageKey(request);
-    if (request.tail ? isResident(entry.tailEntry) : pageTable.isResident(request)) {
+    if (request.tail ? isPageTableEntryResident(entry.tailEntry) : pageTable.isResident(request)) {
       this.residentHits++;
       this.cache.touch(key);
       const scheduled = this.scheduledByKey.get(key);
@@ -67003,7 +68929,7 @@ class VirtualTextureStore {
         this.removeScheduled(index, 3 /* Invalid */);
         continue;
       }
-      if (request.tail ? isResident(entry.tailEntry) : pageTable.isResident(request)) {
+      if (request.tail ? isPageTableEntryResident(entry.tailEntry) : pageTable.isResident(request)) {
         this.removeScheduled(index, 1 /* Resident */);
         continue;
       }
@@ -67082,7 +69008,7 @@ class VirtualTextureStore {
     }
   }
   updateMipTailEntry(path, slot) {
-    this.writeMipTailEntry(path, packEntry(true, slot.x, slot.y));
+    this.writeMipTailEntry(path, packPageTableEntry(true, slot.x, slot.y));
   }
   writePageTableEntry(path, req, value) {
     const entry = this.entries.get(path);
@@ -67105,7 +69031,7 @@ class VirtualTextureStore {
     }
   }
   updatePageTableTexture(path, req, slot) {
-    this.writePageTableEntry(path, req, packEntry(true, slot.x, slot.y));
+    this.writePageTableEntry(path, req, packPageTableEntry(true, slot.x, slot.y));
   }
   unloadTexture(path) {
     const unloading = this.entries.get(path);
@@ -67152,6 +69078,8 @@ class VirtualTextureStore {
     this.gpuPageTables.clear();
     this.gpuAtlasTexture = null;
     this.device = null;
+    for (let index = 0;index < this.readyUploads.length; index++)
+      this.releaseReadyPayload(this.readyUploads[index]);
     this.readyUploadCount = 0;
     this.readyUploadHead = 0;
     this.readyUploadTail = 0;
@@ -67162,6 +69090,22 @@ class VirtualTextureStore {
   getEntryById(textureId) {
     return this.entriesById[textureId >>> 0] ?? undefined;
   }
+  replaceResidentPage(path, request, data) {
+    const entry = this.entries.get(path);
+    if (!entry)
+      return false;
+    const key = packedPageIdentity(entry.textureId, request);
+    const slot = this.cache.replaceByKey(key, data);
+    if (!slot)
+      return false;
+    this.writePage(slot, data);
+    this.completedUploads++;
+    return true;
+  }
+  isPagePending(path, request) {
+    const entry = this.entries.get(path);
+    return entry ? this.pendingByKey.get(packedPageIdentity(entry.textureId, request)) !== undefined : false;
+  }
   writePage(slot, data) {
     if (this.gpuAtlasTexture && this.device) {
       if (!(data.buffer instanceof ArrayBuffer))
@@ -67170,10 +69114,17 @@ class VirtualTextureStore {
       this.device.queue.writeTexture({
         texture: this.gpuAtlasTexture,
         origin: { x: slot.x * SLOT_SIZE, y: slot.y * SLOT_SIZE }
-      }, uploadData, this.format === FORMAT_RGBA ? { bytesPerRow: SLOT_SIZE * 4, rowsPerImage: SLOT_SIZE } : { bytesPerRow: this.cache.slotBytesPerRow, rowsPerImage: SLOT_BLOCKS_Y }, { width: SLOT_SIZE, height: SLOT_SIZE });
+      }, uploadData, isCompressedTextureFormat(this.format) ? { bytesPerRow: this.cache.slotBytesPerRow, rowsPerImage: SLOT_BLOCKS_Y } : {
+        bytesPerRow: SLOT_SIZE * uncompressedBytesPerTexel(this.format),
+        rowsPerImage: SLOT_SIZE
+      }, { width: SLOT_SIZE, height: SLOT_SIZE });
     } else {
       this.atlasTexture.needsUpdate = true;
     }
+  }
+  releaseReadyPayload(ready) {
+    ready.lease?.release();
+    ready.lease = null;
   }
   setPublicationFrameId(frameId2) {
     this.publicationFrameId = Number.isSafeInteger(frameId2) && frameId2 >= 0 ? frameId2 : 0;
@@ -67182,7 +69133,6 @@ class VirtualTextureStore {
     this.tuning.recordFrameTime(frameMs, this.pendingCount + this.readyUploadCount + this.scheduledCount);
   }
   poll() {
-    this.loader.poll();
     const deadline = performance.now() + this.tuning.uploadBudgetMs;
     for (let count = 0;count < this.tuning.uploadsPerPoll && this.readyUploadCount !== 0; count++) {
       if (count !== 0 && performance.now() >= deadline) {
@@ -67193,18 +69143,23 @@ class VirtualTextureStore {
       this.readyUploadHead = (this.readyUploadHead + 1) % this.readyUploads.length;
       this.readyUploadCount--;
       const pending = this.getPending(ready.key);
-      if (!pending || pending.generation !== ready.generation)
+      if (!pending || pending.generation !== ready.generation) {
+        this.releaseReadyPayload(ready);
         continue;
+      }
       if (pending.canceled) {
         this.deletePending(ready.key);
+        this.releaseReadyPayload(ready);
         continue;
       }
       this.deletePending(ready.key);
       const textureId = ready.page.textureId ?? 0;
       const entry = this.entriesById[textureId];
       const pageTable = this.pageTablesById[textureId];
-      if (!entry || !pageTable || (ready.req.tail ? isResident(entry.tailEntry) : pageTable.isResident(ready.req)))
+      if (!entry || !pageTable || (ready.req.tail ? isPageTableEntryResident(entry.tailEntry) : pageTable.isResident(ready.req))) {
+        this.releaseReadyPayload(ready);
         continue;
+      }
       const uploadStartedAt = performance.now();
       this.telemetry?.trace.spanBegin(18 /* VtUpload */, ready.key, ready.data.byteLength, 0);
       let slot;
@@ -67218,6 +69173,7 @@ class VirtualTextureStore {
       } catch {
         this.telemetry?.trace.spanEnd(18 /* VtUpload */, ready.key, 0, 1);
         this.rejectedAdmissions++;
+        this.releaseReadyPayload(ready);
         continue;
       }
       this.cache.commit(ready.page, slot, ready.data);
@@ -67236,6 +69192,7 @@ class VirtualTextureStore {
       this.completedUploads++;
       this.totalUploadMs += uploadMs;
       this.maxUploadMs = Math.max(this.maxUploadMs, uploadMs);
+      this.releaseReadyPayload(ready);
     }
     this.schedulePendingRequests();
   }
@@ -67340,268 +69297,365 @@ class VirtualTextureStore {
     return stats;
   }
 }
-var VirtualTextureRes = defineResource("virtualTexture", () => {
-  throw new Error("VirtualTextureStore not initialized. Set it with explicit runtime capacities during bootstrap.");
-});
-var VT_SAMPLE_WGSL = `
-fn vtSample(
-  pageTable: texture_2d<u32>,
-  atlas: texture_2d<f32>,
-  atlasSampler: sampler,
-  uv: vec2f,
-  virtualSize: vec2f,
-  pageGrid: vec2f,
-  pageSize: f32,
-  pageBorder: f32,
-  atlasSize: vec2f,
-  maxMip: f32,
-  textureMaxMip: f32,
-  mipBias: f32,
-  filterMode: u32,
-  addressMode: u32
-) -> vec4f {
-  // 0 = clamp, 1 = repeat, 2 = mirrored repeat.
-  var addressed_uv = clamp(uv, vec2f(0.0), vec2f(0.99999994));
-  if (addressMode == 1u) {
-    addressed_uv = fract(uv);
-  } else if (addressMode == 2u) {
-    let period = uv - floor(uv * 0.5) * 2.0;
-    addressed_uv = select(period, 2.0 - period, period > vec2f(1.0));
-    addressed_uv = clamp(addressed_uv, vec2f(0.0), vec2f(0.99999994));
-  }
 
-  // Compute desired mip level from the original continuous derivatives.
-  let dx = dpdx(uv * virtualSize);
-  let dy = dpdy(uv * virtualSize);
-  let texel_footprint = max(dot(dx, dx), dot(dy, dy));
-  let mip_float = clamp(
-    0.5 * log2(max(texel_footprint, 1e-8)) + mipBias,
-    0.0,
-    textureMaxMip
-  );
-  let desired_level = i32(mip_float);
+// crates/afterglow-web/web/src/engine/virtual-texturing/virtual-texture-system.ts
+var INSPECT_VIRTUAL_TEXTURE = Symbol("afterglow.inspectVirtualTexture");
+var RESOLVE_VIRTUAL_MATERIAL = Symbol("afterglow.resolveVirtualMaterial");
+function storeFormat(format) {
+  if (format === "r8unorm")
+    return FORMAT_R8;
+  if (format === "r16float")
+    return FORMAT_R16F;
+  if (format.startsWith("bc7-"))
+    return FORMAT_BC7;
+  if (format.startsWith("astc-"))
+    return FORMAT_ASTC;
+  return FORMAT_RGBA2;
+}
+function memoryFormat2(format) {
+  if (format === "r8unorm")
+    return "r8unorm";
+  if (format === "r16float")
+    return "r16float";
+  if (format === "rgba8unorm" || format === "rgba8unorm-srgb")
+    return "rgba8unorm";
+  throw new RangeError("mutable RAM virtual textures require an uncompressed pool");
+}
 
-  // Mips below 128x128 share one pinned physical slot. The entry is stored in
-  // the otherwise-unused x=1 texel of the terminal page-table row.
-  if (desired_level > i32(maxMip)) {
-    var tail_offset = 0.0;
-    for (var level = 0; level < i32(maxMip); level = level + 1) {
-      tail_offset += max(1.0, ceil(pageGrid.y / exp2(f32(level))));
+class VirtualTextureSystem {
+  options;
+  registry;
+  pools = new Map;
+  poolList = [];
+  entriesById = [null];
+  storesById = [null];
+  nextPath = 1;
+  nextTextureId = 1;
+  disposed = false;
+  constructor(options) {
+    this.options = options;
+    if (!Number.isInteger(options.maxMutablePageRefreshesPerPoll) || options.maxMutablePageRefreshesPerPoll < 1)
+      throw new RangeError("mutable VT refresh capacity must be positive");
+    this.registry = new FixedResourceRegistry(options.maxTextures);
+    for (const config of options.pools) {
+      if (this.pools.has(config.format))
+        throw new Error(`duplicate VT pool: ${config.format}`);
+      const sources = new Map;
+      const provider = async (path, request, signal) => {
+        const route = sources.get(path);
+        if (!route)
+          throw new Error(`virtual texture source is unavailable: ${path}`);
+        return route.provider(route.sourceKey ?? path, request, signal);
+      };
+      const store = new VirtualTextureStore(config.capacities, provider, storeFormat(config.format), options.device, config.tuning ?? new VirtualTextureTuning, options.telemetry);
+      const pool = { format: config.format, sources, store };
+      this.pools.set(config.format, pool);
+      this.poolList.push(pool);
     }
-    let tail_entry = textureLoad(pageTable, vec2i(1, i32(tail_offset)), 0).r;
-    if ((tail_entry & 1u) != 0u) {
-      let delta = desired_level - i32(maxMip);
-      var rect_origin = vec2f(0.0);
-      if (delta == 2) { rect_origin = vec2f(72.0, 0.0); }
-      else if (delta == 3) { rect_origin = vec2f(112.0, 0.0); }
-      else if (delta == 4) { rect_origin = vec2f(72.0, 40.0); }
-      else if (delta == 5) { rect_origin = vec2f(88.0, 40.0); }
-      else if (delta == 6) { rect_origin = vec2f(100.0, 40.0); }
-      else if (delta >= 7) { rect_origin = vec2f(110.0, 40.0); }
-      let tail_size = max(vec2f(1.0), floor(virtualSize / exp2(f32(desired_level))));
-      let tail_x = (tail_entry >> 1) & 0xFFu;
-      let tail_y = (tail_entry >> 9) & 0xFFu;
-      let slot_origin = vec2f(f32(tail_x), f32(tail_y)) * (pageSize + pageBorder * 2.0);
-      let tail_texel = slot_origin + rect_origin + pageBorder + addressed_uv * tail_size;
-      let tail_uv = tail_texel / atlasSize;
-      let tail_scale = tail_size / atlasSize;
-      if (filterMode == 1u) {
-        return textureLoad(atlas, vec2i(clamp(floor(tail_texel), vec2f(0.0), atlasSize - 1.0)), 0);
+    if (this.pools.size === 0)
+      throw new RangeError("at least one virtual texture pool is required");
+  }
+  createTexture(descriptor, source, sourceKey) {
+    if (this.disposed)
+      return 0;
+    const pool = this.pools.get(descriptor.format);
+    if (!pool || !Number.isInteger(descriptor.width) || descriptor.width < 1 || !Number.isInteger(descriptor.height) || descriptor.height < 1)
+      return 0;
+    const ownedDescriptor = { ...descriptor };
+    const path = `virtual://${this.nextPath++}`;
+    pool.sources.set(path, { provider: source, sourceKey: sourceKey ?? null });
+    const textureId = this.nextTextureId++;
+    pool.store.loadTexture(path, {
+      width: ownedDescriptor.width,
+      height: ownedDescriptor.height,
+      mipTail: ownedDescriptor.mipTail ?? false,
+      textureId
+    });
+    const entry = pool.store.getEntry(path);
+    if (!entry) {
+      pool.sources.delete(path);
+      return 0;
+    }
+    this.entriesById[textureId] = entry;
+    this.storesById[textureId] = pool.store;
+    const view = {
+      texture: 0,
+      descriptor: ownedDescriptor,
+      entry,
+      store: pool.store
+    };
+    let record;
+    const publish = (page, bytes) => this.publishMemoryPage(record, page, bytes);
+    record = {
+      handle: 0,
+      path,
+      descriptor: ownedDescriptor,
+      source,
+      memory: null,
+      pool,
+      view,
+      publish
+    };
+    const handle = this.registry.acquire(record);
+    if (handle === 0) {
+      pool.store.unloadTexture(path);
+      pool.sources.delete(path);
+      this.entriesById[textureId] = null;
+      this.storesById[textureId] = null;
+      return 0;
+    }
+    record.handle = handle;
+    view.texture = record.handle;
+    return record.handle;
+  }
+  createMemoryTexture(descriptor, sourceOptions) {
+    if (descriptor.mipTail)
+      throw new RangeError("mutable RAM textures use ordinary terminal pages");
+    const memory = new MemoryVirtualTextureSource({
+      ...sourceOptions,
+      width: descriptor.width,
+      height: descriptor.height,
+      format: memoryFormat2(descriptor.format),
+      addressMode: descriptor.addressMode
+    });
+    return this.registerMemorySource(descriptor, memory);
+  }
+  registerMemorySource(descriptor, memory) {
+    const handle = this.createTexture(descriptor, memory.provider);
+    if (handle === 0)
+      return 0;
+    const record = this.registry.get(handle);
+    if (!record)
+      return 0;
+    record.memory = memory;
+    return handle;
+  }
+  async saveMemoryTexture(handle, key, store) {
+    const record = this.registry.get(handle);
+    if (!record?.memory)
+      return 1 /* InvalidTexture */;
+    const bytes = encodeMemoryTextureSnapshot(record.memory, record.descriptor);
+    const result = await store.putAtomic(key, bytes);
+    return result.status === 0 /* Ok */ ? 0 /* Ok */ : 2 /* StorageFailure */;
+  }
+  async loadMemoryTexture(key, store, capacities, maxSnapshotBytes) {
+    const loaded = await store.get(key, maxSnapshotBytes);
+    if (loaded.status !== 0 /* Ok */ || loaded.bytes === null)
+      return {
+        status: 2 /* StorageFailure */,
+        storageStatus: loaded.status,
+        handle: 0
+      };
+    let snapshot;
+    try {
+      snapshot = decodeMemoryTextureSnapshot(loaded.bytes, capacities.pageCapacity);
+    } catch {
+      return {
+        status: 3 /* CorruptSnapshot */,
+        storageStatus: 0 /* Ok */,
+        handle: 0
+      };
+    }
+    try {
+      const memory = restoreMemoryTextureSnapshot(snapshot, capacities);
+      const handle = this.registerMemorySource(snapshot.descriptor, memory);
+      return handle === 0 ? {
+        status: 4 /* CapacityExceeded */,
+        storageStatus: 0 /* Ok */,
+        handle: 0
+      } : {
+        status: 0 /* Ok */,
+        storageStatus: 0 /* Ok */,
+        handle
+      };
+    } catch {
+      return {
+        status: 4 /* CapacityExceeded */,
+        storageStatus: 0 /* Ok */,
+        handle: 0
+      };
+    }
+  }
+  [INSPECT_VIRTUAL_TEXTURE](handle) {
+    return this.registry.get(handle)?.view ?? null;
+  }
+  readTextureInfo(handle, out) {
+    const record = this.registry.get(handle);
+    if (!record)
+      return false;
+    out.texture = record.handle;
+    out.textureId = record.view.entry.textureId;
+    out.sourceKey = record.view.entry.path;
+    out.width = record.descriptor.width;
+    out.height = record.descriptor.height;
+    out.pageGridX = record.view.entry.pageGridX;
+    out.pageGridY = record.view.entry.pageGridY;
+    return true;
+  }
+  getEntryById(textureId) {
+    return this.entriesById[textureId >>> 0] ?? undefined;
+  }
+  writeMemoryRegion(handle, x, y, width, height, source, bytesPerRow) {
+    const memory = this.registry.get(handle)?.memory;
+    if (!memory)
+      return null;
+    const status = memory.writeRegion(x, y, width, height, source, bytesPerRow);
+    this.options.telemetry?.trace.instant(25 /* MutableTextureWrite */, handle, source.byteLength, status);
+    if (status === 0 /* Written */) {
+      this.options.telemetry?.metrics.counterAdd(12 /* MutableTextureWrites */, 1);
+      this.options.telemetry?.metrics.counterAdd(13 /* MutableTextureBytes */, source.byteLength);
+    }
+    return status;
+  }
+  recordFrameTime(frameTimeMs) {
+    for (let pool = 0;pool < this.poolList.length; pool++)
+      this.poolList[pool].store.recordFrameTime(frameTimeMs);
+  }
+  setPublicationFrameId(frameId2) {
+    for (let pool = 0;pool < this.poolList.length; pool++)
+      this.poolList[pool].store.setPublicationFrameId(frameId2);
+  }
+  processFeedback(feedback) {
+    for (let pool = 0;pool < this.poolList.length; pool++)
+      this.poolList[pool].store.processFeedback(feedback);
+  }
+  processFeedbackBatch(maps, count) {
+    for (let pool = 0;pool < this.poolList.length; pool++)
+      this.poolList[pool].store.processFeedbackBatch(maps, count);
+  }
+  [RESOLVE_VIRTUAL_MATERIAL](handles, mipBiases) {
+    const resolve = (handle) => {
+      if (handle === undefined)
+        return;
+      const record = this.registry.get(handle);
+      if (!record)
+        throw new Error("virtual material contains a stale texture handle");
+      return record.view.entry;
+    };
+    const albedo = resolve(handles.albedo);
+    if (!albedo)
+      throw new Error("virtual material requires an albedo texture");
+    const set = { albedo };
+    const normal2 = resolve(handles.normal);
+    const masks = resolve(handles.masks);
+    const roughness2 = resolve(handles.roughness);
+    const ao = resolve(handles.ao);
+    const emissive2 = resolve(handles.emissive);
+    if (normal2)
+      set.normal = normal2;
+    if (masks)
+      set.masks = masks;
+    if (roughness2)
+      set.roughness = roughness2;
+    if (ao)
+      set.ao = ao;
+    if (emissive2)
+      set.emissive = emissive2;
+    let store = null;
+    for (const entry of [albedo, normal2, masks, roughness2, ao, emissive2]) {
+      if (!entry)
+        continue;
+      const candidate = this.storesById[entry.textureId];
+      if (!candidate)
+        throw new Error("virtual material texture is not owned by this system");
+      if (store && store !== candidate)
+        throw new Error("linked virtual material channels require one physical format pool");
+      store = candidate;
+    }
+    if (!store)
+      throw new Error("virtual material set has no registered textures");
+    store.linkMaterialSet(set, mipBiases);
+    return { store, set };
+  }
+  primaryStore() {
+    if (this.poolList.length !== 1)
+      throw new Error("aggregate VT diagnostics require exactly one format pool");
+    return this.poolList[0].store;
+  }
+  getStats() {
+    return this.primaryStore().getStats();
+  }
+  getDebugSnapshot() {
+    return this.primaryStore().getDebugSnapshot();
+  }
+  get atlasWidth() {
+    return this.primaryStore().atlasWidth;
+  }
+  get atlasHeight() {
+    return this.primaryStore().atlasHeight;
+  }
+  get rendererAttached() {
+    for (let pool = 0;pool < this.poolList.length; pool++)
+      if (!this.poolList[pool].store.gpuAtlasTexture)
+        return false;
+    return this.poolList.length !== 0;
+  }
+  isBootstrapReady() {
+    for (let pool = 0;pool < this.poolList.length; pool++) {
+      const stats = this.poolList[pool].store.getStats();
+      if (stats.failedLoads !== 0 || stats.pendingPages !== 0 || stats.readyUploads !== 0 || stats.scheduledRequests !== 0 || stats.bulkInFlight !== 0 || stats.atlasSlotsUsed < stats.textureCount)
+        return false;
+    }
+    return true;
+  }
+  poll() {
+    let remaining = this.options.maxMutablePageRefreshesPerPoll;
+    let published = 0;
+    let deferred = 0;
+    this.options.telemetry?.trace.spanBegin(26 /* MutablePageRefresh */, 0, this.options.maxMutablePageRefreshesPerPoll, 0);
+    for (let slot = 0;slot < this.registry.capacity; slot++) {
+      const record = this.registry.valueAt(slot);
+      if (!record?.memory)
+        continue;
+      if (remaining > 0) {
+        const drained = record.memory.drainDirty(remaining, record.publish);
+        published += drained;
+        remaining -= drained;
       }
-      return textureSampleGrad(atlas, atlasSampler, tail_uv, dpdx(uv) * tail_scale, dpdy(uv) * tail_scale);
+      deferred += record.memory.pendingDirtyPages;
     }
+    if (published > 0)
+      this.options.telemetry?.metrics.counterAdd(14 /* MutablePagesPublished */, published);
+    if (deferred > 0)
+      this.options.telemetry?.metrics.counterAdd(15 /* MutablePagesDeferred */, deferred);
+    this.options.telemetry?.trace.spanEnd(26 /* MutablePageRefresh */, 0, published, deferred);
+    for (let pool = 0;pool < this.poolList.length; pool++)
+      this.poolList[pool].store.poll();
   }
-
-  var mip_level = min(desired_level, i32(maxMip));
-  let max_level = i32(maxMip);
-
-  // Walk from desired mip up, looking for resident page
-  var is_resident = false;
-  var entry = 0u;
-  var curr_page_grid = vec2f(0.0);
-  var curr_mip_size = virtualSize;
-  var page_coords = vec2i(0);
-
-  for (var m = mip_level; m <= max_level; m = m + 1) {
-    let mip_scale = exp2(-f32(m));
-    curr_page_grid = max(ceil(pageGrid * mip_scale), vec2f(1.0));
-    curr_mip_size = max(floor(virtualSize * mip_scale), vec2f(1.0));
-    page_coords = vec2i(min(floor(addressed_uv * curr_mip_size / pageSize), curr_page_grid - 1.0));
-    var mip_offset = 0.0;
-    for (var level = 0; level < m; level = level + 1) {
-      mip_offset += max(1.0, ceil(pageGrid.y / exp2(f32(level))));
+  publishMemoryPage(record, page, bytes) {
+    if (record.pool.store.replaceResidentPage(record.path, page, bytes))
+      return true;
+    return !record.pool.store.isPagePending(record.path, page);
+  }
+  destroyTexture(handle) {
+    const record = this.registry.release(handle);
+    if (!record)
+      return false;
+    record.pool.store.unloadTexture(record.path);
+    record.pool.sources.delete(record.path);
+    this.entriesById[record.view.entry.textureId] = null;
+    this.storesById[record.view.entry.textureId] = null;
+    return true;
+  }
+  attachRenderer(renderer) {
+    for (let pool = 0;pool < this.poolList.length; pool++)
+      this.poolList[pool].store.attachRenderer(renderer);
+  }
+  dispose() {
+    if (this.disposed)
+      return;
+    this.disposed = true;
+    for (let slot = 0;slot < this.registry.capacity; slot++) {
+      const record = this.registry.valueAt(slot);
+      if (record)
+        this.destroyTexture(record.handle);
     }
-    entry = textureLoad(pageTable, vec2i(page_coords.x, page_coords.y + i32(mip_offset)), 0).r;
-    if ((entry & 1u) != 0u) {
-      is_resident = true;
-      mip_level = m;
-      break;
-    }
+    for (let pool = 0;pool < this.poolList.length; pool++)
+      this.poolList[pool].store.dispose();
+    this.pools.clear();
+    this.poolList.length = 0;
   }
-
-  if (!is_resident) {
-    return vec4f(0.5, 0.5, 0.5, 1.0);
-  }
-
-  // Compute physical atlas UV
-  let physX = (entry >> 1) & 0xFFu;
-  let physY = (entry >> 9) & 0xFFu;
-  let local_texel = addressed_uv * curr_mip_size - vec2f(page_coords) * pageSize;
-  let page_origin = vec2f(f32(physX), f32(physY)) * (pageSize + pageBorder * 2.0);
-  let sample_texel = page_origin + pageBorder + local_texel;
-  let atlas_uv = sample_texel / atlasSize;
-
-  // Atlas-space gradients preserve anisotropy without allowing the GPU to
-  // derive across an unrelated neighboring physical slot.
-  let gradient_scale = curr_mip_size / atlasSize;
-  let atlas_dx = dpdx(uv) * gradient_scale;
-  let atlas_dy = dpdy(uv) * gradient_scale;
-  if (filterMode == 1u) {
-    return textureLoad(atlas, vec2i(clamp(floor(sample_texel), vec2f(0.0), atlasSize - 1.0)), 0);
-  }
-  return textureSampleGrad(atlas, atlasSampler, atlas_uv, atlas_dx, atlas_dy);
 }
-`;
-var VT_DESIRED_MIP_WGSL = `
-fn vtDesiredMip(
-  gradientUV: vec2f,
-  virtualSize: vec2f,
-  textureMaxMip: f32,
-  mipBias: f32
-) -> f32 {
-  let dx = dpdx(gradientUV * virtualSize);
-  let dy = dpdy(gradientUV * virtualSize);
-  let footprint = max(dot(dx, dx), dot(dy, dy));
-  return clamp(0.5 * log2(max(footprint, 1e-8)) + mipBias, 0.0, textureMaxMip);
-}
-`;
-var VT_SAMPLE_FROM_LEVEL_WGSL = `
-fn vtSampleFromLevel(
-  pageTable: texture_2d<u32>, atlas: texture_2d<f32>, atlasSampler: sampler,
-  sampleUV: vec2f, gradientUV: vec2f,
-  virtualSize: vec2f, pageGrid: vec2f, pageSize: f32, pageBorder: f32,
-  atlasSize: vec2f, maxMip: f32, resolvedMip: f32, addressMode: u32
-) -> vec4f {
-  var addressedUV = clamp(sampleUV, vec2f(0.0), vec2f(0.99999994));
-  if (addressMode == 1u) {
-    addressedUV = fract(sampleUV);
-  } else if (addressMode == 2u) {
-    let period = sampleUV - floor(sampleUV * 0.5) * 2.0;
-    addressedUV = select(period, 2.0 - period, period > vec2f(1.0));
-    addressedUV = clamp(addressedUV, vec2f(0.0), vec2f(0.99999994));
-  }
-
-  let requested = i32(resolvedMip);
-  let maxLevel = i32(maxMip);
-  var entry = 0u;
-  var selected = -1;
-  var selectedPage = vec2i(0);
-  var selectedSize = vec2f(1.0);
-  if (requested <= maxLevel) {
-    for (var mip = max(0, requested); mip <= maxLevel; mip = mip + 1) {
-      let scale = exp2(-f32(mip));
-      let grid = max(ceil(pageGrid * scale), vec2f(1.0));
-      let mipSize = max(floor(virtualSize * scale), vec2f(1.0));
-      let page = vec2i(min(floor(addressedUV * mipSize / pageSize), grid - 1.0));
-      var offset = 0.0;
-      for (var level = 0; level < mip; level = level + 1) {
-        offset += max(1.0, ceil(pageGrid.y / exp2(f32(level))));
-      }
-      let candidate = textureLoad(pageTable, vec2i(page.x, page.y + i32(offset)), 0).r;
-      if ((candidate & 1u) != 0u) {
-        entry = candidate; selected = mip; selectedPage = page; selectedSize = mipSize;
-        break;
-      }
-    }
-  }
-
-  if (selected >= 0) {
-    let local = addressedUV * selectedSize - vec2f(selectedPage) * pageSize;
-    let origin = vec2f(f32((entry >> 1) & 0xFFu), f32((entry >> 9) & 0xFFu)) * (pageSize + pageBorder * 2.0);
-    let atlasUV = (origin + pageBorder + local) / atlasSize;
-    let gradientScale = selectedSize / atlasSize;
-    return textureSampleGrad(atlas, atlasSampler, atlasUV,
-      dpdx(gradientUV) * gradientScale, dpdy(gradientUV) * gradientScale);
-  }
-
-  var tailOffset = 0.0;
-  for (var level = 0; level < maxLevel; level = level + 1) {
-    tailOffset += max(1.0, ceil(pageGrid.y / exp2(f32(level))));
-  }
-  let tailEntry = textureLoad(pageTable, vec2i(1, i32(tailOffset)), 0).r;
-  if ((tailEntry & 1u) == 0u) { return vec4f(0.5, 0.5, 0.5, 1.0); }
-  let tailMip = max(maxLevel + 1, requested);
-  let delta = tailMip - maxLevel;
-  var rectOrigin = vec2f(0.0);
-  if (delta == 2) { rectOrigin = vec2f(72.0, 0.0); }
-  else if (delta == 3) { rectOrigin = vec2f(112.0, 0.0); }
-  else if (delta == 4) { rectOrigin = vec2f(72.0, 40.0); }
-  else if (delta == 5) { rectOrigin = vec2f(88.0, 40.0); }
-  else if (delta == 6) { rectOrigin = vec2f(100.0, 40.0); }
-  else if (delta >= 7) { rectOrigin = vec2f(110.0, 40.0); }
-  let tailSize = max(vec2f(1.0), floor(virtualSize / exp2(f32(tailMip))));
-  let slot = vec2f(f32((tailEntry >> 1) & 0xFFu), f32((tailEntry >> 9) & 0xFFu)) * (pageSize + pageBorder * 2.0);
-  let atlasUV = (slot + rectOrigin + pageBorder + addressedUV * tailSize) / atlasSize;
-  let gradientScale = tailSize / atlasSize;
-  return textureSampleGrad(atlas, atlasSampler, atlasUV,
-    dpdx(gradientUV) * gradientScale, dpdy(gradientUV) * gradientScale);
-}
-`;
-var VT_FEEDBACK_WGSL = `
-fn vtFeedback(
-  sampleUV: vec2f,
-  gradientUV: vec2f,
-  feedbackPixelScale: vec2f,
-  virtualSize: vec2f,
-  pageGrid: vec2f,
-  maxMip: f32,
-  qualityBias: f32,
-  addressMode: u32,
-  textureId: u32,
-  viewDistance: f32,
-  cameraNear: f32,
-  cameraFar: f32
-) -> vec2u {
-  // Derivatives are measured per reduced-resolution feedback pixel. Convert
-  // them back to physical display-pixel derivatives before selecting a mip.
-  // Keeping gradientUV separate prevents repeat/POM discontinuities from
-  // corrupting the screen-space footprint.
-  let dx = dpdx(gradientUV * virtualSize) * feedbackPixelScale.x;
-  let dy = dpdy(gradientUV * virtualSize) * feedbackPixelScale.y;
-  let texel_footprint = max(dot(dx, dx), dot(dy, dy));
-  let mip_level = u32(clamp(0.5 * log2(max(texel_footprint, 1e-8)) + qualityBias, 0.0, maxMip));
-
-  var addressed_uv = clamp(sampleUV, vec2f(0.0), vec2f(0.99999994));
-  if (addressMode == 1u) {
-    addressed_uv = fract(sampleUV);
-  } else if (addressMode == 2u) {
-    let period = sampleUV - floor(sampleUV * 0.5) * 2.0;
-    addressed_uv = select(period, 2.0 - period, period > vec2f(1.0));
-    addressed_uv = clamp(addressed_uv, vec2f(0.0), vec2f(0.99999994));
-  }
-  let mip_scale = exp2(-f32(mip_level));
-  let curr_page_grid = max(ceil(pageGrid * mip_scale), vec2f(1.0));
-  let mip_size = max(floor(virtualSize * mip_scale), vec2f(1.0));
-  let page_coords = min(floor(addressed_uv * mip_size / 128.0), curr_page_grid - 1.0);
-
-  let safeNear = max(cameraNear, 1e-6);
-  let safeFar = max(cameraFar, safeNear + 1e-6);
-  let logRange = max(log2(safeFar / safeNear), 1e-6);
-  let normalizedDistance = clamp(
-    log2(max(viewDistance, safeNear) / safeNear) / logRange, 0.0, 1.0
-  );
-  let cameraCloseness = u32(round((1.0 - normalizedDistance) * 7.0));
-
-  // RG32Uint: word 0 carries valid + 3-bit camera closeness + 6-bit mip + 11-bit X/Y;
-  // word 1 carries the full virtual-texture identity.
-  let packed = 0x80000000u |
-               ((cameraCloseness & 0x7u) << 28) |
-               (mip_level & 0x3Fu) |
-               ((u32(page_coords.x) & 0x7FFu) << 6) |
-               ((u32(page_coords.y) & 0x7FFu) << 17);
-  return vec2u(packed, textureId);
-}
-`;
 
 // crates/afterglow-web/web/src/engine/assets/engine-assets.ts
 class EngineAssets {
@@ -67610,58 +69664,39 @@ class EngineAssets {
   textureWorkers;
   createMeshOptimizer;
   telemetry;
-  vtCapacities;
   pageProvider;
-  stats = { workersStarted: 0, closeErrors: 0, closed: false };
+  stats = { servicesStarted: 0, closeErrors: 0, closed: false };
   closed = false;
   assetStore = null;
   meshOptimizer = null;
-  store = null;
-  constructor(container, format, textureWorkers, createMeshOptimizer, telemetry, vtCapacities, pageProvider) {
+  modelSystem = null;
+  textureSystem = null;
+  constructor(container, format, textureWorkers, createMeshOptimizer, telemetry, pageProvider) {
     this.container = container;
     this.format = format;
     this.textureWorkers = textureWorkers;
     this.createMeshOptimizer = createMeshOptimizer;
     this.telemetry = telemetry;
-    this.vtCapacities = vtCapacities;
     this.pageProvider = pageProvider;
-    this.stats.workersStarted = textureWorkers.size;
-  }
-  get source() {
-    return this.container.source;
-  }
-  get containerPath() {
-    return this.container.path;
-  }
-  get header() {
-    return this.container.header;
-  }
-  get rawAssets() {
-    return this.container.rawAssets;
+    this.stats.servicesStarted = textureWorkers.size;
   }
   static async open(options) {
     const workerCount = validateOptions(options);
     const correlation = options.telemetry?.nextCorrelation(4 /* Asset */) ?? 0;
-    options.telemetry?.trace.asyncBegin(8 /* SessionOpen */, correlation, workerCount, 0);
+    options.telemetry?.trace.asyncBegin(8 /* AssetCompositionOpen */, correlation, workerCount, 0);
     const source = options.source ?? createPlatformRangeLoader("", options.telemetry);
     let workerPool = null;
     try {
       const container = await BigContainer.open(source, options.containerPath, options.maxHeaderBytes);
       workerPool = await OwnedWorkerPool.start(workerCount, (index) => options.createTranscoder ? options.createTranscoder(index) : createPlatformTextureTranscoder(index, container.path, options.telemetry));
-      const containerLoader = {
-        load: (path) => source.load(path),
-        size: (path) => source.size(path),
-        read: (_path, offset, length2) => source.read(container.path, offset, length2),
-        readBulk: source.readBulk ? (ranges) => source.readBulk(container.path, ranges) : undefined
-      };
-      const pageProvider = createPageDataProvider(containerLoader, container.header, workerPool.workers, options.format, {
+      const pageProvider = createPageDataProvider(container.ranges, container.header, workerPool.workers, options.format, {
         transcodeQueueCapacity: options.transcodeQueueCapacity,
         urgentBatchDeadlineMs: options.urgentBatchDeadlineMs,
         focusBatchDeadlineMs: options.focusBatchDeadlineMs,
         peripheralBatchDeadlineMs: options.peripheralBatchDeadlineMs
       }, options.telemetry);
-      const assets = new EngineAssets(container, options.format, workerPool, options.createMeshOptimizer, options.telemetry, { maxPendingPages: options.maxPendingPages, maxPendingBytes: options.maxPendingBytes }, pageProvider);
-      options.telemetry?.trace.asyncEnd(8 /* SessionOpen */, correlation, workerPool.size, 0);
+      const assets = new EngineAssets(container, options.format, workerPool, options.createMeshOptimizer, options.telemetry, pageProvider);
+      options.telemetry?.trace.asyncEnd(8 /* AssetCompositionOpen */, correlation, workerPool.size, 0);
       return assets;
     } catch (error2) {
       try {
@@ -67670,46 +69705,54 @@ class EngineAssets {
         if (error2 instanceof Error && error2.cause === undefined)
           error2.cause = closeError;
       }
-      options.telemetry?.trace.asyncEnd(8 /* SessionOpen */, correlation, workerPool?.size ?? 0, 1);
+      options.telemetry?.trace.asyncEnd(8 /* AssetCompositionOpen */, correlation, workerPool?.size ?? 0, 1);
       throw error2;
     }
+  }
+  async ensureMeshOptimizer() {
+    if (this.meshOptimizer)
+      return this.meshOptimizer;
+    const optimizer = this.createMeshOptimizer ? await this.createMeshOptimizer() : await createPlatformMeshOptimizer(this.telemetry);
+    if (this.closed) {
+      await optimizer.close();
+      throw new Error("EngineAssets closed while creating its mesh processor");
+    }
+    this.meshOptimizer = optimizer;
+    this.stats.servicesStarted++;
+    return optimizer;
   }
   async createAssetStore(capacity = 64, maxCompletionsPerPoll = 32) {
     if (this.closed)
       throw new Error("cannot create an asset store from closed EngineAssets");
-    if (this.assetStore || this.meshOptimizer)
+    if (this.assetStore)
       throw new Error("EngineAssets already created its asset store");
-    const optimizer = this.createMeshOptimizer ? await this.createMeshOptimizer() : await createPlatformMeshOptimizer(this.telemetry);
-    if (this.closed) {
-      await optimizer.close();
-      throw new Error("EngineAssets closed while creating its asset store");
-    }
-    try {
-      this.assetStore = new AssetStore(this.rawAssets, optimizer, capacity, maxCompletionsPerPoll, this.telemetry);
-      this.meshOptimizer = optimizer;
-      this.stats.workersStarted++;
-      return this.assetStore;
-    } catch (error2) {
-      try {
-        await optimizer.close();
-      } catch (closeError) {
-        if (error2 instanceof Error && error2.cause === undefined)
-          error2.cause = closeError;
-      }
-      throw error2;
-    }
+    const optimizer = await this.ensureMeshOptimizer();
+    this.assetStore = new AssetStore(this.container.rawAssets, optimizer, capacity, maxCompletionsPerPoll, this.telemetry);
+    return this.assetStore;
   }
-  createVirtualTextureStore(device, tuning) {
+  async createModelSystem(options) {
     if (this.closed)
-      throw new Error("cannot create a VT store from closed EngineAssets");
-    if (this.store)
-      throw new Error("EngineAssets already created its VT store");
-    const loader = {
-      read: (_path, offset, length2) => this.source.read(this.containerPath, offset, length2),
-      poll() {}
-    };
-    this.store = new VirtualTextureStore(loader, this.vtCapacities, this.pageProvider, this.format, device, tuning ?? new VirtualTextureTuning, this.telemetry);
-    return this.store;
+      throw new Error("cannot create a model system from closed EngineAssets");
+    if (this.modelSystem)
+      throw new Error("EngineAssets already created its model system");
+    const optimizer = await this.ensureMeshOptimizer();
+    this.modelSystem = new ModelSystem(optimizer, options, this.telemetry);
+    return this.modelSystem;
+  }
+  createVirtualTextureSystem(options) {
+    if (this.closed)
+      throw new Error("cannot create a texture system from closed EngineAssets");
+    if (this.textureSystem)
+      throw new Error("EngineAssets already created its texture system");
+    const telemetry = options.telemetry ?? this.telemetry;
+    this.textureSystem = new VirtualTextureSystem(telemetry ? { ...options, telemetry } : options);
+    return this.textureSystem;
+  }
+  registerVirtualTexture(sourceKey, format, addressMode, mipTail = true) {
+    if (!this.textureSystem)
+      throw new Error("EngineAssets has no virtual texture system");
+    const dimensions = getVirtualTextureDimensions(this.container.header, sourceKey);
+    return this.textureSystem.createTexture({ ...dimensions, format, addressMode, mipTail }, this.pageProvider, sourceKey);
   }
   async close() {
     if (this.closed)
@@ -67717,9 +69760,11 @@ class EngineAssets {
     this.closed = true;
     this.assetStore?.dispose();
     this.assetStore = null;
-    this.store?.dispose();
+    this.modelSystem?.dispose();
+    this.modelSystem = null;
+    this.textureSystem?.dispose();
+    this.textureSystem = null;
     this.pageProvider.close();
-    this.store = null;
     let firstError = null;
     if (this.meshOptimizer) {
       try {
@@ -69386,212 +71431,11 @@ class RenderAdapter {
     this.uniqueObjects.length = 0;
   }
 }
-// crates/afterglow-web/web/src/engine/renderer/gpu-profiler.ts
-var DEFAULT_FRAMES_IN_FLIGHT = 3;
-var DEFAULT_MAX_SCOPES = 16;
+// crates/afterglow-web/web/src/engine/streaming/native-persistent-blob-backend.ts
+var RPC_CHUNK_BYTES = 512 * 1024;
 
-class GpuProfiler {
-  device;
-  slots = [];
-  maxScopes;
-  capacity;
-  current = 0;
-  framesInFlight;
-  supported;
-  period;
-  result = [];
-  frameScopeCount = 0;
-  constructor(device, queue, options = {}) {
-    this.device = device;
-    if (options.framesInFlight !== undefined && (!Number.isInteger(options.framesInFlight) || options.framesInFlight < 1))
-      throw new RangeError("GpuProfiler framesInFlight must be a positive integer");
-    if (options.maxScopesPerFrame !== undefined && (!Number.isInteger(options.maxScopesPerFrame) || options.maxScopesPerFrame < 1))
-      throw new RangeError("GpuProfiler maxScopesPerFrame must be a positive integer");
-    this.framesInFlight = options.framesInFlight ?? DEFAULT_FRAMES_IN_FLIGHT;
-    this.maxScopes = options.maxScopesPerFrame ?? DEFAULT_MAX_SCOPES;
-    this.capacity = this.maxScopes * 2;
-    this.supported = device.features.has("timestamp-query");
-    this.period = () => queue.getTimestampPeriod?.() ?? 1;
-    if (this.supported)
-      this.initSlots();
-  }
-  initSlots() {
-    for (let i = 0;i < this.framesInFlight; i++) {
-      const querySet = this.device.createQuerySet({
-        type: "timestamp",
-        count: this.capacity
-      });
-      const resolveBuffer = this.device.createBuffer({
-        size: this.capacity * 8,
-        usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC
-      });
-      const resultBuffer = this.device.createBuffer({
-        size: this.capacity * 8,
-        usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
-      });
-      this.slots.push({
-        querySet,
-        resolveBuffer,
-        resultBuffer,
-        names: [],
-        mapped: true,
-        resolved: false
-      });
-    }
-  }
-  isSupported() {
-    return this.supported;
-  }
-  beginFrame() {
-    if (!this.supported)
-      return noopFrameScope;
-    this.frameScopeCount = 0;
-    const slot = this.slots[this.current];
-    if (!slot)
-      return noopFrameScope;
-    slot.names.length = 0;
-    slot.resolved = false;
-    slot.mapped = false;
-    const profiler = this;
-    const frameScope = {
-      withPass(name, descriptor) {
-        if (profiler.frameScopeCount >= profiler.maxScopes)
-          return descriptor;
-        const slot2 = profiler.slots[profiler.current];
-        if (!slot2)
-          return descriptor;
-        const pair = profiler.frameScopeCount * 2;
-        slot2.names.push(name);
-        profiler.frameScopeCount++;
-        descriptor.timestampWrites = {
-          querySet: slot2.querySet,
-          beginningOfPassWriteIndex: pair,
-          endOfPassWriteIndex: pair + 1
-        };
-        return descriptor;
-      },
-      scope(name, encoder) {
-        if (profiler.frameScopeCount >= profiler.maxScopes)
-          return { end() {} };
-        const slot2 = profiler.slots[profiler.current];
-        if (!slot2)
-          return { end() {} };
-        const pair = profiler.frameScopeCount * 2;
-        slot2.names.push(name);
-        profiler.frameScopeCount++;
-        encoder.writeTimestamp?.(slot2.querySet, pair);
-        return {
-          end() {
-            encoder.writeTimestamp?.(slot2.querySet, pair + 1);
-          }
-        };
-      }
-    };
-    return frameScope;
-  }
-  endFrame(encoder) {
-    if (!this.supported)
-      return;
-    const slot = this.slots[this.current];
-    if (!slot)
-      return;
-    if (this.frameScopeCount === 0) {
-      this.advance();
-      return;
-    }
-    const used = this.frameScopeCount * 2;
-    encoder.resolveQuerySet(slot.querySet, 0, used, slot.resolveBuffer, 0);
-    encoder.copyBufferToBuffer(slot.resolveBuffer, 0, slot.resultBuffer, 0, used * 8);
-    slot.resolved = true;
-    slot.mapped = false;
-    this.advance();
-  }
-  advance() {
-    this.current = (this.current + 1) % this.framesInFlight;
-  }
-  async poll() {
-    this.result.length = 0;
-    if (!this.supported)
-      return this.result;
-    const slot = this.slots[this.current];
-    if (!slot || !slot.resolved || slot.mapped)
-      return this.result;
-    const used = slot.names.length * 2;
-    await slot.resultBuffer.mapAsync(GPUMapMode.READ);
-    slot.mapped = true;
-    const view = new BigUint64Array(slot.resultBuffer.getMappedRange(0, used * 8));
-    const period = this.period();
-    for (let i = 0;i < slot.names.length; i++) {
-      const start = view[i * 2] ?? 0n;
-      const end = view[i * 2 + 1] ?? 0n;
-      this.result.push({
-        name: slot.names[i] ?? `scope-${i}`,
-        startNs: start,
-        endNs: end,
-        durationMs: Number(end - start) * period / 1e6
-      });
-    }
-    slot.resultBuffer.unmap();
-    slot.resolved = false;
-    return this.result;
-  }
-  exportChromeTrace(scopes) {
-    const events = scopes.map((s) => ({
-      name: s.name,
-      cat: "gpu",
-      ph: "X",
-      ts: Number(s.startNs) / 1000,
-      dur: s.durationMs * 1000,
-      pid: 1,
-      tid: 1
-    }));
-    return JSON.stringify({ traceEvents: events });
-  }
-  dispose() {
-    for (const slot of this.slots) {
-      slot.querySet.destroy();
-      slot.resolveBuffer.destroy();
-      slot.resultBuffer.destroy();
-    }
-    this.slots.length = 0;
-  }
-  static async validate(device, queue) {
-    const profiler = new GpuProfiler(device, queue, { framesInFlight: 2, maxScopesPerFrame: 4 });
-    if (!profiler.isSupported()) {
-      profiler.dispose();
-      return { supported: false, timings: [] };
-    }
-    const target = device.createTexture({
-      size: [4096, 4096],
-      format: navigator.gpu.getPreferredCanvasFormat(),
-      usage: GPUTextureUsage.RENDER_ATTACHMENT
-    });
-    const view = target.createView();
-    for (let frame = 0;frame < 4; frame++) {
-      const scope = profiler.beginFrame();
-      const encoder = device.createCommandEncoder();
-      const pass2 = encoder.beginRenderPass(scope.withPass("validation-pass", {
-        colorAttachments: [{ view, clearValue: { r: 0, g: 0, b: 0, a: 1 }, loadOp: "clear", storeOp: "store" }]
-      }));
-      pass2.end();
-      profiler.endFrame(encoder);
-      queue.submit([encoder.finish()]);
-      await queue.onSubmittedWorkDone();
-    }
-    const timings = await profiler.poll();
-    profiler.dispose();
-    target.destroy();
-    return { supported: true, timings };
-  }
-}
-var noopFrameScope = {
-  withPass(name, d) {
-    return d;
-  },
-  scope(_name, _encoder) {
-    return { end() {} };
-  }
-};
+// crates/afterglow-web/web/src/engine/streaming/web-persistent-blob-backend.ts
+var RPC_CHUNK_BYTES2 = 512 * 1024;
 // crates/afterglow-web/web/src/engine/renderer/renderer-seal.ts
 class RendererSeal {
   backend;
@@ -69712,6 +71556,7 @@ function gpuErrorTarget(device) {
 }
 
 class RendererHost {
+  presentation = true;
   renderer;
   device;
   adapterInfo;
@@ -69727,8 +71572,10 @@ class RendererHost {
   maxPixelRatio;
   deviceTarget;
   resizeClient;
+  fatalClient;
   onResize;
   onGpuError;
+  physicalViewport = null;
   unsubscribeResize = null;
   disposed = false;
   shaderInspectionActive = false;
@@ -69751,6 +71598,7 @@ class RendererHost {
     this.viewport = options.viewport ?? new BrowserRendererViewport;
     this.maxPixelRatio = options.maxPixelRatio ?? 2;
     this.resizeClient = options.onResize;
+    this.fatalClient = options.onFatal;
     if (!Number.isFinite(this.maxPixelRatio) || this.maxPixelRatio <= 0)
       throw new RangeError("maxPixelRatio must be positive");
     this.sealMonitor = new RendererSeal(requirePipelineBackend(renderer));
@@ -69760,12 +71608,21 @@ class RendererHost {
     this.onResize = () => this.resize();
     this.onGpuError = (event) => {
       this.diagnostics.tryRecord(3 /* UncapturedGpuError */, 1 /* Renderer */, event);
+      this.fatalClient?.(event);
     };
     try {
       this.container.appendChild(renderer.domElement);
       this.resize();
       this.unsubscribeResize = this.viewport.subscribe(this.onResize);
       this.deviceTarget?.addEventListener("uncapturederror", this.onGpuError);
+      const lost = this.device.lost;
+      if (lost)
+        lost.then((info) => {
+          if (this.disposed)
+            return;
+          this.diagnostics.tryRecord(2 /* DeviceLost */, 1 /* Renderer */, info);
+          this.fatalClient?.(info);
+        });
     } catch (error2) {
       this.unsubscribeResize?.();
       this.unsubscribeResize = null;
@@ -69794,15 +71651,41 @@ class RendererHost {
     this.renderer.setPixelRatio(ratio);
     this.renderer.setSize(width, height);
     this.resizeClient?.(width, height);
+    this.physicalViewport?.resize(this.renderer.domElement.width, this.renderer.domElement.height);
   }
-  attachVirtualTextureStore(store) {
+  initializeVirtualTextures(textures, physicalViewport) {
+    if (this.disposed)
+      throw new Error("cannot initialize textures on a disposed renderer host");
+    this.renderer.render(this.scene, this.camera);
+    this.attachVirtualTextures(textures, physicalViewport);
+  }
+  attachVirtualTextures(textures, physicalViewport) {
     const backend = this.renderer.backend;
-    store.attachRenderer({
+    textures.attachRenderer({
       backend: {
         device: this.device,
         get: (texture2) => backend.get(texture2)
       }
     });
+    if (physicalViewport) {
+      if (this.physicalViewport !== null)
+        throw new Error("renderer already owns a physical feedback viewport");
+      this.physicalViewport = physicalViewport;
+      physicalViewport.resize(this.renderer.domElement.width, this.renderer.domElement.height);
+    }
+  }
+  readDimensionsInto(out) {
+    out.logicalWidth = Math.max(1, this.viewport.width);
+    out.logicalHeight = Math.max(1, this.viewport.height);
+    out.pixelRatio = Math.min(this.maxPixelRatio, Math.max(0.1, this.viewport.pixelRatio));
+    out.canvasWidth = this.renderer.domElement.width;
+    out.canvasHeight = this.renderer.domElement.height;
+    out.surfaceWidth = out.canvasWidth;
+    out.surfaceHeight = out.canvasHeight;
+    out.feedbackWidth = this.physicalViewport ? out.canvasWidth : 0;
+    out.feedbackHeight = this.physicalViewport ? out.canvasHeight : 0;
+    const aspect2 = this.camera.aspect;
+    out.cameraAspect = typeof aspect2 === "number" ? aspect2 : out.logicalWidth / out.logicalHeight;
   }
   async warm() {
     if (this.disposed)
@@ -69849,6 +71732,7 @@ class RendererHost {
     this.disposed = true;
     this.unsubscribeResize?.();
     this.unsubscribeResize = null;
+    this.physicalViewport = null;
     this.deviceTarget?.removeEventListener("uncapturederror", this.onGpuError);
     const canvas = this.renderer.domElement;
     if (canvas.parentNode === this.container)
@@ -70178,6 +72062,577 @@ function prepareAfterglowFrame(frame, workerInput, adapter, vtInput, memory, bud
   adapter.prepareFrame(frame);
   budget?.endStage(4 /* RenderPrepare */);
 }
+// crates/afterglow-web/web/src/engine/virtual-texturing/virtual-texture-feedback-pass.ts
+var SCORE_COVERAGE_CAP3 = 255;
+
+class VirtualTextureFeedbackPass {
+  scale;
+  pixelScale = new Vector2(1, 1);
+  target;
+  width = 1;
+  height = 1;
+  pending = false;
+  feedbackMaps = [
+    new Map,
+    new Map
+  ];
+  buildMapIndex = 0;
+  completed = null;
+  requestPool = [];
+  seenMips = new Uint8Array(64);
+  latestMips = [];
+  constructor(scale2 = 0.125) {
+    if (!(scale2 > 0 && scale2 <= 1))
+      throw new RangeError("feedback scale must be in (0, 1]");
+    this.scale = scale2;
+    this.target = new RenderTarget(1, 1, {
+      format: RGIntegerFormat,
+      type: UnsignedIntType,
+      minFilter: NearestFilter,
+      magFilter: NearestFilter,
+      generateMipmaps: false,
+      depthBuffer: true
+    });
+    this.target.texture.name = "afterglow-vt-feedback-rg32uint";
+  }
+  resize(displayWidth, displayHeight) {
+    if (!(displayWidth > 0 && displayHeight > 0))
+      throw new RangeError("display dimensions must be positive");
+    const width = Math.max(1, Math.ceil(displayWidth * this.scale));
+    const height = Math.max(1, Math.ceil(displayHeight * this.scale));
+    this.pixelScale.set(width / displayWidth, height / displayHeight);
+    if (width === this.width && height === this.height && this.requestPool.length >= width * height)
+      return;
+    this.width = width;
+    this.height = height;
+    this.target.setSize(width, height);
+    const capacity = width * height;
+    if (this.requestPool.length < capacity) {
+      const previous = this.requestPool.length;
+      this.requestPool.length = capacity;
+      for (let index = previous;index < capacity; index++)
+        this.requestPool[index] = { path: "", mip: 0, x: 0, y: 0 };
+    }
+  }
+  get canSubmit() {
+    return !this.pending && this.completed === null;
+  }
+  submit(renderer, feedbackScene, camera, store) {
+    if (!this.canSubmit)
+      return false;
+    const previous = renderer.getRenderTarget();
+    try {
+      renderer.setRenderTarget(this.target);
+      renderer.render(feedbackScene, camera);
+    } finally {
+      renderer.setRenderTarget(previous);
+    }
+    this.pending = true;
+    renderer.readRenderTargetPixelsAsync(this.target, 0, 0, this.width, this.height).then((raw) => {
+      const words = raw instanceof Uint32Array ? raw : new Uint32Array(raw.buffer, raw.byteOffset, Math.floor(raw.byteLength / 4));
+      const requests = this.feedbackMaps[this.buildMapIndex];
+      requests.clear();
+      for (let mip = 0;mip < this.seenMips.length; mip++)
+        this.seenMips[mip] = 0;
+      let requestCount = 0;
+      for (let index = 0;index + 1 < words.length; index += 2) {
+        const packed = words[index];
+        if ((packed & 2147483648) === 0)
+          continue;
+        const mip = packed & 63;
+        const x2 = packed >>> 6 & 2047;
+        const y2 = packed >>> 17 & 2047;
+        const entry = store.getEntryById(words[index + 1]);
+        if (!entry || mip > entry.textureMaxMip)
+          continue;
+        const tail = mip > entry.maxMip;
+        const gridWidth = tail ? 1 : pagesAtMipAxis(entry.pageTableLayout.width, mip);
+        const gridHeight = tail ? 1 : pagesAtMipAxis(entry.pageTableLayout.baseHeight, mip);
+        if (x2 >= gridWidth || y2 >= gridHeight)
+          continue;
+        const requestMip = tail ? entry.tailFirstMip : mip;
+        const requestX = tail ? 0 : x2;
+        const requestY = tail ? 0 : y2;
+        const local = tail ? 268435456 : (requestMip & 63 | (requestX & 2047) << 6 | (requestY & 2047) << 17) >>> 0;
+        const key = entry.textureId * 536870912 + local;
+        const pixel = index >> 1;
+        const pixelX = pixel % this.width;
+        const pixelY = Math.floor(pixel / this.width);
+        const normalizedX = (pixelX + 0.5) * 2 / this.width - 1;
+        const normalizedY = (pixelY + 0.5) * 2 / this.height - 1;
+        const screenPriority = Math.min(255, Math.floor((normalizedX * normalizedX + normalizedY * normalizedY) * 128));
+        const centerCloseness = 7 - Math.min(7, screenPriority >>> 5);
+        const cameraCloseness = packed >>> 28 & 7;
+        const pixelWeight = 1 + centerCloseness + cameraCloseness;
+        const existing = requests.get(key);
+        if (existing) {
+          existing.screenPriority = Math.min(existing.screenPriority ?? 255, screenPriority);
+          const coverage = existing.coverage ?? 1;
+          if (coverage < SCORE_COVERAGE_CAP3)
+            existing.perceptualWeight = (existing.perceptualWeight ?? 1) + pixelWeight;
+          existing.coverage = Math.min(65535, coverage + 1);
+          continue;
+        }
+        const request = this.requestPool[requestCount++];
+        request.textureId = entry.textureId;
+        request.path = entry.path;
+        request.mip = requestMip;
+        request.x = requestX;
+        request.y = requestY;
+        request.tail = tail ? true : undefined;
+        request.screenPriority = screenPriority;
+        request.coverage = 1;
+        request.perceptualWeight = pixelWeight;
+        request.priorityTier = undefined;
+        requests.set(key, request);
+        this.seenMips[mip] = 1;
+      }
+      this.latestMips.length = 0;
+      for (let mip = 0;mip < this.seenMips.length; mip++)
+        if (this.seenMips[mip] !== 0)
+          this.latestMips.push(mip);
+      this.completed = requests;
+      this.buildMapIndex ^= 1;
+    }).catch((error2) => console.error("[VT] feedback readback failed:", error2)).finally(() => {
+      this.pending = false;
+    });
+    return true;
+  }
+  getLatestMips() {
+    return this.latestMips;
+  }
+  consume() {
+    const result = this.completed;
+    this.completed = null;
+    return result;
+  }
+  dispose() {
+    this.target.dispose();
+    this.feedbackMaps[0].clear();
+    this.feedbackMaps[1].clear();
+    this.completed = null;
+    this.requestPool.length = 0;
+  }
+}
+
+// crates/afterglow-web/web/src/engine/virtual-texturing/predicted-feedback-camera.ts
+var MAX_SAMPLE_SECONDS = 0.1;
+var MAX_ANGULAR_STEP = Math.PI * 0.5;
+var MAX_TRANSLATION_FAR_FRACTION = 0.25;
+
+class PredictedFeedbackCamera {
+  horizonMs;
+  camera;
+  resetCount = 0;
+  previousPosition = new Vector3;
+  currentPosition = new Vector3;
+  predictedPosition = new Vector3;
+  previousQuaternion = new Quaternion;
+  currentQuaternion = new Quaternion;
+  predictedQuaternion = new Quaternion;
+  currentScale = new Vector3(1, 1, 1);
+  lastSeconds = 0;
+  initialized = false;
+  constructor(source, horizonMs) {
+    this.horizonMs = horizonMs;
+    if (!Number.isFinite(horizonMs) || horizonMs <= 0)
+      throw new RangeError("feedback prediction horizon must be positive");
+    this.camera = source.clone(false);
+    this.copyCurrentCamera(source);
+  }
+  sample(source, elapsedSeconds) {
+    source.updateWorldMatrix(true, false);
+    source.matrixWorld.decompose(this.currentPosition, this.currentQuaternion, this.currentScale);
+    this.copyCurrentCamera(source);
+    if (!this.initialized) {
+      this.initialized = true;
+      this.previousPosition.copy(this.currentPosition);
+      this.previousQuaternion.copy(this.currentQuaternion);
+      this.lastSeconds = elapsedSeconds;
+      this.publishCurrentPose();
+      return this.camera;
+    }
+    const dt = elapsedSeconds - this.lastSeconds;
+    const far = Math.max(1, source.far ?? 1);
+    const translation = this.previousPosition.distanceTo(this.currentPosition);
+    const rotation = this.previousQuaternion.angleTo(this.currentQuaternion);
+    const reset = !Number.isFinite(dt) || dt <= 0 || dt > MAX_SAMPLE_SECONDS || translation > far * MAX_TRANSLATION_FAR_FRACTION || rotation > MAX_ANGULAR_STEP;
+    if (reset) {
+      if (dt !== 0)
+        this.resetCount++;
+      this.publishCurrentPose();
+    } else {
+      const factor = 1 + this.horizonMs / (dt * 1000);
+      this.predictedPosition.copy(this.previousPosition).lerp(this.currentPosition, factor);
+      this.predictedQuaternion.slerpQuaternions(this.previousQuaternion, this.currentQuaternion, factor);
+      this.publishPose(this.predictedPosition, this.predictedQuaternion);
+    }
+    this.previousPosition.copy(this.currentPosition);
+    this.previousQuaternion.copy(this.currentQuaternion);
+    this.lastSeconds = elapsedSeconds;
+    return this.camera;
+  }
+  copyCurrentCamera(source) {
+    this.camera.projectionMatrix.copy(source.projectionMatrix);
+    this.camera.projectionMatrixInverse.copy(source.projectionMatrixInverse);
+    this.camera.coordinateSystem = source.coordinateSystem;
+    this.camera.layers.mask = source.layers.mask;
+    const sourcePerspective = source;
+    const targetPerspective = this.camera;
+    if (sourcePerspective.isPerspectiveCamera === true && targetPerspective.isPerspectiveCamera === true) {
+      targetPerspective.near = sourcePerspective.near;
+      targetPerspective.far = sourcePerspective.far;
+      targetPerspective.fov = sourcePerspective.fov;
+      targetPerspective.aspect = sourcePerspective.aspect;
+      targetPerspective.zoom = sourcePerspective.zoom;
+      targetPerspective.focus = sourcePerspective.focus;
+      targetPerspective.filmGauge = sourcePerspective.filmGauge;
+      targetPerspective.filmOffset = sourcePerspective.filmOffset;
+    }
+    const sourceOrthographic = source;
+    const targetOrthographic = this.camera;
+    if (sourceOrthographic.isOrthographicCamera === true && targetOrthographic.isOrthographicCamera === true) {
+      targetOrthographic.near = sourceOrthographic.near;
+      targetOrthographic.far = sourceOrthographic.far;
+      targetOrthographic.left = sourceOrthographic.left;
+      targetOrthographic.right = sourceOrthographic.right;
+      targetOrthographic.top = sourceOrthographic.top;
+      targetOrthographic.bottom = sourceOrthographic.bottom;
+      targetOrthographic.zoom = sourceOrthographic.zoom;
+    }
+    this.camera.parent = null;
+    this.camera.matrixAutoUpdate = true;
+    this.camera.matrixWorldAutoUpdate = true;
+  }
+  publishCurrentPose() {
+    this.publishPose(this.currentPosition, this.currentQuaternion);
+  }
+  publishPose(position, quaternion) {
+    this.camera.position.copy(position);
+    this.camera.quaternion.copy(quaternion);
+    this.camera.scale.copy(this.currentScale);
+    this.camera.updateMatrix();
+    this.camera.updateMatrixWorld(true);
+  }
+}
+
+// crates/afterglow-web/web/src/engine/virtual-texturing/virtual-texture-feedback-coordinator.ts
+class VirtualTextureFeedbackCoordinator {
+  renderer;
+  store;
+  vtCpuUs = 0;
+  feedbackSubmitUs = 0;
+  pixelScale;
+  stats = {
+    submittedSnapshots: 0,
+    completedSnapshots: 0,
+    discardedSnapshots: 0,
+    deferredSnapshots: 0,
+    registrationOverflows: 0,
+    activePasses: 0,
+    predictorResets: 0
+  };
+  passes;
+  renderables;
+  activeRenderable;
+  activeLocalPass;
+  feedbackContextIds;
+  heldResults;
+  renderableCount = 0;
+  registeredPassCount = 0;
+  awaitingPassCount = 0;
+  discardAwaiting = false;
+  nextFeedbackSeconds = 0;
+  lastRenderFrameId = -1;
+  sealed = false;
+  disposed = false;
+  bootstrapPublicationReady = false;
+  constructor(renderer, store, capacities) {
+    this.renderer = renderer;
+    this.store = store;
+    if (!Number.isInteger(capacities.renderables) || capacities.renderables <= 0)
+      throw new RangeError("feedback renderable capacity must be positive");
+    if (!Number.isInteger(capacities.passes) || capacities.passes <= 0)
+      throw new RangeError("feedback pass capacity must be positive");
+    if (!Number.isFinite(capacities.cadenceMs) || capacities.cadenceMs <= 0)
+      throw new RangeError("feedback cadence must be positive");
+    if (!Number.isFinite(capacities.predictionHorizonMs) || capacities.predictionHorizonMs <= 0)
+      throw new RangeError("feedback prediction horizon must be positive");
+    this.cadenceMs = capacities.cadenceMs;
+    this.predictionHorizonMs = capacities.predictionHorizonMs;
+    this.passes = new Array(capacities.passes);
+    this.renderables = new Array(capacities.renderables);
+    this.heldResults = new Array(capacities.passes).fill(null);
+    for (let index = 0;index < capacities.passes; index++)
+      this.passes[index] = new VirtualTextureFeedbackPass(capacities.scale ?? 0.125);
+    for (let index = 0;index < capacities.renderables; index++)
+      this.renderables[index] = { renderable: null, predictor: null, passOffset: 0 };
+    this.activeRenderable = new Int32Array(capacities.passes);
+    this.activeLocalPass = new Uint16Array(capacities.passes);
+    this.feedbackContextIds = new Int32Array(capacities.passes);
+    const firstPass = this.passes[0];
+    if (!firstPass)
+      throw new Error("feedback coordinator failed to reserve its first pass");
+    this.pixelScale = firstPass.pixelScale;
+  }
+  cadenceMs;
+  predictionHorizonMs;
+  register(renderable) {
+    if (this.sealed)
+      return 3 /* Sealed */;
+    if (!Number.isInteger(renderable.feedbackPassCount) || renderable.feedbackPassCount <= 0)
+      return 2 /* InvalidPassCount */;
+    if (this.renderableCount === this.renderables.length || this.registeredPassCount + renderable.feedbackPassCount > this.passes.length) {
+      this.stats.registrationOverflows++;
+      return 1 /* CapacityExceeded */;
+    }
+    const slot = this.renderables[this.renderableCount];
+    if (!slot)
+      return 1 /* CapacityExceeded */;
+    slot.renderable = renderable;
+    slot.predictor = new PredictedFeedbackCamera(renderable.feedbackCamera, this.predictionHorizonMs);
+    slot.passOffset = this.registeredPassCount;
+    this.registeredPassCount += renderable.feedbackPassCount;
+    this.renderableCount++;
+    return 0 /* Registered */;
+  }
+  resize(displayWidth, displayHeight) {
+    for (let index = 0;index < this.passes.length; index++)
+      this.passes[index]?.resize(displayWidth, displayHeight);
+  }
+  async warm() {
+    if (this.disposed)
+      throw new Error("cannot warm a disposed feedback coordinator");
+    const previousTarget = this.renderer.getRenderTarget();
+    const shadows = this.renderer.shadowMap.enabled;
+    this.renderer.shadowMap.enabled = false;
+    try {
+      for (let recordIndex = 0;recordIndex < this.renderableCount; recordIndex++) {
+        const record = this.renderables[recordIndex];
+        const renderable = record?.renderable;
+        if (!record || !renderable)
+          continue;
+        const feedbackCamera = record.predictor?.sample(renderable.feedbackCamera, 0) ?? renderable.feedbackCamera;
+        for (let localPass = 0;localPass < renderable.feedbackPassCount; localPass++) {
+          const pass2 = this.passes[record.passOffset + localPass];
+          if (!pass2)
+            continue;
+          renderable.beginFeedbackPass(localPass);
+          try {
+            this.renderer.setRenderTarget(pass2.target);
+            await this.renderer.compileAsync(renderable.feedbackScene, feedbackCamera);
+            this.renderer.render(renderable.feedbackScene, feedbackCamera);
+          } finally {
+            renderable.endFeedbackPass(localPass);
+          }
+        }
+      }
+    } finally {
+      this.renderer.setRenderTarget(previousTarget);
+      this.renderer.shadowMap.enabled = shadows;
+    }
+  }
+  seal() {
+    this.sealed = true;
+  }
+  setGpuTimingEnabled(enabled) {
+    const renderer = this.renderer;
+    renderer.backend.trackTimestamp = enabled;
+    for (const pool of Object.values(renderer.backend.timestampQueryPool ?? {}))
+      if (pool)
+        pool.trackTimestamp = enabled;
+  }
+  async resolveGpuTimings(out) {
+    out.gpuTimingValid = false;
+    out.resolvedFrameId = -1;
+    out.gpuSceneMs = 0;
+    out.gpuOutputMs = 0;
+    out.gpuFeedbackMs = 0;
+    out.gpuTotalMs = 0;
+    const renderer = this.renderer;
+    let timestamps;
+    let frames;
+    try {
+      await renderer.resolveTimestampsAsync("render");
+      const contexts = renderer._renderContexts;
+      const pool = renderer.backend.timestampQueryPool?.render;
+      timestamps = pool?.timestamps;
+      frames = pool?.getTimestampFrames?.();
+      const resolvedFrame = frames?.[frames.length - 1];
+      if (!contexts || !timestamps || resolvedFrame === undefined || !Number.isInteger(resolvedFrame))
+        return out;
+      const outputContext = renderer.needsFrameBufferTarget === true ? contexts.get(null).id : -1;
+      this.feedbackContextIds.fill(-1);
+      for (let index = 0;index < this.passes.length; index++) {
+        const pass2 = this.passes[index];
+        if (pass2)
+          this.feedbackContextIds[index] = contexts.get(pass2.target).id;
+      }
+      let total = 0, output2 = 0, feedback = 0;
+      for (const [uid, duration] of timestamps) {
+        const match = /^r:\d+:(\d+):f(\d+)$/.exec(uid);
+        if (!match || Number(match[2]) !== resolvedFrame || !Number.isFinite(duration) || duration < 0)
+          continue;
+        const context2 = Number(match[1]);
+        total += duration;
+        if (context2 === outputContext) {
+          output2 += duration;
+          continue;
+        }
+        for (let index = 0;index < this.feedbackContextIds.length; index++) {
+          if (context2 === this.feedbackContextIds[index]) {
+            feedback += duration;
+            break;
+          }
+        }
+      }
+      out.gpuTimingValid = true;
+      out.resolvedFrameId = resolvedFrame;
+      out.gpuOutputMs = output2;
+      out.gpuFeedbackMs = feedback;
+      out.gpuTotalMs = total;
+      out.gpuSceneMs = Math.max(0, total - output2 - feedback);
+      return out;
+    } catch {
+      return out;
+    } finally {
+      timestamps?.clear();
+      if (frames)
+        frames.length = 0;
+    }
+  }
+  recordFrameTime(frameTimeMs) {
+    this.store.recordFrameTime(frameTimeMs);
+  }
+  isBootstrapReady() {
+    return this.bootstrapPublicationReady;
+  }
+  poll() {
+    const started = performance.now();
+    this.consumeCompletedSnapshot();
+    this.store.setPublicationFrameId(this.lastRenderFrameId + 1);
+    this.store.poll();
+    this.bootstrapPublicationReady = this.store.isBootstrapReady?.() ?? true;
+    this.vtCpuUs = (performance.now() - started) * 1000;
+  }
+  render(frame) {
+    this.feedbackSubmitUs = 0;
+    this.lastRenderFrameId = frame.frameId;
+    if (this.disposed)
+      return;
+    let predictorResets = 0;
+    for (let index = 0;index < this.renderableCount; index++) {
+      const slot = this.renderables[index];
+      const renderable = slot?.renderable;
+      if (!slot || !renderable || !slot.predictor)
+        continue;
+      slot.predictor.sample(renderable.feedbackCamera, frame.elapsedSeconds);
+      predictorResets += slot.predictor.resetCount;
+    }
+    this.stats.predictorResets = predictorResets;
+    if (frame.elapsedSeconds < this.nextFeedbackSeconds)
+      return;
+    this.nextFeedbackSeconds = frame.elapsedSeconds + this.cadenceMs / 1000;
+    const started = performance.now();
+    if (this.awaitingPassCount !== 0) {
+      this.stats.deferredSnapshots++;
+      return;
+    }
+    let activeCount = 0;
+    for (let recordIndex = 0;recordIndex < this.renderableCount; recordIndex++) {
+      const renderable = this.renderables[recordIndex]?.renderable;
+      if (!renderable || !renderable.isFeedbackActive())
+        continue;
+      for (let localPass = 0;localPass < renderable.feedbackPassCount; localPass++) {
+        if (activeCount >= this.passes.length)
+          break;
+        this.activeRenderable[activeCount] = recordIndex;
+        this.activeLocalPass[activeCount] = localPass;
+        activeCount++;
+      }
+    }
+    this.stats.activePasses = activeCount;
+    if (activeCount === 0)
+      return;
+    for (let index = 0;index < activeCount; index++) {
+      if (this.passes[index]?.canSubmit !== true) {
+        this.stats.deferredSnapshots++;
+        return;
+      }
+    }
+    const shadows = this.renderer.shadowMap.enabled;
+    this.renderer.shadowMap.enabled = false;
+    let submitted = 0;
+    try {
+      for (let index = 0;index < activeCount; index++) {
+        const slot = this.renderables[this.activeRenderable[index] ?? -1];
+        const renderable = slot?.renderable;
+        const localPass = this.activeLocalPass[index] ?? 0;
+        const pass2 = this.passes[index];
+        if (!slot || !renderable || !pass2)
+          continue;
+        renderable.beginFeedbackPass(localPass);
+        try {
+          if (pass2.submit(this.renderer, renderable.feedbackScene, slot.predictor?.camera ?? renderable.feedbackCamera, this.store))
+            submitted++;
+        } finally {
+          renderable.endFeedbackPass(localPass);
+        }
+      }
+    } finally {
+      this.renderer.shadowMap.enabled = shadows;
+    }
+    this.awaitingPassCount = submitted;
+    this.discardAwaiting = submitted !== activeCount;
+    if (submitted !== 0)
+      this.stats.submittedSnapshots++;
+    if (this.discardAwaiting)
+      this.stats.deferredSnapshots++;
+    this.feedbackSubmitUs = (performance.now() - started) * 1000;
+  }
+  consumeCompletedSnapshot() {
+    if (this.awaitingPassCount === 0)
+      return false;
+    let complete = true;
+    for (let index = 0;index < this.awaitingPassCount; index++) {
+      if (this.heldResults[index] === null)
+        this.heldResults[index] = this.passes[index]?.consume() ?? null;
+      if (this.heldResults[index] === null)
+        complete = false;
+    }
+    if (!complete)
+      return false;
+    if (this.discardAwaiting) {
+      this.stats.discardedSnapshots++;
+    } else {
+      this.store.processFeedbackBatch(this.heldResults, this.awaitingPassCount);
+      this.stats.completedSnapshots++;
+    }
+    for (let index = 0;index < this.awaitingPassCount; index++)
+      this.heldResults[index] = null;
+    this.awaitingPassCount = 0;
+    this.discardAwaiting = false;
+    return true;
+  }
+  dispose() {
+    if (this.disposed)
+      return;
+    this.disposed = true;
+    for (let index = 0;index < this.passes.length; index++)
+      this.passes[index]?.dispose();
+    for (let index = 0;index < this.renderables.length; index++) {
+      const slot = this.renderables[index];
+      if (slot) {
+        slot.renderable = null;
+        slot.predictor = null;
+      }
+    }
+    for (let index = 0;index < this.heldResults.length; index++)
+      this.heldResults[index] = null;
+    this.awaitingPassCount = 0;
+  }
+}
+
 // crates/afterglow-web/web/src/engine/core/runtime.ts
 class BrowserAnimationScheduler {
   request(callback) {
@@ -70201,11 +72656,22 @@ class FixedWorkerInputs {
   get size() {
     return this.count;
   }
+  get hasCapacity() {
+    return this.count < this.capacity;
+  }
   add(input) {
     if (this.count === this.capacity)
       return 1 /* CapacityExceeded */;
     this.inputs[this.count++] = input;
     return 0 /* Registered */;
+  }
+  bootstrapReady() {
+    for (let index = 0;index < this.count; index++) {
+      const input = this.inputs[index];
+      if (input !== null && input !== undefined && input.isBootstrapReady?.() === false)
+        return false;
+    }
+    return true;
   }
   poll() {
     for (let index = 0;index < this.count; index++) {
@@ -70229,6 +72695,59 @@ class FixedWorkerInputs {
     }
   }
 }
+class FixedOwnedResources {
+  capacity;
+  owners;
+  kinds;
+  count = 0;
+  constructor(capacity) {
+    this.capacity = capacity;
+    if (!Number.isInteger(capacity) || capacity < 0)
+      throw new RangeError("owned resource capacity must be a non-negative integer");
+    this.owners = new Array(capacity).fill(null);
+    this.kinds = new Uint8Array(capacity);
+  }
+  add(owner, kind) {
+    if (this.count === this.capacity)
+      return 1 /* CapacityExceeded */;
+    this.owners[this.count] = owner;
+    this.kinds[this.count] = kind;
+    this.count++;
+    return 0 /* Registered */;
+  }
+  disposeSync() {
+    for (let index = this.count - 1;index >= 0; index--) {
+      const owner = this.owners[index];
+      const kind = this.kinds[index] ?? 0 /* Disposable */;
+      this.owners[index] = null;
+      if (kind === 0 /* Disposable */)
+        owner?.dispose();
+      else
+        owner?.close();
+    }
+    this.count = 0;
+  }
+  async close() {
+    let firstError = null;
+    for (let index = this.count - 1;index >= 0; index--) {
+      const owner = this.owners[index];
+      const kind = this.kinds[index] ?? 0 /* Disposable */;
+      this.owners[index] = null;
+      try {
+        if (kind === 0 /* Disposable */)
+          owner?.dispose();
+        else
+          await owner?.close();
+      } catch (error2) {
+        if (firstError === null)
+          firstError = error2;
+      }
+    }
+    this.count = 0;
+    if (firstError !== null)
+      throw firstError;
+  }
+}
 
 class EngineRuntime {
   memory;
@@ -70238,8 +72757,13 @@ class EngineRuntime {
   mutableFrame = { frameId: 0, deltaSeconds: 0, elapsedSeconds: 0 };
   workers;
   passes;
+  owners;
   scheduler;
   manifest;
+  shutdownTarget;
+  onBeforeUnload;
+  onGlobalError;
+  onUnhandledRejection;
   adapter;
   vt;
   onAnimationFrame;
@@ -70249,9 +72773,35 @@ class EngineRuntime {
   previousTimestamp = -1;
   elapsedSeconds = 0;
   mutableState = 0 /* Bootstrap */;
-  static forScene(options) {
+  mutableReadinessStage = 0 /* Bootstrap */;
+  presentationPass = -1;
+  firstUpdateFrame = 0;
+  firstPresentationFrame = 0;
+  nativeReadySignaled = false;
+  ownedRendererHost = null;
+  pendingTextureSystem = null;
+  pendingFeedbackCoordinator = null;
+  closing = null;
+  static async forScene(options) {
     const adapter = new RenderAdapter(options.scene, options.entityCapacity);
-    return new EngineRuntime({ ...options, adapter });
+    const runtime = new EngineRuntime({ ...options, adapter });
+    try {
+      const host = await RendererHost.create({
+        ...options.renderer,
+        scene: options.scene,
+        camera: options.camera,
+        diagnostics: runtime.diagnostics,
+        onFatal: (error2) => runtime.fail(error2, 1 /* Renderer */)
+      });
+      const status = runtime.registerRenderPass(host);
+      if (status !== 0 /* Registered */)
+        throw new Error(`runtime could not own its presentation pass: ${status}`);
+      runtime.ownedRendererHost = host;
+      return runtime;
+    } catch (error2) {
+      runtime.dispose();
+      throw error2;
+    }
   }
   constructor(options) {
     if (!Number.isInteger(options.maxRenderPasses) || options.maxRenderPasses < 1)
@@ -70266,7 +72816,23 @@ class EngineRuntime {
     this.diagnostics = new EngineDiagnostics(options.diagnosticCapacity);
     this.workers = new FixedWorkerInputs(options.maxWorkerInputs);
     this.passes = new Array(options.maxRenderPasses).fill(null);
+    this.owners = new FixedOwnedResources(options.maxOwnedResources);
     this.scheduler = options.scheduler ?? new BrowserAnimationScheduler;
+    const defaultShutdownTarget = typeof window === "object" ? window : null;
+    this.shutdownTarget = options.shutdownTarget === undefined ? defaultShutdownTarget : options.shutdownTarget;
+    this.onBeforeUnload = () => {
+      this.close();
+    };
+    this.onGlobalError = (event) => {
+      const error2 = event.error ?? event;
+      this.fail(error2, 5 /* Game */);
+    };
+    this.onUnhandledRejection = (event) => {
+      this.fail(event.reason ?? event, 5 /* Game */);
+    };
+    this.shutdownTarget?.addEventListener("beforeunload", this.onBeforeUnload);
+    this.shutdownTarget?.addEventListener("error", this.onGlobalError);
+    this.shutdownTarget?.addEventListener("unhandledrejection", this.onUnhandledRejection);
     this.vt = options.vt;
     this.onAnimationFrame = (timestamp) => this.tick(timestamp);
     const memoryResource = defineResource("engineMemory", () => this.memory);
@@ -70280,14 +72846,41 @@ class EngineRuntime {
   get state() {
     return this.mutableState;
   }
+  get readinessStage() {
+    return this.mutableReadinessStage;
+  }
+  get isGameReady() {
+    return this.mutableReadinessStage === 4 /* GameReady */;
+  }
   get frame() {
     return this.mutableFrame;
+  }
+  readReadinessInto(out) {
+    out.stage = this.mutableReadinessStage;
+    out.firstUpdateFrame = this.firstUpdateFrame;
+    out.firstPresentationFrame = this.firstPresentationFrame;
+    out.fatalDiagnostics = this.diagnostics.count + this.diagnostics.dropped;
   }
   get registeredWorkers() {
     return this.workers.size;
   }
   get registeredRenderPasses() {
     return this.passCount;
+  }
+  get rendererHost() {
+    if (!this.ownedRendererHost)
+      throw new Error("runtime was not created with a renderer host");
+    return this.ownedRendererHost;
+  }
+  ownDisposable(owner) {
+    if (this.mutableState !== 0 /* Bootstrap */)
+      return 2 /* RuntimeSealed */;
+    return this.owners.add(owner, 0 /* Disposable */);
+  }
+  ownCloseable(owner) {
+    if (this.mutableState !== 0 /* Bootstrap */)
+      return 2 /* RuntimeSealed */;
+    return this.owners.add(owner, 1 /* Closeable */);
   }
   registerWorker(input) {
     if (this.mutableState !== 0 /* Bootstrap */)
@@ -70299,14 +72892,40 @@ class EngineRuntime {
       return 2 /* RuntimeSealed */;
     if (this.passCount === this.passes.length)
       return 1 /* CapacityExceeded */;
-    this.passes[this.passCount++] = pass2;
+    if (pass2.presentation === true && this.presentationPass >= 0)
+      return 3 /* PresentationAlreadyRegistered */;
+    const index = this.passCount++;
+    this.passes[index] = pass2;
+    if (pass2.presentation === true)
+      this.presentationPass = index;
     return 0 /* Registered */;
+  }
+  createVirtualTextureFeedback(textures, options) {
+    if (this.mutableState !== 0 /* Bootstrap */)
+      throw new Error("virtual-texture presentation must be configured during bootstrap");
+    if (!this.workers.hasCapacity || this.passCount === this.passes.length)
+      throw new Error("runtime virtual-texture registration capacity exceeded");
+    const host = this.rendererHost;
+    const coordinator = new VirtualTextureFeedbackCoordinator(host.renderer, textures, options);
+    try {
+      if (this.pendingTextureSystem !== null)
+        throw new Error("runtime already owns virtual-texture presentation");
+      if (this.workers.add(coordinator) !== 0 /* Registered */ || this.registerRenderPass(coordinator) !== 0 /* Registered */)
+        throw new Error("runtime virtual-texture registration failed after preflight");
+      this.pendingTextureSystem = textures;
+      this.pendingFeedbackCoordinator = coordinator;
+      return coordinator;
+    } catch (error2) {
+      coordinator.dispose();
+      throw error2;
+    }
   }
   enterWarmup() {
     if (this.mutableState !== 0 /* Bootstrap */)
       throw new Error("runtime can enter warmup only from bootstrap");
     this.memory.warmup();
     this.mutableState = 1 /* Warmup */;
+    this.mutableReadinessStage = 1 /* Warmup */;
   }
   async warm() {
     if (this.mutableState !== 1 /* Warmup */)
@@ -70315,11 +72934,18 @@ class EngineRuntime {
       const pass2 = this.passes[index];
       if (pass2 !== null && pass2 !== undefined)
         await pass2.warm?.();
+      if (index === this.presentationPass && this.pendingTextureSystem && this.pendingFeedbackCoordinator) {
+        this.rendererHost.initializeVirtualTextures(this.pendingTextureSystem, this.pendingFeedbackCoordinator);
+        this.pendingTextureSystem = null;
+        this.pendingFeedbackCoordinator = null;
+      }
     }
   }
   sealGameplay() {
     if (this.mutableState !== 1 /* Warmup */)
       throw new Error("runtime can seal only after entering warmup");
+    if (this.presentationPass < 0)
+      throw new Error("runtime requires exactly one presentation render pass before seal");
     this.adapter.sealGameplay();
     this.memory.sealGameplay();
     this.manifest.seal(this.adapter.world);
@@ -70329,19 +72955,31 @@ class EngineRuntime {
         pass2.seal?.();
     }
     this.mutableState = 2 /* GameplaySealed */;
+    this.mutableReadinessStage = 2 /* GameplaySealed */;
   }
   start(client) {
     if (this.mutableState !== 2 /* GameplaySealed */ && this.mutableState !== 4 /* Stopped */)
       throw new Error("runtime can start only after gameplay seal");
+    if (this.diagnostics.count !== 0 || this.diagnostics.dropped !== 0) {
+      this.mutableState = 4 /* Stopped */;
+      this.mutableReadinessStage = 6 /* Fatal */;
+      throw new Error("runtime cannot start with fatal diagnostics");
+    }
     this.client = client;
     this.previousTimestamp = -1;
+    this.firstUpdateFrame = 0;
+    this.firstPresentationFrame = 0;
+    this.nativeReadySignaled = false;
     this.mutableState = 3 /* Running */;
+    this.mutableReadinessStage = 3 /* Starting */;
     this.animationHandle = this.scheduler.request(this.onAnimationFrame);
   }
   stop() {
     if (this.mutableState !== 3 /* Running */)
       return;
     this.mutableState = 4 /* Stopped */;
+    if (this.mutableReadinessStage !== 6 /* Fatal */)
+      this.mutableReadinessStage = 5 /* Suspended */;
     if (this.animationHandle !== 0)
       this.scheduler.cancel(this.animationHandle);
     this.animationHandle = 0;
@@ -70350,6 +72988,30 @@ class EngineRuntime {
     if (this.mutableState === 5 /* Shutdown */)
       return;
     this.stop();
+    this.owners.disposeSync();
+    this.disposeCore();
+  }
+  close() {
+    if (this.closing)
+      return this.closing;
+    this.stop();
+    this.closing = this.closeOwnedAndDispose();
+    return this.closing;
+  }
+  async closeOwnedAndDispose() {
+    let failure = null;
+    try {
+      await this.owners.close();
+    } catch (error2) {
+      failure = error2;
+    }
+    this.disposeCore();
+    if (failure !== null)
+      throw failure;
+  }
+  disposeCore() {
+    if (this.mutableState === 5 /* Shutdown */)
+      return;
     for (let index = this.passCount - 1;index >= 0; index--) {
       const pass2 = this.passes[index];
       if (pass2 !== null && pass2 !== undefined)
@@ -70357,15 +73019,46 @@ class EngineRuntime {
       this.passes[index] = null;
     }
     this.passCount = 0;
+    this.pendingTextureSystem = null;
+    this.pendingFeedbackCoordinator = null;
+    this.ownedRendererHost = null;
     this.adapter.dispose();
     this.client = null;
+    this.shutdownTarget?.removeEventListener("beforeunload", this.onBeforeUnload);
+    this.shutdownTarget?.removeEventListener("error", this.onGlobalError);
+    this.shutdownTarget?.removeEventListener("unhandledrejection", this.onUnhandledRejection);
     this.memory.phase = 3 /* Shutdown */;
     this.mutableState = 5 /* Shutdown */;
+    this.mutableReadinessStage = 7 /* Shutdown */;
+  }
+  fail(error2, source = 0 /* Runtime */) {
+    if (this.mutableState === 5 /* Shutdown */ || this.mutableReadinessStage === 6 /* Fatal */)
+      return;
+    if (this.diagnostics.count === 0 && this.diagnostics.dropped === 0)
+      this.diagnostics.tryRecord(1 /* RuntimeState */, source, error2);
+    this.stop();
+    this.mutableReadinessStage = 6 /* Fatal */;
+    this.showFatalPanel(error2);
+  }
+  showFatalPanel(error2) {
+    if (typeof document !== "object" || document.getElementById("afterglow-webgpu-failure") || document.getElementById("afterglow-runtime-fatal"))
+      return;
+    const panel = document.createElement("pre");
+    panel.id = "afterglow-runtime-fatal";
+    panel.textContent = `Afterglow stopped after a fatal engine error.
+
+${error2 instanceof Error ? error2.message : String(error2)}`;
+    panel.style.cssText = "position:fixed;inset:0;z-index:2147483647;box-sizing:border-box;margin:0;padding:24px;background:#11151c;color:#ff9a9a;font:16px/1.5 ui-monospace,monospace;white-space:pre-wrap";
+    document.body.appendChild(panel);
   }
   tick(timestamp) {
     if (this.mutableState !== 3 /* Running */ || this.client === null)
       return;
     this.animationHandle = 0;
+    if (this.diagnostics.count !== 0 || this.diagnostics.dropped !== 0) {
+      this.fail(new Error("runtime stopped after a fatal diagnostic"));
+      return;
+    }
     const deltaSeconds = this.previousTimestamp < 0 ? 1 / 60 : Math.max(0, (timestamp - this.previousTimestamp) / 1000);
     this.previousTimestamp = timestamp;
     this.elapsedSeconds += deltaSeconds;
@@ -70384,18 +73077,27 @@ class EngineRuntime {
       this.telemetry.trace.spanBegin(6 /* GameUpdate */, this.mutableFrame.frameId, this.mutableFrame.frameId, 0);
       gameSpanOpen = true;
       this.client.update(this.mutableFrame);
+      if (this.firstUpdateFrame === 0)
+        this.firstUpdateFrame = this.mutableFrame.frameId;
       this.telemetry.trace.spanEnd(6 /* GameUpdate */, this.mutableFrame.frameId, this.mutableFrame.frameId, 0);
       gameSpanOpen = false;
       this.telemetry.trace.spanBegin(7 /* RenderPasses */, this.mutableFrame.frameId, this.mutableFrame.frameId, 0);
       renderSpanOpen = true;
       for (let index = 0;index < this.passCount; index++) {
         const pass2 = this.passes[index];
-        if (pass2 !== null && pass2 !== undefined)
+        if (pass2 !== null && pass2 !== undefined) {
           pass2.render(this.mutableFrame);
+          if (index === this.presentationPass && this.firstPresentationFrame === 0)
+            this.firstPresentationFrame = this.mutableFrame.frameId;
+        }
       }
       this.telemetry.trace.spanEnd(7 /* RenderPasses */, this.mutableFrame.frameId, this.mutableFrame.frameId, 0);
       renderSpanOpen = false;
       this.telemetry.trace.spanEnd(0 /* Frame */, this.mutableFrame.frameId, this.mutableFrame.frameId, 0);
+      if (this.mutableState === 3 /* Running */ && this.mutableReadinessStage === 3 /* Starting */ && this.firstUpdateFrame !== 0 && this.firstPresentationFrame !== 0 && this.workers.bootstrapReady() && this.diagnostics.count === 0 && this.diagnostics.dropped === 0) {
+        this.mutableReadinessStage = 4 /* GameReady */;
+        this.publishNativeGameReady();
+      }
     } catch (error2) {
       this.budget.abortOpenStages();
       if (gameSpanOpen)
@@ -70403,13 +73105,22 @@ class EngineRuntime {
       if (renderSpanOpen)
         this.telemetry.trace.spanEnd(7 /* RenderPasses */, this.mutableFrame.frameId, this.mutableFrame.frameId, 1);
       this.telemetry.trace.spanEnd(0 /* Frame */, this.mutableFrame.frameId, this.mutableFrame.frameId, 1);
-      this.diagnostics.tryRecord(1 /* RuntimeState */, 0 /* Runtime */, error2);
       console.error("[afterglow] runtime frame failed:", error2 instanceof Error ? error2.stack : String(error2));
-      this.mutableState = 4 /* Stopped */;
+      this.fail(error2);
       return;
     }
     if (this.mutableState === 3 /* Running */)
       this.animationHandle = this.scheduler.request(this.onAnimationFrame);
+  }
+  publishNativeGameReady() {
+    if (this.nativeReadySignaled)
+      return;
+    const native = globalThis;
+    const signal = native.Deno?.core?.ops?.op_afterglow_game_ready;
+    if (typeof signal !== "function")
+      return;
+    signal();
+    this.nativeReadySignaled = true;
   }
 }
 // crates/afterglow-web/web/src/engine/profiling/profiling.ts
@@ -72025,6 +74736,267 @@ var workgroupId2 = TSL.workgroupId;
 var workingToColorSpace2 = TSL.workingToColorSpace;
 var xor2 = TSL.xor;
 
+// crates/afterglow-web/web/src/engine/virtual-texturing/virtual-texture-shaders.ts
+var VT_SAMPLE_WGSL = `
+fn vtSample(
+  pageTable: texture_2d<u32>,
+  atlas: texture_2d<f32>,
+  atlasSampler: sampler,
+  uv: vec2f,
+  virtualSize: vec2f,
+  pageGrid: vec2f,
+  pageSize: f32,
+  pageBorder: f32,
+  atlasSize: vec2f,
+  maxMip: f32,
+  textureMaxMip: f32,
+  mipBias: f32,
+  filterMode: u32,
+  addressMode: u32
+) -> vec4f {
+  // 0 = clamp, 1 = repeat, 2 = mirrored repeat.
+  var addressed_uv = clamp(uv, vec2f(0.0), vec2f(0.99999994));
+  if (addressMode == 1u) {
+    addressed_uv = fract(uv);
+  } else if (addressMode == 2u) {
+    let period = uv - floor(uv * 0.5) * 2.0;
+    addressed_uv = select(period, 2.0 - period, period > vec2f(1.0));
+    addressed_uv = clamp(addressed_uv, vec2f(0.0), vec2f(0.99999994));
+  }
+
+  // Compute desired mip level from the original continuous derivatives.
+  let dx = dpdx(uv * virtualSize);
+  let dy = dpdy(uv * virtualSize);
+  let texel_footprint = max(dot(dx, dx), dot(dy, dy));
+  let mip_float = clamp(
+    0.5 * log2(max(texel_footprint, 1e-8)) + mipBias,
+    0.0,
+    textureMaxMip
+  );
+  let desired_level = i32(mip_float);
+
+  // Mips below 128x128 share one pinned physical slot. The entry is stored in
+  // the otherwise-unused x=1 texel of the terminal page-table row.
+  if (desired_level > i32(maxMip)) {
+    var tail_offset = 0.0;
+    for (var level = 0; level < i32(maxMip); level = level + 1) {
+      tail_offset += max(1.0, ceil(pageGrid.y / exp2(f32(level))));
+    }
+    let tail_entry = textureLoad(pageTable, vec2i(1, i32(tail_offset)), 0).r;
+    if ((tail_entry & 1u) != 0u) {
+      let delta = desired_level - i32(maxMip);
+      var rect_origin = vec2f(0.0);
+      if (delta == 2) { rect_origin = vec2f(72.0, 0.0); }
+      else if (delta == 3) { rect_origin = vec2f(112.0, 0.0); }
+      else if (delta == 4) { rect_origin = vec2f(72.0, 40.0); }
+      else if (delta == 5) { rect_origin = vec2f(88.0, 40.0); }
+      else if (delta == 6) { rect_origin = vec2f(100.0, 40.0); }
+      else if (delta >= 7) { rect_origin = vec2f(110.0, 40.0); }
+      let tail_size = max(vec2f(1.0), floor(virtualSize / exp2(f32(desired_level))));
+      let tail_x = (tail_entry >> 1) & 0xFFu;
+      let tail_y = (tail_entry >> 9) & 0xFFu;
+      let slot_origin = vec2f(f32(tail_x), f32(tail_y)) * (pageSize + pageBorder * 2.0);
+      let tail_texel = slot_origin + rect_origin + pageBorder + addressed_uv * tail_size;
+      let tail_uv = tail_texel / atlasSize;
+      let tail_scale = tail_size / atlasSize;
+      if (filterMode == 1u) {
+        return textureLoad(atlas, vec2i(clamp(floor(tail_texel), vec2f(0.0), atlasSize - 1.0)), 0);
+      }
+      return textureSampleGrad(atlas, atlasSampler, tail_uv, dpdx(uv) * tail_scale, dpdy(uv) * tail_scale);
+    }
+  }
+
+  var mip_level = min(desired_level, i32(maxMip));
+  let max_level = i32(maxMip);
+
+  // Walk from desired mip up, looking for resident page
+  var is_resident = false;
+  var entry = 0u;
+  var curr_page_grid = vec2f(0.0);
+  var curr_mip_size = virtualSize;
+  var page_coords = vec2i(0);
+
+  for (var m = mip_level; m <= max_level; m = m + 1) {
+    let mip_scale = exp2(-f32(m));
+    curr_page_grid = max(ceil(pageGrid * mip_scale), vec2f(1.0));
+    curr_mip_size = max(floor(virtualSize * mip_scale), vec2f(1.0));
+    page_coords = vec2i(min(floor(addressed_uv * curr_mip_size / pageSize), curr_page_grid - 1.0));
+    var mip_offset = 0.0;
+    for (var level = 0; level < m; level = level + 1) {
+      mip_offset += max(1.0, ceil(pageGrid.y / exp2(f32(level))));
+    }
+    entry = textureLoad(pageTable, vec2i(page_coords.x, page_coords.y + i32(mip_offset)), 0).r;
+    if ((entry & 1u) != 0u) {
+      is_resident = true;
+      mip_level = m;
+      break;
+    }
+  }
+
+  if (!is_resident) {
+    return vec4f(0.5, 0.5, 0.5, 1.0);
+  }
+
+  // Compute physical atlas UV
+  let physX = (entry >> 1) & 0xFFu;
+  let physY = (entry >> 9) & 0xFFu;
+  let local_texel = addressed_uv * curr_mip_size - vec2f(page_coords) * pageSize;
+  let page_origin = vec2f(f32(physX), f32(physY)) * (pageSize + pageBorder * 2.0);
+  let sample_texel = page_origin + pageBorder + local_texel;
+  let atlas_uv = sample_texel / atlasSize;
+
+  // Atlas-space gradients preserve anisotropy without allowing the GPU to
+  // derive across an unrelated neighboring physical slot.
+  let gradient_scale = curr_mip_size / atlasSize;
+  let atlas_dx = dpdx(uv) * gradient_scale;
+  let atlas_dy = dpdy(uv) * gradient_scale;
+  if (filterMode == 1u) {
+    return textureLoad(atlas, vec2i(clamp(floor(sample_texel), vec2f(0.0), atlasSize - 1.0)), 0);
+  }
+  return textureSampleGrad(atlas, atlasSampler, atlas_uv, atlas_dx, atlas_dy);
+}
+`;
+var VT_DESIRED_MIP_WGSL = `
+fn vtDesiredMip(
+  gradientUV: vec2f,
+  virtualSize: vec2f,
+  textureMaxMip: f32,
+  mipBias: f32
+) -> f32 {
+  let dx = dpdx(gradientUV * virtualSize);
+  let dy = dpdy(gradientUV * virtualSize);
+  let footprint = max(dot(dx, dx), dot(dy, dy));
+  return clamp(0.5 * log2(max(footprint, 1e-8)) + mipBias, 0.0, textureMaxMip);
+}
+`;
+var VT_SAMPLE_FROM_LEVEL_WGSL = `
+fn vtSampleFromLevel(
+  pageTable: texture_2d<u32>, atlas: texture_2d<f32>, atlasSampler: sampler,
+  sampleUV: vec2f, gradientUV: vec2f,
+  virtualSize: vec2f, pageGrid: vec2f, pageSize: f32, pageBorder: f32,
+  atlasSize: vec2f, maxMip: f32, resolvedMip: f32, addressMode: u32
+) -> vec4f {
+  var addressedUV = clamp(sampleUV, vec2f(0.0), vec2f(0.99999994));
+  if (addressMode == 1u) {
+    addressedUV = fract(sampleUV);
+  } else if (addressMode == 2u) {
+    let period = sampleUV - floor(sampleUV * 0.5) * 2.0;
+    addressedUV = select(period, 2.0 - period, period > vec2f(1.0));
+    addressedUV = clamp(addressedUV, vec2f(0.0), vec2f(0.99999994));
+  }
+
+  let requested = i32(resolvedMip);
+  let maxLevel = i32(maxMip);
+  var entry = 0u;
+  var selected = -1;
+  var selectedPage = vec2i(0);
+  var selectedSize = vec2f(1.0);
+  if (requested <= maxLevel) {
+    for (var mip = max(0, requested); mip <= maxLevel; mip = mip + 1) {
+      let scale = exp2(-f32(mip));
+      let grid = max(ceil(pageGrid * scale), vec2f(1.0));
+      let mipSize = max(floor(virtualSize * scale), vec2f(1.0));
+      let page = vec2i(min(floor(addressedUV * mipSize / pageSize), grid - 1.0));
+      var offset = 0.0;
+      for (var level = 0; level < mip; level = level + 1) {
+        offset += max(1.0, ceil(pageGrid.y / exp2(f32(level))));
+      }
+      let candidate = textureLoad(pageTable, vec2i(page.x, page.y + i32(offset)), 0).r;
+      if ((candidate & 1u) != 0u) {
+        entry = candidate; selected = mip; selectedPage = page; selectedSize = mipSize;
+        break;
+      }
+    }
+  }
+
+  if (selected >= 0) {
+    let local = addressedUV * selectedSize - vec2f(selectedPage) * pageSize;
+    let origin = vec2f(f32((entry >> 1) & 0xFFu), f32((entry >> 9) & 0xFFu)) * (pageSize + pageBorder * 2.0);
+    let atlasUV = (origin + pageBorder + local) / atlasSize;
+    let gradientScale = selectedSize / atlasSize;
+    return textureSampleGrad(atlas, atlasSampler, atlasUV,
+      dpdx(gradientUV) * gradientScale, dpdy(gradientUV) * gradientScale);
+  }
+
+  var tailOffset = 0.0;
+  for (var level = 0; level < maxLevel; level = level + 1) {
+    tailOffset += max(1.0, ceil(pageGrid.y / exp2(f32(level))));
+  }
+  let tailEntry = textureLoad(pageTable, vec2i(1, i32(tailOffset)), 0).r;
+  if ((tailEntry & 1u) == 0u) { return vec4f(0.5, 0.5, 0.5, 1.0); }
+  let tailMip = max(maxLevel + 1, requested);
+  let delta = tailMip - maxLevel;
+  var rectOrigin = vec2f(0.0);
+  if (delta == 2) { rectOrigin = vec2f(72.0, 0.0); }
+  else if (delta == 3) { rectOrigin = vec2f(112.0, 0.0); }
+  else if (delta == 4) { rectOrigin = vec2f(72.0, 40.0); }
+  else if (delta == 5) { rectOrigin = vec2f(88.0, 40.0); }
+  else if (delta == 6) { rectOrigin = vec2f(100.0, 40.0); }
+  else if (delta >= 7) { rectOrigin = vec2f(110.0, 40.0); }
+  let tailSize = max(vec2f(1.0), floor(virtualSize / exp2(f32(tailMip))));
+  let slot = vec2f(f32((tailEntry >> 1) & 0xFFu), f32((tailEntry >> 9) & 0xFFu)) * (pageSize + pageBorder * 2.0);
+  let atlasUV = (slot + rectOrigin + pageBorder + addressedUV * tailSize) / atlasSize;
+  let gradientScale = tailSize / atlasSize;
+  return textureSampleGrad(atlas, atlasSampler, atlasUV,
+    dpdx(gradientUV) * gradientScale, dpdy(gradientUV) * gradientScale);
+}
+`;
+var VT_FEEDBACK_WGSL = `
+fn vtFeedback(
+  sampleUV: vec2f,
+  gradientUV: vec2f,
+  feedbackPixelScale: vec2f,
+  virtualSize: vec2f,
+  pageGrid: vec2f,
+  maxMip: f32,
+  qualityBias: f32,
+  addressMode: u32,
+  textureId: u32,
+  viewDistance: f32,
+  cameraNear: f32,
+  cameraFar: f32
+) -> vec2u {
+  // Derivatives are measured per reduced-resolution feedback pixel. Convert
+  // them back to physical display-pixel derivatives before selecting a mip.
+  // Keeping gradientUV separate prevents repeat/POM discontinuities from
+  // corrupting the screen-space footprint.
+  let dx = dpdx(gradientUV * virtualSize) * feedbackPixelScale.x;
+  let dy = dpdy(gradientUV * virtualSize) * feedbackPixelScale.y;
+  let texel_footprint = max(dot(dx, dx), dot(dy, dy));
+  let mip_level = u32(clamp(0.5 * log2(max(texel_footprint, 1e-8)) + qualityBias, 0.0, maxMip));
+
+  var addressed_uv = clamp(sampleUV, vec2f(0.0), vec2f(0.99999994));
+  if (addressMode == 1u) {
+    addressed_uv = fract(sampleUV);
+  } else if (addressMode == 2u) {
+    let period = sampleUV - floor(sampleUV * 0.5) * 2.0;
+    addressed_uv = select(period, 2.0 - period, period > vec2f(1.0));
+    addressed_uv = clamp(addressed_uv, vec2f(0.0), vec2f(0.99999994));
+  }
+  let mip_scale = exp2(-f32(mip_level));
+  let curr_page_grid = max(ceil(pageGrid * mip_scale), vec2f(1.0));
+  let mip_size = max(floor(virtualSize * mip_scale), vec2f(1.0));
+  let page_coords = min(floor(addressed_uv * mip_size / 128.0), curr_page_grid - 1.0);
+
+  let safeNear = max(cameraNear, 1e-6);
+  let safeFar = max(cameraFar, safeNear + 1e-6);
+  let logRange = max(log2(safeFar / safeNear), 1e-6);
+  let normalizedDistance = clamp(
+    log2(max(viewDistance, safeNear) / safeNear) / logRange, 0.0, 1.0
+  );
+  let cameraCloseness = u32(round((1.0 - normalizedDistance) * 7.0));
+
+  // RG32Uint: word 0 carries valid + 3-bit camera closeness + 6-bit mip + 11-bit X/Y;
+  // word 1 carries the full virtual-texture identity.
+  let packed = 0x80000000u |
+               ((cameraCloseness & 0x7u) << 28) |
+               (mip_level & 0x3Fu) |
+               ((u32(page_coords.x) & 0x7FFu) << 6) |
+               ((u32(page_coords.y) & 0x7FFu) << 17);
+  return vec2u(packed, textureId);
+}
+`;
+
 // crates/afterglow-web/web/src/engine/virtual-texturing/surface-detail.ts
 var POM_UV_WGSL = `
 fn pomMarchUV(
@@ -72373,8 +75345,12 @@ class VirtualPomSceneBinding {
     const source = mesh.material;
     if (Array.isArray(source))
       throw new Error("POM binding requires one source material");
-    const runtime = Object.assign({}, exports_three_webgpu, exports_three_tsl);
-    const pair = (this.options.createPair ?? createVirtualPomMaterialPair)(runtime, this.options.store, set, heightTexture, this.options.feedbackPixelScale, this.options.material);
+    const pairFactory = this.options.createPair ?? ((textures, handles, height, pixelScale, material) => {
+      const runtime = Object.assign({}, exports_three_webgpu, exports_three_tsl);
+      const resolved = textures[RESOLVE_VIRTUAL_MATERIAL](handles);
+      return createVirtualPomMaterialPair(runtime, resolved.store, resolved.set, height, pixelScale, material);
+    });
+    const pair = pairFactory(this.options.textures, set, heightTexture, this.options.feedbackPixelScale, this.options.material);
     const feedback = new Mesh(mesh.geometry, pair.pomFeedbackMaterial);
     feedback.position.copy(mesh.position);
     feedback.quaternion.copy(mesh.quaternion);
@@ -72429,712 +75405,11 @@ class VirtualPomSceneBinding {
     this.count = 0;
   }
 }
-// crates/afterglow-web/web/src/engine/virtual-texturing/virtual-texture-feedback-pass.ts
-var SCORE_COVERAGE_CAP2 = 255;
-
-class VirtualTextureFeedbackPass {
-  scale;
-  pixelScale = new Vector2(1, 1);
-  target;
-  width = 1;
-  height = 1;
-  pending = false;
-  feedbackMaps = [
-    new Map,
-    new Map
-  ];
-  buildMapIndex = 0;
-  completed = null;
-  requestPool = [];
-  seenMips = new Uint8Array(64);
-  latestMips = [];
-  constructor(scale2 = 0.125) {
-    if (!(scale2 > 0 && scale2 <= 1))
-      throw new RangeError("feedback scale must be in (0, 1]");
-    this.scale = scale2;
-    this.target = new RenderTarget(1, 1, {
-      format: RGIntegerFormat,
-      type: UnsignedIntType,
-      minFilter: NearestFilter,
-      magFilter: NearestFilter,
-      generateMipmaps: false,
-      depthBuffer: true
-    });
-    this.target.texture.name = "afterglow-vt-feedback-rg32uint";
-  }
-  resize(displayWidth, displayHeight) {
-    if (!(displayWidth > 0 && displayHeight > 0))
-      throw new RangeError("display dimensions must be positive");
-    const width = Math.max(1, Math.ceil(displayWidth * this.scale));
-    const height = Math.max(1, Math.ceil(displayHeight * this.scale));
-    this.pixelScale.set(width / displayWidth, height / displayHeight);
-    if (width === this.width && height === this.height && this.requestPool.length >= width * height)
-      return;
-    this.width = width;
-    this.height = height;
-    this.target.setSize(width, height);
-    const capacity = width * height;
-    if (this.requestPool.length < capacity) {
-      const previous = this.requestPool.length;
-      this.requestPool.length = capacity;
-      for (let index = previous;index < capacity; index++)
-        this.requestPool[index] = { path: "", mip: 0, x: 0, y: 0 };
-    }
-  }
-  get canSubmit() {
-    return !this.pending && this.completed === null;
-  }
-  submit(renderer, feedbackScene, camera, store) {
-    if (!this.canSubmit)
-      return false;
-    const previous = renderer.getRenderTarget();
-    try {
-      renderer.setRenderTarget(this.target);
-      renderer.render(feedbackScene, camera);
-    } finally {
-      renderer.setRenderTarget(previous);
-    }
-    this.pending = true;
-    renderer.readRenderTargetPixelsAsync(this.target, 0, 0, this.width, this.height).then((raw) => {
-      const words = raw instanceof Uint32Array ? raw : new Uint32Array(raw.buffer, raw.byteOffset, Math.floor(raw.byteLength / 4));
-      const requests = this.feedbackMaps[this.buildMapIndex];
-      requests.clear();
-      for (let mip = 0;mip < this.seenMips.length; mip++)
-        this.seenMips[mip] = 0;
-      let requestCount = 0;
-      for (let index = 0;index + 1 < words.length; index += 2) {
-        const packed = words[index];
-        if ((packed & 2147483648) === 0)
-          continue;
-        const mip = packed & 63;
-        const x2 = packed >>> 6 & 2047;
-        const y2 = packed >>> 17 & 2047;
-        const entry = store.getEntryById(words[index + 1]);
-        if (!entry || mip > entry.textureMaxMip)
-          continue;
-        const tail = mip > entry.maxMip;
-        const gridWidth = tail ? 1 : pagesAtMipAxis(entry.pageTableLayout.width, mip);
-        const gridHeight = tail ? 1 : pagesAtMipAxis(entry.pageTableLayout.baseHeight, mip);
-        if (x2 >= gridWidth || y2 >= gridHeight)
-          continue;
-        const requestMip = tail ? entry.tailFirstMip : mip;
-        const requestX = tail ? 0 : x2;
-        const requestY = tail ? 0 : y2;
-        const local = tail ? 268435456 : (requestMip & 63 | (requestX & 2047) << 6 | (requestY & 2047) << 17) >>> 0;
-        const key = entry.textureId * 536870912 + local;
-        const pixel = index >> 1;
-        const pixelX = pixel % this.width;
-        const pixelY = Math.floor(pixel / this.width);
-        const normalizedX = (pixelX + 0.5) * 2 / this.width - 1;
-        const normalizedY = (pixelY + 0.5) * 2 / this.height - 1;
-        const screenPriority = Math.min(255, Math.floor((normalizedX * normalizedX + normalizedY * normalizedY) * 128));
-        const centerCloseness = 7 - Math.min(7, screenPriority >>> 5);
-        const cameraCloseness = packed >>> 28 & 7;
-        const pixelWeight = 1 + centerCloseness + cameraCloseness;
-        const existing = requests.get(key);
-        if (existing) {
-          existing.screenPriority = Math.min(existing.screenPriority ?? 255, screenPriority);
-          const coverage = existing.coverage ?? 1;
-          if (coverage < SCORE_COVERAGE_CAP2)
-            existing.perceptualWeight = (existing.perceptualWeight ?? 1) + pixelWeight;
-          existing.coverage = Math.min(65535, coverage + 1);
-          continue;
-        }
-        const request = this.requestPool[requestCount++];
-        request.textureId = entry.textureId;
-        request.path = entry.path;
-        request.mip = requestMip;
-        request.x = requestX;
-        request.y = requestY;
-        request.tail = tail ? true : undefined;
-        request.screenPriority = screenPriority;
-        request.coverage = 1;
-        request.perceptualWeight = pixelWeight;
-        request.priorityTier = undefined;
-        requests.set(key, request);
-        this.seenMips[mip] = 1;
-      }
-      this.latestMips.length = 0;
-      for (let mip = 0;mip < this.seenMips.length; mip++)
-        if (this.seenMips[mip] !== 0)
-          this.latestMips.push(mip);
-      this.completed = requests;
-      this.buildMapIndex ^= 1;
-    }).catch((error2) => console.error("[VT] feedback readback failed:", error2)).finally(() => {
-      this.pending = false;
-    });
-    return true;
-  }
-  getLatestMips() {
-    return this.latestMips;
-  }
-  consume() {
-    const result = this.completed;
-    this.completed = null;
-    return result;
-  }
-  dispose() {
-    this.target.dispose();
-    this.feedbackMaps[0].clear();
-    this.feedbackMaps[1].clear();
-    this.completed = null;
-    this.requestPool.length = 0;
-  }
-}
-// crates/afterglow-web/web/src/engine/virtual-texturing/predicted-feedback-camera.ts
-var MAX_SAMPLE_SECONDS = 0.1;
-var MAX_ANGULAR_STEP = Math.PI * 0.5;
-var MAX_TRANSLATION_FAR_FRACTION = 0.25;
-
-class PredictedFeedbackCamera {
-  horizonMs;
-  camera;
-  resetCount = 0;
-  previousPosition = new Vector3;
-  currentPosition = new Vector3;
-  predictedPosition = new Vector3;
-  previousQuaternion = new Quaternion;
-  currentQuaternion = new Quaternion;
-  predictedQuaternion = new Quaternion;
-  currentScale = new Vector3(1, 1, 1);
-  lastSeconds = 0;
-  initialized = false;
-  constructor(source, horizonMs) {
-    this.horizonMs = horizonMs;
-    if (!Number.isFinite(horizonMs) || horizonMs <= 0)
-      throw new RangeError("feedback prediction horizon must be positive");
-    this.camera = source.clone(false);
-    this.copyCurrentCamera(source);
-  }
-  sample(source, elapsedSeconds) {
-    source.updateWorldMatrix(true, false);
-    source.matrixWorld.decompose(this.currentPosition, this.currentQuaternion, this.currentScale);
-    this.copyCurrentCamera(source);
-    if (!this.initialized) {
-      this.initialized = true;
-      this.previousPosition.copy(this.currentPosition);
-      this.previousQuaternion.copy(this.currentQuaternion);
-      this.lastSeconds = elapsedSeconds;
-      this.publishCurrentPose();
-      return this.camera;
-    }
-    const dt = elapsedSeconds - this.lastSeconds;
-    const far = Math.max(1, source.far ?? 1);
-    const translation = this.previousPosition.distanceTo(this.currentPosition);
-    const rotation = this.previousQuaternion.angleTo(this.currentQuaternion);
-    const reset = !Number.isFinite(dt) || dt <= 0 || dt > MAX_SAMPLE_SECONDS || translation > far * MAX_TRANSLATION_FAR_FRACTION || rotation > MAX_ANGULAR_STEP;
-    if (reset) {
-      if (dt !== 0)
-        this.resetCount++;
-      this.publishCurrentPose();
-    } else {
-      const factor = 1 + this.horizonMs / (dt * 1000);
-      this.predictedPosition.copy(this.previousPosition).lerp(this.currentPosition, factor);
-      this.predictedQuaternion.slerpQuaternions(this.previousQuaternion, this.currentQuaternion, factor);
-      this.publishPose(this.predictedPosition, this.predictedQuaternion);
-    }
-    this.previousPosition.copy(this.currentPosition);
-    this.previousQuaternion.copy(this.currentQuaternion);
-    this.lastSeconds = elapsedSeconds;
-    return this.camera;
-  }
-  copyCurrentCamera(source) {
-    this.camera.projectionMatrix.copy(source.projectionMatrix);
-    this.camera.projectionMatrixInverse.copy(source.projectionMatrixInverse);
-    this.camera.coordinateSystem = source.coordinateSystem;
-    this.camera.layers.mask = source.layers.mask;
-    const sourcePerspective = source;
-    const targetPerspective = this.camera;
-    if (sourcePerspective.isPerspectiveCamera === true && targetPerspective.isPerspectiveCamera === true) {
-      targetPerspective.near = sourcePerspective.near;
-      targetPerspective.far = sourcePerspective.far;
-      targetPerspective.fov = sourcePerspective.fov;
-      targetPerspective.aspect = sourcePerspective.aspect;
-      targetPerspective.zoom = sourcePerspective.zoom;
-      targetPerspective.focus = sourcePerspective.focus;
-      targetPerspective.filmGauge = sourcePerspective.filmGauge;
-      targetPerspective.filmOffset = sourcePerspective.filmOffset;
-    }
-    const sourceOrthographic = source;
-    const targetOrthographic = this.camera;
-    if (sourceOrthographic.isOrthographicCamera === true && targetOrthographic.isOrthographicCamera === true) {
-      targetOrthographic.near = sourceOrthographic.near;
-      targetOrthographic.far = sourceOrthographic.far;
-      targetOrthographic.left = sourceOrthographic.left;
-      targetOrthographic.right = sourceOrthographic.right;
-      targetOrthographic.top = sourceOrthographic.top;
-      targetOrthographic.bottom = sourceOrthographic.bottom;
-      targetOrthographic.zoom = sourceOrthographic.zoom;
-    }
-    this.camera.parent = null;
-    this.camera.matrixAutoUpdate = true;
-    this.camera.matrixWorldAutoUpdate = true;
-  }
-  publishCurrentPose() {
-    this.publishPose(this.currentPosition, this.currentQuaternion);
-  }
-  publishPose(position, quaternion) {
-    this.camera.position.copy(position);
-    this.camera.quaternion.copy(quaternion);
-    this.camera.scale.copy(this.currentScale);
-    this.camera.updateMatrix();
-    this.camera.updateMatrixWorld(true);
-  }
-}
-
-// crates/afterglow-web/web/src/engine/virtual-texturing/virtual-texture-feedback-coordinator.ts
-class VirtualTextureFeedbackCoordinator {
-  renderer;
-  store;
-  vtCpuUs = 0;
-  feedbackSubmitUs = 0;
-  pixelScale;
-  stats = {
-    submittedSnapshots: 0,
-    completedSnapshots: 0,
-    discardedSnapshots: 0,
-    deferredSnapshots: 0,
-    registrationOverflows: 0,
-    activePasses: 0,
-    predictorResets: 0
-  };
-  passes;
-  renderables;
-  activeRenderable;
-  activeLocalPass;
-  feedbackContextIds;
-  heldResults;
-  renderableCount = 0;
-  registeredPassCount = 0;
-  awaitingPassCount = 0;
-  discardAwaiting = false;
-  nextFeedbackSeconds = 0;
-  lastRenderFrameId = -1;
-  sealed = false;
-  disposed = false;
-  constructor(renderer, store, capacities) {
-    this.renderer = renderer;
-    this.store = store;
-    if (!Number.isInteger(capacities.renderables) || capacities.renderables <= 0)
-      throw new RangeError("feedback renderable capacity must be positive");
-    if (!Number.isInteger(capacities.passes) || capacities.passes <= 0)
-      throw new RangeError("feedback pass capacity must be positive");
-    if (!Number.isFinite(capacities.cadenceMs) || capacities.cadenceMs <= 0)
-      throw new RangeError("feedback cadence must be positive");
-    if (!Number.isFinite(capacities.predictionHorizonMs) || capacities.predictionHorizonMs <= 0)
-      throw new RangeError("feedback prediction horizon must be positive");
-    this.cadenceMs = capacities.cadenceMs;
-    this.predictionHorizonMs = capacities.predictionHorizonMs;
-    this.passes = new Array(capacities.passes);
-    this.renderables = new Array(capacities.renderables);
-    this.heldResults = new Array(capacities.passes).fill(null);
-    for (let index = 0;index < capacities.passes; index++)
-      this.passes[index] = new VirtualTextureFeedbackPass(capacities.scale ?? 0.125);
-    for (let index = 0;index < capacities.renderables; index++)
-      this.renderables[index] = { renderable: null, predictor: null, passOffset: 0 };
-    this.activeRenderable = new Int32Array(capacities.passes);
-    this.activeLocalPass = new Uint16Array(capacities.passes);
-    this.feedbackContextIds = new Int32Array(capacities.passes);
-    const firstPass = this.passes[0];
-    if (!firstPass)
-      throw new Error("feedback coordinator failed to reserve its first pass");
-    this.pixelScale = firstPass.pixelScale;
-  }
-  cadenceMs;
-  predictionHorizonMs;
-  register(renderable) {
-    if (this.sealed)
-      return 3 /* Sealed */;
-    if (!Number.isInteger(renderable.feedbackPassCount) || renderable.feedbackPassCount <= 0)
-      return 2 /* InvalidPassCount */;
-    if (this.renderableCount === this.renderables.length || this.registeredPassCount + renderable.feedbackPassCount > this.passes.length) {
-      this.stats.registrationOverflows++;
-      return 1 /* CapacityExceeded */;
-    }
-    const slot = this.renderables[this.renderableCount];
-    if (!slot)
-      return 1 /* CapacityExceeded */;
-    slot.renderable = renderable;
-    slot.predictor = new PredictedFeedbackCamera(renderable.feedbackCamera, this.predictionHorizonMs);
-    slot.passOffset = this.registeredPassCount;
-    this.registeredPassCount += renderable.feedbackPassCount;
-    this.renderableCount++;
-    return 0 /* Registered */;
-  }
-  resize(displayWidth, displayHeight) {
-    for (let index = 0;index < this.passes.length; index++)
-      this.passes[index]?.resize(displayWidth, displayHeight);
-  }
-  async warm() {
-    if (this.disposed)
-      throw new Error("cannot warm a disposed feedback coordinator");
-    const previousTarget = this.renderer.getRenderTarget();
-    const shadows = this.renderer.shadowMap.enabled;
-    this.renderer.shadowMap.enabled = false;
-    try {
-      for (let recordIndex = 0;recordIndex < this.renderableCount; recordIndex++) {
-        const record = this.renderables[recordIndex];
-        const renderable = record?.renderable;
-        if (!record || !renderable)
-          continue;
-        const feedbackCamera = record.predictor?.sample(renderable.feedbackCamera, 0) ?? renderable.feedbackCamera;
-        for (let localPass = 0;localPass < renderable.feedbackPassCount; localPass++) {
-          const pass3 = this.passes[record.passOffset + localPass];
-          if (!pass3)
-            continue;
-          renderable.beginFeedbackPass(localPass);
-          try {
-            this.renderer.setRenderTarget(pass3.target);
-            await this.renderer.compileAsync(renderable.feedbackScene, feedbackCamera);
-            this.renderer.render(renderable.feedbackScene, feedbackCamera);
-          } finally {
-            renderable.endFeedbackPass(localPass);
-          }
-        }
-      }
-    } finally {
-      this.renderer.setRenderTarget(previousTarget);
-      this.renderer.shadowMap.enabled = shadows;
-    }
-  }
-  seal() {
-    this.sealed = true;
-  }
-  setGpuTimingEnabled(enabled) {
-    const renderer = this.renderer;
-    renderer.backend.trackTimestamp = enabled;
-    for (const pool of Object.values(renderer.backend.timestampQueryPool ?? {}))
-      if (pool)
-        pool.trackTimestamp = enabled;
-  }
-  async resolveGpuTimings(out) {
-    out.gpuTimingValid = false;
-    out.resolvedFrameId = -1;
-    out.gpuSceneMs = 0;
-    out.gpuOutputMs = 0;
-    out.gpuFeedbackMs = 0;
-    out.gpuTotalMs = 0;
-    const renderer = this.renderer;
-    let timestamps;
-    let frames;
-    try {
-      await renderer.resolveTimestampsAsync("render");
-      const contexts = renderer._renderContexts;
-      const pool = renderer.backend.timestampQueryPool?.render;
-      timestamps = pool?.timestamps;
-      frames = pool?.getTimestampFrames?.();
-      const resolvedFrame = frames?.[frames.length - 1];
-      if (!contexts || !timestamps || resolvedFrame === undefined || !Number.isInteger(resolvedFrame))
-        return out;
-      const outputContext = renderer.needsFrameBufferTarget === true ? contexts.get(null).id : -1;
-      this.feedbackContextIds.fill(-1);
-      for (let index = 0;index < this.passes.length; index++) {
-        const pass3 = this.passes[index];
-        if (pass3)
-          this.feedbackContextIds[index] = contexts.get(pass3.target).id;
-      }
-      let total = 0, output3 = 0, feedback = 0;
-      for (const [uid, duration] of timestamps) {
-        const match = /^r:\d+:(\d+):f(\d+)$/.exec(uid);
-        if (!match || Number(match[2]) !== resolvedFrame || !Number.isFinite(duration) || duration < 0)
-          continue;
-        const context3 = Number(match[1]);
-        total += duration;
-        if (context3 === outputContext) {
-          output3 += duration;
-          continue;
-        }
-        for (let index = 0;index < this.feedbackContextIds.length; index++) {
-          if (context3 === this.feedbackContextIds[index]) {
-            feedback += duration;
-            break;
-          }
-        }
-      }
-      out.gpuTimingValid = true;
-      out.resolvedFrameId = resolvedFrame;
-      out.gpuOutputMs = output3;
-      out.gpuFeedbackMs = feedback;
-      out.gpuTotalMs = total;
-      out.gpuSceneMs = Math.max(0, total - output3 - feedback);
-      return out;
-    } catch {
-      return out;
-    } finally {
-      timestamps?.clear();
-      if (frames)
-        frames.length = 0;
-    }
-  }
-  recordFrameTime(frameTimeMs) {
-    this.store.recordFrameTime(frameTimeMs);
-  }
-  poll() {
-    const started = performance.now();
-    this.consumeCompletedSnapshot();
-    this.store.setPublicationFrameId(this.lastRenderFrameId + 1);
-    this.store.poll();
-    this.vtCpuUs = (performance.now() - started) * 1000;
-  }
-  render(frame) {
-    this.feedbackSubmitUs = 0;
-    this.lastRenderFrameId = frame.frameId;
-    if (this.disposed)
-      return;
-    let predictorResets = 0;
-    for (let index = 0;index < this.renderableCount; index++) {
-      const slot = this.renderables[index];
-      const renderable = slot?.renderable;
-      if (!slot || !renderable || !slot.predictor)
-        continue;
-      slot.predictor.sample(renderable.feedbackCamera, frame.elapsedSeconds);
-      predictorResets += slot.predictor.resetCount;
-    }
-    this.stats.predictorResets = predictorResets;
-    if (frame.elapsedSeconds < this.nextFeedbackSeconds)
-      return;
-    this.nextFeedbackSeconds = frame.elapsedSeconds + this.cadenceMs / 1000;
-    const started = performance.now();
-    if (this.awaitingPassCount !== 0) {
-      this.stats.deferredSnapshots++;
-      return;
-    }
-    let activeCount = 0;
-    for (let recordIndex = 0;recordIndex < this.renderableCount; recordIndex++) {
-      const renderable = this.renderables[recordIndex]?.renderable;
-      if (!renderable || !renderable.isFeedbackActive())
-        continue;
-      for (let localPass = 0;localPass < renderable.feedbackPassCount; localPass++) {
-        if (activeCount >= this.passes.length)
-          break;
-        this.activeRenderable[activeCount] = recordIndex;
-        this.activeLocalPass[activeCount] = localPass;
-        activeCount++;
-      }
-    }
-    this.stats.activePasses = activeCount;
-    if (activeCount === 0)
-      return;
-    for (let index = 0;index < activeCount; index++) {
-      if (this.passes[index]?.canSubmit !== true) {
-        this.stats.deferredSnapshots++;
-        return;
-      }
-    }
-    const shadows = this.renderer.shadowMap.enabled;
-    this.renderer.shadowMap.enabled = false;
-    let submitted = 0;
-    try {
-      for (let index = 0;index < activeCount; index++) {
-        const slot = this.renderables[this.activeRenderable[index] ?? -1];
-        const renderable = slot?.renderable;
-        const localPass = this.activeLocalPass[index] ?? 0;
-        const pass3 = this.passes[index];
-        if (!slot || !renderable || !pass3)
-          continue;
-        renderable.beginFeedbackPass(localPass);
-        try {
-          if (pass3.submit(this.renderer, renderable.feedbackScene, slot.predictor?.camera ?? renderable.feedbackCamera, this.store))
-            submitted++;
-        } finally {
-          renderable.endFeedbackPass(localPass);
-        }
-      }
-    } finally {
-      this.renderer.shadowMap.enabled = shadows;
-    }
-    this.awaitingPassCount = submitted;
-    this.discardAwaiting = submitted !== activeCount;
-    if (submitted !== 0)
-      this.stats.submittedSnapshots++;
-    if (this.discardAwaiting)
-      this.stats.deferredSnapshots++;
-    this.feedbackSubmitUs = (performance.now() - started) * 1000;
-  }
-  consumeCompletedSnapshot() {
-    if (this.awaitingPassCount === 0)
-      return false;
-    let complete = true;
-    for (let index = 0;index < this.awaitingPassCount; index++) {
-      if (this.heldResults[index] === null)
-        this.heldResults[index] = this.passes[index]?.consume() ?? null;
-      if (this.heldResults[index] === null)
-        complete = false;
-    }
-    if (!complete)
-      return false;
-    if (this.discardAwaiting) {
-      this.stats.discardedSnapshots++;
-    } else {
-      this.store.processFeedbackBatch(this.heldResults, this.awaitingPassCount);
-      this.stats.completedSnapshots++;
-    }
-    for (let index = 0;index < this.awaitingPassCount; index++)
-      this.heldResults[index] = null;
-    this.awaitingPassCount = 0;
-    this.discardAwaiting = false;
-    return true;
-  }
-  dispose() {
-    if (this.disposed)
-      return;
-    this.disposed = true;
-    for (let index = 0;index < this.passes.length; index++)
-      this.passes[index]?.dispose();
-    for (let index = 0;index < this.renderables.length; index++) {
-      const slot = this.renderables[index];
-      if (slot) {
-        slot.renderable = null;
-        slot.predictor = null;
-      }
-    }
-    for (let index = 0;index < this.heldResults.length; index++)
-      this.heldResults[index] = null;
-    this.awaitingPassCount = 0;
-  }
-}
 // crates/afterglow-web/web/src/engine/virtual-texturing/procedural-vt.ts
 var VT_PAGE_SIZE = 128;
 var VT_PAGE_BORDER = 4;
 var VT_SLOT_SIZE = VT_PAGE_SIZE + VT_PAGE_BORDER * 2;
-// crates/afterglow-web/web/src/engine/diagnostics/dev-harness.ts
-class BootstrapGuard {
-  capacity;
-  cleanups;
-  count = 0;
-  constructor(capacity) {
-    this.capacity = capacity;
-    if (!Number.isInteger(capacity) || capacity <= 0)
-      throw new RangeError("bootstrap cleanup capacity must be positive");
-    this.cleanups = new Array(capacity).fill(null);
-  }
-  defer(cleanup) {
-    if (this.count === this.capacity)
-      throw new Error("bootstrap cleanup capacity exceeded");
-    this.cleanups[this.count++] = cleanup;
-  }
-  release() {
-    for (let index = 0;index < this.count; index++)
-      this.cleanups[index] = null;
-    this.count = 0;
-  }
-  async rollback() {
-    let firstError = null;
-    for (let index = this.count - 1;index >= 0; index--) {
-      const cleanup = this.cleanups[index];
-      this.cleanups[index] = null;
-      try {
-        await cleanup?.();
-      } catch (error2) {
-        if (firstError === null)
-          firstError = error2;
-      }
-    }
-    this.count = 0;
-    if (firstError !== null)
-      throw firstError;
-  }
-}
-
-class FrameStepHarness {
-  capacity;
-  targets;
-  resolvers;
-  count = 0;
-  constructor(capacity) {
-    this.capacity = capacity;
-    if (!Number.isInteger(capacity) || capacity <= 0)
-      throw new RangeError("frame-step capacity must be positive");
-    this.targets = new Float64Array(capacity);
-    this.resolvers = new Array(capacity).fill(null);
-  }
-  wait(currentFrame, count = 1) {
-    if (!Number.isInteger(count) || count <= 0)
-      throw new RangeError("frame-step count must be positive");
-    if (this.count === this.capacity)
-      throw new Error("frame-step capacity exceeded");
-    const slot = this.count++;
-    this.targets[slot] = currentFrame + count;
-    return new Promise((resolve) => {
-      this.resolvers[slot] = resolve;
-    });
-  }
-  poll(frame) {
-    let write = 0;
-    for (let read = 0;read < this.count; read++) {
-      const resolver = this.resolvers[read];
-      if (frame >= (this.targets[read] ?? Number.POSITIVE_INFINITY)) {
-        this.resolvers[read] = null;
-        resolver?.();
-        continue;
-      }
-      if (write !== read) {
-        this.targets[write] = this.targets[read] ?? 0;
-        this.resolvers[write] = resolver ?? null;
-        this.resolvers[read] = null;
-      }
-      write++;
-    }
-    this.count = write;
-  }
-}
-
-class BrowserErrorCapture {
-  diagnostics;
-  target;
-  record = { sequence: 0, code: 0 /* Unknown */, source: 5 /* Game */, detail: null };
-  onError;
-  onRejection;
-  disposed = false;
-  constructor(diagnostics2, target = window) {
-    this.diagnostics = diagnostics2;
-    this.target = target;
-    this.onError = (event) => {
-      diagnostics2.tryRecord(0 /* Unknown */, 5 /* Game */, event.error ?? event);
-    };
-    this.onRejection = (event) => {
-      diagnostics2.tryRecord(0 /* Unknown */, 5 /* Game */, event.reason);
-    };
-    target.addEventListener("error", this.onError);
-    target.addEventListener("unhandledrejection", this.onRejection);
-  }
-  snapshot() {
-    const result = [];
-    for (let index = 0;index < this.diagnostics.count; index++) {
-      if (this.diagnostics.readInto(index, this.record))
-        result.push(this.record.detail);
-    }
-    return result;
-  }
-  dispose() {
-    if (this.disposed)
-      return;
-    this.disposed = true;
-    this.target.removeEventListener("error", this.onError);
-    this.target.removeEventListener("unhandledrejection", this.onRejection);
-  }
-}
-
-class PageShutdown {
-  target;
-  onUnload;
-  disposed = false;
-  constructor(callback, target = window) {
-    this.target = target;
-    this.onUnload = () => callback();
-    target.addEventListener("beforeunload", this.onUnload, { once: true });
-  }
-  dispose() {
-    if (this.disposed)
-      return;
-    this.disposed = true;
-    this.target.removeEventListener("beforeunload", this.onUnload);
-  }
-}
-function publishDevHarness(name, value) {
-  Object.defineProperty(window, name, { configurable: true, value });
-}
-
+// crates/afterglow-web/web/src/engine/diagnostics/text-hud.ts
 class TextHud {
   element;
   constructor(element3) {
@@ -73165,8 +75440,10 @@ scene.background = new Color(1053464);
 scene.fog = new Fog(1053464, 7, 28);
 var camera = new PerspectiveCamera(70, innerWidth / innerHeight, 0.05, 60);
 camera.rotation.order = "YXZ";
-var runtime = EngineRuntime.forScene({
+var coordinator = null;
+var runtime = await EngineRuntime.forScene({
   scene,
+  camera,
   entityCapacity: 1,
   memory: {
     frameScratchBytes: 16384,
@@ -73180,28 +75457,18 @@ var runtime = EngineRuntime.forScene({
   },
   diagnosticCapacity: 128,
   maxWorkerInputs: 1,
-  maxRenderPasses: 2
+  maxRenderPasses: 2,
+  maxOwnedResources: 4,
+  renderer: {
+    parameters: { antialias: false, trackTimestamp: false },
+    onResize: resizeCamera
+  }
 });
-var coordinator = null;
 function resizeCamera(width, height) {
   camera.aspect = width / height;
   camera.updateProjectionMatrix();
-  const ratio = Math.min(2, Math.max(0.1, devicePixelRatio));
-  coordinator?.resize(width * ratio, height * ratio);
 }
-var host = await RendererHost.create({
-  scene,
-  camera,
-  diagnostics: runtime.diagnostics,
-  parameters: { antialias: false, trackTimestamp: false },
-  onResize: resizeCamera
-}).catch((error2) => {
-  runtime.dispose();
-  throw error2;
-});
-var bootstrap = new BootstrapGuard(20);
-bootstrap.defer(() => host.dispose());
-bootstrap.defer(() => runtime.dispose());
+var host = runtime.rendererHost;
 try {
   let pointDistance = function(x2, z2, w4) {
     const dx = w4.x2 - w4.x1, dz = w4.z2 - w4.z1, l2 = dx * dx + dz * dz, t = Math.max(0, Math.min(1, ((x2 - w4.x1) * dx + (z2 - w4.z1) * dz) / l2));
@@ -73243,7 +75510,7 @@ Errors ${runtime.diagnostics.count}`);
     const frameStarted = performance.now(), dt = Math.min(0.05, frame.deltaSeconds);
     smoothedDt = smoothedDt * 0.95 + dt * 0.05;
     coordinator?.recordFrameTime(dt * 1000);
-    if (!programmatic) {
+    {
       let f = (input.isDown(2 /* ZoomIn */) ? 1 : 0) - (input.isDown(3 /* ZoomOut */) ? 1 : 0), s = (input.isDown(1 /* OrbitRight */) ? 1 : 0) - (input.isDown(0 /* OrbitLeft */) ? 1 : 0), speed = input.isDown(12 /* Sprint */) ? 5.5 : 2.8;
       if (f || s) {
         const n = Math.hypot(f, s);
@@ -73264,34 +75531,18 @@ Errors ${runtime.diagnostics.count}`);
     camera.rotation.set(pose.pitch, pose.yaw, 0);
     camera.updateMatrixWorld();
     lamp.position.set(pose.x, 3.1, pose.z);
-    steps.poll(frame.frameId);
     timing.vtCpuUs = coordinator?.vtCpuUs ?? 0;
     timing.renderSubmitUs = host.renderSubmitUs;
     timing.feedbackSubmitUs = coordinator?.feedbackSubmitUs ?? 0;
     timing.frameCpuUs = (performance.now() - frameStarted) * 1000;
     if (frame.frameId % 15 === 0)
       profiling.gather(frame.frameId);
-    if (hudVisible && frame.frameId % 15 === 0)
+    if (frame.frameId % 15 === 0)
       updateHud();
-  }, atlasFeedback = function(groups, start = 0) {
-    const map = new Map, entries = sets.map((set) => set.albedo);
-    for (let i = 0;i < groups; i++) {
-      const entry = entries[i % entries.length];
-      if (!entry)
-        continue;
-      const local = start + Math.floor(i / entries.length), page = local % (entry.pageGridX * entry.pageGridY);
-      map.set(i, {
-        path: entry.path,
-        mip: 0,
-        x: page % entry.pageGridX,
-        y: Math.floor(page / entry.pageGridX)
-      });
-    }
-    return map;
   };
   const source = createPlatformRangeLoader("", runtime.telemetry);
-  const device = host.device, format = device.features.has("texture-compression-bc") ? 0 : device.features.has("texture-compression-astc") ? 1 : FORMAT_RGBA;
-  const session = await EngineAssets.open({
+  const device = host.device, format = device.features.has("texture-compression-bc") ? 0 : device.features.has("texture-compression-astc") ? 1 : FORMAT_RGBA2;
+  const engineAssets = await EngineAssets.open({
     containerPath: "dungeon.big",
     telemetry: runtime.telemetry,
     format,
@@ -73304,10 +75555,20 @@ Errors ${runtime.diagnostics.count}`);
     maxHeaderBytes: 2 * 1024 * 1024,
     source
   });
-  bootstrap.defer(() => session.close());
-  const store = session.createVirtualTextureStore(device, new VirtualTextureTuning({ atlasMaxDimension: 53 * SLOT_SIZE }));
-  bootstrap.defer(() => store.dispose());
-  coordinator = new VirtualTextureFeedbackCoordinator(host.renderer, store, {
+  if (runtime.ownCloseable(engineAssets) !== 0 /* Registered */)
+    throw new Error("Dungeon asset owner capacity exceeded");
+  const storageFormat = format === 0 ? "bc7-rgba-unorm" : format === 1 ? "astc-4x4-unorm" : "rgba8unorm";
+  const store = engineAssets.createVirtualTextureSystem({
+    maxTextures: 16,
+    maxMutablePageRefreshesPerPoll: 2,
+    device,
+    pools: [{
+      format: storageFormat,
+      capacities: { maxPendingPages: 16, maxPendingBytes: 2 * 1024 * 1024 },
+      tuning: new VirtualTextureTuning({ atlasMaxDimension: 53 * SLOT_SIZE })
+    }]
+  });
+  coordinator = runtime.createVirtualTextureFeedback(store, {
     renderables: 1,
     passes: 1,
     cadenceMs: FEEDBACK_CADENCE_MS,
@@ -73315,7 +75576,6 @@ Errors ${runtime.diagnostics.count}`);
     scale: 0.125
   });
   const activeCoordinator = coordinator;
-  activeCoordinator.resize(host.renderer.domElement.width, host.renderer.domElement.height);
   const residentThree = exports_three_webgpu;
   const blueNoiseHeader = await readBigHeader(source, "blue-noise.big", 64 * 1024);
   const blueNoiseSource = {
@@ -73324,7 +75584,7 @@ Errors ${runtime.diagnostics.count}`);
   const blueNoise = (await loadResidentTexture(residentThree, blueNoiseSource, blueNoiseHeader, "blue-noise")).texture;
   const pomBinding = new VirtualPomSceneBinding({
     camera,
-    store,
+    textures: store,
     feedbackPixelScale: coordinator.pixelScale,
     capacity: 12,
     material: {
@@ -73343,7 +75603,8 @@ Errors ${runtime.diagnostics.count}`);
       blueNoiseTile: 64
     }
   });
-  bootstrap.defer(() => pomBinding.dispose());
+  if (runtime.ownDisposable(pomBinding) !== 0 /* Registered */)
+    throw new Error("Dungeon POM owner capacity exceeded");
   if (coordinator.register(pomBinding) !== 0 /* Registered */)
     throw new Error("Dungeon feedback capacity exceeded");
   scene.add(new HemisphereLight(12175592, 2366229, 1.6));
@@ -73367,13 +75628,19 @@ Errors ${runtime.diagnostics.count}`);
   };
   const heightHeader = await readBigHeader(source, "dungeon-height.big", 2 * 1024 * 1024);
   const heights = await Promise.all(materialNames.map((name) => loadResidentTexture(residentThree, heightSource, heightHeader, `${name}_Height`)));
+  const registerTexture = (path) => {
+    const handle = engineAssets.registerVirtualTexture(path, storageFormat, "repeat", true);
+    if (handle === 0)
+      throw new Error(`virtual texture capacity exceeded: ${path}`);
+    return handle;
+  };
   const sets = materialNames.map((name) => {
-    const paths = {
-      albedo: `${name}_Color.png`,
-      normal: `${name}_NormalGL.png`,
-      masks: `${name}_Masks.png`
-    }, dimensions = getVirtualTextureDimensions(session.header, paths.albedo);
-    return store.loadMaterialSet(paths, { ...dimensions, mipTail: true });
+    const set = {
+      albedo: registerTexture(`${name}_Color.png`),
+      normal: registerTexture(`${name}_NormalGL.png`),
+      masks: registerTexture(`${name}_Masks.png`)
+    };
+    return set;
   });
   const segments = [
     [-8, -8, 8, -8],
@@ -73410,19 +75677,17 @@ Errors ${runtime.diagnostics.count}`);
   }
   pomBinding.seal();
   const PLAYER_RADIUS = 0.28, pose = { x: -5.5, z: -5.5, yaw: 0, pitch: 0 };
-  let programmatic = false, pomEnabled = true, hudVisible = true, smoothedDt = 1 / 60;
+  let pomEnabled = true, smoothedDt = 1 / 60;
   const input = new BoundedKeyboardInput;
-  bootstrap.defer(() => input.dispose());
+  if (runtime.ownDisposable(input) !== 0 /* Registered */)
+    throw new Error("Dungeon input owner capacity exceeded");
   const relativePointer = new RelativePointerInput(host.renderer.domElement, (x2, y2) => {
-    if (!programmatic) {
-      pose.yaw -= x2 * 0.002;
-      pose.pitch = Math.max(-1.45, Math.min(1.45, pose.pitch - y2 * 0.002));
-    }
+    pose.yaw -= x2 * 0.002;
+    pose.pitch = Math.max(-1.45, Math.min(1.45, pose.pitch - y2 * 0.002));
   });
-  bootstrap.defer(() => relativePointer.dispose());
-  const errors = new BrowserErrorCapture(runtime.diagnostics);
-  bootstrap.defer(() => errors.dispose());
-  const steps = new FrameStepHarness(64), hud = new TextHud(document.getElementById("hud"));
+  if (runtime.ownDisposable(relativePointer) !== 0 /* Registered */)
+    throw new Error("Dungeon pointer owner capacity exceeded");
+  const hud = new TextHud(document.getElementById("hud"));
   const timing = {
     vtCpuUs: 0,
     renderSubmitUs: 0,
@@ -73438,8 +75703,6 @@ Errors ${runtime.diagnostics.count}`);
   };
   const profiling = new Profiling({ renderer: host.renderer, deltaSource: () => smoothedDt * 1000 }, { capacity: 240 });
   ProfilingRes.set(runtime.adapter.world, profiling);
-  if (runtime.registerWorker(coordinator) !== 0 /* Registered */ || runtime.registerRenderPass(host) !== 0 /* Registered */ || runtime.registerRenderPass(coordinator) !== 0 /* Registered */)
-    throw new Error("Dungeon runtime capacity exceeded");
   runtime.enterWarmup();
   profiling.setEnabled(true);
   await validatePomShaderWarmup(host, async () => {
@@ -73453,186 +75716,18 @@ Errors ${runtime.diagnostics.count}`);
     await runtime.warm();
   });
   host.renderer.render(scene, camera);
-  host.attachVirtualTextureStore(store);
   runtime.sealGameplay();
-  const shutdown = new PageShutdown(() => {
-    runtime.stop();
-    relativePointer.dispose();
-    input.dispose();
-    errors.dispose();
-    pomBinding.dispose();
-    store.dispose();
-    session.close();
-    runtime.dispose();
-  });
-  bootstrap.defer(() => shutdown.dispose());
   runtime.start({ update: updateFrame });
-  const step3 = (count = 1) => steps.wait(runtime.frame.frameId, Math.max(1, count | 0));
-  async function stepForMilliseconds(milliseconds) {
-    const deadline = performance.now() + milliseconds;
-    do {
-      await step3(1);
-    } while (performance.now() < deadline);
-  }
-  async function waitIdle(timeout = 60000) {
-    const end = performance.now() + timeout;
-    while (performance.now() < end) {
-      const s = store.getStats();
-      if (!s.pendingPages && !s.scheduledRequests && !s.readyUploads)
-        return true;
-      await step3(1);
-    }
-    return false;
-  }
-  async function runAtlasScenario(name, timeout = 120000) {
-    if (!["cold", "half", "full", "churn"].includes(name))
-      throw new Error(`unknown atlas scenario ${name}`);
-    programmatic = true;
-    pomBinding.setFeedbackEnabled(false);
-    try {
-      const initial = store.getStats(), total = initial.atlasSlotsTotal, target = name === "half" ? Math.floor(total / 2) : name === "cold" ? initial.atlasSlotsUsed : Math.floor(total * 0.995), feedback = atlasFeedback(Math.ceil(Math.max(0, target - initial.atlasSlotsUsed) / 3) + 32, name === "half" ? 0 : 1024);
-      if (name !== "cold")
-        store.processFeedback(feedback);
-      let end = performance.now() + timeout;
-      while (performance.now() < end) {
-        const s = store.getStats();
-        if (s.atlasSlotsUsed >= target && !s.pendingPages && !s.scheduledRequests && !s.readyUploads)
-          break;
-        if (name !== "cold")
-          store.processFeedback(feedback);
-        await stepForMilliseconds(FEEDBACK_CADENCE_MS);
-      }
-      if (name === "churn") {
-        const before = store.getStats().residentEvictions, replacement = atlasFeedback(Math.ceil(total / 3), 3072);
-        for (let epoch = 0;epoch < 17; epoch++)
-          store.processFeedback(replacement);
-        end = performance.now() + timeout;
-        while (performance.now() < end) {
-          const s = store.getStats();
-          if (s.residentEvictions > before && !s.pendingPages && !s.scheduledRequests && !s.readyUploads)
-            break;
-          store.processFeedback(replacement);
-          await stepForMilliseconds(FEEDBACK_CADENCE_MS);
-        }
-      }
-      return {
-        name,
-        target,
-        ...store.getStats(),
-        timing: { ...timing },
-        errors: runtime.diagnostics.count
-      };
-    } finally {
-      pomBinding.setFeedbackEnabled(true);
-    }
-  }
-  const scenarios = {
-    forward: () => setPose(-5.5, -5.5, 0, 0),
-    reverse: () => setPose(5.5, -5.5, Math.PI, 0),
-    corner: () => setPose(5.8, 6.4, -Math.PI / 2, -0.2)
-  };
-  const pipelineStats = {
-    renderPipelines: 0,
-    computePipelines: 0,
-    renderPipelineViolations: 0,
-    computePipelineViolations: 0
-  };
-  publishDevHarness("__afterglowDungeon", {
-    ready: () => true,
-    telemetry: () => store.getStats(),
-    traceArm: (epoch = 1) => runtime.telemetry.trace.arm(epoch),
-    traceStop: () => {
-      if (!runtime.telemetry.trace.stop())
-        return null;
-      return runtime.telemetry.trace.snapshot();
-    },
-    traceBatch: () => {
-      const bytes = new Uint8Array(runtime.telemetry.trace.encodedBatchBytes());
-      const written = runtime.telemetry.trace.encodeBatchInto(bytes, 1, 1);
-      return written > 0 ? bytes : null;
-    },
-    timing: () => timing,
-    inputStatus: () => relativePointer.getStatus(),
-    pomStatus: () => ({
-      enabled: pomEnabled,
-      minLayers: POM_MIN_LAYERS,
-      maxLayers: POM_MAX_LAYERS,
-      heightScale: POM_HEIGHT_SCALE,
-      maxOffsetRatio: POM_MAX_OFFSET_RATIO,
-      maxDistance: POM_MAX_DISTANCE,
-      selfShadowSteps: POM_SHADOW_STEPS,
-      selfShadowStrength: POM_SHADOW_STRENGTH,
-      heightSource: "resident R8 displacement (ambientCG)",
-      heightFormat: "r8unorm"
-    }),
-    profilingSnapshot: () => {
-      const out = [];
-      profiling.latest(1, out);
-      return out[0] ?? null;
-    },
-    profilingTrace: () => profiling.exportChromeTrace(),
-    setPomEnabled,
-    setFeedbackEnabled: (enabled) => pomBinding.setFeedbackEnabled(enabled),
-    pipelineTelemetry: () => {
-      const seal = host.sealMonitor;
-      pipelineStats.renderPipelines = seal.renderPipelines;
-      pipelineStats.computePipelines = seal.computePipelines;
-      pipelineStats.renderPipelineViolations = seal.renderPipelineViolations;
-      pipelineStats.computePipelineViolations = seal.computePipelineViolations;
-      return pipelineStats;
-    },
-    resolveGpuTimings: async () => coordinator?.resolveGpuTimings(timing) ?? timing,
-    setGpuTimingEnabled: (enabled) => coordinator?.setGpuTimingEnabled(enabled),
-    validateGpuProfiler: () => GpuProfiler.validate(host.device, host.device.queue),
-    errorCount: () => runtime.diagnostics.count,
-    runAtlasScenario,
-    snapshot: () => ({
-      pose: { ...pose },
-      ...store.getDebugSnapshot(),
-      requests: 0,
-      feedbackMips: [],
-      errors: errors.snapshot()
-    }),
-    setProgrammatic: (enabled) => {
-      programmatic = enabled;
-      input.programmatic = enabled;
-      input.clear();
-    },
-    setHudVisible: (visible) => {
-      hudVisible = visible;
-      hud.setVisible(visible);
-    },
-    setPose,
-    getPose: () => ({ ...pose }),
-    move,
-    look: (yaw, pitch) => setPose(pose.x, pose.z, pose.yaw + yaw, pose.pitch + pitch),
-    step: step3,
-    waitForIdle: waitIdle,
-    runScenario: async (name) => {
-      const scenario = scenarios[name];
-      if (!scenario)
-        throw new Error(`unknown scenario ${name}`);
-      programmatic = true;
-      scenario();
-      await step3(120);
-      await waitIdle();
-      await step3(16);
-      await waitIdle();
-      return {
-        pose: { ...pose },
-        ...store.getDebugSnapshot(),
-        errors: errors.snapshot()
-      };
-    }
-  });
-  bootstrap.release();
   console.log("afterglow-engine: canonical Dungeon started");
 } catch (error2) {
   try {
-    await bootstrap.rollback();
+    await runtime.close();
   } catch (cleanup) {
     if (error2 instanceof Error && error2.cause === undefined)
       error2.cause = cleanup;
   }
   throw error2;
 }
+export {
+  runtime as demoRuntime
+};

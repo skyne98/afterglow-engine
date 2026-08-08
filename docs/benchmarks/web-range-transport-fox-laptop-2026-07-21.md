@@ -1,10 +1,11 @@
 # Web VT range transport — fox-laptop (2026-07-21)
 
-> **Runtime-wiring note (audited 2026-07-22):** these measurements remain valid
+> **Runtime-wiring note (updated 2026-07-26):** these measurements remain valid
 > for the explicitly source-sorted diagnostic described below. The live
-> `BigAssetSession` provider currently dispatches scheduler/admission order and
-> does not call that sorting helper. Do not cite 950.2 MiB/s as current gameplay
-> provider throughput until a live-provider gate reproduces it.
+> `EngineAssets` provider intentionally preserves scheduler/admission order. The
+> diagnostic is now `createSourceSortedPageReader()` over the same immutable
+> `VtPageDirectory`. Do not cite 950.2 MiB/s as current gameplay-provider
+> throughput until a live-provider gate reproduces it.
 
 ## Scope and method
 
@@ -158,8 +159,8 @@ batches. The admitted diagnostic source-sorts independent spans, adjacent native
 spans collapse into contiguous `pread`, and page indices restore original
 caller order. The bridge is bounded to 4 MiB × two in flight and passed the
 900 MiB/s median transport gate. Production admission additionally requires
-wiring the same ordering into `BigAssetSession` and rerunning this gate through
-the live provider; that integration is currently open.
+selecting source ordering as live `EngineAssets` policy and rerunning this gate
+through the live provider; that policy change remains unselected.
 
 Public web remains standards-only: offer H3 as a compatibility/robustness
 transport with HTTP/2 fallback, but do not claim H3 makes this same-host
