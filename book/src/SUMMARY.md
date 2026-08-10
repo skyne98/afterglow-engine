@@ -49,6 +49,7 @@
 - [Model Presentation](./reference/model-presentation.md)
 - [Dynamic Audio](./reference/dynamic-audio.md)
 - [Demo Input and Automation](./reference/demo-input-harness.md)
+- [Paint Editor Surface](./reference/paint-editor.md)
 - [Allocation Boundaries](./reference/allocation-boundaries.md)
 - [Runtime Capacities](./reference/runtime-capacities.md)
 - [Crate Map](./reference/crate-map.md)

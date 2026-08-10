@@ -1,0 +1,9 @@
+{
+	"InstallScripts" : 
+	[
+		"/home/fox/Project/afterglow-engine/prototype/character-editor/paint/vendor/json-c/build-threads/cmake_install.cmake",
+		"/home/fox/Project/afterglow-engine/prototype/character-editor/paint/vendor/json-c/build-threads/doc/cmake_install.cmake",
+		"/home/fox/Project/afterglow-engine/prototype/character-editor/paint/vendor/json-c/build-threads/apps/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

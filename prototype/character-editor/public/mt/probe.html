@@ -1,0 +1,7 @@
+<!doctype html><html><head><meta charset="utf-8"><title>MT worker probe</title></head>
+<body><pre id="out">spawning worker…</pre>
+<script>
+const w = new Worker('./mt-worker.js', { type: 'module' });
+w.onmessage = (e) => { document.getElementById('out').textContent = JSON.stringify(e.data, null, 2); };
+w.onerror = (e) => { document.getElementById('out').textContent = 'WORKER ERROR: ' + e.message; };
+</script></body></html>

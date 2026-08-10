@@ -1,0 +1,1574 @@
+{
+  "source": "mypaint-brushes 2.0.2",
+  "count": 196,
+  "brushes": [
+    {
+      "id": "classic/blend+paint",
+      "name": "blend+paint",
+      "group": "classic",
+      "brush": "classic/blend_x2b_paint.myb",
+      "preview": "classic/blend_x2b_paint_prev.png",
+      "parentBrushName": "classic/blend+paint"
+    },
+    {
+      "id": "classic/blending_knife",
+      "name": "blending_knife",
+      "group": "oil",
+      "brush": "classic/blending_knife.myb",
+      "preview": "classic/blending_knife_prev.png",
+      "parentBrushName": "classic/blending_knife"
+    },
+    {
+      "id": "classic/blur",
+      "name": "blur",
+      "group": "classic",
+      "brush": "classic/blur.myb",
+      "preview": "classic/blur_prev.png",
+      "parentBrushName": "classic/blur"
+    },
+    {
+      "id": "classic/brush",
+      "name": "brush",
+      "group": "classic",
+      "brush": "classic/brush.myb",
+      "preview": "classic/brush_prev.png",
+      "parentBrushName": "classic/brush"
+    },
+    {
+      "id": "classic/bulk",
+      "name": "bulk",
+      "group": "classic",
+      "brush": "classic/bulk.myb",
+      "preview": "classic/bulk_prev.png",
+      "parentBrushName": "classic/bulk"
+    },
+    {
+      "id": "classic/calligraphy",
+      "name": "calligraphy",
+      "group": "classic",
+      "brush": "classic/calligraphy.myb",
+      "preview": "classic/calligraphy_prev.png",
+      "parentBrushName": "classic/calligraphy"
+    },
+    {
+      "id": "classic/charcoal",
+      "name": "charcoal",
+      "group": "classic",
+      "brush": "classic/charcoal.myb",
+      "preview": "classic/charcoal_prev.png",
+      "parentBrushName": "classic/charcoal"
+    },
+    {
+      "id": "classic/coarse_bulk_1",
+      "name": "coarse_bulk_1",
+      "group": "classic",
+      "brush": "classic/coarse_bulk_1.myb",
+      "preview": "classic/coarse_bulk_1_prev.png",
+      "parentBrushName": "classic/coarse_bulk_1"
+    },
+    {
+      "id": "classic/coarse_bulk_2",
+      "name": "coarse_bulk_2",
+      "group": "classic",
+      "brush": "classic/coarse_bulk_2.myb",
+      "preview": "classic/coarse_bulk_2_prev.png",
+      "parentBrushName": "classic/coarse_bulk_2"
+    },
+    {
+      "id": "classic/coarse_bulk_3",
+      "name": "coarse_bulk_3",
+      "group": "classic",
+      "brush": "classic/coarse_bulk_3.myb",
+      "preview": "classic/coarse_bulk_3_prev.png",
+      "parentBrushName": "classic/coarse_bulk_3"
+    },
+    {
+      "id": "classic/dry_brush",
+      "name": "dry_brush",
+      "group": "classic",
+      "brush": "classic/dry_brush.myb",
+      "preview": "classic/dry_brush_prev.png",
+      "parentBrushName": "classic/dry_brush"
+    },
+    {
+      "id": "classic/imp_blending",
+      "name": "imp_blending",
+      "group": "smudge",
+      "brush": "classic/imp_blending.myb",
+      "preview": "classic/imp_blending_prev.png",
+      "parentBrushName": "classic/imp_blending"
+    },
+    {
+      "id": "classic/imp_details",
+      "name": "imp_details",
+      "group": "impressionism",
+      "brush": "classic/imp_details.myb",
+      "preview": "classic/imp_details_prev.png",
+      "parentBrushName": "classic/imp_details"
+    },
+    {
+      "id": "classic/impressionism",
+      "name": "impressionism",
+      "group": "impressionism",
+      "brush": "classic/impressionism.myb",
+      "preview": "classic/impressionism_prev.png",
+      "parentBrushName": "classic/impressionism"
+    },
+    {
+      "id": "classic/ink_blot",
+      "name": "ink_blot",
+      "group": "classic",
+      "brush": "classic/ink_blot.myb",
+      "preview": "classic/ink_blot_prev.png",
+      "parentBrushName": "classic/ink_blot"
+    },
+    {
+      "id": "classic/ink_eraser",
+      "name": "ink_eraser",
+      "group": "classic",
+      "brush": "classic/ink_eraser.myb",
+      "preview": "classic/ink_eraser_prev.png",
+      "parentBrushName": "classic/ink_eraser"
+    },
+    {
+      "id": "classic/kabura",
+      "name": "kabura",
+      "group": "classic",
+      "brush": "classic/kabura.myb",
+      "preview": "classic/kabura_prev.png",
+      "parentBrushName": "classic/kabura"
+    },
+    {
+      "id": "classic/knife",
+      "name": "knife",
+      "group": "classic",
+      "brush": "classic/knife.myb",
+      "preview": "classic/knife_prev.png",
+      "parentBrushName": "classic/knife"
+    },
+    {
+      "id": "classic/long_grass",
+      "name": "long_grass",
+      "group": "classic",
+      "brush": "classic/long_grass.myb",
+      "preview": "classic/long_grass_prev.png",
+      "parentBrushName": "classic/long_grass"
+    },
+    {
+      "id": "classic/marker_fat",
+      "name": "marker_fat",
+      "group": "classic",
+      "brush": "classic/marker_fat.myb",
+      "preview": "classic/marker_fat_prev.png",
+      "parentBrushName": "classic/marker_fat"
+    },
+    {
+      "id": "classic/marker_small",
+      "name": "marker_small",
+      "group": "classic",
+      "brush": "classic/marker_small.myb",
+      "preview": "classic/marker_small_prev.png",
+      "parentBrushName": "classic/marker_small"
+    },
+    {
+      "id": "classic/modelling",
+      "name": "modelling",
+      "group": "classic",
+      "brush": "classic/modelling.myb",
+      "preview": "classic/modelling_prev.png",
+      "parentBrushName": "classic/modelling"
+    },
+    {
+      "id": "classic/modelling2",
+      "name": "modelling2",
+      "group": "classic",
+      "brush": "classic/modelling2.myb",
+      "preview": "classic/modelling2_prev.png",
+      "parentBrushName": "classic/modelling2"
+    },
+    {
+      "id": "classic/pen",
+      "name": "pen",
+      "group": "classic",
+      "brush": "classic/pen.myb",
+      "preview": "classic/pen_prev.png",
+      "parentBrushName": "classic/pen"
+    },
+    {
+      "id": "classic/pencil",
+      "name": "pencil",
+      "group": "classic",
+      "brush": "classic/pencil.myb",
+      "preview": "classic/pencil_prev.png",
+      "parentBrushName": "classic/pencil"
+    },
+    {
+      "id": "classic/pointy_ink",
+      "name": "pointy_ink",
+      "group": "classic",
+      "brush": "classic/pointy_ink.myb",
+      "preview": "classic/pointy_ink_prev.png",
+      "parentBrushName": "classic/pointy_ink"
+    },
+    {
+      "id": "classic/puantilism",
+      "name": "puantilism",
+      "group": "oil",
+      "brush": "classic/puantilism.myb",
+      "preview": "classic/puantilism_prev.png",
+      "parentBrushName": "classic/puantilism"
+    },
+    {
+      "id": "classic/puantilism2",
+      "name": "puantilism2",
+      "group": "classic",
+      "brush": "classic/puantilism2.myb",
+      "preview": "classic/puantilism2_prev.png",
+      "parentBrushName": "classic/puantilism2"
+    },
+    {
+      "id": "classic/rounded",
+      "name": "rounded",
+      "group": "classic",
+      "brush": "classic/rounded.myb",
+      "preview": "classic/rounded_prev.png",
+      "parentBrushName": "classic/rounded"
+    },
+    {
+      "id": "classic/short_grass",
+      "name": "short_grass",
+      "group": "classic",
+      "brush": "classic/short_grass.myb",
+      "preview": "classic/short_grass_prev.png",
+      "parentBrushName": "classic/short_grass"
+    },
+    {
+      "id": "classic/slow_ink",
+      "name": "slow_ink",
+      "group": "classic",
+      "brush": "classic/slow_ink.myb",
+      "preview": "classic/slow_ink_prev.png",
+      "parentBrushName": "classic/slow_ink"
+    },
+    {
+      "id": "classic/smudge",
+      "name": "smudge",
+      "group": "classic",
+      "brush": "classic/smudge.myb",
+      "preview": "classic/smudge_prev.png",
+      "parentBrushName": "classic/smudge"
+    },
+    {
+      "id": "classic/smudge+paint",
+      "name": "smudge+paint",
+      "group": "classic",
+      "brush": "classic/smudge_x2b_paint.myb",
+      "preview": "classic/smudge_x2b_paint_prev.png",
+      "parentBrushName": "classic/smudge+paint"
+    },
+    {
+      "id": "classic/textured_ink",
+      "name": "textured_ink",
+      "group": "classic",
+      "brush": "classic/textured_ink.myb",
+      "preview": "classic/textured_ink_prev.png",
+      "parentBrushName": "classic/textured_ink"
+    },
+    {
+      "id": "classic/wet_knife",
+      "name": "wet_knife",
+      "group": "classic",
+      "brush": "classic/wet_knife.myb",
+      "preview": "classic/wet_knife_prev.png",
+      "parentBrushName": "classic/wet_knife"
+    },
+    {
+      "id": "deevad/2B_pencil",
+      "name": "A digital pencil soft 2B",
+      "group": "deevad",
+      "brush": "deevad/2B_pencil.myb",
+      "preview": "deevad/2B_pencil_prev.png",
+      "parentBrushName": "deevad/2B_pencil"
+    },
+    {
+      "id": "deevad/4H_pencil",
+      "name": "A digital pencil hard 4H",
+      "group": "deevad",
+      "brush": "deevad/4H_pencil.myb",
+      "preview": "deevad/4H_pencil_prev.png",
+      "parentBrushName": "deevad/4H_pencil"
+    },
+    {
+      "id": "deevad/airbrush",
+      "name": "An airbrush",
+      "group": "deevad",
+      "brush": "deevad/airbrush.myb",
+      "preview": "deevad/airbrush_prev.png",
+      "parentBrushName": "deevad/airbrush"
+    },
+    {
+      "id": "deevad/ballpen",
+      "name": "A ballpen",
+      "group": "deevad",
+      "brush": "deevad/ballpen.myb",
+      "preview": "deevad/ballpen_prev.png",
+      "parentBrushName": "deevad/ballpen"
+    },
+    {
+      "id": "deevad/basic_digital_brush_smudging",
+      "name": "A basic rounded brush able to smudge color",
+      "group": "deevad",
+      "brush": "deevad/basic_digital_brush_smudging.myb",
+      "preview": "deevad/basic_digital_brush_smudging_prev.png",
+      "parentBrushName": "deevad/basic_digital_brush_smudging"
+    },
+    {
+      "id": "deevad/basic_digital_brush",
+      "name": "A basic rounded digital brush",
+      "group": "deevad",
+      "brush": "deevad/basic_digital_brush.myb",
+      "preview": "deevad/basic_digital_brush_prev.png",
+      "parentBrushName": "deevad/basic_digital_brush"
+    },
+    {
+      "id": "deevad/basic_digital_knife_smudging",
+      "name": "A flat brush attempting to emulate a paint-knife with smudging",
+      "group": "deevad",
+      "brush": "deevad/basic_digital_knife_smudging.myb",
+      "preview": "deevad/basic_digital_knife_smudging_prev.png",
+      "parentBrushName": "deevad/basic_digital_knife_smudging"
+    },
+    {
+      "id": "deevad/basic_digital_knife",
+      "name": "A flat brush attempting to emulate a paint-knife",
+      "group": "deevad",
+      "brush": "deevad/basic_digital_knife.myb",
+      "preview": "deevad/basic_digital_knife_prev.png",
+      "parentBrushName": "deevad/basic_digital_knife"
+    },
+    {
+      "id": "deevad/blending",
+      "name": "A brush to blend colors on canvas",
+      "group": "deevad",
+      "brush": "deevad/blending.myb",
+      "preview": "deevad/blending_prev.png",
+      "parentBrushName": "deevad/blending"
+    },
+    {
+      "id": "deevad/brush",
+      "name": "A brush changing diameters depending on pressure",
+      "group": "deevad",
+      "brush": "deevad/brush.myb",
+      "preview": "deevad/brush_prev.png",
+      "parentBrushName": "deevad/brush"
+    },
+    {
+      "id": "deevad/chalk",
+      "name": "A chalk brush attempt, using many tiny particles on canvas to simulate grain",
+      "group": "deevad",
+      "brush": "deevad/chalk.myb",
+      "preview": "deevad/chalk_prev.png",
+      "parentBrushName": "deevad/chalk"
+    },
+    {
+      "id": "deevad/detail_brush_large_glazing",
+      "name": "Part of a subset of detailing brush: large glazing one",
+      "group": "deevad",
+      "brush": "deevad/detail_brush_large_glazing.myb",
+      "preview": "deevad/detail_brush_large_glazing_prev.png",
+      "parentBrushName": "deevad/detail_brush_large_glazing"
+    },
+    {
+      "id": "deevad/detail_brush_large",
+      "name": "Part of a subset of detailing brush: large one",
+      "group": "deevad",
+      "brush": "deevad/detail_brush_large.myb",
+      "preview": "deevad/detail_brush_large_prev.png",
+      "parentBrushName": "deevad/detail_brush_large"
+    },
+    {
+      "id": "deevad/detail_brush_thin_glazing",
+      "name": "Part of a subset of detailing brush: thin glazing one",
+      "group": "deevad",
+      "brush": "deevad/detail_brush_thin_glazing.myb",
+      "preview": "deevad/detail_brush_thin_glazing_prev.png",
+      "parentBrushName": "deevad/detail_brush_thin_glazing"
+    },
+    {
+      "id": "deevad/detail_brush_thin",
+      "name": "Part of a subset of detailing brush: thin one",
+      "group": "deevad",
+      "brush": "deevad/detail_brush_thin.myb",
+      "preview": "deevad/detail_brush_thin_prev.png",
+      "parentBrushName": "deevad/detail_brush_thin"
+    },
+    {
+      "id": "deevad/fill",
+      "name": "A big flat brush to fill color areas",
+      "group": "deevad",
+      "brush": "deevad/fill.myb",
+      "preview": "deevad/fill_prev.png",
+      "parentBrushName": "deevad/fill"
+    },
+    {
+      "id": "deevad/grainy_blending",
+      "name": "A blending tool with particles to simulate the grain of paper.",
+      "group": "deevad",
+      "brush": "deevad/grainy_blending.myb",
+      "preview": "deevad/grainy_blending_prev.png",
+      "parentBrushName": "grainy_blending"
+    },
+    {
+      "id": "deevad/kneaded_eraser_large",
+      "name": "A large and soft eraser",
+      "group": "deevad",
+      "brush": "deevad/kneaded_eraser_large.myb",
+      "preview": "deevad/kneaded_eraser_large_prev.png",
+      "parentBrushName": "deevad/kneaded_eraser_large"
+    },
+    {
+      "id": "deevad/kneaded_eraser",
+      "name": "A soft eraser",
+      "group": "deevad",
+      "brush": "deevad/kneaded_eraser.myb",
+      "preview": "deevad/kneaded_eraser_prev.png",
+      "parentBrushName": "deevad/kneaded_eraser"
+    },
+    {
+      "id": "deevad/large_hard_eraser",
+      "name": "A rubber eraser",
+      "group": "deevad",
+      "brush": "deevad/large_hard_eraser.myb",
+      "preview": "deevad/large_hard_eraser_prev.png",
+      "parentBrushName": "deevad/large_hard_eraser"
+    },
+    {
+      "id": "deevad/large_watercolor_fringe",
+      "name": "A brush attempt to simulate the fringe of watercolor diffusion",
+      "group": "deevad",
+      "brush": "deevad/large_watercolor_fringe.myb",
+      "preview": "deevad/large_watercolor_fringe_prev.png",
+      "parentBrushName": "large_watercolor_fringe"
+    },
+    {
+      "id": "deevad/liner",
+      "name": "A small brush to trace regular lines",
+      "group": "deevad",
+      "brush": "deevad/liner.myb",
+      "preview": "deevad/liner_prev.png",
+      "parentBrushName": "deevad/liner"
+    },
+    {
+      "id": "deevad/only_water_fringe",
+      "name": "A brush attempt to simulate the fringe of watercolor diffusion, only smudging",
+      "group": "deevad",
+      "brush": "deevad/only_water_fringe.myb",
+      "preview": "deevad/only_water_fringe_prev.png",
+      "parentBrushName": "deevad/only_water_fringe"
+    },
+    {
+      "id": "deevad/pen-note",
+      "name": "A pen to write notes",
+      "group": "deevad",
+      "brush": "deevad/pen-note.myb",
+      "preview": "deevad/pen-note_prev.png",
+      "parentBrushName": "deevad/pen-note"
+    },
+    {
+      "id": "deevad/pen",
+      "name": "A pen to draw and sketch",
+      "group": "deevad",
+      "brush": "deevad/pen.myb",
+      "preview": "deevad/pen_prev.png",
+      "parentBrushName": "deevad/pen"
+    },
+    {
+      "id": "deevad/rigger_brush_thin",
+      "name": "A brush for very small details",
+      "group": "deevad",
+      "brush": "deevad/rigger_brush_thin.myb",
+      "preview": "deevad/rigger_brush_thin_prev.png",
+      "parentBrushName": "deevad/rigger_brush_thin"
+    },
+    {
+      "id": "deevad/rigger_brush",
+      "name": "A brush for small details",
+      "group": "deevad",
+      "brush": "deevad/rigger_brush.myb",
+      "preview": "deevad/rigger_brush_prev.png",
+      "parentBrushName": "deevad/rigger_brush"
+    },
+    {
+      "id": "deevad/rough",
+      "name": "A large low opacity brush to draw main shape and rough an artwork",
+      "group": "deevad",
+      "brush": "deevad/rough.myb",
+      "preview": "deevad/rough_prev.png",
+      "parentBrushName": "deevad/rough"
+    },
+    {
+      "id": "deevad/soft-dip-pen",
+      "name": "A hard line with size variation for vigorous inking rendering",
+      "group": "deevad",
+      "brush": "deevad/soft-dip-pen.myb",
+      "preview": "deevad/soft-dip-pen_prev.png",
+      "parentBrushName": "deevad/soft-dip-pen"
+    },
+    {
+      "id": "deevad/sponge_smudging",
+      "name": "For smudging large area with a smooth texture",
+      "group": "deevad",
+      "brush": "deevad/sponge_smudging.myb",
+      "preview": "deevad/sponge_smudging_prev.png",
+      "parentBrushName": "deevad/sponge_smudging"
+    },
+    {
+      "id": "deevad/spray",
+      "name": "Throw particles on the canvas, simulate spray bomb",
+      "group": "deevad",
+      "brush": "deevad/spray.myb",
+      "preview": "deevad/spray_prev.png",
+      "parentBrushName": "deevad/spray"
+    },
+    {
+      "id": "deevad/spray2",
+      "name": "Particles of paint have various size, to create splatter on the canvas",
+      "group": "deevad",
+      "brush": "deevad/spray2.myb",
+      "preview": "deevad/spray2_prev.png",
+      "parentBrushName": "deevad/spray2"
+    },
+    {
+      "id": "deevad/thin_hard_eraser",
+      "name": "A thin hard eraser",
+      "group": "deevad",
+      "brush": "deevad/thin_hard_eraser.myb",
+      "preview": "deevad/thin_hard_eraser_prev.png",
+      "parentBrushName": "deevad/thin_hard_eraser"
+    },
+    {
+      "id": "deevad/thin_watercolor",
+      "name": "A thin brush to add detail in digital watercolour",
+      "group": "deevad",
+      "brush": "deevad/thin_watercolor.myb",
+      "preview": "deevad/thin_watercolor_prev.png",
+      "parentBrushName": "deevad/thin_watercolor"
+    },
+    {
+      "id": "deevad/watercolor_expressive",
+      "name": "A brush with sensitivity on size while producing a fringe to simulate watercolor",
+      "group": "deevad",
+      "brush": "deevad/watercolor_expressive.myb",
+      "preview": "deevad/watercolor_expressive_prev.png",
+      "parentBrushName": "deevad/watercolor_expressive"
+    },
+    {
+      "id": "deevad/watercolor_glazing",
+      "name": "A watercolor brush preset to glaze area",
+      "group": "deevad",
+      "brush": "deevad/watercolor_glazing.myb",
+      "preview": "deevad/watercolor_glazing_prev.png",
+      "parentBrushName": "deevad/watercolor_glazing"
+    },
+    {
+      "id": "Dieterle/8B_Pencil#1",
+      "name": "Pencil",
+      "group": "Dieterle",
+      "brush": "Dieterle/8B_Pencil_x23_1.myb",
+      "preview": "Dieterle/8B_Pencil_x23_1_prev.png",
+      "parentBrushName": "Dieterle/8B_Pencil#1"
+    },
+    {
+      "id": "Dieterle/arrow#1",
+      "name": "Arrow",
+      "group": "Dieterle",
+      "brush": "Dieterle/arrow_x23_1.myb",
+      "preview": "Dieterle/arrow_x23_1_prev.png",
+      "parentBrushName": "Dieterle/arrow#1"
+    },
+    {
+      "id": "Dieterle/Blender",
+      "name": "Blender",
+      "group": "Dieterle",
+      "brush": "Dieterle/Blender.myb",
+      "preview": "Dieterle/Blender_prev.png",
+      "parentBrushName": "Dieterle/Blender"
+    },
+    {
+      "id": "Dieterle/Dissolver",
+      "name": "Blender Dissolve",
+      "group": "Dieterle",
+      "brush": "Dieterle/Dissolver.myb",
+      "preview": "Dieterle/Dissolver_prev.png",
+      "parentBrushName": "Dieterle/Dissolver"
+    },
+    {
+      "id": "Dieterle/Eraser",
+      "name": "Blender Erode",
+      "group": "Dieterle",
+      "brush": "Dieterle/Eraser.myb",
+      "preview": "Dieterle/Eraser_prev.png",
+      "parentBrushName": "Dieterle/Eraser"
+    },
+    {
+      "id": "Dieterle/Fan#1",
+      "name": "Fan Brush Oil",
+      "group": "Dieterle",
+      "brush": "Dieterle/Fan_x23_1.myb",
+      "preview": "Dieterle/Fan_x23_1_prev.png",
+      "parentBrushName": "Dieterle/Fan#1"
+    },
+    {
+      "id": "Dieterle/Flat2#1",
+      "name": "Fan Brush Oil",
+      "group": "Dieterle",
+      "brush": "Dieterle/Flat2_x23_1.myb",
+      "preview": "Dieterle/Flat2_x23_1_prev.png",
+      "parentBrushName": "Dieterle/Flat2#1"
+    },
+    {
+      "id": "Dieterle/Flight_Feathers",
+      "name": "Feathers Flight",
+      "group": "Dieterle",
+      "brush": "Dieterle/Flight_Feathers.myb",
+      "preview": "Dieterle/Flight_Feathers_prev.png",
+      "parentBrushName": "Dieterle/Flight_Feathers"
+    },
+    {
+      "id": "Dieterle/Fount-offset#1",
+      "name": "Soft Fine Fountain Pen",
+      "group": "Dieterle",
+      "brush": "Dieterle/Fount-offset_x23_1.myb",
+      "preview": "Dieterle/Fount-offset_x23_1_prev.png",
+      "parentBrushName": "Dieterle/Fount-offset#1"
+    },
+    {
+      "id": "Dieterle/Fountain_SF#1",
+      "name": "Soft Fine Fountain Pen",
+      "group": "Dieterle",
+      "brush": "Dieterle/Fountain_SF_x23_1.myb",
+      "preview": "Dieterle/Fountain_SF_x23_1_prev.png",
+      "parentBrushName": "Dieterle/Fountain_SF#1"
+    },
+    {
+      "id": "Dieterle/HalfTone#1",
+      "name": "Half Tone",
+      "group": "Dieterle",
+      "brush": "Dieterle/HalfTone_x23_1.myb",
+      "preview": "Dieterle/HalfTone_x23_1_prev.png",
+      "parentBrushName": "Dieterle/HalfTone#1"
+    },
+    {
+      "id": "Dieterle/HalfToneCMY#1",
+      "name": "Half Tone",
+      "group": "Dieterle",
+      "brush": "Dieterle/HalfToneCMY_x23_1.myb",
+      "preview": "Dieterle/HalfToneCMY_x23_1_prev.png",
+      "parentBrushName": "Dieterle/HalfToneCMY#1"
+    },
+    {
+      "id": "Dieterle/Pencil-_Left_Handed",
+      "name": "Pencil",
+      "group": "Dieterle",
+      "brush": "Dieterle/Pencil-_Left_Handed.myb",
+      "preview": "Dieterle/Pencil-_Left_Handed_prev.png",
+      "parentBrushName": "Dieterle/Pencil-_Left_Handed"
+    },
+    {
+      "id": "Dieterle/Posterizer",
+      "name": "Posterizing Blender",
+      "group": "Dieterle",
+      "brush": "Dieterle/Posterizer.myb",
+      "preview": "Dieterle/Posterizer_prev.png",
+      "parentBrushName": "Dieterle/Posterizer"
+    },
+    {
+      "id": "Dieterle/Round#1",
+      "name": "Round Brush Oil",
+      "group": "Dieterle",
+      "brush": "Dieterle/Round_x23_1.myb",
+      "preview": "Dieterle/Round_x23_1_prev.png",
+      "parentBrushName": "Dieterle/Round#1"
+    },
+    {
+      "id": "Dieterle/Splash",
+      "name": "Splash Brush",
+      "group": "Dieterle",
+      "brush": "Dieterle/Splash.myb",
+      "preview": "Dieterle/Splash_prev.png",
+      "parentBrushName": "Dieterle/Splash"
+    },
+    {
+      "id": "Dieterle/Tail_Feathers",
+      "name": "Tail Feathers",
+      "group": "Dieterle",
+      "brush": "Dieterle/Tail_Feathers.myb",
+      "preview": "Dieterle/Tail_Feathers_prev.png",
+      "parentBrushName": "Dieterle/Tail_Feathers"
+    },
+    {
+      "id": "Dieterle/Tail_Feathers2",
+      "name": "Tail Feathers2",
+      "group": "Dieterle",
+      "brush": "Dieterle/Tail_Feathers2.myb",
+      "preview": "Dieterle/Tail_Feathers2_prev.png",
+      "parentBrushName": "Dieterle/Tail_Feathers2"
+    },
+    {
+      "id": "Dieterle/WateryFlatbrush",
+      "name": "Watery Flat Brush",
+      "group": "Dieterle",
+      "brush": "Dieterle/WateryFlatbrush.myb",
+      "preview": "Dieterle/WateryFlatbrush_prev.png",
+      "parentBrushName": "Dieterle/WateryFlatbrush"
+    },
+    {
+      "id": "experimental/1pixel",
+      "name": "1-pixel brush for pixel art",
+      "group": "experimental",
+      "brush": "experimental/1pixel.myb",
+      "preview": "experimental/1pixel_prev.png",
+      "parentBrushName": "experimental/1pixel"
+    },
+    {
+      "id": "experimental/basic",
+      "name": "basic",
+      "group": "experimental",
+      "brush": "experimental/basic.myb",
+      "preview": "experimental/basic_prev.png",
+      "parentBrushName": "experimental/basic"
+    },
+    {
+      "id": "experimental/bubble",
+      "name": "bubble",
+      "group": "experimental",
+      "brush": "experimental/bubble.myb",
+      "preview": "experimental/bubble_prev.png",
+      "parentBrushName": "experimental/bubble"
+    },
+    {
+      "id": "experimental/DNA_brush",
+      "name": "DNA_brush",
+      "group": "experimental",
+      "brush": "experimental/DNA_brush.myb",
+      "preview": "experimental/DNA_brush_prev.png",
+      "parentBrushName": "experimental/DNA_brush"
+    },
+    {
+      "id": "experimental/fur",
+      "name": "fur",
+      "group": "experimental",
+      "brush": "experimental/fur.myb",
+      "preview": "experimental/fur_prev.png",
+      "parentBrushName": "experimental/fur"
+    },
+    {
+      "id": "experimental/glow",
+      "name": "glow",
+      "group": "experimental",
+      "brush": "experimental/glow.myb",
+      "preview": "experimental/glow_prev.png",
+      "parentBrushName": "experimental/glow"
+    },
+    {
+      "id": "experimental/hard_blot",
+      "name": "hard_blot",
+      "group": "experimental",
+      "brush": "experimental/hard_blot.myb",
+      "preview": "experimental/hard_blot_prev.png",
+      "parentBrushName": "experimental/hard_blot"
+    },
+    {
+      "id": "experimental/hard_sting",
+      "name": "hard_sting",
+      "group": "experimental",
+      "brush": "experimental/hard_sting.myb",
+      "preview": "experimental/hard_sting_prev.png",
+      "parentBrushName": "experimental/hard_sting"
+    },
+    {
+      "id": "experimental/irregular_ink",
+      "name": "irregular_ink",
+      "group": "experimental",
+      "brush": "experimental/irregular_ink.myb",
+      "preview": "experimental/irregular_ink_prev.png",
+      "parentBrushName": "experimental/irregular_ink"
+    },
+    {
+      "id": "experimental/leaves",
+      "name": "leaves",
+      "group": "experimental",
+      "brush": "experimental/leaves.myb",
+      "preview": "experimental/leaves_prev.png",
+      "parentBrushName": "experimental/leaves"
+    },
+    {
+      "id": "experimental/particules_3",
+      "name": "particules_3",
+      "group": "experimental",
+      "brush": "experimental/particules_3.myb",
+      "preview": "experimental/particules_3_prev.png",
+      "parentBrushName": "experimental/particules_3"
+    },
+    {
+      "id": "experimental/particules_eraser",
+      "name": "particules_eraser",
+      "group": "experimental",
+      "brush": "experimental/particules_eraser.myb",
+      "preview": "experimental/particules_eraser_prev.png",
+      "parentBrushName": "experimental/particules_eraser"
+    },
+    {
+      "id": "experimental/pick_and_drag",
+      "name": "pick_and_drag",
+      "group": "experimental",
+      "brush": "experimental/pick_and_drag.myb",
+      "preview": "experimental/pick_and_drag_prev.png",
+      "parentBrushName": "experimental/pick_and_drag"
+    },
+    {
+      "id": "experimental/pixel_hardink",
+      "name": "Light, small, relatively slow hard-edged ink brush.",
+      "group": "experimental",
+      "brush": "experimental/pixel_hardink.myb",
+      "preview": "experimental/pixel_hardink_prev.png",
+      "parentBrushName": "experimental/pixel_hardink"
+    },
+    {
+      "id": "experimental/pixelblocking",
+      "name": "15px brush for hard edged blocking-in",
+      "group": "experimental",
+      "brush": "experimental/pixelblocking.myb",
+      "preview": "experimental/pixelblocking_prev.png",
+      "parentBrushName": "experimental/pixelblocking"
+    },
+    {
+      "id": "experimental/sewing",
+      "name": "sewing",
+      "group": "experimental",
+      "brush": "experimental/sewing.myb",
+      "preview": "experimental/sewing_prev.png",
+      "parentBrushName": "experimental/sewing"
+    },
+    {
+      "id": "experimental/small_blot",
+      "name": "small_blot",
+      "group": "experimental",
+      "brush": "experimental/small_blot.myb",
+      "preview": "experimental/small_blot_prev.png",
+      "parentBrushName": "experimental/small_blot"
+    },
+    {
+      "id": "experimental/soft_irregular",
+      "name": "soft_irregular",
+      "group": "experimental",
+      "brush": "experimental/soft_irregular.myb",
+      "preview": "experimental/soft_irregular_prev.png",
+      "parentBrushName": "experimental/soft_irregular"
+    },
+    {
+      "id": "experimental/soft",
+      "name": "soft",
+      "group": "experimental",
+      "brush": "experimental/soft.myb",
+      "preview": "experimental/soft_prev.png",
+      "parentBrushName": "experimental/soft"
+    },
+    {
+      "id": "experimental/spaced-blot",
+      "name": "spaced-blot",
+      "group": "experimental",
+      "brush": "experimental/spaced-blot.myb",
+      "preview": "experimental/spaced-blot_prev.png",
+      "parentBrushName": "experimental/spaced-blot"
+    },
+    {
+      "id": "experimental/speed_blot",
+      "name": "speed_blot",
+      "group": "experimental",
+      "brush": "experimental/speed_blot.myb",
+      "preview": "experimental/speed_blot_prev.png",
+      "parentBrushName": "experimental/speed_blot"
+    },
+    {
+      "id": "experimental/subtle_pencil",
+      "name": "subtle_pencil",
+      "group": "experimental",
+      "brush": "experimental/subtle_pencil.myb",
+      "preview": "experimental/subtle_pencil_prev.png",
+      "parentBrushName": "experimental/subtle_pencil"
+    },
+    {
+      "id": "experimental/track",
+      "name": "track",
+      "group": "experimental",
+      "brush": "experimental/track.myb",
+      "preview": "experimental/track_prev.png",
+      "parentBrushName": "experimental/track"
+    },
+    {
+      "id": "kaerhon_v1/airbruch_press_a",
+      "name": "airbruch_press_a",
+      "group": "kaerhon_v1",
+      "brush": "kaerhon_v1/airbruch_press_a.myb",
+      "preview": "kaerhon_v1/airbruch_press_a_prev.png",
+      "parentBrushName": "airbruch_press"
+    },
+    {
+      "id": "kaerhon_v1/Airbrush_a",
+      "name": "Airbrush_a",
+      "group": "kaerhon_v1",
+      "brush": "kaerhon_v1/Airbrush_a.myb",
+      "preview": "kaerhon_v1/Airbrush_a_prev.png",
+      "parentBrushName": "kaerhon_v1/Airbrush_a"
+    },
+    {
+      "id": "kaerhon_v1/airsmudge_a",
+      "name": "airsmudge_a",
+      "group": "kaerhon_v1",
+      "brush": "kaerhon_v1/airsmudge_a.myb",
+      "preview": "kaerhon_v1/airsmudge_a_prev.png",
+      "parentBrushName": "kaerhon_v1/airsmudge_a"
+    },
+    {
+      "id": "kaerhon_v1/airsmudgeultimate_sk",
+      "name": "airsmudgeultimate_sk",
+      "group": "kaerhon_v1",
+      "brush": "kaerhon_v1/airsmudgeultimate_sk.myb",
+      "preview": "kaerhon_v1/airsmudgeultimate_sk_prev.png",
+      "parentBrushName": "kaerhon_v1/airsmudgeultimate_sk"
+    },
+    {
+      "id": "kaerhon_v1/classic_sk",
+      "name": "classic_sk",
+      "group": "kaerhon_v1",
+      "brush": "kaerhon_v1/classic_sk.myb",
+      "preview": "kaerhon_v1/classic_sk_prev.png",
+      "parentBrushName": "kaerhon_v1/classic_sk"
+    },
+    {
+      "id": "kaerhon_v1/classicroundblock_static_c",
+      "name": "classicroundblock_static_c",
+      "group": "kaerhon_v1",
+      "brush": "kaerhon_v1/classicroundblock_static_c.myb",
+      "preview": "kaerhon_v1/classicroundblock_static_c_prev.png",
+      "parentBrushName": "classicroundblock_static#2"
+    },
+    {
+      "id": "kaerhon_v1/Dirty_Transparent_sk",
+      "name": "Dirty_Transparent_sk",
+      "group": "kaerhon_v1",
+      "brush": "kaerhon_v1/Dirty_Transparent_sk.myb",
+      "preview": "kaerhon_v1/Dirty_Transparent_sk_prev.png",
+      "parentBrushName": "Dirty_Transparent#2"
+    },
+    {
+      "id": "kaerhon_v1/extreme_round_l",
+      "name": "extreme_round_l",
+      "group": "kaerhon_v1",
+      "brush": "kaerhon_v1/extreme_round_l.myb",
+      "preview": "kaerhon_v1/extreme_round_l_prev.png",
+      "parentBrushName": "extreme_round#2"
+    },
+    {
+      "id": "kaerhon_v1/fill_c",
+      "name": "fill_c",
+      "group": "kaerhon_v1",
+      "brush": "kaerhon_v1/fill_c.myb",
+      "preview": "kaerhon_v1/fill_c_prev.png",
+      "parentBrushName": "fill#2"
+    },
+    {
+      "id": "kaerhon_v1/flat_bar_l",
+      "name": "flat_bar_l",
+      "group": "kaerhon_v1",
+      "brush": "kaerhon_v1/flat_bar_l.myb",
+      "preview": "kaerhon_v1/flat_bar_l_prev.png",
+      "parentBrushName": "flat_bar"
+    },
+    {
+      "id": "kaerhon_v1/ink_slow_s",
+      "name": "ink_slow_s",
+      "group": "kaerhon_v1",
+      "brush": "kaerhon_v1/ink_slow_s.myb",
+      "preview": "kaerhon_v1/ink_slow_s_prev.png",
+      "parentBrushName": "kaerhon_v1/ink_slow_s"
+    },
+    {
+      "id": "kaerhon_v1/ink-slowline_s",
+      "name": "ink-slowline_s",
+      "group": "kaerhon_v1",
+      "brush": "kaerhon_v1/ink-slowline_s.myb",
+      "preview": "kaerhon_v1/ink-slowline_s_prev.png",
+      "parentBrushName": "kaerhon_v1/ink-slowline_s"
+    },
+    {
+      "id": "kaerhon_v1/inkster_l",
+      "name": "inkster_l",
+      "group": "kaerhon_v1",
+      "brush": "kaerhon_v1/inkster_l.myb",
+      "preview": "kaerhon_v1/inkster_l_prev.png",
+      "parentBrushName": "inkster#2"
+    },
+    {
+      "id": "kaerhon_v1/paint_barrr_sm",
+      "name": "paint_barrr_sm",
+      "group": "kaerhon_v1",
+      "brush": "kaerhon_v1/paint_barrr_sm.myb",
+      "preview": "kaerhon_v1/paint_barrr_sm_prev.png",
+      "parentBrushName": "paint_barrr#2"
+    },
+    {
+      "id": "kaerhon_v1/paint_radius_2_sm",
+      "name": "paint_radius_2_sm",
+      "group": "kaerhon_v1",
+      "brush": "kaerhon_v1/paint_radius_2_sm.myb",
+      "preview": "kaerhon_v1/paint_radius_2_sm_prev.png",
+      "parentBrushName": "paint_radius_2#2"
+    },
+    {
+      "id": "kaerhon_v1/paint_sm",
+      "name": "paint_sm",
+      "group": "kaerhon_v1",
+      "brush": "kaerhon_v1/paint_sm.myb",
+      "preview": "kaerhon_v1/paint_sm_prev.png",
+      "parentBrushName": "paint#2"
+    },
+    {
+      "id": "kaerhon_v1/Sketcher2_sk",
+      "name": "Sketcher2_sk",
+      "group": "kaerhon_v1",
+      "brush": "kaerhon_v1/Sketcher2_sk.myb",
+      "preview": "kaerhon_v1/Sketcher2_sk_prev.png",
+      "parentBrushName": "kaerhon_v1/Sketcher2_sk"
+    },
+    {
+      "id": "kaerhon_v1/Smear_sm",
+      "name": "Smear_sm",
+      "group": "kaerhon_v1",
+      "brush": "kaerhon_v1/Smear_sm.myb",
+      "preview": "kaerhon_v1/Smear_sm_prev.png",
+      "parentBrushName": "Smear#2"
+    },
+    {
+      "id": "kaerhon_v1/smudge_ink(0.7)_sm",
+      "name": "smudge_ink(0.7)_sm",
+      "group": "kaerhon_v1",
+      "brush": "kaerhon_v1/smudge_ink_x28_0.7_x29__sm.myb",
+      "preview": "kaerhon_v1/smudge_ink_x28_0.7_x29__sm_prev.png",
+      "parentBrushName": "smudge_ink(0.7)#3"
+    },
+    {
+      "id": "kaerhon_v1/wet_paint_sm",
+      "name": "wet_paint_sm",
+      "group": "kaerhon_v1",
+      "brush": "kaerhon_v1/wet_paint_sm.myb",
+      "preview": "kaerhon_v1/wet_paint_sm_prev.png",
+      "parentBrushName": "wet_paint#2"
+    },
+    {
+      "id": "ramon/100%_Opaque",
+      "name": "100%_Opaque",
+      "group": "ramon",
+      "brush": "ramon/100_x25__Opaque.myb",
+      "preview": "ramon/100_x25__Opaque_prev.png",
+      "parentBrushName": "ramon/100%_Opaque"
+    },
+    {
+      "id": "ramon/2B_pencil",
+      "name": "2B_pencil",
+      "group": "ramon",
+      "brush": "ramon/2B_pencil.myb",
+      "preview": "ramon/2B_pencil_prev.png",
+      "parentBrushName": "ramon/2B_pencil"
+    },
+    {
+      "id": "ramon/B-pencil",
+      "name": "B-pencil",
+      "group": "ramon",
+      "brush": "ramon/B-pencil.myb",
+      "preview": "ramon/B-pencil_prev.png",
+      "parentBrushName": "ramon/B-pencil"
+    },
+    {
+      "id": "ramon/Beamlight",
+      "name": "Beamlight",
+      "group": "ramon",
+      "brush": "ramon/Beamlight.myb",
+      "preview": "ramon/Beamlight_prev.png",
+      "parentBrushName": "ramon/Beamlight"
+    },
+    {
+      "id": "ramon/BigAirbrush",
+      "name": "BigAirbrush",
+      "group": "ramon",
+      "brush": "ramon/BigAirbrush.myb",
+      "preview": "ramon/BigAirbrush_prev.png",
+      "parentBrushName": "ramon/BigAirbrush"
+    },
+    {
+      "id": "ramon/Blur_Fast",
+      "name": "Blur_Fast",
+      "group": "ramon",
+      "brush": "ramon/Blur_Fast.myb",
+      "preview": "ramon/Blur_Fast_prev.png",
+      "parentBrushName": "ramon/Blur_Fast"
+    },
+    {
+      "id": "ramon/Classic_Paint",
+      "name": "Classic_Paint",
+      "group": "ramon",
+      "brush": "ramon/Classic_Paint.myb",
+      "preview": "ramon/Classic_Paint_prev.png",
+      "parentBrushName": "ramon/Classic_Paint"
+    },
+    {
+      "id": "ramon/Clouds",
+      "name": "Clouds",
+      "group": "ramon",
+      "brush": "ramon/Clouds.myb",
+      "preview": "ramon/Clouds_prev.png",
+      "parentBrushName": "ramon/Clouds"
+    },
+    {
+      "id": "ramon/Delayed_",
+      "name": "Delayed_",
+      "group": "ramon",
+      "brush": "ramon/Delayed_.myb",
+      "preview": "ramon/Delayed__prev.png",
+      "parentBrushName": "ramon/Delayed_"
+    },
+    {
+      "id": "ramon/Dirty_Noise",
+      "name": "Dirty_Noise",
+      "group": "ramon",
+      "brush": "ramon/Dirty_Noise.myb",
+      "preview": "ramon/Dirty_Noise_prev.png",
+      "parentBrushName": "ramon/Dirty_Noise"
+    },
+    {
+      "id": "ramon/Glow_Airbrush",
+      "name": "Glow_Airbrush",
+      "group": "ramon",
+      "brush": "ramon/Glow_Airbrush.myb",
+      "preview": "ramon/Glow_Airbrush_prev.png",
+      "parentBrushName": "ramon/Glow_Airbrush"
+    },
+    {
+      "id": "ramon/Grain",
+      "name": "Grain",
+      "group": "ramon",
+      "brush": "ramon/Grain.myb",
+      "preview": "ramon/Grain_prev.png",
+      "parentBrushName": "ramon/Grain"
+    },
+    {
+      "id": "ramon/Hard_Eraser",
+      "name": "Hard_Eraser",
+      "group": "ramon",
+      "brush": "ramon/Hard_Eraser.myb",
+      "preview": "ramon/Hard_Eraser_prev.png",
+      "parentBrushName": "ramon/Hard_Eraser"
+    },
+    {
+      "id": "ramon/Knife",
+      "name": "Knife",
+      "group": "ramon",
+      "brush": "ramon/Knife.myb",
+      "preview": "ramon/Knife_prev.png",
+      "parentBrushName": "ramon/Knife"
+    },
+    {
+      "id": "ramon/Marker",
+      "name": "Marker",
+      "group": "ramon",
+      "brush": "ramon/Marker.myb",
+      "preview": "ramon/Marker_prev.png",
+      "parentBrushName": "ramon/Marker"
+    },
+    {
+      "id": "ramon/P._Shade",
+      "name": "P._Shade",
+      "group": "ramon",
+      "brush": "ramon/P._Shade.myb",
+      "preview": "ramon/P._Shade_prev.png",
+      "parentBrushName": "ramon/P._Shade"
+    },
+    {
+      "id": "ramon/Pastel_1",
+      "name": "Pastel_1",
+      "group": "ramon",
+      "brush": "ramon/Pastel_1.myb",
+      "preview": "ramon/Pastel_1_prev.png",
+      "parentBrushName": "ramon/Pastel_1"
+    },
+    {
+      "id": "ramon/Pen",
+      "name": "Pen",
+      "group": "ramon",
+      "brush": "ramon/Pen.myb",
+      "preview": "ramon/Pen_prev.png",
+      "parentBrushName": "ramon/Pen"
+    },
+    {
+      "id": "ramon/PenBrush",
+      "name": "PenBrush",
+      "group": "ramon",
+      "brush": "ramon/PenBrush.myb",
+      "preview": "ramon/PenBrush_prev.png",
+      "parentBrushName": "ramon/PenBrush"
+    },
+    {
+      "id": "ramon/Round_Bl",
+      "name": "Round_Bl",
+      "group": "ramon",
+      "brush": "ramon/Round_Bl.myb",
+      "preview": "ramon/Round_Bl_prev.png",
+      "parentBrushName": "ramon/Round_Bl"
+    },
+    {
+      "id": "ramon/Round",
+      "name": "Round",
+      "group": "ramon",
+      "brush": "ramon/Round.myb",
+      "preview": "ramon/Round_prev.png",
+      "parentBrushName": "ramon/Round"
+    },
+    {
+      "id": "ramon/RS_blendOP",
+      "name": "RS_blendOP",
+      "group": "ramon",
+      "brush": "ramon/RS_blendOP.myb",
+      "preview": "ramon/RS_blendOP_prev.png",
+      "parentBrushName": "ramon/RS_blendOP"
+    },
+    {
+      "id": "ramon/Sketch_1",
+      "name": "Sketch_1",
+      "group": "ramon",
+      "brush": "ramon/Sketch_1.myb",
+      "preview": "ramon/Sketch_1_prev.png",
+      "parentBrushName": "ramon/Sketch_1"
+    },
+    {
+      "id": "ramon/Smear",
+      "name": "Smear",
+      "group": "ramon",
+      "brush": "ramon/Smear.myb",
+      "preview": "ramon/Smear_prev.png",
+      "parentBrushName": "ramon/Smear"
+    },
+    {
+      "id": "ramon/Soft_Eraser",
+      "name": "Soft_Eraser",
+      "group": "ramon",
+      "brush": "ramon/Soft_Eraser.myb",
+      "preview": "ramon/Soft_Eraser_prev.png",
+      "parentBrushName": "ramon/Soft_Eraser"
+    },
+    {
+      "id": "ramon/Thin_Pen",
+      "name": "Thin_Pen",
+      "group": "ramon",
+      "brush": "ramon/Thin_Pen.myb",
+      "preview": "ramon/Thin_Pen_prev.png",
+      "parentBrushName": "ramon/Thin_Pen"
+    },
+    {
+      "id": "ramon/Wet_Direction",
+      "name": "Wet_Direction",
+      "group": "ramon",
+      "brush": "ramon/Wet_Direction.myb",
+      "preview": "ramon/Wet_Direction_prev.png",
+      "parentBrushName": "ramon/Wet_Direction"
+    },
+    {
+      "id": "ramon/wet_round",
+      "name": "wet_round",
+      "group": "ramon",
+      "brush": "ramon/wet_round.myb",
+      "preview": "ramon/wet_round_prev.png",
+      "parentBrushName": "ramon/wet_round"
+    },
+    {
+      "id": "tanda/acrylic-03-only-water",
+      "name": "acrylic-03-only-water",
+      "group": "tanda",
+      "brush": "tanda/acrylic-03-only-water.myb",
+      "preview": "tanda/acrylic-03-only-water_prev.png",
+      "parentBrushName": "tanda/acrylic-03-only-water"
+    },
+    {
+      "id": "tanda/acrylic-03-paint",
+      "name": "acrylic-03-paint",
+      "group": "tanda",
+      "brush": "tanda/acrylic-03-paint.myb",
+      "preview": "tanda/acrylic-03-paint_prev.png",
+      "parentBrushName": "tanda/acrylic-03-paint"
+    },
+    {
+      "id": "tanda/acrylic-03-with-water",
+      "name": "acrylic-03-with-water",
+      "group": "tanda",
+      "brush": "tanda/acrylic-03-with-water.myb",
+      "preview": "tanda/acrylic-03-with-water_prev.png",
+      "parentBrushName": "tanda/acrylic-03-with-water"
+    },
+    {
+      "id": "tanda/acrylic-04-only-water",
+      "name": "acrylic-04-only-water",
+      "group": "tanda",
+      "brush": "tanda/acrylic-04-only-water.myb",
+      "preview": "tanda/acrylic-04-only-water_prev.png",
+      "parentBrushName": "tanda/acrylic-04-only-water"
+    },
+    {
+      "id": "tanda/acrylic-04-paint",
+      "name": "acrylic-04-paint",
+      "group": "tanda",
+      "brush": "tanda/acrylic-04-paint.myb",
+      "preview": "tanda/acrylic-04-paint_prev.png",
+      "parentBrushName": "tanda/acrylic-04-paint"
+    },
+    {
+      "id": "tanda/acrylic-04-with-water",
+      "name": "acrylic-04-with-water",
+      "group": "tanda",
+      "brush": "tanda/acrylic-04-with-water.myb",
+      "preview": "tanda/acrylic-04-with-water_prev.png",
+      "parentBrushName": "tanda/acrylic-04-with-water"
+    },
+    {
+      "id": "tanda/acrylic-05-only-water",
+      "name": "acrylic-05-only-water",
+      "group": "tanda",
+      "brush": "tanda/acrylic-05-only-water.myb",
+      "preview": "tanda/acrylic-05-only-water_prev.png",
+      "parentBrushName": "tanda/acrylic-05-only-water"
+    },
+    {
+      "id": "tanda/acrylic-05-paint",
+      "name": "acrylic-05-paint",
+      "group": "tanda",
+      "brush": "tanda/acrylic-05-paint.myb",
+      "preview": "tanda/acrylic-05-paint_prev.png",
+      "parentBrushName": "tanda/acrylic-05-paint"
+    },
+    {
+      "id": "tanda/acrylic-05-with-water",
+      "name": "acrylic-05-with-water",
+      "group": "tanda",
+      "brush": "tanda/acrylic-05-with-water.myb",
+      "preview": "tanda/acrylic-05-with-water_prev.png",
+      "parentBrushName": "tanda/acrylic-05-with-water"
+    },
+    {
+      "id": "tanda/charcoal-01",
+      "name": "charcoal-01",
+      "group": "tanda",
+      "brush": "tanda/charcoal-01.myb",
+      "preview": "tanda/charcoal-01_prev.png",
+      "parentBrushName": "tanda/charcoal-01"
+    },
+    {
+      "id": "tanda/charcoal-03",
+      "name": "charcoal-03",
+      "group": "tanda",
+      "brush": "tanda/charcoal-03.myb",
+      "preview": "tanda/charcoal-03_prev.png",
+      "parentBrushName": "tanda/charcoal-03"
+    },
+    {
+      "id": "tanda/charcoal-04",
+      "name": "charcoal-04",
+      "group": "tanda",
+      "brush": "tanda/charcoal-04.myb",
+      "preview": "tanda/charcoal-04_prev.png",
+      "parentBrushName": "tanda/charcoal-04"
+    },
+    {
+      "id": "tanda/charcoal-blur1",
+      "name": "charcoal-blur1",
+      "group": "tanda",
+      "brush": "tanda/charcoal-blur1.myb",
+      "preview": "tanda/charcoal-blur1_prev.png",
+      "parentBrushName": "tanda/charcoal-blur1"
+    },
+    {
+      "id": "tanda/marker-01",
+      "name": "marker-01",
+      "group": "tanda",
+      "brush": "tanda/marker-01.myb",
+      "preview": "tanda/marker-01_prev.png",
+      "parentBrushName": "tanda/marker-01"
+    },
+    {
+      "id": "tanda/marker-05",
+      "name": "marker-05",
+      "group": "tanda",
+      "brush": "tanda/marker-05.myb",
+      "preview": "tanda/marker-05_prev.png",
+      "parentBrushName": "tanda/marker-05"
+    },
+    {
+      "id": "tanda/oil-01-clean",
+      "name": "oil-01-clean",
+      "group": "tanda",
+      "brush": "tanda/oil-01-clean.myb",
+      "preview": "tanda/oil-01-clean_prev.png",
+      "parentBrushName": "tanda/oil-01-clean"
+    },
+    {
+      "id": "tanda/oil-01-paint",
+      "name": "oil-01-paint",
+      "group": "tanda",
+      "brush": "tanda/oil-01-paint.myb",
+      "preview": "tanda/oil-01-paint_prev.png",
+      "parentBrushName": "tanda/oil-01-paint"
+    },
+    {
+      "id": "tanda/oil-03-clean",
+      "name": "oil-03-clean",
+      "group": "tanda",
+      "brush": "tanda/oil-03-clean.myb",
+      "preview": "tanda/oil-03-clean_prev.png",
+      "parentBrushName": "tanda/oil-03-clean"
+    },
+    {
+      "id": "tanda/oil-03-paint",
+      "name": "oil-03-paint",
+      "group": "tanda",
+      "brush": "tanda/oil-03-paint.myb",
+      "preview": "tanda/oil-03-paint_prev.png",
+      "parentBrushName": "tanda/oil-03-paint"
+    },
+    {
+      "id": "tanda/oil-06-clean",
+      "name": "oil-06-clean",
+      "group": "tanda",
+      "brush": "tanda/oil-06-clean.myb",
+      "preview": "tanda/oil-06-clean_prev.png",
+      "parentBrushName": "tanda/oil-06-clean"
+    },
+    {
+      "id": "tanda/oil-06-paint",
+      "name": "oil-06-paint",
+      "group": "tanda",
+      "brush": "tanda/oil-06-paint.myb",
+      "preview": "tanda/oil-06-paint_prev.png",
+      "parentBrushName": "tanda/oil-06-paint"
+    },
+    {
+      "id": "tanda/oil-mop",
+      "name": "oil-mop",
+      "group": "tanda",
+      "brush": "tanda/oil-mop.myb",
+      "preview": "tanda/oil-mop_prev.png",
+      "parentBrushName": "tanda/oil-mop"
+    },
+    {
+      "id": "tanda/pencil-2b",
+      "name": "pencil-2b",
+      "group": "tanda",
+      "brush": "tanda/pencil-2b.myb",
+      "preview": "tanda/pencil-2b_prev.png",
+      "parentBrushName": "tanda/pencil-2b"
+    },
+    {
+      "id": "tanda/pencil-8b",
+      "name": "pencil-8b",
+      "group": "tanda",
+      "brush": "tanda/pencil-8b.myb",
+      "preview": "tanda/pencil-8b_prev.png",
+      "parentBrushName": "tanda/pencil-8b"
+    },
+    {
+      "id": "tanda/splatter-02",
+      "name": "splatter-02",
+      "group": "tanda",
+      "brush": "tanda/splatter-02.myb",
+      "preview": "tanda/splatter-02_prev.png",
+      "parentBrushName": "tanda/splatter-02"
+    },
+    {
+      "id": "tanda/splatter-04",
+      "name": "splatter-04",
+      "group": "tanda",
+      "brush": "tanda/splatter-04.myb",
+      "preview": "tanda/splatter-04_prev.png",
+      "parentBrushName": "tanda/splatter-04"
+    },
+    {
+      "id": "tanda/texture-03",
+      "name": "texture-03",
+      "group": "tanda",
+      "brush": "tanda/texture-03.myb",
+      "preview": "tanda/texture-03_prev.png",
+      "parentBrushName": "tanda/texture-03"
+    },
+    {
+      "id": "tanda/texture-06",
+      "name": "texture-06",
+      "group": "tanda",
+      "brush": "tanda/texture-06.myb",
+      "preview": "tanda/texture-06_prev.png",
+      "parentBrushName": "tanda/texture-06"
+    },
+    {
+      "id": "tanda/texture-12",
+      "name": "texture-12",
+      "group": "tanda",
+      "brush": "tanda/texture-12.myb",
+      "preview": "tanda/texture-12_prev.png",
+      "parentBrushName": "tanda/texture-12"
+    },
+    {
+      "id": "tanda/water-01",
+      "name": "water-01",
+      "group": "tanda",
+      "brush": "tanda/water-01.myb",
+      "preview": "tanda/water-01_prev.png",
+      "parentBrushName": "tanda/water-01"
+    },
+    {
+      "id": "tanda/water-02",
+      "name": "water-02",
+      "group": "tanda",
+      "brush": "tanda/water-02.myb",
+      "preview": "tanda/water-02_prev.png",
+      "parentBrushName": "tanda/water-02"
+    },
+    {
+      "id": "tanda/water-05",
+      "name": "water-05",
+      "group": "tanda",
+      "brush": "tanda/water-05.myb",
+      "preview": "tanda/water-05_prev.png",
+      "parentBrushName": "tanda/water-05"
+    },
+    {
+      "id": "tanda/water-06",
+      "name": "water-06",
+      "group": "tanda",
+      "brush": "tanda/water-06.myb",
+      "preview": "tanda/water-06_prev.png",
+      "parentBrushName": "tanda/water-06"
+    },
+    {
+      "id": "tanda/watercolor-02-paint",
+      "name": "watercolor-02-paint",
+      "group": "tanda",
+      "brush": "tanda/watercolor-02-paint.myb",
+      "preview": "tanda/watercolor-02-paint_prev.png",
+      "parentBrushName": "tanda/watercolor-02-paint"
+    },
+    {
+      "id": "tanda/watercolor-02-water",
+      "name": "watercolor-02-water",
+      "group": "tanda",
+      "brush": "tanda/watercolor-02-water.myb",
+      "preview": "tanda/watercolor-02-water_prev.png",
+      "parentBrushName": "tanda/watercolor-02-water"
+    }
+  ]
+}

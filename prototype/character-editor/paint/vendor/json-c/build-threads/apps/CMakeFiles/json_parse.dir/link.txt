@@ -1,0 +1,1 @@
+/home/fox/tools/emsdk/upstream/emscripten/emcc -O3 -pthread -ffunction-sections -fdata-sections -Werror -Wall -Wcast-qual -Wno-error=deprecated-declarations -Wextra -Wwrite-strings -Wno-unused-parameter -Wstrict-prototypes -O3 -DNDEBUG -O2 @CMakeFiles/json_parse.dir/objects1.rsp -o json_parse.js @CMakeFiles/json_parse.dir/linkLibs.rsp

@@ -1,0 +1,24 @@
+CMakeFiles/json-c.dir/arraylist.c.o: \
+  /home/fox/Project/afterglow-engine/prototype/character-editor/paint/vendor/json-c/arraylist.c \
+  /home/fox/Project/afterglow-engine/prototype/character-editor/paint/vendor/json-c/build-threads/config.h \
+  /home/fox/tools/emsdk/upstream/lib/clang/20/include/limits.h \
+  /home/fox/tools/emsdk/upstream/emscripten/cache/sysroot/include/limits.h \
+  /home/fox/tools/emsdk/upstream/emscripten/cache/sysroot/include/features.h \
+  /home/fox/tools/emsdk/upstream/emscripten/cache/sysroot/include/bits/alltypes.h \
+  /home/fox/tools/emsdk/upstream/emscripten/cache/sysroot/include/bits/limits.h \
+  /home/fox/tools/emsdk/upstream/emscripten/cache/sysroot/include/compat/stdlib.h \
+  /home/fox/tools/emsdk/upstream/emscripten/cache/sysroot/include/stdlib.h \
+  /home/fox/tools/emsdk/upstream/emscripten/cache/sysroot/include/alloca.h \
+  /home/fox/tools/emsdk/upstream/emscripten/cache/sysroot/include/compat/string.h \
+  /home/fox/tools/emsdk/upstream/emscripten/cache/sysroot/include/string.h \
+  /home/fox/tools/emsdk/upstream/emscripten/cache/sysroot/include/strings.h \
+  /home/fox/Project/afterglow-engine/prototype/character-editor/paint/vendor/json-c/arraylist.h \
+  /home/fox/tools/emsdk/upstream/lib/clang/20/include/stddef.h \
+  /home/fox/tools/emsdk/upstream/emscripten/cache/sysroot/include/stddef.h \
+  /home/fox/tools/emsdk/upstream/lib/clang/20/include/__stddef_header_macro.h \
+  /home/fox/tools/emsdk/upstream/lib/clang/20/include/__stddef_ptrdiff_t.h \
+  /home/fox/tools/emsdk/upstream/lib/clang/20/include/__stddef_size_t.h \
+  /home/fox/tools/emsdk/upstream/lib/clang/20/include/__stddef_wchar_t.h \
+  /home/fox/tools/emsdk/upstream/lib/clang/20/include/__stddef_null.h \
+  /home/fox/tools/emsdk/upstream/lib/clang/20/include/__stddef_max_align_t.h \
+  /home/fox/tools/emsdk/upstream/lib/clang/20/include/__stddef_offsetof.h

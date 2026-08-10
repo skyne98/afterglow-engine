@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Afterglow — libmypaint NG Brushlib Demo</title>
+    <style>
+      :root {
+        --bg: #14161a; --panel: #1d2026; --panel2: #262a31;
+        --text: #e8e8ea; --muted: #9aa0a8; --border: #343a44;
+        --accent: #4ecdc4;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0; height: 100vh; display: flex; flex-direction: column;
+        background: var(--bg); color: var(--text);
+        font: 14px/1.4 system-ui, sans-serif;
+      }
+      header { display:flex; align-items:center; gap:16px; padding:10px 16px;
+        background:var(--panel); border-bottom:1px solid var(--border); }
+      header h1 { font-size:16px; margin:0; }
+      header .sub { color: var(--muted); font-size:12px; }
+      #main { display:flex; flex:1; min-height:0; }
+      #viewport { flex:1; position:relative; background: #0b0d10;
+        display:flex; align-items:center; justify-content:center;
+        overflow:hidden; touch-action:none; }
+      #viewport canvas { max-width:100%; max-height:100%;
+        transform-origin:center center; will-change:transform;
+        background-color:#686868;
+        background-image: conic-gradient(#777 25%, #5e5e5e 0 50%, #777 0 75%, #5e5e5e 0);
+        background-size:32px 32px;
+        box-shadow:0 4px 30px rgba(0,0,0,.5); border-radius:6px; }
+      #viewport canvas.frame-visible { outline:2px solid var(--accent); outline-offset:-2px; }
+      #status { position:absolute; left:14px; bottom:12px; font-size:12px;
+        color:var(--muted); background:rgba(0,0,0,.55); padding:4px 9px;
+        border-radius:6px; pointer-events:none; }
+      #hud { position:absolute; right:14px; bottom:12px; font-size:11px;
+        color:var(--muted); background:rgba(0,0,0,.6); padding:6px 10px;
+        border-radius:6px; pointer-events:none; font-family:ui-monospace,monospace;
+        white-space:pre; min-width:190px; }
+      aside { width:340px; background:var(--panel); border-left:1px solid var(--border);
+        padding:14px; overflow-y:auto; display:flex; flex-direction:column; gap:14px; }
+      #brushGrid { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr));
+        gap:6px; max-height:470px; overflow-y:auto; padding-right:2px; }
+      #brushGrid h3 { grid-column:1 / -1; color:var(--muted); font-size:11px;
+        margin:5px 0 0; text-transform:uppercase; letter-spacing:.06em; }
+      .brush-item { min-width:0; padding:4px; display:flex; flex-direction:column;
+        align-items:center; gap:3px; overflow:hidden; }
+      .brush-item img { width:72px; height:52px; object-fit:contain; image-rendering:auto;
+        background:#14161a; border-radius:4px; }
+      .brush-item span { width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+        font-size:10px; }
+      .brush-item.selected { border-color:var(--accent); background:#203b3d; }
+      aside h2 { font-size:12px; text-transform:uppercase; letter-spacing:.08em;
+        color:var(--muted); margin:0 0 8px; }
+      .field { margin-bottom:10px; }
+      .field label { display:flex; justify-content:space-between; font-size:12px;
+        margin-bottom:3px; }
+      .field input[type=range] { width:100%; accent-color:var(--accent); }
+      .row { display:flex; gap:8px; }
+      button { flex:1; padding:7px 10px; border-radius:6px; border:1px solid var(--border);
+        background:var(--panel2); color:var(--text); cursor:pointer; font-size:12px; }
+      button:hover, label.button:hover { border-color:var(--accent); }
+      label.button { flex:1; padding:7px 10px; text-align:center; border-radius:6px; border:1px solid var(--border); background:var(--panel2); color:var(--text); cursor:pointer; font-size:12px; }
+      button.active { background:var(--accent); color:#0b0e14; font-weight:600; }
+      .doc-size { align-items:center; }
+      .doc-size label { flex:1; color:var(--muted); font-size:11px; }
+      .doc-size input { width:100%; margin-top:4px; padding:4px; background:var(--panel2); color:var(--text); border:1px solid var(--border); border-radius:4px; }
+      .frame-toggle { display:block; color:var(--muted); font-size:11px; margin:8px 0; }
+      .layer-list { display:flex; flex-direction:column; gap:4px; margin-bottom:8px; }
+      .layer-row { display:flex; gap:4px; align-items:center; }
+      .layer-row button { text-align:left; }
+      .layer-row input { width:48px; accent-color:var(--accent); }
+      .layer-row select { min-width:0; max-width:92px; background:var(--panel2); color:var(--text); border:1px solid var(--border); border-radius:4px; font-size:10px; }
+      .layer-row .order { flex:0 0 24px; padding:4px 2px; }
+      .group-row { display:flex; gap:4px; align-items:center; flex-wrap:wrap; }
+      .group-row select { min-width:0; max-width:92px; background:var(--panel2); color:var(--text); border:1px solid var(--border); border-radius:4px; font-size:10px; }
+      .group-row input[type=range] { width:54px; accent-color:var(--accent); }
+      .group-row .order { flex:0 0 24px; padding:4px 2px; }
+      #logs { font-family:ui-monospace, monospace; font-size:11px; color:var(--muted);
+        background:var(--panel2); border:1px solid var(--border); border-radius:6px;
+        padding:8px; height:120px; overflow-y:auto; white-space:pre-wrap; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Brushlib demo</h1>
+      <span class="sub">libmypaint NG (v2.0) compiled to WebAssembly — 15-bit tiled surface</span>
+    </header>
+
+    <div id="main">
+      <div id="viewport">
+        <canvas id="paint" width="900" height="600"></canvas>
+        <div id="status">Loading brush engine…</div>
+        <div id="hud"></div>
+      </div>
+
+      <aside>
+        <section>
+          <h2>MyPaint brushes</h2>
+          <div id="brushGrid" aria-label="MyPaint brush presets">Loading brushes…</div>
+        </section>
+
+        <section>
+          <h2>Brush</h2>
+          <div class="field">
+            <label>Radius <span id="radiusVal"></span></label>
+            <input id="radius" type="range" min="2" max="60" value="14" />
+          </div>
+          <div class="field">
+            <label>Hardness <span id="hardnessVal"></span></label>
+            <input id="hardness" type="range" min="0" max="1" step="0.01" value="0.6" />
+          </div>
+          <div class="field">
+            <label>Opacity <span id="opacityVal"></span></label>
+            <input id="opacity" type="range" min="0" max="1" step="0.01" value="1.0" />
+          </div>
+          <div class="field">
+            <label>Color</label>
+            <input id="color" type="color" value="#4ecdc4" style="width:100%" />
+          </div>
+        </section>
+
+        <section>
+          <h2>View</h2>
+          <div class="field">
+            <label>Zoom <span id="zoomVal">1</span></label>
+            <input id="viewZoom" type="range" min="0.25" max="4" step="0.01" value="1" />
+          </div>
+          <div class="row">
+            <button id="rotateLeftBtn" type="button">Rotate left</button>
+            <button id="rotateRightBtn" type="button">Rotate right</button>
+          </div>
+          <div class="row">
+            <button id="mirrorBtn" type="button">Mirror</button>
+            <button id="resetViewBtn" type="button">Reset view</button>
+          </div>
+        </section>
+
+        <section>
+          <h2>Actions</h2>
+          <div class="row">
+            <button id="clearBtn">Clear</button>
+            <button id="strokeBtn" class="active">Brush stroke</button>
+          </div>
+          <div class="row">
+            <button id="undoBtn" type="button">Undo</button>
+            <button id="redoBtn" type="button">Redo</button>
+          </div>
+        </section>
+
+        <section>
+          <h2>Layers</h2>
+          <div id="layerList" class="layer-list"></div>
+          <div class="row">
+            <button id="addLayerBtn" type="button">Add layer</button>
+            <button id="deleteLayerBtn" type="button">Delete layer</button>
+          </div>
+          <h2>Groups</h2>
+          <div id="groupList" class="layer-list"></div>
+          <div class="row">
+            <button id="addGroupBtn" type="button">Add group</button>
+            <button id="deleteGroupBtn" type="button">Delete group</button>
+          </div>
+        </section>
+
+        <section>
+          <h2>Document</h2>
+          <div class="row doc-size">
+            <label>Width <input id="documentWidth" type="number" min="64" max="16384" step="64" value="2048"></label>
+            <label>Height <input id="documentHeight" type="number" min="64" max="16384" step="64" value="2048"></label>
+          </div>
+          <label class="frame-toggle"><input id="frameEnabled" type="checkbox"> Frame enabled</label>
+          <label class="frame-toggle">Background <input id="backgroundColor" type="color" value="#a8a498"></label>
+          <div class="row">
+            <button id="newDocumentBtn" type="button">New document</button>
+            <button id="exportPngBtn" type="button">Export PNG</button>
+          </div>
+          <div class="row">
+            <button id="exportOraBtn" type="button">Export ORA</button>
+            <label class="button" for="importOraInput">Import ORA</label>
+            <input id="importOraInput" type="file" accept=".ora,image/openraster" hidden>
+          </div>
+        </section>
+
+        <section>
+          <h2>Engine log</h2>
+          <div id="logs">…</div>
+        </section>
+      </aside>
+    </div>
+
+    <script type="module" src="/src/paint-demo.ts"></script>
+  </body>
+</html>

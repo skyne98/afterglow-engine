@@ -252,14 +252,15 @@ step.
 BDO places the character in the center and uses an accordion panel for major
 systems:
 
-- Hair.
-- Face.
-- Body.
-- Voice.
-- Makeup, tattoos, wrinkles, eye details, and related appearance data.
+- **Hair** (type, shape, color).
+- **Face** (face type, skin, makeup, facial hair, face shape, eyes, eye lines,
+  tattoo, wrinkles, standby expression).
+- **Body** (shape, muscle, tattoo, posture editing).
+- **Voice** (voice type and pitch).
 
 The shape tools use direct region selection. The selected region remains
-visible, and the left panel shows the applicable controller.
+visible, and the panel shows the applicable controller. The current official
+guide (edited July 2025) confirms this structure and the controller model.
 
 ## Region feedback
 
@@ -301,9 +302,11 @@ A typical operation is:
 
 The 2015 face-controller video shows that direct drag updates the control bars.
 It recommends the control bars for more accurate work. It also recommends
-frequent profile checks.
+frequent profile checks. The current official guide confirms that the three
+control bars are labeled **length, width, and depth**, and that each direction
+is applied from the screen view, not from the character's local direction.
 
-## Symmetry and resets
+## Symmetry, resets, and edit history
 
 The face controller supplies:
 
@@ -312,11 +315,15 @@ The face controller supplies:
 - **Reset All**.
 
 Symmetry is an explicit state rather than an assumed permanent rule. This is a
-good match for an editor that has separate left and right controls.
+good match for an editor that has separate left and right controls. Symmetry
+is also the default assumption in most MMORPG editors; the explicit checkbox
+lets the user break it for feature-specific asymmetry.
 
 The older 2015 video had no general undo and therefore depended heavily on
-Reset Part. The current official guide documents a newer edit history that
-saves changes by part and supplies undo and redo.
+Reset Part. The current official guide documents a newer **edit history** that
+saves changes **by part** (hair, face, body, and so on) and supplies **undo and
+redo** buttons. This part-grouped stack is better than one global undo stack
+because the user can reverse one category without losing work in another.
 
 ## Camera and inspection
 
@@ -349,33 +356,95 @@ BDO also starts from a preset:
 4. Check the result in different views and conditions.
 
 Hair uses the same hybrid idea. The user selects a hairstyle, drags adjustable
-hair sections, and can also change length and curl through control bars.
-Some hairstyles have smaller permitted ranges.
+hair sections (a card can be grabbed and pulled directly), and can also change
+length and curl through control bars. Some hairstyles have smaller permitted
+ranges; the official guide notes, for example, that certain short styles
+cannot set the upper **Length 3** value. Hair color has three independent
+regions (base, tips, and roots), each with its own color and an adjustable
+range, plus a shine/gloss control.
 
 ## Persistence and sharing
 
 BDO has stronger long-session support than The Sims 4:
 
-- Part-grouped edit history.
-- Up to ten temporary saves.
-- Save and load files.
-- Restore default.
-- Apply a popular preset.
+- Part-grouped edit history with undo and redo.
+- Up to ten temporary saves (a circular buffer: the oldest is deleted when a
+  new save fills the buffer).
+- Save and load files (binary `CustomizationData` files).
+- Restore to default.
 - Beauty Album sharing.
-- Screenshots.
+- Apply a popular preset.
+- Screenshots and a screenshot-folder shortcut.
+- Horoscope and a character-ID/profile image.
 
 This matters because a high-detail editor can take a long time. A user needs
 checkpoints, comparison, and reuse, not only one linear undo stack.
 
-## Why it feels intuitive
+## Technical data model
 
-- Regions and region boundaries are visible.
-- The selected region has persistent feedback.
-- The operation mode is explicit.
-- Direct drag and accurate controls remain synchronized.
-- Symmetry is visible and controllable.
-- Reset Part is close to the active operation.
-- Camera, light, clothing, and hair inspection are integrated.
+The public choice is not a single mesh plus sliders. BDO composes an existing
+character base with layers of changes and applies them per class.
+
+- **Presets ride a class base.** Each class has its own base model and hair;
+  classes are gender-locked. A preset is therefore tied to a class. Community
+  tools convert a preset between classes by copying the parameter table from
+  one class's `Customization` model to another, which preserves most features
+  but not identical results (some classes have different lips, cheeks, or
+  hairstyles).
+- **Morphs plus bones.** The body deforms through blendshape/morph targets for
+  shape and through extra bones for some proportions and muscle mass. The
+  skill is mostly art: many small, authored morphs; artists decide which
+  vertices belong to each editable group.
+- **A preset is a small parameter table, not a mesh.** Saved `CustomizationData`
+  files are tiny (about 1 KB) and store the selected value of each editable
+  parameter in its minimum/maximum range. Community reverse-engineering
+  reports that these files correspond to a table of the parameters in files
+  such as `customizationboneparamdesc.xml`, and that direct-drag and the
+  control bars change the same underlying value range per parameter.
+- **Base loaded then changes applied over it.** When the character is shown,
+  the base class model is loaded and the saved customization is applied over
+  it. This is why a preset is small and portable but always class-specific.
+
+This matters for Afterglow because it validates the prototype's approach: bake
+morph targets onto a fixed base and store compact parameter values, rather than
+storing full meshes.
+
+## Current official details (verified July 2025)
+
+The current official Adventurer's Guide confirms and extends the earlier
+report in these specific ways:
+
+- **Controller types are Move, Rotate, and Size**, each with the three
+  length/width/depth bars, applied from the screen view.
+- **Beauty Salon structure** adds: front-view gaze lock, UI hide, screenshot
+  and folder, edit history (undo/redo by part), horoscope, weather, character
+  actions, and customization-information management.
+- **Makeup** is split into eye makeup, eyebrows, blush, and lips; menus differ
+  between male and female characters.
+- **Facial hair** covers beard, mustache, sideburns, brows, and eyebrows.
+- **Posture editing** lets the user bend limbs and save/delete postures. It
+  does **not** affect in-game appearance; it is for inspection and screenshots
+  and appears randomly during idle.
+- **Wrinkles** are split into brow, eye, and frown wrinkles and are used to
+  adjust apparent age.
+- **Standby expression** sets the idle facial expression shown in-game.
+- **Muscle** is divided into torso, arms, and legs and is adjusted separately.
+- **Voice** has both a type and a high/low pitch control.
+- **Eyes** are divided into pupil, iris, and lens, each adjustable separately.
+
+Important corrections to the earlier report and to common public claims:
+
+- **Not every pull is a free-form sculpt.** The "pull" on a region is
+  contextual to the camera angle, and the control bars and the direct drag stay
+  synchronized on the same per-parameter value range.
+- **Not every slider is continuous.** Some community measurements report that
+  many BDO sliders only expose about five discrete steps in practice, so the
+  range is not always a full continuous field even though the UI shows a bar.
+- **Appearance after creation is gated.** Changing appearance later requires an
+  Appearance Change Coupon or an active Value Pack; the Beauty Salon (F4) is
+  not always free.
+- **Hair limits vary.** Whether a length or curl option exists depends on the
+  selected hairstyle.
 
 ## Weak points
 
@@ -388,6 +457,25 @@ checkpoints, comparison, and reuse, not only one linear undo stack.
 - Limits vary by class, base face, hair type, and sex.
 - The old workflow's lack of undo made experimentation risky. The current edit
   history corrects this issue.
+- All face and body parts are interconnected; users must iterate between parts
+  to get a balanced result, which is a longer and more demanding workflow than
+  a preset-driven editor.
+- Slider values that appear discrete (about five steps) make fine reproduction
+  between users harder and reduce the perceived precision even though the
+  control bars are present.
+- The "curl" style tool bends straight hair by zig-zagging it rather than
+  supplying genuinely different curl geometry, so the result can look odd on
+  some styles.
+
+## Why it feels intuitive
+
+- Regions and region boundaries are visible.
+- The selected region has persistent feedback.
+- The operation mode is explicit.
+- Direct drag and accurate controls remain synchronized.
+- Symmetry is visible and controllable.
+- Reset Part is close to the active operation.
+- Camera, light, clothing, and hair inspection are integrated.
 
 # Direct comparison
 
@@ -414,6 +502,9 @@ The important finding is that BDO is not only a cursor-drag system. It is a
 more detailed control without making every drag ambiguous.
 
 # Recommendation for Afterglow
+
+> The current prototype build plan for this interaction is
+> `docs/implementation/bdo-style-direct-character-editor-design.md`.
 
 ## Recommended interaction
 
@@ -672,3 +763,35 @@ Secondary practical source:
 The secondary video is used only for observed operation order, direct-drag to
 control-bar synchronization, profile checking, and the historical absence of a
 general undo button.
+
+Third-party sources that confirm the 2026 refinement:
+
+- Black Desert Foundry, **Character Creation & Beauty Album** (walkthrough and
+  current feature list):
+  <https://www.blackdesertfoundry.com/creating-a-character/>
+- Pearl Abyss GM Notes, **Customization Guide** (controller types, temporary
+  saves, edit-method notes):
+  <https://blackdesert.pearlabyss.com/ASIA/News/Notice/Detail?_boardNo=9>
+- Gamepressure, **Black Desert Online: Character Creation** (three slider
+  types, height/width/depth, rotation for depth):
+  <https://www.gamepressure.com/blackdesert/character-creation/z18711>
+- Reddit /r/blackdesertonline, **The biggest problem with BDO's character
+  editor** (camera-context pull, Hor/Ver/Rot sliders, interconnected parts):
+  <https://www.reddit.com/r/blackdesertonline/comments/g9mwru>
+- Undertow Club, **Black Desert char customization file** (binary ~1 KB preset
+  format, value-in-range reverse-engineering):
+  <https://www.undertow.club/threads/black-desert-char-customization-file.8520/>
+- Undertow Club, **Is there a way to Custom character export for Black Desert**
+  (customizationboneparamdesc.xml parameter table, base-model-plus-changes):
+  <https://www.undertow.club/threads/is-there-a-way-to-custom-character-export-for-black-desert.14036/>
+- Game Dev Stack Exchange, **What is the process of making a character creator
+  like Black Desert** (morph targets plus bones; same-topology interpolation):
+  <https://gamedev.stackexchange.com/questions/204019>
+- Reddit /r/blackdesertonline, **Game truly allows the creation of beautiful
+  characters** (several sliders expose about five discrete steps):
+  <https://www.reddit.com/r/blackdesertonline/comments/lagmpf>
+
+Most of the 2026 refinement was cross-checked against the current official
+Adventurer's Guide, <https://www.naeu.playblackdesert.com/en-US/Wiki?wikiNo=5>,
+which was edited in July 2025 and remains the primary source for the Beauty
+Salon structure and controller detail.

@@ -6,7 +6,8 @@ Related: `assets/character-rig/` (assets + licenses),
 `docs/research/open-license-character-rig-in-game-editor.md` (license research),
 `docs/research/direct-manipulation-character-creator-ux.md` (editor UX),
 `docs/research/makehuman-hair-runtime-dynamic-character-system.md` (runtime hair),
-and `docs/implementation/runtime-character-bake-plan.md` (production bake path).
+and `docs/implementation/runtime-character-bake-plan.md` (production bake path),
+`docs/implementation/libmypaint-complete-web-plan.md` (complete paint surface plan).
 
 This note records the **full process**: the environment setup, each pipeline
 iteration, the errors and the corrections, and the final implementation.

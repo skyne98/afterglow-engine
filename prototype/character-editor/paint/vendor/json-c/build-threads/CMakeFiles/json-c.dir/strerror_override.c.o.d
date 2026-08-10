@@ -1,0 +1,31 @@
+CMakeFiles/json-c.dir/strerror_override.c.o: \
+  /home/fox/Project/afterglow-engine/prototype/character-editor/paint/vendor/json-c/strerror_override.c \
+  /home/fox/Project/afterglow-engine/prototype/character-editor/paint/vendor/json-c/strerror_override.h \
+  /home/fox/Project/afterglow-engine/prototype/character-editor/paint/vendor/json-c/build-threads/config.h \
+  /home/fox/tools/emsdk/upstream/emscripten/cache/sysroot/include/errno.h \
+  /home/fox/tools/emsdk/upstream/emscripten/cache/sysroot/include/features.h \
+  /home/fox/tools/emsdk/upstream/emscripten/cache/sysroot/include/bits/errno.h \
+  /home/fox/tools/emsdk/upstream/emscripten/cache/sysroot/include/wasi/api.h \
+  /home/fox/tools/emsdk/upstream/lib/clang/20/include/stddef.h \
+  /home/fox/tools/emsdk/upstream/emscripten/cache/sysroot/include/stddef.h \
+  /home/fox/tools/emsdk/upstream/lib/clang/20/include/__stddef_header_macro.h \
+  /home/fox/tools/emsdk/upstream/lib/clang/20/include/__stddef_ptrdiff_t.h \
+  /home/fox/tools/emsdk/upstream/lib/clang/20/include/__stddef_size_t.h \
+  /home/fox/tools/emsdk/upstream/lib/clang/20/include/__stddef_wchar_t.h \
+  /home/fox/tools/emsdk/upstream/lib/clang/20/include/__stddef_null.h \
+  /home/fox/tools/emsdk/upstream/lib/clang/20/include/__stddef_max_align_t.h \
+  /home/fox/tools/emsdk/upstream/lib/clang/20/include/__stddef_offsetof.h \
+  /home/fox/tools/emsdk/upstream/lib/clang/20/include/stdint.h \
+  /home/fox/tools/emsdk/upstream/emscripten/cache/sysroot/include/stdint.h \
+  /home/fox/tools/emsdk/upstream/emscripten/cache/sysroot/include/bits/alltypes.h \
+  /home/fox/tools/emsdk/upstream/emscripten/cache/sysroot/include/bits/stdint.h \
+  /home/fox/Project/afterglow-engine/prototype/character-editor/paint/vendor/json-c/json_object.h \
+  /home/fox/Project/afterglow-engine/prototype/character-editor/paint/vendor/json-c/json_inttypes.h \
+  /home/fox/Project/afterglow-engine/prototype/character-editor/paint/vendor/json-c/build-threads/json_config.h \
+  /home/fox/tools/emsdk/upstream/lib/clang/20/include/inttypes.h \
+  /home/fox/tools/emsdk/upstream/emscripten/cache/sysroot/include/inttypes.h \
+  /home/fox/Project/afterglow-engine/prototype/character-editor/paint/vendor/json-c/json_types.h \
+  /home/fox/Project/afterglow-engine/prototype/character-editor/paint/vendor/json-c/printbuf.h \
+  /home/fox/tools/emsdk/upstream/emscripten/cache/sysroot/include/compat/string.h \
+  /home/fox/tools/emsdk/upstream/emscripten/cache/sysroot/include/string.h \
+  /home/fox/tools/emsdk/upstream/emscripten/cache/sysroot/include/strings.h

@@ -1,0 +1,12 @@
+prefix=/home/fox/tools/emsdk/upstream/emscripten/cache/sysroot
+exec_prefix=/home/fox/tools/emsdk/upstream/emscripten/cache/sysroot
+libdir=/home/fox/tools/emsdk/upstream/emscripten/cache/sysroot/lib
+includedir=/home/fox/tools/emsdk/upstream/emscripten/cache/sysroot/include
+
+Name: json-c
+Description: A JSON implementation in C
+Version: 0.19.99
+Requires:
+Libs.private: -lm
+Libs: -L${libdir} -ljson-c
+Cflags: -I${includedir} -I${includedir}/json-c
