@@ -11,6 +11,7 @@
       <div id="viewport">
         <div id="loading">Loading character…</div>
       </div>
+      <div id="cam-preview" hidden></div>
 
       <aside id="panel">
         <header>
@@ -80,7 +81,10 @@
             <span>Speech shape</span>
             <select id="speech-preset-select"></select>
           </label>
-          <p class="sub">Expression and speech previews combine. They do not change body controls.</p>
+          <div class="row">
+            <button id="face-track-btn" type="button">🎥 Webcam face tracking</button>
+          </div>
+          <p class="sub" id="face-track-status">Tracks your webcam with MediaPipe and drives the 52 ARKit morphs. Tongue, cheek puff, and jaw side shapes stay neutral.</p>
         </section>
 
         <section id="morph-section">

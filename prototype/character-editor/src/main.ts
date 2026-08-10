@@ -3,6 +3,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { HairFitRuntime, type HairFitDocument, type HairStyleRuntime } from './hair-fit.ts';
 import { controlBelongsToZone, selectTriangleCategory } from './zone-utils.ts';
+import { WebcamFaceTracker } from './face-tracker.ts';
 import {
   EXPRESSION_PRESETS,
   SPEECH_PRESETS,
@@ -96,6 +97,9 @@ class CharacterEditor {
   private expressionPresetSelect = document.getElementById('expression-preset-select') as HTMLSelectElement;
   private speechPresetSelect = document.getElementById('speech-preset-select') as HTMLSelectElement;
   private hairStyleSelect = document.getElementById('hair-style-select') as HTMLSelectElement;
+  private faceTrackBtn = document.getElementById('face-track-btn') as HTMLButtonElement;
+  private faceTrackStatus = document.getElementById('face-track-status')!;
+  private faceTracker?: WebcamFaceTracker;
 
   constructor() {
     this.initViewport();
@@ -160,6 +164,7 @@ class CharacterEditor {
     document.getElementById('zone-clear-btn')!.addEventListener('click', () => this.clearZoneSelection());
     document.getElementById('face-focus-btn')!.addEventListener('click', () => this.focusFace());
     document.getElementById('face-reset-btn')!.addEventListener('click', () => this.resetFace());
+    this.faceTrackBtn.addEventListener('click', () => void this.toggleFaceTracking());
     this.populatePresetSelect(this.expressionPresetSelect, EXPRESSION_PRESETS);
     this.populatePresetSelect(this.speechPresetSelect, SPEECH_PRESETS);
     this.expressionPresetSelect.addEventListener('change', () => {
@@ -418,6 +423,75 @@ class CharacterEditor {
     this.camera.updateProjectionMatrix();
     this.controls.update();
     this.showStatus('Face preview focused.');
+  }
+
+  // --------------------------------------------------- webcam face tracking
+  /** Disable or re-enable the face controls while tracking owns the face. */
+  private setFaceControlsDisabled(disabled: boolean): void {
+    this.expressionPresetSelect.disabled = disabled;
+    this.speechPresetSelect.disabled = disabled;
+    const faceButtons = ['face-focus-btn', 'face-reset-btn'];
+    for (const id of faceButtons) {
+      (document.getElementById(id) as HTMLButtonElement).disabled = disabled;
+    }
+    for (const handle of this.morphHandles) {
+      if (!handle.spec.category.startsWith('expression-') && !handle.spec.category.startsWith('speech-')) continue;
+      handle.slider.disabled = disabled;
+    }
+  }
+
+  /** Apply one tracked coefficient directly, without the hair-fit path. */
+  private applyTrackerMorph(index: number, value: number): boolean {
+    if (index < 0) return false;
+    for (const mesh of this.skinnedMeshes) {
+      const influences = mesh.morphTargetInfluences;
+      if (influences && index < influences.length) influences[index] = value;
+    }
+    return true;
+  }
+
+  private async toggleFaceTracking(): Promise<void> {
+    if (this.faceTracker?.active) {
+      this.faceTracker.stop();
+      this.faceTracker = undefined;
+      this.setFaceControlsDisabled(false);
+      this.faceTrackBtn.textContent = '🎥 Webcam face tracking';
+      this.faceTrackStatus.textContent =
+        'Tracks your webcam with MediaPipe and drives the 52 ARKit morphs. Tongue, cheek puff, and jaw side shapes stay neutral.';
+      this.showStatus('Face tracking stopped.');
+      return;
+    }
+    if (this.morphNames.length === 0) {
+      this.showStatus('Load a character before starting face tracking.');
+      return;
+    }
+    this.faceTrackBtn.disabled = true;
+    try {
+      this.resetFace();
+      this.faceTracker = new WebcamFaceTracker(
+        this.morphNames,
+        {
+          applyMorph: (index, value) => this.applyTrackerMorph(index, value),
+          onFrame: (frame) => {
+            this.faceTrackStatus.textContent = frame.faceDetected
+              ? `Tracking: ${frame.applied} morphs · ${frame.fps.toFixed(0)} fps`
+              : 'No face detected — look at the camera.';
+          },
+          onStatus: (message) => this.showStatus(message),
+        },
+        document.getElementById('cam-preview') ?? undefined,
+      );
+      await this.faceTracker.start();
+      this.setFaceControlsDisabled(true);
+      this.faceTrackBtn.textContent = '⏹ Stop face tracking';
+    } catch (error) {
+      this.faceTracker = undefined;
+      this.showStatus(`Face tracking failed: ${error instanceof Error ? error.message : String(error)}`);
+      this.faceTrackStatus.textContent =
+        'Webcam or MediaPipe failed to start. Check camera permissions and try again.';
+    } finally {
+      this.faceTrackBtn.disabled = false;
+    }
   }
 
   private buildMorphUI(): void {

@@ -11,6 +11,7 @@
     "test": "bun test src/*.test.ts && bun run validate:character && bunx tsc --noEmit"
   },
   "dependencies": {
+    "@mediapipe/tasks-vision": "^1.0.1",
     "three": "0.185.1"
   },
   "devDependencies": {
