@@ -162,3 +162,31 @@ Both C tests run from `bun run test` (`test:cc`).
 
 `rgb_to_spectral`/`spectral_to_rgb`/`fastpow` are the vendored libmypaint
 copies, byte-identical to MyPaint's.
+
+## Error surfacing & stall recovery (2026-08)
+
+A parallel batch that never completes would leave every input command
+deferred silently (no console error — the symptom is "drawing stops"). The
+pipeline now surfaces every failure path and self-heals:
+
+- **Batch watchdog** (`paint-engine-worker.ts` `pollBatch`): after 250 ms of
+  polling without completion, it calls `paint_batch_abort` (C: drops the
+  pending op queue, clears `in_flight`, disables threading for the session so
+  the next batches run serially), posts a `WATCHDOG ...` log AND a status
+  line, then resumes the normal queue. Painting continues on the serial path.
+- **Worker crash/exception reporter**: `self.onerror` and
+  `self.onunhandledrejection` post `WORKER ERROR`/`WORKER UNHANDLED
+  REJECTION` logs; every message is routed through a `handleInput` guard whose
+  rejection triggers `batchRecovery` (reset async state, abort any batch,
+  re-render, push state) instead of freezing.
+- **Batch finish guard**: `_paint_end_batch_finish` throw also routes to
+  `batchRecovery`.
+- **History correctness**: a `commit` arriving mid-flight (and `doCommit`
+  itself) now defers to `commitP` instead of capturing the history "after"
+  state before the parallel workers finish.
+- **Spawn failure**: partial `pthread_create` failure no longer falls back to
+  serial while a spawned worker still runs (double-process race). Live
+  workers drain the whole claim counter; `web_surface_batch_finish` processes
+  any unclaimed tiles serially, and zero-workers degrades cleanly.
+- **Surface gate**: `brush load` failures and per-setting `config` exceptions
+  are logged instead of silently ignored.

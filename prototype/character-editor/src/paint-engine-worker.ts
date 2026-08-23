@@ -29,6 +29,8 @@ let docW = 2048, docH = 2048, dispScale = 1, dispMip = 0, viewMip = 0;
 let flushT: number | null = null, commitP = false, batching = false;
 let n0 = 0, a0 = 0;
 let batchInFlight = false;
+const BATCH_TIMEOUT_MS = 250;
+let batchPolls = 0;
 let pendingCmds: Msg[] = [];
 let pendingBegin: { x: number; y: number; xt: number; yt: number; z: number; r: number; ba: number } | null = null;
 let pendingSamples: (number | boolean)[][] = [];
@@ -38,6 +40,26 @@ let statsS = 0, statsMs = 0, lastBR = 0, lastRR = 0, lastStats = 0;
 let lastRects: number[] = [];
 
 const post = (m: any, t?: Transferable[]) => { if (t && t.length > 0) (self as unknown as Worker).postMessage(m, t); else (self as unknown as Worker).postMessage(m); };
+
+/* Surface any worker-level failure to the page and restore a safe state so
+ * the next message can proceed instead of hanging silently. */
+function batchRecovery(what: string) {
+  post({ type: 'log', text: 'ENGINE RECOVERY: ' + what });
+  post({ type: 'status', text: 'Brush engine recovered from an error.' });
+  batchInFlight = false;
+  batchPolls = 0;
+  batching = false;
+  commitP = false;
+  flushT = null;
+  pendingBegin = null;
+  pendingSamples.length = 0;
+  pendingCmds = [];
+  if (mod) { try { mod._paint_batch_abort?.(); } catch { /* ignore */ } }
+  renderDirty(true);
+  pushState();
+}
+self.onerror = (e: any) => { post({ type: 'log', text: 'WORKER ERROR: ' + ((e && (e.message || e.error || e)) ?? String(e)) }); };
+self.onunhandledrejection = (e: any) => { post({ type: 'log', text: 'WORKER UNHANDLED REJECTION: ' + ((e && e.reason && (e.reason.message || e.reason)) || String(e)) }); };
 
 function setB(n: string, v: number) { const b = mod.lengthBytesUTF8(n) + 1; const p = mod._malloc(b); mod.stringToUTF8(n, p, b); mod._set_brush_base_value(p, v); mod._free(p); }
 function mipLevel() { return dispMip > viewMip ? dispMip : viewMip; }
@@ -113,15 +135,35 @@ function afterBatch() {
 function pollBatch() {
   if (!mod) return;
   if (mod._paint_is_batch_done()) {
-    mod._paint_end_batch_finish();
+    batchPolls = 0;
+    try {
+      mod._paint_end_batch_finish();
+    } catch (err) {
+      batchRecovery('batch finish threw: ' + ((err as Error)?.message ?? err));
+      return;
+    }
     afterBatch();
-  } else {
-    self.setTimeout(pollBatch, 2);
+    return;
   }
+  // Watchdog: a parallel batch must complete promptly. A stalled or crashed
+  // worker would otherwise leave every input command deferred forever with
+  // no error anywhere. On timeout, abort the batch, report it, and fall back
+  // to the serial path for the rest of the session.
+  if (++batchPolls * 2 >= BATCH_TIMEOUT_MS) {
+    batchPolls = 0;
+    let dropped = 0;
+    try { dropped = mod._paint_batch_abort?.() | 0; } catch (err) { post({ type: 'log', text: 'WATCHDOG: abort threw ' + ((err as Error)?.message ?? err) }); }
+    post({ type: 'log', text: `WATCHDOG: parallel batch stalled after ${BATCH_TIMEOUT_MS} ms; dropped ${dropped} tiles; threading disabled for this session.` });
+    post({ type: 'status', text: 'Brush engine recovered from a stalled batch (now running serially).' });
+    batchInFlight = false;
+    afterBatch();
+    return;
+  }
+  self.setTimeout(pollBatch, 2);
 }
 
 function drainProcess(bounded: boolean) {
-  if (!mod || batchInFlight) return; n0 = motionQueue.length; a0 = performance.now();
+  if (!mod || batchInFlight) return; n0 = motionQueue.length; a0 = performance.now(); batchPolls = 0;
   if (bounded) motionQueue.drainInterpolatedBounded(strokeSample, BUDGET); else motionQueue.drainInterpolated(strokeSample);
   const a1 = performance.now();
   if (batching) { mod._paint_end_batch(); batching = false; }
@@ -138,7 +180,7 @@ function scheduleFlush() {
   }, 8);
 }
 function flushNow() { if (flushT !== null) { clearTimeout(flushT); flushT = null; } if (!mod || batchInFlight) return; drainProcess(false); }
-function doCommit() { if (!mod) return; if (batching) { mod._paint_end_batch(); batching = false; if (!mod._paint_is_batch_done()) { commitP = true; return; } } mod._paint_history_commit(); pushState(); }
+function doCommit() { if (!mod) return; if (batchInFlight || pendingCmds.length > 0) { commitP = true; return; } if (batching) { mod._paint_end_batch(); batching = false; if (!mod._paint_is_batch_done()) { commitP = true; return; } } mod._paint_history_commit(); pushState(); }
 function applyPendingBegin() {
   if (!mod || !pendingBegin) return;
   const b = pendingBegin;
@@ -222,7 +264,7 @@ function writeTile(layer: number, tx: number, ty: number, data: ArrayBuffer) {
 
 const pending: Msg[] = [];
 
-self.onmessage = async (e: MessageEvent<Msg & { canvas?: OffscreenCanvas }>) => {
+async function handleInput(e: MessageEvent<Msg & { canvas?: OffscreenCanvas }>) {
   const m = e.data;
   if (m.cmd === 'init') {
     try {
@@ -253,11 +295,11 @@ self.onmessage = async (e: MessageEvent<Msg & { canvas?: OffscreenCanvas }>) => 
   if (!mod) { pending.push(m); return; }
   if (batchInFlight && m.cmd !== 'config' && m.cmd !== 'loadBrush' && m.cmd !== 'strokeSample' && m.cmd !== 'beginStroke' && m.cmd !== 'commit') { pendingCmds.push(m); return; }
   switch (m.cmd) {
-    case 'loadBrush': { const b = mod.lengthBytesUTF8(m.json) + 1; const p = mod._malloc(b); mod.stringToUTF8(m.json, p, b); mod._load_brush(p); mod._free(p); brushOk = true; break; }
-    case 'config': m.settings.forEach(([n, v]) => setB(n, v)); break;
+    case 'loadBrush': { const b = mod.lengthBytesUTF8(m.json) + 1; const p = mod._malloc(b); mod.stringToUTF8(m.json, p, b); const ok = mod._load_brush(p); mod._free(p); if (ok) { brushOk = true; } else { post({ type: 'log', text: 'Brush load failed (bad .myb JSON?).' }); } break; }
+    case 'config': m.settings.forEach(([n, v]) => { try { setB(n, v); } catch (err) { post({ type: 'log', text: `config ${n} failed: ${(err as Error)?.message ?? err}` }); } }); break;
     case 'beginStroke': beginStroke(m.x, m.y, m.xtilt, m.ytilt, m.zoom, m.rotation, m.barrel); break;
     case 'strokeSample': if (pendingBegin) { pendingSamples.push([m.time, m.x, m.y, m.pressure, m.xtilt, m.ytilt, m.zoom, m.rotation, m.barrel, Number.isFinite(m.pressure), true, true]); } else { motionQueue.push(m.time, m.x, m.y, m.pressure, m.xtilt, m.ytilt, m.zoom, m.rotation, m.barrel, Number.isFinite(m.pressure), true, true); } scheduleFlush(); break;
-    case 'commit': if (motionQueue.length > 0 || pendingBegin) { commitP = true; scheduleFlush(); } else doCommit(); break;
+    case 'commit': if (batchInFlight || motionQueue.length > 0 || pendingBegin) { commitP = true; scheduleFlush(); } else doCommit(); break;
     case 'undo': flushNow(); mod._reset_brush(); if (mod._paint_history_undo()) renderDirty(true); pushState(); break;
     case 'redo': flushNow(); mod._reset_brush(); if (mod._paint_history_redo()) renderDirty(true); pushState(); break;
     case 'clear': flushNow(); mod._reset_brush(); mod._paint_clear(); renderDirty(true); pushState(); break;
@@ -281,5 +323,16 @@ self.onmessage = async (e: MessageEvent<Msg & { canvas?: OffscreenCanvas }>) => 
     case 'writeTile': writeTile(m.layer, m.tx, m.ty, m.data); break;
     case 'requestState': pushState(); break;
   }
+}
+
+/* Route every message through a guard so no exception can leave the worker
+ * frozen and silent. Any failure is reported and the engine resets to a
+ * safe serial state. */
+self.onmessage = (e: MessageEvent<Msg & { canvas?: OffscreenCanvas }>) => {
+  handleInput(e)?.catch?.((err: unknown) => {
+    const what = `handleInput threw: ${(err as Error)?.message ?? err} ${((err as Error)?.stack || '').slice(0, 200)}`;
+    post({ type: 'log', text: what });
+    batchRecovery(what);
+  });
 };
 export {};

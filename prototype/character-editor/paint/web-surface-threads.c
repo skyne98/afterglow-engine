@@ -371,6 +371,7 @@ typedef struct {
     volatile int claim;
     volatile int done;
     volatile int in_flight;
+    volatile int disabled;   /* watchdog aborted threading; serial fallback */
 } ParallelBatch;
 
 static ParallelBatch g_batch;
@@ -415,6 +416,7 @@ int web_surface_batch_precreate(WebPaintSurface *surface)
 int web_surface_batch_launch(WebPaintSurface *surface)
 {
     if (!surface || g_batch.in_flight) return -1;
+    if (g_batch.disabled) return -1;   /* watchdog stalled once; stay serial */
     g_batch.surface = surface;
     g_batch.count = operation_queue_get_dirty_tiles(
         surface->parent.operation_queue, &g_batch.tiles);
@@ -425,16 +427,21 @@ int web_surface_batch_launch(WebPaintSurface *surface)
     g_batch.done = 0;
     web_surface_set_no_create(surface, 1);
     __atomic_store_n(&g_batch.in_flight, 1, __ATOMIC_RELEASE);
+    /* Spawn workers; count the ones that actually started. Never fall back to
+     * serial while a spawned worker still runs (double-process race), so on
+     * partial failure we simply wait for the live workers and let finish()
+     * process any unclaimed tiles serially. If none started, finish() does
+     * all the work (spawned == 0 => is_done true immediately). */
+    int spawned = 0;
     for (int i = 0; i < g_batch.target; i++) {
         pthread_t thread;
         if (pthread_create(&thread, NULL, paint_worker_main, NULL) != 0) {
-            /* Spawn failed: abort the flight, caller falls back to serial. */
-            __atomic_store_n(&g_batch.in_flight, 0, __ATOMIC_RELEASE);
-            web_surface_set_no_create(surface, 0);
-            return -1;
+            break;
         }
         pthread_detach(thread);
+        spawned++;
     }
+    g_batch.target = spawned;
     return 0;
 }
 
@@ -449,10 +456,39 @@ int web_surface_batch_in_flight(void)
     return __atomic_load_n(&g_batch.in_flight, __ATOMIC_ACQUIRE);
 }
 
+int web_surface_batch_abort(WebPaintSurface *surface)
+{
+    WebPaintSurface *s = g_batch.surface ? g_batch.surface : surface;
+    const int dropped = g_batch.count;
+    __atomic_store_n(&g_batch.in_flight, 0, __ATOMIC_RELEASE);
+    __atomic_store_n(&g_batch.done, g_batch.target, __ATOMIC_RELEASE);
+    __atomic_store_n(&g_batch.disabled, 1, __ATOMIC_RELEASE);
+    if (s) {
+        /* Drop the pending dabs and release no_create so a serial fallback
+         * batch (or foreground import) can allocate tiles again. Workers
+         * still inside process_tile finish their current tile, then pop NULL
+         * because the queue is empty, and exit harmlessly. */
+        operation_queue_clear_dirty_tiles(s->parent.operation_queue);
+        web_surface_set_no_create(s, 0);
+    }
+    g_batch.surface = NULL;
+    g_batch.tiles = NULL;
+    return dropped;
+}
+
 int web_surface_batch_finish(WebPaintSurface *surface, MyPaintRectangles *roi)
 {
     if (!__atomic_load_n(&g_batch.in_flight, __ATOMIC_ACQUIRE)) return 0;
     WebPaintSurface *s = g_batch.surface ? g_batch.surface : surface;
+    /* Claim and process any tiles no worker picked up (e.g. zero workers
+     * started). Normally claim == count here and this is a no-op. */
+    if (s) {
+        for (;;) {
+            const int i = __atomic_fetch_add(&g_batch.claim, 1, __ATOMIC_RELAXED);
+            if (i >= g_batch.count) break;
+            process_tile(&s->parent, g_batch.tiles[i].x, g_batch.tiles[i].y);
+        }
+    }
     if (!s) return 0;
     /* roi merge: mirrors the vendored mypaint_tiled_surface_end_atomic. */
     if (roi && roi->num_rectangles > 0) {
