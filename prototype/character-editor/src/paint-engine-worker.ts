@@ -31,6 +31,7 @@ let n0 = 0, a0 = 0;
 let batchInFlight = false;
 const BATCH_TIMEOUT_MS = 250;
 let batchPolls = 0;
+let threadCooldownMs = 0;
 let pendingCmds: Msg[] = [];
 let pendingBegin: { x: number; y: number; xt: number; yt: number; z: number; r: number; ba: number } | null = null;
 let pendingSamples: (number | boolean)[][] = [];
@@ -55,6 +56,9 @@ function batchRecovery(what: string) {
   pendingSamples.length = 0;
   pendingCmds = [];
   if (mod) { try { mod._paint_batch_abort?.(); } catch { /* ignore */ } }
+  if (mod?._paint_batch_reenable) {
+    self.setTimeout(() => { try { mod._paint_batch_reenable?.(); } catch { /* ignore */ } }, 2000);
+  }
   renderDirty(true);
   pushState();
 }
@@ -136,6 +140,7 @@ function pollBatch() {
   if (!mod) return;
   if (mod._paint_is_batch_done()) {
     batchPolls = 0;
+    threadCooldownMs = 0;   // a healthy batch means threading recovered
     try {
       mod._paint_end_batch_finish();
     } catch (err) {
@@ -147,14 +152,25 @@ function pollBatch() {
   }
   // Watchdog: a parallel batch must complete promptly. A stalled or crashed
   // worker would otherwise leave every input command deferred forever with
-  // no error anywhere. On timeout, abort the batch, report it, and fall back
-  // to the serial path for the rest of the session.
+  // no error anywhere. On timeout we abort the batch, briefly pause threading
+  // (cooldown with exponential backoff), and schedule an automatic retry.
+  // Threading is never permanently disabled; a healthy batch resets the
+  // cooldown to zero.
   if (++batchPolls * 2 >= BATCH_TIMEOUT_MS) {
     batchPolls = 0;
     let dropped = 0;
     try { dropped = mod._paint_batch_abort?.() | 0; } catch (err) { post({ type: 'log', text: 'WATCHDOG: abort threw ' + ((err as Error)?.message ?? err) }); }
-    post({ type: 'log', text: `WATCHDOG: parallel batch stalled after ${BATCH_TIMEOUT_MS} ms; dropped ${dropped} tiles; threading disabled for this session.` });
-    post({ type: 'status', text: 'Brush engine recovered from a stalled batch (now running serially).' });
+    const cooldown = threadCooldownMs > 0 ? threadCooldownMs : 2000;
+    threadCooldownMs = Math.min(threadCooldownMs > 0 ? threadCooldownMs * 2 : 2000, 30000);
+    post({ type: 'log', text: `WATCHDOG: parallel batch stalled after ${BATCH_TIMEOUT_MS} ms; dropped ${dropped} tiles. Threading paused for ${cooldown} ms, retry scheduled automatically.` });
+    post({ type: 'status', text: 'Brush engine recovered from a stalled batch (threading resumes automatically).' });
+    if (mod?._paint_batch_reenable) {
+      self.setTimeout(() => {
+        try {
+          if (mod?._paint_batch_reenable()) post({ type: 'log', text: 'Threading re-enabled.' });
+        } catch (err) { post({ type: 'log', text: 'Re-enable threading failed: ' + ((err as Error)?.message ?? err) }); }
+      }, cooldown);
+    }
     batchInFlight = false;
     afterBatch();
     return;

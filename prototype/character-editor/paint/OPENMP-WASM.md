@@ -171,9 +171,13 @@ pipeline now surfaces every failure path and self-heals:
 
 - **Batch watchdog** (`paint-engine-worker.ts` `pollBatch`): after 250 ms of
   polling without completion, it calls `paint_batch_abort` (C: drops the
-  pending op queue, clears `in_flight`, disables threading for the session so
-  the next batches run serially), posts a `WATCHDOG ...` log AND a status
-  line, then resumes the normal queue. Painting continues on the serial path.
+  pending op queue, clears `in_flight`, disables threading for a cooldown),
+  posts a `WATCHDOG ...` log AND a status line, then resumes the normal
+  queue. Threading is NEVER permanently disabled: `paint_batch_reenable`
+  (`_paint_batch_reenable`) auto-re-enables after a cooldown (2 s, doubling
+  to 30 s max on repeated stalls; a healthy threaded batch resets it to
+  0). During the cooldown painting continues on the serial path, and speed
+  comes back automatically once the stall cause clears.
 - **Worker crash/exception reporter**: `self.onerror` and
   `self.onunhandledrejection` post `WORKER ERROR`/`WORKER UNHANDLED
   REJECTION` logs; every message is routed through a `handleInput` guard whose

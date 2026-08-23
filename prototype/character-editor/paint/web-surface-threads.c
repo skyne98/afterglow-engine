@@ -476,6 +476,13 @@ int web_surface_batch_abort(WebPaintSurface *surface)
     return dropped;
 }
 
+int web_surface_batch_reenable(void)
+{
+    if (__atomic_load_n(&g_batch.in_flight, __ATOMIC_ACQUIRE)) return 0;
+    __atomic_store_n(&g_batch.disabled, 0, __ATOMIC_RELEASE);
+    return 1;
+}
+
 int web_surface_batch_finish(WebPaintSurface *surface, MyPaintRectangles *roi)
 {
     if (!__atomic_load_n(&g_batch.in_flight, __ATOMIC_ACQUIRE)) return 0;

@@ -57,8 +57,12 @@ int web_surface_batch_is_done(void);
 int web_surface_batch_finish(WebPaintSurface *surface, MyPaintRectangles *roi);
 int web_surface_batch_in_flight(void);
 /* Force-abort a stalled batch (watchdog). Drops pending dabs, disables the
- * threaded path for the rest of the session, and returns the dropped tile
- * count. Safe to call from the main thread whenever in_flight is set. */
+ * threaded path (cooldown) for the session until web_surface_batch_reenable,
+ * and returns the dropped tile count. Safe to call from the main thread
+ * whenever in_flight is set. */
 int web_surface_batch_abort(WebPaintSurface *surface);
+/* Re-enable the threaded path after a watchdog cooldown. Refuses while a
+ * batch is still in flight. Returns 1 if re-enabled. */
+int web_surface_batch_reenable(void);
 
 #endif

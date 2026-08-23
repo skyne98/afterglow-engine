@@ -596,6 +596,12 @@ int paint_batch_abort(void)
     /* Serial: nothing to abort. */
     return 0;
 }
+
+int paint_batch_reenable(void)
+{
+    /* Serial: threading is never disabled. */
+    return 1;
+}
 #else
 
 static int batch_active = 0;
@@ -657,6 +663,11 @@ int paint_batch_abort(void)
 {
     if (!surface) return 0;
     return web_surface_batch_abort(surface);
+}
+
+int paint_batch_reenable(void)
+{
+    return web_surface_batch_reenable();
 }
 #endif
 
