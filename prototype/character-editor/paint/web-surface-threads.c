@@ -1,8 +1,18 @@
 #include "web-surface.h"
 
+#include <math.h>
 #include <pthread.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include "operationqueue.h"
+
+/* External symbol from the vendored libmypaint tiled surface. Not edited.
+ * It pops the tile's ops from the operation queue, fetches the tile through
+ * tile_request_start, stamps dabs, and frees the ops. Tiles are independent,
+ * so each worker can own a disjoint set of tiles. */
+extern void process_tile(MyPaintTiledSurface *self, int tx, int ty);
 
 #define WEB_SURFACE_MIN_HASH_SIZE 8192
 #define WEB_SURFACE_NULL_TILES 16
@@ -333,4 +343,152 @@ void web_surface_set_symmetry(WebPaintSurface *surface, int active,
     mypaint_tiled_surface_set_symmetry_state(
         &surface->parent, active ? 1 : 0, center_x, center_y, angle,
         (MyPaintSymmetryType)symmetry_type, lines);
+}
+
+/* ------------------------------------------------------------------------
+ * Parallel batch driver.
+ *
+ * Design rules (proven on the 680M):
+ *  - No Atomics.wait, no pthread_join, no pthread_mutex_lock. Workers spin
+ *    only on claim/done counters; the main runtime thread stays live between
+ *    the 2 ms polls that call batch_is_done.
+ *  - Workers never allocate tile memory: every dirty tile is pre-created on
+ *    the main thread (batch_precreate), so tile_request_start under
+ *    no_create=1 always finds an existing tile.
+ *  - Workers free() the per-dab operation copies; Emscripten proxies sbrk to
+ *    the main thread, which is live during the polls.
+ *  - The operation queue is quiescent during a batch (dabs stopped), and each
+ *    tile's FIFO is popped by one worker only (atomic claim), so no lock is
+ *    needed on the queue.
+ *  - One batch at a time; the TS worker serializes strokes around in_flight.
+ * ---------------------------------------------------------------------- */
+
+typedef struct {
+    WebPaintSurface *surface;
+    TileIndex *tiles;   /* read-only pointer into the queue's dirty list */
+    int count;
+    int target;
+    volatile int claim;
+    volatile int done;
+    volatile int in_flight;
+} ParallelBatch;
+
+static ParallelBatch g_batch;
+
+static void *paint_worker_main(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        const int i = __atomic_fetch_add(&g_batch.claim, 1, __ATOMIC_RELAXED);
+        if (i >= g_batch.count) break;
+        process_tile(&g_batch.surface->parent,
+                     g_batch.tiles[i].x, g_batch.tiles[i].y);
+    }
+    __atomic_add_fetch(&g_batch.done, 1, __ATOMIC_RELEASE);
+    return NULL;
+}
+
+int web_surface_batch_begin(WebPaintSurface *surface)
+{
+    if (!surface) return 0;
+    return 1;
+}
+
+int web_surface_batch_precreate(WebPaintSurface *surface)
+{
+    if (!surface) return 0;
+    TileIndex *tiles = NULL;
+    const int count = operation_queue_get_dirty_tiles(
+        surface->parent.operation_queue, &tiles);
+    web_surface_set_no_create(surface, 0);
+    MyPaintTileRequest request;
+    for (int i = 0; i < count; i++) {
+        /* The request path creates missing tiles and fires the history
+         * write-callback exactly as serial processing would. */
+        mypaint_tile_request_init(&request, 0, tiles[i].x, tiles[i].y, FALSE);
+        mypaint_tiled_surface_tile_request_start(&surface->parent, &request);
+        mypaint_tiled_surface_tile_request_end(&surface->parent, &request);
+    }
+    return count;
+}
+
+int web_surface_batch_launch(WebPaintSurface *surface)
+{
+    if (!surface || g_batch.in_flight) return -1;
+    g_batch.surface = surface;
+    g_batch.count = operation_queue_get_dirty_tiles(
+        surface->parent.operation_queue, &g_batch.tiles);
+    if (g_batch.count < 2) return -1;   /* nothing worth parallelizing */
+    g_batch.target = g_batch.count < WEB_THREAD_POOL_MAX
+        ? g_batch.count : WEB_THREAD_POOL_MAX;
+    g_batch.claim = 0;
+    g_batch.done = 0;
+    web_surface_set_no_create(surface, 1);
+    __atomic_store_n(&g_batch.in_flight, 1, __ATOMIC_RELEASE);
+    for (int i = 0; i < g_batch.target; i++) {
+        pthread_t thread;
+        if (pthread_create(&thread, NULL, paint_worker_main, NULL) != 0) {
+            /* Spawn failed: abort the flight, caller falls back to serial. */
+            __atomic_store_n(&g_batch.in_flight, 0, __ATOMIC_RELEASE);
+            web_surface_set_no_create(surface, 0);
+            return -1;
+        }
+        pthread_detach(thread);
+    }
+    return 0;
+}
+
+int web_surface_batch_is_done(void)
+{
+    if (!__atomic_load_n(&g_batch.in_flight, __ATOMIC_ACQUIRE)) return 1;
+    return __atomic_load_n(&g_batch.done, __ATOMIC_ACQUIRE) >= g_batch.target;
+}
+
+int web_surface_batch_in_flight(void)
+{
+    return __atomic_load_n(&g_batch.in_flight, __ATOMIC_ACQUIRE);
+}
+
+int web_surface_batch_finish(WebPaintSurface *surface, MyPaintRectangles *roi)
+{
+    if (!__atomic_load_n(&g_batch.in_flight, __ATOMIC_ACQUIRE)) return 0;
+    WebPaintSurface *s = g_batch.surface ? g_batch.surface : surface;
+    if (!s) return 0;
+    /* roi merge: mirrors the vendored mypaint_tiled_surface_end_atomic. */
+    if (roi && roi->num_rectangles > 0) {
+        const int roi_rects = roi->num_rectangles;
+        const int num_dirty = s->parent.num_bboxes_dirtied;
+        const int clear_count = roi_rects < num_dirty ? roi_rects : num_dirty;
+        for (int i = 0; i < clear_count; i++) {
+            roi->rectangles[i].x = 0;
+            roi->rectangles[i].y = 0;
+            roi->rectangles[i].width = 0;
+            roi->rectangles[i].height = 0;
+        }
+        if (num_dirty > 0) {
+            const float bboxes_per_output =
+                (float)num_dirty > (float)roi_rects
+                ? (float)num_dirty / (float)roi_rects : 1.0f;
+            for (int i = 0; i < num_dirty; i++) {
+                int out_index = i;
+                if (num_dirty > roi_rects) {
+                    float index = (float)i / bboxes_per_output;
+                    int rounded = (int)(index + 0.5f);
+                    if (rounded > roi_rects - 1) rounded = roi_rects - 1;
+                    out_index = rounded;
+                }
+                mypaint_rectangle_expand_to_include_rect(
+                    &roi->rectangles[out_index], &s->parent.bboxes[i]);
+            }
+            roi->num_rectangles = roi_rects < num_dirty ? roi_rects : num_dirty;
+        } else {
+            roi->num_rectangles = 0;
+        }
+    }
+    operation_queue_clear_dirty_tiles(s->parent.operation_queue);
+    web_surface_set_no_create(s, 0);
+    __atomic_store_n(&g_batch.in_flight, 0, __ATOMIC_RELEASE);
+    g_batch.surface = NULL;
+    g_batch.tiles = NULL;
+    return roi ? roi->num_rectangles : 0;
 }

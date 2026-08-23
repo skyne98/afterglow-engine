@@ -48,6 +48,7 @@ emcc \
   -O2 \
   -msimd128 \
   -pthread \
+  -DWEB_USE_THREADS \
   -s PTHREAD_POOL_SIZE=4 \
   -s PTHREAD_POOL_SIZE_STRICT=0 \
   -I"$PAINT" -I"$MP" -I"$JSONC_BUILD" -I"$JSONC" -I"$VENDOR/openmp-wasm" \

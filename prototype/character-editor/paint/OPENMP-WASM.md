@@ -1,23 +1,26 @@
 # Threading the brush engine on WebAssembly (current state)
 
-Status: **serial tile processing is the verified, working path.** The
-vendored libmypaint is pristine upstream. Multi-core parallel tile
-processing is an open item.
+Status: **parallel batch processing is implemented and browser-verified.
+Serial remains the single-threaded fallback build.** The vendored libmypaint
+is pristine upstream.
 
 ## Build
 
-`build-wasm-threads.sh` builds with the **emsdk 3.1.74** Emscripten
-(`/home/fox/tools/emsdk`), `-pthread`, `MODULARIZE=1`, `EXPORT_NAME=
-createBrushlib`, `EXPORT_ES6=1`, `PTHREAD_POOL_SIZE=4`. Output lands in
-`public/wasm/` (served statically, no bundler transform) and the engine
-worker loads it with a `new Function('url','return import(url)')` dynamic
-import so Vite never analyzes Emscripten's circular worker import.
+`build-wasm-threads.sh` builds the parallel engine with the **emsdk 3.1.74**
+Emscripten (`/home/fox/tools/emsdk`), `-pthread`, `-DWEB_USE_THREADS`,
+`MODULARIZE=1`, `EXPORT_NAME=createBrushlib`, `EXPORT_ES6=1`,
+`PTHREAD_POOL_SIZE=4`. Output lands in `public/wasm/` (served statically, no
+bundler transform) and the engine worker loads it with a
+`new Function('url','return import(url)')` dynamic import so Vite never
+analyzes Emscripten's circular worker import.
 
 The Nix Emscripten 6.0.2 threaded-ESM output is internally broken
 (`acorn-optimizer` assertions, no companion worker file), so threaded
 builds always use the emsdk.
 
-`build-wasm.sh` is the single-threaded Nix build (no `-pthread`).
+`build-wasm.sh` is the single-threaded Nix build (no `-pthread`) and keeps
+the serial batch path (`main.c` compiles the `#ifndef WEB_USE_THREADS`
+branch).
 
 ## Why OpenMP was abandoned
 
@@ -47,9 +50,12 @@ rendering).
 
 `fixed-operationqueue.c` now keeps the caller-owned ops out of the queue:
 per-tile FIFOs of small `OpNode { op*, next* }` nodes that point at the
-malloc'd ops. The queue is bounded (4096 tiles, 16384 queued ops) and
-single-threaded. `operation_queue_acquire/release/failed` remain as
-no-op compat shims (pristine code never calls them).
+malloc'd ops. The queue is bounded (4096 tiles, 16384 queued ops). Adds
+happen only on the main thread; each tile's FIFO is popped by one parallel
+worker only (see below), so no lock is needed on the queue. `op_count` is
+add-only (popping does not decrement it) so concurrent pops cannot race it.
+`operation_queue_acquire/release/failed` remain as no-op compat shims
+(pristine code never calls them).
 
 ## Verified serial behavior (browser)
 
@@ -61,14 +67,80 @@ no-op compat shims (pristine code never calls them).
 - `bun test` green (28 pass / 0 fail), `bun run build` clean, wasm builds
   with both scripts.
 
-## Open item: multi-core brush
+## 2026-08-10 (later): serial-path hardening
 
-Serial processing is the committed baseline. The earlier async attempt
-proved `pthread_create` + atomic work-stealing works from a browser
-worker *if the event loop stays live* (no `Atomics.wait`, no
-`pthread_join`, no `pthread_mutex_lock`), but the work must be driven
-entirely from our non-vendored code (`web-surface-threads.c` /
-`main.c`), never by editing vendored libmypaint again. The operation
-queue, tile hash, and dirty-rect/bbox accounting all need explicit
-synchronization (the bbox union is main-thread only; the queue is
-currently single-threaded by contract).
+- **Interrupted strokes**: an undo/redo/clear that runs while a stroke is
+  still open (batch uncommitted) now finalizes or discards the pending
+  history record instead of silently merging it into the next stroke. If
+  the cursor moved (an undo already restored an older record) the pending
+  captures are dropped; otherwise they are committed. The commit also
+  refuses to record when the cursor is not at the newest record, so a
+  late pointerup-commit after a mid-stroke undo cannot capture a corrupt
+  after-state. The undo/redo/clear handlers reset the brush state so the
+  pointerup release sample cannot paint taper dabs onto the restored
+  canvas.
+- **Export**: `exportTiles` renders one 64x64 tile per source tile at full
+  document resolution (the old mip-grid path truncated docs larger than
+  the display canvas, and the layer path sampled only the top-left tile
+  of each mip group).
+- **Render allocations**: `drawTile` reuses two `ImageData` scratch
+  buffers (level-0 and scaled) instead of allocating two per tile per
+  frame.
+
+## 2026-08: parallel batch driver (implemented, browser-verified)
+
+`web-surface-threads.c` is the thread-safe tile backend (atomic hash,
+spinlock, `no_create`, 16 null tiles). It now also owns the parallel driver:
+`web_surface_batch_begin/precreate/launch/is_done/finish/in_flight`. `main.c`
+compiles a threaded batch path (`#ifdef WEB_USE_THREADS`) and `build-wasm-threads.sh`
+defines `WEB_USE_THREADS`.
+
+How it runs (one batch = one `drainProcess` in `paint-engine-worker.ts`):
+
+1. `paint_begin_batch` opens the atomic; dabs accumulate in the op queue.
+2. `paint_end_batch` (main thread) calls `batch_precreate`: every dirty
+   tile is created through the request path, so history before-states are
+   captured exactly once, where `calloc` is legal.
+3. `batch_launch` sets `no_create=1`, spawns up to 4 detached pthreads;
+   each claims tiles via one atomic counter and runs the vendored
+   `process_tile()` (never edited). Workers never allocate tile memory;
+   they only `free()` already-allocated op copies (Emscripten proxies
+   `sbrk` to the live main thread). Returns 0 = async.
+4. `paint_is_batch_done` reads one atomic; the worker TS polls every 2 ms.
+5. `paint_end_batch_finish` (main thread) mirrors the vendored roi/bbox
+   merge, clears the op queue, resets `no_create`, re-arms for the next
+   batch.
+
+Rules kept: no `Atomics.wait`, no `pthread_join`, no `pthread_mutex_lock`;
+the queue is quiescent during a batch; each tile is claimed by one worker.
+If there are < 2 dirty tiles or a spawn fails, `paint_end_batch` falls back
+to the serial `end_atomic_internal()`. The engine keeps ONE batch at a time.
+
+TS worker (`paint-engine-worker.ts`) changes for correctness:
+- **Deferred commit**: `doCommit` no longer commits while a parallel batch
+  is in flight — it sets `commitP` and the poll-completion path commits
+  after `paint_end_batch_finish`.
+- **In-flight stroke buffering**: a `beginStroke` that arrives while a
+  batch is in flight is stored in `pendingBegin`; its samples go to
+  `pendingSamples`; `afterBatch` drains any old-stroke residue, then
+  applies the deferred begin. Surface-touching commands (clear, undo,
+  redo, layers, export, probe, ...) arriving mid-flight are deferred to
+  `pendingCmds` and replayed in order after the batch finishes, so a
+  `clear` can never free tiles while workers write them.
+
+Serial build: `main.c`'s `#ifndef WEB_USE_THREADS` branch keeps the
+synchronous `paint_end_batch` (returns 1 from `paint_is_batch_done`); the
+demo and tests behave unchanged.
+
+## Verified parallel behavior (browser, 680M / threaded build)
+
+- Stroke renders a full-width run (probe 311–1262) with 32 used tiles and
+  no holes; worker log confirms "ASYNC batch in flight" each batch.
+- Undo clears the stroke, redo restores it, clear empties the canvas
+  (952 painted → 0 → 952 → 0 across the four probe steps) — history
+  round-trips across parallel batches.
+- No worker errors; `bun test` green (28 pass / 0 fail).
+- Open item: per-batch latency/throughput tuning (BUDGET of 8 samples per
+  batch, thread count 4) needs a measured A/B against serial on heavy
+  strokes; bit-exact serial-vs-parallel tile equality is the acceptance
+  gate to add.

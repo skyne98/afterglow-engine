@@ -563,6 +563,7 @@ int paint_end_atomic(void)
     return end_atomic_internal();
 }
 
+#ifndef WEB_USE_THREADS
 void paint_begin_batch(void)
 {
     if (atomic_active) {
@@ -589,6 +590,63 @@ int paint_end_batch_finish(void)
     /* Serial: no async finish step is needed. */
     return dirty_roi.num_rectangles;
 }
+#else
+
+static int batch_active = 0;
+
+void paint_begin_batch(void)
+{
+    /* One batch at a time. The TS worker never begins a stroke while a
+     * parallel batch is in flight, so this is a defense, not a path. */
+    if (batch_active || web_surface_batch_in_flight()) return;
+    if (atomic_active) {
+        end_atomic_internal();
+    }
+    batch_active = 1;
+    if (surface) web_surface_batch_begin(surface);
+    suppress_atomic_end = 1;
+    begin_atomic_internal();
+}
+
+int paint_end_batch(void)
+{
+    suppress_atomic_end = 0;
+    if (!batch_active || !surface) {
+        return dirty_roi.num_rectangles;
+    }
+    batch_active = 0;
+    /* Main thread: create every dirty tile + capture history before-states. */
+    web_surface_batch_precreate(surface);
+    const int launched = web_surface_batch_launch(surface);
+    if (launched == 0) {
+        /* Parallel batch running; TS polls is_done(), then finish(). */
+        return 0;
+    }
+    /* Nothing to process, or spawn failed: run the serial path now. */
+    return end_atomic_internal();
+}
+
+int paint_is_batch_done(void)
+{
+    return web_surface_batch_is_done();
+}
+
+int paint_end_batch_finish(void)
+{
+    if (!web_surface_batch_in_flight() || !surface) {
+        return dirty_roi.num_rectangles;
+    }
+    atomic_dirty_roi.num_rectangles = WEB_SURFACE_MAX_DIRTY_RECTS;
+    web_surface_batch_finish(surface, &atomic_dirty_roi);
+    for (int i = 0; i < atomic_dirty_roi.num_rectangles; i++) {
+        merge_dirty_rectangle(&atomic_dirty_rects[i]);
+    }
+    if (web_surface_take_capacity_error(surface)) {
+        paint_error_code = 1;
+    }
+    return dirty_roi.num_rectangles;
+}
+#endif
 
 int paint_get_width(void)
 {
@@ -1039,7 +1097,22 @@ static void history_drop_oldest(void)
 
 void paint_history_begin(void)
 {
-    if (!surface || !history_before || !history_after || history_active) return;
+    if (!surface || !history_before || !history_after) return;
+    if (history_active) {
+        if (history_cursor < history_record_total) {
+            /* An undo/redo already restored an older record, which wiped the
+             * interrupted stroke's tiles. Its pending captures are stale;
+             * drop them so the next stroke starts a clean record. */
+            history_active = 0;
+            history_entry_count = history_active_start;
+        } else {
+            /* The stroke was interrupted without an undo (for example a
+             * clear). Finalize it as its own record so strokes never merge
+             * into one undo step. */
+            paint_history_commit();
+            if (history_active) return;
+        }
+    }
     if (history_cursor < history_record_total) {
         history_record_total = history_cursor;
         history_entry_count = history_cursor > 0
@@ -1057,6 +1130,14 @@ void paint_history_commit(void)
 {
     if (!surface || !history_after || !history_active) return;
     if (history_active_layer != active_layer) {
+        history_active = 0;
+        history_entry_count = history_active_start;
+        return;
+    }
+    if (history_cursor < history_record_total) {
+        /* An undo/redo ran since this stroke began. Its restore overwrote
+         * the stroke's tiles, so the after-state is gone; discard the
+         * pending record instead of committing a corrupt one. */
         history_active = 0;
         history_entry_count = history_active_start;
         return;

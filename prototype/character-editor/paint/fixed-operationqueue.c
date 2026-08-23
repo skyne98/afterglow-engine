@@ -6,8 +6,14 @@
  * that point at the caller-owned OperationDataDrawDab objects.
  *
  * The queue is bounded in tiles (linear scan) and in total queued ops
- * (soft cap). It is single-threaded: the engine worker drains the batch
- * before a new batch begins.
+ * (soft cap). Adds happen only on the main thread (draw_dab while the
+ * engine batches). Popping happens from the parallel batch workers, one
+ * worker per tile, so each tile's FIFO is touched by one thread only.
+ *
+ * op_count is only a soft-cap counter for adds. Popping does NOT decrement
+ * it (a plain int would race across workers). operation_queue_clear_dirty_tiles
+ * resets it on the main thread after every batch, so the per-batch add budget
+ * stays correct.
  */
 #include <stddef.h>
 #include <stdlib.h>
@@ -165,7 +171,7 @@ OperationDataDrawDab *operation_queue_pop(OperationQueue *queue, TileIndex index
     if (!queue->tiles[tile].head) queue->tiles[tile].tail = NULL;
     OperationDataDrawDab *op = node->op;
     free(node);
-    queue->op_count--;
+    /* op_count is add-only; see the header comment (no worker race). */
     return op;
 }
 
