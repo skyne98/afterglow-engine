@@ -8,7 +8,7 @@ export type MotionSink = (
   viewzoom: number,
   viewrotation: number,
   barrelRotation: number,
-) => void;
+) => boolean | void;
 
 /** Fixed input storage for pointer samples. The queue does not allocate. */
 export class MotionQueue {
@@ -74,7 +74,9 @@ export class MotionQueue {
     let safeTime = Number.isFinite(time) ? time : this.lastTime;
     if (safeTime < this.lastTime) safeTime = this.lastTime;
     this.lastTime = safeTime;
+    let accepted = true;
     if (this.count === this.capacity) {
+      accepted = false;
       this.overflowCount++;
       // Preserve the newest sample. The pointer handler never queues a
       // button edge here, so dropping the oldest motion is safe.
@@ -95,17 +97,17 @@ export class MotionQueue {
     this.viewrotations[index] = viewrotation;
     this.barrelRotations[index] = barrelRotation;
     this.count++;
-    return true;
+    return accepted;
   }
 
   drain(sink: MotionSink): void {
     while (this.count > 0) {
       const index = this.head;
-      sink(
+      if (sink(
         this.times[index], this.xs[index], this.ys[index], this.pressures[index],
         this.xtilts[index], this.ytilts[index], this.viewzooms[index],
         this.viewrotations[index], this.barrelRotations[index],
-      );
+      ) === false) break;
       this.head = (this.head + 1) % this.capacity;
       this.count--;
     }
@@ -179,14 +181,14 @@ export class MotionQueue {
     while (this.count > 0) {
       const position = 0;
       const index = this.head;
-      sink(
+      if (sink(
         this.times[index], this.xs[index], this.ys[index],
         this.interpolatedAxis(this.pressures, this.pressureValid, position),
         this.interpolatedAxis(this.xtilts, this.tiltValid, position),
         this.interpolatedAxis(this.ytilts, this.tiltValid, position),
         this.interpolatedAxis(this.viewzooms, this.viewValid, position),
         this.viewrotations[index], this.barrelRotations[index],
-      );
+      ) === false) break;
       this.head = (this.head + 1) % this.capacity;
       this.count--;
       if (this.count > 0 && performance.now() - started >= budgetMs) break;
@@ -194,19 +196,22 @@ export class MotionQueue {
   }
 
   drainInterpolated(sink: MotionSink): void {
-    for (let position = 0; position < this.count; position++) {
+    const initialCount = this.count;
+    let consumed = 0;
+    for (let position = 0; position < initialCount; position++) {
       const index = this.indexAt(position);
-      sink(
+      if (sink(
         this.times[index], this.xs[index], this.ys[index],
         this.interpolatedAxis(this.pressures, this.pressureValid, position),
         this.interpolatedAxis(this.xtilts, this.tiltValid, position),
         this.interpolatedAxis(this.ytilts, this.tiltValid, position),
         this.interpolatedAxis(this.viewzooms, this.viewValid, position),
         this.viewrotations[index], this.barrelRotations[index],
-      );
+      ) === false) break;
+      consumed++;
     }
-    this.head = 0;
-    this.count = 0;
+    this.head = (this.head + consumed) % this.capacity;
+    this.count -= consumed;
   }
 }
 

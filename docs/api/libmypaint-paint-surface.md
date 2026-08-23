@@ -2,105 +2,167 @@
 
 Status: prototype implementation
 
-The character-editor paint demo uses the vendored NG libmypaint tiled surface. The brush engine runs entirely in a Web Worker (`paint-brush-worker.ts`) that also owns the display `OffscreenCanvas` and the motion queue. The main thread only forwards input and configuration, so the brush engine never blocks the render thread.
-The browser does not receive `draw_dab` callbacks. The demo uses `getCoalescedEvents()` so fast strokes do not lose pointer samples.
-The worker owns the `MotionQueue` and processes every received sample on its own thread, so a burst of pointer moves never blocks input and no samples are lost.
-The worker fills the display canvas with the uniform background color once, then draws only the mip tiles whose source regions contain paint. Regions with paint use an exact box filter that keeps the background.
+The character-editor paint demo uses the NG libmypaint tiled surface. The vendored source is at commit `d5a88fbe6649d5ec776bc42ec8c1f4bb29d7fd7f`.
 
-## Current API
+`paint-engine-worker.ts` owns the WebAssembly module, motion queue, brush state, document pixels, and `OffscreenCanvas`. The page sends input and control messages.
 
-The WASM module is built by:
+## Build
+
+Build the threaded module with Emscripten 3.1.74:
 
 ```sh
 cd prototype/character-editor
-nix-shell -p emscripten --run 'bash paint/build-wasm.sh'
+nix-shell -p python3 --run \
+  'source /home/fox/tools/emsdk/emsdk_env.sh && bash paint/build-wasm-threads.sh'
 ```
 
-The build uses `-O3` and `-msimd128`. `wasm-opt -all --print-features public/wasm/brushlib.wasm` reports WebAssembly SIMD.
+The build uses four pthread workers, SIMD128, a 128 KiB pthread stack, and a 1 GiB memory limit.
 
-The public C exports include:
+`paint/build-wasm.sh` makes a separate serial module. The threaded build is the shipped demo module.
+
+## Brush processing
+
+`stroke_to()` starts one exact libmypaint input sample. It processes a maximum of 128 dabs and returns one of these values:
+
+- `0`: More dabs remain.
+- `1` or `2`: The input sample is complete.
+- A negative value: The brush state has an error.
+
+`paint_continue_stroke_to()` processes the next 128 dabs. `paint_has_stroke_continuation()` reports the continuation state.
+
+The continuation does not add input points. It resumes inside the original libmypaint dab loop.
+
+The original and cooperative paths have equal brush states and output bytes in `mypaint-brush-cooperative.test.c`.
+
+The TypeScript worker keeps the current `MotionQueue` sample until its continuation completes. It yields between batches, so later worker messages can enter fixed queues.
+
+## Parallel tile processing
+
+`paint_begin_batch()` starts an atomic tile batch. `paint_end_batch()` creates missing tiles before it starts any pthread.
+
+A maximum of four pthreads claim separate dirty tiles. Each pthread runs the unchanged libmypaint `process_tile()` function.
+
+`paint_is_batch_done()` polls counters and `pthread_tryjoin_np()`. The main WASM worker does not use a blocking join.
+
+`paint_end_batch_finish()` merges dirty areas and clears the operation queue. It runs only after all joinable pthreads exit.
+
+Workers cannot create tile memory. This rule prevents a proxied memory-growth deadlock in a pthread.
+
+## Fixed operation queue
+
+The operation queue has these limits:
+
+- 4,096 dirty tile keys for each batch
+- 16,384 dab operations for each batch
+- 8,192 fixed hash entries for O(1) tile lookup
+
+A capacity failure sets error code `4` before the engine clears the queue. The engine does not silently use a serial mode.
+
+## Dirty display data
+
+The C surface keeps both dirty rectangles and exact dirty tile slots.
+
+Use these exports:
+
+- `paint_get_dirty_count()`
+- `paint_get_dirty_rect(index, out)`
+- `paint_get_dirty_tile_count()`
+- `paint_get_dirty_tile_info(index, out)`
+- `paint_clear_dirty()`
+
+The display worker renders exact dirty tiles for brush changes. Thus, one wide rectangle does not cause a full 16K document scan.
+
+Full document changes use the full render path.
+
+## Main C exports
+
+The module includes these brush and batch exports:
 
 - `init(width, height)`
 - `paint_destroy()`
 - `load_brush(json)`
 - `begin_stroke(...)`
 - `stroke_to(..., linear)`
+- `paint_continue_stroke_to()`
+- `paint_has_stroke_continuation()`
+- `paint_begin_batch()`
+- `paint_end_batch()`
+- `paint_is_batch_done()`
+- `paint_end_batch_finish()`
+- `reset_brush()`
+
+It includes these tile and display exports:
+
 - `paint_get_tile_ptr(tx, ty)`
 - `paint_render_tile_ptr(tx, ty)`
 - `paint_render_rgba8_tile_ptr(tx, ty)`
-- `paint_render_rgba8_mip_tile_ptr(tx, ty, level)` for levels `1..2`
+- `paint_render_rgba8_mip_tile_ptr(tx, ty, level)`
 - `paint_render_layer_rgba8_tile_ptr(layer, tx, ty)`
 - `paint_write_rgba8_tile(tx, ty, rgba8)`
-- `paint_set_eotf(value)`
-- `paint_get_error_code()`
-- `paint_clear_error()`
-- `paint_get_dirty_count()`
-- `paint_get_dirty_rect(index, out)`
-- `paint_clear_dirty()`
 - `paint_get_used_tile_count()`
-- `paint_pick_color(...)`
-- `paint_create_layer()`
-- `paint_delete_layer(layer)`
-- `paint_set_active_layer(layer)`
-- `paint_set_layer_visible(layer, visible)`
-- `paint_set_layer_opacity(layer, opacity)`
-- `paint_get_layer_opacity(layer)`
-- `paint_set_layer_mode(layer, mode)` uses the MyPaint mode IDs `0..21`, with Pigment at `21`.
-- `paint_set_layer_group(layer, group)`
-- `paint_move_layer(layer, direction)`
-- `paint_create_group()` and `paint_delete_group(group)`
-- `paint_set_group_parent(group, parent)`
-- `paint_set_group_visible(group, visible)`
-- `paint_set_group_opacity(group, opacity)`
-- `paint_set_group_mode(group, mode)`
-- `paint_set_group_pass_through(group, value)`
-- `paint_set_group_isolated(group, value)`
-- `paint_move_group(group, direction)`
-- `paint_set_background_color(r, g, b)`
-- `paint_clear_background()`
-- `paint_history_begin()`
-- `paint_history_commit()`
-- `paint_history_undo()`
-- `paint_history_redo()`
+- `paint_region_has_paint(tx, ty, level)`
+- `paint_set_eotf(value)`
 
-The internal paint pixels use 64 x 64 RGBA16 premultiplied tiles.
-The full channel value is `32768`.
-The output path un-premultiplies, applies EOTF `2.2`, applies fixed dither, and writes RGBA8 display tiles.
+It also includes layer, group, history, background, symmetry, color-pick, and brush-setting exports.
 
-## Current behavior
+## Pixels and display
 
-The surface supports the libmypaint dab mask, real surface color sampling, brush eraser and smudge paths, brush lock-alpha, colorize, posterize, spectral brush paint, symmetry data, and 22 layer mode selectors.
-The layer compositor supports bounded paint layers, visibility, opacity, standard separable modes, W3C nonseparable modes, Porter-Duff modes, and pigment mode.
-The default layer mode is Pigment, and the default background is the original MyPaint fallback color `#A8A498`.
-The demo supports up to 40 undo and redo records for active-layer tile changes.
-The history callback stores only the tiles a stroke writes, and the snapshot pool grows on demand, so a large stroke never fails to create an undo record except on true out-of-memory.
-The page view supports zoom, pan, quarter-turn rotation, horizontal mirror, pixelized high zoom, and box-filtered low-zoom mip tiles without changing document pixels.
-Pointer input removes the CSS translation component before inverse mapping, so camera pan does not offset strokes.
-The layer compositor is a clean-room implementation of the flat MyPaint modes.
-It uses 15-bit integer compositing, the ten-channel WGM path, MyPaint mode IDs, and the published nonseparable color operations.
-The fixed tree supports eight paint layers and four groups, nested group parents, layer reparenting, ordering, visibility, opacity, blend mode, pass-through, and isolated rendering.
-The brush and dab path uses the vendored ISC libmypaint source at commit `d5a88fbe6649d5ec776bc42ec8c1f4bb29d7fd7f`, with a replacement fixed operation queue.
+Document pixels use sparse 64 x 64 RGBA16 premultiplied tiles. The full channel value is `32768`.
 
-The browser document size is configurable from `64` through `16384` pixels per axis.
-The current surface uses a sparse signed-coordinate tile map with a default `2048 x 2048` display document.
-Documents above `4096` pixels use a reduced display backing store and level-2 display tiles. The display code places each mip tile at its reduced backing-store size, so a 16K document can show paint at the correct location.
-The frame checkbox records the view choice only.
-Each surface holds as many tiles as its full document needs; a painted tile is allocated on demand the first time it is touched, so memory scales with use and no fixed `4096` ceiling remains.
-Signed sparse unframed storage and bounded base-to-mip display generation are active.
-The history pool is growable tile-snapshot storage, not the final generational copy-on-write root system.
-The demo shows a HUD with the input queue state: queued samples, brush and render times, and the input sample rate.
-The demo exports internal RGBA8 tiles to PNG without view transforms.
-The demo exports and imports bounded OpenRaster ZIP files with merged image data, layer PNGs, stack XML, and Afterglow layer/group metadata.
+The display path removes premultiplication, applies EOTF `2.2`, applies fixed dither, and writes RGBA8 tiles.
 
-## Ownership and limits
+Documents from 64 through 16,384 pixels per axis are permitted. Documents above 4,096 pixels use reduced display storage and mip tiles.
 
-The WASM engine owns brush state and all document pixels and runs in the worker.
-TypeScript in the worker owns pressure and tilt interpolation and display tile drawing. The main thread owns input capture, DOM controls, brush metadata, and brush color restore.
-The current layer limit is eight paint layers.
-Each created layer allocates its tiles on demand, so memory grows only as a layer is painted.
+The surface can contain eight paint layers and four groups. It supports all 22 MyPaint layer modes.
 
-The browser operation queue uses fixed storage for 8192 operations and 4096 dirty tile keys.
-Low-zoom display work reuses sixteen source tiles per mip tile and skips view-only redraws when the selected mip level does not change.
-The WASM display path uses a fixed EOTF and dither lookup table, so tile output does not call `powf` for each color channel.
-Tile memory is bounded only by the WASM growth ceiling (set to the 4 GiB wasm32 maximum), so painting does not abort when it fills the document.
-The flat compositor checks run with `paint/layer-compositor.test.c` and native `cc` before the WASM build.
+The default layer mode is Pigment. The default background color is `#A8A498`.
+
+## Ownership and command order
+
+The worker completes current paint data before it applies these commands:
+
+- Brush or color changes
+- Commit
+- Clear
+- Undo or redo
+- Layer or group changes
+- Export
+- Probe
+
+This order prevents brush-state changes during a continuation and surface access during a pthread batch.
+
+`MotionQueue` has 8,192 sample slots. If it becomes full, it removes the oldest motion sample and increments `overflowCount`.
+
+## Error codes
+
+`paint_get_error_code()` returns these current values:
+
+- `1`: Tile allocation failed.
+- `2`: The history capacity was reached.
+- `3`: The libmypaint dab loop made no progress.
+- `4`: The operation queue reached capacity.
+- `5`: A pthread did not exit correctly.
+
+The worker sends each fatal engine error to the page log and status output. It also reports worker errors, promise rejections, and batch-finish exceptions.
+
+The implementation does not contain a watchdog, abort path, cooldown, or automatic serial mode.
+
+## Tests
+
+Run all prototype tests:
+
+```sh
+cd prototype/character-editor
+timeout 240 bun run test
+```
+
+The test set includes:
+
+- TypeScript motion-queue tests
+- Fixed operation-queue hash and capacity tests
+- Exact cooperative-brush state and pixel tests
+- Layer compositor tests
+- MyPaint layer parity tests
+- TypeScript compilation
+
+The layer parity result is 21 bit-exact modes. Pigment has a maximum difference of one least-significant bit.

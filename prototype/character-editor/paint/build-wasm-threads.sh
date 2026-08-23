@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the NG libmypaint brush engine to WebAssembly with threads (OpenMP)
+# Build the NG libmypaint brush engine to WebAssembly with pthreads.
 # using the emsdk Emscripten (not the broken Nix 6.0.2). Run from a shell
 # where python3 is on PATH and EMSDK env is sourced:
 #   nix-shell -p python3 --run 'source /home/fox/tools/emsdk/emsdk_env.sh && bash paint/build-wasm-threads.sh'
@@ -17,7 +17,7 @@ JSONC_BUILD="$JSONC/build-threads"
 
 SRCS=(
   "$MP/mypaint.c"
-  "$MP/mypaint-brush.c"
+  "$PAINT/mypaint-brush-cooperative.c"
   "$MP/mypaint-mapping.c"
   "$MP/mypaint-brush-settings.c"
   "$MP/helpers.c"
@@ -42,7 +42,7 @@ if [ ! -f "$JSONC_BUILD/libjson-c.a" ]; then
   emmake make -C "$JSONC_BUILD" -j"$(nproc)" >/dev/null
 fi
 
-EXPORTS="['_malloc','_free','_init','_paint_destroy','_stroke_to','_reset_brush','_set_brush_base_value','_get_brush_base_value','_set_brush_mapping_n','_set_brush_mapping_point','_new_brush','_load_brush','_begin_stroke','_paint_begin_atomic','_paint_end_atomic','_paint_begin_batch','_paint_end_batch','_paint_is_batch_done','_paint_end_batch_finish','_paint_batch_abort','_paint_batch_reenable','_paint_get_width','_paint_get_height','_paint_get_error_code','_paint_clear_error','_paint_get_tiles_width','_paint_get_tiles_height','_paint_get_used_tile_count','_paint_get_tile_ptr','_paint_render_tile_ptr','_paint_set_eotf','_paint_render_rgba8_tile_ptr','_paint_render_layer_rgba8_tile_ptr','_paint_write_rgba8_tile','_paint_render_rgba8_mip_tile_ptr','_paint_region_has_paint','_paint_get_dirty_count','_paint_get_dirty_rect','_paint_clear_dirty','_paint_set_background_color','_paint_clear_background','_paint_history_begin','_paint_history_commit','_paint_history_undo','_paint_history_redo','_paint_history_can_undo','_paint_history_can_redo','_paint_clear','_paint_pick_color','_paint_set_symmetry','_paint_get_layer_count','_paint_get_active_layer','_paint_set_active_layer','_paint_create_layer','_paint_delete_layer','_paint_set_layer_visible','_paint_set_layer_opacity','_paint_get_layer_opacity','_paint_get_layer_mode','_paint_set_layer_mode','_paint_get_layer_visible','_paint_get_layer_group','_paint_set_layer_group','_paint_move_layer','_paint_get_group_count','_paint_get_group_alive','_paint_get_group_parent','_paint_create_group','_paint_delete_group','_paint_set_group_parent','_paint_get_group_visible','_paint_set_group_visible','_paint_get_group_opacity','_paint_set_group_opacity','_paint_get_group_mode','_paint_set_group_mode','_paint_get_group_pass_through','_paint_set_group_pass_through','_paint_get_group_isolated','_paint_set_group_isolated','_paint_move_group']"
+EXPORTS="['_malloc','_free','_init','_paint_destroy','_stroke_to','_reset_brush','_set_brush_base_value','_get_brush_base_value','_set_brush_mapping_n','_set_brush_mapping_point','_new_brush','_load_brush','_begin_stroke','_paint_begin_atomic','_paint_end_atomic','_paint_begin_batch','_paint_end_batch','_paint_is_batch_done','_paint_end_batch_finish','_paint_continue_stroke_to','_paint_has_stroke_continuation','_paint_get_width','_paint_get_height','_paint_get_error_code','_paint_clear_error','_paint_get_tiles_width','_paint_get_tiles_height','_paint_get_used_tile_count','_paint_get_tile_ptr','_paint_render_tile_ptr','_paint_set_eotf','_paint_render_rgba8_tile_ptr','_paint_render_layer_rgba8_tile_ptr','_paint_write_rgba8_tile','_paint_render_rgba8_mip_tile_ptr','_paint_region_has_paint','_paint_get_dirty_count','_paint_get_dirty_rect','_paint_get_dirty_tile_count','_paint_get_dirty_tile_info','_paint_clear_dirty','_paint_set_background_color','_paint_clear_background','_paint_history_begin','_paint_history_commit','_paint_history_undo','_paint_history_redo','_paint_history_can_undo','_paint_history_can_redo','_paint_clear','_paint_pick_color','_paint_set_symmetry','_paint_get_layer_count','_paint_get_active_layer','_paint_set_active_layer','_paint_create_layer','_paint_delete_layer','_paint_set_layer_visible','_paint_set_layer_opacity','_paint_get_layer_opacity','_paint_get_layer_mode','_paint_set_layer_mode','_paint_get_layer_visible','_paint_get_layer_group','_paint_set_layer_group','_paint_move_layer','_paint_get_group_count','_paint_get_group_alive','_paint_get_group_parent','_paint_create_group','_paint_delete_group','_paint_set_group_parent','_paint_get_group_visible','_paint_set_group_visible','_paint_get_group_opacity','_paint_set_group_opacity','_paint_get_group_mode','_paint_set_group_mode','_paint_get_group_pass_through','_paint_set_group_pass_through','_paint_get_group_isolated','_paint_set_group_isolated','_paint_move_group']"
 
 emcc \
   -O2 \
@@ -51,6 +51,7 @@ emcc \
   -DWEB_USE_THREADS \
   -s PTHREAD_POOL_SIZE=4 \
   -s PTHREAD_POOL_SIZE_STRICT=0 \
+  -s DEFAULT_PTHREAD_STACK_SIZE=131072 \
   -I"$PAINT" -I"$MP" -I"$JSONC_BUILD" -I"$JSONC" -I"$VENDOR/openmp-wasm" \
   "${SRCS[@]}" \
   "$JSONC_BUILD/libjson-c.a" \

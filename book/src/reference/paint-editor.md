@@ -1,13 +1,21 @@
 # Paint editor surface
 
-The character-editor paint demo uses the NG libmypaint brush engine in WebAssembly.
-Brush dabs write 64 x 64 RGBA16 premultiplied tiles.
+The character-editor paint demo uses NG libmypaint in a WebAssembly worker. Brush dabs write sparse 64 x 64 RGBA16 tiles.
 
-The browser reads dirty RGBA8 tiles for display.
-The display path applies EOTF `2.2` and fixed dither.
-The WASM build uses `-O3` and WebAssembly SIMD128.
-Supported browsers draw display tiles on a Worker through `OffscreenCanvas`.
+The threaded build uses a maximum of four pthreads for separate dirty tiles. The main WASM worker polls joinable threads without a blocking join.
 
-The demo supports configurable document dimensions up to 16K x 16K, sparse on-demand tile storage, eight paint layers, four nested groups, layer reparenting and order, group pass-through and isolation, all flat MyPaint layer modes, background color, brush erasing, real brush surface sampling, pressure and tilt interpolation, brush color restore, up to 40 tile history records, zoom, pan, quarter-turn rotation, mirror view, low-zoom mip display, fast view-only zoom changes, internal-pixel PNG export, and OpenRaster import and export. The brush engine runs in a Web Worker, so drawing and view changes never block the editor and no pointer samples are lost. The undo snapshot pool grows on demand. A HUD shows the input queue state, including queued samples and input sample rate.
+A large input sample can request thousands of dabs. The engine processes 128 dabs at a time and resumes the exact libmypaint state.
 
-The full API is in `docs/api/libmypaint-paint-surface.md` in the repository.
+This fixed work unit prevents a wide 16K stroke from blocking all paint-worker messages. Brush and color changes wait for the current sample to complete.
+
+The display uses exact dirty tile slots. It does not render every tile inside one large dirty rectangle.
+
+The operation queue has fixed limits of 4,096 dirty tiles and 16,384 operations for each batch. Capacity failures cause visible errors.
+
+The demo supports documents through 16K x 16K, eight paint layers, four groups, and all 22 MyPaint layer modes.
+
+It also supports pressure, tilt, smudge, erasing, zoom, pan, rotation, mirror view, mip display, PNG, and OpenRaster.
+
+The worker reports brush-loop, queue, tile, history, pthread, worker, and promise errors. It has no watchdog or automatic serial mode.
+
+The full API is in `docs/api/libmypaint-paint-surface.md`.

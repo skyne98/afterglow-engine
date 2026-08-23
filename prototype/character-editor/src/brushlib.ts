@@ -20,6 +20,10 @@ export interface BrushModule {
   _paint_end_atomic: () => number;
   _paint_begin_batch: () => number;
   _paint_end_batch: () => number;
+  _paint_is_batch_done: () => number;
+  _paint_end_batch_finish: () => number;
+  _paint_continue_stroke_to: () => number;
+  _paint_has_stroke_continuation: () => number;
   _paint_get_width: () => number;
   _paint_get_height: () => number;
   _paint_get_error_code: () => number;
@@ -37,6 +41,8 @@ export interface BrushModule {
   _paint_region_has_paint: (tx: number, ty: number, level: number) => number;
   _paint_get_dirty_count: () => number;
   _paint_get_dirty_rect: (index: number, outPtr: number) => number;
+  _paint_get_dirty_tile_count: () => number;
+  _paint_get_dirty_tile_info: (index: number, outPtr: number) => number;
   _paint_clear_dirty: () => number;
   _paint_set_background_color: (r: number, g: number, b: number) => number;
   _paint_clear_background: () => number;

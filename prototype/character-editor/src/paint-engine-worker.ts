@@ -1,7 +1,5 @@
-/* Threaded brush engine worker — owns the WASM module, the motion queue,
- * the OffscreenCanvas, and all engine state. The main thread forwards input
- * and configuration; this worker does all brush + display work on its own
- * thread so pthread_join (Atomics.wait) works without blocking the browser UI.
+/* The brush worker owns WASM, input, display, and engine state.
+ * The page only sends input and configuration messages.
  */
 import { MotionQueue } from './paint-input.ts';
 
@@ -28,12 +26,10 @@ let rgba8: Uint8Array | null = null, rectPtr = 0, renderedMip = -1, lastT = 0;
 let docW = 2048, docH = 2048, dispScale = 1, dispMip = 0, viewMip = 0;
 let flushT: number | null = null, commitP = false, batching = false;
 let n0 = 0, a0 = 0;
-let batchInFlight = false;
-const BATCH_TIMEOUT_MS = 250;
-let batchPolls = 0;
-let threadCooldownMs = 0;
+let batchInFlight = false, strokeContinuation = false;
 let pendingCmds: Msg[] = [];
 let pendingBegin: { x: number; y: number; xt: number; yt: number; z: number; r: number; ba: number } | null = null;
+let pendingBeginCommit = false;
 let pendingSamples: (number | boolean)[][] = [];
 let brushOk = false, brushJson = '';
 let bgRGB: [number, number, number] = [0xA8 / 255, 0xA4 / 255, 0x98 / 255];
@@ -42,30 +38,14 @@ let lastRects: number[] = [];
 
 const post = (m: any, t?: Transferable[]) => { if (t && t.length > 0) (self as unknown as Worker).postMessage(m, t); else (self as unknown as Worker).postMessage(m); };
 
-/* Surface any worker-level failure to the page and restore a safe state so
- * the next message can proceed instead of hanging silently. */
-function batchRecovery(what: string) {
-  post({ type: 'log', text: 'ENGINE RECOVERY: ' + what });
-  post({ type: 'status', text: 'Brush engine recovered from an error.' });
-  batchInFlight = false;
-  batchPolls = 0;
-  batching = false;
-  commitP = false;
-  flushT = null;
-  pendingBegin = null;
-  pendingSamples.length = 0;
-  pendingCmds = [];
-  if (mod) { try { mod._paint_batch_abort?.(); } catch { /* ignore */ } }
-  if (mod?._paint_batch_reenable) {
-    self.setTimeout(() => { try { mod._paint_batch_reenable?.(); } catch { /* ignore */ } }, 2000);
-  }
-  renderDirty(true);
-  pushState();
+function reportEngineError(what: string, status = 'Brush engine error. See the log.') {
+  post({ type: 'log', text: 'ENGINE ERROR: ' + what });
+  post({ type: 'status', text: status });
 }
-self.onerror = (e: any) => { post({ type: 'log', text: 'WORKER ERROR: ' + ((e && (e.message || e.error || e)) ?? String(e)) }); };
-self.onunhandledrejection = (e: any) => { post({ type: 'log', text: 'WORKER UNHANDLED REJECTION: ' + ((e && e.reason && (e.reason.message || e.reason)) || String(e)) }); };
+self.onerror = (e: any) => { reportEngineError('WORKER ERROR: ' + ((e && (e.message || e.error || e)) ?? String(e))); };
+self.onunhandledrejection = (e: any) => { reportEngineError('WORKER UNHANDLED REJECTION: ' + ((e && e.reason && (e.reason.message || e.reason)) || String(e))); };
 
-function setB(n: string, v: number) { const b = mod.lengthBytesUTF8(n) + 1; const p = mod._malloc(b); mod.stringToUTF8(n, p, b); mod._set_brush_base_value(p, v); mod._free(p); }
+function setB(n: string, v: number) { const b = mod.lengthBytesUTF8(n) + 1; const p = mod._malloc(b); if (!p) throw new Error(`No memory for brush setting ${n}.`); mod.stringToUTF8(n, p, b); mod._set_brush_base_value(p, v); mod._free(p); }
 function mipLevel() { return dispMip > viewMip ? dispMip : viewMip; }
 function fillBg() { if (!ctx || !canvas) return; const [r, g, b] = bgRGB; ctx.fillStyle = `rgb(${Math.round(r * 255)},${Math.round(g * 255)},${Math.round(b * 255)})`; ctx.fillRect(0, 0, canvas.width, canvas.height); }
 let tileImg: ImageData | null = null;
@@ -101,77 +81,93 @@ function renderDirty(forceAll = false) {
   if (!mod || !ctx) return;
   if (forceAll || mipLevel() !== renderedMip) { renderFull(); checkErr(); return; }
   const tw = mod._paint_get_tiles_width(), th = mod._paint_get_tiles_height(), ml = mipLevel(), sc = 1 << ml, cnt = mod._paint_get_dirty_count();
+  const mw = ml > 0 ? Math.ceil(tw / sc) : tw, mh = ml > 0 ? Math.ceil(th / sc) : th;
   lastRects = [];
   for (let i = 0; i < cnt; i++) {
     mod._paint_get_dirty_rect(i, rectPtr); const b = rectPtr >> 2;
-    const x = mod.HEAP32[b], y = mod.HEAP32[b+1], w = mod.HEAP32[b+2], h = mod.HEAP32[b+3];
-    lastRects.push(x, y, w, h);
-    const ts = TILE * sc, mw = ml > 0 ? Math.ceil(tw / sc) : tw, mh = ml > 0 ? Math.ceil(th / sc) : th;
-    const tx0 = Math.max(0, Math.floor(x / ts)), ty0 = Math.max(0, Math.floor(y / ts));
-    const tx1 = Math.min(mw - 1, Math.floor((x + w) / ts)), ty1 = Math.min(mh - 1, Math.floor((y + h) / ts));
-    for (let ty = ty0; ty <= ty1; ty++) for (let tx = tx0; tx <= tx1; tx++) renderTile(tx, ty, ml);
+    lastRects.push(mod.HEAP32[b], mod.HEAP32[b+1], mod.HEAP32[b+2], mod.HEAP32[b+3]);
+  }
+  const dirtyTiles = mod._paint_get_dirty_tile_count();
+  if (dirtyTiles > 0) {
+    for (let i = 0; i < dirtyTiles; i++) {
+      mod._paint_get_dirty_tile_info(i, rectPtr); const b = rectPtr >> 2;
+      const tx = mod.HEAP32[b] >> ml, ty = mod.HEAP32[b+1] >> ml;
+      if (tx >= 0 && ty >= 0 && tx < mw && ty < mh) renderTile(tx, ty, ml);
+    }
+  } else {
+    for (let i = 0; i < cnt; i++) {
+      const x = lastRects[i * 4], y = lastRects[i * 4 + 1], w = lastRects[i * 4 + 2], h = lastRects[i * 4 + 3];
+      const ts = TILE * sc;
+      const tx0 = Math.max(0, Math.floor(x / ts)), ty0 = Math.max(0, Math.floor(y / ts));
+      const tx1 = Math.min(mw - 1, Math.floor((x + w) / ts)), ty1 = Math.min(mh - 1, Math.floor((y + h) / ts));
+      for (let ty = ty0; ty <= ty1; ty++) for (let tx = tx0; tx <= tx1; tx++) renderTile(tx, ty, ml);
+    }
   }
   mod._paint_clear_dirty(); checkErr();
 }
-function checkErr() { const c = mod._paint_get_error_code(); if (c) { post({ type: 'status', text: c === 1 ? 'Paint storage allocation failed.' : 'Undo history capacity reached.' }); mod._paint_clear_error(); } }
-function strokeSample(_t: number, x: number, y: number, p: number, xt: number, yt: number, z: number, r: number, ba: number) {
-  const dt = lastT > 0 ? Math.max(0, (_t - lastT) * 0.001) : 0.016; lastT = _t;
-  mod._stroke_to(x, y, p, xt, yt, dt, z, r, ba, 0);
+function checkErr() {
+  const c = mod._paint_get_error_code();
+  if (!c) return;
+  if (c === 1) reportEngineError('Paint tile allocation failed.', 'Paint storage allocation failed.');
+  else if (c === 2) reportEngineError('The undo history reached its fixed capacity.', 'Undo history capacity reached.');
+  else if (c === 3) reportEngineError('The libmypaint dab loop made no progress.');
+  else if (c === 4) reportEngineError('The brush operation queue reached its fixed capacity.');
+  else if (c === 5) reportEngineError('A paint pthread did not exit correctly.');
+  else reportEngineError(`Unknown paint error code ${c}.`);
+  mod._paint_clear_error();
 }
-function emitStats() { const now = performance.now(); if (now - lastStats < 150) return; const wall = now - lastStats; lastStats = now; post({ type: 'stats', queued: motionQueue.length, brushMs: lastBR, renderMs: lastRR, sps: wall > 0 ? Math.round((statsS / wall) * 1000) : 0 }); statsS = 0; statsMs = 0; }
+function strokeSample(_t: number, x: number, y: number, p: number, xt: number, yt: number, z: number, r: number, ba: number): boolean {
+  const result = strokeContinuation
+    ? mod._paint_continue_stroke_to()
+    : mod._stroke_to(x, y, p, xt, yt, lastT > 0 ? Math.max(0, (_t - lastT) * 0.001) : 0.016, z, r, ba, 0);
+  if (result === 0) {
+    strokeContinuation = true;
+    return false;
+  }
+  strokeContinuation = false;
+  lastT = _t;
+  if (result < 0) {
+    if (mod._paint_get_error_code()) checkErr();
+    else reportEngineError('The brush continuation state is incorrect.');
+  }
+  return true;
+}
+function emitStats(force = false) { const now = performance.now(); if (!force && now - lastStats < 150) return; const wall = now - lastStats; lastStats = now; post({ type: 'stats', queued: motionQueue.length, brushMs: lastBR, renderMs: lastRR, sps: wall > 0 ? Math.round((statsS / wall) * 1000) : 0 }); statsS = 0; statsMs = 0; }
 function afterBatch() {
   batchInFlight = false;
   renderDirty();
-  const a2 = performance.now(); lastBR = 0; lastRR = a2 - a0; statsS += n0; statsMs += a2 - a0; emitStats();
-  // Surface-touching commands that arrived mid-flight run now, in order.
+  const a2 = performance.now(); lastBR = 0; lastRR = a2 - a0; statsS += Math.max(0, n0 - motionQueue.length); statsMs += a2 - a0; emitStats(motionQueue.length === 0 && !strokeContinuation);
+  if (motionQueue.length > 0) {
+    self.setTimeout(() => {
+      if (!mod || batchInFlight || motionQueue.length === 0) return;
+      if (!batching) { mod._paint_begin_batch(); batching = true; }
+      drainProcess(true);
+    }, 0);
+    return;
+  }
+  if (commitP) { commitP = false; doCommit(); }
   if (pendingCmds.length > 0) {
     const q = pendingCmds; pendingCmds = [];
     for (let i = 0; i < q.length; i++) {
       (self.onmessage as Function)({ data: q[i] });
-      if (batchInFlight) { for (let j = i + 1; j < q.length; j++) pendingCmds.push(q[j]); return; }
+      if (batchInFlight || motionQueue.length > 0) {
+        for (let j = i + 1; j < q.length; j++) pendingCmds.push(q[j]);
+        return;
+      }
     }
   }
-  if (pendingBegin) { applyPendingBegin(); return; }
-  if (commitP && motionQueue.length === 0) { commitP = false; doCommit(); }
-  else if (motionQueue.length > 0) { if (!batching) { mod._paint_begin_batch(); batching = true; } drainProcess(true); }
+  if (pendingBegin) applyPendingBegin();
 }
 
 function pollBatch() {
   if (!mod) return;
   if (mod._paint_is_batch_done()) {
-    batchPolls = 0;
-    threadCooldownMs = 0;   // a healthy batch means threading recovered
     try {
       mod._paint_end_batch_finish();
     } catch (err) {
-      batchRecovery('batch finish threw: ' + ((err as Error)?.message ?? err));
+      reportEngineError('batch finish threw: ' + ((err as Error)?.message ?? err));
       return;
     }
-    afterBatch();
-    return;
-  }
-  // Watchdog: a parallel batch must complete promptly. A stalled or crashed
-  // worker would otherwise leave every input command deferred forever with
-  // no error anywhere. On timeout we abort the batch, briefly pause threading
-  // (cooldown with exponential backoff), and schedule an automatic retry.
-  // Threading is never permanently disabled; a healthy batch resets the
-  // cooldown to zero.
-  if (++batchPolls * 2 >= BATCH_TIMEOUT_MS) {
-    batchPolls = 0;
-    let dropped = 0;
-    try { dropped = mod._paint_batch_abort?.() | 0; } catch (err) { post({ type: 'log', text: 'WATCHDOG: abort threw ' + ((err as Error)?.message ?? err) }); }
-    const cooldown = threadCooldownMs > 0 ? threadCooldownMs : 2000;
-    threadCooldownMs = Math.min(threadCooldownMs > 0 ? threadCooldownMs * 2 : 2000, 30000);
-    post({ type: 'log', text: `WATCHDOG: parallel batch stalled after ${BATCH_TIMEOUT_MS} ms; dropped ${dropped} tiles. Threading paused for ${cooldown} ms, retry scheduled automatically.` });
-    post({ type: 'status', text: 'Brush engine recovered from a stalled batch (threading resumes automatically).' });
-    if (mod?._paint_batch_reenable) {
-      self.setTimeout(() => {
-        try {
-          if (mod?._paint_batch_reenable()) post({ type: 'log', text: 'Threading re-enabled.' });
-        } catch (err) { post({ type: 'log', text: 'Re-enable threading failed: ' + ((err as Error)?.message ?? err) }); }
-      }, cooldown);
-    }
-    batchInFlight = false;
     afterBatch();
     return;
   }
@@ -179,7 +175,7 @@ function pollBatch() {
 }
 
 function drainProcess(bounded: boolean) {
-  if (!mod || batchInFlight) return; n0 = motionQueue.length; a0 = performance.now(); batchPolls = 0;
+  if (!mod || batchInFlight) return; n0 = motionQueue.length; a0 = performance.now();
   if (bounded) motionQueue.drainInterpolatedBounded(strokeSample, BUDGET); else motionQueue.drainInterpolated(strokeSample);
   const a1 = performance.now();
   if (batching) { mod._paint_end_batch(); batching = false; }
@@ -196,7 +192,7 @@ function scheduleFlush() {
   }, 8);
 }
 function flushNow() { if (flushT !== null) { clearTimeout(flushT); flushT = null; } if (!mod || batchInFlight) return; drainProcess(false); }
-function doCommit() { if (!mod) return; if (batchInFlight || pendingCmds.length > 0) { commitP = true; return; } if (batching) { mod._paint_end_batch(); batching = false; if (!mod._paint_is_batch_done()) { commitP = true; return; } } mod._paint_history_commit(); pushState(); }
+function doCommit() { if (!mod) return; if (batchInFlight || motionQueue.length > 0 || strokeContinuation) { commitP = true; return; } if (batching) { mod._paint_end_batch(); batching = false; if (!mod._paint_is_batch_done()) { commitP = true; return; } } mod._paint_history_commit(); pushState(); }
 function applyPendingBegin() {
   if (!mod || !pendingBegin) return;
   const b = pendingBegin;
@@ -212,14 +208,23 @@ function applyPendingBegin() {
   motionQueue.clear(); lastT = 0;
   mod._begin_stroke(b.x, b.y, b.xt, b.yt, b.z, b.r, b.ba);
   mod._paint_begin_batch(); batching = true;
-  for (const s of pendingSamples) (motionQueue as any).push(...s as number[]);
+  for (const s of pendingSamples) {
+    if (!(motionQueue as any).push(...s as number[])) {
+      reportEngineError('The motion queue reached its fixed capacity.');
+    }
+  }
   pendingSamples.length = 0;
+  commitP = pendingBeginCommit;
+  pendingBeginCommit = false;
   scheduleFlush();
 }
 function beginStroke(x: number, y: number, xt: number, yt: number, z: number, r: number, ba: number) {
   if (!mod) return;
-  if (batchInFlight) { if (!pendingBegin) { pendingBegin = { x, y, xt, yt, z, r, ba }; pendingSamples.length = 0; } return; }
-  if (motionQueue.length > 0 || commitP || batching || flushT !== null) flushNow();
+  if (batchInFlight || strokeContinuation || motionQueue.length > 0 || commitP || batching || flushT !== null) {
+    if (!pendingBegin) { pendingBegin = { x, y, xt, yt, z, r, ba }; pendingBeginCommit = false; pendingSamples.length = 0; }
+    scheduleFlush();
+    return;
+  }
   motionQueue.clear(); lastT = 0; mod._begin_stroke(x, y, xt, yt, z, r, ba); mod._paint_begin_batch(); batching = true; scheduleFlush();
 }
 function pushState() {
@@ -274,7 +279,11 @@ function exportTiles(layerId: number | null, id: number) {
 }
 function writeTile(layer: number, tx: number, ty: number, data: ArrayBuffer) {
   if (!mod) return; mod._paint_set_active_layer(layer); const p = mod._malloc(TILE_B);
-  try { mod.HEAPU8.set(new Uint8Array(data), p); mod._paint_write_rgba8_tile(tx, ty, p); } finally { mod._free(p); }
+  if (!p) { reportEngineError('No memory is available for a tile write.'); return; }
+  try {
+    mod.HEAPU8.set(new Uint8Array(data), p);
+    if (!mod._paint_write_rgba8_tile(tx, ty, p)) reportEngineError(`Tile write failed at (${tx}, ${ty}).`);
+  } finally { mod._free(p); }
   renderDirty(); pushState();
 }
 
@@ -295,8 +304,8 @@ async function handleInput(e: MessageEvent<Msg & { canvas?: OffscreenCanvas }>) 
       canvas.width = Math.ceil(docW / dispScale); canvas.height = Math.ceil(docH / dispScale);
       ctx = canvas.getContext('2d', { alpha: true });
     }
-    if (!mod._init(docW, docH)) { post({ type: 'status', text: 'Init failed.' }); return; }
-    rectPtr = mod._malloc(16); const dp = mod._paint_render_rgba8_tile_ptr(0, 0); rgba8 = mod.HEAPU8.subarray(dp, dp + TILE_B);
+    if (!mod._init(docW, docH)) { reportEngineError('Brush engine initialization failed.', 'Engine initialization failed.'); return; }
+    rectPtr = mod._malloc(16); if (!rectPtr) { reportEngineError('No memory is available for display data.'); return; } const dp = mod._paint_render_rgba8_tile_ptr(0, 0); rgba8 = mod.HEAPU8.subarray(dp, dp + TILE_B);
     mod._paint_set_eotf(EOTF); mod._paint_clear(); mod._paint_set_background_color(bgRGB[0], bgRGB[1], bgRGB[2]);
     renderedMip = -1; renderDirty(true); pushState(); post({ type: 'ready' });
     const q = pending.splice(0, pending.length);
@@ -309,13 +318,18 @@ async function handleInput(e: MessageEvent<Msg & { canvas?: OffscreenCanvas }>) 
     }
   }
   if (!mod) { pending.push(m); return; }
-  if (batchInFlight && m.cmd !== 'config' && m.cmd !== 'loadBrush' && m.cmd !== 'strokeSample' && m.cmd !== 'beginStroke' && m.cmd !== 'commit') { pendingCmds.push(m); return; }
+  const paintPending = batchInFlight || strokeContinuation || motionQueue.length > 0 || batching;
+  if (paintPending && m.cmd !== 'strokeSample' && m.cmd !== 'beginStroke' && m.cmd !== 'commit') {
+    pendingCmds.push(m);
+    scheduleFlush();
+    return;
+  }
   switch (m.cmd) {
-    case 'loadBrush': { const b = mod.lengthBytesUTF8(m.json) + 1; const p = mod._malloc(b); mod.stringToUTF8(m.json, p, b); const ok = mod._load_brush(p); mod._free(p); if (ok) { brushOk = true; } else { post({ type: 'log', text: 'Brush load failed (bad .myb JSON?).' }); } break; }
+    case 'loadBrush': { const b = mod.lengthBytesUTF8(m.json) + 1; const p = mod._malloc(b); if (!p) { reportEngineError('No memory is available for brush data.'); break; } mod.stringToUTF8(m.json, p, b); const ok = mod._load_brush(p); mod._free(p); if (ok) { brushOk = true; } else { reportEngineError('Brush load failed because the .myb data is incorrect.'); } break; }
     case 'config': m.settings.forEach(([n, v]) => { try { setB(n, v); } catch (err) { post({ type: 'log', text: `config ${n} failed: ${(err as Error)?.message ?? err}` }); } }); break;
     case 'beginStroke': beginStroke(m.x, m.y, m.xtilt, m.ytilt, m.zoom, m.rotation, m.barrel); break;
-    case 'strokeSample': if (pendingBegin) { pendingSamples.push([m.time, m.x, m.y, m.pressure, m.xtilt, m.ytilt, m.zoom, m.rotation, m.barrel, Number.isFinite(m.pressure), true, true]); } else { motionQueue.push(m.time, m.x, m.y, m.pressure, m.xtilt, m.ytilt, m.zoom, m.rotation, m.barrel, Number.isFinite(m.pressure), true, true); } scheduleFlush(); break;
-    case 'commit': if (batchInFlight || motionQueue.length > 0 || pendingBegin) { commitP = true; scheduleFlush(); } else doCommit(); break;
+    case 'strokeSample': if (pendingBegin) { pendingSamples.push([m.time, m.x, m.y, m.pressure, m.xtilt, m.ytilt, m.zoom, m.rotation, m.barrel, Number.isFinite(m.pressure), true, true]); } else if (!motionQueue.push(m.time, m.x, m.y, m.pressure, m.xtilt, m.ytilt, m.zoom, m.rotation, m.barrel, Number.isFinite(m.pressure), true, true)) { reportEngineError('The motion queue reached its fixed capacity.'); } scheduleFlush(); break;
+    case 'commit': if (pendingBegin) { pendingBeginCommit = true; scheduleFlush(); } else if (batchInFlight || motionQueue.length > 0) { commitP = true; scheduleFlush(); } else doCommit(); break;
     case 'undo': flushNow(); mod._reset_brush(); if (mod._paint_history_undo()) renderDirty(true); pushState(); break;
     case 'redo': flushNow(); mod._reset_brush(); if (mod._paint_history_redo()) renderDirty(true); pushState(); break;
     case 'clear': flushNow(); mod._reset_brush(); mod._paint_clear(); renderDirty(true); pushState(); break;
@@ -341,14 +355,11 @@ async function handleInput(e: MessageEvent<Msg & { canvas?: OffscreenCanvas }>) 
   }
 }
 
-/* Route every message through a guard so no exception can leave the worker
- * frozen and silent. Any failure is reported and the engine resets to a
- * safe serial state. */
+/* Route each message through a guard so exceptions are visible. */
 self.onmessage = (e: MessageEvent<Msg & { canvas?: OffscreenCanvas }>) => {
   handleInput(e)?.catch?.((err: unknown) => {
     const what = `handleInput threw: ${(err as Error)?.message ?? err} ${((err as Error)?.stack || '').slice(0, 200)}`;
-    post({ type: 'log', text: what });
-    batchRecovery(what);
+    reportEngineError(what);
   });
 };
 export {};

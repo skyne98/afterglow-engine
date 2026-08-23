@@ -16,7 +16,7 @@ describe('MotionQueue', () => {
     const queue = new MotionQueue(2);
     queue.push(10, 1, 0, 0, 0, 0, 1, 0, 0);
     queue.push(9, 2, 0, 0, 0, 0, 1, 0, 0);
-    queue.push(8, 3, 0, 0, 0, 0, 1, 0, 0);
+    expect(queue.push(8, 3, 0, 0, 0, 0, 1, 0, 0)).toBe(false);
     const xs: number[] = [];
     const times: number[] = [];
     queue.drain((time, x) => { times.push(time); xs.push(x); });
@@ -37,6 +37,17 @@ describe('MotionQueue', () => {
     expect(queue.length).toBe(6 - flushed.length);
     queue.drainInterpolatedBounded((_time, x) => { flushed.push(x); }, 1000);
     expect(flushed).toHaveLength(6);
+    expect(queue.length).toBe(0);
+  });
+
+  test('keeps a sample when its sink has more work', () => {
+    const queue = new MotionQueue(4);
+    queue.push(1, 7, 0, 0.5, 0, 0, 1, 0, 0.5);
+    let calls = 0;
+    queue.drainInterpolatedBounded(() => { calls++; return false; }, 1000);
+    expect(calls).toBe(1);
+    expect(queue.length).toBe(1);
+    queue.drainInterpolatedBounded(() => true, 1000);
     expect(queue.length).toBe(0);
   });
 

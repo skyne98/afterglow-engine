@@ -1,12 +1,14 @@
+#define _GNU_SOURCE
 #include "web-surface.h"
 
+#include <errno.h>
 #include <math.h>
 #include <pthread.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "operationqueue.h"
+#include "fixed-operationqueue.h"
 
 /* External symbol from the vendored libmypaint tiled surface. Not edited.
  * It pops the tile's ops from the operation queue, fetches the tile through
@@ -32,6 +34,9 @@ struct WebPaintSurface {
     uint8_t *tile_used;
     int32_t *used_tile_x;
     int32_t *used_tile_y;
+    uint8_t *display_dirty;
+    int32_t *display_dirty_slots;
+    int display_dirty_count;
     int32_t *tile_x;
     int32_t *tile_y;
     int32_t *tile_slot;
@@ -120,6 +125,14 @@ static void reset_null_tile(uint16_t *tile, size_t tile_bytes)
     if (tile) memset(tile, 0, tile_bytes);
 }
 
+static void mark_display_dirty(WebPaintSurface *surface, int tile_slot)
+{
+    if (!surface || tile_slot < 0 || tile_slot >= surface->tile_capacity ||
+        surface->display_dirty[tile_slot]) return;
+    surface->display_dirty[tile_slot] = 1;
+    surface->display_dirty_slots[surface->display_dirty_count++] = tile_slot;
+}
+
 static void tile_request_start(MyPaintTiledSurface *tiled_surface,
                                MyPaintTileRequest *request)
 {
@@ -152,8 +165,11 @@ static void tile_request_start(MyPaintTiledSurface *tiled_surface,
     }
     request->buffer = tile_at_slot(surface, tile_slot);
     request->context = NULL;
-    if (!request->readonly && surface->write_callback) {
-        surface->write_callback(surface, tx, ty, request->buffer);
+    if (!request->readonly) {
+        mark_display_dirty(surface, tile_slot);
+        if (surface->write_callback) {
+            surface->write_callback(surface, tx, ty, request->buffer);
+        }
     }
     __atomic_clear(&tile_spinlock, __ATOMIC_RELEASE);
 }
@@ -185,6 +201,8 @@ static void web_surface_free(MyPaintSurface *base)
     free(surface->tile_used);
     free(surface->used_tile_x);
     free(surface->used_tile_y);
+    free(surface->display_dirty);
+    free(surface->display_dirty_slots);
     free(surface->tile_x);
     free(surface->tile_y);
     free(surface->tile_slot);
@@ -229,6 +247,10 @@ WebPaintSurface *web_surface_new(int width, int height)
                                              sizeof(int32_t));
     surface->used_tile_y = (int32_t *)calloc((size_t)surface->tile_capacity,
                                              sizeof(int32_t));
+    surface->display_dirty = (uint8_t *)calloc((size_t)surface->tile_capacity,
+                                               sizeof(uint8_t));
+    surface->display_dirty_slots = (int32_t *)calloc(
+        (size_t)surface->tile_capacity, sizeof(int32_t));
     surface->tile_x = (int32_t *)calloc((size_t)hash_size, sizeof(int32_t));
     surface->tile_y = (int32_t *)calloc((size_t)hash_size, sizeof(int32_t));
     surface->tile_slot = (int32_t *)calloc((size_t)hash_size, sizeof(int32_t));
@@ -238,7 +260,8 @@ WebPaintSurface *web_surface_new(int width, int height)
     }
     pthread_mutex_init(&surface->lock, NULL);
     if (!surface->tiles || !surface->tile_used || !surface->used_tile_x ||
-        !surface->used_tile_y || !surface->tile_x || !surface->tile_y ||
+        !surface->used_tile_y || !surface->display_dirty ||
+        !surface->display_dirty_slots || !surface->tile_x || !surface->tile_y ||
         !surface->tile_slot || !surface->null_tiles) {
         web_surface_free((MyPaintSurface *)surface);
         return NULL;
@@ -298,6 +321,11 @@ int web_surface_take_capacity_error(WebPaintSurface *surface)
     return failed;
 }
 
+int web_surface_has_operation_error(const WebPaintSurface *surface)
+{
+    return !surface || operation_queue_failed(surface->parent.operation_queue);
+}
+
 int web_surface_get_used_tile_count(const WebPaintSurface *surface)
 {
     return surface ? surface->tile_count : 0;
@@ -318,6 +346,35 @@ uint16_t *web_surface_get_used_tile(WebPaintSurface *surface, int index)
     return tile_at_slot(surface, index);
 }
 
+int web_surface_get_display_dirty_count(const WebPaintSurface *surface)
+{
+    return surface ? surface->display_dirty_count : 0;
+}
+
+int web_surface_get_display_dirty_info(const WebPaintSurface *surface, int index,
+                                       int *tx, int *ty)
+{
+    if (!surface || index < 0 || index >= surface->display_dirty_count ||
+        !tx || !ty) return 0;
+    const int slot = surface->display_dirty_slots[index];
+    if (slot < 0 || slot >= surface->tile_count) return 0;
+    *tx = surface->used_tile_x[slot];
+    *ty = surface->used_tile_y[slot];
+    return 1;
+}
+
+void web_surface_clear_display_dirty(WebPaintSurface *surface)
+{
+    if (!surface) return;
+    for (int i = 0; i < surface->display_dirty_count; i++) {
+        const int slot = surface->display_dirty_slots[i];
+        if (slot >= 0 && slot < surface->tile_capacity) {
+            surface->display_dirty[slot] = 0;
+        }
+    }
+    surface->display_dirty_count = 0;
+}
+
 void web_surface_set_write_callback(WebPaintSurface *surface,
                                      WebSurfaceWriteCallback callback)
 {
@@ -329,6 +386,9 @@ void web_surface_clear(WebPaintSurface *surface)
     if (!surface) return;
     free_tiles(surface);
     memset(surface->tile_used, 0, (size_t)surface->hash_size * sizeof(uint8_t));
+    memset(surface->display_dirty, 0,
+           (size_t)surface->tile_capacity * sizeof(uint8_t));
+    surface->display_dirty_count = 0;
     surface->tile_count = 0;
     for (int i = 0; i < WEB_SURFACE_NULL_TILES; i++) {
         reset_null_tile(surface->null_tiles[i], surface->tile_bytes);
@@ -349,9 +409,8 @@ void web_surface_set_symmetry(WebPaintSurface *surface, int active,
  * Parallel batch driver.
  *
  * Design rules (proven on the 680M):
- *  - No Atomics.wait, no pthread_join, no pthread_mutex_lock. Workers spin
- *    only on claim/done counters; the main runtime thread stays live between
- *    the 2 ms polls that call batch_is_done.
+ *  - No Atomics.wait and no blocking join. The main runtime thread uses
+ *    pthread_tryjoin_np during the 2 ms batch polls.
  *  - Workers never allocate tile memory: every dirty tile is pre-created on
  *    the main thread (batch_precreate), so tile_request_start under
  *    no_create=1 always finds an existing tile.
@@ -368,10 +427,13 @@ typedef struct {
     TileIndex *tiles;   /* read-only pointer into the queue's dirty list */
     int count;
     int target;
+    int joined;
+    int error;
+    pthread_t threads[WEB_THREAD_POOL_MAX];
+    uint8_t thread_joined[WEB_THREAD_POOL_MAX];
     volatile int claim;
     volatile int done;
     volatile int in_flight;
-    volatile int disabled;   /* watchdog aborted threading; serial fallback */
 } ParallelBatch;
 
 static ParallelBatch g_batch;
@@ -416,7 +478,6 @@ int web_surface_batch_precreate(WebPaintSurface *surface)
 int web_surface_batch_launch(WebPaintSurface *surface)
 {
     if (!surface || g_batch.in_flight) return -1;
-    if (g_batch.disabled) return -1;   /* watchdog stalled once; stay serial */
     g_batch.surface = surface;
     g_batch.count = operation_queue_get_dirty_tiles(
         surface->parent.operation_queue, &g_batch.tiles);
@@ -425,6 +486,9 @@ int web_surface_batch_launch(WebPaintSurface *surface)
         ? g_batch.count : WEB_THREAD_POOL_MAX;
     g_batch.claim = 0;
     g_batch.done = 0;
+    g_batch.joined = 0;
+    g_batch.error = 0;
+    memset(g_batch.thread_joined, 0, sizeof(g_batch.thread_joined));
     web_surface_set_no_create(surface, 1);
     __atomic_store_n(&g_batch.in_flight, 1, __ATOMIC_RELEASE);
     /* Spawn workers; count the ones that actually started. Never fall back to
@@ -434,11 +498,10 @@ int web_surface_batch_launch(WebPaintSurface *surface)
      * all the work (spawned == 0 => is_done true immediately). */
     int spawned = 0;
     for (int i = 0; i < g_batch.target; i++) {
-        pthread_t thread;
-        if (pthread_create(&thread, NULL, paint_worker_main, NULL) != 0) {
+        if (pthread_create(&g_batch.threads[spawned], NULL,
+                           paint_worker_main, NULL) != 0) {
             break;
         }
-        pthread_detach(thread);
         spawned++;
     }
     g_batch.target = spawned;
@@ -448,7 +511,18 @@ int web_surface_batch_launch(WebPaintSurface *surface)
 int web_surface_batch_is_done(void)
 {
     if (!__atomic_load_n(&g_batch.in_flight, __ATOMIC_ACQUIRE)) return 1;
-    return __atomic_load_n(&g_batch.done, __ATOMIC_ACQUIRE) >= g_batch.target;
+    if (__atomic_load_n(&g_batch.done, __ATOMIC_ACQUIRE) < g_batch.target) {
+        return 0;
+    }
+    for (int i = 0; i < g_batch.target; i++) {
+        if (g_batch.thread_joined[i]) continue;
+        const int result = pthread_tryjoin_np(g_batch.threads[i], NULL);
+        if (result == EBUSY || result == ETIMEDOUT) return 0;
+        if (result != 0) g_batch.error = result;
+        g_batch.thread_joined[i] = 1;
+        g_batch.joined++;
+    }
+    return g_batch.joined >= g_batch.target;
 }
 
 int web_surface_batch_in_flight(void)
@@ -456,31 +530,11 @@ int web_surface_batch_in_flight(void)
     return __atomic_load_n(&g_batch.in_flight, __ATOMIC_ACQUIRE);
 }
 
-int web_surface_batch_abort(WebPaintSurface *surface)
+int web_surface_batch_take_error(void)
 {
-    WebPaintSurface *s = g_batch.surface ? g_batch.surface : surface;
-    const int dropped = g_batch.count;
-    __atomic_store_n(&g_batch.in_flight, 0, __ATOMIC_RELEASE);
-    __atomic_store_n(&g_batch.done, g_batch.target, __ATOMIC_RELEASE);
-    __atomic_store_n(&g_batch.disabled, 1, __ATOMIC_RELEASE);
-    if (s) {
-        /* Drop the pending dabs and release no_create so a serial fallback
-         * batch (or foreground import) can allocate tiles again. Workers
-         * still inside process_tile finish their current tile, then pop NULL
-         * because the queue is empty, and exit harmlessly. */
-        operation_queue_clear_dirty_tiles(s->parent.operation_queue);
-        web_surface_set_no_create(s, 0);
-    }
-    g_batch.surface = NULL;
-    g_batch.tiles = NULL;
-    return dropped;
-}
-
-int web_surface_batch_reenable(void)
-{
-    if (__atomic_load_n(&g_batch.in_flight, __ATOMIC_ACQUIRE)) return 0;
-    __atomic_store_n(&g_batch.disabled, 0, __ATOMIC_RELEASE);
-    return 1;
+    const int error = g_batch.error;
+    g_batch.error = 0;
+    return error;
 }
 
 int web_surface_batch_finish(WebPaintSurface *surface, MyPaintRectangles *roi)

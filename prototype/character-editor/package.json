@@ -8,8 +8,9 @@
     "build": "vite build",
     "gen:character": "bun scripts/gen-makehuman.ts",
     "validate:character": "bun scripts/validate-character-glb.ts",
-    "test:cc": "cc -O2 -std=c11 -Ipaint -Ipaint/vendor/libmypaint paint/layer-compositor.c paint/layer-compositor.test.c paint/vendor/libmypaint/helpers.c paint/vendor/libmypaint/rng-double.c -lm -o /tmp/lc-test && /tmp/lc-test && cc -O2 -std=c11 -Ipaint -Ipaint/vendor/libmypaint paint/layer-compositor.c paint/layer-compositor.parity.test.c paint/vendor/libmypaint/helpers.c paint/vendor/libmypaint/rng-double.c -lm -o /tmp/lc-parity && /tmp/lc-parity",
-    "test": "bun test src/*.test.ts && bun run validate:character && bun run test:cc && bunx tsc --noEmit"
+    "test:cc": "cc -O2 -std=c11 -Ipaint -Ipaint/vendor/libmypaint paint/layer-compositor.c paint/layer-compositor.test.c paint/vendor/libmypaint/helpers.c paint/vendor/libmypaint/rng-double.c -lm -o /tmp/lc-test && /tmp/lc-test && cc -O2 -std=c11 -Ipaint -Ipaint/vendor/libmypaint paint/layer-compositor.c paint/layer-compositor.parity.test.c paint/vendor/libmypaint/helpers.c paint/vendor/libmypaint/rng-double.c -lm -o /tmp/lc-parity && /tmp/lc-parity && cc -O2 -std=c11 -Ipaint/vendor/libmypaint paint/fixed-operationqueue.c paint/fixed-operationqueue.test.c -o /tmp/fixed-operationqueue-test && /tmp/fixed-operationqueue-test",
+    "test:cooperative": "nix-shell -p json_c pkg-config --run 'bash paint/test-cooperative.sh'",
+    "test": "bun test src/*.test.ts && bun run validate:character && bun run test:cc && bun run test:cooperative && bunx tsc --noEmit"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^1.0.1",

@@ -3,6 +3,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "fixed-operationqueue.h"
+
 #define WEB_SURFACE_MIN_HASH_SIZE 8192
 
 struct WebPaintSurface {
@@ -18,6 +20,9 @@ struct WebPaintSurface {
     uint8_t *tile_used;
     int32_t *used_tile_x;
     int32_t *used_tile_y;
+    uint8_t *display_dirty;
+    int32_t *display_dirty_slots;
+    int display_dirty_count;
     int32_t *tile_x;
     int32_t *tile_y;
     int32_t *tile_slot;
@@ -94,6 +99,14 @@ static void reset_null_tile(WebPaintSurface *surface)
     memset(surface->null_tile, 0, surface->tile_bytes);
 }
 
+static void mark_display_dirty(WebPaintSurface *surface, int tile_slot)
+{
+    if (!surface || tile_slot < 0 || tile_slot >= surface->tile_capacity ||
+        surface->display_dirty[tile_slot]) return;
+    surface->display_dirty[tile_slot] = 1;
+    surface->display_dirty_slots[surface->display_dirty_count++] = tile_slot;
+}
+
 static void tile_request_start(MyPaintTiledSurface *tiled_surface,
                                MyPaintTileRequest *request)
 {
@@ -117,8 +130,11 @@ static void tile_request_start(MyPaintTiledSurface *tiled_surface,
     }
     request->buffer = tile_at_slot(surface, tile_slot);
     request->context = NULL;
-    if (!request->readonly && surface->write_callback) {
-        surface->write_callback(surface, tx, ty, request->buffer);
+    if (!request->readonly) {
+        mark_display_dirty(surface, tile_slot);
+        if (surface->write_callback) {
+            surface->write_callback(surface, tx, ty, request->buffer);
+        }
     }
 }
 
@@ -149,6 +165,8 @@ static void web_surface_free(MyPaintSurface *base)
     free(surface->tile_used);
     free(surface->used_tile_x);
     free(surface->used_tile_y);
+    free(surface->display_dirty);
+    free(surface->display_dirty_slots);
     free(surface->tile_x);
     free(surface->tile_y);
     free(surface->tile_slot);
@@ -189,12 +207,17 @@ WebPaintSurface *web_surface_new(int width, int height)
                                              sizeof(int32_t));
     surface->used_tile_y = (int32_t *)calloc((size_t)surface->tile_capacity,
                                              sizeof(int32_t));
+    surface->display_dirty = (uint8_t *)calloc((size_t)surface->tile_capacity,
+                                               sizeof(uint8_t));
+    surface->display_dirty_slots = (int32_t *)calloc(
+        (size_t)surface->tile_capacity, sizeof(int32_t));
     surface->tile_x = (int32_t *)calloc((size_t)hash_size, sizeof(int32_t));
     surface->tile_y = (int32_t *)calloc((size_t)hash_size, sizeof(int32_t));
     surface->tile_slot = (int32_t *)calloc((size_t)hash_size, sizeof(int32_t));
     surface->null_tile = (uint16_t *)calloc(1, surface->tile_bytes);
     if (!surface->tiles || !surface->tile_used || !surface->used_tile_x ||
-        !surface->used_tile_y || !surface->tile_x || !surface->tile_y ||
+        !surface->used_tile_y || !surface->display_dirty ||
+        !surface->display_dirty_slots || !surface->tile_x || !surface->tile_y ||
         !surface->tile_slot || !surface->null_tile) {
         web_surface_free((MyPaintSurface *)surface);
         return NULL;
@@ -254,6 +277,11 @@ int web_surface_take_capacity_error(WebPaintSurface *surface)
     return failed;
 }
 
+int web_surface_has_operation_error(const WebPaintSurface *surface)
+{
+    return !surface || operation_queue_failed(surface->parent.operation_queue);
+}
+
 int web_surface_get_used_tile_count(const WebPaintSurface *surface)
 {
     return surface ? surface->tile_count : 0;
@@ -274,6 +302,35 @@ uint16_t *web_surface_get_used_tile(WebPaintSurface *surface, int index)
     return tile_at_slot(surface, index);
 }
 
+int web_surface_get_display_dirty_count(const WebPaintSurface *surface)
+{
+    return surface ? surface->display_dirty_count : 0;
+}
+
+int web_surface_get_display_dirty_info(const WebPaintSurface *surface, int index,
+                                       int *tx, int *ty)
+{
+    if (!surface || index < 0 || index >= surface->display_dirty_count ||
+        !tx || !ty) return 0;
+    const int slot = surface->display_dirty_slots[index];
+    if (slot < 0 || slot >= surface->tile_count) return 0;
+    *tx = surface->used_tile_x[slot];
+    *ty = surface->used_tile_y[slot];
+    return 1;
+}
+
+void web_surface_clear_display_dirty(WebPaintSurface *surface)
+{
+    if (!surface) return;
+    for (int i = 0; i < surface->display_dirty_count; i++) {
+        const int slot = surface->display_dirty_slots[i];
+        if (slot >= 0 && slot < surface->tile_capacity) {
+            surface->display_dirty[slot] = 0;
+        }
+    }
+    surface->display_dirty_count = 0;
+}
+
 void web_surface_set_write_callback(WebPaintSurface *surface,
                                      WebSurfaceWriteCallback callback)
 {
@@ -285,6 +342,9 @@ void web_surface_clear(WebPaintSurface *surface)
     if (!surface) return;
     free_tiles(surface);
     memset(surface->tile_used, 0, (size_t)surface->hash_size * sizeof(uint8_t));
+    memset(surface->display_dirty, 0,
+           (size_t)surface->tile_capacity * sizeof(uint8_t));
+    surface->display_dirty_count = 0;
     surface->tile_count = 0;
     reset_null_tile(surface);
 }

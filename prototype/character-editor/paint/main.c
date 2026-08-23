@@ -12,6 +12,7 @@
 #include "helpers.h"
 #include "mypaint-surface.h"
 #include "mypaint-symmetry.h"
+#include "mypaint-brush-cooperative.h"
 #include "web-surface.h"
 #include "layer-compositor.h"
 
@@ -21,6 +22,7 @@
 #define WEB_MIP_MAX_SOURCES 16
 #define DISPLAY_LUT_VALUES 32769
 #define DISPLAY_LUT_NOISE 256
+#define WEB_STROKE_DAB_BUDGET 128
 
 static WebPaintSurface *layers[WEB_MAX_LAYERS];
 static WebPaintSurface *background_surface;
@@ -174,6 +176,7 @@ static int end_atomic_internal(void)
     if (!surface || !atomic_active) {
         return dirty_roi.num_rectangles;
     }
+    if (web_surface_has_operation_error(surface)) paint_error_code = 4;
     atomic_dirty_roi.num_rectangles = WEB_SURFACE_MAX_DIRTY_RECTS;
     mypaint_surface_end_atomic(surface_interface(), &atomic_dirty_roi);
     for (int i = 0; i < atomic_dirty_roi.num_rectangles; i++) {
@@ -351,6 +354,7 @@ static void destroy_layers(void)
 void new_brush(void)
 {
     ensure_init();
+    afterglow_brush_stroke_cancel();
     if (brush) {
         mypaint_brush_unref(brush);
     }
@@ -397,6 +401,7 @@ int init(int width, int height)
     history_record_total = 0;
     history_cursor = 0;
     history_active = 0;
+    afterglow_brush_stroke_cancel();
     if (brush) {
         mypaint_brush_unref(brush);
         brush = NULL;
@@ -440,6 +445,7 @@ int init(int width, int height)
     rebuild_display_lut();
     if (!history_ensure(1024)) {
         history_free();
+        return 0;
     }
     layer_visible[0] = 1;
     paint_set_background_color(0xA8 / 255.0f, 0xA4 / 255.0f, 0x98 / 255.0f);
@@ -471,6 +477,7 @@ void begin_stroke(float x, float y, float xtilt, float ytilt,
     }
     paint_history_begin();
     begin_atomic_internal();
+    afterglow_brush_stroke_cancel();
     mypaint_brush_reset(brush);
     mypaint_brush_new_stroke(brush);
     /* Match MyPaint's abrupt Brushwork start. Prime the engine at the
@@ -532,25 +539,43 @@ void set_brush_mapping_point(const char *setting_name, const char *input_name,
 
 void reset_brush(void)
 {
+    afterglow_brush_stroke_cancel();
     if (brush) {
         mypaint_brush_reset(brush);
     }
 }
 
-void stroke_to(float x, float y, float pressure, float xtilt, float ytilt,
-               double dtime, float viewzoom, float viewrotation,
-               float barrel_rotation, int linear)
+int stroke_to(float x, float y, float pressure, float xtilt, float ytilt,
+              double dtime, float viewzoom, float viewrotation,
+              float barrel_rotation, int linear)
 {
-    if (!brush || !surface) {
-        return;
+    if (!brush || !surface || afterglow_brush_stroke_pending()) {
+        return -1;
     }
     begin_atomic_internal();
-    mypaint_brush_stroke_to(brush, surface_interface(), x, y, pressure,
-                            xtilt, ytilt, dtime, viewzoom, viewrotation,
-                            barrel_rotation, linear ? 1 : 0);
-    if (!suppress_atomic_end) {
-        end_atomic_internal();
-    }
+    const int result = afterglow_brush_stroke_start(
+        brush, surface_interface(), x, y, pressure, xtilt, ytilt, dtime,
+        viewzoom, viewrotation, barrel_rotation, linear ? 1 : 0,
+        WEB_STROKE_DAB_BUDGET);
+    if (result < 0) paint_error_code = 3;
+    if (!suppress_atomic_end) end_atomic_internal();
+    return result;
+}
+
+int paint_continue_stroke_to(void)
+{
+    if (!afterglow_brush_stroke_pending()) return -1;
+    begin_atomic_internal();
+    const int result = afterglow_brush_stroke_continue(
+        WEB_STROKE_DAB_BUDGET);
+    if (result < 0) paint_error_code = 3;
+    if (!suppress_atomic_end) end_atomic_internal();
+    return result;
+}
+
+int paint_has_stroke_continuation(void)
+{
+    return afterglow_brush_stroke_pending();
 }
 
 void paint_begin_atomic(void)
@@ -591,17 +616,6 @@ int paint_end_batch_finish(void)
     return dirty_roi.num_rectangles;
 }
 
-int paint_batch_abort(void)
-{
-    /* Serial: nothing to abort. */
-    return 0;
-}
-
-int paint_batch_reenable(void)
-{
-    /* Serial: threading is never disabled. */
-    return 1;
-}
 #else
 
 static int batch_active = 0;
@@ -627,6 +641,7 @@ int paint_end_batch(void)
         return dirty_roi.num_rectangles;
     }
     batch_active = 0;
+    if (web_surface_has_operation_error(surface)) paint_error_code = 4;
     /* Main thread: create every dirty tile + capture history before-states. */
     web_surface_batch_precreate(surface);
     const int launched = web_surface_batch_launch(surface);
@@ -650,25 +665,17 @@ int paint_end_batch_finish(void)
     }
     atomic_dirty_roi.num_rectangles = WEB_SURFACE_MAX_DIRTY_RECTS;
     web_surface_batch_finish(surface, &atomic_dirty_roi);
+    if (web_surface_batch_take_error()) paint_error_code = 5;
     for (int i = 0; i < atomic_dirty_roi.num_rectangles; i++) {
         merge_dirty_rectangle(&atomic_dirty_rects[i]);
     }
     if (web_surface_take_capacity_error(surface)) {
         paint_error_code = 1;
     }
+    atomic_active = 0;
     return dirty_roi.num_rectangles;
 }
 
-int paint_batch_abort(void)
-{
-    if (!surface) return 0;
-    return web_surface_batch_abort(surface);
-}
-
-int paint_batch_reenable(void)
-{
-    return web_surface_batch_reenable();
-}
 #endif
 
 int paint_get_width(void)
@@ -1002,9 +1009,22 @@ void paint_get_dirty_rect(int index, int *out_rect)
     out_rect[3] = dirty_rects[index].height;
 }
 
+int paint_get_dirty_tile_count(void)
+{
+    return surface ? web_surface_get_display_dirty_count(surface) : 0;
+}
+
+void paint_get_dirty_tile_info(int index, int *out_tile)
+{
+    if (!surface || !out_tile) return;
+    web_surface_get_display_dirty_info(
+        surface, index, &out_tile[0], &out_tile[1]);
+}
+
 void paint_clear_dirty(void)
 {
     dirty_roi.num_rectangles = 0;
+    if (surface) web_surface_clear_display_dirty(surface);
 }
 
 int history_ensure(int needed)
@@ -1066,14 +1086,16 @@ static void history_capture_before(WebPaintSurface *owner, int tx, int ty,
         history_active_layer >= layer_count || owner != layers[history_active_layer]) {
         return;
     }
-    /* Spinlock — no Atomics.wait, can't deadlock with pthread_join */
+    /* The main WASM worker does not use a blocking join. */
     while (__atomic_test_and_set(&history_spinlock, __ATOMIC_ACQUIRE)) {}
     if (history_find_entry(history_active_start, history_active_count, tx, ty) >= 0) {
         __atomic_clear(&history_spinlock, __ATOMIC_RELEASE);
         return;
     }
     if (history_entry_count + 1 > history_capacity) {
-        /* Don't realloc from a pthread worker — it deadlocks on wasmMemory.grow. */
+        paint_error_code = 2;
+        history_active = 0;
+        history_entry_count = history_active_start;
         __atomic_clear(&history_spinlock, __ATOMIC_RELEASE);
         return;
     }
@@ -1617,6 +1639,7 @@ void paint_destroy(void)
     if (atomic_active) {
         end_atomic_internal();
     }
+    afterglow_brush_stroke_cancel();
     if (brush) {
         mypaint_brush_unref(brush);
         brush = NULL;

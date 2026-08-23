@@ -24,12 +24,17 @@ int web_surface_get_tiles_height(const WebPaintSurface *surface);
 uint16_t *web_surface_get_tile(WebPaintSurface *surface, int tx, int ty);
 uint16_t *web_surface_get_or_create_tile(WebPaintSurface *surface, int tx, int ty);
 int web_surface_take_capacity_error(WebPaintSurface *surface);
+int web_surface_has_operation_error(const WebPaintSurface *surface);
 int web_surface_get_no_create(WebPaintSurface *surface);
 void web_surface_set_no_create(WebPaintSurface *surface, int v);
 int web_surface_get_used_tile_count(const WebPaintSurface *surface);
 int web_surface_get_used_tile_info(const WebPaintSurface *surface, int index,
                                     int *tx, int *ty);
 uint16_t *web_surface_get_used_tile(WebPaintSurface *surface, int index);
+int web_surface_get_display_dirty_count(const WebPaintSurface *surface);
+int web_surface_get_display_dirty_info(const WebPaintSurface *surface, int index,
+                                       int *tx, int *ty);
+void web_surface_clear_display_dirty(WebPaintSurface *surface);
 void web_surface_set_write_callback(WebPaintSurface *surface,
                                      WebSurfaceWriteCallback callback);
 void web_surface_clear(WebPaintSurface *surface);
@@ -56,13 +61,6 @@ int web_surface_batch_launch(WebPaintSurface *surface);
 int web_surface_batch_is_done(void);
 int web_surface_batch_finish(WebPaintSurface *surface, MyPaintRectangles *roi);
 int web_surface_batch_in_flight(void);
-/* Force-abort a stalled batch (watchdog). Drops pending dabs, disables the
- * threaded path (cooldown) for the session until web_surface_batch_reenable,
- * and returns the dropped tile count. Safe to call from the main thread
- * whenever in_flight is set. */
-int web_surface_batch_abort(WebPaintSurface *surface);
-/* Re-enable the threaded path after a watchdog cooldown. Refuses while a
- * batch is still in flight. Returns 1 if re-enabled. */
-int web_surface_batch_reenable(void);
+int web_surface_batch_take_error(void);
 
 #endif
