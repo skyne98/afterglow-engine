@@ -40,17 +40,32 @@ static u15_t u15_opacity(float opacity)
     return (u15_t)(opacity * (float)U15_ONE);
 }
 
+/* Integer sqrt in fix15, transcribing MyPaint's fix15_sqrt (table + Babylon)
+ * bit-for-bit, so Soft-light matches the reference layer stack exactly. */
 static u15_t u15_sqrt(u15_t value)
 {
-    uint64_t target = (uint64_t)value * U15_ONE;
-    uint64_t low = 0;
-    uint64_t high = U15_ONE;
-    while (low < high) {
-        uint64_t middle = (low + high + 1) >> 1;
-        if (middle * middle <= target) low = middle;
-        else high = middle - 1;
+    if (value == 0 || value == U15_ONE) return value;
+    static const uint16_t approx16[16] = {
+        16383, 23169, 28376, 32767, 36634, 40131, 43346, 46339,
+        49151, 51809, 54338, 56754, 59072, 61302, 63453, 65535
+    };
+    /* One extra bit of precision for working; 1.0 would overflow, so the
+     * caller guarantees value < 1.0 here (value == U15_ONE returns early). */
+    uint32_t s = value << 1;
+    const int fracbits = 16;
+    uint32_t n = approx16[s >> 12];
+    uint32_t n_old = 0;
+    for (int i = 0; i < 15; ++i) {
+        n_old = n;
+        n += (s << fracbits) / n;
+        n >>= 1;
+        if (n == n_old
+            || ((n > n_old) && (n - 1 == n_old))
+            || ((n < n_old) && (n + 1 == n_old))) {
+            break;
+        }
     }
-    return (u15_t)low;
+    return (u15_t)(n >> 1);
 }
 
 static u15_t blend_channel(u15_t source, u15_t backdrop, int mode)

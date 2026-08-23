@@ -144,3 +144,21 @@ demo and tests behave unchanged.
   batch, thread count 4) needs a measured A/B against serial on heavy
   strokes; bit-exact serial-vs-parallel tile equality is the acceptance
   gate to add.
+
+## Layer-mode parity with MyPaint (2026-08)
+
+`layer-compositor.c` implements the same 22 layer modes as MyPaint's layer
+stack (lib/pixops.cpp -> blending.hpp + compositing.hpp + fix15.hpp), with the
+same mode ordering and the same Pigment default (`mypaint:spectral-wgm`). All
+arithmetic is truncating fix15 exactly like MyPaint. The one divergence that
+existed — the soft-light sqrt — is now a bit-for-bit transcription of MyPaint's
+table+Babylonian `fix15_sqrt`.
+
+`layer-compositor.parity.test.c` transcribes MyPaint's fix15/blending/
+compositing headers (GPL, test-only) and exhaustively compares every mode over
+a source/backdrop colour, alpha and opacity grid. Result: **21 modes bit-exact
+(0 LSB); Pigment within 1 LSB** (its float `fastpow` accumulation order).
+Both C tests run from `bun run test` (`test:cc`).
+
+`rgb_to_spectral`/`spectral_to_rgb`/`fastpow` are the vendored libmypaint
+copies, byte-identical to MyPaint's.
