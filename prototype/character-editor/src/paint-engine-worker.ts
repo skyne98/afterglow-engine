@@ -31,7 +31,7 @@ let n0 = 0, a0 = 0;
 let batchInFlight = false;
 let pendingCmds: Msg[] = [];
 let pendingBegin: { x: number; y: number; xt: number; yt: number; z: number; r: number; ba: number } | null = null;
-let pendingSamples: number[][] = [];
+let pendingSamples: (number | boolean)[][] = [];
 let brushOk = false, brushJson = '';
 let bgRGB: [number, number, number] = [0xA8 / 255, 0xA4 / 255, 0x98 / 255];
 let statsS = 0, statsMs = 0, lastBR = 0, lastRR = 0, lastStats = 0;
@@ -154,7 +154,7 @@ function applyPendingBegin() {
   motionQueue.clear(); lastT = 0;
   mod._begin_stroke(b.x, b.y, b.xt, b.yt, b.z, b.r, b.ba);
   mod._paint_begin_batch(); batching = true;
-  for (const s of pendingSamples) (motionQueue as any).push(...s);
+  for (const s of pendingSamples) (motionQueue as any).push(...s as number[]);
   pendingSamples.length = 0;
   scheduleFlush();
 }
