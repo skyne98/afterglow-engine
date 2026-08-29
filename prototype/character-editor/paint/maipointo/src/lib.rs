@@ -4,13 +4,21 @@
 //! Port status, in dependency order:
 //! 1. [`mask`] — dab opacity mask + LRE encoding (`mypaint-tiled-surface.c`)
 //! 2. [`brushmodes`] — pixel blend modes (`brushmodes.c`, non-spectral set)
-//! 3. TODO: `mypaint-mapping.c` (input → setting curves)
-//! 4. TODO: `mypaint-brush.c` stroke state machine (`stroke_to`, dabs)
-//! 5. TODO: spectral `paint` modes (fastapprox `fastpow` port)
-//! 6. TODO: `.myb` JSON brushes, wasm bindings, parity oracle vs vendored C
+//! 3. [`mapping`] — input→setting curves (`mypaint-mapping.c`)
+//! 4. [`rngdouble`] — Knuth lagged-Fibonacci brush RNG (`rng-double.c`)
+//! 5. [`settings`] — settings/input tables (generated from
+//!    `brushsettings.json` at build time)
+//! 6. TODO: `mypaint-brush.c` stroke state machine (`stroke_to`, dabs, smudge)
+//! 7. TODO: spectral `paint` modes (fastapprox `fastpow` port) — NOTE: this
+//!    NG version defaults `paint_mode` to 1.0, so this is required for
+//!    default-brush parity, not an optional extra
+//! 8. TODO: `.myb` JSON brushes, wasm bindings
 
 pub mod brushmodes;
+pub mod mapping;
 pub mod mask;
+pub mod rngdouble;
+pub mod settings;
 
 pub use brushmodes::ColorSums;
 pub use mask::{clamp, render_dab_mask, TILE_SIZE};

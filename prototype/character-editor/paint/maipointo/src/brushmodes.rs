@@ -40,7 +40,6 @@ macro_rules! for_each_masked_pixel {
     }};
 }
 
-pub(crate) use for_each_masked_pixel;
 /// `draw_dab_pixels_BlendMode_Normal` — plain "over".
 pub fn draw_dab_normal(
     mask: &[u16],

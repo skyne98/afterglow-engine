@@ -90,18 +90,16 @@ fn calculate_rr_antialiased(
     let pixel_top = pixel_bottom - 1.0;
 
     let (mut nearest_x, mut nearest_y) = (0.0f32, 0.0f32);
-    let r_near;
     let rr_near;
     // Dab's center is inside the pixel?
     if pixel_left < 0.0 && pixel_right > 0.0 && pixel_top < 0.0 && pixel_bottom > 0.0 {
-        r_near = 0.0;
         rr_near = 0.0;
     } else {
         let (nx, ny) = closest_point_to_line(cs, sn, pixel_center_x, pixel_center_y);
         nearest_x = clamp(nx, pixel_left, pixel_right);
         nearest_y = clamp(ny, pixel_top, pixel_bottom);
-        r_near = calculate_r_sample(nearest_x, nearest_y, aspect_ratio, sn, cs);
-        rr_near = r_near * one_over_radius2;
+        rr_near = calculate_r_sample(nearest_x, nearest_y, aspect_ratio, sn, cs)
+            * one_over_radius2;
     }
 
     // Out of dab's reach?
