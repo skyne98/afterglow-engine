@@ -248,10 +248,14 @@ pub fn hsl_to_rgb_float(hsl: &mut [f32; 3]) {
 
 /// `rgb_to_spectral` — upsample linear sRGB to a 10-bin reflectance.
 pub fn rgb_to_spectral(r: f32, g: f32, b: f32, spectral: &mut [f32; 10]) {
-    let offset = 1.0 - WGM_EPSILON;
-    let r = r * offset + WGM_EPSILON;
-    let g = g * offset + WGM_EPSILON;
-    let b = b * offset + WGM_EPSILON;
+    // C: `float offset = 1.0 - WGM_EPSILON` narrows 0.999 to f32; the multiply
+    // is f32, then + 0.001 (double literal) promotes to double and the
+    // assignment narrows back to the float parameter.
+    let offset: f32 = (1.0f64 - 0.001f64) as f32;
+    let r = (r * offset) as f64 + 0.001;
+    let g = (g * offset) as f64 + 0.001;
+    let b = (b * offset) as f64 + 0.001;
+    let (r, g, b) = (r as f32, g as f32, b as f32);
     for i in 0..10 {
         spectral[i] += SPECTRAL_R_SMALL[i] * r + SPECTRAL_G_SMALL[i] * g + SPECTRAL_B_SMALL[i] * b;
     }
@@ -259,15 +263,17 @@ pub fn rgb_to_spectral(r: f32, g: f32, b: f32, spectral: &mut [f32; 10]) {
 
 /// `spectral_to_rgb`.
 pub fn spectral_to_rgb(spectral: &[f32; 10], rgb: &mut [f32; 3]) {
-    let offset = 1.0 - WGM_EPSILON;
     let mut tmp = [0.0f32; 3];
     for i in 0..10 {
         tmp[0] += T_MATRIX_SMALL[0][i] * spectral[i];
         tmp[1] += T_MATRIX_SMALL[1][i] * spectral[i];
         tmp[2] += T_MATRIX_SMALL[2][i] * spectral[i];
     }
+    // C: (tmp[i] - 0.001double) / float_offset is computed in double, then
+    // narrowed to float by the assignment.
+    let offset: f32 = (1.0f64 - 0.001f64) as f32;
     for i in 0..3 {
-        rgb[i] = clamp((tmp[i] - WGM_EPSILON) / offset, 0.0, 1.0);
+        rgb[i] = clamp((((tmp[i] as f64) - 0.001) / (offset as f64)) as f32, 0.0, 1.0);
     }
 }
 

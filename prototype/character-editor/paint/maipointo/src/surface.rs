@@ -112,13 +112,11 @@ impl FixedTiledSurface {
         let mut mask = std::mem::take(&mut self.mask);
         let mut scratch = std::mem::take(&mut self.scratch);
         if let Some(base) = self.tile_base(tx, ty) {
-            let end = base + TILE_SIZE * TILE_SIZE * 4;
-            let (before, rgba) = self.tiles.split_at_mut(end);
-            let rgba = &mut rgba[..TILE_SIZE * TILE_SIZE * 4];
+            let (_, rest) = self.tiles.split_at_mut(base);
+            let rgba = &mut rest[..TILE_SIZE * TILE_SIZE * 4];
             for op in &batch {
                 process_op(rgba, &mut mask, tx, ty, op, &mut scratch);
             }
-            let _ = before;
         }
         // Out-of-range tiles drew into the discarded null tile.
         self.mask = mask;
@@ -418,8 +416,10 @@ fn process_op(
                     * (1 << 15) as f32) as u16,
             );
         }
-    } else {
-        // spectral paint path (paint >= 1.0): the NG Pigment mode
+    } 
+    if op.paint > 0.0 {
+        // spectral paint path (paint > 0.0): the NG Pigment mode; the C also
+        // runs this for 0 < paint < 1 together with the legacy block above.
         if op.normal != 0.0 {
             if op.color_a == 1.0 {
                 draw_dab_normal_paint(

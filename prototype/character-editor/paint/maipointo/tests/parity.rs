@@ -43,6 +43,9 @@ const MODE_POSTERIZE: u8 = 3;
 const MODE_COLORIZE: u8 = 4;
 const MODE_GET_COLOR_LEGACY: u8 = 5;
 const MODE_GET_COLOR_ACCUM: u8 = 6;
+const MODE_NORMAL_PAINT: u8 = 7;
+const MODE_NORMAL_ERASER_PAINT: u8 = 8;
+const MODE_LOCK_ALPHA_PAINT: u8 = 9;
 
 impl DabCmd {
     fn encode(&self) -> [u8; 64] {
@@ -116,6 +119,8 @@ fn oracle_path() -> PathBuf {
         let cc = Command::new("cc")
             .arg("-O2")
             .arg("-ffp-contract=off")
+            .arg("-fno-tree-vectorize")
+            .arg("-fno-tree-slp-vectorize")
             .arg("-std=c11")
             .arg("-I")
             .arg(paint_dir())
@@ -231,6 +236,13 @@ fn run_maipointo(cmds: &[DabCmd]) -> (Vec<u16>, [f64; 5]) {
                 c.interval,
                 c.rand_rate,
                 &mut PortableRand::default(),
+            ),
+            MODE_NORMAL_PAINT => draw_dab_normal_paint(&mask, &mut tile.data, c.r, c.g, c.b, c.opacity),
+            MODE_NORMAL_ERASER_PAINT => draw_dab_normal_and_eraser_paint(
+                &mask, &mut tile.data, c.r, c.g, c.b, c.a, c.opacity,
+            ),
+            MODE_LOCK_ALPHA_PAINT => draw_dab_lock_alpha_paint(
+                &mask, &mut tile.data, c.r, c.g, c.b, c.opacity,
             ),
             _ => unreachable!(),
         }
@@ -477,7 +489,7 @@ fn parity_fuzzed_dabs() {
             a: rng.u16_in(0, 32768),
             opacity: rng.u16_in(0, 32768),
             posterize_num: posterize,
-            // paint < 0 → legacy sampling; 0.0 → non-spectral accumulate.
+            // paint < 0 = legacy sampling; 0.0 = non-spectral accumulate.
             paint: if mode == MODE_GET_COLOR_ACCUM { 0.0 } else { -1.0 },
             interval: 1,
             rand_rate: 0.0,
@@ -486,4 +498,180 @@ fn parity_fuzzed_dabs() {
         cmds.push(cmd);
     }
     assert_exact(&cmds);
+}
+
+/// Spectral (Pigment) paint blend modes: fixed + fuzzed byte parity.
+#[test]
+fn parity_spectral_dabs() {
+    let mut cmds = Vec::new();
+    // Fixed spectral dabs: pure spectral (paint == 1 semantics) and mixed.
+    for &(x, y) in &[(32.0f32, 32.0), (0.0, 0.0), (63.9, 63.9), (-5.0, 70.0)] {
+        cmds.push(DabCmd {
+            mode: MODE_NORMAL_PAINT,
+            x,
+            y,
+            radius: 7.5,
+            hardness: 0.65,
+            softness: 0.0,
+            aspect: 1.0,
+            angle: 0.0,
+            r: 24576,
+            g: 8192,
+            b: 4096,
+            a: 32768,
+            opacity: 20000,
+            posterize_num: 1,
+            paint: 1.0,
+            interval: 1,
+            rand_rate: 0.0,
+            seed: 0,
+        });
+        cmds.push(DabCmd {
+            mode: MODE_NORMAL_ERASER_PAINT,
+            x,
+            y,
+            radius: 5.5,
+            hardness: 0.5,
+            softness: 0.0,
+            aspect: 2.0,
+            angle: 45.0,
+            r: 16384,
+            g: 24576,
+            b: 4096,
+            a: 19660, // alpha < 1 -> eraser variant
+            opacity: 26000,
+            posterize_num: 1,
+            paint: 1.0,
+            interval: 1,
+            rand_rate: 0.0,
+            seed: 0,
+        });
+        cmds.push(DabCmd {
+            mode: MODE_LOCK_ALPHA_PAINT,
+            x,
+            y,
+            radius: 9.0,
+            hardness: 0.4,
+            softness: 0.0,
+            aspect: 1.0,
+            angle: 0.0,
+            r: 8192,
+            g: 8192,
+            b: 28000,
+            a: 32768,
+            opacity: 16000,
+            posterize_num: 1,
+            paint: 1.0,
+            interval: 1,
+            rand_rate: 0.0,
+            seed: 0,
+        });
+    }
+    assert_exact(&cmds);
+
+    // Fuzzed spectral dabs over a pre-painted tile.
+    let mut rng = Lcg(0xC0FFEE11);
+    let mut fuzz = Vec::new();
+    for i in 0..300 {
+        let mode = match i % 3 {
+            0 => MODE_NORMAL_PAINT,
+            1 => MODE_NORMAL_ERASER_PAINT,
+            _ => MODE_LOCK_ALPHA_PAINT,
+        };
+        fuzz.push(DabCmd {
+            mode,
+            x: rng.f32_in(-10.0, 74.0),
+            y: rng.f32_in(-10.0, 74.0),
+            radius: rng.f32_in(0.5, 40.0),
+            hardness: rng.f32_in(0.02, 1.0),
+            softness: 0.0,
+            aspect: rng.f32_in(1.0, 8.0),
+            angle: rng.f32_in(0.0, 360.0),
+            r: rng.u16_in(0, 32768),
+            g: rng.u16_in(0, 32768),
+            b: rng.u16_in(0, 32768),
+            a: rng.u16_in(0, 32768),
+            opacity: rng.u16_in(0, 32768),
+            posterize_num: 1,
+            paint: 1.0,
+            interval: 1,
+            rand_rate: 0.0,
+            seed: 0,
+        });
+    }
+    assert_exact(&fuzz);
+}
+#[test]
+fn spectral_single_fixed() {
+    let cmd = DabCmd {
+        mode: MODE_NORMAL_PAINT,
+        x: 32.0,
+        y: 32.0,
+        radius: 7.5,
+        hardness: 0.65,
+        softness: 0.0,
+        aspect: 1.0,
+        angle: 0.0,
+        r: 24576,
+        g: 8192,
+        b: 4096,
+        a: 32768,
+        opacity: 20000,
+        posterize_num: 1,
+        paint: 1.0,
+        interval: 1,
+        rand_rate: 0.0,
+        seed: 0,
+    };
+    let (want, _) = run_oracle(&[cmd.clone()]);
+    let (got, _) = run_maipointo(&[cmd]);
+    let diffs: Vec<usize> = want.iter().zip(got.iter()).enumerate().filter(|(_, (w, g))| w != g).map(|(i, _)| i).collect();
+    assert!(diffs.is_empty(), "diff at {:?} first 5: {:?} vs {:?}", diffs.len(), &diffs[..diffs.len().min(5)], diffs.iter().take(5).map(|i| (want[*i], got[*i])).collect::<Vec<_>>());
+}
+
+#[test]
+fn spectral_prefix_bisect() {
+    let mut rng = Lcg(0xC0FFEE11);
+    let mut cmds = Vec::new();
+    for i in 0..300 {
+        let mode = match i % 3 {
+            0 => MODE_NORMAL_PAINT,
+            1 => MODE_NORMAL_ERASER_PAINT,
+            _ => MODE_LOCK_ALPHA_PAINT,
+        };
+        cmds.push(DabCmd {
+            mode,
+            x: rng.f32_in(-10.0, 74.0),
+            y: rng.f32_in(-10.0, 74.0),
+            radius: rng.f32_in(0.5, 40.0),
+            hardness: rng.f32_in(0.02, 1.0),
+            softness: 0.0,
+            aspect: rng.f32_in(1.0, 8.0),
+            angle: rng.f32_in(0.0, 360.0),
+            r: rng.u16_in(0, 32768),
+            g: rng.u16_in(0, 32768),
+            b: rng.u16_in(0, 32768),
+            a: rng.u16_in(0, 32768),
+            opacity: rng.u16_in(0, 32768),
+            posterize_num: 1,
+            paint: 1.0,
+            interval: 1,
+            rand_rate: 0.0,
+            seed: 0,
+        });
+    }
+    for n in 1..=cmds.len() {
+        let (want, _) = run_oracle(&cmds[..n]);
+        let (got, _) = run_maipointo(&cmds[..n]);
+        if want != got {
+            let idx = want.iter().zip(got.iter()).position(|(w, g)| w != g).unwrap();
+            let c = &cmds[n - 1];
+            panic!(
+                "first divergence at prefix {n}: word {idx} want {w} got {g} | cmd mode={m} x={x:.3} y={y:.3} rad={rad:.3} h={h:.3} asp={asp:.3} ang={ang:.3} col=({cr},{cg},{cb},{ca}) opa={opa}",
+                n = n, idx = idx, w = want[idx], g = got[idx], m = c.mode, x = c.x, y = c.y,
+                rad = c.radius, h = c.hardness, asp = c.aspect, ang = c.angle,
+                cr = c.r, cg = c.g, cb = c.b, ca = c.a, opa = c.opacity
+            );
+        }
+    }
 }

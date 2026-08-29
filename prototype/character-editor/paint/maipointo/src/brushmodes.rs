@@ -355,15 +355,15 @@ pub fn draw_dab_normal_paint(
         let p = pi * 4;
         let opa_a = (mask[mi] as u32 * opacity as u32) >> 15;
         let opa_b = (1 << 15) - opa_a;
-        // nothing to mix with on a transparent background
-        if rgba[p + 3] <= 0 {
+        if rgba[p + 3] == 0 {
+            // nothing to mix with on a transparent background (C `continue`
+            // here just ends this pixel; the macro already advances).
             rgba[p + 3] = (opa_a + ((opa_b * rgba[p + 3] as u32) >> 15)) as u16;
             rgba[p] = ((opa_a * color_r as u32 + opa_b * rgba[p] as u32) >> 15) as u16;
             rgba[p + 1] = ((opa_a * color_g as u32 + opa_b * rgba[p + 1] as u32) >> 15) as u16;
             rgba[p + 2] = ((opa_a * color_b as u32 + opa_b * rgba[p + 2] as u32) >> 15) as u16;
-            continue;
-        }
-        let fac_a = opa_a as f32 / (opa_a as f32 + opa_b as f32 * rgba[p + 3] as f32 / (1 << 15) as f32);
+        } else {
+        let fac_a = opa_a as f32 / (opa_a + ((opa_b as u32 * rgba[p + 3] as u32) >> 15)) as f32;
         let fac_b = 1.0 - fac_a;
 
         let mut spectral_b = [0.0f32; 10];
@@ -383,7 +383,8 @@ pub fn draw_dab_normal_paint(
         spectral_to_rgb(&spectral_result, &mut rgb_result);
         rgba[p + 3] = (opa_a + ((opa_b * rgba[p + 3] as u32) >> 15)) as u16;
         for i in 0..3 {
-            rgba[p + i] = (rgb_result[i] * rgba[p + 3] as f32 + 0.5) as u16;
+            rgba[p + i] = ((rgb_result[i] * rgba[p + 3] as f32) as f64 + 0.5) as u16;
+        }
         }
     });
     let _ = WGM_EPSILON;
@@ -439,7 +440,7 @@ pub fn draw_dab_normal_and_eraser_paint(
                 &mut spectral_b,
             );
 
-            let mut fac_a = opa_a as f32 / (opa_a as f32 + opa_b as f32 * rgba[p + 3] as f32 / (1 << 15) as f32);
+            let mut fac_a = opa_a as f32 / (opa_a + ((opa_b as u32 * rgba[p + 3] as u32) >> 15)) as f32;
             fac_a *= color_a as f32 / (1 << 15) as f32;
             let fac_b = 1.0 - fac_a;
 
@@ -488,9 +489,12 @@ pub fn draw_dab_lock_alpha_paint(
         let opa_b = (1 << 15) - opa_a;
         opa_a = (opa_a * rgba[p + 3] as u32) >> 15;
         if rgba[p + 3] == 0 {
-            continue;
-        }
-        let fac_a = opa_a as f32 / (opa_a as f32 + opa_b as f32 * rgba[p + 3] as f32 / (1 << 15) as f32);
+            // C: opa_a is 0 here; legacy-style write then next pixel.
+            rgba[p] = ((opa_a * color_r as u32 + opa_b * rgba[p] as u32) >> 15) as u16;
+            rgba[p + 1] = ((opa_a * color_g as u32 + opa_b * rgba[p + 1] as u32) >> 15) as u16;
+            rgba[p + 2] = ((opa_a * color_b as u32 + opa_b * rgba[p + 2] as u32) >> 15) as u16;
+        } else {
+        let fac_a = opa_a as f32 / (opa_a + ((opa_b as u32 * rgba[p + 3] as u32) >> 15)) as f32;
         let fac_b = 1.0 - fac_a;
         let mut spectral_b = [0.0f32; 10];
         rgb_to_spectral(
@@ -508,7 +512,8 @@ pub fn draw_dab_lock_alpha_paint(
         spectral_to_rgb(&spectral_result, &mut rgb_result);
 
         for i in 0..3 {
-            rgba[p + i] = (rgb_result[i] * rgba[p + 3] as f32 + 0.5) as u16;
+            rgba[p + i] = ((rgb_result[i] * rgba[p + 3] as f32) as f64 + 0.5) as u16;
+        }
         }
     });
 }

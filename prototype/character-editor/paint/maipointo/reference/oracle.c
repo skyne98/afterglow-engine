@@ -39,6 +39,9 @@ enum {
     MODE_COLORIZE = 4,
     MODE_GET_COLOR_LEGACY = 5,
     MODE_GET_COLOR_ACCUM = 6,
+    MODE_NORMAL_PAINT = 7,
+    MODE_NORMAL_ERASER_PAINT = 8,
+    MODE_LOCK_ALPHA_PAINT = 9,
 };
 
 #define REC 64
@@ -131,6 +134,16 @@ int main(int argc, char **argv) {
             get_color_pixels_accumulate(m, rgba, &sums[0], &sums[1], &sums[2],
                                         &sums[3], &sums[4], paint, interval,
                                         rand_rate);
+            break;
+        case MODE_NORMAL_PAINT:
+            draw_dab_pixels_BlendMode_Normal_Paint(m, rgba, r, g, b, opacity);
+            break;
+        case MODE_NORMAL_ERASER_PAINT:
+            draw_dab_pixels_BlendMode_Normal_and_Eraser_Paint(m, rgba, r, g, b,
+                                                              a, opacity);
+            break;
+        case MODE_LOCK_ALPHA_PAINT:
+            draw_dab_pixels_BlendMode_LockAlpha_Paint(m, rgba, r, g, b, opacity);
             break;
         default:
             fprintf(stderr, "bad mode %u\n", mode);

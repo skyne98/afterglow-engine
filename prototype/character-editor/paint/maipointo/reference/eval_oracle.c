@@ -22,6 +22,17 @@
 
 #include "mypaint-mapping.h"
 #include "rng-double.h"
+#include "helpers.h"
+#include "fastapprox/fastpow.h"
+
+/* render_dab_mask lives in mypaint-tiled-surface.c (not in its header). */
+void render_dab_mask(uint16_t * mask,
+                     float x, float y,
+                     float radius,
+                     float hardness,
+                     float softness,
+                     float aspect_ratio, float angle);
+#include "mypaint-config.h" /* MYPAINT_TILE_SIZE */
 
 static uint16_t rec16(const uint8_t *p) { return (uint16_t)(p[0] | (p[1] << 8)); }
 static uint32_t rec32(const uint8_t *p) {
@@ -54,6 +65,79 @@ int main(int argc, char **argv) {
 
     while (fread(hdr, 1, 1, in) == 1) {
         switch (hdr[0]) {
+        case 20: {
+            /* SPECTRAL_RGB: 3x f32 -> 10x f32 (rgb_to_spectral) */
+            uint8_t args[12];
+            if (fread(args, 1, 12, in) != 12) return 2;
+            float c[3];
+            memcpy(c, args, 12);
+            float spec[10] = {0};
+            rgb_to_spectral(c[0], c[1], c[2], spec);
+            put_bytes(out, spec, 40);
+            break;
+        }
+        case 21: {
+            /* SPECTRAL_TO_RGB: 10x f32 -> 3x f32 */
+            uint8_t args[40];
+            if (fread(args, 1, 40, in) != 40) return 2;
+            float spec[10];
+            memcpy(spec, args, 40);
+            float rgb[3] = {0};
+            spectral_to_rgb(spec, rgb);
+            put_bytes(out, rgb, 12);
+            break;
+        }
+        case 22: {
+            /* FASTPOW: 2x f32 -> f32 */
+            uint8_t args[8];
+            if (fread(args, 1, 8, in) != 8) return 8;
+            float a, e;
+            memcpy(&a, args, 4);
+            memcpy(&e, args + 4, 4);
+            float r = fastpow(a, e);
+            put_bytes(out, &r, 4);
+            break;
+        }
+        case 24: {
+            /* SPECTRAL_MIX: 10x f32 a, 10x f32 b, f32 fac_a ->
+             * 10x f32 result via fastpow WGM (the paint-mode mix). */
+            uint8_t args[84];
+            if (fread(args, 1, 84, in) != 84) return 2;
+            float sa[10], sb[10], fa;
+            memcpy(sa, args, 40);
+            memcpy(sb, args + 40, 40);
+            memcpy(&fa, args + 80, 4);
+            float res[10] = {0};
+            for (int i = 0; i < 10; i++) {
+                res[i] = fastpow(sa[i], fa) * fastpow(sb[i], 1.0f - fa);
+            }
+            put_bytes(out, res, 40);
+            break;
+        }
+        case 23: {
+            /* MASK: 7x f32 (x,y,radius,hardness,softness,aspect,angle)
+             * -> u16 count + LRE mask array */
+            uint8_t args[28];
+            if (fread(args, 1, 28, in) != 28) return 2;
+            float p[7];
+            memcpy(p, args, 28);
+            static uint16_t mask_buf[MYPAINT_TILE_SIZE * MYPAINT_TILE_SIZE + 2 * MYPAINT_TILE_SIZE];
+            memset(mask_buf, 0, sizeof(mask_buf));
+            render_dab_mask(mask_buf, p[0], p[1], p[2], p[3], p[4], p[5], p[6]);
+            size_t n = 0;
+            while (n < sizeof(mask_buf) / 2) {
+                if (mask_buf[n] == 0) {
+                    if (n + 1 >= sizeof(mask_buf) / 2 || mask_buf[n + 1] == 0) break;
+                    n += 2;
+                } else {
+                    n += 1;
+                }
+            }
+            uint16_t cnt = (uint16_t)n;
+            put_bytes(out, &cnt, 2);
+            put_bytes(out, mask_buf, n * 2);
+            break;
+        }
         case 1: {
             uint8_t args[1];
             if (fread(args, 1, 1, in) != 1) return 2;

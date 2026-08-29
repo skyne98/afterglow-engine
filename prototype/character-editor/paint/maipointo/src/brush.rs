@@ -48,7 +48,8 @@ fn exp_decay(t_const: f32, t: f32) -> f32 {
         return 0.0;
     }
     let arg: f32 = -t / t_const;
-    (arg as f64).exp() as f32
+    // C uses expf (single-precision libm exp); keep the same precision.
+    arg.exp()
 }
 
 /// The brush engine (`MyPaintBrush`).
@@ -77,6 +78,9 @@ pub struct Brush {
     speed_mapping_q: [f32; 2],
 
     reset_requested: bool,
+
+    /// Optional per-dab argument recording (parity/debug).
+    pub dab_trace: Option<Vec<[f32; 17]>>,
 }
 
 
@@ -89,6 +93,32 @@ impl Brush {
     #[inline]
     fn set_st(&mut self, id: BrushStateId, v: f32) {
         self.states[id.index()] = v;
+    }
+
+    /// Raw state read by index (parity/debug).
+    pub fn reset_requested_pub(&self) -> bool {
+        self.reset_requested
+    }
+
+    pub fn raw_state(&self, index: usize) -> f32 {
+        self.states[index]
+    }
+
+    /// Evaluated settings (parity/debug).
+    pub fn raw_settings(&self) -> &[f32] {
+        &self.settings_value
+    }
+
+    /// Precalculated speed mapping constants (parity/debug).
+    pub fn raw_speed_mapping(&self) -> [f32; 6] {
+        [
+            self.speed_mapping_m[0],
+            self.speed_mapping_m[1],
+            self.speed_mapping_q[0],
+            self.speed_mapping_q[1],
+            self.speed_mapping_gamma[0],
+            self.speed_mapping_gamma[1],
+        ]
     }
 
     /// `mypaint_brush_new` (no buckets).
@@ -118,6 +148,7 @@ impl Brush {
             speed_mapping_m: [0.0; 2],
             speed_mapping_q: [0.0; 2],
             reset_requested: false,
+            dab_trace: None,
         };
         if num_smudge_buckets > 0 {
             brush.smudge_buckets =
@@ -1076,11 +1107,19 @@ impl Brush {
         let posterize = self.setting(SettingId::Posterize);
         let posterize_num = self.setting(SettingId::PosterizeNum);
 
-        surface.surface_draw_dab(
+        let painted = surface.surface_draw_dab(
             x, y, radius, color[0], color[1], color[2], opaque, hardness, softness,
             eraser_target_alpha, dab_ratio, dab_angle, lock_alpha, colorize, posterize,
             posterize_num, paint_factor,
-        )
+        );
+        if let Some(t) = self.dab_trace.as_mut() {
+            t.push([
+                x, y, radius, color[0], color[1], color[2], opaque, hardness, softness,
+                eraser_target_alpha, dab_ratio, dab_angle, lock_alpha, colorize, posterize,
+                posterize_num, paint_factor,
+            ]);
+        }
+        painted
     }
 
     fn smudge_bucket_ref(&mut self) -> &mut [f32] {
@@ -1278,7 +1317,8 @@ impl Brush {
             let step_dx = frac * (x - self.st(BrushStateId::X));
             let step_dy = frac * (y - self.st(BrushStateId::Y));
             let step_dpressure = frac * (pressure - self.st(BrushStateId::Pressure));
-            let step_dtime = frac * dtime_left as f32;
+            // C: frac (float) * dtime_left (double) — double product, float param.
+            let step_dtime = (frac as f64 * (dtime_left - 0.0)) as f32;
             let step_declination = frac * (tilt_declination - self.st(BrushStateId::Declination));
             let step_declinationx = frac * (tilt_declinationx - self.st(BrushStateId::Declinationx));
             let step_declinationy = frac * (tilt_declinationy - self.st(BrushStateId::Declinationy));
