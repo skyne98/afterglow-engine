@@ -1,0 +1,99 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --bg: #14161b;
+  --fg: #e8e8ee;
+  /* Button design tokens (shared so every button matches). */
+  --btn-bg: #ffffff12;
+  --btn-bg-hover: #ffffff20;
+  --btn-border: #ffffff30;
+  --btn-border-soft: #ffffff1c;
+  --btn-accent: #5b9dff;
+  --btn-accent-soft: #5b9dff26;
+  --btn-accent-fg: #08101c;
+  --btn-radius: 8px;
+  --btn-h: 34px;
+  --btn-fg: var(--fg);
+}
+
+body {
+  margin: 0;
+  background: var(--bg, #14161b);
+  color: var(--fg, #e8e8ee);
+}
+
+html,
+body {
+  height: 100%;
+}
+
+#app {
+  display: block;
+  height: 100%;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* ---- Buttons: one base, predictable everywhere ---- */
+button {
+  font: inherit;
+  color: var(--btn-fg);
+  background: var(--btn-bg);
+  border: 1px solid var(--btn-border);
+  border-radius: var(--btn-radius);
+  height: var(--btn-h);
+  padding: 0 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  line-height: 1;
+  white-space: nowrap;
+  user-select: none;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, transform 0.06s ease;
+}
+button:hover:not(:disabled) {
+  background: var(--btn-bg-hover);
+}
+button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+button:focus-visible {
+  outline: 2px solid var(--btn-accent);
+  outline-offset: 2px;
+}
+
+/* Secondary action: quiet, borders only. */
+button.subtle {
+  background: transparent;
+  border-color: var(--btn-border-soft);
+  color: #b8bcc8;
+}
+button.subtle:hover:not(:disabled) {
+  background: var(--btn-bg-hover);
+  color: var(--fg);
+}
+
+/* Primary action: filled accent. */
+button.primary {
+  background: var(--btn-accent);
+  border-color: var(--btn-accent);
+  color: var(--btn-accent-fg);
+  font-weight: 600;
+}
+button.primary:hover:not(:disabled) {
+  background: #7ab6ff;
+  border-color: #7ab6ff;
+}
+button.primary:disabled {
+  background: var(--btn-accent-soft);
+  border-color: transparent;
+  color: var(--btn-accent);
+}

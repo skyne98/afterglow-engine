@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "isolatedModules": true,
+    "jsx": "preserve",
+    "types": ["bun", "vite/client"]
+  },
+  "include": ["shared", "web/src", "server/src", "vite.config.ts"],
+  "exclude": ["web/src/**/*.test.ts", "server/src/**/*.test.ts"]
+}
