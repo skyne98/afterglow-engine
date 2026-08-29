@@ -34,6 +34,16 @@ pub struct SettingInfo {
     pub default: f32,
 }
 
+/// Index of a setting by upstream `internal_name` (runtime strings).
+pub fn setting_index_runtime(internal_name: &str) -> Option<usize> {
+    (0..SETTING_INFOS.len()).find(|&i| SETTING_INFOS[i].internal_name == internal_name)
+}
+
+/// Index of an input by upstream `id` (runtime strings).
+pub fn input_index_runtime(id: &str) -> Option<usize> {
+    (0..INPUT_INFOS.len()).find(|&i| INPUT_INFOS[i].id == id)
+}
+
 /// Index of an input by upstream `id` (compile-time-checked unique names).
 pub const fn input_index(id: &str) -> Option<usize> {
     let mut i = 0;

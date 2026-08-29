@@ -12,7 +12,7 @@
 #include "helpers.h"
 #include "mypaint-surface.h"
 #include "mypaint-symmetry.h"
-#include "mypaint-brush-cooperative.h"
+#include "brush_engine.h"
 #include "web-surface.h"
 #include "layer-compositor.h"
 #include "fixed-tile-set.h"
@@ -53,7 +53,7 @@ static uint16_t *group_tile[WEB_MAX_GROUPS];
 static uint16_t *group_base_tile[WEB_MAX_GROUPS];
 static int active_layer;
 static WebPaintSurface *surface;
-static MyPaintBrush *brush;
+static void *brush; /* engine-neutral (brush_engine.h) */
 static uint16_t *composite_tile;
 static uint16_t *mip_composite_tile;
 static uint16_t *mip_source_tiles;
@@ -357,13 +357,13 @@ static void destroy_layers(void)
 void new_brush(void)
 {
     ensure_init();
-    afterglow_brush_stroke_cancel();
+    be_stroke_cancel();
     if (brush) {
-        mypaint_brush_unref(brush);
+        be_brush_free(brush);
     }
-    brush = mypaint_brush_new();
-    mypaint_brush_from_defaults(brush);
-    mypaint_brush_new_stroke(brush);
+    brush = be_brush_new();
+    be_brush_from_defaults(brush);
+    be_brush_new_stroke(brush);
 }
 
 int load_brush(const char *brush_json)
@@ -372,9 +372,9 @@ int load_brush(const char *brush_json)
         return 0;
     }
     new_brush();
-    const int loaded = mypaint_brush_from_string(brush, brush_json) ? 1 : 0;
+    const int loaded = be_brush_from_string(brush, brush_json);
     if (loaded) {
-        mypaint_brush_new_stroke(brush);
+        be_brush_new_stroke(brush);
     }
     return loaded;
 }
@@ -404,9 +404,9 @@ int init(int width, int height)
     history_record_total = 0;
     history_cursor = 0;
     history_active = 0;
-    afterglow_brush_stroke_cancel();
+    be_stroke_cancel();
     if (brush) {
-        mypaint_brush_unref(brush);
+        be_brush_free(brush);
         brush = NULL;
     }
     tile_bytes = (size_t)MYPAINT_TILE_SIZE * (size_t)MYPAINT_TILE_SIZE * 4u * sizeof(uint16_t);
@@ -490,14 +490,14 @@ void begin_stroke(float x, float y, float xtilt, float ytilt,
     }
     paint_history_begin();
     begin_atomic_internal();
-    afterglow_brush_stroke_cancel();
-    mypaint_brush_reset(brush);
-    mypaint_brush_new_stroke(brush);
+    be_stroke_cancel();
+    be_brush_reset(brush);
+    be_brush_new_stroke(brush);
     /* Match MyPaint's abrupt Brushwork start. Prime the engine at the
      * contact point with zero pressure before the real input sample. */
-    mypaint_brush_stroke_to(brush, surface_interface(), x, y, 0.0f,
-                            xtilt, ytilt, 10.0, viewzoom, viewrotation,
-                            barrel_rotation, 0);
+    be_brush_stroke_to(brush, surface_interface(), x, y, 0.0f,
+                       xtilt, ytilt, 10.0, viewzoom, viewrotation,
+                       barrel_rotation, 0);
     end_atomic_internal();
 }
 
@@ -506,9 +506,9 @@ void set_brush_base_value(const char *setting_name, double base_value)
     if (!brush || !setting_name) {
         return;
     }
-    MyPaintBrushSetting setting_id = mypaint_brush_setting_from_cname(setting_name);
+    const int setting_id = be_brush_setting_from_cname(setting_name);
     if (setting_id < MYPAINT_BRUSH_SETTINGS_COUNT) {
-        mypaint_brush_set_base_value(brush, setting_id, (float)base_value);
+        be_brush_set_base_value(brush, setting_id, (float)base_value);
     }
 }
 
@@ -517,11 +517,11 @@ float get_brush_base_value(const char *setting_name)
     if (!brush || !setting_name) {
         return 0.0f;
     }
-    MyPaintBrushSetting setting_id = mypaint_brush_setting_from_cname(setting_name);
+    const int setting_id = be_brush_setting_from_cname(setting_name);
     if (setting_id >= MYPAINT_BRUSH_SETTINGS_COUNT) {
         return 0.0f;
     }
-    return mypaint_brush_get_base_value(brush, setting_id);
+    return be_brush_get_base_value(brush, setting_id);
 }
 
 void set_brush_mapping_n(const char *setting_name, const char *input_name,
@@ -530,10 +530,10 @@ void set_brush_mapping_n(const char *setting_name, const char *input_name,
     if (!brush || !setting_name || !input_name) {
         return;
     }
-    MyPaintBrushSetting setting_id = mypaint_brush_setting_from_cname(setting_name);
-    MyPaintBrushInput input_id = mypaint_brush_input_from_cname(input_name);
+    const int setting_id = be_brush_setting_from_cname(setting_name);
+    const int input_id = be_brush_input_from_cname(input_name);
     if (setting_id < MYPAINT_BRUSH_SETTINGS_COUNT && input_id < MYPAINT_BRUSH_INPUTS_COUNT) {
-        mypaint_brush_set_mapping_n(brush, setting_id, input_id, number_of_mapping_points);
+        be_brush_set_mapping_n(brush, setting_id, input_id, number_of_mapping_points);
     }
 }
 
@@ -543,18 +543,18 @@ void set_brush_mapping_point(const char *setting_name, const char *input_name,
     if (!brush || !setting_name || !input_name) {
         return;
     }
-    MyPaintBrushSetting setting_id = mypaint_brush_setting_from_cname(setting_name);
-    MyPaintBrushInput input_id = mypaint_brush_input_from_cname(input_name);
+    const int setting_id = be_brush_setting_from_cname(setting_name);
+    const int input_id = be_brush_input_from_cname(input_name);
     if (setting_id < MYPAINT_BRUSH_SETTINGS_COUNT && input_id < MYPAINT_BRUSH_INPUTS_COUNT) {
-        mypaint_brush_set_mapping_point(brush, setting_id, input_id, index, x, y);
+        be_brush_set_mapping_point(brush, setting_id, input_id, index, x, y);
     }
 }
 
 void reset_brush(void)
 {
-    afterglow_brush_stroke_cancel();
+    be_stroke_cancel();
     if (brush) {
-        mypaint_brush_reset(brush);
+        be_brush_reset(brush);
     }
 }
 
@@ -562,11 +562,11 @@ int stroke_to(float x, float y, float pressure, float xtilt, float ytilt,
               double dtime, float viewzoom, float viewrotation,
               float barrel_rotation, int linear)
 {
-    if (!brush || !surface || afterglow_brush_stroke_pending()) {
+    if (!brush || !surface || be_stroke_pending()) {
         return -1;
     }
     begin_atomic_internal();
-    const int result = afterglow_brush_stroke_start(
+    const int result = be_stroke_start(
         brush, surface_interface(), x, y, pressure, xtilt, ytilt, dtime,
         viewzoom, viewrotation, barrel_rotation, linear ? 1 : 0,
         WEB_STROKE_DAB_BUDGET);
@@ -577,9 +577,9 @@ int stroke_to(float x, float y, float pressure, float xtilt, float ytilt,
 
 int paint_continue_stroke_to(void)
 {
-    if (!afterglow_brush_stroke_pending()) return -1;
+    if (!be_stroke_pending()) return -1;
     begin_atomic_internal();
-    const int result = afterglow_brush_stroke_continue(
+    const int result = be_stroke_continue(
         WEB_STROKE_DAB_BUDGET);
     if (result < 0) paint_error_code = 3;
     if (!suppress_atomic_end) end_atomic_internal();
@@ -588,7 +588,7 @@ int paint_continue_stroke_to(void)
 
 int paint_has_stroke_continuation(void)
 {
-    return afterglow_brush_stroke_pending();
+    return be_stroke_pending();
 }
 
 void paint_begin_atomic(void)
@@ -1640,9 +1640,9 @@ void paint_destroy(void)
     if (atomic_active) {
         end_atomic_internal();
     }
-    afterglow_brush_stroke_cancel();
+    be_stroke_cancel();
     if (brush) {
-        mypaint_brush_unref(brush);
+        be_brush_free(brush);
         brush = NULL;
     }
     destroy_layers();

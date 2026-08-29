@@ -14,6 +14,8 @@ use crate::helpers::{
 use crate::mapping::Mapping;
 use crate::rngdouble::RngDouble;
 use crate::surface::Surface;
+
+pub mod cooperative;
 use crate::settings::{BrushStateId, InputId, SettingId, BRUSH_STATES_COUNT, INPUTS, SETTINGS};
 
 /// `ACTUAL_RADIUS_MIN`.

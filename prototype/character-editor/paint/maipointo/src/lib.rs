@@ -24,6 +24,11 @@ pub mod rngdouble;
 pub mod surface;
 pub mod settings;
 
+/// C ABI for the demo's Emscripten wasm module (wasm builds only; the
+/// native test builds have no libmypaint surface symbols to link against).
+#[cfg(target_arch = "wasm32")]
+pub mod capi;
+
 pub use brushmodes::ColorSums;
 pub use mask::{clamp, render_dab_mask, TILE_SIZE};
 

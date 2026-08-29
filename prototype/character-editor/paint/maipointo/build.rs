@@ -100,7 +100,15 @@ fn main() {
             pascal(setting["internal_name"].as_str().unwrap())
         ));
     }
-    out.push_str("}\n\nimpl SettingId {\n    pub const fn index(self) -> usize {\n        self as usize\n    }\n}\n\n");
+    out.push_str("}\n\nimpl SettingId {\n    pub const fn index(self) -> usize {\n        self as usize\n    }\n\n    /// Variant from the C enum index (None past the last setting).\n    pub const fn from_index(index: usize) -> Option<SettingId> {\n        match index {\n");
+    for (i, setting) in root["settings"].as_array().unwrap().iter().enumerate() {
+        out.push_str(&format!(
+            "            {} => Some(SettingId::{}),\n",
+            i,
+            pascal(setting["internal_name"].as_str().unwrap())
+        ));
+    }
+    out.push_str("            _ => None,\n        }\n    }\n}\n\n");
 
     out.push_str("/// Upstream `MyPaintBrushInput` order (JSON order).\n#[derive(Clone, Copy, Debug, PartialEq, Eq)]\n#[allow(missing_docs)]\npub enum InputId {\n");
     for input in root["inputs"].as_array().unwrap() {

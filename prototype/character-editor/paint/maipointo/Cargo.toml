@@ -13,6 +13,14 @@ repository = "https://github.com/skyne98/afterglow-engine"
 [workspace]
 
 [dependencies]
+serde_json = "1"
 
 [build-dependencies]
 serde_json = "1"
+
+[lib]
+crate-type = ["rlib", "staticlib"]
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
