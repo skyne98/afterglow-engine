@@ -15,6 +15,7 @@
 //! 8. TODO: `.myb` JSON brushes, wasm bindings
 
 pub mod brush;
+pub mod compositor;
 pub mod brushmodes;
 pub mod helpers;
 pub mod mapping;
