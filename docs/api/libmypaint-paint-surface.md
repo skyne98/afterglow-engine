@@ -36,6 +36,14 @@ The original and cooperative paths have equal brush states and output bytes in `
 
 The TypeScript worker keeps the current `MotionQueue` sample until its continuation completes. It yields between batches, so later worker messages can enter fixed queues.
 
+One fixed `MessageChannel` starts continuation tasks. It permits only one pending wake and does not use a nested zero-delay timer.
+
+The worker can process more 128-dab continuation units in one tile batch for a maximum of 2 ms. The normal input drain keeps its 8 ms budget.
+
+Chromium clamps nested zero-delay timers to approximately 4 ms. This delay multiplied a 613-batch Tail Feathers stroke to approximately 2.52 seconds.
+
+An 8,192-item deferred command ring keeps each `beginStroke`, sample, and `commit` boundary. Thus, a backlog cannot combine separate strokes into one history record.
+
 ## Parallel tile processing
 
 `paint_begin_batch()` starts an atomic tile batch. `paint_end_batch()` creates missing tiles before it starts any pthread.
@@ -57,6 +65,14 @@ The operation queue has these limits:
 - 8,192 fixed hash entries for O(1) tile lookup
 
 A capacity failure sets error code `4` before the engine clears the queue. The engine does not silently use a serial mode.
+
+## History tile set
+
+The history path uses a fixed generation set with one mark for each surface tile slot. A tile capture is an O(1) operation for all active-stroke sizes.
+
+The set prevents a scan of all prior stroke tiles for each dab operation. Separate queued strokes also keep separate history records.
+
+The history pixel capacity does not change. Error code `2` reports that capacity limit.
 
 ## Dirty display data
 
@@ -131,7 +147,19 @@ The worker completes current paint data before it applies these commands:
 
 This order prevents brush-state changes during a continuation and surface access during a pthread batch.
 
+`PaintPointerState` owns the stroke, pan, and pointer-capture state. Before each zoom, rotation, mirror, view reset, or pan, the page commits an open stroke and releases its pointer capture.
+
+A document change discards this pointer state before it initializes the new document. A lost pointer capture, hidden document, or window focus loss commits the open stroke. Thus, a missed pointer release cannot block the next stroke.
+
 `MotionQueue` has 8,192 sample slots. If it becomes full, it removes the oldest motion sample and increments `overflowCount`.
+
+The queue resolves each missing pressure, tilt, or view run once. It does not scan the remaining queue for each sample.
+
+The deferred command ring has 8,192 slots. It reports and rejects a new command when full. It does not remove or reorder stored boundaries.
+
+The demo sends brush data only after brush selection or engine initialization. It does not reload the same brush for each stroke.
+
+The HUD gives both the current sample count and the deferred action count.
 
 ## Error codes
 
@@ -158,11 +186,19 @@ timeout 240 bun run test
 
 The test set includes:
 
-- TypeScript motion-queue tests
+- TypeScript motion-queue order, interpolation, capacity, and long-run cost tests
+- TypeScript fixed-ring order, wrap, and capacity tests
+- TypeScript fixed task-wake coalescing and long-chain tests
+- TypeScript paint-pointer view-change, stale-stroke, pan, and capture-loss tests
 - Fixed operation-queue hash and capacity tests
+- Fixed history-tile generation and capacity tests
 - Exact cooperative-brush state and pixel tests
 - Layer compositor tests
 - MyPaint layer parity tests
 - TypeScript compilation
 
 The layer parity result is 21 bit-exact modes. Pigment has a maximum difference of one least-significant bit.
+
+The browser pointer regression omits one pointer release, applies wheel zoom, and draws a second stroke. Both strokes complete without an engine error, and two undo commands remove them separately.
+
+The wide-stroke wake measurements are in `docs/benchmarks/paint-wide-stroke-fox-workstation-2026-08-24.md`.

@@ -3,6 +3,7 @@
  * This module captures input, manages DOM/UI, and forwards to the worker.
  */
 import { decodeZip, encodeStoredZip, text, utf8 } from './openraster.ts';
+import { PaintPointerState } from './paint-pointer-state.ts';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const canvas = $<HTMLCanvasElement>('paint');
@@ -14,7 +15,7 @@ let ready = false;
 let exportSeq = 0;
 let pendingTiles: ((v: { data: ArrayBuffer[]; scale: number }) => void) | null = null;
 
-let strokeActive = false, activePid: number | null = null, panPid: number | null = null;
+const pointerState = new PaintPointerState();
 let lastPX = 0, lastPY = 0;
 const docSize = { width: 2048, height: 2048 };
 const view = { zoom: 1, rotationDegrees: 0, mirror: false, panX: 0, panY: 0 };
@@ -29,6 +30,27 @@ const layerModes = ['Normal','Multiply','Screen','Overlay','Darken','Lighten','H
 
 function log(m: string) { logEl.textContent += m + '\n'; logEl.scrollTop = logEl.scrollHeight; }
 function send(m: any, t?: Transferable[]) { if (t) worker?.postMessage(m, t); else worker?.postMessage(m); }
+function releaseCanvasPointer(pointerId: number | null) {
+  if (pointerId === null) return;
+  try {
+    if (canvas.hasPointerCapture?.(pointerId)) canvas.releasePointerCapture(pointerId);
+  } catch {}
+}
+function commitPointerStroke(commit: boolean) {
+  if (commit && ready) send({ cmd: 'commit' });
+}
+function clearPointerInput(): boolean {
+  const strokePointer = pointerState.strokePointer;
+  const panPointer = pointerState.panPointer;
+  const commit = pointerState.finishForViewChange();
+  lastSampleTime = 0;
+  releaseCanvasPointer(strokePointer);
+  if (panPointer !== strokePointer) releaseCanvasPointer(panPointer);
+  return commit;
+}
+function finishInputForViewChange() {
+  commitPointerStroke(clearPointerInput());
+}
 function sendCfg(s: [string, number][]) { send({ cmd: 'config', settings: s }); }
 function brushUrl(p: string) { return `/mypaint/brushes/${p.split('/').map(encodeURIComponent).join('/')}`; }
 function hexRgb(v: string): [number, number, number] { const n = parseInt(v.slice(1), 16); return [((n>>16)&255)/255, ((n>>8)&255)/255, (n&255)/255]; }
@@ -64,21 +86,88 @@ function sendSample(e: PointerEvent, pressure: number) {
   send({ cmd: 'strokeSample', x, y, pressure, xtilt: xt, ytilt: yt, time: now, zoom: view.zoom, rotation: view.rotationDegrees * Math.PI / 180, barrel: 0.5 });
 }
 function beginStrokeAt(e: PointerEvent) {
-  if (!ready) return; ensureBrush();
+  if (!ready) return;
   lastSampleTime = 0;
   const [x, y] = pointerModel(e);
   send({ cmd: 'beginStroke', x, y, xtilt: (e.tiltX/90)||0, ytilt: (e.tiltY/90)||0, zoom: view.zoom, rotation: view.rotationDegrees * Math.PI / 180, barrel: 0.5 });
   sendSample(e, e.pointerType === 'mouse' ? 0.5 : Math.max(0, Math.min(1, e.pressure)));
 }
 function endStroke(e: PointerEvent) {
-  if (e.pointerId === panPid) { panPid = null; return; }
-  if (!strokeActive || activePid !== e.pointerId) return; strokeActive = false; activePid = null; lastSampleTime = 0; sendSample(e, 0); send({ cmd: 'commit' });
+  if (pointerState.finishPan(e.pointerId)) {
+    releaseCanvasPointer(e.pointerId);
+    return;
+  }
+  if (!pointerState.strokeActive || pointerState.strokePointer !== e.pointerId) return;
+  lastSampleTime = 0;
+  sendSample(e, 0);
+  commitPointerStroke(pointerState.finishStroke(e.pointerId));
+  releaseCanvasPointer(e.pointerId);
 }
-canvas.addEventListener('pointerdown', e => { if (!ready) return; if (e.button === 1) { panPid = e.pointerId; lastPX = e.clientX; lastPY = e.clientY; try { canvas.setPointerCapture?.(e.pointerId); } catch {} return; } if (e.button !== 0) return; strokeActive = true; activePid = e.pointerId; beginStrokeAt(e); try { canvas.setPointerCapture?.(e.pointerId); } catch {} });
-canvas.addEventListener('pointermove', e => { if (e.pointerId === panPid) { view.panX += e.clientX - lastPX; view.panY += e.clientY - lastPY; lastPX = e.clientX; lastPY = e.clientY; applyView(); return; } if (e.pointerId !== activePid || !strokeActive) return; const c = e.pointerType === 'mouse' ? (e.buttons & 1) !== 0 : e.pressure > 0; if (!c) { strokeActive = false; activePid = null; send({ cmd: 'commit' }); return; } sendSample(e, e.pointerType === 'mouse' ? 0.5 : Math.max(0, Math.min(1, e.pressure))); });
-canvas.addEventListener('pointerup', endStroke); canvas.addEventListener('pointercancel', endStroke);
-window.addEventListener('pointerup', endStroke); window.addEventListener('pointercancel', endStroke);
-window.addEventListener('blur', () => { strokeActive = false; activePid = null; panPid = null; if (ready) send({ cmd: 'commit' }); });
+canvas.addEventListener('pointerdown', e => {
+  if (!ready) return;
+  if (e.button === 1) {
+    const oldStrokePointer = pointerState.strokePointer;
+    const oldPanPointer = pointerState.panPointer;
+    const commit = pointerState.beginPan(e.pointerId);
+    if (oldStrokePointer !== e.pointerId) releaseCanvasPointer(oldStrokePointer);
+    if (oldPanPointer !== oldStrokePointer && oldPanPointer !== e.pointerId) {
+      releaseCanvasPointer(oldPanPointer);
+    }
+    commitPointerStroke(commit);
+    lastSampleTime = 0;
+    lastPX = e.clientX;
+    lastPY = e.clientY;
+    try { canvas.setPointerCapture?.(e.pointerId); } catch {}
+    return;
+  }
+  if (e.button !== 0) return;
+  const oldStrokePointer = pointerState.strokePointer;
+  const oldPanPointer = pointerState.panPointer;
+  const commit = pointerState.beginStroke(e.pointerId);
+  if (oldStrokePointer !== e.pointerId) releaseCanvasPointer(oldStrokePointer);
+  if (oldPanPointer !== oldStrokePointer && oldPanPointer !== e.pointerId) {
+    releaseCanvasPointer(oldPanPointer);
+  }
+  commitPointerStroke(commit);
+  beginStrokeAt(e);
+  try { canvas.setPointerCapture?.(e.pointerId); } catch {}
+});
+canvas.addEventListener('pointermove', e => {
+  if (e.pointerId === pointerState.panPointer) {
+    view.panX += e.clientX - lastPX;
+    view.panY += e.clientY - lastPY;
+    lastPX = e.clientX;
+    lastPY = e.clientY;
+    applyView();
+    return;
+  }
+  if (e.pointerId !== pointerState.strokePointer || !pointerState.strokeActive) return;
+  const contact = e.pointerType === 'mouse'
+    ? (e.buttons & 1) !== 0
+    : e.pressure > 0;
+  if (!contact) {
+    lastSampleTime = 0;
+    commitPointerStroke(pointerState.finishStroke(e.pointerId));
+    releaseCanvasPointer(e.pointerId);
+    return;
+  }
+  sendSample(e, e.pointerType === 'mouse'
+    ? 0.5
+    : Math.max(0, Math.min(1, e.pressure)));
+});
+canvas.addEventListener('pointerup', endStroke);
+canvas.addEventListener('pointercancel', endStroke);
+canvas.addEventListener('lostpointercapture', e => {
+  const commit = pointerState.losePointer(e.pointerId);
+  if (commit) lastSampleTime = 0;
+  commitPointerStroke(commit);
+});
+window.addEventListener('pointerup', endStroke);
+window.addEventListener('pointercancel', endStroke);
+window.addEventListener('blur', finishInputForViewChange);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') finishInputForViewChange();
+});
 
 function refreshLayers() { if (!engineState) return; layerList.replaceChildren(); groupList.replaceChildren();
   for (let l = engineState.layers.length - 1; l >= 0; l--) { const info = engineState.layers[l]; const row = document.createElement('div'); row.className = 'layer-row';
@@ -123,17 +212,17 @@ async function exportOra() { if (!engineState) return; const e = [{ name: 'mimet
 async function importOra(file: File) { if (!ready) return; const entries = await decodeZip(await file.arrayBuffer()); const mb = entries.get('data/metadata.json'); const meta = mb ? JSON.parse(text(mb)) as any : null; const st = entries.get('stack.xml'); const stT = st ? text(st) : ''; const w = meta?.width ?? Number(stT.match(/\bw="(\d+)"/)?.[1] ?? docSize.width), h = meta?.height ?? Number(stT.match(/\bh="(\d+)"/)?.[1] ?? docSize.height); const merged = entries.get('mergedimage.png') ?? entries.get('data/layer-0.png'); if (!merged) throw new Error('No image.'); resetDoc(w, h); send({ cmd: 'clearBackground' }); send({ cmd: 'clear' }); const layers = meta?.layers ?? [{ id: 0, group: -1, visible: 1, mode: 0 }]; for (const l of layers) { if (l.id > 0) send({ cmd: 'layer', op: 'create', layer: l.id }); send({ cmd: 'layer', op: 'setVisible', layer: l.id, value: l.visible !== 0 ? 1 : 0 }); send({ cmd: 'layer', op: 'setOpacity', layer: l.id, value: Number(l.opacity) || 1 }); send({ cmd: 'layer', op: 'setMode', layer: l.id, value: Number(l.mode) || 0 }); } const ic = await imgCanvas(merged); writeImg(ic, 0); for (const l of layers) { if (l.id === 0) continue; const d = entries.get(`data/layer-${l.id}.png`); if (d) writeImg(await imgCanvas(d), l.id); } for (const g of meta?.groups ?? []) { send({ cmd: 'group', op: 'create', group: g.id }); send({ cmd: 'group', op: 'setVisible', group: g.id, value: g.visible !== 0 ? 1 : 0 }); send({ cmd: 'group', op: 'setOpacity', group: g.id, value: Number(g.opacity) || 0 }); send({ cmd: 'group', op: 'setMode', group: g.id, value: Number(g.mode) || 0 }); send({ cmd: 'group', op: 'setPassThrough', group: g.id, value: g.passThrough ? 1 : 0 }); send({ cmd: 'group', op: 'setIsolated', group: g.id, value: g.isolated ? 1 : 0 }); send({ cmd: 'group', op: 'setParent', group: g.id, value: Number(g.parent) }); } for (const l of layers) if (l.group !== undefined) send({ cmd: 'layer', op: 'setGroup', layer: l.id, value: Number(l.group) }); send({ cmd: 'layer', op: 'setActive', layer: 0 }); }
 async function imgCanvas(d: Uint8Array): Promise<HTMLCanvasElement> { const bm = await createImageBitmap(new Blob([d as BlobPart], { type: 'image/png' })); const c = document.createElement('canvas'); c.width = bm.width; c.height = bm.height; c.getContext('2d', { alpha: true })!.drawImage(bm, 0, 0); bm.close(); return c; }
 function writeImg(ic: HTMLCanvasElement, layer: number) { const g = ic.getContext('2d', { alpha: true })!; const img = g.getImageData(0, 0, ic.width, ic.height); const tile = new Uint8Array(64 * 64 * 4); for (let ty = 0; ty < Math.ceil(ic.height / 64); ty++) for (let tx = 0; tx < Math.ceil(ic.width / 64); tx++) { tile.fill(0); for (let y = 0; y < 64; y++) { const sy = ty * 64 + y; if (sy >= img.height) continue; for (let x = 0; x < 64; x++) { const sx = tx * 64 + x; if (sx >= img.width) continue; tile.set(img.data.subarray((sy * img.width + sx) * 4, (sy * img.width + sx) * 4 + 4), (y * 64 + x) * 4); } } send({ cmd: 'writeTile', layer, tx, ty, data: tile.slice().buffer }, [tile.slice().buffer]); } }
-function resetDoc(w: number, h: number) { if (w < 64 || h < 64 || w > 16384 || h > 16384) return; docSize.width = w; docSize.height = h; const r = Math.max(w, h) / 4096; const ds = r <= 1 ? 1 : r <= 2 ? 2 : 4; dispW = Math.ceil(w / ds); dispH = Math.ceil(h / ds); canvas.style.width = `${dispW}px`; canvas.style.height = `${dispH}px`; send({ cmd: 'init', width: w, height: h }); }
+function resetDoc(w: number, h: number) { if (w < 64 || h < 64 || w > 16384 || h > 16384) return; clearPointerInput(); docSize.width = w; docSize.height = h; const r = Math.max(w, h) / 4096; const ds = r <= 1 ? 1 : r <= 2 ? 2 : 4; dispW = Math.ceil(w / ds); dispH = Math.ceil(h / ds); canvas.style.width = `${dispW}px`; canvas.style.height = `${dispH}px`; send({ cmd: 'init', width: w, height: h }); }
 
 worker = new Worker(new URL('./paint-engine-worker.ts', import.meta.url), { type: 'module' });
 (window as any).probe = (y: number) => { worker.postMessage({ cmd: 'probe', id: Math.floor(Math.random() * 1e9), y }); };
 worker.onmessage = (e: MessageEvent) => { const m = e.data;
   switch (m.type) {
-    case 'ready': ready = true; refreshLayers(); statusEl.textContent = 'Ready — choose a brush or draw.'; break;
+    case 'ready': ready = true; ensureBrush(); refreshLayers(); statusEl.textContent = 'Ready — choose a brush or draw.'; break;
     case 'state': engineState = m.state; if (engineState) { dispW = Math.ceil(engineState.width / engineState.displayScale); dispH = Math.ceil(engineState.height / engineState.displayScale); canvas.style.width = `${dispW}px`; canvas.style.height = `${dispH}px`; } refreshLayers(); break;
     case 'status': statusEl.textContent = m.text; break;
     case 'log': log(m.text); break;
-    case 'stats': hudEl.textContent = `queue  ${m.queued} sp\nbrush  ${m.brushMs.toFixed(1)} ms\nrender ${m.renderMs.toFixed(1)} ms\ninput  ${m.sps}/s`; break;
+    case 'stats': hudEl.textContent = `queue   ${m.queued} sp\nactions ${m.deferred}\nbrush   ${m.brushMs.toFixed(1)} ms\nrender  ${m.renderMs.toFixed(1)} ms\ninput   ${m.sps}/s`; break;
     case 'tiles': if (pendingTiles) { const r = pendingTiles; pendingTiles = null; r({ data: m.data, scale: m.scale }); } break;
     case 'probeResult': (window as any).__probeResult = m; break;
   }
@@ -149,12 +238,12 @@ applyView(); init().catch(e => { statusEl.textContent = 'Engine failed to load: 
 // UI bindings
 ['radius','hardness','opacity'].forEach(k => { const i = $(k) as HTMLInputElement; const a = () => { (ui as any)[k] = Number(i.value); $(`${k}Val`).textContent = i.value; applyBrushOverrides(); }; i.addEventListener('input', a); a(); });
 $('color').addEventListener('input', e => { ui.color = (e.target as HTMLInputElement).value; applyBrushColor(); applyBrushOverrides(); });
-$('viewZoom').addEventListener('input', e => { view.zoom = Number((e.target as HTMLInputElement).value); applyView(); });
-$('rotateLeftBtn').addEventListener('click', () => { view.rotationDegrees = (view.rotationDegrees + 90) % 360; applyView(); });
-$('rotateRightBtn').addEventListener('click', () => { view.rotationDegrees = (view.rotationDegrees + 270) % 360; applyView(); });
-$('mirrorBtn').addEventListener('click', () => { view.mirror = !view.mirror; applyView(); });
-$('resetViewBtn').addEventListener('click', () => { Object.assign(view, { zoom: 1, rotationDegrees: 0, mirror: false, panX: 0, panY: 0 }); applyView(); });
-canvas.addEventListener('wheel', e => { e.preventDefault(); view.zoom = Math.max(0.1, Math.min(8, view.zoom * (e.deltaY < 0 ? 1.1 : 0.9))); applyView(); }, { passive: false });
+$('viewZoom').addEventListener('input', e => { finishInputForViewChange(); view.zoom = Number((e.target as HTMLInputElement).value); applyView(); });
+$('rotateLeftBtn').addEventListener('click', () => { finishInputForViewChange(); view.rotationDegrees = (view.rotationDegrees + 90) % 360; applyView(); });
+$('rotateRightBtn').addEventListener('click', () => { finishInputForViewChange(); view.rotationDegrees = (view.rotationDegrees + 270) % 360; applyView(); });
+$('mirrorBtn').addEventListener('click', () => { finishInputForViewChange(); view.mirror = !view.mirror; applyView(); });
+$('resetViewBtn').addEventListener('click', () => { finishInputForViewChange(); Object.assign(view, { zoom: 1, rotationDegrees: 0, mirror: false, panX: 0, panY: 0 }); applyView(); });
+canvas.addEventListener('wheel', e => { e.preventDefault(); finishInputForViewChange(); view.zoom = Math.max(0.1, Math.min(8, view.zoom * (e.deltaY < 0 ? 1.1 : 0.9))); applyView(); }, { passive: false });
 $('frameEnabled').addEventListener('change', e => canvas.classList.toggle('frame-visible', (e.target as HTMLInputElement).checked));
 $('clearBtn').addEventListener('click', () => send({ cmd: 'clear' }));
 $('backgroundColor').addEventListener('input', applyBgColor);
@@ -168,4 +257,4 @@ $('addLayerBtn').addEventListener('click', () => send({ cmd: 'layer', op: 'creat
 $('deleteLayerBtn').addEventListener('click', () => { if (engineState) send({ cmd: 'layer', op: 'delete', layer: engineState.activeLayer }); });
 $('addGroupBtn').addEventListener('click', () => send({ cmd: 'group', op: 'create', group: 0 }));
 $('deleteGroupBtn').addEventListener('click', () => { if (selectedGroupId >= 0) { send({ cmd: 'group', op: 'delete', group: selectedGroupId }); selectedGroupId = -1; } });
-$('strokeBtn').addEventListener('click', () => { if (!ready) return; ensureBrush(); const y = docSize.height / 2, x0 = docSize.width * 0.15; send({ cmd: 'beginStroke', x: x0, y, xtilt: 0, ytilt: 0, zoom: view.zoom, rotation: view.rotationDegrees * Math.PI / 180, barrel: 0.5 }); for (let i = 1; i <= 10; i++) send({ cmd: 'strokeSample', x: x0 + (docSize.width * 0.6) * (i / 10), y, pressure: 0.5, xtilt: 0, ytilt: 0, time: i * 16, zoom: view.zoom, rotation: view.rotationDegrees * Math.PI / 180, barrel: 0.5 }); send({ cmd: 'commit' }); statusEl.textContent = 'Test stroke drawn.'; });
+$('strokeBtn').addEventListener('click', () => { if (!ready) return; const y = docSize.height / 2, x0 = docSize.width * 0.15; send({ cmd: 'beginStroke', x: x0, y, xtilt: 0, ytilt: 0, zoom: view.zoom, rotation: view.rotationDegrees * Math.PI / 180, barrel: 0.5 }); for (let i = 1; i <= 10; i++) send({ cmd: 'strokeSample', x: x0 + (docSize.width * 0.6) * (i / 10), y, pressure: 0.5, xtilt: 0, ytilt: 0, time: i * 16, zoom: view.zoom, rotation: view.rotationDegrees * Math.PI / 180, barrel: 0.5 }); send({ cmd: 'commit' }); statusEl.textContent = 'Test stroke drawn.'; });

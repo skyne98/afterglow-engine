@@ -133,7 +133,8 @@ static void tile_request_start(MyPaintTiledSurface *tiled_surface,
     if (!request->readonly) {
         mark_display_dirty(surface, tile_slot);
         if (surface->write_callback) {
-            surface->write_callback(surface, tx, ty, request->buffer);
+            surface->write_callback(
+                surface, tile_slot, tx, ty, request->buffer);
         }
     }
 }
@@ -253,6 +254,11 @@ int web_surface_get_tiles_width(const WebPaintSurface *surface)
 int web_surface_get_tiles_height(const WebPaintSurface *surface)
 {
     return surface ? surface->tiles_height : 0;
+}
+
+int web_surface_get_tile_capacity(const WebPaintSurface *surface)
+{
+    return surface ? surface->tile_capacity : 0;
 }
 
 uint16_t *web_surface_get_tile(WebPaintSurface *surface, int tx, int ty)

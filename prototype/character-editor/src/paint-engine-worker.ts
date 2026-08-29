@@ -1,6 +1,8 @@
 /* The brush worker owns WASM, input, display, and engine state.
  * The page only sends input and configuration messages.
  */
+import { FixedRing } from './fixed-ring.ts';
+import { FixedTaskWake } from './fixed-task-wake.ts';
 import { MotionQueue } from './paint-input.ts';
 
 type Msg =
@@ -19,22 +21,26 @@ type Msg =
   | { cmd: 'probe'; id: number; y: number }
   | { cmd: 'requestState' };
 
-const TILE = 64, TILE_B = TILE * TILE * 4, EOTF = 2.2, BUDGET = 8;
-let mod: any = null, motionQueue = new MotionQueue(8192);
+const TILE = 64, TILE_B = TILE * TILE * 4, EOTF = 2.2;
+const BUDGET = 8, CONTINUATION_BUDGET = 2;
+const INPUT_CAPACITY = 8192, COMMAND_CAPACITY = 8192;
+let mod: any = null, motionQueue = new MotionQueue(INPUT_CAPACITY);
+const deferredCommands = new FixedRing<Msg>(COMMAND_CAPACITY);
 let ctx: OffscreenCanvasRenderingContext2D | null = null, canvas: OffscreenCanvas | null = null;
 let rgba8: Uint8Array | null = null, rectPtr = 0, renderedMip = -1, lastT = 0;
 let docW = 2048, docH = 2048, dispScale = 1, dispMip = 0, viewMip = 0;
 let flushT: number | null = null, commitP = false, batching = false;
 let n0 = 0, a0 = 0;
-let batchInFlight = false, strokeContinuation = false;
-let pendingCmds: Msg[] = [];
-let pendingBegin: { x: number; y: number; xt: number; yt: number; z: number; r: number; ba: number } | null = null;
-let pendingBeginCommit = false;
-let pendingSamples: (number | boolean)[][] = [];
-let brushOk = false, brushJson = '';
+let batchInFlight = false, strokeContinuation = false, strokeOpen = false;
 let bgRGB: [number, number, number] = [0xA8 / 255, 0xA4 / 255, 0x98 / 255];
-let statsS = 0, statsMs = 0, lastBR = 0, lastRR = 0, lastStats = 0;
+let statsS = 0, lastBR = 0, lastRR = 0, lastStats = 0;
 let lastRects: number[] = [];
+function runDrainWake() {
+  if (!mod || batchInFlight || motionQueue.length === 0) return;
+  if (!batching) { mod._paint_begin_batch(); batching = true; }
+  drainProcess(true);
+}
+const drainWake = new FixedTaskWake(runDrainWake);
 
 const post = (m: any, t?: Transferable[]) => { if (t && t.length > 0) (self as unknown as Worker).postMessage(m, t); else (self as unknown as Worker).postMessage(m); };
 
@@ -132,31 +138,68 @@ function strokeSample(_t: number, x: number, y: number, p: number, xt: number, y
   }
   return true;
 }
-function emitStats(force = false) { const now = performance.now(); if (!force && now - lastStats < 150) return; const wall = now - lastStats; lastStats = now; post({ type: 'stats', queued: motionQueue.length, brushMs: lastBR, renderMs: lastRR, sps: wall > 0 ? Math.round((statsS / wall) * 1000) : 0 }); statsS = 0; statsMs = 0; }
+function emitStats(force = false) {
+  const now = performance.now();
+  if (!force && now - lastStats < 150) return;
+  const wall = now - lastStats;
+  lastStats = now;
+  post({
+    type: 'stats',
+    queued: motionQueue.length,
+    deferred: deferredCommands.length,
+    brushMs: lastBR,
+    renderMs: lastRR,
+    sps: wall > 0 ? Math.round((statsS / wall) * 1000) : 0,
+  });
+  statsS = 0;
+}
+
+function deferCommand(command: Msg) {
+  if (!deferredCommands.push(command)) {
+    reportEngineError('The deferred command queue reached its fixed capacity.');
+  }
+}
+
+function replayDeferredCommands() {
+  while (deferredCommands.length > 0) {
+    const next = deferredCommands.peek();
+    if (!next) return;
+    if (motionQueue.length > 0 &&
+        next.cmd !== 'strokeSample' && next.cmd !== 'commit') return;
+    deferredCommands.shift();
+    handleReadyCommand(next);
+    if (batchInFlight || commitP) return;
+  }
+}
+
 function afterBatch() {
   batchInFlight = false;
+  const renderStart = performance.now();
   renderDirty();
-  const a2 = performance.now(); lastBR = 0; lastRR = a2 - a0; statsS += Math.max(0, n0 - motionQueue.length); statsMs += a2 - a0; emitStats(motionQueue.length === 0 && !strokeContinuation);
+  lastRR = performance.now() - renderStart;
+  statsS += Math.max(0, n0 - motionQueue.length);
+  emitStats(
+    motionQueue.length === 0 && deferredCommands.length === 0 &&
+    !strokeContinuation,
+  );
   if (motionQueue.length > 0) {
-    self.setTimeout(() => {
-      if (!mod || batchInFlight || motionQueue.length === 0) return;
-      if (!batching) { mod._paint_begin_batch(); batching = true; }
-      drainProcess(true);
-    }, 0);
+    if (flushT !== null) {
+      clearTimeout(flushT);
+      flushT = null;
+    }
+    drainWake.schedule();
     return;
   }
-  if (commitP) { commitP = false; doCommit(); }
-  if (pendingCmds.length > 0) {
-    const q = pendingCmds; pendingCmds = [];
-    for (let i = 0; i < q.length; i++) {
-      (self.onmessage as Function)({ data: q[i] });
-      if (batchInFlight || motionQueue.length > 0) {
-        for (let j = i + 1; j < q.length; j++) pendingCmds.push(q[j]);
-        return;
-      }
-    }
+  if (commitP) {
+    commitP = false;
+    doCommit();
+    if (batchInFlight || commitP) return;
   }
-  if (pendingBegin) applyPendingBegin();
+  replayDeferredCommands();
+  if (!batchInFlight && !commitP && motionQueue.length === 0 &&
+      deferredCommands.length === 0 && !strokeContinuation) {
+    emitStats(true);
+  }
 }
 
 function pollBatch() {
@@ -165,7 +208,7 @@ function pollBatch() {
     try {
       mod._paint_end_batch_finish();
     } catch (err) {
-      reportEngineError('batch finish threw: ' + ((err as Error)?.message ?? err));
+      reportEngineError('Batch finish failed: ' + ((err as Error)?.message ?? err));
       return;
     }
     afterBatch();
@@ -175,9 +218,18 @@ function pollBatch() {
 }
 
 function drainProcess(bounded: boolean) {
-  if (!mod || batchInFlight) return; n0 = motionQueue.length; a0 = performance.now();
-  if (bounded) motionQueue.drainInterpolatedBounded(strokeSample, BUDGET); else motionQueue.drainInterpolated(strokeSample);
-  const a1 = performance.now();
+  if (!mod || batchInFlight) return;
+  n0 = motionQueue.length;
+  a0 = performance.now();
+  if (bounded) {
+    motionQueue.drainInterpolatedBounded(strokeSample, BUDGET);
+    let remaining = CONTINUATION_BUDGET - (performance.now() - a0);
+    while (motionQueue.length > 0 && strokeContinuation && remaining > 0) {
+      motionQueue.drainInterpolatedBounded(strokeSample, remaining);
+      remaining = CONTINUATION_BUDGET - (performance.now() - a0);
+    }
+  } else motionQueue.drainInterpolated(strokeSample);
+  lastBR = performance.now() - a0;
   if (batching) { mod._paint_end_batch(); batching = false; }
   if (!mod._paint_is_batch_done()) {
     batchInFlight = true;
@@ -187,45 +239,51 @@ function drainProcess(bounded: boolean) {
   afterBatch();
 }
 function scheduleFlush() {
-  if (flushT !== null || batchInFlight) return; flushT = self.setTimeout(() => {
-    flushT = null; if (!mod || batchInFlight) return; drainProcess(true);
+  if (flushT !== null || batchInFlight || drainWake.isPending) return;
+  flushT = self.setTimeout(() => {
+    flushT = null;
+    if (!mod || batchInFlight) return;
+    drainProcess(true);
   }, 8);
 }
-function flushNow() { if (flushT !== null) { clearTimeout(flushT); flushT = null; } if (!mod || batchInFlight) return; drainProcess(false); }
-function doCommit() { if (!mod) return; if (batchInFlight || motionQueue.length > 0 || strokeContinuation) { commitP = true; return; } if (batching) { mod._paint_end_batch(); batching = false; if (!mod._paint_is_batch_done()) { commitP = true; return; } } mod._paint_history_commit(); pushState(); }
-function applyPendingBegin() {
-  if (!mod || !pendingBegin) return;
-  const b = pendingBegin;
-  // Drain any old-stroke residue still in the motion queue before starting
-  // the deferred stroke; then this pass re-enters and begins it.
-  if (motionQueue.length > 0) {
-    if (!batching) { mod._paint_begin_batch(); batching = true; }
-    drainProcess(true);
-    if (batchInFlight) return;   // afterBatch() re-applies this begin
+function flushNow() {
+  if (flushT !== null) { clearTimeout(flushT); flushT = null; }
+  if (!mod || batchInFlight) return;
+  drainProcess(false);
+}
+function doCommit() {
+  if (!mod) return;
+  if (batchInFlight || motionQueue.length > 0 || strokeContinuation) {
+    commitP = true;
     return;
   }
-  pendingBegin = null;
-  motionQueue.clear(); lastT = 0;
-  mod._begin_stroke(b.x, b.y, b.xt, b.yt, b.z, b.r, b.ba);
-  mod._paint_begin_batch(); batching = true;
-  for (const s of pendingSamples) {
-    if (!(motionQueue as any).push(...s as number[])) {
-      reportEngineError('The motion queue reached its fixed capacity.');
+  if (batching) {
+    mod._paint_end_batch();
+    batching = false;
+    if (!mod._paint_is_batch_done()) {
+      batchInFlight = true;
+      commitP = true;
+      pollBatch();
+      return;
     }
   }
-  pendingSamples.length = 0;
-  commitP = pendingBeginCommit;
-  pendingBeginCommit = false;
-  scheduleFlush();
+  mod._paint_history_commit();
+  strokeOpen = false;
+  pushState();
 }
 function beginStroke(x: number, y: number, xt: number, yt: number, z: number, r: number, ba: number) {
   if (!mod) return;
-  if (batchInFlight || strokeContinuation || motionQueue.length > 0 || commitP || batching || flushT !== null) {
-    if (!pendingBegin) { pendingBegin = { x, y, xt, yt, z, r, ba }; pendingBeginCommit = false; pendingSamples.length = 0; }
-    scheduleFlush();
+  if (strokeOpen) {
+    reportEngineError('A new stroke started before the current stroke ended.');
     return;
   }
-  motionQueue.clear(); lastT = 0; mod._begin_stroke(x, y, xt, yt, z, r, ba); mod._paint_begin_batch(); batching = true; scheduleFlush();
+  motionQueue.clear();
+  lastT = 0;
+  strokeOpen = true;
+  mod._begin_stroke(x, y, xt, yt, z, r, ba);
+  mod._paint_begin_batch();
+  batching = true;
+  scheduleFlush();
 }
 function pushState() {
   if (!mod) return;
@@ -287,49 +345,50 @@ function writeTile(layer: number, tx: number, ty: number, data: ArrayBuffer) {
   renderDirty(); pushState();
 }
 
-const pending: Msg[] = [];
+const pendingInitCommands = new FixedRing<Msg>(COMMAND_CAPACITY);
 
-async function handleInput(e: MessageEvent<Msg & { canvas?: OffscreenCanvas }>) {
-  const m = e.data;
-  if (m.cmd === 'init') {
-    try {
-    if (!mod) {
-      const dynamicImport = new Function('url', 'return import(url)') as (u: string) => Promise<any>;
-      mod = await (await dynamicImport('/wasm/brushlib.js')).default({ locateFile: (p: string) => `/wasm/${p}` });
-    }
-    docW = m.width; docH = m.height;
-    if (m.canvas) { canvas = m.canvas; }
-    if (canvas) {
-      const ratio = Math.max(docW, docH) / 4096; dispScale = ratio <= 1 ? 1 : ratio <= 2 ? 2 : 4; dispMip = Math.round(Math.log2(dispScale));
-      canvas.width = Math.ceil(docW / dispScale); canvas.height = Math.ceil(docH / dispScale);
-      ctx = canvas.getContext('2d', { alpha: true });
-    }
-    if (!mod._init(docW, docH)) { reportEngineError('Brush engine initialization failed.', 'Engine initialization failed.'); return; }
-    rectPtr = mod._malloc(16); if (!rectPtr) { reportEngineError('No memory is available for display data.'); return; } const dp = mod._paint_render_rgba8_tile_ptr(0, 0); rgba8 = mod.HEAPU8.subarray(dp, dp + TILE_B);
-    mod._paint_set_eotf(EOTF); mod._paint_clear(); mod._paint_set_background_color(bgRGB[0], bgRGB[1], bgRGB[2]);
-    renderedMip = -1; renderDirty(true); pushState(); post({ type: 'ready' });
-    const q = pending.splice(0, pending.length);
-    for (const msg of q) (self.onmessage as Function)({ data: msg });
-    return;
-    } catch (err) {
-      post({ type: 'log', text: 'INIT ERROR: ' + (err as Error).message + ' ' + ((err as Error).stack || '').slice(0, 200) });
-      post({ type: 'status', text: 'Engine init failed.' });
-      return;
-    }
-  }
-  if (!mod) { pending.push(m); return; }
-  const paintPending = batchInFlight || strokeContinuation || motionQueue.length > 0 || batching;
-  if (paintPending && m.cmd !== 'strokeSample' && m.cmd !== 'beginStroke' && m.cmd !== 'commit') {
-    pendingCmds.push(m);
-    scheduleFlush();
-    return;
-  }
+function handleReadyCommand(m: Msg) {
   switch (m.cmd) {
-    case 'loadBrush': { const b = mod.lengthBytesUTF8(m.json) + 1; const p = mod._malloc(b); if (!p) { reportEngineError('No memory is available for brush data.'); break; } mod.stringToUTF8(m.json, p, b); const ok = mod._load_brush(p); mod._free(p); if (ok) { brushOk = true; } else { reportEngineError('Brush load failed because the .myb data is incorrect.'); } break; }
-    case 'config': m.settings.forEach(([n, v]) => { try { setB(n, v); } catch (err) { post({ type: 'log', text: `config ${n} failed: ${(err as Error)?.message ?? err}` }); } }); break;
+    case 'loadBrush': {
+      const bytes = mod.lengthBytesUTF8(m.json) + 1;
+      const pointer = mod._malloc(bytes);
+      if (!pointer) {
+        reportEngineError('No memory is available for brush data.');
+        break;
+      }
+      mod.stringToUTF8(m.json, pointer, bytes);
+      const loaded = mod._load_brush(pointer);
+      mod._free(pointer);
+      if (!loaded) {
+        reportEngineError('Brush load failed because the .myb data is incorrect.');
+      }
+      break;
+    }
+    case 'config': m.settings.forEach(([name, value]) => {
+      try { setB(name, value); }
+      catch (err) { post({ type: 'log', text: `config ${name} failed: ${(err as Error)?.message ?? err}` }); }
+    }); break;
     case 'beginStroke': beginStroke(m.x, m.y, m.xtilt, m.ytilt, m.zoom, m.rotation, m.barrel); break;
-    case 'strokeSample': if (pendingBegin) { pendingSamples.push([m.time, m.x, m.y, m.pressure, m.xtilt, m.ytilt, m.zoom, m.rotation, m.barrel, Number.isFinite(m.pressure), true, true]); } else if (!motionQueue.push(m.time, m.x, m.y, m.pressure, m.xtilt, m.ytilt, m.zoom, m.rotation, m.barrel, Number.isFinite(m.pressure), true, true)) { reportEngineError('The motion queue reached its fixed capacity.'); } scheduleFlush(); break;
-    case 'commit': if (pendingBegin) { pendingBeginCommit = true; scheduleFlush(); } else if (batchInFlight || motionQueue.length > 0) { commitP = true; scheduleFlush(); } else doCommit(); break;
+    case 'strokeSample':
+      if (!strokeOpen) {
+        reportEngineError('A stroke sample has no active stroke.');
+        break;
+      }
+      if (!motionQueue.push(
+        m.time, m.x, m.y, m.pressure, m.xtilt, m.ytilt, m.zoom,
+        m.rotation, m.barrel, Number.isFinite(m.pressure), true, true,
+      )) {
+        reportEngineError('The motion queue reached its fixed capacity.');
+      }
+      scheduleFlush();
+      break;
+    case 'commit':
+      if (!strokeOpen) break;
+      if (batchInFlight || motionQueue.length > 0 || strokeContinuation) {
+        commitP = true;
+        scheduleFlush();
+      } else doCommit();
+      break;
     case 'undo': flushNow(); mod._reset_brush(); if (mod._paint_history_undo()) renderDirty(true); pushState(); break;
     case 'redo': flushNow(); mod._reset_brush(); if (mod._paint_history_redo()) renderDirty(true); pushState(); break;
     case 'clear': flushNow(); mod._reset_brush(); mod._paint_clear(); renderDirty(true); pushState(); break;
@@ -352,13 +411,91 @@ async function handleInput(e: MessageEvent<Msg & { canvas?: OffscreenCanvas }>) 
       break; }
     case 'writeTile': writeTile(m.layer, m.tx, m.ty, m.data); break;
     case 'requestState': pushState(); break;
+    case 'init': break;
   }
 }
 
-/* Route each message through a guard so exceptions are visible. */
+function routeReadyCommand(m: Msg) {
+  const paintPending = batchInFlight || strokeContinuation ||
+    motionQueue.length > 0 || batching || commitP;
+  const joinsCurrentStroke = strokeOpen &&
+    (m.cmd === 'strokeSample' || m.cmd === 'commit');
+  if (deferredCommands.length > 0 ||
+      (m.cmd === 'beginStroke' && strokeOpen) ||
+      (paintPending && !joinsCurrentStroke)) {
+    deferCommand(m);
+    scheduleFlush();
+    return;
+  }
+  handleReadyCommand(m);
+}
+
+async function handleInput(e: MessageEvent<Msg & { canvas?: OffscreenCanvas }>) {
+  const m = e.data;
+  if (m.cmd === 'init') {
+    try {
+      if (!mod) {
+        const dynamicImport = new Function('url', 'return import(url)') as (u: string) => Promise<any>;
+        mod = await (await dynamicImport('/wasm/brushlib.js')).default({ locateFile: (p: string) => `/wasm/${p}` });
+      }
+      docW = m.width; docH = m.height;
+      if (m.canvas) canvas = m.canvas;
+      if (canvas) {
+        const ratio = Math.max(docW, docH) / 4096;
+        dispScale = ratio <= 1 ? 1 : ratio <= 2 ? 2 : 4;
+        dispMip = Math.round(Math.log2(dispScale));
+        canvas.width = Math.ceil(docW / dispScale);
+        canvas.height = Math.ceil(docH / dispScale);
+        ctx = canvas.getContext('2d', { alpha: true });
+      }
+      if (!mod._init(docW, docH)) {
+        reportEngineError('Brush engine initialization failed.', 'Engine initialization failed.');
+        return;
+      }
+      rectPtr = mod._malloc(16);
+      if (!rectPtr) {
+        reportEngineError('No memory is available for display data.');
+        return;
+      }
+      const displayPointer = mod._paint_render_rgba8_tile_ptr(0, 0);
+      rgba8 = mod.HEAPU8.subarray(displayPointer, displayPointer + TILE_B);
+      mod._paint_set_eotf(EOTF);
+      mod._paint_clear();
+      mod._paint_set_background_color(bgRGB[0], bgRGB[1], bgRGB[2]);
+      motionQueue.clear();
+      deferredCommands.clear();
+      strokeContinuation = false;
+      strokeOpen = false;
+      commitP = false;
+      batching = false;
+      batchInFlight = false;
+      renderedMip = -1;
+      renderDirty(true);
+      pushState();
+      post({ type: 'ready' });
+      while (pendingInitCommands.length > 0) {
+        const command = pendingInitCommands.shift();
+        if (command) routeReadyCommand(command);
+      }
+      return;
+    } catch (err) {
+      post({ type: 'log', text: 'INIT ERROR: ' + (err as Error).message + ' ' + ((err as Error).stack || '').slice(0, 200) });
+      post({ type: 'status', text: 'Engine init failed.' });
+      return;
+    }
+  }
+  if (!mod) {
+    if (!pendingInitCommands.push(m)) {
+      reportEngineError('The initial command queue reached its fixed capacity.');
+    }
+    return;
+  }
+  routeReadyCommand(m);
+}
+
 self.onmessage = (e: MessageEvent<Msg & { canvas?: OffscreenCanvas }>) => {
   handleInput(e)?.catch?.((err: unknown) => {
-    const what = `handleInput threw: ${(err as Error)?.message ?? err} ${((err as Error)?.stack || '').slice(0, 200)}`;
+    const what = `Input command failed: ${(err as Error)?.message ?? err} ${((err as Error)?.stack || '').slice(0, 200)}`;
     reportEngineError(what);
   });
 };

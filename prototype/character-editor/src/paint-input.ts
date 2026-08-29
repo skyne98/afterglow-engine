@@ -117,57 +117,94 @@ export class MotionQueue {
     return (this.head + position) % this.capacity;
   }
 
-  private interpolatedAxis(values: Float32Array, valid: Uint8Array, position: number): number {
-    const current = this.indexAt(position);
-    if (valid[current] !== 0) return values[current];
+  private resolveBoundedHeadRun(
+    valid: Uint8Array,
+    first: Float32Array,
+    second?: Float32Array,
+  ): void {
+    if (this.count === 0 || valid[this.head] !== 0) return;
+    let after = 1;
+    while (after < this.count && valid[this.indexAt(after)] === 0) after++;
+    if (after < this.count) {
+      const source = this.indexAt(after);
+      const firstValue = first[source];
+      const secondValue = second?.[source] ?? 0;
+      for (let position = 0; position < after; position++) {
+        const index = this.indexAt(position);
+        first[index] = firstValue;
+        if (second) second[index] = secondValue;
+      }
+    }
+    const end = after < this.count ? after : this.count;
+    for (let position = 0; position < end; position++) {
+      valid[this.indexAt(position)] = 1;
+    }
+  }
 
+  private resolveAllMissingRuns(
+    valid: Uint8Array,
+    first: Float32Array,
+    second?: Float32Array,
+  ): void {
+    let previous = -1;
     let before = -1;
-    let after = -1;
-    for (let p = position - 1; p >= 0; p--) {
-      const index = this.indexAt(p);
+    let position = 0;
+    while (position < this.count) {
+      const index = this.indexAt(position);
       if (valid[index] !== 0) {
-        before = p;
-        break;
+        previous = before < 0 ? position : before;
+        before = position;
+        position++;
+        continue;
       }
-    }
-    for (let p = position + 1; p < this.count; p++) {
-      const index = this.indexAt(p);
-      if (valid[index] !== 0) {
-        after = p;
-        break;
-      }
-    }
-    if (before < 0) return after < 0 ? values[current] : values[this.indexAt(after)];
-    if (after < 0) return values[this.indexAt(before)];
 
-    let previous = before;
-    for (let p = before - 1; p >= 0; p--) {
-      if (valid[this.indexAt(p)] !== 0) {
-        previous = p;
-        break;
+      const start = position;
+      let after = position + 1;
+      while (after < this.count && valid[this.indexAt(after)] === 0) after++;
+      let next = after;
+      if (after < this.count) {
+        next = after + 1;
+        while (next < this.count && valid[this.indexAt(next)] === 0) next++;
+        if (next >= this.count) next = after;
       }
-    }
-    let next = after;
-    for (let p = after + 1; p < this.count; p++) {
-      if (valid[this.indexAt(p)] !== 0) {
-        next = p;
-        break;
-      }
-    }
 
-    const beforeIndex = this.indexAt(before);
-    const afterIndex = this.indexAt(after);
-    const span = this.times[afterIndex] - this.times[beforeIndex];
-    const t = span > 0
-      ? Math.max(0, Math.min(1, (this.times[current] - this.times[beforeIndex]) / span))
-      : 0.5;
-    return spline4p(
-      t,
-      values[this.indexAt(previous)],
-      values[beforeIndex],
-      values[afterIndex],
-      values[this.indexAt(next)],
-    );
+      for (let missing = start; missing < after; missing++) {
+        const missingIndex = this.indexAt(missing);
+        if (before < 0) {
+          if (after < this.count) {
+            const afterIndex = this.indexAt(after);
+            first[missingIndex] = first[afterIndex];
+            if (second) second[missingIndex] = second[afterIndex];
+          }
+        } else if (after >= this.count) {
+          const beforeIndex = this.indexAt(before);
+          first[missingIndex] = first[beforeIndex];
+          if (second) second[missingIndex] = second[beforeIndex];
+        } else {
+          const beforeIndex = this.indexAt(before);
+          const afterIndex = this.indexAt(after);
+          const span = this.times[afterIndex] - this.times[beforeIndex];
+          const t = span > 0
+            ? Math.max(0, Math.min(1,
+              (this.times[missingIndex] - this.times[beforeIndex]) / span))
+            : 0.5;
+          first[missingIndex] = spline4p(
+            t,
+            first[this.indexAt(previous)], first[beforeIndex],
+            first[afterIndex], first[this.indexAt(next)],
+          );
+          if (second) {
+            second[missingIndex] = spline4p(
+              t,
+              second[this.indexAt(previous)], second[beforeIndex],
+              second[afterIndex], second[this.indexAt(next)],
+            );
+          }
+        }
+        valid[missingIndex] = 1;
+      }
+      position = after;
+    }
   }
 
   /**
@@ -179,15 +216,15 @@ export class MotionQueue {
   drainInterpolatedBounded(sink: MotionSink, budgetMs: number): void {
     const started = performance.now();
     while (this.count > 0) {
-      const position = 0;
+      this.resolveBoundedHeadRun(this.pressureValid, this.pressures);
+      this.resolveBoundedHeadRun(this.tiltValid, this.xtilts, this.ytilts);
+      this.resolveBoundedHeadRun(this.viewValid, this.viewzooms);
       const index = this.head;
       if (sink(
         this.times[index], this.xs[index], this.ys[index],
-        this.interpolatedAxis(this.pressures, this.pressureValid, position),
-        this.interpolatedAxis(this.xtilts, this.tiltValid, position),
-        this.interpolatedAxis(this.ytilts, this.tiltValid, position),
-        this.interpolatedAxis(this.viewzooms, this.viewValid, position),
-        this.viewrotations[index], this.barrelRotations[index],
+        this.pressures[index], this.xtilts[index], this.ytilts[index],
+        this.viewzooms[index], this.viewrotations[index],
+        this.barrelRotations[index],
       ) === false) break;
       this.head = (this.head + 1) % this.capacity;
       this.count--;
@@ -196,17 +233,18 @@ export class MotionQueue {
   }
 
   drainInterpolated(sink: MotionSink): void {
+    this.resolveAllMissingRuns(this.pressureValid, this.pressures);
+    this.resolveAllMissingRuns(this.tiltValid, this.xtilts, this.ytilts);
+    this.resolveAllMissingRuns(this.viewValid, this.viewzooms);
     const initialCount = this.count;
     let consumed = 0;
     for (let position = 0; position < initialCount; position++) {
       const index = this.indexAt(position);
       if (sink(
         this.times[index], this.xs[index], this.ys[index],
-        this.interpolatedAxis(this.pressures, this.pressureValid, position),
-        this.interpolatedAxis(this.xtilts, this.tiltValid, position),
-        this.interpolatedAxis(this.ytilts, this.tiltValid, position),
-        this.interpolatedAxis(this.viewzooms, this.viewValid, position),
-        this.viewrotations[index], this.barrelRotations[index],
+        this.pressures[index], this.xtilts[index], this.ytilts[index],
+        this.viewzooms[index], this.viewrotations[index],
+        this.barrelRotations[index],
       ) === false) break;
       consumed++;
     }

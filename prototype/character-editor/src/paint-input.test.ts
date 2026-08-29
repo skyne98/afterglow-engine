@@ -40,14 +40,18 @@ describe('MotionQueue', () => {
     expect(queue.length).toBe(0);
   });
 
-  test('keeps a sample when its sink has more work', () => {
+  test('keeps one sample through many sink continuations', () => {
     const queue = new MotionQueue(4);
     queue.push(1, 7, 0, 0.5, 0, 0, 1, 0, 0.5);
     let calls = 0;
-    queue.drainInterpolatedBounded(() => { calls++; return false; }, 1000);
-    expect(calls).toBe(1);
-    expect(queue.length).toBe(1);
-    queue.drainInterpolatedBounded(() => true, 1000);
+    while (queue.length > 0) {
+      queue.drainInterpolatedBounded((_time, x) => {
+        expect(x).toBe(7);
+        calls++;
+        return calls >= 32;
+      }, 1000);
+    }
+    expect(calls).toBe(32);
     expect(queue.length).toBe(0);
   });
 
@@ -76,6 +80,56 @@ describe('MotionQueue', () => {
     expect(pressure[1]).toBeCloseTo(0.5, 5);
     expect(tilt[1]).toBeCloseTo(0.5, 5);
     expect(queue.length).toBe(0);
+  });
+
+  test('uses four valid controls for a middle run', () => {
+    const queue = new MotionQueue(5);
+    queue.push(0, 0, 0, 0, 0, 0, 1, 0, 0.5, true, true, true);
+    queue.push(10, 1, 0, 1, 0, 0, 1, 0, 0.5, true, true, true);
+    queue.push(15, 2, 0, 0, 0, 0, 1, 0, 0.5, false, true, true);
+    queue.push(20, 3, 0, 4, 0, 0, 1, 0, 0.5, true, true, true);
+    queue.push(30, 4, 0, 9, 0, 0, 1, 0, 0.5, true, true, true);
+    const pressure: number[] = [];
+    queue.drainInterpolated((_time, _x, _y, value) => pressure.push(value));
+    expect(pressure[2]).toBeCloseTo(spline4p(0.5, 0, 1, 4, 9), 5);
+  });
+
+  test('resolves a long missing run with bounded linear work', () => {
+    const capacity = 8192;
+    const queue = new MotionQueue(capacity);
+    for (let i = 0; i < capacity - 1; i++) {
+      queue.push(i, i, 0, i, i, -i, i, 0, 0.5, false, false, false);
+    }
+    queue.push(capacity, capacity, 0, 1, 2, 3, 4, 0, 0.5, true, true, true);
+    let count = 0;
+    let incorrect = 0;
+    const started = performance.now();
+    queue.drainInterpolatedBounded((_time, _x, _y, pressure, xtilt, ytilt, zoom) => {
+      if (pressure !== 1 || xtilt !== 2 || ytilt !== 3 || zoom !== 4) incorrect++;
+      count++;
+    }, 1000);
+    const elapsed = performance.now() - started;
+    expect(incorrect).toBe(0);
+    expect(count).toBe(capacity);
+    expect(queue.length).toBe(0);
+    expect(elapsed).toBeLessThan(100);
+  });
+
+  test('keeps values when a missing run has no valid control', () => {
+    const queue = new MotionQueue(4);
+    for (let i = 0; i < 4; i++) {
+      queue.push(i, i, 0, i, i + 1, i + 2, i + 3, 0, 0.5, false, false, false);
+    }
+    const values: number[] = [];
+    queue.drainInterpolatedBounded((_time, _x, _y, pressure, xtilt, ytilt, zoom) => {
+      values.push(pressure, xtilt, ytilt, zoom);
+    }, 1000);
+    expect(values).toEqual([
+      0, 1, 2, 3,
+      1, 2, 3, 4,
+      2, 3, 4, 5,
+      3, 4, 5, 6,
+    ]);
   });
 });
 

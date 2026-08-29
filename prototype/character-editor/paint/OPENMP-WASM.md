@@ -35,6 +35,8 @@ The queue contains fixed per-tile FIFOs. A fixed 8,192-entry hash table gives O(
 
 The limits are 4,096 dirty tiles and 16,384 operations for each batch. The engine reports a capacity error before it clears the queue.
 
+History capture uses a fixed generation set for stable tile slots. Duplicate capture checks stay O(1) as an active stroke touches more tiles.
+
 ## Parallel tile batch
 
 One TypeScript drain is one tile batch:
@@ -79,9 +81,23 @@ The rectangle list stays available for diagnostics. Full document changes still 
 
 `paint-engine-worker.ts` keeps the current motion sample in `MotionQueue` while a dab continuation is active.
 
+The motion queue resolves a missing pressure, tilt, or view run once. It does not scan the remaining queue for each sample.
+
 The worker yields to its event loop between continuation batches. A later color or brush command waits until the current sample completes.
 
+A fixed `MessageChannel` starts each continuation task. It permits one pending wake and avoids the approximately 4 ms nested-timer clamp.
+
+One tile batch can include 2 ms of 128-dab continuation units. The 8 ms input budget still controls samples that do not need continuation.
+
+The 16K Tail Feathers test decreased from approximately 2.52 seconds to a 47.8 ms median on fox-workstation.
+
+An 8,192-item fixed command ring keeps all deferred stroke boundaries. It does not combine separate queued strokes into one history record.
+
 Commit, clear, undo, redo, layer, export, and probe commands also wait for all current paint work. This prevents concurrent surface access.
+
+`PaintPointerState` commits an open stroke before a zoom, rotation, mirror, view reset, or pan. It also commits after pointer-capture, document-visibility, or window-focus loss.
+
+A document change discards the local pointer state before it initializes the new document.
 
 ## Error information
 
@@ -100,7 +116,7 @@ The engine does not use a watchdog, batch abort, cooldown, or automatic serial m
 
 ## Tests
 
-`bun run test` runs the TypeScript tests, layer parity tests, operation-queue tests, and the cooperative brush test.
+`bun run test` runs the TypeScript tests, pointer-state tests, task-wake tests, layer parity tests, operation-queue tests, and the cooperative brush test.
 
 The layer tests keep 21 modes bit-exact. Pigment stays within one least-significant bit because of float operation order.
 

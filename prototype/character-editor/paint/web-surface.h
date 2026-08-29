@@ -10,8 +10,8 @@
 #define WEB_THREAD_POOL_MAX 4
 
 typedef struct WebPaintSurface WebPaintSurface;
-typedef void (*WebSurfaceWriteCallback)(WebPaintSurface *surface, int tx, int ty,
-                                        uint16_t *tile);
+typedef void (*WebSurfaceWriteCallback)(WebPaintSurface *surface, int tile_slot,
+                                        int tx, int ty, uint16_t *tile);
 
 WebPaintSurface *web_surface_new(int width, int height);
 void web_surface_destroy(WebPaintSurface *surface);
@@ -21,6 +21,7 @@ int web_surface_get_width(const WebPaintSurface *surface);
 int web_surface_get_height(const WebPaintSurface *surface);
 int web_surface_get_tiles_width(const WebPaintSurface *surface);
 int web_surface_get_tiles_height(const WebPaintSurface *surface);
+int web_surface_get_tile_capacity(const WebPaintSurface *surface);
 uint16_t *web_surface_get_tile(WebPaintSurface *surface, int tx, int ty);
 uint16_t *web_surface_get_or_create_tile(WebPaintSurface *surface, int tx, int ty);
 int web_surface_take_capacity_error(WebPaintSurface *surface);

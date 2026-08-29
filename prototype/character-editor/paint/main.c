@@ -15,6 +15,7 @@
 #include "mypaint-brush-cooperative.h"
 #include "web-surface.h"
 #include "layer-compositor.h"
+#include "fixed-tile-set.h"
 
 #define WEB_MAX_LAYERS 8
 #define WEB_MAX_GROUPS 4
@@ -77,13 +78,15 @@ static int history_active;
 static int history_active_start;
 static int history_active_count;
 static int history_active_layer;
+static uint32_t *history_tile_marks;
+static FixedTileSet history_tiles;
 static int init_done = 0;
 static int atomic_active = 0;
 static int suppress_atomic_end = 0;
 static int paint_error_code = 0;
 
-static void history_capture_before(WebPaintSurface *owner, int tx, int ty,
-                                   uint16_t *tile);
+static void history_capture_before(WebPaintSurface *owner, int tile_slot,
+                                   int tx, int ty, uint16_t *tile);
 static int history_ensure(int needed);
 static void history_free(void);
 
@@ -421,11 +424,20 @@ int init(int width, int height)
     background_surface = NULL;
     layers[0] = web_surface_new(width, height);
     web_surface_set_write_callback(layers[0], history_capture_before);
+    const int history_tile_capacity =
+        web_surface_get_tile_capacity(layers[0]);
+    history_tile_marks = history_tile_capacity > 0
+        ? (uint32_t *)calloc((size_t)history_tile_capacity, sizeof(uint32_t))
+        : NULL;
+    fixed_tile_set_init(
+        &history_tiles, history_tile_marks, history_tile_capacity);
     int group_storage_ok = 1;
     for (int i = 0; i < WEB_MAX_GROUPS; i++) {
         if (!group_tile[i] || !group_base_tile[i]) group_storage_ok = 0;
     }
-    if (!composite_tile || !mip_composite_tile || !mip_source_tiles || !background_tile || !display_tile || !display_lut || !layers[0] || !group_storage_ok) {
+    if (!composite_tile || !mip_composite_tile || !mip_source_tiles ||
+        !background_tile || !display_tile || !display_lut || !layers[0] ||
+        !history_tile_marks || !group_storage_ok) {
         free(composite_tile);
         free(mip_composite_tile);
         free(mip_source_tiles);
@@ -440,6 +452,7 @@ int init(int width, int height)
         display_lut = NULL;
         display_lut_ready = 0;
         destroy_layers();
+        history_free();
         return 0;
     }
     rebuild_display_lut();
@@ -1060,46 +1073,33 @@ void history_free(void)
     free(history_after);
     free(history_tx);
     free(history_ty);
+    free(history_tile_marks);
     history_before = NULL;
     history_after = NULL;
     history_tx = NULL;
     history_ty = NULL;
+    history_tile_marks = NULL;
+    fixed_tile_set_init(&history_tiles, NULL, 0);
     history_capacity = 0;
     history_entry_count = 0;
 }
 
-static int history_find_entry(int start, int count, int tx, int ty)
-{
-    for (int i = 0; i < count; i++) {
-        const int entry = start + i;
-        if (history_tx[entry] == tx && history_ty[entry] == ty) return entry;
-    }
-    return -1;
-}
-
 static volatile int history_spinlock = 0;
 
-static void history_capture_before(WebPaintSurface *owner, int tx, int ty,
-                                   uint16_t *tile)
+static void history_capture_before(WebPaintSurface *owner, int tile_slot,
+                                   int tx, int ty, uint16_t *tile)
 {
     if (!history_active || !tile || history_active_layer < 0 ||
         history_active_layer >= layer_count || owner != layers[history_active_layer]) {
         return;
     }
-    /* The main WASM worker does not use a blocking join. */
     while (__atomic_test_and_set(&history_spinlock, __ATOMIC_ACQUIRE)) {}
-    if (history_find_entry(history_active_start, history_active_count, tx, ty) >= 0) {
+    const int inserted = fixed_tile_set_insert(&history_tiles, tile_slot);
+    if (inserted == 0) {
         __atomic_clear(&history_spinlock, __ATOMIC_RELEASE);
         return;
     }
-    if (history_entry_count + 1 > history_capacity) {
-        paint_error_code = 2;
-        history_active = 0;
-        history_entry_count = history_active_start;
-        __atomic_clear(&history_spinlock, __ATOMIC_RELEASE);
-        return;
-    }
-    if (!history_ensure(history_entry_count + 1)) {
+    if (inserted < 0 || history_entry_count + 1 > history_capacity) {
         paint_error_code = 2;
         history_active = 0;
         history_entry_count = history_active_start;
@@ -1168,6 +1168,7 @@ void paint_history_begin(void)
     history_active_start = history_entry_count;
     history_active_count = 0;
     history_active_layer = active_layer;
+    fixed_tile_set_begin(&history_tiles);
     history_active = 1;
 }
 

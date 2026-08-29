@@ -24,6 +24,7 @@ SRCS=(
   "$MP/rng-double.c"
   "$MP/brushmodes.c"
   "$PAINT/fixed-operationqueue.c"
+  "$PAINT/fixed-tile-set.c"
   "$MP/mypaint-rectangle.c"
   "$MP/mypaint-matrix.c"
   "$MP/mypaint-symmetry.c"
