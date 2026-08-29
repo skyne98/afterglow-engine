@@ -1,0 +1,17 @@
+[package]
+name = "maipointo"
+version = "0.0.1"
+edition = "2024"
+publish = false
+license = "MIT OR Apache-2.0"
+description = "From-scratch Rust reimplementation of the libmypaint (brushlib) brush engine for the paint demo"
+repository = "https://github.com/skyne98/afterglow-engine"
+
+# libmypaint's brush engine core (mypaint-brush.c + brushmodes.c +
+# mypaint-tiled-surface.c mask rendering) is ISC-licensed; this crate is an
+# independent Rust reimplementation of that math. See THIRD_PARTY_NOTICES.md.
+[workspace]
+
+[dependencies]
+
+[dev-dependencies]
