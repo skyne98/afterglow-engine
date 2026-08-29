@@ -23,6 +23,7 @@ pub mod mask;
 pub mod random;
 pub mod rngdouble;
 pub mod surface;
+pub mod symmetry;
 pub mod settings;
 
 /// C ABI for the demo's Emscripten wasm module (wasm builds only; the
