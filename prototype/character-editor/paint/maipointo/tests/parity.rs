@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use maipointo::brushmodes::*;
+use maipointo::random::PortableRand;
 use maipointo::mask::{render_dab_mask, TILE_SIZE};
 use maipointo::Tile;
 
@@ -229,8 +230,7 @@ fn run_maipointo(cmds: &[DabCmd]) -> (Vec<u16>, [f64; 5]) {
                 c.paint,
                 c.interval,
                 c.rand_rate,
-                || 0, // unused at rate 0 / interval 1
-                2147483647,
+                &mut PortableRand::default(),
             ),
             _ => unreachable!(),
         }

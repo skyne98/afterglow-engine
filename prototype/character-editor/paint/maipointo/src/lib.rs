@@ -14,10 +14,14 @@
 //!    default-brush parity, not an optional extra
 //! 8. TODO: `.myb` JSON brushes, wasm bindings
 
+pub mod brush;
 pub mod brushmodes;
+pub mod helpers;
 pub mod mapping;
 pub mod mask;
+pub mod random;
 pub mod rngdouble;
+pub mod surface;
 pub mod settings;
 
 pub use brushmodes::ColorSums;
