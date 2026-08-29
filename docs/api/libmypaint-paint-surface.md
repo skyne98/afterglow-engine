@@ -8,15 +8,14 @@ The character-editor paint demo uses the maipointo brush engine (see `maipointo.
 
 ## Build
 
-Build the threaded module with Emscripten 3.1.74:
+Build the module with Emscripten (the engine is maipointo; see `maipointo.md`):
 
 ```sh
 cd prototype/character-editor
-nix-shell -p python3 --run \
-  'source /home/fox/tools/emsdk/emsdk_env.sh && bash paint/build-wasm-threads.sh'
+nix-shell -p emscripten --run 'bash paint/build-wasm.sh'
 ```
 
-The build uses four pthread workers, SIMD128, a 128 KiB pthread stack, and a 1 GiB memory limit.
+The module is single-threaded, SIMD128-enabled, with growth enabled.
 
 `paint/build-wasm.sh` makes a separate serial module. The threaded build is the shipped demo module.
 
