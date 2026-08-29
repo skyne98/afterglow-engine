@@ -202,8 +202,8 @@ fn run_oracle(cmds: &[DabCmd]) -> (Vec<u16>, [f64; 5]) {
 /// Apply the same command list through maipointo.
 fn run_maipointo(cmds: &[DabCmd]) -> (Vec<u16>, [f64; 5]) {
     let mut tile = Tile::new();
-    let mut scratch = Vec::new();
-    let mut mask = Vec::new();
+    let mut scratch = [0f32; 64 * 64 + 2 * 64];
+    let mut mask = [0u16; 64 * 64 + 2 * 64];
     let mut sums = ColorSums::default();
     for c in cmds {
         render_dab_mask(

@@ -167,7 +167,6 @@ fn calculate_opa(
 
 /// Scratch buffer sized as in the C (`TILE_SIZE*TILE_SIZE + 2*TILE_SIZE`
 /// floats is enough for the precomputed rr values).
-pub type RrMaskScratch = Vec<f32>;
 
 /// `render_dab_mask` — fills `mask` with the LRE-encoded dab opacity.
 ///
@@ -176,7 +175,7 @@ pub type RrMaskScratch = Vec<f32>;
 /// the stored count is `skip*4` because consumers advance RGBA by `u16`
 /// quads.
 pub fn render_dab_mask(
-    mask: &mut Vec<u16>,
+    mask: &mut [u16],
     x: f32,
     y: f32,
     radius: f32,
@@ -184,8 +183,8 @@ pub fn render_dab_mask(
     softness: f32,
     aspect_ratio: f32,
     angle: f32,
-    scratch: &mut RrMaskScratch,
-) {
+    scratch: &mut [f32],
+) -> usize {
     let hardness = clamp(hardness, 0.0, 1.0);
     let mut aspect_ratio = aspect_ratio;
     if aspect_ratio < 1.0 {
@@ -225,8 +224,7 @@ pub fn render_dab_mask(
     }
     let one_over_radius2 = 1.0 / (radius * radius);
 
-    scratch.clear();
-    scratch.resize(TILE_SIZE * TILE_SIZE + 2 * TILE_SIZE, 0.0);
+    // the caller owns a fixed-capacity scratch sized MASK_LEN
 
     if radius < 3.0 {
         let aa_border = 1.0f32;
@@ -252,8 +250,9 @@ pub fn render_dab_mask(
     }
 
     // Run-length encoding: if opacity is zero, the next mask value is the
-    // number of pixels that can be skipped.
-    mask.clear();
+    // number of pixels that can be skipped. Fixed-capacity slice, written
+    // through an index cursor (the caller owns a MASK_LEN buffer).
+    let mut mp = 0usize;
     let mut skip: i32 = 0;
 
     skip += y0 * TILE_SIZE as i32;
@@ -278,16 +277,19 @@ pub fn render_dab_mask(
                 skip += 1;
             } else {
                 if skip != 0 {
-                    mask.push(0);
-                    mask.push((skip * 4) as u16);
+                    mask[mp] = 0;
+                    mask[mp + 1] = (skip * 4) as u16;
+                    mp += 2;
                     skip = 0;
                 }
-                mask.push(opa_);
+                mask[mp] = opa_;
+                mp += 1;
             }
             xp += 1;
         }
         skip += TILE_SIZE as i32 - xp;
     }
-    mask.push(0);
-    mask.push(0);
+    mask[mp] = 0;
+    mask[mp + 1] = 0;
+    mp + 2
 }

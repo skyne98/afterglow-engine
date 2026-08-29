@@ -37,17 +37,59 @@ fn round_i(x: f32) -> i32 {
     (x + 0.5) as i32
 }
 
+/// Fixed op-queue capacity — mirrors the demo C `FIXED_OP_CAPACITY`.
+const OP_QUEUE_CAP: usize = 16384;
+/// Matches the demo C `FIXED_TILE_CAPACITY`.
+const DIRTY_TILE_CAP: usize = 4096;
+const MASK_LEN: usize = TILE_SIZE * TILE_SIZE + 2 * TILE_SIZE;
+
+const NULL_DAB_OP: DrawDabOp = DrawDabOp {
+    x: 0.0,
+    y: 0.0,
+    radius: 0.0,
+    aspect_ratio: 1.0,
+    angle: 0.0,
+    opaque: 0.0,
+    hardness: 0.0,
+    softness: 0.0,
+    lock_alpha: 0.0,
+    colorize: 0.0,
+    posterize: 0.0,
+    posterize_num: 1,
+    paint: 0.0,
+    normal: 1.0,
+    color_r: 0,
+    color_g: 0,
+    color_b: 0,
+    color_a: 0.0,
+};
+
+#[derive(Clone, Copy)]
+struct QueuedOp {
+    tx: i32,
+    ty: i32,
+    op: DrawDabOp,
+}
+
 /// `MyPaintFixedTiledSurface`: W×H pixels, 64×64 RGBA fix15 tiles, the tile
 /// buffer pre-filled with `0xFFFF` u16s (the C `memset(buffer, 255)` quirk).
+/// All hot-path storage is fixed-capacity: the op queue, the LRE mask, and
+/// the mask scratch are single bootstrap allocations with deterministic
+/// overflow (drops counted, never grown). Matches the demo C
+/// `fixed-operationqueue.c` capacity and failure policy.
 pub struct FixedTiledSurface {
     width: i32,
     height: i32,
     tiles_width: i32,
     tiles_height: i32,
     tiles: Vec<u16>,
-    ops: Vec<(i32, i32, DrawDabOp)>,
-    mask: Vec<u16>,
-    scratch: Vec<f32>,
+    ops: Box<[QueuedOp]>,
+    op_len: usize,
+    op_failed: u32,
+    dirty: Box<[(i32, i32)]>,
+    batch: Box<[DrawDabOp]>,
+    mask: Box<[u16]>,
+    scratch: Box<[f32]>,
     random: Box<dyn RandomSource>,
 }
 
@@ -63,9 +105,13 @@ impl FixedTiledSurface {
             tiles_width,
             tiles_height,
             tiles: vec![0xFFFF; words],
-            ops: Vec::new(),
-            mask: Vec::new(),
-            scratch: Vec::new(),
+            ops: vec![QueuedOp { tx: 0, ty: 0, op: NULL_DAB_OP }; OP_QUEUE_CAP].into_boxed_slice(),
+            op_len: 0,
+            op_failed: 0,
+            dirty: vec![(0i32, 0i32); DIRTY_TILE_CAP].into_boxed_slice(),
+            batch: vec![NULL_DAB_OP; OP_QUEUE_CAP].into_boxed_slice(),
+            mask: vec![0u16; MASK_LEN].into_boxed_slice(),
+            scratch: vec![0.0f32; MASK_LEN].into_boxed_slice(),
             random: Box::new(crate::random::PortableRand::default()),
         }
     }
@@ -86,6 +132,12 @@ impl FixedTiledSurface {
         self.height
     }
 
+    /// Deterministic op-queue overflow counter (the C
+    /// `operation_queue_failed` analogue).
+    pub fn queue_failed(&self) -> u32 {
+        self.op_failed
+    }
+
     #[inline]
     fn tile_base(&self, tx: i32, ty: i32) -> Option<usize> {
         if tx < 0 || ty < 0 || tx >= self.tiles_width || ty >= self.tiles_height {
@@ -96,31 +148,34 @@ impl FixedTiledSurface {
 
     /// `process_tile` — apply all queued ops for one tile, FIFO order.
     fn process_tile(&mut self, tx: i32, ty: i32) {
-        let mut batch = Vec::new();
-        self.ops.retain(|(ttx, tty, op)| {
-            if *ttx == tx && *tty == ty {
-                batch.push(*op);
-                false
+        if self.op_len == 0 {
+            return;
+        }
+        // Drain matching ops in FIFO order; compact non-matching in place.
+        let mut batch_len = 0usize;
+        let mut w = 0usize;
+        for r in 0..self.op_len {
+            let e = self.ops[r];
+            if e.tx == tx && e.ty == ty {
+                self.batch[batch_len] = e.op;
+                batch_len += 1;
             } else {
-                true
+                self.ops[w] = e;
+                w += 1;
             }
-        });
-        if batch.is_empty() {
+        }
+        self.op_len = w;
+        if batch_len == 0 {
             return;
         }
 
-        let mut mask = std::mem::take(&mut self.mask);
-        let mut scratch = std::mem::take(&mut self.scratch);
         if let Some(base) = self.tile_base(tx, ty) {
             let (_, rest) = self.tiles.split_at_mut(base);
             let rgba = &mut rest[..TILE_SIZE * TILE_SIZE * 4];
-            for op in &batch {
-                process_op(rgba, &mut mask, tx, ty, op, &mut scratch);
+            for b in 0..batch_len {
+                process_op(rgba, &mut self.mask[..], tx, ty, &self.batch[b], &mut self.scratch[..]);
             }
         }
-        // Out-of-range tiles drew into the discarded null tile.
-        self.mask = mask;
-        self.scratch = scratch;
     }
 
     /// `draw_dab_internal` — validate + queue the dab onto every tile it
@@ -209,7 +264,12 @@ impl FixedTiledSurface {
 
         for ty in ty1..=ty2 {
             for tx in tx1..=tx2 {
-                self.ops.push((tx, ty, op));
+                if self.op_len < OP_QUEUE_CAP {
+                    self.ops[self.op_len] = QueuedOp { tx, ty, op };
+                    self.op_len += 1;
+                } else {
+                    self.op_failed += 1; // deterministic overflow: op dropped
+                }
             }
         }
         true
@@ -251,7 +311,7 @@ impl FixedTiledSurface {
                 };
 
                 render_dab_mask(
-                    &mut self.mask,
+                    &mut self.mask[..],
                     x - (tx * TILE_SIZE as i32) as f32,
                     y - (ty * TILE_SIZE as i32) as f32,
                     radius,
@@ -259,11 +319,11 @@ impl FixedTiledSurface {
                     softness,
                     aspect_ratio,
                     angle,
-                    &mut self.scratch,
+                    &mut self.scratch[..],
                 );
 
                 get_color_accumulate(
-                    &self.mask,
+                    &self.mask[..],
                     rgba,
                     &mut sums,
                     paint,
@@ -335,14 +395,27 @@ impl FixedTiledSurface {
     }
 
     /// Drain every queued operation into its tile (end-of-stroke flush).
+    /// Collects the unique dirty tiles into a fixed table first (the C
+    /// demo's `FIXED_TILE_CAPACITY`), then drains each in first-appearance
+    /// order.
     pub fn flush_all(&mut self) {
-        let mut coords: Vec<(i32, i32)> = Vec::new();
-        for (tx, ty, _) in &self.ops {
-            if !coords.contains(&(*tx, *ty)) {
-                coords.push((*tx, *ty));
+        let mut n = 0usize;
+        for r in 0..self.op_len {
+            let e = self.ops[r];
+            let mut seen = false;
+            for d in 0..n {
+                if self.dirty[d] == (e.tx, e.ty) {
+                    seen = true;
+                    break;
+                }
+            }
+            if !seen && n < self.dirty.len() {
+                self.dirty[n] = (e.tx, e.ty);
+                n += 1;
             }
         }
-        for (tx, ty) in coords {
+        for d in 0..n {
+            let (tx, ty) = self.dirty[d];
             self.process_tile(tx, ty);
         }
     }
@@ -357,11 +430,11 @@ impl FixedTiledSurface {
 /// mode (verbatim from `mypaint-tiled-surface.c`).
 fn process_op(
     rgba: &mut [u16],
-    mask: &mut Vec<u16>,
+    mask: &mut [u16],
     tx: i32,
     ty: i32,
     op: &DrawDabOp,
-    scratch: &mut Vec<f32>,
+    scratch: &mut [f32],
 ) {
     render_dab_mask(
         mask,

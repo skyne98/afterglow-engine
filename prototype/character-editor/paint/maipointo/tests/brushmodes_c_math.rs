@@ -10,8 +10,8 @@ use maipointo::{Tile, TILE_SIZE};
 #[test]
 fn normal_dab_solid_red_over_transparent() {
     let mut tile = Tile::new();
-    let mut scratch = Vec::new();
-    let mut mask = Vec::new();
+    let mut scratch = [0f32; 64 * 64 + 2 * 64];
+    let mut mask = [0u16; 64 * 64 + 2 * 64];
     render_dab_mask(&mut mask, 32.0, 32.0, 8.0, 0.8, 0.0, 1.0, 0.0, &mut scratch);
     assert!(!mask.is_empty(), "mask must cover the dab");
 
@@ -134,8 +134,8 @@ fn lre_skip_offsets_pixels() {
 /// is properly LRE-terminated with (0, 0).
 #[test]
 fn mask_encoding_terminated() {
-    let mut scratch = Vec::new();
-    let mut mask = Vec::new();
+    let mut scratch = [0f32; 64 * 64 + 2 * 64];
+    let mut mask = [0u16; 64 * 64 + 2 * 64];
     render_dab_mask(&mut mask, 32.0, 32.0, 4.0, 0.5, 0.0, 1.0, 0.0, &mut scratch);
     let n = mask.len();
     assert!(n >= 2);
