@@ -1,4 +1,4 @@
-// crates/afterglow-web/web/src/engine/assets/big-format.ts
+// ../../crates/afterglow-web/web/src/engine/assets/big-format.ts
 function decodeVarint(bytes, off) {
   let r = 0;
   for (let shift = 0;shift < 56; shift += 7) {

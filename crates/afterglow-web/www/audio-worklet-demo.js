@@ -1,4 +1,4 @@
-// crates/afterglow-web/web/src/engine/audio/pcm-ring.ts
+// ../../crates/afterglow-web/web/src/engine/audio/pcm-ring.ts
 var AUDIO_QUANTUM_FRAMES = 128;
 var AUDIO_CHANNELS = 2;
 var AUDIO_PCM_SAMPLES = AUDIO_QUANTUM_FRAMES * AUDIO_CHANNELS;
@@ -24,7 +24,7 @@ function audioPcmRingTelemetry(memory) {
   return new Int32Array(memory, AUDIO_RING_HEADER_WORDS * 4 + capacityBytes, AUDIO_RING_TELEMETRY_WORDS);
 }
 
-// crates/afterglow-web/web/src/workers/codec.ts
+// ../../crates/afterglow-web/web/src/workers/codec.ts
 function encodeVarint(n) {
   const b = [];
   do {
@@ -108,7 +108,7 @@ function unwrapResponse(bytes) {
   throw new Error(`RPC ${variant === 1 ? "server" : "decode"} error (method ${method}): ${msg}`);
 }
 
-// crates/afterglow-web/web/src/workers/rpc.ts
+// ../../crates/afterglow-web/web/src/workers/rpc.ts
 var TIMEOUT_MS = 5000;
 
 class Rpc {
@@ -243,7 +243,7 @@ class Rpc {
   }
 }
 
-// crates/afterglow-web/web/src/workers/engineaudioservice.client.ts
+// ../../crates/afterglow-web/web/src/workers/engineaudioservice.client.ts
 class EngineAudioServiceClient {
   rpc;
   closed = false;
@@ -397,7 +397,7 @@ class EngineAudioServiceClient {
   }
 }
 
-// crates/afterglow-web/web/src/demos/audio-worklet/main.ts
+// ../../crates/afterglow-web/web/src/demos/audio-worklet/main.ts
 var UPLOAD_CHUNK_BYTES = 512 * 1024;
 var REAL_SOUND_NAMES = ["abcd.wav", "counting.wav", "impulse.wav", "ozymandias.wav", "pinknoise.wav"];
 var output = document.getElementById("output");

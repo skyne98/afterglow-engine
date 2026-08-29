@@ -1,4 +1,4 @@
-// crates/afterglow-web/web/src/workers/codec.ts
+// ../../crates/afterglow-web/web/src/workers/codec.ts
 function encodeVarint(n) {
   const b = [];
   do {
@@ -80,7 +80,7 @@ function unwrapResponse(bytes) {
   throw new Error(`RPC ${variant === 1 ? "server" : "decode"} error (method ${method}): ${msg}`);
 }
 
-// crates/afterglow-web/web/src/workers/rpc.ts
+// ../../crates/afterglow-web/web/src/workers/rpc.ts
 var TIMEOUT_MS = 5000;
 
 class Rpc {
@@ -215,7 +215,7 @@ class Rpc {
   }
 }
 
-// crates/afterglow-web/web/src/workers/physics.client.ts
+// ../../crates/afterglow-web/web/src/workers/physics.client.ts
 class PhysicsClient {
   rpc;
   closed = false;
@@ -249,7 +249,7 @@ class PhysicsClient {
   }
 }
 
-// crates/afterglow-web/web/src/demos/worker-test/main.ts
+// ../../crates/afterglow-web/web/src/demos/worker-test/main.ts
 var output = document.getElementById("out");
 function log(message) {
   if (output)

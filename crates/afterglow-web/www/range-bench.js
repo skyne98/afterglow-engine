@@ -1,4 +1,4 @@
-// crates/afterglow-web/web/src/engine/assets/bulk-range.ts
+// ../../crates/afterglow-web/web/src/engine/assets/bulk-range.ts
 var BULK_RANGE_CAPACITY = 256;
 var BULK_RESPONSE_MAX_BYTES = 4 * 1024 * 1024;
 var BULK_IN_FLIGHT_MAX_BYTES = 8 * 1024 * 1024;
@@ -113,7 +113,7 @@ async function fetchByteRanges(url, ranges) {
   return parseMultipartByteRanges(body, response.headers.get("content-type") ?? "", ranges);
 }
 
-// crates/afterglow-web/web/src/engine/assets/big-format.ts
+// ../../crates/afterglow-web/web/src/engine/assets/big-format.ts
 function decodeVarint(bytes, off) {
   let r = 0;
   for (let shift = 0;shift < 56; shift += 7) {
@@ -329,7 +329,7 @@ function findVTPageChunk(header, assetName, mip, pageX, pageY) {
   };
 }
 
-// crates/afterglow-web/web/src/engine/assets/asset-range.ts
+// ../../crates/afterglow-web/web/src/engine/assets/asset-range.ts
 async function readBigHeader(source, path, maxHeaderBytes) {
   if (!Number.isSafeInteger(maxHeaderBytes) || maxHeaderBytes < 16)
     throw new RangeError("BIG maxHeaderBytes must be at least 16");
@@ -392,7 +392,7 @@ function createFetchRangeLoader(baseUrl = "") {
   };
 }
 
-// crates/afterglow-web/web/src/engine/assets/vt-page-directory.ts
+// ../../crates/afterglow-web/web/src/engine/assets/vt-page-directory.ts
 class VtPageDirectory {
   textures = new Map;
   constructor(header) {
@@ -461,7 +461,7 @@ class VtPageDirectory {
   }
 }
 
-// crates/afterglow-web/web/src/engine/assets/source-sorted-page-reader.ts
+// ../../crates/afterglow-web/web/src/engine/assets/source-sorted-page-reader.ts
 function createSourceSortedPageReader(loader, header, readConcurrency = 16) {
   if (!Number.isInteger(readConcurrency) || readConcurrency < 1)
     throw new RangeError("source-sorted page reader concurrency must be positive");
@@ -622,7 +622,7 @@ function createSourceSortedPageReader(loader, header, readConcurrency = 16) {
   };
 }
 
-// crates/afterglow-web/web/src/demos/range-bench/main.ts
+// ../../crates/afterglow-web/web/src/demos/range-bench/main.ts
 var CONTAINER = "dungeon.big";
 var ASSET = "Rock064_Color.png";
 var DEFAULT_CONCURRENCY = 16;
