@@ -24,6 +24,10 @@ pub mod random;
 pub mod rngdouble;
 pub mod surface;
 pub mod symmetry;
+#[cfg(feature = "demo")]
+pub mod web_surface;
+#[cfg(feature = "demo")]
+pub mod app;
 pub mod settings;
 
 /// C ABI for the demo's Emscripten wasm module (wasm builds only; the

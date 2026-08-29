@@ -428,7 +428,7 @@ impl FixedTiledSurface {
 
 /// `process_op` — render the mask then stamp the dab with each active blend
 /// mode (verbatim from `mypaint-tiled-surface.c`).
-fn process_op(
+pub(crate) fn process_op(
     rgba: &mut [u16],
     mask: &mut [u16],
     tx: i32,
