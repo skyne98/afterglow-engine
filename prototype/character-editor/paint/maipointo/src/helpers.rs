@@ -54,7 +54,10 @@ pub fn rand_gauss(rng: &mut RngDouble) -> f32 {
 
 /// `mod_arith` — arithmetic modulo (C `fmodf` mishandles negatives).
 pub fn mod_arith(a: f32, n: f32) -> f32 {
-    a - n * (a / n).floor()
+    // C: float ret = a - N * floor(a/N); — a/N is float, floor and the
+    // multiply/subtract run in double, then narrow to float.
+    let q = (a / n) as f64;
+    ((a as f64) - (n as f64) * q.floor()) as f32
 }
 
 /// `smallest_angular_difference`.

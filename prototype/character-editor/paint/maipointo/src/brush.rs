@@ -162,7 +162,27 @@ impl Brush {
         self.reset_requested = true;
     }
 
-    /// `mypaint_brush_set_base_value`.
+    /// Index-based variant for parity tests (setting order == C enum order).
+    pub fn set_base_value_at(&mut self, index: usize, value: f32) {
+        self.settings[index].set_base_value(value);
+        self.settings_base_values_have_changed();
+    }
+
+    pub fn set_mapping_n_at(&mut self, index: usize, input: usize, n: usize) {
+        self.settings[index].set_n(input, n);
+    }
+
+    pub fn set_mapping_point_at(
+        &mut self,
+        index: usize,
+        input: usize,
+        point: usize,
+        x: f32,
+        y: f32,
+    ) {
+        self.settings[index].set_point(input, point, x, y);
+    }
+
     pub fn set_base_value(&mut self, id: SettingId, value: f32) {
         self.settings[id.index()].set_base_value(value);
         self.settings_base_values_have_changed();
@@ -493,7 +513,10 @@ impl Brush {
         );
         // C: mod_arith(DEGREES(dir_angle) + viewrotation + 180.0, 180.0)
         inputs[InputId::Direction.index()] =
-            mod_arith(degrees(dir_angle) + viewrotation + 180.0, 180.0);
+            mod_arith(
+                ((degrees(dir_angle) + viewrotation) as f64 + 180.0) as f32,
+                180.0,
+            );
         let dir_angle_360 = atan2f(
             self.st(BrushStateId::DirectionAngleDy),
             self.st(BrushStateId::DirectionAngleDx),
@@ -502,7 +525,7 @@ impl Brush {
             fmodf_impl(degrees(dir_angle_360) + viewrotation + 360.0, 360.0);
         inputs[InputId::TiltDeclination.index()] = self.st(BrushStateId::Declination);
         inputs[InputId::TiltAscension.index()] = mod_arith(
-            self.st(BrushStateId::Ascension) + viewrotation + 180.0,
+            ((self.st(BrushStateId::Ascension) + viewrotation) as f64 + 180.0) as f32,
             360.0,
         ) - 180.0;
         // C: BASEVAL(RADIUS_LOGARITHMIC) - logf(base_radius / VIEWZOOM) — logf float.
@@ -510,7 +533,7 @@ impl Brush {
             - f32::ln(base_radius / self.st(BrushStateId::Viewzoom));
         inputs[InputId::AttackAngle.index()] = smallest_angular_difference(
             self.st(BrushStateId::Ascension),
-            mod_arith(degrees(dir_angle_360) + 90.0, 360.0),
+            mod_arith((degrees(dir_angle_360) as f64 + 90.0) as f32, 360.0),
         );
         inputs[InputId::BrushRadius.index()] = self.get_base_value(SettingId::RadiusLogarithmic);
 
@@ -865,7 +888,8 @@ impl Brush {
             dabs_per_pixel = 1.0 + opaque_linearize * (dabs_per_pixel - 1.0);
             let alpha = opaque;
             let beta = 1.0 - alpha;
-            let beta_dab = f32::powf(beta, 1.0 / dabs_per_pixel);
+            // C: 1.0/dabs_per_pixel is a double division narrowed to float.
+            let beta_dab = f32::powf(beta, (1.0f64 / dabs_per_pixel as f64) as f32);
             let alpha_dab = 1.0 - beta_dab;
             opaque = alpha_dab;
         }
@@ -1035,7 +1059,7 @@ impl Brush {
             x = x + (snapped_x - x) * snap_to_pixel;
             y = y + (snapped_y - y) * snap_to_pixel;
 
-            let mut snapped_radius = (radius * 2.0).round_ties_even() / 2.0;
+            let mut snapped_radius = (radius * 2.0).round() / 2.0; // C roundf
             if snapped_radius < 0.5 {
                 snapped_radius = 0.5;
             }
@@ -1083,7 +1107,8 @@ impl Brush {
             let sn = sin(angle_rad);
             let yyr = (dy * cs - dx * sn) * self.st(BrushStateId::ActualEllipticalDabRatio);
             let xxr = dy * sn + dx * cs;
-            dist = (yyr * yyr + xxr * xxr).sqrt();
+            // C: dist = sqrt(yyr*yyr + xxr*xxr); — double sqrt narrowed to float.
+            dist = ((yyr * yyr + xxr * xxr) as f64).sqrt() as f32;
         } else {
             dist = f32::hypot(dx, dy);
         }
