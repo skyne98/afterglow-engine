@@ -1,4 +1,4 @@
-// ../../crates/afterglow-web/web/src/workers/codec.ts
+// crates/afterglow-web/web/src/workers/codec.ts
 function encodeVarint(n) {
   const b = [];
   do {
@@ -68,7 +68,7 @@ function decodeBytes(bytes, off) {
   return [bytes.subarray(o, end), end];
 }
 
-// ../../crates/afterglow-web/web/src/workers/ring-buf.ts
+// crates/afterglow-web/web/src/workers/ring-buf.ts
 var U32 = 4;
 var HEADER = 12;
 function rdU32(u8, off, cap) {
@@ -93,7 +93,7 @@ function xfer(u8, off, cap, buf, len, mode) {
   }
 }
 
-// ../../crates/afterglow-web/web/src/workers/opfs-blob-storage.ts
+// crates/afterglow-web/web/src/workers/opfs-blob-storage.ts
 var POINTER_SUFFIX = ".ptr";
 var SLOT0_SUFFIX = ".0";
 var SLOT1_SUFFIX = ".1";
@@ -348,7 +348,7 @@ class OpfsBlobStorageService {
   }
 }
 
-// ../../crates/afterglow-web/web/src/workers/storage-worker.ts
+// crates/afterglow-web/web/src/workers/storage-worker.ts
 var state = "init";
 var sab = null;
 var requestBase = 0;

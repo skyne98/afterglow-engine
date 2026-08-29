@@ -1,4 +1,4 @@
-// ../../crates/afterglow-web/web/src/workers/codec.ts
+// crates/afterglow-web/web/src/workers/codec.ts
 function encodeVarint(n) {
   const b = [];
   do {
@@ -82,7 +82,7 @@ function unwrapResponse(bytes) {
   throw new Error(`RPC ${variant === 1 ? "server" : "decode"} error (method ${method}): ${msg}`);
 }
 
-// ../../crates/afterglow-web/web/src/workers/rpc.ts
+// crates/afterglow-web/web/src/workers/rpc.ts
 var TIMEOUT_MS = 5000;
 
 class Rpc {
@@ -217,7 +217,7 @@ class Rpc {
   }
 }
 
-// ../../crates/afterglow-web/web/src/workers/engineaudioservice.client.ts
+// crates/afterglow-web/web/src/workers/engineaudioservice.client.ts
 class EngineAudioServiceClient {
   rpc;
   closed = false;

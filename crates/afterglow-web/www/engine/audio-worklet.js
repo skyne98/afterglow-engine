@@ -1,4 +1,4 @@
-// ../../crates/afterglow-web/web/src/engine/audio/pcm-ring.ts
+// crates/afterglow-web/web/src/engine/audio/pcm-ring.ts
 var AUDIO_QUANTUM_FRAMES = 128;
 var AUDIO_CHANNELS = 2;
 var AUDIO_PCM_SAMPLES = AUDIO_QUANTUM_FRAMES * AUDIO_CHANNELS;
@@ -93,7 +93,7 @@ class AudioPcmRingReader extends AudioPcmRingView {
   }
 }
 
-// ../../crates/afterglow-web/web/src/engine/audio/audio-worklet.ts
+// crates/afterglow-web/web/src/engine/audio/audio-worklet.ts
 class EngineAudioSinkProcessor extends AudioWorkletProcessor {
   reader;
   gain;

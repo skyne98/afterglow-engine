@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-# Build the NG libmypaint brush engine to WebAssembly for the paint demo.
+# Build the paint demo wasm module: the maipointo (Rust) brush engine is the
+# only engine. C code in the module is limited to the non-engine surface
+# infrastructure (tiled surface, blend modes, layer compositor) and stays
+# byte-validated by the maipointo parity tests. The vendored C brush engine
+# exists only in the exactness-test oracles (maipointo/reference/).
 # Run from nix-shell with emscripten:
 #   nix-shell -p emscripten --run 'bash paint/build-wasm.sh'
-#   MAIPO=1 links the maipointo (Rust) brush engine instead of the C one.
 set -euo pipefail
 
 # Paths relative to the character-editor prototype root.
@@ -13,22 +16,16 @@ OUT="$ROOT/public/wasm"
 mkdir -p "$OUT"
 
 MP="$VENDOR/libmypaint"
-JSONC="$VENDOR/json-c"
-JSONC_BUILD="$JSONC/build"
-MAIPO="${MAIPO:-0}"
-OUT_SUFFIX=""
-
-if [ "$MAIPO" = "1" ]; then
-  # 0) Build the maipointo (Rust) brush engine staticlib.
-  OUT_SUFFIX="-maipo"
-  (cd "$PAINT/maipointo" && RUSTC_BOOTSTRAP=1 cargo build --release \
-     --target wasm32-unknown-unknown -Zbuild-std=panic_abort,std) >/dev/null
-fi
+# 0) Build the maipointo (Rust) brush engine staticlib.
+(cd "$PAINT/maipointo" && RUSTC_BOOTSTRAP=1 cargo build --release \
+   --target wasm32-unknown-unknown -Zbuild-std=panic_abort,std) >/dev/null
+MAIPO_LIB="$PAINT/maipointo/target/wasm32-unknown-unknown/release/libmaipointo.a"
 
 SRCS=(
   "$MP/mypaint.c"
   "$MP/brushmodes.c"
   "$MP/helpers.c"
+  "$PAINT/brush_engine_rust.c"
   "$PAINT/fixed-operationqueue.c"
   "$PAINT/fixed-tile-set.c"
   "$MP/mypaint-rectangle.c"
@@ -41,40 +38,16 @@ SRCS=(
   "$PAINT/main.c"
 )
 
-if [ "$MAIPO" = "1" ]; then
-  # Rust engine: the maipointo staticlib replaces the C brush + cooperative
-  # wrapper + mapping/settings/rng/brushmodes internals (the C tiled surface,
-  # its blend modes, and the compositor stay C).
-  SRCS+=("$PAINT/brush_engine_rust.c")
-  MAIPO_LIB="$PAINT/maipointo/target/wasm32-unknown-unknown/release/libmaipointo.a"
-else
-  SRCS+=(
-    "$PAINT/mypaint-brush-cooperative.c"
-    "$MP/mypaint-mapping.c"
-    "$MP/mypaint-brush-settings.c"
-    "$MP/rng-double.c"
-    "$PAINT/brush_engine_c.c"
-  )
-  MAIPO_LIB=""
-fi
-
-# 1) Cross-compile json-c to wasm (static).
-if [ ! -f "$JSONC_BUILD/libjson-c.a" ]; then
-  mkdir -p "$JSONC_BUILD"
-  emcmake cmake -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
-    -DBUILD_TESTING=OFF -DCMAKE_C_FLAGS="-O3" -S "$JSONC" -B "$JSONC_BUILD" >/dev/null
-  emmake make -C "$JSONC_BUILD" -j"$(nproc)" >/dev/null
-fi
 
 # 2) Compile libmypaint NG + tiled surface + compositor + wrapper to one module.
 # Keep the release optimization level and enable WebAssembly SIMD128 for C code.
 emcc \
   -O3 \
   -msimd128 \
-  -I"$PAINT" -I"$MP" -I"$JSONC_BUILD" -I"$JSONC" -I"$VENDOR/openmp-wasm" \
+  -I"$PAINT" -I"$MP" \
   "${SRCS[@]}" \
-  "$JSONC_BUILD/libjson-c.a" $MAIPO_LIB \
-  -o "$OUT/brushlib$OUT_SUFFIX.js" \
+  "$MAIPO_LIB" \
+  -o "$OUT/brushlib.js" \
   -s EXPORTED_FUNCTIONS="['_malloc','_free','_init','_paint_destroy','_stroke_to','_reset_brush','_set_brush_base_value','_get_brush_base_value','_set_brush_mapping_n','_set_brush_mapping_point','_new_brush','_load_brush','_begin_stroke','_paint_begin_atomic','_paint_end_atomic','_paint_begin_batch','_paint_end_batch','_paint_is_batch_done','_paint_end_batch_finish','_paint_continue_stroke_to','_paint_has_stroke_continuation','_paint_get_width','_paint_get_height','_paint_get_error_code','_paint_clear_error','_paint_get_tiles_width','_paint_get_tiles_height','_paint_get_used_tile_count','_paint_get_tile_ptr','_paint_render_tile_ptr','_paint_set_eotf','_paint_render_rgba8_tile_ptr','_paint_render_layer_rgba8_tile_ptr','_paint_write_rgba8_tile','_paint_render_rgba8_mip_tile_ptr','_paint_region_has_paint','_paint_get_dirty_count','_paint_get_dirty_rect','_paint_get_dirty_tile_count','_paint_get_dirty_tile_info','_paint_clear_dirty','_paint_set_background_color','_paint_clear_background','_paint_history_begin','_paint_history_commit','_paint_history_undo','_paint_history_redo','_paint_history_can_undo','_paint_history_can_redo','_paint_clear','_paint_pick_color','_paint_set_symmetry','_paint_get_layer_count','_paint_get_active_layer','_paint_set_active_layer','_paint_create_layer','_paint_delete_layer','_paint_set_layer_visible','_paint_set_layer_opacity','_paint_get_layer_opacity','_paint_get_layer_mode','_paint_set_layer_mode','_paint_get_layer_visible','_paint_get_layer_group','_paint_set_layer_group','_paint_move_layer','_paint_get_group_count','_paint_get_group_alive','_paint_get_group_parent','_paint_create_group','_paint_delete_group','_paint_set_group_parent','_paint_get_group_visible','_paint_set_group_visible','_paint_get_group_opacity','_paint_set_group_opacity','_paint_get_group_mode','_paint_set_group_mode','_paint_get_group_pass_through','_paint_set_group_pass_through','_paint_get_group_isolated','_paint_set_group_isolated','_paint_move_group']" \
   -s EXPORTED_RUNTIME_METHODS="['addFunction','ccall','cwrap']" \
   -s ALLOW_TABLE_GROWTH=1 \
@@ -86,9 +59,9 @@ emcc \
   -s MODULARIZE=1
 
 # Keep the Vite import copy in sync with the public build output.
-printf '\nexport default Module;\n' >> "$OUT/brushlib$OUT_SUFFIX.js"
+printf '\nexport default Module;\n' >> "$OUT/brushlib.js"
 mkdir -p "$ROOT/src/wasm"
-cp "$OUT/brushlib$OUT_SUFFIX.js" "$ROOT/src/wasm/brushlib$OUT_SUFFIX.js"
-cp "$OUT/brushlib$OUT_SUFFIX.wasm" "$ROOT/src/wasm/brushlib$OUT_SUFFIX.wasm"
+cp "$OUT/brushlib.js" "$ROOT/src/wasm/brushlib.js"
+cp "$OUT/brushlib.wasm" "$ROOT/src/wasm/brushlib.wasm"
 
 ls -la "$OUT/"

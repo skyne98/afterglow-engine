@@ -436,8 +436,7 @@ async function handleInput(e: MessageEvent<Msg & { canvas?: OffscreenCanvas }>) 
     try {
       if (!mod) {
         const dynamicImport = new Function('url', 'return import(url)') as (u: string) => Promise<any>;
-        const engine = (globalThis as any).__paintEngine === 'maipo' ? 'brushlib-maipo.js' : 'brushlib.js';
-        mod = await (await dynamicImport(`/wasm/${engine}`)).default({ locateFile: (p: string) => `/wasm/${p}` });
+        mod = await (await dynamicImport('/wasm/brushlib.js')).default({ locateFile: (p: string) => `/wasm/${p}` });
       }
       docW = m.width; docH = m.height;
       if (m.canvas) canvas = m.canvas;

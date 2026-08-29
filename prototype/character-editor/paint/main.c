@@ -6,8 +6,6 @@
 
 #include "mypaint-config.h"
 #include "mypaint.h"
-#include "mypaint-brush.h"
-#include "mypaint-brush-settings.h"
 #include "mypaint-mapping.h"
 #include "helpers.h"
 #include "mypaint-surface.h"
@@ -507,7 +505,7 @@ void set_brush_base_value(const char *setting_name, double base_value)
         return;
     }
     const int setting_id = be_brush_setting_from_cname(setting_name);
-    if (setting_id < MYPAINT_BRUSH_SETTINGS_COUNT) {
+    if (setting_id >= 0) {
         be_brush_set_base_value(brush, setting_id, (float)base_value);
     }
 }
@@ -518,7 +516,7 @@ float get_brush_base_value(const char *setting_name)
         return 0.0f;
     }
     const int setting_id = be_brush_setting_from_cname(setting_name);
-    if (setting_id >= MYPAINT_BRUSH_SETTINGS_COUNT) {
+    if (setting_id < 0) {
         return 0.0f;
     }
     return be_brush_get_base_value(brush, setting_id);
@@ -532,7 +530,7 @@ void set_brush_mapping_n(const char *setting_name, const char *input_name,
     }
     const int setting_id = be_brush_setting_from_cname(setting_name);
     const int input_id = be_brush_input_from_cname(input_name);
-    if (setting_id < MYPAINT_BRUSH_SETTINGS_COUNT && input_id < MYPAINT_BRUSH_INPUTS_COUNT) {
+    if (setting_id >= 0 && input_id >= 0) {
         be_brush_set_mapping_n(brush, setting_id, input_id, number_of_mapping_points);
     }
 }
@@ -545,7 +543,7 @@ void set_brush_mapping_point(const char *setting_name, const char *input_name,
     }
     const int setting_id = be_brush_setting_from_cname(setting_name);
     const int input_id = be_brush_input_from_cname(input_name);
-    if (setting_id < MYPAINT_BRUSH_SETTINGS_COUNT && input_id < MYPAINT_BRUSH_INPUTS_COUNT) {
+    if (setting_id >= 0 && input_id >= 0) {
         be_brush_set_mapping_point(brush, setting_id, input_id, index, x, y);
     }
 }

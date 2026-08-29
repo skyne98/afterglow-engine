@@ -2,7 +2,7 @@
 
 Status: prototype implementation
 
-The character-editor paint demo uses the NG libmypaint tiled surface. The vendored source is at commit `d5a88fbe6649d5ec776bc42ec8c1f4bb29d7fd7f`.
+The character-editor paint demo uses the maipointo brush engine (see `maipointo.md`) driving the NG libmypaint tiled surface. The vendored source is at commit `d5a88fbe6649d5ec776bc42ec8c1f4bb29d7fd7f`.
 
 `paint-engine-worker.ts` owns the WebAssembly module, motion queue, brush state, document pixels, and `OffscreenCanvas`. The page sends input and control messages.
 

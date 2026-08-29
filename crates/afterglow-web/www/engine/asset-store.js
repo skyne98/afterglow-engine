@@ -1,4 +1,4 @@
-// ../../crates/afterglow-web/web/node_modules/three/build/three.core.js
+// crates/afterglow-web/web/node_modules/three/build/three.core.js
 var REVISION = "185";
 var PCFShadowMap = 1;
 var VSMShadowMap = 3;
@@ -8177,7 +8177,7 @@ if (typeof window !== "undefined") {
     window.__THREE__ = REVISION;
   }
 }
-// ../../crates/afterglow-web/web/node_modules/three/build/three.module.js
+// crates/afterglow-web/web/node_modules/three/build/three.module.js
 var alphahash_fragment = `#ifdef USE_ALPHAHASH
 	if ( diffuseColor.a < getAlphaHashThreshold( vPosition ) ) discard;
 #endif`;
@@ -13125,7 +13125,7 @@ var DATA = new Uint16Array([
   1183
 ]);
 
-// ../../crates/afterglow-web/web/src/engine/core/resource.ts
+// crates/afterglow-web/web/src/engine/core/resource.ts
 var RESOURCES = Symbol.for("afterglow-resources");
 var RESOURCES_SEALED = Symbol.for("afterglow-resources-sealed");
 function ensureStore(world) {
@@ -13165,7 +13165,7 @@ function defineResource(name, factory) {
   return new Resource(name, factory);
 }
 
-// ../../crates/afterglow-web/web/src/engine/assets/asset-handle.ts
+// crates/afterglow-web/web/src/engine/assets/asset-handle.ts
 class AssetHandle {
   asset;
   generation = 0;
@@ -13184,7 +13184,7 @@ class AssetHandle {
   lod = -1;
 }
 
-// ../../crates/afterglow-web/web/src/engine/renderer/fallback.ts
+// crates/afterglow-web/web/src/engine/renderer/fallback.ts
 var _fallbackGeometry = null;
 var _fallbackMaterial = null;
 var _fallbackGroup = null;
@@ -13210,14 +13210,14 @@ function fallbackGroup() {
   return _fallbackGroup.clone(true);
 }
 
-// ../../crates/afterglow-web/web/src/engine/telemetry/telemetry.ts
+// crates/afterglow-web/web/src/engine/telemetry/telemetry.ts
 var TELEMETRY_RECORD_BYTES = 40;
 var TELEMETRY_RECORD_WORDS = TELEMETRY_RECORD_BYTES / 4;
 var TelemetryRes = defineResource("telemetry", () => {
   throw new Error("Telemetry not initialized. Set TelemetryRes during bootstrap.");
 });
 
-// ../../crates/afterglow-web/web/src/engine/telemetry/catalog.ts
+// crates/afterglow-web/web/src/engine/telemetry/catalog.ts
 var ENGINE_TRACE_DESCRIPTORS = [
   { category: 1 /* Frame */, categoryName: "frame", name: "frame", kind: 2 /* Span */, argument0: "frame_id", argument1: "delta_ns" },
   { category: 2 /* Worker */, categoryName: "worker", name: "worker.poll", kind: 2 /* Span */, argument0: "stage", argument1: "elapsed_us" },
@@ -13279,7 +13279,7 @@ var ENGINE_METRIC_DESCRIPTORS = [
   { category: 11 /* Storage */, categoryName: "storage", name: "blob_write_bytes", kind: 1 /* Counter */, unit: "bytes" }
 ];
 
-// ../../crates/afterglow-web/web/src/engine/assets/asset-store.ts
+// crates/afterglow-web/web/src/engine/assets/asset-store.ts
 var MAX_SINGLE_LOAD = 1 << 20;
 var CHUNK_SIZE = 512 * 1024;
 var DEFAULT_ASSET_CAPACITY = 1024;

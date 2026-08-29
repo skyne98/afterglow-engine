@@ -16,6 +16,54 @@ use crate::surface::Surface;
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_int};
 
+/// Route all Rust allocations through the module's emscripten malloc. The
+/// staticlib is linked into an emcc module whose heap is managed by
+/// emscripten's allocator; a second wasm allocator (the wasm32-unknown-
+/// unknown std default) would double-manage the same linear memory.
+struct EmscriptenAlloc;
+
+unsafe impl std::alloc::GlobalAlloc for EmscriptenAlloc {
+    #[inline]
+    unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
+        unsafe extern "C" {
+            fn malloc(size: usize) -> *mut u8;
+        }
+        unsafe { malloc(layout.size()) }
+    }
+
+    #[inline]
+    unsafe fn dealloc(&self, ptr: *mut u8, _layout: std::alloc::Layout) {
+        unsafe extern "C" {
+            fn free(ptr: *mut u8);
+        }
+        unsafe { free(ptr) }
+    }
+
+    #[inline]
+    unsafe fn realloc(
+        &self,
+        ptr: *mut u8,
+        _layout: std::alloc::Layout,
+        new_size: usize,
+    ) -> *mut u8 {
+        unsafe extern "C" {
+            fn realloc(ptr: *mut u8, size: usize) -> *mut u8;
+        }
+        unsafe { realloc(ptr, new_size) }
+    }
+
+    #[inline]
+    unsafe fn alloc_zeroed(&self, layout: std::alloc::Layout) -> *mut u8 {
+        unsafe extern "C" {
+            fn calloc(n: usize, size: usize) -> *mut u8;
+        }
+        unsafe { calloc(1, layout.size()) }
+    }
+}
+
+#[global_allocator]
+static GLOBAL_ALLOCATOR: EmscriptenAlloc = EmscriptenAlloc;
+
 /// The host's opaque surface. We only ever pass it back to the C surface
 /// entry points.
 #[derive(Clone, Copy)]

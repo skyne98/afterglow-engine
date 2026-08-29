@@ -1,4 +1,4 @@
-// ../../crates/afterglow-web/web/src/engine/audio/pcm-ring.ts
+// crates/afterglow-web/web/src/engine/audio/pcm-ring.ts
 var AUDIO_QUANTUM_FRAMES = 128;
 var AUDIO_CHANNELS = 2;
 var AUDIO_PCM_SAMPLES = AUDIO_QUANTUM_FRAMES * AUDIO_CHANNELS;
@@ -72,7 +72,7 @@ class AudioPcmRingWriter extends AudioPcmRingView {
   }
 }
 
-// ../../crates/afterglow-web/web/src/workers/ring-buf.ts
+// crates/afterglow-web/web/src/workers/ring-buf.ts
 var U32 = 4;
 var HEADER = 12;
 function rdU32(u8, off, cap) {
@@ -97,7 +97,7 @@ function xfer(u8, off, cap, buf, len, mode) {
   }
 }
 
-// ../../crates/afterglow-web/web/src/workers/audio-worker.ts
+// crates/afterglow-web/web/src/workers/audio-worker.ts
 var initMessage = null;
 var wasm = null;
 var wasmMemory = null;
