@@ -258,9 +258,8 @@ pub struct ColorSums {
     pub a: f32,
 }
 
-/// `get_color_pixels_accumulate` — spectral `paint` sampling remains
-/// deferred (paint must be <= 0; smudge sampling with paint_mode > 0 is the
-/// last spectral gap).
+/// `get_color_pixels_accumulate` — the spectral `paint > 0` smudge path is
+/// ported: additive+subtractive sampling blended by `paint`.
 ///
 /// Pixel sampling uses the injectable [`RandomSource`] — the parity oracle
 /// passes the glibc-compatible stream, production uses the portable one.
@@ -277,11 +276,14 @@ pub fn get_color_accumulate(
         get_color_legacy(mask, rgba, sums);
         return;
     }
-    debug_assert!(paint <= 0.0, "spectral paint sampling deferred");
 
     // C keeps local accumulators seeded from the sums and writes back at the
     // end; replicate that exactly.
+    let mut avg_spectral = [0.0f32; 10];
     let mut avg_rgb = [sums.r, sums.g, sums.b];
+    if paint > 0.0 {
+        crate::helpers::rgb_to_spectral(sums.r, sums.g, sums.b, &mut avg_spectral);
+    }
     let mut interval_counter: u16 = 0;
     let random_sample_threshold =
         (random_sample_rate * random.rand_max() as f32) as i32;
@@ -299,19 +301,37 @@ pub fn get_color_accumulate(
             }
             if rgba[p + 3] > 0 {
                 // C: avg_rgb[i] = rgba[i]*fac_a/rgba[3] + avg_rgb[i]*fac_b;
-                for i in 0..3 {
-                    avg_rgb[i] =
-                        rgba[p + i] as f32 * fac_a / rgba[p + 3] as f32 + avg_rgb[i] * fac_b;
+                if paint > 0.0 {
+                    let mut spectral = [0.0f32; 10];
+                    crate::helpers::rgb_to_spectral(
+                        rgba[p] as f32 / rgba[p + 3] as f32,
+                        rgba[p + 1] as f32 / rgba[p + 3] as f32,
+                        rgba[p + 2] as f32 / rgba[p + 3] as f32,
+                        &mut spectral,
+                    );
+                    for i in 0..10 {
+                        avg_spectral[i] = crate::helpers::fastpow(spectral[i], fac_a)
+                            * crate::helpers::fastpow(avg_spectral[i], fac_b);
+                    }
+                }
+                if paint < 1.0 {
+                    for i in 0..3 {
+                        avg_rgb[i] = rgba[p + i] as f32 * fac_a / rgba[p + 3] as f32
+                            + avg_rgb[i] * fac_b;
+                    }
                 }
             }
             sums.a += a;
         }
         interval_counter = (interval_counter + 1) % sample_interval;
     });
-    // paint == 0: sum = avg_rgb (spectral term absent).
-    sums.r = avg_rgb[0];
-    sums.g = avg_rgb[1];
-    sums.b = avg_rgb[2];
+    // Convert the spectral average to rgb and write the result back
+    // weighted with the rgb average (the C tail).
+    let mut spec_rgb = [0.0f32; 3];
+    crate::helpers::spectral_to_rgb(&avg_spectral, &mut spec_rgb);
+    sums.r = spec_rgb[0] * paint + (1.0 - paint) * avg_rgb[0];
+    sums.g = spec_rgb[1] * paint + (1.0 - paint) * avg_rgb[1];
+    sums.b = spec_rgb[2] * paint + (1.0 - paint) * avg_rgb[2];
 }
 
 // ---- Spectral paint modes (brushmodes.c `*_Paint`) ----

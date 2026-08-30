@@ -586,9 +586,12 @@ impl WebSurface {
             for tx in tx1..=tx2 {
                 self.process_tile(tx, ty);
                 // Copy the tile out: the mask/scratch borrow self mutably.
+                // Missing tiles read as the zero tile (the C readonly
+                // fetch), so smudge sampling never sees an empty slice.
+                const ZERO_TILE: [u16; TILE_PX] = [0; TILE_PX];
                 let tile_copy: Vec<u16> = self.get_tile(tx, ty).map(|t| t.to_vec())
                     .unwrap_or_default();
-                let rgba: &[u16] = &tile_copy[..];
+                let rgba: &[u16] = if tile_copy.is_empty() { &ZERO_TILE } else { &tile_copy };
                 render_dab_mask(
                     &mut self.mask[..],
                     x - (tx * TILE as i32) as f32,
