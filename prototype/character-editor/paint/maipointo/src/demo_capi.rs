@@ -27,25 +27,47 @@ fn with_app<R>(f: impl FnOnce(&mut PaintApp) -> R) -> R {
     })
 }
 
-/// Opaque scratch block the worker uses for out-params (`_malloc`).
-/// A tiny fixed arena: the worker allocates one small block per init and
-/// never frees it (same lifetime as the module).
+const POOL_SLOTS: usize = 64;
+const POOL_SLOT_BYTES: usize = 32768; // largest cooked .myb JSON is ~25 KiB
+static POOL: [u8; POOL_SLOTS * POOL_SLOT_BYTES] = [0; POOL_SLOTS * POOL_SLOT_BYTES];
+static POOL_FREE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(u64::MAX);
+
+/// Bounded scratch pool: the worker mallocs short-lived strings/out-params
+/// and frees them immediately, so a fixed 64x4 KiB slot pool with a free
+/// bitmask never exhausts. Returns null for oversized or exhausted requests.
 #[unsafe(no_mangle)]
 pub extern "C" fn _malloc(n: usize) -> *mut u8 {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    static ARENA: [u64; 64] = [0; 64];
-    static USED: AtomicUsize = AtomicUsize::new(0);
-    let end = ARENA.len() * 8;
-    let prev = USED.fetch_add(n.max(1), Ordering::Relaxed);
-    if prev + n.max(1) > end {
+    use std::sync::atomic::Ordering;
+    if n == 0 || n > POOL_SLOT_BYTES {
         return std::ptr::null_mut();
     }
-    unsafe { ARENA.as_ptr().add(prev) as *mut u8 }
+    loop {
+        let free = POOL_FREE.load(Ordering::Relaxed);
+        if free == 0 {
+            return std::ptr::null_mut();
+        }
+        let slot = free.trailing_zeros() as usize;
+        if POOL_FREE
+            .compare_exchange_weak(free, free & !(1u64 << slot), Ordering::AcqRel, Ordering::Relaxed)
+            .is_ok()
+        {
+            return unsafe { POOL.as_ptr().add(slot * POOL_SLOT_BYTES) as *mut u8 };
+        }
+    }
 }
 
-/// No-op: the scratch arena lives for the module lifetime.
+/// Returns the slot to the pool. Out-of-pool pointers are ignored.
 #[unsafe(no_mangle)]
-pub extern "C" fn _free(_ptr: *mut u8, _n: usize) {}
+pub extern "C" fn _free(ptr: *mut u8, _n: usize) {
+    use std::sync::atomic::Ordering;
+    let base = POOL.as_ptr() as usize;
+    let addr = ptr as usize;
+    if addr < base || addr >= base + POOL_SLOTS * POOL_SLOT_BYTES {
+        return;
+    }
+    let slot = (addr - base) / POOL_SLOT_BYTES;
+    POOL_FREE.fetch_or(1u64 << slot, Ordering::AcqRel);
+}
 
 /// # Safety
 /// Called once by the worker before anything else.
@@ -80,7 +102,12 @@ pub unsafe extern "C" fn load_brush(json: *const i8) -> i32 {
         .to_string_lossy()
         .into_owned();
     with_app(|app| {
-        new_brush();
+        // Same as new_brush(), inlined: calling new_brush() here would
+        // re-enter with_app while the RefCell is already borrowed.
+        let mut brush = crate::brush::Brush::new();
+        brush.from_defaults();
+        brush.new_stroke();
+        app.brush = Some(brush);
         let Some(brush) = app.brush.as_mut() else { return 0 };
         let loaded = maipo_load_brush_json(brush, &text);
         if loaded {

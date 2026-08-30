@@ -2,7 +2,7 @@
 
 The character-editor paint demo runs the maipointo brush engine — a from-scratch, bit-exact Rust port of the NG libmypaint brush machine — inside a WebAssembly worker. Brush dabs write sparse 64 x 64 RGBA16 tiles.
 
-The vendored C engine exists only in the exactness validation oracles (`prototype/character-editor/paint/maipointo/reference/`). It is not linked into the demo. The wasm module keeps the C tiled surface, blend modes, and layer compositor; the maipointo parity tests byte-validate them against the C reference.
+The vendored C engine exists only in the exactness validation oracles (`prototype/character-editor/paint/maipointo/reference/`). It is not linked into the demo. The wasm module is a plain `rust-lld` cdylib with imported shared memory — no Emscripten runtime, no json-c, no C. The compositor and symmetry parity tests byte-validate the Rust ports against the C reference. A hand-written TypeScript loader (`src/maipo-wasm.ts`) instantiates the module and provides the HEAP views, string helpers, and shared `WebAssembly.Memory` the worker expects.
 
 The threaded build uses a maximum of four pthreads for separate dirty tiles. The main WASM worker polls joinable threads without a blocking join.
 

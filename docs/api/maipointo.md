@@ -1,12 +1,13 @@
 # maipointo (マイペイント) — the paint brush engine
 
-Status: prototype implementation, byte-exactness gate met
+Status: prototype implementation, byte-exactness gate met, zero-C wasm module
 
 `prototype/character-editor/paint/maipointo/` is a from-scratch Rust
 reimplementation of the NG libmypaint brush machine
-(`mypaint-brush.c` + the dab blend/mask math). It is the paint demo's
-only brush engine. The vendored C engine exists solely as the reference
-for the exactness tests.
+(`mypaint-brush.c` + the dab blend/mask math + tiled surface +
+layer compositor). It is the paint demo's only brush engine and the
+entire wasm module — no C is linked into the product. The vendored C
+engine exists solely as the reference for the exactness tests.
 
 ## Crate layout
 
@@ -28,27 +29,42 @@ for the exactness tests.
 - `src/surface.rs` — `FixedTiledSurface`: 64x64 RGBA fix15 tiles,
   0xFFFF prefill (the C `memset(buffer, 255)` quirk), fixed-capacity op
   queue (16384 ops, 4096 dirty tiles; overflow is counted, never grown).
+- `src/compositor.rs` — the layer compositor (`layer_blend_over`,
+  `pigment_blend`, 22 `BlendMode`s). Byte-validated against
+  `paint/layer-compositor.c` (21 modes 0 LSB, Pigment <= 1 LSB).
+- `src/symmetry.rs` — `mypaint-symmetry.c` + `mypaint-matrix.c` port
+  (transforms, snowflake fall-through, rectangle expansion).
+- `src/web_surface.rs` — sparse hash-tile surface (>= 8192 hash size),
+  used-tile slots, first-write capture, fixed 16384-op queue,
+  `begin_atomic`/`end_atomic` dirty ROI (max 32 rects), symmetry dab
+  fan-out, `get_color`, display-dirty slots.
+- `src/app.rs` — `PaintApp`: layers/groups tree, history (fixed 40
+  records, capture/restore entries), display EOTF LUT, mip render,
+  render/pick/symmetry/layer/group operations, and the budgeted
+  stroke driver mapping onto the brush.
+- `src/demo_capi.rs` — the full `_paint_*` + `_init`/`_malloc`/`_free`
+  C ABI for the standalone wasm module (feature `demo`), plus the
+  shared `.myb` v3 JSON loader (`src/capi_json.rs`). Scratch
+  allocations use a fixed 64x32 KiB slot pool with a free bitmask.
 - `src/random.rs` — `RandomSource` trait: `PortableRand` (production)
   and `GlibcRand` (TYPE_3 glibc clone) so parity tests can replay the
   C `rand()` stream exactly.
-- `src/capi.rs` — the wasm C ABI (`maipo_*`) for the demo's Emscripten
-  module, including the `.myb` v3 JSON loader. Rust allocations route
-  through the module's emscripten malloc (`#[global_allocator]`).
 
-## C in the demo module
+## Zero C in the product
 
-The wasm module keeps only non-engine C: `mypaint-tiled-surface.c`
-(mask + `process_op`), `brushmodes.c`/`helpers.c` (blend math),
-`mypaint-surface.c` (public entry points the Rust engine calls back
-through), `web-surface.c`, `layer-compositor.c`, and the fixed queues.
-`main.c` talks to the engine only through `brush_engine.h`
-(`brush_engine_rust.c` bridges to the `maipo_*` ABI).
-
-The C brush engine (`mypaint-brush.c`, `mypaint-mapping.c`,
-`mypaint-brush-settings.c`, `rng-double.c`, the cooperative wrapper) is
-not linked into the product. It is compiled only by the exactness
-oracles under `maipointo/reference/` and the vendored source the tests
+The wasm module is a plain `rust-lld` cdylib: `--import-memory
+--shared-memory`, imported shared memory owned by the host, panic=abort.
+No Emscripten runtime, no json-c, no C glue. C lives only in
+validation: `maipointo/reference/*.c` oracles, the compositor parity
+harness (`paint/layer-compositor.parity.test.c` +
+`paint/layer-compositor.c`), and the vendored libmypaint the tests
 compile against.
+
+The demo's TS loader (`src/maipo-wasm.ts`) instantiates the module,
+wraps the exports (`_name` keys), provides `HEAPU8`/`HEAP32` views,
+the string helpers the worker uses (`lengthBytesUTF8`,
+`stringToUTF8`, `UTF8ToString`), and the shared
+`WebAssembly.Memory` (initial 256, maximum 1024 pages).
 
 ## Exactness validation
 
@@ -62,22 +78,22 @@ gate compiler-dependent). The oracle replay covers:
 - fixed and fuzzed single-dab tile bytes (all blend modes, spectral
   and legacy),
 - mapping/RNG/interp/spectral-primitive bit comparisons,
+- compositor parity (21 modes + Pigment spectral, byte-exact),
+- symmetry parity (75 states, bit-for-bit vs `mypaint-symmetry.c`),
 - full stroke replay: opcode streams through both engines with
   per-event state, evaluated-settings, speed-mapping, 17-float dab
   argument, and tile-byte comparison,
 - event-prefix bisection to the first divergent dab.
 
-The oracle rebuild is cached by source mtime; deleting
-`target/tmp/*oracle*` forces a rebuild.
+29 tests total; all green with and without `--features demo`.
 
 ## Build
 
 ```sh
 cd prototype/character-editor
-nix-shell -p emscripten --run 'bash paint/build-wasm.sh'
+RUSTC_BOOTSTRAP=1 bash paint/build-wasm.sh
 ```
 
-This builds `public/wasm/brushlib.js` + `.wasm` (single module, no
-json-c): the maipointo staticlib plus the C surface/compositor
-infrastructure. The demo has no engine toggle; maipointo is the
-engine.
+This builds `public/wasm/brushlib.wasm` (single pure-Rust module) and
+mirrors it into `src/wasm/`. The demo has no engine toggle; maipointo
+is the engine.

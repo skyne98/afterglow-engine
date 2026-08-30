@@ -8,16 +8,14 @@ The character-editor paint demo uses the maipointo brush engine (see `maipointo.
 
 ## Build
 
-Build the module with Emscripten (the engine is maipointo; see `maipointo.md`):
+Build the pure-Rust module (the engine is maipointo; see `maipointo.md`):
 
 ```sh
 cd prototype/character-editor
-nix-shell -p emscripten --run 'bash paint/build-wasm.sh'
+RUSTC_BOOTSTRAP=1 bash paint/build-wasm.sh
 ```
 
-The module is single-threaded, SIMD128-enabled, with growth enabled.
-
-`paint/build-wasm.sh` makes a separate serial module. The threaded build is the shipped demo module.
+The module is a plain `rust-lld` cdylib with imported shared memory (`--import-memory --shared-memory`), panic=abort, and no Emscripten runtime. `paint/build-wasm.sh` copies `maipointo.wasm` to `public/wasm/brushlib.wasm` and `src/wasm/`. The TS loader `src/maipo-wasm.ts` instantiates it with a host-owned shared `WebAssembly.Memory` and wraps the exports for the worker.
 
 ## Brush processing
 

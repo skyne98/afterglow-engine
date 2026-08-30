@@ -178,6 +178,7 @@ impl PaintApp {
         app.layer_mode[0] = BlendMode::Pigment;
         app.layer_count = 1;
         app.active_layer = 0;
+        app.node_append(0, -1);
         // main.c's init() ends with new_brush().
         let mut brush = Brush::new();
         brush.from_defaults();
@@ -677,7 +678,6 @@ impl PaintApp {
             10.0, viewzoom, viewrotation, barrel_rotation, false);
         let roi = self.layers[layer].end_atomic();
         self.dirty_roi = roi;
-        self.layers[layer].set_capture_enabled(false);
         let captured = self.layers[layer].take_captured();
         for (tx, ty, before) in captured {
             self.pending_captures.push(PendingCapture {
@@ -737,6 +737,17 @@ impl PaintApp {
             return;
         }
         let layer = self.history_active_layer;
+        // The stroke capture stays enabled for the whole stroke; close it
+        // here and absorb any tiles written after the last stroke_to.
+        self.layers[layer].set_capture_enabled(false);
+        let captured = self.layers[layer].take_captured();
+        for (tx, ty, before) in captured {
+            self.pending_captures.push(PendingCapture {
+                pos: TilePos { tx, ty },
+                layer,
+                before,
+            });
+        }
         let mut record: Vec<HistoryEntry> = Vec::new();
         for capture in &self.pending_captures {
             let after = self.layers[layer]

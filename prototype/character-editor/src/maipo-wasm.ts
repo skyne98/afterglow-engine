@@ -27,12 +27,28 @@ export function loadBrushModule(): Promise<MaipoModule> {
     const memory = new WebAssembly.Memory({ initial: 256, maximum: 1024, shared: true });
     const { instance } = await WebAssembly.instantiate(bytes, { env: { memory } });
     const exports = instance.exports as unknown as Record<string, CallableFunction>;
+    const encoder = new TextEncoder();
+    const decoder = new TextDecoder();
     const mod: MaipoModule = {
       memory,
       get HEAPU8() { return new Uint8Array(memory.buffer); },
       get HEAP32() { return new Int32Array(memory.buffer); },
       _malloc: exports._malloc as (n: number) => number,
       _free: exports._free as (p: number, n: number) => void,
+      lengthBytesUTF8(value: string) { return encoder.encode(value).length; },
+      stringToUTF8(value: string, ptr: number, maxBytes: number) {
+        const bytes = encoder.encode(value);
+        const view = new Uint8Array(memory.buffer);
+        const n = Math.min(bytes.length, maxBytes - 1);
+        view.set(bytes.subarray(0, n), ptr);
+        view[ptr + n] = 0;
+      },
+      UTF8ToString(ptr: number) {
+        const view = new Uint8Array(memory.buffer);
+        let end = ptr;
+        while (view[end] !== 0) end++;
+        return decoder.decode(view.subarray(ptr, end));
+      },
     };
     // Expose every paint export under its emscripten-era `_name`.
     for (const name of Object.keys(exports)) {
