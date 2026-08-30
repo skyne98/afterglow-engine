@@ -22,7 +22,9 @@ thread_local! {
 fn with_app<R: Default>(f: impl FnOnce(&mut PaintApp) -> R) -> R {
     install_panic_hook();
     APP.with(|slot| {
-        let mut borrow = slot.borrow_mut();
+        let Ok(mut borrow) = slot.try_borrow_mut() else {
+            return R::default();
+        };
         let app = borrow.get_or_insert_with(|| PaintApp::new(2048, 2048).unwrap());
         // A panic unwinds (wasm exception handling), drops this RefMut and
         // leaves the module usable; the error code reports the failure.
@@ -944,4 +946,16 @@ fn install_panic_hook() {
     HOOK.call_once(|| {
         std::panic::set_hook(Box::new(|_| {}));
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nested_app_access_returns_without_a_panic() {
+        let result = with_app(|_| with_app(|_| 7u32));
+        assert_eq!(result, 0);
+        assert_eq!(with_app(|app| app.error_code), 0);
+    }
 }

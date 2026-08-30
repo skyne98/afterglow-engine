@@ -47,11 +47,11 @@ engine exists solely as the reference for the exactness tests.
   C ABI for the standalone wasm module (feature `demo`), plus the
   shared `.myb` v3 JSON loader (`src/capi_json.rs`). Scratch
   allocations use a fixed 64x32 KiB slot pool with a free bitmask.
-  Every app access goes through a guarded `with_app`: a panic unwinds
-  (wasm exception handling; the build uses `panic=unwind`), drops the
-  RefCell borrow cleanly, and degrades to error code 1 — an engine
-  panic must never abort into a trap that leaks the borrow and bricks
-  the instance. The history system carries a 64 MiB entry-byte budget
+  Every app access goes through a guarded `with_app`: Wasm exception
+  handling unwinds a panic, drops the RefCell borrow cleanly, and degrades
+  to error code 1. A busy RefCell returns the default result without a
+  second panic. An engine panic must never abort into a trap that leaks the
+  borrow and bricks the instance. The history system carries a 64 MiB entry-byte budget
   with deterministic oldest-record eviction and fallible reservation:
   at 16K documents a single stroke can capture hundreds of tiles. One stroke
   has a 32 MiB before-image limit. An over-size stroke paints without undo and
@@ -63,7 +63,8 @@ engine exists solely as the reference for the exactness tests.
 ## Zero C in the product
 
 The wasm module is a plain `rust-lld` cdylib: `--import-memory
---shared-memory`, imported shared memory owned by the host, panic=unwind.
+--shared-memory`, `panic=unwind`, `panic-unwind`, and the Wasm
+`exception-handling` target feature. The host owns the imported shared memory.
 No Emscripten runtime, no json-c, no C glue. C lives only in
 validation: `maipointo/reference/*.c` oracles, the compositor parity
 harness (`paint/layer-compositor.parity.test.c` +
@@ -100,7 +101,7 @@ gate compiler-dependent). The oracle replay covers:
   argument, and tile-byte comparison,
 - event-prefix bisection to the first divergent dab.
 
-31 tests total; all green with and without `--features demo`.
+33 tests total; all green with and without `--features demo`.
 
 ## Build
 

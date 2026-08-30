@@ -15,7 +15,7 @@ cd prototype/character-editor
 RUSTC_BOOTSTRAP=1 bash paint/build-wasm.sh
 ```
 
-The module is a plain `rust-lld` cdylib with imported shared memory (`--import-memory --shared-memory`), panic=unwind, and no Emscripten runtime. `paint/build-wasm.sh` copies `maipointo.wasm` to `public/wasm/brushlib.wasm` and `src/wasm/`. The TS loader `src/maipo-wasm.ts` instantiates it with a host-owned shared `WebAssembly.Memory` and wraps the exports for the worker.
+The module is a plain `rust-lld` cdylib with imported shared memory (`--import-memory --shared-memory`), `panic=unwind`, `panic-unwind`, and the Wasm `exception-handling` target feature. It has no Emscripten runtime. `paint/build-wasm.sh` copies `maipointo.wasm` to `public/wasm/brushlib.wasm` and `src/wasm/`. The TS loader `src/maipo-wasm.ts` instantiates it with a host-owned shared `WebAssembly.Memory` and wraps the exports for the worker.
 
 ## Brush processing
 
@@ -69,7 +69,7 @@ Use these exports:
 
 The display worker renders exact dirty tiles for brush changes. Thus, one wide rectangle does not cause a full 16K document scan.
 
-Full document changes use the full render path.
+Full document changes use the full render path. Render and mip paths reuse fixed tile buffers, so repeated tile renders do not grow the wasm heap.
 
 ## Main C exports
 

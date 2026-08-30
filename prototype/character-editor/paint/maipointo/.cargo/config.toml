@@ -5,7 +5,8 @@
 # this file does not affect the engine crates.
 [target.wasm32-unknown-unknown]
 rustflags = [
-  '-C', 'target-feature=+atomics,+bulk-memory,+mutable-globals,+simd128',
+  '-C', 'panic=unwind',
+  '-C', 'target-feature=+atomics,+bulk-memory,+mutable-globals,+simd128,+exception-handling',
   '-C', 'link-arg=--import-memory',
   '-C', 'link-arg=--max-memory=268435456',
   '-C', 'link-arg=--shared-memory',

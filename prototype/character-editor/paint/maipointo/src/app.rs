@@ -119,6 +119,7 @@ pub struct PaintApp {
     history_active_layer: usize,
 
     composite_tile: Vec<u16>,
+    render_scratch: Vec<u16>,
     mip_composite_tile: Vec<u16>,
     mip_source_tiles: Vec<u16>,
     display_tile: Vec<u8>,
@@ -179,6 +180,7 @@ impl PaintApp {
             history_active: false,
             history_active_layer: 0,
             composite_tile: vec![0; 64 * 64 * 4],
+            render_scratch: vec![0; WEB_MAX_GROUPS * 64 * 64 * 4],
             mip_composite_tile: vec![0; 64 * 64 * 4],
             mip_source_tiles: vec![0; WEB_MIP_MAX_SOURCES * 64 * 64 * 4],
             display_tile: vec![0; 64 * 64 * 4],
@@ -292,8 +294,7 @@ impl PaintApp {
         (value ^ (value >> 16)) & 255
     }
 
-    fn render_display_tile(&mut self, source: &[u16]) -> &[u8] {
-        let display_tile = &mut self.display_tile;
+    fn render_display_tile(source: &[u16], display_tile: &mut [u8], display_lut: &[u8]) {
         for pixel in 0..64 * 64 {
             let alpha = source[pixel * 4 + 3] as u32;
             let mut r = 0u32;
@@ -311,18 +312,24 @@ impl PaintApp {
                 g = g.min(32768);
                 b = b.min(32768);
             }
-            display_tile[pixel * 4] = self.display_lut
+            display_tile[pixel * 4] = display_lut
                 [(r as usize) * DISPLAY_LUT_NOISE + Self::display_noise(pixel, 0) as usize];
-            display_tile[pixel * 4 + 1] = self.display_lut
+            display_tile[pixel * 4 + 1] = display_lut
                 [(g as usize) * DISPLAY_LUT_NOISE + Self::display_noise(pixel, 1) as usize];
-            display_tile[pixel * 4 + 2] = self.display_lut
+            display_tile[pixel * 4 + 2] = display_lut
                 [(b as usize) * DISPLAY_LUT_NOISE + Self::display_noise(pixel, 2) as usize];
             display_tile[pixel * 4 + 3] = ((alpha * 255 + 16384) / 32768) as u8;
         }
-        display_tile
     }
 
-    fn render_node(&mut self, r: i32, tx: i32, ty: i32, target: &mut [u16]) {
+    fn render_node(
+        &mut self,
+        r: i32,
+        tx: i32,
+        ty: i32,
+        target: &mut [u16],
+        scratch: &mut [u16],
+    ) {
         if web_ref_is_group(r) {
             let group = web_ref_group_id(r) as usize;
             if group >= WEB_MAX_GROUPS
@@ -331,24 +338,29 @@ impl PaintApp {
             {
                 return;
             }
+            let tile_words = self.tile_bytes;
+            if scratch.len() < tile_words {
+                return;
+            }
+            let (work, child_scratch) = scratch.split_at_mut(tile_words);
             let direct = self.group_pass_through[group]
                 && !self.group_isolated[group]
                 && self.group_mode[group] == BlendMode::Normal;
             if direct {
                 let opacity = (self.group_opacity[group].clamp(0.0, 1.0) * 32768.0
                     + 0.5) as u32;
-                let base = target.to_vec();
+                work.copy_from_slice(target);
                 let mut child = self.group_first_child[group];
                 while child != WEB_REF_NONE {
                     let next = self.node_next(child);
-                    self.render_node(child, tx, ty, target);
+                    self.render_node(child, tx, ty, target, child_scratch);
                     child = next;
                 }
                 if opacity < 32768 {
                     let inverse = 32768 - opacity;
                     for pixel in 0..64 * 64 {
                         for channel in 0..4 {
-                            let b = base[pixel * 4 + channel] as u32;
+                            let b = work[pixel * 4 + channel] as u32;
                             let res = target[pixel * 4 + channel] as u32;
                             target[pixel * 4 + channel] =
                                 ((b * inverse + res * opacity + 16384) >> 15) as u16;
@@ -357,11 +369,11 @@ impl PaintApp {
                 }
                 return;
             }
-            let mut content = vec![0u16; self.tile_bytes];
+            work.fill(0);
             let mut child = self.group_first_child[group];
             while child != WEB_REF_NONE {
                 let next = self.node_next(child);
-                self.render_node(child, tx, ty, &mut content);
+                self.render_node(child, tx, ty, work, child_scratch);
                 child = next;
             }
             let opacity = self.group_opacity[group];
@@ -369,7 +381,7 @@ impl PaintApp {
             for pixel in 0..64 * 64 {
                 layer_blend_over(
                     &mut target[pixel * 4..pixel * 4 + 4],
-                    &content[pixel * 4..pixel * 4 + 4],
+                    &work[pixel * 4..pixel * 4 + 4],
                     opacity,
                     mode,
                 );
@@ -397,22 +409,28 @@ impl PaintApp {
 
     /// `paint_render_tile_ptr` -- composite the full stack for one tile.
     pub fn render_tile(&mut self, tx: i32, ty: i32) -> &[u16] {
-        let mut composite = self.background_tile.clone();
+        let mut composite = std::mem::take(&mut self.composite_tile);
+        let mut scratch = std::mem::take(&mut self.render_scratch);
+        composite.copy_from_slice(&self.background_tile);
         let mut child = self.root_first_child;
         while child != WEB_REF_NONE {
             let next = self.node_next(child);
-            self.render_node(child, tx, ty, &mut composite);
+            self.render_node(child, tx, ty, &mut composite, &mut scratch);
             child = next;
         }
         self.composite_tile = composite;
+        self.render_scratch = scratch;
         &self.composite_tile
     }
 
     /// `render_display_tile(paint_render_tile_ptr(...))` combined.
     pub fn render_rgba8_tile(&mut self, tx: i32, ty: i32) -> &[u8] {
         self.render_tile(tx, ty);
-        let src = self.composite_tile.clone();
-        self.render_display_tile(&src);
+        Self::render_display_tile(
+            &self.composite_tile,
+            &mut self.display_tile,
+            &self.display_lut,
+        );
         &self.display_tile
     }
 
@@ -420,15 +438,16 @@ impl PaintApp {
         if layer_id >= self.layer_count {
             return None;
         }
-        let tile_copy: Vec<u16> = self.layers[layer_id]
-            .get_tile(tx, ty)
-            .map(|t| t.to_vec())
-            .unwrap_or_default();
-        if tile_copy.is_empty() {
+        let Some(tile) = self.layers[layer_id].get_tile(tx, ty) else {
             self.display_tile.fill(0);
             return Some(&self.display_tile);
-        }
-        self.render_display_tile(&tile_copy);
+        };
+        self.composite_tile.copy_from_slice(tile);
+        Self::render_display_tile(
+            &self.composite_tile,
+            &mut self.display_tile,
+            &self.display_lut,
+        );
         Some(&self.display_tile)
     }
 
@@ -497,8 +516,11 @@ impl PaintApp {
                 self.mip_composite_tile[pixel * 4..pixel * 4 + 4]
                     .copy_from_slice(&self.background_color);
             }
-            let t = self.mip_composite_tile.clone();
-            self.render_display_tile(&t);
+            Self::render_display_tile(
+                &self.mip_composite_tile,
+                &mut self.display_tile,
+                &self.display_lut,
+            );
             return &self.display_tile;
         }
         let mut region_has_paint = false;
@@ -520,8 +542,11 @@ impl PaintApp {
                 self.mip_composite_tile[pixel * 4..pixel * 4 + 4]
                     .copy_from_slice(&self.background_color);
             }
-            let t = self.mip_composite_tile.clone();
-            self.render_display_tile(&t);
+            Self::render_display_tile(
+                &self.mip_composite_tile,
+                &mut self.display_tile,
+                &self.display_lut,
+            );
             return &self.display_tile;
         }
         // Snapshot the 4 (or 16) source tiles, then box-average.
@@ -530,10 +555,10 @@ impl PaintApp {
             for sx in 0..scale {
                 let src_tx = tx * scale as i32 + sx as i32;
                 let src_ty = ty * scale as i32 + sy as i32;
-                let rendered = self.render_tile(src_tx, src_ty).to_vec();
+                self.render_tile(src_tx, src_ty);
                 let dst = &mut self.mip_source_tiles
                     [(sy * scale + sx) * tile_px..(sy * scale + sx + 1) * tile_px];
-                dst.copy_from_slice(&rendered);
+                dst.copy_from_slice(&self.composite_tile);
             }
         }
         for pixel_y in 0..64usize {
@@ -563,8 +588,11 @@ impl PaintApp {
                 }
             }
         }
-        let t = self.mip_composite_tile.clone();
-        self.render_display_tile(&t);
+        Self::render_display_tile(
+            &self.mip_composite_tile,
+            &mut self.display_tile,
+            &self.display_lut,
+        );
         &self.display_tile
     }
 
@@ -1147,5 +1175,38 @@ impl PaintApp {
 
     pub fn group_count(&self) -> usize {
         self.group_count
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repeated_render_reuses_tile_buffers() {
+        let mut app = PaintApp::new(2048, 2048).unwrap();
+        let tile = app.active().get_or_create_tile_mut(0, 0).unwrap();
+        tile[0] = 32768;
+        let caps = (
+            app.composite_tile.capacity(),
+            app.render_scratch.capacity(),
+            app.mip_composite_tile.capacity(),
+            app.mip_source_tiles.capacity(),
+            app.display_tile.capacity(),
+        );
+        for _ in 0..128 {
+            assert_eq!(app.render_rgba8_tile(0, 0).len(), 64 * 64 * 4);
+            assert_eq!(app.render_rgba8_mip_tile(0, 0, 2).len(), 64 * 64 * 4);
+        }
+        assert_eq!(
+            caps,
+            (
+                app.composite_tile.capacity(),
+                app.render_scratch.capacity(),
+                app.mip_composite_tile.capacity(),
+                app.mip_source_tiles.capacity(),
+                app.display_tile.capacity(),
+            )
+        );
     }
 }
