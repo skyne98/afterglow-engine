@@ -64,7 +64,12 @@ The demo's TS loader (`src/maipo-wasm.ts`) instantiates the module,
 wraps the exports (`_name` keys), provides `HEAPU8`/`HEAP32` views,
 the string helpers the worker uses (`lengthBytesUTF8`,
 `stringToUTF8`, `UTF8ToString`), and the shared
-`WebAssembly.Memory` (initial 256, maximum 1024 pages).
+`WebAssembly.Memory` (initial 256, maximum 4096 pages). The module
+imports that memory with its own 256 MiB cap
+(`paint/maipointo/.cargo/config.toml`), which overrides the engine
+workspace's 64 MiB default for this crate only — the demo document
+(16K documents, eight layers, 40 history records of tile captures)
+needs headroom; the old 64 MiB cap OOM-aborted the worker mid-stroke.
 
 ## Exactness validation
 

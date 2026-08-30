@@ -24,7 +24,7 @@ export function loadBrushModule(): Promise<MaipoModule> {
     const bytes = await response.arrayBuffer();
     // The module imports its memory (--import-memory --shared-memory); the
     // host owns it so HEAP views stay valid across growth.
-    const memory = new WebAssembly.Memory({ initial: 256, maximum: 1024, shared: true });
+    const memory = new WebAssembly.Memory({ initial: 256, maximum: 4096, shared: true });
     const { instance } = await WebAssembly.instantiate(bytes, { env: { memory } });
     const exports = instance.exports as unknown as Record<string, CallableFunction>;
     const encoder = new TextEncoder();

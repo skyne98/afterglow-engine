@@ -58,6 +58,9 @@ pub struct WebSurface {
     null_tile: Vec<u16>,
     mask: Vec<u16>,
     scratch: Vec<f32>,
+    /// Reused copy-out buffer for `get_color` tile reads (no per-call
+    /// allocation: the smudge path calls this for every dab).
+    smudge_tile: Vec<u16>,
 
     ops: Vec<QueuedOp>,
     op_len: usize,
@@ -123,6 +126,7 @@ impl WebSurface {
             null_tile: vec![0; TILE_PX],
             mask: vec![0; MASK_LEN],
             scratch: vec![0.0; MASK_LEN],
+            smudge_tile: Vec::with_capacity(TILE_PX),
             ops: vec![QueuedOp { tx: 0, ty: 0, bbox_idx: 0, op: NULL_DAB_OP }; OP_QUEUE_CAP],
             op_len: 0,
             op_failed: 0,
@@ -582,16 +586,21 @@ impl WebSurface {
         let sample_interval: u16 = if radius <= 2.0 { 1 } else { (radius * 7.0) as u16 };
         let random_sample_rate = 1.0 / (7.0 * radius);
 
+        let mut tile_copy = std::mem::take(&mut self.smudge_tile);
         for ty in ty1..=ty2 {
             for tx in tx1..=tx2 {
                 self.process_tile(tx, ty);
-                // Copy the tile out: the mask/scratch borrow self mutably.
-                // Missing tiles read as the zero tile (the C readonly
-                // fetch), so smudge sampling never sees an empty slice.
+                // Copy the tile out into the reused smudge buffer (the
+                // mask/scratch borrow self mutably). Missing tiles read as
+                // the zero tile (the C readonly fetch), so smudge sampling
+                // never sees an empty slice. No per-call allocation.
                 const ZERO_TILE: [u16; TILE_PX] = [0; TILE_PX];
-                let tile_copy: Vec<u16> = self.get_tile(tx, ty).map(|t| t.to_vec())
-                    .unwrap_or_default();
-                let rgba: &[u16] = if tile_copy.is_empty() { &ZERO_TILE } else { &tile_copy };
+                tile_copy.clear();
+                match self.get_tile(tx, ty) {
+                    Some(t) => tile_copy.extend_from_slice(t),
+                    None => tile_copy.extend_from_slice(&ZERO_TILE),
+                }
+                let rgba: &[u16] = &tile_copy;
                 render_dab_mask(
                     &mut self.mask[..],
                     x - (tx * TILE as i32) as f32,
@@ -614,6 +623,7 @@ impl WebSurface {
                 );
             }
         }
+        self.smudge_tile = tile_copy;
         // The C normalization (mypaint-tiled-surface.c get_color tail):
         // legacy sampling divides by the mask weight; the spectral path's
         // sum is already a 0..1 reflectance and must not be divided.
