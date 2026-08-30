@@ -1,3 +1,2 @@
-// maipointo wasm pointer (the loader reads this to find the binary).
-export const brushlibWasm = "/wasm/brushlib.wasm";
+export const brushlibWasm = "/wasm/brushlib.wasm?v=2344429";
 export default {};

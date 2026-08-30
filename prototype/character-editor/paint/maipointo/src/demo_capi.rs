@@ -248,12 +248,15 @@ pub extern "C" fn paint_end_atomic() -> i32 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn paint_begin_batch() {
-    with_app(|app| app.active().begin_atomic());
+    with_app(|app| app.begin_batch());
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn paint_end_batch() -> i32 {
-    paint_end_atomic()
+    with_app(|app| {
+        app.end_batch();
+        app.dirty_roi_len() as i32
+    })
 }
 
 #[unsafe(no_mangle)]

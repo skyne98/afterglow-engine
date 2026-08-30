@@ -116,6 +116,10 @@ pub struct PaintApp {
 
     pub error_code: i32,
     pub dirty_roi: Vec<crate::symmetry::Rectangle>,
+    /// True between `begin_batch` and `end_batch` (the worker's drain
+    /// window): `stroke_to` must not end the atomic then, so all of a
+    /// drain's dabs land in one ROI.
+    pub batch_open: bool,
 }
 
 impl PaintApp {
@@ -170,6 +174,7 @@ impl PaintApp {
             display_eotf: 2.2,
             error_code: 0,
             dirty_roi: Vec::new(),
+            batch_open: false,
         };
         let layer0 = WebSurface::new(width, height)?;
         app.layers.push(layer0);
@@ -191,6 +196,23 @@ impl PaintApp {
 
     pub fn active(&mut self) -> &mut WebSurface {
         &mut self.layers[self.active_layer]
+    }
+
+    /// `paint_begin_batch`: open one drain window. Inside it `stroke_to`
+    /// only queues ops; `end_batch` drains and publishes the ROI.
+    pub fn begin_batch(&mut self) {
+        if !self.batch_open {
+            self.batch_open = true;
+            self.active().begin_atomic();
+        }
+    }
+
+    pub fn end_batch(&mut self) {
+        if self.batch_open {
+            self.batch_open = false;
+            let roi = self.active().end_atomic();
+            self.dirty_roi = roi;
+        }
     }
 
     pub fn set_background_color(&mut self, r: f32, g: f32, b: f32) {
@@ -695,10 +717,17 @@ impl PaintApp {
     ) -> i32 {
         let Some(brush) = self.brush.as_mut() else { return -1 };
         let layer = self.active_layer;
-        self.layers[layer].begin_atomic();
+        let open = self.batch_open;
+        if !open {
+            self.layers[layer].begin_atomic();
+        }
         let result = brush.stroke_to(&mut self.layers[layer], x, y, pressure,
             xtilt, ytilt, dtime, viewzoom, viewrotation, barrel_rotation,
             linear);
+        if !open {
+            let roi = self.layers[layer].end_atomic();
+            self.dirty_roi = roi;
+        }
         self.absorb_captures();
         if result { 2 } else { 1 }
     }

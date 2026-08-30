@@ -19,4 +19,12 @@ cp "$PAINT/maipointo/target/wasm32-unknown-unknown/release/maipointo.wasm" \
    "$OUT/brushlib.wasm"
 cp "$OUT/brushlib.wasm" "$ROOT/src/wasm/brushlib.wasm"
 
-echo "brushlib.wasm: $(stat -c%s "$OUT/brushlib.wasm") bytes"
+# Content-stamped module URL: the loader reads brushlibWasm from the stub,
+# so a rebuilt module busts the browser's wasm cache automatically.
+SIZE=$(stat -c%s "$OUT/brushlib.wasm")
+cat > "$OUT/brushlib.js" <<EOF
+export const brushlibWasm = "/wasm/brushlib.wasm?v=$SIZE";
+export default {};
+EOF
+
+echo "brushlib.wasm: $SIZE bytes"
