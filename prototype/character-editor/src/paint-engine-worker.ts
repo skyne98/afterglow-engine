@@ -1,3 +1,4 @@
+import { loadBrushModule } from './maipo-wasm';
 /* The brush worker owns WASM, input, display, and engine state.
  * The page only sends input and configuration messages.
  */
@@ -435,8 +436,7 @@ async function handleInput(e: MessageEvent<Msg & { canvas?: OffscreenCanvas }>) 
   if (m.cmd === 'init') {
     try {
       if (!mod) {
-        const dynamicImport = new Function('url', 'return import(url)') as (u: string) => Promise<any>;
-        mod = await (await dynamicImport('/wasm/brushlib.js')).default({ locateFile: (p: string) => `/wasm/${p}` });
+        mod = await loadBrushModule();
       }
       docW = m.width; docH = m.height;
       if (m.canvas) canvas = m.canvas;

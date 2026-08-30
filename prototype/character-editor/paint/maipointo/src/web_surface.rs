@@ -1,4 +1,4 @@
-//! The demo's paint surface — port of `web-surface.c` + the tiled-surface
+//! The demo's paint surface -- port of `web-surface.c` + the tiled-surface
 //! machinery it embeds (`begin_atomic`/`end_atomic` dirty rectangles,
 //! per-dab bounding boxes, the symmetry passes of `draw_dab`, and the fixed
 //! op queue). Sparse tiles in an open-addressed hash; first-write capture
@@ -6,6 +6,7 @@
 //! overflow.
 
 use crate::compositor::BlendMode;
+use crate::surface::{DrawDabOp, NULL_DAB_OP, Surface};
 use crate::mask::render_dab_mask;
 use crate::symmetry::{
     rectangle_expand_to_include_point, update_symmetry_state, Rectangle, SymmetryData,
@@ -33,50 +34,6 @@ struct QueuedOp {
     bbox_idx: usize,
     op: DrawDabOp,
 }
-
-/// The queued dab payload (the C `OperationDataDrawDab`).
-#[derive(Clone, Copy)]
-pub struct DrawDabOp {
-    x: f32,
-    y: f32,
-    radius: f32,
-    aspect_ratio: f32,
-    angle: f32,
-    opaque: f32,
-    hardness: f32,
-    softness: f32,
-    lock_alpha: f32,
-    colorize: f32,
-    posterize: f32,
-    posterize_num: u16,
-    paint: f32,
-    normal: f32,
-    color_r: u16,
-    color_g: u16,
-    color_b: u16,
-    color_a: f32,
-}
-
-const NULL_DAB_OP: DrawDabOp = DrawDabOp {
-    x: 0.0,
-    y: 0.0,
-    radius: 0.0,
-    aspect_ratio: 1.0,
-    angle: 0.0,
-    opaque: 0.0,
-    hardness: 0.0,
-    softness: 0.0,
-    lock_alpha: 0.0,
-    colorize: 0.0,
-    posterize: 0.0,
-    posterize_num: 1,
-    paint: 0.0,
-    normal: 1.0,
-    color_r: 0,
-    color_g: 0,
-    color_b: 0,
-    color_a: 0.0,
-};
 
 /// The demo's paint surface: sparse tiles, used-tile tracking, display
 /// dirty slots, first-write capture, fixed-capacity op queue.
@@ -321,7 +278,7 @@ impl WebSurface {
         self.atomic_active = true;
     }
 
-    /// `end_atomic` — drain the op queue per dirty tile, then merge the
+    /// `end_atomic` -- drain the op queue per dirty tile, then merge the
     /// per-dab bounding boxes into a fresh roi (the C distribution).
     pub fn end_atomic(&mut self) -> Vec<Rectangle> {
         let mut dirty: Vec<(i32, i32)> = Vec::new();
@@ -398,7 +355,7 @@ impl WebSurface {
         }
     }
 
-    /// `draw_dab_internal` — validate + queue the dab for every touched
+    /// `draw_dab_internal` -- validate + queue the dab for every touched
     /// tile + update the bbox for `bbox_idx`.
     #[allow(clippy::too_many_arguments)]
     fn draw_dab_internal(
@@ -489,7 +446,7 @@ impl WebSurface {
         true
     }
 
-    /// `draw_dab` — the normal pass plus the symmetry passes (bit-faithful
+    /// `draw_dab` -- the normal pass plus the symmetry passes (bit-faithful
     /// to mypaint-tiled-surface.c, including the Snowflake fall-through).
     #[allow(clippy::too_many_arguments)]
     pub fn draw_dab(
@@ -608,7 +565,7 @@ impl WebSurface {
     }
 
     /// `get_color` (surface vtable). Flushes queued ops per tile, then
-    /// samples — serial order matches the non-OpenMP C build.
+    /// samples -- serial order matches the non-OpenMP C build.
     pub fn get_color(&mut self, x: f32, y: f32, radius: f32, paint: f32) -> [f32; 4] {
         let radius = if radius < 1.0 { 1.0 } else { radius };
         let hardness = 0.5f32;
@@ -628,10 +585,10 @@ impl WebSurface {
         for ty in ty1..=ty2 {
             for tx in tx1..=tx2 {
                 self.process_tile(tx, ty);
-                let rgba: &[u16] = match self.get_tile(tx, ty) {
-                    Some(t) => &t[..],
-                    None => &self.null_tile[..],
-                };
+                // Copy the tile out: the mask/scratch borrow self mutably.
+                let tile_copy: Vec<u16> = self.get_tile(tx, ty).map(|t| t.to_vec())
+                    .unwrap_or_default();
+                let rgba: &[u16] = &tile_copy[..];
                 render_dab_mask(
                     &mut self.mask[..],
                     x - (tx * TILE as i32) as f32,
@@ -706,5 +663,39 @@ impl WebSurface {
 
     pub fn used_tile(&self, index: usize) -> Option<&[u16; TILE_PX]> {
         self.tiles.get(index).and_then(|t| t.as_ref()).map(|b| &**b)
+    }
+}
+
+impl Surface for WebSurface {
+    #[allow(clippy::too_many_arguments)]
+    fn surface_draw_dab(
+        &mut self,
+        x: f32,
+        y: f32,
+        radius: f32,
+        color_r: f32,
+        color_g: f32,
+        color_b: f32,
+        opaque: f32,
+        hardness: f32,
+        softness: f32,
+        color_a: f32,
+        aspect_ratio: f32,
+        angle: f32,
+        lock_alpha: f32,
+        colorize: f32,
+        posterize: f32,
+        posterize_num: f32,
+        paint: f32,
+    ) -> bool {
+        self.draw_dab(
+            x, y, radius, color_r, color_g, color_b, opaque, hardness,
+            softness, color_a, aspect_ratio, angle, lock_alpha, colorize,
+            posterize, posterize_num, paint,
+        )
+    }
+
+    fn get_color(&mut self, x: f32, y: f32, radius: f32, paint: f32) -> [f32; 4] {
+        self.get_color(x, y, radius, paint)
     }
 }

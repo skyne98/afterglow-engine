@@ -28,12 +28,13 @@ pub mod symmetry;
 pub mod web_surface;
 #[cfg(feature = "demo")]
 pub mod app;
+#[cfg(feature = "demo")]
+pub mod demo_capi;
 pub mod settings;
+pub mod capi_json;
 
 /// C ABI for the demo's Emscripten wasm module (wasm builds only; the
 /// native test builds have no libmypaint surface symbols to link against).
-#[cfg(target_arch = "wasm32")]
-pub mod capi;
 
 pub use brushmodes::ColorSums;
 pub use mask::{clamp, render_dab_mask, TILE_SIZE};

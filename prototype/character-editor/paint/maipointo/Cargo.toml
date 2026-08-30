@@ -23,7 +23,7 @@ default = []
 demo = []
 
 [lib]
-crate-type = ["rlib", "staticlib"]
+crate-type = ["rlib", "cdylib"]
 
 [profile.release]
 panic = "abort"

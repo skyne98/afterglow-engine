@@ -11,24 +11,24 @@ use crate::random::RandomSource;
 /// A queued dab operation (`OperationDataDrawDab`).
 #[derive(Clone, Copy, Debug)]
 pub struct DrawDabOp {
-    x: f32,
-    y: f32,
-    radius: f32,
-    aspect_ratio: f32,
-    angle: f32,
-    opaque: f32,
-    hardness: f32,
-    softness: f32,
-    lock_alpha: f32,
-    colorize: f32,
-    posterize: f32,
-    posterize_num: u16,
-    paint: f32,
-    normal: f32,
-    color_r: u16,
-    color_g: u16,
-    color_b: u16,
-    color_a: f32,
+    pub x: f32,
+    pub y: f32,
+    pub radius: f32,
+    pub aspect_ratio: f32,
+    pub angle: f32,
+    pub opaque: f32,
+    pub hardness: f32,
+    pub softness: f32,
+    pub lock_alpha: f32,
+    pub colorize: f32,
+    pub posterize: f32,
+    pub posterize_num: u16,
+    pub paint: f32,
+    pub normal: f32,
+    pub color_r: u16,
+    pub color_g: u16,
+    pub color_b: u16,
+    pub color_a: f32,
 }
 
 /// C `ROUND(x)` = `(int)((x)+0.5)`.
@@ -43,7 +43,7 @@ const OP_QUEUE_CAP: usize = 16384;
 const DIRTY_TILE_CAP: usize = 4096;
 const MASK_LEN: usize = TILE_SIZE * TILE_SIZE + 2 * TILE_SIZE;
 
-const NULL_DAB_OP: DrawDabOp = DrawDabOp {
+pub const NULL_DAB_OP: DrawDabOp = DrawDabOp {
     x: 0.0,
     y: 0.0,
     radius: 0.0,
