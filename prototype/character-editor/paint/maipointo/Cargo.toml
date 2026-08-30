@@ -26,4 +26,4 @@ demo = []
 crate-type = ["rlib", "cdylib"]
 
 [profile.release]
-opt-level = "s"
+opt-level = 3

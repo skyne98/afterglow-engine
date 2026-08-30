@@ -22,30 +22,47 @@ export interface TilePool {
   }): Promise<Uint8Array>;
 }
 
-export async function spawnTilePool(memoryOpSize: number, onLog?: (text: string) => void): Promise<TilePool> {
-  const logical = navigator.hardwareConcurrency || 8;
+export async function spawnTilePool(
+  memoryOpSize: number,
+  onLog?: (text: string) => void,
+  logical = navigator.hardwareConcurrency || 8,
+): Promise<TilePool> {
   const count = Math.max(1, Math.min(POOL_CAP, Math.floor(logical / 2) - 1));
   const readyFlag = new SharedArrayBuffer(4);
   const readyView = new Int32Array(readyFlag);
   const workers: Worker[] = [];
   let dispatched = 0;
-  const pending = new Map<number, (v: Uint8Array) => void>();
+  let failed = false;
+  type Pending = {
+    resolve: (value: Uint8Array) => void;
+    reject: (reason: Error) => void;
+  };
+  const pending = new Map<number, Pending>();
+  const fail = (message: string) => {
+    if (failed) return;
+    failed = true;
+    onLog?.(message);
+    for (const entry of pending.values()) entry.reject(new Error(message));
+    pending.clear();
+    for (const worker of workers) worker.terminate();
+  };
 
   for (let i = 0; i < count; i++) {
     const w = new Worker(new URL('./paint-tile-pool-worker.ts', import.meta.url), { type: 'module' });
     w.onmessage = (e: MessageEvent) => {
       const d = e.data;
       if (d?.type === 'log') { onLog?.(d.text); return; }
+      if (d?.type === 'bootFailed') { fail(d.text); return; }
       if (d?.type === 'jobDone') {
-        const resolve = pending.get(d.id);
-        if (resolve) {
+        const entry = pending.get(d.id);
+        if (entry) {
           pending.delete(d.id);
-          resolve(new Uint8Array(d.tile));
+          entry.resolve(new Uint8Array(d.tile));
         }
       }
     };
     w.onerror = (e: ErrorEvent) => {
-      onLog?.(`tile pool worker ${i} error: ${(e as ErrorEvent)?.message ?? 'unknown'}`);
+      fail(`tile pool worker ${i} error: ${(e as ErrorEvent)?.message ?? 'unknown'}`);
     };
     w.postMessage({ cmd: 'boot', workerId: i + 1, readyFlag, opSize: memoryOpSize });
     workers.push(w);
@@ -57,11 +74,14 @@ export async function spawnTilePool(memoryOpSize: number, onLog?: (text: string)
   return {
     workerCount: count,
     ready() {
-      return Atomics.load(readyView, 0) >= count;
+      return !failed && Atomics.load(readyView, 0) >= count;
     },
     blend(job): Promise<Uint8Array> {
+      if (failed) return Promise.reject(new Error('The tile pool is unavailable.'));
       const id = dispatched++;
-      const promise = new Promise<Uint8Array>((resolve) => pending.set(id, resolve));
+      const promise = new Promise<Uint8Array>((resolve, reject) => {
+        pending.set(id, { resolve, reject });
+      });
       const worker = workers[id % workers.length];
       worker.postMessage({ cmd: 'job', id, tx: job.tx, ty: job.ty, opCount: job.opCount, ops: job.ops, tile: job.tile }, [job.ops.buffer, job.tile.buffer]);
       return promise;

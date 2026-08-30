@@ -15,43 +15,27 @@ cd prototype/character-editor
 RUSTC_BOOTSTRAP=1 bash paint/build-wasm.sh
 ```
 
-The module is a plain `rust-lld` cdylib with imported shared memory (`--import-memory --shared-memory`), panic=abort, and no Emscripten runtime. `paint/build-wasm.sh` copies `maipointo.wasm` to `public/wasm/brushlib.wasm` and `src/wasm/`. The TS loader `src/maipo-wasm.ts` instantiates it with a host-owned shared `WebAssembly.Memory` and wraps the exports for the worker.
+The module is a plain `rust-lld` cdylib with imported shared memory (`--import-memory --shared-memory`), panic=unwind, and no Emscripten runtime. `paint/build-wasm.sh` copies `maipointo.wasm` to `public/wasm/brushlib.wasm` and `src/wasm/`. The TS loader `src/maipo-wasm.ts` instantiates it with a host-owned shared `WebAssembly.Memory` and wraps the exports for the worker.
 
 ## Brush processing
 
-`stroke_to()` starts one exact libmypaint input sample. It processes a maximum of 128 dabs and returns one of these values:
+`stroke_to()` starts one exact libmypaint input sample and completes its stateful dab loop on the paint worker. The current ABI does not use a continuation.
 
-- `0`: More dabs remain.
-- `1` or `2`: The input sample is complete.
-- A negative value: The brush state has an error.
+The normal input drain keeps an 8 ms scheduling budget between samples. One fixed `MessageChannel` starts the next drain and permits only one pending wake.
 
-`paint_continue_stroke_to()` processes the next 128 dabs. `paint_has_stroke_continuation()` reports the continuation state.
-
-The continuation does not add input points. It resumes inside the original libmypaint dab loop.
-
-The original and cooperative paths have equal brush states and output bytes in `mypaint-brush-cooperative.test.c`.
-
-The TypeScript worker keeps the current `MotionQueue` sample until its continuation completes. It yields between batches, so later worker messages can enter fixed queues.
-
-One fixed `MessageChannel` starts continuation tasks. It permits only one pending wake and does not use a nested zero-delay timer.
-
-The worker can process more 128-dab continuation units in one tile batch for a maximum of 2 ms. The normal input drain keeps its 8 ms budget.
-
-Chromium clamps nested zero-delay timers to approximately 4 ms. This delay multiplied a 613-batch Tail Feathers stroke to approximately 2.52 seconds.
+The `MotionQueue` has 8,192 fixed sample slots. It preserves input order until its fixed capacity is full.
 
 An 8,192-item deferred command ring keeps each `beginStroke`, sample, and `commit` boundary. Thus, a backlog cannot combine separate strokes into one history record.
 
 ## Parallel tile processing
 
-`paint_begin_batch()` starts an atomic tile batch. `paint_end_batch()` creates missing tiles before it starts any pthread.
+`paint_begin_batch()` starts an atomic tile batch. `paint_end_batch_parallel()` performs serial tile bookkeeping and publishes one job per dirty tile.
 
-A maximum of four pthreads claim separate dirty tiles. Each pthread runs the unchanged libmypaint `process_tile()` function.
+The TypeScript tile pool uses a bounded worker count from the page hardware-concurrency value. Each pool worker owns an isolated wasm instance and receives copied operation and tile bytes.
 
-`paint_is_batch_done()` polls counters and `pthread_tryjoin_np()`. The main WASM worker does not use a blocking join.
+The paint worker copies completed tile bytes back into its module memory. It uses inline processing when the pool is not ready or fails. Pool boot failures reject pending jobs and stop the pool.
 
-`paint_end_batch_finish()` merges dirty areas and clears the operation queue. It runs only after all joinable pthreads exit.
-
-Workers cannot create tile memory. This rule prevents a proxied memory-growth deadlock in a pthread.
+`paint_end_batch_finish()` merges dirty areas and clears the operation queue after all tile jobs complete. The stateful brush and smudge sampling remain serial.
 
 ## Fixed operation queue
 
@@ -69,7 +53,7 @@ The history path uses a fixed generation set with one mark for each surface tile
 
 The set prevents a scan of all prior stroke tiles for each dab operation. Separate queued strokes also keep separate history records.
 
-The history pixel capacity does not change. Error code `2` reports that capacity limit.
+History uses a 64 MiB tile-entry byte budget and keeps at most 40 records. One active stroke limits before-image capture to 32 MiB. An over-size stroke still paints, but it gets no undo record and reports error code `2`. The system evicts the oldest records before it rejects a new allocation.
 
 ## Dirty display data
 
@@ -142,7 +126,7 @@ The worker completes current paint data before it applies these commands:
 - Export
 - Probe
 
-This order prevents brush-state changes during a continuation and surface access during a pthread batch.
+This order prevents brush-state changes and surface access during a tile batch.
 
 `PaintPointerState` owns the stroke, pan, and pointer-capture state. Before each zoom, rotation, mirror, view reset, or pan, the page commits an open stroke and releases its pointer capture.
 
@@ -156,21 +140,20 @@ The deferred command ring has 8,192 slots. It reports and rejects a new command 
 
 The demo sends brush data only after brush selection or engine initialization. It does not reload the same brush for each stroke.
 
-The HUD gives both the current sample count and the deferred action count.
+The HUD gives the current sample count, deferred action count, and recent work times.
 
 ## Error codes
 
 `paint_get_error_code()` returns these current values:
 
-- `1`: Tile allocation failed.
-- `2`: The history capacity was reached.
+- `1`: A guarded engine call panicked or tile allocation failed.
+- `2`: The history byte budget rejected a reservation.
 - `3`: The libmypaint dab loop made no progress.
 - `4`: The operation queue reached capacity.
-- `5`: A pthread did not exit correctly.
 
 The worker sends each fatal engine error to the page log and status output. It also reports worker errors, promise rejections, and batch-finish exceptions.
 
-The implementation does not contain a watchdog, abort path, cooldown, or automatic serial mode.
+The implementation does not contain a watchdog or cooldown. Tile work uses inline processing when the pool is unavailable.
 
 ## Tests
 

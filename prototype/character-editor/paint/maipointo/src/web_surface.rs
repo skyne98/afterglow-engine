@@ -5,7 +5,6 @@
 //! feeds the history system; fixed-capacity storage with deterministic
 //! overflow.
 
-use crate::compositor::BlendMode;
 use std::sync::atomic::Ordering;
 use crate::surface::{DrawDabOp, NULL_DAB_OP, Surface};
 use crate::mask::render_dab_mask;
@@ -106,6 +105,7 @@ pub struct WebSurface {
     /// Reused copy-out buffer for `get_color` tile reads (no per-call
     /// allocation: the smudge path calls this for every dab).
     smudge_tile: Vec<u16>,
+    captured_bytes: usize,
 
     ops: Vec<QueuedOp>,
     op_len: usize,
@@ -174,6 +174,7 @@ impl WebSurface {
             mask: vec![0; MASK_LEN],
             scratch: vec![0.0; MASK_LEN],
             smudge_tile: Vec::with_capacity(TILE_PX),
+            captured_bytes: 0,
             ops: vec![QueuedOp { tx: 0, ty: 0, bbox_idx: 0, op: NULL_DAB_OP }; OP_QUEUE_CAP],
             op_len: 0,
             jobs_used: 0,
@@ -295,25 +296,50 @@ impl WebSurface {
                 self.capture_generation = 1;
             }
             self.captured.clear();
+            self.captured_bytes = 0;
+            self.capture_overflow = false;
         }
         self.capture_enabled = enabled;
     }
 
     pub fn take_captured(&mut self) -> Vec<(i32, i32, Vec<u16>)> {
+        self.captured_bytes = 0;
         std::mem::take(&mut self.captured)
+    }
+
+    pub fn take_capture_error(&mut self) -> bool {
+        let failed = self.capture_overflow;
+        self.capture_overflow = false;
+        failed
     }
 
     /// Snapshot a tile's before-state on first write of the stroke.
     fn capture_first_write(&mut self, slot: usize, tx: i32, ty: i32) {
-        if !self.capture_enabled {
+        if !self.capture_enabled || self.capture_overflow {
             return;
         }
         if self.capture_marks[slot] == self.capture_generation {
             return; // already captured this stroke
         }
+        let words = self.tiles[slot].as_ref().unwrap().len();
+        let bytes = words * std::mem::size_of::<u16>();
+        if self.captured_bytes.saturating_add(bytes) > crate::app::HISTORY_BYTE_BUDGET / 2 {
+            self.capture_overflow = true;
+            return;
+        }
+        if self.captured.try_reserve(1).is_err() {
+            self.capture_overflow = true;
+            return;
+        }
+        let mut before = Vec::new();
+        if before.try_reserve_exact(words).is_err() {
+            self.capture_overflow = true;
+            return;
+        }
+        before.extend_from_slice(&self.tiles[slot].as_ref().unwrap()[..]);
         self.capture_marks[slot] = self.capture_generation;
-        let bytes = self.tiles[slot].as_ref().unwrap().to_vec();
-        self.captured.push((tx, ty, bytes));
+        self.captured_bytes += bytes;
+        self.captured.push((tx, ty, before));
     }
 
     fn mark_display_dirty(&mut self, slot: usize) {
@@ -386,19 +412,23 @@ impl WebSurface {
         arena: &mut [DrawDabOp],
         ops_base: usize,
     ) -> usize {
-        let mut batch: Vec<DrawDabOp> = Vec::new();
+        // Copy matching ops directly into the fixed arena while compacting
+        // the remaining queue. This preserves FIFO order without a Vec per
+        // tile.
+        let mut op_count = 0usize;
         let mut w = 0usize;
         for r in 0..self.op_len {
             let e = self.ops[r];
             if e.tx == tx && e.ty == ty {
-                batch.push(e.op);
+                arena[ops_base + op_count] = e.op;
+                op_count += 1;
             } else {
                 self.ops[w] = e;
                 w += 1;
             }
         }
         self.op_len = w;
-        if batch.is_empty() {
+        if op_count == 0 {
             return ops_base;
         }
         let Some(slot) = self
@@ -412,56 +442,55 @@ impl WebSurface {
 
         let job = self.jobs_used;
         self.jobs_used += 1;
-        for (k, op) in batch.iter().enumerate() {
-            arena[ops_base + k] = *op;
-        }
         let tile_addr = self.tiles[slot].as_mut().unwrap().as_mut_ptr() as usize;
         let words = &JOB_TABLE[job * JOB_WORDS..(job + 1) * JOB_WORDS];
         words[JOB_OPS_OFF].store(ops_base, Ordering::Relaxed);
-        words[JOB_OP_COUNT].store(batch.len(), Ordering::Relaxed);
+        words[JOB_OP_COUNT].store(op_count, Ordering::Relaxed);
         words[JOB_TILE_ADDR].store(tile_addr, Ordering::Relaxed);
         words[JOB_TX].store(tx.max(0) as usize, Ordering::Relaxed);
         words[JOB_TY].store(ty.max(0) as usize, Ordering::Relaxed);
-        ops_base + batch.len()
+        ops_base + op_count
     }
 
     fn process_tile(&mut self, tx: i32, ty: i32) {
-        // Drain matching ops in FIFO order; compact non-matching in place.
-        let mut batch: Vec<DrawDabOp> = Vec::new();
+        // Drain matching ops in FIFO order and compact the rest in place.
+        // The tile is created only when the first matching op occurs.
+        let mut slot = self.find_tile_slot(tx, ty);
+        let mut prepared = false;
         let mut w = 0usize;
         for r in 0..self.op_len {
             let e = self.ops[r];
             if e.tx == tx && e.ty == ty {
-                batch.push(e.op);
+                if !prepared {
+                    if let Some(index) = slot {
+                        self.capture_first_write(index, tx, ty);
+                        self.mark_display_dirty(index);
+                    } else {
+                        slot = self.create_tile_slot(tx, ty);
+                        if let Some(index) = slot {
+                            self.capture_first_write(index, tx, ty);
+                            self.mark_display_dirty(index);
+                        }
+                    }
+                    prepared = true;
+                }
+                if let Some(index) = slot {
+                    let tile = &mut self.tiles[index].as_mut().unwrap()[..];
+                    crate::surface::process_op(
+                        tile,
+                        &mut self.mask[..],
+                        tx,
+                        ty,
+                        &e.op,
+                        &mut self.scratch[..],
+                    );
+                }
             } else {
                 self.ops[w] = e;
                 w += 1;
             }
         }
         self.op_len = w;
-        if batch.is_empty() {
-            return;
-        }
-        let Some(slot) = self
-            .find_tile_slot(tx, ty)
-            .or_else(|| self.create_tile_slot(tx, ty))
-        else {
-            return; // out of capacity: ops land in the (zeroed) null tile
-        };
-        self.capture_first_write(slot, tx, ty);
-        self.mark_display_dirty(slot);
-
-        let tile = &mut self.tiles[slot].as_mut().unwrap()[..];
-        for op in &batch {
-            crate::surface::process_op(
-                tile,
-                &mut self.mask[..],
-                tx,
-                ty,
-                op,
-                &mut self.scratch[..],
-            );
-        }
     }
 
     /// `draw_dab_internal` -- validate + queue the dab for every touched

@@ -6,7 +6,7 @@
 
 #![allow(clippy::too_many_arguments)]
 
-use crate::app::{PaintApp, TilePos, WEB_MAX_GROUPS};
+use crate::app::{PaintApp, WEB_MAX_GROUPS};
 use crate::compositor::BLEND_MODE_COUNT;
 use crate::compositor::BlendMode;
 use std::cell::RefCell;
@@ -937,28 +937,9 @@ pub extern "C" fn paint_pool_tile_ptr() -> i32 {
     POOL_TILE.as_ptr() as i32
 }
 
-/// Guarded app access: a panic inside any engine call unwinds (the wasm
-/// exception-handling ABI), drops the borrow guard cleanly, and degrades
-/// to `fallback` with error code 1 instead of aborting into a trap that
-/// leaks the RefCell borrow and bricks every later call.
-fn with_app_guarded<R: Default>(fallback: R, f: impl FnOnce(&mut PaintApp) -> R) -> R {
-    APP.with(|slot| {
-        let mut borrow = slot.borrow_mut();
-        let app = borrow.get_or_insert_with(|| PaintApp::new(2048, 2048).unwrap());
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(app))) {
-            Ok(r) => r,
-            Err(_) => {
-                app.error_code = 1;
-                fallback
-            }
-        }
-    })
-}
-
 /// Install a silent panic hook once: the error code is the reporting
 /// channel; unwinding restores a usable module state.
 fn install_panic_hook() {
-    use std::sync::Once;
     static HOOK: std::sync::Once = std::sync::Once::new();
     HOOK.call_once(|| {
         std::panic::set_hook(Box::new(|_| {}));

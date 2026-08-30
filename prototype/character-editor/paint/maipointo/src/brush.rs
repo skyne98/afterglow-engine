@@ -974,20 +974,22 @@ impl Brush {
         ];
         hsv_to_rgb_float(&mut color);
 
-        // update smudge color
+        // Keep the active smudge bucket on the stack. The old path allocated
+        // one Vec for the sampler and another clone for every dab.
         let smudge_length = self.setting(SettingId::SmudgeLength);
-        if smudge_length < 1.0
-            && (self.setting(SettingId::Smudge) != 0.0 || !self.is_constant(SettingId::Smudge))
-        {
-            // Take a copy of the bucket, update it through the sampler,
-            // then write it back (avoids aliasing `self`).
-            let mut bucket = std::mem::take(&mut self.smudge_buckets);
-            let was_empty = bucket.is_empty();
-            if was_empty {
-                bucket = self.states[BrushStateId::SmudgeRa.index()
-                    ..BrushStateId::SmudgeRa.index() + SMUDGE_BUCKET_SIZE]
-                    .to_vec();
+        let smudge_value = self.setting(SettingId::Smudge);
+        let update_smudge = smudge_length < 1.0
+            && (smudge_value != 0.0 || !self.is_constant(SettingId::Smudge));
+        let mut bucket = [0.0f32; SMUDGE_BUCKET_SIZE];
+        if update_smudge || smudge_value > 0.0 {
+            if self.smudge_buckets.is_empty() {
+                let start = BrushStateId::SmudgeRa.index();
+                bucket.copy_from_slice(&self.states[start..start + SMUDGE_BUCKET_SIZE]);
+            } else {
+                bucket.copy_from_slice(&self.smudge_buckets[..SMUDGE_BUCKET_SIZE]);
             }
+        }
+        if update_smudge {
             let return_early = self.update_smudge_color(
                 surface,
                 &mut bucket,
@@ -998,11 +1000,11 @@ impl Brush {
                 legacy_smudge,
                 paint_factor,
             );
-            if was_empty {
+            if self.smudge_buckets.is_empty() {
                 let start = BrushStateId::SmudgeRa.index();
                 self.states[start..start + SMUDGE_BUCKET_SIZE].copy_from_slice(&bucket);
             } else {
-                self.smudge_buckets = bucket;
+                self.smudge_buckets[..SMUDGE_BUCKET_SIZE].copy_from_slice(&bucket);
             }
             if return_early {
                 return false;
@@ -1010,17 +1012,9 @@ impl Brush {
         }
 
         let mut eraser_target_alpha = 1.0f32;
-        let smudge_value = self.setting(SettingId::Smudge);
-
         if smudge_value > 0.0 {
-            let bucket_copy: Vec<f32> = if self.smudge_buckets.is_empty() {
-                let start = BrushStateId::SmudgeRa.index();
-                self.states[start..start + SMUDGE_BUCKET_SIZE].to_vec()
-            } else {
-                self.smudge_buckets.clone()
-            };
             eraser_target_alpha = self.apply_smudge(
-                &bucket_copy,
+                &bucket,
                 smudge_value,
                 legacy_smudge,
                 paint_factor,

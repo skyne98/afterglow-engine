@@ -37,11 +37,12 @@ engine exists solely as the reference for the exactness tests.
 - `src/web_surface.rs` — sparse hash-tile surface (>= 8192 hash size),
   used-tile slots, first-write capture, fixed 16384-op queue,
   `begin_atomic`/`end_atomic` dirty ROI (max 32 rects), symmetry dab
-  fan-out, `get_color`, display-dirty slots.
+  fan-out, `get_color`, display-dirty slots, and fixed tile-job publication.
 - `src/app.rs` — `PaintApp`: layers/groups tree, history (fixed 40
-  records, capture/restore entries), display EOTF LUT, mip render,
-  render/pick/symmetry/layer/group operations, and the budgeted
-  stroke driver mapping onto the brush.
+  records and a 64 MiB entry-byte budget), with a 32 MiB limit for one
+  stroke's before-image capture, display EOTF LUT, mip render, render/pick/
+  symmetry/layer/group operations, and the serial stroke driver
+  mapping onto the brush.
 - `src/demo_capi.rs` — the full `_paint_*` + `_init`/`_malloc`/`_free`
   C ABI for the standalone wasm module (feature `demo`), plus the
   shared `.myb` v3 JSON loader (`src/capi_json.rs`). Scratch
@@ -52,8 +53,9 @@ engine exists solely as the reference for the exactness tests.
   panic must never abort into a trap that leaks the borrow and bricks
   the instance. The history system carries a 64 MiB entry-byte budget
   with deterministic oldest-record eviction and fallible reservation:
-  at 16K documents a single stroke can capture hundreds of tiles, and
-  an unbounded history OOM-aborted the worker mid-stroke.
+  at 16K documents a single stroke can capture hundreds of tiles. One stroke
+  has a 32 MiB before-image limit. An over-size stroke paints without undo and
+  reports error 2; an unbounded history OOM-aborted the worker mid-stroke.
 - `src/random.rs` — `RandomSource` trait: `PortableRand` (production)
   and `GlibcRand` (TYPE_3 glibc clone) so parity tests can replay the
   C `rand()` stream exactly.
@@ -61,7 +63,7 @@ engine exists solely as the reference for the exactness tests.
 ## Zero C in the product
 
 The wasm module is a plain `rust-lld` cdylib: `--import-memory
---shared-memory`, imported shared memory owned by the host, panic=abort.
+--shared-memory`, imported shared memory owned by the host, panic=unwind.
 No Emscripten runtime, no json-c, no C glue. C lives only in
 validation: `maipointo/reference/*.c` oracles, the compositor parity
 harness (`paint/layer-compositor.parity.test.c` +
@@ -98,7 +100,7 @@ gate compiler-dependent). The oracle replay covers:
   argument, and tile-byte comparison,
 - event-prefix bisection to the first divergent dab.
 
-29 tests total; all green with and without `--features demo`.
+31 tests total; all green with and without `--features demo`.
 
 ## Build
 
@@ -107,6 +109,6 @@ cd prototype/character-editor
 RUSTC_BOOTSTRAP=1 bash paint/build-wasm.sh
 ```
 
-This builds `public/wasm/brushlib.wasm` (single pure-Rust module) and
-mirrors it into `src/wasm/`. The demo has no engine toggle; maipointo
-is the engine.
+This builds `public/wasm/brushlib.wasm` (single pure-Rust module) with
+release `opt-level = 3` and mirrors it into `src/wasm/`. The demo has no
+engine toggle; maipointo is the engine.

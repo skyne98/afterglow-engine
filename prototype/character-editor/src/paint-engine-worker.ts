@@ -8,7 +8,7 @@ import { MotionQueue } from './paint-input.ts';
 import { spawnTilePool, type TilePool } from './paint-tile-pool.ts';
 
 type Msg =
-  | { cmd: 'init'; width: number; height: number; canvas: OffscreenCanvas }
+  | { cmd: 'init'; width: number; height: number; canvas?: OffscreenCanvas; hardwareConcurrency?: number }
   | { cmd: 'loadBrush'; json: string }
   | { cmd: 'config'; settings: [string, number][] }
   | { cmd: 'beginStroke'; x: number; y: number; xtilt: number; ytilt: number; zoom: number; rotation: number; barrel: number }
@@ -56,23 +56,31 @@ async function drainBlendJobs(): Promise<number> {
 
   if (tilePool?.ready()) {
     const jobs: Promise<Uint8Array>[] = [];
+    const info = new Int32Array(mod.memory.buffer, jobInfoPtr, 5);
+    const opArenaPtr = mod._paint_ops_arena_ptr();
+    const heap = new Uint8Array(mod.memory.buffer);
     for (let i = 0; i < n; i++) {
-      const info = new Int32Array(mod.memory.buffer, jobInfoPtr, 5);
-      mod._paint_get_job_info(i, info);
+      mod._paint_get_job_info(i, jobInfoPtr);
       const opsOff = info[0], opCount = info[1], tileAddr = info[2], tx = info[3], ty = info[4];
-      const heap = new Uint8Array(mod.memory.buffer);
-      const ops = heap.slice(opsOff * opSize, (opsOff + opCount) * opSize);
+      const opsStart = opArenaPtr + opsOff * opSize;
+      const ops = heap.slice(opsStart, opsStart + opCount * opSize);
       const tile = heap.slice(tileAddr, tileAddr + 64 * 64 * 4 * 2);
       jobs.push(tilePool.blend({ id: i, tx, ty, opCount, ops, tile }));
     }
-    const blended = await Promise.all(jobs);
-    const heap = new Uint8Array(mod.memory.buffer);
-    for (let i = 0; i < n; i++) {
-      mod._paint_get_job_info(i, info);
-      const tileAddr2 = info[2];
-      heap.set(blended[i], tileAddr2);
+    try {
+      const blended = await Promise.all(jobs);
+      const resultHeap = new Uint8Array(mod.memory.buffer);
+      for (let i = 0; i < n; i++) {
+        mod._paint_get_job_info(i, jobInfoPtr);
+        const tileAddr2 = info[2];
+        resultHeap.set(blended[i], tileAddr2);
+      }
+      return n;
+    } catch (err) {
+      post({ type: 'log', text: `tile pool fallback: ${(err as Error)?.message ?? err}` });
+      for (let i = 0; i < n; i++) mod._paint_process_tile_job(i, 0);
+      return n;
     }
-    return n;
   }
   for (let i = 0; i < n; i++) mod._paint_process_tile_job(i, 0);
   return n;
@@ -159,7 +167,6 @@ function checkErr() {
   else if (c === 2) reportEngineError('The undo history reached its fixed capacity.', 'Undo history capacity reached.');
   else if (c === 3) reportEngineError('The libmypaint dab loop made no progress.');
   else if (c === 4) reportEngineError('The brush operation queue reached its fixed capacity.');
-  else if (c === 5) reportEngineError('A paint pthread did not exit correctly.');
   else reportEngineError(`Unknown paint error code ${c}.`);
   mod._paint_clear_error();
 }
@@ -278,6 +285,9 @@ function drainProcess(bounded: boolean) {
       mod._paint_end_batch_finish();
       batchInFlight = false;
       afterBatch();
+    }).catch((err) => {
+      reportEngineError('Batch drain failed: ' + ((err as Error)?.stack ?? err));
+      batchInFlight = false;
     });
     return;
   }
@@ -314,6 +324,10 @@ function doCommit() {
       mod._paint_history_commit();
       strokeOpen = false;
       pushState();
+    }).catch((err) => {
+      reportEngineError('Commit failed: ' + ((err as Error)?.message ?? err));
+      batchInFlight = false;
+      strokeOpen = false;
     });
     return;
   }
@@ -449,14 +463,32 @@ function handleReadyCommand(m: Msg) {
     case 'group': handleGroup(m.op, m.group, m.value); break;
     case 'exportTiles': exportTiles(m.layerId, m.id); break;
     case 'probe': {
-      const data = ctx && canvas ? ctx.getImageData(0, 0, canvas.width, canvas.height).data : null;
-      const y = canvas ? Math.min(canvas.height - 1, Math.max(0, Math.round(m.y * canvas.height))) : 0;
-      const runs: number[] = []; let rs = -1; const w = canvas.width;
+      const currentCanvas = canvas, currentCtx = ctx;
+      const data = currentCtx && currentCanvas
+        ? currentCtx.getImageData(0, 0, currentCanvas.width, currentCanvas.height).data
+        : null;
+      const w = currentCanvas?.width ?? 0;
+      const h = currentCanvas?.height ?? 1;
+      const y = Math.min(h - 1, Math.max(0, Math.round(m.y * h)));
+      const runs: number[] = []; let rs = -1;
       const br = Math.round(bgRGB[0] * 255), bgc = Math.round(bgRGB[1] * 255), bb = Math.round(bgRGB[2] * 255);
       let alpha0 = 0, painted = 0;
       const samples: number[] = [];
-      if (data) { for (let x = 0; x < w; x++) { const o = (y * w + x) * 4; const a = data[o + 3]; if (a === 0) alpha0++; const p = a > 0 && Math.abs(data[o] - br) + Math.abs(data[o + 1] - bgc) + Math.abs(data[o + 2] - bb) > 60; if (p) painted++; if (p && rs < 0) rs = x; if (!p && rs >= 0) { runs.push(rs, x - 1); rs = -1; } } if (rs >= 0) runs.push(rs, w - 1); }
-      for (const sx of [Math.floor(w * 0.1), Math.floor(w * 0.5), Math.floor(w * 0.9)]) { const o = (y * w + sx) * 4; samples.push(sx, data![o], data![o + 1], data![o + 2], data![o + 3]); }
+      if (data) {
+        for (let x = 0; x < w; x++) {
+          const o = (y * w + x) * 4; const a = data[o + 3];
+          if (a === 0) alpha0++;
+          const p = a > 0 && Math.abs(data[o] - br) + Math.abs(data[o + 1] - bgc) + Math.abs(data[o + 2] - bb) > 60;
+          if (p) painted++;
+          if (p && rs < 0) rs = x;
+          if (!p && rs >= 0) { runs.push(rs, x - 1); rs = -1; }
+        }
+        if (rs >= 0) runs.push(rs, w - 1);
+        for (const sx of [Math.floor(w * 0.1), Math.floor(w * 0.5), Math.floor(w * 0.9)]) {
+          const o = (y * w + sx) * 4;
+          samples.push(sx, data[o], data[o + 1], data[o + 2], data[o + 3]);
+        }
+      }
       post({ type: 'probeResult', id: m.id, y, w, runs, alpha0, painted, samples, dirtyCount: mod._paint_get_dirty_count(), usedTiles: mod._paint_get_used_tile_count(), rects: lastRects });
       break; }
     case 'writeTile': writeTile(m.layer, m.tx, m.ty, m.data); break;
@@ -486,7 +518,11 @@ async function handleInput(e: MessageEvent<Msg & { canvas?: OffscreenCanvas }>) 
     try {
       if (!mod) {
         mod = await loadBrushModule();
-        void spawnTilePool(mod._paint_draw_dab_op_size(), (t) => post({ type: "log", text: t }))
+        void spawnTilePool(
+          mod._paint_draw_dab_op_size(),
+          (t) => post({ type: 'log', text: t }),
+          m.hardwareConcurrency,
+        )
           .then((p) => { tilePool = p; })
           .catch((err) => {
             post({ type: "log", text: `tile pool unavailable: ${(err as Error)?.message ?? err}` });

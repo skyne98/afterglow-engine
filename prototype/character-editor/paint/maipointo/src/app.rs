@@ -5,7 +5,6 @@
 use crate::brush::Brush;
 use crate::compositor::{layer_blend_over, BlendMode};
 use crate::web_surface::WebSurface;
-use crate::symmetry::Rectangle;
 
 pub const WEB_MAX_LAYERS: usize = 8;
 pub const WEB_MAX_GROUPS: usize = 4;
@@ -760,13 +759,21 @@ impl PaintApp {
 
     fn absorb_captures(&mut self) {
         let layer = self.active_layer;
+        let capture_failed = self.layers[layer].take_capture_error();
         let captured = self.layers[layer].take_captured();
+        if self.pending_captures.try_reserve(captured.len()).is_err() {
+            self.fail_history(layer);
+            return;
+        }
         for (tx, ty, before) in captured {
             self.pending_captures.push(PendingCapture {
                 pos: TilePos { tx, ty },
                 layer,
                 before,
             });
+        }
+        if capture_failed {
+            self.fail_history(layer);
         }
     }
 
@@ -792,6 +799,13 @@ impl PaintApp {
         self.history_active_layer = self.active_layer;
     }
 
+    fn fail_history(&mut self, layer: usize) {
+        self.error_code = 2;
+        self.pending_captures.clear();
+        self.history_active = false;
+        self.layers[layer].set_capture_enabled(false);
+    }
+
     pub fn history_commit(&mut self) {
         if !self.history_active { return; }
         if self.history_active_layer != self.active_layer {
@@ -799,10 +813,15 @@ impl PaintApp {
             return;
         }
         let layer = self.history_active_layer;
-        // The stroke capture stays enabled for the whole stroke; close it
-        // here and absorb any tiles written after the last stroke_to.
+        // The stroke capture stays enabled for the whole stroke. Close it
+        // here and absorb tiles written after the last stroke_to.
         self.layers[layer].set_capture_enabled(false);
+        let capture_failed = self.layers[layer].take_capture_error();
         let captured = self.layers[layer].take_captured();
+        if self.pending_captures.try_reserve(captured.len()).is_err() {
+            self.fail_history(layer);
+            return;
+        }
         for (tx, ty, before) in captured {
             self.pending_captures.push(PendingCapture {
                 pos: TilePos { tx, ty },
@@ -810,27 +829,41 @@ impl PaintApp {
                 before,
             });
         }
+        if capture_failed {
+            self.fail_history(layer);
+            return;
+        }
+
+        let pending = std::mem::take(&mut self.pending_captures);
         let mut record: Vec<HistoryEntry> = Vec::new();
+        if record.try_reserve(pending.len()).is_err() {
+            self.fail_history(layer);
+            return;
+        }
         let mut record_bytes = 0usize;
-        for capture in &self.pending_captures {
-            let after = self.layers[layer]
-                .get_tile(capture.pos.tx, capture.pos.ty)
-                .map(|t| t.to_vec())
-                .unwrap_or_else(|| vec![0u16; capture.before.len()]);
+        for capture in pending {
+            let mut after = Vec::new();
+            if after.try_reserve_exact(capture.before.len()).is_err() {
+                self.fail_history(layer);
+                return;
+            }
+            if let Some(tile) = self.layers[layer].get_tile(capture.pos.tx, capture.pos.ty) {
+                after.extend_from_slice(tile);
+            } else {
+                after.resize(capture.before.len(), 0);
+            }
             record_bytes += (capture.before.len() + after.len())
                 * std::mem::size_of::<u16>();
             record.push(HistoryEntry {
                 tx: capture.pos.tx,
                 ty: capture.pos.ty,
                 layer,
-                before: capture.before.clone(),
+                before: capture.before,
                 after,
             });
         }
         if !record.is_empty() {
-            // Deterministic overflow: evict the oldest records until the
-            // entry bytes fit the budget, then fallible-reserve; on failure
-            // (transient memory pressure) report error 2 instead of OOM.
+            // Evict the oldest records until the entry bytes fit the budget.
             while self.history_entry_bytes + record_bytes > HISTORY_BYTE_BUDGET
                 && !self.history_records.is_empty()
             {
@@ -839,12 +872,9 @@ impl PaintApp {
                     self.history_cursor -= 1;
                 }
             }
-            let evicted = self.evict_dropped_entries();
-            let _ = evicted;
+            self.evict_dropped_entries();
             if self.history_entries.try_reserve(record.len()).is_err() {
-                self.error_code = 2;
-                self.pending_captures.clear();
-                self.history_active = false;
+                self.fail_history(layer);
                 return;
             }
             self.history_records.push(HistoryRecord {
@@ -856,7 +886,6 @@ impl PaintApp {
             self.history_entries.extend(record);
             self.history_cursor = self.history_records.len();
         }
-        self.pending_captures.clear();
         self.history_active = false;
     }
 
