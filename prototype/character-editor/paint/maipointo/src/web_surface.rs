@@ -614,13 +614,23 @@ impl WebSurface {
                 );
             }
         }
+        // The C normalization (mypaint-tiled-surface.c get_color tail):
+        // legacy sampling divides by the mask weight; the spectral path's
+        // sum is already a 0..1 reflectance and must not be divided.
         let weight = sums.weight.max(f32::MIN_POSITIVE);
-        [
-            sums.r / weight,
-            sums.g / weight,
-            sums.b / weight,
-            sums.a / weight,
-        ]
+        let sum_a = sums.a / weight;
+        let color_a = sum_a.clamp(0.0, 1.0);
+        if sum_a > 0.0 {
+            let demul = if paint < 0.0 { sum_a } else { 1.0 };
+            [
+                (sums.r / demul).clamp(0.0, 1.0),
+                (sums.g / demul).clamp(0.0, 1.0),
+                (sums.b / demul).clamp(0.0, 1.0),
+                color_a,
+            ]
+        } else {
+            [0.0, 1.0, 0.0, color_a]
+        }
     }
 
     pub fn display_dirty_count(&self) -> usize {
