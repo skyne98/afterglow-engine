@@ -47,8 +47,8 @@ static JOB_HEADER: [std::sync::atomic::AtomicU32; JOB_HEADER_LEN] = [
     std::sync::atomic::AtomicU32::new(0),
     std::sync::atomic::AtomicU32::new(0),
 ];
-static JOB_TABLE: [std::sync::atomic::AtomicU32; MAX_JOBS * JOB_WORDS] =
-    [const { std::sync::atomic::AtomicU32::new(0) }; MAX_JOBS * JOB_WORDS];
+static JOB_TABLE: [std::sync::atomic::AtomicUsize; MAX_JOBS * JOB_WORDS] =
+    [const { std::sync::atomic::AtomicUsize::new(0) }; MAX_JOBS * JOB_WORDS];
 /// Single writer during `end_atomic_prepare` (the batch owner); pool
 /// workers read slices after claiming, so no two readers mutate.
 /// A plain-data arena shared across the module instances (the paint worker
@@ -417,11 +417,11 @@ impl WebSurface {
         }
         let tile_addr = self.tiles[slot].as_mut().unwrap().as_mut_ptr() as usize;
         let words = &JOB_TABLE[job * JOB_WORDS..(job + 1) * JOB_WORDS];
-        words[JOB_OPS_OFF].store(ops_base as u32, Ordering::Relaxed);
-        words[JOB_OP_COUNT].store(batch.len() as u32, Ordering::Relaxed);
-        words[JOB_TILE_ADDR].store(tile_addr as u32, Ordering::Relaxed);
-        words[JOB_TX].store(tx as u32, Ordering::Relaxed);
-        words[JOB_TY].store(ty as u32, Ordering::Relaxed);
+        words[JOB_OPS_OFF].store(ops_base, Ordering::Relaxed);
+        words[JOB_OP_COUNT].store(batch.len(), Ordering::Relaxed);
+        words[JOB_TILE_ADDR].store(tile_addr, Ordering::Relaxed);
+        words[JOB_TX].store(tx.max(0) as usize, Ordering::Relaxed);
+        words[JOB_TY].store(ty.max(0) as usize, Ordering::Relaxed);
         ops_base + batch.len()
     }
 
@@ -854,17 +854,17 @@ pub fn completed_jobs() -> i32 {
 pub const JOB_DONE_INDEX: usize = JOB_HEADER_DONE;
 
 /// One job's fields for the host's serialization path.
-pub fn job_info(job_index: i32, out: &mut [i32]) {
+pub fn job_info(job_index: i32, out: &mut [usize]) {
     let j = job_index.max(0) as usize;
     if j >= MAX_JOBS || out.len() < 5 {
         return;
     }
     let words = &JOB_TABLE[j * JOB_WORDS..(j + 1) * JOB_WORDS];
-    out[0] = words[JOB_OPS_OFF].load(Ordering::Acquire) as i32;
-    out[1] = words[JOB_OP_COUNT].load(Ordering::Acquire) as i32;
-    out[2] = words[JOB_TILE_ADDR].load(Ordering::Acquire) as i32;
-    out[3] = words[JOB_TX].load(Ordering::Acquire) as i32;
-    out[4] = words[JOB_TY].load(Ordering::Acquire) as i32;
+    out[0] = words[JOB_OPS_OFF].load(Ordering::Acquire);
+    out[1] = words[JOB_OP_COUNT].load(Ordering::Acquire);
+    out[2] = words[JOB_TILE_ADDR].load(Ordering::Acquire);
+    out[3] = words[JOB_TX].load(Ordering::Acquire);
+    out[4] = words[JOB_TY].load(Ordering::Acquire);
 }
 
 /// The job-table header address (a fixed shared-memory static).

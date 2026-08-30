@@ -14,7 +14,7 @@ OUT="$ROOT/public/wasm"
 mkdir -p "$OUT"
 
 (cd "$PAINT/maipointo" && RUSTC_BOOTSTRAP=1 cargo build --release \
-   --features demo --target wasm32-unknown-unknown -Zbuild-std=panic_abort,std)
+   --features demo --target wasm32-unknown-unknown -Zbuild-std=std)
 cp "$PAINT/maipointo/target/wasm32-unknown-unknown/release/maipointo.wasm" \
    "$OUT/brushlib.wasm"
 cp "$OUT/brushlib.wasm" "$ROOT/src/wasm/brushlib.wasm"

@@ -500,7 +500,7 @@ async function handleInput(e: MessageEvent<Msg & { canvas?: OffscreenCanvas }>) 
         dispMip = Math.round(Math.log2(dispScale));
         canvas.width = Math.ceil(docW / dispScale);
         canvas.height = Math.ceil(docH / dispScale);
-        ctx = canvas.getContext('2d', { alpha: true });
+        ctx = canvas.getContext('2d', { alpha: true, willReadFrequently: true });
       }
       if (!mod._init(docW, docH)) {
         reportEngineError('Brush engine initialization failed.', 'Engine initialization failed.');

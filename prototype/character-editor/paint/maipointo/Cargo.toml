@@ -26,5 +26,4 @@ demo = []
 crate-type = ["rlib", "cdylib"]
 
 [profile.release]
-panic = "abort"
 opt-level = "s"

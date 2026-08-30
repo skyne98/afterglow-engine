@@ -19,11 +19,22 @@ thread_local! {
     static APP: RefCell<Option<PaintApp>> = const { RefCell::new(None) };
 }
 
-fn with_app<R>(f: impl FnOnce(&mut PaintApp) -> R) -> R {
+fn with_app<R: Default>(f: impl FnOnce(&mut PaintApp) -> R) -> R {
+    install_panic_hook();
     APP.with(|slot| {
         let mut borrow = slot.borrow_mut();
         let app = borrow.get_or_insert_with(|| PaintApp::new(2048, 2048).unwrap());
-        f(app)
+        // A panic unwinds (wasm exception handling), drops this RefMut and
+        // leaves the module usable; the error code reports the failure.
+        // Without this, an abort leaks the borrow and bricks every later
+        // call (the engine must never trap into a dead instance).
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(app))) {
+            Ok(r) => r,
+            Err(_) => {
+                app.error_code = 1;
+                R::default()
+            }
+        }
     })
 }
 
@@ -905,9 +916,9 @@ pub unsafe extern "C" fn paint_blend_tile_ops(
 /// [ops_off, op_count, tile_addr, tx, ty].
 ///
 /// # Safety
-/// `out` must point to 5 i32 slots.
+/// `out` must point to 5 usize slots.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn paint_get_job_info(job_index: i32, out: *mut i32) {
+pub unsafe extern "C" fn paint_get_job_info(job_index: i32, out: *mut usize) {
     crate::web_surface::job_info(job_index, std::slice::from_raw_parts_mut(out, 5));
 }
 
@@ -924,4 +935,32 @@ static POOL_TILE: [u16; 64 * 64 * 4] = [0; 64 * 64 * 4];
 #[unsafe(no_mangle)]
 pub extern "C" fn paint_pool_tile_ptr() -> i32 {
     POOL_TILE.as_ptr() as i32
+}
+
+/// Guarded app access: a panic inside any engine call unwinds (the wasm
+/// exception-handling ABI), drops the borrow guard cleanly, and degrades
+/// to `fallback` with error code 1 instead of aborting into a trap that
+/// leaks the RefCell borrow and bricks every later call.
+fn with_app_guarded<R: Default>(fallback: R, f: impl FnOnce(&mut PaintApp) -> R) -> R {
+    APP.with(|slot| {
+        let mut borrow = slot.borrow_mut();
+        let app = borrow.get_or_insert_with(|| PaintApp::new(2048, 2048).unwrap());
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(app))) {
+            Ok(r) => r,
+            Err(_) => {
+                app.error_code = 1;
+                fallback
+            }
+        }
+    })
+}
+
+/// Install a silent panic hook once: the error code is the reporting
+/// channel; unwinding restores a usable module state.
+fn install_panic_hook() {
+    use std::sync::Once;
+    static HOOK: std::sync::Once = std::sync::Once::new();
+    HOOK.call_once(|| {
+        std::panic::set_hook(Box::new(|_| {}));
+    });
 }

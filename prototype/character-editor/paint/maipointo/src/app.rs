@@ -10,6 +10,12 @@ use crate::symmetry::Rectangle;
 pub const WEB_MAX_LAYERS: usize = 8;
 pub const WEB_MAX_GROUPS: usize = 4;
 pub const WEB_HISTORY_RECORDS: usize = 40;
+/// Hard byte budget for the undo entries (before+after tile clones). At a
+/// 16K document a single stroke can touch hundreds of tiles; without this
+/// bound the history Vecs grow until the module's allocator OOM-aborts.
+/// The overflow evicts the OLDEST records (deterministic, like the C's
+/// fixed record count).
+pub const HISTORY_BYTE_BUDGET: usize = 64 * 1024 * 1024;
 pub const WEB_MIP_MAX_SOURCES: usize = 16;
 pub const DISPLAY_LUT_VALUES: usize = 32769;
 pub const DISPLAY_LUT_NOISE: usize = 256;
@@ -47,6 +53,12 @@ struct HistoryEntry {
     layer: usize,
     before: Vec<u16>,
     after: Vec<u16>,
+}
+
+impl HistoryEntry {
+    fn byte_len(&self) -> usize {
+        (self.before.len() + self.after.len()) * std::mem::size_of::<u16>()
+    }
 }
 
 struct HistoryRecord {
@@ -102,6 +114,7 @@ pub struct PaintApp {
     pub pending_captures: Vec<PendingCapture>,
     history_entries: Vec<HistoryEntry>,
     history_records: Vec<HistoryRecord>,
+    history_entry_bytes: usize,
     history_cursor: usize,
     history_active: bool,
     history_active_layer: usize,
@@ -162,6 +175,7 @@ impl PaintApp {
             pending_captures: Vec::new(),
             history_entries: Vec::new(),
             history_records: Vec::new(),
+            history_entry_bytes: 0,
             history_cursor: 0,
             history_active: false,
             history_active_layer: 0,
@@ -764,9 +778,16 @@ impl PaintApp {
         if self.history_cursor < self.history_records.len() {
             self.history_records.truncate(self.history_cursor);
         }
-        while self.history_records.len() >= WEB_HISTORY_RECORDS {
+        while self.history_records.len() >= WEB_HISTORY_RECORDS
+            || self.history_entry_bytes > HISTORY_BYTE_BUDGET && self.history_records.len() > 1
+        {
+            if self.history_records.is_empty() { break; }
             self.history_records.remove(0);
+            if self.history_cursor > 0 {
+                self.history_cursor -= 1;
+            }
         }
+        self.evict_dropped_entries();
         self.history_active = true;
         self.history_active_layer = self.active_layer;
     }
@@ -790,11 +811,14 @@ impl PaintApp {
             });
         }
         let mut record: Vec<HistoryEntry> = Vec::new();
+        let mut record_bytes = 0usize;
         for capture in &self.pending_captures {
             let after = self.layers[layer]
                 .get_tile(capture.pos.tx, capture.pos.ty)
                 .map(|t| t.to_vec())
                 .unwrap_or_else(|| vec![0u16; capture.before.len()]);
+            record_bytes += (capture.before.len() + after.len())
+                * std::mem::size_of::<u16>();
             record.push(HistoryEntry {
                 tx: capture.pos.tx,
                 ty: capture.pos.ty,
@@ -804,16 +828,58 @@ impl PaintApp {
             });
         }
         if !record.is_empty() {
+            // Deterministic overflow: evict the oldest records until the
+            // entry bytes fit the budget, then fallible-reserve; on failure
+            // (transient memory pressure) report error 2 instead of OOM.
+            while self.history_entry_bytes + record_bytes > HISTORY_BYTE_BUDGET
+                && !self.history_records.is_empty()
+            {
+                self.history_records.remove(0);
+                if self.history_cursor > 0 {
+                    self.history_cursor -= 1;
+                }
+            }
+            let evicted = self.evict_dropped_entries();
+            let _ = evicted;
+            if self.history_entries.try_reserve(record.len()).is_err() {
+                self.error_code = 2;
+                self.pending_captures.clear();
+                self.history_active = false;
+                return;
+            }
             self.history_records.push(HistoryRecord {
                 layer,
                 entries: self.history_entries.len()
                     ..self.history_entries.len() + record.len(),
             });
+            self.history_entry_bytes += record_bytes;
             self.history_entries.extend(record);
             self.history_cursor = self.history_records.len();
         }
         self.pending_captures.clear();
         self.history_active = false;
+    }
+
+    /// Drop the entries of records already evicted from the front (their
+    /// ranges start before the first live record). Rebases nothing: the
+    /// live records' ranges are absolute and unchanged.
+    fn evict_dropped_entries(&mut self) {
+        let first_live = self.history_records.first()
+            .map(|r| r.entries.start)
+            .unwrap_or(self.history_entries.len());
+        if first_live == 0 {
+            return;
+        }
+        let mut bytes = 0usize;
+        for e in &self.history_entries[..first_live] {
+            bytes += e.byte_len();
+        }
+        self.history_entries.drain(..first_live);
+        self.history_entry_bytes = self.history_entry_bytes.saturating_sub(bytes);
+        for r in &mut self.history_records {
+            r.entries.start -= first_live;
+            r.entries.end -= first_live;
+        }
     }
 
     pub fn history_undo(&mut self) -> bool {
@@ -823,15 +889,18 @@ impl PaintApp {
             let record = &self.history_records[self.history_cursor];
             (record.entries.start, record.entries.end, record.layer)
         };
-        let entries: Vec<HistoryEntry> = self.history_entries[start..end].to_vec();
         self.active_layer = layer;
-        for e in entries {
-            let Some(tile) = self.layers[layer].get_or_create_tile_mut(e.tx, e.ty)
-            else {
+        let positions: Vec<(usize, i32, i32)> = self.history_entries[start..end]
+            .iter()
+            .enumerate()
+            .map(|(i, e)| (start + i, e.tx, e.ty))
+            .collect();
+        for (idx, tx, ty) in positions {
+            let Some(tile) = self.layers[layer].get_or_create_tile_mut(tx, ty) else {
                 self.error_code = 1;
                 return false;
             };
-            tile.copy_from_slice(&e.before);
+            tile.copy_from_slice(&self.history_entries[idx].before);
         }
         true
     }
@@ -842,21 +911,27 @@ impl PaintApp {
             let record = &self.history_records[self.history_cursor];
             (record.entries.start, record.entries.end, record.layer)
         };
-        let entries: Vec<HistoryEntry> = self.history_entries[start..end].to_vec();
         self.active_layer = layer;
-        for e in entries {
-            let Some(tile) = self.layers[layer].get_or_create_tile_mut(e.tx, e.ty)
-            else {
+        let positions: Vec<(usize, i32, i32)> = self.history_entries[start..end]
+            .iter()
+            .enumerate()
+            .map(|(i, e)| (start + i, e.tx, e.ty))
+            .collect();
+        for (idx, tx, ty) in positions {
+            let Some(tile) = self.layers[layer].get_or_create_tile_mut(tx, ty) else {
                 self.error_code = 1;
                 return false;
             };
-            tile.copy_from_slice(&e.after);
+            tile.copy_from_slice(&self.history_entries[idx].after);
         }
         self.history_cursor += 1;
         true
     }
 
     pub fn history_can_undo(&self) -> bool { self.history_cursor > 0 }
+
+    /// Test hook: the total history entry bytes (the budget accounting).
+    pub fn history_entry_bytes(&self) -> usize { self.history_entry_bytes }
     pub fn history_can_redo(&self) -> bool { self.history_cursor < self.history_records.len() }
 
     pub fn clear(&mut self) {

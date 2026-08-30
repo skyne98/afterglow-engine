@@ -46,6 +46,14 @@ engine exists solely as the reference for the exactness tests.
   C ABI for the standalone wasm module (feature `demo`), plus the
   shared `.myb` v3 JSON loader (`src/capi_json.rs`). Scratch
   allocations use a fixed 64x32 KiB slot pool with a free bitmask.
+  Every app access goes through a guarded `with_app`: a panic unwinds
+  (wasm exception handling; the build uses `panic=unwind`), drops the
+  RefCell borrow cleanly, and degrades to error code 1 — an engine
+  panic must never abort into a trap that leaks the borrow and bricks
+  the instance. The history system carries a 64 MiB entry-byte budget
+  with deterministic oldest-record eviction and fallible reservation:
+  at 16K documents a single stroke can capture hundreds of tiles, and
+  an unbounded history OOM-aborted the worker mid-stroke.
 - `src/random.rs` — `RandomSource` trait: `PortableRand` (production)
   and `GlibcRand` (TYPE_3 glibc clone) so parity tests can replay the
   C `rand()` stream exactly.
