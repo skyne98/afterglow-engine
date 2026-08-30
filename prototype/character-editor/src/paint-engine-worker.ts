@@ -5,6 +5,7 @@ import { loadBrushModule } from './maipo-wasm';
 import { FixedRing } from './fixed-ring.ts';
 import { FixedTaskWake } from './fixed-task-wake.ts';
 import { MotionQueue } from './paint-input.ts';
+import { spawnTilePool, type TilePool } from './paint-tile-pool.ts';
 
 type Msg =
   | { cmd: 'init'; width: number; height: number; canvas: OffscreenCanvas }
@@ -28,7 +29,7 @@ const INPUT_CAPACITY = 8192, COMMAND_CAPACITY = 8192;
 let mod: any = null, motionQueue = new MotionQueue(INPUT_CAPACITY);
 const deferredCommands = new FixedRing<Msg>(COMMAND_CAPACITY);
 let ctx: OffscreenCanvasRenderingContext2D | null = null, canvas: OffscreenCanvas | null = null;
-let rgba8: Uint8Array | null = null, rectPtr = 0, renderedMip = -1, lastT = 0;
+let rgba8: Uint8Array | null = null, rectPtr = 0, jobInfoPtr = 0, renderedMip = -1, lastT = 0;
 let docW = 2048, docH = 2048, dispScale = 1, dispMip = 0, viewMip = 0;
 let flushT: number | null = null, commitP = false, batching = false;
 let n0 = 0, a0 = 0;
@@ -42,6 +43,40 @@ function runDrainWake() {
   drainProcess(true);
 }
 const drainWake = new FixedTaskWake(runDrainWake);
+let tilePool: TilePool | null = null;
+
+/// Parallel drain of the published blend jobs: each job (one dirty tile)
+/// is serialized — the op bytes + the tile bytes — and blended off-thread
+/// by the tile pool. Falls back to inline draining without a pool.
+/// Returns the job count (0 when the batch had no dirty tiles).
+async function drainBlendJobs(): Promise<number> {
+  const n = mod._paint_end_batch_parallel();
+  if (n <= 0) return n;
+  const opSize = mod._paint_draw_dab_op_size();
+
+  if (tilePool?.ready()) {
+    const jobs: Promise<Uint8Array>[] = [];
+    for (let i = 0; i < n; i++) {
+      const info = new Int32Array(mod.memory.buffer, jobInfoPtr, 5);
+      mod._paint_get_job_info(i, info);
+      const opsOff = info[0], opCount = info[1], tileAddr = info[2], tx = info[3], ty = info[4];
+      const heap = new Uint8Array(mod.memory.buffer);
+      const ops = heap.slice(opsOff * opSize, (opsOff + opCount) * opSize);
+      const tile = heap.slice(tileAddr, tileAddr + 64 * 64 * 4 * 2);
+      jobs.push(tilePool.blend({ id: i, tx, ty, opCount, ops, tile }));
+    }
+    const blended = await Promise.all(jobs);
+    const heap = new Uint8Array(mod.memory.buffer);
+    for (let i = 0; i < n; i++) {
+      mod._paint_get_job_info(i, info);
+      const tileAddr2 = info[2];
+      heap.set(blended[i], tileAddr2);
+    }
+    return n;
+  }
+  for (let i = 0; i < n; i++) mod._paint_process_tile_job(i, 0);
+  return n;
+}
 
 const post = (m: any, t?: Transferable[]) => { if (t && t.length > 0) (self as unknown as Worker).postMessage(m, t); else (self as unknown as Worker).postMessage(m); };
 
@@ -96,10 +131,15 @@ function renderDirty(forceAll = false) {
   }
   const dirtyTiles = mod._paint_get_dirty_tile_count();
   if (dirtyTiles > 0) {
+    const seenMip = new Set<number>();
     for (let i = 0; i < dirtyTiles; i++) {
       mod._paint_get_dirty_tile_info(i, rectPtr); const b = rectPtr >> 2;
       const tx = mod.HEAP32[b] >> ml, ty = mod.HEAP32[b+1] >> ml;
-      if (tx >= 0 && ty >= 0 && tx < mw && ty < mh) renderTile(tx, ty, ml);
+      if (tx < 0 || ty < 0 || tx >= mw || ty >= mh) continue;
+      const key = ty * mw + tx;
+      if (seenMip.has(key)) continue;
+      seenMip.add(key);
+      renderTile(tx, ty, ml);
     }
   } else {
     for (let i = 0; i < cnt; i++) {
@@ -231,7 +271,16 @@ function drainProcess(bounded: boolean) {
     }
   } else motionQueue.drainInterpolated(strokeSample);
   lastBR = performance.now() - a0;
-  if (batching) { mod._paint_end_batch(); batching = false; }
+  if (batching) {
+    batching = false;
+    batchInFlight = true;
+    void drainBlendJobs().then(() => {
+      mod._paint_end_batch_finish();
+      batchInFlight = false;
+      afterBatch();
+    });
+    return;
+  }
   if (!mod._paint_is_batch_done()) {
     batchInFlight = true;
     pollBatch();
@@ -259,14 +308,14 @@ function doCommit() {
     return;
   }
   if (batching) {
-    mod._paint_end_batch();
     batching = false;
-    if (!mod._paint_is_batch_done()) {
-      batchInFlight = true;
-      commitP = true;
-      pollBatch();
-      return;
-    }
+    void drainBlendJobs().then(() => {
+      mod._paint_end_batch_finish();
+      mod._paint_history_commit();
+      strokeOpen = false;
+      pushState();
+    });
+    return;
   }
   mod._paint_history_commit();
   strokeOpen = false;
@@ -400,9 +449,9 @@ function handleReadyCommand(m: Msg) {
     case 'group': handleGroup(m.op, m.group, m.value); break;
     case 'exportTiles': exportTiles(m.layerId, m.id); break;
     case 'probe': {
-      const data = ctx ? ctx.getImageData(0, 0, canvas!.width, canvas!.height).data : null;
-      const y = Math.min(canvas!.height - 1, Math.max(0, Math.round(m.y * canvas!.height)));
-      const runs: number[] = []; let rs = -1; const w = canvas!.width;
+      const data = ctx && canvas ? ctx.getImageData(0, 0, canvas.width, canvas.height).data : null;
+      const y = canvas ? Math.min(canvas.height - 1, Math.max(0, Math.round(m.y * canvas.height))) : 0;
+      const runs: number[] = []; let rs = -1; const w = canvas.width;
       const br = Math.round(bgRGB[0] * 255), bgc = Math.round(bgRGB[1] * 255), bb = Math.round(bgRGB[2] * 255);
       let alpha0 = 0, painted = 0;
       const samples: number[] = [];
@@ -437,6 +486,11 @@ async function handleInput(e: MessageEvent<Msg & { canvas?: OffscreenCanvas }>) 
     try {
       if (!mod) {
         mod = await loadBrushModule();
+        void spawnTilePool(mod._paint_draw_dab_op_size(), (t) => post({ type: "log", text: t }))
+          .then((p) => { tilePool = p; })
+          .catch((err) => {
+            post({ type: "log", text: `tile pool unavailable: ${(err as Error)?.message ?? err}` });
+          });
       }
       docW = m.width; docH = m.height;
       if (m.canvas) canvas = m.canvas;
@@ -453,6 +507,7 @@ async function handleInput(e: MessageEvent<Msg & { canvas?: OffscreenCanvas }>) 
         return;
       }
       rectPtr = mod._malloc(16);
+      jobInfoPtr = mod._malloc(20);
       if (!rectPtr) {
         reportEngineError('No memory is available for display data.');
         return;

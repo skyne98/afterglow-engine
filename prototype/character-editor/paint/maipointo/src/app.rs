@@ -210,9 +210,21 @@ impl PaintApp {
     pub fn end_batch(&mut self) {
         if self.batch_open {
             self.batch_open = false;
-            let roi = self.active().end_atomic();
+            let (roi, _jobs) = self.active().end_atomic();
             self.dirty_roi = roi;
         }
+    }
+
+    /// Batch end with tile-parallel dispatch: run all serial bookkeeping
+    /// and publish the job table; the caller drains the jobs through
+    /// `paint_claim_job`/`paint_process_tile_job` (inline or via the
+    /// tile-pool workers). Returns the job count.
+    pub fn end_batch_parallel(&mut self) -> i32 {
+        if self.batch_open {
+            self.batch_open = false;
+            return self.active().end_atomic_prepare() as i32;
+        }
+        0
     }
 
     pub fn set_background_color(&mut self, r: f32, g: f32, b: f32) {
@@ -698,7 +710,7 @@ impl PaintApp {
         brush.new_stroke();
         brush.stroke_to(&mut self.layers[layer], x, y, 0.0, xtilt, ytilt,
             10.0, viewzoom, viewrotation, barrel_rotation, false);
-        let roi = self.layers[layer].end_atomic();
+        let (roi, _jobs) = self.layers[layer].end_atomic();
         self.dirty_roi = roi;
         let captured = self.layers[layer].take_captured();
         for (tx, ty, before) in captured {
@@ -725,7 +737,7 @@ impl PaintApp {
             xtilt, ytilt, dtime, viewzoom, viewrotation, barrel_rotation,
             linear);
         if !open {
-            let roi = self.layers[layer].end_atomic();
+            let (roi, _jobs) = self.layers[layer].end_atomic();
             self.dirty_roi = roi;
         }
         self.absorb_captures();

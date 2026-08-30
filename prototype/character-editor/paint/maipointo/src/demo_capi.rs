@@ -240,7 +240,7 @@ pub extern "C" fn paint_begin_atomic() {
 #[unsafe(no_mangle)]
 pub extern "C" fn paint_end_atomic() -> i32 {
     with_app(|app| {
-        let roi = app.active().end_atomic();
+        let (roi, _jobs) = app.active().end_atomic();
         app.set_dirty_roi(roi);
         app.dirty_roi_len() as i32
     })
@@ -257,6 +257,43 @@ pub extern "C" fn paint_end_batch() -> i32 {
         app.end_batch();
         app.dirty_roi_len() as i32
     })
+}
+
+/// Prepare the tile-parallel drain: serial bookkeeping + the shared job
+/// table. Returns the job count; drain via `paint_claim_job` (any module
+/// instance sharing the linear memory) + `paint_process_tile_job`, then
+/// `paint_end_batch_finish` for the ROI bookkeeping.
+#[unsafe(no_mangle)]
+pub extern "C" fn paint_end_batch_parallel() -> i32 {
+    with_app(|app| app.end_batch_parallel())
+}
+
+/// Claim the next unclaimed blend job (atomic; pool-safe). -1 = drained.
+#[unsafe(no_mangle)]
+pub extern "C" fn paint_claim_job() -> i32 {
+    crate::web_surface::claim_job()
+}
+
+/// Mark one claimed job complete.
+#[unsafe(no_mangle)]
+pub extern "C" fn paint_complete_job() {
+    crate::web_surface::complete_job();
+}
+
+/// Blend one claimed job. Runs on any module instance sharing the linear
+/// memory; `worker_id` selects the private mask/scratch arenas.
+/// # Safety
+/// `job_index` must be within the published job table (0..count-1) and
+/// `worker_id` below JOB_WORKERS; both are enforced by clamping.
+#[unsafe(no_mangle)]
+pub extern "C" fn paint_process_tile_job(job_index: i32, worker_id: i32) {
+    crate::web_surface::process_job(job_index, worker_id.max(0) as usize);
+}
+
+/// The published job count of the current batch (the host's wait target).
+#[unsafe(no_mangle)]
+pub extern "C" fn paint_job_count() -> i32 {
+    crate::web_surface::job_count()
 }
 
 #[unsafe(no_mangle)]
@@ -814,4 +851,77 @@ pub extern "C" fn paint_destroy() {
     APP.with(|slot| {
         *slot.borrow_mut() = None;
     });
+}
+
+/// The job-table header address (a fixed wasm static; the same address in
+/// every instance sharing the linear memory). The pool workers build their
+/// Atomics views here.
+#[unsafe(no_mangle)]
+pub extern "C" fn paint_header_ptr() -> i32 {
+    crate::web_surface::job_header_ptr() as i32
+}
+
+/// The completed-job count of the current batch (the host's wait progress).
+#[unsafe(no_mangle)]
+pub extern "C" fn paint_completed_jobs() -> i32 {
+    crate::web_surface::completed_jobs()
+}
+
+/// The `DrawDabOp` byte size (the host serializes job ops by raw bytes).
+#[unsafe(no_mangle)]
+pub extern "C" fn paint_draw_dab_op_size() -> i32 {
+    std::mem::size_of::<crate::surface::DrawDabOp>() as i32
+}
+
+/// Pool-local tile blend: the tile-pool worker received the ops bytes and
+/// the tile bytes in ITS OWN linear memory (each pool worker owns an
+/// isolated module instance + memory, so two Rust allocators never share
+/// state). Blends the ops into the tile in FIFO order.
+///
+/// # Safety
+/// The pointers must reference the caller's own memory arenas sized
+/// `op_count * size_of::<DrawDabOp>()` and 64*64*4*2 bytes respectively.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn paint_blend_tile_ops(
+    ops_ptr: *const crate::surface::DrawDabOp,
+    op_count: i32,
+    tile_ptr: *mut u16,
+    tx: i32,
+    ty: i32,
+) {
+    if ops_ptr.is_null() || tile_ptr.is_null() || op_count <= 0 {
+        return;
+    }
+    let ops = std::slice::from_raw_parts(ops_ptr, op_count as usize);
+    let tile = std::slice::from_raw_parts_mut(tile_ptr, 64 * 64 * 4);
+    let mut mask = [0u16; crate::surface::MASK_LEN];
+    let mut scratch = [0.0f32; crate::surface::MASK_LEN];
+    for op in ops {
+        crate::surface::process_op(tile, &mut mask, tx, ty, op, &mut scratch);
+    }
+}
+
+/// Job fields for the host's serialization: out receives
+/// [ops_off, op_count, tile_addr, tx, ty].
+///
+/// # Safety
+/// `out` must point to 5 i32 slots.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn paint_get_job_info(job_index: i32, out: *mut i32) {
+    crate::web_surface::job_info(job_index, std::slice::from_raw_parts_mut(out, 5));
+}
+
+/// The op-arena address in this instance\x27s memory (the pool workers
+/// deserialize the received op bytes here, then blend from it).
+#[unsafe(no_mangle)]
+pub extern "C" fn paint_ops_arena_ptr() -> i32 {
+    crate::web_surface::op_arena_ptr() as i32
+}
+/// The pool private blended-tile buffer (64x64 rgba16). A plain static:
+/// each pool worker has its own module instance and memory.
+static POOL_TILE: [u16; 64 * 64 * 4] = [0; 64 * 64 * 4];
+
+#[unsafe(no_mangle)]
+pub extern "C" fn paint_pool_tile_ptr() -> i32 {
+    POOL_TILE.as_ptr() as i32
 }

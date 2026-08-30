@@ -6,6 +6,7 @@
 //! overflow.
 
 use crate::compositor::BlendMode;
+use std::sync::atomic::Ordering;
 use crate::surface::{DrawDabOp, NULL_DAB_OP, Surface};
 use crate::mask::render_dab_mask;
 use crate::symmetry::{
@@ -18,6 +19,50 @@ const MASK_LEN: usize = TILE * TILE + 2 * TILE;
 const WEB_SURFACE_MIN_HASH_SIZE: usize = 8192;
 const MAX_DIRTY_RECTS: usize = 32;
 const OP_QUEUE_CAP: usize = 16384;
+
+// ---- Tile-parallel blend jobs (shared with the pool workers) ----
+//
+// `end_atomic_prepare` partitions the queued ops into one blend job per
+// dirty tile and fills these shared-memory tables. The job claims are
+// atomic so the main worker and the tile-pool workers share the drain;
+// each tile is owned by exactly one job, and each processor blends
+// through its own mask/scratch arena slice.
+pub const MAX_JOBS: usize = 4096;
+pub const JOB_WORKERS: usize = 16;
+const JOB_HEADER_COUNT: usize = 0;
+const JOB_HEADER_CLAIM: usize = 1;
+const JOB_HEADER_DONE: usize = 2;
+const JOB_HEADER_GEN: usize = 3;
+const JOB_HEADER_LEN: usize = 4;
+const JOB_OPS_OFF: usize = 0;
+const JOB_OP_COUNT: usize = 1;
+const JOB_TILE_ADDR: usize = 2;
+const JOB_TX: usize = 3;
+const JOB_TY: usize = 4;
+const JOB_WORDS: usize = 5;
+
+static JOB_HEADER: [std::sync::atomic::AtomicU32; JOB_HEADER_LEN] = [
+    std::sync::atomic::AtomicU32::new(0),
+    std::sync::atomic::AtomicU32::new(0),
+    std::sync::atomic::AtomicU32::new(0),
+    std::sync::atomic::AtomicU32::new(0),
+];
+static JOB_TABLE: [std::sync::atomic::AtomicU32; MAX_JOBS * JOB_WORDS] =
+    [const { std::sync::atomic::AtomicU32::new(0) }; MAX_JOBS * JOB_WORDS];
+/// Single writer during `end_atomic_prepare` (the batch owner); pool
+/// workers read slices after claiming, so no two readers mutate.
+/// A plain-data arena shared across the module instances (the paint worker
+/// and the tile-pool workers) through the common linear memory.
+/// `UnsafeCell` is always `!Sync`, so the shared arenas need this wrapper.
+struct SharedArena<T: Copy>(std::cell::UnsafeCell<T>);
+unsafe impl<T: Copy> Sync for SharedArena<T> {}
+
+static OP_ARENA: SharedArena<[DrawDabOp; OP_QUEUE_CAP]> =
+    SharedArena(std::cell::UnsafeCell::new([NULL_DAB_OP; OP_QUEUE_CAP]));
+static WORKER_MASKS: SharedArena<[u16; JOB_WORKERS * MASK_LEN]> =
+    SharedArena(std::cell::UnsafeCell::new([0; JOB_WORKERS * MASK_LEN]));
+static WORKER_SCRATCH: SharedArena<[f32; JOB_WORKERS * MASK_LEN]> =
+    SharedArena(std::cell::UnsafeCell::new([0.0; JOB_WORKERS * MASK_LEN]));
 
 /// One dirty-tile position.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -64,6 +109,8 @@ pub struct WebSurface {
 
     ops: Vec<QueuedOp>,
     op_len: usize,
+    jobs_used: usize,
+    pending_roi: Vec<Rectangle>,
     op_failed: u32,
 
     bboxes: [Rectangle; MAX_DIRTY_RECTS],
@@ -129,6 +176,8 @@ impl WebSurface {
             smudge_tile: Vec::with_capacity(TILE_PX),
             ops: vec![QueuedOp { tx: 0, ty: 0, bbox_idx: 0, op: NULL_DAB_OP }; OP_QUEUE_CAP],
             op_len: 0,
+            jobs_used: 0,
+            pending_roi: Vec::new(),
             op_failed: 0,
             bboxes: [Rectangle::default(); MAX_DIRTY_RECTS],
             num_bboxes_dirtied: 0,
@@ -279,12 +328,44 @@ impl WebSurface {
     pub fn begin_atomic(&mut self) {
         update_symmetry_state(&mut self.symmetry);
         self.num_bboxes_dirtied = 0;
+        self.jobs_used = 0;
         self.atomic_active = true;
     }
 
     /// `end_atomic` -- drain the op queue per dirty tile, then merge the
     /// per-dab bounding boxes into a fresh roi (the C distribution).
-    pub fn end_atomic(&mut self) -> Vec<Rectangle> {
+    pub fn end_atomic(&mut self) -> (Vec<Rectangle>, u32) {
+        let n = self.end_atomic_prepare();
+        for i in 0..n {
+            process_job(i as i32, 0);
+        }
+        (std::mem::take(&mut self.pending_roi), n)
+    }
+
+    /// Serial half of the batch end: partition the op queue per dirty tile,
+    /// run all bookkeeping (slot creation, first-write capture, display
+    /// dirty, bbox ROI), and fill the shared job table with one blend job
+    /// per dirty tile. The blend then runs via `process_job` on this
+    /// instance or via `paint_process_tile_job` on any module instance
+    /// sharing the same linear memory (the tile-pool workers).
+    pub fn end_atomic_prepare(&mut self) -> u32 {
+        let dirty = self.partition_ops();
+        let count = dirty.len().min(MAX_JOBS) as u32;
+        let arena = unsafe { &mut *OP_ARENA.0.get() };
+        let mut ops_base = 0usize;
+        for (i, (tx, ty)) in dirty.iter().take(count as usize).enumerate() {
+            ops_base = self.prepare_tile(*tx, *ty, arena, ops_base);
+        }
+        // Publish: release the job data, then the generation bump wakes the
+        // pool workers (they Acquire-load the generation before claiming).
+        JOB_HEADER[JOB_HEADER_COUNT].store(count, Ordering::Release);
+        JOB_HEADER[JOB_HEADER_CLAIM].store(0, Ordering::Release);
+        JOB_HEADER[JOB_HEADER_DONE].store(0, Ordering::Release);
+        JOB_HEADER[JOB_HEADER_GEN].fetch_add(1, Ordering::Release);
+        count
+    }
+
+    fn partition_ops(&mut self) -> Vec<(i32, i32)> {
         let mut dirty: Vec<(i32, i32)> = Vec::new();
         for r in 0..self.op_len {
             let e = self.ops[r];
@@ -292,32 +373,56 @@ impl WebSurface {
                 dirty.push((e.tx, e.ty));
             }
         }
-        for (tx, ty) in &dirty {
-            self.process_tile(*tx, *ty);
-        }
+        dirty
+    }
 
-        let num_dirty = self.num_bboxes_dirtied;
-        let mut roi = vec![Rectangle::default(); MAX_DIRTY_RECTS];
-        if num_dirty > 0 {
-            let roi_rects = roi.len();
-            let bboxes_per_output = 1f32.max(num_dirty as f32 / roi_rects as f32);
-            for i in 0..num_dirty {
-                let out_index = if num_dirty > roi_rects {
-                    ((i as f32 / bboxes_per_output).round() as usize).min(roi_rects - 1)
-                } else {
-                    i
-                };
-                rectangle_expand_to_include_point(
-                    &mut roi[out_index],
-                    self.bboxes[i].x,
-                    self.bboxes[i].y,
-                );
+    /// Bookkeeping + job fill for one dirty tile. Drains the tile's ops
+    /// from the queue in FIFO order (the serial, deterministic half).
+    /// Returns the ops arena offset after this tile's batch.
+    fn prepare_tile(
+        &mut self,
+        tx: i32,
+        ty: i32,
+        arena: &mut [DrawDabOp],
+        ops_base: usize,
+    ) -> usize {
+        let mut batch: Vec<DrawDabOp> = Vec::new();
+        let mut w = 0usize;
+        for r in 0..self.op_len {
+            let e = self.ops[r];
+            if e.tx == tx && e.ty == ty {
+                batch.push(e.op);
+            } else {
+                self.ops[w] = e;
+                w += 1;
             }
-            roi.truncate(roi_rects.min(num_dirty));
         }
-        self.num_bboxes_dirtied = 0;
-        self.atomic_active = false;
-        roi
+        self.op_len = w;
+        if batch.is_empty() {
+            return ops_base;
+        }
+        let Some(slot) = self
+            .find_tile_slot(tx, ty)
+            .or_else(|| self.create_tile_slot(tx, ty))
+        else {
+            return ops_base; // out of capacity: ops land in the (zeroed) null tile
+        };
+        self.capture_first_write(slot, tx, ty);
+        self.mark_display_dirty(slot);
+
+        let job = self.jobs_used;
+        self.jobs_used += 1;
+        for (k, op) in batch.iter().enumerate() {
+            arena[ops_base + k] = *op;
+        }
+        let tile_addr = self.tiles[slot].as_mut().unwrap().as_mut_ptr() as usize;
+        let words = &JOB_TABLE[job * JOB_WORDS..(job + 1) * JOB_WORDS];
+        words[JOB_OPS_OFF].store(ops_base as u32, Ordering::Relaxed);
+        words[JOB_OP_COUNT].store(batch.len() as u32, Ordering::Relaxed);
+        words[JOB_TILE_ADDR].store(tile_addr as u32, Ordering::Relaxed);
+        words[JOB_TX].store(tx as u32, Ordering::Relaxed);
+        words[JOB_TY].store(ty as u32, Ordering::Relaxed);
+        ops_base + batch.len()
     }
 
     fn process_tile(&mut self, tx: i32, ty: i32) {
@@ -720,5 +825,87 @@ impl Surface for WebSurface {
 
     fn get_color(&mut self, x: f32, y: f32, radius: f32, paint: f32) -> [f32; 4] {
         self.get_color(x, y, radius, paint)
+    }
+}
+
+/// Claim the next unclaimed blend job, or -1 when the drain is done.
+pub fn claim_job() -> i32 {
+    let count = JOB_HEADER[JOB_HEADER_COUNT].load(Ordering::Acquire);
+    let i = JOB_HEADER[JOB_HEADER_CLAIM].fetch_add(1, Ordering::AcqRel);
+    if i >= count as u32 { -1 } else { i as i32 }
+}
+
+/// Mark one claimed job complete (each processor, main or pool).
+pub fn complete_job() {
+    JOB_HEADER[JOB_HEADER_DONE].fetch_add(1, Ordering::AcqRel);
+}
+
+/// The published job count of the current batch (0 when idle).
+pub fn job_count() -> i32 {
+    JOB_HEADER[JOB_HEADER_COUNT].load(Ordering::Acquire) as i32
+}
+
+/// The completed-job count (the host's wait progress).
+pub fn completed_jobs() -> i32 {
+    JOB_HEADER[JOB_HEADER_DONE].load(Ordering::Acquire) as i32
+}
+
+/// The done-counter header index (the host waits on this cell).
+pub const JOB_DONE_INDEX: usize = JOB_HEADER_DONE;
+
+/// One job's fields for the host's serialization path.
+pub fn job_info(job_index: i32, out: &mut [i32]) {
+    let j = job_index.max(0) as usize;
+    if j >= MAX_JOBS || out.len() < 5 {
+        return;
+    }
+    let words = &JOB_TABLE[j * JOB_WORDS..(j + 1) * JOB_WORDS];
+    out[0] = words[JOB_OPS_OFF].load(Ordering::Acquire) as i32;
+    out[1] = words[JOB_OP_COUNT].load(Ordering::Acquire) as i32;
+    out[2] = words[JOB_TILE_ADDR].load(Ordering::Acquire) as i32;
+    out[3] = words[JOB_TX].load(Ordering::Acquire) as i32;
+    out[4] = words[JOB_TY].load(Ordering::Acquire) as i32;
+}
+
+/// The job-table header address (a fixed shared-memory static).
+pub fn job_header_ptr() -> usize {
+    JOB_HEADER.as_ptr() as usize
+}
+
+/// The op arena address (the pool workers serialize received ops here).
+pub fn op_arena_ptr() -> usize {
+    OP_ARENA.0.get() as usize
+}
+
+/// Blend one prepared job. Callable from any module instance sharing the
+/// linear memory: reads the job table + op arena statics and the tile, and
+/// touches only this worker's mask/scratch arenas. One tile is owned by
+/// exactly one job, so no two workers write the same tile.
+pub fn process_job(job_index: i32, worker_id: usize) {
+    let j = job_index.max(0) as usize;
+    if j >= MAX_JOBS {
+        return;
+    }
+    let words = &JOB_TABLE[j * JOB_WORDS..(j + 1) * JOB_WORDS];
+    let ops_off = words[JOB_OPS_OFF].load(Ordering::Acquire) as usize;
+    let op_count = words[JOB_OP_COUNT].load(Ordering::Relaxed) as usize;
+    let tile_addr = words[JOB_TILE_ADDR].load(Ordering::Relaxed) as usize;
+    let tx = words[JOB_TX].load(Ordering::Relaxed) as i32;
+    let ty = words[JOB_TY].load(Ordering::Relaxed) as i32;
+    if op_count == 0 || tile_addr == 0 {
+        return;
+    }
+    let arena = unsafe { &*OP_ARENA.0.get() };
+    let ops = &arena[ops_off..ops_off + op_count];
+    let tile = unsafe { std::slice::from_raw_parts_mut(tile_addr as *mut u16, TILE_PX) };
+    let masks = unsafe { &mut *WORKER_MASKS.0.get() };
+    let scratches = unsafe { &mut *WORKER_SCRATCH.0.get() };
+    let wi = (worker_id.min(JOB_WORKERS - 1)) * MASK_LEN;
+    let (m, _) = masks.split_at_mut(wi + MASK_LEN);
+    let (s2, _) = scratches.split_at_mut(wi + MASK_LEN);
+    let mask = &mut m[wi..];
+    let scratch = &mut s2[wi..];
+    for op in ops {
+        crate::surface::process_op(tile, mask, tx, ty, op, scratch);
     }
 }

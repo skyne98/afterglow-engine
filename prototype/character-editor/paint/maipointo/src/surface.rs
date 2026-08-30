@@ -41,7 +41,7 @@ fn round_i(x: f32) -> i32 {
 const OP_QUEUE_CAP: usize = 16384;
 /// Matches the demo C `FIXED_TILE_CAPACITY`.
 const DIRTY_TILE_CAP: usize = 4096;
-const MASK_LEN: usize = TILE_SIZE * TILE_SIZE + 2 * TILE_SIZE;
+pub const MASK_LEN: usize = TILE_SIZE * TILE_SIZE + 2 * TILE_SIZE;
 
 pub const NULL_DAB_OP: DrawDabOp = DrawDabOp {
     x: 0.0,
@@ -428,7 +428,7 @@ impl FixedTiledSurface {
 
 /// `process_op` — render the mask then stamp the dab with each active blend
 /// mode (verbatim from `mypaint-tiled-surface.c`).
-pub(crate) fn process_op(
+pub fn process_op(
     rgba: &mut [u16],
     mask: &mut [u16],
     tx: i32,
