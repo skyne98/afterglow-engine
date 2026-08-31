@@ -1,3 +1,5 @@
+#![feature(allocator_api)]
+
 //! Maipointo (マイペイント) — from-scratch Rust reimplementation of the
 //! libmypaint (brushlib) brush engine for the afterglow paint demo.
 //!

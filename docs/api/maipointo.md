@@ -35,9 +35,10 @@ engine exists solely as the reference for the exactness tests.
 - `src/symmetry.rs` — `mypaint-symmetry.c` + `mypaint-matrix.c` port
   (transforms, snowflake fall-through, rectangle expansion).
 - `src/web_surface.rs` — sparse hash-tile surface (>= 8192 hash size),
-  used-tile slots, first-write capture, fixed 16384-op queue,
-  `begin_atomic`/`end_atomic` dirty ROI (max 32 rects), symmetry dab
-  fan-out, `get_color`, display-dirty slots, and fixed tile-job publication.
+  used-tile slots, shared 4096-tile resident budget, first-write capture,
+  fixed 16384-op queue, `begin_atomic`/`end_atomic` dirty ROI (max 32
+  rects), symmetry dab fan-out, `get_color`, display-dirty slots, and fixed
+  tile-job publication.
 - `src/app.rs` — `PaintApp`: layers/groups tree, history (fixed 40
   records and a 64 MiB entry-byte budget), with a 32 MiB limit for one
   stroke's before-image capture, display EOTF LUT, mip render, render/pick/
@@ -78,9 +79,10 @@ the string helpers the worker uses (`lengthBytesUTF8`,
 `WebAssembly.Memory` (initial 256, maximum 4096 pages). The module
 imports that memory with its own 256 MiB cap
 (`paint/maipointo/.cargo/config.toml`), which overrides the engine
-workspace's 64 MiB default for this crate only — the demo document
-(16K documents, eight layers, 40 history records of tile captures)
-needs headroom; the old 64 MiB cap OOM-aborted the worker mid-stroke.
+workspace's 64 MiB default for this crate only. All paint layers share a
+fixed 4,096-resident-tile budget (128 MiB of RGBA16 tile data), and history
+uses a separate 64 MiB byte budget. A full budget reports error code `1`
+instead of growing until the worker aborts.
 
 ## Exactness validation
 
@@ -101,7 +103,7 @@ gate compiler-dependent). The oracle replay covers:
   argument, and tile-byte comparison,
 - event-prefix bisection to the first divergent dab.
 
-33 tests total; all green with and without `--features demo`.
+35 tests total; all green with and without `--features demo`.
 
 ## Build
 

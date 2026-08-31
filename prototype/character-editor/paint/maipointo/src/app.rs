@@ -5,6 +5,8 @@
 use crate::brush::Brush;
 use crate::compositor::{layer_blend_over, BlendMode};
 use crate::web_surface::WebSurface;
+use std::cell::Cell;
+use std::rc::Rc;
 
 pub const WEB_MAX_LAYERS: usize = 8;
 pub const WEB_MAX_GROUPS: usize = 4;
@@ -79,6 +81,7 @@ pub struct PaintApp {
     tile_bytes: usize,
 
     pub layers: Vec<WebSurface>,
+    tile_budget: Rc<Cell<usize>>,
     pub layer_visible: [bool; WEB_MAX_LAYERS],
     pub layer_opacity: [f32; WEB_MAX_LAYERS],
     pub layer_mode: [BlendMode; WEB_MAX_LAYERS],
@@ -141,11 +144,13 @@ impl PaintApp {
             return None;
         }
         let tile_bytes = 64 * 64 * 4 * 2;
+        let tile_budget = Rc::new(Cell::new(0));
         let mut app = Self {
             width,
             height,
             tile_bytes,
             layers: Vec::with_capacity(WEB_MAX_LAYERS),
+            tile_budget: Rc::clone(&tile_budget),
             layer_visible: [false; WEB_MAX_LAYERS],
             layer_opacity: [0.0; WEB_MAX_LAYERS],
             layer_mode: [BlendMode::Pigment; WEB_MAX_LAYERS],
@@ -191,7 +196,7 @@ impl PaintApp {
             dirty_roi: Vec::new(),
             batch_open: false,
         };
-        let layer0 = WebSurface::new(width, height)?;
+        let layer0 = WebSurface::new_with_budget(width, height, tile_budget)?;
         app.layers.push(layer0);
         app.layer_visible[0] = true;
         app.layer_opacity[0] = 1.0;
@@ -863,12 +868,34 @@ impl PaintApp {
         }
 
         let pending = std::mem::take(&mut self.pending_captures);
+        let mut record_bytes = 0usize;
+        for capture in &pending {
+            record_bytes = record_bytes.saturating_add(
+                capture.before.len()
+                    .saturating_mul(2 * std::mem::size_of::<u16>()),
+            );
+        }
+        if record_bytes > HISTORY_BYTE_BUDGET {
+            self.fail_history(layer);
+            return;
+        }
+        // Free old history before allocating the new after-images. This keeps
+        // the tile data and the history budget below the wasm memory limit.
+        while self.history_entry_bytes + record_bytes > HISTORY_BYTE_BUDGET
+            && !self.history_records.is_empty()
+        {
+            self.history_records.remove(0);
+            if self.history_cursor > 0 {
+                self.history_cursor -= 1;
+            }
+        }
+        self.evict_dropped_entries();
+
         let mut record: Vec<HistoryEntry> = Vec::new();
         if record.try_reserve(pending.len()).is_err() {
             self.fail_history(layer);
             return;
         }
-        let mut record_bytes = 0usize;
         for capture in pending {
             let mut after = Vec::new();
             if after.try_reserve_exact(capture.before.len()).is_err() {
@@ -880,8 +907,6 @@ impl PaintApp {
             } else {
                 after.resize(capture.before.len(), 0);
             }
-            record_bytes += (capture.before.len() + after.len())
-                * std::mem::size_of::<u16>();
             record.push(HistoryEntry {
                 tx: capture.pos.tx,
                 ty: capture.pos.ty,
@@ -891,16 +916,6 @@ impl PaintApp {
             });
         }
         if !record.is_empty() {
-            // Evict the oldest records until the entry bytes fit the budget.
-            while self.history_entry_bytes + record_bytes > HISTORY_BYTE_BUDGET
-                && !self.history_records.is_empty()
-            {
-                self.history_records.remove(0);
-                if self.history_cursor > 0 {
-                    self.history_cursor -= 1;
-                }
-            }
-            self.evict_dropped_entries();
             if self.history_entries.try_reserve(record.len()).is_err() {
                 self.fail_history(layer);
                 return;
@@ -1008,7 +1023,9 @@ impl PaintApp {
     pub fn create_layer(&mut self) -> i32 {
         if self.layer_count >= WEB_MAX_LAYERS { return -1; }
         let (w, h) = (self.width, self.height);
-        let Some(surface) = WebSurface::new(w, h) else { return -1 };
+        let Some(surface) = WebSurface::new_with_budget(w, h, Rc::clone(&self.tile_budget)) else {
+            return -1;
+        };
         let id = self.layer_count;
         self.layers.push(surface);
         self.layer_visible[id] = true;

@@ -30,13 +30,22 @@ fn with_app<R: Default>(f: impl FnOnce(&mut PaintApp) -> R) -> R {
         // leaves the module usable; the error code reports the failure.
         // Without this, an abort leaks the borrow and bricks every later
         // call (the engine must never trap into a dead instance).
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(app))) {
+        let result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(app))) {
             Ok(r) => r,
             Err(_) => {
                 app.error_code = 1;
                 R::default()
             }
+        };
+        let active_layer = app.active_layer();
+        let capacity_failed = match app.layers.get_mut(active_layer) {
+            Some(surface) => surface.take_capacity_error(),
+            None => false,
+        };
+        if capacity_failed {
+            app.error_code = 1;
         }
+        result
     })
 }
 

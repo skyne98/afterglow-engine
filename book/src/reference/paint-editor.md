@@ -18,7 +18,7 @@ History capture uses an O(1) generation set for tile slots. One stroke has a 32 
 
 The display uses exact dirty tile slots. It does not render every tile inside one large dirty rectangle. Render and mip paths reuse fixed tile buffers.
 
-The operation queue has fixed limits of 4,096 dirty tiles and 16,384 operations for each batch. Capacity failures cause visible errors.
+The operation queue has fixed limits of 4,096 dirty tiles and 16,384 operations for each batch. All layers share 4,096 resident RGBA16 tiles. Capacity failures cause visible errors without a heap growth attempt.
 
 The demo supports documents through 16K x 16K, eight paint layers, four groups, and all 22 MyPaint layer modes.
 

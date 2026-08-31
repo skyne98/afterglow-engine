@@ -45,7 +45,13 @@ The operation queue has these limits:
 - 16,384 dab operations for each batch
 - 8,192 fixed hash entries for O(1) tile lookup
 
-A capacity failure sets error code `4` before the engine clears the queue. The engine does not silently use a serial mode.
+All layers share 4,096 resident RGBA16 tiles (128 MiB). The hash and tile
+slot arrays use this fixed resident limit instead of the full document tile
+count. A resident-tile failure sets error code `1` and drops the affected
+operation without a memory growth attempt.
+
+A queue capacity failure sets error code `4` before the engine clears the
+queue. The engine does not silently use a serial mode.
 
 ## History tile set
 
@@ -53,7 +59,7 @@ The history path uses a fixed generation set with one mark for each surface tile
 
 The set prevents a scan of all prior stroke tiles for each dab operation. Separate queued strokes also keep separate history records.
 
-History uses a 64 MiB tile-entry byte budget and keeps at most 40 records. One active stroke limits before-image capture to 32 MiB. An over-size stroke still paints, but it gets no undo record and reports error code `2`. The system evicts the oldest records before it rejects a new allocation.
+History uses a 64 MiB tile-entry byte budget and keeps at most 40 records. One active stroke limits before-image capture to 32 MiB. An over-size stroke still paints, but it gets no undo record and reports error code `2`. The system evicts the oldest records before it allocates new after-images.
 
 ## Dirty display data
 
@@ -146,7 +152,7 @@ The HUD gives the current sample count, deferred action count, and recent work t
 
 `paint_get_error_code()` returns these current values:
 
-- `1`: A guarded engine call panicked or tile allocation failed.
+- `1`: A guarded engine call panicked or the resident tile budget failed.
 - `2`: The history byte budget rejected a reservation.
 - `3`: The libmypaint dab loop made no progress.
 - `4`: The operation queue reached capacity.

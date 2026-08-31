@@ -5,6 +5,8 @@
 //! feeds the history system; fixed-capacity storage with deterministic
 //! overflow.
 
+use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::atomic::Ordering;
 use crate::surface::{DrawDabOp, NULL_DAB_OP, Surface};
 use crate::mask::render_dab_mask;
@@ -18,6 +20,8 @@ const MASK_LEN: usize = TILE * TILE + 2 * TILE;
 const WEB_SURFACE_MIN_HASH_SIZE: usize = 8192;
 const MAX_DIRTY_RECTS: usize = 32;
 const OP_QUEUE_CAP: usize = 16384;
+/// Shared RGBA16 tile limit. Eight bytes per pixel gives a 128 MiB tile cap.
+pub(crate) const MAX_RESIDENT_TILES: usize = 4096;
 
 // ---- Tile-parallel blend jobs (shared with the pool workers) ----
 //
@@ -128,6 +132,7 @@ pub struct WebSurface {
 
     capacity_failed: bool,
     visible: bool,
+    tile_budget: Rc<Cell<usize>>,
 }
 
 #[inline]
@@ -141,16 +146,24 @@ fn tile_hash(x: i32, y: i32) -> u32 {
 
 impl WebSurface {
     fn tiles_capacity(&self) -> usize {
-        (self.tiles_width * self.tiles_height) as usize
+        ((self.tiles_width * self.tiles_height) as usize).min(MAX_RESIDENT_TILES)
     }
 
     pub fn new(width: i32, height: i32) -> Option<Self> {
+        Self::new_with_budget(width, height, Rc::new(Cell::new(0)))
+    }
+
+    pub(crate) fn new_with_budget(
+        width: i32,
+        height: i32,
+        tile_budget: Rc<Cell<usize>>,
+    ) -> Option<Self> {
         if width <= 0 || height <= 0 {
             return None;
         }
         let tiles_width = (width + TILE as i32 - 1) / TILE as i32;
         let tiles_height = (height + TILE as i32 - 1) / TILE as i32;
-        let tile_capacity = (tiles_width * tiles_height) as usize;
+        let tile_capacity = ((tiles_width * tiles_height) as usize).min(MAX_RESIDENT_TILES);
         let mut hash_size = WEB_SURFACE_MIN_HASH_SIZE;
         while hash_size < tile_capacity * 2 {
             hash_size <<= 1;
@@ -191,6 +204,7 @@ impl WebSurface {
             capture_overflow: false,
             capacity_failed: false,
             visible: true,
+            tile_budget,
         })
     }
 
@@ -249,12 +263,22 @@ impl WebSurface {
                 }
                 continue;
             }
-            if self.tiles.len() >= self.tiles_capacity() {
+            if self.tiles.len() >= self.tiles_capacity()
+                || self.tile_budget.get() >= MAX_RESIDENT_TILES
+            {
                 self.capacity_failed = true;
                 return None;
             }
             let index = self.tiles.len();
-            self.tiles.push(Some(Box::new([0u16; TILE_PX])));
+            let tile = match Box::try_new([0u16; TILE_PX]) {
+                Ok(tile) => tile,
+                Err(_) => {
+                    self.capacity_failed = true;
+                    return None;
+                }
+            };
+            self.tiles.push(Some(tile));
+            self.tile_budget.set(self.tile_budget.get() + 1);
             self.tile_tx.push(tx);
             self.tile_ty.push(ty);
             self.slot_used[slot] = true;
@@ -795,6 +819,8 @@ impl WebSurface {
 
     /// `web_surface_clear`.
     pub fn clear_tiles(&mut self) {
+        self.tile_budget
+            .set(self.tile_budget.get().saturating_sub(self.tiles.len()));
         self.tiles.clear();
         self.tile_tx.clear();
         self.tile_ty.clear();
@@ -820,6 +846,42 @@ impl WebSurface {
 
     pub fn used_tile(&self, index: usize) -> Option<&[u16; TILE_PX]> {
         self.tiles.get(index).and_then(|t| t.as_ref()).map(|b| &**b)
+    }
+}
+
+impl Drop for WebSurface {
+    fn drop(&mut self) {
+        self.tile_budget
+            .set(self.tile_budget.get().saturating_sub(self.tiles.len()));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resident_tile_budget_is_shared_and_released() {
+        let budget = Rc::new(Cell::new(0));
+        let mut first = WebSurface::new_with_budget(64, 64, Rc::clone(&budget)).unwrap();
+        let mut second = WebSurface::new_with_budget(64, 64, Rc::clone(&budget)).unwrap();
+        assert!(first.get_or_create_tile_mut(0, 0).is_some());
+        assert!(second.get_or_create_tile_mut(0, 0).is_some());
+        assert_eq!(budget.get(), 2);
+        first.clear_tiles();
+        assert_eq!(budget.get(), 1);
+        drop(second);
+        assert_eq!(budget.get(), 0);
+    }
+
+    #[test]
+    fn resident_tile_budget_rejects_before_allocation() {
+        let budget = Rc::new(Cell::new(MAX_RESIDENT_TILES));
+        let mut surface = WebSurface::new_with_budget(16384, 16384, budget).unwrap();
+        assert_eq!(surface.tiles.capacity(), MAX_RESIDENT_TILES);
+        assert_eq!(surface.display_dirty.len(), MAX_RESIDENT_TILES);
+        assert!(surface.get_or_create_tile_mut(0, 0).is_none());
+        assert!(surface.take_capacity_error());
     }
 }
 
