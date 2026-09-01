@@ -6,9 +6,10 @@ import { FixedRing } from './fixed-ring.ts';
 import { FixedTaskWake } from './fixed-task-wake.ts';
 import { MotionQueue } from './paint-input.ts';
 import { spawnTilePool, type TilePool } from './paint-tile-pool.ts';
+import { PaintTileStore, paintTileKey, type PaintTileRecord } from './paint-tile-store.ts';
 
 type Msg =
-  | { cmd: 'init'; width: number; height: number; canvas?: OffscreenCanvas; hardwareConcurrency?: number }
+  | { cmd: 'init'; width: number; height: number; canvas?: OffscreenCanvas; hardwareConcurrency?: number; documentId?: string }
   | { cmd: 'loadBrush'; json: string }
   | { cmd: 'config'; settings: [string, number][] }
   | { cmd: 'beginStroke'; x: number; y: number; xtilt: number; ytilt: number; zoom: number; rotation: number; barrel: number }
@@ -23,24 +24,204 @@ type Msg =
   | { cmd: 'probe'; id: number; y: number }
   | { cmd: 'requestState' };
 
-const TILE = 64, TILE_B = TILE * TILE * 4, EOTF = 2.2;
+const TILE = 64, TILE_B = TILE * TILE * 4, TILE16_B = TILE_B * 2, EOTF = 2.2;
 const BUDGET = 8, CONTINUATION_BUDGET = 2;
+const RESIDENT_TILES = 4096;
+const PAGE_TRIGGER = 3584, PAGE_TARGET = 2048, PAGE_RADIUS = 1024;
+const PAGE_REGION_LIMIT = 1536, PAGE_WRITE_BATCH = 64;
 const INPUT_CAPACITY = 8192, COMMAND_CAPACITY = 8192;
 let mod: any = null, motionQueue = new MotionQueue(INPUT_CAPACITY);
 const deferredCommands = new FixedRing<Msg>(COMMAND_CAPACITY);
+let tileStore: PaintTileStore | null = null;
+let tilePager: PaintTilePager | null = null;
+let tileDocumentId = '';
 let ctx: OffscreenCanvasRenderingContext2D | null = null, canvas: OffscreenCanvas | null = null;
 let rgba8: Uint8Array | null = null, rectPtr = 0, jobInfoPtr = 0, renderedMip = -1, lastT = 0;
 let docW = 2048, docH = 2048, dispScale = 1, dispMip = 0, viewMip = 0;
 let flushT: number | null = null, commitP = false, batching = false;
 let n0 = 0, a0 = 0;
-let batchInFlight = false, strokeContinuation = false, strokeOpen = false;
+let batchInFlight = false, drainInFlight = false, strokeContinuation = false;
+let strokeOpen = false, strokePreparing = false, lastStrokeX = 0, lastStrokeY = 0;
 let bgRGB: [number, number, number] = [0xA8 / 255, 0xA4 / 255, 0x98 / 255];
 let statsS = 0, lastBR = 0, lastRR = 0, lastStats = 0;
 let lastRects: number[] = [];
+
+class PaintTilePager {
+  private engine: any = null;
+  private store: PaintTileStore | null = null;
+  private documentId = '';
+  private scratchPtr = 0;
+  private infoPtr = 0;
+  private coldMask = 0;
+
+  configure(engine: any, store: PaintTileStore | null, documentId: string): boolean {
+    this.engine = engine;
+    this.store = store;
+    this.documentId = documentId;
+    this.coldMask = 0;
+    if (!store) return false;
+    if (!this.scratchPtr) this.scratchPtr = engine._malloc(TILE16_B);
+    if (!this.infoPtr) this.infoPtr = engine._malloc(8);
+    if (!this.scratchPtr || !this.infoPtr) {
+      this.store = null;
+      return false;
+    }
+    return true;
+  }
+
+  private totalUsed(): number {
+    if (!this.engine) return 0;
+    let total = 0;
+    const count = this.engine._paint_get_layer_count();
+    for (let layer = 0; layer < count; layer++) {
+      total += this.engine._paint_get_layer_used_tile_count(layer);
+    }
+    return total;
+  }
+
+  private bounds(x: number, y: number, previousX: number, previousY: number): [number, number, number, number] | null {
+    const tw = this.engine._paint_get_tiles_width();
+    const th = this.engine._paint_get_tiles_height();
+    const minX = Math.min(x, previousX) - PAGE_RADIUS;
+    const maxX = Math.max(x, previousX) + PAGE_RADIUS;
+    const minY = Math.min(y, previousY) - PAGE_RADIUS;
+    const maxY = Math.max(y, previousY) + PAGE_RADIUS;
+    const tx0 = Math.max(0, Math.min(tw - 1, Math.floor(minX / TILE)));
+    const ty0 = Math.max(0, Math.min(th - 1, Math.floor(minY / TILE)));
+    const tx1 = Math.max(0, Math.min(tw - 1, Math.floor(maxX / TILE)));
+    const ty1 = Math.max(0, Math.min(th - 1, Math.floor(maxY / TILE)));
+    if (tx1 < tx0 || ty1 < ty0 || (tx1 - tx0 + 1) * (ty1 - ty0 + 1) > PAGE_REGION_LIMIT) return null;
+    return [tx0, ty0, tx1, ty1];
+  }
+
+  prepare(x: number, y: number, previousX: number, previousY: number): Promise<boolean> | null {
+    if (!this.engine || !this.store) return null;
+    if (this.totalUsed() < PAGE_TRIGGER && this.coldMask === 0) return null;
+    const region = this.bounds(x, y, previousX, previousY);
+    if (!region) return Promise.resolve(false);
+    return this.prepareAsync(region);
+  }
+
+  private async prepareAsync(region: [number, number, number, number]): Promise<boolean> {
+    try {
+      while (this.totalUsed() > PAGE_TARGET) {
+        if (!(await this.pageBatch(region))) return false;
+      }
+      if (this.coldMask !== 0) await this.loadRegion(region);
+      return true;
+    } catch (error) {
+      post({ type: 'log', text: `IndexedDB tile paging failed: ${(error as Error)?.message ?? error}` });
+      return false;
+    }
+  }
+
+  private findVictim(
+    region: [number, number, number, number],
+    planned: readonly [number, number, number][],
+  ): [number, number, number] | null {
+    const [tx0, ty0, tx1, ty1] = region;
+    const count = this.engine._paint_get_layer_count();
+    for (let layer = 0; layer < count; layer++) {
+      const used = this.engine._paint_get_layer_used_tile_count(layer);
+      for (let index = 0; index < used; index++) {
+        this.engine._paint_get_layer_used_tile_info(layer, index, this.infoPtr);
+        const slot = this.infoPtr >> 2;
+        const tx = this.engine.HEAP32[slot], ty = this.engine.HEAP32[slot + 1];
+        if (tx >= tx0 && tx <= tx1 && ty >= ty0 && ty <= ty1) continue;
+        let alreadyPlanned = false;
+        for (const item of planned) {
+          if (item[0] === layer && item[1] === tx && item[2] === ty) {
+            alreadyPlanned = true;
+            break;
+          }
+        }
+        if (!alreadyPlanned) return [layer, tx, ty];
+      }
+    }
+    return null;
+  }
+
+  private async pageBatch(region: [number, number, number, number]): Promise<boolean> {
+    const candidates: { key: PaintTileRecord['key']; layer: number; tx: number; ty: number; data: ArrayBuffer }[] = [];
+    const planned: [number, number, number][] = [];
+    while (this.totalUsed() - candidates.length > PAGE_TARGET && candidates.length < PAGE_WRITE_BATCH) {
+      const victim = this.findVictim(region, planned);
+      if (!victim) break;
+      const [layer, tx, ty] = victim;
+      const ptr = this.engine._paint_get_layer_tile_ptr(layer, tx, ty);
+      if (!ptr) break;
+      const bytes = new Uint8Array(TILE16_B);
+      bytes.set(this.engine.HEAPU8.subarray(ptr, ptr + TILE16_B));
+      candidates.push({ key: paintTileKey(this.documentId, layer, tx, ty), layer, tx, ty, data: bytes.buffer });
+      planned.push(victim);
+    }
+    if (candidates.length === 0) {
+      post({ type: 'log', text: 'IndexedDB found no evictable resident tile in the brush area.' });
+      return false;
+    }
+    await this.store!.putMany(candidates);
+    for (const candidate of candidates) {
+      if (!this.engine._paint_remove_layer_tile(candidate.layer, candidate.tx, candidate.ty)) {
+        post({ type: 'log', text: `IndexedDB could not evict tile (${candidate.tx}, ${candidate.ty}) from layer ${candidate.layer}.` });
+        return false;
+      }
+      this.coldMask |= 1 << candidate.layer;
+    }
+    return true;
+  }
+
+  private async pageOne(region: [number, number, number, number]): Promise<boolean> {
+    const victim = this.findVictim(region, []);
+    if (!victim) {
+      post({ type: 'log', text: 'IndexedDB found no evictable resident tile in the brush area.' });
+      return false;
+    }
+    const [layer, tx, ty] = victim;
+    const ptr = this.engine._paint_get_layer_tile_ptr(layer, tx, ty);
+    if (!ptr) return false;
+    const bytes = new Uint8Array(TILE16_B);
+    bytes.set(this.engine.HEAPU8.subarray(ptr, ptr + TILE16_B));
+    await this.store!.put(paintTileKey(this.documentId, layer, tx, ty), bytes.buffer);
+    if (!this.engine._paint_remove_layer_tile(layer, tx, ty)) {
+      post({ type: 'log', text: `IndexedDB could not evict tile (${tx}, ${ty}) from layer ${layer}.` });
+      return false;
+    }
+    this.coldMask |= 1 << layer;
+    return true;
+  }
+
+  private async loadRegion(region: [number, number, number, number]): Promise<void> {
+    const [tx0, ty0, tx1, ty1] = region;
+    const layerCount = this.engine._paint_get_layer_count();
+    for (let layer = 0; layer < layerCount; layer++) {
+      if ((this.coldMask & (1 << layer)) === 0) continue;
+      const records = await this.store!.getRegion(
+        this.documentId, layer, tx0, ty0, tx1, ty1,
+      );
+      for (const record of records) {
+        const tx = record.key[2], ty = record.key[3];
+        if (this.engine._paint_get_layer_tile_ptr(layer, tx, ty)) continue;
+        if (record.data.byteLength !== TILE16_B) {
+          throw new Error(`Invalid tile size at (${tx}, ${ty}).`);
+        }
+        while (this.totalUsed() >= RESIDENT_TILES) {
+          if (!(await this.pageOne(region))) {
+            throw new Error('No resident tile is available for restore.');
+          }
+        }
+        this.engine.HEAPU8.set(new Uint8Array(record.data), this.scratchPtr);
+        if (!this.engine._paint_write_layer_rgba16_tile(layer, tx, ty, this.scratchPtr)) {
+          throw new Error(`Tile restore failed at (${tx}, ${ty}).`);
+        }
+      }
+    }
+  }
+}
+
 function runDrainWake() {
-  if (!mod || batchInFlight || motionQueue.length === 0) return;
+  if (!mod || batchInFlight || drainInFlight || strokePreparing || motionQueue.length === 0) return;
   if (!batching) { mod._paint_begin_batch(); batching = true; }
-  drainProcess(true);
+  void drainProcess(true);
 }
 const drainWake = new FixedTaskWake(runDrainWake);
 let tilePool: TilePool | null = null;
@@ -91,6 +272,19 @@ const post = (m: any, t?: Transferable[]) => { if (t && t.length > 0) (self as u
 function reportEngineError(what: string, status = 'Brush engine error. See the log.') {
   post({ type: 'log', text: 'ENGINE ERROR: ' + what });
   post({ type: 'status', text: status });
+}
+function abortStrokeAfterStorageError() {
+  motionQueue.clear();
+  strokeContinuation = false;
+  commitP = false;
+  if (batching) {
+    batching = false;
+    try { mod._paint_end_batch(); } catch {}
+  }
+  mod._paint_history_commit();
+  strokeOpen = false;
+  strokePreparing = false;
+  pushState();
 }
 self.onerror = (e: any) => { reportEngineError('WORKER ERROR: ' + ((e && (e.message || e.error || e)) ?? String(e))); };
 self.onunhandledrejection = (e: any) => { reportEngineError('WORKER UNHANDLED REJECTION: ' + ((e && e.reason && (e.reason.message || e.reason)) || String(e))); };
@@ -180,6 +374,8 @@ function strokeSample(_t: number, x: number, y: number, p: number, xt: number, y
   }
   strokeContinuation = false;
   lastT = _t;
+  lastStrokeX = x;
+  lastStrokeY = y;
   if (result < 0) {
     if (mod._paint_get_error_code()) checkErr();
     else reportEngineError('The brush continuation state is incorrect.');
@@ -265,55 +461,71 @@ function pollBatch() {
   self.setTimeout(pollBatch, 2);
 }
 
-function drainProcess(bounded: boolean) {
-  if (!mod || batchInFlight) return;
-  n0 = motionQueue.length;
-  a0 = performance.now();
-  if (bounded) {
-    motionQueue.drainInterpolatedBounded(strokeSample, BUDGET);
-    let remaining = CONTINUATION_BUDGET - (performance.now() - a0);
-    while (motionQueue.length > 0 && strokeContinuation && remaining > 0) {
-      motionQueue.drainInterpolatedBounded(strokeSample, remaining);
-      remaining = CONTINUATION_BUDGET - (performance.now() - a0);
+async function drainProcess(bounded: boolean) {
+  if (!mod || batchInFlight || drainInFlight || strokePreparing) return;
+  drainInFlight = true;
+  try {
+    n0 = motionQueue.length;
+    a0 = performance.now();
+    if (motionQueue.length > 0) {
+      const wait = tilePager?.prepare(
+        motionQueue.peekX(), motionQueue.peekY(), lastStrokeX, lastStrokeY,
+      );
+      if (wait && !(await wait)) {
+        abortStrokeAfterStorageError();
+        reportEngineError('IndexedDB tile storage could not make room.', 'Paint storage is full.');
+        replayDeferredCommands();
+        return;
+      }
     }
-  } else motionQueue.drainInterpolated(strokeSample);
-  lastBR = performance.now() - a0;
-  if (batching) {
-    batching = false;
-    batchInFlight = true;
-    void drainBlendJobs().then(() => {
-      mod._paint_end_batch_finish();
-      batchInFlight = false;
-      afterBatch();
-    }).catch((err) => {
-      reportEngineError('Batch drain failed: ' + ((err as Error)?.stack ?? err));
-      batchInFlight = false;
-    });
-    return;
+    if (bounded) {
+      motionQueue.drainInterpolatedBounded(strokeSample, BUDGET);
+      let remaining = CONTINUATION_BUDGET - (performance.now() - a0);
+      while (motionQueue.length > 0 && strokeContinuation && remaining > 0) {
+        motionQueue.drainInterpolatedBounded(strokeSample, remaining);
+        remaining = CONTINUATION_BUDGET - (performance.now() - a0);
+      }
+    } else motionQueue.drainInterpolated(strokeSample);
+    lastBR = performance.now() - a0;
+    if (batching) {
+      batching = false;
+      batchInFlight = true;
+      void drainBlendJobs().then(() => {
+        mod._paint_end_batch_finish();
+        batchInFlight = false;
+        afterBatch();
+      }).catch((err) => {
+        reportEngineError('Batch drain failed: ' + ((err as Error)?.stack ?? err));
+        batchInFlight = false;
+      });
+      return;
+    }
+    if (!mod._paint_is_batch_done()) {
+      batchInFlight = true;
+      pollBatch();
+      return;
+    }
+    afterBatch();
+  } finally {
+    drainInFlight = false;
   }
-  if (!mod._paint_is_batch_done()) {
-    batchInFlight = true;
-    pollBatch();
-    return;
-  }
-  afterBatch();
 }
 function scheduleFlush() {
-  if (flushT !== null || batchInFlight || drainWake.isPending) return;
+  if (flushT !== null || batchInFlight || drainInFlight || strokePreparing || drainWake.isPending) return;
   flushT = self.setTimeout(() => {
     flushT = null;
-    if (!mod || batchInFlight) return;
-    drainProcess(true);
+    if (!mod || batchInFlight || drainInFlight || strokePreparing) return;
+    void drainProcess(true);
   }, 8);
 }
 function flushNow() {
   if (flushT !== null) { clearTimeout(flushT); flushT = null; }
-  if (!mod || batchInFlight) return;
-  drainProcess(false);
+  if (!mod || batchInFlight || drainInFlight || strokePreparing) return;
+  void drainProcess(false);
 }
 function doCommit() {
   if (!mod) return;
-  if (batchInFlight || motionQueue.length > 0 || strokeContinuation) {
+  if (batchInFlight || drainInFlight || strokePreparing || motionQueue.length > 0 || strokeContinuation) {
     commitP = true;
     return;
   }
@@ -335,19 +547,44 @@ function doCommit() {
   strokeOpen = false;
   pushState();
 }
-function beginStroke(x: number, y: number, xt: number, yt: number, z: number, r: number, ba: number) {
+async function beginStroke(x: number, y: number, xt: number, yt: number, z: number, r: number, ba: number) {
   if (!mod) return;
-  if (strokeOpen) {
+  if (strokeOpen || strokePreparing) {
     reportEngineError('A new stroke started before the current stroke ended.');
     return;
   }
   motionQueue.clear();
   lastT = 0;
+  lastStrokeX = x;
+  lastStrokeY = y;
   strokeOpen = true;
-  mod._begin_stroke(x, y, xt, yt, z, r, ba);
-  mod._paint_begin_batch();
-  batching = true;
-  scheduleFlush();
+  strokePreparing = true;
+  try {
+    const wait = tilePager?.prepare(x, y, x, y);
+    if (wait && !(await wait)) {
+      motionQueue.clear();
+      commitP = false;
+      strokeOpen = false;
+      reportEngineError('IndexedDB tile storage could not make room.', 'Paint storage is full.');
+      pushState();
+      replayDeferredCommands();
+      return;
+    }
+    mod._begin_stroke(x, y, xt, yt, z, r, ba);
+    mod._paint_begin_batch();
+    batching = true;
+    scheduleFlush();
+  } catch (error) {
+    motionQueue.clear();
+    commitP = false;
+    strokeOpen = false;
+    reportEngineError(`Stroke start failed: ${(error as Error)?.message ?? error}`);
+    pushState();
+    replayDeferredCommands();
+  } finally {
+    strokePreparing = false;
+    if (strokeOpen && batching) scheduleFlush();
+  }
 }
 function pushState() {
   if (!mod) return;
@@ -432,7 +669,7 @@ function handleReadyCommand(m: Msg) {
       try { setB(name, value); }
       catch (err) { post({ type: 'log', text: `config ${name} failed: ${(err as Error)?.message ?? err}` }); }
     }); break;
-    case 'beginStroke': beginStroke(m.x, m.y, m.xtilt, m.ytilt, m.zoom, m.rotation, m.barrel); break;
+    case 'beginStroke': void beginStroke(m.x, m.y, m.xtilt, m.ytilt, m.zoom, m.rotation, m.barrel); break;
     case 'strokeSample':
       if (!strokeOpen) {
         reportEngineError('A stroke sample has no active stroke.');
@@ -498,8 +735,8 @@ function handleReadyCommand(m: Msg) {
 }
 
 function routeReadyCommand(m: Msg) {
-  const paintPending = batchInFlight || strokeContinuation ||
-    motionQueue.length > 0 || batching || commitP;
+  const paintPending = batchInFlight || drainInFlight || strokePreparing ||
+    strokeContinuation || motionQueue.length > 0 || batching || commitP;
   const joinsCurrentStroke = strokeOpen &&
     (m.cmd === 'strokeSample' || m.cmd === 'commit');
   if (deferredCommands.length > 0 ||
@@ -528,6 +765,22 @@ async function handleInput(e: MessageEvent<Msg & { canvas?: OffscreenCanvas }>) 
             post({ type: "log", text: `tile pool unavailable: ${(err as Error)?.message ?? err}` });
           });
       }
+      const nextDocumentId = m.documentId ?? `paint-${Date.now()}-${Math.random()}`;
+      if (!tileStore) {
+        const candidate = new PaintTileStore();
+        try {
+          await candidate.open();
+          await candidate.clear();
+          tileStore = candidate;
+        } catch (err) {
+          post({ type: 'log', text: `IndexedDB unavailable: ${(err as Error)?.message ?? err}` });
+        }
+      }
+      if (tileStore && tileDocumentId && tileDocumentId !== nextDocumentId) {
+        try { await tileStore.dropDocument(tileDocumentId); }
+        catch (err) { post({ type: 'log', text: `IndexedDB cleanup failed: ${(err as Error)?.message ?? err}` }); }
+      }
+      tileDocumentId = nextDocumentId;
       docW = m.width; docH = m.height;
       if (m.canvas) canvas = m.canvas;
       if (canvas) {
@@ -551,6 +804,8 @@ async function handleInput(e: MessageEvent<Msg & { canvas?: OffscreenCanvas }>) 
       const displayPointer = mod._paint_render_rgba8_tile_ptr(0, 0);
       rgba8 = mod.HEAPU8.subarray(displayPointer, displayPointer + TILE_B);
       mod._paint_set_eotf(EOTF);
+      if (!tilePager) tilePager = new PaintTilePager();
+      tilePager.configure(mod, tileStore, tileDocumentId);
       mod._paint_clear();
       mod._paint_set_background_color(bgRGB[0], bgRGB[1], bgRGB[2]);
       motionQueue.clear();
@@ -560,6 +815,8 @@ async function handleInput(e: MessageEvent<Msg & { canvas?: OffscreenCanvas }>) 
       commitP = false;
       batching = false;
       batchInFlight = false;
+      drainInFlight = false;
+      strokePreparing = false;
       renderedMip = -1;
       renderDirty(true);
       pushState();

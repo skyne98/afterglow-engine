@@ -2,6 +2,14 @@ import { describe, expect, test } from 'bun:test';
 import { MotionQueue, spline4p } from './paint-input.ts';
 
 describe('MotionQueue', () => {
+  test('peeks the next position without removing it', () => {
+    const queue = new MotionQueue(4);
+    queue.push(1, 12, 13, 0.5, 0, 0, 1, 0, 0.5);
+    expect(queue.peekX()).toBe(12);
+    expect(queue.peekY()).toBe(13);
+    expect(queue.length).toBe(1);
+  });
+
   test('keeps primitive samples in order', () => {
     const queue = new MotionQueue(4);
     queue.push(10, 1, 2, 0.5, 0, 0, 1, 0, 0.5);

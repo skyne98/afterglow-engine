@@ -739,6 +739,46 @@ impl PaintApp {
 
     pub fn layer_count(&self) -> usize { self.layer_count }
     pub fn active_layer(&self) -> usize { self.active_layer }
+
+    pub fn layer_used_tile_count(&self, layer_id: usize) -> usize {
+        self.layers
+            .get(layer_id)
+            .map(WebSurface::used_tile_count)
+            .unwrap_or(0)
+    }
+
+    pub fn layer_used_tile_info(&self, layer_id: usize, index: usize) -> Option<TilePos> {
+        let pos = self.layers.get(layer_id)?.used_tile_info(index)?;
+        Some(TilePos { tx: pos.tx, ty: pos.ty })
+    }
+
+    pub fn layer_tile_ptr(&self, layer_id: usize, tx: i32, ty: i32) -> usize {
+        self.layers
+            .get(layer_id)
+            .and_then(|surface| surface.get_tile(tx, ty))
+            .map(|tile| tile.as_ptr() as usize)
+            .unwrap_or(0)
+    }
+
+    pub fn remove_layer_tile(&mut self, layer_id: usize, tx: i32, ty: i32) -> bool {
+        self.layers
+            .get_mut(layer_id)
+            .map(|surface| surface.remove_tile(tx, ty))
+            .unwrap_or(false)
+    }
+
+    pub fn write_layer_rgba16_tile(
+        &mut self,
+        layer_id: usize,
+        tx: i32,
+        ty: i32,
+        source: &[u16],
+    ) -> bool {
+        self.layers
+            .get_mut(layer_id)
+            .map(|surface| surface.write_rgba16_tile(tx, ty, source))
+            .unwrap_or(false)
+    }
 }
 impl PaintApp {
     /// `begin_stroke` -- history begin + brush reset + zero-pressure warm-up.

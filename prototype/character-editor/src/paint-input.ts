@@ -51,6 +51,14 @@ export class MotionQueue {
     return this.count;
   }
 
+  peekX(): number {
+    return this.count === 0 ? 0 : this.xs[this.head];
+  }
+
+  peekY(): number {
+    return this.count === 0 ? 0 : this.ys[this.head];
+  }
+
   clear(): void {
     this.head = 0;
     this.count = 0;

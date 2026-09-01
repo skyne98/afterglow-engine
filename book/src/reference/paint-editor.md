@@ -20,6 +20,8 @@ The display uses exact dirty tile slots. It does not render every tile inside on
 
 The operation queue has fixed limits of 4,096 dirty tiles and 16,384 operations for each batch. All layers share 4,096 resident RGBA16 tiles. Capacity failures cause visible errors without a heap growth attempt.
 
+The worker writes cold RGBA16 tiles to IndexedDB and restores the protected brush path before a new stroke. It waits for storage before it starts the brush. A missing record means an empty tile. A storage failure drops the stroke without a wasm trap. The store is cleared when the worker starts or the document changes.
+
 The demo supports documents through 16K x 16K, eight paint layers, four groups, and all 22 MyPaint layer modes.
 
 It also supports pressure, tilt, smudge, erasing, zoom, pan, rotation, mirror view, mip display, PNG, and OpenRaster.
@@ -30,4 +32,4 @@ The worker reports brush-loop, queue, tile, history, worker, and promise errors.
 
 The HUD gives the current motion-sample count, deferred action count, and recent work times.
 
-The full API is in `docs/api/libmypaint-paint-surface.md` and `docs/api/maipointo.md`.
+The full API is in `docs/api/libmypaint-paint-surface.md`, `docs/api/maipointo.md`, and `docs/api/paint-tile-storage.md`.

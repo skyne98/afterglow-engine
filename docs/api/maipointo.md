@@ -52,11 +52,13 @@ engine exists solely as the reference for the exactness tests.
   handling unwinds a panic, drops the RefCell borrow cleanly, and degrades
   to error code 1. A busy RefCell returns the default result without a
   second panic. An engine panic must never abort into a trap that leaks the
-  borrow and bricks the instance. The history system carries a 64 MiB entry-byte budget
-  with deterministic oldest-record eviction and fallible reservation:
-  at 16K documents a single stroke can capture hundreds of tiles. One stroke
-  has a 32 MiB before-image limit. An over-size stroke paints without undo and
-  reports error 2; an unbounded history OOM-aborted the worker mid-stroke.
+  borrow and bricks the instance. The ABI also lists, reads, removes, and
+  restores raw RGBA16 tiles for the TypeScript IndexedDB pager. The history
+  system carries a 64 MiB entry-byte budget with deterministic oldest-record
+  eviction and fallible reservation: at 16K documents a single stroke can
+  capture hundreds of tiles. One stroke has a 32 MiB before-image limit. An
+  over-size stroke paints without undo and reports error 2; an unbounded
+  history OOM-aborted the worker mid-stroke.
 - `src/random.rs` — `RandomSource` trait: `PortableRand` (production)
   and `GlibcRand` (TYPE_3 glibc clone) so parity tests can replay the
   C `rand()` stream exactly.
@@ -81,8 +83,13 @@ imports that memory with its own 256 MiB cap
 (`paint/maipointo/.cargo/config.toml`), which overrides the engine
 workspace's 64 MiB default for this crate only. All paint layers share a
 fixed 4,096-resident-tile budget (128 MiB of RGBA16 tile data), and history
-uses a separate 64 MiB byte budget. A full budget reports error code `1`
-instead of growing until the worker aborts.
+uses a separate 64 MiB byte budget. The worker stores evicted RGBA16 tiles
+in IndexedDB and restores the needed brush region before a new stroke. It
+pages only between strokes, protects a bounded 1,024-pixel brush path, and
+keeps 2,048 or fewer resident tiles after a page. An IndexedDB miss means a
+zero tile, while a storage failure rejects the stroke without a wasm trap. A
+full budget without a page still reports error code `1` instead of growing
+until the worker aborts.
 
 ## Exactness validation
 
@@ -103,7 +110,7 @@ gate compiler-dependent). The oracle replay covers:
   argument, and tile-byte comparison,
 - event-prefix bisection to the first divergent dab.
 
-35 tests total; all green with and without `--features demo`.
+36 tests total; all green with and without `--features demo`.
 
 ## Build
 

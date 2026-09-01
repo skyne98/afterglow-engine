@@ -374,6 +374,49 @@ pub extern "C" fn paint_get_used_tile_count() -> i32 {
     with_app(|app| app.active().used_tile_count() as i32)
 }
 
+#[unsafe(no_mangle)]
+pub extern "C" fn paint_get_layer_used_tile_count(layer_id: i32) -> i32 {
+    if layer_id < 0 {
+        return 0;
+    }
+    with_app(|app| app.layer_used_tile_count(layer_id as usize) as i32)
+}
+
+/// # Safety
+/// `out_tile` must point to 2 writable i32s.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn paint_get_layer_used_tile_info(
+    layer_id: i32,
+    index: i32,
+    out_tile: *mut i32,
+) {
+    if layer_id < 0 || index < 0 || out_tile.is_null() {
+        return;
+    }
+    with_app(|app| {
+        if let Some(pos) = app.layer_used_tile_info(layer_id as usize, index as usize) {
+            unsafe {
+                *out_tile.add(0) = pos.tx;
+                *out_tile.add(1) = pos.ty;
+            }
+        }
+    })
+}
+
+/// # Safety
+/// The returned pointer aliases the selected layer's tile buffer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn paint_get_layer_tile_ptr(
+    layer_id: i32,
+    tx: i32,
+    ty: i32,
+) -> usize {
+    if layer_id < 0 {
+        return 0;
+    }
+    with_app(|app| app.layer_tile_ptr(layer_id as usize, tx, ty))
+}
+
 /// # Safety
 /// The returned pointer aliases the active layer's tile buffer.
 #[unsafe(no_mangle)]
@@ -381,6 +424,32 @@ pub unsafe extern "C" fn paint_get_tile_ptr(tx: i32, ty: i32) -> usize {
     with_app(|app| {
         let s = app.active();
         s.get_tile(tx, ty).map(|t| t.as_ptr() as usize).unwrap_or(0)
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn paint_remove_layer_tile(layer_id: i32, tx: i32, ty: i32) -> i32 {
+    if layer_id < 0 {
+        return 0;
+    }
+    with_app(|app| app.remove_layer_tile(layer_id as usize, tx, ty) as i32)
+}
+
+/// # Safety
+/// `source` must point to `64*64*4` readable u16 values.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn paint_write_layer_rgba16_tile(
+    layer_id: i32,
+    tx: i32,
+    ty: i32,
+    source: *const u16,
+) -> i32 {
+    if layer_id < 0 || source.is_null() {
+        return 0;
+    }
+    with_app(|app| {
+        let words = unsafe { std::slice::from_raw_parts(source, 64 * 64 * 4) };
+        app.write_layer_rgba16_tile(layer_id as usize, tx, ty, words) as i32
     })
 }
 

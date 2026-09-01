@@ -47,8 +47,9 @@ The operation queue has these limits:
 
 All layers share 4,096 resident RGBA16 tiles (128 MiB). The hash and tile
 slot arrays use this fixed resident limit instead of the full document tile
-count. A resident-tile failure sets error code `1` and drops the affected
-operation without a memory growth attempt.
+count. Before a new stroke, the worker writes cold tiles to IndexedDB and
+restores a bounded input region. A resident-tile failure sets error code `1`
+and drops the affected operation without a memory growth attempt.
 
 A queue capacity failure sets error code `4` before the engine clears the
 queue. The engine does not silently use a serial mode.
@@ -103,6 +104,11 @@ It includes these tile and display exports:
 - `paint_render_layer_rgba8_tile_ptr(layer, tx, ty)`
 - `paint_write_rgba8_tile(tx, ty, rgba8)`
 - `paint_get_used_tile_count()`
+- `paint_get_layer_used_tile_count(layer)`
+- `paint_get_layer_used_tile_info(layer, index, out)`
+- `paint_get_layer_tile_ptr(layer, tx, ty)`
+- `paint_remove_layer_tile(layer, tx, ty)`
+- `paint_write_layer_rgba16_tile(layer, tx, ty, rgba16)`
 - `paint_region_has_paint(tx, ty, level)`
 - `paint_set_eotf(value)`
 
@@ -122,7 +128,8 @@ The default layer mode is Pigment. The default background color is `#A8A498`.
 
 ## Ownership and command order
 
-The worker completes current paint data before it applies these commands:
+The worker completes current paint data before it applies these commands. It
+also waits for IndexedDB page work before it starts a new stroke:
 
 - Brush or color changes
 - Commit
@@ -131,6 +138,10 @@ The worker completes current paint data before it applies these commands:
 - Layer or group changes
 - Export
 - Probe
+
+A page operation never runs during a Rust tile batch. It copies a tile, waits
+for the IndexedDB write, and then removes the resident tile. A cold-tile read
+that finds no record keeps the tile absent and therefore transparent.
 
 This order prevents brush-state changes and surface access during a tile batch.
 

@@ -239,7 +239,7 @@ impl WebSurface {
     }
 
     #[inline]
-    fn find_tile_slot(&self, tx: i32, ty: i32) -> Option<usize> {
+    fn find_hash_slot(&self, tx: i32, ty: i32) -> Option<usize> {
         let start = tile_hash(tx, ty) & (self.hash_size as u32 - 1);
         for probe in 0..self.hash_size as u32 {
             let slot = ((start + probe) & (self.hash_size as u32 - 1)) as usize;
@@ -247,10 +247,14 @@ impl WebSurface {
                 return None;
             }
             if self.slot_tx[slot] == tx && self.slot_ty[slot] == ty {
-                return Some(self.slot_index[slot]);
+                return Some(slot);
             }
         }
         None
+    }
+
+    fn find_tile_slot(&self, tx: i32, ty: i32) -> Option<usize> {
+        self.find_hash_slot(tx, ty).map(|slot| self.slot_index[slot])
     }
 
     fn create_tile_slot(&mut self, tx: i32, ty: i32) -> Option<usize> {
@@ -309,6 +313,59 @@ impl WebSurface {
     /// `web_surface_has_tile`.
     pub fn has_tile(&self, tx: i32, ty: i32) -> bool {
         self.find_tile_slot(tx, ty).is_some()
+    }
+
+    /// Remove one resident tile after the worker has saved its bytes.
+    pub fn remove_tile(&mut self, tx: i32, ty: i32) -> bool {
+        let Some(hash_slot) = self.find_hash_slot(tx, ty) else {
+            return false;
+        };
+        let index = self.slot_index[hash_slot];
+        let last = self.tiles.len() - 1;
+        self.tiles.swap_remove(index);
+        self.tile_tx.swap_remove(index);
+        self.tile_ty.swap_remove(index);
+        if index != last {
+            self.display_dirty[index] = self.display_dirty[last];
+            self.capture_marks[index] = self.capture_marks[last];
+        }
+        self.display_dirty.fill(false);
+        self.display_dirty_slots.clear();
+        self.capture_marks[last] = 0;
+        self.slot_used[hash_slot] = false;
+        self.tile_budget
+            .set(self.tile_budget.get().saturating_sub(1));
+        self.rebuild_hash();
+        true
+    }
+
+    fn rebuild_hash(&mut self) {
+        self.slot_used.fill(false);
+        for (index, (&tx, &ty)) in self.tile_tx.iter().zip(&self.tile_ty).enumerate() {
+            let start = tile_hash(tx, ty) & (self.hash_size as u32 - 1);
+            for probe in 0..self.hash_size as u32 {
+                let slot = ((start + probe) & (self.hash_size as u32 - 1)) as usize;
+                if !self.slot_used[slot] {
+                    self.slot_used[slot] = true;
+                    self.slot_tx[slot] = tx;
+                    self.slot_ty[slot] = ty;
+                    self.slot_index[slot] = index;
+                    break;
+                }
+            }
+        }
+    }
+
+    /// Write one raw RGBA16 tile without changing display state.
+    pub fn write_rgba16_tile(&mut self, tx: i32, ty: i32, source: &[u16]) -> bool {
+        if source.len() < TILE_PX {
+            return false;
+        }
+        let Some(tile) = self.get_or_create_tile_mut(tx, ty) else {
+            return false;
+        };
+        tile.copy_from_slice(&source[..TILE_PX]);
+        true
     }
 
     /// First-write capture control (the C write_callback + FixedTileSet).
@@ -827,6 +884,7 @@ impl WebSurface {
         self.slot_used.fill(false);
         self.display_dirty.fill(false);
         self.display_dirty_slots.clear();
+        self.capture_marks.fill(0);
         self.null_tile.fill(0);
     }
 
@@ -882,6 +940,22 @@ mod tests {
         assert_eq!(surface.display_dirty.len(), MAX_RESIDENT_TILES);
         assert!(surface.get_or_create_tile_mut(0, 0).is_none());
         assert!(surface.take_capacity_error());
+    }
+
+    #[test]
+    fn resident_tile_remove_rebuilds_hash_and_releases_budget() {
+        let budget = Rc::new(Cell::new(0));
+        let mut surface = WebSurface::new_with_budget(4096, 4096, Rc::clone(&budget)).unwrap();
+        *surface.get_or_create_tile_mut(1, 2).unwrap().first_mut().unwrap() = 77;
+        *surface.get_or_create_tile_mut(3, 4).unwrap().first_mut().unwrap() = 88;
+        assert_eq!(budget.get(), 2);
+        assert!(surface.remove_tile(1, 2));
+        assert!(!surface.has_tile(1, 2));
+        assert_eq!(surface.get_tile(3, 4).unwrap()[0], 88);
+        assert_eq!(budget.get(), 1);
+        assert!(surface.write_rgba16_tile(1, 2, &[99; TILE_PX]));
+        assert_eq!(surface.get_tile(1, 2).unwrap()[0], 99);
+        assert_eq!(budget.get(), 2);
     }
 }
 
