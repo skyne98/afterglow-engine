@@ -43,7 +43,7 @@ The dab totals were almost equal. The batch count and wake delay caused the larg
 
 The worker now uses one fixed `MessageChannel` wake. It permits only one pending drain wake and still gives one worker task between continuation batches.
 
-The worker can process more 128-dab continuation units in the current tile batch for a maximum of 2 ms. Dense and sparse input now use the same bounded batch mechanism.
+A later queue audit found that several 128-dab continuation units in one tile batch could exceed the fixed operation queue. The worker now processes one input sample or continuation unit per batch. This adds fixed wake work, but preserves the queue limit and input order.
 
 The change does not change these items:
 
@@ -57,4 +57,4 @@ Five final Tail Feathers runs measured a 47.8 ms median. The range was 45.090 th
 
 The prior path measured 2,516.7 through 2,524.8 ms. Thus, the median improvement was approximately 52 times.
 
-The final classic Brush wide test measured 156.975 ms. Its remaining difference from local input is tile-batch, pthread, and display work, not timer clamp.
+The final classic Brush wide test measured 156.975 ms. Its remaining difference from local input is tile-batch, pthread, and display work, not timer clamp. These timing values predate the one-sample batch correction.

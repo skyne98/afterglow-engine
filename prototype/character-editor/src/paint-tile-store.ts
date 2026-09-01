@@ -135,6 +135,55 @@ export class PaintTileStore {
     });
   }
 
+  async dropLayer(documentId: string, layer: number): Promise<void> {
+    const db = this.db;
+    if (!db) return;
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(TILE_STORE, 'readwrite');
+      const index = tx.objectStore(TILE_STORE).index('documentId');
+      const request = index.openCursor(IDBKeyRange.only(documentId));
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (cursor) {
+          const record = cursor.value as TileRecord;
+          if (record.layer === layer) cursor.delete();
+          cursor.continue();
+        }
+      };
+      request.onerror = event => reject(errorText(event, 'IndexedDB layer delete failed.'));
+      tx.oncomplete = () => resolve();
+      tx.onerror = event => reject(errorText(event, 'IndexedDB layer delete failed.'));
+      tx.onabort = event => reject(errorText(event, 'IndexedDB layer delete aborted.'));
+    });
+  }
+
+  async deleteLayer(documentId: string, layer: number): Promise<void> {
+    const db = this.db;
+    if (!db) return;
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(TILE_STORE, 'readwrite');
+      const tiles = tx.objectStore(TILE_STORE);
+      const index = tiles.index('documentId');
+      const request = index.openCursor(IDBKeyRange.only(documentId));
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) return;
+        const record = cursor.value as TileRecord;
+        if (record.layer === layer) {
+          cursor.delete();
+        } else if (record.layer > layer) {
+          cursor.delete();
+          tiles.put({ ...record, layer: record.layer - 1 });
+        }
+        cursor.continue();
+      };
+      request.onerror = event => reject(errorText(event, 'IndexedDB layer delete failed.'));
+      tx.oncomplete = () => resolve();
+      tx.onerror = event => reject(errorText(event, 'IndexedDB layer delete failed.'));
+      tx.onabort = event => reject(errorText(event, 'IndexedDB layer delete aborted.'));
+    });
+  }
+
   async dropDocument(documentId: string): Promise<void> {
     const db = this.db;
     if (!db) return;

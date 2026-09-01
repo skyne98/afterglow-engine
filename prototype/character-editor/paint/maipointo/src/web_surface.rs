@@ -232,6 +232,13 @@ impl WebSurface {
     pub fn queue_failed(&self) -> u32 {
         self.op_failed
     }
+
+    pub fn take_queue_error(&mut self) -> bool {
+        let failed = self.op_failed != 0;
+        self.op_failed = 0;
+        failed
+    }
+
     pub fn take_capacity_error(&mut self) -> bool {
         let f = self.capacity_failed;
         self.capacity_failed = false;
@@ -956,6 +963,20 @@ mod tests {
         assert!(surface.write_rgba16_tile(1, 2, &[99; TILE_PX]));
         assert_eq!(surface.get_tile(1, 2).unwrap()[0], 99);
         assert_eq!(budget.get(), 2);
+    }
+
+    #[test]
+    fn operation_queue_reports_overflow() {
+        let mut surface = WebSurface::new(4096, 4096).unwrap();
+        for _ in 0..2_000 {
+            surface.draw_dab(
+                100.0, 100.0, 60.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0,
+                1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0,
+            );
+        }
+        assert!(surface.queue_failed() > 0);
+        assert!(surface.take_queue_error());
+        assert_eq!(surface.queue_failed(), 0);
     }
 }
 

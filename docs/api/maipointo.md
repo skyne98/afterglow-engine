@@ -42,8 +42,8 @@ engine exists solely as the reference for the exactness tests.
 - `src/app.rs` — `PaintApp`: layers/groups tree, history (fixed 40
   records and a 64 MiB entry-byte budget), with a 32 MiB limit for one
   stroke's before-image capture, display EOTF LUT, mip render, render/pick/
-  symmetry/layer/group operations, and the serial stroke driver
-  mapping onto the brush.
+  symmetry/layer/group operations, and the cooperative 128-dab, one-sample
+  stroke driver mapping onto the brush.
 - `src/demo_capi.rs` — the full `_paint_*` + `_init`/`_malloc`/`_free`
   C ABI for the standalone wasm module (feature `demo`), plus the
   shared `.myb` v3 JSON loader (`src/capi_json.rs`). Scratch
@@ -85,11 +85,12 @@ workspace's 64 MiB default for this crate only. All paint layers share a
 fixed 4,096-resident-tile budget (128 MiB of RGBA16 tile data), and history
 uses a separate 64 MiB byte budget. The worker stores evicted RGBA16 tiles
 in IndexedDB and restores the needed brush region before a new stroke. It
-pages only between strokes, protects a bounded 1,024-pixel brush path, and
-keeps 2,048 or fewer resident tiles after a page. An IndexedDB miss means a
-zero tile, while a storage failure rejects the stroke without a wasm trap. A
-full budget without a page still reports error code `1` instead of growing
-until the worker aborts.
+evicts only between strokes, protects a bounded 1,024-pixel brush path, and
+keeps 2,048 or fewer resident tiles after a page. During a stroke it restores
+the next bounded input region, writes older tiles before eviction, and protects
+the current brush region. An IndexedDB miss means a zero tile, while a
+storage failure rejects the stroke without a wasm trap. A full budget without a page still reports error code `1`
+instead of growing until the worker aborts.
 
 ## Exactness validation
 

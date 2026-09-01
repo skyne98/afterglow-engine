@@ -42,8 +42,14 @@ fn with_app<R: Default>(f: impl FnOnce(&mut PaintApp) -> R) -> R {
             Some(surface) => surface.take_capacity_error(),
             None => false,
         };
+        let queue_failed = match app.layers.get_mut(active_layer) {
+            Some(surface) => surface.take_queue_error(),
+            None => false,
+        };
         if capacity_failed {
             app.error_code = 1;
+        } else if queue_failed {
+            app.error_code = 4;
         }
         result
     })
@@ -330,13 +336,17 @@ pub extern "C" fn paint_end_batch_finish() -> i32 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn paint_continue_stroke_to() -> i32 {
-    // The serial driver completes every stroke inside stroke_to.
-    -1
+    with_app(|app| app.continue_stroke_to())
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn paint_has_stroke_continuation() -> i32 {
-    0
+    with_app(|app| app.has_stroke_continuation() as i32)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn paint_cancel_stroke() {
+    with_app(|app| app.cancel_stroke());
 }
 
 #[unsafe(no_mangle)]

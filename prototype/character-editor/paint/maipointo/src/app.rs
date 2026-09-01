@@ -3,6 +3,7 @@
 //! `_paint_*` surface the TS worker drives. Zero C, zero emscripten.
 
 use crate::brush::Brush;
+use crate::brush::cooperative::StrokeState;
 use crate::compositor::{layer_blend_over, BlendMode};
 use crate::web_surface::WebSurface;
 use std::cell::Cell;
@@ -113,6 +114,7 @@ pub struct PaintApp {
     root_last_child: i32,
 
     pub brush: Option<Brush>,
+    cooperative_stroke: StrokeState,
     pub pending_captures: Vec<PendingCapture>,
     history_entries: Vec<HistoryEntry>,
     history_records: Vec<HistoryRecord>,
@@ -177,6 +179,7 @@ impl PaintApp {
             root_first_child: WEB_REF_NONE,
             root_last_child: WEB_REF_NONE,
             brush: None,
+            cooperative_stroke: StrokeState::default(),
             pending_captures: Vec::new(),
             history_entries: Vec::new(),
             history_records: Vec::new(),
@@ -785,6 +788,7 @@ impl PaintApp {
     pub fn begin_stroke(&mut self, x: f32, y: f32, xtilt: f32, ytilt: f32,
         viewzoom: f32, viewrotation: f32, barrel_rotation: f32,
     ) {
+        self.cooperative_stroke.cancel();
         self.history_begin();
         let Some(brush) = self.brush.as_mut() else { return };
         self.history_active_layer = self.active_layer;
@@ -819,15 +823,53 @@ impl PaintApp {
         if !open {
             self.layers[layer].begin_atomic();
         }
-        let result = brush.stroke_to(&mut self.layers[layer], x, y, pressure,
-            xtilt, ytilt, dtime, viewzoom, viewrotation, barrel_rotation,
-            linear);
+        let result = if self.cooperative_stroke.pending() {
+            brush.cooperative_stroke_continue(
+                &mut self.layers[layer], &mut self.cooperative_stroke,
+                WEB_STROKE_DAB_BUDGET,
+            )
+        } else {
+            brush.cooperative_stroke_start(
+                &mut self.layers[layer], &mut self.cooperative_stroke,
+                x, y, pressure, xtilt, ytilt, dtime, viewzoom, viewrotation,
+                barrel_rotation, linear, WEB_STROKE_DAB_BUDGET,
+            )
+        };
         if !open {
             let (roi, _jobs) = self.layers[layer].end_atomic();
             self.dirty_roi = roi;
         }
         self.absorb_captures();
-        if result { 2 } else { 1 }
+        if result < 0 { self.error_code = 3; }
+        result
+    }
+
+    pub fn continue_stroke_to(&mut self) -> i32 {
+        let Some(brush) = self.brush.as_mut() else { return -1 };
+        let layer = self.active_layer;
+        let open = self.batch_open;
+        if !open {
+            self.layers[layer].begin_atomic();
+        }
+        let result = brush.cooperative_stroke_continue(
+            &mut self.layers[layer], &mut self.cooperative_stroke,
+            WEB_STROKE_DAB_BUDGET,
+        );
+        if !open {
+            let (roi, _jobs) = self.layers[layer].end_atomic();
+            self.dirty_roi = roi;
+        }
+        self.absorb_captures();
+        if result < 0 { self.error_code = 3; }
+        result
+    }
+
+    pub fn cancel_stroke(&mut self) {
+        self.cooperative_stroke.cancel();
+    }
+
+    pub fn has_stroke_continuation(&self) -> bool {
+        self.cooperative_stroke.pending()
     }
 
     fn absorb_captures(&mut self) {
@@ -1265,5 +1307,26 @@ mod tests {
                 app.display_tile.capacity(),
             )
         );
+    }
+
+    #[test]
+    fn cooperative_stroke_keeps_boundary_crossing_queue_bounded() {
+        let mut app = PaintApp::new(12288, 12288).unwrap();
+        app.begin_stroke(500.0, 2500.0, 0.0, 0.0, 1.0, 0.0, 0.5);
+        app.begin_batch();
+        for step in 1..=25 {
+            let x = 500.0 + 11300.0 * step as f32 / 25.0;
+            let mut result = app.stroke_to(
+                x, 2500.0, 0.5, 0.0, 0.0, 0.016, 1.0, 0.0, 0.5, false,
+            );
+            while result == 0 {
+                app.end_batch();
+                app.begin_batch();
+                result = app.continue_stroke_to();
+            }
+        }
+        app.end_batch();
+        app.history_commit();
+        assert_eq!(app.active().queue_failed(), 0);
     }
 }

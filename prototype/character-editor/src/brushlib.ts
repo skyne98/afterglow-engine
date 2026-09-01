@@ -24,6 +24,7 @@ export interface BrushModule {
   _paint_end_batch_finish: () => number;
   _paint_continue_stroke_to: () => number;
   _paint_has_stroke_continuation: () => number;
+  _paint_cancel_stroke: () => void;
   _paint_get_width: () => number;
   _paint_get_height: () => number;
   _paint_get_error_code: () => number;

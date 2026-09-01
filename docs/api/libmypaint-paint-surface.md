@@ -19,9 +19,9 @@ The module is a plain `rust-lld` cdylib with imported shared memory (`--import-m
 
 ## Brush processing
 
-`stroke_to()` starts one exact libmypaint input sample and completes its stateful dab loop on the paint worker. The current ABI does not use a continuation.
+`stroke_to()` starts one exact libmypaint input sample. The Rust app uses the cooperative dab driver with a 128-dab limit. A zero result keeps the sample at the queue head, and `paint_continue_stroke_to()` resumes it after the batch drains.
 
-The normal input drain keeps an 8 ms scheduling budget between samples. One fixed `MessageChannel` starts the next drain and permits only one pending wake.
+The worker closes the batch after one input sample or continuation unit. This keeps the fixed operation queue below capacity. The normal input drain keeps an 8 ms scheduling budget, and one fixed `MessageChannel` starts the next drain with one pending wake.
 
 The `MotionQueue` has 8,192 fixed sample slots. It preserves input order until its fixed capacity is full.
 
@@ -48,11 +48,12 @@ The operation queue has these limits:
 All layers share 4,096 resident RGBA16 tiles (128 MiB). The hash and tile
 slot arrays use this fixed resident limit instead of the full document tile
 count. Before a new stroke, the worker writes cold tiles to IndexedDB and
-restores a bounded input region. A resident-tile failure sets error code `1`
-and drops the affected operation without a memory growth attempt.
+restores a bounded input region. During a stroke, it restores each next input region before brush work. It
+writes older tiles before eviction and protects the current brush region.
 
-A queue capacity failure sets error code `4` before the engine clears the
-queue. The engine does not silently use a serial mode.
+The cooperative 128-dab limit keeps normal editor brushes below the 16,384
+operation batch limit. A queue capacity failure sets error code `4` before the
+engine clears the queue.
 
 ## History tile set
 
@@ -89,6 +90,7 @@ The module includes these brush and batch exports:
 - `stroke_to(..., linear)`
 - `paint_continue_stroke_to()`
 - `paint_has_stroke_continuation()`
+- `paint_cancel_stroke()`
 - `paint_begin_batch()`
 - `paint_end_batch()`
 - `paint_is_batch_done()`

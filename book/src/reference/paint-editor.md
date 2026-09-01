@@ -6,7 +6,7 @@ The vendored C engine exists only in the exactness validation oracles (`prototyp
 
 The tile pool uses a bounded worker count from the page hardware-concurrency value. Each pool worker owns an isolated wasm instance and receives copied dirty-tile data.
 
-The stateful brush and smudge sample run on the paint worker in input order. A fixed `MessageChannel` starts the next drain and permits one pending wake.
+The stateful brush and smudge sample run on the paint worker in input order. The cooperative driver limits each batch to 128 dabs and one input sample. A fixed `MessageChannel` starts the next drain with one pending wake.
 
 The stateful smudge path can exceed the input rate. The fixed queue preserves input order until its capacity limit.
 
@@ -20,7 +20,7 @@ The display uses exact dirty tile slots. It does not render every tile inside on
 
 The operation queue has fixed limits of 4,096 dirty tiles and 16,384 operations for each batch. All layers share 4,096 resident RGBA16 tiles. Capacity failures cause visible errors without a heap growth attempt.
 
-The worker writes cold RGBA16 tiles to IndexedDB and restores the protected brush path before a new stroke. It waits for storage before it starts the brush. A missing record means an empty tile. A storage failure drops the stroke without a wasm trap. The store is cleared when the worker starts or the document changes.
+The worker writes cold RGBA16 tiles to IndexedDB and restores the protected brush path before a new stroke. During a stroke, it restores the next input region before brush work. It writes older tiles before eviction and protects the current brush region. It waits for storage before brush work. A missing record means an empty tile. A storage failure drops the stroke without a wasm trap. The store is cleared when the worker starts, the active layer is cleared, or the document changes.
 
 The demo supports documents through 16K x 16K, eight paint layers, four groups, and all 22 MyPaint layer modes.
 

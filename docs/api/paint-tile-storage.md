@@ -33,7 +33,8 @@ The demo ABI has these cold-tile operations:
 - `paint_remove_layer_tile`
 - `paint_write_layer_rgba16_tile`
 
-The worker copies tile bytes before it removes a resident tile. It removes the
+The store also removes cold records for a cleared layer and shifts records
+when a layer is deleted. The worker copies tile bytes before it removes a resident tile. It removes the
 tile only after the IndexedDB write completes. A failed write leaves the tile
 resident and rejects the stroke start.
 
@@ -50,9 +51,15 @@ The page operation does these steps:
 4. Restore cold tiles in the protected path.
 5. Start the brush only after all restore work completes.
 
+During an open stroke, the worker restores the next bounded input region before
+it processes that input. It writes older tiles before it evicts them and keeps
+the current brush region protected.
+
 The protected region has a limit of 1,536 source tiles. This gives the brush a
 fixed working set and keeps all allocations bounded. A brush path that needs a
-larger working set reports a storage error and does not start.
+larger working set reports a storage error and does not start. A later input
+region that exceeds the resident limit ends the stroke without removing the
+protected brush region.
 
 An absent cold record means that the tile has no paint and stays absent from
 Rust. An IndexedDB error reports `Paint storage is full.` and drops the stroke
@@ -68,4 +75,7 @@ more than 4,096 logical painted tiles and must confirm:
 - no `RuntimeError: unreachable`,
 - no `Paint tile allocation failed.` message,
 - no RefCell borrow error,
-- input queue completion after each page operation.
+- input queue completion after each page operation,
+- full-width draw-over strokes after eviction,
+- smudge plus undo and redo after restoration,
+- active-layer clear without loss of other-layer cold records.
