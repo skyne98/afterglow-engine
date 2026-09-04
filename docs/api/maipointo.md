@@ -129,6 +129,20 @@ It puts the selected item controls above the stack and the stack actions below i
 These controls set visibility, blend mode, opacity, parent, group composition, order, creation, and deletion.
 The Eyedropper tool samples the visible composite and updates all Color panel fields.
 
+The options bar has one global stroke stabilizer profile.
+`src/paint-stabilizer.ts` supplies four fixed-capacity position filters:
+
+- Pulled String holds the brush until the screen-space string is tight.
+- Moving Average uses a fixed 64-sample maximum window for rounded curves.
+- Exponential gives more weight to new samples for long curves.
+- Inertia uses a damped spring for fast, flowing strokes.
+
+The Amount range is 1 through 100.
+Moving Average and Exponential support Catch Up during a pause and at pen lift.
+Catch Up sends one point per animation frame and one final point at pen lift.
+The profile applies to all brush presets and uses the `afterglow.paintStabilizer` local-storage key.
+The sample path does not allocate filter storage during a stroke.
+
 The page uses these Photoshop shortcuts for available actions:
 
 | Shortcut | Action |

@@ -123,6 +123,23 @@ button { cursor: default; }
   color: #b8b8b8;
   font-variant-numeric: tabular-nums;
 }
+.stabilizer-controls {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding-left: 10px;
+  border-left: 1px solid #555;
+}
+.stabilizer-controls select {
+  max-width: 132px;
+  height: 24px;
+  border: 1px solid #555;
+  border-radius: 2px;
+  color: #ddd;
+  background: #252525;
+}
+.options-bar .compact-check { gap: 4px; }
+.stabilizer-controls :disabled { opacity: .45; }
 .color-control {
   display: flex;
   align-items: center;

@@ -128,6 +128,19 @@ function focusColor(): void {
       <label>Size <input id="radius" type="range" min="2" max="60" value="14" /><output id="radiusVal" /></label>
       <label>Hardness <input id="hardness" type="range" min="0" max="1" step="0.01" value="0.6" /><output id="hardnessVal" /></label>
       <label>Opacity <input id="opacity" type="range" min="0" max="1" step="0.01" value="1" /><output id="opacityVal" /></label>
+      <span class="stabilizer-controls">
+        <label>Stabilizer
+          <select id="stabilizerMode">
+            <option value="off">Off</option>
+            <option value="string">Pulled String</option>
+            <option value="average">Moving Average</option>
+            <option value="exponential">Exponential</option>
+            <option value="inertia">Inertia</option>
+          </select>
+        </label>
+        <label>Amount <input id="stabilizerAmount" type="range" min="1" max="100" value="20" /><output id="stabilizerAmountVal">20</output></label>
+        <label id="stabilizerCatchUpLabel" class="compact-check"><input id="stabilizerCatchUp" type="checkbox" checked /> Catch Up</label>
+      </span>
       <button id="colorFocusBtn" class="color-control" type="button" @click="focusColor">Color <span class="toolbar-color-swatch" /></button>
     </div>
 

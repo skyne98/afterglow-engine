@@ -48,6 +48,12 @@ The selected item controls set blend mode, opacity, parent, pass-through mode, a
 The row and toolbar controls set visibility, order, creation, and deletion.
 The Eyedropper tool samples the visible composite and updates all Color panel fields.
 
+The options bar has one stabilizer profile for all brushes.
+Select Pulled String for accurate corners, Moving Average for rounded curves, Exponential for long curves, or Inertia for flowing strokes.
+The Amount control sets the filter strength.
+Moving Average and Exponential also have Catch Up for pauses and pen lift.
+The editor saves this profile in the browser.
+
 The page uses Photoshop shortcuts for each available action:
 
 | Shortcut | Action |

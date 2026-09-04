@@ -9,6 +9,7 @@ import { PaintPointerState } from './paint-pointer-state.ts';
 import { resolvePaintShortcut, type PaintShortcut } from './paint-shortcuts.ts';
 import { buildPaintLayerRows, type PaintGroupInfo, type PaintLayerInfo } from './paint-layers.ts';
 import { rgbToHex } from './paint-color.ts';
+import { StrokeStabilizer, type StrokeStabilizerMode } from './paint-stabilizer.ts';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const canvas = $<HTMLCanvasElement>('paint');
@@ -33,6 +34,31 @@ let viewDragMode: 'pan' | 'rotate' | null = null;
 let colorPickPointer: number | null = null;
 let latestColorPickId = 0;
 let spaceHeld = false;
+const stabilizer = new StrokeStabilizer();
+let stabilizerFrame: number | null = null;
+let lastSourceWallTime = 0;
+let lastStrokeTime = 0;
+let lastStrokePressure = 0.5;
+let lastStrokeXTilt = 0;
+let lastStrokeYTilt = 0;
+let stabilizerMode: StrokeStabilizerMode = 'off';
+let stabilizerAmount = 20;
+let stabilizerCatchUp = true;
+const strokeSampleMessage = {
+  cmd: 'strokeSample', x: 0, y: 0, pressure: 0, xtilt: 0, ytilt: 0,
+  time: 0, zoom: 1, rotation: 0, barrel: 0.5,
+};
+const stabilizerModes = new Set<StrokeStabilizerMode>(['off', 'string', 'average', 'exponential', 'inertia']);
+try {
+  const saved = JSON.parse(localStorage.getItem('afterglow.paintStabilizer') ?? 'null') as
+    { mode?: string; amount?: number; catchUp?: boolean } | null;
+  if (saved?.mode && stabilizerModes.has(saved.mode as StrokeStabilizerMode)) {
+    stabilizerMode = saved.mode as StrokeStabilizerMode;
+  }
+  if (Number.isFinite(saved?.amount)) stabilizerAmount = Math.max(1, Math.min(100, saved!.amount!));
+  if (typeof saved?.catchUp === 'boolean') stabilizerCatchUp = saved.catchUp;
+} catch {}
+stabilizer.configure(stabilizerMode, stabilizerAmount, stabilizerCatchUp);
 const deviceMemoryGiB = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
 let savedPaintMemoryMiB: number | undefined;
 try {
@@ -57,7 +83,11 @@ function releaseCanvasPointer(pointerId: number | null) {
   } catch {}
 }
 function commitPointerStroke(commit: boolean) {
-  if (commit && ready) send({ cmd: 'commit' });
+  if (!commit) return;
+  cancelStabilizerCatchUp();
+  if (ready && stabilizer.isActive()) sendStabilizedPoint(performance.now(), 0);
+  stabilizer.end();
+  if (ready) send({ cmd: 'commit' });
 }
 function clearPointerInput(): boolean {
   const strokePointer = pointerState.strokePointer;
@@ -152,18 +182,62 @@ function penPressure(e: PointerEvent, contact = (e.buttons & 1) !== 0): number {
   if (p > 0) lastKnownPenPressure = p;
   return p;
 }
-function sendSample(e: PointerEvent, pressure: number) {
+function sendStabilizedPoint(time: number, pressure: number): void {
+  lastStrokeTime = Math.max(lastStrokeTime + 0.01, time);
+  strokeSampleMessage.x = stabilizer.x;
+  strokeSampleMessage.y = stabilizer.y;
+  strokeSampleMessage.pressure = pressure;
+  strokeSampleMessage.xtilt = lastStrokeXTilt;
+  strokeSampleMessage.ytilt = lastStrokeYTilt;
+  strokeSampleMessage.time = lastStrokeTime;
+  strokeSampleMessage.zoom = view.zoom;
+  strokeSampleMessage.rotation = view.rotationDegrees * Math.PI / 180;
+  send(strokeSampleMessage);
+}
+function cancelStabilizerCatchUp(): void {
+  if (stabilizerFrame === null) return;
+  cancelAnimationFrame(stabilizerFrame);
+  stabilizerFrame = null;
+}
+function runStabilizerCatchUp(time: number): void {
+  stabilizerFrame = null;
+  if (!pointerState.strokeActive || !stabilizer.canCatchUp()) return;
+  if (performance.now() - lastSourceWallTime < 24) {
+    stabilizerFrame = requestAnimationFrame(runStabilizerCatchUp);
+    return;
+  }
+  if (!stabilizer.stepCatchUp()) return;
+  sendStabilizedPoint(time, lastStrokePressure);
+  stabilizerFrame = requestAnimationFrame(runStabilizerCatchUp);
+}
+function scheduleStabilizerCatchUp(): void {
+  if (stabilizerFrame === null && stabilizer.canCatchUp()) {
+    stabilizerFrame = requestAnimationFrame(runStabilizerCatchUp);
+  }
+}
+function sendSample(e: PointerEvent, pressure: number, scheduleCatchUp = true): boolean {
   const now = Number.isFinite(e.timeStamp) ? e.timeStamp : performance.now();
   const [x, y] = pointerModel(e);
-  const xt = Math.max(-1, Math.min(1, (e.tiltX / 90) || 0)), yt = Math.max(-1, Math.min(1, (e.tiltY / 90) || 0));
-  send({ cmd: 'strokeSample', x, y, pressure, xtilt: xt, ytilt: yt, time: now, zoom: view.zoom, rotation: view.rotationDegrees * Math.PI / 180, barrel: 0.5 });
+  lastStrokeXTilt = Math.max(-1, Math.min(1, (e.tiltX / 90) || 0));
+  lastStrokeYTilt = Math.max(-1, Math.min(1, (e.tiltY / 90) || 0));
+  if (pressure > 0) lastStrokePressure = pressure;
+  lastSourceWallTime = performance.now();
+  const modelUnitsPerPixel = (docSize.width / dispW) / Math.max(0.1, view.zoom);
+  const emitted = stabilizer.sample(x, y, now, modelUnitsPerPixel);
+  if (emitted) sendStabilizedPoint(now, pressure);
+  if (scheduleCatchUp && pressure > 0) scheduleStabilizerCatchUp();
+  return emitted;
 }
 function beginStrokeAt(e: PointerEvent) {
   if (!ready) return;
   if (e.pointerType !== 'mouse') lastKnownPenPressure = 0.5;
   const [x, y] = pointerModel(e);
+  const now = Number.isFinite(e.timeStamp) ? e.timeStamp : performance.now();
+  stabilizer.begin(x, y, now);
+  lastStrokeTime = now;
+  lastStrokePressure = penPressure(e, true);
   send({ cmd: 'beginStroke', x, y, xtilt: (e.tiltX/90)||0, ytilt: (e.tiltY/90)||0, zoom: view.zoom, rotation: view.rotationDegrees * Math.PI / 180, barrel: 0.5 });
-  sendSample(e, penPressure(e, true));
+  sendSample(e, lastStrokePressure);
 }
 function endStroke(e: PointerEvent) {
   if (colorPickPointer === e.pointerId) {
@@ -177,7 +251,11 @@ function endStroke(e: PointerEvent) {
     return;
   }
   if (!pointerState.strokeActive || pointerState.strokePointer !== e.pointerId) return;
-  sendSample(e, 0);
+  cancelStabilizerCatchUp();
+  sendSample(e, lastStrokePressure, false);
+  if (stabilizer.finishCatchUp()) {
+    sendStabilizedPoint(lastStrokeTime + 1000 / 120, lastStrokePressure);
+  }
   commitPointerStroke(pointerState.finishStroke(e.pointerId));
   releaseCanvasPointer(e.pointerId);
 }
@@ -246,8 +324,7 @@ canvas.addEventListener('pointermove', e => {
   // from tool frames and the browser then reports pressure 0 mid-stroke.
   const contact = (e.buttons & 1) !== 0;
   if (!contact) {
-    commitPointerStroke(pointerState.finishStroke(e.pointerId));
-    releaseCanvasPointer(e.pointerId);
+    endStroke(e);
     return;
   }
   const samples = e.getCoalescedEvents();
@@ -259,11 +336,7 @@ canvas.addEventListener('pointermove', e => {
 });
 canvas.addEventListener('pointerup', endStroke);
 canvas.addEventListener('pointercancel', endStroke);
-canvas.addEventListener('lostpointercapture', e => {
-  if (colorPickPointer === e.pointerId) colorPickPointer = null;
-  const commit = pointerState.losePointer(e.pointerId);
-  commitPointerStroke(commit);
-});
+canvas.addEventListener('lostpointercapture', endStroke);
 window.addEventListener('pointerup', endStroke);
 window.addEventListener('pointercancel', endStroke);
 window.addEventListener('blur', () => {
@@ -514,6 +587,42 @@ document.addEventListener('keyup', (event) => {
 });
 
 // UI bindings
+const stabilizerModeInput = $<HTMLSelectElement>('stabilizerMode');
+const stabilizerAmountInput = $<HTMLInputElement>('stabilizerAmount');
+const stabilizerCatchUpInput = $<HTMLInputElement>('stabilizerCatchUp');
+function updateStabilizerControls(save: boolean): void {
+  const requestedMode = stabilizerModeInput.value as StrokeStabilizerMode;
+  stabilizerMode = stabilizerModes.has(requestedMode) ? requestedMode : 'off';
+  stabilizerAmount = Math.max(1, Math.min(100, Number(stabilizerAmountInput.value) || 20));
+  stabilizerCatchUp = stabilizerCatchUpInput.checked;
+  stabilizer.configure(stabilizerMode, stabilizerAmount, stabilizerCatchUp);
+  canvas.dataset.stabilizerMode = stabilizerMode;
+  canvas.dataset.stabilizerAmount = String(stabilizerAmount);
+  canvas.dataset.stabilizerCatchUp = String(stabilizerCatchUp);
+  stabilizerAmountInput.disabled = stabilizerMode === 'off';
+  $('stabilizerAmountVal').textContent = String(stabilizerAmount);
+  const supportsCatchUp = stabilizerMode === 'average' || stabilizerMode === 'exponential';
+  $('stabilizerCatchUpLabel').hidden = !supportsCatchUp;
+  stabilizerCatchUpInput.disabled = !supportsCatchUp;
+  if (save) {
+    try {
+      localStorage.setItem('afterglow.paintStabilizer', JSON.stringify({
+        mode: stabilizerMode, amount: stabilizerAmount, catchUp: stabilizerCatchUp,
+      }));
+    } catch {}
+  }
+}
+function changeStabilizer(): void {
+  finishInputForViewChange();
+  updateStabilizerControls(true);
+}
+stabilizerModeInput.value = stabilizerMode;
+stabilizerAmountInput.value = String(stabilizerAmount);
+stabilizerCatchUpInput.checked = stabilizerCatchUp;
+stabilizerModeInput.addEventListener('change', changeStabilizer);
+stabilizerAmountInput.addEventListener('input', changeStabilizer);
+stabilizerCatchUpInput.addEventListener('change', changeStabilizer);
+updateStabilizerControls(false);
 ['radius','hardness','opacity'].forEach(k => { const i = $(k) as HTMLInputElement; const a = () => { (ui as any)[k] = Number(i.value); $(`${k}Val`).textContent = i.value; applyBrushOverrides(); }; i.addEventListener('input', a); a(); });
 $('color').addEventListener('input', e => setForegroundColor((e.target as HTMLInputElement).value));
 $('viewZoom').addEventListener('input', e => setZoom(Number((e.target as HTMLInputElement).value)));
