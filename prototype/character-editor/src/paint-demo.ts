@@ -8,6 +8,7 @@ import { paintMemoryLimitMiB } from './paint-memory.ts';
 import { PaintPointerState } from './paint-pointer-state.ts';
 import { resolvePaintShortcut, type PaintShortcut } from './paint-shortcuts.ts';
 import { buildPaintLayerRows, type PaintGroupInfo, type PaintLayerInfo } from './paint-layers.ts';
+import { rgbToHex } from './paint-color.ts';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const canvas = $<HTMLCanvasElement>('paint');
@@ -26,9 +27,11 @@ const docSize = { width: 2048, height: 2048 };
 const view = { zoom: 1, rotationDegrees: 0, mirror: false, panX: 0, panY: 0 };
 let dispW = canvas.width, dispH = canvas.height;
 const ui = { radius: 14, hardness: 0.6, opacity: 1.0, color: '#4ecdc4' };
-type ActiveTool = 'brush' | 'hand' | 'rotate' | 'zoom';
+type ActiveTool = 'brush' | 'eyedropper' | 'hand' | 'rotate' | 'zoom';
 let activeTool: ActiveTool = 'brush';
 let viewDragMode: 'pan' | 'rotate' | null = null;
+let colorPickPointer: number | null = null;
+let latestColorPickId = 0;
 let spaceHeld = false;
 const deviceMemoryGiB = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
 let savedPaintMemoryMiB: number | undefined;
@@ -59,10 +62,13 @@ function commitPointerStroke(commit: boolean) {
 function clearPointerInput(): boolean {
   const strokePointer = pointerState.strokePointer;
   const panPointer = pointerState.panPointer;
+  const pickPointer = colorPickPointer;
   const commit = pointerState.finishForViewChange();
   viewDragMode = null;
+  colorPickPointer = null;
   releaseCanvasPointer(strokePointer);
   if (panPointer !== strokePointer) releaseCanvasPointer(panPointer);
+  if (pickPointer !== strokePointer && pickPointer !== panPointer) releaseCanvasPointer(pickPointer);
   return commit;
 }
 function finishInputForViewChange() {
@@ -89,7 +95,8 @@ function actualPixels() { setZoom(docSize.width / Math.max(1, canvas.offsetWidth
 function setTool(tool: ActiveTool) {
   activeTool = tool;
   canvas.dataset.tool = tool;
-  for (const name of ['brush', 'hand', 'rotate', 'zoom'] as const) {
+  delete canvas.dataset.altEyedropper;
+  for (const name of ['brush', 'eyedropper', 'hand', 'rotate', 'zoom'] as const) {
     const button = $<HTMLButtonElement>(`${name}ToolBtn`);
     button.classList.toggle('tool-active', name === tool);
     button.setAttribute('aria-pressed', String(name === tool));
@@ -103,6 +110,17 @@ function updateColorSwatches() {
   if (toolbar) toolbar.style.background = ui.color;
   if (background) background.style.background = $<HTMLInputElement>('backgroundColor').value;
   $<HTMLInputElement>('color').dispatchEvent(new Event('change'));
+}
+function setForegroundColor(color: string) {
+  ui.color = color;
+  $<HTMLInputElement>('color').value = color;
+  applyBrushColor();
+  applyBrushOverrides();
+  updateColorSwatches();
+}
+function requestColorPick(event: PointerEvent) {
+  const [x, y] = pointerModel(event);
+  send({ cmd: 'pickColor', id: ++latestColorPickId, x, y });
 }
 function setBrushValue(id: 'radius' | 'hardness' | 'opacity', value: number) {
   const input = $<HTMLInputElement>(id);
@@ -148,6 +166,11 @@ function beginStrokeAt(e: PointerEvent) {
   sendSample(e, penPressure(e, true));
 }
 function endStroke(e: PointerEvent) {
+  if (colorPickPointer === e.pointerId) {
+    colorPickPointer = null;
+    releaseCanvasPointer(e.pointerId);
+    return;
+  }
   if (pointerState.finishPan(e.pointerId)) {
     viewDragMode = null;
     releaseCanvasPointer(e.pointerId);
@@ -177,6 +200,12 @@ canvas.addEventListener('pointerdown', e => {
     return;
   }
   if (e.button !== 0) return;
+  if (activeTool === 'eyedropper' || (activeTool === 'brush' && e.altKey)) {
+    colorPickPointer = e.pointerId;
+    requestColorPick(e);
+    try { canvas.setPointerCapture?.(e.pointerId); } catch {}
+    return;
+  }
   if (activeTool === 'zoom') {
     setZoom(view.zoom * (e.altKey ? 0.8 : 1.25));
     return;
@@ -194,6 +223,11 @@ canvas.addEventListener('pointerdown', e => {
   try { canvas.setPointerCapture?.(e.pointerId); } catch {}
 });
 canvas.addEventListener('pointermove', e => {
+  if (e.pointerId === colorPickPointer) {
+    if ((e.buttons & 1) !== 0) requestColorPick(e);
+    else endStroke(e);
+    return;
+  }
   if (e.pointerId === pointerState.panPointer) {
     if (viewDragMode === 'rotate') {
       view.rotationDegrees = (view.rotationDegrees + (e.clientX - lastPX) * 0.5) % 360;
@@ -226,6 +260,7 @@ canvas.addEventListener('pointermove', e => {
 canvas.addEventListener('pointerup', endStroke);
 canvas.addEventListener('pointercancel', endStroke);
 canvas.addEventListener('lostpointercapture', e => {
+  if (colorPickPointer === e.pointerId) colorPickPointer = null;
   const commit = pointerState.losePointer(e.pointerId);
   commitPointerStroke(commit);
 });
@@ -234,6 +269,7 @@ window.addEventListener('pointercancel', endStroke);
 window.addEventListener('blur', () => {
   spaceHeld = false;
   delete canvas.dataset.spaceHand;
+  delete canvas.dataset.altEyedropper;
   finishInputForViewChange();
 });
 document.addEventListener('visibilitychange', () => {
@@ -374,6 +410,12 @@ worker.onmessage = (e: MessageEvent) => { const m = e.data;
     case 'stats': hudEl.textContent = `queue   ${m.queued} sp\nactions ${m.deferred}\ntiles   ${m.residentTiles}/${m.residentTileLimit}\nbrush   ${m.brushMs.toFixed(1)} ms\nrender  ${m.renderMs.toFixed(1)} ms\ninput   ${m.sps}/s`; break;
     case 'tiles': if (pendingTiles) { const r = pendingTiles; pendingTiles = null; r({ data: m.data, scale: m.scale }); } break;
     case 'probeResult': (window as any).__probeResult = m; break;
+    case 'colorPicked':
+      if (m.id === latestColorPickId) {
+        setForegroundColor(rgbToHex({ r: m.r, g: m.g, b: m.b }));
+        statusEl.textContent = `Sampled ${ui.color}.`;
+      }
+      break;
   }
 };
 worker.onerror = (e) => { log(`Worker error: ${e.message}`); statusEl.textContent = 'Engine error.'; };
@@ -402,6 +444,7 @@ function runShortcut(action: PaintShortcut) {
   }
   switch (action) {
     case 'brush-tool': setTool('brush'); break;
+    case 'eyedropper-tool': setTool('eyedropper'); break;
     case 'hand-tool': setTool('hand'); break;
     case 'rotate-tool': setTool('rotate'); break;
     case 'zoom-tool': setTool('zoom'); break;
@@ -410,18 +453,17 @@ function runShortcut(action: PaintShortcut) {
     case 'hardness-softer': setBrushValue('hardness', Math.max(0, ui.hardness - 0.1)); break;
     case 'hardness-harder': setBrushValue('hardness', Math.min(1, ui.hardness + 0.1)); break;
     case 'default-colors':
-      ui.color = '#000000';
-      $<HTMLInputElement>('color').value = ui.color;
       $<HTMLInputElement>('backgroundColor').value = '#ffffff';
-      applyBrushColor(); applyBgColor(); updateColorSwatches();
+      applyBgColor();
+      setForegroundColor('#000000');
       break;
     case 'switch-colors': {
       const background = $<HTMLInputElement>('backgroundColor');
       const foreground = ui.color;
-      ui.color = background.value;
+      const nextForeground = background.value;
       background.value = foreground;
-      $<HTMLInputElement>('color').value = ui.color;
-      applyBrushColor(); applyBgColor(); updateColorSwatches();
+      applyBgColor();
+      setForegroundColor(nextForeground);
       break;
     }
     case 'previous-brush': cycleBrush(-1); break;
@@ -443,6 +485,7 @@ function runShortcut(action: PaintShortcut) {
 }
 document.addEventListener('keydown', (event) => {
   const editable = editableTarget(event.target);
+  if (event.key === 'Alt' && activeTool === 'brush' && !editable) canvas.dataset.altEyedropper = 'true';
   if (event.key === ' ' && !editable && !event.ctrlKey && !event.metaKey && !event.altKey) {
     event.preventDefault();
     spaceHeld = true;
@@ -463,14 +506,16 @@ document.addEventListener('keydown', (event) => {
   runShortcut(action);
 });
 document.addEventListener('keyup', (event) => {
-  if (event.key !== ' ') return;
-  spaceHeld = false;
-  delete canvas.dataset.spaceHand;
+  if (event.key === 'Alt') delete canvas.dataset.altEyedropper;
+  if (event.key === ' ') {
+    spaceHeld = false;
+    delete canvas.dataset.spaceHand;
+  }
 });
 
 // UI bindings
 ['radius','hardness','opacity'].forEach(k => { const i = $(k) as HTMLInputElement; const a = () => { (ui as any)[k] = Number(i.value); $(`${k}Val`).textContent = i.value; applyBrushOverrides(); }; i.addEventListener('input', a); a(); });
-$('color').addEventListener('input', e => { ui.color = (e.target as HTMLInputElement).value; applyBrushColor(); applyBrushOverrides(); updateColorSwatches(); });
+$('color').addEventListener('input', e => setForegroundColor((e.target as HTMLInputElement).value));
 $('viewZoom').addEventListener('input', e => setZoom(Number((e.target as HTMLInputElement).value)));
 $('rotateLeftBtn').addEventListener('click', () => { finishInputForViewChange(); view.rotationDegrees = (view.rotationDegrees + 90) % 360; applyView(); });
 $('rotateRightBtn').addEventListener('click', () => { finishInputForViewChange(); view.rotationDegrees = (view.rotationDegrees + 270) % 360; applyView(); });
@@ -481,6 +526,7 @@ $('actualPixelsBtn').addEventListener('click', actualPixels);
 $('zoomOutBtn').addEventListener('click', () => setZoom(view.zoom * 0.9));
 $('zoomInBtn').addEventListener('click', () => setZoom(view.zoom * 1.1));
 $('brushToolBtn').addEventListener('click', () => setTool('brush'));
+$('eyedropperToolBtn').addEventListener('click', () => setTool('eyedropper'));
 $('handToolBtn').addEventListener('click', () => setTool('hand'));
 $('rotateToolBtn').addEventListener('click', () => setTool('rotate'));
 $('zoomToolBtn').addEventListener('click', () => setTool('zoom'));

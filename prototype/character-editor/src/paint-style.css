@@ -218,6 +218,7 @@ input[type="range"] { accent-color: #2680eb; }
 }
 #viewport canvas.frame-visible { outline: 2px solid #2680eb; outline-offset: -2px; }
 #viewport canvas[data-tool="hand"], #viewport canvas[data-space-hand="true"] { cursor: grab; }
+#viewport canvas[data-tool="eyedropper"], #viewport canvas[data-alt-eyedropper="true"] { cursor: crosshair; }
 #viewport canvas[data-tool="rotate"] { cursor: ew-resize; }
 #viewport canvas[data-tool="zoom"] { cursor: zoom-in; }
 #hud {

@@ -8,6 +8,7 @@ export type PaintShortcut =
   | 'export-png'
   | 'fit-view'
   | 'hand-tool'
+  | 'eyedropper-tool'
   | 'hardness-harder'
   | 'hardness-softer'
   | 'new-document'
@@ -65,6 +66,7 @@ export function resolvePaintShortcut(input: PaintShortcutInput): PaintShortcut |
   switch (input.code ?? input.key) {
     case 'KeyB': return 'brush-tool';
     case 'KeyH': return 'hand-tool';
+    case 'KeyI': return 'eyedropper-tool';
     case 'KeyR': return 'rotate-tool';
     case 'KeyZ': return 'zoom-tool';
     case 'BracketLeft': return 'brush-smaller';

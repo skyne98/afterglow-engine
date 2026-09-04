@@ -24,6 +24,7 @@ type Msg =
   | { cmd: 'exportTiles'; layerId: number | null; id: number }
   | { cmd: 'writeTile'; layer: number; tx: number; ty: number; data: ArrayBuffer }
   | { cmd: 'probe'; id: number; y: number }
+  | { cmd: 'pickColor'; id: number; x: number; y: number }
   | { cmd: 'requestState' };
 
 const TILE = 64, TILE_B = TILE * TILE * 4, TILE16_B = TILE_B * 2, EOTF = 2.2;
@@ -1306,6 +1307,13 @@ function handleReadyCommand(m: Msg) {
     case 'layer': handleLayer(m.op, m.layer, m.value); break;
     case 'group': handleGroup(m.op, m.group, m.value); break;
     case 'exportTiles': exportTiles(m.layerId, m.id); break;
+    case 'pickColor': {
+      const px = Math.max(0, Math.min((canvas?.width ?? 1) - 1, Math.floor(m.x / dispScale)));
+      const py = Math.max(0, Math.min((canvas?.height ?? 1) - 1, Math.floor(m.y / dispScale)));
+      const color = ctx?.getImageData(px, py, 1, 1).data;
+      if (color) post({ type: 'colorPicked', id: m.id, r: color[0], g: color[1], b: color[2] });
+      break;
+    }
     case 'probe': {
       const currentCanvas = canvas, currentCtx = ctx;
       const data = currentCtx && currentCanvas

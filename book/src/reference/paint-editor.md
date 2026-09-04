@@ -46,12 +46,14 @@ It gives synchronized hexadecimal, RGB, and HSV inputs, plus current and previou
 The Layers panel shows layers and groups in one nested stack.
 The selected item controls set blend mode, opacity, parent, pass-through mode, and isolation.
 The row and toolbar controls set visibility, order, creation, and deletion.
+The Eyedropper tool samples the visible composite and updates all Color panel fields.
 
 The page uses Photoshop shortcuts for each available action:
 
 | Shortcut | Action |
 |---|---|
-| `B`, `H`, `R`, `Z` | Select Brush, Hand, Rotate View, or Zoom |
+| `B`, `I`, `H`, `R`, `Z` | Select Brush, Eyedropper, Hand, Rotate View, or Zoom |
+| `Alt` with the Brush tool | Temporarily sample the visible composite color |
 | `Space` | Temporarily use the Hand tool |
 | `[` / `]` | Change brush size |
 | `{` / `}` | Change brush hardness |

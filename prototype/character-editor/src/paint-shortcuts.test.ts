@@ -7,6 +7,7 @@ describe('Photoshop paint shortcuts', () => {
   test('maps tools and brush controls', () => {
     expect(resolvePaintShortcut(key('KeyB'))).toBe('brush-tool');
     expect(resolvePaintShortcut(key('KeyH'))).toBe('hand-tool');
+    expect(resolvePaintShortcut(key('KeyI'))).toBe('eyedropper-tool');
     expect(resolvePaintShortcut(key('KeyR'))).toBe('rotate-tool');
     expect(resolvePaintShortcut(key('KeyZ'))).toBe('zoom-tool');
     expect(resolvePaintShortcut(key('BracketLeft', '['))).toBe('brush-smaller');
@@ -44,5 +45,6 @@ describe('Photoshop paint shortcuts', () => {
     expect(resolvePaintShortcut({ key: 'b', code: 'KeyB', ctrlKey: true })).toBeUndefined();
     expect(resolvePaintShortcut({ key: 'w', ctrlKey: true })).toBeUndefined();
     expect(resolvePaintShortcut({ key: '[', code: 'BracketLeft', altKey: true })).toBeUndefined();
+    expect(resolvePaintShortcut({ key: 'i', code: 'KeyI', altKey: true })).toBeUndefined();
   });
 });

@@ -127,12 +127,14 @@ The Color panel has a hue wheel, a saturation-value square, two swatches, and sy
 The Layers panel shows one nested layer and group stack.
 It puts the selected item controls above the stack and the stack actions below it.
 These controls set visibility, blend mode, opacity, parent, group composition, order, creation, and deletion.
+The Eyedropper tool samples the visible composite and updates all Color panel fields.
 
 The page uses these Photoshop shortcuts for available actions:
 
 | Shortcut | Action |
 |---|---|
-| `B`, `H`, `R`, `Z` | Select Brush, Hand, Rotate View, or Zoom |
+| `B`, `I`, `H`, `R`, `Z` | Select Brush, Eyedropper, Hand, Rotate View, or Zoom |
+| `Alt` with the Brush tool | Temporarily sample the visible composite color |
 | `Space` | Temporarily use the Hand tool |
 | `[` / `]` | Decrease or increase the brush size |
 | `{` / `}` | Decrease or increase brush hardness |

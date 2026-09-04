@@ -13,6 +13,7 @@ import {
   Layers3,
   Palette,
   PanelRightClose,
+  Pipette,
   Plus,
   Redo2,
   RotateCcw,
@@ -136,6 +137,10 @@ function focusColor(): void {
           <Tooltip>
             <TooltipTrigger as-child><Button id="brushToolBtn" class="tool-active" variant="ghost" size="icon" aria-label="Brush tool"><Brush /></Button></TooltipTrigger>
             <TooltipContent side="right">Brush tool (B)</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger as-child><Button id="eyedropperToolBtn" variant="ghost" size="icon" aria-label="Eyedropper tool"><Pipette /></Button></TooltipTrigger>
+            <TooltipContent side="right">Eyedropper tool (I or hold Alt)</TooltipContent>
           </Tooltip>
           <Tooltip>
             <TooltipTrigger as-child><Button id="handToolBtn" variant="ghost" size="icon" aria-label="Hand tool"><Hand /></Button></TooltipTrigger>

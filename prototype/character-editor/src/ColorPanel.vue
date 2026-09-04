@@ -95,7 +95,10 @@ function endPointer(event: PointerEvent): void {
 }
 function syncExternal(event: Event): void {
   const value = (event.target as HTMLInputElement).value;
-  if (value !== hex.value) setHex(value, false);
+  if (value !== hex.value) {
+    previous.value = hex.value;
+    setHex(value, false);
+  }
 }
 
 onMounted(() => setHex('#4ecdc4', false));
