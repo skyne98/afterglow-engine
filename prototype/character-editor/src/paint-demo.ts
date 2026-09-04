@@ -15,8 +15,17 @@ const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as 
 const canvas = $<HTMLCanvasElement>('paint');
 const statusEl = $('status'), logEl = $('logs'), hudEl = $<HTMLDivElement>('hud');
 
+function newPaintDocumentId(): string {
+  if (crypto.randomUUID) return crypto.randomUUID();
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 let worker: Worker | null = null;
-let paintDocumentId = crypto.randomUUID();
+let paintDocumentId = newPaintDocumentId();
 let engineState: any = null;
 let ready = false;
 let exportSeq = 0;
@@ -470,7 +479,7 @@ async function exportOra() { if (!engineState) return; const e = [{ name: 'mimet
 async function importOra(file: File) { if (!ready) return; const entries = await decodeZip(await file.arrayBuffer()); const mb = entries.get('data/metadata.json'); const meta = mb ? JSON.parse(text(mb)) as any : null; const st = entries.get('stack.xml'); const stT = st ? text(st) : ''; const w = meta?.width ?? Number(stT.match(/\bw="(\d+)"/)?.[1] ?? docSize.width), h = meta?.height ?? Number(stT.match(/\bh="(\d+)"/)?.[1] ?? docSize.height); const merged = entries.get('mergedimage.png') ?? entries.get('data/layer-0.png'); if (!merged) throw new Error('No image.'); resetDoc(w, h); send({ cmd: 'clearBackground' }); send({ cmd: 'clear' }); const layers = meta?.layers ?? [{ id: 0, group: -1, visible: 1, mode: 0 }]; for (const l of layers) { if (l.id > 0) send({ cmd: 'layer', op: 'create', layer: l.id }); send({ cmd: 'layer', op: 'setVisible', layer: l.id, value: l.visible !== 0 ? 1 : 0 }); send({ cmd: 'layer', op: 'setOpacity', layer: l.id, value: Number(l.opacity) || 1 }); send({ cmd: 'layer', op: 'setMode', layer: l.id, value: Number(l.mode) || 0 }); } const ic = await imgCanvas(merged); writeImg(ic, 0); for (const l of layers) { if (l.id === 0) continue; const d = entries.get(`data/layer-${l.id}.png`); if (d) writeImg(await imgCanvas(d), l.id); } for (const g of meta?.groups ?? []) { send({ cmd: 'group', op: 'create', group: g.id }); send({ cmd: 'group', op: 'setVisible', group: g.id, value: g.visible !== 0 ? 1 : 0 }); send({ cmd: 'group', op: 'setOpacity', group: g.id, value: Number(g.opacity) || 0 }); send({ cmd: 'group', op: 'setMode', group: g.id, value: Number(g.mode) || 0 }); send({ cmd: 'group', op: 'setPassThrough', group: g.id, value: g.passThrough ? 1 : 0 }); send({ cmd: 'group', op: 'setIsolated', group: g.id, value: g.isolated ? 1 : 0 }); send({ cmd: 'group', op: 'setParent', group: g.id, value: Number(g.parent) }); } for (const l of layers) if (l.group !== undefined) send({ cmd: 'layer', op: 'setGroup', layer: l.id, value: Number(l.group) }); send({ cmd: 'layer', op: 'setActive', layer: 0 }); }
 async function imgCanvas(d: Uint8Array): Promise<HTMLCanvasElement> { const bm = await createImageBitmap(new Blob([d as BlobPart], { type: 'image/png' })); const c = document.createElement('canvas'); c.width = bm.width; c.height = bm.height; c.getContext('2d', { alpha: true })!.drawImage(bm, 0, 0); bm.close(); return c; }
 function writeImg(ic: HTMLCanvasElement, layer: number) { const g = ic.getContext('2d', { alpha: true })!; const img = g.getImageData(0, 0, ic.width, ic.height); const tile = new Uint8Array(64 * 64 * 4); for (let ty = 0; ty < Math.ceil(ic.height / 64); ty++) for (let tx = 0; tx < Math.ceil(ic.width / 64); tx++) { tile.fill(0); for (let y = 0; y < 64; y++) { const sy = ty * 64 + y; if (sy >= img.height) continue; for (let x = 0; x < 64; x++) { const sx = tx * 64 + x; if (sx >= img.width) continue; tile.set(img.data.subarray((sy * img.width + sx) * 4, (sy * img.width + sx) * 4 + 4), (y * 64 + x) * 4); } } send({ cmd: 'writeTile', layer, tx, ty, data: tile.slice().buffer }, [tile.slice().buffer]); } }
-function resetDoc(w: number, h: number) { if (w < 64 || h < 64 || w > 16384 || h > 16384) return; clearPointerInput(); ready = false; paintDocumentId = crypto.randomUUID(); docSize.width = w; docSize.height = h; const r = Math.max(w, h) / 4096; const ds = r <= 1 ? 1 : r <= 2 ? 2 : 4; dispW = Math.ceil(w / ds); dispH = Math.ceil(h / ds); canvas.style.width = `${dispW}px`; canvas.style.height = `${dispH}px`; send({ cmd: 'init', width: w, height: h, documentId: paintDocumentId, hardwareConcurrency: navigator.hardwareConcurrency, memoryLimitMiB: paintMemoryMiB }); }
+function resetDoc(w: number, h: number) { if (w < 64 || h < 64 || w > 16384 || h > 16384) return; clearPointerInput(); ready = false; paintDocumentId = newPaintDocumentId(); docSize.width = w; docSize.height = h; const r = Math.max(w, h) / 4096; const ds = r <= 1 ? 1 : r <= 2 ? 2 : 4; dispW = Math.ceil(w / ds); dispH = Math.ceil(h / ds); canvas.style.width = `${dispW}px`; canvas.style.height = `${dispH}px`; send({ cmd: 'init', width: w, height: h, documentId: paintDocumentId, hardwareConcurrency: navigator.hardwareConcurrency, memoryLimitMiB: paintMemoryMiB }); }
 
 worker = new Worker(new URL('./paint-engine-worker.ts', import.meta.url), { type: 'module' });
 (window as any).probe = (y: number) => { worker.postMessage({ cmd: 'probe', id: Math.floor(Math.random() * 1e9), y }); };

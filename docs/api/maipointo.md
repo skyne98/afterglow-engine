@@ -92,6 +92,11 @@ imports that memory with a 2 GiB maximum
 (`paint/maipointo/.cargo/config.toml`). This crate does not use the engine
 workspace's 64 MiB maximum.
 
+The Vite development and preview servers bind to `0.0.0.0` for LAN access.
+Start the development server with `cd prototype/character-editor && bun run dev`, then open `/paint/paint-demo.html` on port 5173.
+Plain HTTP LAN origins do not supply `crypto.randomUUID()`.
+The page uses a `crypto.getRandomValues()` UUIDv4 fallback for these origins.
+
 The page sets a total paint-memory limit. The default is 25 percent of
 `navigator.deviceMemory`, with a 2 GiB maximum and a 1 GiB fallback. The
 new-document control has a 64 MiB through 2 GiB override. The tile calculation
