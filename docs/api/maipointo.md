@@ -93,9 +93,10 @@ imports that memory with a 2 GiB maximum
 workspace's 64 MiB maximum.
 
 The Vite development and preview servers bind to `0.0.0.0` for LAN access.
-Start the development server with `cd prototype/character-editor && bun run dev`, then open `/paint/paint-demo.html` on port 5173.
-Plain HTTP LAN origins do not supply `crypto.randomUUID()`.
-The page uses a `crypto.getRandomValues()` UUIDv4 fallback for these origins.
+They use a generated self-signed HTTPS certificate.
+Start the development server with `cd prototype/character-editor && bun run dev`.
+Then open `https://<computer-address>:5173/paint/paint-demo.html` and accept the certificate warning.
+The page uses a `crypto.getRandomValues()` UUIDv4 fallback when `crypto.randomUUID()` is not available.
 
 The page sets a total paint-memory limit. The default is 25 percent of
 `navigator.deviceMemory`, with a 2 GiB maximum and a 1 GiB fallback. The

@@ -1,4 +1,5 @@
 import path from 'node:path';
+import basicSsl from '@vitejs/plugin-basic-ssl';
 import tailwindcss from '@tailwindcss/vite';
 import vue from '@vitejs/plugin-vue';
 import { defineConfig, type PluginOption } from 'vite';
@@ -27,7 +28,7 @@ function crossOriginIsolationHeaders(): PluginOption {
 
 export default defineConfig({
   root: '.',
-  plugins: [vue(), tailwindcss(), crossOriginIsolationHeaders()],
+  plugins: [basicSsl(), vue(), tailwindcss(), crossOriginIsolationHeaders()],
   resolve: {
     alias: {
       '@': path.resolve(import.meta.dirname, 'src'),

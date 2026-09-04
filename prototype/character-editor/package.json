@@ -27,6 +27,7 @@
     "@tailwindcss/vite": "^4.3.3",
     "@types/node": "^26.4.1",
     "@types/three": "0.183.1",
+    "@vitejs/plugin-basic-ssl": "^2.3.0",
     "@vitejs/plugin-vue": "^6.0.8",
     "shadcn-vue": "^2.8.2",
     "tailwindcss": "^4.3.3",
