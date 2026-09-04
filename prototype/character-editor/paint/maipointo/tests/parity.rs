@@ -8,10 +8,10 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-use maipointo::brushmodes::*;
-use maipointo::random::PortableRand;
-use maipointo::mask::{render_dab_mask, TILE_SIZE};
 use maipointo::Tile;
+use maipointo::brushmodes::*;
+use maipointo::mask::{TILE_SIZE, render_dab_mask};
+use maipointo::random::PortableRand;
 
 /// One 64-byte dab command record, shared with reference/oracle.c.
 #[derive(Clone, Copy, Debug)]
@@ -77,7 +77,10 @@ struct Lcg(u64);
 
 impl Lcg {
     fn next_u32(&mut self) -> u32 {
-        self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        self.0 = self
+            .0
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         (self.0 >> 33) as u32
     }
     fn f32_in(&mut self, lo: f32, hi: f32) -> f32 {
@@ -101,7 +104,9 @@ fn vendor_dir() -> PathBuf {
 fn oracle_path() -> PathBuf {
     let tmp = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
     let exe = tmp.join("maipointo-oracle");
-    let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("reference").join("oracle.c");
+    let src = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("reference")
+        .join("oracle.c");
     let stale = match std::fs::metadata(&exe) {
         Ok(m) => m
             .modified()
@@ -161,7 +166,7 @@ fn scratch_paths(tag: &str) -> (PathBuf, PathBuf) {
     let tmp = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
     (
         tmp.join(format!("parity-cmds-{tag}-{}-{n}.bin", std::process::id())),
-        tmp.join(format!("parity-out-{tag}-{n}.bin", )),
+        tmp.join(format!("parity-out-{tag}-{n}.bin",)),
     )
 }
 
@@ -189,9 +194,7 @@ fn run_oracle(cmds: &[DabCmd]) -> (Vec<u16>, [f64; 5]) {
     for i in 0..tile_words {
         tile.push(u16::from_le_bytes([raw[i * 2], raw[i * 2 + 1]]));
     }
-    let sums_raw: [u8; 40] = raw[tile_words * 2..tile_words * 2 + 40]
-        .try_into()
-        .unwrap();
+    let sums_raw: [u8; 40] = raw[tile_words * 2..tile_words * 2 + 40].try_into().unwrap();
     let mut sums = [0f64; 5];
     for (i, s) in sums.iter_mut().enumerate() {
         *s = f64::from_le_bytes(sums_raw[i * 8..i * 8 + 8].try_into().unwrap());
@@ -219,13 +222,11 @@ fn run_maipointo(cmds: &[DabCmd]) -> (Vec<u16>, [f64; 5]) {
         );
         match c.mode {
             MODE_NORMAL => draw_dab_normal(&mask, &mut tile.data, c.r, c.g, c.b, c.opacity),
-            MODE_NORMAL_ERASER => draw_dab_normal_and_eraser(
-                &mask, &mut tile.data, c.r, c.g, c.b, c.a, c.opacity,
-            ),
-            MODE_LOCK_ALPHA => draw_dab_lock_alpha(&mask, &mut tile.data, c.r, c.g, c.b, c.opacity),
-            MODE_POSTERIZE => {
-                draw_dab_posterize(&mask, &mut tile.data, c.opacity, c.posterize_num)
+            MODE_NORMAL_ERASER => {
+                draw_dab_normal_and_eraser(&mask, &mut tile.data, c.r, c.g, c.b, c.a, c.opacity)
             }
+            MODE_LOCK_ALPHA => draw_dab_lock_alpha(&mask, &mut tile.data, c.r, c.g, c.b, c.opacity),
+            MODE_POSTERIZE => draw_dab_posterize(&mask, &mut tile.data, c.opacity, c.posterize_num),
             MODE_COLORIZE => draw_dab_colorize(&mask, &mut tile.data, c.r, c.g, c.b, c.opacity),
             MODE_GET_COLOR_LEGACY => get_color_legacy(&mask, &tile.data, &mut sums),
             MODE_GET_COLOR_ACCUM => get_color_accumulate(
@@ -237,19 +238,33 @@ fn run_maipointo(cmds: &[DabCmd]) -> (Vec<u16>, [f64; 5]) {
                 c.rand_rate,
                 &mut PortableRand::default(),
             ),
-            MODE_NORMAL_PAINT => draw_dab_normal_paint(&mask, &mut tile.data, c.r, c.g, c.b, c.opacity),
+            MODE_NORMAL_PAINT => {
+                draw_dab_normal_paint(&mask, &mut tile.data, c.r, c.g, c.b, c.opacity)
+            }
             MODE_NORMAL_ERASER_PAINT => draw_dab_normal_and_eraser_paint(
-                &mask, &mut tile.data, c.r, c.g, c.b, c.a, c.opacity,
+                &mask,
+                &mut tile.data,
+                c.r,
+                c.g,
+                c.b,
+                c.a,
+                c.opacity,
             ),
-            MODE_LOCK_ALPHA_PAINT => draw_dab_lock_alpha_paint(
-                &mask, &mut tile.data, c.r, c.g, c.b, c.opacity,
-            ),
+            MODE_LOCK_ALPHA_PAINT => {
+                draw_dab_lock_alpha_paint(&mask, &mut tile.data, c.r, c.g, c.b, c.opacity)
+            }
             _ => unreachable!(),
         }
     }
     (
         tile.data.clone(),
-        [sums.weight as f64, sums.r as f64, sums.g as f64, sums.b as f64, sums.a as f64],
+        [
+            sums.weight as f64,
+            sums.r as f64,
+            sums.g as f64,
+            sums.b as f64,
+            sums.a as f64,
+        ],
     )
 }
 
@@ -490,7 +505,11 @@ fn parity_fuzzed_dabs() {
             opacity: rng.u16_in(0, 32768),
             posterize_num: posterize,
             // paint < 0 = legacy sampling; 0.0 = non-spectral accumulate.
-            paint: if mode == MODE_GET_COLOR_ACCUM { 0.0 } else { -1.0 },
+            paint: if mode == MODE_GET_COLOR_ACCUM {
+                0.0
+            } else {
+                -1.0
+            },
             interval: 1,
             rand_rate: 0.0,
             seed: 0,
@@ -625,8 +644,24 @@ fn spectral_single_fixed() {
     };
     let (want, _) = run_oracle(&[cmd.clone()]);
     let (got, _) = run_maipointo(&[cmd]);
-    let diffs: Vec<usize> = want.iter().zip(got.iter()).enumerate().filter(|(_, (w, g))| w != g).map(|(i, _)| i).collect();
-    assert!(diffs.is_empty(), "diff at {:?} first 5: {:?} vs {:?}", diffs.len(), &diffs[..diffs.len().min(5)], diffs.iter().take(5).map(|i| (want[*i], got[*i])).collect::<Vec<_>>());
+    let diffs: Vec<usize> = want
+        .iter()
+        .zip(got.iter())
+        .enumerate()
+        .filter(|(_, (w, g))| w != g)
+        .map(|(i, _)| i)
+        .collect();
+    assert!(
+        diffs.is_empty(),
+        "diff at {:?} first 5: {:?} vs {:?}",
+        diffs.len(),
+        &diffs[..diffs.len().min(5)],
+        diffs
+            .iter()
+            .take(5)
+            .map(|i| (want[*i], got[*i]))
+            .collect::<Vec<_>>()
+    );
 }
 
 #[test]
@@ -664,13 +699,30 @@ fn spectral_prefix_bisect() {
         let (want, _) = run_oracle(&cmds[..n]);
         let (got, _) = run_maipointo(&cmds[..n]);
         if want != got {
-            let idx = want.iter().zip(got.iter()).position(|(w, g)| w != g).unwrap();
+            let idx = want
+                .iter()
+                .zip(got.iter())
+                .position(|(w, g)| w != g)
+                .unwrap();
             let c = &cmds[n - 1];
             panic!(
                 "first divergence at prefix {n}: word {idx} want {w} got {g} | cmd mode={m} x={x:.3} y={y:.3} rad={rad:.3} h={h:.3} asp={asp:.3} ang={ang:.3} col=({cr},{cg},{cb},{ca}) opa={opa}",
-                n = n, idx = idx, w = want[idx], g = got[idx], m = c.mode, x = c.x, y = c.y,
-                rad = c.radius, h = c.hardness, asp = c.aspect, ang = c.angle,
-                cr = c.r, cg = c.g, cb = c.b, ca = c.a, opa = c.opacity
+                n = n,
+                idx = idx,
+                w = want[idx],
+                g = got[idx],
+                m = c.mode,
+                x = c.x,
+                y = c.y,
+                rad = c.radius,
+                h = c.hardness,
+                asp = c.aspect,
+                ang = c.angle,
+                cr = c.r,
+                cg = c.g,
+                cb = c.b,
+                ca = c.a,
+                opa = c.opacity
             );
         }
     }

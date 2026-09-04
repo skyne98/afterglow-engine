@@ -77,7 +77,11 @@ pub fn smallest_angular_difference(angle_a: f32, angle_b: f32) -> f32 {
 /// `rgb_to_hsv_float` (GIMP `gimp_rgb_to_hsv`); writes back h, s, v into
 /// the same three slots (r → h, g → s, b → v as the C does via pointers).
 pub fn rgb_to_hsv_float(rgb: &mut [f32; 3]) {
-    let (r, g, b) = (clamp(rgb[0], 0.0, 1.0), clamp(rgb[1], 0.0, 1.0), clamp(rgb[2], 0.0, 1.0));
+    let (r, g, b) = (
+        clamp(rgb[0], 0.0, 1.0),
+        clamp(rgb[1], 0.0, 1.0),
+        clamp(rgb[2], 0.0, 1.0),
+    );
     let max = max3(r, g, b);
     let min = min3(r, g, b);
 
@@ -150,7 +154,11 @@ pub fn hsv_to_rgb_float(hsv: &mut [f32; 3]) {
 
 /// `rgb_to_hsl_float` (GIMP `gimp_rgb_to_hsl`).
 pub fn rgb_to_hsl_float(rgb: &mut [f32; 3]) {
-    let (r, g, b) = (clamp(rgb[0], 0.0, 1.0), clamp(rgb[1], 0.0, 1.0), clamp(rgb[2], 0.0, 1.0));
+    let (r, g, b) = (
+        clamp(rgb[0], 0.0, 1.0),
+        clamp(rgb[1], 0.0, 1.0),
+        clamp(rgb[2], 0.0, 1.0),
+    );
 
     // C uses doubles for max/min/delta here.
     let max: f64 = max3(r, g, b) as f64;
@@ -164,9 +172,9 @@ pub fn rgb_to_hsl_float(rgb: &mut [f32; 3]) {
         h = 0.0;
     } else {
         if l as f64 <= 0.5 {
-            s = (((max - min) / (max + min)) as f32);
+            s = ((max - min) / (max + min)) as f32;
         } else {
-            s = (((max - min) / (2.0 - max - min)) as f32);
+            s = ((max - min) / (2.0 - max - min)) as f32;
         }
 
         let mut delta = max - min;
@@ -224,16 +232,12 @@ pub fn hsl_to_rgb_float(hsl: &mut [f32; 3]) {
     let rgb = if s == 0.0 {
         [l, l, l]
     } else {
-        let (m1, m2): (f64, f64);
+        let m2: f64;
         if l as f64 <= 0.5 {
             m2 = l as f64 * (1.0 + s as f64);
         } else {
             m2 = l as f64 + s as f64 - (l as f64) * (s as f64);
         }
-        let m1 = 2.0 * (l as f64) - m2;
-        let m2 = m2;
-        let m1 = m1; // shadow to double context below
-
         let m1 = 2.0 * (l as f64) - m2;
         [
             hsl_value(m1, m2, (h as f64) * 6.0 + 2.0) as f32,
@@ -273,7 +277,11 @@ pub fn spectral_to_rgb(spectral: &[f32; 10], rgb: &mut [f32; 3]) {
     // narrowed to float by the assignment.
     let offset: f32 = (1.0f64 - 0.001f64) as f32;
     for i in 0..3 {
-        rgb[i] = clamp((((tmp[i] as f64) - 0.001) / (offset as f64)) as f32, 0.0, 1.0);
+        rgb[i] = clamp(
+            (((tmp[i] as f64) - 0.001) / (offset as f64)) as f32,
+            0.0,
+            1.0,
+        );
     }
 }
 
@@ -286,7 +294,11 @@ pub fn mix_colors(a: &[f32; 4], b: &[f32; 4], fac: f32, paint_mode: f32) -> [f32
     let opa_b = 1.0 - opa_a;
     result[3] = clamp(opa_a * a[3] + opa_b * b[3], 0.0, 1.0);
     // Guard against NaN from division by zero
-    let sfac_a = if a[3] == 0.0 { 0.0 } else { opa_a * a[3] / (a[3] + b[3] * opa_b) };
+    let sfac_a = if a[3] == 0.0 {
+        0.0
+    } else {
+        opa_a * a[3] / (a[3] + b[3] * opa_b)
+    };
     let sfac_b = 1.0 - sfac_a;
 
     if paint_mode > 0.0 {
@@ -337,8 +349,8 @@ pub fn fastpow2(p: f32) -> f32 {
     let w = clipp as i32;
     let z = clipp - w as f32 + offset;
     let v: u32 = ((1u32 << 23) as f32
-        * (clipp + 121.274_057_5f32 + 27.728_023_3f32 / (4.842_525_68f32 - z) - 1.490_129_07f32 * z))
-        as u32;
+        * (clipp + 121.274_057_5f32 + 27.728_023_3f32 / (4.842_525_68f32 - z)
+            - 1.490_129_07f32 * z)) as u32;
     f32::from_bits(v)
 }
 

@@ -6,7 +6,7 @@ Status: prototype implementation in `prototype/character-editor`.
 
 `src/paint-tile-store.ts` owns IndexedDB access in the paint worker. Rust does
 not wait for IndexedDB. Rust keeps the synchronous brush working set in the
-fixed resident tile cache.
+runtime resident tile cache.
 
 The database name is `afterglow-paint`. The `tiles` object store uses this
 ordered key:
@@ -27,39 +27,68 @@ document reset therefore cannot read tiles from another document.
 
 The demo ABI has these cold-tile operations:
 
+- `paint_init_with_tile_limits`
+- `paint_get_resident_tile_count`
+- `paint_get_resident_tile_limit`
+- `paint_get_maximum_resident_tile_limit`
+- `paint_set_resident_tile_limit`
 - `paint_get_layer_used_tile_count`
 - `paint_get_layer_used_tile_info`
+- `paint_get_layer_used_tile_is_storage_dirty`
 - `paint_get_layer_tile_ptr`
 - `paint_remove_layer_tile`
 - `paint_write_layer_rgba16_tile`
 
+The ABI also supplies the resident count, current limit, maximum limit, and
+the storage-dirty state of each used tile. The host can increase the current
+limit up to the fixed maximum for that document.
+
 The store also removes cold records for a cleared layer and shifts records
-when a layer is deleted. The worker copies tile bytes before it removes a resident tile. It removes the
-tile only after the IndexedDB write completes. A failed write leaves the tile
-resident and rejects the stroke start.
+when a layer is deleted. The worker copies modified tile bytes before it
+removes a resident tile. It removes the tile only after the IndexedDB write
+completes. A failed write leaves the tile resident and rejects the stroke.
 
 ## Page rule
 
-The worker starts a page operation before `_begin_stroke` when resident use
-reaches 3,584 tiles or when cold records exist for the document.
+The worker starts with 4,096 resident tiles. Near each limit, it increases the
+limit by 2,048 tiles (64 MiB). It does not evict a tile until the runtime
+limit reaches the selected maximum and enters its 512-tile allocation headroom.
 
 The page operation does these steps:
 
-1. Protect the current input path plus a 1,024-pixel border.
-2. Write non-protected resident tiles to IndexedDB.
-3. Remove saved tiles from Rust until 2,048 or fewer remain.
-4. Restore cold tiles in the protected path.
-5. Start the brush only after all restore work completes.
+1. Protect the recent input path plus a 1,024-pixel border.
+2. Predict up to 100 ms and 512 pixels in the movement direction.
+3. At the maximum, select far-behind tiles until one 2,048-tile block is free.
+4. Write only modified selected tiles in transactions of at most 64 tiles (2 MiB).
+5. Remove all selected tiles after the write completes.
+6. Restore cold tiles in the protected and predicted path.
+7. Start the brush only after all restore work completes.
 
-During an open stroke, the worker restores the next bounded input region before
-it processes that input. It writes older tiles before it evicts them and keeps
-the current brush region protected.
+A restored tile has a clean storage state. A later eviction does not write it
+again unless paint, import, undo, or redo changed it. This prevents repeat
+writes when the brush moves between old regions. Each page request has a
+generation. A document reset or a newer request stops stale tile installation
+after each IndexedDB wait.
+
+The compound key orders X before Y. A rectangular read therefore uses one
+exact key range for each X column. It does not scan unrelated Y values in the
+columns between the rectangle edges.
+
+The same database has a separate exact history store. One operation keeps one
+before-image for each changed tile. The worker writes groups of 64 tiles (2 MiB)
+during the operation. Undo and redo first write an opposite-side image for all
+operation tiles. They then restore groups of 64 tiles. The cursor changes only
+after all groups are restored.
+
+The history queue keeps as many as 256 completed operations. It removes the
+oldest operation when the count or IndexedDB quota blocks a new write. If the
+current operation alone cannot fit, the worker restores its before-images. It
+does not complete an operation without undo data.
 
 The protected region has a limit of 1,536 source tiles. This gives the brush a
-fixed working set and keeps all allocations bounded. A brush path that needs a
-larger working set reports a storage error and does not start. A later input
-region that exceeds the resident limit ends the stroke without removing the
-protected brush region.
+bounded working set. If the predicted corridor is too large, the worker uses
+the current-point region. A later input region that cannot keep the protected
+brush region ends the stroke.
 
 An absent cold record means that the tile has no paint and stays absent from
 Rust. An IndexedDB error reports `Paint storage is full.` and drops the stroke
@@ -68,8 +97,10 @@ reaches its resident limit during a stroke.
 
 ## Tests and checks
 
-`paintTileKey` has a TypeScript unit test. The Rust tile surface tests remove,
-restore, and hash resident tiles. Browser checks must cover a 16K document with
+TypeScript tests cover key order, exact column bounds, 2 MiB write batches,
+the 256-operation FIFO history queue, and memory-limit calculations. Rust tests cover shared runtime limits, metadata
+growth, storage-dirty changes, removal, restoration, and the resident hash.
+Browser checks must cover a 16K document with
 more than 4,096 logical painted tiles and must confirm:
 
 - no `RuntimeError: unreachable`,
@@ -77,5 +108,10 @@ more than 4,096 logical painted tiles and must confirm:
 - no RefCell borrow error,
 - input queue completion after each page operation,
 - full-width draw-over strokes after eviction,
+- an operation above the internal 32 MiB history limit,
 - smudge plus undo and redo after restoration,
 - active-layer clear without loss of other-layer cold records.
+
+The 2026-09-04 browser gate stored, undid, and redid one exact 1,770-tile
+operation. It also kept operations 2 through 257 after a 257-operation test.
+See `docs/benchmarks/paint-indexeddb-history-fox-workstation-2026-09-04.md`.

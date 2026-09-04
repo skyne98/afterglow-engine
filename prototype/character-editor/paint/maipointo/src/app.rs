@@ -4,9 +4,8 @@
 
 use crate::brush::Brush;
 use crate::brush::cooperative::StrokeState;
-use crate::compositor::{layer_blend_over, BlendMode};
-use crate::web_surface::WebSurface;
-use std::cell::Cell;
+use crate::compositor::{BlendMode, layer_blend_normal_full_tile, layer_blend_over};
+use crate::web_surface::{INITIAL_RESIDENT_TILES, TileBudget, WebSurface};
 use std::rc::Rc;
 
 pub const WEB_MAX_LAYERS: usize = 8;
@@ -82,7 +81,7 @@ pub struct PaintApp {
     tile_bytes: usize,
 
     pub layers: Vec<WebSurface>,
-    tile_budget: Rc<Cell<usize>>,
+    tile_budget: Rc<TileBudget>,
     pub layer_visible: [bool; WEB_MAX_LAYERS],
     pub layer_opacity: [f32; WEB_MAX_LAYERS],
     pub layer_mode: [BlendMode; WEB_MAX_LAYERS],
@@ -115,13 +114,15 @@ pub struct PaintApp {
 
     pub brush: Option<Brush>,
     cooperative_stroke: StrokeState,
-    pub pending_captures: Vec<PendingCapture>,
+    pending_captures: Vec<PendingCapture>,
+    pending_capture_bytes: usize,
     history_entries: Vec<HistoryEntry>,
     history_records: Vec<HistoryRecord>,
     history_entry_bytes: usize,
     history_cursor: usize,
     history_active: bool,
     history_active_layer: usize,
+    external_history: bool,
 
     composite_tile: Vec<u16>,
     render_scratch: Vec<u16>,
@@ -142,11 +143,25 @@ pub struct PaintApp {
 
 impl PaintApp {
     pub fn new(width: i32, height: i32) -> Option<Self> {
-        if width <= 0 || height <= 0 {
+        Self::new_with_tile_limits(
+            width,
+            height,
+            INITIAL_RESIDENT_TILES,
+            INITIAL_RESIDENT_TILES,
+        )
+    }
+
+    pub fn new_with_tile_limits(
+        width: i32,
+        height: i32,
+        initial_tile_limit: usize,
+        maximum_tile_limit: usize,
+    ) -> Option<Self> {
+        if width <= 0 || height <= 0 || initial_tile_limit == 0 || maximum_tile_limit == 0 {
             return None;
         }
         let tile_bytes = 64 * 64 * 4 * 2;
-        let tile_budget = Rc::new(Cell::new(0));
+        let tile_budget = Rc::new(TileBudget::new(initial_tile_limit, maximum_tile_limit));
         let mut app = Self {
             width,
             height,
@@ -181,12 +196,14 @@ impl PaintApp {
             brush: None,
             cooperative_stroke: StrokeState::default(),
             pending_captures: Vec::new(),
+            pending_capture_bytes: 0,
             history_entries: Vec::new(),
             history_records: Vec::new(),
             history_entry_bytes: 0,
             history_cursor: 0,
             history_active: false,
             history_active_layer: 0,
+            external_history: false,
             composite_tile: vec![0; 64 * 64 * 4],
             render_scratch: vec![0; WEB_MAX_GROUPS * 64 * 64 * 4],
             mip_composite_tile: vec![0; 64 * 64 * 4],
@@ -213,8 +230,28 @@ impl PaintApp {
         brush.new_stroke();
         app.brush = Some(brush);
         app.rebuild_display_lut();
-        app.set_background_color(0xA8 as f32 / 255.0, 0xA4 as f32 / 255.0, 0x98 as f32 / 255.0);
+        app.set_background_color(
+            0xA8 as f32 / 255.0,
+            0xA4 as f32 / 255.0,
+            0x98 as f32 / 255.0,
+        );
         Some(app)
+    }
+
+    pub fn resident_tile_count(&self) -> usize {
+        self.tile_budget.used()
+    }
+
+    pub fn resident_tile_limit(&self) -> usize {
+        self.tile_budget.limit()
+    }
+
+    pub fn maximum_resident_tile_limit(&self) -> usize {
+        self.tile_budget.maximum()
+    }
+
+    pub fn set_resident_tile_limit(&self, limit: usize) -> bool {
+        self.tile_budget.set_limit(limit)
     }
 
     pub fn active(&mut self) -> &mut WebSurface {
@@ -247,6 +284,9 @@ impl PaintApp {
             self.batch_open = false;
             return self.active().end_atomic_prepare() as i32;
         }
+        if self.active().has_pending_ops() {
+            return self.active().end_atomic_prepare() as i32;
+        }
         0
     }
 
@@ -260,8 +300,7 @@ impl PaintApp {
         self.background_color[2] = (eb * 32768.0 + 0.5) as u16;
         self.background_color[3] = 32768;
         for pixel in 0..64 * 64 {
-            self.background_tile[pixel * 4..pixel * 4 + 4]
-                .copy_from_slice(&self.background_color);
+            self.background_tile[pixel * 4..pixel * 4 + 4].copy_from_slice(&self.background_color);
         }
     }
 
@@ -274,9 +313,8 @@ impl PaintApp {
         let inverse_eotf = 1.0 / self.display_eotf;
         for value in 0..DISPLAY_LUT_VALUES {
             for noise in 0..DISPLAY_LUT_NOISE {
-                let encoded = ((value as f32 / 32768.0
-                    + noise as f32 / (255.0 * 32768.0))
-                    .min(1.0)) as f32;
+                let encoded =
+                    ((value as f32 / 32768.0 + noise as f32 / (255.0 * 32768.0)).min(1.0)) as f32;
                 self.display_lut[value * DISPLAY_LUT_NOISE + noise] =
                     (encoded.powf(inverse_eotf) * 255.0 + 0.5) as u8;
             }
@@ -330,20 +368,10 @@ impl PaintApp {
         }
     }
 
-    fn render_node(
-        &mut self,
-        r: i32,
-        tx: i32,
-        ty: i32,
-        target: &mut [u16],
-        scratch: &mut [u16],
-    ) {
+    fn render_node(&mut self, r: i32, tx: i32, ty: i32, target: &mut [u16], scratch: &mut [u16]) {
         if web_ref_is_group(r) {
             let group = web_ref_group_id(r) as usize;
-            if group >= WEB_MAX_GROUPS
-                || !self.group_alive[group]
-                || !self.group_visible[group]
-            {
+            if group >= WEB_MAX_GROUPS || !self.group_alive[group] || !self.group_visible[group] {
                 return;
             }
             let tile_words = self.tile_bytes;
@@ -355,8 +383,7 @@ impl PaintApp {
                 && !self.group_isolated[group]
                 && self.group_mode[group] == BlendMode::Normal;
             if direct {
-                let opacity = (self.group_opacity[group].clamp(0.0, 1.0) * 32768.0
-                    + 0.5) as u32;
+                let opacity = (self.group_opacity[group].clamp(0.0, 1.0) * 32768.0 + 0.5) as u32;
                 work.copy_from_slice(target);
                 let mut child = self.group_first_child[group];
                 while child != WEB_REF_NONE {
@@ -418,8 +445,22 @@ impl PaintApp {
     /// `paint_render_tile_ptr` -- composite the full stack for one tile.
     pub fn render_tile(&mut self, tx: i32, ty: i32) -> &[u16] {
         let mut composite = std::mem::take(&mut self.composite_tile);
-        let mut scratch = std::mem::take(&mut self.render_scratch);
         composite.copy_from_slice(&self.background_tile);
+        if self.layer_count == 1
+            && self.root_first_child == 0
+            && self.root_last_child == 0
+            && self.layer_visible[0]
+            && self.layer_opacity[0] == 1.0
+            && self.layer_mode[0] == BlendMode::Normal
+        {
+            if let Some(source) = self.layers[0].get_tile(tx, ty) {
+                layer_blend_normal_full_tile(&mut composite, source);
+            }
+            self.composite_tile = composite;
+            return &self.composite_tile;
+        }
+
+        let mut scratch = std::mem::take(&mut self.render_scratch);
         let mut child = self.root_first_child;
         while child != WEB_REF_NONE {
             let next = self.node_next(child);
@@ -469,8 +510,7 @@ impl PaintApp {
             return false;
         };
         for pixel in 0..64 * 64 {
-            let alpha =
-                ((source[pixel * 4 + 3] as u32 * 32768 + 127) / 255) as u16;
+            let alpha = ((source[pixel * 4 + 3] as u32 * 32768 + 127) / 255) as u16;
             for channel in 0..3 {
                 let encoded = source[pixel * 4 + channel] as f32 / 255.0;
                 let linear = (encoded.powf(eotf) * 32768.0 + 0.5) as u32;
@@ -492,8 +532,8 @@ impl PaintApp {
         }
         let level = level.min(2);
         let scale = 1 << level;
-        for layer in &self.layers[..self.layer_count] {
-            if !layer.is_visible() {
+        for (i, layer) in self.layers[..self.layer_count].iter().enumerate() {
+            if !self.layer_visible[i] {
                 continue;
             }
             for sy in 0..scale {
@@ -515,10 +555,7 @@ impl PaintApp {
         }
         let level = level.min(2);
         let scale = 1usize << level;
-        let has_paint = self
-            .layers
-            .iter()
-            .any(|l| l.used_tile_count() > 0);
+        let has_paint = self.layers.iter().any(|l| l.used_tile_count() > 0);
         if !has_paint {
             for pixel in 0..64 * 64 {
                 self.mip_composite_tile[pixel * 4..pixel * 4 + 4]
@@ -532,13 +569,14 @@ impl PaintApp {
             return &self.display_tile;
         }
         let mut region_has_paint = false;
-        'outer: for layer in &self.layers[..self.layer_count] {
-            if !layer.is_visible() {
+        'outer: for (i, layer) in self.layers[..self.layer_count].iter().enumerate() {
+            if !self.layer_visible[i] {
                 continue;
             }
             for sy in 0..scale {
                 for sx in 0..scale {
-                    if layer.has_tile(tx * scale as i32 + sx as i32, ty * scale as i32 + sy as i32) {
+                    if layer.has_tile(tx * scale as i32 + sx as i32, ty * scale as i32 + sy as i32)
+                    {
                         region_has_paint = true;
                         break 'outer;
                     }
@@ -590,8 +628,7 @@ impl PaintApp {
                 }
                 let sample_count = (scale * scale) as u64;
                 for channel in 0..4 {
-                    self.mip_composite_tile
-                        [(pixel_y * 64 + pixel_x) * 4 + channel] =
+                    self.mip_composite_tile[(pixel_y * 64 + pixel_x) * 4 + channel] =
                         ((sum[channel] + sample_count / 2) / sample_count) as u16;
                 }
             }
@@ -603,7 +640,6 @@ impl PaintApp {
         );
         &self.display_tile
     }
-
 }
 
 impl PaintApp {
@@ -671,33 +707,57 @@ impl PaintApp {
 
     #[inline]
     fn node_first(&self, parent: i32) -> i32 {
-        if parent < 0 { self.root_first_child } else { self.group_first_child[parent as usize] }
+        if parent < 0 {
+            self.root_first_child
+        } else {
+            self.group_first_child[parent as usize]
+        }
     }
 
     #[inline]
     fn node_last(&self, parent: i32) -> i32 {
-        if parent < 0 { self.root_last_child } else { self.group_last_child[parent as usize] }
+        if parent < 0 {
+            self.root_last_child
+        } else {
+            self.group_last_child[parent as usize]
+        }
     }
 
     #[inline]
     fn node_set_first(&mut self, parent: i32, r: i32) {
-        if parent < 0 { self.root_first_child = r; } else { self.group_first_child[parent as usize] = r; }
+        if parent < 0 {
+            self.root_first_child = r;
+        } else {
+            self.group_first_child[parent as usize] = r;
+        }
     }
 
     #[inline]
     fn node_set_last(&mut self, parent: i32, r: i32) {
-        if parent < 0 { self.root_last_child = r; } else { self.group_last_child[parent as usize] = r; }
+        if parent < 0 {
+            self.root_last_child = r;
+        } else {
+            self.group_last_child[parent as usize] = r;
+        }
     }
 
     fn node_remove(&mut self, r: i32) {
         let parent = self.node_parent(r);
-        if parent < -1 { return; }
+        if parent < -1 {
+            return;
+        }
         let previous = self.node_previous(r);
         let next = self.node_next(r);
-        if previous == WEB_REF_NONE { self.node_set_first(parent, next); }
-        else { self.node_set_next(previous, next); }
-        if next == WEB_REF_NONE { self.node_set_last(parent, previous); }
-        else { self.node_set_previous(next, previous); }
+        if previous == WEB_REF_NONE {
+            self.node_set_first(parent, next);
+        } else {
+            self.node_set_next(previous, next);
+        }
+        if next == WEB_REF_NONE {
+            self.node_set_last(parent, previous);
+        } else {
+            self.node_set_previous(next, previous);
+        }
         self.node_set_parent(r, -2);
         self.node_set_previous(r, WEB_REF_NONE);
         self.node_set_next(r, WEB_REF_NONE);
@@ -708,8 +768,11 @@ impl PaintApp {
         self.node_set_parent(r, parent);
         self.node_set_previous(r, last);
         self.node_set_next(r, WEB_REF_NONE);
-        if last == WEB_REF_NONE { self.node_set_first(parent, r); }
-        else { self.node_set_next(last, r); }
+        if last == WEB_REF_NONE {
+            self.node_set_first(parent, r);
+        } else {
+            self.node_set_next(last, r);
+        }
         self.node_set_last(parent, r);
     }
 
@@ -720,28 +783,39 @@ impl PaintApp {
         self.node_set_previous(r, previous);
         self.node_set_next(r, before);
         self.node_set_previous(before, r);
-        if previous == WEB_REF_NONE { self.node_set_first(parent, r); }
-        else { self.node_set_next(previous, r); }
+        if previous == WEB_REF_NONE {
+            self.node_set_first(parent, r);
+        } else {
+            self.node_set_next(previous, r);
+        }
     }
 
     fn group_contains(&self, ancestor: usize, candidate: i32) -> bool {
         let mut current = candidate;
         while current >= 0 && (current as usize) < WEB_MAX_GROUPS {
-            if current as usize == ancestor { return true; }
+            if current as usize == ancestor {
+                return true;
+            }
             current = self.group_parent[current as usize];
         }
         false
     }
 
     fn history_reset_all(&mut self) {
+        self.pending_captures.clear();
+        self.pending_capture_bytes = 0;
         self.history_entries.clear();
         self.history_records.clear();
         self.history_cursor = 0;
         self.history_active = false;
     }
 
-    pub fn layer_count(&self) -> usize { self.layer_count }
-    pub fn active_layer(&self) -> usize { self.active_layer }
+    pub fn layer_count(&self) -> usize {
+        self.layer_count
+    }
+    pub fn active_layer(&self) -> usize {
+        self.active_layer
+    }
 
     pub fn layer_used_tile_count(&self, layer_id: usize) -> usize {
         self.layers
@@ -752,7 +826,17 @@ impl PaintApp {
 
     pub fn layer_used_tile_info(&self, layer_id: usize, index: usize) -> Option<TilePos> {
         let pos = self.layers.get(layer_id)?.used_tile_info(index)?;
-        Some(TilePos { tx: pos.tx, ty: pos.ty })
+        Some(TilePos {
+            tx: pos.tx,
+            ty: pos.ty,
+        })
+    }
+
+    pub fn layer_used_tile_is_storage_dirty(&self, layer_id: usize, index: usize) -> bool {
+        self.layers
+            .get(layer_id)
+            .map(|surface| surface.used_tile_is_storage_dirty(index))
+            .unwrap_or(false)
     }
 
     pub fn layer_tile_ptr(&self, layer_id: usize, tx: i32, ty: i32) -> usize {
@@ -761,6 +845,13 @@ impl PaintApp {
             .and_then(|surface| surface.get_tile(tx, ty))
             .map(|tile| tile.as_ptr() as usize)
             .unwrap_or(0)
+    }
+
+    pub fn layer_tile_is_captured(&self, layer_id: usize, tx: i32, ty: i32) -> bool {
+        self.layers
+            .get(layer_id)
+            .map(|surface| surface.tile_is_captured(tx, ty))
+            .unwrap_or(false)
     }
 
     pub fn remove_layer_tile(&mut self, layer_id: usize, tx: i32, ty: i32) -> bool {
@@ -782,24 +873,58 @@ impl PaintApp {
             .map(|surface| surface.write_rgba16_tile(tx, ty, source))
             .unwrap_or(false)
     }
+
+    pub fn write_layer_rgba16_tile_modified(
+        &mut self,
+        layer_id: usize,
+        tx: i32,
+        ty: i32,
+        source: &[u16],
+    ) -> bool {
+        self.layers
+            .get_mut(layer_id)
+            .map(|surface| surface.write_rgba16_tile_modified(tx, ty, source))
+            .unwrap_or(false)
+    }
 }
 impl PaintApp {
     /// `begin_stroke` -- history begin + brush reset + zero-pressure warm-up.
-    pub fn begin_stroke(&mut self, x: f32, y: f32, xtilt: f32, ytilt: f32,
-        viewzoom: f32, viewrotation: f32, barrel_rotation: f32,
+    pub fn begin_stroke(
+        &mut self,
+        x: f32,
+        y: f32,
+        xtilt: f32,
+        ytilt: f32,
+        viewzoom: f32,
+        viewrotation: f32,
+        barrel_rotation: f32,
     ) {
         self.cooperative_stroke.cancel();
         self.history_begin();
-        let Some(brush) = self.brush.as_mut() else { return };
+        let Some(brush) = self.brush.as_mut() else {
+            return;
+        };
         self.history_active_layer = self.active_layer;
         self.pending_captures.clear();
+        self.pending_capture_bytes = 0;
         let layer = self.active_layer;
         self.layers[layer].set_capture_enabled(true);
         self.layers[layer].begin_atomic();
         brush.request_reset();
         brush.new_stroke();
-        brush.stroke_to(&mut self.layers[layer], x, y, 0.0, xtilt, ytilt,
-            10.0, viewzoom, viewrotation, barrel_rotation, false);
+        brush.stroke_to(
+            &mut self.layers[layer],
+            x,
+            y,
+            0.0,
+            xtilt,
+            ytilt,
+            10.0,
+            viewzoom,
+            viewrotation,
+            barrel_rotation,
+            false,
+        );
         let (roi, _jobs) = self.layers[layer].end_atomic();
         self.dirty_roi = roi;
         let captured = self.layers[layer].take_captured();
@@ -813,11 +938,22 @@ impl PaintApp {
     }
 
     /// `stroke_to` -- one motion sample through the budgeted driver.
-    pub fn stroke_to(&mut self, x: f32, y: f32, pressure: f32, xtilt: f32,
-        ytilt: f32, dtime: f64, viewzoom: f32, viewrotation: f32,
-        barrel_rotation: f32, linear: bool,
+    pub fn stroke_to(
+        &mut self,
+        x: f32,
+        y: f32,
+        pressure: f32,
+        xtilt: f32,
+        ytilt: f32,
+        dtime: f64,
+        viewzoom: f32,
+        viewrotation: f32,
+        barrel_rotation: f32,
+        linear: bool,
     ) -> i32 {
-        let Some(brush) = self.brush.as_mut() else { return -1 };
+        let Some(brush) = self.brush.as_mut() else {
+            return -1;
+        };
         let layer = self.active_layer;
         let open = self.batch_open;
         if !open {
@@ -825,14 +961,25 @@ impl PaintApp {
         }
         let result = if self.cooperative_stroke.pending() {
             brush.cooperative_stroke_continue(
-                &mut self.layers[layer], &mut self.cooperative_stroke,
+                &mut self.layers[layer],
+                &mut self.cooperative_stroke,
                 WEB_STROKE_DAB_BUDGET,
             )
         } else {
             brush.cooperative_stroke_start(
-                &mut self.layers[layer], &mut self.cooperative_stroke,
-                x, y, pressure, xtilt, ytilt, dtime, viewzoom, viewrotation,
-                barrel_rotation, linear, WEB_STROKE_DAB_BUDGET,
+                &mut self.layers[layer],
+                &mut self.cooperative_stroke,
+                x,
+                y,
+                pressure,
+                xtilt,
+                ytilt,
+                dtime,
+                viewzoom,
+                viewrotation,
+                barrel_rotation,
+                linear,
+                WEB_STROKE_DAB_BUDGET,
             )
         };
         if !open {
@@ -840,19 +987,24 @@ impl PaintApp {
             self.dirty_roi = roi;
         }
         self.absorb_captures();
-        if result < 0 { self.error_code = 3; }
+        if result < 0 {
+            self.error_code = 3;
+        }
         result
     }
 
     pub fn continue_stroke_to(&mut self) -> i32 {
-        let Some(brush) = self.brush.as_mut() else { return -1 };
+        let Some(brush) = self.brush.as_mut() else {
+            return -1;
+        };
         let layer = self.active_layer;
         let open = self.batch_open;
         if !open {
             self.layers[layer].begin_atomic();
         }
         let result = brush.cooperative_stroke_continue(
-            &mut self.layers[layer], &mut self.cooperative_stroke,
+            &mut self.layers[layer],
+            &mut self.cooperative_stroke,
             WEB_STROKE_DAB_BUDGET,
         );
         if !open {
@@ -860,7 +1012,9 @@ impl PaintApp {
             self.dirty_roi = roi;
         }
         self.absorb_captures();
-        if result < 0 { self.error_code = 3; }
+        if result < 0 {
+            self.error_code = 3;
+        }
         result
     }
 
@@ -872,13 +1026,16 @@ impl PaintApp {
         self.cooperative_stroke.pending()
     }
 
-    fn absorb_captures(&mut self) {
-        let layer = self.active_layer;
-        let capture_failed = self.layers[layer].take_capture_error();
-        let captured = self.layers[layer].take_captured();
-        if self.pending_captures.try_reserve(captured.len()).is_err() {
+    fn append_captures(&mut self, layer: usize, captured: Vec<(i32, i32, Vec<u16>)>) -> bool {
+        let added_bytes = captured.iter().fold(0usize, |total, (_, _, before)| {
+            total.saturating_add(before.len().saturating_mul(std::mem::size_of::<u16>()))
+        });
+        if (!self.external_history
+            && self.pending_capture_bytes.saturating_add(added_bytes) > HISTORY_BYTE_BUDGET / 2)
+            || self.pending_captures.try_reserve(captured.len()).is_err()
+        {
             self.fail_history(layer);
-            return;
+            return false;
         }
         for (tx, ty, before) in captured {
             self.pending_captures.push(PendingCapture {
@@ -887,15 +1044,95 @@ impl PaintApp {
                 before,
             });
         }
+        self.pending_capture_bytes += added_bytes;
+        true
+    }
+
+    fn absorb_captures(&mut self) {
+        let layer = self.active_layer;
+        let capture_failed = self.layers[layer].take_capture_error();
+        let captured = self.layers[layer].take_captured();
+        if capture_failed && self.external_history {
+            if self.append_captures(layer, captured) {
+                self.error_code = 2;
+                self.layers[layer].set_capture_enabled(false);
+            }
+            return;
+        }
         if capture_failed {
             self.fail_history(layer);
+            return;
+        }
+        self.append_captures(layer, captured);
+    }
+
+    pub fn set_external_history(&mut self, enabled: bool) {
+        if self.external_history == enabled {
+            return;
+        }
+        self.history_reset_all();
+        self.external_history = enabled;
+        for layer in &mut self.layers {
+            layer.set_external_history(enabled);
         }
     }
 
+    pub fn external_history_finish(&mut self) {
+        if !self.external_history || !self.history_active {
+            return;
+        }
+        let layer = self.history_active_layer;
+        self.layers[layer].set_capture_enabled(false);
+        self.absorb_captures();
+        self.history_active = false;
+    }
+
+    pub fn external_history_capture_count(&mut self) -> usize {
+        if self.external_history && self.history_active {
+            self.absorb_captures();
+        }
+        self.pending_captures.len()
+    }
+
+    pub fn external_history_capture_info(&self, index: usize) -> Option<(usize, TilePos)> {
+        let capture = self.pending_captures.get(index)?;
+        Some((capture.layer, capture.pos))
+    }
+
+    pub fn external_history_capture_ptr(&self, index: usize) -> usize {
+        self.pending_captures
+            .get(index)
+            .map(|capture| capture.before.as_ptr() as usize)
+            .unwrap_or(0)
+    }
+
+    pub fn external_history_clear_captures(&mut self) {
+        self.pending_captures.clear();
+        self.pending_capture_bytes = 0;
+    }
+
+    pub fn external_history_cancel(&mut self) {
+        if self.history_active_layer < self.layer_count {
+            self.layers[self.history_active_layer].set_capture_enabled(false);
+        }
+        self.pending_captures.clear();
+        self.pending_capture_bytes = 0;
+        self.history_active = false;
+    }
+
     pub fn history_begin(&mut self) {
+        if self.external_history {
+            self.pending_captures.clear();
+            self.pending_capture_bytes = 0;
+            self.history_active = true;
+            self.history_active_layer = self.active_layer;
+            return;
+        }
         if self.history_active {
             self.history_commit();
-            if self.history_active { return; }
+            if self.history_active {
+                return;
+            }
         }
         if self.history_cursor < self.history_records.len() {
             self.history_records.truncate(self.history_cursor);
@@ -903,7 +1140,9 @@ impl PaintApp {
         while self.history_records.len() >= WEB_HISTORY_RECORDS
             || self.history_entry_bytes > HISTORY_BYTE_BUDGET && self.history_records.len() > 1
         {
-            if self.history_records.is_empty() { break; }
+            if self.history_records.is_empty() {
+                break;
+            }
             self.history_records.remove(0);
             if self.history_cursor > 0 {
                 self.history_cursor -= 1;
@@ -917,12 +1156,15 @@ impl PaintApp {
     fn fail_history(&mut self, layer: usize) {
         self.error_code = 2;
         self.pending_captures.clear();
+        self.pending_capture_bytes = 0;
         self.history_active = false;
         self.layers[layer].set_capture_enabled(false);
     }
 
     pub fn history_commit(&mut self) {
-        if !self.history_active { return; }
+        if !self.history_active {
+            return;
+        }
         if self.history_active_layer != self.active_layer {
             self.history_active = false;
             return;
@@ -933,27 +1175,22 @@ impl PaintApp {
         self.layers[layer].set_capture_enabled(false);
         let capture_failed = self.layers[layer].take_capture_error();
         let captured = self.layers[layer].take_captured();
-        if self.pending_captures.try_reserve(captured.len()).is_err() {
-            self.fail_history(layer);
-            return;
-        }
-        for (tx, ty, before) in captured {
-            self.pending_captures.push(PendingCapture {
-                pos: TilePos { tx, ty },
-                layer,
-                before,
-            });
-        }
         if capture_failed {
             self.fail_history(layer);
             return;
         }
+        if !self.append_captures(layer, captured) {
+            return;
+        }
 
         let pending = std::mem::take(&mut self.pending_captures);
+        self.pending_capture_bytes = 0;
         let mut record_bytes = 0usize;
         for capture in &pending {
             record_bytes = record_bytes.saturating_add(
-                capture.before.len()
+                capture
+                    .before
+                    .len()
                     .saturating_mul(2 * std::mem::size_of::<u16>()),
             );
         }
@@ -1004,8 +1241,7 @@ impl PaintApp {
             }
             self.history_records.push(HistoryRecord {
                 layer,
-                entries: self.history_entries.len()
-                    ..self.history_entries.len() + record.len(),
+                entries: self.history_entries.len()..self.history_entries.len() + record.len(),
             });
             self.history_entry_bytes += record_bytes;
             self.history_entries.extend(record);
@@ -1018,7 +1254,9 @@ impl PaintApp {
     /// ranges start before the first live record). Rebases nothing: the
     /// live records' ranges are absolute and unchanged.
     fn evict_dropped_entries(&mut self) {
-        let first_live = self.history_records.first()
+        let first_live = self
+            .history_records
+            .first()
             .map(|r| r.entries.start)
             .unwrap_or(self.history_entries.len());
         if first_live == 0 {
@@ -1037,7 +1275,9 @@ impl PaintApp {
     }
 
     pub fn history_undo(&mut self) -> bool {
-        if self.history_cursor == 0 { return false; }
+        if self.history_cursor == 0 {
+            return false;
+        }
         self.history_cursor -= 1;
         let (start, end, layer) = {
             let record = &self.history_records[self.history_cursor];
@@ -1060,7 +1300,9 @@ impl PaintApp {
     }
 
     pub fn history_redo(&mut self) -> bool {
-        if self.history_cursor >= self.history_records.len() { return false; }
+        if self.history_cursor >= self.history_records.len() {
+            return false;
+        }
         let (start, end, layer) = {
             let record = &self.history_records[self.history_cursor];
             (record.entries.start, record.entries.end, record.layer)
@@ -1082,11 +1324,17 @@ impl PaintApp {
         true
     }
 
-    pub fn history_can_undo(&self) -> bool { self.history_cursor > 0 }
+    pub fn history_can_undo(&self) -> bool {
+        self.history_cursor > 0
+    }
 
     /// Test hook: the total history entry bytes (the budget accounting).
-    pub fn history_entry_bytes(&self) -> usize { self.history_entry_bytes }
-    pub fn history_can_redo(&self) -> bool { self.history_cursor < self.history_records.len() }
+    pub fn history_entry_bytes(&self) -> usize {
+        self.history_entry_bytes
+    }
+    pub fn history_can_redo(&self) -> bool {
+        self.history_cursor < self.history_records.len()
+    }
 
     pub fn clear(&mut self) {
         self.active().clear_tiles();
@@ -1096,18 +1344,29 @@ impl PaintApp {
         self.active().get_color(x, y, radius, paint)
     }
 
-    pub fn set_symmetry(&mut self, active: bool, cx: f32, cy: f32, angle: f32,
-        kind: i32, lines: i32,
+    pub fn set_symmetry(
+        &mut self,
+        active: bool,
+        cx: f32,
+        cy: f32,
+        angle: f32,
+        kind: i32,
+        lines: i32,
     ) {
-        self.active().set_symmetry(active, cx, cy, angle, kind, lines);
+        self.active()
+            .set_symmetry(active, cx, cy, angle, kind, lines);
     }
 
     pub fn create_layer(&mut self) -> i32 {
-        if self.layer_count >= WEB_MAX_LAYERS { return -1; }
+        if self.layer_count >= WEB_MAX_LAYERS {
+            return -1;
+        }
         let (w, h) = (self.width, self.height);
-        let Some(surface) = WebSurface::new_with_budget(w, h, Rc::clone(&self.tile_budget)) else {
+        let Some(mut surface) = WebSurface::new_with_budget(w, h, Rc::clone(&self.tile_budget))
+        else {
             return -1;
         };
+        surface.set_external_history(self.external_history);
         let id = self.layer_count;
         self.layers.push(surface);
         self.layer_visible[id] = true;
@@ -1120,7 +1379,9 @@ impl PaintApp {
     }
 
     pub fn delete_layer(&mut self, layer_id: usize) -> bool {
-        if self.layer_count <= 1 || layer_id >= self.layer_count { return false; }
+        if self.layer_count <= 1 || layer_id >= self.layer_count {
+            return false;
+        }
         self.node_remove(layer_id as i32);
         self.layers.remove(layer_id);
         for i in layer_id..self.layer_count - 1 {
@@ -1131,8 +1392,13 @@ impl PaintApp {
         self.layer_count -= 1;
         let removed = layer_id as i32;
         let remap = |r: i32| -> i32 {
-            if r == WEB_REF_NONE || r == removed { WEB_REF_NONE }
-            else if r > removed { r - 1 } else { r }
+            if r == WEB_REF_NONE || r == removed {
+                WEB_REF_NONE
+            } else if r > removed {
+                r - 1
+            } else {
+                r
+            }
         };
         for i in 0..WEB_MAX_GROUPS {
             self.group_first_child[i] = remap(self.group_first_child[i]);
@@ -1147,7 +1413,11 @@ impl PaintApp {
             self.layer_previous[i] = remap(self.layer_previous[i]);
         }
         if self.active_layer == layer_id {
-            self.active_layer = if layer_id < self.layer_count { layer_id } else { self.layer_count - 1 };
+            self.active_layer = if layer_id < self.layer_count {
+                layer_id
+            } else {
+                self.layer_count - 1
+            };
         } else if self.active_layer > layer_id {
             self.active_layer -= 1;
         }
@@ -1156,20 +1426,30 @@ impl PaintApp {
     }
 
     pub fn set_layer_visible(&mut self, layer_id: usize, visible: bool) {
-        if layer_id < self.layer_count { self.layer_visible[layer_id] = visible; }
+        if layer_id < self.layer_count {
+            self.layer_visible[layer_id] = visible;
+        }
     }
 
     pub fn set_layer_opacity(&mut self, layer_id: usize, opacity: f32) {
-        if layer_id < self.layer_count { self.layer_opacity[layer_id] = opacity.clamp(0.0, 1.0); }
+        if layer_id < self.layer_count {
+            self.layer_opacity[layer_id] = opacity.clamp(0.0, 1.0);
+        }
     }
 
     pub fn set_layer_mode(&mut self, layer_id: usize, mode: BlendMode) {
-        if layer_id < self.layer_count { self.layer_mode[layer_id] = mode; }
+        if layer_id < self.layer_count {
+            self.layer_mode[layer_id] = mode;
+        }
     }
 
     pub fn set_layer_group(&mut self, layer_id: usize, group_id: i32) -> bool {
-        if layer_id >= self.layer_count { return false; }
-        if group_id >= 0 && (group_id as usize >= WEB_MAX_GROUPS || !self.group_alive[group_id as usize]) {
+        if layer_id >= self.layer_count {
+            return false;
+        }
+        if group_id >= 0
+            && (group_id as usize >= WEB_MAX_GROUPS || !self.group_alive[group_id as usize])
+        {
             return false;
         }
         self.node_remove(layer_id as i32);
@@ -1179,24 +1459,42 @@ impl PaintApp {
     }
 
     fn move_node(&mut self, r: i32, direction: i32) -> bool {
-        let neighbor = if direction < 0 { self.node_previous(r) } else { self.node_next(r) };
-        if neighbor == WEB_REF_NONE { return false; }
+        let neighbor = if direction < 0 {
+            self.node_previous(r)
+        } else {
+            self.node_next(r)
+        };
+        if neighbor == WEB_REF_NONE {
+            return false;
+        }
         let parent = self.node_parent(r);
-        let after = if direction < 0 { neighbor } else { self.node_next(neighbor) };
+        let after = if direction < 0 {
+            neighbor
+        } else {
+            self.node_next(neighbor)
+        };
         self.node_remove(r);
-        if direction < 0 { self.node_insert_before(r, neighbor); }
-        else if after == WEB_REF_NONE { self.node_append(r, parent); }
-        else { self.node_insert_before(r, after); }
+        if direction < 0 {
+            self.node_insert_before(r, neighbor);
+        } else if after == WEB_REF_NONE {
+            self.node_append(r, parent);
+        } else {
+            self.node_insert_before(r, after);
+        }
         true
     }
 
     pub fn move_layer(&mut self, layer_id: usize, direction: i32) -> bool {
-        if layer_id >= self.layer_count || (direction != -1 && direction != 1) { return false; }
+        if layer_id >= self.layer_count || (direction != -1 && direction != 1) {
+            return false;
+        }
         self.move_node(layer_id as i32, direction)
     }
 
     pub fn create_group(&mut self) -> i32 {
-        let Some(group) = self.group_alive.iter().position(|a| !a) else { return -1; };
+        let Some(group) = self.group_alive.iter().position(|a| !a) else {
+            return -1;
+        };
         self.group_alive[group] = true;
         self.group_visible[group] = true;
         self.group_pass_through[group] = false;
@@ -1211,7 +1509,9 @@ impl PaintApp {
     }
 
     pub fn delete_group(&mut self, group_id: usize) -> bool {
-        if group_id >= WEB_MAX_GROUPS || !self.group_alive[group_id] { return false; }
+        if group_id >= WEB_MAX_GROUPS || !self.group_alive[group_id] {
+            return false;
+        }
         let parent = self.group_parent[group_id];
         let mut child = self.group_first_child[group_id];
         while child != WEB_REF_NONE {
@@ -1226,17 +1526,25 @@ impl PaintApp {
         self.group_first_child[group_id] = WEB_REF_NONE;
         self.group_last_child[group_id] = WEB_REF_NONE;
         self.group_parent[group_id] = -2;
-        while self.group_count > 0 && !self.group_alive[self.group_count - 1] { self.group_count -= 1; }
+        while self.group_count > 0 && !self.group_alive[self.group_count - 1] {
+            self.group_count -= 1;
+        }
         self.history_reset_all();
         true
     }
 
     pub fn set_group_parent(&mut self, group_id: usize, parent_id: i32) -> bool {
-        if group_id >= WEB_MAX_GROUPS || !self.group_alive[group_id] { return false; }
-        if parent_id >= 0 && (parent_id as usize >= WEB_MAX_GROUPS || !self.group_alive[parent_id as usize]) {
+        if group_id >= WEB_MAX_GROUPS || !self.group_alive[group_id] {
             return false;
         }
-        if parent_id == group_id as i32 || (parent_id >= 0 && self.group_contains(group_id, parent_id)) {
+        if parent_id >= 0
+            && (parent_id as usize >= WEB_MAX_GROUPS || !self.group_alive[parent_id as usize])
+        {
+            return false;
+        }
+        if parent_id == group_id as i32
+            || (parent_id >= 0 && self.group_contains(group_id, parent_id))
+        {
             return false;
         }
         self.node_remove(web_ref_group(group_id));
@@ -1246,8 +1554,12 @@ impl PaintApp {
     }
 
     pub fn move_group(&mut self, group_id: usize, direction: i32) -> bool {
-        if group_id >= WEB_MAX_GROUPS || !self.group_alive[group_id]
-            || (direction != -1 && direction != 1) { return false; }
+        if group_id >= WEB_MAX_GROUPS
+            || !self.group_alive[group_id]
+            || (direction != -1 && direction != 1)
+        {
+            return false;
+        }
         self.move_node(web_ref_group(group_id), direction)
     }
 }
@@ -1310,15 +1622,66 @@ mod tests {
     }
 
     #[test]
+    fn one_layer_render_matches_the_tree_path() {
+        let mut app = PaintApp::new(256, 256).unwrap();
+        app.set_layer_mode(0, BlendMode::Normal);
+        let tile = app.layers[0].get_or_create_tile_mut(0, 0).unwrap();
+        for pi in 0..64 * 64 {
+            let p = pi * 4;
+            let alpha = ((pi * 1877) % 32769) as u16;
+            tile[p] = ((pi * 271) as u16).min(alpha);
+            tile[p + 1] = ((pi * 613) as u16).min(alpha);
+            tile[p + 2] = ((pi * 997) as u16).min(alpha);
+            tile[p + 3] = alpha;
+        }
+        let fast = app.render_tile(0, 0).to_vec();
+        let second = app.create_layer();
+        assert_eq!(second, 1);
+        app.set_layer_visible(second as usize, false);
+        let tree = app.render_tile(0, 0);
+        assert_eq!(fast, tree);
+    }
+
+    #[test]
+    fn history_capture_limit_applies_across_batches() {
+        let mut app = PaintApp::new(256, 256).unwrap();
+        app.history_begin();
+        app.layers[0].set_capture_enabled(true);
+        app.pending_capture_bytes = HISTORY_BYTE_BUDGET / 2 - app.tile_bytes;
+        let tile_words = app.tile_bytes / std::mem::size_of::<u16>();
+        assert!(app.append_captures(0, vec![(0, 0, vec![0; tile_words])]));
+        assert_eq!(app.pending_capture_bytes, HISTORY_BYTE_BUDGET / 2);
+
+        assert!(!app.append_captures(0, vec![(1, 0, vec![0])]));
+        assert_eq!(app.error_code, 2);
+        assert_eq!(app.pending_capture_bytes, 0);
+        assert!(app.pending_captures.is_empty());
+        assert!(!app.history_active);
+    }
+
+    #[test]
+    fn external_history_streams_past_the_internal_capture_limit() {
+        let mut app = PaintApp::new(256, 256).unwrap();
+        app.set_external_history(true);
+        app.history_begin();
+        app.pending_capture_bytes = HISTORY_BYTE_BUDGET / 2;
+        assert!(app.append_captures(0, vec![(0, 0, vec![0; 64 * 64 * 4])]));
+        assert_eq!(app.external_history_capture_count(), 1);
+        assert_eq!(app.error_code, 0);
+        assert!(app.history_active);
+        app.external_history_clear_captures();
+        assert_eq!(app.pending_capture_bytes, 0);
+    }
+
+    #[test]
     fn cooperative_stroke_keeps_boundary_crossing_queue_bounded() {
+        let _guard = crate::web_surface::JOB_TEST_LOCK.lock().unwrap();
         let mut app = PaintApp::new(12288, 12288).unwrap();
         app.begin_stroke(500.0, 2500.0, 0.0, 0.0, 1.0, 0.0, 0.5);
         app.begin_batch();
         for step in 1..=25 {
             let x = 500.0 + 11300.0 * step as f32 / 25.0;
-            let mut result = app.stroke_to(
-                x, 2500.0, 0.5, 0.0, 0.0, 0.016, 1.0, 0.0, 0.5, false,
-            );
+            let mut result = app.stroke_to(x, 2500.0, 0.5, 0.0, 0.0, 0.016, 1.0, 0.0, 0.5, false);
             while result == 0 {
                 app.end_batch();
                 app.begin_batch();

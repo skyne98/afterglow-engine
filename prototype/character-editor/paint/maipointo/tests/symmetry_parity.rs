@@ -4,7 +4,7 @@
 //! `mypaint_transform_point` outputs at probe points.
 
 use std::io::Write;
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 fn build_oracle() -> std::path::PathBuf {
     let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -62,10 +62,10 @@ fn states() -> Vec<(i32, f32, f32, f32, i32)> {
 #[test]
 fn symmetry_matches_mypaint_reference() {
     let exe = build_oracle();
-    let cases_file = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("target/symmetry-cases.bin");
-    let out_file = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("target/symmetry-ref.bin");
+    let cases_file =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/symmetry-cases.bin");
+    let out_file =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/symmetry-ref.bin");
 
     let states = states();
     {

@@ -141,9 +141,9 @@ pub struct SymmetryData {
 /// `num_matrices_required`.
 fn num_matrices_required(state: &SymmetryState) -> usize {
     match state.kind {
-        0 | 1 => 1,                       // vertical / horizontal
-        2 => 3,                           // verthorz
-        3 => (state.num_lines - 1) as usize, // rotational
+        0 | 1 => 1,                              // vertical / horizontal
+        2 => 3,                                  // verthorz
+        3 => (state.num_lines - 1) as usize,     // rotational
         4 => (2 * state.num_lines - 1) as usize, // snowflake
         _ => 0,
     }

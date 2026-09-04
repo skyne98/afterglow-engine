@@ -1,6 +1,6 @@
 #![cfg(feature = "demo")]
-use std::sync::Mutex;
 use maipointo::app::PaintApp;
+use std::sync::Mutex;
 
 static TEST_LOCK: Mutex<()> = Mutex::new(());
 
@@ -17,15 +17,22 @@ fn history_budget_evicts() {
         app.active().begin_atomic();
         for i in 0..60 {
             let _ = app.stroke_to(
-                100.0 + stroke as f32 * 20.0 + i as f32 * 40.0, 100.0,
-                0.7, 0.0, 0.0, 0.016, 1.0, 0.0, 0.0, false,
+                100.0 + stroke as f32 * 20.0 + i as f32 * 40.0,
+                100.0,
+                0.7,
+                0.0,
+                0.0,
+                0.016,
+                1.0,
+                0.0,
+                0.0,
+                false,
             );
         }
         app.active().end_atomic();
         app.history_commit();
         assert!(app.history_can_undo());
-        assert!(app.history_entry_bytes() <= maipointo::app::HISTORY_BYTE_BUDGET
-            + 4 * 1024 * 1024);
+        assert!(app.history_entry_bytes() <= maipointo::app::HISTORY_BYTE_BUDGET + 4 * 1024 * 1024);
     }
     // Undo/redo stays consistent across the evictions.
     assert!(app.history_undo());
@@ -43,8 +50,7 @@ fn history_capture_overflow_is_reported() {
     layer.begin_atomic();
     for (x, y) in [(2000.0, 2000.0), (8000.0, 8000.0)] {
         layer.draw_dab(
-            x, y, 1000.0, 0.4, 0.2, 0.1, 1.0, 1.0, 0.0, 1.0,
-            1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0,
+            x, y, 1000.0, 0.4, 0.2, 0.1, 1.0, 1.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0,
         );
     }
     layer.end_atomic();

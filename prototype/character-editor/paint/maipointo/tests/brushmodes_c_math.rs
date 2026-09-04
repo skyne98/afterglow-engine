@@ -1,9 +1,9 @@
 //! Arithmetic spot-checks against the exact C semantics of
 //! `brushmodes.c` / `mypaint-tiled-surface.c` (premultiplied fix15).
 
+use maipointo::Tile;
 use maipointo::brushmodes::*;
 use maipointo::mask::render_dab_mask;
-use maipointo::{Tile, TILE_SIZE};
 
 /// Opaque red dab stamped once over transparent tile: over-op with
 /// full opacity must produce solid red, exactly.
@@ -38,9 +38,7 @@ fn normal_blend_matches_c_integer_math() {
     draw_dab_normal(&mask, &mut rgba, 32768, 16384, 0, 16384);
     let opa_a: u32 = 8192;
     let opa_b: u32 = 32768 - 8192;
-    let expect = |bottom: u32, col: u32| -> u16 {
-        ((opa_a * col + opa_b * bottom) >> 15) as u16
-    };
+    let expect = |bottom: u32, col: u32| -> u16 { ((opa_a * col + opa_b * bottom) >> 15) as u16 };
     assert_eq!(rgba[0], expect(8192, 32768));
     assert_eq!(rgba[1], expect(16384, 16384));
     assert_eq!(rgba[2], expect(24576, 0));
@@ -157,5 +155,9 @@ fn colorize_retains_luminance() {
     let c = rgba;
     let lum_after = 0.2126 * c[0] as f32 + 0.7152 * c[1] as f32 + 0.0722 * c[2] as f32;
     let lum_before = 0.2126 * 16384.0 + 0.7152 * 16384.0 + 0.0722 * 16384.0;
-    assert!((lum_after - lum_before).abs() < 64.0, "luma drifted: {:?}", c);
+    assert!(
+        (lum_after - lum_before).abs() < 64.0,
+        "luma drifted: {:?}",
+        c
+    );
 }

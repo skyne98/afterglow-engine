@@ -8,15 +8,15 @@
 //!   calls, narrowed to float where the C assigns to float.
 
 use crate::helpers::{
-    clamp, hsv_to_rgb_float, hsl_to_rgb_float, mix_colors, mod_arith, rand_gauss,
-    rgb_to_hsl_float, rgb_to_hsv_float, smallest_angular_difference, sqr,
+    clamp, hsl_to_rgb_float, hsv_to_rgb_float, mix_colors, mod_arith, rand_gauss, rgb_to_hsl_float,
+    rgb_to_hsv_float, smallest_angular_difference, sqr,
 };
 use crate::mapping::Mapping;
 use crate::rngdouble::RngDouble;
 use crate::surface::Surface;
 
 pub mod cooperative;
-use crate::settings::{BrushStateId, InputId, SettingId, BRUSH_STATES_COUNT, INPUTS, SETTINGS};
+use crate::settings::{BRUSH_STATES_COUNT, BrushStateId, INPUTS, InputId, SETTINGS, SettingId};
 
 /// `ACTUAL_RADIUS_MIN`.
 pub const ACTUAL_RADIUS_MIN: f32 = 0.2;
@@ -85,7 +85,6 @@ pub struct Brush {
     pub dab_trace: Option<Vec<[f32; 17]>>,
 }
 
-
 impl Brush {
     #[inline]
     fn st(&self, id: BrushStateId) -> f32 {
@@ -153,8 +152,7 @@ impl Brush {
             dab_trace: None,
         };
         if num_smudge_buckets > 0 {
-            brush.smudge_buckets =
-                vec![0.0; num_smudge_buckets as usize * SMUDGE_BUCKET_SIZE];
+            brush.smudge_buckets = vec![0.0; num_smudge_buckets as usize * SMUDGE_BUCKET_SIZE];
             brush.num_buckets = num_smudge_buckets;
             brush.min_bucket_used = 0;
             brush.max_bucket_used = brush.num_buckets - 1;
@@ -451,20 +449,35 @@ impl Brush {
 
         self.set_st(BrushStateId::X, self.st(BrushStateId::X) + step_dx);
         self.set_st(BrushStateId::Y, self.st(BrushStateId::Y) + step_dy);
-        self.set_st(BrushStateId::Pressure, self.st(BrushStateId::Pressure) + step_dpressure);
+        self.set_st(
+            BrushStateId::Pressure,
+            self.st(BrushStateId::Pressure) + step_dpressure,
+        );
 
-        self.set_st(BrushStateId::Declination, self.st(BrushStateId::Declination) + step_declination);
-        self.set_st(BrushStateId::Ascension, self.st(BrushStateId::Ascension) + step_ascension);
-        self.set_st(BrushStateId::Declinationx, self.st(BrushStateId::Declinationx) + step_declinationx);
-        self.set_st(BrushStateId::Declinationy, self.st(BrushStateId::Declinationy) + step_declinationy);
+        self.set_st(
+            BrushStateId::Declination,
+            self.st(BrushStateId::Declination) + step_declination,
+        );
+        self.set_st(
+            BrushStateId::Ascension,
+            self.st(BrushStateId::Ascension) + step_ascension,
+        );
+        self.set_st(
+            BrushStateId::Declinationx,
+            self.st(BrushStateId::Declinationx) + step_declinationx,
+        );
+        self.set_st(
+            BrushStateId::Declinationy,
+            self.st(BrushStateId::Declinationy) + step_declinationy,
+        );
 
         self.set_st(BrushStateId::Viewzoom, step_viewzoom);
         // C: mod_arith(DEGREES(step_viewrotation) + 180.0, 360.0) - 180.0
-        let viewrotation =
-            mod_arith(degrees(step_viewrotation) + 180.0, 360.0) - 180.0;
+        let viewrotation = mod_arith(degrees(step_viewrotation) + 180.0, 360.0) - 180.0;
         self.set_st(BrushStateId::Viewrotation, viewrotation);
 
-        { // Gridmap state update
+        {
+            // Gridmap state update
             let x = self.st(BrushStateId::ActualX);
             let y = self.st(BrushStateId::ActualY);
             let scale = self.setting(SettingId::GridmapScale).exp();
@@ -494,7 +507,8 @@ impl Brush {
         }
         let pressure = self.st(BrushStateId::Pressure);
 
-        { // start / end stroke (for "stroke" input only)
+        {
+            // start / end stroke (for "stroke" input only)
             let lim = 0.0001;
             let threshold = self.get_base_value(SettingId::StrokeThreshold);
             let started = self.st(BrushStateId::StrokeStarted);
@@ -526,16 +540,14 @@ impl Brush {
         let m1 = self.speed_mapping_m[1];
         let q1 = self.speed_mapping_q[1];
         // C: log(gamma + STATE(...)) * m + q — double log, float narrow.
-        inputs[InputId::Speed1.index()] = (((self.speed_mapping_gamma[0]
-            + self.st(BrushStateId::NormSpeed1Slow)) as f64)
-            .ln()
-            * m0 as f64
-            + q0 as f64) as f32;
-        inputs[InputId::Speed2.index()] = (((self.speed_mapping_gamma[1]
-            + self.st(BrushStateId::NormSpeed2Slow)) as f64)
-            .ln()
-            * m1 as f64
-            + q1 as f64) as f32;
+        inputs[InputId::Speed1.index()] =
+            (((self.speed_mapping_gamma[0] + self.st(BrushStateId::NormSpeed1Slow)) as f64).ln()
+                * m0 as f64
+                + q0 as f64) as f32;
+        inputs[InputId::Speed2.index()] =
+            (((self.speed_mapping_gamma[1] + self.st(BrushStateId::NormSpeed2Slow)) as f64).ln()
+                * m1 as f64
+                + q1 as f64) as f32;
 
         inputs[InputId::Random.index()] = self.random_input as f32;
         inputs[InputId::Stroke.index()] = min(self.st(BrushStateId::Stroke), 1.0);
@@ -545,11 +557,10 @@ impl Brush {
             self.st(BrushStateId::DirectionDx),
         );
         // C: mod_arith(DEGREES(dir_angle) + viewrotation + 180.0, 180.0)
-        inputs[InputId::Direction.index()] =
-            mod_arith(
-                ((degrees(dir_angle) + viewrotation) as f64 + 180.0) as f32,
-                180.0,
-            );
+        inputs[InputId::Direction.index()] = mod_arith(
+            ((degrees(dir_angle) + viewrotation) as f64 + 180.0) as f32,
+            180.0,
+        );
         let dir_angle_360 = atan2f(
             self.st(BrushStateId::DirectionAngleDy),
             self.st(BrushStateId::DirectionAngleDx),
@@ -570,16 +581,8 @@ impl Brush {
         );
         inputs[InputId::BrushRadius.index()] = self.get_base_value(SettingId::RadiusLogarithmic);
 
-        inputs[InputId::GridmapX.index()] = clamp(
-            self.st(BrushStateId::GridmapX),
-            0.0,
-            GRID_SIZE,
-        );
-        inputs[InputId::GridmapY.index()] = clamp(
-            self.st(BrushStateId::GridmapY),
-            0.0,
-            GRID_SIZE,
-        );
+        inputs[InputId::GridmapX.index()] = clamp(self.st(BrushStateId::GridmapX), 0.0, GRID_SIZE);
+        inputs[InputId::GridmapY.index()] = clamp(self.st(BrushStateId::GridmapY), 0.0, GRID_SIZE);
 
         inputs[InputId::TiltDeclinationx.index()] = self.st(BrushStateId::Declinationx);
         inputs[InputId::TiltDeclinationy.index()] = self.st(BrushStateId::Declinationy);
@@ -608,49 +611,55 @@ impl Brush {
         {
             let fac = 1.0 - exp_decay(self.setting(SettingId::SlowTrackingPerDab), step_ddab);
             self.set_st(
-BrushStateId::ActualX,
+                BrushStateId::ActualX,
                 self.st(BrushStateId::ActualX)
                     + (self.st(BrushStateId::X) - self.st(BrushStateId::ActualX)) * fac,
             );
             self.set_st(
-BrushStateId::ActualY,
+                BrushStateId::ActualY,
                 self.st(BrushStateId::ActualY)
                     + (self.st(BrushStateId::Y) - self.st(BrushStateId::ActualY)) * fac,
             );
         }
 
-        { // slow speed
+        {
+            // slow speed
             let fac1 = 1.0 - exp_decay(self.setting(SettingId::Speed1Slowness), step_dtime);
             self.set_st(
-BrushStateId::NormSpeed1Slow,
+                BrushStateId::NormSpeed1Slow,
                 self.st(BrushStateId::NormSpeed1Slow)
                     + (norm_speed - self.st(BrushStateId::NormSpeed1Slow)) * fac1,
             );
             let fac2 = 1.0 - exp_decay(self.setting(SettingId::Speed2Slowness), step_dtime);
             self.set_st(
-BrushStateId::NormSpeed2Slow,
+                BrushStateId::NormSpeed2Slow,
                 self.st(BrushStateId::NormSpeed2Slow)
                     + (norm_speed - self.st(BrushStateId::NormSpeed2Slow)) * fac2,
             );
         }
 
-        { // slow speed, but as a vector
-            let mut time_constant = (self.setting(SettingId::OffsetBySpeedSlowness) * 0.01).exp() - 1.0;
+        {
+            // slow speed, but as a vector
+            let mut time_constant =
+                (self.setting(SettingId::OffsetBySpeedSlowness) * 0.01).exp() - 1.0;
             if time_constant < 0.002 {
                 time_constant = 0.002;
             }
             let fac = 1.0 - exp_decay(time_constant, step_dtime);
             self.set_st(
-BrushStateId::NormDxSlow,
-                self.st(BrushStateId::NormDxSlow) + (norm_dx - self.st(BrushStateId::NormDxSlow)) * fac,
+                BrushStateId::NormDxSlow,
+                self.st(BrushStateId::NormDxSlow)
+                    + (norm_dx - self.st(BrushStateId::NormDxSlow)) * fac,
             );
             self.set_st(
-BrushStateId::NormDySlow,
-                self.st(BrushStateId::NormDySlow) + (norm_dy - self.st(BrushStateId::NormDySlow)) * fac,
+                BrushStateId::NormDySlow,
+                self.st(BrushStateId::NormDySlow)
+                    + (norm_dy - self.st(BrushStateId::NormDySlow)) * fac,
             );
         }
 
-        { // orientation (lowpass on dabtime)
+        {
+            // orientation (lowpass on dabtime)
             let dx = step_dx * self.st(BrushStateId::Viewzoom);
             let dy = step_dy * self.st(BrushStateId::Viewzoom);
 
@@ -666,12 +675,14 @@ BrushStateId::NormDySlow,
             let dy_old = self.st(BrushStateId::DirectionDy);
 
             self.set_st(
-BrushStateId::DirectionAngleDx,
-                self.st(BrushStateId::DirectionAngleDx) + (dx - self.st(BrushStateId::DirectionAngleDx)) * fac,
+                BrushStateId::DirectionAngleDx,
+                self.st(BrushStateId::DirectionAngleDx)
+                    + (dx - self.st(BrushStateId::DirectionAngleDx)) * fac,
             );
             self.set_st(
-BrushStateId::DirectionAngleDy,
-                self.st(BrushStateId::DirectionAngleDy) + (dy - self.st(BrushStateId::DirectionAngleDy)) * fac,
+                BrushStateId::DirectionAngleDy,
+                self.st(BrushStateId::DirectionAngleDy)
+                    + (dy - self.st(BrushStateId::DirectionAngleDy)) * fac,
             );
 
             // use the opposite speed vector if closer (no 180° turns)
@@ -682,25 +693,30 @@ BrushStateId::DirectionAngleDy,
                 dy = -dy;
             }
             self.set_st(
-BrushStateId::DirectionDx,
-                self.st(BrushStateId::DirectionDx) + (dx - self.st(BrushStateId::DirectionDx)) * fac,
+                BrushStateId::DirectionDx,
+                self.st(BrushStateId::DirectionDx)
+                    + (dx - self.st(BrushStateId::DirectionDx)) * fac,
             );
             self.set_st(
-BrushStateId::DirectionDy,
-                self.st(BrushStateId::DirectionDy) + (dy - self.st(BrushStateId::DirectionDy)) * fac,
+                BrushStateId::DirectionDy,
+                self.st(BrushStateId::DirectionDy)
+                    + (dy - self.st(BrushStateId::DirectionDy)) * fac,
             );
         }
 
-        { // custom input
+        {
+            // custom input
             let fac = 1.0 - exp_decay(self.setting(SettingId::CustomInputSlowness), 0.1);
             self.set_st(
-BrushStateId::CustomInput,
+                BrushStateId::CustomInput,
                 self.st(BrushStateId::CustomInput)
-                    + (self.setting(SettingId::CustomInput) - self.st(BrushStateId::CustomInput)) * fac,
+                    + (self.setting(SettingId::CustomInput) - self.st(BrushStateId::CustomInput))
+                        * fac,
             );
         }
 
-        { // stroke length
+        {
+            // stroke length
             let frequency = (-self.setting(SettingId::StrokeDurationLogarithmic)).exp();
             let stroke = max(0.0, self.st(BrushStateId::Stroke) + norm_dist * frequency);
             let wrap = 1.0 + max(0.0, self.setting(SettingId::StrokeHoldtime));
@@ -730,17 +746,20 @@ BrushStateId::CustomInput,
         );
         self.set_st(
             BrushStateId::ActualEllipticalDabAngle,
-            mod_arith(self.setting(SettingId::EllipticalDabAngle) - viewrotation + 180.0, 180.0) - 180.0,
+            mod_arith(
+                self.setting(SettingId::EllipticalDabAngle) - viewrotation + 180.0,
+                180.0,
+            ) - 180.0,
         );
     }
 }
 
 impl Brush {
-    #[inline]
-    fn bucket_view(&mut self) -> &mut [f32] {
+    /// `fetch_smudge_bucket` (C): the start index of the active bucket.
+    /// With no bucket array the state slots act as the single bucket.
+    fn active_bucket_start(&mut self) -> usize {
         if self.smudge_buckets.is_empty() {
-            let start = BrushStateId::SmudgeRa.index();
-            return &mut self.states[start..start + SMUDGE_BUCKET_SIZE];
+            return BrushStateId::SmudgeRa.index();
         }
         let idx = clamp(
             roundf(self.setting(SettingId::SmudgeBucket)),
@@ -753,8 +772,21 @@ impl Brush {
         if self.max_bucket_used < idx as i32 {
             self.max_bucket_used = idx as i32;
         }
-        let start = idx * SMUDGE_BUCKET_SIZE;
-        &mut self.smudge_buckets[start..start + SMUDGE_BUCKET_SIZE]
+        idx * SMUDGE_BUCKET_SIZE
+    }
+
+    /// The active smudge bucket contents (parity/debug).
+    pub fn raw_smudge_bucket(&mut self) -> [f32; SMUDGE_BUCKET_SIZE] {
+        let start = self.active_bucket_start();
+        if self.smudge_buckets.is_empty() {
+            self.states[start..start + SMUDGE_BUCKET_SIZE]
+                .try_into()
+                .unwrap()
+        } else {
+            self.smudge_buckets[start..start + SMUDGE_BUCKET_SIZE]
+                .try_into()
+                .unwrap()
+        }
     }
 
     /// `update_smudge_color` (TRUE = caller returns early).
@@ -781,15 +813,23 @@ impl Brush {
         let mut g = 0.0f32;
         let mut b = 0.0f32;
         let mut a = 0.0f32;
-        if recentness < min(1.0, f32::powf(0.5 * update_factor, smudge_length_log) + margin) {
+        if recentness
+            < min(
+                1.0,
+                f32::powf(0.5 * update_factor, smudge_length_log) + margin,
+            )
+        {
             if recentness == 0.0 {
                 update_factor = 0.0;
             }
             bucket[PREV_COL_RECENTNESS] = 1.0;
 
             let radius_log = self.setting(SettingId::SmudgeRadiusLog);
-            let smudge_radius =
-                clamp(radius * radius_log.exp(), ACTUAL_RADIUS_MIN, ACTUAL_RADIUS_MAX);
+            let smudge_radius = clamp(
+                radius * radius_log.exp(),
+                ACTUAL_RADIUS_MIN,
+                ACTUAL_RADIUS_MAX,
+            );
 
             let sampled = surface.get_color(
                 px as f32,
@@ -834,8 +874,12 @@ impl Brush {
                 bucket[SMUDGE_R + 3],
             ];
             let sampled_color = [r, g, b, a];
-            let smudge_new =
-                mix_colors(&prev_smudge_color, &sampled_color, update_factor, paint_factor);
+            let smudge_new = mix_colors(
+                &prev_smudge_color,
+                &sampled_color,
+                update_factor,
+                paint_factor,
+            );
             bucket[SMUDGE_R] = smudge_new[SMUDGE_R];
             bucket[SMUDGE_R + 1] = smudge_new[SMUDGE_R + 1];
             bucket[SMUDGE_R + 2] = smudge_new[SMUDGE_R + 2];
@@ -978,16 +1022,17 @@ impl Brush {
         // one Vec for the sampler and another clone for every dab.
         let smudge_length = self.setting(SettingId::SmudgeLength);
         let smudge_value = self.setting(SettingId::Smudge);
-        let update_smudge = smudge_length < 1.0
-            && (smudge_value != 0.0 || !self.is_constant(SettingId::Smudge));
+        let update_smudge =
+            smudge_length < 1.0 && (smudge_value != 0.0 || !self.is_constant(SettingId::Smudge));
         let mut bucket = [0.0f32; SMUDGE_BUCKET_SIZE];
+        let bucket_start = self.active_bucket_start();
         if update_smudge || smudge_value > 0.0 {
-            if self.smudge_buckets.is_empty() {
-                let start = BrushStateId::SmudgeRa.index();
-                bucket.copy_from_slice(&self.states[start..start + SMUDGE_BUCKET_SIZE]);
+            let src = if self.smudge_buckets.is_empty() {
+                &self.states[bucket_start..bucket_start + SMUDGE_BUCKET_SIZE]
             } else {
-                bucket.copy_from_slice(&self.smudge_buckets[..SMUDGE_BUCKET_SIZE]);
-            }
+                &self.smudge_buckets[bucket_start..bucket_start + SMUDGE_BUCKET_SIZE]
+            };
+            bucket.copy_from_slice(src);
         }
         if update_smudge {
             let return_early = self.update_smudge_color(
@@ -1000,12 +1045,12 @@ impl Brush {
                 legacy_smudge,
                 paint_factor,
             );
-            if self.smudge_buckets.is_empty() {
-                let start = BrushStateId::SmudgeRa.index();
-                self.states[start..start + SMUDGE_BUCKET_SIZE].copy_from_slice(&bucket);
+            let dst = if self.smudge_buckets.is_empty() {
+                &mut self.states[bucket_start..bucket_start + SMUDGE_BUCKET_SIZE]
             } else {
-                self.smudge_buckets[..SMUDGE_BUCKET_SIZE].copy_from_slice(&bucket);
-            }
+                &mut self.smudge_buckets[bucket_start..bucket_start + SMUDGE_BUCKET_SIZE]
+            };
+            dst.copy_from_slice(&bucket);
             if return_early {
                 return false;
             }
@@ -1104,22 +1149,46 @@ impl Brush {
         let posterize_num = self.setting(SettingId::PosterizeNum);
 
         let painted = surface.surface_draw_dab(
-            x, y, radius, color[0], color[1], color[2], opaque, hardness, softness,
-            eraser_target_alpha, dab_ratio, dab_angle, lock_alpha, colorize, posterize,
-            posterize_num, paint_factor,
+            x,
+            y,
+            radius,
+            color[0],
+            color[1],
+            color[2],
+            opaque,
+            hardness,
+            softness,
+            eraser_target_alpha,
+            dab_ratio,
+            dab_angle,
+            lock_alpha,
+            colorize,
+            posterize,
+            posterize_num,
+            paint_factor,
         );
         if let Some(t) = self.dab_trace.as_mut() {
             t.push([
-                x, y, radius, color[0], color[1], color[2], opaque, hardness, softness,
-                eraser_target_alpha, dab_ratio, dab_angle, lock_alpha, colorize, posterize,
-                posterize_num, paint_factor,
+                x,
+                y,
+                radius,
+                color[0],
+                color[1],
+                color[2],
+                opaque,
+                hardness,
+                softness,
+                eraser_target_alpha,
+                dab_ratio,
+                dab_angle,
+                lock_alpha,
+                colorize,
+                posterize,
+                posterize_num,
+                paint_factor,
             ]);
         }
         painted
-    }
-
-    fn smudge_bucket_ref(&mut self) -> &mut [f32] {
-        self.bucket_view()
     }
 
     /// `count_dabs_to`.
@@ -1148,8 +1217,8 @@ impl Brush {
             dist = f32::hypot(dx, dy);
         }
 
-        let res1 = dist / self.st(BrushStateId::ActualRadius)
-            * self.st(BrushStateId::DabsPerActualRadius);
+        let res1 =
+            dist / self.st(BrushStateId::ActualRadius) * self.st(BrushStateId::DabsPerActualRadius);
         let res2 = dist / base_radius * self.st(BrushStateId::DabsPerBasicRadius);
         let res3 = dt * self.st(BrushStateId::DabsPerSecond);
         let res4 = res1 + res2 + res3;
@@ -1256,7 +1325,8 @@ impl Brush {
             self.skipped_dtime = 0.0;
         }
 
-        { // virtual cursor position: tracking noise + slow tracking
+        {
+            // virtual cursor position: tracking noise + slow tracking
             if self.get_base_value(SettingId::TrackingNoise) != 0.0 {
                 let base_radius = self.get_base_value(SettingId::RadiusLogarithmic).exp();
                 let noise = base_radius * self.get_base_value(SettingId::TrackingNoise);
@@ -1269,7 +1339,11 @@ impl Brush {
                 }
             }
 
-            let fac = 1.0 - exp_decay(self.get_base_value(SettingId::SlowTracking), 100.0 * dtime as f32);
+            let fac = 1.0
+                - exp_decay(
+                    self.get_base_value(SettingId::SlowTracking),
+                    100.0 * dtime as f32,
+                );
             x = self.st(BrushStateId::X) + (x - self.st(BrushStateId::X)) * fac;
             y = self.st(BrushStateId::Y) + (y - self.st(BrushStateId::Y)) * fac;
         }
@@ -1316,8 +1390,10 @@ impl Brush {
             // C: frac (float) * dtime_left (double) — double product, float param.
             let step_dtime = (frac as f64 * (dtime_left - 0.0)) as f32;
             let step_declination = frac * (tilt_declination - self.st(BrushStateId::Declination));
-            let step_declinationx = frac * (tilt_declinationx - self.st(BrushStateId::Declinationx));
-            let step_declinationy = frac * (tilt_declinationy - self.st(BrushStateId::Declinationy));
+            let step_declinationx =
+                frac * (tilt_declinationx - self.st(BrushStateId::Declinationx));
+            let step_declinationy =
+                frac * (tilt_declinationy - self.st(BrushStateId::Declinationy));
             let step_ascension = frac
                 * smallest_angular_difference(self.st(BrushStateId::Ascension), tilt_ascension);
             let step_barrel_rotation = frac
@@ -1419,5 +1495,82 @@ impl Brush {
             }
         }
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::surface::FixedTiledSurface;
+
+    #[test]
+    fn smudge_bucket_setting_selects_the_active_bucket() {
+        let mut surface = FixedTiledSurface::new(128, 128);
+        // Put opaque red paint under the stroke.
+        surface.surface_draw_dab(
+            64.0, 64.0, 20.0, 1.0, 0.0, 0.0, 1.0, 0.9, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0,
+        );
+        surface.flush_all();
+
+        let mut brush = Brush::new_with_buckets(2);
+        brush.from_defaults();
+        brush.set_base_value(SettingId::Smudge, 0.9);
+        brush.set_base_value(SettingId::SmudgeLength, 0.5);
+        brush.set_base_value(SettingId::SmudgeBucket, 1.0);
+        brush.new_stroke();
+
+        // First call only consumes the pending reset; moving calls then
+        // draw (the default brush spaces dabs by actual radius only).
+        let _ = brush.stroke_to(
+            &mut surface,
+            64.0,
+            64.0,
+            0.5,
+            0.0,
+            0.0,
+            0.1,
+            1.0,
+            0.0,
+            0.0,
+            false,
+        );
+        for i in 1..6 {
+            let y = 64.0 + i as f32 * 8.0;
+            let _ = brush.stroke_to(
+                &mut surface,
+                64.0,
+                y,
+                0.5,
+                0.0,
+                0.0,
+                0.1,
+                1.0,
+                0.0,
+                0.0,
+                false,
+            );
+        }
+
+        // Bucket 1 must hold the sampled color; bucket 0 must stay untouched.
+        let bucket1: Vec<f32> =
+            brush.smudge_buckets[SMUDGE_BUCKET_SIZE..2 * SMUDGE_BUCKET_SIZE].to_vec();
+        let bucket0: Vec<f32> = brush.smudge_buckets[..SMUDGE_BUCKET_SIZE].to_vec();
+        assert!(
+            bucket1[..4].iter().any(|&v| v != 0.0),
+            "bucket 1 never sampled"
+        );
+        assert!(
+            bucket0.iter().all(|&v| v == 0.0),
+            "bucket 0 must stay untouched"
+        );
+        assert_eq!(brush.min_bucket_used, 1);
+        assert_eq!(brush.max_bucket_used, 1);
+    }
+}
+
+impl Brush {
+    /// The whole smudge-bucket array (parity/debug).
+    pub fn raw_smudge_buckets(&self) -> &[f32] {
+        &self.smudge_buckets
     }
 }

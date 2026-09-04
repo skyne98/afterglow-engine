@@ -98,8 +98,7 @@ fn calculate_rr_antialiased(
         let (nx, ny) = closest_point_to_line(cs, sn, pixel_center_x, pixel_center_y);
         nearest_x = clamp(nx, pixel_left, pixel_right);
         nearest_y = clamp(ny, pixel_top, pixel_bottom);
-        rr_near = calculate_r_sample(nearest_x, nearest_y, aspect_ratio, sn, cs)
-            * one_over_radius2;
+        rr_near = calculate_r_sample(nearest_x, nearest_y, aspect_ratio, sn, cs) * one_over_radius2;
     }
 
     // Out of dab's reach?
@@ -165,6 +164,76 @@ fn calculate_opa(
     opa
 }
 
+/// Return one pixel from `render_dab_mask` without making the full mask.
+/// This uses the same operation order as the full-mask path.
+#[allow(clippy::too_many_arguments)]
+pub fn render_dab_mask_pixel(
+    x: f32,
+    y: f32,
+    radius: f32,
+    hardness: f32,
+    softness: f32,
+    mut aspect_ratio: f32,
+    angle: f32,
+    xp: i32,
+    yp: i32,
+) -> u16 {
+    let hardness = clamp(hardness, 0.0, 1.0);
+    if aspect_ratio < 1.0 {
+        aspect_ratio = 1.0;
+    }
+    debug_assert!(hardness != 0.0);
+
+    let r_fringe = radius + 1.0;
+    let x0 = (x - r_fringe).floor().max(0.0) as i32;
+    let y0 = (y - r_fringe).floor().max(0.0) as i32;
+    let x1 = ((x + r_fringe).floor() as i32).min(TILE_SIZE as i32 - 1);
+    let y1 = ((y + r_fringe).floor() as i32).min(TILE_SIZE as i32 - 1);
+    if xp < x0 || xp > x1 || yp < y0 || yp > y1 {
+        return 0;
+    }
+
+    let segment1_offset = 1.0 * (1.0 - softness);
+    let segment1_slope = -(1.0 / hardness - 1.0) * (1.0 - softness);
+    let segment2_offset = hardness / (1.0 - hardness) * (1.0 - softness);
+    let segment2_slope = -hardness / (1.0 - hardness) * (1.0 - softness);
+    let angle_rad = (((angle / 360.0) * 2.0) as f64 * std::f64::consts::PI) as f32;
+    let cs = (angle_rad as f64).cos() as f32;
+    let sn = (angle_rad as f64).sin() as f32;
+    let one_over_radius2 = 1.0 / (radius * radius);
+    let rr = if radius < 3.0 {
+        let aa_border = 1.0f32;
+        let mut r_aa_start = if radius > aa_border {
+            radius - aa_border
+        } else {
+            0.0
+        };
+        r_aa_start *= r_aa_start / aspect_ratio;
+        calculate_rr_antialiased(
+            xp,
+            yp,
+            x,
+            y,
+            aspect_ratio,
+            sn,
+            cs,
+            one_over_radius2,
+            r_aa_start,
+        )
+    } else {
+        calculate_rr(xp, yp, x, y, aspect_ratio, sn, cs, one_over_radius2)
+    };
+    let opa = calculate_opa(
+        rr,
+        hardness,
+        segment1_offset,
+        segment1_slope,
+        segment2_offset,
+        segment2_slope,
+    );
+    (opa as f64 * (1u32 << 15) as f64) as u16
+}
+
 /// Scratch buffer sized as in the C (`TILE_SIZE*TILE_SIZE + 2*TILE_SIZE`
 /// floats is enough for the precomputed rr values).
 
@@ -184,6 +253,37 @@ pub fn render_dab_mask(
     aspect_ratio: f32,
     angle: f32,
     scratch: &mut [f32],
+) -> usize {
+    render_dab_mask_rows(
+        mask,
+        x,
+        y,
+        radius,
+        hardness,
+        softness,
+        aspect_ratio,
+        angle,
+        scratch,
+        0,
+        TILE_SIZE,
+    )
+}
+
+/// Render only the specified tile rows. The result keeps absolute tile
+/// pixel positions, so the existing blend functions can process it.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn render_dab_mask_rows(
+    mask: &mut [u16],
+    x: f32,
+    y: f32,
+    radius: f32,
+    hardness: f32,
+    softness: f32,
+    aspect_ratio: f32,
+    angle: f32,
+    scratch: &mut [f32],
+    row_start: usize,
+    row_end: usize,
 ) -> usize {
     let hardness = clamp(hardness, 0.0, 1.0);
     let mut aspect_ratio = aspect_ratio;
@@ -222,19 +322,38 @@ pub fn render_dab_mask(
     if y1 > TILE_SIZE as i32 - 1 {
         y1 = TILE_SIZE as i32 - 1;
     }
+    y0 = y0.max(row_start.min(TILE_SIZE) as i32);
+    y1 = y1.min(row_end.min(TILE_SIZE) as i32 - 1);
+    if x0 > x1 || y0 > y1 {
+        mask[0] = 0;
+        mask[1] = 0;
+        return 2;
+    }
     let one_over_radius2 = 1.0 / (radius * radius);
 
     // the caller owns a fixed-capacity scratch sized MASK_LEN
 
     if radius < 3.0 {
         let aa_border = 1.0f32;
-        let mut r_aa_start = if radius > aa_border { radius - aa_border } else { 0.0 };
+        let mut r_aa_start = if radius > aa_border {
+            radius - aa_border
+        } else {
+            0.0
+        };
         r_aa_start *= r_aa_start / aspect_ratio;
 
         for yp in y0..=y1 {
             for xp in x0..=x1 {
                 let rr = calculate_rr_antialiased(
-                    xp, yp, x, y, aspect_ratio, sn, cs, one_over_radius2, r_aa_start,
+                    xp,
+                    yp,
+                    x,
+                    y,
+                    aspect_ratio,
+                    sn,
+                    cs,
+                    one_over_radius2,
+                    r_aa_start,
                 );
                 scratch[(yp as usize) * TILE_SIZE + xp as usize] = rr;
             }
@@ -242,8 +361,7 @@ pub fn render_dab_mask(
     } else {
         for yp in y0..=y1 {
             for xp in x0..=x1 {
-                let rr =
-                    calculate_rr(xp, yp, x, y, aspect_ratio, sn, cs, one_over_radius2);
+                let rr = calculate_rr(xp, yp, x, y, aspect_ratio, sn, cs, one_over_radius2);
                 scratch[(yp as usize) * TILE_SIZE + xp as usize] = rr;
             }
         }
@@ -292,4 +410,73 @@ pub fn render_dab_mask(
     mask[mp] = 0;
     mask[mp + 1] = 0;
     mp + 2
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn check_pixel_path(
+        x: f32,
+        y: f32,
+        radius: f32,
+        hardness: f32,
+        softness: f32,
+        aspect_ratio: f32,
+        angle: f32,
+    ) {
+        const MASK_LEN: usize = TILE_SIZE * TILE_SIZE + 2 * TILE_SIZE;
+        let mut mask = [0u16; MASK_LEN];
+        let mut scratch = [0.0f32; MASK_LEN];
+        render_dab_mask(
+            &mut mask,
+            x,
+            y,
+            radius,
+            hardness,
+            softness,
+            aspect_ratio,
+            angle,
+            &mut scratch,
+        );
+        let mut decoded = [0u16; TILE_SIZE * TILE_SIZE];
+        let mut mi = 0usize;
+        let mut pi = 0usize;
+        loop {
+            while mask[mi] != 0 {
+                decoded[pi] = mask[mi];
+                mi += 1;
+                pi += 1;
+            }
+            if mask[mi + 1] == 0 {
+                break;
+            }
+            pi += mask[mi + 1] as usize / 4;
+            mi += 2;
+        }
+        for (pi, expected) in decoded.into_iter().enumerate() {
+            assert_eq!(
+                render_dab_mask_pixel(
+                    x,
+                    y,
+                    radius,
+                    hardness,
+                    softness,
+                    aspect_ratio,
+                    angle,
+                    (pi % TILE_SIZE) as i32,
+                    (pi / TILE_SIZE) as i32,
+                ),
+                expected,
+                "pixel {pi}",
+            );
+        }
+    }
+
+    #[test]
+    fn pixel_path_matches_full_mask() {
+        check_pixel_path(31.25, 29.75, 1.5, 0.4, 0.2, 1.0, 0.0);
+        check_pixel_path(4.25, 63.5, 18.0, 0.6, 0.1, 2.5, 37.0);
+        check_pixel_path(-5.0, 10.0, 12.0, 1.0, 0.4, 1.0, 91.0);
+    }
 }

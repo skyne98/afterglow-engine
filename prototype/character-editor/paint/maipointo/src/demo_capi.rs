@@ -76,7 +76,12 @@ pub extern "C" fn _malloc(n: usize) -> *mut u8 {
         }
         let slot = free.trailing_zeros() as usize;
         if POOL_FREE
-            .compare_exchange_weak(free, free & !(1u64 << slot), Ordering::AcqRel, Ordering::Relaxed)
+            .compare_exchange_weak(
+                free,
+                free & !(1u64 << slot),
+                Ordering::AcqRel,
+                Ordering::Relaxed,
+            )
             .is_ok()
         {
             return unsafe { POOL.as_ptr().add(slot * POOL_SLOT_BYTES) as *mut u8 };
@@ -102,12 +107,47 @@ pub extern "C" fn _free(ptr: *mut u8, _n: usize) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn init(width: i32, height: i32) -> i32 {
     APP.with(|slot| {
-        *slot.borrow_mut() = PaintApp::new(width, height);
-    });
-    with_app(|app| {
-        let _ = app;
-        1
+        let app = PaintApp::new(width, height);
+        let ok = app.is_some() as i32;
+        *slot.borrow_mut() = app;
+        ok
     })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn paint_init_with_tile_limits(
+    width: i32,
+    height: i32,
+    initial_tile_limit: usize,
+    maximum_tile_limit: usize,
+) -> i32 {
+    APP.with(|slot| {
+        let app =
+            PaintApp::new_with_tile_limits(width, height, initial_tile_limit, maximum_tile_limit);
+        let ok = app.is_some() as i32;
+        *slot.borrow_mut() = app;
+        ok
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn paint_get_resident_tile_count() -> usize {
+    with_app(|app| app.resident_tile_count())
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn paint_get_resident_tile_limit() -> usize {
+    with_app(|app| app.resident_tile_limit())
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn paint_get_maximum_resident_tile_limit() -> usize {
+    with_app(|app| app.maximum_resident_tile_limit())
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn paint_set_resident_tile_limit(limit: usize) -> i32 {
+    with_app(|app| app.set_resident_tile_limit(limit) as i32)
 }
 
 #[unsafe(no_mangle)]
@@ -136,7 +176,9 @@ pub unsafe extern "C" fn load_brush(json: *const i8) -> i32 {
         brush.from_defaults();
         brush.new_stroke();
         app.brush = Some(brush);
-        let Some(brush) = app.brush.as_mut() else { return 0 };
+        let Some(brush) = app.brush.as_mut() else {
+            return 0;
+        };
         let loaded = maipo_load_brush_json(brush, &text);
         if loaded {
             brush.new_stroke();
@@ -155,21 +197,43 @@ pub extern "C" fn reset_brush() {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn begin_stroke(x: f32, y: f32, xtilt: f32, ytilt: f32,
-    viewzoom: f32, viewrotation: f32, barrel_rotation: f32,
+pub extern "C" fn begin_stroke(
+    x: f32,
+    y: f32,
+    xtilt: f32,
+    ytilt: f32,
+    viewzoom: f32,
+    viewrotation: f32,
+    barrel_rotation: f32,
 ) {
     with_app(|app| app.begin_stroke(x, y, xtilt, ytilt, viewzoom, viewrotation, barrel_rotation));
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn stroke_to(x: f32, y: f32, pressure: f32, xtilt: f32, ytilt: f32,
-    dtime: f64, viewzoom: f32, viewrotation: f32, barrel_rotation: f32,
+pub extern "C" fn stroke_to(
+    x: f32,
+    y: f32,
+    pressure: f32,
+    xtilt: f32,
+    ytilt: f32,
+    dtime: f64,
+    viewzoom: f32,
+    viewrotation: f32,
+    barrel_rotation: f32,
     linear: i32,
 ) -> i32 {
     with_app(|app| {
         app.stroke_to(
-            x, y, pressure, xtilt, ytilt, dtime, viewzoom, viewrotation,
-            barrel_rotation, linear != 0,
+            x,
+            y,
+            pressure,
+            xtilt,
+            ytilt,
+            dtime,
+            viewzoom,
+            viewrotation,
+            barrel_rotation,
+            linear != 0,
         )
     })
 }
@@ -201,30 +265,36 @@ pub unsafe extern "C" fn get_brush_base_value(cname: *const i8) -> f32 {
     let name = unsafe { std::ffi::CStr::from_ptr(cname) }
         .to_string_lossy()
         .into_owned();
-    with_app(|app| {
-        match crate::settings::setting_index_runtime(&name) {
-            Some(i) => {
-                let Some(brush) = app.brush.as_ref() else { return 0.0 };
-                crate::settings::SettingId::from_index(i)
-                    .map(|id| brush.get_base_value(id))
-                    .unwrap_or(0.0)
-            }
-            None => 0.0,
+    with_app(|app| match crate::settings::setting_index_runtime(&name) {
+        Some(i) => {
+            let Some(brush) = app.brush.as_ref() else {
+                return 0.0;
+            };
+            crate::settings::SettingId::from_index(i)
+                .map(|id| brush.get_base_value(id))
+                .unwrap_or(0.0)
         }
+        None => 0.0,
     })
 }
 
 /// # Safety
 /// `setting_name`/`input_name` must be NUL-terminated strings.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn set_brush_mapping_n(setting_name: *const i8,
-    input_name: *const i8, number_of_mapping_points: i32,
+pub unsafe extern "C" fn set_brush_mapping_n(
+    setting_name: *const i8,
+    input_name: *const i8,
+    number_of_mapping_points: i32,
 ) {
     if setting_name.is_null() || input_name.is_null() || number_of_mapping_points < 0 {
         return;
     }
-    let s = unsafe { std::ffi::CStr::from_ptr(setting_name) }.to_string_lossy().into_owned();
-    let i = unsafe { std::ffi::CStr::from_ptr(input_name) }.to_string_lossy().into_owned();
+    let s = unsafe { std::ffi::CStr::from_ptr(setting_name) }
+        .to_string_lossy()
+        .into_owned();
+    let i = unsafe { std::ffi::CStr::from_ptr(input_name) }
+        .to_string_lossy()
+        .into_owned();
     with_app(|app| {
         if let Some(brush) = app.brush.as_mut() {
             if let (Some(si), Some(ii)) = (
@@ -240,14 +310,22 @@ pub unsafe extern "C" fn set_brush_mapping_n(setting_name: *const i8,
 /// # Safety
 /// `setting_name`/`input_name` must be NUL-terminated strings.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn set_brush_mapping_point(setting_name: *const i8,
-    input_name: *const i8, index: i32, x: f32, y: f32,
+pub unsafe extern "C" fn set_brush_mapping_point(
+    setting_name: *const i8,
+    input_name: *const i8,
+    index: i32,
+    x: f32,
+    y: f32,
 ) {
     if setting_name.is_null() || input_name.is_null() || index < 0 {
         return;
     }
-    let s = unsafe { std::ffi::CStr::from_ptr(setting_name) }.to_string_lossy().into_owned();
-    let i = unsafe { std::ffi::CStr::from_ptr(input_name) }.to_string_lossy().into_owned();
+    let s = unsafe { std::ffi::CStr::from_ptr(setting_name) }
+        .to_string_lossy()
+        .into_owned();
+    let i = unsafe { std::ffi::CStr::from_ptr(input_name) }
+        .to_string_lossy()
+        .into_owned();
     with_app(|app| {
         if let Some(brush) = app.brush.as_mut() {
             if let (Some(si), Some(ii)) = (
@@ -288,28 +366,16 @@ pub extern "C" fn paint_end_batch() -> i32 {
 }
 
 /// Prepare the tile-parallel drain: serial bookkeeping + the shared job
-/// table. Returns the job count; drain via `paint_claim_job` (any module
-/// instance sharing the linear memory) + `paint_process_tile_job`, then
+/// table. Returns the job count; the host serializes each job via
+/// `paint_get_job_info`, blends it inline (`paint_process_tile_job`) or via
+/// the tile-pool workers (`paint_blend_tile_ops`), then calls
 /// `paint_end_batch_finish` for the ROI bookkeeping.
 #[unsafe(no_mangle)]
 pub extern "C" fn paint_end_batch_parallel() -> i32 {
     with_app(|app| app.end_batch_parallel())
 }
 
-/// Claim the next unclaimed blend job (atomic; pool-safe). -1 = drained.
-#[unsafe(no_mangle)]
-pub extern "C" fn paint_claim_job() -> i32 {
-    crate::web_surface::claim_job()
-}
-
-/// Mark one claimed job complete.
-#[unsafe(no_mangle)]
-pub extern "C" fn paint_complete_job() {
-    crate::web_surface::complete_job();
-}
-
-/// Blend one claimed job. Runs on any module instance sharing the linear
-/// memory; `worker_id` selects the private mask/scratch arenas.
+/// Blend one prepared job on this instance (the inline fallback).
 /// # Safety
 /// `job_index` must be within the published job table (0..count-1) and
 /// `worker_id` below JOB_WORKERS; both are enforced by clamping.
@@ -318,15 +384,18 @@ pub extern "C" fn paint_process_tile_job(job_index: i32, worker_id: i32) {
     crate::web_surface::process_job(job_index, worker_id.max(0) as usize);
 }
 
-/// The published job count of the current batch (the host's wait target).
+/// Blend a bounded number of operation rows. One means complete.
 #[unsafe(no_mangle)]
-pub extern "C" fn paint_job_count() -> i32 {
-    crate::web_surface::job_count()
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn paint_is_batch_done() -> i32 {
-    1
+pub extern "C" fn paint_process_tile_job_work(
+    job_index: i32,
+    worker_id: i32,
+    row_budget: i32,
+) -> i32 {
+    crate::web_surface::process_job_work(
+        job_index,
+        worker_id.max(0) as usize,
+        row_budget.max(1) as usize,
+    ) as i32
 }
 
 #[unsafe(no_mangle)]
@@ -413,18 +482,30 @@ pub unsafe extern "C" fn paint_get_layer_used_tile_info(
     })
 }
 
+#[unsafe(no_mangle)]
+pub extern "C" fn paint_get_layer_used_tile_is_storage_dirty(layer_id: i32, index: i32) -> i32 {
+    if layer_id < 0 || index < 0 {
+        return 0;
+    }
+    with_app(|app| app.layer_used_tile_is_storage_dirty(layer_id as usize, index as usize) as i32)
+}
+
 /// # Safety
 /// The returned pointer aliases the selected layer's tile buffer.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn paint_get_layer_tile_ptr(
-    layer_id: i32,
-    tx: i32,
-    ty: i32,
-) -> usize {
+pub unsafe extern "C" fn paint_get_layer_tile_ptr(layer_id: i32, tx: i32, ty: i32) -> usize {
     if layer_id < 0 {
         return 0;
     }
     with_app(|app| app.layer_tile_ptr(layer_id as usize, tx, ty))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn paint_layer_tile_is_captured(layer_id: i32, tx: i32, ty: i32) -> i32 {
+    if layer_id < 0 {
+        return 0;
+    }
+    with_app(|app| app.layer_tile_is_captured(layer_id as usize, tx, ty) as i32)
 }
 
 /// # Safety
@@ -464,6 +545,24 @@ pub unsafe extern "C" fn paint_write_layer_rgba16_tile(
 }
 
 /// # Safety
+/// `source` must point to `64*64*4` readable u16 values.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn paint_write_layer_rgba16_tile_modified(
+    layer_id: i32,
+    tx: i32,
+    ty: i32,
+    source: *const u16,
+) -> i32 {
+    if layer_id < 0 || source.is_null() {
+        return 0;
+    }
+    with_app(|app| {
+        let words = unsafe { std::slice::from_raw_parts(source, 64 * 64 * 4) };
+        app.write_layer_rgba16_tile_modified(layer_id as usize, tx, ty, words) as i32
+    })
+}
+
+/// # Safety
 /// The returned pointer aliases the composite tile buffer (valid until the
 /// next render call).
 #[unsafe(no_mangle)]
@@ -483,9 +582,7 @@ pub extern "C" fn paint_set_eotf(eotf: f32) {
 /// The returned pointer aliases the display tile buffer.
 #[unsafe(no_mangle)]
 pub extern "C" fn paint_render_rgba8_tile_ptr(tx: i32, ty: i32) -> usize {
-    with_app(|app| {
-        app.render_rgba8_tile(tx, ty).as_ptr() as usize
-    })
+    with_app(|app| app.render_rgba8_tile(tx, ty).as_ptr() as usize)
 }
 
 /// # Safety
@@ -594,6 +691,57 @@ pub extern "C" fn paint_clear_background() {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn paint_set_external_history(enabled: i32) {
+    with_app(|app| app.set_external_history(enabled != 0));
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn paint_external_history_finish() {
+    with_app(PaintApp::external_history_finish);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn paint_external_history_capture_count() -> i32 {
+    with_app(|app| app.external_history_capture_count() as i32)
+}
+
+/// # Safety
+/// `out_capture` must point to 3 writable i32s.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn paint_external_history_capture_info(index: i32, out_capture: *mut i32) {
+    if index < 0 || out_capture.is_null() {
+        return;
+    }
+    with_app(|app| {
+        if let Some((layer, pos)) = app.external_history_capture_info(index as usize) {
+            unsafe {
+                *out_capture.add(0) = layer as i32;
+                *out_capture.add(1) = pos.tx;
+                *out_capture.add(2) = pos.ty;
+            }
+        }
+    });
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn paint_external_history_capture_ptr(index: i32) -> usize {
+    if index < 0 {
+        return 0;
+    }
+    with_app(|app| app.external_history_capture_ptr(index as usize))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn paint_external_history_clear_captures() {
+    with_app(PaintApp::external_history_clear_captures);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn paint_external_history_cancel() {
+    with_app(PaintApp::external_history_cancel);
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn paint_history_begin() {
     with_app(|app| app.history_begin());
 }
@@ -631,8 +779,12 @@ pub extern "C" fn paint_clear() {
 /// # Safety
 /// `out_rgba` must point to 4 writable f32s.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn paint_pick_color(x: f32, y: f32, radius: f32,
-    paint: f32, out_rgba: *mut f32,
+pub unsafe extern "C" fn paint_pick_color(
+    x: f32,
+    y: f32,
+    radius: f32,
+    paint: f32,
+    out_rgba: *mut f32,
 ) {
     if out_rgba.is_null() {
         return;
@@ -649,8 +801,13 @@ pub unsafe extern "C" fn paint_pick_color(x: f32, y: f32, radius: f32,
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn paint_set_symmetry(active: i32, center_x: f32, center_y: f32,
-    angle: f32, symmetry_type: i32, lines: i32,
+pub extern "C" fn paint_set_symmetry(
+    active: i32,
+    center_x: f32,
+    center_y: f32,
+    angle: f32,
+    symmetry_type: i32,
+    lines: i32,
 ) {
     with_app(|app| {
         app.set_symmetry(active != 0, center_x, center_y, angle, symmetry_type, lines);
@@ -952,20 +1109,6 @@ pub extern "C" fn paint_destroy() {
     APP.with(|slot| {
         *slot.borrow_mut() = None;
     });
-}
-
-/// The job-table header address (a fixed wasm static; the same address in
-/// every instance sharing the linear memory). The pool workers build their
-/// Atomics views here.
-#[unsafe(no_mangle)]
-pub extern "C" fn paint_header_ptr() -> i32 {
-    crate::web_surface::job_header_ptr() as i32
-}
-
-/// The completed-job count of the current batch (the host's wait progress).
-#[unsafe(no_mangle)]
-pub extern "C" fn paint_completed_jobs() -> i32 {
-    crate::web_surface::completed_jobs()
 }
 
 /// The `DrawDabOp` byte size (the host serializes job ops by raw bytes).

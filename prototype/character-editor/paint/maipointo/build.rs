@@ -30,9 +30,8 @@ fn main() {
     let root: serde_json::Value = serde_json::from_str(&text).expect("parse brushsettings.json");
 
     // States come from the committed C gen header (not in the JSON).
-    let gen_header =
-        fs::read_to_string("../vendor/libmypaint/mypaint-brush-settings-gen.h")
-            .expect("read mypaint-brush-settings-gen.h");
+    let gen_header = fs::read_to_string("../vendor/libmypaint/mypaint-brush-settings-gen.h")
+        .expect("read mypaint-brush-settings-gen.h");
     let mut states: Vec<String> = Vec::new();
     for line in gen_header.lines() {
         let line = line.trim();
@@ -55,8 +54,6 @@ fn main() {
     out.push_str("pub static INPUT_INFOS: &[InputInfo] = &[\n");
     for input in root["inputs"].as_array().expect("inputs array") {
         let id = input["id"].as_str().unwrap();
-        let displayed = input["displayed_name"].as_str().unwrap();
-        let tooltip = input["tooltip"].as_str().unwrap();
         let normal = input["normal"].as_f64().unwrap();
         let soft_min = input["soft_minimum"].as_f64().unwrap();
         let soft_max = input["soft_maximum"].as_f64().unwrap();
@@ -142,5 +139,7 @@ fn opt(v: Option<f64>) -> String {
 }
 
 fn escape(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n")
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
 }

@@ -49,16 +49,6 @@ impl StrokeState {
     }
 }
 
-fn clamp01(v: f32) -> f32 {
-    if v < 0.0 {
-        0.0
-    } else if v > 1.0 {
-        1.0
-    } else {
-        v
-    }
-}
-
 fn clampf(v: f32, lo: f32, hi: f32) -> f32 {
     if v < lo {
         lo
@@ -70,10 +60,6 @@ fn clampf(v: f32, lo: f32, hi: f32) -> f32 {
 }
 
 impl Brush {
-    fn st_base(&self, id: SettingId) -> f32 {
-        self.get_base_value(id)
-    }
-
     /// `afterglow_brush_stroke_start` — returns 2 when the caller must split
     /// the stroke (state advanced past a threshold), 1 when queued, 0 when
     /// the budgeted loop finished, negative on error.
@@ -129,7 +115,16 @@ impl Brush {
 
         if dtime > 0.100 && pressure != 0.0 && self.st(BrushStateId::Pressure) == 0.0 {
             self.stroke_to(
-                surface, x, y, 0.0, 90.0, 0.0, dtime - 0.0001, viewzoom, viewrotation, 0.0,
+                surface,
+                x,
+                y,
+                0.0,
+                90.0,
+                0.0,
+                dtime - 0.0001,
+                viewzoom,
+                viewrotation,
+                0.0,
                 linear,
             );
             dtime = 0.0001;
@@ -310,16 +305,11 @@ impl Brush {
         let step_dx = state.x - self.st(BrushStateId::X);
         let step_dy = state.y - self.st(BrushStateId::Y);
         let step_dpressure = state.pressure - self.st(BrushStateId::Pressure);
-        let step_declination =
-            state.tilt_declination - self.st(BrushStateId::Declination);
-        let step_declinationx =
-            state.tilt_declinationx - self.st(BrushStateId::Declinationx);
-        let step_declinationy =
-            state.tilt_declinationy - self.st(BrushStateId::Declinationy);
-        let step_ascension = smallest_angular_difference(
-            self.st(BrushStateId::Ascension),
-            state.tilt_ascension,
-        );
+        let step_declination = state.tilt_declination - self.st(BrushStateId::Declination);
+        let step_declinationx = state.tilt_declinationx - self.st(BrushStateId::Declinationx);
+        let step_declinationy = state.tilt_declinationy - self.st(BrushStateId::Declinationy);
+        let step_ascension =
+            smallest_angular_difference(self.st(BrushStateId::Ascension), state.tilt_ascension);
         let step_dtime = state.dtime_left as f32;
         let step_barrel_rotation = smallest_angular_difference(
             self.st(BrushStateId::BarrelRotation),
@@ -340,10 +330,7 @@ impl Brush {
             step_declinationy,
             step_barrel_rotation,
         );
-        self.set_st(
-            BrushStateId::PartialDabs,
-            state.dabs_moved + dabs_todo,
-        );
+        self.set_st(BrushStateId::PartialDabs, state.dabs_moved + dabs_todo);
 
         let mut split = false;
         let mut painted = state.painted;
@@ -375,10 +362,6 @@ impl Brush {
             }
         }
         state.active = false;
-        if split {
-            2
-        } else {
-            1
-        }
+        if split { 2 } else { 1 }
     }
 }

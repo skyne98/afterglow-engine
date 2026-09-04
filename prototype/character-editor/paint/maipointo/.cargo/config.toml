@@ -1,13 +1,10 @@
-# maipointo standalone module: imported shared memory with a larger cap
-# than the engine workspace default (the demo module owns its document
-# tiles, history captures, and scratch arenas; 64 MiB OOM-aborted the
-# worker mid-stroke). The nearest .cargo/config wins for rustflags, so
-# this file does not affect the engine crates.
+# The demo uses imported shared memory and an adaptive tile limit.
+# The nearest .cargo/config wins, so this file does not affect engine crates.
 [target.wasm32-unknown-unknown]
 rustflags = [
   '-C', 'panic=unwind',
   '-C', 'target-feature=+atomics,+bulk-memory,+mutable-globals,+simd128,+exception-handling',
   '-C', 'link-arg=--import-memory',
-  '-C', 'link-arg=--max-memory=268435456',
+  '-C', 'link-arg=--max-memory=2147483648',
   '-C', 'link-arg=--shared-memory',
 ]

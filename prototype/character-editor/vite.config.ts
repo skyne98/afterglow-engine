@@ -1,3 +1,6 @@
+import path from 'node:path';
+import tailwindcss from '@tailwindcss/vite';
+import vue from '@vitejs/plugin-vue';
 import { defineConfig, type PluginOption } from 'vite';
 
 /** Serve the COOP/COEP headers the WASM threads (SharedArrayBuffer) require. */
@@ -24,12 +27,23 @@ function crossOriginIsolationHeaders(): PluginOption {
 
 export default defineConfig({
   root: '.',
-  plugins: [crossOriginIsolationHeaders()],
+  plugins: [vue(), tailwindcss(), crossOriginIsolationHeaders()],
+  resolve: {
+    alias: {
+      '@': path.resolve(import.meta.dirname, 'src'),
+    },
+  },
   server: {
     port: 5173,
   },
   build: {
     outDir: 'dist',
     target: 'esnext',
+    rollupOptions: {
+      input: {
+        editor: path.resolve(import.meta.dirname, 'index.html'),
+        paint: path.resolve(import.meta.dirname, 'paint/paint-demo.html'),
+      },
+    },
   },
 });

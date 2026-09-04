@@ -6,6 +6,11 @@ export interface BrushModule {
   HEAPU16: Uint16Array;
   HEAP32: Int32Array;
   _init: (width: number, height: number) => number;
+  _paint_init_with_tile_limits: (width: number, height: number, initialTiles: number, maximumTiles: number) => number;
+  _paint_get_resident_tile_count: () => number;
+  _paint_get_resident_tile_limit: () => number;
+  _paint_get_maximum_resident_tile_limit: () => number;
+  _paint_set_resident_tile_limit: (limit: number) => number;
   _paint_destroy: () => number;
   _new_brush: () => number;
   _load_brush: (json: number) => number;
@@ -20,8 +25,8 @@ export interface BrushModule {
   _paint_end_atomic: () => number;
   _paint_begin_batch: () => number;
   _paint_end_batch: () => number;
-  _paint_is_batch_done: () => number;
   _paint_end_batch_finish: () => number;
+  _paint_process_tile_job_work: (jobIndex: number, workerId: number, rowBudget: number) => number;
   _paint_continue_stroke_to: () => number;
   _paint_has_stroke_continuation: () => number;
   _paint_cancel_stroke: () => void;
@@ -32,7 +37,11 @@ export interface BrushModule {
   _paint_get_tiles_width: () => number;
   _paint_get_tiles_height: () => number;
   _paint_get_used_tile_count: () => number;
+  _paint_get_layer_used_tile_is_storage_dirty: (layerId: number, index: number) => number;
   _paint_get_tile_ptr: (tx: number, ty: number) => number;
+  _paint_get_layer_tile_ptr: (layerId: number, tx: number, ty: number) => number;
+  _paint_write_layer_rgba16_tile_modified: (layerId: number, tx: number, ty: number, sourcePtr: number) => number;
+  _paint_layer_tile_is_captured: (layerId: number, tx: number, ty: number) => number;
   _paint_render_tile_ptr: (tx: number, ty: number) => number;
   _paint_set_eotf: (eotf: number) => number;
   _paint_render_rgba8_tile_ptr: (tx: number, ty: number) => number;
@@ -47,6 +56,13 @@ export interface BrushModule {
   _paint_clear_dirty: () => number;
   _paint_set_background_color: (r: number, g: number, b: number) => number;
   _paint_clear_background: () => number;
+  _paint_set_external_history: (enabled: number) => void;
+  _paint_external_history_finish: () => void;
+  _paint_external_history_capture_count: () => number;
+  _paint_external_history_capture_info: (index: number, outPtr: number) => void;
+  _paint_external_history_capture_ptr: (index: number) => number;
+  _paint_external_history_clear_captures: () => void;
+  _paint_external_history_cancel: () => void;
   _paint_history_begin: () => number;
   _paint_history_commit: () => number;
   _paint_history_undo: () => number;

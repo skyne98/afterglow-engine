@@ -3,7 +3,11 @@
  * This module captures input, manages DOM/UI, and forwards to the worker.
  */
 import { decodeZip, encodeStoredZip, text, utf8 } from './openraster.ts';
+import { resolvePenPressure } from './paint-input.ts';
+import { paintMemoryLimitMiB } from './paint-memory.ts';
 import { PaintPointerState } from './paint-pointer-state.ts';
+import { resolvePaintShortcut, type PaintShortcut } from './paint-shortcuts.ts';
+import { buildPaintLayerRows, type PaintGroupInfo, type PaintLayerInfo } from './paint-layers.ts';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const canvas = $<HTMLCanvasElement>('paint');
@@ -22,9 +26,21 @@ const docSize = { width: 2048, height: 2048 };
 const view = { zoom: 1, rotationDegrees: 0, mirror: false, panX: 0, panY: 0 };
 let dispW = canvas.width, dispH = canvas.height;
 const ui = { radius: 14, hardness: 0.6, opacity: 1.0, color: '#4ecdc4' };
+type ActiveTool = 'brush' | 'hand' | 'rotate' | 'zoom';
+let activeTool: ActiveTool = 'brush';
+let viewDragMode: 'pan' | 'rotate' | null = null;
+let spaceHeld = false;
+const deviceMemoryGiB = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
+let savedPaintMemoryMiB: number | undefined;
+try {
+  const saved = Number(localStorage.getItem('afterglow.paintMemoryMiB'));
+  if (saved > 0) savedPaintMemoryMiB = saved;
+} catch {}
+let paintMemoryMiB = paintMemoryLimitMiB(deviceMemoryGiB, savedPaintMemoryMiB);
 
 type BrushPreset = { id: string; name: string; group: string; brush: string; preview: string };
-const brushGrid = $<HTMLDivElement>('brushGrid'), layerList = $<HTMLDivElement>('layerList'), groupList = $<HTMLDivElement>('groupList');
+let loadedBrushes: BrushPreset[] = [];
+const brushGrid = $<HTMLDivElement>('brushGrid'), layerList = $<HTMLDivElement>('layerList');
 let selectedGroupId = -1, selectedBrushId = '', selectedBrushJson = '';
 const brushButtons = new Map<string, HTMLButtonElement>();
 const layerModes = ['Normal','Multiply','Screen','Overlay','Darken','Lighten','Hard Light','Soft Light','Burn','Dodge','Difference','Exclusion','Hue','Saturation','Color','Luminosity','Plus','Destination In','Destination Out','Source Atop','Destination Atop','Pigment'];
@@ -44,7 +60,7 @@ function clearPointerInput(): boolean {
   const strokePointer = pointerState.strokePointer;
   const panPointer = pointerState.panPointer;
   const commit = pointerState.finishForViewChange();
-  lastSampleTime = 0;
+  viewDragMode = null;
   releaseCanvasPointer(strokePointer);
   if (panPointer !== strokePointer) releaseCanvasPointer(panPointer);
   return commit;
@@ -64,8 +80,40 @@ function ensureBrush() { if (selectedBrushJson) { send({ cmd: 'loadBrush', json:
 function applyView() {
   canvas.style.transform = `translate(${view.panX}px,${view.panY}px) scale(${view.zoom}) rotate(${view.rotationDegrees}deg) scaleX(${view.mirror?-1:1})`;
   canvas.style.imageRendering = view.zoom >= 2.5 ? 'pixelated' : 'auto';
-  const zEl = $('viewZoom') as HTMLInputElement; zEl.value = String(view.zoom); $('zoomVal').textContent = view.zoom.toFixed(2); $('mirrorBtn').classList.toggle('active', view.mirror);
+  const zEl = $('viewZoom') as HTMLInputElement; zEl.value = String(view.zoom); $('zoomVal').textContent = String(Math.round(view.zoom * 100)); $('mirrorBtn').classList.toggle('active', view.mirror);
   send({ cmd: 'setView', zoom: view.zoom });
+}
+function setZoom(zoom: number) { finishInputForViewChange(); view.zoom = Math.max(0.1, Math.min(8, zoom)); applyView(); }
+function fitView() { finishInputForViewChange(); Object.assign(view, { zoom: 1, panX: 0, panY: 0 }); applyView(); }
+function actualPixels() { setZoom(docSize.width / Math.max(1, canvas.offsetWidth)); }
+function setTool(tool: ActiveTool) {
+  activeTool = tool;
+  canvas.dataset.tool = tool;
+  for (const name of ['brush', 'hand', 'rotate', 'zoom'] as const) {
+    const button = $<HTMLButtonElement>(`${name}ToolBtn`);
+    button.classList.toggle('tool-active', name === tool);
+    button.setAttribute('aria-pressed', String(name === tool));
+  }
+}
+function updateColorSwatches() {
+  const foreground = document.querySelector<HTMLElement>('.foreground-swatch');
+  const toolbar = document.querySelector<HTMLElement>('.toolbar-color-swatch');
+  const background = document.querySelector<HTMLElement>('.background-swatch');
+  if (foreground) foreground.style.background = ui.color;
+  if (toolbar) toolbar.style.background = ui.color;
+  if (background) background.style.background = $<HTMLInputElement>('backgroundColor').value;
+  $<HTMLInputElement>('color').dispatchEvent(new Event('change'));
+}
+function setBrushValue(id: 'radius' | 'hardness' | 'opacity', value: number) {
+  const input = $<HTMLInputElement>(id);
+  input.value = String(value);
+  input.dispatchEvent(new Event('input'));
+}
+function cycleBrush(offset: number) {
+  if (loadedBrushes.length === 0) return;
+  const index = loadedBrushes.findIndex((brush) => brush.id === selectedBrushId);
+  const next = (Math.max(0, index) + offset + loadedBrushes.length) % loadedBrushes.length;
+  void selectBrush(loadedBrushes[next]);
 }
 function pointerModel(e: PointerEvent): [number, number] {
   const r = canvas.getBoundingClientRect(), cx = r.left + r.width * 0.5, cy = r.top + r.height * 0.5;
@@ -76,37 +124,44 @@ function pointerModel(e: PointerEvent): [number, number] {
   const dx = (l.x + cw * 0.5) * (dispW / cw), dy = (l.y + ch * 0.5) * (dispH / ch);
   return [dx * (docSize.width / dispW), dy * (docSize.height / dispH)];
 }
-let lastSampleTime = 0;
-const MIN_SAMPLE_MS = 4;
+let lastKnownPenPressure = 0.5;
+function penPressure(e: PointerEvent, contact = (e.buttons & 1) !== 0): number {
+  const p = resolvePenPressure(e.pointerType, e.pressure, contact, lastKnownPenPressure);
+  // Exact 0 while the pen is down means "missing", not "no force": on
+  // Wayland, a compositor may omit an unchanged pressure from tool frames
+  // and Chromium then reports 0 mid-stroke. Hold the last real value
+  // (spec default 0.5 before the first real reading).
+  if (p > 0) lastKnownPenPressure = p;
+  return p;
+}
 function sendSample(e: PointerEvent, pressure: number) {
   const now = Number.isFinite(e.timeStamp) ? e.timeStamp : performance.now();
-  if (now - lastSampleTime < MIN_SAMPLE_MS) return;
-  lastSampleTime = now;
   const [x, y] = pointerModel(e);
   const xt = Math.max(-1, Math.min(1, (e.tiltX / 90) || 0)), yt = Math.max(-1, Math.min(1, (e.tiltY / 90) || 0));
   send({ cmd: 'strokeSample', x, y, pressure, xtilt: xt, ytilt: yt, time: now, zoom: view.zoom, rotation: view.rotationDegrees * Math.PI / 180, barrel: 0.5 });
 }
 function beginStrokeAt(e: PointerEvent) {
   if (!ready) return;
-  lastSampleTime = 0;
+  if (e.pointerType !== 'mouse') lastKnownPenPressure = 0.5;
   const [x, y] = pointerModel(e);
   send({ cmd: 'beginStroke', x, y, xtilt: (e.tiltX/90)||0, ytilt: (e.tiltY/90)||0, zoom: view.zoom, rotation: view.rotationDegrees * Math.PI / 180, barrel: 0.5 });
-  sendSample(e, e.pointerType === 'mouse' ? 0.5 : Math.max(0, Math.min(1, e.pressure)));
+  sendSample(e, penPressure(e, true));
 }
 function endStroke(e: PointerEvent) {
   if (pointerState.finishPan(e.pointerId)) {
+    viewDragMode = null;
     releaseCanvasPointer(e.pointerId);
     return;
   }
   if (!pointerState.strokeActive || pointerState.strokePointer !== e.pointerId) return;
-  lastSampleTime = 0;
   sendSample(e, 0);
   commitPointerStroke(pointerState.finishStroke(e.pointerId));
   releaseCanvasPointer(e.pointerId);
 }
 canvas.addEventListener('pointerdown', e => {
   if (!ready) return;
-  if (e.button === 1) {
+  const viewDrag = e.button === 1 || (e.button === 0 && (spaceHeld || activeTool === 'hand' || activeTool === 'rotate'));
+  if (viewDrag) {
     const oldStrokePointer = pointerState.strokePointer;
     const oldPanPointer = pointerState.panPointer;
     const commit = pointerState.beginPan(e.pointerId);
@@ -115,13 +170,18 @@ canvas.addEventListener('pointerdown', e => {
       releaseCanvasPointer(oldPanPointer);
     }
     commitPointerStroke(commit);
-    lastSampleTime = 0;
+    viewDragMode = activeTool === 'rotate' && !spaceHeld && e.button === 0 ? 'rotate' : 'pan';
     lastPX = e.clientX;
     lastPY = e.clientY;
     try { canvas.setPointerCapture?.(e.pointerId); } catch {}
     return;
   }
   if (e.button !== 0) return;
+  if (activeTool === 'zoom') {
+    setZoom(view.zoom * (e.altKey ? 0.8 : 1.25));
+    return;
+  }
+  if (activeTool !== 'brush') return;
   const oldStrokePointer = pointerState.strokePointer;
   const oldPanPointer = pointerState.panPointer;
   const commit = pointerState.beginStroke(e.pointerId);
@@ -135,65 +195,153 @@ canvas.addEventListener('pointerdown', e => {
 });
 canvas.addEventListener('pointermove', e => {
   if (e.pointerId === pointerState.panPointer) {
-    view.panX += e.clientX - lastPX;
-    view.panY += e.clientY - lastPY;
+    if (viewDragMode === 'rotate') {
+      view.rotationDegrees = (view.rotationDegrees + (e.clientX - lastPX) * 0.5) % 360;
+    } else {
+      view.panX += e.clientX - lastPX;
+      view.panY += e.clientY - lastPY;
+    }
     lastPX = e.clientX;
     lastPY = e.clientY;
     applyView();
     return;
   }
   if (e.pointerId !== pointerState.strokePointer || !pointerState.strokeActive) return;
-  const contact = e.pointerType === 'mouse'
-    ? (e.buttons & 1) !== 0
-    : e.pressure > 0;
+  // Contact comes from the button bit, never from e.pressure: on some
+  // compositors (niri + Chromium wayland), a held constant pressure is omitted
+  // from tool frames and the browser then reports pressure 0 mid-stroke.
+  const contact = (e.buttons & 1) !== 0;
   if (!contact) {
-    lastSampleTime = 0;
     commitPointerStroke(pointerState.finishStroke(e.pointerId));
     releaseCanvasPointer(e.pointerId);
     return;
   }
-  sendSample(e, e.pointerType === 'mouse'
-    ? 0.5
-    : Math.max(0, Math.min(1, e.pressure)));
+  const samples = e.getCoalescedEvents();
+  if (samples.length === 0) {
+    sendSample(e, penPressure(e, true));
+  } else {
+    for (const sample of samples) sendSample(sample, penPressure(sample, true));
+  }
 });
 canvas.addEventListener('pointerup', endStroke);
 canvas.addEventListener('pointercancel', endStroke);
 canvas.addEventListener('lostpointercapture', e => {
   const commit = pointerState.losePointer(e.pointerId);
-  if (commit) lastSampleTime = 0;
   commitPointerStroke(commit);
 });
 window.addEventListener('pointerup', endStroke);
 window.addEventListener('pointercancel', endStroke);
-window.addEventListener('blur', finishInputForViewChange);
+window.addEventListener('blur', () => {
+  spaceHeld = false;
+  delete canvas.dataset.spaceHand;
+  finishInputForViewChange();
+});
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') finishInputForViewChange();
 });
 
-function refreshLayers() { if (!engineState) return; layerList.replaceChildren(); groupList.replaceChildren();
-  for (let l = engineState.layers.length - 1; l >= 0; l--) { const info = engineState.layers[l]; const row = document.createElement('div'); row.className = 'layer-row';
-    const btn = document.createElement('button'); btn.type = 'button'; btn.textContent = `Layer ${l+1}`; btn.classList.toggle('active', info.active); btn.onclick = () => send({ cmd: 'layer', op: 'setActive', layer: l });
-    const up = document.createElement('button'); up.type = 'button'; up.className = 'order'; up.textContent = '↑'; up.onclick = () => send({ cmd: 'layer', op: 'move', layer: l, value: 1 });
-    const dn = document.createElement('button'); dn.type = 'button'; dn.className = 'order'; dn.textContent = '↓'; dn.onclick = () => send({ cmd: 'layer', op: 'move', layer: l, value: -1 });
-    const vis = document.createElement('input'); vis.type = 'checkbox'; vis.checked = info.visible !== 0; vis.onchange = () => send({ cmd: 'layer', op: 'setVisible', layer: l, value: vis.checked ? 1 : 0 });
-    const mode = document.createElement('select'); for (let m = 0; m < layerModes.length; m++) { const o = document.createElement('option'); o.value = String(m); o.textContent = layerModes[m]; mode.append(o); } mode.value = String(info.mode); mode.onchange = () => send({ cmd: 'layer', op: 'setMode', layer: l, value: Number(mode.value) });
-    const grp = document.createElement('select'); const root = document.createElement('option'); root.value = '-1'; root.textContent = 'Root'; grp.append(root); for (const g of engineState.groups) if (g.alive) { const o = document.createElement('option'); o.value = String(g.id); o.textContent = `G${g.id+1}`; grp.append(o); } grp.value = String(info.group); grp.onchange = () => send({ cmd: 'layer', op: 'setGroup', layer: l, value: Number(grp.value) });
-    const op = document.createElement('input'); op.type = 'range'; op.min = '0'; op.max = '1'; op.step = '0.01'; op.value = String(info.opacity); op.oninput = () => send({ cmd: 'layer', op: 'setOpacity', layer: l, value: Number(op.value) });
-    row.append(up, dn, btn, vis, grp, mode, op); layerList.append(row); }
-  for (let g = engineState.groups.length - 1; g >= 0; g--) { const info = engineState.groups[g]; if (!info.alive) continue; const row = document.createElement('div'); row.className = 'group-row';
-    const up = document.createElement('button'); up.type = 'button'; up.className = 'order'; up.textContent = '↑'; up.onclick = () => send({ cmd: 'group', op: 'move', group: g, value: 1 });
-    const dn = document.createElement('button'); dn.type = 'button'; dn.className = 'order'; dn.textContent = '↓'; dn.onclick = () => send({ cmd: 'group', op: 'move', group: g, value: -1 });
-    const btn = document.createElement('button'); btn.type = 'button'; btn.textContent = `Group ${g+1}`; btn.classList.toggle('active', selectedGroupId === g); btn.onclick = () => { selectedGroupId = g; refreshLayers(); };
-    const vis = document.createElement('input'); vis.type = 'checkbox'; vis.checked = info.visible !== 0; vis.onchange = () => send({ cmd: 'group', op: 'setVisible', group: g, value: vis.checked ? 1 : 0 });
-    const par = document.createElement('select'); const root = document.createElement('option'); root.value = '-1'; root.textContent = 'Root'; par.append(root); for (const p of engineState.groups) if (p.id !== g && p.alive) { const o = document.createElement('option'); o.value = String(p.id); o.textContent = `G${p.id+1}`; par.append(o); } par.value = String(info.parent); par.onchange = () => send({ cmd: 'group', op: 'setParent', group: g, value: Number(par.value) });
-    const mode = document.createElement('select'); for (let m = 0; m < layerModes.length; m++) { const o = document.createElement('option'); o.value = String(m); o.textContent = layerModes[m]; mode.append(o); } mode.value = String(info.mode); mode.onchange = () => send({ cmd: 'group', op: 'setMode', group: g, value: Number(mode.value) });
-    const op = document.createElement('input'); op.type = 'range'; op.min = '0'; op.max = '1'; op.step = '0.01'; op.value = String(info.opacity); op.oninput = () => send({ cmd: 'group', op: 'setOpacity', group: g, value: Number(op.value) });
-    const pass = document.createElement('input'); pass.type = 'checkbox'; pass.checked = info.passThrough !== 0; pass.onchange = () => send({ cmd: 'group', op: 'setPassThrough', group: g, value: pass.checked ? 1 : 0 });
-    const iso = document.createElement('input'); iso.type = 'checkbox'; iso.checked = info.isolated !== 0; iso.onchange = () => send({ cmd: 'group', op: 'setIsolated', group: g, value: iso.checked ? 1 : 0 });
-    row.append(up, dn, btn, vis, par, mode, op, pass, iso); groupList.append(row); }
+const icon = {
+  eye: '<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>',
+  eyeOff: '<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m3 3 18 18M10.6 10.6a2 2 0 0 0 2.8 2.8M9.9 4.2A11 11 0 0 1 12 4c6.5 0 10 8 10 8a17 17 0 0 1-2.1 3.2M6.6 6.6C3.7 8.5 2 12 2 12s3.5 8 10 8a10 10 0 0 0 3.4-.6"/></svg>',
+  layer: '<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m12 2-9 5 9 5 9-5-9-5Z"/><path d="m3 12 9 5 9-5M3 17l9 5 9-5"/></svg>',
+  group: '<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h6l2 2h10v11H3Z"/></svg>',
+};
+function selectedLayerInfo(): PaintLayerInfo | PaintGroupInfo | null {
+  if (!engineState) return null;
+  const group = engineState.groups.find((item: PaintGroupInfo) => item.id === selectedGroupId && item.alive);
+  if (group) return group;
+  selectedGroupId = -1;
+  return engineState.layers.find((item: PaintLayerInfo) => item.id === engineState.activeLayer) ?? null;
 }
-function renderCatalog(brushes: BrushPreset[]) { brushGrid.replaceChildren(); brushButtons.clear(); let last = ''; for (const b of brushes) { if (b.group !== last) { const h = document.createElement('h3'); h.textContent = b.group; brushGrid.append(h); last = b.group; } const btn = document.createElement('button'); btn.type = 'button'; btn.className = 'brush-item'; const img = document.createElement('img'); img.src = brushUrl(b.preview); img.alt = ''; const sp = document.createElement('span'); sp.textContent = b.name; btn.append(img, sp); btn.onclick = () => void selectBrush(b); brushButtons.set(b.id, btn); brushGrid.append(btn); } }
-async function selectBrush(b: BrushPreset) { const r = await fetch(brushUrl(b.brush)); if (!r.ok) return; const json = await r.text(); selectedBrushId = b.id; selectedBrushJson = json; try { const root = JSON.parse(json); const rest = Number(root?.settings?.restore_color?.base_value ?? 0); if (rest > 0) { const s = [Number(root?.settings?.color_h?.base_value ?? 0), Number(root?.settings?.color_s?.base_value ?? 0), Number(root?.settings?.color_v?.base_value ?? 0)]; const a = hexRgb(ui.color).map(v => v ** 2.2); const f = Math.max(0, Math.min(1, rest)); const r2 = a[0]*(1-f)+s[0]*f, g2 = a[1]*(1-f)+s[1]*f, b2 = a[2]*(1-f)+s[2]*f; ui.color = `#${Math.round(r2**(1/2.2)*255).toString(16).padStart(2,'0')}${Math.round(g2**(1/2.2)*255).toString(16).padStart(2,'0')}${Math.round(b2**(1/2.2)*255).toString(16).padStart(2,'0')}`; ($('color') as HTMLInputElement).value = ui.color; } } catch {} send({ cmd: 'loadBrush', json }); applyBrushColor(); applyBrushOverrides(); for (const [id, btn] of brushButtons) btn.classList.toggle('selected', id === selectedBrushId); statusEl.textContent = `Ready — ${b.name}.`; }
+function setLayerSelection(kind: 'layer' | 'group', id: number) {
+  if (kind === 'group') {
+    selectedGroupId = id;
+    refreshLayers();
+  } else {
+    selectedGroupId = -1;
+    send({ cmd: 'layer', op: 'setActive', layer: id });
+  }
+}
+function setVisibility(kind: 'layer' | 'group', id: number, visible: boolean) {
+  send({ cmd: kind, op: 'setVisible', [kind]: id, value: visible ? 1 : 0 });
+}
+function sendSelection(op: string, value?: number) {
+  if (!engineState) return;
+  if (selectedGroupId >= 0) send({ cmd: 'group', op, group: selectedGroupId, value });
+  else send({ cmd: 'layer', op, layer: engineState.activeLayer, value });
+}
+function groupIsInside(groupId: number, possibleParent: number): boolean {
+  if (!engineState) return false;
+  let next = possibleParent;
+  while (next >= 0) {
+    if (next === groupId) return true;
+    next = engineState.groups.find((group: PaintGroupInfo) => group.id === next)?.parent ?? -1;
+  }
+  return false;
+}
+function refreshLayerInspector() {
+  const info = selectedLayerInfo();
+  const groupSelected = selectedGroupId >= 0;
+  const blend = $<HTMLSelectElement>('layerBlendMode');
+  const opacity = $<HTMLInputElement>('layerOpacity');
+  const parent = $<HTMLSelectElement>('layerParent');
+  blend.disabled = !info;
+  opacity.disabled = !info;
+  parent.disabled = !info;
+  if (!info || !engineState) return;
+  blend.value = String(info.mode);
+  opacity.value = String(info.opacity);
+  $('layerOpacityValue').textContent = `${Math.round(info.opacity * 100)}%`;
+  parent.replaceChildren(new Option('Canvas', '-1'));
+  for (const group of engineState.groups as PaintGroupInfo[]) {
+    if (!group.alive || groupSelected && groupIsInside(selectedGroupId, group.id)) continue;
+    parent.append(new Option(`Group ${group.id + 1}`, String(group.id)));
+  }
+  parent.value = String(groupSelected ? (info as PaintGroupInfo).parent : (info as PaintLayerInfo).group);
+  const groupOptions = $<HTMLDivElement>('groupOptions');
+  groupOptions.hidden = !groupSelected;
+  if (groupSelected) {
+    $<HTMLInputElement>('groupPassThrough').checked = (info as PaintGroupInfo).passThrough !== 0;
+    $<HTMLInputElement>('groupIsolated').checked = (info as PaintGroupInfo).isolated !== 0;
+  }
+}
+function refreshLayers() {
+  if (!engineState) return;
+  layerList.replaceChildren();
+  const rows = buildPaintLayerRows(engineState.layers, engineState.groups);
+  for (const item of rows) {
+    const row = document.createElement('div');
+    row.className = `layer-tree-row ${item.kind}-row`;
+    row.style.setProperty('--indent', `${item.depth * 14}px`);
+    const selected = item.kind === 'group' ? selectedGroupId === item.id : selectedGroupId < 0 && item.info.active;
+    row.classList.toggle('selected', selected);
+    row.classList.toggle('hidden-item', item.info.visible === 0);
+
+    const visibility = document.createElement('button');
+    visibility.type = 'button';
+    visibility.className = 'layer-visibility';
+    visibility.innerHTML = item.info.visible !== 0 ? icon.eye : icon.eyeOff;
+    visibility.title = item.info.visible !== 0 ? 'Hide' : 'Show';
+    visibility.setAttribute('aria-label', `${visibility.title} ${item.kind}`);
+    visibility.onclick = () => setVisibility(item.kind, item.id, item.info.visible === 0);
+
+    const thumbnail = document.createElement('span');
+    thumbnail.className = 'layer-thumbnail';
+    thumbnail.innerHTML = item.kind === 'group' ? icon.group : icon.layer;
+
+    const name = document.createElement('button');
+    name.type = 'button';
+    name.className = 'layer-name';
+    name.textContent = `${item.kind === 'group' ? 'Group' : 'Layer'} ${item.id + 1}`;
+    name.onclick = () => setLayerSelection(item.kind, item.id);
+    row.onclick = (event) => { if (event.target === row || thumbnail.contains(event.target as Node)) setLayerSelection(item.kind, item.id); };
+    row.append(visibility, thumbnail, name);
+    layerList.append(row);
+  }
+  refreshLayerInspector();
+}
+function renderCatalog(brushes: BrushPreset[]) { loadedBrushes = brushes; brushGrid.replaceChildren(); brushButtons.clear(); let last = ''; for (const b of brushes) { if (b.group !== last) { const h = document.createElement('h3'); h.textContent = b.group; brushGrid.append(h); last = b.group; } const btn = document.createElement('button'); btn.type = 'button'; btn.className = 'brush-item'; const img = document.createElement('img'); img.src = brushUrl(b.preview); img.alt = ''; const sp = document.createElement('span'); sp.textContent = b.name; btn.append(img, sp); btn.onclick = () => void selectBrush(b); brushButtons.set(b.id, btn); brushGrid.append(btn); } }
+async function selectBrush(b: BrushPreset) { const r = await fetch(brushUrl(b.brush)); if (!r.ok) return; const json = await r.text(); selectedBrushId = b.id; selectedBrushJson = json; try { const root = JSON.parse(json); const rest = Number(root?.settings?.restore_color?.base_value ?? 0); if (rest > 0) { const s = [Number(root?.settings?.color_h?.base_value ?? 0), Number(root?.settings?.color_s?.base_value ?? 0), Number(root?.settings?.color_v?.base_value ?? 0)]; const a = hexRgb(ui.color).map(v => v ** 2.2); const f = Math.max(0, Math.min(1, rest)); const r2 = a[0]*(1-f)+s[0]*f, g2 = a[1]*(1-f)+s[1]*f, b2 = a[2]*(1-f)+s[2]*f; ui.color = `#${Math.round(r2**(1/2.2)*255).toString(16).padStart(2,'0')}${Math.round(g2**(1/2.2)*255).toString(16).padStart(2,'0')}${Math.round(b2**(1/2.2)*255).toString(16).padStart(2,'0')}`; ($('color') as HTMLInputElement).value = ui.color; } } catch {} send({ cmd: 'loadBrush', json }); applyBrushColor(); applyBrushOverrides(); updateColorSwatches(); for (const [id, btn] of brushButtons) btn.classList.toggle('selected', id === selectedBrushId); statusEl.textContent = `Ready — ${b.name}.`; }
 async function loadCatalog() { const r = await fetch('/mypaint/brushes.json'); if (!r.ok) throw new Error('Cannot load brush catalog.'); const m = await r.json() as { count: number; brushes: BrushPreset[] }; renderCatalog(m.brushes); const init = m.brushes.find(b => b.id === 'classic/brush') ?? m.brushes[0]; if (init) await selectBrush(init); log(`${m.count} brushes loaded.`); }
 
 // Export
@@ -213,17 +361,17 @@ async function exportOra() { if (!engineState) return; const e = [{ name: 'mimet
 async function importOra(file: File) { if (!ready) return; const entries = await decodeZip(await file.arrayBuffer()); const mb = entries.get('data/metadata.json'); const meta = mb ? JSON.parse(text(mb)) as any : null; const st = entries.get('stack.xml'); const stT = st ? text(st) : ''; const w = meta?.width ?? Number(stT.match(/\bw="(\d+)"/)?.[1] ?? docSize.width), h = meta?.height ?? Number(stT.match(/\bh="(\d+)"/)?.[1] ?? docSize.height); const merged = entries.get('mergedimage.png') ?? entries.get('data/layer-0.png'); if (!merged) throw new Error('No image.'); resetDoc(w, h); send({ cmd: 'clearBackground' }); send({ cmd: 'clear' }); const layers = meta?.layers ?? [{ id: 0, group: -1, visible: 1, mode: 0 }]; for (const l of layers) { if (l.id > 0) send({ cmd: 'layer', op: 'create', layer: l.id }); send({ cmd: 'layer', op: 'setVisible', layer: l.id, value: l.visible !== 0 ? 1 : 0 }); send({ cmd: 'layer', op: 'setOpacity', layer: l.id, value: Number(l.opacity) || 1 }); send({ cmd: 'layer', op: 'setMode', layer: l.id, value: Number(l.mode) || 0 }); } const ic = await imgCanvas(merged); writeImg(ic, 0); for (const l of layers) { if (l.id === 0) continue; const d = entries.get(`data/layer-${l.id}.png`); if (d) writeImg(await imgCanvas(d), l.id); } for (const g of meta?.groups ?? []) { send({ cmd: 'group', op: 'create', group: g.id }); send({ cmd: 'group', op: 'setVisible', group: g.id, value: g.visible !== 0 ? 1 : 0 }); send({ cmd: 'group', op: 'setOpacity', group: g.id, value: Number(g.opacity) || 0 }); send({ cmd: 'group', op: 'setMode', group: g.id, value: Number(g.mode) || 0 }); send({ cmd: 'group', op: 'setPassThrough', group: g.id, value: g.passThrough ? 1 : 0 }); send({ cmd: 'group', op: 'setIsolated', group: g.id, value: g.isolated ? 1 : 0 }); send({ cmd: 'group', op: 'setParent', group: g.id, value: Number(g.parent) }); } for (const l of layers) if (l.group !== undefined) send({ cmd: 'layer', op: 'setGroup', layer: l.id, value: Number(l.group) }); send({ cmd: 'layer', op: 'setActive', layer: 0 }); }
 async function imgCanvas(d: Uint8Array): Promise<HTMLCanvasElement> { const bm = await createImageBitmap(new Blob([d as BlobPart], { type: 'image/png' })); const c = document.createElement('canvas'); c.width = bm.width; c.height = bm.height; c.getContext('2d', { alpha: true })!.drawImage(bm, 0, 0); bm.close(); return c; }
 function writeImg(ic: HTMLCanvasElement, layer: number) { const g = ic.getContext('2d', { alpha: true })!; const img = g.getImageData(0, 0, ic.width, ic.height); const tile = new Uint8Array(64 * 64 * 4); for (let ty = 0; ty < Math.ceil(ic.height / 64); ty++) for (let tx = 0; tx < Math.ceil(ic.width / 64); tx++) { tile.fill(0); for (let y = 0; y < 64; y++) { const sy = ty * 64 + y; if (sy >= img.height) continue; for (let x = 0; x < 64; x++) { const sx = tx * 64 + x; if (sx >= img.width) continue; tile.set(img.data.subarray((sy * img.width + sx) * 4, (sy * img.width + sx) * 4 + 4), (y * 64 + x) * 4); } } send({ cmd: 'writeTile', layer, tx, ty, data: tile.slice().buffer }, [tile.slice().buffer]); } }
-function resetDoc(w: number, h: number) { if (w < 64 || h < 64 || w > 16384 || h > 16384) return; clearPointerInput(); ready = false; paintDocumentId = crypto.randomUUID(); docSize.width = w; docSize.height = h; const r = Math.max(w, h) / 4096; const ds = r <= 1 ? 1 : r <= 2 ? 2 : 4; dispW = Math.ceil(w / ds); dispH = Math.ceil(h / ds); canvas.style.width = `${dispW}px`; canvas.style.height = `${dispH}px`; send({ cmd: 'init', width: w, height: h, documentId: paintDocumentId, hardwareConcurrency: navigator.hardwareConcurrency }); }
+function resetDoc(w: number, h: number) { if (w < 64 || h < 64 || w > 16384 || h > 16384) return; clearPointerInput(); ready = false; paintDocumentId = crypto.randomUUID(); docSize.width = w; docSize.height = h; const r = Math.max(w, h) / 4096; const ds = r <= 1 ? 1 : r <= 2 ? 2 : 4; dispW = Math.ceil(w / ds); dispH = Math.ceil(h / ds); canvas.style.width = `${dispW}px`; canvas.style.height = `${dispH}px`; send({ cmd: 'init', width: w, height: h, documentId: paintDocumentId, hardwareConcurrency: navigator.hardwareConcurrency, memoryLimitMiB: paintMemoryMiB }); }
 
 worker = new Worker(new URL('./paint-engine-worker.ts', import.meta.url), { type: 'module' });
 (window as any).probe = (y: number) => { worker.postMessage({ cmd: 'probe', id: Math.floor(Math.random() * 1e9), y }); };
 worker.onmessage = (e: MessageEvent) => { const m = e.data;
   switch (m.type) {
     case 'ready': ready = true; ensureBrush(); refreshLayers(); statusEl.textContent = 'Ready — choose a brush or draw.'; break;
-    case 'state': engineState = m.state; if (engineState) { dispW = Math.ceil(engineState.width / engineState.displayScale); dispH = Math.ceil(engineState.height / engineState.displayScale); canvas.style.width = `${dispW}px`; canvas.style.height = `${dispH}px`; } refreshLayers(); break;
+    case 'state': engineState = m.state; if (engineState) { dispW = Math.ceil(engineState.width / engineState.displayScale); dispH = Math.ceil(engineState.height / engineState.displayScale); canvas.style.width = `${dispW}px`; canvas.style.height = `${dispH}px`; canvas.dataset.residentTiles = String(engineState.residentTiles); canvas.dataset.residentTileLimit = String(engineState.residentTileLimit); canvas.dataset.maximumResidentTiles = String(engineState.maximumResidentTiles); } refreshLayers(); break;
     case 'status': statusEl.textContent = m.text; break;
     case 'log': log(m.text); break;
-    case 'stats': hudEl.textContent = `queue   ${m.queued} sp\nactions ${m.deferred}\nbrush   ${m.brushMs.toFixed(1)} ms\nrender  ${m.renderMs.toFixed(1)} ms\ninput   ${m.sps}/s`; break;
+    case 'stats': hudEl.textContent = `queue   ${m.queued} sp\nactions ${m.deferred}\ntiles   ${m.residentTiles}/${m.residentTileLimit}\nbrush   ${m.brushMs.toFixed(1)} ms\nrender  ${m.renderMs.toFixed(1)} ms\ninput   ${m.sps}/s`; break;
     case 'tiles': if (pendingTiles) { const r = pendingTiles; pendingTiles = null; r({ data: m.data, scale: m.scale }); } break;
     case 'probeResult': (window as any).__probeResult = m; break;
   }
@@ -231,31 +379,150 @@ worker.onmessage = (e: MessageEvent) => { const m = e.data;
 worker.onerror = (e) => { log(`Worker error: ${e.message}`); statusEl.textContent = 'Engine error.'; };
 
 async function init() { statusEl.textContent = 'Loading brush engine…'; log('loading brush engine…');
-  const off = canvas.transferControlToOffscreen(); send({ cmd: 'init', width: docSize.width, height: docSize.height, documentId: paintDocumentId, canvas: off, hardwareConcurrency: navigator.hardwareConcurrency }, [off]);
+  const off = canvas.transferControlToOffscreen(); send({ cmd: 'init', width: docSize.width, height: docSize.height, documentId: paintDocumentId, canvas: off, hardwareConcurrency: navigator.hardwareConcurrency, memoryLimitMiB: paintMemoryMiB }, [off]);
   try { await loadCatalog(); } catch (e) { log(`Brush catalog error: ${(e as Error).message}`); } refreshLayers();
 }
-applyView(); init().catch(e => { statusEl.textContent = 'Engine failed to load: ' + (e as Error).message; log('ERROR: ' + ((e as Error).stack || (e as Error).message)); });
+applyView();
+setTool('brush');
+updateColorSwatches();
+init().catch(e => { statusEl.textContent = 'Engine failed to load: ' + (e as Error).message; log('ERROR: ' + ((e as Error).stack || (e as Error).message)); });
+
+function togglePanels() {
+  const workspace = document.querySelector<HTMLElement>('.workspace');
+  const hidden = workspace?.classList.toggle('panels-hidden') ?? false;
+  $('panelToggleBtn').setAttribute('aria-pressed', String(hidden));
+}
+function editableTarget(target: EventTarget | null): boolean {
+  return target instanceof HTMLInputElement || target instanceof HTMLSelectElement || target instanceof HTMLTextAreaElement || (target instanceof HTMLElement && target.isContentEditable);
+}
+function runShortcut(action: PaintShortcut) {
+  if (action.startsWith('opacity-')) {
+    setBrushValue('opacity', Number(action.slice('opacity-'.length)) / 100);
+    return;
+  }
+  switch (action) {
+    case 'brush-tool': setTool('brush'); break;
+    case 'hand-tool': setTool('hand'); break;
+    case 'rotate-tool': setTool('rotate'); break;
+    case 'zoom-tool': setTool('zoom'); break;
+    case 'brush-smaller': setBrushValue('radius', Math.max(2, ui.radius - 2)); break;
+    case 'brush-larger': setBrushValue('radius', Math.min(60, ui.radius + 2)); break;
+    case 'hardness-softer': setBrushValue('hardness', Math.max(0, ui.hardness - 0.1)); break;
+    case 'hardness-harder': setBrushValue('hardness', Math.min(1, ui.hardness + 0.1)); break;
+    case 'default-colors':
+      ui.color = '#000000';
+      $<HTMLInputElement>('color').value = ui.color;
+      $<HTMLInputElement>('backgroundColor').value = '#ffffff';
+      applyBrushColor(); applyBgColor(); updateColorSwatches();
+      break;
+    case 'switch-colors': {
+      const background = $<HTMLInputElement>('backgroundColor');
+      const foreground = ui.color;
+      ui.color = background.value;
+      background.value = foreground;
+      $<HTMLInputElement>('color').value = ui.color;
+      applyBrushColor(); applyBgColor(); updateColorSwatches();
+      break;
+    }
+    case 'previous-brush': cycleBrush(-1); break;
+    case 'next-brush': cycleBrush(1); break;
+    case 'undo': $('undoBtn').click(); break;
+    case 'redo': $('redoBtn').click(); break;
+    case 'clear-layer': $('clearBtn').click(); break;
+    case 'new-document': $('newDocumentBtn').click(); break;
+    case 'new-layer': $('addLayerBtn').click(); break;
+    case 'open-document': $<HTMLInputElement>('importOraInput').click(); break;
+    case 'save-document': $('exportOraBtn').click(); break;
+    case 'export-png': $('exportPngBtn').click(); break;
+    case 'zoom-in': setZoom(view.zoom * 1.1); break;
+    case 'zoom-out': setZoom(view.zoom * 0.9); break;
+    case 'fit-view': fitView(); break;
+    case 'actual-pixels': actualPixels(); break;
+    case 'toggle-panels': togglePanels(); break;
+  }
+}
+document.addEventListener('keydown', (event) => {
+  const editable = editableTarget(event.target);
+  if (event.key === ' ' && !editable && !event.ctrlKey && !event.metaKey && !event.altKey) {
+    event.preventDefault();
+    spaceHeld = true;
+    canvas.dataset.spaceHand = 'true';
+    return;
+  }
+  const action = resolvePaintShortcut({
+    key: event.key,
+    code: event.code,
+    ctrlKey: event.ctrlKey,
+    metaKey: event.metaKey,
+    shiftKey: event.shiftKey,
+    altKey: event.altKey,
+    editable,
+  });
+  if (!action) return;
+  event.preventDefault();
+  runShortcut(action);
+});
+document.addEventListener('keyup', (event) => {
+  if (event.key !== ' ') return;
+  spaceHeld = false;
+  delete canvas.dataset.spaceHand;
+});
 
 // UI bindings
 ['radius','hardness','opacity'].forEach(k => { const i = $(k) as HTMLInputElement; const a = () => { (ui as any)[k] = Number(i.value); $(`${k}Val`).textContent = i.value; applyBrushOverrides(); }; i.addEventListener('input', a); a(); });
-$('color').addEventListener('input', e => { ui.color = (e.target as HTMLInputElement).value; applyBrushColor(); applyBrushOverrides(); });
-$('viewZoom').addEventListener('input', e => { finishInputForViewChange(); view.zoom = Number((e.target as HTMLInputElement).value); applyView(); });
+$('color').addEventListener('input', e => { ui.color = (e.target as HTMLInputElement).value; applyBrushColor(); applyBrushOverrides(); updateColorSwatches(); });
+$('viewZoom').addEventListener('input', e => setZoom(Number((e.target as HTMLInputElement).value)));
 $('rotateLeftBtn').addEventListener('click', () => { finishInputForViewChange(); view.rotationDegrees = (view.rotationDegrees + 90) % 360; applyView(); });
 $('rotateRightBtn').addEventListener('click', () => { finishInputForViewChange(); view.rotationDegrees = (view.rotationDegrees + 270) % 360; applyView(); });
 $('mirrorBtn').addEventListener('click', () => { finishInputForViewChange(); view.mirror = !view.mirror; applyView(); });
 $('resetViewBtn').addEventListener('click', () => { finishInputForViewChange(); Object.assign(view, { zoom: 1, rotationDegrees: 0, mirror: false, panX: 0, panY: 0 }); applyView(); });
-canvas.addEventListener('wheel', e => { e.preventDefault(); finishInputForViewChange(); view.zoom = Math.max(0.1, Math.min(8, view.zoom * (e.deltaY < 0 ? 1.1 : 0.9))); applyView(); }, { passive: false });
+$('fitViewBtn').addEventListener('click', fitView);
+$('actualPixelsBtn').addEventListener('click', actualPixels);
+$('zoomOutBtn').addEventListener('click', () => setZoom(view.zoom * 0.9));
+$('zoomInBtn').addEventListener('click', () => setZoom(view.zoom * 1.1));
+$('brushToolBtn').addEventListener('click', () => setTool('brush'));
+$('handToolBtn').addEventListener('click', () => setTool('hand'));
+$('rotateToolBtn').addEventListener('click', () => setTool('rotate'));
+$('zoomToolBtn').addEventListener('click', () => setTool('zoom'));
+$('panelToggleBtn').addEventListener('click', togglePanels);
+canvas.addEventListener('wheel', e => { e.preventDefault(); setZoom(view.zoom * (e.deltaY < 0 ? 1.1 : 0.9)); }, { passive: false });
 $('frameEnabled').addEventListener('change', e => canvas.classList.toggle('frame-visible', (e.target as HTMLInputElement).checked));
 $('clearBtn').addEventListener('click', () => send({ cmd: 'clear' }));
-$('backgroundColor').addEventListener('input', applyBgColor);
+$('backgroundColor').addEventListener('input', () => { applyBgColor(); updateColorSwatches(); });
 $('undoBtn').addEventListener('click', () => send({ cmd: 'undo' }));
 $('redoBtn').addEventListener('click', () => send({ cmd: 'redo' }));
+$('memoryLimit').addEventListener('input', e => {
+  paintMemoryMiB = paintMemoryLimitMiB(deviceMemoryGiB, Number((e.target as HTMLInputElement).value));
+  ($('memoryLimit') as HTMLInputElement).value = String(paintMemoryMiB);
+  $('memoryLimitVal').textContent = String(paintMemoryMiB);
+  try { localStorage.setItem('afterglow.paintMemoryMiB', String(paintMemoryMiB)); } catch {}
+});
+($('memoryLimit') as HTMLInputElement).value = String(paintMemoryMiB);
+$('memoryLimitVal').textContent = String(paintMemoryMiB);
 $('newDocumentBtn').addEventListener('click', () => resetDoc(Number(($('documentWidth') as HTMLInputElement).value), Number(($('documentHeight') as HTMLInputElement).value)));
 $('exportPngBtn').addEventListener('click', () => void exportPng().catch(e => statusEl.textContent = `PNG export failed: ${(e as Error).message}`));
 $('exportOraBtn').addEventListener('click', () => void exportOra().catch(e => statusEl.textContent = `ORA export failed: ${(e as Error).message}`));
 $('importOraInput').addEventListener('change', e => { const f = (e.target as HTMLInputElement).files?.[0]; if (f) void importOra(f).then(() => statusEl.textContent = 'OpenRaster imported.').catch(er => statusEl.textContent = `ORA import failed: ${(er as Error).message}`); });
+$('layerBlendMode').addEventListener('change', event => sendSelection('setMode', Number((event.target as HTMLSelectElement).value)));
+$('layerOpacity').addEventListener('input', event => {
+  const value = Number((event.target as HTMLInputElement).value);
+  $('layerOpacityValue').textContent = `${Math.round(value * 100)}%`;
+  sendSelection('setOpacity', value);
+});
+$('layerParent').addEventListener('change', event => sendSelection(selectedGroupId >= 0 ? 'setParent' : 'setGroup', Number((event.target as HTMLSelectElement).value)));
+$('groupPassThrough').addEventListener('change', event => sendSelection('setPassThrough', (event.target as HTMLInputElement).checked ? 1 : 0));
+$('groupIsolated').addEventListener('change', event => sendSelection('setIsolated', (event.target as HTMLInputElement).checked ? 1 : 0));
 $('addLayerBtn').addEventListener('click', () => send({ cmd: 'layer', op: 'create', layer: 0 }));
-$('deleteLayerBtn').addEventListener('click', () => { if (engineState) send({ cmd: 'layer', op: 'delete', layer: engineState.activeLayer }); });
 $('addGroupBtn').addEventListener('click', () => send({ cmd: 'group', op: 'create', group: 0 }));
-$('deleteGroupBtn').addEventListener('click', () => { if (selectedGroupId >= 0) { send({ cmd: 'group', op: 'delete', group: selectedGroupId }); selectedGroupId = -1; } });
+$('moveSelectionUpBtn').addEventListener('click', () => sendSelection('move', 1));
+$('moveSelectionDownBtn').addEventListener('click', () => sendSelection('move', -1));
+$('deleteSelectionBtn').addEventListener('click', () => {
+  if (!engineState) return;
+  if (selectedGroupId >= 0) {
+    send({ cmd: 'group', op: 'delete', group: selectedGroupId });
+    selectedGroupId = -1;
+  } else {
+    send({ cmd: 'layer', op: 'delete', layer: engineState.activeLayer });
+  }
+});
 $('strokeBtn').addEventListener('click', () => { if (!ready) return; const y = docSize.height / 2, x0 = docSize.width * 0.15; send({ cmd: 'beginStroke', x: x0, y, xtilt: 0, ytilt: 0, zoom: view.zoom, rotation: view.rotationDegrees * Math.PI / 180, barrel: 0.5 }); for (let i = 1; i <= 10; i++) send({ cmd: 'strokeSample', x: x0 + (docSize.width * 0.6) * (i / 10), y, pressure: 0.5, xtilt: 0, ytilt: 0, time: i * 16, zoom: view.zoom, rotation: view.rotationDegrees * Math.PI / 180, barrel: 0.5 }); send({ cmd: 'commit' }); statusEl.textContent = 'Test stroke drawn.'; });

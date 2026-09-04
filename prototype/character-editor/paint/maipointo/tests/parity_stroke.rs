@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use maipointo::brush::Brush;
-use maipointo::settings::{InputId, SettingId};
+
 use maipointo::surface::FixedTiledSurface;
 
 fn paint_dir() -> PathBuf {
@@ -108,12 +108,10 @@ fn oracle_path() -> PathBuf {
             mp.join("fifo.c").to_str().unwrap(),
         ]
         .join(" ");
-        let mut script = String::from("set -e; cc -O2 -ffp-contract=off -fno-tree-vectorize -fno-tree-slp-vectorize -std=c11 ");
-        script.push_str(&format!(
-            "-I '{}' -I '{}' ",
-            paint.display(),
-            mp.display()
-        ));
+        let mut script = String::from(
+            "set -e; cc -O2 -ffp-contract=off -fno-tree-vectorize -fno-tree-slp-vectorize -std=c11 ",
+        );
+        script.push_str(&format!("-I '{}' -I '{}' ", paint.display(), mp.display()));
         script.push_str("$(pkg-config --cflags json-c) ");
         script.push_str(&srcs);
         script.push_str(" $(pkg-config --libs json-c) -lm -o ");
@@ -121,9 +119,13 @@ fn oracle_path() -> PathBuf {
         let out1 = Command::new("nix-shell")
             .args(["-p", "json_c", "pkg-config", "--run"])
             .arg(&script)
-            .output().expect("cc for stroke oracle");
+            .output()
+            .expect("cc for stroke oracle");
         if !out1.status.success() {
-            panic!("stroke-oracle build failed: {}", String::from_utf8_lossy(&out1.stderr));
+            panic!(
+                "stroke-oracle build failed: {}",
+                String::from_utf8_lossy(&out1.stderr)
+            );
         }
     }
     exe
@@ -170,11 +172,21 @@ fn run_maipointo(w: i32, h: i32, ops: &[Op]) -> Vec<u16> {
             Op::FromDefaults => brush.from_defaults(),
             Op::SetBase(s, v) => brush.set_base_value_at(*s, *v),
             Op::SetN(s, i, n) => brush.set_mapping_n_at(*s, *i, *n),
-            Op::SetPoint(s, i, idx, x, y) => {
-                brush.set_mapping_point_at(*s, *i, *idx, *x, *y)
-            }
+            Op::SetPoint(s, i, idx, x, y) => brush.set_mapping_point_at(*s, *i, *idx, *x, *y),
             Op::StrokeTo(x, y, pr, xt, yt, dt, vz, vr, br, lin) => {
-                brush.stroke_to(&mut surface, *x, *y, *pr, *xt, *yt, *dt, *vz, *vr, *br, *lin);
+                brush.stroke_to(
+                    &mut surface,
+                    *x,
+                    *y,
+                    *pr,
+                    *xt,
+                    *yt,
+                    *dt,
+                    *vz,
+                    *vr,
+                    *br,
+                    *lin,
+                );
             }
         }
     }
@@ -210,7 +222,9 @@ fn parity_basic_stroke() {
     ops.push(Op::SetBase(7, 0.0)); // color_h
     ops.push(Op::SetBase(8, 0.6)); // color_s
     ops.push(Op::SetBase(9, 0.35)); // color_v
-    ops.push(Op::StrokeTo(64.0, 128.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, false));
+    ops.push(Op::StrokeTo(
+        64.0, 128.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, false,
+    ));
     for i in 0..60 {
         let t = i as f32 / 59.0;
         ops.push(Op::StrokeTo(
@@ -240,7 +254,9 @@ fn parity_smudge_legacy() {
     ops.push(Op::SetBase(9, 0.4)); // color_v
     // smudge on: smudge_length < 1 + non-constant smudge
     ops.push(Op::SetBase(15, 0.6)); // smudge (index probed at runtime below)
-    ops.push(Op::StrokeTo(40.0, 40.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, false));
+    ops.push(Op::StrokeTo(
+        40.0, 40.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, false,
+    ));
     for i in 0..40 {
         let t = i as f32 / 39.0;
         ops.push(Op::StrokeTo(
@@ -303,16 +319,50 @@ fn encode2(ops: &[Op2]) -> Vec<u8> {
 }
 
 const STATE_NAMES: [&str; 44] = [
-    "X", "Y", "PRESSURE", "PARTIAL_DABS", "ACTUAL_RADIUS", "SMUDGE_RA", "SMUDGE_GA",
-    "SMUDGE_BA", "SMUDGE_A", "LAST_GETCOLOR_R", "LAST_GETCOLOR_G", "LAST_GETCOLOR_B",
-    "LAST_GETCOLOR_A", "LAST_GETCOLOR_RECENTNESS", "ACTUAL_X", "ACTUAL_Y",
-    "NORM_DX_SLOW", "NORM_DY_SLOW", "NORM_SPEED1_SLOW", "NORM_SPEED2_SLOW", "STROKE",
-    "STROKE_STARTED", "CUSTOM_INPUT", "RNG_SEED", "ACTUAL_ELLIPTICAL_DAB_RATIO",
-    "ACTUAL_ELLIPTICAL_DAB_ANGLE", "DIRECTION_DX", "DIRECTION_DY", "DECLINATION",
-    "ASCENSION", "VIEWZOOM", "VIEWROTATION", "DIRECTION_ANGLE_DX",
-    "DIRECTION_ANGLE_DY", "ATTACK_ANGLE", "FLIP", "GRIDMAP_X", "GRIDMAP_Y",
-    "DECLINATIONX", "DECLINATIONY", "DABS_PER_BASIC_RADIUS",
-    "DABS_PER_ACTUAL_RADIUS", "DABS_PER_SECOND", "BARREL_ROTATION",
+    "X",
+    "Y",
+    "PRESSURE",
+    "PARTIAL_DABS",
+    "ACTUAL_RADIUS",
+    "SMUDGE_RA",
+    "SMUDGE_GA",
+    "SMUDGE_BA",
+    "SMUDGE_A",
+    "LAST_GETCOLOR_R",
+    "LAST_GETCOLOR_G",
+    "LAST_GETCOLOR_B",
+    "LAST_GETCOLOR_A",
+    "LAST_GETCOLOR_RECENTNESS",
+    "ACTUAL_X",
+    "ACTUAL_Y",
+    "NORM_DX_SLOW",
+    "NORM_DY_SLOW",
+    "NORM_SPEED1_SLOW",
+    "NORM_SPEED2_SLOW",
+    "STROKE",
+    "STROKE_STARTED",
+    "CUSTOM_INPUT",
+    "RNG_SEED",
+    "ACTUAL_ELLIPTICAL_DAB_RATIO",
+    "ACTUAL_ELLIPTICAL_DAB_ANGLE",
+    "DIRECTION_DX",
+    "DIRECTION_DY",
+    "DECLINATION",
+    "ASCENSION",
+    "VIEWZOOM",
+    "VIEWROTATION",
+    "DIRECTION_ANGLE_DX",
+    "DIRECTION_ANGLE_DY",
+    "ATTACK_ANGLE",
+    "FLIP",
+    "GRIDMAP_X",
+    "GRIDMAP_Y",
+    "DECLINATIONX",
+    "DECLINATIONY",
+    "DABS_PER_BASIC_RADIUS",
+    "DABS_PER_ACTUAL_RADIUS",
+    "DABS_PER_SECOND",
+    "BARREL_ROTATION",
 ];
 
 const SETTING_NAMES: [&str; 65] = [
@@ -467,7 +517,19 @@ fn bisect_states() {
             Op2::FromDefaults => brush.from_defaults(),
             Op2::SetBase(s, v) => brush.set_base_value_at(*s, *v),
             Op2::StrokeTo(x, y, pr, xt, yt, dt, vz, vr, br, lin) => {
-                brush.stroke_to(&mut surface, *x, *y, *pr, *xt, *yt, *dt, *vz, *vr, *br, *lin);
+                brush.stroke_to(
+                    &mut surface,
+                    *x,
+                    *y,
+                    *pr,
+                    *xt,
+                    *yt,
+                    *dt,
+                    *vz,
+                    *vr,
+                    *br,
+                    *lin,
+                );
             }
             Op2::DumpStates => {
                 states_out.push((0..44).map(|i| brush.raw_state(i)).collect());
@@ -487,12 +549,23 @@ fn bisect_states() {
         // settings_value is malloc-uninitialized in C until the first
         // update_states runs inside a dab loop; compare from the first dump
         // where PARTIAL_DABS shows a dab has occurred.
-        for (i, (w, g)) in ref_settings[d].iter().zip(settings_out[d].iter()).enumerate().skip(if ref_states[d][3] == 0.0 { usize::MAX } else { 0 }) {
+        for (i, (w, g)) in ref_settings[d]
+            .iter()
+            .zip(settings_out[d].iter())
+            .enumerate()
+            .skip(if ref_states[d][3] == 0.0 {
+                usize::MAX
+            } else {
+                0
+            })
+        {
             if w.to_bits() != g.to_bits() {
                 if first_event.is_none() {
                     first_event = Some(d);
-                    eprintln!("FIRST divergence: dump #{d}, SETTING {} (C={:.7} rust={:.7})",
-                        SETTING_NAMES[i], w, g);
+                    eprintln!(
+                        "FIRST divergence: dump #{d}, SETTING {} (C={:.7} rust={:.7})",
+                        SETTING_NAMES[i], w, g
+                    );
                 }
             }
         }
@@ -500,7 +573,10 @@ fn bisect_states() {
             if let Some(sm) = speedmap_out {
                 for k in 0..6 {
                     if sm[k].to_bits() != ref_speedmap[k].to_bits() {
-                        eprintln!("SPEEDMAPPING[{}] C={:.9} rust={:.9}", k, ref_speedmap[k], sm[k]);
+                        eprintln!(
+                            "SPEEDMAPPING[{}] C={:.9} rust={:.9}",
+                            k, ref_speedmap[k], sm[k]
+                        );
                     }
                 }
             }
@@ -513,24 +589,35 @@ fn bisect_states() {
         }
         if first_state.is_some() && first_event.is_none() {
             first_event = Some(d);
-            eprintln!("FIRST divergence: dump #{d}, state {} (C={:.6} rust={:.6})",
+            eprintln!(
+                "FIRST divergence: dump #{d}, state {} (C={:.6} rust={:.6})",
                 STATE_NAMES[first_state.unwrap()],
                 ref_states[d][first_state.unwrap()],
-                states_out[d][first_state.unwrap()]);
+                states_out[d][first_state.unwrap()]
+            );
         }
     }
     if let Some(e) = first_event {
         for d in 0..=e {
             let gate = ref_states.get(d).map(|s| s[3]).unwrap_or(f32::NAN);
-            eprintln!("dump #{d} gate(PARTIAL)={gate} C.SPEED2SLOW={:?} R.SPEED2SLOW={:?} C.SPEED1SLOW={:?} R.SPEED1SLOW={:?}",
-                ref_settings.get(d).map(|s| s[14]), settings_out.get(d).map(|s| s[14]),
-                ref_settings.get(d).map(|s| s[15]), settings_out.get(d).map(|s| s[15]));
+            eprintln!(
+                "dump #{d} gate(PARTIAL)={gate} C.SPEED2SLOW={:?} R.SPEED2SLOW={:?} C.SPEED1SLOW={:?} R.SPEED1SLOW={:?}",
+                ref_settings.get(d).map(|s| s[14]),
+                settings_out.get(d).map(|s| s[14]),
+                ref_settings.get(d).map(|s| s[15]),
+                settings_out.get(d).map(|s| s[15])
+            );
         }
         for d in 0..=e.min(2) {
-            eprintln!("dump #{d} C.X={:?} C.Y={:?} C.PARTIAL={:?} C.SETOPAQUE={:?} | R.X={:?} R.Y={:?}",
-                ref_states.get(d).map(|s| s[0]), ref_states.get(d).map(|s| s[1]),
-                ref_states.get(d).map(|s| s[3]), ref_settings.get(d).map(|s| s[0]),
-                states_out.get(d).map(|s| s[0]), states_out.get(d).map(|s| s[1]));
+            eprintln!(
+                "dump #{d} C.X={:?} C.Y={:?} C.PARTIAL={:?} C.SETOPAQUE={:?} | R.X={:?} R.Y={:?}",
+                ref_states.get(d).map(|s| s[0]),
+                ref_states.get(d).map(|s| s[1]),
+                ref_states.get(d).map(|s| s[3]),
+                ref_settings.get(d).map(|s| s[0]),
+                states_out.get(d).map(|s| s[0]),
+                states_out.get(d).map(|s| s[1])
+            );
         }
         eprintln!("raw.len={} n_dumps={}", raw.len(), n_dumps);
         panic!("first divergent event dump #{e}");
@@ -573,7 +660,11 @@ fn bisect_dabs() {
         .arg(&dab_file)
         .output()
         .expect("run oracle");
-    assert!(status.status.success(), "oracle failed: {}", String::from_utf8_lossy(&status.stderr));
+    assert!(
+        status.status.success(),
+        "oracle failed: {}",
+        String::from_utf8_lossy(&status.stderr)
+    );
     let raw = std::fs::read(&dab_file).unwrap();
     let ref_dabs: Vec<[f32; 17]> = raw
         .chunks_exact(4)
@@ -596,7 +687,19 @@ fn bisect_dabs() {
             Op2::FromDefaults => brush.from_defaults(),
             Op2::SetBase(s, v) => brush.set_base_value_at(*s, *v),
             Op2::StrokeTo(x, y, pr, xt, yt, dt, vz, vr, br, lin) => {
-                brush.stroke_to(&mut surface, *x, *y, *pr, *xt, *yt, *dt, *vz, *vr, *br, *lin);
+                brush.stroke_to(
+                    &mut surface,
+                    *x,
+                    *y,
+                    *pr,
+                    *xt,
+                    *yt,
+                    *dt,
+                    *vz,
+                    *vr,
+                    *br,
+                    *lin,
+                );
             }
             Op2::DumpStates | Op2::DumpSettings | Op2::DumpSpeedMapping => {}
         }
@@ -607,9 +710,7 @@ fn bisect_dabs() {
     for (i, (w, g)) in ref_dabs.iter().zip(got_dabs.iter()).enumerate() {
         for (k, (wv, gv)) in w.iter().zip(g.iter()).enumerate() {
             if wv.to_bits() != gv.to_bits() {
-                panic!(
-                    "dab #{i} arg {k} differs: C={wv:.7} rust={gv:.7}"
-                );
+                panic!("dab #{i} arg {k} differs: C={wv:.7} rust={gv:.7}");
             }
         }
     }
@@ -625,7 +726,9 @@ fn stroke_prefix_bisect() {
     head.push(Op::SetBase(7, 0.0));
     head.push(Op::SetBase(8, 0.6));
     head.push(Op::SetBase(9, 0.35));
-    head.push(Op::StrokeTo(64.0, 128.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, false));
+    head.push(Op::StrokeTo(
+        64.0, 128.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, false,
+    ));
     let events: Vec<Op> = (0..60)
         .map(|i| {
             let t = i as f32 / 59.0;
@@ -650,24 +753,48 @@ fn stroke_prefix_bisect() {
         let (cmd_file, out_file) = unique_tmp("pfx");
         let dab_file = unique_tmp("pfx-dabs").1;
         std::fs::write(&cmd_file, encode(&ops)).unwrap();
-        let st = Command::new(oracle_path()).args(["256", "256"]).arg(&cmd_file).arg(&out_file).arg(&dab_file).output().unwrap();
+        let st = Command::new(oracle_path())
+            .args(["256", "256"])
+            .arg(&cmd_file)
+            .arg(&out_file)
+            .arg(&dab_file)
+            .output()
+            .unwrap();
         assert!(st.status.success());
         let raw = std::fs::read(&dab_file).unwrap();
-        let ref_dabs: Vec<[f32; 17]> = raw.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect::<Vec<f32>>().chunks_exact(17).map(|c| { let mut a = [0f32; 17]; a.copy_from_slice(c); a }).collect();
+        let ref_dabs: Vec<[f32; 17]> = raw
+            .chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect::<Vec<f32>>()
+            .chunks_exact(17)
+            .map(|c| {
+                let mut a = [0f32; 17];
+                a.copy_from_slice(c);
+                a
+            })
+            .collect();
         let mut brush = Brush::new();
         brush.dab_trace = Some(Vec::new());
         let mut surf = FixedTiledSurface::new(256, 256);
         for op in &ops {
             match op {
                 Op::FromDefaults => brush.from_defaults(),
-                Op::SetBase(s, v) => { brush.set_base_value_at(*s, *v); }
-                Op::StrokeTo(x, y, pr, xt, yt, dt, vz, vr, br, lin) => { brush.stroke_to(&mut surf, *x, *y, *pr, *xt, *yt, *dt, *vz, *vr, *br, *lin); }
+                Op::SetBase(s, v) => {
+                    brush.set_base_value_at(*s, *v);
+                }
+                Op::StrokeTo(x, y, pr, xt, yt, dt, vz, vr, br, lin) => {
+                    brush.stroke_to(&mut surf, *x, *y, *pr, *xt, *yt, *dt, *vz, *vr, *br, *lin);
+                }
                 _ => {}
             }
         }
         let got_dabs = brush.dab_trace.take().unwrap();
         if ref_dabs.len() != got_dabs.len() {
-            panic!("prefix {n}: dab count C={} rust={}", ref_dabs.len(), got_dabs.len());
+            panic!(
+                "prefix {n}: dab count C={} rust={}",
+                ref_dabs.len(),
+                got_dabs.len()
+            );
         }
         for (i, (w, g)) in ref_dabs.iter().zip(got_dabs.iter()).enumerate() {
             for (k, (wv, gv)) in w.iter().zip(g.iter()).enumerate() {
@@ -679,20 +806,54 @@ fn stroke_prefix_bisect() {
         let want = run_oracle(256, 256, &ops);
         let got = run_maipointo(256, 256, &ops);
         if want != got {
-            let diffs: Vec<usize> = want.iter().zip(got.iter()).enumerate().filter(|(_, (w, g))| w != g).map(|(i, _)| i).collect();
-            let mut cmin = 99; let mut cmax = -1; let mut rmin = 9999; let mut rmax = -1;
+            let diffs: Vec<usize> = want
+                .iter()
+                .zip(got.iter())
+                .enumerate()
+                .filter(|(_, (w, g))| w != g)
+                .map(|(i, _)| i)
+                .collect();
+            let mut cmin = 99;
+            let mut cmax = -1;
+            let mut rmin = 9999;
+            let mut rmax = -1;
             for &d in diffs.iter() {
-                let lw = d % (64*64*4); let px = lw/4; let c = (px%64) as i32; let r = (px/64) as i32;
-                if c < cmin { cmin = c; } if c > cmax { cmax = c; }
-                if r < rmin { rmin = r; } if r > rmax { rmax = r; }
+                let lw = d % (64 * 64 * 4);
+                let px = lw / 4;
+                let c = (px % 64) as i32;
+                let r = (px / 64) as i32;
+                if c < cmin {
+                    cmin = c;
+                }
+                if c > cmax {
+                    cmax = c;
+                }
+                if r < rmin {
+                    rmin = r;
+                }
+                if r > rmax {
+                    rmax = r;
+                }
             }
             eprintln!("diff bbox tile5 cols {cmin}-{cmax} rows {rmin}-{rmax}");
             for &d in diffs.iter().take(8) {
-                let t = d / (64*64*4); let lw = d % (64*64*4);
-                eprintln!("word {d}: tile {t} local_px {} (col {} row {}) want {} got {}", lw/4, (lw/4)%64, (lw/4)/64, want[d], got[d]);
+                let t = d / (64 * 64 * 4);
+                let lw = d % (64 * 64 * 4);
+                eprintln!(
+                    "word {d}: tile {t} local_px {} (col {} row {}) want {} got {}",
+                    lw / 4,
+                    (lw / 4) % 64,
+                    (lw / 4) / 64,
+                    want[d],
+                    got[d]
+                );
             }
             eprintln!("total diffs {}", diffs.len());
-            let idx = want.iter().zip(got.iter()).position(|(w, g)| w != g).unwrap();
+            let idx = want
+                .iter()
+                .zip(got.iter())
+                .position(|(w, g)| w != g)
+                .unwrap();
             panic!(
                 "first divergent prefix: {n} events, word {idx} want {} got {}",
                 want[idx], got[idx]

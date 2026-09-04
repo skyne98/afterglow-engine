@@ -5,7 +5,7 @@
 
 use crate::brushmodes::*;
 use crate::helpers::clamp;
-use crate::mask::{render_dab_mask, TILE_SIZE};
+use crate::mask::{TILE_SIZE, render_dab_mask};
 use crate::random::RandomSource;
 
 /// A queued dab operation (`OperationDataDrawDab`).
@@ -105,7 +105,15 @@ impl FixedTiledSurface {
             tiles_width,
             tiles_height,
             tiles: vec![0xFFFF; words],
-            ops: vec![QueuedOp { tx: 0, ty: 0, op: NULL_DAB_OP }; OP_QUEUE_CAP].into_boxed_slice(),
+            ops: vec![
+                QueuedOp {
+                    tx: 0,
+                    ty: 0,
+                    op: NULL_DAB_OP
+                };
+                OP_QUEUE_CAP
+            ]
+            .into_boxed_slice(),
             op_len: 0,
             op_failed: 0,
             dirty: vec![(0i32, 0i32); DIRTY_TILE_CAP].into_boxed_slice(),
@@ -173,7 +181,14 @@ impl FixedTiledSurface {
             let (_, rest) = self.tiles.split_at_mut(base);
             let rgba = &mut rest[..TILE_SIZE * TILE_SIZE * 4];
             for b in 0..batch_len {
-                process_op(rgba, &mut self.mask[..], tx, ty, &self.batch[b], &mut self.scratch[..]);
+                process_op(
+                    rgba,
+                    &mut self.mask[..],
+                    tx,
+                    ty,
+                    &self.batch[b],
+                    &mut self.scratch[..],
+                );
             }
         }
     }
@@ -293,15 +308,18 @@ impl FixedTiledSurface {
         let ty1 = ((y - r_fringe).floor() as i32) / TILE_SIZE as i32;
         let ty2 = ((y + r_fringe).floor() as i32) / TILE_SIZE as i32;
 
-        let sample_interval: u16 = if radius <= 2.0 { 1 } else { (radius * 7.0) as u16 };
+        let sample_interval: u16 = if radius <= 2.0 {
+            1
+        } else {
+            (radius * 7.0) as u16
+        };
         let random_sample_rate = 1.0 / (7.0 * radius);
 
         for ty in ty1..=ty2 {
             for tx in tx1..=tx2 {
                 self.process_tile(tx, ty);
 
-                static NULL_TILE: [u16; TILE_SIZE * TILE_SIZE * 4] =
-                    [0; TILE_SIZE * TILE_SIZE * 4];
+                static NULL_TILE: [u16; TILE_SIZE * TILE_SIZE * 4] = [0; TILE_SIZE * TILE_SIZE * 4];
                 let rgba: &[u16] = match self.tile_base(tx, ty) {
                     Some(base) => {
                         let end = base + TILE_SIZE * TILE_SIZE * 4;
@@ -384,8 +402,23 @@ impl FixedTiledSurface {
         paint: f32,
     ) -> bool {
         self.draw_dab_internal(
-            x, y, radius, color_r, color_g, color_b, opaque, hardness, softness, color_a,
-            aspect_ratio, angle, lock_alpha, colorize, posterize, posterize_num, paint,
+            x,
+            y,
+            radius,
+            color_r,
+            color_g,
+            color_b,
+            opaque,
+            hardness,
+            softness,
+            color_a,
+            aspect_ratio,
+            angle,
+            lock_alpha,
+            colorize,
+            posterize,
+            posterize_num,
+            paint,
         )
     }
 
@@ -436,7 +469,22 @@ pub fn process_op(
     op: &DrawDabOp,
     scratch: &mut [f32],
 ) {
-    render_dab_mask(
+    process_op_rows(rgba, mask, tx, ty, op, scratch, 0, TILE_SIZE);
+}
+
+/// Apply one operation to a half-open tile-row range.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn process_op_rows(
+    rgba: &mut [u16],
+    mask: &mut [u16],
+    tx: i32,
+    ty: i32,
+    op: &DrawDabOp,
+    scratch: &mut [f32],
+    row_start: usize,
+    row_end: usize,
+) {
+    crate::mask::render_dab_mask_rows(
         mask,
         op.x - (tx * TILE_SIZE as i32) as f32,
         op.y - (ty * TILE_SIZE as i32) as f32,
@@ -446,9 +494,13 @@ pub fn process_op(
         op.aspect_ratio,
         op.angle,
         scratch,
+        row_start,
+        row_end,
     );
+    process_op_with_mask(rgba, &mask[..], op);
+}
 
-    let m = &mask[..];
+fn process_op_with_mask(rgba: &mut [u16], m: &[u16], op: &DrawDabOp) {
     if op.paint < 1.0 {
         if op.normal != 0.0 {
             if op.color_a == 1.0 {
@@ -489,7 +541,7 @@ pub fn process_op(
                     * (1 << 15) as f32) as u16,
             );
         }
-    } 
+    }
     if op.paint > 0.0 {
         // spectral paint path (paint > 0.0): the NG Pigment mode; the C also
         // runs this for 0 < paint < 1 together with the legacy block above.
@@ -553,6 +605,33 @@ pub fn process_op(
     }
 }
 
+/// Apply one queued operation to one tile pixel. This gives smudge sampling
+/// the queued result without an eager full-tile raster pass.
+pub(crate) fn process_op_pixel(
+    rgba: &mut Pixel,
+    tx: i32,
+    ty: i32,
+    pixel_index: usize,
+    op: &DrawDabOp,
+) {
+    let opacity = crate::mask::render_dab_mask_pixel(
+        op.x - (tx * TILE_SIZE as i32) as f32,
+        op.y - (ty * TILE_SIZE as i32) as f32,
+        op.radius,
+        op.hardness,
+        op.softness,
+        op.aspect_ratio,
+        op.angle,
+        (pixel_index % TILE_SIZE) as i32,
+        (pixel_index / TILE_SIZE) as i32,
+    );
+    if opacity == 0 {
+        return;
+    }
+    let mask = [opacity, 0, 0];
+    process_op_with_mask(&mut rgba[..], &mask, op);
+}
+
 /// The `MyPaintSurface` vtable subset the brush engine calls.
 pub trait Surface {
     /// `mypaint_surface_draw_dab` — returns whether the surface changed.
@@ -604,12 +683,93 @@ impl Surface for FixedTiledSurface {
         paint: f32,
     ) -> bool {
         self.draw_dab_internal(
-            x, y, radius, color_r, color_g, color_b, opaque, hardness, softness, color_a,
-            aspect_ratio, angle, lock_alpha, colorize, posterize, posterize_num, paint,
+            x,
+            y,
+            radius,
+            color_r,
+            color_g,
+            color_b,
+            opaque,
+            hardness,
+            softness,
+            color_a,
+            aspect_ratio,
+            angle,
+            lock_alpha,
+            colorize,
+            posterize,
+            posterize_num,
+            paint,
         )
     }
 
     fn get_color(&mut self, x: f32, y: f32, radius: f32, paint: f32) -> [f32; 4] {
         self.get_color_internal(x, y, radius, paint)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn one_pixel_operation_matches_full_tile_operation() {
+        let op = DrawDabOp {
+            x: 35.25,
+            y: 28.75,
+            radius: 18.0,
+            aspect_ratio: 1.7,
+            angle: 23.0,
+            opaque: 0.83,
+            hardness: 0.61,
+            softness: 0.12,
+            lock_alpha: 0.0,
+            colorize: 0.0,
+            posterize: 0.0,
+            posterize_num: 4,
+            paint: 1.0,
+            normal: 1.0,
+            color_r: 24_000,
+            color_g: 8_000,
+            color_b: 30_000,
+            color_a: 0.72,
+        };
+        let mut full = [0u16; TILE_SIZE * TILE_SIZE * 4];
+        for (i, value) in full.iter_mut().enumerate() {
+            *value = ((i * 37) % 20_000) as u16;
+        }
+        for pixel in full.chunks_exact_mut(4) {
+            pixel[0] = pixel[0].min(pixel[3]);
+            pixel[1] = pixel[1].min(pixel[3]);
+            pixel[2] = pixel[2].min(pixel[3]);
+        }
+        let before = full;
+        let mut mask = [0u16; MASK_LEN];
+        let mut scratch = [0.0f32; MASK_LEN];
+        process_op(&mut full, &mut mask, 0, 0, &op, &mut scratch);
+        for pi in 0..TILE_SIZE * TILE_SIZE {
+            let p = pi * 4;
+            let mut pixel: Pixel = before[p..p + 4].try_into().unwrap();
+            process_op_pixel(&mut pixel, 0, 0, pi, &op);
+            assert_eq!(pixel, full[p..p + 4], "pixel {pi}");
+        }
+        for rows in [1usize, 7, TILE_SIZE] {
+            let mut chunked = before;
+            let mut mask = [0u16; MASK_LEN];
+            let mut scratch = [0.0f32; MASK_LEN];
+            for row in (0..TILE_SIZE).step_by(rows) {
+                process_op_rows(
+                    &mut chunked,
+                    &mut mask,
+                    0,
+                    0,
+                    &op,
+                    &mut scratch,
+                    row,
+                    (row + rows).min(TILE_SIZE),
+                );
+            }
+            assert_eq!(chunked, full, "row size {rows}");
+        }
     }
 }

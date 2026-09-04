@@ -13,7 +13,19 @@ fn default_brush_stroke_renders() {
     brush.set_base_value(SettingId::ColorV, 0.35);
 
     // Warm-up event, then a stroke across the canvas.
-    brush.stroke_to(&mut surface, 64.0, 128.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, false);
+    brush.stroke_to(
+        &mut surface,
+        64.0,
+        128.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        false,
+    );
     let mut painted = 0u64;
     for i in 0..80 {
         let t = i as f32 / 79.0;

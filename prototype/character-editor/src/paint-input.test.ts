@@ -1,5 +1,14 @@
 import { describe, expect, test } from 'bun:test';
-import { MotionQueue, spline4p } from './paint-input.ts';
+import { MotionQueue, resolvePenPressure, spline4p } from './paint-input.ts';
+
+describe('pen pressure', () => {
+  test('uses stroke contact for coalesced samples', () => {
+    expect(resolvePenPressure('pen', 0, true, 0.27)).toBe(0.27);
+    expect(resolvePenPressure('pen', 0, false, 0.27)).toBe(0);
+    expect(resolvePenPressure('pen', 1.5, true, 0.27)).toBe(1);
+    expect(resolvePenPressure('mouse', 0, true, 0.27)).toBe(0.5);
+  });
+});
 
 describe('MotionQueue', () => {
   test('peeks the next position without removing it', () => {
@@ -7,6 +16,7 @@ describe('MotionQueue', () => {
     queue.push(1, 12, 13, 0.5, 0, 0, 1, 0, 0.5);
     expect(queue.peekX()).toBe(12);
     expect(queue.peekY()).toBe(13);
+    expect(queue.peekTime()).toBe(1);
     expect(queue.length).toBe(1);
   });
 

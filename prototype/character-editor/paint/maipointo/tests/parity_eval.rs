@@ -6,8 +6,8 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use maipointo::mapping::Mapping;
-use maipointo::rngdouble::RngDouble;
-use maipointo::settings::{input_index, setting_index, INPUT_INFOS, SETTING_INFOS};
+
+use maipointo::settings::{SETTING_INFOS, input_index, setting_index};
 
 fn paint_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..")
@@ -24,7 +24,11 @@ fn oracle_path() -> PathBuf {
         .join("eval_oracle.c");
     let stale = std::fs::metadata(&exe)
         .and_then(|m| m.modified())
-        .map(|exe_t| std::fs::metadata(&src).and_then(|s| s.modified()).map(|s| s > exe_t))
+        .map(|exe_t| {
+            std::fs::metadata(&src)
+                .and_then(|s| s.modified())
+                .map(|s| s > exe_t)
+        })
         .unwrap_or(Ok(true))
         .unwrap_or(true);
     if stale {
@@ -68,8 +72,16 @@ fn oracle_path() -> PathBuf {
 enum Op {
     MappingNew(usize),
     SetBase(f32),
-    SetN { input: usize, n: usize },
-    SetPoint { input: usize, index: usize, x: f32, y: f32 },
+    SetN {
+        input: usize,
+        n: usize,
+    },
+    SetPoint {
+        input: usize,
+        index: usize,
+        x: f32,
+        y: f32,
+    },
     /// One f32 per input; emits one f32 result.
     Calc(Vec<f32>),
     RngNew(i64),
@@ -152,9 +164,9 @@ fn assert_exact(ops: &[Op], n_calc_results: usize, n_rng_values: usize) {
             Op::SetPoint { input, index, x, y } => {
                 mapping.as_mut().unwrap().set_point(*input, *index, *x, *y)
             }
-            Op::Calc(data) => results.extend_from_slice(
-                &mapping.as_ref().unwrap().calculate(data).to_le_bytes(),
-            ),
+            Op::Calc(data) => {
+                results.extend_from_slice(&mapping.as_ref().unwrap().calculate(data).to_le_bytes())
+            }
             Op::RngNew(seed) => rng = Some(maipointo::rngdouble::RngDouble::new(*seed)),
             Op::RngNext(count) => {
                 for _ in 0..*count {
@@ -178,7 +190,8 @@ fn assert_exact(ops: &[Op], n_calc_results: usize, n_rng_values: usize) {
     );
     for i in 0..reference.len() {
         assert_eq!(
-            results[i], reference[i],
+            results[i],
+            reference[i],
             "bit difference at byte {i} (calc-result boundary at {})",
             n_calc_results * 4
         );
@@ -192,21 +205,41 @@ fn parity_mapping_fixed() {
     let mut ops = vec![Op::MappingNew(3), Op::SetBase(0.5)];
     // Input 0: three points with a curve; input 1: flat segment; input 2 unused.
     ops.push(Op::SetN { input: 0, n: 4 });
-    for (i, (x, y)) in [(0.0, 0.0f32), (0.25, 1.0), (0.5, -1.0), (1.0, 0.5)].iter().enumerate() {
-        ops.push(Op::SetPoint { input: 0, index: i, x: *x, y: *y });
+    for (i, (x, y)) in [(0.0, 0.0f32), (0.25, 1.0), (0.5, -1.0), (1.0, 0.5)]
+        .iter()
+        .enumerate()
+    {
+        ops.push(Op::SetPoint {
+            input: 0,
+            index: i,
+            x: *x,
+            y: *y,
+        });
     }
     ops.push(Op::SetN { input: 1, n: 2 });
     for (i, (x, y)) in [(0.0, 0.4f32), (1.0, 0.4)].iter().enumerate() {
-        ops.push(Op::SetPoint { input: 1, index: i, x: *x, y: *y });
+        ops.push(Op::SetPoint {
+            input: 1,
+            index: i,
+            x: *x,
+            y: *y,
+        });
     }
     // Evaluate across and outside the defined ranges.
-    for &x0 in &[-1.0f32, 0.0, 0.1, 0.249, 0.25, 0.251, 0.499, 0.5, 0.75, 1.0, 2.0] {
+    for &x0 in &[
+        -1.0f32, 0.0, 0.1, 0.249, 0.25, 0.251, 0.499, 0.5, 0.75, 1.0, 2.0,
+    ] {
         ops.push(Op::Calc(vec![x0, x0 / 2.0, 0.0]));
     }
     // Degenerate flat segment (y0 == y1) and vertical (x0 == x1).
     ops.push(Op::SetN { input: 2, n: 3 });
     for (i, (x, y)) in [(0.0, 0.1f32), (0.0, 0.2), (1.0, 0.1)].iter().enumerate() {
-        ops.push(Op::SetPoint { input: 2, index: i, x: *x, y: *y });
+        ops.push(Op::SetPoint {
+            input: 2,
+            index: i,
+            x: *x,
+            y: *y,
+        });
     }
     ops.push(Op::Calc(vec![0.5, 0.5, 0.0]));
     assert_exact(&ops, 12, 0);
@@ -216,7 +249,15 @@ fn parity_mapping_fixed() {
 /// Multiple seeds; long streams cross the QUALITY-buffer cycle boundary.
 #[test]
 fn parity_rng_streams() {
-    for seed in [0i64, 1, 1000, 999_999, -1, i32::MAX as i64, (1i64 << 40) + 12345] {
+    for seed in [
+        0i64,
+        1,
+        1000,
+        999_999,
+        -1,
+        i32::MAX as i64,
+        (1i64 << 40) + 12345,
+    ] {
         let ops = vec![
             Op::RngNew(seed),
             Op::RngNext(64),  // several cycles + exact sentinel handling
@@ -262,7 +303,12 @@ fn parity_eval_fuzz() {
         let mut x = rng.f32_in(-1.0, 0.0);
         for i in 0..n {
             let y = rng.f32_in(-3.0, 3.0);
-            ops.push(Op::SetPoint { input, index: i, x, y });
+            ops.push(Op::SetPoint {
+                input,
+                index: i,
+                x,
+                y,
+            });
             x = rng.f32_in(x, x + 2.0);
         }
     }
@@ -284,12 +330,11 @@ fn parity_eval_fuzz() {
 #[test]
 fn settings_tables_sane() {
     assert_eq!(maipointo::settings::INPUT_INFOS[0].id, "pressure");
-    assert_eq!(maipointo::settings::SETTING_INFOS[0].internal_name, "opaque");
     assert_eq!(
-        input_index("pressure"),
-        Some(0),
-        "first input is pressure"
+        maipointo::settings::SETTING_INFOS[0].internal_name,
+        "opaque"
     );
+    assert_eq!(input_index("pressure"), Some(0), "first input is pressure");
     assert_eq!(setting_index("opaque"), Some(0));
     // Upstream defaults that the brush engine relies on.
     let opaque = &maipointo::settings::SETTING_INFOS[setting_index("opaque").unwrap()];

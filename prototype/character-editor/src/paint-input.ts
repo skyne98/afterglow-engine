@@ -1,3 +1,14 @@
+export function resolvePenPressure(
+  pointerType: string,
+  pressure: number,
+  contact: boolean,
+  previous: number,
+): number {
+  if (pointerType === 'mouse') return 0.5;
+  const value = Math.max(0, Math.min(1, pressure));
+  return contact && value === 0 ? previous : value;
+}
+
 export type MotionSink = (
   time: number,
   x: number,
@@ -57,6 +68,10 @@ export class MotionQueue {
 
   peekY(): number {
     return this.count === 0 ? 0 : this.ys[this.head];
+  }
+
+  peekTime(): number {
+    return this.count === 0 ? 0 : this.times[this.head];
   }
 
   clear(): void {

@@ -111,11 +111,7 @@ fn u15_sumprods(a1: U15, a2: U15, b1: U15, b2: U15) -> U15 {
 
 #[inline]
 fn u15_div(a: U15, b: U15) -> U15 {
-    if b == 0 {
-        U15_ONE
-    } else {
-        (a << 15) / b
-    }
+    if b == 0 { U15_ONE } else { (a << 15) / b }
 }
 
 fn u15_opacity(opacity: f32) -> U15 {
@@ -135,8 +131,8 @@ fn u15_sqrt(value: U15) -> U15 {
         return value;
     }
     const APPROX16: [u16; 16] = [
-        16383, 23169, 28376, 32767, 36634, 40131, 43346, 46339, 49151, 51809, 54338, 56754,
-        59072, 61302, 63453, 65535,
+        16383, 23169, 28376, 32767, 36634, 40131, 43346, 46339, 49151, 51809, 54338, 56754, 59072,
+        61302, 63453, 65535,
     ];
     // One extra bit of precision for working; 1.0 would overflow, so the
     // caller guarantees value < 1.0 here (value == U15_ONE returns early).
@@ -242,21 +238,13 @@ fn blend_channel(source: U15, backdrop: U15, mode: BlendMode) -> U15 {
 #[inline]
 fn channel_min(r: I15, g: I15, b: I15) -> I15 {
     let result = if r < g { r } else { g };
-    if result < b {
-        result
-    } else {
-        b
-    }
+    if result < b { result } else { b }
 }
 
 #[inline]
 fn channel_max(r: I15, g: I15, b: I15) -> I15 {
     let result = if r > g { r } else { g };
-    if result > b {
-        result
-    } else {
-        b
-    }
+    if result > b { result } else { b }
 }
 
 #[inline]
@@ -264,7 +252,8 @@ fn luminance(r: I15, g: I15, b: I15) -> I15 {
     const LUM_R: u32 = 9830;
     const LUM_G: u32 = 19333;
     const LUM_B: u32 = 3604;
-    ((r as u32).wrapping_mul(LUM_R)
+    ((r as u32)
+        .wrapping_mul(LUM_R)
         .wrapping_add((g as u32).wrapping_mul(LUM_G))
         .wrapping_add((b as u32).wrapping_mul(LUM_B))
         / U15_ONE) as I15
@@ -323,9 +312,8 @@ fn set_saturation(r: &mut I15, g: &mut I15, b: &mut I15, sat: I15) {
         std::mem::swap(&mut middle, &mut bottom);
     }
     if vals[top as usize] > vals[bottom as usize] {
-        vals[middle as usize] =
-            (vals[middle as usize] - vals[bottom as usize]) * sat
-                / (vals[top as usize] - vals[bottom as usize]);
+        vals[middle as usize] = (vals[middle as usize] - vals[bottom as usize]) * sat
+            / (vals[top as usize] - vals[bottom as usize]);
         vals[top as usize] = sat;
     } else {
         vals[top as usize] = 0;
@@ -350,11 +338,7 @@ fn nonseparable_color(
     out_g: &mut U15,
     out_b: &mut U15,
 ) {
-    let backdrop_lum = luminance(
-        backdrop_r as I15,
-        backdrop_g as I15,
-        backdrop_b as I15,
-    );
+    let backdrop_lum = luminance(backdrop_r as I15, backdrop_g as I15, backdrop_b as I15);
     let (mut r, mut g, mut b);
     match mode {
         BlendMode::Hue => {
@@ -365,11 +349,7 @@ fn nonseparable_color(
                 &mut r,
                 &mut g,
                 &mut b,
-                saturation(
-                    backdrop_r as I15,
-                    backdrop_g as I15,
-                    backdrop_b as I15,
-                ),
+                saturation(backdrop_r as I15, backdrop_g as I15, backdrop_b as I15),
             );
             set_luminance(&mut r, &mut g, &mut b, backdrop_lum);
         }
@@ -412,23 +392,21 @@ fn pigment_blend(dst: &mut [u16], src: &[u16], source_alpha: U15, opacity: U15) 
     let backdrop_alpha = dst[3] as U15;
     let one_minus_source = U15_ONE - source_alpha;
     if backdrop_alpha == 0 || source_alpha == 0 || source_alpha == U15_ONE {
-        dst[0] = u15_clamp(
-            u15_sumprods(src[0] as U15, opacity, one_minus_source, dst[0] as U15) as I15,
-        ) as u16;
-        dst[1] = u15_clamp(
-            u15_sumprods(src[1] as U15, opacity, one_minus_source, dst[1] as U15) as I15,
-        ) as u16;
-        dst[2] = u15_clamp(
-            u15_sumprods(src[2] as U15, opacity, one_minus_source, dst[2] as U15) as I15,
-        ) as u16;
-        dst[3] = u15_clamp(
-            (source_alpha + u15_mul(backdrop_alpha, one_minus_source)) as I15,
-        ) as u16;
+        dst[0] =
+            u15_clamp(u15_sumprods(src[0] as U15, opacity, one_minus_source, dst[0] as U15) as I15)
+                as u16;
+        dst[1] =
+            u15_clamp(u15_sumprods(src[1] as U15, opacity, one_minus_source, dst[1] as U15) as I15)
+                as u16;
+        dst[2] =
+            u15_clamp(u15_sumprods(src[2] as U15, opacity, one_minus_source, dst[2] as U15) as I15)
+                as u16;
+        dst[3] =
+            u15_clamp((source_alpha + u15_mul(backdrop_alpha, one_minus_source)) as I15) as u16;
         return;
     }
 
-    let denominator = (source_alpha
-        + ((one_minus_source * backdrop_alpha) / U15_ONE)) as f32;
+    let denominator = (source_alpha + ((one_minus_source * backdrop_alpha) / U15_ONE)) as f32;
     let source_factor = source_alpha as f32 / denominator;
     let backdrop_factor = 1.0f32 - source_factor;
     let mut source_spectral = [0.0f32; 10];
@@ -452,12 +430,70 @@ fn pigment_blend(dst: &mut [u16], src: &[u16], source_alpha: U15, opacity: U15) 
     }
     let mut rgb = [0.0f32; 3];
     spectral_to_rgb(&result_spectral, &mut rgb);
-    let out_alpha =
-        u15_clamp((source_alpha + u15_mul(backdrop_alpha, one_minus_source)) as I15);
+    let out_alpha = u15_clamp((source_alpha + u15_mul(backdrop_alpha, one_minus_source)) as I15);
     dst[0] = (rgb[0] * (out_alpha as f32 + 0.5)) as u16;
     dst[1] = (rgb[1] * (out_alpha as f32 + 0.5)) as u16;
     dst[2] = (rgb[2] * (out_alpha as f32 + 0.5)) as u16;
     dst[3] = out_alpha as u16;
+}
+
+/// Blend a full-opacity normal tile over an initialized destination tile.
+/// The wasm path handles two RGBA pixels per SIMD128 operation.
+pub fn layer_blend_normal_full_tile(dst: &mut [u16], src: &[u16]) {
+    debug_assert_eq!(dst.len(), src.len());
+    debug_assert_eq!(dst.len() % 8, 0);
+    #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+    {
+        // SAFETY: both slices contain `len` aligned-or-unaligned readable
+        // bytes, and v128_load/store permit unaligned addresses.
+        unsafe { layer_blend_normal_full_tile_simd(dst, src) };
+        return;
+    }
+    #[cfg(not(all(target_arch = "wasm32", target_feature = "simd128")))]
+    for (dst, src) in dst.chunks_exact_mut(4).zip(src.chunks_exact(4)) {
+        let one_minus_source = U15_ONE - src[3] as U15;
+        for channel in 0..4 {
+            dst[channel] = ((src[channel] as U15 * U15_ONE
+                + one_minus_source * dst[channel] as U15)
+                >> 15) as u16;
+        }
+    }
+}
+
+#[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+#[target_feature(enable = "simd128")]
+unsafe fn layer_blend_normal_full_tile_simd(dst: &mut [u16], src: &[u16]) {
+    use core::arch::wasm32::*;
+
+    let alpha_lanes = i8x16(6, 7, 6, 7, 6, 7, 6, 7, 14, 15, 14, 15, 14, 15, 14, 15);
+    let one = i32x4_splat(U15_ONE as i32);
+    for i in (0..dst.len()).step_by(8) {
+        let source = unsafe { v128_load(src.as_ptr().add(i).cast()) };
+        let backdrop = unsafe { v128_load(dst.as_ptr().add(i).cast()) };
+        let alpha = i8x16_swizzle(source, alpha_lanes);
+        let source_low = u32x4_extend_low_u16x8(source);
+        let source_high = u32x4_extend_high_u16x8(source);
+        let backdrop_low = u32x4_extend_low_u16x8(backdrop);
+        let backdrop_high = u32x4_extend_high_u16x8(backdrop);
+        let inverse_low = i32x4_sub(one, u32x4_extend_low_u16x8(alpha));
+        let inverse_high = i32x4_sub(one, u32x4_extend_high_u16x8(alpha));
+        let result_low = u32x4_shr(
+            i32x4_add(
+                i32x4_mul(source_low, one),
+                i32x4_mul(backdrop_low, inverse_low),
+            ),
+            15,
+        );
+        let result_high = u32x4_shr(
+            i32x4_add(
+                i32x4_mul(source_high, one),
+                i32x4_mul(backdrop_high, inverse_high),
+            ),
+            15,
+        );
+        let result = u16x8_narrow_i32x4(result_low, result_high);
+        unsafe { v128_store(dst.as_mut_ptr().add(i).cast(), result) };
+    }
 }
 
 /// `afterglow_layer_blend_over` — blend one premultiplied fix15 pixel of a
@@ -466,36 +502,6 @@ pub fn layer_blend_over(dst: &mut [u16], src: &[u16], opacity: f32, mode: BlendM
     let source_opacity = u15_opacity(opacity);
     let source_alpha = u15_mul(src[3] as U15, source_opacity);
     let backdrop_alpha = dst[3] as U15;
-    let source_r = if src[3] != 0 {
-        u15_clamp(u15_div(src[0] as U15, src[3] as U15) as I15)
-    } else {
-        0
-    };
-    let source_g = if src[3] != 0 {
-        u15_clamp(u15_div(src[1] as U15, src[3] as U15) as I15)
-    } else {
-        0
-    };
-    let source_b = if src[3] != 0 {
-        u15_clamp(u15_div(src[2] as U15, src[3] as U15) as I15)
-    } else {
-        0
-    };
-    let backdrop_r = if dst[3] != 0 {
-        u15_clamp(u15_div(dst[0] as U15, dst[3] as U15) as I15)
-    } else {
-        0
-    };
-    let backdrop_g = if dst[3] != 0 {
-        u15_clamp(u15_div(dst[1] as U15, dst[3] as U15) as I15)
-    } else {
-        0
-    };
-    let backdrop_b = if dst[3] != 0 {
-        u15_clamp(u15_div(dst[2] as U15, dst[3] as U15) as I15)
-    } else {
-        0
-    };
     let one_minus_source = U15_ONE - source_alpha;
 
     if mode == BlendMode::Pigment {
@@ -521,16 +527,8 @@ pub fn layer_blend_over(dst: &mut [u16], src: &[u16], opacity: f32, mode: BlendM
             one_minus_source,
             dst[2] as U15,
         ) as I15) as u16;
-        dst[3] = u15_clamp(
-            (source_alpha + u15_mul(backdrop_alpha, one_minus_source)) as I15,
-        ) as u16;
-        return;
-    }
-    if mode == BlendMode::Plus {
-        dst[0] = u15_clamp((u15_mul(source_r, source_alpha) + dst[0] as U15) as I15) as u16;
-        dst[1] = u15_clamp((u15_mul(source_g, source_alpha) + dst[1] as U15) as I15) as u16;
-        dst[2] = u15_clamp((u15_mul(source_b, source_alpha) + dst[2] as U15) as I15) as u16;
-        dst[3] = u15_clamp((backdrop_alpha + source_alpha) as I15) as u16;
+        dst[3] =
+            u15_clamp((source_alpha + u15_mul(backdrop_alpha, one_minus_source)) as I15) as u16;
         return;
     }
     if mode == BlendMode::DestinationIn || mode == BlendMode::DestinationOut {
@@ -549,24 +547,19 @@ pub fn layer_blend_over(dst: &mut [u16], src: &[u16], opacity: f32, mode: BlendM
         let source_red = u15_mul(src[0] as U15, source_opacity);
         let source_green = u15_mul(src[1] as U15, source_opacity);
         let source_blue = u15_mul(src[2] as U15, source_opacity);
-        dst[0] = u15_clamp(u15_sumprods(
-            source_red,
-            backdrop_alpha,
-            dst[0] as U15,
-            one_minus_source,
-        ) as I15) as u16;
+        dst[0] = u15_clamp(
+            u15_sumprods(source_red, backdrop_alpha, dst[0] as U15, one_minus_source) as I15,
+        ) as u16;
         dst[1] = u15_clamp(u15_sumprods(
             source_green,
             backdrop_alpha,
             dst[1] as U15,
             one_minus_source,
         ) as I15) as u16;
-        dst[2] = u15_clamp(u15_sumprods(
-            source_blue,
-            backdrop_alpha,
-            dst[2] as U15,
-            one_minus_source,
-        ) as I15) as u16;
+        dst[2] =
+            u15_clamp(
+                u15_sumprods(source_blue, backdrop_alpha, dst[2] as U15, one_minus_source) as I15,
+            ) as u16;
         return;
     }
     if mode == BlendMode::DestinationAtop {
@@ -574,31 +567,63 @@ pub fn layer_blend_over(dst: &mut [u16], src: &[u16], opacity: f32, mode: BlendM
         let source_green = u15_mul(src[1] as U15, source_opacity);
         let source_blue = u15_mul(src[2] as U15, source_opacity);
         let one_minus_backdrop = U15_ONE - backdrop_alpha;
-        dst[0] = u15_clamp(u15_sumprods(
-            source_red,
-            one_minus_backdrop,
-            dst[0] as U15,
-            source_alpha,
-        ) as I15) as u16;
+        dst[0] = u15_clamp(
+            u15_sumprods(source_red, one_minus_backdrop, dst[0] as U15, source_alpha) as I15,
+        ) as u16;
         dst[1] = u15_clamp(u15_sumprods(
             source_green,
             one_minus_backdrop,
             dst[1] as U15,
             source_alpha,
         ) as I15) as u16;
-        dst[2] = u15_clamp(u15_sumprods(
-            source_blue,
-            one_minus_backdrop,
-            dst[2] as U15,
-            source_alpha,
-        ) as I15) as u16;
+        dst[2] =
+            u15_clamp(
+                u15_sumprods(source_blue, one_minus_backdrop, dst[2] as U15, source_alpha) as I15,
+            ) as u16;
         dst[3] = source_alpha as u16;
         return;
     }
 
+    let source_r = if src[3] != 0 {
+        u15_clamp(u15_div(src[0] as U15, src[3] as U15) as I15)
+    } else {
+        0
+    };
+    let source_g = if src[3] != 0 {
+        u15_clamp(u15_div(src[1] as U15, src[3] as U15) as I15)
+    } else {
+        0
+    };
+    let source_b = if src[3] != 0 {
+        u15_clamp(u15_div(src[2] as U15, src[3] as U15) as I15)
+    } else {
+        0
+    };
+    if mode == BlendMode::Plus {
+        dst[0] = u15_clamp((u15_mul(source_r, source_alpha) + dst[0] as U15) as I15) as u16;
+        dst[1] = u15_clamp((u15_mul(source_g, source_alpha) + dst[1] as U15) as I15) as u16;
+        dst[2] = u15_clamp((u15_mul(source_b, source_alpha) + dst[2] as U15) as I15) as u16;
+        dst[3] = u15_clamp((backdrop_alpha + source_alpha) as I15) as u16;
+        return;
+    }
+    let backdrop_r = if dst[3] != 0 {
+        u15_clamp(u15_div(dst[0] as U15, dst[3] as U15) as I15)
+    } else {
+        0
+    };
+    let backdrop_g = if dst[3] != 0 {
+        u15_clamp(u15_div(dst[1] as U15, dst[3] as U15) as I15)
+    } else {
+        0
+    };
+    let backdrop_b = if dst[3] != 0 {
+        u15_clamp(u15_div(dst[2] as U15, dst[3] as U15) as I15)
+    } else {
+        0
+    };
+
     let (mut blend_r, mut blend_g, mut blend_b) = (source_r, source_g, source_b);
-    if (BlendMode::Hue as u8) <= (mode as u8) && (mode as u8) <= (BlendMode::Luminosity as u8)
-    {
+    if (BlendMode::Hue as u8) <= (mode as u8) && (mode as u8) <= (BlendMode::Luminosity as u8) {
         nonseparable_color(
             source_r,
             source_g,
@@ -621,25 +646,44 @@ pub fn layer_blend_over(dst: &mut [u16], src: &[u16], opacity: f32, mode: BlendM
     let composite_r = u15_sumprods(one_minus_backdrop, source_r, backdrop_alpha, blend_r);
     let composite_g = u15_sumprods(one_minus_backdrop, source_g, backdrop_alpha, blend_g);
     let composite_b = u15_sumprods(one_minus_backdrop, source_b, backdrop_alpha, blend_b);
-    dst[0] = u15_clamp(u15_sumprods(
-        source_alpha,
-        composite_r,
-        one_minus_source,
-        dst[0] as U15,
-    ) as I15) as u16;
-    dst[1] = u15_clamp(u15_sumprods(
-        source_alpha,
-        composite_g,
-        one_minus_source,
-        dst[1] as U15,
-    ) as I15) as u16;
-    dst[2] = u15_clamp(u15_sumprods(
-        source_alpha,
-        composite_b,
-        one_minus_source,
-        dst[2] as U15,
-    ) as I15) as u16;
-    dst[3] = u15_clamp(
-        (source_alpha + u15_mul(backdrop_alpha, one_minus_source)) as I15,
-    ) as u16;
+    dst[0] =
+        u15_clamp(u15_sumprods(source_alpha, composite_r, one_minus_source, dst[0] as U15) as I15)
+            as u16;
+    dst[1] =
+        u15_clamp(u15_sumprods(source_alpha, composite_g, one_minus_source, dst[1] as U15) as I15)
+            as u16;
+    dst[2] =
+        u15_clamp(u15_sumprods(source_alpha, composite_b, one_minus_source, dst[2] as U15) as I15)
+            as u16;
+    dst[3] = u15_clamp((source_alpha + u15_mul(backdrop_alpha, one_minus_source)) as I15) as u16;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normal_tile_path_matches_pixel_compositor() {
+        let mut source = [0u16; 64 * 4];
+        let mut expected = [0u16; 64 * 4];
+        for pi in 0..64 {
+            let p = pi * 4;
+            let source_alpha = ((pi * 2089) % 32769) as u16;
+            let backdrop_alpha = ((pi * 1237 + 91) % 32769) as u16;
+            source[p] = ((pi * 271) as u16).min(source_alpha);
+            source[p + 1] = ((pi * 613) as u16).min(source_alpha);
+            source[p + 2] = ((pi * 997) as u16).min(source_alpha);
+            source[p + 3] = source_alpha;
+            expected[p] = ((pi * 337) as u16).min(backdrop_alpha);
+            expected[p + 1] = ((pi * 557) as u16).min(backdrop_alpha);
+            expected[p + 2] = ((pi * 751) as u16).min(backdrop_alpha);
+            expected[p + 3] = backdrop_alpha;
+        }
+        let mut actual = expected;
+        for (dst, src) in expected.chunks_exact_mut(4).zip(source.chunks_exact(4)) {
+            layer_blend_over(dst, src, 1.0, BlendMode::Normal);
+        }
+        layer_blend_normal_full_tile(&mut actual, &source);
+        assert_eq!(actual, expected);
+    }
 }

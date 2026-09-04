@@ -1,15 +1,17 @@
-import { loadBrushModule } from './maipo-wasm';
+import { loadBrushModule } from './maipo-wasm.ts';
 /* The brush worker owns WASM, input, display, and engine state.
  * The page only sends input and configuration messages.
  */
 import { FixedRing } from './fixed-ring.ts';
 import { FixedTaskWake } from './fixed-task-wake.ts';
+import { PaintHistoryQueue, type PaintHistoryOperation } from './paint-history.ts';
 import { MotionQueue } from './paint-input.ts';
+import { paintMemoryLimitMiB, paintMemoryPolicy, paintTileWorkerCount } from './paint-memory.ts';
 import { spawnTilePool, type TilePool } from './paint-tile-pool.ts';
-import { PaintTileStore, paintTileKey, type PaintTileRecord } from './paint-tile-store.ts';
+import { PaintTileStore, paintEvictionRankBefore, paintTileKey, protectedTileRegionContains, type PaintEvictionRank, type PaintHistoryKey, type PaintHistoryRecord, type PaintTileKey, type PaintTileRecord } from './paint-tile-store.ts';
 
 type Msg =
-  | { cmd: 'init'; width: number; height: number; canvas?: OffscreenCanvas; hardwareConcurrency?: number; documentId?: string }
+  | { cmd: 'init'; width: number; height: number; canvas?: OffscreenCanvas; hardwareConcurrency?: number; memoryLimitMiB?: number; documentId?: string }
   | { cmd: 'loadBrush'; json: string }
   | { cmd: 'config'; settings: [string, number][] }
   | { cmd: 'beginStroke'; x: number; y: number; xtilt: number; ytilt: number; zoom: number; rotation: number; barrel: number }
@@ -26,14 +28,15 @@ type Msg =
 
 const TILE = 64, TILE_B = TILE * TILE * 4, TILE16_B = TILE_B * 2, EOTF = 2.2;
 const BUDGET = 8;
-const RESIDENT_TILES = 4096;
-const PAGE_TRIGGER = 3584, PAGE_TARGET = 2048, PAGE_RADIUS = 1024;
-const PAGE_REGION_LIMIT = 1536, PAGE_WRITE_BATCH = 64;
+const PAGE_RADIUS = 1024, PAGE_PREDICTION_MS = 100, PAGE_PREDICTION_MAX = 512;
+const PAGE_GUARD_TILES = 8, PAGE_REGION_LIMIT = 1536, PAGE_WRITE_BATCH = 64;
+const PAGE_ALLOCATION_HEADROOM = 512;
 const INPUT_CAPACITY = 8192, COMMAND_CAPACITY = 8192;
 let mod: any = null, motionQueue = new MotionQueue(INPUT_CAPACITY);
 const deferredCommands = new FixedRing<Msg>(COMMAND_CAPACITY);
 let tileStore: PaintTileStore | null = null;
 let tilePager: PaintTilePager | null = null;
+let diskHistory: PaintDiskHistory | null = null;
 let tileDocumentId = '';
 let ctx: OffscreenCanvasRenderingContext2D | null = null, canvas: OffscreenCanvas | null = null;
 let rgba8: Uint8Array | null = null, rectPtr = 0, jobInfoPtr = 0, renderedMip = -1, lastT = 0;
@@ -41,9 +44,11 @@ let docW = 2048, docH = 2048, dispScale = 1, dispMip = 0, viewMip = 0;
 let flushT: number | null = null, commitP = false, batching = false;
 let n0 = 0, a0 = 0;
 let batchInFlight = false, drainInFlight = false, storageInFlight = false, strokeContinuation = false;
-let strokeOpen = false, strokePreparing = false;
+let strokeOpen = false, strokePreparing = false, hasStrokePoint = false;
+let lastStrokeX = 0, lastStrokeY = 0;
 let bgRGB: [number, number, number] = [0xA8 / 255, 0xA4 / 255, 0x98 / 255];
-let statsS = 0, lastBR = 0, lastRR = 0, lastStats = 0;
+let statsS = 0, lastBR = 0, lastRR = 0, lastStats = 0, lastDisplay = 0;
+const DISPLAY_INTERVAL_MS = 16;
 let lastRects: number[] = [];
 
 
@@ -55,14 +60,32 @@ class PaintTilePager {
   private infoPtr = 0;
   private coldMask = 0;
   private prefetchRegion: [number, number, number, number] | null = null;
+  private maximumTiles = 0;
+  private growTiles = 0;
+  private focusX = 0;
+  private focusY = 0;
+  private directionX = 0;
+  private directionY = 0;
+  private requestGeneration = 0;
 
-  configure(engine: any, store: PaintTileStore | null, documentId: string): boolean {
+  configure(
+    engine: any,
+    store: PaintTileStore | null,
+    documentId: string,
+    maximumTiles: number,
+    growTiles: number,
+  ): boolean {
     this.engine = engine;
     this.store = store;
     this.documentId = documentId;
+    this.maximumTiles = maximumTiles;
+    this.growTiles = growTiles;
     this.coldMask = 0;
     this.prefetchRegion = null;
-    if (!store) return false;
+    this.directionX = 0;
+    this.directionY = 0;
+    this.requestGeneration++;
+    if (!store) return true;
     if (!this.scratchPtr) this.scratchPtr = engine._malloc(TILE16_B);
     if (!this.infoPtr) this.infoPtr = engine._malloc(8);
     if (!this.scratchPtr || !this.infoPtr) {
@@ -73,22 +96,29 @@ class PaintTilePager {
   }
 
   private totalUsed(): number {
-    if (!this.engine) return 0;
-    let total = 0;
-    const count = this.engine._paint_get_layer_count();
-    for (let layer = 0; layer < count; layer++) {
-      total += this.engine._paint_get_layer_used_tile_count(layer);
-    }
-    return total;
+    return this.engine?._paint_get_resident_tile_count() ?? 0;
   }
 
-  private bounds(x: number, y: number): [number, number, number, number] | null {
+  private growForHeadroom(): boolean {
+    const used = this.totalUsed();
+    const limit = this.engine._paint_get_resident_tile_limit();
+    if (used + PAGE_ALLOCATION_HEADROOM < limit || limit >= this.maximumTiles) return false;
+    const next = Math.min(this.maximumTiles, limit + this.growTiles);
+    return this.engine._paint_set_resident_tile_limit(next) !== 0;
+  }
+
+  private bounds(
+    x: number,
+    y: number,
+    previousX = x,
+    previousY = y,
+  ): [number, number, number, number] | null {
     const tw = this.engine._paint_get_tiles_width();
     const th = this.engine._paint_get_tiles_height();
-    const minX = x - PAGE_RADIUS;
-    const maxX = x + PAGE_RADIUS;
-    const minY = y - PAGE_RADIUS;
-    const maxY = y + PAGE_RADIUS;
+    const minX = Math.min(x, previousX) - PAGE_RADIUS;
+    const maxX = Math.max(x, previousX) + PAGE_RADIUS;
+    const minY = Math.min(y, previousY) - PAGE_RADIUS;
+    const maxY = Math.max(y, previousY) + PAGE_RADIUS;
     const tx0 = Math.max(0, Math.min(tw - 1, Math.floor(minX / TILE)));
     const ty0 = Math.max(0, Math.min(th - 1, Math.floor(minY / TILE)));
     const tx1 = Math.max(0, Math.min(tw - 1, Math.floor(maxX / TILE)));
@@ -97,14 +127,20 @@ class PaintTilePager {
     return [tx0, ty0, tx1, ty1];
   }
 
-  private contains(region: [number, number, number, number], x: number, y: number): boolean {
-    const tx = Math.floor(x / TILE), ty = Math.floor(y / TILE);
-    return tx >= region[0] && tx <= region[2] && ty >= region[1] && ty <= region[3];
+  private containsProtected(region: [number, number, number, number], x: number, y: number): boolean {
+    return protectedTileRegionContains(
+      region,
+      Math.floor(x / TILE),
+      Math.floor(y / TILE),
+      this.engine._paint_get_tiles_width(),
+      this.engine._paint_get_tiles_height(),
+      PAGE_GUARD_TILES,
+    );
   }
 
   canSample(x: number, y: number): boolean {
     return this.coldMask === 0 || this.prefetchRegion === null ||
-      this.contains(this.prefetchRegion, x, y);
+      this.containsProtected(this.prefetchRegion, x, y);
   }
 
   clearColdLayer(layer: number): void {
@@ -123,30 +159,99 @@ class PaintTilePager {
     this.prefetchRegion = null;
   }
 
-  prepareStrokePoint(x: number, y: number): Promise<boolean> | null {
-    if (!this.engine || !this.store) return null;
-    if (this.coldMask === 0 && this.totalUsed() < RESIDENT_TILES) return null;
-    const region = this.bounds(x, y);
+  prepareStrokePoint(
+    x: number,
+    y: number,
+    time: number,
+    previousX = x,
+    previousY = y,
+    previousTime = time,
+  ): Promise<boolean> | null {
+    if (!this.engine) return null;
+    const coldPoint = this.coldMask !== 0 && (!this.prefetchRegion ||
+      !this.containsProtected(this.prefetchRegion, x, y) ||
+      !this.containsProtected(this.prefetchRegion, previousX, previousY));
+    if (!coldPoint && this.growForHeadroom()) return null;
+    const limit = this.engine._paint_get_resident_tile_limit();
+    if (!coldPoint && this.totalUsed() + PAGE_ALLOCATION_HEADROOM < limit) return null;
+    const dx = x - previousX;
+    const dy = y - previousY;
+    const distance = Math.hypot(dx, dy);
+    if (distance > 0) {
+      this.directionX = dx / distance;
+      this.directionY = dy / distance;
+    }
+    this.focusX = x;
+    this.focusY = y;
+    const predictedDistance = Math.min(
+      PAGE_PREDICTION_MAX,
+      distance * PAGE_PREDICTION_MS / Math.max(1, time - previousTime),
+    );
+    const predictedX = x + this.directionX * predictedDistance;
+    const predictedY = y + this.directionY * predictedDistance;
+    const region = this.bounds(predictedX, predictedY, previousX, previousY) ?? this.bounds(x, y);
     if (!region) return Promise.resolve(false);
-    if (this.prefetchRegion && this.contains(this.prefetchRegion, x, y) &&
-        this.totalUsed() < RESIDENT_TILES) return null;
-    return this.prepareAsync(region);
+    return this.prepareAsync(region, ++this.requestGeneration);
+  }
+
+  async prepareHistory(maximumTiles: number): Promise<boolean> {
+    if (!this.engine) return false;
+    try {
+      let limit = this.engine._paint_get_resident_tile_limit();
+      while (limit - this.totalUsed() < maximumTiles && limit < this.maximumTiles) {
+        const next = Math.min(this.maximumTiles, limit + this.growTiles);
+        if (!this.engine._paint_set_resident_tile_limit(next)) return false;
+        limit = next;
+      }
+      if (limit - this.totalUsed() >= maximumTiles) return true;
+      if (!this.store) return false;
+      const generation = ++this.requestGeneration;
+      const target = Math.max(0, limit - maximumTiles);
+      const noProtection: [number, number, number, number] = [1, 1, 0, 0];
+      while (this.totalUsed() > target) {
+        if (!(await this.pageBatch(noProtection, target, generation))) return false;
+        if (generation !== this.requestGeneration) return true;
+      }
+      return true;
+    } catch (error) {
+      post({ type: 'log', text: `IndexedDB history paging failed: ${(error as Error)?.message ?? error}` });
+      return false;
+    }
   }
 
   prepare(x: number, y: number): Promise<boolean> | null {
-    if (!this.engine || !this.store) return null;
-    if (this.totalUsed() < PAGE_TRIGGER && this.coldMask === 0) return null;
+    if (!this.engine) return null;
+    this.focusX = x;
+    this.focusY = y;
+    this.directionX = 0;
+    this.directionY = 0;
+    const coldPoint = this.coldMask !== 0 && (!this.prefetchRegion ||
+      !this.containsProtected(this.prefetchRegion, x, y));
+    if (!coldPoint && this.growForHeadroom()) return null;
+    const limit = this.engine._paint_get_resident_tile_limit();
+    if (!coldPoint && this.totalUsed() + PAGE_ALLOCATION_HEADROOM < limit) return null;
     const region = this.bounds(x, y);
     if (!region) return Promise.resolve(false);
-    return this.prepareAsync(region);
+    return this.prepareAsync(region, ++this.requestGeneration);
   }
 
-  private async prepareAsync(region: [number, number, number, number]): Promise<boolean> {
+  private async prepareAsync(
+    region: [number, number, number, number],
+    generation: number,
+  ): Promise<boolean> {
+    if (!this.store) {
+      post({ type: 'log', text: 'IndexedDB is necessary after the paint memory limit is full.' });
+      return false;
+    }
     try {
-      while (this.totalUsed() > PAGE_TARGET) {
-        if (!(await this.pageBatch(region))) return false;
+      const limit = this.engine._paint_get_resident_tile_limit();
+      const target = Math.max(0, limit - this.growTiles);
+      while (this.totalUsed() + PAGE_ALLOCATION_HEADROOM >= limit && this.totalUsed() > target) {
+        if (!(await this.pageBatch(region, target, generation))) return false;
+        if (generation !== this.requestGeneration) return true;
       }
-      const loaded = await this.loadRegion(region, true);
+      const loaded = await this.loadRegion(region, true, generation);
+      if (generation !== this.requestGeneration) return true;
       if (loaded) this.prefetchRegion = region;
       return loaded;
     } catch (error) {
@@ -155,11 +260,12 @@ class PaintTilePager {
     }
   }
 
-  private findVictim(
+  private findVictims(
     region: [number, number, number, number],
-    planned: readonly [number, number, number][],
-  ): [number, number, number] | null {
+    maximum: number,
+  ): PaintEvictionRank[] {
     const [tx0, ty0, tx1, ty1] = region;
+    const result: PaintEvictionRank[] = [];
     const count = this.engine._paint_get_layer_count();
     for (let layer = 0; layer < count; layer++) {
       const used = this.engine._paint_get_layer_used_tile_count(layer);
@@ -168,38 +274,60 @@ class PaintTilePager {
         const slot = this.infoPtr >> 2;
         const tx = this.engine.HEAP32[slot], ty = this.engine.HEAP32[slot + 1];
         if (tx >= tx0 && tx <= tx1 && ty >= ty0 && ty <= ty1) continue;
-        let alreadyPlanned = false;
-        for (const item of planned) {
-          if (item[0] === layer && item[1] === tx && item[2] === ty) {
-            alreadyPlanned = true;
-            break;
-          }
+        if (this.engine._paint_layer_tile_is_captured(layer, tx, ty)) continue;
+        const x = tx * TILE + TILE * 0.5 - this.focusX;
+        const y = ty * TILE + TILE * 0.5 - this.focusY;
+        const projection = x * this.directionX + y * this.directionY;
+        const candidate: PaintEvictionRank = [
+          layer, index, tx, ty, projection < 0 ? 1 : 0, projection, x * x + y * y,
+        ];
+        let position: number;
+        if (result.length < maximum) {
+          result.push(candidate);
+          position = result.length - 1;
+        } else {
+          position = result.length - 1;
+          if (!paintEvictionRankBefore(candidate, result[position])) continue;
+          result[position] = candidate;
         }
-        if (!alreadyPlanned) return [layer, tx, ty];
+        while (position > 0 && paintEvictionRankBefore(result[position], result[position - 1])) {
+          const swap = result[position - 1];
+          result[position - 1] = result[position];
+          result[position] = swap;
+          position--;
+        }
       }
     }
-    return null;
+    return result;
   }
 
-  private async pageBatch(region: [number, number, number, number]): Promise<boolean> {
-    const candidates: { key: PaintTileRecord['key']; layer: number; tx: number; ty: number; data: ArrayBuffer }[] = [];
-    const planned: [number, number, number][] = [];
-    while (this.totalUsed() - candidates.length > PAGE_TARGET && candidates.length < PAGE_WRITE_BATCH) {
-      const victim = this.findVictim(region, planned);
-      if (!victim) break;
-      const [layer, tx, ty] = victim;
-      const ptr = this.engine._paint_get_layer_tile_ptr(layer, tx, ty);
-      if (!ptr) break;
-      const bytes = new Uint8Array(TILE16_B);
-      bytes.set(this.engine.HEAPU8.subarray(ptr, ptr + TILE16_B));
-      candidates.push({ key: paintTileKey(this.documentId, layer, tx, ty), layer, tx, ty, data: bytes.buffer });
-      planned.push(victim);
+  private async pageBatch(
+    region: [number, number, number, number],
+    target: number,
+    generation: number,
+  ): Promise<boolean> {
+    const candidates: { layer: number; tx: number; ty: number }[] = [];
+    const writes: PaintTileRecord[] = [];
+    const victims = this.findVictims(
+      region,
+      Math.min(PAGE_WRITE_BATCH, this.totalUsed() - target),
+    );
+    for (const [layer, index, tx, ty] of victims) {
+      if (this.engine._paint_get_layer_used_tile_is_storage_dirty(layer, index)) {
+        const ptr = this.engine._paint_get_layer_tile_ptr(layer, tx, ty);
+        if (!ptr) break;
+        const bytes = new Uint8Array(TILE16_B);
+        bytes.set(this.engine.HEAPU8.subarray(ptr, ptr + TILE16_B));
+        writes.push({ key: paintTileKey(this.documentId, layer, tx, ty), data: bytes.buffer });
+      }
+      candidates.push({ layer, tx, ty });
     }
     if (candidates.length === 0) {
       post({ type: 'log', text: 'IndexedDB found no evictable resident tile in the brush area.' });
       return false;
     }
-    await this.store!.putMany(candidates);
+    if (writes.length > 0) await this.store!.putMany(writes);
+    if (generation !== this.requestGeneration) return true;
     for (const candidate of candidates) {
       if (!this.engine._paint_remove_layer_tile(candidate.layer, candidate.tx, candidate.ty)) {
         post({ type: 'log', text: `IndexedDB could not evict tile (${candidate.tx}, ${candidate.ty}) from layer ${candidate.layer}.` });
@@ -210,18 +338,24 @@ class PaintTilePager {
     return true;
   }
 
-  private async pageOne(region: [number, number, number, number]): Promise<boolean> {
-    const victim = this.findVictim(region, []);
+  private async pageOne(
+    region: [number, number, number, number],
+    generation: number,
+  ): Promise<boolean> {
+    const victim = this.findVictims(region, 1)[0];
     if (!victim) {
       post({ type: 'log', text: 'IndexedDB found no evictable resident tile in the brush area.' });
       return false;
     }
-    const [layer, tx, ty] = victim;
-    const ptr = this.engine._paint_get_layer_tile_ptr(layer, tx, ty);
-    if (!ptr) return false;
-    const bytes = new Uint8Array(TILE16_B);
-    bytes.set(this.engine.HEAPU8.subarray(ptr, ptr + TILE16_B));
-    await this.store!.put(paintTileKey(this.documentId, layer, tx, ty), bytes.buffer);
+    const [layer, index, tx, ty] = victim;
+    if (this.engine._paint_get_layer_used_tile_is_storage_dirty(layer, index)) {
+      const ptr = this.engine._paint_get_layer_tile_ptr(layer, tx, ty);
+      if (!ptr) return false;
+      const bytes = new Uint8Array(TILE16_B);
+      bytes.set(this.engine.HEAPU8.subarray(ptr, ptr + TILE16_B));
+      await this.store!.put(paintTileKey(this.documentId, layer, tx, ty), bytes.buffer);
+    }
+    if (generation !== this.requestGeneration) return true;
     if (!this.engine._paint_remove_layer_tile(layer, tx, ty)) {
       post({ type: 'log', text: `IndexedDB could not evict tile (${tx}, ${ty}) from layer ${layer}.` });
       return false;
@@ -233,6 +367,7 @@ class PaintTilePager {
   private async loadRegion(
     region: [number, number, number, number],
     allowEvict: boolean,
+    generation: number,
   ): Promise<boolean> {
     const [tx0, ty0, tx1, ty1] = region;
     const layerCount = this.engine._paint_get_layer_count();
@@ -241,14 +376,27 @@ class PaintTilePager {
       const records = await this.store!.getRegion(
         this.documentId, layer, tx0, ty0, tx1, ty1,
       );
+      if (generation !== this.requestGeneration) return true;
+      let needed = 0;
+      for (const record of records) {
+        if (!this.engine._paint_get_layer_tile_ptr(layer, record.key[2], record.key[3])) needed++;
+      }
+      const limit = this.engine._paint_get_resident_tile_limit();
+      if (needed > limit) return false;
+      const target = limit - needed;
+      while (allowEvict && this.totalUsed() > target) {
+        if (!(await this.pageBatch(region, target, generation))) return false;
+        if (generation !== this.requestGeneration) return true;
+      }
       for (const record of records) {
         const tx = record.key[2], ty = record.key[3];
         if (this.engine._paint_get_layer_tile_ptr(layer, tx, ty)) continue;
         if (record.data.byteLength !== TILE16_B) {
           throw new Error(`Invalid tile size at (${tx}, ${ty}).`);
         }
-        while (this.totalUsed() >= RESIDENT_TILES) {
-          if (!allowEvict || !(await this.pageOne(region))) return false;
+        while (this.totalUsed() >= limit) {
+          if (!allowEvict || !(await this.pageOne(region, generation))) return false;
+          if (generation !== this.requestGeneration) return true;
         }
         this.engine.HEAPU8.set(new Uint8Array(record.data), this.scratchPtr);
         if (!this.engine._paint_write_layer_rgba16_tile(layer, tx, ty, this.scratchPtr)) {
@@ -260,6 +408,290 @@ class PaintTilePager {
   }
 }
 
+const HISTORY_WRITE_BATCH = 64;
+
+class PaintDiskHistory {
+  private engine: any = null;
+  private store: PaintTileStore | null = null;
+  private pager: PaintTilePager | null = null;
+  private documentId = '';
+  private queue = new PaintHistoryQueue();
+  private infoPtr = 0;
+  private scratchPtr = 0;
+  private activeTiles = 0;
+  private readonly zeroTile = new ArrayBuffer(TILE16_B);
+
+  configure(
+    engine: any,
+    store: PaintTileStore | null,
+    pager: PaintTilePager,
+    documentId: string,
+  ): boolean {
+    this.engine = engine;
+    this.store = store;
+    this.pager = pager;
+    this.documentId = documentId;
+    this.queue = new PaintHistoryQueue();
+    this.activeTiles = 0;
+    if (!store) return false;
+    if (!this.infoPtr) this.infoPtr = engine._malloc(12);
+    if (!this.scratchPtr) this.scratchPtr = engine._malloc(TILE16_B);
+    return this.infoPtr !== 0 && this.scratchPtr !== 0;
+  }
+
+  canUndo(): boolean { return this.queue.canUndo(); }
+  canRedo(): boolean { return this.queue.canRedo(); }
+
+  private async deleteOperations(operations: readonly PaintHistoryOperation[]): Promise<void> {
+    for (const operation of operations) {
+      await this.store!.deleteHistorySide(this.documentId, operation.id);
+    }
+  }
+
+  async begin(layer: number): Promise<boolean> {
+    if (!this.store) return false;
+    const { discarded } = this.queue.begin(layer);
+    await this.deleteOperations(discarded);
+    this.activeTiles = 0;
+    return true;
+  }
+
+  private async writeWithEviction(
+    records: readonly PaintHistoryRecord[],
+    protectedOperation = -1,
+  ): Promise<void> {
+    for (;;) {
+      try {
+        await this.store!.putHistoryMany(records);
+        return;
+      } catch (error) {
+        if ((error as Error)?.name !== 'QuotaExceededError') throw error;
+        const oldest = this.queue.removeOldest(protectedOperation);
+        if (!oldest) throw error;
+        await this.store!.deleteHistorySide(this.documentId, oldest.id);
+      }
+    }
+  }
+
+  async flush(force: boolean): Promise<boolean> {
+    const operation = this.queue.activeOperation();
+    if (!operation || !this.store) return false;
+    const count = this.engine._paint_external_history_capture_count();
+    if (this.engine._paint_get_error_code() === 2) {
+      throw new Error('Paint history capture failed.');
+    }
+    if (count === 0 || (!force && count < HISTORY_WRITE_BATCH)) return true;
+    for (let base = 0; base < count; base += HISTORY_WRITE_BATCH) {
+      const records: PaintHistoryRecord[] = [];
+      const end = Math.min(count, base + HISTORY_WRITE_BATCH);
+      for (let index = base; index < end; index++) {
+        this.engine._paint_external_history_capture_info(index, this.infoPtr);
+        const info = this.infoPtr >> 2;
+        const layer = this.engine.HEAP32[info];
+        const tx = this.engine.HEAP32[info + 1];
+        const ty = this.engine.HEAP32[info + 2];
+        const pointer = this.engine._paint_external_history_capture_ptr(index);
+        if (!pointer) throw new Error('A paint history capture has no data.');
+        const bytes = new Uint8Array(TILE16_B);
+        bytes.set(this.engine.HEAPU8.subarray(pointer, pointer + TILE16_B));
+        records.push({
+          key: [this.documentId, operation.id, 0, layer, tx, ty],
+          data: bytes.buffer,
+        });
+      }
+      await this.writeWithEviction(records);
+    }
+    this.activeTiles += count;
+    this.engine._paint_external_history_clear_captures();
+    return true;
+  }
+
+  async commit(): Promise<boolean> {
+    this.engine._paint_external_history_finish();
+    if (!(await this.flush(true))) return false;
+    const discarded = this.queue.commit(this.activeTiles);
+    this.activeTiles = 0;
+    await this.deleteOperations(discarded);
+    return true;
+  }
+
+  async cancel(): Promise<void> {
+    this.engine?._paint_external_history_cancel();
+    const operation = this.queue.cancel();
+    this.activeTiles = 0;
+    if (operation && this.store) {
+      await this.store.deleteHistorySide(this.documentId, operation.id);
+    }
+  }
+
+  async rollbackActive(): Promise<void> {
+    const operation = this.queue.activeOperation();
+    if (!operation || !this.store || !this.pager) {
+      await this.cancel();
+      return;
+    }
+    this.engine._paint_external_history_finish();
+    await this.restoreSide(operation, 0);
+    const count = this.engine._paint_external_history_capture_count();
+    for (let base = 0; base < count; base += HISTORY_WRITE_BATCH) {
+      const end = Math.min(count, base + HISTORY_WRITE_BATCH);
+      let needed = 0;
+      for (let index = base; index < end; index++) {
+        this.engine._paint_external_history_capture_info(index, this.infoPtr);
+        const info = this.infoPtr >> 2;
+        if (!this.engine._paint_get_layer_tile_ptr(
+          this.engine.HEAP32[info], this.engine.HEAP32[info + 1], this.engine.HEAP32[info + 2],
+        )) needed++;
+      }
+      if (needed > 0 && !(await this.pager.prepareHistory(needed))) {
+        throw new Error('IndexedDB could not make room to cancel a paint operation.');
+      }
+      for (let index = base; index < end; index++) {
+        this.engine._paint_external_history_capture_info(index, this.infoPtr);
+        const info = this.infoPtr >> 2;
+        const pointer = this.engine._paint_external_history_capture_ptr(index);
+        if (!pointer) throw new Error('A paint history capture has no data.');
+        this.engine.HEAPU8.set(
+          this.engine.HEAPU8.subarray(pointer, pointer + TILE16_B), this.scratchPtr,
+        );
+        if (!this.engine._paint_write_layer_rgba16_tile_modified(
+          this.engine.HEAP32[info], this.engine.HEAP32[info + 1],
+          this.engine.HEAP32[info + 2], this.scratchPtr,
+        )) {
+          throw new Error('A paint history rollback failed.');
+        }
+      }
+    }
+    await this.cancel();
+    if (this.engine._paint_get_error_code() === 2) this.engine._paint_clear_error();
+  }
+
+  async clear(): Promise<void> {
+    const active = this.queue.cancel();
+    const operations = this.queue.reset();
+    this.engine?._paint_external_history_cancel();
+    this.activeTiles = 0;
+    if (active) operations.push(active);
+    if (this.store && operations.length > 0) {
+      await this.store.deleteHistoryDocument(this.documentId);
+    }
+  }
+
+  private async captureCurrent(
+    operation: PaintHistoryOperation,
+    records: readonly PaintHistoryRecord[],
+    side: 0 | 1,
+  ): Promise<void> {
+    const swap: PaintHistoryRecord[] = new Array(records.length);
+    const coldKeys: PaintTileKey[] = [];
+    const coldIndexes: number[] = [];
+    for (let index = 0; index < records.length; index++) {
+      const target = records[index];
+      const layer = target.key[3], tx = target.key[4], ty = target.key[5];
+      const pointer = this.engine._paint_get_layer_tile_ptr(layer, tx, ty);
+      let data: ArrayBuffer;
+      if (pointer) {
+        const bytes = new Uint8Array(TILE16_B);
+        bytes.set(this.engine.HEAPU8.subarray(pointer, pointer + TILE16_B));
+        data = bytes.buffer;
+      } else {
+        data = this.zeroTile;
+        coldIndexes.push(index);
+        coldKeys.push(paintTileKey(this.documentId, layer, tx, ty));
+      }
+      swap[index] = {
+        key: [this.documentId, operation.id, side, layer, tx, ty],
+        data,
+      };
+    }
+    const cold = await this.store!.getMany(coldKeys);
+    for (let index = 0; index < coldIndexes.length; index++) {
+      swap[coldIndexes[index]].data = cold[index]?.data ?? this.zeroTile;
+    }
+    await this.writeWithEviction(swap, operation.id);
+  }
+
+  private async restoreSide(operation: PaintHistoryOperation, side: 0 | 1): Promise<number> {
+    let after: PaintHistoryKey | null = null;
+    let restored = 0;
+    for (;;) {
+      const records = await this.store!.getHistoryBatch(
+        this.documentId, operation.id, side, after, HISTORY_WRITE_BATCH,
+      );
+      if (records.length === 0) return restored;
+      let needed = 0;
+      for (const record of records) {
+        if (!this.engine._paint_get_layer_tile_ptr(record.key[3], record.key[4], record.key[5])) {
+          needed++;
+        }
+      }
+      if (needed > 0 && !(await this.pager!.prepareHistory(needed))) {
+        throw new Error('IndexedDB could not make room for a history tile.');
+      }
+      for (const record of records) {
+        if (record.data.byteLength !== TILE16_B) {
+          throw new Error('A paint history tile has an incorrect size.');
+        }
+        this.engine.HEAPU8.set(new Uint8Array(record.data), this.scratchPtr);
+        if (!this.engine._paint_write_layer_rgba16_tile_modified(
+          record.key[3], record.key[4], record.key[5], this.scratchPtr,
+        )) {
+          throw new Error('A paint history tile restore failed.');
+        }
+      }
+      restored += records.length;
+      after = records[records.length - 1].key;
+    }
+  }
+
+  async toggle(redo: boolean): Promise<boolean> {
+    if (!this.store || !this.pager) return false;
+    const operation = redo ? this.queue.redoTarget() : this.queue.undoTarget();
+    if (!operation) return false;
+    const source = operation.side;
+    const opposite = (source === 0 ? 1 : 0) as 0 | 1;
+    await this.store.deleteHistorySide(this.documentId, operation.id, opposite);
+
+    try {
+      let after: PaintHistoryKey | null = null;
+      let captured = 0;
+      for (;;) {
+        const records = await this.store.getHistoryBatch(
+          this.documentId, operation.id, source, after, HISTORY_WRITE_BATCH,
+        );
+        if (records.length === 0) break;
+        await this.captureCurrent(operation, records, opposite);
+        captured += records.length;
+        after = records[records.length - 1].key;
+      }
+      if (captured !== operation.tiles) {
+        throw new Error('A paint history operation is incomplete.');
+      }
+    } catch (error) {
+      try { await this.store.deleteHistorySide(this.documentId, operation.id, opposite); }
+      catch {}
+      throw error;
+    }
+
+    try {
+      const restored = await this.restoreSide(operation, source);
+      if (restored !== operation.tiles) {
+        throw new Error('A paint history operation is incomplete.');
+      }
+    } catch (error) {
+      await this.restoreSide(operation, opposite);
+      await this.store.deleteHistorySide(this.documentId, operation.id, opposite);
+      throw error;
+    }
+    operation.side = opposite;
+    this.engine._paint_set_active_layer(operation.layer);
+    if (redo) this.queue.completeRedo();
+    else this.queue.completeUndo();
+    await this.store.deleteHistorySide(this.documentId, operation.id, source);
+    return true;
+  }
+}
+
 function runDrainWake() {
   if (!mod || batchInFlight || drainInFlight || strokePreparing || motionQueue.length === 0) return;
   startDrain(true);
@@ -267,45 +699,58 @@ function runDrainWake() {
 const drainWake = new FixedTaskWake(runDrainWake);
 let tilePool: TilePool | null = null;
 
-/// Parallel drain of the published blend jobs: each job (one dirty tile)
-/// is serialized — the op bytes + the tile bytes — and blended off-thread
-/// by the tile pool. Falls back to inline draining without a pool.
-/// Returns the job count (0 when the batch had no dirty tiles).
-async function drainBlendJobs(): Promise<number> {
-  const n = mod._paint_end_batch_parallel();
-  if (n <= 0) return n;
-  const opSize = mod._paint_draw_dab_op_size();
+const INLINE_JOB_ROWS = 4;
+async function drainInlineJobs(count: number): Promise<void> {
+  let job = 0;
+  while (job < count) {
+    const start = performance.now();
+    do {
+      if (mod._paint_process_tile_job_work(job, 0, INLINE_JOB_ROWS)) job++;
+    } while (job < count && performance.now() - start < BUDGET);
+    if (job < count) await new Promise<void>(resolve => self.setTimeout(resolve, 0));
+  }
+}
 
+/// Drain one published group of blend jobs.
+async function drainPreparedJobs(count: number): Promise<void> {
+  const opSize = mod._paint_draw_dab_op_size();
   if (tilePool?.ready()) {
     const jobs: Promise<Uint8Array>[] = [];
     const info = new Int32Array(mod.memory.buffer, jobInfoPtr, 5);
     const opArenaPtr = mod._paint_ops_arena_ptr();
     const heap = new Uint8Array(mod.memory.buffer);
-    for (let i = 0; i < n; i++) {
-      mod._paint_get_job_info(i, jobInfoPtr);
+    for (let index = 0; index < count; index++) {
+      mod._paint_get_job_info(index, jobInfoPtr);
       const opsOff = info[0], opCount = info[1], tileAddr = info[2], tx = info[3], ty = info[4];
       const opsStart = opArenaPtr + opsOff * opSize;
       const ops = heap.slice(opsStart, opsStart + opCount * opSize);
-      const tile = heap.slice(tileAddr, tileAddr + 64 * 64 * 4 * 2);
-      jobs.push(tilePool.blend({ id: i, tx, ty, opCount, ops, tile }));
+      const tile = heap.slice(tileAddr, tileAddr + TILE16_B);
+      jobs.push(tilePool.blend({ id: index, tx, ty, opCount, ops, tile }));
     }
     try {
       const blended = await Promise.all(jobs);
       const resultHeap = new Uint8Array(mod.memory.buffer);
-      for (let i = 0; i < n; i++) {
-        mod._paint_get_job_info(i, jobInfoPtr);
-        const tileAddr2 = info[2];
-        resultHeap.set(blended[i], tileAddr2);
+      for (let index = 0; index < count; index++) {
+        mod._paint_get_job_info(index, jobInfoPtr);
+        resultHeap.set(blended[index], info[2]);
       }
-      return n;
-    } catch (err) {
-      post({ type: 'log', text: `tile pool fallback: ${(err as Error)?.message ?? err}` });
-      for (let i = 0; i < n; i++) mod._paint_process_tile_job(i, 0);
-      return n;
+      return;
+    } catch (error) {
+      post({ type: 'log', text: `tile pool fallback: ${(error as Error)?.message ?? error}` });
     }
   }
-  for (let i = 0; i < n; i++) mod._paint_process_tile_job(i, 0);
-  return n;
+  await drainInlineJobs(count);
+}
+
+/// Drain all fixed-size groups. This leaves no operation for a later stroke.
+async function drainBlendJobs(): Promise<number> {
+  let total = 0;
+  for (;;) {
+    const count = mod._paint_end_batch_parallel();
+    if (count <= 0) return total;
+    await drainPreparedJobs(count);
+    total += count;
+  }
 }
 
 const post = (m: any, t?: Transferable[]) => { if (t && t.length > 0) (self as unknown as Worker).postMessage(m, t); else (self as unknown as Worker).postMessage(m); };
@@ -314,20 +759,42 @@ function reportEngineError(what: string, status = 'Brush engine error. See the l
   post({ type: 'log', text: 'ENGINE ERROR: ' + what });
   post({ type: 'status', text: status });
 }
-function finishStorageFailure() {
+function finishStorageFailure(rollback = false) {
   if (!mod) return;
   motionQueue.clear();
   strokeContinuation = false;
+  hasStrokePoint = false;
   commitP = false;
   mod._paint_cancel_stroke();
   if (batching) {
     batching = false;
     try { mod._paint_end_batch(); } catch {}
   }
-  mod._paint_history_commit();
   strokeOpen = false;
-  pushState();
+  storageInFlight = true;
   reportEngineError('IndexedDB tile storage could not make room.', 'Paint storage is full.');
+  let restored = rollback;
+  const settle = async () => {
+    if (rollback) {
+      await diskHistory?.rollbackActive();
+      return;
+    }
+    try {
+      await diskHistory?.commit();
+    } catch {
+      restored = true;
+      await diskHistory?.rollbackActive();
+    }
+  };
+  void settle().then(() => {
+    if (restored) renderDirty(true);
+  }).catch(error => {
+    reportEngineError(`Paint history recovery failed: ${(error as Error)?.message ?? error}`);
+  }).finally(() => {
+    storageInFlight = false;
+    pushState();
+    replayDeferredCommands();
+  });
 }
 self.onerror = (e: any) => { reportEngineError('WORKER ERROR: ' + ((e && (e.message || e.error || e)) ?? String(e))); };
 self.onunhandledrejection = (e: any) => { reportEngineError('WORKER UNHANDLED REJECTION: ' + ((e && e.reason && (e.reason.message || e.reason)) || String(e))); };
@@ -401,7 +868,7 @@ function checkErr() {
   const c = mod._paint_get_error_code();
   if (!c) return;
   if (c === 1) reportEngineError('Paint tile allocation failed.', 'Paint storage allocation failed.');
-  else if (c === 2) reportEngineError('The undo history reached its fixed capacity.', 'Undo history capacity reached.');
+  else if (c === 2) reportEngineError('Paint history capture allocation failed.', 'Paint history storage failed.');
   else if (c === 3) reportEngineError('The libmypaint dab loop made no progress.');
   else if (c === 4) reportEngineError('The brush operation queue reached its fixed capacity.');
   else reportEngineError(`Unknown paint error code ${c}.`);
@@ -420,6 +887,9 @@ function strokeSample(_t: number, x: number, y: number, p: number, xt: number, y
   }
   strokeContinuation = false;
   lastT = _t;
+  lastStrokeX = x;
+  lastStrokeY = y;
+  hasStrokePoint = true;
   if (result < 0) {
     if (mod._paint_get_error_code()) checkErr();
     else reportEngineError('The brush continuation state is incorrect.');
@@ -441,6 +911,8 @@ function emitStats(force = false) {
     deferred: deferredCommands.length,
     brushMs: lastBR,
     renderMs: lastRR,
+    residentTiles: mod?._paint_get_resident_tile_count() ?? 0,
+    residentTileLimit: mod?._paint_get_resident_tile_limit() ?? 0,
     sps: wall > 0 ? Math.round((statsS / wall) * 1000) : 0,
   });
   statsS = 0;
@@ -467,9 +939,13 @@ function replayDeferredCommands() {
 
 function afterBatch() {
   batchInFlight = false;
-  const renderStart = performance.now();
-  renderDirty();
-  lastRR = performance.now() - renderStart;
+  const now = performance.now();
+  if (motionQueue.length === 0 || now - lastDisplay >= DISPLAY_INTERVAL_MS) {
+    const renderStart = now;
+    renderDirty();
+    lastRR = performance.now() - renderStart;
+    lastDisplay = performance.now();
+  }
   statsS += Math.max(0, n0 - motionQueue.length);
   emitStats(
     motionQueue.length === 0 && deferredCommands.length === 0 &&
@@ -495,30 +971,24 @@ function afterBatch() {
   }
 }
 
-function pollBatch() {
-  if (!mod) return;
-  if (mod._paint_is_batch_done()) {
-    try {
-      mod._paint_end_batch_finish();
-    } catch (err) {
-      reportEngineError('Batch finish failed: ' + ((err as Error)?.message ?? err));
-      return;
-    }
-    afterBatch();
-    return;
-  }
-  self.setTimeout(pollBatch, 2);
-}
-
 function startDrain(bounded: boolean) {
   if (!mod || batchInFlight || drainInFlight || strokePreparing || motionQueue.length === 0) return;
   const wait = strokeOpen && tilePager
-    ? tilePager.prepareStrokePoint(motionQueue.peekX(), motionQueue.peekY())
+    ? tilePager.prepareStrokePoint(
+      motionQueue.peekX(), motionQueue.peekY(), motionQueue.peekTime(),
+      hasStrokePoint ? lastStrokeX : motionQueue.peekX(),
+      hasStrokePoint ? lastStrokeY : motionQueue.peekY(),
+      lastT > 0 ? lastT : motionQueue.peekTime(),
+    )
     : null;
   if (!wait) {
     drainProcess(bounded);
     return;
   }
+  const renderStart = performance.now();
+  renderDirty();
+  lastRR = performance.now() - renderStart;
+  lastDisplay = performance.now();
   drainInFlight = true;
   let failed = false;
   void wait.then(ok => {
@@ -549,19 +1019,18 @@ function drainProcess(bounded: boolean) {
   if (batching) {
     batching = false;
     batchInFlight = true;
-    void drainBlendJobs().then(() => {
+    void drainBlendJobs().then(async () => {
       mod._paint_end_batch_finish();
+      if (!diskHistory || !(await diskHistory.flush(false))) {
+        throw new Error('Paint history storage is not available.');
+      }
       batchInFlight = false;
       afterBatch();
     }).catch((err) => {
       reportEngineError('Batch drain failed: ' + ((err as Error)?.stack ?? err));
       batchInFlight = false;
+      finishStorageFailure(true);
     });
-    return;
-  }
-  if (!mod._paint_is_batch_done()) {
-    batchInFlight = true;
-    pollBatch();
     return;
   }
   afterBatch();
@@ -585,28 +1054,31 @@ function doCommit() {
     commitP = true;
     return;
   }
-  if (batching) {
-    batching = false;
-    batchInFlight = true;
-    void drainBlendJobs().then(() => {
+  batchInFlight = true;
+  const finish = async () => {
+    if (batching) {
+      batching = false;
+      await drainBlendJobs();
       mod._paint_end_batch_finish();
-      mod._paint_history_commit();
-      batchInFlight = false;
-      strokeOpen = false;
-      pushState();
-      replayDeferredCommands();
-    }).catch((err) => {
-      reportEngineError('Commit failed: ' + ((err as Error)?.message ?? err));
-      batchInFlight = false;
-      strokeOpen = false;
-      pushState();
-      replayDeferredCommands();
-    });
-    return;
-  }
-  mod._paint_history_commit();
-  strokeOpen = false;
-  pushState();
+    }
+    if (!diskHistory || !(await diskHistory.commit())) {
+      throw new Error('Paint history storage is not available.');
+    }
+  };
+  void finish().catch(async (error) => {
+    reportEngineError('Commit failed: ' + ((error as Error)?.message ?? error));
+    try {
+      await diskHistory?.rollbackActive();
+      renderDirty(true);
+    } catch (recoveryError) {
+      reportEngineError(`Paint history recovery failed: ${(recoveryError as Error)?.message ?? recoveryError}`);
+    }
+  }).finally(() => {
+    batchInFlight = false;
+    strokeOpen = false;
+    pushState();
+    replayDeferredCommands();
+  });
 }
 async function beginStroke(x: number, y: number, xt: number, yt: number, z: number, r: number, ba: number) {
   if (!mod) return;
@@ -623,20 +1095,29 @@ async function beginStroke(x: number, y: number, xt: number, yt: number, z: numb
     if (wait && !(await wait)) {
       motionQueue.clear();
       commitP = false;
+      hasStrokePoint = false;
       strokeOpen = false;
       reportEngineError('IndexedDB tile storage could not make room.', 'Paint storage is full.');
       pushState();
       replayDeferredCommands();
       return;
     }
+    if (!diskHistory || !(await diskHistory.begin(mod._paint_get_active_layer()))) {
+      throw new Error('Paint history storage is not available.');
+    }
     mod._begin_stroke(x, y, xt, yt, z, r, ba);
+    lastStrokeX = x;
+    lastStrokeY = y;
+    hasStrokePoint = true;
     mod._paint_begin_batch();
     batching = true;
     scheduleFlush();
   } catch (error) {
     motionQueue.clear();
     commitP = false;
+    hasStrokePoint = false;
     strokeOpen = false;
+    await diskHistory?.cancel();
     reportEngineError(`Stroke start failed: ${(error as Error)?.message ?? error}`);
     pushState();
     replayDeferredCommands();
@@ -653,13 +1134,31 @@ function pushState() {
   for (let i = 0; i < lc; i++) layers.push({ id: i, active: i === active, visible: mod._paint_get_layer_visible(i), opacity: mod._paint_get_layer_opacity?.(i) ?? 1, mode: mod._paint_get_layer_mode(i), group: mod._paint_get_layer_group(i) });
   const gc = mod._paint_get_group_count();
   for (let i = 0; i < gc; i++) groups.push({ id: i, alive: mod._paint_get_group_alive(i) !== 0, parent: mod._paint_get_group_parent(i), visible: mod._paint_get_group_visible(i), opacity: mod._paint_get_group_opacity(i), mode: mod._paint_get_group_mode(i), passThrough: mod._paint_get_group_pass_through(i), isolated: mod._paint_get_group_isolated(i) });
-  post({ type: 'state', state: { layers, groups, activeLayer: active, canUndo: mod._paint_history_can_undo() !== 0, canRedo: mod._paint_history_can_redo() !== 0, width: docW, height: docH, displayScale: dispScale, mipLevel: dispMip, tilesWidth: mod._paint_get_tiles_width(), tilesHeight: mod._paint_get_tiles_height(), error: mod._paint_get_error_code() } });
+  post({ type: 'state', state: { layers, groups, activeLayer: active, canUndo: diskHistory?.canUndo() ?? false, canRedo: diskHistory?.canRedo() ?? false, width: docW, height: docH, displayScale: dispScale, mipLevel: dispMip, tilesWidth: mod._paint_get_tiles_width(), tilesHeight: mod._paint_get_tiles_height(), residentTiles: mod._paint_get_resident_tile_count(), residentTileLimit: mod._paint_get_resident_tile_limit(), maximumResidentTiles: mod._paint_get_maximum_resident_tile_limit(), error: mod._paint_get_error_code() } });
 }
+async function changeHistory(redo: boolean) {
+  if (!mod || storageInFlight) return;
+  storageInFlight = true;
+  try {
+    renderDirty();
+    mod._reset_brush();
+    const changed = await diskHistory?.toggle(redo);
+    if (changed) renderDirty(true);
+    pushState();
+  } catch (error) {
+    reportEngineError(`History change failed: ${(error as Error)?.message ?? error}`);
+  } finally {
+    storageInFlight = false;
+    replayDeferredCommands();
+  }
+}
+
 async function clearPaint() {
   if (!mod || storageInFlight) return;
   storageInFlight = true;
   try {
     const layer = mod._paint_get_active_layer();
+    await diskHistory?.clear();
     if (tileStore) await tileStore.dropLayer(tileDocumentId, layer);
     tilePager?.clearColdLayer(layer);
     mod._reset_brush();
@@ -680,6 +1179,7 @@ async function deleteLayer(layer: number) {
   if (layer < 0 || layer >= count || count <= 1) return;
   storageInFlight = true;
   try {
+    await diskHistory?.clear();
     if (tileStore) await tileStore.deleteLayer(tileDocumentId, layer);
     if (mod._paint_delete_layer(layer)) {
       tilePager?.deleteLayer(layer);
@@ -792,8 +1292,8 @@ function handleReadyCommand(m: Msg) {
         scheduleFlush();
       } else doCommit();
       break;
-    case 'undo': flushNow(); mod._reset_brush(); if (mod._paint_history_undo()) renderDirty(true); pushState(); break;
-    case 'redo': flushNow(); mod._reset_brush(); if (mod._paint_history_redo()) renderDirty(true); pushState(); break;
+    case 'undo': flushNow(); void changeHistory(false); break;
+    case 'redo': flushNow(); void changeHistory(true); break;
     case 'clear': flushNow(); void clearPaint(); break;
     case 'clearBackground': flushNow(); mod._reset_brush(); mod._paint_clear_background(); renderDirty(true); break;
     case 'setBackground': flushNow(); bgRGB = [m.r, m.g, m.b]; mod._paint_set_background_color(m.r, m.g, m.b); renderDirty(true); break;
@@ -860,12 +1360,22 @@ async function dispatchInput(e: MessageEvent<Msg & { canvas?: OffscreenCanvas }>
   const m = e.data;
   if (m.cmd === 'init') {
     try {
+      const logicalProcessors = m.hardwareConcurrency ?? 8;
+      const workerCount = paintTileWorkerCount(logicalProcessors);
+      const memory = paintMemoryPolicy(
+        paintMemoryLimitMiB(undefined, m.memoryLimitMiB),
+        workerCount,
+      );
+      if (memory.maximumTiles === 0) {
+        reportEngineError('The selected paint memory is too small for the fixed reserve.', 'Increase the paint memory limit.');
+        return;
+      }
       if (!mod) {
         mod = await loadBrushModule();
         void spawnTilePool(
           mod._paint_draw_dab_op_size(),
           (t) => post({ type: 'log', text: t }),
-          m.hardwareConcurrency,
+          logicalProcessors,
         )
           .then((p) => { tilePool = p; })
           .catch((err) => {
@@ -883,7 +1393,7 @@ async function dispatchInput(e: MessageEvent<Msg & { canvas?: OffscreenCanvas }>
           post({ type: 'log', text: `IndexedDB unavailable: ${(err as Error)?.message ?? err}` });
         }
       }
-      if (tileStore && tileDocumentId && tileDocumentId !== nextDocumentId) {
+      if (tileStore && tileDocumentId) {
         try { await tileStore.dropDocument(tileDocumentId); }
         catch (err) { post({ type: 'log', text: `IndexedDB cleanup failed: ${(err as Error)?.message ?? err}` }); }
       }
@@ -898,7 +1408,12 @@ async function dispatchInput(e: MessageEvent<Msg & { canvas?: OffscreenCanvas }>
         canvas.height = Math.ceil(docH / dispScale);
         ctx = canvas.getContext('2d', { alpha: true });
       }
-      if (!mod._init(docW, docH)) {
+      if (!mod._paint_init_with_tile_limits(
+        docW,
+        docH,
+        memory.initialTiles,
+        memory.maximumTiles,
+      )) {
         reportEngineError('Brush engine initialization failed.', 'Engine initialization failed.');
         return;
       }
@@ -912,12 +1427,21 @@ async function dispatchInput(e: MessageEvent<Msg & { canvas?: OffscreenCanvas }>
       rgba8 = mod.HEAPU8.subarray(displayPointer, displayPointer + TILE_B);
       mod._paint_set_eotf(EOTF);
       if (!tilePager) tilePager = new PaintTilePager();
-      tilePager.configure(mod, tileStore, tileDocumentId);
+      tilePager.configure(mod, tileStore, tileDocumentId, memory.maximumTiles, memory.growTiles);
+      if (!diskHistory) diskHistory = new PaintDiskHistory();
+      if (!diskHistory.configure(mod, tileStore, tilePager, tileDocumentId)) {
+        reportEngineError('IndexedDB history is not available.', 'Paint history is not available.');
+        return;
+      }
+      mod._paint_set_external_history(1);
+      void navigator.storage?.persist?.().catch(() => {});
+      post({ type: 'log', text: `paint memory ${memory.totalMiB} MiB, ${memory.maximumTiles} tile maximum` });
       mod._paint_clear();
       mod._paint_set_background_color(bgRGB[0], bgRGB[1], bgRGB[2]);
       motionQueue.clear();
       deferredCommands.clear();
       strokeContinuation = false;
+      hasStrokePoint = false;
       strokeOpen = false;
       commitP = false;
       batching = false;

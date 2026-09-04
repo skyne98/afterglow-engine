@@ -1,0 +1,50 @@
+<!doctype html>
+<!-- Raw pen-pressure probe. Open via the vite dev server:
+     http://localhost:5175/pressure-probe.html
+     Draw on the box; watch readout + trace. Delete this file when done. -->
+<meta charset="utf-8">
+<title>pressure probe</title>
+<style>
+  body { font: 13px monospace; margin: 1rem; }
+  #pad { width: 100%; height: 300px; background: #111; touch-action: none; }
+</style>
+<div id="readout">draw below</div>
+<canvas id="pad" width="1200" height="300"></canvas>
+<div id="flags"></div>
+<script>
+  const pad = document.getElementById('pad');
+  const cx = pad.getContext('2d');
+  const readout = document.getElementById('readout');
+  const flags = document.getElementById('flags');
+  let n = 0, maxHit = false;
+  function flag(t) { flags.textContent = (new Date().toISOString().slice(11, 23) + ' ' + t) + '\n' + flags.textContent; }
+  function note(e) {
+    readout.textContent =
+      `type=${e.type} pointerType=${e.pointerType} pointerId=${e.pointerId} ` +
+      `pressure=${e.pressure} buttons=${e.buttons} tiltX=${e.tiltX} tiltY=${e.tiltY}`;
+    // Key diagnostics: zero pressure while pressed, and pressure > 1 or 0.5 only.
+    if (e.pressure === 0 && (e.buttons & 1)) flag('ZERO pressure while button down');
+    if (e.pressure > 1) flag('pressure > 1: ' + e.pressure);
+    if (e.type === 'pointerdown' && e.pressure === 0.5 && e.pointerType === 'pen')
+      flag('pen pointerdown gave 0.5 (pressure may be unsupported)');
+    maxHit = maxHit || e.pressure >= 0.999;
+    if (maxHit && e.pressure < 0.999 && (e.buttons & 1)) {
+      flag(`pressure left max while still down: ${e.pressure} at ${e.type}`);
+      maxHit = false;
+    }
+  }
+  for (const t of ['pointerdown', 'pointermove', 'pointerup', 'pointercancel']) {
+    pad.addEventListener(t, e => {
+      e.preventDefault();
+      note(e);
+      for (const c of e.getCoalescedEvents ? e.getCoalescedEvents() : []) {
+        // Sub-frame samples often hold the values the rAF event hides.
+        if (c.pressure === 0 && (c.buttons & 1)) flag('coalesced ZERO while down');
+      }
+      if (e.type === 'pointerdown' || e.type === 'pointerup') { n = 1; cx.clearRect(0, 0, pad.width, pad.height); }
+      const y = pad.height - Math.max(0, Math.min(1, e.pressure)) * pad.height;
+      cx.fillStyle = e.pressure === 0 ? '#888' : '#4ecdc4';
+      cx.fillRect(n++ * 3, y - 1.5, 3, 3);
+    });
+  }
+</script>

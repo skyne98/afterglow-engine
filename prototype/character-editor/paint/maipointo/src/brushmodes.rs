@@ -27,7 +27,9 @@ macro_rules! for_each_masked_pixel {
         let mut $pi = 0usize;
         loop {
             while $mask[$mi] != 0 {
-                { $body }
+                {
+                    $body
+                }
                 $mi += 1;
                 $pi += 1;
             }
@@ -49,6 +51,13 @@ pub fn draw_dab_normal(
     color_b: u16,
     opacity: u16,
 ) {
+    #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+    {
+        // SAFETY: the LRE mask limits pixel positions to this RGBA tile.
+        unsafe { draw_dab_normal_simd(mask, rgba, color_r, color_g, color_b, opacity) };
+        return;
+    }
+    #[cfg(not(all(target_arch = "wasm32", target_feature = "simd128")))]
     for_each_masked_pixel!(mask, mi, pi, {
         let p = pi * 4;
         let opa_a = (mask[mi] as u32 * opacity as u32) >> 15; // topAlpha
@@ -74,6 +83,15 @@ pub fn draw_dab_normal_and_eraser(
     color_a: u16,
     opacity: u16,
 ) {
+    #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+    {
+        // SAFETY: the LRE mask limits pixel positions to this RGBA tile.
+        unsafe {
+            draw_dab_normal_and_eraser_simd(mask, rgba, color_r, color_g, color_b, color_a, opacity)
+        };
+        return;
+    }
+    #[cfg(not(all(target_arch = "wasm32", target_feature = "simd128")))]
     for_each_masked_pixel!(mask, mi, pi, {
         let p = pi * 4;
         let mut opa_a = (mask[mi] as u32 * opacity as u32) >> 15; // topAlpha
@@ -96,6 +114,13 @@ pub fn draw_dab_lock_alpha(
     color_b: u16,
     opacity: u16,
 ) {
+    #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+    {
+        // SAFETY: the LRE mask limits pixel positions to this RGBA tile.
+        unsafe { draw_dab_lock_alpha_simd(mask, rgba, color_r, color_g, color_b, opacity) };
+        return;
+    }
+    #[cfg(not(all(target_arch = "wasm32", target_feature = "simd128")))]
     for_each_masked_pixel!(mask, mi, pi, {
         let p = pi * 4;
         let mut opa_a = (mask[mi] as u32 * opacity as u32) >> 15; // topAlpha
@@ -105,6 +130,212 @@ pub fn draw_dab_lock_alpha(
         rgba[p + 1] = ((opa_a * color_g as u32 + opa_b * rgba[p + 1] as u32) >> 15) as u16;
         rgba[p + 2] = ((opa_a * color_b as u32 + opa_b * rgba[p + 2] as u32) >> 15) as u16;
     });
+}
+
+#[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+fn for_each_mask_pair<F, S>(mask: &[u16], mut pair: F, mut single: S)
+where
+    F: FnMut(usize, u16, u16),
+    S: FnMut(usize, u16),
+{
+    let mut mi = 0usize;
+    let mut pi = 0usize;
+    loop {
+        let run_mask = mi;
+        let run_pixel = pi;
+        while mask[mi] != 0 {
+            mi += 1;
+            pi += 1;
+        }
+        let run_len = mi - run_mask;
+        let mut i = 0usize;
+        while i + 1 < run_len {
+            pair(run_pixel + i, mask[run_mask + i], mask[run_mask + i + 1]);
+            i += 2;
+        }
+        if i < run_len {
+            single(run_pixel + i, mask[run_mask + i]);
+        }
+        if mask[mi + 1] == 0 {
+            break;
+        }
+        pi += mask[mi + 1] as usize / 4;
+        mi += 2;
+    }
+}
+
+#[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+#[target_feature(enable = "simd128")]
+unsafe fn blend_normal_pair(
+    rgba: &mut [u16],
+    pi: usize,
+    top: core::arch::wasm32::v128,
+    top0: u32,
+    bottom0: u32,
+    top1: u32,
+    bottom1: u32,
+) {
+    use core::arch::wasm32::*;
+    let p = pi * 4;
+    let backdrop = unsafe { v128_load(rgba.as_ptr().add(p).cast()) };
+    let low = u32x4_shr(
+        i32x4_add(
+            i32x4_mul(top, i32x4_splat(top0 as i32)),
+            i32x4_mul(
+                u32x4_extend_low_u16x8(backdrop),
+                i32x4_splat(bottom0 as i32),
+            ),
+        ),
+        15,
+    );
+    let high = u32x4_shr(
+        i32x4_add(
+            i32x4_mul(top, i32x4_splat(top1 as i32)),
+            i32x4_mul(
+                u32x4_extend_high_u16x8(backdrop),
+                i32x4_splat(bottom1 as i32),
+            ),
+        ),
+        15,
+    );
+    let result = u16x8_narrow_i32x4(low, high);
+    unsafe { v128_store(rgba.as_mut_ptr().add(p).cast(), result) };
+}
+
+#[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+#[target_feature(enable = "simd128")]
+unsafe fn draw_dab_normal_simd(
+    mask: &[u16],
+    rgba: &mut [u16],
+    color_r: u16,
+    color_g: u16,
+    color_b: u16,
+    opacity: u16,
+) {
+    use core::arch::wasm32::*;
+    let top = i32x4(color_r as i32, color_g as i32, color_b as i32, 1 << 15);
+    let rgba_ptr = rgba.as_mut_ptr();
+    let rgba_len = rgba.len();
+    for_each_mask_pair(
+        mask,
+        |pi, m0, m1| {
+            let rgba = unsafe { std::slice::from_raw_parts_mut(rgba_ptr, rgba_len) };
+            let a0 = (m0 as u32 * opacity as u32) >> 15;
+            let a1 = (m1 as u32 * opacity as u32) >> 15;
+            unsafe { blend_normal_pair(rgba, pi, top, a0, (1 << 15) - a0, a1, (1 << 15) - a1) };
+        },
+        |pi, m| {
+            let rgba = unsafe { std::slice::from_raw_parts_mut(rgba_ptr, rgba_len) };
+            let p = pi * 4;
+            let a = (m as u32 * opacity as u32) >> 15;
+            let b = (1 << 15) - a;
+            rgba[p + 3] = (a + ((b * rgba[p + 3] as u32) >> 15)) as u16;
+            rgba[p] = ((a * color_r as u32 + b * rgba[p] as u32) >> 15) as u16;
+            rgba[p + 1] = ((a * color_g as u32 + b * rgba[p + 1] as u32) >> 15) as u16;
+            rgba[p + 2] = ((a * color_b as u32 + b * rgba[p + 2] as u32) >> 15) as u16;
+        },
+    );
+}
+
+#[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+#[target_feature(enable = "simd128")]
+unsafe fn draw_dab_normal_and_eraser_simd(
+    mask: &[u16],
+    rgba: &mut [u16],
+    color_r: u16,
+    color_g: u16,
+    color_b: u16,
+    color_a: u16,
+    opacity: u16,
+) {
+    use core::arch::wasm32::*;
+    let top = i32x4(color_r as i32, color_g as i32, color_b as i32, 1 << 15);
+    let rgba_ptr = rgba.as_mut_ptr();
+    let rgba_len = rgba.len();
+    for_each_mask_pair(
+        mask,
+        |pi, m0, m1| {
+            let rgba = unsafe { std::slice::from_raw_parts_mut(rgba_ptr, rgba_len) };
+            let a0 = (m0 as u32 * opacity as u32) >> 15;
+            let a1 = (m1 as u32 * opacity as u32) >> 15;
+            let top0 = (a0 * color_a as u32) >> 15;
+            let top1 = (a1 * color_a as u32) >> 15;
+            unsafe { blend_normal_pair(rgba, pi, top, top0, (1 << 15) - a0, top1, (1 << 15) - a1) };
+        },
+        |pi, m| {
+            let rgba = unsafe { std::slice::from_raw_parts_mut(rgba_ptr, rgba_len) };
+            let p = pi * 4;
+            let a = (m as u32 * opacity as u32) >> 15;
+            let b = (1 << 15) - a;
+            let top = (a * color_a as u32) >> 15;
+            rgba[p + 3] = (top + ((b * rgba[p + 3] as u32) >> 15)) as u16;
+            rgba[p] = ((top * color_r as u32 + b * rgba[p] as u32) >> 15) as u16;
+            rgba[p + 1] = ((top * color_g as u32 + b * rgba[p + 1] as u32) >> 15) as u16;
+            rgba[p + 2] = ((top * color_b as u32 + b * rgba[p + 2] as u32) >> 15) as u16;
+        },
+    );
+}
+
+#[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+#[target_feature(enable = "simd128")]
+unsafe fn draw_dab_lock_alpha_simd(
+    mask: &[u16],
+    rgba: &mut [u16],
+    color_r: u16,
+    color_g: u16,
+    color_b: u16,
+    opacity: u16,
+) {
+    use core::arch::wasm32::*;
+    let top = i32x4(color_r as i32, color_g as i32, color_b as i32, 0);
+    let rgba_ptr = rgba.as_mut_ptr();
+    let rgba_len = rgba.len();
+    for_each_mask_pair(
+        mask,
+        |pi, m0, m1| {
+            let rgba = unsafe { std::slice::from_raw_parts_mut(rgba_ptr, rgba_len) };
+            let p = pi * 4;
+            let backdrop = unsafe { v128_load(rgba.as_ptr().add(p).cast()) };
+            let a0 = (m0 as u32 * opacity as u32) >> 15;
+            let a1 = (m1 as u32 * opacity as u32) >> 15;
+            let top0 = (a0 * rgba[p + 3] as u32) >> 15;
+            let top1 = (a1 * rgba[p + 7] as u32) >> 15;
+            let bottom0 = ((1 << 15) - a0) as i32;
+            let bottom1 = ((1 << 15) - a1) as i32;
+            let low = u32x4_shr(
+                i32x4_add(
+                    i32x4_mul(top, i32x4(top0 as i32, top0 as i32, top0 as i32, 0)),
+                    i32x4_mul(
+                        u32x4_extend_low_u16x8(backdrop),
+                        i32x4(bottom0, bottom0, bottom0, 1 << 15),
+                    ),
+                ),
+                15,
+            );
+            let high = u32x4_shr(
+                i32x4_add(
+                    i32x4_mul(top, i32x4(top1 as i32, top1 as i32, top1 as i32, 0)),
+                    i32x4_mul(
+                        u32x4_extend_high_u16x8(backdrop),
+                        i32x4(bottom1, bottom1, bottom1, 1 << 15),
+                    ),
+                ),
+                15,
+            );
+            let result = u16x8_narrow_i32x4(low, high);
+            unsafe { v128_store(rgba.as_mut_ptr().add(p).cast(), result) };
+        },
+        |pi, m| {
+            let rgba = unsafe { std::slice::from_raw_parts_mut(rgba_ptr, rgba_len) };
+            let p = pi * 4;
+            let a = (m as u32 * opacity as u32) >> 15;
+            let b = (1 << 15) - a;
+            let top = (a * rgba[p + 3] as u32) >> 15;
+            rgba[p] = ((top * color_r as u32 + b * rgba[p] as u32) >> 15) as u16;
+            rgba[p + 1] = ((top * color_g as u32 + b * rgba[p + 1] as u32) >> 15) as u16;
+            rgba[p + 2] = ((top * color_b as u32 + b * rgba[p + 2] as u32) >> 15) as u16;
+        },
+    );
 }
 
 /// `draw_dab_pixels_BlendMode_Posterize` — GIMP-style posterize, blended in
@@ -118,12 +349,12 @@ pub fn draw_dab_posterize(mask: &[u16], rgba: &mut [u16], opacity: u16, posteriz
 
         // C ROUND(x) == (int)(x + 0.5)
         let round = |x: f32| (x + 0.5) as i32;
-        let post_r = ((1 << 15) as u32 * round(r * posterize_num as f32) as u32)
-            / posterize_num as u32;
-        let post_g = ((1 << 15) as u32 * round(g * posterize_num as f32) as u32)
-            / posterize_num as u32;
-        let post_b = ((1 << 15) as u32 * round(b * posterize_num as f32) as u32)
-            / posterize_num as u32;
+        let post_r =
+            ((1 << 15) as u32 * round(r * posterize_num as f32) as u32) / posterize_num as u32;
+        let post_g =
+            ((1 << 15) as u32 * round(g * posterize_num as f32) as u32) / posterize_num as u32;
+        let post_b =
+            ((1 << 15) as u32 * round(b * posterize_num as f32) as u32) / posterize_num as u32;
 
         let opa_a = (mask[mi] as u32 * opacity as u32) >> 15; // topAlpha
         let opa_b = (1 << 15) - opa_a; // bottomAlpha
@@ -222,11 +453,7 @@ pub fn draw_dab_colorize(
 
 /// `get_color_pixels_legacy` — masked color pickup (weights are `u32` per
 /// tile; results accumulate in `f32` across tiles).
-pub fn get_color_legacy(
-    mask: &[u16],
-    rgba: &[u16],
-    sums: &mut ColorSums,
-) {
+pub fn get_color_legacy(mask: &[u16], rgba: &[u16], sums: &mut ColorSums) {
     let mut weight = 0u32;
     let mut r = 0u32;
     let mut g = 0u32;
@@ -276,7 +503,34 @@ pub fn get_color_accumulate(
         get_color_legacy(mask, rgba, sums);
         return;
     }
+    get_color_accumulate_sampled(
+        mask,
+        sums,
+        paint,
+        sample_interval,
+        random_sample_rate,
+        random,
+        |pi| {
+            let p = pi * 4;
+            [rgba[p], rgba[p + 1], rgba[p + 2], rgba[p + 3]]
+        },
+    );
+}
 
+/// The spectral sampler with a lazy pixel source. The source runs only for
+/// pixels selected by the unchanged interval and random-sample sequence.
+pub(crate) fn get_color_accumulate_sampled<F>(
+    mask: &[u16],
+    sums: &mut ColorSums,
+    paint: f32,
+    sample_interval: u16,
+    random_sample_rate: f32,
+    random: &mut dyn crate::random::RandomSource,
+    mut pixel_at: F,
+) where
+    F: FnMut(usize) -> Pixel,
+{
+    debug_assert!(paint >= 0.0);
     // C keeps local accumulators seeded from the sums and writes back at the
     // end; replicate that exactly.
     let mut avg_spectral = [0.0f32; 10];
@@ -285,12 +539,11 @@ pub fn get_color_accumulate(
         crate::helpers::rgb_to_spectral(sums.r, sums.g, sums.b, &mut avg_spectral);
     }
     let mut interval_counter: u16 = 0;
-    let random_sample_threshold =
-        (random_sample_rate * random.rand_max() as f32) as i32;
+    let random_sample_threshold = (random_sample_rate * random.rand_max() as f32) as i32;
     for_each_masked_pixel!(mask, mi, pi, {
-        let p = pi * 4;
         if interval_counter == 0 || random.next() < random_sample_threshold {
-            let a = mask[mi] as f32 * rgba[p + 3] as f32 / (1u32 << 30) as f32;
+            let rgba = pixel_at(pi);
+            let a = mask[mi] as f32 * rgba[3] as f32 / (1u32 << 30) as f32;
             let alpha_sums = a + sums.a;
             sums.weight += mask[mi] as f32 / (1 << 15) as f32;
             let mut fac_a = 1.0f32;
@@ -299,14 +552,14 @@ pub fn get_color_accumulate(
                 fac_a = a / alpha_sums;
                 fac_b = 1.0 - fac_a;
             }
-            if rgba[p + 3] > 0 {
+            if rgba[3] > 0 {
                 // C: avg_rgb[i] = rgba[i]*fac_a/rgba[3] + avg_rgb[i]*fac_b;
                 if paint > 0.0 {
                     let mut spectral = [0.0f32; 10];
                     crate::helpers::rgb_to_spectral(
-                        rgba[p] as f32 / rgba[p + 3] as f32,
-                        rgba[p + 1] as f32 / rgba[p + 3] as f32,
-                        rgba[p + 2] as f32 / rgba[p + 3] as f32,
+                        rgba[0] as f32 / rgba[3] as f32,
+                        rgba[1] as f32 / rgba[3] as f32,
+                        rgba[2] as f32 / rgba[3] as f32,
                         &mut spectral,
                     );
                     for i in 0..10 {
@@ -316,8 +569,7 @@ pub fn get_color_accumulate(
                 }
                 if paint < 1.0 {
                     for i in 0..3 {
-                        avg_rgb[i] = rgba[p + i] as f32 * fac_a / rgba[p + 3] as f32
-                            + avg_rgb[i] * fac_b;
+                        avg_rgb[i] = rgba[i] as f32 * fac_a / rgba[3] as f32 + avg_rgb[i] * fac_b;
                     }
                 }
             }
@@ -359,7 +611,7 @@ pub fn draw_dab_normal_paint(
     color_b: u16,
     mut opacity: u16,
 ) {
-    use crate::helpers::{fastpow, rgb_to_spectral, spectral_to_rgb, WGM_EPSILON};
+    use crate::helpers::{WGM_EPSILON, fastpow, rgb_to_spectral, spectral_to_rgb};
     let mut spectral_a = [0.0f32; 10];
     rgb_to_spectral(
         color_r as f32 / (1 << 15) as f32,
@@ -383,28 +635,28 @@ pub fn draw_dab_normal_paint(
             rgba[p + 1] = ((opa_a * color_g as u32 + opa_b * rgba[p + 1] as u32) >> 15) as u16;
             rgba[p + 2] = ((opa_a * color_b as u32 + opa_b * rgba[p + 2] as u32) >> 15) as u16;
         } else {
-        let fac_a = opa_a as f32 / (opa_a + ((opa_b as u32 * rgba[p + 3] as u32) >> 15)) as f32;
-        let fac_b = 1.0 - fac_a;
+            let fac_a = opa_a as f32 / (opa_a + ((opa_b as u32 * rgba[p + 3] as u32) >> 15)) as f32;
+            let fac_b = 1.0 - fac_a;
 
-        let mut spectral_b = [0.0f32; 10];
-        rgb_to_spectral(
-            rgba[p] as f32 / rgba[p + 3] as f32,
-            rgba[p + 1] as f32 / rgba[p + 3] as f32,
-            rgba[p + 2] as f32 / rgba[p + 3] as f32,
-            &mut spectral_b,
-        );
+            let mut spectral_b = [0.0f32; 10];
+            rgb_to_spectral(
+                rgba[p] as f32 / rgba[p + 3] as f32,
+                rgba[p + 1] as f32 / rgba[p + 3] as f32,
+                rgba[p + 2] as f32 / rgba[p + 3] as f32,
+                &mut spectral_b,
+            );
 
-        let mut spectral_result = [0.0f32; 10];
-        for i in 0..10 {
-            spectral_result[i] = fastpow(spectral_a[i], fac_a) * fastpow(spectral_b[i], fac_b);
-        }
+            let mut spectral_result = [0.0f32; 10];
+            for i in 0..10 {
+                spectral_result[i] = fastpow(spectral_a[i], fac_a) * fastpow(spectral_b[i], fac_b);
+            }
 
-        let mut rgb_result = [0.0f32; 3];
-        spectral_to_rgb(&spectral_result, &mut rgb_result);
-        rgba[p + 3] = (opa_a + ((opa_b * rgba[p + 3] as u32) >> 15)) as u16;
-        for i in 0..3 {
-            rgba[p + i] = ((rgb_result[i] * rgba[p + 3] as f32) as f64 + 0.5) as u16;
-        }
+            let mut rgb_result = [0.0f32; 3];
+            spectral_to_rgb(&spectral_result, &mut rgb_result);
+            rgba[p + 3] = (opa_a + ((opa_b * rgba[p + 3] as u32) >> 15)) as u16;
+            for i in 0..3 {
+                rgba[p + i] = ((rgb_result[i] * rgba[p + 3] as f32) as f64 + 0.5) as u16;
+            }
         }
     });
     let _ = WGM_EPSILON;
@@ -460,7 +712,8 @@ pub fn draw_dab_normal_and_eraser_paint(
                 &mut spectral_b,
             );
 
-            let mut fac_a = opa_a as f32 / (opa_a + ((opa_b as u32 * rgba[p + 3] as u32) >> 15)) as f32;
+            let mut fac_a =
+                opa_a as f32 / (opa_a + ((opa_b as u32 * rgba[p + 3] as u32) >> 15)) as f32;
             fac_a *= color_a as f32 / (1 << 15) as f32;
             let fac_b = 1.0 - fac_a;
 
@@ -473,7 +726,9 @@ pub fn draw_dab_normal_and_eraser_paint(
             spectral_to_rgb(&spectral_result, &mut rgb_result);
 
             for i in 0..3 {
-                rgb[i] = (additive_factor * rgb[i] as f32 + spectral_factor * rgb_result[i] * opa_out as f32) as u32;
+                rgb[i] = (additive_factor * rgb[i] as f32
+                    + spectral_factor * rgb_result[i] * opa_out as f32)
+                    as u32;
             }
         }
 
@@ -514,26 +769,26 @@ pub fn draw_dab_lock_alpha_paint(
             rgba[p + 1] = ((opa_a * color_g as u32 + opa_b * rgba[p + 1] as u32) >> 15) as u16;
             rgba[p + 2] = ((opa_a * color_b as u32 + opa_b * rgba[p + 2] as u32) >> 15) as u16;
         } else {
-        let fac_a = opa_a as f32 / (opa_a + ((opa_b as u32 * rgba[p + 3] as u32) >> 15)) as f32;
-        let fac_b = 1.0 - fac_a;
-        let mut spectral_b = [0.0f32; 10];
-        rgb_to_spectral(
-            rgba[p] as f32 / rgba[p + 3] as f32,
-            rgba[p + 1] as f32 / rgba[p + 3] as f32,
-            rgba[p + 2] as f32 / rgba[p + 3] as f32,
-            &mut spectral_b,
-        );
+            let fac_a = opa_a as f32 / (opa_a + ((opa_b as u32 * rgba[p + 3] as u32) >> 15)) as f32;
+            let fac_b = 1.0 - fac_a;
+            let mut spectral_b = [0.0f32; 10];
+            rgb_to_spectral(
+                rgba[p] as f32 / rgba[p + 3] as f32,
+                rgba[p + 1] as f32 / rgba[p + 3] as f32,
+                rgba[p + 2] as f32 / rgba[p + 3] as f32,
+                &mut spectral_b,
+            );
 
-        let mut spectral_result = [0.0f32; 10];
-        for i in 0..10 {
-            spectral_result[i] = fastpow(spectral_a[i], fac_a) * fastpow(spectral_b[i], fac_b);
-        }
-        let mut rgb_result = [0.0f32; 3];
-        spectral_to_rgb(&spectral_result, &mut rgb_result);
+            let mut spectral_result = [0.0f32; 10];
+            for i in 0..10 {
+                spectral_result[i] = fastpow(spectral_a[i], fac_a) * fastpow(spectral_b[i], fac_b);
+            }
+            let mut rgb_result = [0.0f32; 3];
+            spectral_to_rgb(&spectral_result, &mut rgb_result);
 
-        for i in 0..3 {
-            rgba[p + i] = ((rgb_result[i] * rgba[p + 3] as f32) as f64 + 0.5) as u16;
-        }
+            for i in 0..3 {
+                rgba[p + i] = ((rgb_result[i] * rgba[p + 3] as f32) as f64 + 0.5) as u16;
+            }
         }
     });
 }

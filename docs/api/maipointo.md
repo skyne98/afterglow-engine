@@ -21,29 +21,40 @@ engine exists solely as the reference for the exactness tests.
   `cooperative_stroke_continue`, `StrokeState`). Returns 2 to split a
   stroke, 1 when queued/finished, 0 while budgeted work remains.
 - `src/brushmodes.rs`, `src/mask.rs` — the fix15 dab blend modes and the
-  LRE dab mask, including the spectral (`paint > 0`) Pigment paths.
+  LRE dab mask, including the spectral (`paint > 0`) Pigment paths. The wasm
+  normal, eraser, and alpha-lock paths use SIMD128. Scalar paths use the same
+  integer operation order. The mask API can calculate one pixel or a specified
+  row range without a change to its result.
 - `src/mapping.rs` — `mypaint-mapping.c` input mappings.
 - `src/rngdouble.rs` — Knuth lagged-Fibonacci RNG (seed 1000).
 - `src/settings.rs` + `build.rs` — tables/enums generated from the
   vendored `brushsettings.json` at build time (order equals the C enums).
 - `src/surface.rs` — `FixedTiledSurface`: 64x64 RGBA fix15 tiles,
   0xFFFF prefill (the C `memset(buffer, 255)` quirk), fixed-capacity op
-  queue (16384 ops, 4096 dirty tiles; overflow is counted, never grown).
+  queue (16,384 ops) and 4,096-tile job groups. One batch drains all groups
+  before the next stroke. Queue overflow is counted, never grown.
 - `src/compositor.rs` — the layer compositor (`layer_blend_over`,
   `pigment_blend`, 22 `BlendMode`s). Byte-validated against
   `paint/layer-compositor.c` (21 modes 0 LSB, Pigment <= 1 LSB).
 - `src/symmetry.rs` — `mypaint-symmetry.c` + `mypaint-matrix.c` port
   (transforms, snowflake fall-through, rectangle expansion).
 - `src/web_surface.rs` — sparse hash-tile surface (>= 8192 hash size),
-  used-tile slots, shared 4096-tile resident budget, first-write capture,
+  used-tile slots, shared runtime tile budget, first-write capture,
   fixed 16384-op queue, `begin_atomic`/`end_atomic` dirty ROI (max 32
   rects), symmetry dab fan-out, `get_color`, display-dirty slots, and fixed
-  tile-job publication.
-- `src/app.rs` — `PaintApp`: layers/groups tree, history (fixed 40
-  records and a 64 MiB entry-byte budget), with a 32 MiB limit for one
-  stroke's before-image capture, display EOTF LUT, mip render, render/pick/
+  tile-job publication. Spectral `get_color` applies queued dabs only to the
+  selected pixels. A reused operation-index buffer limits each pixel to the
+  operations for its tile. Row progress permits bounded inline tile work.
+  Ops whose tiles fall outside the document grid are
+  dropped at queue time (the C keeps them and skips them at tile-fetch
+  time); a fully off-canvas dab reports `false`. Tile metadata and the hash
+  grow when the host increases the runtime tile limit. Each tile has a storage-dirty bit.
+- `src/app.rs` — `PaintApp`: layers/groups tree, an internal history fallback
+  (fixed 40 records and a 64 MiB entry-byte budget), external history capture,
+  display EOTF LUT, mip render, render/pick/
   symmetry/layer/group operations, and the cooperative 128-dab, one-sample
-  stroke driver mapping onto the brush.
+  stroke driver mapping onto the brush. A visible full-opacity Normal layer
+  uses an exact full-tile compositor path when it is the only root item.
 - `src/demo_capi.rs` — the full `_paint_*` + `_init`/`_malloc`/`_free`
   C ABI for the standalone wasm module (feature `demo`), plus the
   shared `.myb` v3 JSON loader (`src/capi_json.rs`). Scratch
@@ -52,13 +63,11 @@ engine exists solely as the reference for the exactness tests.
   handling unwinds a panic, drops the RefCell borrow cleanly, and degrades
   to error code 1. A busy RefCell returns the default result without a
   second panic. An engine panic must never abort into a trap that leaks the
-  borrow and bricks the instance. The ABI also lists, reads, removes, and
-  restores raw RGBA16 tiles for the TypeScript IndexedDB pager. The history
-  system carries a 64 MiB entry-byte budget with deterministic oldest-record
-  eviction and fallible reservation: at 16K documents a single stroke can
-  capture hundreds of tiles. One stroke has a 32 MiB before-image limit. An
-  over-size stroke paints without undo and reports error 2; an unbounded
-  history OOM-aborted the worker mid-stroke.
+  borrow and bricks the instance. The ABI also controls the shared runtime tile
+  limit and lists, reads, removes, and restores raw RGBA16 tiles for the TypeScript pager. In external
+  history mode, the ABI supplies each first-write RGBA16 capture to TypeScript.
+  TypeScript writes captures to IndexedDB in 64-tile, 2 MiB batches. Thus, the
+  internal 32 MiB capture limit does not apply to the browser paint worker.
 - `src/random.rs` — `RandomSource` trait: `PortableRand` (production)
   and `GlibcRand` (TYPE_3 glibc clone) so parity tests can replay the
   C `rand()` stream exactly.
@@ -78,19 +87,71 @@ The demo's TS loader (`src/maipo-wasm.ts`) instantiates the module,
 wraps the exports (`_name` keys), provides `HEAPU8`/`HEAP32` views,
 the string helpers the worker uses (`lengthBytesUTF8`,
 `stringToUTF8`, `UTF8ToString`), and the shared
-`WebAssembly.Memory` (initial 256, maximum 4096 pages). The module
-imports that memory with its own 256 MiB cap
-(`paint/maipointo/.cargo/config.toml`), which overrides the engine
-workspace's 64 MiB default for this crate only. All paint layers share a
-fixed 4,096-resident-tile budget (128 MiB of RGBA16 tile data), and history
-uses a separate 64 MiB byte budget. The worker stores evicted RGBA16 tiles
-in IndexedDB and restores the needed brush region before a new stroke. It
-evicts only between strokes, protects a bounded 1,024-pixel brush path, and
-keeps 2,048 or fewer resident tiles after a page. During a stroke it restores
-the next bounded input region, writes older tiles before eviction, and protects
-the current brush region. An IndexedDB miss means a zero tile, while a
-storage failure rejects the stroke without a wasm trap. A full budget without a page still reports error code `1`
-instead of growing until the worker aborts.
+`WebAssembly.Memory` (initial 256, maximum 32768 pages). The module
+imports that memory with a 2 GiB maximum
+(`paint/maipointo/.cargo/config.toml`). This crate does not use the engine
+workspace's 64 MiB maximum.
+
+The page sets a total paint-memory limit. The default is 25 percent of
+`navigator.deviceMemory`, with a 2 GiB maximum and a 1 GiB fallback. The
+new-document control has a 64 MiB through 2 GiB override. The tile calculation
+subtracts 64 MiB for history, 128 MiB for other paint data, and 8 MiB for
+each tile worker.
+
+All paint layers first share 4,096 resident tiles. The worker increases the
+limit by 2,048 tiles (64 MiB of RGBA16 pixels) near each limit. It writes
+cold tiles only after the limit reaches the selected maximum and enters its
+512-tile allocation headroom. It then frees one 64 MiB block. The worker
+protects the current and recent path. It also loads a path
+up to 100 ms and 512 pixels in the movement direction. An eight-tile inner
+guard starts a restore before the brush reaches a cold tile.
+
+The pager writes only storage-dirty tiles. It uses 64-tile, 2 MiB write
+transactions. A restored clean tile can leave memory without a second write.
+IndexedDB reads use one exact compound-key range for each tile column. The
+history queue keeps as many as 256 completed operations. It removes the oldest
+operation at this count or when IndexedDB quota blocks a new write. Undo and
+redo exchange one exact tile snapshot in two phases. A failed current-operation
+write restores its before-images instead of completing without undo. An
+IndexedDB miss means an empty tile. A paging failure ends the operation and
+keeps its undo data. A history write failure rolls the operation back. A full
+budget without a page reports error code `1`.
+
+## Paint editor UI
+
+The paint page uses Vue 3, shadcn-vue components, and Lucide icons.
+`src/PaintApp.vue` supplies the Photoshop-style menu bar, options bar, tool rail, canvas, panels, and status bar.
+`src/paint-demo.ts` connects these controls to the paint worker.
+
+The Color panel has a hue wheel, a saturation-value square, two swatches, and synchronized hexadecimal, RGB, and HSV inputs.
+The Layers panel shows one nested layer and group stack.
+It puts the selected item controls above the stack and the stack actions below it.
+These controls set visibility, blend mode, opacity, parent, group composition, order, creation, and deletion.
+
+The page uses these Photoshop shortcuts for available actions:
+
+| Shortcut | Action |
+|---|---|
+| `B`, `H`, `R`, `Z` | Select Brush, Hand, Rotate View, or Zoom |
+| `Space` | Temporarily use the Hand tool |
+| `[` / `]` | Decrease or increase the brush size |
+| `{` / `}` | Decrease or increase brush hardness |
+| `0` through `9` | Set brush opacity |
+| `D` / `X` | Set default colors or switch foreground and background colors |
+| `,` / `.` | Select the previous or next brush |
+| `Ctrl/Command+Z` | Undo |
+| `Ctrl/Command+Shift+Z` | Redo |
+| `Ctrl/Command+N` | Make a new document |
+| `Ctrl/Command+Shift+N` | Make a new layer |
+| `Ctrl/Command+O` | Open an OpenRaster file |
+| `Ctrl/Command+S` | Save an OpenRaster file |
+| `Ctrl/Command+Alt+Shift+W` | Export a PNG file |
+| `Ctrl/Command++` / `Ctrl/Command+-` | Increase or decrease zoom |
+| `Ctrl/Command+0` / `Ctrl/Command+1` | Fit the canvas or use 100 percent zoom |
+| `Delete` | Clear the active layer |
+| `Tab` | Hide or show the panels |
+
+A form control keeps its normal keys while it has focus. The app does not replace browser shortcuts that have no paint action.
 
 ## Exactness validation
 
@@ -111,7 +172,7 @@ gate compiler-dependent). The oracle replay covers:
   argument, and tile-byte comparison,
 - event-prefix bisection to the first divergent dab.
 
-36 tests total; all green with and without `--features demo`.
+The full test set is green with and without `--features demo`.
 
 ## Build
 

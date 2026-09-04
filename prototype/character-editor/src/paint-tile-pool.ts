@@ -5,7 +5,7 @@
  * the blended tiles. Falls back to inline draining when the pool cannot
  * start. */
 
-const POOL_CAP = 16;
+import { paintTileWorkerCount } from './paint-memory.ts';
 
 export interface TilePool {
   workerCount: number;
@@ -27,7 +27,7 @@ export async function spawnTilePool(
   onLog?: (text: string) => void,
   logical = navigator.hardwareConcurrency || 8,
 ): Promise<TilePool> {
-  const count = Math.max(1, Math.min(POOL_CAP, Math.floor(logical / 2) - 1));
+  const count = paintTileWorkerCount(logical);
   const readyFlag = new SharedArrayBuffer(4);
   const readyView = new Int32Array(readyFlag);
   const workers: Worker[] = [];
