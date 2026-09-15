@@ -3,11 +3,14 @@
  * This module captures input, manages DOM/UI, and forwards to the worker.
  */
 import { decodeZip, encodeStoredZip, text, utf8 } from './openraster.ts';
+import { PaintSession } from './paint-session.ts';
+import { openFile, saveFile } from '../../../crates/afterglow-web/web/src/engine/workers/platform-files.ts';
 import { resolvePenPressure } from './paint-input.ts';
 import { paintMemoryLimitMiB } from './paint-memory.ts';
 import { PaintPointerState } from './paint-pointer-state.ts';
+import { inversePaintView } from './paint-view.ts';
 import { resolvePaintShortcut, type PaintShortcut } from './paint-shortcuts.ts';
-import { buildPaintLayerRows, type PaintGroupInfo, type PaintLayerInfo } from './paint-layers.ts';
+import { buildPaintLayerRows, samePaintLayerState, type PaintGroupInfo, type PaintLayerInfo } from './paint-layers.ts';
 import { rgbToHex } from './paint-color.ts';
 import { StrokeStabilizer, type StrokeStabilizerMode } from './paint-stabilizer.ts';
 
@@ -24,12 +27,18 @@ function newPaintDocumentId(): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
-let worker: Worker | null = null;
+let worker: PaintSession | null = null;
 let paintDocumentId = newPaintDocumentId();
 let engineState: any = null;
 let ready = false;
+let recoveryPending = false;
+let resolveInitialReady!: () => void;
+let rejectInitialReady!: (error: Error) => void;
+const initialReady = new Promise<void>((resolve, reject) => { resolveInitialReady = resolve; rejectInitialReady = reject; });
+let resolveRecoveryPrompt!: () => void;
+const recoveryPrompt = new Promise<void>(resolve => { resolveRecoveryPrompt = resolve; });
 let exportSeq = 0;
-let pendingTiles: ((v: { data: ArrayBuffer[]; scale: number }) => void) | null = null;
+let pendingTiles: { id: number; resolve: (v: { data: ArrayBuffer[]; scale: number }) => void; reject: (error: Error) => void } | null = null;
 
 const pointerState = new PaintPointerState();
 let lastPX = 0, lastPY = 0;
@@ -70,7 +79,10 @@ try {
 stabilizer.configure(stabilizerMode, stabilizerAmount, stabilizerCatchUp);
 const deviceMemoryGiB = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
 let savedPaintMemoryMiB: number | undefined;
+let nativeMemoryLimitMiB: number | undefined;
 try {
+  const native = Number(localStorage.getItem('afterglow.nativePaintMemoryMiB'));
+  if (Number.isFinite(native) && native > 0) nativeMemoryLimitMiB = native;
   const saved = Number(localStorage.getItem('afterglow.paintMemoryMiB'));
   if (saved > 0) savedPaintMemoryMiB = saved;
 } catch {}
@@ -84,7 +96,10 @@ const brushButtons = new Map<string, HTMLButtonElement>();
 const layerModes = ['Normal','Multiply','Screen','Overlay','Darken','Lighten','Hard Light','Soft Light','Burn','Dodge','Difference','Exclusion','Hue','Saturation','Color','Luminosity','Plus','Destination In','Destination Out','Source Atop','Destination Atop','Pigment'];
 
 function log(m: string) { logEl.textContent += m + '\n'; logEl.scrollTop = logEl.scrollHeight; }
-function send(m: any, t?: Transferable[]) { if (t) worker?.postMessage(m, t); else worker?.postMessage(m); }
+function send(m: any, t?: Transferable[]) {
+  if (recoveryPending && m.cmd !== 'init') return;
+  worker?.send(m, t);
+}
 function releaseCanvasPointer(pointerId: number | null) {
   if (pointerId === null) return;
   try {
@@ -114,7 +129,7 @@ function finishInputForViewChange() {
   commitPointerStroke(clearPointerInput());
 }
 function sendCfg(s: [string, number][]) { send({ cmd: 'config', settings: s }); }
-function brushUrl(p: string) { return `/mypaint/brushes/${p.split('/').map(encodeURIComponent).join('/')}`; }
+function brushUrl(p: string) { return new URL(`../mypaint/brushes/${p.split('/').map(encodeURIComponent).join('/')}`, document.baseURI).href; }
 function hexRgb(v: string): [number, number, number] { const n = parseInt(v.slice(1), 16); return [((n>>16)&255)/255, ((n>>8)&255)/255, (n&255)/255]; }
 function rgbHsv(r: number, g: number, b: number): [number, number, number] { const mx = Math.max(r,g,b), mn = Math.min(r,g,b), d = mx-mn; let h = 0; if (d) { if (mx===r) h=((g-b)/d)%6; else if (mx===g) h=(b-r)/d+2; else h=(r-g)/d+4; h/=6; if (h<0) h+=1; } return [h, mx===0?0:d/mx, mx]; }
 function applyBrushColor() { const [r,g,b] = hexRgb(ui.color); const h = rgbHsv(r**2.2, g**2.2, b**2.2); sendCfg([['color_h',h[0]],['color_s',h[1]],['color_v',h[2]]]); }
@@ -174,11 +189,9 @@ function cycleBrush(offset: number) {
 }
 function pointerModel(e: PointerEvent): [number, number] {
   const r = canvas.getBoundingClientRect(), cx = r.left + r.width * 0.5, cy = r.top + r.height * 0.5;
-  const t = new DOMMatrix(getComputedStyle(canvas).transform);
-  const lt = new DOMMatrix([t.a, t.b, t.c, t.d, 0, 0]).inverse();
-  const l = new DOMPoint(e.clientX - cx, e.clientY - cy).matrixTransform(lt);
+  const [x, y] = inversePaintView(e.clientX - cx, e.clientY - cy, view.zoom, view.rotationDegrees, view.mirror);
   const cw = canvas.offsetWidth, ch = canvas.offsetHeight;
-  const dx = (l.x + cw * 0.5) * (dispW / cw), dy = (l.y + ch * 0.5) * (dispH / ch);
+  const dx = (x + cw * 0.5) * (dispW / cw), dy = (y + ch * 0.5) * (dispH / ch);
   return [dx * (docSize.width / dispW), dy * (docSize.height / dispH)];
 }
 let lastKnownPenPressure = 0.5;
@@ -410,10 +423,10 @@ function refreshLayerInspector() {
   blend.value = String(info.mode);
   opacity.value = String(info.opacity);
   $('layerOpacityValue').textContent = `${Math.round(info.opacity * 100)}%`;
-  parent.replaceChildren(new Option('Canvas', '-1'));
+  parent.replaceChildren(Object.assign(document.createElement('option'), { textContent: 'Canvas', value: '-1' }));
   for (const group of engineState.groups as PaintGroupInfo[]) {
     if (!group.alive || groupSelected && groupIsInside(selectedGroupId, group.id)) continue;
-    parent.append(new Option(`Group ${group.id + 1}`, String(group.id)));
+    parent.append(Object.assign(document.createElement('option'), { textContent: `Group ${group.id + 1}`, value: String(group.id) }));
   }
   parent.value = String(groupSelected ? (info as PaintGroupInfo).parent : (info as PaintLayerInfo).group);
   const groupOptions = $<HTMLDivElement>('groupOptions');
@@ -460,37 +473,98 @@ function refreshLayers() {
 }
 function renderCatalog(brushes: BrushPreset[]) { loadedBrushes = brushes; brushGrid.replaceChildren(); brushButtons.clear(); let last = ''; for (const b of brushes) { if (b.group !== last) { const h = document.createElement('h3'); h.textContent = b.group; brushGrid.append(h); last = b.group; } const btn = document.createElement('button'); btn.type = 'button'; btn.className = 'brush-item'; const img = document.createElement('img'); img.src = brushUrl(b.preview); img.alt = ''; const sp = document.createElement('span'); sp.textContent = b.name; btn.append(img, sp); btn.onclick = () => void selectBrush(b); brushButtons.set(b.id, btn); brushGrid.append(btn); } }
 async function selectBrush(b: BrushPreset) { const r = await fetch(brushUrl(b.brush)); if (!r.ok) return; const json = await r.text(); selectedBrushId = b.id; selectedBrushJson = json; try { const root = JSON.parse(json); const rest = Number(root?.settings?.restore_color?.base_value ?? 0); if (rest > 0) { const s = [Number(root?.settings?.color_h?.base_value ?? 0), Number(root?.settings?.color_s?.base_value ?? 0), Number(root?.settings?.color_v?.base_value ?? 0)]; const a = hexRgb(ui.color).map(v => v ** 2.2); const f = Math.max(0, Math.min(1, rest)); const r2 = a[0]*(1-f)+s[0]*f, g2 = a[1]*(1-f)+s[1]*f, b2 = a[2]*(1-f)+s[2]*f; ui.color = `#${Math.round(r2**(1/2.2)*255).toString(16).padStart(2,'0')}${Math.round(g2**(1/2.2)*255).toString(16).padStart(2,'0')}${Math.round(b2**(1/2.2)*255).toString(16).padStart(2,'0')}`; ($('color') as HTMLInputElement).value = ui.color; } } catch {} send({ cmd: 'loadBrush', json }); applyBrushColor(); applyBrushOverrides(); updateColorSwatches(); for (const [id, btn] of brushButtons) btn.classList.toggle('selected', id === selectedBrushId); statusEl.textContent = `Ready — ${b.name}.`; }
-async function loadCatalog() { const r = await fetch('/mypaint/brushes.json'); if (!r.ok) throw new Error('Cannot load brush catalog.'); const m = await r.json() as { count: number; brushes: BrushPreset[] }; renderCatalog(m.brushes); const init = m.brushes.find(b => b.id === 'classic/brush') ?? m.brushes[0]; if (init) await selectBrush(init); log(`${m.count} brushes loaded.`); }
+async function loadCatalog() { const r = await fetch(new URL('../mypaint/brushes.json', document.baseURI)); if (!r.ok) throw new Error('Cannot load brush catalog.'); const m = await r.json() as { count: number; brushes: BrushPreset[] }; renderCatalog(m.brushes); const init = m.brushes.find(b => b.id === 'classic/brush') ?? m.brushes[0]; if (init) await selectBrush(init); log(`${m.count} brushes loaded.`); }
 
 // Export
-function reqTiles(layerId: number | null): Promise<{ data: ArrayBuffer[]; scale: number }> { const id = ++exportSeq; return new Promise(res => { pendingTiles = (v) => res(v); send({ cmd: 'exportTiles', layerId, id }); }); }
+function reqTiles(layerId: number | null): Promise<{ data: ArrayBuffer[]; scale: number }> {
+  if (!ready) return Promise.reject(new Error('The paint document is not ready.'));
+  if (pendingTiles) return Promise.reject(new Error('An export is already active.'));
+  const id = ++exportSeq;
+  return new Promise((resolve, reject) => {
+    pendingTiles = { id, resolve, reject };
+    try { send({ cmd: 'exportTiles', layerId, id }); }
+    catch (error) { pendingTiles = null; reject(error); }
+  });
+}
 async function canvasPng(c: HTMLCanvasElement): Promise<Uint8Array> { const b = await new Promise<Blob|null>(r => c.toBlob(r, 'image/png')); if (!b) throw new Error('PNG failed.'); return new Uint8Array(await b.arrayBuffer()); }
 async function renderPng(layerId: number | null): Promise<Uint8Array> { if (!engineState) throw new Error('No engine.');
   const ow = engineState.width, oh = engineState.height;
   const out = document.createElement('canvas'); out.width = ow; out.height = oh; const g = out.getContext('2d', { alpha: true })!;
   const { data, scale } = await reqTiles(layerId); const cols = Math.ceil(ow / (64 * scale)); const img = new ImageData(64, 64);
   for (let i = 0; i < data.length; i++) { const tx = i % cols, ty = Math.floor(i / cols); img.data.set(new Uint8Array(data[i])); g.putImageData(img, tx * 64, ty * 64); } return canvasPng(out); }
-function dl(data: Uint8Array, name: string, type: string) { const b = new Blob([data as BlobPart], { type }); const u = URL.createObjectURL(b); const a = document.createElement('a'); a.href = u; a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(u), 1000); }
-async function exportPng() { dl(await renderPng(null), 'afterglow-paint.png', 'image/png'); }
+async function exportPng() { await saveFile(await renderPng(null), 'afterglow-paint.png', 'image/png'); }
 function compOp(m: number) { const n = ['svg:src-over','svg:multiply','svg:screen','svg:overlay','svg:darken','svg:lighten','svg:hard-light','svg:soft-light','svg:color-burn','svg:color-dodge','svg:difference','svg:exclusion','svg:hue','svg:saturation','svg:color','svg:luminosity','svg:plus','svg:src-in','svg:src-out','svg:src-atop','svg:dst-atop','svg:src-over']; return n[m] ?? 'svg:src-over'; }
 function buildStackXml(): string { if (!engineState) return ''; const lc = engineState.layers.length, gc = engineState.groups.length; const lX = (l: number, i: string) => `${i}<layer name="Layer ${l+1}" src="data/layer-${l}.png" opacity="${engineState.layers[l].opacity}" visibility="${engineState.layers[l].visible !== 0 ? 'visible' : 'hidden'}" composite-op="${compOp(engineState.layers[l].mode)}" />`; const gX = (g: number, i: string) => { const lines = [`${i}<stack name="Group ${g+1}" opacity="${engineState.groups[g].opacity}" visibility="${engineState.groups[g].visible !== 0 ? 'visible' : 'hidden'}" composite-op="${compOp(engineState.groups[g].mode)}">`]; for (let c = g - 1; c >= 0; c--) if (engineState.groups[c].alive && engineState.groups[c].parent === g && c !== g) lines.push(gX(c, i + '  ')); for (let l = lc - 1; l >= 0; l--) if (engineState.layers[l].group === g) lines.push(lX(l, i + '  ')); lines.push(`${i}</stack>`); return lines.join('\n'); }; const lines = ['<?xml version="1.0" encoding="UTF-8"?>', `<image version="0.0" w="${docSize.width}" h="${docSize.height}" name="Afterglow">`, '  <stack name="Afterglow">']; for (let g = gc - 1; g >= 0; g--) if (engineState.groups[g].alive && engineState.groups[g].parent < 0) lines.push(gX(g, '    ')); for (let l = lc - 1; l >= 0; l--) if (engineState.layers[l].group < 0) lines.push(lX(l, '    ')); lines.push('  </stack>', '</image>'); return lines.join('\n'); }
 function buildMeta(): string { if (!engineState) return '{}'; return JSON.stringify({ width: docSize.width, height: docSize.height, layers: engineState.layers.map((l: any) => ({ id: l.id, group: l.group, visible: l.visible, opacity: l.opacity, mode: l.mode })), groups: engineState.groups.filter((g: any) => g.alive).map((g: any) => ({ id: g.id, parent: g.parent, visible: g.visible, opacity: g.opacity, mode: g.mode, passThrough: g.passThrough, isolated: g.isolated })) }); }
-async function exportOra() { if (!engineState) return; const e = [{ name: 'mimetype', data: utf8('image/openraster') }, { name: 'stack.xml', data: utf8(buildStackXml()) }, { name: 'mergedimage.png', data: await renderPng(null) }, { name: 'data/metadata.json', data: utf8(buildMeta()) }]; for (let l = 0; l < engineState.layers.length; l++) e.push({ name: `data/layer-${l}.png`, data: await renderPng(l) }); dl(encodeStoredZip(e), 'afterglow-paint.ora', 'image/openraster'); }
-async function importOra(file: File) { if (!ready) return; const entries = await decodeZip(await file.arrayBuffer()); const mb = entries.get('data/metadata.json'); const meta = mb ? JSON.parse(text(mb)) as any : null; const st = entries.get('stack.xml'); const stT = st ? text(st) : ''; const w = meta?.width ?? Number(stT.match(/\bw="(\d+)"/)?.[1] ?? docSize.width), h = meta?.height ?? Number(stT.match(/\bh="(\d+)"/)?.[1] ?? docSize.height); const merged = entries.get('mergedimage.png') ?? entries.get('data/layer-0.png'); if (!merged) throw new Error('No image.'); resetDoc(w, h); send({ cmd: 'clearBackground' }); send({ cmd: 'clear' }); const layers = meta?.layers ?? [{ id: 0, group: -1, visible: 1, mode: 0 }]; for (const l of layers) { if (l.id > 0) send({ cmd: 'layer', op: 'create', layer: l.id }); send({ cmd: 'layer', op: 'setVisible', layer: l.id, value: l.visible !== 0 ? 1 : 0 }); send({ cmd: 'layer', op: 'setOpacity', layer: l.id, value: Number(l.opacity) || 1 }); send({ cmd: 'layer', op: 'setMode', layer: l.id, value: Number(l.mode) || 0 }); } const ic = await imgCanvas(merged); writeImg(ic, 0); for (const l of layers) { if (l.id === 0) continue; const d = entries.get(`data/layer-${l.id}.png`); if (d) writeImg(await imgCanvas(d), l.id); } for (const g of meta?.groups ?? []) { send({ cmd: 'group', op: 'create', group: g.id }); send({ cmd: 'group', op: 'setVisible', group: g.id, value: g.visible !== 0 ? 1 : 0 }); send({ cmd: 'group', op: 'setOpacity', group: g.id, value: Number(g.opacity) || 0 }); send({ cmd: 'group', op: 'setMode', group: g.id, value: Number(g.mode) || 0 }); send({ cmd: 'group', op: 'setPassThrough', group: g.id, value: g.passThrough ? 1 : 0 }); send({ cmd: 'group', op: 'setIsolated', group: g.id, value: g.isolated ? 1 : 0 }); send({ cmd: 'group', op: 'setParent', group: g.id, value: Number(g.parent) }); } for (const l of layers) if (l.group !== undefined) send({ cmd: 'layer', op: 'setGroup', layer: l.id, value: Number(l.group) }); send({ cmd: 'layer', op: 'setActive', layer: 0 }); }
+async function exportOra() { if (!engineState) return; const e = [{ name: 'mimetype', data: utf8('image/openraster') }, { name: 'stack.xml', data: utf8(buildStackXml()) }, { name: 'mergedimage.png', data: await renderPng(null) }, { name: 'data/metadata.json', data: utf8(buildMeta()) }]; for (let l = 0; l < engineState.layers.length; l++) e.push({ name: `data/layer-${l}.png`, data: await renderPng(l) }); await saveFile(encodeStoredZip(e), 'afterglow-paint.ora', 'image/openraster'); }
+async function importOra(file: Blob) { if (!ready) return; const entries = await decodeZip(await file.arrayBuffer()); const mb = entries.get('data/metadata.json'); const meta = mb ? JSON.parse(text(mb)) as any : null; const st = entries.get('stack.xml'); const stT = st ? text(st) : ''; const w = meta?.width ?? Number(stT.match(/\bw="(\d+)"/)?.[1] ?? docSize.width), h = meta?.height ?? Number(stT.match(/\bh="(\d+)"/)?.[1] ?? docSize.height); const merged = entries.get('data/layer-0.png') ?? entries.get('mergedimage.png'); if (!merged) throw new Error('No image.'); resetDoc(w, h); send({ cmd: 'clearBackground' }); send({ cmd: 'clear' }); const layers = meta?.layers ?? [{ id: 0, group: -1, visible: 1, mode: 0 }]; for (const l of layers) { if (l.id > 0) send({ cmd: 'layer', op: 'create', layer: l.id }); send({ cmd: 'layer', op: 'setVisible', layer: l.id, value: l.visible !== 0 ? 1 : 0 }); send({ cmd: 'layer', op: 'setOpacity', layer: l.id, value: Number(l.opacity ?? 1) }); send({ cmd: 'layer', op: 'setMode', layer: l.id, value: Number(l.mode) || 0 }); } const ic = await imgCanvas(merged); await writeImg(ic, 0); for (const l of layers) { if (l.id === 0) continue; const d = entries.get(`data/layer-${l.id}.png`); if (d) await writeImg(await imgCanvas(d), l.id); } for (const g of meta?.groups ?? []) { send({ cmd: 'group', op: 'create', group: g.id }); send({ cmd: 'group', op: 'setVisible', group: g.id, value: g.visible !== 0 ? 1 : 0 }); send({ cmd: 'group', op: 'setOpacity', group: g.id, value: Number(g.opacity) || 0 }); send({ cmd: 'group', op: 'setMode', group: g.id, value: Number(g.mode) || 0 }); send({ cmd: 'group', op: 'setPassThrough', group: g.id, value: g.passThrough ? 1 : 0 }); send({ cmd: 'group', op: 'setIsolated', group: g.id, value: g.isolated ? 1 : 0 }); send({ cmd: 'group', op: 'setParent', group: g.id, value: Number(g.parent) }); } for (const l of layers) if (l.group !== undefined) send({ cmd: 'layer', op: 'setGroup', layer: l.id, value: Number(l.group) }); send({ cmd: 'layer', op: 'setActive', layer: 0 }); }
 async function imgCanvas(d: Uint8Array): Promise<HTMLCanvasElement> { const bm = await createImageBitmap(new Blob([d as BlobPart], { type: 'image/png' })); const c = document.createElement('canvas'); c.width = bm.width; c.height = bm.height; c.getContext('2d', { alpha: true })!.drawImage(bm, 0, 0); bm.close(); return c; }
-function writeImg(ic: HTMLCanvasElement, layer: number) { const g = ic.getContext('2d', { alpha: true })!; const img = g.getImageData(0, 0, ic.width, ic.height); const tile = new Uint8Array(64 * 64 * 4); for (let ty = 0; ty < Math.ceil(ic.height / 64); ty++) for (let tx = 0; tx < Math.ceil(ic.width / 64); tx++) { tile.fill(0); for (let y = 0; y < 64; y++) { const sy = ty * 64 + y; if (sy >= img.height) continue; for (let x = 0; x < 64; x++) { const sx = tx * 64 + x; if (sx >= img.width) continue; tile.set(img.data.subarray((sy * img.width + sx) * 4, (sy * img.width + sx) * 4 + 4), (y * 64 + x) * 4); } } send({ cmd: 'writeTile', layer, tx, ty, data: tile.slice().buffer }, [tile.slice().buffer]); } }
-function resetDoc(w: number, h: number) { if (w < 64 || h < 64 || w > 16384 || h > 16384) return; clearPointerInput(); ready = false; paintDocumentId = newPaintDocumentId(); docSize.width = w; docSize.height = h; const r = Math.max(w, h) / 4096; const ds = r <= 1 ? 1 : r <= 2 ? 2 : 4; dispW = Math.ceil(w / ds); dispH = Math.ceil(h / ds); canvas.style.width = `${dispW}px`; canvas.style.height = `${dispH}px`; send({ cmd: 'init', width: w, height: h, documentId: paintDocumentId, hardwareConcurrency: navigator.hardwareConcurrency, memoryLimitMiB: paintMemoryMiB }); }
+async function writeImg(ic: HTMLCanvasElement, layer: number) { const g = ic.getContext('2d', { alpha: true })!; const img = g.getImageData(0, 0, ic.width, ic.height); const tile = new Uint8Array(64 * 64 * 4); for (let ty = 0; ty < Math.ceil(ic.height / 64); ty++) for (let tx = 0; tx < Math.ceil(ic.width / 64); tx++) { tile.fill(0); for (let y = 0; y < 64; y++) { const sy = ty * 64 + y; if (sy >= img.height) continue; for (let x = 0; x < 64; x++) { const sx = tx * 64 + x; if (sx >= img.width) continue; tile.set(img.data.subarray((sy * img.width + sx) * 4, (sy * img.width + sx) * 4 + 4), (y * 64 + x) * 4); } } const data = tile.slice().buffer; send({ cmd: 'writeTile', layer, tx, ty, data }, [data]); if ((ty * Math.ceil(ic.width / 64) + tx + 1) % 64 === 0) await worker?.flush(); } await worker?.flush(); }
+function resetDoc(w: number, h: number) { if (recoveryPending || w < 64 || h < 64 || w > 16384 || h > 16384) return; clearPointerInput(); ready = false; paintDocumentId = newPaintDocumentId(); docSize.width = w; docSize.height = h; const r = Math.max(w, h) / 4096; const ds = r <= 1 ? 1 : r <= 2 ? 2 : 4; dispW = Math.ceil(w / ds); dispH = Math.ceil(h / ds); canvas.style.width = `${dispW}px`; canvas.style.height = `${dispH}px`; send({ cmd: 'init', recovery: 'discard', width: w, height: h, documentId: paintDocumentId, hardwareConcurrency: navigator.hardwareConcurrency, memoryLimitMiB: paintMemoryMiB, nativeMemoryLimitMiB }); }
 
-worker = new Worker(new URL('./paint-engine-worker.ts', import.meta.url), { type: 'module' });
-(window as any).probe = (y: number) => { worker.postMessage({ cmd: 'probe', id: Math.floor(Math.random() * 1e9), y }); };
-worker.onmessage = (e: MessageEvent) => { const m = e.data;
+function chooseRecovery(recovery: 'restore' | 'discard') {
+  if (!recoveryPending) return;
+  $<HTMLButtonElement>('restorePaintBtn').disabled = true;
+  $<HTMLButtonElement>('discardPaintBtn').disabled = true;
+  send({ cmd: 'init', recovery, width: docSize.width, height: docSize.height, documentId: paintDocumentId,
+    hardwareConcurrency: navigator.hardwareConcurrency, memoryLimitMiB: paintMemoryMiB, nativeMemoryLimitMiB });
+}
+$('restorePaintBtn').onclick = () => chooseRecovery('restore');
+$('discardPaintBtn').onclick = () => chooseRecovery('discard');
+
+const tileMetricKeys = ['residentTiles', 'residentTileLimit', 'maximumResidentTiles'] as const;
+worker = new PaintSession(canvas);
+(window as any).probe = (y: number) => { const id = ++exportSeq; send({ cmd: 'probe', id, y }); return id; };
+worker.onmessage = (e) => { const m = e.data;
   switch (m.type) {
-    case 'ready': ready = true; ensureBrush(); refreshLayers(); statusEl.textContent = 'Ready — choose a brush or draw.'; break;
-    case 'state': engineState = m.state; if (engineState) { dispW = Math.ceil(engineState.width / engineState.displayScale); dispH = Math.ceil(engineState.height / engineState.displayScale); canvas.style.width = `${dispW}px`; canvas.style.height = `${dispH}px`; canvas.dataset.residentTiles = String(engineState.residentTiles); canvas.dataset.residentTileLimit = String(engineState.residentTileLimit); canvas.dataset.maximumResidentTiles = String(engineState.maximumResidentTiles); } refreshLayers(); break;
+    case 'recoveryRequired':
+      ready = false;
+      recoveryPending = true;
+      $('paintRecovery').style.display = 'block';
+      statusEl.textContent = 'Select Restore or Discard.';
+      $<HTMLButtonElement>('restorePaintBtn').disabled = false;
+      $<HTMLButtonElement>('discardPaintBtn').disabled = false;
+      $('restorePaintBtn').focus();
+      resolveRecoveryPrompt();
+      break;
+    case 'ready':
+      if (recoveryPending) canvas.focus();
+      recoveryPending = false;
+      $('paintRecovery').style.display = 'none';
+      ready = true; resolveInitialReady(); ensureBrush(); refreshLayers(); statusEl.textContent = 'Ready — choose a brush or draw.'; break;
+    case 'state': {
+      const previous = engineState;
+      engineState = m.state;
+      if (!engineState) break;
+      if (engineState.nativeMemory && (!previous || previous.nativeMemory?.limitMiB !== engineState.nativeMemory.limitMiB)) {
+        const memory = engineState.nativeMemory;
+        const input = $<HTMLInputElement>('memoryLimit');
+        input.max = String(memory.maximumMiB);
+        input.min = String(Math.ceil((memory.reservedBytes / 1048576 + 64) / 64) * 64);
+        paintMemoryMiB = memory.limitMiB;
+        input.value = String(paintMemoryMiB);
+        $('memoryLimitVal').textContent = String(paintMemoryMiB);
+      }
+      if (!previous || previous.width !== engineState.width || previous.height !== engineState.height || previous.displayScale !== engineState.displayScale) {
+        docSize.width = engineState.width;
+        docSize.height = engineState.height;
+        $<HTMLInputElement>('documentWidth').value = String(docSize.width);
+        $<HTMLInputElement>('documentHeight').value = String(docSize.height);
+        dispW = Math.ceil(engineState.width / engineState.displayScale);
+        dispH = Math.ceil(engineState.height / engineState.displayScale);
+        canvas.style.width = `${dispW}px`;
+        canvas.style.height = `${dispH}px`;
+      }
+      for (const key of tileMetricKeys) {
+        if (!previous || previous[key] !== engineState[key]) canvas.dataset[key] = String(engineState[key]);
+      }
+      if (!samePaintLayerState(previous, engineState)) refreshLayers();
+      break;
+    }
     case 'status': statusEl.textContent = m.text; break;
     case 'log': log(m.text); break;
     case 'stats': hudEl.textContent = `queue   ${m.queued} sp\nactions ${m.deferred}\ntiles   ${m.residentTiles}/${m.residentTileLimit}\nbrush   ${m.brushMs.toFixed(1)} ms\nrender  ${m.renderMs.toFixed(1)} ms\ninput   ${m.sps}/s`; break;
-    case 'tiles': if (pendingTiles) { const r = pendingTiles; pendingTiles = null; r({ data: m.data, scale: m.scale }); } break;
+    case 'tiles': if (pendingTiles && pendingTiles.id === m.id) { const request = pendingTiles; pendingTiles = null; request.resolve({ data: m.data, scale: m.scale }); } break;
     case 'probeResult': (window as any).__probeResult = m; break;
     case 'colorPicked':
       if (m.id === latestColorPickId) {
@@ -500,16 +574,24 @@ worker.onmessage = (e: MessageEvent) => { const m = e.data;
       break;
   }
 };
-worker.onerror = (e) => { log(`Worker error: ${e.message}`); statusEl.textContent = 'Engine error.'; };
+worker.onerror = (e) => {
+  ready = false;
+  rejectInitialReady(new Error(e.message));
+  pendingTiles?.reject(new Error(e.message));
+  pendingTiles = null;
+  log(`Worker error: ${e.message}`);
+  statusEl.textContent = 'Engine error: ' + e.message;
+};
 
 async function init() { statusEl.textContent = 'Loading brush engine…'; log('loading brush engine…');
-  const off = canvas.transferControlToOffscreen(); send({ cmd: 'init', width: docSize.width, height: docSize.height, documentId: paintDocumentId, canvas: off, hardwareConcurrency: navigator.hardwareConcurrency, memoryLimitMiB: paintMemoryMiB }, [off]);
+  send({ cmd: 'init', width: docSize.width, height: docSize.height, documentId: paintDocumentId, hardwareConcurrency: navigator.hardwareConcurrency, memoryLimitMiB: paintMemoryMiB, nativeMemoryLimitMiB });
   try { await loadCatalog(); } catch (e) { log(`Brush catalog error: ${(e as Error).message}`); } refreshLayers();
+  await initialReady;
 }
 applyView();
 setTool('brush');
 updateColorSwatches();
-init().catch(e => { statusEl.textContent = 'Engine failed to load: ' + (e as Error).message; log('ERROR: ' + ((e as Error).stack || (e as Error).message)); });
+const initTask = init().catch(e => { statusEl.textContent = 'Engine failed to load: ' + (e as Error).message; log('ERROR: ' + ((e as Error).stack || (e as Error).message)); throw e; });
 
 function togglePanels() {
   const workspace = document.querySelector<HTMLElement>('.workspace');
@@ -555,7 +637,7 @@ function runShortcut(action: PaintShortcut) {
     case 'clear-layer': $('clearBtn').click(); break;
     case 'new-document': $('newDocumentBtn').click(); break;
     case 'new-layer': $('addLayerBtn').click(); break;
-    case 'open-document': $<HTMLInputElement>('importOraInput').click(); break;
+    case 'open-document': $('openDocumentBtn').click(); break;
     case 'save-document': $('exportOraBtn').click(); break;
     case 'export-png': $('exportPngBtn').click(); break;
     case 'zoom-in': setZoom(view.zoom * 1.1); break;
@@ -656,17 +738,26 @@ $('backgroundColor').addEventListener('input', () => { applyBgColor(); updateCol
 $('undoBtn').addEventListener('click', () => send({ cmd: 'undo' }));
 $('redoBtn').addEventListener('click', () => send({ cmd: 'redo' }));
 $('memoryLimit').addEventListener('input', e => {
-  paintMemoryMiB = paintMemoryLimitMiB(deviceMemoryGiB, Number((e.target as HTMLInputElement).value));
-  ($('memoryLimit') as HTMLInputElement).value = String(paintMemoryMiB);
+  const input = e.target as HTMLInputElement;
+  const native = engineState?.nativeMemory;
+  paintMemoryMiB = native
+    ? Math.max(Number(input.min), Math.min(native.maximumMiB, Math.floor(Number(input.value) / 64) * 64))
+    : paintMemoryLimitMiB(deviceMemoryGiB, Number(input.value));
+  if (native) nativeMemoryLimitMiB = paintMemoryMiB;
+  input.value = String(paintMemoryMiB);
   $('memoryLimitVal').textContent = String(paintMemoryMiB);
-  try { localStorage.setItem('afterglow.paintMemoryMiB', String(paintMemoryMiB)); } catch {}
+  try { localStorage.setItem(native ? 'afterglow.nativePaintMemoryMiB' : 'afterglow.paintMemoryMiB', String(paintMemoryMiB)); } catch {}
 });
 ($('memoryLimit') as HTMLInputElement).value = String(paintMemoryMiB);
 $('memoryLimitVal').textContent = String(paintMemoryMiB);
 $('newDocumentBtn').addEventListener('click', () => resetDoc(Number(($('documentWidth') as HTMLInputElement).value), Number(($('documentHeight') as HTMLInputElement).value)));
 $('exportPngBtn').addEventListener('click', () => void exportPng().catch(e => statusEl.textContent = `PNG export failed: ${(e as Error).message}`));
 $('exportOraBtn').addEventListener('click', () => void exportOra().catch(e => statusEl.textContent = `ORA export failed: ${(e as Error).message}`));
-$('importOraInput').addEventListener('change', e => { const f = (e.target as HTMLInputElement).files?.[0]; if (f) void importOra(f).then(() => statusEl.textContent = 'OpenRaster imported.').catch(er => statusEl.textContent = `ORA import failed: ${(er as Error).message}`); });
+$('openDocumentBtn').addEventListener('click', () => {
+  void openFile(['ora']).then(async file => {
+    if (file) { await importOra(file); statusEl.textContent = 'OpenRaster imported.'; }
+  }).catch(error => { statusEl.textContent = `ORA import failed: ${(error as Error).message}`; });
+});
 $('layerBlendMode').addEventListener('change', event => sendSelection('setMode', Number((event.target as HTMLSelectElement).value)));
 $('layerOpacity').addEventListener('input', event => {
   const value = Number((event.target as HTMLInputElement).value);
@@ -690,3 +781,6 @@ $('deleteSelectionBtn').addEventListener('click', () => {
   }
 });
 $('strokeBtn').addEventListener('click', () => { if (!ready) return; const y = docSize.height / 2, x0 = docSize.width * 0.15; send({ cmd: 'beginStroke', x: x0, y, xtilt: 0, ytilt: 0, zoom: view.zoom, rotation: view.rotationDegrees * Math.PI / 180, barrel: 0.5 }); for (let i = 1; i <= 10; i++) send({ cmd: 'strokeSample', x: x0 + (docSize.width * 0.6) * (i / 10), y, pressure: 0.5, xtilt: 0, ytilt: 0, time: i * 16, zoom: view.zoom, rotation: view.rotationDegrees * Math.PI / 180, barrel: 0.5 }); send({ cmd: 'commit' }); statusEl.textContent = 'Test stroke drawn.'; });
+
+// The native host must complete module startup before it accepts recovery input.
+await Promise.race([initTask, recoveryPrompt]);

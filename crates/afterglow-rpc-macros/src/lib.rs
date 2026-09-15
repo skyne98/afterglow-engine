@@ -22,7 +22,7 @@
 //! the generated `<Name>Server` methods and preserves the trait's visibility.
 //!
 //! Method names must not collide with the generated API: `serve`, `new`, and
-//! `transport` are always reserved, and `spawn_worker` is reserved only when
+//! `transport` plus `into_transport` are always reserved. `spawn_worker` is reserved when
 //! `#[rpc(worker = ...)]` is used (it generates the native client constructor).
 //!
 //! ## Limitation
@@ -519,6 +519,11 @@ pub fn rpc(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     };
 
+    let native_transport_type = if singleton {
+        quote! { ::std::sync::Arc<::afterglow_rpc::native::AsyncWorkerTransport> }
+    } else {
+        quote! { ::afterglow_rpc::native::AsyncWorkerTransport }
+    };
     let expanded = if is_async {
         quote! {
             #vis trait #server {
@@ -540,6 +545,8 @@ pub fn rpc(attr: TokenStream, item: TokenStream) -> TokenStream {
             impl #client {
                 /// Drain completions and resolve pending futures. Call each frame.
                 pub fn poll(&self) { self.transport.poll(); }
+                /// Give the transport to its next owner without a second worker.
+                pub fn into_transport(self) -> #native_transport_type { self.transport }
                 #( #clients )*
             }
 
@@ -565,6 +572,8 @@ pub fn rpc(attr: TokenStream, item: TokenStream) -> TokenStream {
                 pub fn new(t: T) -> Self { Self { t } }
                 /// Read-only access to the underlying transport (for ad-hoc/raw calls).
                 pub fn transport(&self) -> &T { &self.t }
+                /// Give the transport to its next owner without a second worker.
+                pub fn into_transport(self) -> T { self.t }
                 #( #clients )*
             }
 
@@ -602,8 +611,10 @@ fn validate_trait(tr: &ItemTrait, worker: Option<&Type>) -> syn::Result<()> {
         // `new`, and `transport` are always generated; `spawn_worker` is only
         // generated in worker mode.
         let mname_str = sig.ident.to_string();
-        let collides = matches!(mname_str.as_str(), "serve" | "new" | "transport")
-            || (mname_str == "spawn_worker" && worker.is_some());
+        let collides = matches!(
+            mname_str.as_str(),
+            "serve" | "new" | "transport" | "into_transport"
+        ) || (mname_str == "spawn_worker" && worker.is_some());
         if collides {
             bad!(
                 &sig.ident,
@@ -714,7 +725,7 @@ mod tests {
     fn rejects_reserved_method_names() {
         // Always reserved: `serve` (server dispatch) and `new`/`transport`
         // (generic client methods). Rejected regardless of worker mode.
-        for name in ["serve", "new", "transport"] {
+        for name in ["serve", "new", "transport", "into_transport"] {
             let src = format!("trait T {{ fn {name}(a: u32) -> u32; }}");
             assert!(
                 validate_trait(&parsed(&src), None).is_err(),

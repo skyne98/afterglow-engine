@@ -5,9 +5,21 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 publish = false
-description = "Bounded metrics and correlated trace capture for Afterglow"
+description = "Application-independent bounded metrics and correlated trace capture"
+
+[features]
+default = []
+collector = ["dep:serde", "dep:serde_json", "dep:tungstenite"]
 
 [dependencies]
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+tungstenite = { version = "0.24", optional = true }
+
+[[bin]]
+name = "afterglow-collector"
+path = "src/bin/afterglow-collector.rs"
+required-features = ["collector"]
 
 [[example]]
 name = "bench_telemetry"

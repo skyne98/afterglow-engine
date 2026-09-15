@@ -84,12 +84,28 @@ function unwrapResponse(bytes) {
 var TIMEOUT_MS = 5000;
 
 class Rpc {
+  w;
+  mem;
+  worker;
+  scratch;
+  scratchLen;
+  pending;
+  _resolve;
+  _reject;
+  _fatal;
+  _terminated;
+  timeoutMs;
+  _initPromise;
+  _initTimer;
   static async create({ mainWasmUrl, workerJsUrl, workerWasmUrl, timeoutMs, workerInit = null }) {
     const memory = new WebAssembly.Memory({ shared: true, initial: 256, maximum: 1024 });
     const worker = new Worker(workerJsUrl, { type: "module" });
     let rpc = null;
     try {
-      const { exports: wasm } = await WebAssembly.instantiate(await WebAssembly.compile(await (await fetch(mainWasmUrl)).arrayBuffer()), { env: { memory, notify_worker: () => worker.postMessage("wake") } });
+      const { exports: rawWasm } = await WebAssembly.instantiate(await WebAssembly.compile(await (await fetch(mainWasmUrl)).arrayBuffer()), { env: { memory, notify_worker: () => {
+        worker.postMessage("wake");
+      } } });
+      const wasm = rawWasm;
       wasm.init_ring_buffers();
       rpc = new Rpc(wasm, memory, worker, { timeoutMs });
       worker.postMessage({
@@ -135,7 +151,8 @@ class Rpc {
   _onmsg(d) {
     if (this._fatal)
       return;
-    if (d && d.type === "ready") {
+    const message = typeof d === "object" && d !== null ? d : null;
+    if (message && message.type === "ready") {
       clearTimeout(this._initTimer);
       const r = this._resolve;
       this._resolve = this._reject = null;
@@ -143,8 +160,8 @@ class Rpc {
         r();
       return;
     }
-    if (d && d.type === "error") {
-      this._fail(this._reject ? new Error("worker init: " + (d.message || "error")) : new Error(d.message || "worker error"));
+    if (message && message.type === "error") {
+      this._fail(this._reject ? new Error("worker init: " + (message.message || "error")) : new Error(message.message || "worker error"));
       return;
     }
     if (this.pending)
@@ -167,8 +184,8 @@ class Rpc {
     if (this.w.write_frame(this.scratch, len) !== 0)
       throw new Error("write_frame failed (ring full)");
     return new Promise((resolve, reject) => {
-      this.pending = { resolve, reject };
-      this.pending.timer = setTimeout(() => this._fail(new Error("RPC timeout")), this.timeoutMs);
+      const timer = setTimeout(() => this._fail(new Error("RPC timeout")), this.timeoutMs);
+      this.pending = { resolve, reject, timer };
     });
   }
   _readResponse() {

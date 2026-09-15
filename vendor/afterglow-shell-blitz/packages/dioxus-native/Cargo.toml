@@ -10,13 +10,12 @@ homepage = "https://dioxuslabs.com/learn/0.7/getting_started"
 keywords = ["dom", "ui", "gui", "react"]
 
 [features]
-default = ["accessibility", "hot-reload", "net", "html", "svg", "system-fonts", "clipboard", "file-dialog", "vello-hybrid", "incremental", "woff", "apple-font-embolden"]
+default = ["accessibility", "hot-reload", "net", "html", "svg", "system-fonts", "clipboard", "file-dialog", "vello-hybrid", "woff", "apple-font-embolden"]
 prelude = ["dep:dioxus-core-macro", "dep:dioxus-hooks", "dep:dioxus-signals", "dep:dioxus-stores", "dep:manganis"]
 
 # DOM features
 svg = ["blitz-dom/svg", "blitz-paint/svg"]
 floats = ["blitz-dom/floats"]
-incremental = ["blitz-dom/incremental"]
 autofocus = ["blitz-dom/autofocus"]
 system-fonts = ["blitz-dom/system-fonts"]
 # complex-scripts: enable dictionary-based line-breaking
@@ -35,6 +34,9 @@ data-uri = ["blitz-shell/data-uri"]
 vello = ["dep:anyrender_vello", "dep:wgpu_context"]
 vello-hybrid = ["dep:anyrender_vello_hybrid", "dep:wgpu_context"]
 skia = ["dep:anyrender_skia"]
+skia-pixels = ["skia-raster-base", "anyrender_skia/pixels_window_renderer"]
+skia-softbuffer = ["skia-raster-base", "anyrender_skia/softbuffer_window_renderer"]
+skia-raster-base = ["dep:anyrender_skia"]
 vello-cpu = ["vello-cpu-pixels"]
 vello-cpu-pixels = ["vello-cpu-base", "anyrender_vello_cpu/pixels_window_renderer"]
 vello-cpu-softbuffer = ["vello-cpu-base", "anyrender_vello_cpu/softbuffer_window_renderer"]
@@ -75,6 +77,7 @@ blitz-shell = { workspace = true }
 
 # AnyRender dependencies
 anyrender = { workspace = true }
+peniko = { workspace = true }
 anyrender_vello = { workspace = true, optional = true}
 anyrender_vello_hybrid = { workspace = true, optional = true}
 anyrender_vello_cpu = { workspace = true, optional = true}

@@ -1,2 +1,2 @@
-export const brushlibWasm = "/wasm/brushlib.wasm?v=cce3e7bcafabae31b07130fa0e2b553cc9e354400b0e619b54ffcfacb22b6cfa";
+export const brushlibWasm = "/wasm/brushlib.wasm?v=9d7c00ff1cb54a6376a7aa899c77163c6470c1a967dbc90795f6a183b49d96a4";
 export default {};

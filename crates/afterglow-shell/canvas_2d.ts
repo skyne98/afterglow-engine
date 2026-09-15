@@ -122,6 +122,7 @@ class CanvasRenderingContext2D {
     this._width = 0;
     this._height = 0;
     this._data = new Uint8ClampedArray();
+    this._bytes = new Uint8Array(this._data.buffer);
     this._path = [];
     this._matrix = identity();
     this._clip = null;
@@ -136,9 +137,11 @@ class CanvasRenderingContext2D {
       this._width = width;
       this._height = height;
       this._data = new Uint8ClampedArray(width * height * 4);
+      this._bytes = new Uint8Array(this._data.buffer);
     }
   }
   get data() { this._syncSize(); return this._data; }
+  get bytes() { this._syncSize(); return this._bytes; }
   _point(x, y) {
     const m = this._matrix;
     return [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]];
@@ -367,6 +370,25 @@ export function installCanvas2D(canvas) {
   const context = new CanvasRenderingContext2D(canvas);
   Object.defineProperty(canvas, '_canvas2d', { value: context, configurable: false });
   Object.defineProperty(canvas, 'data', { configurable: true, get: () => context.data });
+  Object.defineProperty(canvas, 'toBlob', {
+    configurable: true,
+    value(callback, type = 'image/png') {
+      if (typeof callback !== 'function') throw new TypeError('toBlob callback must be a function');
+      const mime = String(type ?? 'image/png').trim().toLowerCase() || 'image/png';
+      const width = Number(canvas.width), height = Number(canvas.height);
+      const pixels = new Uint8Array(context.data);
+      queueMicrotask(() => {
+        if (mime !== 'image/png') return callback(null);
+        let encoded;
+        try {
+          encoded = Deno.core.ops.op_encode_png(width, height, pixels);
+        } catch {
+          return callback(null);
+        }
+        callback(new Blob([encoded], { type: 'image/png' }));
+      });
+    },
+  });
   return context;
 }
 

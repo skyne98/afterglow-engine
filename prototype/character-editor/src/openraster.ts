@@ -112,12 +112,26 @@ export function encodeStoredZip(entries: ZipEntry[]): Uint8Array {
   return concat([...locals, centralData, end]);
 }
 
-async function inflateRaw(data: Uint8Array): Promise<Uint8Array> {
-  const stream = new Blob([data as BlobPart]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
-  return new Uint8Array(await new Response(stream).arrayBuffer());
+async function inflateRaw(data: Uint8Array, expectedSize: number): Promise<Uint8Array> {
+  const reader = new Blob([data as BlobPart]).stream().pipeThrough(new DecompressionStream('deflate-raw')).getReader();
+  const output = new Uint8Array(expectedSize);
+  let offset = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (offset + value.length > expectedSize) throw new Error('The OpenRaster entry exceeds its size.');
+      output.set(value, offset);
+      offset += value.length;
+    }
+    if (offset !== expectedSize) throw new Error('The OpenRaster entry size is incorrect.');
+    return output;
+  } finally { await reader.cancel(); reader.releaseLock(); }
 }
 
 export async function decodeZip(input: ArrayBuffer): Promise<Map<string, Uint8Array>> {
+  const maximumBytes = 256 * 1024 * 1024;
+  if (input.byteLength > maximumBytes) throw new Error('The OpenRaster file exceeds 256 MiB.');
   const bytes = new Uint8Array(input);
   const view = new DataView(input);
   let end = -1;
@@ -132,10 +146,14 @@ export async function decodeZip(input: ArrayBuffer): Promise<Map<string, Uint8Ar
   const centralOffset = read32(view, end + 16);
   const result = new Map<string, Uint8Array>();
   let cursor = centralOffset;
+  let totalBytes = 0;
   for (let i = 0; i < count; i++) {
     if (read32(view, cursor) !== 0x02014b50) throw new Error('The OpenRaster ZIP directory is invalid.');
     const method = read16(view, cursor + 10);
     const compressedSize = read32(view, cursor + 20);
+    const expectedSize = read32(view, cursor + 24);
+    totalBytes += expectedSize;
+    if (totalBytes > maximumBytes) throw new Error('The OpenRaster contents exceed 256 MiB.');
     const nameLength = read16(view, cursor + 28);
     const extraLength = read16(view, cursor + 30);
     const commentLength = read16(view, cursor + 32);
@@ -144,9 +162,12 @@ export async function decodeZip(input: ArrayBuffer): Promise<Map<string, Uint8Ar
     const localNameLength = read16(view, localOffset + 26);
     const localExtraLength = read16(view, localOffset + 28);
     const dataStart = localOffset + 30 + localNameLength + localExtraLength;
+    if (dataStart + compressedSize > bytes.length) throw new Error('The OpenRaster entry is incomplete.');
     const compressed = bytes.subarray(dataStart, dataStart + compressedSize);
-    const data = method === 0 ? compressed.slice() : method === 8 ? await inflateRaw(compressed) : null;
+    const data = method === 0 ? compressed.slice() : method === 8 ? await inflateRaw(compressed, expectedSize) : null;
     if (!data) throw new Error(`The OpenRaster ZIP method ${method} is not supported.`);
+    if (data.length !== expectedSize || crc32(data) !== read32(view, cursor + 16)) throw new Error('The OpenRaster entry checksum or size is incorrect.');
+    if (result.has(name)) throw new Error('The OpenRaster ZIP contains duplicate names.');
     result.set(name, data);
     cursor += 46 + nameLength + extraLength + commentLength;
   }

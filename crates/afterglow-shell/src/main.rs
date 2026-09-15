@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll, Wake, Waker};
 use std::time::{Duration, Instant};
 
+use afterglow_shell::diagnostics;
 use afterglow_shell::runtime::{MonotonicClock, RuntimeClock, RuntimeLifecycle, RuntimePhase};
 use deno_core::v8;
 use deno_core::{
@@ -25,7 +26,7 @@ use winit::event::{
     DeviceEvent, DeviceId, ElementState, MouseButton, MouseScrollDelta, TouchPhase, WindowEvent,
 };
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
-use winit::keyboard::PhysicalKey;
+use winit::keyboard::{Key, NamedKey, PhysicalKey};
 use winit::window::{CursorGrabMode, CursorIcon, Window, WindowId};
 
 static SNAPSHOT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/SNAPSHOT.bin"));
@@ -37,6 +38,25 @@ fn dom_physical_code(key: PhysicalKey) -> String {
         // `Code(...)` wrapper.
         PhysicalKey::Code(code) => format!("{code:?}"),
         PhysicalKey::Unidentified(_) => "Unidentified".to_string(),
+    }
+}
+
+fn dom_logical_key(key: &Key) -> String {
+    match key {
+        Key::Character(text) => text.to_string(),
+        Key::Named(NamedKey::Space) => " ".to_string(),
+        // NamedKey uses UI Events key names, not control-character text.
+        Key::Named(name) => format!("{name:?}"),
+        Key::Dead(_) => "Dead".to_string(),
+        Key::Unidentified(_) => "Unidentified".to_string(),
+    }
+}
+
+fn dom_wheel_delta(delta: MouseScrollDelta, scale: f64) -> (f64, f64, u32) {
+    // Winit describes content movement. DOM wheel deltas use the opposite sign.
+    match delta {
+        MouseScrollDelta::LineDelta(x, y) => (-f64::from(x), -f64::from(y), 1),
+        MouseScrollDelta::PixelDelta(position) => (-position.x / scale, -position.y / scale, 0),
     }
 }
 
@@ -418,6 +438,7 @@ struct VertexOutput { @builtin(position) position: vec4f, @location(0) uv: vec2f
 }
 
 struct NativeSurface {
+    window: Arc<Window>,
     data: Rc<RefCell<SurfaceData>>,
     context: Option<v8::Global<v8::Value>>,
     canvas_id: Option<u32>,
@@ -511,6 +532,37 @@ impl PendingResize {
 
 fn frame_deadline_after_admission(now: Instant, frame_interval: Duration) -> Instant {
     now + frame_interval
+}
+
+/// Runtime deadlines do not depend on compositor redraw delivery.
+struct RuntimeAdmission {
+    pending: bool,
+    deadline: Instant,
+    redraw_pending: bool,
+}
+
+impl RuntimeAdmission {
+    fn new(now: Instant) -> Self {
+        Self { pending: true, deadline: now, redraw_pending: false }
+    }
+
+    fn due(&self, now: Instant) -> bool {
+        self.pending && now >= self.deadline
+    }
+
+    fn polled(&mut self, now: Instant, interval: Duration, pending: bool) {
+        self.pending = pending;
+        self.deadline = now + interval;
+    }
+
+    fn wake_deadline(&self, frame: Option<Instant>) -> Option<Instant> {
+        let runtime = self.pending.then_some(self.deadline);
+        let frame = frame.filter(|_| !self.redraw_pending);
+        match (runtime, frame) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        }
+    }
 }
 
 #[op2(fast)]
@@ -649,6 +701,19 @@ fn acquire_pointer_grab<E>(
 }
 
 #[op2(fast)]
+fn op_browser_input_method(state: &mut OpState, enabled: bool, x: f64, y: f64, width: f64, height: f64) -> Result<(), JsErrorBox> {
+    if ![x, y, width, height].iter().all(|value| value.is_finite()) || width < 0.0 || height < 0.0 {
+        return Err(JsErrorBox::range_error("invalid IME rectangle"));
+    }
+    let window = &state.borrow::<NativePointerLock>().window;
+    window.set_ime_allowed(enabled);
+    if enabled {
+        window.set_ime_cursor_area(winit::dpi::LogicalPosition::new(x, y), winit::dpi::LogicalSize::new(width, height));
+    }
+    Ok(())
+}
+
+#[op2(fast)]
 fn op_request_pointer_lock(state: &mut OpState) -> Result<(), JsErrorBox> {
     let pointer_lock = state.borrow::<NativePointerLock>();
     let mode = acquire_pointer_grab(|mode| pointer_lock.window.set_cursor_grab(mode))
@@ -694,6 +759,13 @@ fn op_resize_canvas(
 }
 
 fn present_surface(state: &mut OpState, scope: &mut v8::PinScope) -> Result<bool, JsErrorBox> {
+    let ticket = diagnostics::span_begin(state, diagnostics::PRESENT_WORK);
+    let result = present_surface_inner(state, scope);
+    diagnostics::span_end(state, ticket, diagnostics::PRESENT_WORK);
+    result
+}
+
+fn present_surface_inner(state: &mut OpState, scope: &mut v8::PinScope) -> Result<bool, JsErrorBox> {
     let context = state
         .borrow::<NativeSurface>()
         .context
@@ -702,7 +774,6 @@ fn present_surface(state: &mut OpState, scope: &mut v8::PinScope) -> Result<bool
     let local = v8::Local::new(scope, &context);
     let context = deno_core::cppgc::try_unwrap_cppgc_object::<GPUCanvasContext>(scope, local)
         .ok_or_else(|| JsErrorBox::generic("native surface context is invalid"))?;
-    let hud_scene = afterglow_shell::native_browser::take_gpu_hud_scene(state)?;
     let (instance, texture_id, device_id, queue_id, format, size) = {
         let current = context.current_texture.borrow();
         let texture = current
@@ -740,35 +811,41 @@ fn present_surface(state: &mut OpState, scope: &mut v8::PinScope) -> Result<bool
         )
     };
     let capture_now = state.borrow::<EngineReady>().0.load(Ordering::Acquire);
-    let surface = state.borrow_mut::<NativeSurface>();
-    if surface.hud_presenter.is_none() {
-        surface.hud_presenter = Some(unsafe {
-            GpuHudPresenter::new(
-                instance,
-                device_id,
-                queue_id,
-                format,
-                size.width,
-                size.height,
-            )
-            .map_err(JsErrorBox::generic)?
-        });
-    }
-    let capture_pending = surface
-        .hud_presenter
-        .as_mut()
-        .unwrap()
-        .render_and_composite(hud_scene, &surface_texture, capture_now)
-        .map_err(JsErrorBox::generic)?;
-    let presented = context.present()?;
+    let ticket = diagnostics::span_begin(state, diagnostics::HUD_COMPOSITE);
+    let capture_pending = (|| {
+        let surface = state.borrow_mut::<NativeSurface>();
+        if surface.hud_presenter.is_none() {
+            surface.hud_presenter = Some(unsafe {
+                GpuHudPresenter::new(instance, device_id, queue_id, format, size.width, size.height)
+                    .map_err(JsErrorBox::generic)?
+            });
+        }
+        let mut presenter = surface.hud_presenter.take().unwrap();
+        let ticket = diagnostics::span_begin(state, diagnostics::HUD_SCENE);
+        let hud_scene = afterglow_shell::native_browser::take_gpu_hud_scene(
+            state, &presenter.device, &presenter.queue, &mut presenter.renderer);
+        diagnostics::span_end(state, ticket, diagnostics::HUD_SCENE);
+        let result = hud_scene.and_then(|scene| presenter
+            .render_and_composite(scene, &surface_texture, capture_now).map_err(JsErrorBox::generic));
+        state.borrow_mut::<NativeSurface>().hud_presenter = Some(presenter);
+        result
+    })();
+    diagnostics::span_end(state, ticket, diagnostics::HUD_COMPOSITE);
+    let capture_pending = capture_pending?;
+    let ticket = diagnostics::span_begin(state, diagnostics::SURFACE_PRESENT);
+    state.borrow::<NativeSurface>().window.pre_present_notify();
+    let presented = context.present();
+    diagnostics::span_end(state, ticket, diagnostics::SURFACE_PRESENT);
+    let presented = presented?;
     if capture_pending {
-        surface
+        state.borrow_mut::<NativeSurface>()
             .hud_presenter
             .as_mut()
             .unwrap()
             .finish_capture(format)
             .map_err(JsErrorBox::generic)?;
     }
+    afterglow_shell::diagnostics::instant(state, 0, u64::from(presented));
     Ok(presented)
 }
 
@@ -860,7 +937,7 @@ fn publish_runtime_ready(state: &mut OpState) -> Result<(), JsErrorBox> {
         .map_err(|error| JsErrorBox::generic(error.to_string()))
 }
 
-/// Compatibility-only first-present readiness for unmodified Three.js examples.
+/// First-present readiness for Three.js examples and DOM-only documents.
 #[op2(fast)]
 fn op_engine_ready(state: &mut OpState) -> Result<(), JsErrorBox> {
     publish_runtime_ready(state)
@@ -884,6 +961,7 @@ deno_core::extension!(
         op_bind_canvas_node,
         op_resize_canvas,
         op_request_pointer_lock,
+        op_browser_input_method,
         op_exit_pointer_lock,
         op_present_surface,
         op_try_present_surface,
@@ -896,6 +974,8 @@ deno_core::extension!(
         afterglow_shell::rpc_bridge::op_afterglow_rpc_call,
         afterglow_shell::rpc_bridge::op_afterglow_rpc_call_async,
         afterglow_shell::rpc_bridge::op_afterglow_worker_ids,
+        afterglow_shell::diagnostics::op_diagnostics_capture,
+        afterglow_shell::diagnostics::op_diagnostics_drain,
         afterglow_shell::rpc_bridge::op_native_asset_size,
         afterglow_shell::rpc_bridge::op_native_asset_read_copy,
     ],
@@ -1026,6 +1106,7 @@ if (!globalThis.__officialExample) document.body.appendChild(canvas);
 globalThis.engineCanvas = canvas;
 globalThis.dispatchNativeInput = (type, init = {}) => {
   type = String(type);
+  if (type === 'ime') return globalThis.__dispatchBrowserImeEvent(init);
   if (type.startsWith('pointer')) return globalThis.__dispatchBrowserPointerEvent(type, init);
   if (type === 'wheel') return globalThis.__dispatchBrowserWheelEvent(init);
   if (type === 'keydown' || type === 'keyup') return globalThis.__dispatchBrowserKeyboardEvent(type, init);
@@ -1088,6 +1169,7 @@ struct HtmlModuleLoader {
     exact: HashMap<String, String>,
     prefixes: Vec<(String, String)>,
     html_url: url::Url,
+    inline_modules: HashMap<String, String>,
 }
 
 impl ModuleLoader for HtmlModuleLoader {
@@ -1126,10 +1208,14 @@ impl ModuleLoader for HtmlModuleLoader {
         _options: ModuleLoadOptions,
     ) -> ModuleLoadResponse {
         let result = (|| {
-            let path = module_specifier.to_file_path().map_err(|_| {
-                JsErrorBox::generic(format!("not a file module: {module_specifier}"))
-            })?;
-            let code = std::fs::read(path).map_err(JsErrorBox::from_err)?;
+            let code = if let Some(code) = self.inline_modules.get(module_specifier.as_str()) {
+                code.as_bytes().to_vec()
+            } else {
+                let path = module_specifier.to_file_path().map_err(|_| {
+                    JsErrorBox::generic(format!("not a file module: {module_specifier}"))
+                })?;
+                std::fs::read(path).map_err(JsErrorBox::from_err)?
+            };
             Ok(ModuleSource::new(
                 ModuleType::JavaScript,
                 ModuleSourceCode::Bytes(code.into_boxed_slice().into()),
@@ -1141,59 +1227,53 @@ impl ModuleLoader for HtmlModuleLoader {
     }
 }
 
-fn extract_html_section<'a>(html: &'a str, start: &str, end: &str) -> Option<&'a str> {
-    let start = html.find(start)? + start.len();
-    let end = html[start..].find(end)? + start;
-    Some(&html[start..end])
-}
-
-/// Extract the entry module from an HTML page: either an inline
-/// `<script type="module">CODE</script>` (official three.js style) or an
-/// external `<script type="module" src="URL"></script>` (the afterglow demos).
-/// For the external form, emits `import "URL";` so the module loader resolves
-/// the src against the page's directory.
-fn extract_module_script(html: &str) -> Option<String> {
-    // Inline module script.
-    for (start, end) in [
-        (r#"<script type="module">"#, "</script>"),
-        (r"<script type='module'>", "</script>"),
-    ] {
-        if let Some(code) = extract_html_section(html, start, end) {
-            if !code.trim().is_empty() {
-                return Some(code.trim().to_string());
+/// Read scripts with the same HTML parser that the shell uses for its document.
+fn extract_html_scripts(html: &str, base_url: &str) -> (Option<String>, String, HashMap<String, String>) {
+    let document = blitz_html::HtmlDocument::from_html(html, blitz_dom::DocumentConfig {
+        base_url: Some(base_url.to_owned()),
+        ..Default::default()
+    });
+    let mut modules = Vec::new();
+    let mut inline_modules = HashMap::new();
+    let mut import_map = None;
+    for id in document.query_selector_all("script").expect("script selector") {
+        let node = document.get_node(id).expect("script node");
+        match node.attr("type".into()) {
+            Some("module") => {
+                let src = if let Some(src) = node.attr("src".into()).filter(|src| !src.is_empty()) {
+                    src.to_owned()
+                } else {
+                    let code = node.text_content();
+                    if code.trim().is_empty() {
+                        continue;
+                    }
+                    // Each inline script has its own module scope and the page base URL.
+                    let mut url = url::Url::parse(base_url).expect("HTML base URL");
+                    url.set_fragment(Some(&format!("afterglow-inline-{}", inline_modules.len())));
+                    inline_modules.insert(url.to_string(), code);
+                    url.to_string()
+                };
+                modules.push(format!("import {};", serde_json::to_string(&src).unwrap()));
             }
+            Some("importmap") if import_map.is_none() => import_map = Some(node.text_content()),
+            _ => {}
         }
     }
-    // External `src` module script.
-    for tag in [
-        r#"<script type="module" src="#,
-        r"<script type='module' src=",
-    ] {
-        if let Some(idx) = html.find(tag) {
-            let after = &html[idx + tag.len()..];
-            let quote = after.chars().next()?;
-            if quote != '"' && quote != '\'' {
-                continue;
-            }
-            let src = after.strip_prefix(quote)?.split(quote).next()?;
-            if !src.is_empty() {
-                return Some(format!(
-                    "import {};",
-                    serde_json::to_string(src).unwrap_or_else(|_| format!("'{src}'"))
-                ));
-            }
-        }
-    }
-    None
+    (
+        (!modules.is_empty()).then(|| modules.join("\n")),
+        import_map.unwrap_or_else(|| "{}".to_owned()),
+        inline_modules,
+    )
 }
 
 fn parse_official_example(html_path: &std::path::Path) -> (String, String, HtmlModuleLoader) {
     let html = std::fs::read_to_string(html_path)
         .unwrap_or_else(|error| panic!("read official example {html_path:?}: {error}"));
-    let module = extract_module_script(&html).expect("official example has a module script");
-    let import_map = extract_html_section(&html, "<script type=\"importmap\">", "</script>")
-        .or_else(|| extract_html_section(&html, "<script type='importmap'>", "</script>"))
-        .unwrap_or("{}");
+    let html_url = url::Url::from_file_path(
+        html_path.canonicalize().expect("canonicalize HTML document path"),
+    ).expect("convert HTML document path to URL");
+    let (module, import_map, inline_modules) = extract_html_scripts(&html, html_url.as_str());
+    let module = module.expect("HTML document has a module script");
     let imports: serde_json::Value =
         serde_json::from_str(import_map.trim()).expect("parse official example import map");
     let mut exact = HashMap::new();
@@ -1213,12 +1293,6 @@ fn parse_official_example(html_path: &std::path::Path) -> (String, String, HtmlM
             }
         }
     }
-    let html_url = url::Url::from_file_path(
-        html_path
-            .canonicalize()
-            .expect("canonicalize official example path"),
-    )
-    .expect("convert official example path to URL");
     (
         html,
         module,
@@ -1226,8 +1300,24 @@ fn parse_official_example(html_path: &std::path::Path) -> (String, String, HtmlM
             exact,
             prefixes,
             html_url,
+            inline_modules,
         },
     )
+}
+
+const POINTER_SAMPLE_CAPACITY: usize = 64;
+
+#[derive(Clone, Copy, Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PointerSample {
+    client_x: f64,
+    client_y: f64,
+    time_stamp: f64,
+    buttons: u16,
+    shift_key: bool,
+    ctrl_key: bool,
+    alt_key: bool,
+    meta_key: bool,
 }
 
 struct App {
@@ -1243,6 +1333,7 @@ struct App {
     startup_reported: bool,
     official_example: bool,
     compatibility_mode: bool,
+    document_mode: bool,
     fatal_error: Option<String>,
     ready: Arc<AtomicBool>,
     lifecycle: Arc<RuntimeLifecycle>,
@@ -1251,7 +1342,9 @@ struct App {
     cursor: [f64; 2],
     modifiers: winit::keyboard::ModifiersState,
     scale_factor: f64,
-    pending_pointer_move: Option<serde_json::Value>,
+    pending_pointer_moves: [PointerSample; POINTER_SAMPLE_CAPACITY],
+    pending_pointer_count: usize,
+    mouse_buttons: u16,
     pending_relative_move: [f64; 2],
     pointer_locked: Arc<AtomicBool>,
     pending_resize: Option<PendingResize>,
@@ -1265,6 +1358,7 @@ struct App {
     host_resize_applies: u64,
     frame_interval: Duration,
     next_frame_deadline: Instant,
+    runtime_admission: RuntimeAdmission,
     game_module: std::path::PathBuf,
     builder: afterglow_shell::builder::ShellBuilder,
 }
@@ -1291,8 +1385,30 @@ fn native_storage_root() -> std::path::PathBuf {
     std::env::temp_dir().join("afterglow-engine-storage")
 }
 
+#[cfg(unix)]
+fn compose_diagnostics_worker(state: &mut OpState, id: u32) {
+    use afterglow_diagnostics_worker::{DEFAULT_PORT, DiagnosticsClient, DiagnosticsWorker};
+    if std::env::var("AFTERGLOW_DIAGNOSTICS_PORT").as_deref() == Ok("off") { return; }
+    let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+        let port = match std::env::var("AFTERGLOW_DIAGNOSTICS_PORT") {
+            Ok(value) => value.parse::<u16>()?,
+            Err(std::env::VarError::NotPresent) => DEFAULT_PORT,
+            Err(error) => return Err(error.into()),
+        };
+        let worker = DiagnosticsWorker::connect(port)?;
+        eprintln!("[diagnostics] profiling server: ws://{}/", worker.address()?);
+        let (client, events) = DiagnosticsClient::spawn_worker(worker)?;
+        drop(events);
+        afterglow_shell::builder::register_async_worker(state, "diagnostics", id, Arc::new(client.into_transport()));
+        state.put(afterglow_shell::diagnostics::HostDiagnostics::new(id));
+        Ok(())
+    })();
+    if let Err(error) = result { eprintln!("[diagnostics] capture unavailable: {error}"); }
+}
+
 fn compose_engine_workers(state: &mut OpState) {
     use afterglow_meshopt::{MeshoptServer, MeshoptWorker};
+    use afterglow_paint_worker::{PaintServer, PaintWorker};
     use afterglow_rpc_demo::{PhysicsServer, PhysicsWorker};
     use afterglow_storage_worker::{BlobStorageServer, BlobStorageWorker};
     use afterglow_texture::{TextureServer, TextureWorker};
@@ -1355,6 +1471,23 @@ fn compose_engine_workers(state: &mut OpState) {
         storage_id,
         Arc::new(storage),
     );
+
+    PaintWorker::set_storage_root(native_storage_root().join("paint"))
+        .expect("initialize native paint storage root");
+    let (paint, _events) = afterglow_rpc::native::spawn_async_worker_loop(
+        PaintWorker::default(),
+        1 << 20,
+        |worker: &PaintWorker, method, args| worker.serve_async(method, args),
+    )
+    .expect("spawn native Paint worker");
+    afterglow_shell::builder::register_async_worker(
+        state,
+        "paint",
+        storage_id.checked_add(1).expect("native paint worker id"),
+        Arc::new(paint),
+    );
+    #[cfg(unix)]
+    compose_diagnostics_worker(state, storage_id.checked_add(2).expect("native diagnostics worker id"));
 }
 
 impl App {
@@ -1376,20 +1509,25 @@ impl App {
             .unwrap_or(Self::STARTUP_TIMEOUT);
         let mut arguments = std::env::args_os().skip(1);
         let first = arguments.next();
-        let (compatibility_mode, game_module) =
-            if first.as_deref() == Some(std::ffi::OsStr::new("--compat-three")) {
-                let path = arguments
-                    .next()
-                    .expect("--compat-three requires an HTML example path");
-                (true, std::path::PathBuf::from(path))
-            } else {
-                (
-                    false,
-                    first.map(std::path::PathBuf::from).unwrap_or_else(|| {
-                        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("native_game.ts")
-                    }),
-                )
-            };
+        let document_mode = first.as_deref() == Some(std::ffi::OsStr::new("--document"));
+        let (compatibility_mode, game_module) = if document_mode {
+            let path = arguments
+                .next()
+                .expect("--document needs an HTML document path");
+            (false, std::path::PathBuf::from(path))
+        } else if first.as_deref() == Some(std::ffi::OsStr::new("--compat-three")) {
+            let path = arguments
+                .next()
+                .expect("--compat-three requires an HTML example path");
+            (true, std::path::PathBuf::from(path))
+        } else {
+            (
+                false,
+                first.map(std::path::PathBuf::from).unwrap_or_else(|| {
+                    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("native_game.ts")
+                }),
+            )
+        };
         Self {
             window: None,
             runtime: None,
@@ -1403,6 +1541,7 @@ impl App {
             startup_reported: false,
             official_example: false,
             compatibility_mode,
+            document_mode,
             fatal_error: None,
             ready: Arc::new(AtomicBool::new(false)),
             lifecycle: Arc::new(RuntimeLifecycle::new()),
@@ -1411,7 +1550,9 @@ impl App {
             cursor: [0.0, 0.0],
             modifiers: winit::keyboard::ModifiersState::empty(),
             scale_factor: 1.0,
-            pending_pointer_move: None,
+            pending_pointer_moves: [PointerSample::default(); POINTER_SAMPLE_CAPACITY],
+            pending_pointer_count: 0,
+            mouse_buttons: 0,
             pending_relative_move: [0.0, 0.0],
             pointer_locked: Arc::new(AtomicBool::new(false)),
             pending_resize: None,
@@ -1425,6 +1566,7 @@ impl App {
             host_resize_applies: 0,
             frame_interval: Duration::from_nanos(16_666_667),
             next_frame_deadline: Instant::now(),
+            runtime_admission: RuntimeAdmission::new(Instant::now()),
             game_module,
             builder,
         }
@@ -1438,6 +1580,13 @@ impl App {
         match result {
             Poll::Ready(Ok(())) => {
                 self.game_evaluation = None;
+                if self.document_mode {
+                    self.runtime
+                        .as_mut()
+                        .ok_or("JavaScript runtime is absent")?
+                        .execute_script("<document-loaded>", "globalThis.__documentLoaded = true;")
+                        .map_err(|error| error.to_string())?;
+                }
                 Ok(true)
             }
             Poll::Ready(Err(error)) => {
@@ -1470,6 +1619,7 @@ impl App {
                     wait_for_inspector: false,
                 },
             );
+        self.runtime_admission.polled(Instant::now(), self.frame_interval, poll.is_pending());
         if let Poll::Ready(Err(error)) = poll {
             return Err(error.to_string());
         }
@@ -1487,6 +1637,8 @@ impl App {
         // `poll_event_loop` is deliberately one bounded turn, but it must be
         // polled inside Tokio so lazy deno async ops (including op_defer) can
         // enter and advance the runtime's current-thread driver.
+        let state = self.runtime.as_ref().map(|runtime| runtime.op_state());
+        let ticket = state.as_ref().map_or((0, 0), |state| diagnostics::span_begin(&state.borrow(), diagnostics::RUNTIME_TURN));
         let result = tokio.block_on(async {
             // Give lazy async ops dispatched by the preceding deno turn one
             // bounded executor opportunity before collecting their results.
@@ -1494,6 +1646,7 @@ impl App {
             poll_fn(|_| Poll::Ready(self.poll_runtime_turn_inner())).await
         });
         self.tokio = Some(tokio);
+        if let Some(state) = state { diagnostics::span_end(&state.borrow(), ticket, diagnostics::RUNTIME_TURN); }
         result
     }
 
@@ -1505,6 +1658,7 @@ impl App {
             .handle()
             .clone();
         let _tokio_guard = tokio_handle.enter();
+        self.runtime_admission.pending = true;
         self.runtime
             .as_mut()
             .ok_or("JavaScript runtime is absent")?
@@ -1538,6 +1692,19 @@ impl App {
         let op_state = runtime.op_state();
         let state = op_state.borrow();
         afterglow_shell::rpc_bridge::async_workers_pending(&state)
+    }
+
+    fn has_pending_presentation(&self) -> bool {
+        let Some(runtime) = self.runtime.as_ref() else {
+            return false;
+        };
+        let op_state = runtime.op_state();
+        let state = op_state.borrow();
+        let hud_dirty = afterglow_shell::native_browser::hud_needs_redraw(&state);
+        let capture_pending = state.borrow::<NativeSurface>().hud_presenter.as_ref()
+            .and_then(|presenter| presenter.capture.as_ref())
+            .is_some_and(|capture| !capture.complete);
+        hud_dirty || capture_pending
     }
 
     fn has_pending_native_assets(&self) -> bool {
@@ -1602,7 +1769,7 @@ impl App {
 
     fn flush_pointer_move(&mut self) {
         if self.pointer_locked.load(Ordering::Acquire) {
-            self.pending_pointer_move = None;
+            self.pending_pointer_count = 0;
             let [movement_x, movement_y] = std::mem::take(&mut self.pending_relative_move);
             if movement_x != 0.0 || movement_y != 0.0 {
                 self.dispatch_input(
@@ -1621,7 +1788,12 @@ impl App {
                     }),
                 );
             }
-        } else if let Some(data) = self.pending_pointer_move.take() {
+        } else if self.pending_pointer_count > 0 {
+            let count = std::mem::take(&mut self.pending_pointer_count);
+            let mut data = serde_json::to_value(self.pending_pointer_moves[count - 1]).unwrap();
+            data["pointerId"] = 1.into();
+            data["pointerType"] = "mouse".into();
+            data["coalescedEvents"] = serde_json::to_value(&self.pending_pointer_moves[..count]).unwrap();
             self.dispatch_input("pointermove", data);
             self.update_cursor_icon();
         }
@@ -1697,17 +1869,28 @@ impl App {
             self.account_startup_time()?;
         }
 
+        if self.lifecycle.phase() == RuntimePhase::Suspended
+            || self.window.as_ref().is_none_or(|window| {
+                let size = window.inner_size();
+                size.width == 0 || size.height == 0
+            })
+        {
+            return Ok(());
+        }
         self.flush_resize();
 
-        // Browsers coalesce high-frequency pointer motion to the presentation
-        // cadence. Dispatch only the latest sample before each game frame so a
-        // 1000 Hz mouse cannot starve rendering with synchronous V8 entries.
+        // Send one pointer event with all retained samples before each frame.
+        // A full sample buffer sends its event before the next frame.
         if self.ready.load(Ordering::Acquire) {
             self.flush_pointer_move();
         }
 
-        let evaluation_complete = if self.compatibility_mode && !self.ready.load(Ordering::Acquire)
-        {
+        let evaluation_complete = if self.document_mode {
+            self.execute_static(
+                "<native-document-frame>",
+                "__runNativeAnimationFrames(performance.now()); __syncBrowserDocument(false); __presentDocument();",
+            )?
+        } else if self.compatibility_mode && !self.ready.load(Ordering::Acquire) {
             self.execute_static(
                 "<native-startup-frame>",
                 "__runNativeAnimationFrames(performance.now()); __syncBrowserDocument(false); if (Deno.core.ops.op_try_present_surface()) Deno.core.ops.op_engine_ready();",
@@ -1796,6 +1979,10 @@ impl App {
     }
 
     fn dispatch_input(&mut self, event_type: &str, data: serde_json::Value) {
+        if let Some(runtime) = self.runtime.as_ref() {
+            let kind = match event_type { "pointermove" => 1, "pointerdown" => 2, "pointerup" => 3, "wheel" => 4, "keydown" => 5, "keyup" => 6, _ => 0 };
+            afterglow_shell::diagnostics::instant(&runtime.op_state().borrow(), 1, kind);
+        }
         if !self.ready.load(Ordering::Acquire) {
             return;
         }
@@ -1804,6 +1991,16 @@ impl App {
             serde_json::to_string(event_type).unwrap(),
             serde_json::to_string(&data).unwrap()
         );
+        if self.host_trace && matches!(event_type, "pointerdown" | "pointerup") {
+            let trace = format!(
+                "{{ const p = {}; const t = document.elementFromPoint(p.clientX, p.clientY); console.log('[host-input]', {}, JSON.stringify({{ x: p.clientX, y: p.clientY, tag: t?.localName, id: t?.id, className: t?.getAttribute('class') }})); }}",
+                serde_json::to_string(&data).unwrap(),
+                serde_json::to_string(event_type).unwrap(),
+            );
+            if let Err(error) = self.execute_sync("<native-input-trace>", trace) {
+                eprintln!("native input trace failed: {error}");
+            }
+        }
         if let Err(error) = self.execute_sync("<native-input>", source) {
             eprintln!("native input dispatch failed: {error}");
         }
@@ -1811,17 +2008,23 @@ impl App {
 
     fn queue_resize(&mut self, width: u32, height: u32, scale_factor: f64) {
         self.scale_factor = scale_factor.max(f64::EPSILON);
-        if width == 0 || height == 0 || self.lifecycle.phase() == RuntimePhase::Suspended {
+        if width == 0 || height == 0 {
             self.pending_resize = None;
-            self.apply_resize(width, height, self.scale_factor);
+            if self.lifecycle.phase() == RuntimePhase::Running {
+                self.lifecycle.transition(RuntimePhase::Suspended).ok();
+            }
             return;
         }
-        self.pending_resize = Some(PendingResize::trailing(
-            width,
-            height,
-            self.scale_factor,
-            Instant::now(),
-        ));
+        let restoring = self.lifecycle.phase() == RuntimePhase::Suspended;
+        if restoring {
+            self.lifecycle.transition(RuntimePhase::Running).ok();
+        }
+        let now = Instant::now();
+        let mut resize = PendingResize::trailing(width, height, self.scale_factor, now);
+        if restoring {
+            resize.deadline = now;
+        }
+        self.pending_resize = Some(resize);
     }
 
     fn flush_resize(&mut self) {
@@ -1908,12 +2111,17 @@ impl App {
 
 impl ApplicationHandler<HostEvent> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if let Some(runtime) = &self.runtime {
+            diagnostics::window_state(&runtime.op_state().borrow(), diagnostics::SUSPENDED, false);
+        }
         if let Some(window) = &self.window {
             self.startup_last_active = Some(Instant::now());
             self.next_frame_deadline = Instant::now();
             if self.lifecycle.phase() == RuntimePhase::Suspended {
                 self.lifecycle.transition(RuntimePhase::Running).ok();
             }
+            self.runtime_admission.redraw_pending = true;
+            self.runtime_admission.pending = true;
             window.request_redraw();
             return;
         }
@@ -2030,6 +2238,7 @@ impl ApplicationHandler<HostEvent> for App {
             let mut state = op_state.borrow_mut();
             state.put::<deno_webgpu::Instance>(instance);
             state.put::<NativeSurface>(NativeSurface {
+                window: window.clone(),
                 data: surface,
                 context: None,
                 canvas_id: None,
@@ -2132,6 +2341,14 @@ impl ApplicationHandler<HostEvent> for App {
         runtime
             .execute_script("<animation-frame>", ANIMATION_FRAME_BOOTSTRAP)
             .expect("install native animation-frame scheduler");
+        if let Err(error) = runtime.execute_script("<diagnostics>", include_str!(concat!(env!("OUT_DIR"), "/diagnostics.js"))) {
+            eprintln!("[diagnostics] capture unavailable: {error}");
+        }
+        if self.document_mode {
+            runtime
+                .execute_script("<document-surface>", include_str!("../document.ts"))
+                .expect("start native document surface");
+        }
         let game_specifier =
             ModuleSpecifier::from_file_path(self.game_module.canonicalize().unwrap_or_else(
                 |error| panic!("resolve game module {:?}: {error}", self.game_module),
@@ -2155,6 +2372,7 @@ impl ApplicationHandler<HostEvent> for App {
         self.startup_last_active = Some(Instant::now());
         self.startup_reported = false;
         self.window = Some(window.clone());
+        diagnostics::window_state(&runtime.op_state().borrow(), diagnostics::SUSPENDED, false);
         self.runtime = Some(runtime);
         self.tokio = Some(tokio);
         // Return to winit immediately. Module evaluation, including top-level
@@ -2163,90 +2381,83 @@ impl ApplicationHandler<HostEvent> for App {
     }
 
     fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
+        if let Some(runtime) = &self.runtime {
+            diagnostics::window_state(&runtime.op_state().borrow(), diagnostics::SUSPENDED, true);
+        }
         self.startup_last_active = None;
         if self.lifecycle.phase() == RuntimePhase::Running {
             self.lifecycle.transition(RuntimePhase::Suspended).ok();
         }
     }
 
-    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: HostEvent) {
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: HostEvent) {
         match event {
             HostEvent::RuntimeWake => {
                 self.host_wakes = self.host_wakes.saturating_add(1);
                 self.runtime_wake.clear();
-                if self.runtime.is_none() {
-                    return;
-                }
-                // A referenced rAF token keeps deno's event loop alive and can
-                // wake its registered waker. Once module evaluation is done,
-                // repolling deno for that wake creates a self-sustaining
-                // UserEvent loop that starves winit redraw and resize events.
-                // Pending rAF is presentation work, so hand it back to winit;
-                // idle-runtime wakes with no pending rAF still poll immediately.
-                if self.game_evaluation.is_none() && self.has_pending_animation_frames() {
-                    return;
-                }
-                if (self.game_evaluation.is_some() || !self.ready.load(Ordering::Acquire))
-                    && let Err(error) = self.account_startup_time()
-                {
-                    self.fail(event_loop, error);
-                    return;
-                }
-                if let Err(error) = self.poll_runtime_turn() {
-                    self.fail(
-                        event_loop,
-                        format!("native JavaScript event loop failed: {error}"),
-                    );
-                    return;
-                }
+                // Coalesce wakes without polling here. The rAF external-op
+                // token can wake Deno again after every runtime turn.
+                self.runtime_admission.pending = true;
             }
         }
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         self.trace_host();
-        if self.runtime.is_none() || self.lifecycle.phase() == RuntimePhase::Suspended {
+        if self.runtime.is_none() {
             event_loop.set_control_flow(ControlFlow::Wait);
             return;
+        }
+        let loss = self.device_loss.lock().unwrap().take();
+        if let Some(reason) = loss {
+            self.ready.store(false, Ordering::Release);
+            self.fail(event_loop, format!("WebGPU device lost; rendering stopped: {reason}"));
+            return;
+        }
+        let suspended = self.lifecycle.phase() == RuntimePhase::Suspended;
+        let starting = self.game_evaluation.is_some() || !self.ready.load(Ordering::Acquire);
+        self.runtime_admission.pending |= starting
+            || self.has_pending_native_assets()
+            || self.has_pending_native_workers()
+            || self.pending_pointer_count > 0
+            || self.pending_relative_move != [0.0, 0.0];
+        if self.runtime_admission.due(Instant::now()) {
+            if starting && !suspended && let Err(error) = self.account_startup_time() {
+                self.fail(event_loop, error);
+                return;
+            }
+            if self.ready.load(Ordering::Acquire) {
+                self.flush_pointer_move();
+            }
+            if let Err(error) = self.poll_runtime_turn() {
+                self.fail(event_loop, format!("native JavaScript event loop failed: {error}"));
+                return;
+            }
         }
 
         let now = Instant::now();
-        let resize_deadline = self.pending_resize.as_ref().map(|resize| resize.deadline);
-        let resize_due = resize_deadline.is_some_and(|deadline| now >= deadline);
-
-        let needs_redraw = self.pending_resize.is_some()
-            || self.game_evaluation.is_some()
-            || !self.ready.load(Ordering::Acquire)
+        let size = self.window.as_ref().map(|window| window.inner_size());
+        let drawable = size.is_some_and(|size| size.width > 0 && size.height > 0);
+        let needs_redraw = drawable && !suspended && (
+            self.pending_resize.is_some()
+            || starting
             || self.has_pending_animation_frames()
-            || self.has_pending_native_assets()
-            || self.has_pending_native_workers()
-            || self.pending_pointer_move.is_some()
-            || self.pending_relative_move != [0.0, 0.0];
-        if !needs_redraw {
-            event_loop.set_control_flow(ControlFlow::Wait);
-            return;
+            || self.has_pending_presentation()
+        );
+        if needs_redraw && !self.runtime_admission.redraw_pending && now >= self.next_frame_deadline {
+            self.next_frame_deadline = frame_deadline_after_admission(now, self.frame_interval);
+            if let Some(runtime) = &self.runtime {
+                diagnostics::instant(&runtime.op_state().borrow(), diagnostics::REDRAW_REQUEST, 0);
+            }
+            if let Some(window) = &self.window {
+                self.runtime_admission.redraw_pending = true;
+                window.request_redraw();
+            }
         }
-
-        if !resize_due && now < self.next_frame_deadline {
-            let wake_at = resize_deadline.map_or(self.next_frame_deadline, |deadline| {
-                deadline.min(self.next_frame_deadline)
-            });
-            event_loop.set_control_flow(ControlFlow::WaitUntil(wake_at));
-            return;
-        }
-
-        // `request_redraw` is not itself paced by Wayland/wgpu. Admit one
-        // browser rAF batch per monitor interval so redraw requests cannot
-        // flood submissions and starve configure/input event processing.
-        // Anchor to the admission instant rather than adding to the previous
-        // deadline. request_redraw() itself wakes winit immediately; repeated
-        // startup/runtime wakes must never bank thousands of future intervals
-        // and leave an otherwise live game black after bootstrap completes.
-        self.next_frame_deadline = frame_deadline_after_admission(now, self.frame_interval);
-        event_loop.set_control_flow(ControlFlow::WaitUntil(self.next_frame_deadline));
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
+        // A withheld redraw must not suppress native-ring or timer progress.
+        // Native worker unparks do not wake this Winit event loop.
+        let deadline = self.runtime_admission.wake_deadline(needs_redraw.then_some(self.next_frame_deadline));
+        event_loop.set_control_flow(deadline.map_or(ControlFlow::Wait, ControlFlow::WaitUntil));
     }
 
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
@@ -2306,16 +2517,18 @@ impl ApplicationHandler<HostEvent> for App {
                 self.host_pointer_moves = self.host_pointer_moves.saturating_add(1);
                 if !self.pointer_locked.load(Ordering::Acquire) {
                     self.cursor = [position.x, position.y];
-                    self.pending_pointer_move = Some(serde_json::json!({
-                        "pointerId": 1,
-                        "pointerType": "mouse",
-                        "clientX": position.x / self.scale_factor,
-                        "clientY": position.y / self.scale_factor,
-                        "shiftKey": self.modifiers.shift_key(),
-                        "ctrlKey": self.modifiers.control_key(),
-                        "altKey": self.modifiers.alt_key(),
-                        "metaKey": self.modifiers.super_key(),
-                    }));
+                    self.pending_pointer_moves[self.pending_pointer_count] = PointerSample {
+                        client_x: position.x / self.scale_factor,
+                        client_y: position.y / self.scale_factor,
+                        time_stamp: self.clock.now_millis(),
+                        buttons: self.mouse_buttons,
+                        shift_key: self.modifiers.shift_key(),
+                        ctrl_key: self.modifiers.control_key(),
+                        alt_key: self.modifiers.alt_key(),
+                        meta_key: self.modifiers.super_key(),
+                    };
+                    self.pending_pointer_count += 1;
+                    if self.pending_pointer_count == POINTER_SAMPLE_CAPACITY { self.flush_pointer_move(); }
                 }
             }
             WindowEvent::CursorLeft { .. } => {
@@ -2340,10 +2553,15 @@ impl ApplicationHandler<HostEvent> for App {
                     MouseButton::Forward => 4,
                     MouseButton::Other(value) => value as u32,
                 };
+                let mask = match button { 0 => 1, 1 => 4, 2 => 2, 3 => 8, 4 => 16, _ => 0 };
+                if state == ElementState::Pressed { self.mouse_buttons |= mask; }
+                else { self.mouse_buttons &= !mask; }
                 self.dispatch_input(
                     event_type,
                     serde_json::json!({
                         "pointerId": 1,
+                        "buttons": self.mouse_buttons,
+                        "timeStamp": self.clock.now_millis(),
                         "pointerType": "mouse",
                         "button": button,
                         "clientX": self.cursor[0] / self.scale_factor,
@@ -2389,14 +2607,7 @@ impl ApplicationHandler<HostEvent> for App {
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 self.flush_pointer_move();
-                let (delta_x, delta_y, delta_mode) = match delta {
-                    MouseScrollDelta::LineDelta(x, y) => (x as f64, y as f64, 1),
-                    MouseScrollDelta::PixelDelta(position) => (
-                        position.x / self.scale_factor,
-                        position.y / self.scale_factor,
-                        0,
-                    ),
-                };
+                let (delta_x, delta_y, delta_mode) = dom_wheel_delta(delta, self.scale_factor);
                 self.dispatch_input(
                     "wheel",
                     serde_json::json!({
@@ -2412,6 +2623,16 @@ impl ApplicationHandler<HostEvent> for App {
                     }),
                 );
             }
+            WindowEvent::Ime(event) => {
+                self.flush_pointer_move();
+                let data = match event {
+                    winit::event::Ime::Enabled => serde_json::json!({ "phase": "enabled" }),
+                    winit::event::Ime::Disabled => serde_json::json!({ "phase": "disabled" }),
+                    winit::event::Ime::Preedit(text, cursor) => serde_json::json!({ "phase": "preedit", "data": text, "cursor": cursor }),
+                    winit::event::Ime::Commit(text) => serde_json::json!({ "phase": "commit", "data": text }),
+                };
+                self.dispatch_input("ime", data);
+            }
             WindowEvent::KeyboardInput { event, .. } => self.dispatch_input(
                 if event.state == ElementState::Pressed {
                     "keydown"
@@ -2420,7 +2641,7 @@ impl ApplicationHandler<HostEvent> for App {
                 },
                 serde_json::json!({
                     "code": dom_physical_code(event.physical_key),
-                    "key": event.logical_key.to_text().unwrap_or(""),
+                    "key": dom_logical_key(&event.logical_key),
                     "repeat": event.repeat,
                     "shiftKey": self.modifiers.shift_key(),
                     "ctrlKey": self.modifiers.control_key(),
@@ -2429,9 +2650,15 @@ impl ApplicationHandler<HostEvent> for App {
                 }),
             ),
             WindowEvent::ModifiersChanged(modifiers) => {
+                self.flush_pointer_move();
                 self.modifiers = modifiers.state();
             }
             WindowEvent::Focused(focused) => {
+                if let Some(runtime) = &self.runtime {
+                    diagnostics::window_state(&runtime.op_state().borrow(), diagnostics::FOCUS, focused);
+                }
+                self.flush_pointer_move();
+                if !focused { self.mouse_buttons = 0; }
                 if !focused && self.pointer_locked.load(Ordering::Acquire) {
                     let _ = self.window.as_ref().map(|window| {
                         let _ = window.set_cursor_grab(CursorGrabMode::None);
@@ -2448,9 +2675,19 @@ impl ApplicationHandler<HostEvent> for App {
                     serde_json::json!({}),
                 );
             }
+            WindowEvent::Occluded(occluded) => {
+                if let Some(runtime) = &self.runtime {
+                    diagnostics::window_state(&runtime.op_state().borrow(), diagnostics::OCCLUDED, occluded);
+                }
+            }
             WindowEvent::RedrawRequested => {
+                self.runtime_admission.redraw_pending = false;
                 self.host_redraws = self.host_redraws.saturating_add(1);
-                if let Err(error) = self.render() {
+                let state = self.runtime.as_ref().map(|runtime| runtime.op_state());
+                let ticket = state.as_ref().map_or((0, 0), |state| diagnostics::span_begin(&state.borrow(), diagnostics::FRAME));
+                let result = self.render();
+                if let Some(state) = state { diagnostics::span_end(&state.borrow(), ticket, diagnostics::FRAME); }
+                if let Err(error) = result {
                     self.fail(event_loop, format!("native frame failed: {error}"));
                 } else if std::env::var_os("AFTERGLOW_CAPTURE_PATH")
                     .is_some_and(|path| std::path::Path::new(&path).is_file())
@@ -2466,6 +2703,66 @@ impl ApplicationHandler<HostEvent> for App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_wheel_uses_dom_direction_and_logical_pixels() {
+        assert_eq!(dom_wheel_delta(MouseScrollDelta::LineDelta(2.0, 3.0), 2.0), (-2.0, -3.0, 1));
+        assert_eq!(dom_wheel_delta(MouseScrollDelta::LineDelta(-2.0, -3.0), 1.0), (2.0, 3.0, 1));
+        assert_eq!(dom_wheel_delta(MouseScrollDelta::PixelDelta(winit::dpi::PhysicalPosition::new(8.0, -12.0)), 2.0), (-4.0, 6.0, 0));
+    }
+
+    #[test]
+    fn native_logical_keys_keep_navigation_and_control_names() {
+        for (key, expected) in [(NamedKey::ArrowDown, "ArrowDown"), (NamedKey::Enter, "Enter"), (NamedKey::Escape, "Escape"), (NamedKey::Tab, "Tab"), (NamedKey::Backspace, "Backspace"), (NamedKey::Space, " ")] {
+            assert_eq!(dom_logical_key(&Key::Named(key)), expected);
+        }
+        assert_eq!(dom_logical_key(&Key::Character("é".into())), "é");
+        assert_eq!(dom_logical_key(&Key::Dead(Some('^'))), "Dead");
+    }
+
+    #[test]
+    fn html_scripts_accept_vite_attributes_and_ignore_comments() {
+        let (module, map, inline_modules) = extract_html_scripts(
+            r#"<link rel="stylesheet" href="../assets/main.css">
+            <!-- <script type="module" src="wrong.js"></script> -->
+            <script nonce="test" type='importmap'>{"imports":{"x":"./x.js"}}</script>
+            <script crossorigin src="./entry.js?a=1&amp;b=2" type="module"></script>"#,
+            "file:///tmp/paint/index.html",
+        );
+        assert_eq!(module.as_deref(), Some("import \"./entry.js?a=1&b=2\";"));
+        assert_eq!(map, r#"{"imports":{"x":"./x.js"}}"#);
+        assert!(inline_modules.is_empty());
+        assert_eq!(extract_html_scripts("<p>No script</p>", "file:///tmp/index.html").0, None);
+    }
+
+    #[test]
+    fn html_scripts_include_every_vite_entry_and_isolate_inline_scopes() {
+        let (module, _, inline_modules) = extract_html_scripts(
+            r#"<script type="module" crossorigin src="./preload.js"></script>
+            <script type="module" crossorigin src="./color.js"></script>
+            <script type="module" crossorigin src="./paint-main.js"></script>
+            <script type="module">const x = 1;</script>
+            <script type="module">const x = 2;</script>"#,
+            "file:///tmp/paint/index.html",
+        );
+        assert_eq!(module.unwrap(), concat!(
+            "import \"./preload.js\";\n",
+            "import \"./color.js\";\n",
+            "import \"./paint-main.js\";\n",
+            "import \"file:///tmp/paint/index.html#afterglow-inline-0\";\n",
+            "import \"file:///tmp/paint/index.html#afterglow-inline-1\";",
+        ));
+        assert_eq!(inline_modules.len(), 2);
+        assert_eq!(inline_modules["file:///tmp/paint/index.html#afterglow-inline-0"], "const x = 1;");
+        assert_eq!(inline_modules["file:///tmp/paint/index.html#afterglow-inline-1"], "const x = 2;");
+        let loader = HtmlModuleLoader {
+            exact: HashMap::new(),
+            prefixes: Vec::new(),
+            html_url: url::Url::parse("file:///tmp/paint/index.html").unwrap(),
+            inline_modules,
+        };
+        assert_eq!(loader.resolve("./brush.js", "file:///tmp/paint/index.html#afterglow-inline-1", ResolutionKind::Import).unwrap().as_str(), "file:///tmp/paint/brush.js");
+    }
 
     #[test]
     fn native_texture_workers_match_physical_cores_with_fixed_limits() {
@@ -2523,6 +2820,49 @@ mod tests {
             deadline = frame_deadline_after_admission(now, interval);
         }
         assert_eq!(deadline, expected);
+    }
+
+    #[test]
+    fn withheld_redraw_keeps_runtime_deadline() {
+        let now = Instant::now();
+        let interval = Duration::from_millis(7);
+        let mut admission = RuntimeAdmission::new(now);
+        admission.redraw_pending = true;
+        for i in 0..100 {
+            let time = now + interval * i;
+            assert!(admission.due(time));
+            admission.polled(time, interval, true);
+            assert_eq!(admission.wake_deadline(Some(now)), Some(time + interval));
+            assert!(admission.redraw_pending);
+        }
+    }
+
+    #[test]
+    fn repeated_runtime_wakes_do_not_bypass_deadline() {
+        let now = Instant::now();
+        let interval = Duration::from_millis(7);
+        let mut admission = RuntimeAdmission::new(now);
+        admission.polled(now, interval, false);
+        for _ in 0..10_000 {
+            admission.pending = true;
+            assert!(!admission.due(now));
+            assert_eq!(admission.wake_deadline(None), Some(now + interval));
+        }
+        assert!(admission.due(now + interval));
+        admission.polled(now + Duration::from_secs(1), interval, true);
+        assert_eq!(admission.deadline, now + Duration::from_secs(1) + interval);
+    }
+
+    #[test]
+    fn idle_runtime_waits_without_repeated_redraw_requests() {
+        let now = Instant::now();
+        let mut admission = RuntimeAdmission::new(now);
+        admission.polled(now, Duration::from_millis(7), false);
+        assert_eq!(admission.wake_deadline(None), None);
+        admission.redraw_pending = true;
+        assert_eq!(admission.wake_deadline(Some(now)), None);
+        admission.redraw_pending = false;
+        assert_eq!(admission.wake_deadline(Some(now)), Some(now));
     }
 
     #[test]

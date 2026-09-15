@@ -45,6 +45,7 @@ export {
   ENGINE_METRIC_DESCRIPTORS,
   ENGINE_TRACE_DESCRIPTORS,
   FRAME_BUDGET_TRACE_DESCRIPTORS,
+  TelemetryCaptureRetention,
   TelemetryCaptureState,
   TelemetryDescriptorKind,
   TelemetryMetricBank,
@@ -62,6 +63,7 @@ export {
   type TelemetryDescriptor,
   type TelemetryMetricDescriptor,
   type TelemetrySnapshot,
+  type TelemetryProducerIdentity,
 } from './telemetry/index.ts';
 export {
   Profiling,

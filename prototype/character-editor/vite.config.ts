@@ -28,6 +28,7 @@ function crossOriginIsolationHeaders(): PluginOption {
 
 export default defineConfig({
   root: '.',
+  base: './',
   plugins: [basicSsl(), vue(), tailwindcss(), crossOriginIsolationHeaders()],
   resolve: {
     alias: {
@@ -48,6 +49,13 @@ export default defineConfig({
       input: {
         editor: path.resolve(import.meta.dirname, 'index.html'),
         paint: path.resolve(import.meta.dirname, 'paint/paint-demo.html'),
+        paintNativeProbe: path.resolve(import.meta.dirname, 'paint/paint-native-probe.html'),
+        paintMenuProbe: path.resolve(import.meta.dirname, 'paint/paint-menu-probe.html'),
+        paintRecoveryProbe: path.resolve(import.meta.dirname, 'paint/paint-recovery-probe.html'),
+        paintRasterProbe: path.resolve(import.meta.dirname, 'paint/paint-raster-probe.html'),
+        paintStressProbe: path.resolve(import.meta.dirname, 'paint/paint-stress-probe.html'),
+        paintCaptureProbe: path.resolve(import.meta.dirname, 'paint/paint-capture-probe.html'),
+        paintCaptureControl: path.resolve(import.meta.dirname, 'paint/paint-capture-control.html'),
       },
     },
   },

@@ -1,32 +1,138 @@
 use anyrender::{ImageRenderer as _, PaintScene as _};
+use blitz_dom::util::Color;
+use blitz_dom::{BaseDocument, Document as _};
 use blitz_paint::paint_scene;
 use image::{ImageBuffer, ImageFormat};
+use log::warn;
+use peniko::Fill;
+use peniko::kurbo::Rect;
 use std::fs;
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 use url::Url;
 
-use super::parse_and_resolve_document;
+use super::fuzzy::{FuzzySpec, fuzzy_buffer_diff, parse_fuzzy_metas, tolerance_for_reference};
+use super::{
+    document_has_scripts, parse_and_resolve_document, pump_net_provider, run_document_scripts,
+};
 use crate::{BufferKind, HEIGHT, SCALE, SubtestCounts, TestFlags, ThreadCtx, WIDTH};
 
-#[allow(clippy::too_many_arguments)]
 pub fn process_ref_test(
     ctx: &mut ThreadCtx,
     test_relative_path: &str,
     test_html: &str,
-    ref_file: &str,
+    match_references: &[String],
+    mismatch_references: &[String],
     flags: &mut TestFlags,
 ) -> SubtestCounts {
-    let ref_url: Url = ctx
-        .dummy_base_url
-        .join(test_relative_path)
-        .unwrap()
-        .join(ref_file)
-        .unwrap();
-    let ref_relative_path = ref_url.path().strip_prefix('/').unwrap().to_string();
-    let ref_path = ctx.wpt_dir.join(&ref_relative_path);
-    let ref_html = fs::read_to_string(ref_path).expect("Ref file not found.");
+    let test_out_path = ctx
+        .out_dir
+        .join(format!("{}{}", test_relative_path, "-test.png"));
+    render_html_to_buffer(
+        ctx,
+        BufferKind::Test,
+        test_relative_path,
+        &test_out_path,
+        test_html,
+    );
+
+    let image_is_blank = ctx.buffers.test_buffer.iter().all(|x| *x == 0);
+    if image_is_blank {
+        return SubtestCounts::ZERO_OF_ONE;
+    }
+
+    let fuzzy_specs = parse_fuzzy_metas(test_html);
+
+    // A test passes if its rendering matches ANY of its `rel=match` references
+    // and differs from ALL of its `rel=mismatch` references.
+    let mut ref_index = 0;
+
+    let mut matches_pass = match_references.is_empty();
+    for ref_file in match_references {
+        ref_index += 1;
+        match render_reference_and_compare(
+            ctx,
+            test_relative_path,
+            ref_file,
+            ref_index,
+            &fuzzy_specs,
+            flags,
+        ) {
+            Some(true) => {
+                matches_pass = true;
+                break;
+            }
+            Some(false) => {}
+            // Reference could not be resolved or read: skip the test
+            None => return SubtestCounts::ZERO_OF_ZERO,
+        }
+    }
+
+    let mut mismatches_pass = true;
+    for ref_file in mismatch_references {
+        ref_index += 1;
+        match render_reference_and_compare(
+            ctx,
+            test_relative_path,
+            ref_file,
+            ref_index,
+            &fuzzy_specs,
+            flags,
+        ) {
+            Some(true) => {
+                mismatches_pass = false;
+                break;
+            }
+            Some(false) => {}
+            // Reference could not be resolved or read: skip the test
+            None => return SubtestCounts::ZERO_OF_ZERO,
+        }
+    }
+
+    if matches_pass && mismatches_pass {
+        SubtestCounts::ONE_OF_ONE
+    } else {
+        SubtestCounts::ZERO_OF_ONE
+    }
+}
+
+/// Renders `ref_file` to the reference buffer and compares it against the already-rendered
+/// test buffer. Returns `true` if the two renderings are considered equal.
+fn render_reference_and_compare(
+    ctx: &mut ThreadCtx,
+    test_relative_path: &str,
+    ref_file: &str,
+    ref_index: usize,
+    fuzzy_specs: &[FuzzySpec],
+    flags: &mut TestFlags,
+) -> Option<bool> {
+    let test_url = ctx.dummy_base_url.join(test_relative_path).unwrap();
+    let ref_url: Url = match test_url.join(ref_file) {
+        Ok(url) => url,
+        Err(err) => {
+            warn!("Skipping {test_relative_path}: unresolvable ref href {ref_file:?} ({err})");
+            return None;
+        }
+    };
+
+    // An `about:blank` reference is a blank page: render the ref as an empty document.
+    let (ref_relative_path, ref_html) = if ref_url.as_str() == "about:blank" {
+        (test_relative_path.to_string(), String::new())
+    } else if ref_url.scheme() == ctx.dummy_base_url.scheme() {
+        let ref_relative_path = ref_url.path().strip_prefix('/').unwrap().to_string();
+        let ref_path = ctx.wpt_dir.join(&ref_relative_path);
+        match fs::read_to_string(&ref_path) {
+            Ok(html) => (ref_relative_path, html),
+            Err(err) => {
+                warn!("Skipping {test_relative_path}: cannot read ref file {ref_file:?} ({err})");
+                return None;
+            }
+        }
+    } else {
+        warn!("Skipping {test_relative_path}: unsupported ref url {ref_url}");
+        return None;
+    };
 
     if ctx.float_re.is_match(&ref_html) {
         *flags |= TestFlags::USES_FLOAT;
@@ -46,24 +152,18 @@ pub fn process_ref_test(
     if ctx.subgrid_re.is_match(&ref_html) {
         *flags |= TestFlags::USES_SUBGRID;
     }
-    if ctx.masonry_re.is_match(&ref_html) {
-        *flags |= TestFlags::USES_MASONRY;
+    if ctx.grid_lanes_re.is_match(&ref_html) {
+        *flags |= TestFlags::USES_GRID_LANES;
     }
 
-    let test_out_path = ctx
-        .out_dir
-        .join(format!("{}{}", test_relative_path, "-test.png"));
-    render_html_to_buffer(
-        ctx,
-        BufferKind::Test,
-        test_relative_path,
-        &test_out_path,
-        test_html,
-    );
-
+    let suffix = if ref_index == 1 {
+        String::new()
+    } else {
+        format!("-{ref_index}")
+    };
     let ref_out_path = ctx
         .out_dir
-        .join(format!("{}{}", test_relative_path, "-ref.png"));
+        .join(format!("{test_relative_path}-ref{suffix}.png"));
     render_html_to_buffer(
         ctx,
         BufferKind::Ref,
@@ -72,14 +172,22 @@ pub fn process_ref_test(
         &ref_html,
     );
 
-    let image_is_blank = ctx.buffers.test_buffer.iter().all(|x| *x == 0);
-    if image_is_blank {
-        return SubtestCounts::ZERO_OF_ONE;
+    if ctx.buffers.test_buffer == ctx.buffers.ref_buffer {
+        return Some(true);
     }
 
-    if ctx.buffers.test_buffer == ctx.buffers.ref_buffer {
-        return SubtestCounts::ONE_OF_ONE;
-    }
+    // If the test declares a `<meta name=fuzzy>` tolerance applicable to this reference,
+    // use it to decide whether the renderings match. Otherwise fall back to the fixed
+    // dify threshold.
+    let fuzzy_tolerance = tolerance_for_reference(fuzzy_specs, ref_file);
+    let is_match = if let Some(tolerance) = fuzzy_tolerance {
+        let (max_difference, differing_pixels) =
+            fuzzy_buffer_diff(&ctx.buffers.test_buffer, &ctx.buffers.ref_buffer);
+        max_difference <= tolerance.max_difference.max
+            && differing_pixels <= tolerance.total_pixels.max
+    } else {
+        true
+    };
 
     let test_image = ImageBuffer::from_raw(WIDTH, HEIGHT, ctx.buffers.test_buffer.clone()).unwrap();
     let ref_image = ImageBuffer::from_raw(WIDTH, HEIGHT, ctx.buffers.ref_buffer.clone()).unwrap();
@@ -89,13 +197,13 @@ pub fn process_ref_test(
     if let Some(diff) = diff {
         let path = ctx
             .out_dir
-            .join(format!("{}{}", test_relative_path, "-diff.png"));
+            .join(format!("{test_relative_path}-diff{suffix}.png"));
         let parent = path.parent().unwrap();
         fs::create_dir_all(parent).unwrap();
         diff.1.save_with_format(path, ImageFormat::Png).unwrap();
-        SubtestCounts::ZERO_OF_ONE
+        Some(fuzzy_tolerance.is_some() && is_match)
     } else {
-        SubtestCounts::ONE_OF_ONE
+        Some(is_match)
     }
 }
 
@@ -108,6 +216,32 @@ fn render_html_to_buffer(
 ) {
     let mut document = parse_and_resolve_document(ctx, html, relative_path);
 
+    if document_has_scripts(&document) {
+        // The document contains scripts, so it (probably) requires JavaScript
+        // to render correctly: upgrade it to a `ScriptDocument` (without
+        // reparsing) and execute its scripts before rendering.
+        let mut script_document = run_document_scripts(ctx, document);
+        for error in script_document.take_js_errors() {
+            warn!("{relative_path}: {error}");
+        }
+
+        // Scripts may have mutated the DOM: re-resolve and load any
+        // newly-requested resources
+        let mut doc = script_document.inner_mut();
+        doc.resolve(0.0);
+        pump_net_provider(ctx, &mut doc);
+        render_document_to_buffer(ctx, buffer_kind, out_path, &mut doc);
+    } else {
+        render_document_to_buffer(ctx, buffer_kind, out_path, &mut document);
+    }
+}
+
+fn render_document_to_buffer(
+    ctx: &mut ThreadCtx,
+    buffer_kind: BufferKind,
+    out_path: &Path,
+    document: &mut BaseDocument,
+) {
     // Determine height to render
     // let computed_height = document.as_ref().root_element().final_layout.size.height;
     // let render_height = (computed_height as u32).clamp(HEIGHT, 4000);
@@ -118,7 +252,17 @@ fn render_html_to_buffer(
     ctx.renderer.render_to_vec(
         |scene| {
             scene.reset();
-            paint_scene(scene, &mut document, SCALE, WIDTH, HEIGHT, 0, 0);
+
+            // Render white background
+            scene.fill(
+                Fill::NonZero,
+                Default::default(),
+                Color::WHITE,
+                Default::default(),
+                &Rect::new(0.0, 0.0, WIDTH as f64, HEIGHT as f64),
+            );
+
+            paint_scene(scene, document, SCALE, WIDTH, HEIGHT, 0, 0);
         },
         buf,
     );

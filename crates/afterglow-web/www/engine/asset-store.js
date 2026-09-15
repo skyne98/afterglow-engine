@@ -13210,9 +13210,10 @@ function fallbackGroup() {
   return _fallbackGroup.clone(true);
 }
 
-// crates/afterglow-web/web/src/engine/telemetry/telemetry.ts
+// crates/afterglow-telemetry/web/src/telemetry.ts
 var TELEMETRY_RECORD_BYTES = 40;
 var TELEMETRY_RECORD_WORDS = TELEMETRY_RECORD_BYTES / 4;
+// crates/afterglow-web/web/src/engine/telemetry/telemetry.ts
 var TelemetryRes = defineResource("telemetry", () => {
   throw new Error("Telemetry not initialized. Set TelemetryRes during bootstrap.");
 });
@@ -13238,8 +13239,6 @@ var ENGINE_TRACE_DESCRIPTORS = [
   { category: 5 /* Texture */, categoryName: "texture", name: "texture.transcode_queue", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "format" },
   { category: 5 /* Texture */, categoryName: "texture", name: "texture.transcode", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "format" },
   { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.upload", kind: 2 /* Span */, argument0: "bytes", argument1: "slot" },
-  { category: 4 /* Asset */, categoryName: "cache", name: "cache.read", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "hit" },
-  { category: 4 /* Asset */, categoryName: "cache", name: "cache.write", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "status" },
   { category: 4 /* Asset */, categoryName: "asset", name: "mesh.optimize", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "status" },
   { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.feedback_detected", kind: 1 /* Instant */, argument0: "priority", argument1: "feedback_epoch" },
   { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.scheduler_wait", kind: 3 /* AsyncSpan */, argument0: "priority", argument1: "status" },
@@ -13424,9 +13423,9 @@ class AssetStore {
   readyCount = 0;
   meshopt;
   loader;
-  constructor(loader, meshopt, capacity = DEFAULT_ASSET_CAPACITY, maxCompletionsPerPoll = 32, telemetry) {
+  constructor(loader, meshopt, capacity = DEFAULT_ASSET_CAPACITY, maxCompletionsPerPoll = 32, telemetry2) {
     this.maxCompletionsPerPoll = maxCompletionsPerPoll;
-    this.telemetry = telemetry;
+    this.telemetry = telemetry2;
     if (!Number.isInteger(capacity) || capacity <= 0)
       throw new RangeError("asset capacity must be positive");
     if (!Number.isInteger(maxCompletionsPerPoll) || maxCompletionsPerPoll <= 0)
@@ -13592,13 +13591,13 @@ class AssetStore {
   }
   async optimizeGltfScene(scene) {
     const correlation = this.telemetry?.nextCorrelation(4 /* Asset */) ?? 0;
-    this.telemetry?.trace.asyncBegin(21 /* MeshOptimize */, correlation, 0, 0);
+    this.telemetry?.trace.asyncBegin(19 /* MeshOptimize */, correlation, 0, 0);
     try {
       const stats = await this.optimizeGltfSceneInner(scene);
-      this.telemetry?.trace.asyncEnd(21 /* MeshOptimize */, correlation, stats.length, 0);
+      this.telemetry?.trace.asyncEnd(19 /* MeshOptimize */, correlation, stats.length, 0);
       return stats;
     } catch (error2) {
-      this.telemetry?.trace.asyncEnd(21 /* MeshOptimize */, correlation, 0, 1);
+      this.telemetry?.trace.asyncEnd(19 /* MeshOptimize */, correlation, 0, 1);
       throw error2;
     }
   }

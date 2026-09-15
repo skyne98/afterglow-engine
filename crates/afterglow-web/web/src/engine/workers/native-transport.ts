@@ -26,6 +26,27 @@ declare const Deno: {
   };
 };
 
+type NativeOps = {
+  op_afterglow_rpc_call_async?: unknown;
+  op_afterglow_worker_ids?: (service: string) => number[];
+};
+function nativeOps(): NativeOps | undefined {
+  return (globalThis as typeof globalThis & { Deno?: { core?: { ops?: NativeOps } } }).Deno?.core?.ops;
+}
+
+export function hasNativeWorkerTransport(): boolean {
+  return typeof nativeOps()?.op_afterglow_rpc_call_async === 'function';
+}
+
+export function nativeWorkerIds(service: string): number[] {
+  const resolve = nativeOps()?.op_afterglow_worker_ids;
+  if (typeof resolve !== 'function') throw new Error('Native worker manifest is unavailable.');
+  const ids = resolve(service);
+  if (!Array.isArray(ids) || ids.some(id => !Number.isInteger(id) || id < 0))
+    throw new Error(`Invalid native worker manifest: ${service}`);
+  return ids;
+}
+
 export class NativeRpcTransport implements RpcTransport {
   constructor(
     private readonly workerId: number,

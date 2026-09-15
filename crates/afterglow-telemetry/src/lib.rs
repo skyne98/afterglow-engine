@@ -1,4 +1,4 @@
-//! Bounded, transport-neutral engine telemetry.
+//! Bounded, application-independent diagnostics.
 //!
 //! `afterglow-telemetry` provides two correlated planes:
 //!
@@ -15,17 +15,26 @@
 pub mod batch;
 pub mod clock;
 pub mod collector;
+#[cfg(feature = "collector")]
+pub mod connection;
 pub mod descriptor;
+pub mod fields;
 pub mod metrics;
+#[cfg(feature = "collector")]
+pub mod publisher;
+#[cfg(feature = "collector")]
+pub mod websocket;
 pub mod record;
 pub mod recorder;
 
 pub use batch::{
-    BATCH_HEADER_BYTES, BATCH_MAGIC, BATCH_VERSION, BatchError, BatchHeader, decode_batch_into,
-    encode_batch_into, encoded_batch_len,
+    BATCH_HEADER_BYTES, BATCH_MAGIC, BATCH_ROLLING, BATCH_VERSION, BatchError, BatchHeader,
+    ProducerIdentity, decode_batch_header, decode_batch_into, encode_batch_into, encoded_batch_len,
 };
 pub use clock::{Clock, ClockMapping, MonotonicClock};
-pub use collector::{Collector, CollectorError, RAW_MAGIC, RAW_VERSION, SourceRegistration};
+pub use collector::{
+    Collector, CollectorError, CollectorLimits, RAW_MAGIC, RAW_VERSION, SourceRegistration,
+};
 pub use descriptor::{
     ArgumentDescriptor, ArgumentType, CategoryId, Descriptor, DescriptorId, DescriptorKind,
     Severity, Unit,
@@ -36,8 +45,8 @@ pub use metrics::{
 };
 pub use record::{TRACE_RECORD_BYTES, TraceContext, TracePhase, TraceRecord};
 pub use recorder::{
-    CaptureConfig, CaptureError, CaptureSnapshot, CaptureState, CategoryMask, RecordStatus,
-    Recorder, SpanGuard,
+    CaptureConfig, CaptureError, CaptureRetention, CaptureSnapshot, CaptureState, CategoryMask,
+    RecordStatus, Recorder, SpanGuard,
 };
 
 #[cfg(test)]
@@ -47,6 +56,33 @@ mod tests {
 
     use super::*;
 
+    const IDENTITY: ProducerIdentity = ProducerIdentity {
+        session: [1, 2, 3, 4],
+        source_id: 1,
+        generation: 1,
+        clock_domain: 1,
+        clock_generation: 1,
+    };
+    fn test_header(count: u32) -> BatchHeader {
+        BatchHeader {
+            session: IDENTITY.session,
+            producer_generation: 1,
+            clock_generation: 1,
+            record_count: count,
+            next_sequence: count as u64,
+            ..BatchHeader::default()
+        }
+    }
+
+    const LIMITS: CollectorLimits = CollectorLimits {
+        sources: 8,
+        descriptors: 64,
+        metadata_bytes: 4096,
+        records: 1024,
+        batches: 32,
+        metric_samples: 128,
+        raw_bytes: 1_048_576,
+    };
     const IO: CategoryId = CategoryId(3);
     const GPU: CategoryId = CategoryId(9);
     static DESCRIPTORS: [Descriptor; 4] = [
@@ -125,6 +161,7 @@ mod tests {
             .arm(CaptureConfig {
                 epoch: 7,
                 categories,
+                retention: CaptureRetention::Prefix,
             })
             .unwrap();
         assert_eq!(
@@ -157,6 +194,96 @@ mod tests {
         assert_eq!(snapshot.records[0].correlation, 5);
         assert_eq!(snapshot.records[1].correlation, 6);
         assert_eq!(snapshot.dropped_records, 1);
+    }
+
+    #[test]
+    fn rolling_capture_retains_each_possible_window_and_resets() {
+        for capacity in 1..=9 {
+            for writes in 0..=capacity * 4 + 1 {
+                let mut recorder = Recorder::new(&DESCRIPTORS, capacity, TestClock::new()).unwrap();
+                recorder.arm(CaptureConfig::flight(19)).unwrap();
+                for index in 0..writes {
+                    assert_eq!(
+                        recorder.instant(
+                            DescriptorId(1),
+                            TraceContext(index as u64),
+                            index as u64,
+                            0
+                        ),
+                        RecordStatus::Recorded
+                    );
+                }
+                recorder.stop().unwrap();
+                let snapshot = recorder.snapshot().unwrap();
+                assert_eq!(snapshot.records.len(), writes.min(capacity));
+                assert_eq!(
+                    snapshot.overwritten_records,
+                    writes.saturating_sub(capacity) as u64
+                );
+                assert_eq!(snapshot.dropped_records, 0);
+                assert_eq!(snapshot.retention, CaptureRetention::Rolling);
+                let header =
+                    BatchHeader::from_snapshot(IDENTITY, 1_000_000_000, &snapshot).unwrap();
+                assert_eq!(
+                    header.first_sequence,
+                    writes.saturating_sub(capacity) as u64
+                );
+                assert_eq!(header.next_sequence, writes as u64);
+                assert_eq!(header.flags, BATCH_ROLLING);
+                for (offset, record) in snapshot.records.iter().enumerate() {
+                    assert_eq!(
+                        record.correlation,
+                        (writes.saturating_sub(capacity) + offset) as u64
+                    );
+                    assert_eq!(record.argument0, record.correlation);
+                }
+                assert_eq!(
+                    recorder.instant(DescriptorId(1), TraceContext::NONE, 0, 0),
+                    RecordStatus::Disabled
+                );
+                recorder.reset().unwrap();
+                recorder.arm(CaptureConfig::all(20)).unwrap();
+                recorder.stop().unwrap();
+                let snapshot = recorder.snapshot().unwrap();
+                assert!(snapshot.records.is_empty());
+                assert_eq!(snapshot.overwritten_records, 0);
+                assert_eq!(snapshot.retention, CaptureRetention::Prefix);
+                assert!(BatchHeader::from_snapshot(IDENTITY, 1_000_000_000, &snapshot).is_ok());
+            }
+        }
+    }
+
+    #[test]
+    fn rolling_record_bytes_match_the_shared_fixture() {
+        let mut recorder = Recorder::new(&DESCRIPTORS, 3, TestClock::new()).unwrap();
+        recorder.arm(CaptureConfig::flight(1)).unwrap();
+        for index in 0..5 {
+            recorder.instant(DescriptorId(1), TraceContext(index), index, 0);
+        }
+        recorder.stop().unwrap();
+        let snapshot = recorder.snapshot().unwrap();
+        let mut bytes = vec![0; encoded_batch_len(3).unwrap()];
+        encode_batch_into(
+            BatchHeader::from_snapshot(IDENTITY, 1_000_000_000, &snapshot).unwrap(),
+            snapshot.records,
+            &mut bytes,
+        )
+        .unwrap();
+        let hex: String = include_str!("../tests/fixtures/rolling-batch.hex")
+            .split_whitespace()
+            .collect();
+        let expected: Vec<u8> = (0..hex.len())
+            .step_by(2)
+            .map(|index| u8::from_str_radix(&hex[index..index + 2], 16).unwrap())
+            .collect();
+        assert_eq!(bytes, expected);
+        let mut decoded = [TraceRecord::default(); 3];
+        let (header, count) = decode_batch_into(&bytes, &mut decoded).unwrap();
+        assert_eq!(count, 3);
+        assert_eq!(header.identity(), IDENTITY);
+        assert_eq!(header.first_sequence, 2);
+        assert_eq!(header.next_sequence, 5);
+        assert_eq!(decoded, snapshot.records);
     }
 
     #[test]
@@ -251,17 +378,18 @@ mod tests {
             argument1: 40,
             descriptor: 1,
             phase: TracePhase::Instant as u8,
-            flags: 2,
+            flags: 0,
             reserved: 0,
         }];
         let header = BatchHeader {
             source_id: 4,
             epoch: 5,
             clock_domain: 6,
-            flags: 7,
+            flags: 0,
             record_count: 1,
             dropped_records: 8,
             ticks_per_second: 1_000_000_000,
+            ..test_header(1)
         };
         let mut bytes = vec![0; encoded_batch_len(1).unwrap()];
         assert_eq!(
@@ -282,10 +410,12 @@ mod tests {
 
     #[test]
     fn collector_rejects_a_malformed_batch_without_partial_ingest() {
-        let mut collector = Collector::new(3);
+        let mut collector = Collector::new(IDENTITY.session, 3, LIMITS).unwrap();
         collector
             .register_source(SourceRegistration {
                 source_id: 1,
+                producer_generation: 1,
+                clock_generation: 1,
                 process_id: 1,
                 name: "worker",
                 clock: ClockMapping::native(1),
@@ -315,7 +445,7 @@ mod tests {
                     clock_domain: 1,
                     record_count: 2,
                     ticks_per_second: 1_000_000_000,
-                    ..BatchHeader::default()
+                    ..test_header(2)
                 },
                 &records,
             ),
@@ -329,10 +459,12 @@ mod tests {
 
     #[test]
     fn collector_merges_clock_domains_and_streams_valid_json() {
-        let mut collector = Collector::new(9);
+        let mut collector = Collector::new(IDENTITY.session, 9, LIMITS).unwrap();
         collector
             .register_source(SourceRegistration {
                 source_id: 2,
+                producer_generation: 1,
+                clock_generation: 1,
                 process_id: 1,
                 name: "worker\"two",
                 clock: ClockMapping::native(1),
@@ -343,6 +475,8 @@ mod tests {
         collector
             .register_source(SourceRegistration {
                 source_id: 1,
+                producer_generation: 1,
+                clock_generation: 1,
                 process_id: 1,
                 name: "page",
                 clock: ClockMapping {
@@ -365,7 +499,7 @@ mod tests {
                     clock_domain: 1,
                     record_count: 1,
                     ticks_per_second: 1_000_000_000,
-                    ..BatchHeader::default()
+                    ..test_header(1)
                 },
                 &[TraceRecord {
                     timestamp: 20,
@@ -384,7 +518,7 @@ mod tests {
                     record_count: 1,
                     dropped_records: 2,
                     ticks_per_second: 500_000_000,
-                    ..BatchHeader::default()
+                    ..test_header(1)
                 },
                 &[TraceRecord {
                     timestamp: 105,
@@ -397,7 +531,10 @@ mod tests {
             .unwrap();
         collector
             .ingest_metrics(
-                1,
+                ProducerIdentity {
+                    clock_domain: 2,
+                    ..IDENTITY
+                },
                 106,
                 &[MetricSample {
                     metric: 0,

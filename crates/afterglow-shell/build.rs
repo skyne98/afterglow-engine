@@ -28,6 +28,15 @@ fn main() {
     println!("cargo:rerun-if-changed=raf.ts");
     println!("cargo:rerun-if-changed=scheduler.ts");
 
+    for path in ["diagnostics.ts", "../afterglow-telemetry/web/src", "../afterglow-web/web/src/workers", "../afterglow-web/web/src/engine/workers/native-transport.ts", "../afterglow-web/web/src/engine/telemetry"] {
+        println!("cargo:rerun-if-changed={path}");
+    }
+    let bundle = std::path::Path::new(&std::env::var("OUT_DIR").unwrap()).join("diagnostics.js");
+    let status = std::process::Command::new("bun")
+        .args(["build", "diagnostics.ts", "--target", "browser", "--format", "iife", "--outfile"])
+        .arg(&bundle).status().expect("Bun is necessary for shell TypeScript");
+    assert!(status.success(), "Could not build shell diagnostics TypeScript");
+
     let output = create_snapshot(
         CreateSnapshotOptions {
             cargo_manifest_dir: env!("CARGO_MANIFEST_DIR"),

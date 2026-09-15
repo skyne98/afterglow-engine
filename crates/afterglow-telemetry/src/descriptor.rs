@@ -11,6 +11,7 @@ pub struct CategoryId(pub u8);
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "collector", derive(serde::Serialize, serde::Deserialize))]
 pub enum DescriptorKind {
     Instant = 1,
     Span = 2,
@@ -20,6 +21,7 @@ pub enum DescriptorKind {
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "collector", derive(serde::Serialize, serde::Deserialize))]
 pub enum ArgumentType {
     None = 0,
     Unsigned = 1,
@@ -33,6 +35,7 @@ pub enum ArgumentType {
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "collector", derive(serde::Serialize, serde::Deserialize))]
 pub enum Unit {
     None = 0,
     Count = 1,
@@ -47,6 +50,7 @@ pub enum Unit {
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "collector", derive(serde::Serialize, serde::Deserialize))]
 pub enum Severity {
     Trace = 0,
     Debug = 1,
@@ -57,43 +61,43 @@ pub enum Severity {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ArgumentDescriptor {
-    pub name: &'static str,
+pub struct ArgumentDescriptor<'a> {
+    pub name: &'a str,
     pub kind: ArgumentType,
     pub unit: Unit,
 }
 
-impl ArgumentDescriptor {
+impl<'a> ArgumentDescriptor<'a> {
     pub const NONE: Self = Self {
         name: "",
         kind: ArgumentType::None,
         unit: Unit::None,
     };
 
-    pub const fn new(name: &'static str, kind: ArgumentType, unit: Unit) -> Self {
+    pub const fn new(name: &'a str, kind: ArgumentType, unit: Unit) -> Self {
         Self { name, kind, unit }
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Descriptor {
+pub struct Descriptor<'a> {
     pub category: CategoryId,
-    pub category_name: &'static str,
-    pub name: &'static str,
+    pub category_name: &'a str,
+    pub name: &'a str,
     pub kind: DescriptorKind,
-    pub argument0: ArgumentDescriptor,
-    pub argument1: ArgumentDescriptor,
+    pub argument0: ArgumentDescriptor<'a>,
+    pub argument1: ArgumentDescriptor<'a>,
     pub severity: Severity,
 }
 
-impl Descriptor {
+impl<'a> Descriptor<'a> {
     pub const fn new(
         category: CategoryId,
-        category_name: &'static str,
-        name: &'static str,
+        category_name: &'a str,
+        name: &'a str,
         kind: DescriptorKind,
-        argument0: ArgumentDescriptor,
-        argument1: ArgumentDescriptor,
+        argument0: ArgumentDescriptor<'a>,
+        argument1: ArgumentDescriptor<'a>,
     ) -> Self {
         Self {
             category,

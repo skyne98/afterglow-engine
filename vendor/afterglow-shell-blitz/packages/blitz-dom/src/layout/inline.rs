@@ -1,16 +1,18 @@
-use parley::{AlignmentOptions, IndentOptions, PositionedInlineBox};
+use blitz_traits::node_id::NodeId;
+use parley::{AlignmentOptions, IndentOptions};
+use style::values::specified::box_::DisplayOutside;
 use style::values::{computed::CSSPixelLength, generics::text::GenericTextIndent};
 use taffy::{
     AvailableSpace, BlockContext, BlockFormattingContext, BoxSizing, CollapsibleMarginSet,
     CoreStyle as _, Direction, LayoutInput, LayoutOutput, LayoutPartialTree as _, MaybeMath as _,
-    MaybeResolve as _, NodeId, Overflow, Point, Position, RequestedAxis, ResolveOrZero as _,
-    RunMode, Size, SizingMode,
+    MaybeResolve as _, Overflow, Point, Position, RequestedAxis, ResolveOrZero as _, RunMode, Size,
+    SizingMode,
 };
 
 #[cfg(feature = "floats")]
 use parley::YieldData;
 #[cfg(feature = "floats")]
-use taffy::{Clear, Float, prelude::TaffyMaxContent};
+use taffy::{BlockItemStyle as _, Clear, Float, prelude::TaffyMaxContent};
 
 use super::resolve_calc_value;
 use crate::BaseDocument;
@@ -18,7 +20,7 @@ use crate::BaseDocument;
 impl BaseDocument {
     pub(crate) fn compute_inline_layout(
         &mut self,
-        node_id: usize,
+        node_id: NodeId,
         inputs: taffy::tree::LayoutInput,
         block_ctx: Option<&mut BlockContext<'_>>,
     ) -> taffy::LayoutOutput {
@@ -28,11 +30,11 @@ impl BaseDocument {
             run_mode,
             ..
         } = inputs;
-        let style = &self.nodes[node_id].style;
+        let style = self.nodes[node_id].layout_style();
 
         // Pull these out earlier to avoid borrowing issues
         let is_scroll_container =
-            style.overflow.x.is_scroll_container() || style.overflow.y.is_scroll_container();
+            style.overflow().x.is_scroll_container() || style.overflow().y.is_scroll_container();
         let padding = style
             .padding()
             .resolve_or_zero(parent_size.width, resolve_calc_value);
@@ -101,6 +103,8 @@ impl BaseDocument {
             }
         }
 
+        drop(style);
+
         // Unwrap the block formatting context if one was passed, or else create a new one
         match block_ctx {
             Some(inherited_bfc) if !is_scroll_container => self.compute_inline_layout_inner(
@@ -128,7 +132,7 @@ impl BaseDocument {
 
     fn compute_inline_layout_inner(
         &mut self,
-        node_id: usize,
+        node_id: NodeId,
         inputs: taffy::tree::LayoutInput,
         block_ctx: &mut BlockContext<'_>,
     ) -> taffy::LayoutOutput {
@@ -149,7 +153,7 @@ impl BaseDocument {
             .take_inline_layout()
             .unwrap();
 
-        let style = &self.nodes[node_id].style;
+        let style = self.nodes[node_id].layout_style();
 
         // Note: both horizontal and vertical percentage padding/borders are resolved against the container's inline size (i.e. width).
         // This is not a bug, but is how CSS is specified (see: https://developer.mozilla.org/en-US/docs/Web/CSS/padding#values)
@@ -195,22 +199,6 @@ impl BaseDocument {
         // || !inline_layout.text.is_empty();
         // || !inline_layout.layout.inline_boxes().is_empty();
 
-        // Short circuit if inline context contains no text or inline boxes
-        if !has_styles_preventing_being_collapsed_through
-            && inline_layout.text.is_empty()
-            && inline_layout.layout.inline_boxes().is_empty()
-        {
-            // Put layout back
-            self.nodes[node_id]
-                .data
-                .downcast_element_mut()
-                .unwrap()
-                .inline_layout_data = Some(inline_layout);
-            return LayoutOutput::from_outer_size(
-                Size::ZERO.maybe_max(container_pb.sum_axes().map(Some)),
-            );
-        }
-
         // Resolve node's preferred/min/max sizes (width/heights) against the available space (percentages resolve to pixel values)
         // For ContentSize mode, we pretend that the node has no size styles as these should be ignored.
         let (node_size, node_min_size, node_max_size, aspect_ratio) = match sizing_mode {
@@ -243,6 +231,24 @@ impl BaseDocument {
             }
         };
 
+        drop(style);
+
+        // Short circuit if inline context contains no text or inline boxes
+        if !has_styles_preventing_being_collapsed_through
+            && inline_layout.text.is_empty()
+            && inline_layout.layout.inline_boxes().is_empty()
+        {
+            // Put layout back
+            self.nodes[node_id]
+                .data
+                .downcast_element_mut()
+                .unwrap()
+                .inline_layout_data = Some(inline_layout);
+            return LayoutOutput::from_outer_size(
+                Size::ZERO.maybe_max(container_pb.sum_axes().map(Some)),
+            );
+        }
+
         // Compute available space
         let available_space = Size {
             width: known_dimensions
@@ -253,8 +259,9 @@ impl BaseDocument {
                 .maybe_set(known_dimensions.width)
                 .maybe_set(node_size.width)
                 .map_definite_value(|size| {
-                    size.maybe_clamp(node_min_size.width, node_max_size.width)
-                        - content_box_inset.horizontal_axis_sum()
+                    (size.maybe_clamp(node_min_size.width, node_max_size.width)
+                        - content_box_inset.horizontal_axis_sum())
+                    .max(0.0)
                 }),
             height: known_dimensions
                 .height
@@ -264,8 +271,9 @@ impl BaseDocument {
                 .maybe_set(known_dimensions.height)
                 .maybe_set(node_size.height)
                 .map_definite_value(|size| {
-                    size.maybe_clamp(node_min_size.height, node_max_size.height)
-                        - content_box_inset.vertical_axis_sum()
+                    (size.maybe_clamp(node_min_size.height, node_max_size.height)
+                        - content_box_inset.vertical_axis_sum())
+                    .max(0.0)
                 }),
         };
 
@@ -275,6 +283,9 @@ impl BaseDocument {
             available_space,
             sizing_mode: SizingMode::InherentSize,
             parent_size: available_space.into_options(),
+            // Atomic inlines (e.g. inline-block) establish independent formatting
+            // contexts: their margins never collapse with their children's margins.
+            vertical_margins_are_collapsible: taffy::Line::FALSE,
             ..inputs
         };
         #[cfg(feature = "floats")]
@@ -285,23 +296,28 @@ impl BaseDocument {
 
         // Update inline boxes
         for ibox in inline_layout.layout.inline_boxes_mut() {
-            let style = &self.nodes[ibox.id as usize].style;
+            let style = self.nodes[NodeId::from_u64(ibox.id)].layout_style();
             let margin = style
-                .margin
+                .margin()
                 .resolve_or_zero(inputs.parent_size, resolve_calc_value);
 
             #[cfg(feature = "floats")]
-            let is_floated = style.float.is_floated();
+            let is_floated = style.float().is_floated();
             #[cfg(not(feature = "floats"))]
             let is_floated = false;
 
-            if style.position == Position::Absolute || is_floated {
+            let is_absolute = style.position() == Position::Absolute;
+            drop(style);
+
+            if is_absolute || is_floated {
                 ibox.width = 0.0;
                 ibox.height = 0.0;
             } else {
-                let output = self.compute_child_layout(NodeId::from(ibox.id), child_inputs);
+                let output = self.compute_child_layout(taffy::NodeId::from(ibox.id), child_inputs);
                 ibox.width = (margin.left + margin.right + output.size.width) * scale;
-                ibox.height = (margin.top + margin.bottom + output.size.height) * scale;
+                // Vertical margins adjust the space the box reserves in the line, but the
+                // reserved space cannot be negative.
+                ibox.height = (margin.top + margin.bottom + output.size.height).max(0.0) * scale;
             }
         }
 
@@ -345,14 +361,21 @@ impl BaseDocument {
                     AvailableSpace::MinContent => {
                         let mut width: f32 = 0.0;
                         for ibox in inline_layout.layout.inline_boxes_mut() {
-                            let style = &self.nodes[ibox.id as usize].style;
+                            let (is_floated, margin) = {
+                                let style = self.nodes[NodeId::from_u64(ibox.id)].layout_style();
+                                (
+                                    style.float().is_floated(),
+                                    style
+                                        .margin()
+                                        .resolve_or_zero(inputs.parent_size, resolve_calc_value),
+                                )
+                            };
 
-                            if style.float.is_floated() {
-                                let margin = style
-                                    .margin
-                                    .resolve_or_zero(inputs.parent_size, resolve_calc_value);
-                                let output =
-                                    self.compute_child_layout(NodeId::from(ibox.id), child_inputs);
+                            if is_floated {
+                                let output = self.compute_child_layout(
+                                    taffy::NodeId::from(ibox.id),
+                                    child_inputs,
+                                );
                                 width = width.max(output.size.width + margin.left + margin.right);
                             }
                         }
@@ -372,22 +395,29 @@ impl BaseDocument {
                         let mut right_band: f32 = 0.0;
                         let mut width: f32 = 0.0;
                         for ibox in inline_layout.layout.inline_boxes_mut() {
-                            let style = &self.nodes[ibox.id as usize].style;
-                            let float = style.float;
+                            let (float, clear, margin) = {
+                                let style = self.nodes[NodeId::from_u64(ibox.id)].layout_style();
+                                (
+                                    style.float(),
+                                    style.clear(),
+                                    style
+                                        .margin()
+                                        .resolve_or_zero(inputs.parent_size, resolve_calc_value),
+                                )
+                            };
 
                             if float.is_floated() {
-                                if matches!(style.clear, Clear::Left | Clear::Both) {
+                                if matches!(clear, Clear::Left | Clear::Both) {
                                     left_band = 0.0;
                                 }
-                                if matches!(style.clear, Clear::Right | Clear::Both) {
+                                if matches!(clear, Clear::Right | Clear::Both) {
                                     right_band = 0.0;
                                 }
 
-                                let margin = style
-                                    .margin
-                                    .resolve_or_zero(inputs.parent_size, resolve_calc_value);
-                                let output =
-                                    self.compute_child_layout(NodeId::from(ibox.id), child_inputs);
+                                let output = self.compute_child_layout(
+                                    taffy::NodeId::from(ibox.id),
+                                    child_inputs,
+                                );
                                 let box_width = output.size.width + margin.left + margin.right;
 
                                 match float {
@@ -523,34 +553,41 @@ impl BaseDocument {
                     }
                     YieldData::InlineBoxBreak(box_break_data) => {
                         let state = breaker.state_mut();
-                        let node_id = box_break_data.inline_box_id as usize;
-                        let node = &mut self.nodes[node_id];
+                        let node_id = NodeId::from_u64(box_break_data.inline_box_id);
 
-                        // We can assume that the box is a float because we only set `break_on_box: true` for floats
-                        let direction = match node.style.float {
-                            Float::Left => taffy::FloatDirection::Left,
-                            Float::Right => taffy::FloatDirection::Right,
-                            Float::None => unreachable!(),
+                        let (direction, clear, margin) = {
+                            let style = self.nodes[node_id].layout_style();
+                            // We can assume that the box is a float because we only set `break_on_box: true` for floats
+                            let direction = match style.float() {
+                                Float::Left => taffy::FloatDirection::Left,
+                                Float::Right => taffy::FloatDirection::Right,
+                                Float::None => unreachable!(),
+                            };
+                            (
+                                direction,
+                                style.clear(),
+                                style
+                                    .margin()
+                                    .resolve_or_zero(inputs.parent_size, resolve_calc_value),
+                            )
                         };
-                        let clear = node.style.clear;
-                        let margin = node
-                            .style
-                            .margin
-                            .resolve_or_zero(inputs.parent_size, resolve_calc_value);
 
                         let margin_sum = margin.sum_axes();
 
-                        let output =
-                            self.compute_child_layout(NodeId::from(node_id), float_child_inputs);
+                        let output = self.compute_child_layout(
+                            crate::taffy_node_id(node_id),
+                            float_child_inputs,
+                        );
                         let min_y = state.line_y() as f32 / scale;
-                        let mut pos = block_ctx.place_floated_box(
+
+                        // Note: `pos` is content-box relative
+                        let pos = block_ctx.place_floated_box(
                             output.size + margin_sum,
                             min_y,
                             direction,
                             clear,
+                            false,
                         );
-                        pos.x += container_pb.left;
-                        pos.y += container_pb.top;
 
                         let min_y = state.line_y() / scale as f64; //.max(pos.y as f64);
                         let next_slot =
@@ -561,7 +598,7 @@ impl BaseDocument {
                         state.set_line_x(next_slot.x * scale);
                         state.set_line_y((next_slot.y * scale) as f64);
 
-                        let layout = &mut self.nodes[node_id].unrounded_layout;
+                        let layout = self.nodes[node_id].unrounded_layout_mut();
                         layout.size = output.size;
                         layout.location.x = pos.x + margin.left + container_pb.left;
                         layout.location.y = pos.y + margin.top + container_pb.top;
@@ -620,32 +657,34 @@ impl BaseDocument {
         // inline content ends the final line box but must not generate an extra empty
         // line box after it. Parley produces a trailing empty line in this case
         // (text-editor semantics), so we exclude that line from the measured height.
-        if inline_layout.text.ends_with('\n') {
-            if let Some(last_line) = inline_layout.layout.lines().last() {
-                if last_line.items().next().is_none() {
-                    height -= last_line.metrics().line_height;
-                }
-            }
-        }
+        // if inline_layout.text.ends_with('\n') {
+        //     if let Some(last_line) = inline_layout.layout.lines().last() {
+        //         if last_line.items().next().is_none() {
+        //             height -= last_line.metrics().line_height;
+        //         }
+        //     }
+        // }
 
         #[cfg(feature = "floats")]
         {
-            let contains_floats = is_bfc_root;
-            if contains_floats {
-                height = height.max(
-                    (block_ctx.floated_content_height_contribution() + container_pb.top) * scale,
-                )
+            if is_bfc_root {
+                height = height.max(block_ctx.floated_content_height_contribution() * scale)
             };
         }
 
         // Note: `width` and `height` are content-box measurements of the inline content.
         // `known_dimensions` must not be substituted in here: those are border-box sizes, and
-        // using them for `content_size` (which adds padding below) would double-count padding,
-        // incorrectly making the container's content overflow it.
+        // using them for the scrollable overflow rect (which adds padding below) would
+        // double-count padding, incorrectly making the container's content overflow it.
         let measured_size = taffy::Size {
             width: width / scale,
             height: height / scale,
         };
+
+        // Unbreakable content (e.g. `white-space: pre` text) may overflow the max advance the
+        // lines were broken at. `width` is the advance the lines were broken at, so the actual
+        // extent of the line boxes must be taken from the laid-out lines for `content_size`.
+        let content_width = f32_max(width, inline_layout.layout.width()) / scale;
 
         let clamped_size = inputs
             .known_dimensions
@@ -663,42 +702,120 @@ impl BaseDocument {
         }
         .maybe_max(container_pb.sum_axes().map(Some));
 
+        let container_direction = self.nodes[node_id].layout_style().direction();
+
         // Store sizes and positions of inline boxes
         for line in inline_layout.layout.lines() {
             for item in line.items() {
                 if let parley::layout::PositionedLayoutItem::InlineBox(ibox) = item {
-                    let node = &mut self.nodes[ibox.id as usize];
-                    let padding = node
-                        .style
-                        .padding
+                    let node = &self.nodes[NodeId::from_u64(ibox.id)];
+                    let style = node.layout_style();
+                    let padding = style
+                        .padding()
                         .resolve_or_zero(child_inputs.parent_size, resolve_calc_value);
-                    let border = node
-                        .style
-                        .border
+                    let border = style
+                        .border()
                         .resolve_or_zero(child_inputs.parent_size, resolve_calc_value);
-                    let margin = node
-                        .style
-                        .margin
+                    let margin = style
+                        .margin()
                         .resolve_or_zero(child_inputs.parent_size, resolve_calc_value);
 
                     #[cfg(feature = "floats")]
-                    let is_floated = node.style.float != Float::None;
+                    let is_floated = style.float() != Float::None;
                     #[cfg(not(feature = "floats"))]
                     let is_floated = false;
 
-                    if node.style.position == Position::Absolute {
-                        let direction = node.style.direction;
-                        layout_abspos_child(self, ibox, final_size, taffy::Point::ZERO, direction);
+                    let is_absolute = style.position() == Position::Absolute;
+                    let direction = style.direction();
+
+                    // The static position of an absolutely positioned box depends on the
+                    // display its hypothetical box would have had (the display specified
+                    // before position:absolute blockified it): inline-level boxes sit at
+                    // their position within the line, while block-level boxes start at the
+                    // content-box left edge of their containing block.
+                    let is_inline_level =
+                        style.style.get_box().original_display.outside() == DisplayOutside::Inline;
+
+                    // Resolve relative inset offsets against the containing block
+                    // (the content box of the inline container).
+                    let container_content_size = final_size - content_box_inset.sum_axes();
+                    let inset_style = style.inset();
+                    let inset = taffy::Rect {
+                        left: inset_style
+                            .left
+                            .maybe_resolve(container_content_size.width, resolve_calc_value),
+                        right: inset_style
+                            .right
+                            .maybe_resolve(container_content_size.width, resolve_calc_value),
+                        top: inset_style
+                            .top
+                            .maybe_resolve(container_content_size.height, resolve_calc_value),
+                        bottom: inset_style
+                            .bottom
+                            .maybe_resolve(container_content_size.height, resolve_calc_value),
+                    };
+                    drop(style);
+
+                    if is_absolute {
+                        // Inline-level boxes are placed at the top of the line box they would
+                        // have occupied (`ibox.y` is the baseline as out-of-flow boxes are
+                        // zero-sized), and block-level boxes below it.
+                        let line_metrics = line.metrics();
+                        let static_position = taffy::Point {
+                            x: if is_inline_level {
+                                (ibox.x / scale) + container_pb.left
+                            } else {
+                                container_pb.left
+                            },
+                            y: if is_inline_level {
+                                (line_metrics.block_min_coord / scale) + container_pb.top
+                            } else {
+                                (line_metrics.block_max_coord / scale) + container_pb.top
+                            },
+                        };
+
+                        layout_abspos_child(
+                            self,
+                            ibox.id,
+                            static_position,
+                            is_inline_level,
+                            final_size,
+                            taffy::Point::ZERO,
+                            direction,
+                        );
                     } else if is_floated {
-                        let layout = &mut self.nodes[ibox.id as usize].unrounded_layout;
+                        let layout = self.nodes[NodeId::from_u64(ibox.id)].unrounded_layout_mut();
                         layout.padding = padding; //.map(|p| p / scale);
                         layout.border = border; //.map(|p| p / scale);
                     } else {
-                        let layout = &mut node.unrounded_layout;
-                        layout.size.width = (ibox.width / scale) - margin.left - margin.right;
-                        layout.size.height = (ibox.height / scale) - margin.top - margin.bottom;
-                        layout.location.x = (ibox.x / scale) + margin.left + container_pb.left;
-                        layout.location.y = (ibox.y / scale) + margin.top + container_pb.top;
+                        // Re-measure the box to get its border-box size (this hits the layout
+                        // cache). The size cannot be recovered from `ibox` dimensions as the
+                        // space reserved in the line is clamped to be non-negative.
+                        let size = self
+                            .compute_child_layout(taffy::NodeId::from(ibox.id), child_inputs)
+                            .size;
+                        let node = &mut self.nodes[NodeId::from_u64(ibox.id)];
+
+                        let inset_offset = taffy::Point {
+                            x: if container_direction == Direction::Rtl {
+                                inset.right.map(|x| -x).or(inset.left).unwrap_or(0.0)
+                            } else {
+                                inset.left.or(inset.right.map(|x| -x)).unwrap_or(0.0)
+                            },
+                            y: inset.top.or(inset.bottom.map(|x| -x)).unwrap_or(0.0),
+                        };
+
+                        let layout = node.unrounded_layout_mut();
+                        layout.size = size;
+                        layout.location.x =
+                            (ibox.x / scale) + margin.left + container_pb.left + inset_offset.x;
+                        // A negative `margin-top` shrinks the space the box reserves in the
+                        // line but does not move the box itself, which stays anchored to the
+                        // bottom of the reserved space.
+                        layout.location.y = (ibox.y / scale)
+                            + margin.top.max(0.0)
+                            + container_pb.top
+                            + inset_offset.y;
                         layout.padding = padding; //.map(|p| p / scale);
                         layout.border = border; //.map(|p| p / scale);
                     }
@@ -712,6 +829,12 @@ impl BaseDocument {
         // println!("known_dimensions: w: {:?} h: {:?}", inputs.known_dimensions.width, inputs.known_dimensions.height);
         // println!("\n");
 
+        let first_baseline = inline_layout
+            .layout
+            .lines()
+            .next()
+            .map(|line| (line.metrics().baseline / scale) + container_pb.top);
+
         // Put layout back
         self.nodes[node_id]
             .data
@@ -721,8 +844,19 @@ impl BaseDocument {
 
         LayoutOutput {
             size: final_size,
-            content_size: measured_size + padding.sum_axes(),
-            first_baselines: Point::NONE,
+            scrollable_overflow_rect: {
+                let content_extent = taffy::Size {
+                    width: content_width,
+                    height: measured_size.height,
+                } + padding.sum_axes();
+                taffy::Rect {
+                    left: 0.0,
+                    right: content_extent.width,
+                    top: 0.0,
+                    bottom: content_extent.height,
+                }
+            },
+            baselines: taffy::Baselines::from_first(first_baseline),
             top_margin: CollapsibleMarginSet::ZERO,
             bottom_margin: CollapsibleMarginSet::ZERO,
             margins_can_collapse_through: !has_styles_preventing_being_collapsed_through
@@ -741,7 +875,9 @@ fn f32_max(a: f32, b: f32) -> f32 {
 #[inline]
 fn layout_abspos_child(
     tree: &mut impl taffy::LayoutBlockContainer,
-    item: PositionedInlineBox,
+    item_id: u64,
+    static_position: Point<f32>,
+    is_inline_level: bool,
     area_size: Size<f32>,
     area_offset: Point<f32>,
     direction: taffy::Direction,
@@ -749,7 +885,7 @@ fn layout_abspos_child(
     let area_width = area_size.width;
     let area_height = area_size.height;
 
-    let node_id = NodeId::new(item.id);
+    let node_id = taffy::NodeId::from(item_id);
     let child_style = tree.get_block_child_style(node_id);
 
     // Skip items that are display:none or are not position:absolute
@@ -847,6 +983,10 @@ fn layout_abspos_child(
             node_id,
             taffy::LayoutInput {
                 known_dimensions,
+                known_dimensions_are_definite: taffy::Size {
+                    width: true,
+                    height: true,
+                },
                 parent_size: area_size.map(Some),
                 available_space: Size {
                     width: AvailableSpace::Definite(
@@ -872,6 +1012,10 @@ fn layout_abspos_child(
         node_id,
         taffy::LayoutInput {
             known_dimensions: final_size.map(Some),
+            known_dimensions_are_definite: taffy::Size {
+                width: true,
+                height: true,
+            },
             parent_size: area_size.map(Some),
             available_space: Size {
                 width: AvailableSpace::Definite(
@@ -999,10 +1143,10 @@ fn layout_abspos_child(
         (Some(left), None) => left + resolved_margin.left,
         (None, Some(right)) => area_size.width - final_size.width - right - resolved_margin.right,
         (None, None) => {
-            if direction == Direction::Rtl {
-                item.x - final_size.width - resolved_margin.right - area_offset.x
+            if direction == Direction::Rtl && is_inline_level {
+                static_position.x - final_size.width - resolved_margin.right - area_offset.x
             } else {
-                item.x + resolved_margin.left - area_offset.x
+                static_position.x + resolved_margin.left - area_offset.x
             }
         }
     };
@@ -1014,7 +1158,7 @@ fn layout_abspos_child(
                 area_size.height - final_size.height - bottom - resolved_margin.bottom
             }))
             .maybe_add(area_offset.y)
-            .unwrap_or(item.y + resolved_margin.top),
+            .unwrap_or(static_position.y + resolved_margin.top),
     };
     // Note: axis intentionally switched here as scrollbars take up space in the opposite axis
     // to the axis in which scrolling is enabled.
@@ -1036,7 +1180,7 @@ fn layout_abspos_child(
         &taffy::Layout {
             order: 0, // TODO: order
             size: final_size,
-            content_size: layout_output.content_size,
+            scrollable_overflow_rect: layout_output.scrollable_overflow_rect,
             scrollbar_size,
             location,
             padding,

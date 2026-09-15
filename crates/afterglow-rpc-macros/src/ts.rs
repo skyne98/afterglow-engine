@@ -282,7 +282,7 @@ pub fn generate_client(tr: &ItemTrait, is_async: bool) -> syn::Result<String> {
             format!("      asyncWorkerImports(driver, memory),"),
             format!("    );"),
             format!("    driver.w = instance.exports;"),
-            format!("    instance.exports.afterglow_wasm_init();"),
+            format!("    (instance.exports.afterglow_wasm_init as () => void)();"),
             format!("    return new {client_name}(driver);"),
             format!("  }}"),
             String::new(),

@@ -40,21 +40,17 @@ export const enum EngineTraceDescriptor {
   TextureTranscodeQueue = 16,
   TextureTranscode = 17,
   VtUpload = 18,
-  /** Reserved for decoding pre-removal AGTB captures; no runtime producer. */
-  CacheRead = 19,
-  /** Reserved for decoding pre-removal AGTB captures; no runtime producer. */
-  CacheWrite = 20,
-  MeshOptimize = 21,
-  VtFeedbackDetected = 22,
-  VtSchedulerWait = 23,
-  VtPagePublished = 24,
-  MutableTextureWrite = 25,
-  MutablePageRefresh = 26,
-  ModelRevision = 27,
-  ModelPublished = 28,
-  GeometryUpload = 29,
-  BlobRead = 30,
-  BlobWrite = 31,
+  MeshOptimize = 19,
+  VtFeedbackDetected = 20,
+  VtSchedulerWait = 21,
+  VtPagePublished = 22,
+  MutableTextureWrite = 23,
+  MutablePageRefresh = 24,
+  ModelRevision = 25,
+  ModelPublished = 26,
+  GeometryUpload = 27,
+  BlobRead = 28,
+  BlobWrite = 29,
 }
 
 export const ENGINE_TRACE_DESCRIPTORS: readonly TelemetryDescriptor[] = [
@@ -77,9 +73,6 @@ export const ENGINE_TRACE_DESCRIPTORS: readonly TelemetryDescriptor[] = [
   { category: EngineTelemetryCategory.Texture, categoryName: 'texture', name: 'texture.transcode_queue', kind: TelemetryDescriptorKind.AsyncSpan, argument0: 'bytes', argument1: 'format' },
   { category: EngineTelemetryCategory.Texture, categoryName: 'texture', name: 'texture.transcode', kind: TelemetryDescriptorKind.AsyncSpan, argument0: 'bytes', argument1: 'format' },
   { category: EngineTelemetryCategory.VirtualTexture, categoryName: 'vt', name: 'vt.upload', kind: TelemetryDescriptorKind.Span, argument0: 'bytes', argument1: 'slot' },
-  // IDs 19–20 remain reserved so historical pre-removal captures decode without ABI drift.
-  { category: EngineTelemetryCategory.Asset, categoryName: 'cache', name: 'cache.read', kind: TelemetryDescriptorKind.AsyncSpan, argument0: 'bytes', argument1: 'hit' },
-  { category: EngineTelemetryCategory.Asset, categoryName: 'cache', name: 'cache.write', kind: TelemetryDescriptorKind.AsyncSpan, argument0: 'bytes', argument1: 'status' },
   { category: EngineTelemetryCategory.Asset, categoryName: 'asset', name: 'mesh.optimize', kind: TelemetryDescriptorKind.AsyncSpan, argument0: 'bytes', argument1: 'status' },
   { category: EngineTelemetryCategory.VirtualTexture, categoryName: 'vt', name: 'vt.feedback_detected', kind: TelemetryDescriptorKind.Instant, argument0: 'priority', argument1: 'feedback_epoch' },
   { category: EngineTelemetryCategory.VirtualTexture, categoryName: 'vt', name: 'vt.scheduler_wait', kind: TelemetryDescriptorKind.AsyncSpan, argument0: 'priority', argument1: 'status' },

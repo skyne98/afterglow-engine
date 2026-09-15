@@ -300,18 +300,20 @@ pub async fn op_afterglow_rpc_call_async(
     method: u32,
     #[buffer] args: JsBuffer,
 ) -> Result<Uint8Array, JsErrorBox> {
-    let (future, pending) = {
+    let (future, pending, correlation) = {
         let state = state.borrow();
-        state
-            .borrow::<WorkerRegistry>()
-            .call_async(worker_id, method, &args)
-            .map_err(JsErrorBox::generic)?
+        let (future, pending) = state.borrow::<WorkerRegistry>()
+            .call_async(worker_id, method, &args).map_err(JsErrorBox::generic)?;
+        let correlation = state.try_borrow::<crate::diagnostics::HostDiagnostics>()
+            .map_or((0, 0), |host| host.rpc_begin(worker_id, method));
+        (future, pending, correlation)
     };
     let _pending = pending;
-    let response = future
-        .await
-        .map_err(|error| JsErrorBox::generic(error.to_string()))?;
-    Ok(response.into())
+    let response = future.await;
+    if let Some(host) = state.borrow().try_borrow::<crate::diagnostics::HostDiagnostics>() {
+        host.rpc_end(correlation, response.as_ref().map_or(0, Vec::len), response.is_err());
+    }
+    Ok(response.map_err(|error| JsErrorBox::generic(error.to_string()))?.into())
 }
 
 pub fn poll_async_workers(state: &OpState) {

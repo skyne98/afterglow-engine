@@ -49,6 +49,8 @@ texture like an ordinary destroyable headless texture. The local canvas patch:
 - calls wgpu-core `surface_present` and retires the current surface texture;
 - discards, rather than destroys, an unpresented surface texture during resize
   or unconfigure;
+- discards an acquired texture before `SurfaceData::drop` destroys the surface,
+  including shutdown after a JavaScript frame error;
 - leaves headless `ContextData::Canvas` readback behavior unchanged.
 
 `src/main.rs` creates the winit surface through the same wgpu-core `Global`
@@ -64,6 +66,31 @@ handles suppress their normal core-ID drop calls; JavaScript remains the sole
 owner. This lets Vello rasterize Blitz paint scenes and composite them on the
 exact JavaScript device/queue without a second adapter, cross-device copy, CPU
 pixel raster, or readback.
+
+## Blitz integration
+
+`vendor/afterglow-shell-blitz/THREE_NATIVE_PIN` records upstream commit
+`a50cb8971a03fb4cac697b763f8f5d01ee83cefb` from DioxusLabs/Blitz `main`.
+The shell uses Blitz `0.3.0-beta.2`, Stylo `0.20`, anyrender `0.13`, and Vello `0.10`.
+Native node maps retain the complete generational `NodeId`.
+
+The local changes supply these functions:
+
+- DOM queries, stylesheet changes, and live checkbox state for the browser bridge.
+- Canvas RGBA publication and paint access. `set_canvas_image` also accepts a renderer-owned image identity for persistent GPU textures.
+- Viewport-relative initial containing blocks and fixed-position insets.
+- Hit-test clipping and text-line bounds.
+- Range control paint, select labels, text shadows, and button layout.
+- Intrinsic number-input height, with a raster regression for visible digits.
+- Container client rectangles that exclude the container's own scroll offset and include CSS transforms.
+- Stacking geometry from the completed layout, including transformed popup bounds.
+- Public text selection through the existing Parley editor and pointer selection beyond the input border.
+
+The update retains upstream incremental overflow propagation and Taffy overflow bounds.
+It removes the previous local grid content-size correction.
+Select labels use snapshot selectedness because this Stylo parser rejects `:has()`.
+Native tests check canvas dimensions, containing blocks, hit tests, controls, and CSS transitions.
+The WebGPU update script below does not update Blitz.
 
 ## Maintenance
 

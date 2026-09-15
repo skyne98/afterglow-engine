@@ -4706,33 +4706,24 @@ var stringAttribute = {
 
 // esm/interface/event-target.js
 var wm = new WeakMap;
-function dispatch(event, listener) {
-  if (typeof listener === "function")
-    listener.call(event.target, event);
-  else
-    listener.handleEvent(event);
-  return event._stopImmediatePropagationFlag;
-}
-function invokeListeners({ currentTarget, target }) {
-  const map = wm.get(currentTarget);
-  if (map && map.has(this.type)) {
-    const listeners = map.get(this.type);
-    if (currentTarget === target) {
-      this.eventPhase = this.AT_TARGET;
-    } else {
-      this.eventPhase = this.BUBBLING_PHASE;
+function invokeListeners(event, currentTarget, capture) {
+  const listeners = wm.get(currentTarget)?.get(event.type);
+  if (!listeners) return;
+  event.currentTarget = currentTarget;
+  for (const record of [...listeners]) {
+    if (record.capture !== capture || !listeners.includes(record)) continue;
+    if (record.once) currentTarget.removeEventListener(event.type, record.listener, capture);
+    event._passive = record.passive;
+    try {
+      if (typeof record.listener === "function") record.listener.call(currentTarget, event);
+      else record.listener.handleEvent(event);
+    } catch (error) {
+      if (typeof globalThis.reportError === "function") globalThis.reportError(error);
+      else queueMicrotask(() => { throw error; });
+    } finally {
+      event._passive = false;
     }
-    this.currentTarget = currentTarget;
-    this.target = target;
-    for (const [listener, options] of listeners) {
-      if (options && options.once)
-        listeners.delete(listener);
-      if (dispatch(this, listener))
-        break;
-    }
-    delete this.currentTarget;
-    delete this.target;
-    return this.cancelBubble;
+    if (event._stopImmediatePropagationFlag) break;
   }
 }
 
@@ -4743,31 +4734,66 @@ class DOMEventTarget {
   _getParent() {
     return null;
   }
-  addEventListener(type, listener, options) {
+  addEventListener(type, listener, options = {}) {
+    if (listener == null) return;
+    type = String(type);
+    options = typeof options === "boolean" ? { capture: options } : options ?? {};
+    if (options.signal?.aborted) return;
     const map = wm.get(this);
-    if (!map.has(type))
-      map.set(type, new Map);
-    map.get(type).set(listener, options);
-  }
-  removeEventListener(type, listener) {
-    const map = wm.get(this);
-    if (map.has(type)) {
-      const listeners = map.get(type);
-      if (listeners.delete(listener) && !listeners.size)
-        map.delete(type);
+    if (!map.has(type)) map.set(type, []);
+    const listeners = map.get(type);
+    const capture = !!options.capture;
+    if (listeners.some(record => record.listener === listener && record.capture === capture)) return;
+    const record = { listener, capture, once: !!options.once, passive: !!options.passive, signal: options.signal };
+    if (record.signal) {
+      record.abort = () => this.removeEventListener(type, listener, capture);
+      record.signal.addEventListener("abort", record.abort, { once: true });
     }
+    listeners.push(record);
+  }
+  removeEventListener(type, listener, options = {}) {
+    const map = wm.get(this);
+    const listeners = map.get(String(type));
+    if (!listeners) return;
+    const capture = typeof options === "boolean" ? options : !!options?.capture;
+    const index = listeners.findIndex(record => record.listener === listener && record.capture === capture);
+    if (index < 0) return;
+    const [record] = listeners.splice(index, 1);
+    record.signal?.removeEventListener("abort", record.abort);
+    if (!listeners.length) map.delete(String(type));
   }
   dispatchEvent(event) {
-    let node2 = this;
-    event.eventPhase = event.CAPTURING_PHASE;
-    while (node2) {
-      if (node2.dispatchEvent)
-        event._path.push({ currentTarget: node2, target: this });
-      node2 = event.bubbles && node2._getParent && node2._getParent();
-    }
-    event._path.some(invokeListeners, event);
+    if (event._dispatching) throw new DOMException("The event is already in dispatch", "InvalidStateError");
+    event._dispatching = true;
+    event.target = this;
     event._path = [];
-    event.eventPhase = event.NONE;
+    for (let node = this; node; node = node._getParent?.()) {
+      if (node.dispatchEvent) event._path.push({ currentTarget: node, target: this });
+    }
+    try {
+      event.eventPhase = event.CAPTURING_PHASE;
+      for (let i = event._path.length - 1; i > 0 && !event.cancelBubble; i--) {
+        invokeListeners(event, event._path[i].currentTarget, true);
+      }
+      if (!event.cancelBubble) {
+        event.eventPhase = event.AT_TARGET;
+        invokeListeners(event, this, true);
+        if (!event._stopImmediatePropagationFlag) invokeListeners(event, this, false);
+      }
+      if (event.bubbles) {
+        event.eventPhase = event.BUBBLING_PHASE;
+        for (let i = 1; i < event._path.length && !event.cancelBubble; i++) {
+          invokeListeners(event, event._path[i].currentTarget, false);
+        }
+      }
+    } finally {
+      event._path = [];
+      event.currentTarget = null;
+      event.eventPhase = event.NONE;
+      event.cancelBubble = false;
+      event._stopImmediatePropagationFlag = false;
+      event._dispatching = false;
+    }
     return !event.defaultPrevented;
   }
 }
@@ -7092,8 +7118,9 @@ var handler2 = {
         element.setAttributeNode(attr);
         style.set(PRIVATE, attr);
       }
+      const cssText = style.toString();
+      if (attr.value !== cssText) attr.value = cssText;
       attr[CHANGED] = false;
-      attr[VALUE] = style.toString();
     }
     return true;
   }
@@ -7203,7 +7230,7 @@ class GlobalEvent {
     return NONE;
   }
   preventDefault() {
-    this.defaultPrevented = true;
+    if (this.cancelable && !this._passive) this.defaultPrevented = true;
   }
   composedPath() {
     return this._path.map(getCurrentTarget);

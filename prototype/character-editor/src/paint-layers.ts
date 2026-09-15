@@ -18,6 +18,28 @@ export interface PaintGroupInfo {
   isolated: number;
 }
 
+export interface PaintLayerState {
+  activeLayer: number;
+  layers: PaintLayerInfo[];
+  groups: PaintGroupInfo[];
+}
+
+export function samePaintLayerState(a: PaintLayerState | null, b: PaintLayerState): boolean {
+  if (!a || a.activeLayer !== b.activeLayer || a.layers.length !== b.layers.length || a.groups.length !== b.groups.length) return false;
+  for (let i = 0; i < a.layers.length; i++) {
+    const x = a.layers[i], y = b.layers[i];
+    if (x.id !== y.id || x.active !== y.active || x.visible !== y.visible ||
+        x.opacity !== y.opacity || x.mode !== y.mode || x.group !== y.group) return false;
+  }
+  for (let i = 0; i < a.groups.length; i++) {
+    const x = a.groups[i], y = b.groups[i];
+    if (x.id !== y.id || x.alive !== y.alive || x.parent !== y.parent ||
+        x.visible !== y.visible || x.opacity !== y.opacity || x.mode !== y.mode ||
+        x.passThrough !== y.passThrough || x.isolated !== y.isolated) return false;
+  }
+  return true;
+}
+
 export type PaintLayerRow =
   | { kind: 'layer'; id: number; depth: number; info: PaintLayerInfo }
   | { kind: 'group'; id: number; depth: number; info: PaintGroupInfo };

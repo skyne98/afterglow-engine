@@ -11,10 +11,6 @@ impl ElementCx<'_, '_> {
         if self.node.local_name() != "input" {
             return;
         }
-        let Some(checked) = self.element.checkbox_input_checked() else {
-            return;
-        };
-
         let type_attr = self.node.attr(local_name!("type"));
         let disabled = self.node.attr(local_name!("disabled")).is_some();
 
@@ -23,6 +19,46 @@ impl ElementCx<'_, '_> {
             Color::from_rgba8(209, 209, 209, 255)
         } else {
             self.style.clone_color().as_srgb_color()
+        };
+
+        if type_attr == Some("range") {
+            let number = |name, fallback| {
+                self.node
+                    .attr(name)
+                    .and_then(|value| value.trim().parse::<f64>().ok())
+                    .filter(|value| value.is_finite())
+                    .unwrap_or(fallback)
+            };
+            let min = number(local_name!("min"), 0.0);
+            let max = number(local_name!("max"), 100.0).max(min);
+            let value = number(local_name!("value"), (min + max) / 2.0).clamp(min, max);
+            let mut fraction = if max > min {
+                (value - min) / (max - min)
+            } else {
+                0.0
+            };
+            if self.style.clone_direction() == style::computed_values::direction::T::Rtl {
+                fraction = 1.0 - fraction;
+            }
+            let frame = self.frame.border_box;
+            let radius = 6.0_f64.min(frame.height() / 2.0).min(frame.width() / 2.0);
+            let left = frame.x0 + radius;
+            let right = frame.x1 - radius;
+            let y = frame.center().y;
+            let thumb = Circle::new((left + fraction * (right - left), y), radius);
+            let track = RoundedRect::new(left, y - 2.0, right, y + 2.0, 2.0);
+            scene.fill(
+                Fill::NonZero,
+                self.transform,
+                Color::from_rgba8(110, 110, 110, 255),
+                None,
+                &track,
+            );
+            scene.fill(Fill::NonZero, self.transform, accent_color, None, &thumb);
+            return;
+        }
+        let Some(checked) = self.element.checkbox_input_checked() else {
+            return;
         };
 
         let width = self.frame.border_box.width();

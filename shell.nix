@@ -27,7 +27,7 @@ let
 in
 pkgs.mkShell {
   packages = runtimeLibs ++ [
-    pkgs.patchelf pkgs.mold pkgs.clang pkgs.bun pkgs.nodejs pkgs.caddy
+    pkgs.patchelf pkgs.mold pkgs.clang pkgs.bun pkgs.nodejs pkgs.caddy pkgs.pkg-config
     # Stylo generates its property tables while building afterglow-shell.
     pkgs.python3
   ];
@@ -49,6 +49,8 @@ pkgs.mkShell {
       export VK_ICD_FILENAMES="''${VK_ICD_FILENAMES:-${pkgs.mesa}/share/vulkan/icd.d/radeon_icd.x86_64.json:${pkgs.mesa}/share/vulkan/icd.d/intel_icd.x86_64.json}"
     fi
     export LD_LIBRARY_PATH="$graphicsLibDirs:${pkgs.lib.makeLibraryPath runtimeLibs}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    # Native GTK dialogs need compiled schemas as well as shared libraries.
+    export XDG_DATA_DIRS="${pkgs.gtk3}/share/gsettings-schemas/${pkgs.gtk3.name}:${pkgs.gsettings-desktop-schemas}/share/gsettings-schemas/${pkgs.gsettings-desktop-schemas.name}:''${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
     # X11/XWayland display. Xwayland is typically at :0 on a Wayland session.
     export DISPLAY="''${DISPLAY:-:0}"
     echo "[afterglow-engine] devShell ready  DISPLAY=$DISPLAY"

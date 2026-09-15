@@ -11,6 +11,7 @@ pub struct MetricId(pub u32);
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "collector", derive(serde::Serialize, serde::Deserialize))]
 pub enum MetricKind {
     Counter = 1,
     Gauge = 2,
@@ -19,19 +20,19 @@ pub enum MetricKind {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct MetricDescriptor {
+pub struct MetricDescriptor<'a> {
     pub category: CategoryId,
-    pub category_name: &'static str,
-    pub name: &'static str,
+    pub category_name: &'a str,
+    pub name: &'a str,
     pub kind: MetricKind,
     pub unit: Unit,
 }
 
-impl MetricDescriptor {
+impl<'a> MetricDescriptor<'a> {
     pub const fn new(
         category: CategoryId,
-        category_name: &'static str,
-        name: &'static str,
+        category_name: &'a str,
+        name: &'a str,
         kind: MetricKind,
         unit: Unit,
     ) -> Self {
@@ -53,6 +54,11 @@ pub enum MetricStatus {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "collector",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(deny_unknown_fields)
+)]
 pub struct MetricSample {
     pub metric: u32,
     /// Zero for scalar metrics; 0..31 for logarithmic histograms.
@@ -68,14 +74,14 @@ pub enum MetricSnapshotError {
 /// Fixed atomic storage. Construction computes one direct cell offset per
 /// metric; updates never allocate or lock.
 pub struct MetricBank {
-    descriptors: &'static [MetricDescriptor],
+    descriptors: &'static [MetricDescriptor<'static>],
     offsets: Box<[u32]>,
     cells: Box<[AtomicU64]>,
     sample_count: usize,
 }
 
 impl MetricBank {
-    pub fn new(descriptors: &'static [MetricDescriptor]) -> Self {
+    pub fn new(descriptors: &'static [MetricDescriptor<'static>]) -> Self {
         let mut offsets = Vec::with_capacity(descriptors.len());
         let mut cell_count = 0_usize;
         for descriptor in descriptors {
@@ -98,7 +104,7 @@ impl MetricBank {
         }
     }
 
-    pub fn descriptors(&self) -> &'static [MetricDescriptor] {
+    pub fn descriptors(&self) -> &'static [MetricDescriptor<'static>] {
         self.descriptors
     }
 

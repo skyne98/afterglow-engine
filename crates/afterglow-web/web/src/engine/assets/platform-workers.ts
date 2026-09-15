@@ -1,32 +1,9 @@
 import { MeshoptClient } from '../../workers/meshopt.client.ts';
-import { NativeRpcTransport } from '../workers/native-transport.ts';
+import { NativeRpcTransport, hasNativeWorkerTransport, nativeWorkerIds } from '../workers/native-transport.ts';
+export { hasNativeWorkerTransport } from '../workers/native-transport.ts';
 import { TextureClient } from '../../workers/texture.client.ts';
 import type { OwnedMeshOptimizer, OwnedTextureTranscoder } from './service-types.ts';
 import type { EngineTelemetry } from '../telemetry/telemetry.ts';
-
-type NativeOps = {
-  op_afterglow_rpc_call_async?: unknown;
-  op_afterglow_worker_ids?: (service: string) => number[];
-};
-type NativeDeno = { core?: { ops?: NativeOps } };
-
-function nativeOps(): NativeOps | undefined {
-  return (globalThis as typeof globalThis & { Deno?: NativeDeno }).Deno?.core?.ops;
-}
-
-export function hasNativeWorkerTransport(): boolean {
-  return typeof nativeOps()?.op_afterglow_rpc_call_async === 'function';
-}
-
-function nativeWorkerIds(service: string): number[] {
-  const resolve = nativeOps()?.op_afterglow_worker_ids;
-  if (typeof resolve !== 'function')
-    throw new Error('native worker manifest op is unavailable');
-  const ids = resolve(service);
-  if (!Array.isArray(ids) || ids.some(id => !Number.isInteger(id) || id < 0))
-    throw new Error(`native worker manifest is invalid for ${service}`);
-  return ids;
-}
 
 /** Select the bounded platform profile without exposing worker ids to games. */
 export function platformTextureWorkerCount(maxWorkers: number): number {

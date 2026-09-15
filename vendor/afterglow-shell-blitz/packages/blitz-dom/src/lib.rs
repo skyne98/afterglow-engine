@@ -45,21 +45,31 @@ mod events;
 mod font_metrics;
 mod form;
 mod html;
+/// Loading of `<iframe>` elements into sub-documents.
+mod iframe;
 /// Integration of taffy and the DOM.
 mod layout;
 mod mutator;
 mod query_selector;
 mod resolve;
+/// Computation of resolved CSS property values (`getComputedStyle()`)
+mod resolved_style;
+/// Scrolling of nodes and the viewport, and scroll animations.
+mod scrolling;
 mod selection;
 /// Implementations that interact with servo's style engine
 mod stylo;
+mod stylo_device;
 mod stylo_to_cursor_icon;
 mod stylo_to_kurbo;
 mod stylo_to_parley;
-mod traversal;
+pub mod traversal;
+/// Versioned storage for the nodes of the DOM tree.
+mod tree;
 
 mod url;
 
+pub use resolved_style::css_property_is_supported;
 pub use stylo_to_kurbo::resolve_2d_transform;
 
 pub mod net;
@@ -68,9 +78,13 @@ pub mod util;
 #[cfg(feature = "accessibility")]
 mod accessibility;
 
+pub use crate::layout::replaced::IntrinsicSizes;
 #[cfg(feature = "custom-widget")]
 pub use crate::node::Widget;
 
+pub use blitz_traits::node_id::NodeId;
+// Re-export taffy: it is part of blitz-dom's public API (e.g. `Node::style`,
+// `Node::final_layout`)
 pub use config::{DocumentConfig, StyleThreading};
 pub use document::{BaseDocument, BoundingRect, DocGuard, DocGuardMut, Document, PlainDocument};
 pub use markup5ever::{
@@ -78,8 +92,22 @@ pub use markup5ever::{
     namespace_prefix, namespace_url, ns,
 };
 pub use mutator::DocumentMutator;
-pub use node::{Attribute, ElementData, Node, NodeData, TextNodeData};
+pub use node::{Attribute, DocumentData, ElementData, Node, NodeData, TextNodeData};
 pub use parley::FontContext;
+pub use scrolling::{ScrollBehavior, ScrollLogicalPosition};
+pub use tree::NodeTree;
+
+/// Convert a Blitz [`NodeId`] into a [`taffy::NodeId`] (which wraps a `u64`).
+#[inline]
+pub fn taffy_node_id(id: NodeId) -> taffy::NodeId {
+    taffy::NodeId::from(id.as_u64())
+}
+
+/// Convert a [`taffy::NodeId`] produced by [`taffy_node_id`] back into a Blitz [`NodeId`].
+#[inline]
+pub fn dom_node_id(id: taffy::NodeId) -> NodeId {
+    NodeId::from_u64(u64::from(id))
+}
 pub use style::Atom;
 pub use style::invalidation::element::restyle_hints::RestyleHint;
 pub use style::media_queries::MediaType;

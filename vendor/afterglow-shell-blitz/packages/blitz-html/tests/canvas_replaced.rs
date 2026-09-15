@@ -21,7 +21,7 @@ fn layout_doc(html: &str) -> HtmlDocument {
 fn default_inline_canvas_has_default_intrinsic_size() {
     let doc = layout_doc("<html><body><canvas id='c'></canvas></body></html>");
     let id = doc.query_selector("#c").unwrap().unwrap();
-    let layout = doc.get_node(id).unwrap().final_layout;
+    let layout = doc.get_node(id).unwrap().final_layout();
     assert_eq!((layout.size.width, layout.size.height), (300.0, 150.0));
 }
 
@@ -30,7 +30,7 @@ fn default_inline_canvas_uses_dimension_attributes() {
     let doc =
         layout_doc("<html><body><canvas id='c' width='200' height='120'></canvas></body></html>");
     let id = doc.query_selector("#c").unwrap().unwrap();
-    let layout = doc.get_node(id).unwrap().final_layout;
+    let layout = doc.get_node(id).unwrap().final_layout();
     assert_eq!((layout.size.width, layout.size.height), (200.0, 120.0));
 }
 
@@ -40,6 +40,6 @@ fn css_size_overrides_canvas_intrinsic_size_without_changing_display() {
         "<html><body><canvas id='c' width='200' height='100' style='width:80px;height:40px'></canvas></body></html>",
     );
     let id = doc.query_selector("#c").unwrap().unwrap();
-    let layout = doc.get_node(id).unwrap().final_layout;
+    let layout = doc.get_node(id).unwrap().final_layout();
     assert_eq!((layout.size.width, layout.size.height), (80.0, 40.0));
 }

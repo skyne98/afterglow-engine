@@ -26,6 +26,11 @@ impl Clock for MonotonicClock {
 
 /// Maps producer ticks into one collector reference timeline.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "collector",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(deny_unknown_fields)
+)]
 pub struct ClockMapping {
     pub clock_domain: u32,
     pub origin_tick: u64,

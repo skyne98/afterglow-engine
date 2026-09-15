@@ -23,7 +23,7 @@ type Msg =
   | { cmd: 'group'; op: string; group: number; value?: number }
   | { cmd: 'exportTiles'; layerId: number | null; id: number }
   | { cmd: 'writeTile'; layer: number; tx: number; ty: number; data: ArrayBuffer }
-  | { cmd: 'probe'; id: number; y: number }
+  | { cmd: 'probe'; id: number; y: number; pixels?: boolean }
   | { cmd: 'pickColor'; id: number; x: number; y: number }
   | { cmd: 'requestState' };
 
@@ -1316,19 +1316,19 @@ function handleReadyCommand(m: Msg) {
     }
     case 'probe': {
       const currentCanvas = canvas, currentCtx = ctx;
-      const data = currentCtx && currentCanvas
-        ? currentCtx.getImageData(0, 0, currentCanvas.width, currentCanvas.height).data
-        : null;
       const w = currentCanvas?.width ?? 0;
       const h = currentCanvas?.height ?? 1;
       const y = Math.min(h - 1, Math.max(0, Math.round(m.y * h)));
+      const data = currentCtx && currentCanvas
+        ? currentCtx.getImageData(0, y, w, 1).data
+        : null;
       const runs: number[] = []; let rs = -1;
       const br = Math.round(bgRGB[0] * 255), bgc = Math.round(bgRGB[1] * 255), bb = Math.round(bgRGB[2] * 255);
       let alpha0 = 0, painted = 0;
       const samples: number[] = [];
       if (data) {
         for (let x = 0; x < w; x++) {
-          const o = (y * w + x) * 4; const a = data[o + 3];
+          const o = x * 4; const a = data[o + 3];
           if (a === 0) alpha0++;
           const p = a > 0 && Math.abs(data[o] - br) + Math.abs(data[o + 1] - bgc) + Math.abs(data[o + 2] - bb) > 60;
           if (p) painted++;
@@ -1337,11 +1337,12 @@ function handleReadyCommand(m: Msg) {
         }
         if (rs >= 0) runs.push(rs, w - 1);
         for (const sx of [Math.floor(w * 0.1), Math.floor(w * 0.5), Math.floor(w * 0.9)]) {
-          const o = (y * w + sx) * 4;
+          const o = sx * 4;
           samples.push(sx, data[o], data[o + 1], data[o + 2], data[o + 3]);
         }
       }
-      post({ type: 'probeResult', id: m.id, y, w, runs, alpha0, painted, samples, dirtyCount: mod._paint_get_dirty_count(), usedTiles: mod._paint_get_used_tile_count(), rects: lastRects });
+      post({ type: 'probeResult', id: m.id, y, w, runs, alpha0, painted, samples, dirtyCount: mod._paint_get_dirty_count(), usedTiles: mod._paint_get_used_tile_count(), rects: lastRects,
+        rgba: m.pixels && data ? Array.from(data) : undefined });
       break; }
     case 'writeTile': writeTile(m.layer, m.tx, m.ty, m.data); break;
     case 'requestState': pushState(); break;

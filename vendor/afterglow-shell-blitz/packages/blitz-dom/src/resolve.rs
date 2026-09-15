@@ -1,9 +1,7 @@
 //! Resolve style and layout
 
-use std::{
-    cell::RefCell,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use blitz_traits::node_id::NodeId;
+use std::cell::RefCell;
 
 use debug_timer::debug_timer;
 use kurbo::{Affine, Rect};
@@ -25,7 +23,6 @@ use taffy::AvailableSpace;
 
 use crate::{
     BaseDocument,
-    events::ScrollAnimationState,
     layout::{
         construct::{
             ConstructionTask, ConstructionTaskData, ConstructionTaskResult,
@@ -40,7 +37,7 @@ use crate::{
 impl BaseDocument {
     /// Restyle the tree and then relayout it
     pub fn resolve(&mut self, current_time_for_animations: f64) {
-        if TDocument::as_node(&&self.nodes[0])
+        if TDocument::as_node(&self.root_node())
             .first_element_child()
             .is_none()
         {
@@ -51,6 +48,19 @@ impl BaseDocument {
 
         // Process messages that have been sent to our message channel (e.g. loaded resource)
         self.handle_messages();
+
+        // While render-blocking resources (e.g. stylesheets linked from the `<head>`) are
+        // still loading, don't resolve styles or layout (matching how browsers block
+        // rendering). Resolving styles before the document's stylesheets have loaded would
+        // give elements computed styles based on an incomplete cascade, and a later restyle
+        // (once the stylesheet loads) would treat those as genuine "before-change styles",
+        // spuriously starting CSS transitions from unstyled values. See issue #689.
+        //
+        // `handle_messages` above must still run so that loaded resources are ingested and
+        // this state can clear.
+        if self.has_pending_critical_resources() {
+            return;
+        }
 
         self.resolve_scroll_animation();
 
@@ -64,6 +74,10 @@ impl BaseDocument {
 
         let root_node_id = self.root_element().id;
         debug_timer!(timer, feature = "log-phase-times");
+
+        // Apply any device changes (viewport resize, zoom, color-scheme, etc)
+        // accumulated since the last resolve as a single device rebuild.
+        self.flush_pending_device_changes();
 
         // we need to resolve stylist first since it will need to drive our layout bits
         self.resolve_stylist(current_time_for_animations);
@@ -80,6 +94,10 @@ impl BaseDocument {
         timer.record_time("construct");
 
         self.resolve_deferred_tasks();
+        // Flush background/mask images from style to dedicated storage on the
+        // nodes whose style changed (queued by the style traversal and by
+        // pseudo-element box construction), fetching any not-yet-loaded images.
+        self.flush_pending_style_images();
         timer.record_time("pconstruct");
 
         // Merge stylo into taffy
@@ -90,22 +108,31 @@ impl BaseDocument {
         self.resolve_layout();
         timer.record_time("layout");
 
+        // Resolve transforms
         self.resolve_transforms(root_node_id);
         timer.record_time("transform");
 
-        // Clear all damage and dirty flags
+        // Clear all damage and dirty flags, walking only subtrees which are
+        // marked as (potentially) containing damage.
         if self.incremental_layout {
-            for (_, node) in self.nodes.iter_mut() {
-                node.clear_damage_mut();
-                node.unset_dirty_descendants();
-            }
+            let doc_node_id = self.root_node().id;
+            self.clear_damage_and_dirty_flags(doc_node_id);
             timer.record_time("c_damage");
         }
+
+        // Re-resolve the hover node from the pointer position against the fresh
+        // layout. This must run *after* the damage/dirty flags are cleared
+        // above, so that the restyle hint and ancestor `dirty_descendants`
+        // flags set by any resulting hover change survive into the next resolve
+        // pass (the clearing loop would otherwise wipe them). Any resulting
+        // restyle is picked up on the next resolve pass; a redraw is requested
+        // if the hovered node actually changes.
+        self.refresh_hover();
 
         let mut subdoc_is_animating = false;
         for &node_id in &self.sub_document_nodes {
             let node = &mut self.nodes[node_id];
-            let size = node.final_layout.size;
+            let size = node.final_layout().size;
             if let Some(mut sub_doc) = node.subdoc_mut().map(|doc| doc.inner_mut()) {
                 // Set viewport
                 // viewport_mut handles change detection. So we just unconditionally set the values;
@@ -132,25 +159,34 @@ impl BaseDocument {
         timer.print_times(&format!("Resolve({}): ", self.id()));
     }
 
-    fn resolve_transforms(&mut self, node_id: usize) -> Rect {
-        if !self.nodes.contains(node_id) {
+    fn resolve_transforms(&mut self, node_id: NodeId) -> Rect {
+        if !self.nodes.contains_key(node_id) {
             return Rect::ZERO;
         }
+
+        let scale = self.viewport.scale_f64();
 
         if !self.nodes[node_id]
             .damage()
             .map(|d| d.contains(style::selector_parser::RestyleDamage::RECALCULATE_OVERFLOW))
             .unwrap_or(false)
         {
-            return self.nodes[node_id].scrollable_overflow;
-        }
+            let node = &self.nodes[node_id];
+            let location = node.final_layout().location.map(|v| v as f64 * scale);
 
-        let scale = self.viewport.scale_f64();
+            let mut transform = Affine::translate((location.x, location.y));
+            if let Some(t) = node.transform().as_deref() {
+                transform *= *t
+            }
+
+            let overflow = *node.scrollable_overflow();
+            return transform.transform_rect_bbox(overflow);
+        }
 
         let transform = self.nodes[node_id].set_transform(scale as f32);
 
-        let w = self.nodes[node_id].final_layout.size.width as f64 * scale;
-        let h = self.nodes[node_id].final_layout.size.height as f64 * scale;
+        let w = self.nodes[node_id].final_layout().size.width as f64 * scale;
+        let h = self.nodes[node_id].final_layout().size.height as f64 * scale;
         let mut overflow = Rect::new(0.0, 0.0, w, h);
 
         let layout_children = std::mem::take(self.nodes[node_id].layout_children.get_mut());
@@ -161,20 +197,26 @@ impl BaseDocument {
                 overflow = overflow.union(child_rect_in_self);
             }
         }
-        if let Some(before) = self.nodes[node_id].before {
+        if let Some(before) = self.nodes[node_id].before() {
             let child_rect_in_self = self.resolve_transforms(before);
             overflow = overflow.union(child_rect_in_self);
         }
-        if let Some(after) = self.nodes[node_id].after {
+        if let Some(after) = self.nodes[node_id].after() {
             let child_rect_in_self = self.resolve_transforms(after);
             overflow = overflow.union(child_rect_in_self);
         }
 
-        self.nodes[node_id].scrollable_overflow = overflow;
+        *self.nodes[node_id].scrollable_overflow_mut() = overflow;
         *self.nodes[node_id].layout_children.get_mut() = layout_children;
 
-        let scaled_x = self.nodes[node_id].final_layout.location.x as f64 * scale;
-        let scaled_y = self.nodes[node_id].final_layout.location.y as f64 * scale;
+        // Stacking geometry must use the completed layout and child transforms.
+        if let Some(mut context) = self.nodes[node_id].stacking_context.take() {
+            context.update_geometry(self, node_id);
+            self.nodes[node_id].stacking_context = Some(context);
+        }
+
+        let scaled_x = self.nodes[node_id].final_layout().location.x as f64 * scale;
+        let scaled_y = self.nodes[node_id].final_layout().location.y as f64 * scale;
 
         let full = if let Some(t) = transform {
             Affine::translate((scaled_x, scaled_y)) * t
@@ -185,43 +227,11 @@ impl BaseDocument {
         full.transform_rect_bbox(overflow)
     }
 
-    pub fn resolve_scroll_animation(&mut self) {
-        match &mut self.scroll_animation {
-            ScrollAnimationState::Fling(fling_state) => {
-                let time_ms = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis() as u64 as f64;
-
-                let time_diff_ms = time_ms - fling_state.last_seen_time;
-
-                // 0.95 @ 60fps normalized to actual frame times
-                let deceleration = 1.0 - ((0.05 / 16.66666) * time_diff_ms);
-
-                fling_state.x_velocity *= deceleration;
-                fling_state.y_velocity *= deceleration;
-                fling_state.last_seen_time = time_ms;
-                let fling_state = fling_state.clone();
-
-                let dx = fling_state.x_velocity * time_diff_ms;
-                let dy = fling_state.y_velocity * time_diff_ms;
-
-                self.scroll_by(Some(fling_state.target), dx, dy, &mut |_| {});
-                if fling_state.x_velocity.abs() < 0.1 && fling_state.y_velocity.abs() < 0.1 {
-                    self.scroll_animation = ScrollAnimationState::None;
-                }
-            }
-            ScrollAnimationState::None => {
-                // Do nothing
-            }
-        }
-    }
-
     /// Ensure that the layout_children field is populated for all nodes
     pub fn resolve_layout_children(&mut self) {
         resolve_layout_children_recursive(self, self.root_node().id);
 
-        fn resolve_layout_children_recursive(doc: &mut BaseDocument, node_id: usize) {
+        fn resolve_layout_children_recursive(doc: &mut BaseDocument, node_id: NodeId) {
             // Anonymous blocks and pseudo-elements can be removed from the slab
             // between render passes. Bail out rather than panicking on a stale key.
             if doc.nodes.get(node_id).is_none() {
@@ -233,15 +243,29 @@ impl BaseDocument {
 
             if !doc.incremental_layout || damage.intersects(CONSTRUCT_FC | CONSTRUCT_BOX) {
                 //} || flags.contains(NodeFlags::IS_INLINE_ROOT) {
+
+                // Deallocate the anonymous blocks created for this node in the
+                // previous construction round. They live only in the slab, so
+                // reconstructing without freeing them would leak a slab entry per
+                // anonymous block per reconstruction.
+                let old_anonymous_blocks = std::mem::take(&mut doc.nodes[node_id].anonymous_blocks);
+                for anon_id in old_anonymous_blocks {
+                    doc.deallocate_anonymous_block(anon_id);
+                }
+
                 let mut collected = LayoutChildren::default();
                 collect_layout_children(doc, node_id, &mut collected);
                 let layout_children = collected.children;
+                doc.nodes[node_id].anonymous_blocks = collected.anonymous_blocks;
 
                 // Recurse into newly collected layout children
                 for child_id in layout_children.iter().copied() {
                     resolve_layout_children_recursive(doc, child_id);
                     doc.nodes[child_id].layout_parent.set(Some(node_id));
-                    if let Some(mut data) = doc.nodes[child_id].stylo_element_data.get_mut() {
+                    if let Some(mut data) = doc.nodes[child_id]
+                        .try_stylo_element_data_mut()
+                        .and_then(|s| s.get_mut())
+                    {
                         data.damage
                             .remove(CONSTRUCT_DESCENDENT | CONSTRUCT_FC | CONSTRUCT_BOX);
                     }
@@ -259,7 +283,7 @@ impl BaseDocument {
                     for child_id in layout_children.iter().copied() {
                         // Anonymous blocks and pseudo-elements can be removed from the
                         // slab between render passes; skip stale IDs.
-                        if !doc.nodes.contains(child_id) {
+                        if !doc.nodes.contains_key(child_id) {
                             continue;
                         }
                         resolve_layout_children_recursive(doc, child_id);
@@ -344,7 +368,7 @@ impl BaseDocument {
         for result in results {
             match result.data {
                 ConstructionTaskResultData::InlineLayout(layout) => {
-                    self.nodes[result.node_id].cache.clear();
+                    self.nodes[result.node_id].clear_layout_cache();
                     self.nodes[result.node_id]
                         .element_data_mut()
                         .unwrap()
@@ -369,7 +393,7 @@ impl BaseDocument {
             height: AvailableSpace::Definite(size.height.to_f32_px() / scale),
         };
 
-        let root_element_id = taffy::NodeId::from(self.root_element().id);
+        let root_element_id = crate::taffy_node_id(self.root_element().id);
 
         // println!("\n\nRESOLVE LAYOUT\n===========\n");
 
@@ -424,62 +448,31 @@ impl BaseDocument {
             let mut current_id = Some(parent_id);
             while let Some(id) = current_id {
                 let ancestor = &self.nodes[id];
-                parent_position.x += ancestor.unrounded_layout.location.x;
-                parent_position.y += ancestor.unrounded_layout.location.y;
+                parent_position.x += ancestor.unrounded_layout().location.x;
+                parent_position.y += ancestor.unrounded_layout().location.y;
                 current_id = ancestor.layout_parent.get();
             }
-            let node = &mut self.nodes[node_id];
+            use taffy::CoreStyle;
+            let inset = self.nodes[node_id].layout_style().inset();
+            let layout = self.nodes[node_id].unrounded_layout_mut();
             if position == Position::Fixed {
-                // Taffy has no fixed-position primitive and therefore resolves
-                // bottom/right against the immediate parent's available size.
-                // Re-anchor the resulting box to the viewport while preserving
-                // its measured size, margins, and descendant layout.
-                if let Some(left) = node
-                    .style
-                    .inset
-                    .left
-                    .resolve_to_option(viewport_width, crate::layout::resolve_calc_value)
-                {
-                    node.unrounded_layout.location.x =
-                        left + node.unrounded_layout.margin.left - parent_position.x;
-                } else if let Some(right) = node
-                    .style
-                    .inset
-                    .right
-                    .resolve_to_option(viewport_width, crate::layout::resolve_calc_value)
-                {
-                    node.unrounded_layout.location.x = viewport_width
-                        - right
-                        - node.unrounded_layout.margin.right
-                        - node.unrounded_layout.size.width
-                        - parent_position.x;
+                // Keep fixed insets relative to the viewport, not the layout parent.
+                if let Some(left) = inset.left.resolve_to_option(viewport_width, crate::layout::resolve_calc_value) {
+                    layout.location.x = left + layout.margin.left - parent_position.x;
+                } else if let Some(right) = inset.right.resolve_to_option(viewport_width, crate::layout::resolve_calc_value) {
+                    layout.location.x = viewport_width - right - layout.margin.right - layout.size.width - parent_position.x;
                 }
-                if let Some(top) = node
-                    .style
-                    .inset
-                    .top
-                    .resolve_to_option(viewport_height, crate::layout::resolve_calc_value)
-                {
-                    node.unrounded_layout.location.y =
-                        top + node.unrounded_layout.margin.top - parent_position.y;
-                } else if let Some(bottom) = node
-                    .style
-                    .inset
-                    .bottom
-                    .resolve_to_option(viewport_height, crate::layout::resolve_calc_value)
-                {
-                    node.unrounded_layout.location.y = viewport_height
-                        - bottom
-                        - node.unrounded_layout.margin.bottom
-                        - node.unrounded_layout.size.height
-                        - parent_position.y;
+                if let Some(top) = inset.top.resolve_to_option(viewport_height, crate::layout::resolve_calc_value) {
+                    layout.location.y = top + layout.margin.top - parent_position.y;
+                } else if let Some(bottom) = inset.bottom.resolve_to_option(viewport_height, crate::layout::resolve_calc_value) {
+                    layout.location.y = viewport_height - bottom - layout.margin.bottom - layout.size.height - parent_position.y;
                 }
             } else {
-                if !node.style.inset.left.is_auto() || !node.style.inset.right.is_auto() {
-                    node.unrounded_layout.location.x -= parent_position.x;
+                if !inset.left.is_auto() || !inset.right.is_auto() {
+                    layout.location.x -= parent_position.x;
                 }
-                if !node.style.inset.top.is_auto() || !node.style.inset.bottom.is_auto() {
-                    node.unrounded_layout.location.y -= parent_position.y;
+                if !inset.top.is_auto() || !inset.bottom.is_auto() {
+                    layout.location.y -= parent_position.y;
                 }
             }
         }

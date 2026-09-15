@@ -8,6 +8,8 @@
 // to return it. This is an environment piece, not a client-code replacement.
 
 import * as linkedom from './vendor/linkedom/linkedom.mjs';
+import { createCrypto } from './crypto.ts';
+import { TextHistory } from './text-history.ts';
 import {
   CanvasGradient,
   CanvasRenderingContext2D,
@@ -44,6 +46,10 @@ for (const body of Array.from(document.querySelectorAll('body'))) {
 // enumerable window keys (which omit HTMLElement and most HTML* classes).
 for (const [name, value] of Object.entries(linkedom)) {
   if (!(name in globalThis)) globalThis[name] = value;
+  // DOM interface tags prevent reactive libraries from wrapping nodes as plain objects.
+  if (typeof value === 'function' && value.prototype && !Object.prototype.hasOwnProperty.call(value.prototype, Symbol.toStringTag)) {
+    Object.defineProperty(value.prototype, Symbol.toStringTag, { configurable: true, value: name });
+  }
 }
 // LinkeDOM dispatch mutates the event phase/current target while traversing its
 // own listener tree, so its Event constructors must accompany its EventTarget
@@ -61,6 +67,11 @@ globalThis.self = globalThis;
 globalThis.CanvasGradient = CanvasGradient;
 globalThis.CanvasRenderingContext2D = CanvasRenderingContext2D;
 globalThis.ImageData = ImageData;
+if (!globalThis.crypto) {
+  Object.defineProperty(globalThis, 'crypto', {
+    value: createCrypto((bytes) => Deno.core.ops.op_random_bytes(bytes)), configurable: true,
+  });
+}
 
 // LinkeDOM owns JavaScript DOM identity and mutation semantics. Blitz receives
 // structured records keyed by out-of-band WeakMap IDs whenever layout is
@@ -90,6 +101,10 @@ const observeBrowserDocument = () => browserMutationObserver.observe(document, {
   characterData: true,
 });
 const markBrowserDocumentDirty = (records) => {
+  // LinkeDOM can deliver an empty callback after takeRecords drains its queue.
+  if (records?.length === 0) return;
+  // The headless runner has no native redraw queue.
+  Deno.core.ops.op_browser_document_dirty?.();
   browserDomDirty = true;
   browserDomEpoch++;
   if (records != null && typeof records !== 'string') {
@@ -135,7 +150,7 @@ const serializeBrowserDocument = () => {
       return null;
     }
   };
-  const visit = (node) => {
+  const visit = (node, selectedOption = null) => {
     let kind;
     if (node.nodeType === 1) kind = 'element';
     else if (node.nodeType === 3) kind = 'text';
@@ -144,25 +159,38 @@ const serializeBrowserDocument = () => {
     const children = Array.from(node.childNodes).filter((child) =>
       child.nodeType === 1 || child.nodeType === 3 || child.nodeType === 8
     );
+    if (kind === 'element' && node.localName === 'select') {
+      selectedOption = node.multiple ? null : node.options[selectedOptionIndex(node)] ?? null;
+    }
+    let attributes = kind === 'element' ? Array.from(node.attributes).map((attribute) => ({
+      localName: attribute.localName || attribute.name,
+      namespace: attribute.namespaceURI,
+      prefix: attribute.prefix,
+      value: attribute.value,
+    })) : [];
+    // Send current selectedness without a change to the source DOM.
+    if (kind === 'element' && node.localName === 'option' && selectedOption) {
+      attributes = attributes.filter(attribute => attribute.localName !== 'selected');
+      if (node === selectedOption) attributes.push({ localName: 'selected', namespace: null, prefix: null, value: '' });
+    }
+    if (kind === 'element' && isTextControl(node)) {
+      attributes = attributes.filter(attribute => attribute.localName !== 'value');
+      attributes.push({ localName: 'value', namespace: null, prefix: null, value: textControlValues.get(node) ?? node.value });
+    }
     nodes.push({
       id: ensureNativeNodeId(node),
       kind,
       localName: kind === 'element' ? node.localName : null,
       namespace: kind === 'element' ? node.namespaceURI : null,
       prefix: kind === 'element' ? node.prefix : null,
-      attributes: kind === 'element' ? Array.from(node.attributes).map((attribute) => ({
-        localName: attribute.localName || attribute.name,
-        namespace: attribute.namespaceURI,
-        prefix: attribute.prefix,
-        value: attribute.value,
-      })) : [],
+      attributes,
       text: kind === 'text' ? node.data : null,
       stylesheetText: stylesheetText(node),
       checked: kind === 'element' && node.localName === 'input' && /^(checkbox|radio)$/.test(node.type)
         ? Boolean(node.checked) : null,
       children: children.map(ensureNativeNodeId),
     });
-    for (const child of children) visit(child);
+    for (const child of children) visit(child, selectedOption);
   };
   visit(document.documentElement);
   return { nodes };
@@ -260,19 +288,25 @@ HTMLElement.prototype.focus = function focus(_options = undefined) {
   if (!this.isConnected || !isBrowserFocusable(this) || browserActiveElement === this) return;
   syncBrowserDocument();
   const previous = browserActiveElement?.isConnected ? browserActiveElement : null;
+  cancelTextComposition();
   if (Deno.core.ops.op_browser_set_focus(ensureNativeNodeId(this))) scheduleBrowserObservers();
   browserActiveElement = this;
   if (previous) {
+    commitTextChange(previous);
     dispatchFocusEvent(previous, 'blur', false, this);
     dispatchFocusEvent(previous, 'focusout', true, this);
   }
   dispatchFocusEvent(this, 'focus', false, previous);
   dispatchFocusEvent(this, 'focusin', true, previous);
+  updateInputMethod(this);
 };
 HTMLElement.prototype.blur = function blur() {
   if (browserActiveElement !== this) return;
+  cancelTextComposition();
+  Deno.core.ops.op_browser_input_method?.(false, 0, 0, 0, 0);
   if (Deno.core.ops.op_browser_set_focus(0)) scheduleBrowserObservers();
   browserActiveElement = document.body;
+  commitTextChange(this);
   dispatchFocusEvent(this, 'blur', false, document.body);
   dispatchFocusEvent(this, 'focusout', true, document.body);
 };
@@ -384,6 +418,7 @@ class UIEvent extends Event {
     super(type, init);
     defineEventValues(this, {
       view: init.view ?? window,
+      timeStamp: init.__trusted && Number.isFinite(init.timeStamp) ? init.timeStamp : performance.now(),
       detail: Number(init.detail ?? 0),
       isTrusted: Boolean(init.__trusted),
     });
@@ -409,6 +444,7 @@ class MouseEvent extends UIEvent {
     return Boolean({ Control: this.ctrlKey, Shift: this.shiftKey, Alt: this.altKey, Meta: this.metaKey }[key]);
   }
 }
+const coalescedPointerSamples = new WeakMap();
 class PointerEvent extends MouseEvent {
   constructor(type, init = {}) {
     super(type, init);
@@ -421,8 +457,14 @@ class PointerEvent extends MouseEvent {
       azimuthAngle: Number(init.azimuthAngle ?? 0), pointerType: String(init.pointerType ?? ''),
       isPrimary: Boolean(init.isPrimary),
     });
+    if (init.__trusted && Array.isArray(init.coalescedEvents)) {
+      if (init.coalescedEvents.length > 64) throw new RangeError('Pointer sample capacity exceeded');
+      coalescedPointerSamples.set(this, init.coalescedEvents.map(sample => new PointerEvent(type, {
+        ...init, ...sample, coalescedEvents: undefined,
+      })));
+    }
   }
-  getCoalescedEvents() { return [this]; }
+  getCoalescedEvents() { return coalescedPointerSamples.get(this)?.slice() ?? []; }
   getPredictedEvents() { return []; }
 }
 class WheelEvent extends MouseEvent {
@@ -462,6 +504,297 @@ globalThis.PointerEvent = PointerEvent;
 globalThis.WheelEvent = WheelEvent;
 globalThis.KeyboardEvent = KeyboardEvent;
 globalThis.FocusEvent = FocusEvent;
+class InputEvent extends UIEvent {
+  constructor(type, init = {}) {
+    super(type, init);
+    defineEventValues(this, { data: init.data ?? null, inputType: String(init.inputType ?? ''), isComposing: Boolean(init.isComposing), dataTransfer: null });
+  }
+  getTargetRanges() { return []; }
+}
+globalThis.InputEvent = InputEvent;
+class CompositionEvent extends UIEvent {
+  constructor(type, init = {}) { super(type, init); defineEventValues(this, { data: String(init.data ?? '') }); }
+}
+globalThis.CompositionEvent = CompositionEvent;
+
+const textControlValues = new WeakMap();
+const textHistory = new TextHistory();
+const validNumberValue = (value) => value === '' || /^-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$/.test(value) && Number.isFinite(Number(value));
+const textDrags = new Map();
+const textEditInitialValues = new WeakMap();
+let textComposition = null;
+const updateInputMethod = control => {
+  const enabled = isTextControl(control) && !disabledControl(control) && !control.hasAttribute('readonly');
+  if (enabled) nativeTextAction(control, { action: 'query' });
+  else Deno.core.ops.op_browser_input_method?.(false, 0, 0, 0, 0);
+};
+const cancelTextComposition = () => {
+  const composition = textComposition;
+  if (!composition) return;
+  textComposition = null;
+  const control = composition.control;
+  if (control.isConnected) {
+    nativeTextAction(control, { action: 'imeCancel' });
+    textControlValues.set(control, composition.before.value);
+    markBrowserDocumentDirty();
+    nativeTextAction(control, { action: 'select', anchor: composition.before.anchor, focus: composition.before.focus });
+    control.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, inputType: 'deleteCompositionText', isComposing: false }));
+  }
+  control.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, composed: true, data: '' }));
+};
+globalThis.__dispatchBrowserImeEvent = init => {
+  const control = document.activeElement;
+  if (init.phase === 'disabled') { cancelTextComposition(); return; }
+  if (init.phase === 'enabled' || !isTextControl(control) || !canEditText(control)) return;
+  if (textComposition && textComposition.control !== control) cancelTextComposition();
+  const data = String(init.data ?? '');
+  if (init.phase === 'preedit') {
+    if (!textComposition) {
+      if (!data) return;
+      textComposition = { control, before: nativeTextAction(control, { action: 'query' }) };
+      control.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true, composed: true }));
+    }
+    control.dispatchEvent(new CompositionEvent('compositionupdate', { bubbles: true, composed: true, data }));
+    if (!textComposition || textComposition.control !== control || !canEditText(control)) return;
+    control.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, composed: true, inputType: 'insertCompositionText', data, isComposing: true }));
+    if (!textComposition || textComposition.control !== control || !canEditText(control)) return;
+    if (!textEditInitialValues.has(control)) textEditInitialValues.set(control, control.value);
+    const result = nativeTextAction(control, { action: 'imePreedit', key: data, cursor: init.cursor ?? null });
+    textControlValues.set(control, result.value);
+    markBrowserDocumentDirty();
+    control.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, inputType: 'insertCompositionText', data, isComposing: true }));
+  } else if (init.phase === 'commit') {
+    const composition = textComposition;
+    if (!composition) { insertTextDefault(control, data, 'insertText'); return; }
+    const result = nativeTextAction(control, { action: 'imeCommit', key: data });
+    textComposition = null;
+    textControlValues.set(control, result.value);
+    markBrowserDocumentDirty();
+    textHistory.record(control, composition.before, result);
+    control.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, inputType: 'insertCompositionText', data, isComposing: false }));
+    control.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, composed: true, data }));
+  }
+};
+const isTextControl = (element) => element instanceof Element && (element.localName === 'textarea'
+  || element.localName === 'input' && /^(text|search|email|number|tel|url|password)$/.test(element.type || 'text'));
+const nativeTextAction = (control, action) => {
+  syncBrowserDocument();
+  const result = Deno.core.ops.op_browser_text_input(ensureNativeNodeId(control), action);
+  const rect = result.cursorRect;
+  if (rect && document.activeElement === control && !disabledControl(control) && !control.hasAttribute('readonly')) {
+    Deno.core.ops.op_browser_input_method?.(true, rect.x, rect.y, rect.width, rect.height);
+  }
+  scheduleBrowserObservers();
+  return result;
+};
+const commitTextChange = (control) => {
+  if (!isTextControl(control) || !textEditInitialValues.has(control)) return;
+  const initial = textEditInitialValues.get(control);
+  textEditInitialValues.delete(control);
+  if (initial !== control.value) control.dispatchEvent(new Event('change', { bubbles: true }));
+};
+const textKeyDefault = (control, event) => {
+  if (!isTextControl(control) || disabledControl(control) || event.isComposing || textComposition?.control === control) return false;
+  if (event.key === 'Tab') return false;
+  const modifier = event.ctrlKey || event.metaKey;
+  const letter = event.key.toLowerCase();
+  if (modifier && !event.altKey && /^(c|x|v)$/.test(letter)) {
+    void textClipboardDefault(control, letter).catch(error => console.error('Clipboard operation failed:', error));
+    return true;
+  }
+  if (modifier && !event.altKey && (letter === 'z' || letter === 'y')) {
+    textHistoryDefault(control, letter === 'y' || event.shiftKey);
+    return true;
+  }
+  const movement = /^(ArrowLeft|ArrowRight|ArrowUp|ArrowDown|Home|End)$/.test(event.key) || modifier && letter === 'a';
+  let inputType = '', data = null;
+  if (event.key === 'Backspace') inputType = modifier ? 'deleteWordBackward' : 'deleteContentBackward';
+  else if (event.key === 'Delete') inputType = modifier ? 'deleteWordForward' : 'deleteContentForward';
+  else if (event.key === 'Enter') {
+    if (control.localName !== 'textarea') { commitTextChange(control); return true; }
+    inputType = 'insertLineBreak';
+    data = '\n';
+  } else if (!modifier && !event.altKey && Array.from(event.key).length === 1) {
+    if (control.type === 'number' && !/^[0-9eE+.-]$/.test(event.key)) return true;
+    inputType = 'insertText';
+    data = event.key;
+  } else if (!movement) return false;
+  if (inputType) {
+    if (control.hasAttribute('readonly')) return true;
+    const before = new InputEvent('beforeinput', { bubbles: true, composed: true, cancelable: true, inputType, data });
+    control.dispatchEvent(before);
+    if (before.defaultPrevented || !control.isConnected || document.activeElement !== control || disabledControl(control) || control.hasAttribute('readonly')) return true;
+    if (!textEditInitialValues.has(control)) textEditInitialValues.set(control, control.value);
+  }
+  const previous = control.value;
+  const beforeState = inputType ? nativeTextAction(control, { action: 'query' }) : null;
+  const result = nativeTextAction(control, { action: 'key', key: event.key, shift: event.shiftKey, control: event.ctrlKey, alt: event.altKey, meta: event.metaKey });
+  if (result.value !== (textControlValues.get(control) ?? previous)) {
+    if (beforeState) textHistory.record(control, beforeState, result);
+    textControlValues.set(control, result.value);
+    markBrowserDocumentDirty();
+    control.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, inputType, data }));
+  }
+  if (result.anchor !== result.focus) control.dispatchEvent(new Event('select', { bubbles: true }));
+  return true;
+};
+const canEditText = control => isTextControl(control) && control.isConnected && document.activeElement === control
+  && !disabledControl(control) && !control.hasAttribute('readonly');
+const textHistoryDefault = (control, redo) => {
+  if (!canEditText(control)) return;
+  const token = textHistory.peek(control, redo);
+  if (!token) return;
+  const inputType = redo ? 'historyRedo' : 'historyUndo';
+  const event = new InputEvent('beforeinput', { bubbles: true, composed: true, cancelable: true, inputType });
+  control.dispatchEvent(event);
+  if (event.defaultPrevented || !canEditText(control) || !textHistory.accept(control, token, redo)) return;
+  if (!textEditInitialValues.has(control)) textEditInitialValues.set(control, control.value);
+  textControlValues.set(control, token.value.value);
+  markBrowserDocumentDirty();
+  nativeTextAction(control, { action: 'select', anchor: token.value.anchor, focus: token.value.focus });
+  control.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, inputType }));
+};
+const insertTextDefault = (control, data, inputType) => {
+  if (!canEditText(control)) return;
+  data = String(data).replace(/\r\n?/g, '\n');
+  if (control.localName !== 'textarea') data = data.replace(/\n/g, '');
+  const event = new InputEvent('beforeinput', { bubbles: true, composed: true, cancelable: true, inputType, data });
+  control.dispatchEvent(event);
+  if (event.defaultPrevented || !canEditText(control)) return;
+  const before = nativeTextAction(control, { action: 'query' });
+  if (!textEditInitialValues.has(control)) textEditInitialValues.set(control, control.value);
+  const after = nativeTextAction(control, { action: 'insert', key: data });
+  if (before.value === after.value) return;
+  textHistory.record(control, before, after);
+  textControlValues.set(control, after.value);
+  markBrowserDocumentDirty();
+  control.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, inputType, data }));
+};
+class ClipboardEvent extends Event {
+  constructor(type, init = {}) { super(type, init); defineEventValues(this, { clipboardData: init.clipboardData ?? null }); }
+}
+globalThis.ClipboardEvent = ClipboardEvent;
+const textClipboardDefault = async (control, key) => {
+  if (control.type === 'password' && key !== 'v') return;
+  const before = nativeTextAction(control, { action: 'query' });
+  let text = key === 'v' ? await navigator.clipboard.readText()
+    : before.value.slice(Math.min(before.anchor, before.focus), Math.max(before.anchor, before.focus));
+  if (!control.isConnected || document.activeElement !== control) return;
+  const current = nativeTextAction(control, { action: 'query' });
+  if (current.value !== before.value || current.anchor !== before.anchor || current.focus !== before.focus) return;
+  let changed = false;
+  const clipboardData = {
+    get types() { return ['text/plain']; },
+    getData(type) { return /^(text|text\/plain)$/i.test(type) ? text : ''; },
+    setData(type, value) { if (key !== 'v' && /^(text|text\/plain)$/i.test(type)) { text = String(value); changed = true; } },
+    clearData() { if (key !== 'v') { text = ''; changed = true; } },
+  };
+  const event = new ClipboardEvent(key === 'v' ? 'paste' : key === 'x' ? 'cut' : 'copy', {
+    bubbles: true, composed: true, cancelable: true, clipboardData,
+  });
+  control.dispatchEvent(event);
+  if (event.defaultPrevented) {
+    if (changed) await navigator.clipboard.writeText(text);
+    return;
+  }
+  if (key === 'v') { insertTextDefault(control, text, 'insertFromPaste'); return; }
+  if (before.anchor === before.focus) return;
+  await navigator.clipboard.writeText(text);
+  if (key !== 'x' || !canEditText(control)) return;
+  const after = nativeTextAction(control, { action: 'query' });
+  if (after.value === before.value && after.anchor === before.anchor && after.focus === before.focus) {
+    insertTextDefault(control, '', 'deleteByCut');
+  }
+};
+for (const prototype of [HTMLInputElement.prototype, HTMLTextAreaElement.prototype]) {
+  const originalValue = Object.getOwnPropertyDescriptor(prototype, 'value');
+  Object.defineProperty(prototype, 'value', {
+    configurable: true, enumerable: true,
+    get() {
+      if (!isTextControl(this)) return originalValue.get.call(this);
+      const value = textControlValues.get(this) ?? originalValue.get.call(this);
+      return this.type === 'number' && !validNumberValue(value) ? '' : value;
+    },
+    set(value) {
+      if (!isTextControl(this)) { originalValue.set.call(this, value); return; }
+      value = String(value).replace(/\r\n?/g, '\n');
+      if (this.localName !== 'textarea') value = value.replace(/\n/g, '');
+      if (this.type === 'number' && !validNumberValue(value)) value = '';
+      if (value !== (textControlValues.get(this) ?? originalValue.get.call(this))) {
+        if (textComposition?.control === this) cancelTextComposition();
+        textHistory.clear(this);
+      }
+      textControlValues.set(this, value);
+      markBrowserDocumentDirty();
+    },
+  });
+  Object.defineProperty(prototype, 'defaultValue', {
+    configurable: true, get() { return this.localName === 'textarea' ? this.textContent : this.getAttribute('value') ?? ''; },
+    set(value) { if (this.localName === 'textarea') this.textContent = String(value); else this.setAttribute('value', String(value)); },
+  });
+  prototype.select = function select() {
+    if (!isTextControl(this)) return;
+    this.focus();
+    nativeTextAction(this, { action: 'select', anchor: 0, focus: this.value.length });
+    this.dispatchEvent(new Event('select', { bubbles: true }));
+  };
+  prototype.setSelectionRange = function setSelectionRange(start, end, direction = 'none') {
+    if (!isTextControl(this) || this.type === 'number' || this.type === 'email') throw new DOMException('The control does not support text selection', 'InvalidStateError');
+    end = Math.min(this.value.length, Math.max(0, Number(end) >>> 0));
+    start = Math.min(end, Number(start) >>> 0);
+    nativeTextAction(this, { action: 'select', anchor: direction === 'backward' ? end : start, focus: direction === 'backward' ? start : end });
+  };
+  Object.defineProperties(prototype, {
+    selectionStart: { configurable: true, get() {
+      if (!isTextControl(this) || this.type === 'number' || this.type === 'email') return null;
+      const state = nativeTextAction(this, { action: 'query' });
+      return Math.min(state.anchor, state.focus);
+    }, set(value) { this.setSelectionRange(value, Math.max(value, this.selectionEnd)); } },
+    selectionEnd: { configurable: true, get() {
+      if (!isTextControl(this) || this.type === 'number' || this.type === 'email') return null;
+      const state = nativeTextAction(this, { action: 'query' });
+      return Math.max(state.anchor, state.focus);
+    }, set(value) { this.setSelectionRange(Math.min(value, this.selectionStart), value); } },
+    selectionDirection: { configurable: true, get() {
+      if (!isTextControl(this) || this.type === 'number' || this.type === 'email') return null;
+      const state = nativeTextAction(this, { action: 'query' });
+      return state.anchor > state.focus ? 'backward' : 'forward';
+    }, set(value) { this.setSelectionRange(this.selectionStart, this.selectionEnd, value); } },
+  });
+}
+
+const rangeDrags = new Map();
+const isRange = (target) => target instanceof HTMLInputElement && target.type === 'range' && !target.disabled;
+const rangeLimits = (input) => {
+  const number = (name, fallback) => {
+    const value = input.getAttribute(name);
+    return value !== null && value.trim() !== '' && Number.isFinite(Number(value)) ? Number(value) : fallback;
+  };
+  const min = number('min', 0), max = Math.max(min, number('max', 100));
+  const step = input.getAttribute('step') === 'any' ? 0 : Math.max(0, number('step', 1)) || 1;
+  return { min, max, step, base: number('min', number('value', 0)) };
+};
+const setRangeValue = (input, value) => {
+  const { min, max, step, base } = rangeLimits(input);
+  value = Math.max(min, Math.min(max, value));
+  if (step) {
+    value = base + Math.round((value - base) / step) * step;
+    if (value > max) value -= step;
+    if (value < min) value += step;
+  }
+  const next = String(Number(Math.max(min, Math.min(max, value)).toPrecision(12)));
+  if (input.value === next) return;
+  input.value = next;
+  input.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+};
+const moveRange = (input, clientX) => {
+  const rect = input.getBoundingClientRect();
+  const radius = Math.min(6, rect.height / 2, rect.width / 2);
+  let fraction = Math.max(0, Math.min(1, (clientX - rect.left - radius) / Math.max(1, rect.width - radius * 2)));
+  if (getComputedStyle(input).direction === 'rtl') fraction = 1 - fraction;
+  const { min, max } = rangeLimits(input);
+  setRangeValue(input, min + fraction * (max - min));
+};
 
 const pointerCaptures = new Map();
 const pointerDownTargets = new Map();
@@ -471,11 +804,17 @@ const pointerPositions = new Map();
 const disabledControl = (element) =>
   element instanceof Element && element.hasAttribute('disabled') &&
   /^(button|input|select|textarea|option|optgroup|fieldset)$/.test(element.localName);
-const eventCoordinatesFor = (target, init) => {
-  const clientX = Number(init.clientX ?? init.x ?? 0);
-  const clientY = Number(init.clientY ?? init.y ?? 0);
-  const rect = target?.isConnected ? target.getBoundingClientRect() : new DOMRect();
-  return { ...init, clientX, clientY, offsetX: clientX - rect.left, offsetY: clientY - rect.top };
+// Native input must not force layout for offsets that no listener reads.
+const nativeEventTarget = Symbol('nativeEventTarget');
+const nativeEventOffsets = {
+  offsetX: { configurable: true, enumerable: true, get() {
+    const target = this[nativeEventTarget];
+    return this.clientX - (target?.isConnected ? target.getBoundingClientRect().left : 0);
+  } },
+  offsetY: { configurable: true, enumerable: true, get() {
+    const target = this[nativeEventTarget];
+    return this.clientY - (target?.isConnected ? target.getBoundingClientRect().top : 0);
+  } },
 };
 const dispatchMouseLike = (target, Constructor, type, init = {}) => {
   if (!target) return null;
@@ -483,8 +822,12 @@ const dispatchMouseLike = (target, Constructor, type, init = {}) => {
     bubbles: init.bubbles ?? true,
     cancelable: init.cancelable ?? true,
     composed: init.composed ?? true,
-    ...eventCoordinatesFor(target, init),
+    ...init,
+    clientX: Number(init.clientX ?? init.x ?? 0),
+    clientY: Number(init.clientY ?? init.y ?? 0),
   });
+  Object.defineProperty(event, nativeEventTarget, { value: target });
+  Object.defineProperties(event, nativeEventOffsets);
   target.dispatchEvent(event);
   return event;
 };
@@ -494,7 +837,7 @@ const dispatchInputChange = (control) => {
   control.dispatchEvent(new Event('change', { bubbles: true }));
 };
 const activationTargetFor = (target) => target instanceof Element
-  ? target.closest('label,input,button,option,summary,a[href]')
+  ? target.closest('label,input,button,select,option,summary,a[href]')
   : null;
 const commitClickDefault = (eventTarget) => {
   const target = activationTargetFor(eventTarget);
@@ -502,6 +845,11 @@ const commitClickDefault = (eventTarget) => {
   if (target.localName === 'label') {
     const control = target.control || (target.htmlFor ? document.getElementById(target.htmlFor) : target.querySelector('input,button,select,textarea'));
     if (control && control !== target) dispatchClick(control);
+    return;
+  }
+  if (target.localName === 'select') {
+    if (selectPopup?.select === target) closeSelectPopup();
+    else openSelectPopup(target);
     return;
   }
   if (target instanceof HTMLInputElement) {
@@ -637,7 +985,7 @@ globalThis.__dispatchBrowserPointerEvent = (type, init = {}) => {
   const target = __pointerLockElement?.isConnected ? __pointerLockElement
     : captured?.isConnected ? captured : document.elementFromPoint(clientX, clientY);
   const button = Number(init.button ?? (type === 'pointermove' ? -1 : 0));
-  const defaultButtons = type === 'pointerdown' ? 1 << Math.max(0, button)
+  const defaultButtons = type === 'pointerdown' ? button === 1 ? 4 : button === 2 ? 2 : 1 << Math.max(0, button)
     : type === 'pointerup' || type === 'pointercancel' ? 0 : pointerDownTargets.has(pointerId) ? 1 : 0;
   const eventInit = {
     ...init, __trusted: true, pointerId, pointerType, clientX, clientY, button,
@@ -667,34 +1015,62 @@ globalThis.__dispatchBrowserPointerEvent = (type, init = {}) => {
   if (type === 'pointerdown') pointerDownTargets.set(pointerId, target);
   const pointerEvent = dispatchMouseLike(target, PointerEvent, type, eventInit);
   if (type === 'pointerdown') {
+    if (!pointerEvent.defaultPrevented && button === 0 && isRange(target)) {
+      rangeDrags.set(pointerId, { input: target, value: target.value });
+      target.setPointerCapture(pointerId);
+      moveRange(target, clientX);
+    }
     if (pointerEvent.defaultPrevented) suppressedCompatibilityPointers.add(pointerId);
     else suppressedCompatibilityPointers.delete(pointerId);
     if (!pointerEvent.defaultPrevented && pointerType === 'mouse') {
       const mouse = dispatchMouseLike(target, MouseEvent, 'mousedown', eventInit);
       const focusTarget = target.closest?.('button,input,select,textarea,a[href],[tabindex],summary') ?? target;
-      if (!mouse.defaultPrevented && focusTarget instanceof HTMLElement && !disabledControl(focusTarget) && isBrowserFocusable(focusTarget)) focusTarget.focus();
+      if (!mouse.defaultPrevented && focusTarget instanceof HTMLElement && !disabledControl(focusTarget) && isBrowserFocusable(focusTarget)) {
+        focusTarget.focus();
+        if (button === 0 && isTextControl(focusTarget) && focusTarget.isConnected) {
+          textDrags.set(pointerId, focusTarget);
+          nativeTextAction(focusTarget, { action: 'down', x: clientX, y: clientY, shift: eventInit.shiftKey });
+        }
+      }
     }
-  } else if (type === 'pointermove' && pointerType === 'mouse' && !pointerEvent.defaultPrevented) {
-    dispatchMouseLike(target, MouseEvent, 'mousemove', eventInit);
+  } else if (type === 'pointermove') {
+    const text = textDrags.get(pointerId);
+    if (text?.isConnected && !pointerEvent.defaultPrevented) nativeTextAction(text, { action: 'move', x: clientX, y: clientY });
+    const drag = rangeDrags.get(pointerId);
+    if (!pointerEvent.defaultPrevented && drag && isRange(drag.input)) moveRange(drag.input, clientX);
+    if (pointerType === 'mouse' && !suppressedCompatibilityPointers.has(pointerId)) dispatchMouseLike(target, MouseEvent, 'mousemove', eventInit);
   } else if (type === 'pointerup') {
-    if (Deno.core.ops.op_browser_set_pointer_state(2, clientX, clientY)) scheduleBrowserObservers();
-    if (!pointerEvent.defaultPrevented && !suppressedCompatibilityPointers.has(pointerId)) {
-      const clickTarget = nearestCommonElement(pointerDownTargets.get(pointerId), target);
-      if (pointerType === 'mouse') dispatchMouseLike(target, MouseEvent, 'mouseup', eventInit);
-      if (clickTarget && (pointerType === 'mouse' || eventInit.isPrimary)) dispatchClick(clickTarget, eventInit);
+    const text = textDrags.get(pointerId);
+    textDrags.delete(pointerId);
+    if (text?.isConnected) nativeTextAction(text, { action: 'up', x: clientX, y: clientY });
+    const drag = rangeDrags.get(pointerId);
+    rangeDrags.delete(pointerId);
+    if (drag && isRange(drag.input)) {
+      if (!pointerEvent.defaultPrevented) moveRange(drag.input, clientX);
+      if (drag.value !== drag.input.value) drag.input.dispatchEvent(new Event('change', { bubbles: true }));
     }
+    if (Deno.core.ops.op_browser_set_pointer_state(2, clientX, clientY)) scheduleBrowserObservers();
+    if (pointerType === 'mouse' && !suppressedCompatibilityPointers.has(pointerId)) dispatchMouseLike(target, MouseEvent, 'mouseup', eventInit);
+    const clickTarget = captured?.isConnected ? captured : nearestCommonElement(pointerDownTargets.get(pointerId), target);
     pointerDownTargets.delete(pointerId);
     suppressedCompatibilityPointers.delete(pointerId);
     const capture = pointerCaptures.get(pointerId);
-    if (capture) {
-      capture.releasePointerCapture(pointerId);
-      updatePointerHover(pointerId, document.elementFromPoint(clientX, clientY), eventInit);
+    if (capture) capture.releasePointerCapture(pointerId);
+    // Canceled pointerdown suppresses compatibility mouse events, not click.
+    if (clickTarget?.isConnected && (pointerType === 'mouse' || eventInit.isPrimary)) {
+      if (button === 0) dispatchClick(clickTarget, eventInit);
+      else dispatchMouseLike(clickTarget, PointerEvent, 'auxclick', eventInit);
     }
+    if (capture) updatePointerHover(pointerId, document.elementFromPoint(clientX, clientY), eventInit);
     if (pointerType !== 'mouse') {
       updatePointerHover(pointerId, null, eventInit);
       if (Deno.core.ops.op_browser_set_pointer_state(0, -1, -1)) scheduleBrowserObservers();
     }
   } else if (type === 'pointercancel') {
+    textDrags.delete(pointerId);
+    const drag = rangeDrags.get(pointerId);
+    rangeDrags.delete(pointerId);
+    if (drag && drag.value !== drag.input.value) drag.input.dispatchEvent(new Event('change', { bubbles: true }));
     if (Deno.core.ops.op_browser_set_pointer_state(2, clientX, clientY)) scheduleBrowserObservers();
     pointerDownTargets.delete(pointerId);
     suppressedCompatibilityPointers.delete(pointerId);
@@ -705,6 +1081,15 @@ globalThis.__dispatchBrowserPointerEvent = (type, init = {}) => {
   }
   return !pointerEvent.defaultPrevented;
 };
+
+globalThis.addEventListener('blur', () => {
+  cancelTextComposition();
+  commitTextChange(document.activeElement);
+  for (const pointerId of pointerDownTargets.keys()) {
+    globalThis.__dispatchBrowserPointerEvent('pointercancel', { pointerId });
+  }
+  pointerPositions.clear();
+});
 
 globalThis.__dispatchBrowserWheelEvent = (init = {}) => {
   syncBrowserDocument();
@@ -717,9 +1102,13 @@ globalThis.__dispatchBrowserWheelEvent = (init = {}) => {
     const multiplier = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? innerHeight : 1;
     let scroller = target;
     while (scroller instanceof Element) {
-      if (scroller.scrollHeight > scroller.clientHeight || scroller.scrollWidth > scroller.clientWidth) {
-        scroller.scrollBy(event.deltaX * multiplier, event.deltaY * multiplier);
-        break;
+      const style = getComputedStyle(scroller);
+      const canX = event.deltaX !== 0 && /^(auto|scroll)$/.test(style.overflowX) && scroller.scrollWidth > scroller.clientWidth;
+      const canY = event.deltaY !== 0 && /^(auto|scroll)$/.test(style.overflowY) && scroller.scrollHeight > scroller.clientHeight;
+      if (canX || canY) {
+        const left = scroller.scrollLeft, top = scroller.scrollTop;
+        scroller.scrollBy(canX ? event.deltaX * multiplier : 0, canY ? event.deltaY * multiplier : 0);
+        if (scroller.scrollLeft !== left || scroller.scrollTop !== top) break;
       }
       scroller = scroller.parentElement;
     }
@@ -735,13 +1124,128 @@ const tabbableElements = () => Array.from(document.querySelectorAll(
     if (at === 0 && bt > 0) return 1;
     return at > 0 && bt > 0 ? at - bt : 0;
   });
+// One native select popup is active at a time. Options remain in the authored DOM.
+let selectPopup = null;
+const enabledOption = (option) => !option.hasAttribute('disabled') && !option.closest('optgroup[disabled]');
+const selectedOptionIndex = (select) => {
+  const index = Array.from(select.options).findIndex((option) => option.hasAttribute('selected'));
+  return index < 0 && select.options.length ? 0 : index;
+};
+const closeSelectPopup = () => {
+  selectPopup?.element.remove();
+  selectPopup = null;
+};
+const chooseSelectOption = (select, index) => {
+  const option = select.options[index];
+  if (disabledControl(select) || !option || !enabledOption(option)) return;
+  const previous = selectedOptionIndex(select);
+  for (const item of select.options) item.toggleAttribute('selected', item === option);
+  if (index !== previous) dispatchInputChange(select);
+};
+const highlightSelectOption = (index) => {
+  const popup = selectPopup;
+  if (!popup) return;
+  popup.index = index;
+  for (const [i, row] of Array.from(popup.element.children).entries()) {
+    row.setAttribute('aria-selected', String(i === index));
+    row.style.background = i === index ? '#426493' : 'transparent';
+  }
+  const row = popup.element.children[index];
+  if (row) {
+    const top = row.offsetTop;
+    const bottom = top + row.offsetHeight;
+    if (top < popup.element.scrollTop) popup.element.scrollTop = top;
+    else if (bottom > popup.element.scrollTop + popup.element.clientHeight) {
+      popup.element.scrollTop = bottom - popup.element.clientHeight;
+    }
+  }
+};
+const openSelectPopup = (select) => {
+  if (disabledControl(select) || !select.options.length) return;
+  closeSelectPopup();
+  const rect = select.getBoundingClientRect();
+  const element = document.createElement('div');
+  element.setAttribute('role', 'listbox');
+  element.setAttribute('aria-label', select.getAttribute('aria-label') || 'Options');
+  const height = Math.min(select.options.length * 28 + 8, 280, innerHeight);
+  const top = rect.bottom + height <= innerHeight ? rect.bottom : Math.max(0, rect.top - height);
+  const width = Math.min(innerWidth, Math.max(rect.width, 160));
+  element.style.cssText = `position:fixed;left:${Math.max(0, Math.min(rect.left, innerWidth - width))}px;top:${top}px;width:${width}px;max-height:${height}px;overflow-y:auto;z-index:2147483647;background:#252a33;color:#f3f4f6;border:1px solid #687080;padding:4px;font:13px sans-serif;box-sizing:border-box;`;
+  selectPopup = { select, element, index: selectedOptionIndex(select) };
+  for (const [index, option] of Array.from(select.options).entries()) {
+    const row = document.createElement('div');
+    row.setAttribute('role', 'option');
+    row.setAttribute('aria-disabled', String(!enabledOption(option)));
+    row.textContent = option.getAttribute('label') || option.textContent;
+    row.style.cssText = `display:block;height:28px;line-height:28px;padding:0 8px;white-space:nowrap;cursor:pointer;opacity:${enabledOption(option) ? 1 : 0.4};`;
+    row.addEventListener('pointermove', () => { if (enabledOption(option)) highlightSelectOption(index); });
+    row.addEventListener('click', () => {
+      if (!enabledOption(option)) return;
+      chooseSelectOption(select, index);
+      closeSelectPopup();
+      select.focus();
+    });
+    element.appendChild(row);
+  }
+  document.body.appendChild(element);
+  select.focus();
+  highlightSelectOption(selectPopup.index);
+};
+document.addEventListener('pointerdown', (event) => {
+  if (selectPopup && event.target !== selectPopup.select && !selectPopup.element.contains(event.target)) closeSelectPopup();
+});
+const selectKeyDefault = (select, event) => {
+  if (disabledControl(select)) return false;
+  const popup = selectPopup?.select === select ? selectPopup : null;
+  if (event.key === 'Tab') { closeSelectPopup(); return false; }
+  if (event.key === 'Escape' && popup) { closeSelectPopup(); return true; }
+  if (event.key === 'Enter' || event.key === ' ' || (event.altKey && event.key === 'ArrowDown')) {
+    if (popup) { chooseSelectOption(select, popup.index); closeSelectPopup(); }
+    else openSelectPopup(select);
+    return true;
+  }
+  const options = Array.from(select.options);
+  const current = popup?.index ?? selectedOptionIndex(select);
+  const direction = ['ArrowUp', 'Home', 'PageUp'].includes(event.key) ? -1 : 1;
+  let next = current;
+  if (['ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown'].includes(event.key)) {
+    next = event.key === 'Home' ? 0 : event.key === 'End' ? options.length - 1 : current + direction;
+    while (next >= 0 && next < options.length && !enabledOption(options[next])) next += direction;
+  } else if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
+    for (let step = 1; step <= options.length; step++) {
+      const index = (current + step + options.length) % options.length;
+      if (enabledOption(options[index]) && options[index].textContent.trim().toLowerCase().startsWith(event.key.toLowerCase())) { next = index; break; }
+    }
+  } else return false;
+  if (next >= 0 && next < options.length) {
+    if (popup) highlightSelectOption(next);
+    else chooseSelectOption(select, next);
+  }
+  return true;
+};
 const pendingSpaceActivations = new WeakSet();
 globalThis.__dispatchBrowserKeyboardEvent = (type, init = {}) => {
   const target = document.activeElement ?? document.body;
-  const event = new KeyboardEvent(String(type), { bubbles: true, cancelable: true, composed: true, ...init, __trusted: true });
+  const event = new KeyboardEvent(String(type), { bubbles: true, cancelable: true, composed: true, ...init, isComposing: Boolean(textComposition), __trusted: true });
   target.dispatchEvent(event);
+  if (event.isComposing) return !event.defaultPrevented;
   if (type === 'keydown' && !event.defaultPrevented) {
-    if (event.key === 'Tab') {
+    if (target.isConnected && document.activeElement === target && textKeyDefault(target, event)) {
+      // The text editor supplies the default action after JavaScript dispatch.
+    } else if (target.localName === 'select' && selectKeyDefault(target, event)) {
+      event.preventDefault();
+    } else if (isRange(target) && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown'].includes(event.key)) {
+      const { min, max, step } = rangeLimits(target);
+      const current = target.value === '' || !Number.isFinite(Number(target.value)) ? (min + max) / 2 : Number(target.value);
+      const increment = step || (max - min) / 100;
+      const rtl = getComputedStyle(target).direction === 'rtl';
+      const sign = event.key === 'ArrowDown' || event.key === 'PageDown' || event.key === (rtl ? 'ArrowRight' : 'ArrowLeft') ? -1 : 1;
+      const value = event.key === 'Home' ? min : event.key === 'End' ? max : current + sign * increment * (event.key.startsWith('Page') ? 10 : 1);
+      const previous = target.value;
+      setRangeValue(target, value);
+      if (target.value !== previous) target.dispatchEvent(new Event('change', { bubbles: true }));
+      event.preventDefault();
+    } else if (event.key === 'Tab') {
       const elements = tabbableElements();
       if (elements.length !== 0) {
         const current = elements.indexOf(document.activeElement);
@@ -798,6 +1302,14 @@ Object.defineProperty(HTMLSelectElement.prototype, 'value', {
 
 // Browser globals LinkeDOM doesn't own.
 globalThis.navigator = globalThis.navigator || {};
+Object.defineProperty(navigator, 'clipboard', { configurable: true, value: Object.freeze({
+  async readText() { return Deno.core.ops.op_browser_clipboard(false, ''); },
+  async writeText(text) {
+    text = String(text);
+    if (new TextEncoder().encode(text).byteLength > 32 * 1024 * 1024) throw new DOMException('Clipboard text exceeds 32 MiB', 'DataError');
+    await Deno.core.ops.op_browser_clipboard(true, text);
+  },
+}) });
 globalThis.performance = globalThis.performance || { now: () => 0, _now: () => 0 };
 globalThis.devicePixelRatio = Number(globalThis.__devicePixelRatio) || 1;
 delete globalThis.__devicePixelRatio;
@@ -1698,6 +2210,16 @@ const configureCanvas = (canvas) => {
   if (canvasContexts.has(canvas)) return canvas;
   const state = { id: ++nextCanvasId, type: null, gpu: null };
   canvasContexts.set(canvas, state);
+  // LinkeDOM creates parsed canvases with a 300×150 backing image without
+  // applying their width/height attributes. Bring that backing size in line
+  // with the actual canvas dimensions before any context can observe it.
+  for (const [name, descriptor] of [['width', canvasWidth], ['height', canvasHeight]]) {
+    const value = canvas.getAttribute(name);
+    if (value !== null && /^\d+$/.test(value.trim())) {
+      const dimension = Number(value);
+      if (Number.isSafeInteger(dimension)) descriptor.set.call(canvas, dimension);
+    }
+  }
   Object.defineProperties(canvas, {
     width: {
       configurable: true,
@@ -1721,9 +2243,29 @@ const configureCanvas = (canvas) => {
     if (type !== 'webgpu' && type !== '2d') return null;
     if (state.type !== null && state.type !== type) return null;
     state.type = type;
-    if (type === '2d') return installCanvas2D(canvas);
+    if (type === '2d') {
+      const context = installCanvas2D(canvas);
+      context.commit = (x = 0, y = 0, width = canvas.width, height = canvas.height) => {
+        if (!canvas.isConnected) return;
+        if (!Number.isSafeInteger(x) || !Number.isSafeInteger(y)
+          || !Number.isSafeInteger(width) || !Number.isSafeInteger(height)
+          || x < 0 || y < 0 || width <= 0 || height <= 0
+          || x + width > canvas.width || y + height > canvas.height) {
+          throw new RangeError('Invalid canvas commit region.');
+        }
+        syncBrowserDocument();
+        return Deno.core.ops.op_browser_set_canvas_raster(
+          ensureNativeNodeId(canvas),
+          canvas.width,
+          canvas.height,
+          context.bytes,
+          x, y, width, height,
+        );
+      };
+      return context;
+    }
     if (!state.gpu) {
-      state.gpu = Deno.core.ops.op_create_capture_canvas(state.id, canvas.width || 300, canvas.height || 150);
+      state.gpu = Deno.core.ops.op_create_capture_canvas(state.id, canvas.width, canvas.height);
       gpuCanvasIds.set(state.gpu, state.id);
       Deno.core.ops.op_bind_canvas_node(state.id, ensureNativeNodeId(canvas));
       globalThis.__gpuCanvasCount++;

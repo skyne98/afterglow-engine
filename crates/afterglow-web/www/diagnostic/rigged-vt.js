@@ -66741,9 +66741,9 @@ function sealResources(world) {
   world[RESOURCES_SEALED] = true;
 }
 
-// crates/afterglow-web/web/src/engine/telemetry/telemetry.ts
+// crates/afterglow-telemetry/web/src/telemetry.ts
 var TELEMETRY_RECORD_BYTES = 40;
-var TELEMETRY_BATCH_HEADER_BYTES = 40;
+var TELEMETRY_BATCH_HEADER_BYTES = 96;
 var TELEMETRY_BATCH_VERSION = 1;
 var TELEMETRY_RECORD_WORDS = TELEMETRY_RECORD_BYTES / 4;
 var U32_SCALE = 4294967296;
@@ -66762,6 +66762,10 @@ class TelemetryRecorder {
   captureEpoch = 0;
   length = 0;
   droppedRecords = 0;
+  overwrittenRecords = 0;
+  nextSequence = 0;
+  cursor = 0;
+  retention = 0 /* Prefix */;
   constructor(descriptors, buffer2, clock = () => performance.now() * 1e6, ticksPerSecond = 1e9) {
     this.descriptors = descriptors;
     this.buffer = buffer2;
@@ -66769,8 +66773,8 @@ class TelemetryRecorder {
     this.ticksPerSecond = ticksPerSecond;
     if (buffer2.byteLength === 0 || buffer2.byteLength % TELEMETRY_RECORD_BYTES !== 0)
       throw new RangeError("telemetry trace buffer must contain a positive whole number of 40-byte records");
-    if (!Number.isFinite(ticksPerSecond) || ticksPerSecond <= 0)
-      throw new RangeError("telemetry ticksPerSecond must be positive");
+    if (!Number.isSafeInteger(ticksPerSecond) || ticksPerSecond <= 0)
+      throw new RangeError("telemetry ticksPerSecond must be a positive safe integer");
     this.words = new Uint32Array(buffer2);
     this.bytes = new Uint8Array(buffer2);
     this.enabledDescriptors = new Uint8Array(descriptors.length);
@@ -66779,6 +66783,10 @@ class TelemetryRecorder {
       count: 0,
       capacity: buffer2.byteLength / TELEMETRY_RECORD_BYTES,
       dropped: 0,
+      overwritten: 0,
+      firstSequence: 0,
+      nextSequence: 0,
+      retention: 0 /* Prefix */,
       ticksPerSecond,
       buffer: buffer2
     };
@@ -66795,10 +66803,17 @@ class TelemetryRecorder {
   get dropped() {
     return this.droppedRecords;
   }
-  arm(epoch, categoryWords) {
-    if (this.captureState !== 0 /* Idle */ || !Number.isInteger(epoch) || epoch < 0 || epoch > U32_MAX)
+  get overwritten() {
+    return this.overwrittenRecords;
+  }
+  arm(epoch, categoryWords, retention = 0 /* Prefix */) {
+    if (this.captureState !== 0 /* Idle */ || retention !== 0 /* Prefix */ && retention !== 1 /* Rolling */ || !Number.isInteger(epoch) || epoch < 0 || epoch > U32_MAX)
       return false;
     this.captureEpoch = epoch;
+    this.nextSequence = 0;
+    this.retention = retention;
+    this.overwrittenRecords = 0;
+    this.cursor = 0;
     this.length = 0;
     this.droppedRecords = 0;
     for (let index = 0;index < this.descriptors.length; index++) {
@@ -66811,6 +66826,13 @@ class TelemetryRecorder {
   stop() {
     if (this.captureState !== 1 /* Armed */)
       return false;
+    const split2 = this.cursor * TELEMETRY_RECORD_WORDS;
+    if (split2 !== 0) {
+      this.reverseWords(0, split2);
+      this.reverseWords(split2, this.words.length);
+      this.reverseWords(0, this.words.length);
+    }
+    this.cursor = 0;
     this.captureState = 2 /* Frozen */;
     return true;
   }
@@ -66820,7 +66842,19 @@ class TelemetryRecorder {
     this.stableSnapshot.epoch = this.captureEpoch;
     this.stableSnapshot.count = this.length;
     this.stableSnapshot.dropped = this.droppedRecords;
+    this.stableSnapshot.overwritten = this.overwrittenRecords;
+    this.stableSnapshot.firstSequence = this.nextSequence - this.length;
+    this.stableSnapshot.nextSequence = this.nextSequence;
+    this.stableSnapshot.retention = this.retention;
     return this.stableSnapshot;
+  }
+  resume() {
+    if (this.captureState !== 2 /* Frozen */)
+      return false;
+    this.length = 0;
+    this.cursor = 0;
+    this.captureState = 1 /* Armed */;
+    return true;
   }
   reset() {
     if (this.captureState !== 2 /* Frozen */)
@@ -66828,32 +66862,67 @@ class TelemetryRecorder {
     this.length = 0;
     this.droppedRecords = 0;
     this.enabledDescriptors.fill(0);
+    this.nextSequence = 0;
+    this.overwrittenRecords = 0;
+    this.cursor = 0;
+    this.retention = 0 /* Prefix */;
     this.captureState = 0 /* Idle */;
     return true;
   }
   encodedBatchBytes() {
     return TELEMETRY_BATCH_HEADER_BYTES + this.length * TELEMETRY_RECORD_BYTES;
   }
-  encodeBatchInto(output2, sourceId, clockDomain) {
-    if (this.captureState !== 2 /* Frozen */ || !Number.isInteger(sourceId) || sourceId < 0 || sourceId > U32_MAX || !Number.isInteger(clockDomain) || clockDomain < 0 || clockDomain > U32_MAX)
+  encodeBatchInto(output2, identity) {
+    if (this.captureState !== 2 /* Frozen */ || !Number.isInteger(identity.sourceId) || identity.sourceId < 0 || identity.sourceId > U32_MAX || !Number.isInteger(identity.clockDomain) || identity.clockDomain < 0 || identity.clockDomain > U32_MAX || !Number.isInteger(identity.generation) || identity.generation <= 0 || identity.generation > U32_MAX || !Number.isInteger(identity.clockGeneration) || identity.clockGeneration <= 0 || identity.clockGeneration > U32_MAX || identity.session.length !== 4 || !Number.isSafeInteger(this.nextSequence))
+      return 0;
+    let sessionBits = 0;
+    for (let index = 0;index < 4; index++) {
+      const word = identity.session[index];
+      if (!Number.isInteger(word) || word < 0 || word > U32_MAX)
+        return 0;
+      sessionBits |= word;
+    }
+    if (sessionBits === 0)
       return 0;
     const needed = this.encodedBatchBytes();
     if (output2.length < needed)
       return -needed;
-    output2[0] = 65;
+    const payloadBytes = this.length * TELEMETRY_RECORD_BYTES;
+    if (output2.buffer === this.buffer && output2.byteOffset < payloadBytes)
+      return 0;
+    let previousHigh = 0;
+    let previousLow = 0;
+    for (let index = 0;index < this.length; index++) {
+      const base = index * TELEMETRY_RECORD_WORDS;
+      const low = this.words[base];
+      const high = this.words[base + 1];
+      const phase = this.words[base + 9];
+      if (phase < 1 || phase > 8 || high < previousHigh || high === previousHigh && low < previousLow)
+        return 0;
+      previousHigh = high;
+      previousLow = low;
+    }
+    output2[0] = 68;
     output2[1] = 71;
     output2[2] = 84;
     output2[3] = 66;
     this.writeU16(output2, 4, TELEMETRY_BATCH_VERSION);
     this.writeU16(output2, 6, TELEMETRY_BATCH_HEADER_BYTES);
-    this.writeU32(output2, 8, sourceId);
+    this.writeU32(output2, 8, identity.sourceId);
     this.writeU32(output2, 12, this.captureEpoch);
-    this.writeU32(output2, 16, clockDomain);
-    this.writeU32(output2, 20, 0);
+    this.writeU32(output2, 16, identity.clockDomain);
+    this.writeU32(output2, 20, this.retention === 1 /* Rolling */ ? 1 : 0);
     this.writeU32(output2, 24, this.length);
-    this.writeU32(output2, 28, Math.min(U32_MAX, this.droppedRecords));
+    this.writeU32(output2, 28, 0);
     this.writeU64Number(output2, 32, this.ticksPerSecond);
-    const payloadBytes = this.length * TELEMETRY_RECORD_BYTES;
+    for (let index = 0;index < 4; index++)
+      this.writeU32(output2, 40 + index * 4, identity.session[index]);
+    this.writeU32(output2, 56, identity.generation);
+    this.writeU32(output2, 60, identity.clockGeneration);
+    this.writeU64Number(output2, 64, this.nextSequence - this.length);
+    this.writeU64Number(output2, 72, this.nextSequence);
+    this.writeU64Number(output2, 80, this.droppedRecords);
+    this.writeU64Number(output2, 88, this.overwrittenRecords);
     for (let index = 0;index < payloadBytes; index++)
       output2[TELEMETRY_BATCH_HEADER_BYTES + index] = this.bytes[index] ?? 0;
     return needed;
@@ -66891,19 +66960,38 @@ class TelemetryRecorder {
       return 4 /* WrongDescriptorKind */;
     if (this.enabledDescriptors[descriptor] === 0)
       return 2 /* CategoryDisabled */;
-    if (this.length === this.capacity) {
-      this.droppedRecords++;
+    if (this.nextSequence === Number.MAX_SAFE_INTEGER) {
+      this.droppedRecords = Math.min(Number.MAX_SAFE_INTEGER, this.droppedRecords + 1);
+      return 6 /* SequenceExhausted */;
+    }
+    const full = this.length === this.capacity;
+    if (full && this.retention === 0 /* Prefix */) {
+      this.droppedRecords = Math.min(Number.MAX_SAFE_INTEGER, this.droppedRecords + 1);
       return 5 /* CapacityExceeded */;
     }
-    const base = this.length * TELEMETRY_RECORD_WORDS;
+    const slot = full ? this.cursor : this.length;
+    const base = slot * TELEMETRY_RECORD_WORDS;
     this.writeU53(base, this.clock());
     this.writeU53(base + 2, correlation);
     this.writeU53(base + 4, argument0);
     this.writeU53(base + 6, argument1);
     this.words[base + 8] = descriptor;
     this.words[base + 9] = phase;
-    this.length++;
+    this.nextSequence++;
+    if (full) {
+      this.overwrittenRecords = Math.min(Number.MAX_SAFE_INTEGER, this.overwrittenRecords + 1);
+      this.cursor = slot + 1 === this.capacity ? 0 : slot + 1;
+    } else {
+      this.length++;
+    }
     return 0 /* Recorded */;
+  }
+  reverseWords(start, end) {
+    for (let left = start, right = end - 1;left < right; left++, right--) {
+      const value = this.words[left];
+      this.words[left] = this.words[right];
+      this.words[right] = value;
+    }
   }
   writeU53(word, value) {
     const nonNegative = Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
@@ -66997,7 +67085,7 @@ class TelemetryMetricBank {
   }
 }
 
-class EngineTelemetry {
+class Telemetry {
   trace;
   metrics;
   correlationCounter = 1;
@@ -67012,6 +67100,7 @@ class EngineTelemetry {
     return safeNamespace * U32_SCALE + local;
   }
 }
+// crates/afterglow-web/web/src/engine/telemetry/telemetry.ts
 var TelemetryRes = defineResource("telemetry", () => {
   throw new Error("Telemetry not initialized. Set TelemetryRes during bootstrap.");
 });
@@ -67037,8 +67126,6 @@ var ENGINE_TRACE_DESCRIPTORS = [
   { category: 5 /* Texture */, categoryName: "texture", name: "texture.transcode_queue", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "format" },
   { category: 5 /* Texture */, categoryName: "texture", name: "texture.transcode", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "format" },
   { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.upload", kind: 2 /* Span */, argument0: "bytes", argument1: "slot" },
-  { category: 4 /* Asset */, categoryName: "cache", name: "cache.read", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "hit" },
-  { category: 4 /* Asset */, categoryName: "cache", name: "cache.write", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "status" },
   { category: 4 /* Asset */, categoryName: "asset", name: "mesh.optimize", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "status" },
   { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.feedback_detected", kind: 1 /* Instant */, argument0: "priority", argument1: "feedback_epoch" },
   { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.scheduler_wait", kind: 3 /* AsyncSpan */, argument0: "priority", argument1: "status" },
@@ -67112,15 +67199,15 @@ class PersistentBlobStore {
     removeOperations: 0,
     ioErrors: 0
   };
-  constructor(backend, capacities, telemetry) {
+  constructor(backend, capacities, telemetry2) {
     this.backend = backend;
     this.capacities = capacities;
-    this.telemetry = telemetry;
+    this.telemetry = telemetry2;
   }
-  static async open(backend, capacities, telemetry) {
+  static async open(backend, capacities, telemetry2) {
     if (!Number.isInteger(capacities.maxItems) || capacities.maxItems < 1 || !Number.isInteger(capacities.maxBytes) || capacities.maxBytes < 1 || !Number.isInteger(capacities.maxValueBytes) || capacities.maxValueBytes < 1 || capacities.maxValueBytes > capacities.maxBytes || !Number.isInteger(capacities.maxInFlightOperations) || capacities.maxInFlightOperations < 1 || !Number.isInteger(capacities.maxInFlightBytes) || capacities.maxInFlightBytes < 1)
       throw new RangeError("invalid persistent blob-store capacities");
-    const store = new PersistentBlobStore(backend, capacities, telemetry);
+    const store = new PersistentBlobStore(backend, capacities, telemetry2);
     const entries = await backend.list(capacities.maxValueBytes);
     let bytes = 0;
     for (const entry of entries) {
@@ -67183,24 +67270,24 @@ class PersistentBlobStore {
     if (admitted !== 0 /* Ok */)
       return { status: admitted, bytes: null };
     const correlation = this.telemetry?.nextCorrelation(11 /* Storage */) ?? 0;
-    this.telemetry?.trace.asyncBegin(30 /* BlobRead */, correlation, maxBytes, 0);
+    this.telemetry?.trace.asyncBegin(28 /* BlobRead */, correlation, maxBytes, 0);
     try {
       const bytes = await this.backend.read(key, maxBytes);
       if (bytes === null) {
-        this.telemetry?.trace.asyncEnd(30 /* BlobRead */, correlation, 0, 1);
+        this.telemetry?.trace.asyncEnd(28 /* BlobRead */, correlation, 0, 1);
         return { status: 1 /* NotFound */, bytes: null };
       }
       if (bytes.byteLength > maxBytes || bytes.byteLength > this.capacities.maxValueBytes) {
-        this.telemetry?.trace.asyncEnd(30 /* BlobRead */, correlation, bytes.byteLength, 2);
+        this.telemetry?.trace.asyncEnd(28 /* BlobRead */, correlation, bytes.byteLength, 2);
         return { status: 5 /* ValueCapacityExceeded */, bytes: null };
       }
       this.stats.readOperations++;
       this.telemetry?.metrics.counterAdd(22 /* BlobReadBytes */, bytes.byteLength);
-      this.telemetry?.trace.asyncEnd(30 /* BlobRead */, correlation, bytes.byteLength, 0);
+      this.telemetry?.trace.asyncEnd(28 /* BlobRead */, correlation, bytes.byteLength, 0);
       return { status: 0 /* Ok */, bytes };
     } catch {
       this.stats.ioErrors++;
-      this.telemetry?.trace.asyncEnd(30 /* BlobRead */, correlation, 0, 3);
+      this.telemetry?.trace.asyncEnd(28 /* BlobRead */, correlation, 0, 3);
       return { status: 10 /* IoError */, bytes: null };
     } finally {
       this.end(key, maxBytes);
@@ -67223,7 +67310,7 @@ class PersistentBlobStore {
     if (newItem)
       this.reservedItems++;
     const correlation = this.telemetry?.nextCorrelation(11 /* Storage */) ?? 0;
-    this.telemetry?.trace.asyncBegin(31 /* BlobWrite */, correlation, bytes.byteLength, 0);
+    this.telemetry?.trace.asyncBegin(29 /* BlobWrite */, correlation, bytes.byteLength, 0);
     try {
       await this.backend.writeAtomic(key, bytes);
       this.sizes.set(key, bytes.byteLength);
@@ -67231,11 +67318,11 @@ class PersistentBlobStore {
       this.stats.writeOperations++;
       this.refreshStats();
       this.telemetry?.metrics.counterAdd(23 /* BlobWriteBytes */, bytes.byteLength);
-      this.telemetry?.trace.asyncEnd(31 /* BlobWrite */, correlation, bytes.byteLength, 0);
+      this.telemetry?.trace.asyncEnd(29 /* BlobWrite */, correlation, bytes.byteLength, 0);
       return { status: 0 /* Ok */ };
     } catch {
       this.stats.ioErrors++;
-      this.telemetry?.trace.asyncEnd(31 /* BlobWrite */, correlation, 0, 1);
+      this.telemetry?.trace.asyncEnd(29 /* BlobWrite */, correlation, 0, 1);
       return { status: 10 /* IoError */ };
     } finally {
       this.reservedBytes -= delta;
@@ -67444,6 +67531,10 @@ function unwrapResponse(bytes) {
 
 // crates/afterglow-web/web/src/workers/async-worker.ts
 class PendingFetch {
+  promise;
+  resolved;
+  bytes;
+  error;
   constructor(url) {
     this.promise = fetch(url);
     this.resolved = false;
@@ -67464,6 +67555,10 @@ class PendingFetch {
 }
 
 class HeadFetch {
+  promise;
+  resolved;
+  contentLength;
+  error;
   constructor(url) {
     this.promise = fetch(url, { method: "HEAD" });
     this.resolved = false;
@@ -67485,6 +67580,10 @@ class HeadFetch {
 }
 
 class RangeFetch {
+  promise;
+  resolved;
+  bytes;
+  error;
   constructor(url, offset, len) {
     const start = Number(offset);
     const end = start + Number(len) - 1;
@@ -67507,6 +67606,25 @@ class RangeFetch {
 }
 
 class AsyncWorker {
+  w;
+  baseUrl;
+  _memory;
+  nextFetchId;
+  _fetchCapacity;
+  _fetchIds;
+  _fetches;
+  _pendingFetchCount;
+  _callCapacity;
+  _callIds;
+  _callResolves;
+  _callRejects;
+  _pendingCallCount;
+  _taskIdCounter;
+  _pumpScheduled;
+  _completionLimit;
+  _lastPollCompletions;
+  _totalCompletions;
+  _completionLimitHits;
   constructor(wasm, baseUrl = "") {
     this.w = wasm;
     this.baseUrl = baseUrl;
@@ -67529,6 +67647,9 @@ class AsyncWorker {
     this._lastPollCompletions = 0;
     this._totalCompletions = 0;
     this._completionLimitHits = 0;
+  }
+  _wasm() {
+    return this.w;
   }
   async call(method, args) {
     const taskId = this._nextTaskId();
@@ -67561,29 +67682,29 @@ class AsyncWorker {
     }, 0);
   }
   serveAsync(method, args, taskId = this._nextTaskId()) {
-    const inPtr = this.w.afterglow_wasm_input_ptr();
-    const inSize = this.w.afterglow_wasm_input_size();
+    const inPtr = this._wasm().afterglow_wasm_input_ptr();
+    const inSize = this._wasm().afterglow_wasm_input_size();
     if (args.length + 12 > inSize) {
       console.error("async worker: args too large for input scratch");
       return -1;
     }
-    const view = new DataView((this._memory || this.w.memory).buffer, inPtr, 12 + args.length);
+    const view = new DataView((this._memory || this._wasm().memory).buffer, inPtr, 12 + args.length);
     view.setUint32(0, method, true);
     view.setBigUint64(4, BigInt(taskId), true);
-    new Uint8Array((this._memory || this.w.memory).buffer, inPtr + 12, args.length).set(args);
-    const r = this.w.afterglow_wasm_serve_async(method, inPtr + 12, args.length, BigInt(taskId));
+    new Uint8Array((this._memory || this._wasm().memory).buffer, inPtr + 12, args.length).set(args);
+    const r = this._wasm().afterglow_wasm_serve_async(method, inPtr + 12, args.length, BigInt(taskId));
     if (r < 0)
       return -1;
     return taskId;
   }
   poll(maxCompletions = this._completionLimit) {
-    this.w.afterglow_wasm_tick();
-    const outPtr = this.w.afterglow_wasm_output_ptr();
-    const outSize = this.w.afterglow_wasm_output_size();
-    const memory = this._memory || this.w.memory;
+    this._wasm().afterglow_wasm_tick();
+    const outPtr = this._wasm().afterglow_wasm_output_ptr();
+    const outSize = this._wasm().afterglow_wasm_output_size();
+    const memory = this._memory || this._wasm().memory;
     let drained = 0;
     while (drained < maxCompletions) {
-      const n = this.w.afterglow_wasm_drain_completion(outPtr, outSize);
+      const n = this._wasm().afterglow_wasm_drain_completion(outPtr, outSize);
       if (n < 0)
         break;
       if (n < 8)
@@ -67610,44 +67731,44 @@ class AsyncWorker {
     return drained;
   }
   fetchStart(urlPtr, urlLen) {
-    const url = new TextDecoder().decode(Uint8Array.from(new Uint8Array((this._memory || this.w.memory).buffer, urlPtr, urlLen)));
+    const url = new TextDecoder().decode(Uint8Array.from(new Uint8Array((this._memory || this._wasm().memory).buffer, urlPtr, urlLen)));
     const fullUrl = this._resolveUrl(url);
     return this._registerFetch(new PendingFetch(fullUrl));
   }
   fetchPoll(fetchId, outPtr, outMax) {
     const pending = this._getFetch(fetchId);
-    if (!pending)
+    if (!pending || !(pending instanceof PendingFetch || pending instanceof RangeFetch))
       return -1;
     if (!pending.resolved)
       return -1;
     this._releaseFetch(fetchId);
-    if (pending.error) {
+    if (pending.error || pending.bytes === null) {
       return 0;
     }
     if (pending.bytes.length > outMax)
       return -2;
-    new Uint8Array((this._memory || this.w.memory).buffer, outPtr, outMax).set(pending.bytes);
+    new Uint8Array((this._memory || this._wasm().memory).buffer, outPtr, outMax).set(pending.bytes);
     return pending.bytes.length;
   }
   headStart(urlPtr, urlLen) {
-    const url = new TextDecoder().decode(Uint8Array.from(new Uint8Array((this._memory || this.w.memory).buffer, urlPtr, urlLen)));
+    const url = new TextDecoder().decode(Uint8Array.from(new Uint8Array((this._memory || this._wasm().memory).buffer, urlPtr, urlLen)));
     const fullUrl = this._resolveUrl(url);
     return this._registerFetch(new HeadFetch(fullUrl));
   }
   headPoll(fetchId, outPtr, outMax) {
     const pending = this._getFetch(fetchId);
-    if (!pending)
+    if (!pending || !(pending instanceof HeadFetch))
       return -2;
     if (!pending.resolved)
       return -1;
     this._releaseFetch(fetchId);
     if (pending.error || pending.contentLength === null || outMax < 8)
       return -2;
-    new DataView((this._memory || this.w.memory).buffer, outPtr, 8).setBigUint64(0, BigInt(pending.contentLength), true);
+    new DataView((this._memory || this._wasm().memory).buffer, outPtr, 8).setBigUint64(0, BigInt(pending.contentLength), true);
     return 8;
   }
   rangeStart(urlPtr, urlLen, offset, len) {
-    const url = new TextDecoder().decode(Uint8Array.from(new Uint8Array((this._memory || this.w.memory).buffer, urlPtr, urlLen)));
+    const url = new TextDecoder().decode(Uint8Array.from(new Uint8Array((this._memory || this._wasm().memory).buffer, urlPtr, urlLen)));
     const fullUrl = this._resolveUrl(url);
     return this._registerFetch(new RangeFetch(fullUrl, offset, len));
   }
@@ -67713,12 +67834,28 @@ function asyncWorkerImports(driver, memory) {
 var TIMEOUT_MS = 5000;
 
 class Rpc {
+  w;
+  mem;
+  worker;
+  scratch;
+  scratchLen;
+  pending;
+  _resolve;
+  _reject;
+  _fatal;
+  _terminated;
+  timeoutMs;
+  _initPromise;
+  _initTimer;
   static async create({ mainWasmUrl, workerJsUrl, workerWasmUrl, timeoutMs, workerInit = null }) {
     const memory = new WebAssembly.Memory({ shared: true, initial: 256, maximum: 1024 });
     const worker = new Worker(workerJsUrl, { type: "module" });
     let rpc = null;
     try {
-      const { exports: wasm } = await WebAssembly.instantiate(await WebAssembly.compile(await (await fetch(mainWasmUrl)).arrayBuffer()), { env: { memory, notify_worker: () => worker.postMessage("wake") } });
+      const { exports: rawWasm } = await WebAssembly.instantiate(await WebAssembly.compile(await (await fetch(mainWasmUrl)).arrayBuffer()), { env: { memory, notify_worker: () => {
+        worker.postMessage("wake");
+      } } });
+      const wasm = rawWasm;
       wasm.init_ring_buffers();
       rpc = new Rpc(wasm, memory, worker, { timeoutMs });
       worker.postMessage({
@@ -67764,7 +67901,8 @@ class Rpc {
   _onmsg(d) {
     if (this._fatal)
       return;
-    if (d && d.type === "ready") {
+    const message = typeof d === "object" && d !== null ? d : null;
+    if (message && message.type === "ready") {
       clearTimeout(this._initTimer);
       const r = this._resolve;
       this._resolve = this._reject = null;
@@ -67772,8 +67910,8 @@ class Rpc {
         r();
       return;
     }
-    if (d && d.type === "error") {
-      this._fail(this._reject ? new Error("worker init: " + (d.message || "error")) : new Error(d.message || "worker error"));
+    if (message && message.type === "error") {
+      this._fail(this._reject ? new Error("worker init: " + (message.message || "error")) : new Error(message.message || "worker error"));
       return;
     }
     if (this.pending)
@@ -67796,8 +67934,8 @@ class Rpc {
     if (this.w.write_frame(this.scratch, len) !== 0)
       throw new Error("write_frame failed (ring full)");
     return new Promise((resolve, reject) => {
-      this.pending = { resolve, reject };
-      this.pending.timer = setTimeout(() => this._fail(new Error("RPC timeout")), this.timeoutMs);
+      const timer = setTimeout(() => this._fail(new Error("RPC timeout")), this.timeoutMs);
+      this.pending = { resolve, reject, timer };
     });
   }
   _readResponse() {
@@ -67845,12 +67983,28 @@ class Rpc {
 }
 
 // crates/afterglow-web/web/src/engine/workers/native-transport.ts
+function nativeOps() {
+  return globalThis.Deno?.core?.ops;
+}
+function hasNativeWorkerTransport() {
+  return typeof nativeOps()?.op_afterglow_rpc_call_async === "function";
+}
+function nativeWorkerIds(service) {
+  const resolve = nativeOps()?.op_afterglow_worker_ids;
+  if (typeof resolve !== "function")
+    throw new Error("Native worker manifest is unavailable.");
+  const ids = resolve(service);
+  if (!Array.isArray(ids) || ids.some((id) => !Number.isInteger(id) || id < 0))
+    throw new Error(`Invalid native worker manifest: ${service}`);
+  return ids;
+}
+
 class NativeRpcTransport {
   workerId;
   telemetry;
-  constructor(workerId, telemetry) {
+  constructor(workerId, telemetry2) {
     this.workerId = workerId;
-    this.telemetry = telemetry;
+    this.telemetry = telemetry2;
   }
   call(method, args) {
     const correlation = this.telemetry?.nextCorrelation(9 /* Rpc */) ?? 0;
@@ -68372,9 +68526,9 @@ class FrameBudget {
   frameId = 0;
   frameStart = 0;
   frameDurationMs = 0;
-  constructor(config = DEFAULT_FRAME_BUDGET, clock = () => performance.now(), telemetry) {
+  constructor(config = DEFAULT_FRAME_BUDGET, clock = () => performance.now(), telemetry2) {
     this.clock = clock;
-    this.telemetry = telemetry;
+    this.telemetry = telemetry2;
     if (config.deadlineFractions.length !== 5 /* Count */ || config.operationLimits.length !== 5 /* Count */)
       throw new RangeError(`FrameBudget requires ${5 /* Count */} stage entries`);
     let previous = 0;
@@ -69283,7 +69437,7 @@ class EngineRuntime {
       throw new RangeError("render pass capacity must be a positive integer");
     this.adapter = options.adapter;
     this.memory = new EngineMemory(options.memory);
-    this.telemetry = new EngineTelemetry(ENGINE_TRACE_DESCRIPTORS, ENGINE_METRIC_DESCRIPTORS, this.memory.telemetryTrace, this.memory.telemetryMetrics);
+    this.telemetry = new Telemetry(ENGINE_TRACE_DESCRIPTORS, ENGINE_METRIC_DESCRIPTORS, this.memory.telemetryTrace, this.memory.telemetryMetrics);
     this.budget = new FrameBudget(options.frameBudget, undefined, {
       recorder: this.telemetry.trace,
       stageDescriptors: FRAME_BUDGET_TRACE_DESCRIPTORS
@@ -69775,9 +69929,9 @@ class AssetStore {
   readyCount = 0;
   meshopt;
   loader;
-  constructor(loader, meshopt, capacity = DEFAULT_ASSET_CAPACITY, maxCompletionsPerPoll = 32, telemetry) {
+  constructor(loader, meshopt, capacity = DEFAULT_ASSET_CAPACITY, maxCompletionsPerPoll = 32, telemetry2) {
     this.maxCompletionsPerPoll = maxCompletionsPerPoll;
-    this.telemetry = telemetry;
+    this.telemetry = telemetry2;
     if (!Number.isInteger(capacity) || capacity <= 0)
       throw new RangeError("asset capacity must be positive");
     if (!Number.isInteger(maxCompletionsPerPoll) || maxCompletionsPerPoll <= 0)
@@ -69943,13 +70097,13 @@ class AssetStore {
   }
   async optimizeGltfScene(scene) {
     const correlation = this.telemetry?.nextCorrelation(4 /* Asset */) ?? 0;
-    this.telemetry?.trace.asyncBegin(21 /* MeshOptimize */, correlation, 0, 0);
+    this.telemetry?.trace.asyncBegin(19 /* MeshOptimize */, correlation, 0, 0);
     try {
       const stats = await this.optimizeGltfSceneInner(scene);
-      this.telemetry?.trace.asyncEnd(21 /* MeshOptimize */, correlation, stats.length, 0);
+      this.telemetry?.trace.asyncEnd(19 /* MeshOptimize */, correlation, stats.length, 0);
       return stats;
     } catch (error2) {
-      this.telemetry?.trace.asyncEnd(21 /* MeshOptimize */, correlation, 0, 1);
+      this.telemetry?.trace.asyncEnd(19 /* MeshOptimize */, correlation, 0, 1);
       throw error2;
     }
   }
@@ -70310,7 +70464,7 @@ function decodeU642(bytes, off) {
   }
   throw new Error("postcard u64 varint overflows");
 }
-function decodeString(bytes, off) {
+function decodeString2(bytes, off) {
   const [len, o] = decodeVarint2(bytes, off);
   const str = new TextDecoder().decode(bytes.subarray(o, o + len));
   return [str, o + len];
@@ -70329,7 +70483,7 @@ function decodeVec(bytes, off, decodeFn) {
 function decodeBool2(bytes, off) {
   return [bytes[off] !== 0, off + 1];
 }
-function decodeU8(bytes, off) {
+function decodeU82(bytes, off) {
   return [bytes[off], off + 1];
 }
 function decodeAssetType(bytes, off) {
@@ -70398,8 +70552,8 @@ function decodeChunkInfo(bytes, off) {
   const [offset, o1] = decodeU642(bytes, off);
   const [compressedSize, o2] = decodeU642(bytes, o1);
   const [uncompressedSize, o3] = decodeU642(bytes, o2);
-  const [lodLevel, o4] = decodeU8(bytes, o3);
-  const [mipLevel, o5] = decodeU8(bytes, o4);
+  const [lodLevel, o4] = decodeU82(bytes, o3);
+  const [mipLevel, o5] = decodeU82(bytes, o4);
   const [compression, o6] = decodeCompression(bytes, o5);
   const [meta, o7] = decodeChunkMeta(bytes, o6);
   return [{
@@ -70413,7 +70567,7 @@ function decodeChunkInfo(bytes, off) {
   }, o7];
 }
 function decodeVTMipDirectory(bytes, off) {
-  const [mip, o1] = decodeU8(bytes, off);
+  const [mip, o1] = decodeU82(bytes, off);
   const [pagesX, o2] = decodeU322(bytes, o1);
   const [pagesY, o3] = decodeU322(bytes, o2);
   const [offset, o4] = decodeU642(bytes, o3);
@@ -70421,7 +70575,7 @@ function decodeVTMipDirectory(bytes, off) {
   return [{ mip, pagesX, pagesY, offset, pageSizes }, o5];
 }
 function decodeVTTailDirectory(bytes, off) {
-  const [firstMip, o1] = decodeU8(bytes, off);
+  const [firstMip, o1] = decodeU82(bytes, off);
   const [offset, o2] = decodeU642(bytes, o1);
   const [size, o3] = decodeU322(bytes, o2);
   return [{ firstMip, offset, size }, o3];
@@ -70438,7 +70592,7 @@ function decodeVTDirectory(bytes, off) {
   return [{ width, height, encoding, mips, tail }, o6];
 }
 function decodeAssetEntry(bytes, off) {
-  const [name, o1] = decodeString(bytes, off);
+  const [name, o1] = decodeString2(bytes, off);
   const [assetType, o2] = decodeAssetType(bytes, o1);
   const [chunks, o3] = decodeVec(bytes, o2, decodeChunkInfo);
   const [hasVirtualTexture, o4] = decodeBool2(bytes, o3);
@@ -70612,12 +70766,12 @@ class DeadlineRangeBatcher {
     rejected: 0,
     canceled: 0
   };
-  constructor(loader, urgentDeadlineMs, focusDeadlineMs, peripheralDeadlineMs, telemetry) {
+  constructor(loader, urgentDeadlineMs, focusDeadlineMs, peripheralDeadlineMs, telemetry2) {
     this.loader = loader;
     this.urgentDeadlineMs = urgentDeadlineMs;
     this.focusDeadlineMs = focusDeadlineMs;
     this.peripheralDeadlineMs = peripheralDeadlineMs;
-    this.telemetry = telemetry;
+    this.telemetry = telemetry2;
     for (let index = BULK_RANGE_CAPACITY - 1;index >= 0; index--) {
       this.slots[index] = {
         offset: 0,
@@ -70861,9 +71015,9 @@ class BoundedTranscoderPool {
     averageTranscodeMs: 0,
     maxTranscodeMs: 0
   };
-  constructor(workers, capacity, telemetry) {
+  constructor(workers, capacity, telemetry2) {
     this.workers = workers;
-    this.telemetry = telemetry;
+    this.telemetry = telemetry2;
     if (workers.length === 0 || !Number.isInteger(capacity) || capacity < 1)
       throw new RangeError("VT transcoder pool requires workers and positive capacity");
     this.jobs = new Array(capacity).fill(null);
@@ -71039,14 +71193,14 @@ class VtPageDirectory {
 }
 
 // crates/afterglow-web/web/src/engine/assets/vt-page-provider.ts
-function createPageDataProvider(loader, header, textureWorkers, format, config, telemetry) {
+function createPageDataProvider(loader, header, textureWorkers, format, config, telemetry2) {
   if (!Number.isInteger(config.transcodeQueueCapacity) || config.transcodeQueueCapacity < 1 || !Number.isInteger(config.urgentBatchDeadlineMs) || config.urgentBatchDeadlineMs < 0 || !Number.isInteger(config.focusBatchDeadlineMs) || config.focusBatchDeadlineMs < 0 || !Number.isInteger(config.peripheralBatchDeadlineMs) || config.peripheralBatchDeadlineMs < 0 || config.urgentBatchDeadlineMs > config.focusBatchDeadlineMs || config.focusBatchDeadlineMs > config.peripheralBatchDeadlineMs) {
     throw new RangeError("invalid VT page-pipeline configuration");
   }
   const directory = new VtPageDirectory(header);
-  const transcoder = new BoundedTranscoderPool(textureWorkers, config.transcodeQueueCapacity, telemetry);
+  const transcoder = new BoundedTranscoderPool(textureWorkers, config.transcodeQueueCapacity, telemetry2);
   const sourceBackedWorkers = textureWorkers.every(hasSourceTextureTranscoder);
-  const bulkReads = new DeadlineRangeBatcher(loader, config.urgentBatchDeadlineMs, config.focusBatchDeadlineMs, config.peripheralBatchDeadlineMs, telemetry);
+  const bulkReads = new DeadlineRangeBatcher(loader, config.urgentBatchDeadlineMs, config.focusBatchDeadlineMs, config.peripheralBatchDeadlineMs, telemetry2);
   const stats = {
     reads: 0,
     averageReadMs: 0,
@@ -71072,7 +71226,7 @@ function createPageDataProvider(loader, header, textureWorkers, format, config, 
     if (signal?.aborted)
       throw new Error("VT page load canceled before read");
     const page = directory.resolve({ ...req, path });
-    const correlation = req.cacheKey ?? telemetry?.nextCorrelation(3 /* VirtualTexture */) ?? 0;
+    const correlation = req.cacheKey ?? telemetry2?.nextCorrelation(3 /* VirtualTexture */) ?? 0;
     let transcoded;
     if (page.encoding !== "RawRgba8" && sourceBackedWorkers) {
       transcoded = await transcoder.submitSourceRange(page.offset, page.length, format, signal, correlation);
@@ -71133,7 +71287,7 @@ function createPageDataProvider(loader, header, textureWorkers, format, config, 
 
 // crates/afterglow-web/web/src/engine/assets/platform-range-loader.ts
 var COPY_CHUNK_BYTES = 512 * 1024;
-function nativeOps() {
+function nativeOps2() {
   if (typeof Deno !== "object" || Deno === null)
     return null;
   const ops = Deno.core?.ops;
@@ -71182,84 +71336,84 @@ function createNativeRangeLoader(ops) {
     }
   };
 }
-function instrumentRangeLoader(loader, telemetry) {
+function instrumentRangeLoader(loader, telemetry2) {
   const duration = (startedAt) => {
-    telemetry.metrics.histogramLog2(4 /* AssetReadNs */, Math.max(1, Math.floor((performance.now() - startedAt) * 1e6)));
+    telemetry2.metrics.histogramLog2(4 /* AssetReadNs */, Math.max(1, Math.floor((performance.now() - startedAt) * 1e6)));
   };
   return {
     async load(path) {
-      const correlation = telemetry.nextCorrelation(4 /* Asset */);
+      const correlation = telemetry2.nextCorrelation(4 /* Asset */);
       const startedAt = performance.now();
-      telemetry.trace.asyncBegin(10 /* AssetRead */, correlation, 0, 0);
+      telemetry2.trace.asyncBegin(10 /* AssetRead */, correlation, 0, 0);
       try {
         const bytes = await loader.load(path);
-        telemetry.metrics.counterAdd(3 /* AssetBytesRead */, bytes.byteLength);
-        telemetry.trace.asyncEnd(10 /* AssetRead */, correlation, bytes.byteLength, 0);
+        telemetry2.metrics.counterAdd(3 /* AssetBytesRead */, bytes.byteLength);
+        telemetry2.trace.asyncEnd(10 /* AssetRead */, correlation, bytes.byteLength, 0);
         return bytes;
       } catch (error2) {
-        telemetry.trace.asyncEnd(10 /* AssetRead */, correlation, 0, 1);
+        telemetry2.trace.asyncEnd(10 /* AssetRead */, correlation, 0, 1);
         throw error2;
       } finally {
         duration(startedAt);
       }
     },
     async size(path) {
-      const correlation = telemetry.nextCorrelation(4 /* Asset */);
-      telemetry.trace.asyncBegin(9 /* AssetSize */, correlation, 0, 0);
+      const correlation = telemetry2.nextCorrelation(4 /* Asset */);
+      telemetry2.trace.asyncBegin(9 /* AssetSize */, correlation, 0, 0);
       try {
         const size = await loader.size(path);
-        telemetry.trace.asyncEnd(9 /* AssetSize */, correlation, size, 0);
+        telemetry2.trace.asyncEnd(9 /* AssetSize */, correlation, size, 0);
         return size;
       } catch (error2) {
-        telemetry.trace.asyncEnd(9 /* AssetSize */, correlation, 0, 1);
+        telemetry2.trace.asyncEnd(9 /* AssetSize */, correlation, 0, 1);
         throw error2;
       }
     },
     async identity(path) {
-      const correlation = telemetry.nextCorrelation(4 /* Asset */);
-      telemetry.trace.asyncBegin(9 /* AssetSize */, correlation, 0, 0);
+      const correlation = telemetry2.nextCorrelation(4 /* Asset */);
+      telemetry2.trace.asyncBegin(9 /* AssetSize */, correlation, 0, 0);
       try {
         const identity = await loader.identity(path);
-        telemetry.trace.asyncEnd(9 /* AssetSize */, correlation, identity.size, 0);
+        telemetry2.trace.asyncEnd(9 /* AssetSize */, correlation, identity.size, 0);
         return identity;
       } catch (error2) {
-        telemetry.trace.asyncEnd(9 /* AssetSize */, correlation, 0, 1);
+        telemetry2.trace.asyncEnd(9 /* AssetSize */, correlation, 0, 1);
         throw error2;
       }
     },
     async read(path, offset, length2) {
-      const correlation = telemetry.nextCorrelation(4 /* Asset */);
+      const correlation = telemetry2.nextCorrelation(4 /* Asset */);
       const startedAt = performance.now();
-      telemetry.trace.asyncBegin(10 /* AssetRead */, correlation, length2, offset);
+      telemetry2.trace.asyncBegin(10 /* AssetRead */, correlation, length2, offset);
       try {
         const bytes = await loader.read(path, offset, length2);
-        telemetry.metrics.counterAdd(3 /* AssetBytesRead */, bytes.byteLength);
-        telemetry.trace.asyncEnd(10 /* AssetRead */, correlation, bytes.byteLength, 0);
+        telemetry2.metrics.counterAdd(3 /* AssetBytesRead */, bytes.byteLength);
+        telemetry2.trace.asyncEnd(10 /* AssetRead */, correlation, bytes.byteLength, 0);
         return bytes;
       } catch (error2) {
-        telemetry.trace.asyncEnd(10 /* AssetRead */, correlation, 0, 1);
+        telemetry2.trace.asyncEnd(10 /* AssetRead */, correlation, 0, 1);
         throw error2;
       } finally {
         duration(startedAt);
       }
     },
     readBulk: loader.readBulk === undefined ? undefined : async (path, ranges) => {
-      const correlation = telemetry.nextCorrelation(4 /* Asset */);
+      const correlation = telemetry2.nextCorrelation(4 /* Asset */);
       const startedAt = performance.now();
       let requested = 0;
       for (let index = 0;index < ranges.length; index++)
         requested += ranges[index]?.length ?? 0;
-      telemetry.trace.asyncBegin(11 /* AssetBulkRead */, correlation, requested, ranges.length);
+      telemetry2.trace.asyncBegin(11 /* AssetBulkRead */, correlation, requested, ranges.length);
       try {
         const parts = await loader.readBulk(path, ranges);
         let bytes = 0;
         for (let index = 0;index < parts.length; index++)
           bytes += parts[index]?.byteLength ?? 0;
-        telemetry.metrics.counterAdd(3 /* AssetBytesRead */, bytes);
-        telemetry.trace.asyncEnd(11 /* AssetBulkRead */, correlation, bytes, parts.length);
+        telemetry2.metrics.counterAdd(3 /* AssetBytesRead */, bytes);
+        telemetry2.trace.asyncEnd(11 /* AssetBulkRead */, correlation, bytes, parts.length);
         return parts;
       } catch (error2) {
-        telemetry.trace.asyncEnd(11 /* AssetBulkRead */, correlation, 0, 1);
+        telemetry2.trace.asyncEnd(11 /* AssetBulkRead */, correlation, 0, 1);
         throw error2;
       } finally {
         duration(startedAt);
@@ -71267,10 +71421,10 @@ function instrumentRangeLoader(loader, telemetry) {
     }
   };
 }
-function createPlatformRangeLoader(baseUrl = "", telemetry) {
-  const ops = nativeOps();
+function createPlatformRangeLoader(baseUrl = "", telemetry2) {
+  const ops = nativeOps2();
   const loader = ops === null ? createFetchRangeLoader(baseUrl) : createNativeRangeLoader(ops);
-  return telemetry === undefined ? loader : instrumentRangeLoader(loader, telemetry);
+  return telemetry2 === undefined ? loader : instrumentRangeLoader(loader, telemetry2);
 }
 
 // crates/afterglow-web/web/src/workers/meshopt.client.ts
@@ -71382,7 +71536,6 @@ class MeshoptClient {
     return decodeU16(resp, 0)[0];
   }
 }
-
 // crates/afterglow-web/web/src/workers/texture.client.ts
 class TextureClient {
   rpc;
@@ -71444,21 +71597,6 @@ class TextureClient {
 }
 
 // crates/afterglow-web/web/src/engine/assets/platform-workers.ts
-function nativeOps2() {
-  return globalThis.Deno?.core?.ops;
-}
-function hasNativeWorkerTransport() {
-  return typeof nativeOps2()?.op_afterglow_rpc_call_async === "function";
-}
-function nativeWorkerIds(service) {
-  const resolve = nativeOps2()?.op_afterglow_worker_ids;
-  if (typeof resolve !== "function")
-    throw new Error("native worker manifest op is unavailable");
-  const ids = resolve(service);
-  if (!Array.isArray(ids) || ids.some((id) => !Number.isInteger(id) || id < 0))
-    throw new Error(`native worker manifest is invalid for ${service}`);
-  return ids;
-}
 function platformTextureWorkerCount(maxWorkers) {
   if (!Number.isInteger(maxWorkers) || maxWorkers <= 0)
     throw new RangeError("texture worker limit must be positive");
@@ -71471,13 +71609,13 @@ function platformTextureWorkerCount(maxWorkers) {
   const hardwareThreads = globalThis.navigator?.hardwareConcurrency || 4;
   return Math.min(maxWorkers, Math.max(2, Math.min(4, Math.floor(hardwareThreads / 2))));
 }
-async function createPlatformTextureTranscoder(index, sourcePath, telemetry) {
+async function createPlatformTextureTranscoder(index, sourcePath, telemetry2) {
   if (!hasNativeWorkerTransport())
     return TextureClient.spawnThreaded({ workerWasmUrl: "texture.wasm", timeoutMs: 1e4 });
   const ids = nativeWorkerIds("texture");
   if (!Number.isInteger(index) || index < 0 || index >= ids.length)
     throw new RangeError(`native texture worker index must be 0..${ids.length - 1}`);
-  const client = new TextureClient(new NativeRpcTransport(ids[index], telemetry));
+  const client = new TextureClient(new NativeRpcTransport(ids[index], telemetry2));
   const source = await client.openSource(sourcePath);
   return {
     responseIsOwned: true,
@@ -71492,13 +71630,13 @@ async function createPlatformTextureTranscoder(index, sourcePath, telemetry) {
     }
   };
 }
-async function createPlatformMeshOptimizer(telemetry) {
+async function createPlatformMeshOptimizer(telemetry2) {
   if (!hasNativeWorkerTransport())
     return MeshoptClient.spawnThreaded({ workerWasmUrl: "meshopt.wasm", timeoutMs: 1e4 });
   const ids = nativeWorkerIds("meshopt");
   if (ids.length !== 1)
     throw new Error(`native meshopt service requires exactly one worker; found ${ids.length}`);
-  return new MeshoptClient(new NativeRpcTransport(ids[0], telemetry));
+  return new MeshoptClient(new NativeRpcTransport(ids[0], telemetry2));
 }
 
 // crates/afterglow-web/web/src/engine/assets/owned-worker-pool.ts
@@ -71892,8 +72030,8 @@ class GeometryArena {
     if (this.stats.activeGpuBytes > this.stats.activeGpuByteHighWater)
       this.stats.activeGpuByteHighWater = this.stats.activeGpuBytes;
     const elapsedNs = Math.max(1, Math.floor((performance.now() - startedAt) * 1e6));
-    this.options.telemetry?.trace.spanBegin(29 /* GeometryUpload */, slot.generation, activeBytes, slot.slot);
-    this.options.telemetry?.trace.spanEnd(29 /* GeometryUpload */, slot.generation, activeBytes, slot.slot);
+    this.options.telemetry?.trace.spanBegin(27 /* GeometryUpload */, slot.generation, activeBytes, slot.slot);
+    this.options.telemetry?.trace.spanEnd(27 /* GeometryUpload */, slot.generation, activeBytes, slot.slot);
     this.options.telemetry?.metrics.histogramLog2(21 /* GeometryUploadNs */, elapsedNs);
     this.options.telemetry?.metrics.maximum(20 /* ModelGpuBytesHighWater */, this.stats.activeGpuBytes);
     return activeBytes;
@@ -72317,16 +72455,16 @@ class ModelSystem {
   options;
   geometryArena;
   closed = false;
-  constructor(optimizer, options, telemetry, ownedOptimizer = null) {
+  constructor(optimizer, options, telemetry2, ownedOptimizer = null) {
     this.optimizer = optimizer;
-    this.telemetry = telemetry;
+    this.telemetry = telemetry2;
     this.ownedOptimizer = ownedOptimizer;
     this.options = { ...options, ratios: Array.from(options.ratios) };
     if (!Number.isInteger(options.maxModels) || options.maxModels < 1 || !Number.isInteger(options.maxPendingOptimizations) || options.maxPendingOptimizations < 1 || options.maxPendingOptimizations > options.maxModels || !Number.isInteger(options.maxResidentCpuBytes) || options.maxResidentCpuBytes < 1 || !Number.isInteger(options.completionsPerPoll) || options.completionsPerPoll < 1)
       throw new RangeError("invalid model-system capacities");
     this.geometryArena = new GeometryArena({
       buckets: options.geometryArena.buckets,
-      ...telemetry ? { telemetry } : {}
+      ...telemetry2 ? { telemetry: telemetry2 } : {}
     });
     this.registry = new FixedResourceRegistry(options.maxModels);
     this.completionHandles = new Float64Array(options.maxModels);
@@ -72334,10 +72472,10 @@ class ModelSystem {
     this.completionLevels = new Array(options.maxModels).fill(null);
     this.completionErrors = new Array(options.maxModels).fill(null);
   }
-  static async open(options, telemetry) {
-    const optimizer = await createPlatformMeshOptimizer(telemetry);
+  static async open(options, telemetry2) {
+    const optimizer = await createPlatformMeshOptimizer(telemetry2);
     try {
-      return new ModelSystem(optimizer, options, telemetry, optimizer);
+      return new ModelSystem(optimizer, options, telemetry2, optimizer);
     } catch (error2) {
       await optimizer.close();
       throw error2;
@@ -72414,7 +72552,7 @@ class ModelSystem {
     this.residentBytes += bytes;
     this.telemetry?.metrics.counterAdd(17 /* ModelRevisionsPublished */, 1);
     this.telemetry?.metrics.maximum(19 /* ModelCpuBytesHighWater */, this.residentBytes);
-    this.telemetry?.trace.instant(28 /* ModelPublished */, record.handle, 1, bytes);
+    this.telemetry?.trace.instant(26 /* ModelPublished */, record.handle, 1, bytes);
     return record.handle;
   }
   reviseRuntimeModel(handle, geometry) {
@@ -72434,7 +72572,7 @@ class ModelSystem {
     record.pending = true;
     this.pendingCount++;
     this.telemetry?.metrics.counterAdd(16 /* ModelRevisionsQueued */, 1);
-    this.telemetry?.trace.asyncBegin(27 /* ModelRevision */, this.revisionCorrelation(record.handle, token), token, 0);
+    this.telemetry?.trace.asyncBegin(25 /* ModelRevision */, this.revisionCorrelation(record.handle, token), token, 0);
     buildModelGeometryLods(source, this.optimizer, this.options).then((levels) => this.enqueue(record.handle, token, levels, null), (error2) => this.enqueue(record.handle, token, null, error2));
   }
   revisionCorrelation(handle, token) {
@@ -72451,7 +72589,7 @@ class ModelSystem {
         this.pendingCount--;
       }
       this.telemetry?.metrics.counterAdd(18 /* ModelRevisionsFailed */, 1);
-      this.telemetry?.trace.asyncEnd(27 /* ModelRevision */, this.revisionCorrelation(handle, token), token, 4);
+      this.telemetry?.trace.asyncEnd(25 /* ModelRevision */, this.revisionCorrelation(handle, token), token, 4);
       return;
     }
     const slot = this.completionTail;
@@ -72478,7 +72616,7 @@ class ModelSystem {
       if (!record || record.token !== token) {
         if (levels)
           disposeLevels(levels);
-        this.telemetry?.trace.asyncEnd(27 /* ModelRevision */, this.revisionCorrelation(handle, token), token, 2);
+        this.telemetry?.trace.asyncEnd(25 /* ModelRevision */, this.revisionCorrelation(handle, token), token, 2);
         continue;
       }
       record.pending = false;
@@ -72486,7 +72624,7 @@ class ModelSystem {
       if (!levels || error2) {
         record.view.status = record.view.levels.length === 0 ? "error" : "ready";
         this.telemetry?.metrics.counterAdd(18 /* ModelRevisionsFailed */, 1);
-        this.telemetry?.trace.asyncEnd(27 /* ModelRevision */, this.revisionCorrelation(handle, token), token, 1);
+        this.telemetry?.trace.asyncEnd(25 /* ModelRevision */, this.revisionCorrelation(handle, token), token, 1);
         continue;
       }
       let bytes = 0;
@@ -72497,7 +72635,7 @@ class ModelSystem {
         disposeLevels(levels);
         record.view.status = record.view.levels.length === 0 ? "error" : "ready";
         this.telemetry?.metrics.counterAdd(18 /* ModelRevisionsFailed */, 1);
-        this.telemetry?.trace.asyncEnd(27 /* ModelRevision */, this.revisionCorrelation(handle, token), token, 3);
+        this.telemetry?.trace.asyncEnd(25 /* ModelRevision */, this.revisionCorrelation(handle, token), token, 3);
         continue;
       }
       const publication = this.geometryArena.publish(levels);
@@ -72505,7 +72643,7 @@ class ModelSystem {
         disposeLevels(levels);
         record.view.status = record.view.levels.length === 0 ? "error" : "ready";
         this.telemetry?.metrics.counterAdd(18 /* ModelRevisionsFailed */, 1);
-        this.telemetry?.trace.asyncEnd(27 /* ModelRevision */, this.revisionCorrelation(handle, token), token, 5);
+        this.telemetry?.trace.asyncEnd(25 /* ModelRevision */, this.revisionCorrelation(handle, token), token, 5);
         continue;
       }
       if (record.publication)
@@ -72519,8 +72657,8 @@ class ModelSystem {
       record.view.status = "ready";
       this.telemetry?.metrics.counterAdd(17 /* ModelRevisionsPublished */, 1);
       this.telemetry?.metrics.maximum(19 /* ModelCpuBytesHighWater */, this.residentBytes);
-      this.telemetry?.trace.instant(28 /* ModelPublished */, handle, record.view.revision, bytes);
-      this.telemetry?.trace.asyncEnd(27 /* ModelRevision */, this.revisionCorrelation(handle, token), token, 0);
+      this.telemetry?.trace.instant(26 /* ModelPublished */, handle, record.view.revision, bytes);
+      this.telemetry?.trace.asyncEnd(25 /* ModelRevision */, this.revisionCorrelation(handle, token), token, 0);
     }
   }
   getView(handle) {
@@ -72561,7 +72699,7 @@ class ModelSystem {
       const levels = this.completionLevels[slot];
       if (levels)
         disposeLevels(levels);
-      this.telemetry?.trace.asyncEnd(27 /* ModelRevision */, this.revisionCorrelation(this.completionHandles[slot], this.completionTokens[slot] ?? 0), this.completionTokens[slot] ?? 0, 2);
+      this.telemetry?.trace.asyncEnd(25 /* ModelRevision */, this.revisionCorrelation(this.completionHandles[slot], this.completionTokens[slot] ?? 0), this.completionTokens[slot] ?? 0, 2);
       this.completionLevels[slot] = null;
       this.completionHead = (slot + 1) % this.completionHandles.length;
       this.completionCount--;
@@ -73982,8 +74120,8 @@ class VirtualTextureStore {
     averageTranscodeMs: 0,
     maxTranscodeMs: 0
   };
-  constructor(capacities, pageDataProvider, format, device, tuning, telemetry) {
-    this.telemetry = telemetry;
+  constructor(capacities, pageDataProvider, format, device, tuning, telemetry2) {
+    this.telemetry = telemetry2;
     this.pageDataProvider = pageDataProvider;
     this.format = format ?? FORMAT_RGBA2;
     this.device = device ?? null;
@@ -74582,7 +74720,7 @@ class VirtualTextureStore {
     if (this.scheduledActive[index] === 0)
       return;
     if (this.scheduledTraceActive[index] !== 0) {
-      this.telemetry?.trace.asyncEnd(23 /* VtSchedulerWait */, this.scheduledKeys[index], this.scheduledPriority[index], status);
+      this.telemetry?.trace.asyncEnd(21 /* VtSchedulerWait */, this.scheduledKeys[index], this.scheduledPriority[index], status);
       this.scheduledTraceActive[index] = 0;
     }
     this.unlinkScheduled(index);
@@ -74633,8 +74771,8 @@ class VirtualTextureStore {
     this.scheduledByKey.set(key, index);
     this.scheduledCount++;
     const priority = request.priorityTier ?? PRIORITY_LANE_COUNT - 1;
-    this.telemetry?.trace.instant(22 /* VtFeedbackDetected */, key, priority, this.feedbackEpoch);
-    this.scheduledTraceActive[index] = this.telemetry?.trace.asyncBegin(23 /* VtSchedulerWait */, key, priority, 0) === 0 /* Recorded */ ? 1 : 0;
+    this.telemetry?.trace.instant(20 /* VtFeedbackDetected */, key, priority, this.feedbackEpoch);
+    this.scheduledTraceActive[index] = this.telemetry?.trace.asyncBegin(21 /* VtSchedulerWait */, key, priority, 0) === 0 /* Recorded */ ? 1 : 0;
   }
   schedulePendingRequests() {
     const operationBudget = this.debugPaused ? 0 : this.debugPageBudget ?? this.pageBudget;
@@ -74930,7 +75068,7 @@ class VirtualTextureStore {
       }
       const uploadMs = performance.now() - uploadStartedAt;
       const physicalSlot = slot.y * this.atlasPagesX + slot.x;
-      this.telemetry?.trace.instant(24 /* VtPagePublished */, ready.key, physicalSlot, this.publicationFrameId);
+      this.telemetry?.trace.instant(22 /* VtPagePublished */, ready.key, physicalSlot, this.publicationFrameId);
       this.telemetry?.trace.spanEnd(18 /* VtUpload */, ready.key, ready.data.byteLength, physicalSlot);
       this.telemetry?.metrics.histogramLog2(10 /* VtUploadNs */, Math.max(1, Math.floor(uploadMs * 1e6)));
       this.completedUploads++;
@@ -75244,7 +75382,7 @@ class VirtualTextureSystem {
     if (!memory)
       return null;
     const status = memory.writeRegion(x2, y2, width, height, source, bytesPerRow);
-    this.options.telemetry?.trace.instant(25 /* MutableTextureWrite */, handle, source.byteLength, status);
+    this.options.telemetry?.trace.instant(23 /* MutableTextureWrite */, handle, source.byteLength, status);
     if (status === 0 /* Written */) {
       this.options.telemetry?.metrics.counterAdd(12 /* MutableTextureWrites */, 1);
       this.options.telemetry?.metrics.counterAdd(13 /* MutableTextureBytes */, source.byteLength);
@@ -75346,7 +75484,7 @@ class VirtualTextureSystem {
     let remaining = this.options.maxMutablePageRefreshesPerPoll;
     let published = 0;
     let deferred = 0;
-    this.options.telemetry?.trace.spanBegin(26 /* MutablePageRefresh */, 0, this.options.maxMutablePageRefreshesPerPoll, 0);
+    this.options.telemetry?.trace.spanBegin(24 /* MutablePageRefresh */, 0, this.options.maxMutablePageRefreshesPerPoll, 0);
     for (let slot = 0;slot < this.registry.capacity; slot++) {
       const record = this.registry.valueAt(slot);
       if (!record?.memory)
@@ -75362,7 +75500,7 @@ class VirtualTextureSystem {
       this.options.telemetry?.metrics.counterAdd(14 /* MutablePagesPublished */, published);
     if (deferred > 0)
       this.options.telemetry?.metrics.counterAdd(15 /* MutablePagesDeferred */, deferred);
-    this.options.telemetry?.trace.spanEnd(26 /* MutablePageRefresh */, 0, published, deferred);
+    this.options.telemetry?.trace.spanEnd(24 /* MutablePageRefresh */, 0, published, deferred);
     for (let pool = 0;pool < this.poolList.length; pool++)
       this.poolList[pool].store.poll();
   }
@@ -75415,12 +75553,12 @@ class EngineAssets {
   meshOptimizer = null;
   modelSystem = null;
   textureSystem = null;
-  constructor(container, format, textureWorkers, createMeshOptimizer, telemetry, pageProvider) {
+  constructor(container, format, textureWorkers, createMeshOptimizer, telemetry2, pageProvider) {
     this.container = container;
     this.format = format;
     this.textureWorkers = textureWorkers;
     this.createMeshOptimizer = createMeshOptimizer;
-    this.telemetry = telemetry;
+    this.telemetry = telemetry2;
     this.pageProvider = pageProvider;
     this.stats.servicesStarted = textureWorkers.size;
   }
@@ -75488,8 +75626,8 @@ class EngineAssets {
       throw new Error("cannot create a texture system from closed EngineAssets");
     if (this.textureSystem)
       throw new Error("EngineAssets already created its texture system");
-    const telemetry = options.telemetry ?? this.telemetry;
-    this.textureSystem = new VirtualTextureSystem(telemetry ? { ...options, telemetry } : options);
+    const telemetry2 = options.telemetry ?? this.telemetry;
+    this.textureSystem = new VirtualTextureSystem(telemetry2 ? { ...options, telemetry: telemetry2 } : options);
     return this.textureSystem;
   }
   registerVirtualTexture(sourceKey, format, addressMode, mipTail = true) {

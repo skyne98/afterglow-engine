@@ -67,7 +67,7 @@ function focusColor(): void {
             <FilePlus2 /> New
             <DropdownMenuShortcut>Ctrl+N</DropdownMenuShortcut>
           </DropdownMenuItem>
-          <DropdownMenuItem @select="activate('importOraInput')">
+          <DropdownMenuItem @select="activate('openDocumentBtn')">
             <FolderOpen /> Open OpenRaster
             <DropdownMenuShortcut>Ctrl+O</DropdownMenuShortcut>
           </DropdownMenuItem>
@@ -245,8 +245,10 @@ function focusColor(): void {
           </div>
           <label class="field">Paint memory <span><output id="memoryLimitVal">1024</output> MiB</span><input id="memoryLimit" type="range" min="64" max="2048" step="64" value="1024" /></label>
           <label class="field inline-field">Background <input id="backgroundColor" type="color" value="#a8a498" /></label>
-          <Button id="newDocumentBtn" variant="outline" size="sm"><FilePlus2 /> New document</Button>
-          <input id="importOraInput" type="file" accept=".ora,image/openraster" hidden />
+          <div class="button-grid">
+            <Button id="newDocumentBtn" variant="outline" size="sm"><FilePlus2 /> New document</Button>
+            <Button id="openDocumentBtn" variant="outline" size="sm"><FolderOpen /> Open ORA</Button>
+          </div>
           <div class="button-grid">
             <Button id="exportOraBtn" variant="outline" size="sm"><FileDown /> Save ORA</Button>
             <Button id="exportPngBtn" variant="outline" size="sm"><ImageDown /> PNG</Button>
@@ -266,6 +268,12 @@ function focusColor(): void {
       </aside>
     </div>
 
+    <section id="paintRecovery" aria-labelledby="paintRecoveryTitle" style="display: none; position: fixed; top: 64px; left: 24px; right: 24px; z-index: 100; padding: 24px; background: #20242b; color: white; border: 1px solid #68717e;">
+      <h2 id="paintRecoveryTitle">Recover drawing</h2>
+      <p>A completed drawing is available on disk. Restore it, or discard it and start a new document.</p>
+      <Button id="restorePaintBtn" variant="outline" type="button">Restore</Button>
+      <Button id="discardPaintBtn" variant="destructive" type="button">Discard</Button>
+    </section>
     <footer class="status-bar">
       <span id="status">Loading brush engine…</span>
       <button id="panelToggleBtn" type="button"><PanelRightClose /> Panels</button>

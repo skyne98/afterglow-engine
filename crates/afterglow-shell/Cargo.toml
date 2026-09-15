@@ -7,6 +7,7 @@ repository.workspace = true
 autoexamples = false
 
 [dependencies]
+afterglow-memory = { path = "../afterglow-memory" }
 winit = { version = "0.30", features = ["rwh_06"] }
 raw-window-handle = "0.6"
 deno_core = "0.408"
@@ -24,12 +25,16 @@ env_logger = "0.11"
 tokio = { version = "1", features = ["full"] }
 futures-util = "0.3"
 serde_json = "1"
+afterglow-telemetry = { path = "../afterglow-telemetry", features = ["collector"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 data-url = "0.3.2"
+getrandom = "0.3"
 deno_webidl = "0.255.0"
 deno_web = "0.286.0"
 url = "2.5.8"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+rfd = { version = "0.15.4", default-features = false, features = ["gtk3"] }
+arboard = { version = "3.6.1", default-features = false, features = ["wayland-data-control"] }
 wgpu-core = "29.0.1"
 # Native worker comms: the op bridge exposes spawned `afterglow-rpc` workers to JS.
 afterglow-rpc = { path = "../afterglow-rpc" }
@@ -39,20 +44,25 @@ afterglow-assets-worker = { path = "../afterglow-assets-worker" }
 afterglow-texture = { path = "../afterglow-texture" }
 afterglow-meshopt = { path = "../afterglow-meshopt" }
 afterglow-storage-worker = { path = "../afterglow-storage-worker" }
+afterglow-paint-worker = { path = "../afterglow-paint-worker" }
 wgpu-types = "29.0.1"
 half = "2"
 num_cpus = "1.17"
 # LinkeDOM remains the JavaScript DOM; Blitz supplies the browser's native
 # CSS cascade, layout, and complete headless page compositor.
-blitz-dom = { version = "=0.3.0-beta.1", default-features = false, features = ["svg"] }
-blitz-html = "=0.3.0-beta.1"
-blitz-paint = { version = "=0.3.0-beta.1", default-features = false, features = ["font-embolden", "svg"] }
-blitz-traits = "=0.3.0-beta.1"
-anyrender = "0.11"
-anyrender_vello_cpu = "0.14"
-anyrender_vello = "0.12"
-vello = { version = "0.9", features = ["wgpu"] }
+blitz-dom = { version = "=0.3.0-beta.2", default-features = false, features = ["svg"] }
+blitz-html = "=0.3.0-beta.2"
+blitz-paint = { version = "=0.3.0-beta.2", default-features = false, features = ["font-embolden", "svg"] }
+blitz-traits = "=0.3.0-beta.2"
+keyboard-types = "0.7"
+anyrender = "0.13"
+anyrender_vello_cpu = "0.17"
+anyrender_vello = "0.14"
+vello = { version = "0.10", features = ["wgpu"] }
 wgpu = "=29.0.4"
+
+[target.'cfg(unix)'.dependencies]
+afterglow-diagnostics-worker = { path = "../afterglow-diagnostics-worker" }
 
 [build-dependencies]
 deno_core = "0.408"
@@ -69,3 +79,7 @@ pollster = "0.3"
 [[example]]
 name = "browser_test"
 path = "examples/browser_test.rs"
+
+[[example]]
+name = "bench_canvas_upload"
+path = "examples/bench_canvas_upload.rs"

@@ -93,6 +93,112 @@ function xfer(u8, off, cap, buf, len, mode) {
   }
 }
 
+// crates/afterglow-web/web/src/workers/ring-service.ts
+function installRingService(create) {
+  const host = self;
+  let state = "init";
+  let memory;
+  let requestBase = 0, responseBase = 0, capacity = 0;
+  let handler;
+  let wakePending = false;
+  let wakeResolve = null;
+  function fail(error) {
+    state = "failed";
+    host.postMessage({ type: "error", message: (error instanceof Error ? error.message : String(error)).slice(0, 512) });
+  }
+  host.onmessage = (event) => {
+    const message = event.data;
+    if (state === "init" && message?.type === "init") {
+      try {
+        const { sab, reqBase, respBase, bufSize } = message;
+        if (!(sab instanceof SharedArrayBuffer) || !Number.isInteger(bufSize) || bufSize <= HEADER + 8 || !Number.isInteger(reqBase) || !Number.isInteger(respBase) || reqBase < 0 || respBase < 0 || reqBase % 4 !== 0 || respBase % 4 !== 0 || reqBase + bufSize > sab.byteLength || respBase + bufSize > sab.byteLength || Math.abs(reqBase - respBase) < bufSize) {
+          throw new Error("Invalid RPC ring storage");
+        }
+        memory = sab;
+        requestBase = reqBase;
+        responseBase = respBase;
+        capacity = bufSize - HEADER;
+        if (Atomics.load(new Uint32Array(memory, requestBase, 1), 0) !== capacity || Atomics.load(new Uint32Array(memory, responseBase, 1), 0) !== capacity) {
+          throw new Error("Invalid RPC ring capacity");
+        }
+        handler = create(message.workerInit);
+        state = "ready";
+        host.postMessage({ type: "ready" });
+      } catch (error) {
+        fail(error);
+      }
+      return;
+    }
+    if (state === "ready" && message?.type === "run") {
+      state = "running";
+      run().catch(fail);
+      return;
+    }
+    if (state === "running" && message === "wake") {
+      if (wakeResolve) {
+        const resolve = wakeResolve;
+        wakeResolve = null;
+        resolve();
+      } else
+        wakePending = true;
+    }
+  };
+  function wait() {
+    if (wakePending) {
+      wakePending = false;
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      wakeResolve = resolve;
+    });
+  }
+  async function run() {
+    const requestWrite = new Int32Array(memory, requestBase + U32, 1);
+    const requestRead = new Int32Array(memory, requestBase + 2 * U32, 1);
+    const requestData = new Uint8Array(memory, requestBase + HEADER, capacity);
+    const responseWrite = new Int32Array(memory, responseBase + U32, 1);
+    const responseRead = new Int32Array(memory, responseBase + 2 * U32, 1);
+    const responseData = new Uint8Array(memory, responseBase + HEADER, capacity);
+    while (state === "running") {
+      const write = Atomics.load(requestWrite, 0) >>> 0;
+      const read = Atomics.load(requestRead, 0) >>> 0;
+      const used = write - read >>> 0;
+      if (!used) {
+        await wait();
+        continue;
+      }
+      if (used > capacity || used < U32)
+        throw new Error("Corrupt RPC request ring");
+      const offset = read % capacity;
+      const length = rdU32(requestData, offset, capacity);
+      const frame = U32 + length;
+      if (length < U32 || frame > used || frame > capacity)
+        throw new Error("Corrupt RPC request frame");
+      const method = rdU32(requestData, offset + U32, capacity) >>> 0;
+      const args = new Uint8Array(length - U32);
+      xfer(requestData, offset + 2 * U32, capacity, args, args.byteLength, "rd");
+      Atomics.store(requestRead, 0, read + frame >>> 0);
+      let response;
+      try {
+        response = concat(encodeVarint(0), encodeBytes(await handler(method, args)));
+      } catch (error) {
+        const text = (error instanceof Error ? error.message : String(error)).slice(0, 512);
+        response = concat(encodeVarint(1), encodeVarint(method), encodeString(text));
+      }
+      const responseFrame = U32 + response.byteLength;
+      const responseIndex = Atomics.load(responseWrite, 0) >>> 0;
+      const responseUsed = responseIndex - (Atomics.load(responseRead, 0) >>> 0) >>> 0;
+      if (responseUsed > capacity || responseFrame > capacity - responseUsed)
+        throw new Error("RPC response ring full");
+      const responseOffset = responseIndex % capacity;
+      wrU32(responseData, responseOffset, capacity, response.byteLength);
+      xfer(responseData, responseOffset + U32, capacity, response, response.byteLength, "wr");
+      Atomics.store(responseWrite, 0, responseIndex + responseFrame >>> 0);
+      host.postMessage("wake");
+    }
+  }
+}
+
 // crates/afterglow-web/web/src/workers/opfs-blob-storage.ts
 var POINTER_SUFFIX = ".ptr";
 var SLOT0_SUFFIX = ".0";
@@ -349,60 +455,11 @@ class OpfsBlobStorageService {
 }
 
 // crates/afterglow-web/web/src/workers/storage-worker.ts
-var state = "init";
-var sab = null;
-var requestBase = 0;
-var responseBase = 0;
-var bufferSize = 0;
-var wakePending = false;
-var wakeResolve = null;
 var service = null;
-self.onmessage = async (event) => {
-  const message = event.data;
-  if (state === "init" && message?.type === "init") {
-    try {
-      sab = message.sab;
-      requestBase = message.reqBase;
-      responseBase = message.respBase;
-      bufferSize = message.bufSize;
-      service = OpfsBlobStorageService.fromNavigator();
-      state = "ready";
-      self.postMessage({ type: "ready" });
-    } catch (error) {
-      self.postMessage({ type: "error", message: error instanceof Error ? error.message : String(error) });
-    }
-    return;
-  }
-  if (state === "ready" && message?.type === "run") {
-    state = "running";
-    runLoop();
-    return;
-  }
-  if (state === "running" && message === "wake") {
-    if (wakeResolve) {
-      const resolve = wakeResolve;
-      wakeResolve = null;
-      resolve();
-    } else
-      wakePending = true;
-  }
-};
-function waitForWake() {
-  if (wakePending) {
-    wakePending = false;
-    return Promise.resolve();
-  }
-  return new Promise((resolve) => {
-    wakeResolve = resolve;
-  });
-}
-function success(payload) {
-  return concat(encodeVarint(0), encodeBytes(payload));
-}
-function failure(method, error) {
-  const message = error instanceof Error ? error.message : String(error);
-  return concat(encodeVarint(1), encodeVarint(method), encodeString(message));
-}
+installRingService(() => {
+  service = OpfsBlobStorageService.fromNavigator();
+  return serve;
+});
 function encodeList(entries) {
   let length = 4;
   const keys = new Array(entries.length);
@@ -490,66 +547,4 @@ async function serve(method, args) {
     return encodeBool(await service.clear(namespace));
   }
   throw new Error(`unknown storage method ${method}`);
-}
-async function runLoop() {
-  const memory = sab;
-  if (!memory)
-    return;
-  const requestCapacity = Atomics.load(new Uint32Array(memory, requestBase, 1), 0) >>> 0;
-  const responseCapacity = Atomics.load(new Uint32Array(memory, responseBase, 1), 0) >>> 0;
-  if (requestCapacity === 0 || requestCapacity !== bufferSize - HEADER || responseCapacity === 0 || responseCapacity !== bufferSize - HEADER) {
-    self.postMessage({ type: "error", message: "bad storage ring capacity" });
-    return;
-  }
-  const requestWrite = new Int32Array(memory, requestBase + U32, 1);
-  const requestRead = new Int32Array(memory, requestBase + 2 * U32, 1);
-  const requestData = new Uint8Array(memory, requestBase + HEADER, requestCapacity);
-  const responseWrite = new Int32Array(memory, responseBase + U32, 1);
-  const responseRead = new Int32Array(memory, responseBase + 2 * U32, 1);
-  const responseData = new Uint8Array(memory, responseBase + HEADER, responseCapacity);
-  for (;; ) {
-    const write = Atomics.load(requestWrite, 0) >>> 0;
-    const read = Atomics.load(requestRead, 0) >>> 0;
-    const used = write - read >>> 0;
-    if (used === 0) {
-      await waitForWake();
-      continue;
-    }
-    if (used > requestCapacity || used < U32) {
-      Atomics.store(requestRead, 0, write);
-      self.postMessage({ type: "error", message: "corrupt storage request ring" });
-      continue;
-    }
-    const ringOffset = read % requestCapacity;
-    const payloadLength = rdU32(requestData, ringOffset, requestCapacity);
-    const frameLength = U32 + payloadLength;
-    if (payloadLength < U32 || frameLength > used || frameLength > requestCapacity) {
-      Atomics.store(requestRead, 0, write);
-      self.postMessage({ type: "error", message: "corrupt storage request frame" });
-      continue;
-    }
-    const method = rdU32(requestData, ringOffset + U32, requestCapacity) >>> 0;
-    const args = new Uint8Array(payloadLength - U32);
-    xfer(requestData, ringOffset + 2 * U32, requestCapacity, args, args.byteLength, "rd");
-    Atomics.store(requestRead, 0, read + frameLength >>> 0);
-    let response;
-    try {
-      response = success(await serve(method, args));
-    } catch (error) {
-      response = failure(method, error);
-    }
-    const responseFrameLength = U32 + response.byteLength;
-    const responseWriteIndex = Atomics.load(responseWrite, 0) >>> 0;
-    const responseReadIndex = Atomics.load(responseRead, 0) >>> 0;
-    const responseUsed = responseWriteIndex - responseReadIndex >>> 0;
-    if (responseFrameLength > responseCapacity || responseFrameLength > responseCapacity - responseUsed) {
-      self.postMessage({ type: "error", message: "storage response ring full" });
-      continue;
-    }
-    const responseOffset = responseWriteIndex % responseCapacity;
-    wrU32(responseData, responseOffset, responseCapacity, response.byteLength);
-    xfer(responseData, responseOffset + U32, responseCapacity, response, response.byteLength, "wr");
-    Atomics.store(responseWrite, 0, responseWriteIndex + responseFrameLength >>> 0);
-    self.postMessage("wake");
-  }
 }

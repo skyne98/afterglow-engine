@@ -59315,9 +59315,9 @@ function sealResources(world) {
   world[RESOURCES_SEALED] = true;
 }
 
-// crates/afterglow-web/web/src/engine/telemetry/telemetry.ts
+// crates/afterglow-telemetry/web/src/telemetry.ts
 var TELEMETRY_RECORD_BYTES = 40;
-var TELEMETRY_BATCH_HEADER_BYTES = 40;
+var TELEMETRY_BATCH_HEADER_BYTES = 96;
 var TELEMETRY_BATCH_VERSION = 1;
 var TELEMETRY_RECORD_WORDS = TELEMETRY_RECORD_BYTES / 4;
 var U32_SCALE = 4294967296;
@@ -59336,6 +59336,10 @@ class TelemetryRecorder {
   captureEpoch = 0;
   length = 0;
   droppedRecords = 0;
+  overwrittenRecords = 0;
+  nextSequence = 0;
+  cursor = 0;
+  retention = 0 /* Prefix */;
   constructor(descriptors, buffer2, clock = () => performance.now() * 1e6, ticksPerSecond = 1e9) {
     this.descriptors = descriptors;
     this.buffer = buffer2;
@@ -59343,8 +59347,8 @@ class TelemetryRecorder {
     this.ticksPerSecond = ticksPerSecond;
     if (buffer2.byteLength === 0 || buffer2.byteLength % TELEMETRY_RECORD_BYTES !== 0)
       throw new RangeError("telemetry trace buffer must contain a positive whole number of 40-byte records");
-    if (!Number.isFinite(ticksPerSecond) || ticksPerSecond <= 0)
-      throw new RangeError("telemetry ticksPerSecond must be positive");
+    if (!Number.isSafeInteger(ticksPerSecond) || ticksPerSecond <= 0)
+      throw new RangeError("telemetry ticksPerSecond must be a positive safe integer");
     this.words = new Uint32Array(buffer2);
     this.bytes = new Uint8Array(buffer2);
     this.enabledDescriptors = new Uint8Array(descriptors.length);
@@ -59353,6 +59357,10 @@ class TelemetryRecorder {
       count: 0,
       capacity: buffer2.byteLength / TELEMETRY_RECORD_BYTES,
       dropped: 0,
+      overwritten: 0,
+      firstSequence: 0,
+      nextSequence: 0,
+      retention: 0 /* Prefix */,
       ticksPerSecond,
       buffer: buffer2
     };
@@ -59369,10 +59377,17 @@ class TelemetryRecorder {
   get dropped() {
     return this.droppedRecords;
   }
-  arm(epoch, categoryWords) {
-    if (this.captureState !== 0 /* Idle */ || !Number.isInteger(epoch) || epoch < 0 || epoch > U32_MAX)
+  get overwritten() {
+    return this.overwrittenRecords;
+  }
+  arm(epoch, categoryWords, retention = 0 /* Prefix */) {
+    if (this.captureState !== 0 /* Idle */ || retention !== 0 /* Prefix */ && retention !== 1 /* Rolling */ || !Number.isInteger(epoch) || epoch < 0 || epoch > U32_MAX)
       return false;
     this.captureEpoch = epoch;
+    this.nextSequence = 0;
+    this.retention = retention;
+    this.overwrittenRecords = 0;
+    this.cursor = 0;
     this.length = 0;
     this.droppedRecords = 0;
     for (let index = 0;index < this.descriptors.length; index++) {
@@ -59385,6 +59400,13 @@ class TelemetryRecorder {
   stop() {
     if (this.captureState !== 1 /* Armed */)
       return false;
+    const split2 = this.cursor * TELEMETRY_RECORD_WORDS;
+    if (split2 !== 0) {
+      this.reverseWords(0, split2);
+      this.reverseWords(split2, this.words.length);
+      this.reverseWords(0, this.words.length);
+    }
+    this.cursor = 0;
     this.captureState = 2 /* Frozen */;
     return true;
   }
@@ -59394,7 +59416,19 @@ class TelemetryRecorder {
     this.stableSnapshot.epoch = this.captureEpoch;
     this.stableSnapshot.count = this.length;
     this.stableSnapshot.dropped = this.droppedRecords;
+    this.stableSnapshot.overwritten = this.overwrittenRecords;
+    this.stableSnapshot.firstSequence = this.nextSequence - this.length;
+    this.stableSnapshot.nextSequence = this.nextSequence;
+    this.stableSnapshot.retention = this.retention;
     return this.stableSnapshot;
+  }
+  resume() {
+    if (this.captureState !== 2 /* Frozen */)
+      return false;
+    this.length = 0;
+    this.cursor = 0;
+    this.captureState = 1 /* Armed */;
+    return true;
   }
   reset() {
     if (this.captureState !== 2 /* Frozen */)
@@ -59402,32 +59436,67 @@ class TelemetryRecorder {
     this.length = 0;
     this.droppedRecords = 0;
     this.enabledDescriptors.fill(0);
+    this.nextSequence = 0;
+    this.overwrittenRecords = 0;
+    this.cursor = 0;
+    this.retention = 0 /* Prefix */;
     this.captureState = 0 /* Idle */;
     return true;
   }
   encodedBatchBytes() {
     return TELEMETRY_BATCH_HEADER_BYTES + this.length * TELEMETRY_RECORD_BYTES;
   }
-  encodeBatchInto(output2, sourceId, clockDomain) {
-    if (this.captureState !== 2 /* Frozen */ || !Number.isInteger(sourceId) || sourceId < 0 || sourceId > U32_MAX || !Number.isInteger(clockDomain) || clockDomain < 0 || clockDomain > U32_MAX)
+  encodeBatchInto(output2, identity) {
+    if (this.captureState !== 2 /* Frozen */ || !Number.isInteger(identity.sourceId) || identity.sourceId < 0 || identity.sourceId > U32_MAX || !Number.isInteger(identity.clockDomain) || identity.clockDomain < 0 || identity.clockDomain > U32_MAX || !Number.isInteger(identity.generation) || identity.generation <= 0 || identity.generation > U32_MAX || !Number.isInteger(identity.clockGeneration) || identity.clockGeneration <= 0 || identity.clockGeneration > U32_MAX || identity.session.length !== 4 || !Number.isSafeInteger(this.nextSequence))
+      return 0;
+    let sessionBits = 0;
+    for (let index = 0;index < 4; index++) {
+      const word = identity.session[index];
+      if (!Number.isInteger(word) || word < 0 || word > U32_MAX)
+        return 0;
+      sessionBits |= word;
+    }
+    if (sessionBits === 0)
       return 0;
     const needed = this.encodedBatchBytes();
     if (output2.length < needed)
       return -needed;
-    output2[0] = 65;
+    const payloadBytes = this.length * TELEMETRY_RECORD_BYTES;
+    if (output2.buffer === this.buffer && output2.byteOffset < payloadBytes)
+      return 0;
+    let previousHigh = 0;
+    let previousLow = 0;
+    for (let index = 0;index < this.length; index++) {
+      const base = index * TELEMETRY_RECORD_WORDS;
+      const low = this.words[base];
+      const high = this.words[base + 1];
+      const phase = this.words[base + 9];
+      if (phase < 1 || phase > 8 || high < previousHigh || high === previousHigh && low < previousLow)
+        return 0;
+      previousHigh = high;
+      previousLow = low;
+    }
+    output2[0] = 68;
     output2[1] = 71;
     output2[2] = 84;
     output2[3] = 66;
     this.writeU16(output2, 4, TELEMETRY_BATCH_VERSION);
     this.writeU16(output2, 6, TELEMETRY_BATCH_HEADER_BYTES);
-    this.writeU32(output2, 8, sourceId);
+    this.writeU32(output2, 8, identity.sourceId);
     this.writeU32(output2, 12, this.captureEpoch);
-    this.writeU32(output2, 16, clockDomain);
-    this.writeU32(output2, 20, 0);
+    this.writeU32(output2, 16, identity.clockDomain);
+    this.writeU32(output2, 20, this.retention === 1 /* Rolling */ ? 1 : 0);
     this.writeU32(output2, 24, this.length);
-    this.writeU32(output2, 28, Math.min(U32_MAX, this.droppedRecords));
+    this.writeU32(output2, 28, 0);
     this.writeU64Number(output2, 32, this.ticksPerSecond);
-    const payloadBytes = this.length * TELEMETRY_RECORD_BYTES;
+    for (let index = 0;index < 4; index++)
+      this.writeU32(output2, 40 + index * 4, identity.session[index]);
+    this.writeU32(output2, 56, identity.generation);
+    this.writeU32(output2, 60, identity.clockGeneration);
+    this.writeU64Number(output2, 64, this.nextSequence - this.length);
+    this.writeU64Number(output2, 72, this.nextSequence);
+    this.writeU64Number(output2, 80, this.droppedRecords);
+    this.writeU64Number(output2, 88, this.overwrittenRecords);
     for (let index = 0;index < payloadBytes; index++)
       output2[TELEMETRY_BATCH_HEADER_BYTES + index] = this.bytes[index] ?? 0;
     return needed;
@@ -59465,19 +59534,38 @@ class TelemetryRecorder {
       return 4 /* WrongDescriptorKind */;
     if (this.enabledDescriptors[descriptor] === 0)
       return 2 /* CategoryDisabled */;
-    if (this.length === this.capacity) {
-      this.droppedRecords++;
+    if (this.nextSequence === Number.MAX_SAFE_INTEGER) {
+      this.droppedRecords = Math.min(Number.MAX_SAFE_INTEGER, this.droppedRecords + 1);
+      return 6 /* SequenceExhausted */;
+    }
+    const full = this.length === this.capacity;
+    if (full && this.retention === 0 /* Prefix */) {
+      this.droppedRecords = Math.min(Number.MAX_SAFE_INTEGER, this.droppedRecords + 1);
       return 5 /* CapacityExceeded */;
     }
-    const base = this.length * TELEMETRY_RECORD_WORDS;
+    const slot = full ? this.cursor : this.length;
+    const base = slot * TELEMETRY_RECORD_WORDS;
     this.writeU53(base, this.clock());
     this.writeU53(base + 2, correlation);
     this.writeU53(base + 4, argument0);
     this.writeU53(base + 6, argument1);
     this.words[base + 8] = descriptor;
     this.words[base + 9] = phase;
-    this.length++;
+    this.nextSequence++;
+    if (full) {
+      this.overwrittenRecords = Math.min(Number.MAX_SAFE_INTEGER, this.overwrittenRecords + 1);
+      this.cursor = slot + 1 === this.capacity ? 0 : slot + 1;
+    } else {
+      this.length++;
+    }
     return 0 /* Recorded */;
+  }
+  reverseWords(start, end) {
+    for (let left = start, right = end - 1;left < right; left++, right--) {
+      const value = this.words[left];
+      this.words[left] = this.words[right];
+      this.words[right] = value;
+    }
   }
   writeU53(word, value) {
     const nonNegative = Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
@@ -59571,7 +59659,7 @@ class TelemetryMetricBank {
   }
 }
 
-class EngineTelemetry {
+class Telemetry {
   trace;
   metrics;
   correlationCounter = 1;
@@ -59586,6 +59674,7 @@ class EngineTelemetry {
     return safeNamespace * U32_SCALE + local;
   }
 }
+// crates/afterglow-web/web/src/engine/telemetry/telemetry.ts
 var TelemetryRes = defineResource("telemetry", () => {
   throw new Error("Telemetry not initialized. Set TelemetryRes during bootstrap.");
 });
@@ -59611,8 +59700,6 @@ var ENGINE_TRACE_DESCRIPTORS = [
   { category: 5 /* Texture */, categoryName: "texture", name: "texture.transcode_queue", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "format" },
   { category: 5 /* Texture */, categoryName: "texture", name: "texture.transcode", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "format" },
   { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.upload", kind: 2 /* Span */, argument0: "bytes", argument1: "slot" },
-  { category: 4 /* Asset */, categoryName: "cache", name: "cache.read", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "hit" },
-  { category: 4 /* Asset */, categoryName: "cache", name: "cache.write", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "status" },
   { category: 4 /* Asset */, categoryName: "asset", name: "mesh.optimize", kind: 3 /* AsyncSpan */, argument0: "bytes", argument1: "status" },
   { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.feedback_detected", kind: 1 /* Instant */, argument0: "priority", argument1: "feedback_epoch" },
   { category: 3 /* VirtualTexture */, categoryName: "vt", name: "vt.scheduler_wait", kind: 3 /* AsyncSpan */, argument0: "priority", argument1: "status" },
@@ -59686,15 +59773,15 @@ class PersistentBlobStore {
     removeOperations: 0,
     ioErrors: 0
   };
-  constructor(backend, capacities, telemetry) {
+  constructor(backend, capacities, telemetry2) {
     this.backend = backend;
     this.capacities = capacities;
-    this.telemetry = telemetry;
+    this.telemetry = telemetry2;
   }
-  static async open(backend, capacities, telemetry) {
+  static async open(backend, capacities, telemetry2) {
     if (!Number.isInteger(capacities.maxItems) || capacities.maxItems < 1 || !Number.isInteger(capacities.maxBytes) || capacities.maxBytes < 1 || !Number.isInteger(capacities.maxValueBytes) || capacities.maxValueBytes < 1 || capacities.maxValueBytes > capacities.maxBytes || !Number.isInteger(capacities.maxInFlightOperations) || capacities.maxInFlightOperations < 1 || !Number.isInteger(capacities.maxInFlightBytes) || capacities.maxInFlightBytes < 1)
       throw new RangeError("invalid persistent blob-store capacities");
-    const store = new PersistentBlobStore(backend, capacities, telemetry);
+    const store = new PersistentBlobStore(backend, capacities, telemetry2);
     const entries = await backend.list(capacities.maxValueBytes);
     let bytes = 0;
     for (const entry of entries) {
@@ -59757,24 +59844,24 @@ class PersistentBlobStore {
     if (admitted !== 0 /* Ok */)
       return { status: admitted, bytes: null };
     const correlation = this.telemetry?.nextCorrelation(11 /* Storage */) ?? 0;
-    this.telemetry?.trace.asyncBegin(30 /* BlobRead */, correlation, maxBytes, 0);
+    this.telemetry?.trace.asyncBegin(28 /* BlobRead */, correlation, maxBytes, 0);
     try {
       const bytes = await this.backend.read(key, maxBytes);
       if (bytes === null) {
-        this.telemetry?.trace.asyncEnd(30 /* BlobRead */, correlation, 0, 1);
+        this.telemetry?.trace.asyncEnd(28 /* BlobRead */, correlation, 0, 1);
         return { status: 1 /* NotFound */, bytes: null };
       }
       if (bytes.byteLength > maxBytes || bytes.byteLength > this.capacities.maxValueBytes) {
-        this.telemetry?.trace.asyncEnd(30 /* BlobRead */, correlation, bytes.byteLength, 2);
+        this.telemetry?.trace.asyncEnd(28 /* BlobRead */, correlation, bytes.byteLength, 2);
         return { status: 5 /* ValueCapacityExceeded */, bytes: null };
       }
       this.stats.readOperations++;
       this.telemetry?.metrics.counterAdd(22 /* BlobReadBytes */, bytes.byteLength);
-      this.telemetry?.trace.asyncEnd(30 /* BlobRead */, correlation, bytes.byteLength, 0);
+      this.telemetry?.trace.asyncEnd(28 /* BlobRead */, correlation, bytes.byteLength, 0);
       return { status: 0 /* Ok */, bytes };
     } catch {
       this.stats.ioErrors++;
-      this.telemetry?.trace.asyncEnd(30 /* BlobRead */, correlation, 0, 3);
+      this.telemetry?.trace.asyncEnd(28 /* BlobRead */, correlation, 0, 3);
       return { status: 10 /* IoError */, bytes: null };
     } finally {
       this.end(key, maxBytes);
@@ -59797,7 +59884,7 @@ class PersistentBlobStore {
     if (newItem)
       this.reservedItems++;
     const correlation = this.telemetry?.nextCorrelation(11 /* Storage */) ?? 0;
-    this.telemetry?.trace.asyncBegin(31 /* BlobWrite */, correlation, bytes.byteLength, 0);
+    this.telemetry?.trace.asyncBegin(29 /* BlobWrite */, correlation, bytes.byteLength, 0);
     try {
       await this.backend.writeAtomic(key, bytes);
       this.sizes.set(key, bytes.byteLength);
@@ -59805,11 +59892,11 @@ class PersistentBlobStore {
       this.stats.writeOperations++;
       this.refreshStats();
       this.telemetry?.metrics.counterAdd(23 /* BlobWriteBytes */, bytes.byteLength);
-      this.telemetry?.trace.asyncEnd(31 /* BlobWrite */, correlation, bytes.byteLength, 0);
+      this.telemetry?.trace.asyncEnd(29 /* BlobWrite */, correlation, bytes.byteLength, 0);
       return { status: 0 /* Ok */ };
     } catch {
       this.stats.ioErrors++;
-      this.telemetry?.trace.asyncEnd(31 /* BlobWrite */, correlation, 0, 1);
+      this.telemetry?.trace.asyncEnd(29 /* BlobWrite */, correlation, 0, 1);
       return { status: 10 /* IoError */ };
     } finally {
       this.reservedBytes -= delta;
@@ -60402,9 +60489,9 @@ class FrameBudget {
   frameId = 0;
   frameStart = 0;
   frameDurationMs = 0;
-  constructor(config = DEFAULT_FRAME_BUDGET, clock = () => performance.now(), telemetry) {
+  constructor(config = DEFAULT_FRAME_BUDGET, clock = () => performance.now(), telemetry2) {
     this.clock = clock;
-    this.telemetry = telemetry;
+    this.telemetry = telemetry2;
     if (config.deadlineFractions.length !== 5 /* Count */ || config.operationLimits.length !== 5 /* Count */)
       throw new RangeError(`FrameBudget requires ${5 /* Count */} stage entries`);
     let previous = 0;
@@ -66261,7 +66348,7 @@ class EngineRuntime {
       throw new RangeError("render pass capacity must be a positive integer");
     this.adapter = options.adapter;
     this.memory = new EngineMemory(options.memory);
-    this.telemetry = new EngineTelemetry(ENGINE_TRACE_DESCRIPTORS, ENGINE_METRIC_DESCRIPTORS, this.memory.telemetryTrace, this.memory.telemetryMetrics);
+    this.telemetry = new Telemetry(ENGINE_TRACE_DESCRIPTORS, ENGINE_METRIC_DESCRIPTORS, this.memory.telemetryTrace, this.memory.telemetryMetrics);
     this.budget = new FrameBudget(options.frameBudget, undefined, {
       recorder: this.telemetry.trace,
       stageDescriptors: FRAME_BUDGET_TRACE_DESCRIPTORS
@@ -67308,8 +67395,8 @@ class VirtualTextureStore {
     averageTranscodeMs: 0,
     maxTranscodeMs: 0
   };
-  constructor(capacities, pageDataProvider, format, device, tuning, telemetry) {
-    this.telemetry = telemetry;
+  constructor(capacities, pageDataProvider, format, device, tuning, telemetry2) {
+    this.telemetry = telemetry2;
     this.pageDataProvider = pageDataProvider;
     this.format = format ?? FORMAT_RGBA2;
     this.device = device ?? null;
@@ -67908,7 +67995,7 @@ class VirtualTextureStore {
     if (this.scheduledActive[index] === 0)
       return;
     if (this.scheduledTraceActive[index] !== 0) {
-      this.telemetry?.trace.asyncEnd(23 /* VtSchedulerWait */, this.scheduledKeys[index], this.scheduledPriority[index], status);
+      this.telemetry?.trace.asyncEnd(21 /* VtSchedulerWait */, this.scheduledKeys[index], this.scheduledPriority[index], status);
       this.scheduledTraceActive[index] = 0;
     }
     this.unlinkScheduled(index);
@@ -67959,8 +68046,8 @@ class VirtualTextureStore {
     this.scheduledByKey.set(key, index);
     this.scheduledCount++;
     const priority = request.priorityTier ?? PRIORITY_LANE_COUNT - 1;
-    this.telemetry?.trace.instant(22 /* VtFeedbackDetected */, key, priority, this.feedbackEpoch);
-    this.scheduledTraceActive[index] = this.telemetry?.trace.asyncBegin(23 /* VtSchedulerWait */, key, priority, 0) === 0 /* Recorded */ ? 1 : 0;
+    this.telemetry?.trace.instant(20 /* VtFeedbackDetected */, key, priority, this.feedbackEpoch);
+    this.scheduledTraceActive[index] = this.telemetry?.trace.asyncBegin(21 /* VtSchedulerWait */, key, priority, 0) === 0 /* Recorded */ ? 1 : 0;
   }
   schedulePendingRequests() {
     const operationBudget = this.debugPaused ? 0 : this.debugPageBudget ?? this.pageBudget;
@@ -68256,7 +68343,7 @@ class VirtualTextureStore {
       }
       const uploadMs = performance.now() - uploadStartedAt;
       const physicalSlot = slot.y * this.atlasPagesX + slot.x;
-      this.telemetry?.trace.instant(24 /* VtPagePublished */, ready.key, physicalSlot, this.publicationFrameId);
+      this.telemetry?.trace.instant(22 /* VtPagePublished */, ready.key, physicalSlot, this.publicationFrameId);
       this.telemetry?.trace.spanEnd(18 /* VtUpload */, ready.key, ready.data.byteLength, physicalSlot);
       this.telemetry?.metrics.histogramLog2(10 /* VtUploadNs */, Math.max(1, Math.floor(uploadMs * 1e6)));
       this.completedUploads++;
@@ -71297,7 +71384,7 @@ class VirtualTextureSystem {
     if (!memory)
       return null;
     const status = memory.writeRegion(x2, y2, width, height, source, bytesPerRow);
-    this.options.telemetry?.trace.instant(25 /* MutableTextureWrite */, handle, source.byteLength, status);
+    this.options.telemetry?.trace.instant(23 /* MutableTextureWrite */, handle, source.byteLength, status);
     if (status === 0 /* Written */) {
       this.options.telemetry?.metrics.counterAdd(12 /* MutableTextureWrites */, 1);
       this.options.telemetry?.metrics.counterAdd(13 /* MutableTextureBytes */, source.byteLength);
@@ -71399,7 +71486,7 @@ class VirtualTextureSystem {
     let remaining = this.options.maxMutablePageRefreshesPerPoll;
     let published = 0;
     let deferred = 0;
-    this.options.telemetry?.trace.spanBegin(26 /* MutablePageRefresh */, 0, this.options.maxMutablePageRefreshesPerPoll, 0);
+    this.options.telemetry?.trace.spanBegin(24 /* MutablePageRefresh */, 0, this.options.maxMutablePageRefreshesPerPoll, 0);
     for (let slot = 0;slot < this.registry.capacity; slot++) {
       const record = this.registry.valueAt(slot);
       if (!record?.memory)
@@ -71415,7 +71502,7 @@ class VirtualTextureSystem {
       this.options.telemetry?.metrics.counterAdd(14 /* MutablePagesPublished */, published);
     if (deferred > 0)
       this.options.telemetry?.metrics.counterAdd(15 /* MutablePagesDeferred */, deferred);
-    this.options.telemetry?.trace.spanEnd(26 /* MutablePageRefresh */, 0, published, deferred);
+    this.options.telemetry?.trace.spanEnd(24 /* MutablePageRefresh */, 0, published, deferred);
     for (let pool = 0;pool < this.poolList.length; pool++)
       this.poolList[pool].store.poll();
   }

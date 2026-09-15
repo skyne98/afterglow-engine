@@ -1,3 +1,5 @@
+export { attachProfiling } from './profiling.ts';
+export { initializeWebProfiling } from './web-profiling.ts';
 export {
   EngineMetric,
   EngineTelemetryCategory,
@@ -8,6 +10,7 @@ export {
 } from './catalog.ts';
 export {
   EngineTelemetry,
+  TelemetryCaptureRetention,
   TelemetryCaptureState,
   TelemetryDescriptorKind,
   TelemetryMetricBank,
@@ -25,4 +28,5 @@ export {
   type TelemetryDescriptor,
   type TelemetryMetricDescriptor,
   type TelemetrySnapshot,
+  type TelemetryProducerIdentity,
 } from './telemetry.ts';

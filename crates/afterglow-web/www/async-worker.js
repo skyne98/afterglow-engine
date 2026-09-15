@@ -29,6 +29,10 @@ function unwrapResponse(bytes) {
 
 // crates/afterglow-web/web/src/workers/async-worker.ts
 class PendingFetch {
+  promise;
+  resolved;
+  bytes;
+  error;
   constructor(url) {
     this.promise = fetch(url);
     this.resolved = false;
@@ -49,6 +53,10 @@ class PendingFetch {
 }
 
 class HeadFetch {
+  promise;
+  resolved;
+  contentLength;
+  error;
   constructor(url) {
     this.promise = fetch(url, { method: "HEAD" });
     this.resolved = false;
@@ -70,6 +78,10 @@ class HeadFetch {
 }
 
 class RangeFetch {
+  promise;
+  resolved;
+  bytes;
+  error;
   constructor(url, offset, len) {
     const start = Number(offset);
     const end = start + Number(len) - 1;
@@ -92,6 +104,25 @@ class RangeFetch {
 }
 
 class AsyncWorker {
+  w;
+  baseUrl;
+  _memory;
+  nextFetchId;
+  _fetchCapacity;
+  _fetchIds;
+  _fetches;
+  _pendingFetchCount;
+  _callCapacity;
+  _callIds;
+  _callResolves;
+  _callRejects;
+  _pendingCallCount;
+  _taskIdCounter;
+  _pumpScheduled;
+  _completionLimit;
+  _lastPollCompletions;
+  _totalCompletions;
+  _completionLimitHits;
   constructor(wasm, baseUrl = "") {
     this.w = wasm;
     this.baseUrl = baseUrl;
@@ -114,6 +145,9 @@ class AsyncWorker {
     this._lastPollCompletions = 0;
     this._totalCompletions = 0;
     this._completionLimitHits = 0;
+  }
+  _wasm() {
+    return this.w;
   }
   async call(method, args) {
     const taskId = this._nextTaskId();
@@ -146,29 +180,29 @@ class AsyncWorker {
     }, 0);
   }
   serveAsync(method, args, taskId = this._nextTaskId()) {
-    const inPtr = this.w.afterglow_wasm_input_ptr();
-    const inSize = this.w.afterglow_wasm_input_size();
+    const inPtr = this._wasm().afterglow_wasm_input_ptr();
+    const inSize = this._wasm().afterglow_wasm_input_size();
     if (args.length + 12 > inSize) {
       console.error("async worker: args too large for input scratch");
       return -1;
     }
-    const view = new DataView((this._memory || this.w.memory).buffer, inPtr, 12 + args.length);
+    const view = new DataView((this._memory || this._wasm().memory).buffer, inPtr, 12 + args.length);
     view.setUint32(0, method, true);
     view.setBigUint64(4, BigInt(taskId), true);
-    new Uint8Array((this._memory || this.w.memory).buffer, inPtr + 12, args.length).set(args);
-    const r = this.w.afterglow_wasm_serve_async(method, inPtr + 12, args.length, BigInt(taskId));
+    new Uint8Array((this._memory || this._wasm().memory).buffer, inPtr + 12, args.length).set(args);
+    const r = this._wasm().afterglow_wasm_serve_async(method, inPtr + 12, args.length, BigInt(taskId));
     if (r < 0)
       return -1;
     return taskId;
   }
   poll(maxCompletions = this._completionLimit) {
-    this.w.afterglow_wasm_tick();
-    const outPtr = this.w.afterglow_wasm_output_ptr();
-    const outSize = this.w.afterglow_wasm_output_size();
-    const memory = this._memory || this.w.memory;
+    this._wasm().afterglow_wasm_tick();
+    const outPtr = this._wasm().afterglow_wasm_output_ptr();
+    const outSize = this._wasm().afterglow_wasm_output_size();
+    const memory = this._memory || this._wasm().memory;
     let drained = 0;
     while (drained < maxCompletions) {
-      const n = this.w.afterglow_wasm_drain_completion(outPtr, outSize);
+      const n = this._wasm().afterglow_wasm_drain_completion(outPtr, outSize);
       if (n < 0)
         break;
       if (n < 8)
@@ -195,44 +229,44 @@ class AsyncWorker {
     return drained;
   }
   fetchStart(urlPtr, urlLen) {
-    const url = new TextDecoder().decode(Uint8Array.from(new Uint8Array((this._memory || this.w.memory).buffer, urlPtr, urlLen)));
+    const url = new TextDecoder().decode(Uint8Array.from(new Uint8Array((this._memory || this._wasm().memory).buffer, urlPtr, urlLen)));
     const fullUrl = this._resolveUrl(url);
     return this._registerFetch(new PendingFetch(fullUrl));
   }
   fetchPoll(fetchId, outPtr, outMax) {
     const pending = this._getFetch(fetchId);
-    if (!pending)
+    if (!pending || !(pending instanceof PendingFetch || pending instanceof RangeFetch))
       return -1;
     if (!pending.resolved)
       return -1;
     this._releaseFetch(fetchId);
-    if (pending.error) {
+    if (pending.error || pending.bytes === null) {
       return 0;
     }
     if (pending.bytes.length > outMax)
       return -2;
-    new Uint8Array((this._memory || this.w.memory).buffer, outPtr, outMax).set(pending.bytes);
+    new Uint8Array((this._memory || this._wasm().memory).buffer, outPtr, outMax).set(pending.bytes);
     return pending.bytes.length;
   }
   headStart(urlPtr, urlLen) {
-    const url = new TextDecoder().decode(Uint8Array.from(new Uint8Array((this._memory || this.w.memory).buffer, urlPtr, urlLen)));
+    const url = new TextDecoder().decode(Uint8Array.from(new Uint8Array((this._memory || this._wasm().memory).buffer, urlPtr, urlLen)));
     const fullUrl = this._resolveUrl(url);
     return this._registerFetch(new HeadFetch(fullUrl));
   }
   headPoll(fetchId, outPtr, outMax) {
     const pending = this._getFetch(fetchId);
-    if (!pending)
+    if (!pending || !(pending instanceof HeadFetch))
       return -2;
     if (!pending.resolved)
       return -1;
     this._releaseFetch(fetchId);
     if (pending.error || pending.contentLength === null || outMax < 8)
       return -2;
-    new DataView((this._memory || this.w.memory).buffer, outPtr, 8).setBigUint64(0, BigInt(pending.contentLength), true);
+    new DataView((this._memory || this._wasm().memory).buffer, outPtr, 8).setBigUint64(0, BigInt(pending.contentLength), true);
     return 8;
   }
   rangeStart(urlPtr, urlLen, offset, len) {
-    const url = new TextDecoder().decode(Uint8Array.from(new Uint8Array((this._memory || this.w.memory).buffer, urlPtr, urlLen)));
+    const url = new TextDecoder().decode(Uint8Array.from(new Uint8Array((this._memory || this._wasm().memory).buffer, urlPtr, urlLen)));
     const fullUrl = this._resolveUrl(url);
     return this._registerFetch(new RangeFetch(fullUrl, offset, len));
   }

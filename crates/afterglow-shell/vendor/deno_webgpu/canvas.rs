@@ -38,6 +38,10 @@ pub struct SurfaceData {
 
 impl Drop for SurfaceData {
     fn drop(&mut self) {
+        // A script error can stop a frame before presentation. Release its
+        // acquired texture before the surface destroys its Vulkan semaphores.
+        // An unconfigured surface or a completed frame has no texture to discard.
+        let _ = self.instance.surface_texture_discard(self.id);
         self.instance.surface_drop(self.id);
     }
 }

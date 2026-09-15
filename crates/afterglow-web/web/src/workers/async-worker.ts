@@ -14,15 +14,35 @@
 
 import { unwrapResponse } from './codec.ts';
 
+type WasmOffset = number | bigint;
+type CallResolve = (value: Uint8Array | PromiseLike<Uint8Array>) => void;
+type CallReject = (reason?: unknown) => void;
+
+interface AsyncWorkerWasm {
+  readonly memory: WebAssembly.Memory;
+  afterglow_wasm_input_ptr(): number;
+  afterglow_wasm_input_size(): number;
+  afterglow_wasm_serve_async(method: number, argsPtr: number, argsLen: number, taskId: bigint): number;
+  afterglow_wasm_tick(): void;
+  afterglow_wasm_output_ptr(): number;
+  afterglow_wasm_output_size(): number;
+  afterglow_wasm_drain_completion(outPtr: number, outSize: number): number;
+}
+
 /// A pending JS fetch (full GET), keyed by `fetch_id`.
 class PendingFetch {
-  constructor(url) {
+  promise: Promise<Response>;
+  resolved: boolean;
+  bytes: Uint8Array | null;
+  error: unknown;
+
+  constructor(url: string) {
     this.promise = fetch(url);
     this.resolved = false;
     this.bytes = null;
     this.error = null;
     this.promise
-      .then(async (resp) => {
+      .then(async (resp: Response) => {
         if (!resp.ok) {
           this.error = new Error(`fetch ${resp.status}: ${url}`);
         } else {
@@ -30,7 +50,7 @@ class PendingFetch {
         }
         this.resolved = true;
       })
-      .catch((e) => {
+      .catch((e: unknown) => {
         this.error = e;
         this.resolved = true;
       });
@@ -39,13 +59,18 @@ class PendingFetch {
 
 /// A pending HEAD fetch (to get Content-Length).
 class HeadFetch {
-  constructor(url) {
+  promise: Promise<Response>;
+  resolved: boolean;
+  contentLength: number | null;
+  error: unknown;
+
+  constructor(url: string) {
     this.promise = fetch(url, { method: 'HEAD' });
     this.resolved = false;
     this.contentLength = null;
     this.error = null;
     this.promise
-      .then((resp) => {
+      .then((resp: Response) => {
         if (!resp.ok) {
           this.error = new Error(`HEAD ${resp.status}: ${url}`);
         } else {
@@ -54,7 +79,7 @@ class HeadFetch {
         }
         this.resolved = true;
       })
-      .catch((e) => {
+      .catch((e: unknown) => {
         this.error = e;
         this.resolved = true;
       });
@@ -63,7 +88,12 @@ class HeadFetch {
 
 /// A pending ranged GET fetch.
 class RangeFetch {
-  constructor(url, offset, len) {
+  promise: Promise<Response>;
+  resolved: boolean;
+  bytes: Uint8Array | null;
+  error: unknown;
+
+  constructor(url: string, offset: WasmOffset, len: WasmOffset) {
     const start = Number(offset);
     const end = start + Number(len) - 1;
     this.promise = fetch(url, { headers: { Range: `bytes=${start}-${end}` } });
@@ -71,7 +101,7 @@ class RangeFetch {
     this.bytes = null;
     this.error = null;
     this.promise
-      .then(async (resp) => {
+      .then(async (resp: Response) => {
         if (!resp.ok && resp.status !== 206) {
           this.error = new Error(`range fetch ${resp.status}: ${url}`);
         } else {
@@ -79,21 +109,43 @@ class RangeFetch {
         }
         this.resolved = true;
       })
-      .catch((e) => {
+      .catch((e: unknown) => {
         this.error = e;
         this.resolved = true;
       });
   }
 }
 
+type Fetch = PendingFetch | HeadFetch | RangeFetch;
+
 /// The async worker driver. Instantiate the wasm module, then drive the
 /// executor + drain completions. Implements `RpcTransport` so generated TS
 /// clients (`AssetLoaderClient`, etc.) can use it directly.
 export class AsyncWorker {
+  w: WebAssembly.Exports;
+  baseUrl: string;
+  _memory: WebAssembly.Memory | null;
+  nextFetchId: number;
+  _fetchCapacity: number;
+  _fetchIds: Float64Array;
+  _fetches: Array<Fetch | null>;
+  _pendingFetchCount: number;
+  _callCapacity: number;
+  _callIds: Float64Array;
+  _callResolves: Array<CallResolve | null>;
+  _callRejects: Array<CallReject | null>;
+  _pendingCallCount: number;
+  _taskIdCounter: number;
+  _pumpScheduled: boolean;
+  _completionLimit: number;
+  _lastPollCompletions: number;
+  _totalCompletions: number;
+  _completionLimitHits: number;
+
   /// @param {WebAssembly.Exports} wasm — the instantiated wasm exports.
   /// @param {string} baseUrl — base URL for fetch (e.g. '' for same-origin).
-  constructor(wasm, baseUrl = '') {
-    this.w = wasm;
+  constructor(wasm: WebAssembly.Exports | null, baseUrl: string = '') {
+    this.w = wasm as WebAssembly.Exports;
     this.baseUrl = baseUrl;
     this._memory = null; // set by asyncWorkerImports
     this.nextFetchId = 1;
@@ -116,17 +168,21 @@ export class AsyncWorker {
     this._completionLimitHits = 0;
   }
 
+  _wasm(): AsyncWorkerWasm {
+    return this.w as unknown as AsyncWorkerWasm;
+  }
+
   /// `RpcTransport.call`: spawn an async task and return a Promise that
   /// resolves when `poll()` delivers the completion. This is what generated TS
   /// clients call under the hood.
   /// @param {number} method
   /// @param {Uint8Array} args
   /// @returns {Promise<Uint8Array>}
-  async call(method, args) {
+  async call(method: number, args: Uint8Array): Promise<Uint8Array> {
     const taskId = this._nextTaskId();
     const slot = taskId % this._callCapacity;
     if (this._callIds[slot] !== -1) throw new Error('async worker: fixed task capacity exhausted');
-    return new Promise((resolve, reject) => {
+    return new Promise<Uint8Array>((resolve, reject) => {
       this._callIds[slot] = taskId;
       this._callResolves[slot] = resolve;
       this._callRejects[slot] = reject;
@@ -142,7 +198,7 @@ export class AsyncWorker {
 
   // Exactly one page-thread pump serves all pending calls. This avoids the
   // previous one-setTimeout-loop-per-RPC event storm under sustained streaming.
-  _schedulePump() {
+  _schedulePump(): void {
     if (this._pumpScheduled || this._pendingCallCount === 0) return;
     this._pumpScheduled = true;
     setTimeout(() => {
@@ -158,21 +214,21 @@ export class AsyncWorker {
   /// @param {number} method
   /// @param {Uint8Array} args
   /// @returns {number} task_id (or -1 on error)
-  serveAsync(method, args, taskId = this._nextTaskId()) {
-    const inPtr = this.w.afterglow_wasm_input_ptr();
-    const inSize = this.w.afterglow_wasm_input_size();
+  serveAsync(method: number, args: Uint8Array, taskId: number = this._nextTaskId()): number {
+    const inPtr = this._wasm().afterglow_wasm_input_ptr();
+    const inSize = this._wasm().afterglow_wasm_input_size();
     if (args.length + 12 > inSize) {
       console.error('async worker: args too large for input scratch');
       return -1;
     }
     // Write [method:u32 LE][task_id:u64 LE][args] to the input scratch.
-    const view = new DataView((this._memory || this.w.memory).buffer, inPtr, 12 + args.length);
+    const view = new DataView((this._memory || this._wasm().memory).buffer, inPtr, 12 + args.length);
     view.setUint32(0, method, true);
     view.setBigUint64(4, BigInt(taskId), true);
-    new Uint8Array((this._memory || this.w.memory).buffer, inPtr + 12, args.length).set(args);
+    new Uint8Array((this._memory || this._wasm().memory).buffer, inPtr + 12, args.length).set(args);
     // Call serve_async with the input scratch (it reads method+task_id+args).
     // Actually the exported fn takes (method, args_ptr, args_len, task_id).
-    const r = this.w.afterglow_wasm_serve_async(method, inPtr + 12, args.length, BigInt(taskId));
+    const r = this._wasm().afterglow_wasm_serve_async(method, inPtr + 12, args.length, BigInt(taskId));
     if (r < 0) return -1;
     return taskId;
   }
@@ -180,14 +236,14 @@ export class AsyncWorker {
   /// Drive the executor and resolve a bounded number of completions. The
   /// Promise API is game-facing; engine ownership remains in fixed task slots.
   /// @returns {number} number of completions drained
-  poll(maxCompletions = this._completionLimit) {
-    this.w.afterglow_wasm_tick();
-    const outPtr = this.w.afterglow_wasm_output_ptr();
-    const outSize = this.w.afterglow_wasm_output_size();
-    const memory = this._memory || this.w.memory;
+  poll(maxCompletions: number = this._completionLimit): number {
+    this._wasm().afterglow_wasm_tick();
+    const outPtr = this._wasm().afterglow_wasm_output_ptr();
+    const outSize = this._wasm().afterglow_wasm_output_size();
+    const memory = this._memory || this._wasm().memory;
     let drained = 0;
     while (drained < maxCompletions) {
-      const n = this.w.afterglow_wasm_drain_completion(outPtr, outSize);
+      const n = this._wasm().afterglow_wasm_drain_completion(outPtr, outSize);
       if (n < 0) break;
       if (n < 8) continue;
       const taskId = Number(new DataView(memory.buffer, outPtr, 8).getBigUint64(0, true));
@@ -200,9 +256,9 @@ export class AsyncWorker {
         const reject = this._callRejects[slot];
         this._releaseCallSlot(slot);
         try {
-          resolve(unwrapResponse(responseBytes));
+          resolve!(unwrapResponse(responseBytes));
         } catch (e) {
-          reject(e);
+          reject!(e);
         }
       }
     }
@@ -216,9 +272,9 @@ export class AsyncWorker {
   /// @param {number} urlPtr
   /// @param {number} urlLen
   /// @returns {number} fetch_id (>0) or 0 on error
-  fetchStart(urlPtr, urlLen) {
+  fetchStart(urlPtr: number, urlLen: number): number {
     const url = new TextDecoder().decode(
-      Uint8Array.from(new Uint8Array((this._memory || this.w.memory).buffer, urlPtr, urlLen))
+      Uint8Array.from(new Uint8Array((this._memory || this._wasm().memory).buffer, urlPtr, urlLen))
     );
     const fullUrl = this._resolveUrl(url);
     return this._registerFetch(new PendingFetch(fullUrl));
@@ -229,17 +285,17 @@ export class AsyncWorker {
   /// @param {number} outPtr
   /// @param {number} outMax
   /// @returns {number} -1 pending, >=0 byte count (complete), -2 out too small
-  fetchPoll(fetchId, outPtr, outMax) {
+  fetchPoll(fetchId: number, outPtr: number, outMax: number): number {
     const pending = this._getFetch(fetchId);
-    if (!pending) return -1;
+    if (!pending || !(pending instanceof PendingFetch || pending instanceof RangeFetch)) return -1;
     if (!pending.resolved) return -1;
     this._releaseFetch(fetchId);
-    if (pending.error) {
-      // Write an empty response — the wasm side handles null/error.
+    if (pending.error || pending.bytes === null) {
+      // Write an empty response for a failed fetch.
       return 0;
     }
     if (pending.bytes.length > outMax) return -2;
-    new Uint8Array((this._memory || this.w.memory).buffer, outPtr, outMax).set(pending.bytes);
+    new Uint8Array((this._memory || this._wasm().memory).buffer, outPtr, outMax).set(pending.bytes);
     return pending.bytes.length;
   }
 
@@ -248,9 +304,9 @@ export class AsyncWorker {
   /// @param {number} urlPtr
   /// @param {number} urlLen
   /// @returns {number} fetch_id (>0) or 0 on error
-  headStart(urlPtr, urlLen) {
+  headStart(urlPtr: number, urlLen: number): number {
     const url = new TextDecoder().decode(
-      Uint8Array.from(new Uint8Array((this._memory || this.w.memory).buffer, urlPtr, urlLen))
+      Uint8Array.from(new Uint8Array((this._memory || this._wasm().memory).buffer, urlPtr, urlLen))
     );
     const fullUrl = this._resolveUrl(url);
     return this._registerFetch(new HeadFetch(fullUrl));
@@ -261,13 +317,13 @@ export class AsyncWorker {
   /// @param {number} outPtr
   /// @param {number} outMax
   /// @returns {number} -1 pending, 8 complete, -2 error
-  headPoll(fetchId, outPtr, outMax) {
+  headPoll(fetchId: number, outPtr: number, outMax: number): number {
     const pending = this._getFetch(fetchId);
-    if (!pending) return -2;
+    if (!pending || !(pending instanceof HeadFetch)) return -2;
     if (!pending.resolved) return -1;
     this._releaseFetch(fetchId);
     if (pending.error || pending.contentLength === null || outMax < 8) return -2;
-    new DataView((this._memory || this.w.memory).buffer, outPtr, 8)
+    new DataView((this._memory || this._wasm().memory).buffer, outPtr, 8)
       .setBigUint64(0, BigInt(pending.contentLength), true);
     return 8;
   }
@@ -278,9 +334,9 @@ export class AsyncWorker {
   /// @param {number} offset
   /// @param {number} len
   /// @returns {number} fetch_id (>0) or 0 on error
-  rangeStart(urlPtr, urlLen, offset, len) {
+  rangeStart(urlPtr: number, urlLen: number, offset: WasmOffset, len: WasmOffset): number {
     const url = new TextDecoder().decode(
-      Uint8Array.from(new Uint8Array((this._memory || this.w.memory).buffer, urlPtr, urlLen))
+      Uint8Array.from(new Uint8Array((this._memory || this._wasm().memory).buffer, urlPtr, urlLen))
     );
     const fullUrl = this._resolveUrl(url);
     return this._registerFetch(new RangeFetch(fullUrl, offset, len));
@@ -288,7 +344,7 @@ export class AsyncWorker {
 
   // --- private ---
 
-  _registerFetch(fetch) {
+  _registerFetch(fetch: Fetch): number {
     for (let probe = 0; probe < this._fetchCapacity; probe++) {
       const id = this.nextFetchId++;
       const slot = id % this._fetchCapacity;
@@ -301,12 +357,12 @@ export class AsyncWorker {
     return 0;
   }
 
-  _getFetch(id) {
+  _getFetch(id: number): Fetch | null {
     const slot = id % this._fetchCapacity;
     return this._fetchIds[slot] === id ? this._fetches[slot] : null;
   }
 
-  _releaseFetch(id) {
+  _releaseFetch(id: number): void {
     const slot = id % this._fetchCapacity;
     if (this._fetchIds[slot] !== id) return;
     this._fetchIds[slot] = -1;
@@ -314,18 +370,18 @@ export class AsyncWorker {
     this._pendingFetchCount--;
   }
 
-  _releaseCallSlot(slot) {
+  _releaseCallSlot(slot: number): void {
     this._callIds[slot] = -1;
     this._callResolves[slot] = null;
     this._callRejects[slot] = null;
     this._pendingCallCount--;
   }
 
-  _nextTaskId() {
+  _nextTaskId(): number {
     return ++this._taskIdCounter;
   }
 
-  _resolveUrl(path) {
+  _resolveUrl(path: string): string {
     if (!this.baseUrl) return path;
     const p = path.startsWith('/') ? path.slice(1) : path;
     const sep = this.baseUrl.endsWith('/') ? '' : '/';
@@ -337,18 +393,18 @@ export class AsyncWorker {
 /// the `ag_fetch_start` / `ag_fetch_poll` imports the asset worker uses.
 /// @param {AsyncWorker} driver
 /// @param {WebAssembly.Memory} memory
-export function asyncWorkerImports(driver, memory) {
+export function asyncWorkerImports(driver: AsyncWorker, memory: WebAssembly.Memory) {
   driver._memory = memory; // store for AsyncWorker methods that need buffer access
   return {
     env: {
       memory,
-      notify_worker: () => {}, // wake-up only (not used by async workers)
-      performance_now: () => performance.now(), // for benchmark functions
-      ag_fetch_start: (urlPtr, urlLen) => driver.fetchStart(urlPtr, urlLen),
-      ag_fetch_poll: (fetchId, outPtr, outMax) => driver.fetchPoll(fetchId, outPtr, outMax),
-      ag_fetch_head_start: (urlPtr, urlLen) => driver.headStart(urlPtr, urlLen),
-      ag_fetch_head_poll: (fetchId, outPtr, outMax) => driver.headPoll(fetchId, outPtr, outMax),
-      ag_fetch_range_start: (urlPtr, urlLen, offset, len) => driver.rangeStart(urlPtr, urlLen, offset, len),
+      notify_worker: (): void => {}, // wake-up only (not used by async workers)
+      performance_now: (): number => performance.now(), // for benchmark functions
+      ag_fetch_start: (urlPtr: number, urlLen: number): number => driver.fetchStart(urlPtr, urlLen),
+      ag_fetch_poll: (fetchId: number, outPtr: number, outMax: number): number => driver.fetchPoll(fetchId, outPtr, outMax),
+      ag_fetch_head_start: (urlPtr: number, urlLen: number): number => driver.headStart(urlPtr, urlLen),
+      ag_fetch_head_poll: (fetchId: number, outPtr: number, outMax: number): number => driver.headPoll(fetchId, outPtr, outMax),
+      ag_fetch_range_start: (urlPtr: number, urlLen: number, offset: WasmOffset, len: WasmOffset): number => driver.rangeStart(urlPtr, urlLen, offset, len),
     },
   };
 }

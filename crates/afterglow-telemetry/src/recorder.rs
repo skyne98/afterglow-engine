@@ -1,4 +1,4 @@
-//! Producer-local finite trace capture.
+//! Producer-local bounded trace capture.
 
 use std::cell::{Cell, UnsafeCell};
 
@@ -33,10 +33,20 @@ impl CategoryMask {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CaptureRetention {
+    /// Keep the initial records and count rejected writes at capacity.
+    #[default]
+    Prefix,
+    /// Replace the oldest record at capacity and count each replacement.
+    Rolling,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CaptureConfig {
     pub epoch: u32,
     pub categories: CategoryMask,
+    pub retention: CaptureRetention,
 }
 
 impl CaptureConfig {
@@ -44,6 +54,14 @@ impl CaptureConfig {
         Self {
             epoch,
             categories: CategoryMask::all(),
+            retention: CaptureRetention::Prefix,
+        }
+    }
+
+    pub const fn flight(epoch: u32) -> Self {
+        Self {
+            retention: CaptureRetention::Rolling,
+            ..Self::all(epoch)
         }
     }
 }
@@ -74,12 +92,17 @@ pub enum RecordStatus {
     InvalidDescriptor,
     WrongDescriptorKind,
     BufferFull,
+    SequenceExhausted,
 }
 
 pub struct CaptureSnapshot<'a> {
     pub epoch: u32,
     pub records: &'a [TraceRecord],
     pub dropped_records: u64,
+    pub overwritten_records: u64,
+    pub first_sequence: u64,
+    pub next_sequence: u64,
+    pub retention: CaptureRetention,
     pub capacity: usize,
 }
 
@@ -90,7 +113,7 @@ pub struct CaptureSnapshot<'a> {
 /// its owning thread or worker. The internal `UnsafeCell` permits allocation-
 /// free RAII span guards to retain `&Recorder` while nested events are emitted.
 pub struct Recorder<C> {
-    descriptors: &'static [Descriptor],
+    descriptors: &'static [Descriptor<'static>],
     clock: C,
     records: UnsafeCell<Box<[TraceRecord]>>,
     enabled_descriptors: Box<[u64]>,
@@ -98,11 +121,15 @@ pub struct Recorder<C> {
     epoch: Cell<u32>,
     length: Cell<usize>,
     dropped: Cell<u64>,
+    overwritten: Cell<u64>,
+    next_sequence: Cell<u64>,
+    cursor: Cell<usize>,
+    retention: CaptureRetention,
 }
 
 impl<C: Clock> Recorder<C> {
     pub fn new(
-        descriptors: &'static [Descriptor],
+        descriptors: &'static [Descriptor<'static>],
         capacity: usize,
         clock: C,
     ) -> Result<Self, CaptureError> {
@@ -120,10 +147,14 @@ impl<C: Clock> Recorder<C> {
             epoch: Cell::new(0),
             length: Cell::new(0),
             dropped: Cell::new(0),
+            overwritten: Cell::new(0),
+            next_sequence: Cell::new(0),
+            cursor: Cell::new(0),
+            retention: CaptureRetention::Prefix,
         })
     }
 
-    pub fn descriptors(&self) -> &'static [Descriptor] {
+    pub fn descriptors(&self) -> &'static [Descriptor<'static>] {
         self.descriptors
     }
 
@@ -146,6 +177,10 @@ impl<C: Clock> Recorder<C> {
         self.length.set(0);
         self.dropped.set(0);
         self.epoch.set(config.epoch);
+        self.next_sequence.set(0);
+        self.overwritten.set(0);
+        self.cursor.set(0);
+        self.retention = config.retention;
         self.enabled_descriptors.fill(0);
         for (index, descriptor) in self.descriptors.iter().enumerate() {
             if config.categories.contains(descriptor.category.0) {
@@ -163,6 +198,12 @@ impl<C: Clock> Recorder<C> {
                 operation: "stop",
             });
         }
+        // This cold operation puts the retained window in chronological order.
+        // SAFETY: exclusive access prevents writes and outstanding snapshots.
+        unsafe {
+            (&mut *self.records.get()).rotate_left(self.cursor.get());
+        }
+        self.cursor.set(0);
         self.state.set(CaptureState::Frozen);
         Ok(())
     }
@@ -181,8 +222,27 @@ impl<C: Clock> Recorder<C> {
             epoch: self.epoch.get(),
             records: &records[..self.length.get()],
             dropped_records: self.dropped.get(),
+            overwritten_records: self.overwritten.get(),
+            first_sequence: self.next_sequence.get() - self.length.get() as u64,
+            next_sequence: self.next_sequence.get(),
+            retention: self.retention,
             capacity: records.len(),
         })
+    }
+
+    /// Continue the same capture after the caller consumes the frozen records.
+    /// This discards the frozen window, but keeps sequence and loss counters.
+    pub fn resume(&mut self) -> Result<(), CaptureError> {
+        if self.state.get() != CaptureState::Frozen {
+            return Err(CaptureError::InvalidTransition {
+                from: self.state.get(),
+                operation: "resume",
+            });
+        }
+        self.length.set(0);
+        self.cursor.set(0);
+        self.state.set(CaptureState::Armed);
+        Ok(())
     }
 
     pub fn reset(&mut self) -> Result<(), CaptureError> {
@@ -195,6 +255,10 @@ impl<C: Clock> Recorder<C> {
         self.length.set(0);
         self.dropped.set(0);
         self.enabled_descriptors.fill(0);
+        self.next_sequence.set(0);
+        self.overwritten.set(0);
+        self.cursor.set(0);
+        self.retention = CaptureRetention::Prefix;
         self.state.set(CaptureState::Idle);
         Ok(())
     }
@@ -384,11 +448,18 @@ impl<C: Clock> Recorder<C> {
         if self.enabled_descriptors[index / 64] & (1_u64 << (index % 64)) == 0 {
             return RecordStatus::CategoryDisabled;
         }
-        let slot = self.length.get();
-        if slot == self.capacity() {
+        let sequence = self.next_sequence.get();
+        if sequence == u64::MAX {
+            self.dropped.set(self.dropped.get().saturating_add(1));
+            return RecordStatus::SequenceExhausted;
+        }
+        let length = self.length.get();
+        let full = length == self.capacity();
+        if full && self.retention == CaptureRetention::Prefix {
             self.dropped.set(self.dropped.get().saturating_add(1));
             return RecordStatus::BufferFull;
         }
+        let slot = if full { self.cursor.get() } else { length };
         let record = TraceRecord {
             timestamp: self.clock.now(),
             correlation: context.0,
@@ -399,12 +470,23 @@ impl<C: Clock> Recorder<C> {
             flags: 0,
             reserved: 0,
         };
-        // SAFETY: Recorder is !Sync and has one producer. Each call writes the
-        // next unique slot; snapshots are only exposed in Frozen state.
+        // SAFETY: Recorder is !Sync and has one producer. Snapshots are only
+        // available in Frozen state, when writes are disabled.
         unsafe {
             (&mut *self.records.get())[slot] = record;
         }
-        self.length.set(slot + 1);
+        self.next_sequence.set(sequence + 1);
+        if full {
+            self.overwritten
+                .set(self.overwritten.get().saturating_add(1));
+            self.cursor.set(if slot + 1 == self.capacity() {
+                0
+            } else {
+                slot + 1
+            });
+        } else {
+            self.length.set(length + 1);
+        }
         RecordStatus::Recorded
     }
 }
@@ -433,5 +515,43 @@ impl<C: Clock> Drop for SpanGuard<'_, C> {
         if self.active {
             let _ = self.recorder.span_end(self.descriptor, self.context, 0, 0);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{ArgumentDescriptor, CategoryId};
+
+    struct NoClock;
+    impl Clock for NoClock {
+        fn now(&self) -> u64 {
+            panic!("An exhausted recorder must not read the clock");
+        }
+    }
+
+    #[test]
+    fn exhausted_sequence_does_not_wrap() {
+        static DESCRIPTORS: [Descriptor<'static>; 1] = [Descriptor::new(
+            CategoryId(0),
+            "app",
+            "sample",
+            DescriptorKind::Instant,
+            ArgumentDescriptor::NONE,
+            ArgumentDescriptor::NONE,
+        )];
+        let mut recorder = Recorder::new(&DESCRIPTORS, 1, NoClock).unwrap();
+        recorder.arm(CaptureConfig::flight(1)).unwrap();
+        recorder.next_sequence.set(u64::MAX);
+        assert_eq!(
+            recorder.instant(DescriptorId(0), TraceContext(1), 0, 0),
+            RecordStatus::SequenceExhausted
+        );
+        recorder.stop().unwrap();
+        let snapshot = recorder.snapshot().unwrap();
+        assert!(snapshot.records.is_empty());
+        assert_eq!(snapshot.first_sequence, u64::MAX);
+        assert_eq!(snapshot.next_sequence, u64::MAX);
+        assert_eq!(snapshot.dropped_records, 1);
     }
 }

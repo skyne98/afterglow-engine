@@ -14,7 +14,9 @@ use std::{
 use tokio::sync::Semaphore;
 
 #[cfg(feature = "cache")]
-use http_cache_reqwest::{CACacheManager, Cache, CacheMode, HttpCache, HttpCacheOptions};
+use http_cache_reqwest::{
+    CACacheManager, Cache, CacheMode, CacheOptions, HttpCache, HttpCacheOptions,
+};
 
 const USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64; rv:60.0) Gecko/20100101 Firefox/81.0";
 
@@ -35,11 +37,23 @@ type RequestBuilder = reqwest::RequestBuilder;
 
 #[cfg(feature = "cache")]
 fn get_cache_path() -> std::path::PathBuf {
-    use directories::ProjectDirs;
-    let path = ProjectDirs::from("com", "DioxusLabs", "Blitz")
-        .expect("Failed to find cache directory")
-        .cache_dir()
-        .to_owned();
+    // iOS apps are sandboxed with a per-app Caches directory, and the sandbox
+    // only permits paths that case-match its canonical layout, so the
+    // ProjectDirs convention (a mixed-case bundle-id directory) cannot be
+    // created. Use a subdirectory of the app's own Caches directory instead.
+    #[cfg(target_os = "ios")]
+    let path = {
+        let home = std::env::var_os("HOME").expect("Failed to find cache directory");
+        std::path::PathBuf::from(home).join("Library/Caches/http-cache")
+    };
+    #[cfg(not(target_os = "ios"))]
+    let path = {
+        use directories::ProjectDirs;
+        ProjectDirs::from("com", "DioxusLabs", "Blitz")
+            .expect("Failed to find cache directory")
+            .cache_dir()
+            .to_owned()
+    };
     #[cfg(feature = "tracing")]
     tracing::info!(path = ?path.display(), "Using cache dir");
     path
@@ -83,7 +97,21 @@ impl Provider {
             .with(Cache(HttpCache {
                 mode: CacheMode::Default,
                 manager: cache_manager.clone(),
-                options: HttpCacheOptions::default(),
+                options: HttpCacheOptions {
+                    // Evaluate cache policy as a single-user (private) cache, like a
+                    // real browser, rather than a shared/proxy cache. The default
+                    // (`shared: true`) treats any response carrying `Set-Cookie` without
+                    // an explicit `Cache-Control: public`/`immutable` as immediately
+                    // stale, forcing a revalidation request to the server on every load.
+                    // Many CDNs (e.g. Wikimedia image hosts) serve images this way, so
+                    // the shared-cache default defeats disk caching and gets us rate
+                    // limited. A private cache honours heuristic freshness instead.
+                    cache_options: Some(CacheOptions {
+                        shared: false,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
             }))
             .build();
 

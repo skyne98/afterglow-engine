@@ -51,4 +51,20 @@ test('native rAF queue is bounded, ordered, cancelable, and frame-delayed', asyn
   expect(requested).toBeGreaterThan(0);
   expect(emptied).toBeGreaterThan(0);
   expect(drainedCallbacks).toBeGreaterThanOrEqual(1029);
+
+  // Runtime turns do not deliver withheld compositor frames.
+  const resumed: number[] = [];
+  const first = requestAnimationFrame(() => resumed.push(-1));
+  requestAnimationFrame(time => {
+    resumed.push(time);
+    requestAnimationFrame(next => resumed.push(next));
+  });
+  cancelAnimationFrame(first);
+  for (let turn = 0; turn < 20; turn++) await Promise.resolve();
+  expect(resumed).toEqual([]);
+  expect((globalThis as any).__nativeAnimationFrameStats().pending).toBe(1);
+  (globalThis as any).__runNativeAnimationFrames(30_000);
+  expect(resumed).toEqual([30_000]);
+  (globalThis as any).__runNativeAnimationFrames(30_007);
+  expect(resumed).toEqual([30_000, 30_007]);
 });

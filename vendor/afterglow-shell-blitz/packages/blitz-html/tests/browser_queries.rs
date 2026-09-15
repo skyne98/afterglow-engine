@@ -61,6 +61,24 @@ fn overflow_visible_descendants_are_hit_outside_parent_box() {
 }
 
 #[test]
+fn scrolling_keeps_the_container_rect_and_moves_child_rects() {
+    let mut doc = resolved_doc(
+        "<style>body{margin:0}</style><div id='popup' style='position:fixed;left:40px;top:80px;width:160px;height:100px;padding:4px;border:1px solid;overflow:auto'><div style='height:168px'></div><button id='row' style='display:block;width:100px;height:28px'></button><div style='height:100px'></div></div>",
+    );
+    let popup = doc.query_selector("#popup").unwrap().unwrap();
+    let row = doc.query_selector("#row").unwrap().unwrap();
+    let before = doc.get_client_bounding_rect(popup).unwrap();
+    let row_before = doc.get_client_bounding_rect(row).unwrap();
+    doc.scroll_node_by(popup, 0.0, -168.0, |_| {});
+    let after = doc.get_client_bounding_rect(popup).unwrap();
+    let row_after = doc.get_client_bounding_rect(row).unwrap();
+    assert_eq!((after.x, after.y), (before.x, before.y));
+    assert_eq!(row_after.y, row_before.y - 168.0);
+    assert!(doc.hits((row_after.x + 10.0) as f32, (row_after.y + 10.0) as f32)
+        .iter().any(|hit| hit.node_id == row));
+}
+
+#[test]
 fn all_hits_respect_pointer_events_none() {
     let doc = resolved_doc(
         "<html><body style='margin:0'><div id='back' style='position:absolute;inset:0;width:100px;height:100px'></div><div id='front' style='pointer-events:none;position:absolute;inset:0;width:100px;height:100px'></div></body></html>",

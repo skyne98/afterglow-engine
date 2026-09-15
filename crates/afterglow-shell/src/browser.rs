@@ -1,5 +1,10 @@
+mod canvas;
+pub use canvas::RasterRegion;
+use canvas::CanvasPixels;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::time::Instant;
+use blitz_traits::NodeId;
 
 use anyrender::render_to_buffer;
 use anyrender_vello_cpu::VelloCpuImageRenderer;
@@ -11,6 +16,31 @@ use blitz_paint::{paint_scene, paint_scene_region};
 use blitz_traits::net::{Bytes, NetHandler, NetProvider, Request};
 use blitz_traits::shell::{ColorScheme, Viewport};
 use serde::{Deserialize, Serialize};
+
+#[derive(Default, Deserialize)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+pub struct TextInputAction {
+    pub action: String,
+    pub key: String,
+    pub x: f32,
+    pub y: f32,
+    pub shift: bool,
+    pub control: bool,
+    pub alt: bool,
+    pub meta: bool,
+    pub anchor: usize,
+    pub focus: usize,
+    pub cursor: Option<(usize, usize)>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextInputState {
+    pub value: String,
+    pub anchor: usize,
+    pub focus: usize,
+    pub cursor_rect: Option<DomRect>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -175,13 +205,16 @@ pub struct CanvasRaster {
 /// Reconciliation preserves the long-lived Blitz document and derived state.
 pub struct BrowserDocument {
     document: Option<BaseDocument>,
-    nodes: HashMap<u64, usize>,
+    nodes: HashMap<u64, NodeId>,
+    stylesheet_texts: HashMap<u64, String>,
+    canvas_pixels: HashMap<u64, CanvasPixels>,
     viewport_width: u32,
     viewport_height: u32,
     raster_width: u32,
     raster_height: u32,
     viewport_scale: f64,
     epoch: u64,
+    animation_clock: Instant,
 }
 
 impl BrowserDocument {
@@ -189,12 +222,27 @@ impl BrowserDocument {
         Self {
             document: None,
             nodes: HashMap::new(),
+            stylesheet_texts: HashMap::new(),
+            canvas_pixels: HashMap::new(),
             viewport_width,
             viewport_height,
             raster_width: viewport_width,
             raster_height: viewport_height,
             viewport_scale: 1.0,
             epoch: 0,
+            animation_clock: Instant::now(),
+        }
+    }
+
+    pub fn is_animating(&self) -> bool {
+        self.document.as_ref().is_some_and(BaseDocument::is_animating)
+    }
+
+    pub fn advance_animations(&mut self) {
+        if let Some(document) = self.document.as_mut() {
+            if document.is_animating() {
+                document.resolve(self.animation_clock.elapsed().as_secs_f64());
+            }
         }
     }
 
@@ -266,7 +314,7 @@ impl BrowserDocument {
                         )
                     }
                     "text" => mutator.create_text_node(record.text.as_deref().unwrap_or("")),
-                    "comment" => mutator.create_comment_node(),
+                    "comment" => mutator.create_comment_node(record.text.as_deref().unwrap_or("")),
                     kind => {
                         return Err(format!(
                             "native node {} has unknown kind {kind:?}",
@@ -314,6 +362,7 @@ impl BrowserDocument {
         for record in &snapshot.nodes {
             if let Some(css) = &record.stylesheet_text {
                 document.set_stylesheet_text_for_node(nodes[&record.id], css);
+                self.stylesheet_texts.insert(record.id, css.clone());
             }
         }
 
@@ -358,7 +407,7 @@ impl BrowserDocument {
                     .map_err(|error| format!("set Blitz canvas {node_id}: {error}"))?;
             }
         }
-        document.resolve(0.0);
+        document.resolve(self.animation_clock.elapsed().as_secs_f64());
         self.document = Some(document);
         self.nodes = nodes;
         self.epoch = epoch;
@@ -451,7 +500,7 @@ impl BrowserDocument {
                         )
                     }
                     "text" => mutator.create_text_node(record.text.as_deref().unwrap_or("")),
-                    "comment" => mutator.create_comment_node(),
+                    "comment" => mutator.create_comment_node(record.text.as_deref().unwrap_or("")),
                     kind => {
                         return Err(format!(
                             "native node {} has unknown kind {kind:?}",
@@ -564,9 +613,16 @@ impl BrowserDocument {
         }
         self.nodes
             .retain(|native_id, _| snapshot_ids.contains(native_id));
+        self.stylesheet_texts
+            .retain(|id, _| snapshot_ids.contains(id));
         for record in &snapshot.nodes {
             if let Some(css) = &record.stylesheet_text {
-                document.set_stylesheet_text_for_node(self.nodes[&record.id], css);
+                if self.stylesheet_texts.get(&record.id) != Some(css) {
+                    document.set_stylesheet_text_for_node(self.nodes[&record.id], css);
+                    self.stylesheet_texts.insert(record.id, css.clone());
+                }
+            } else {
+                self.stylesheet_texts.remove(&record.id);
             }
         }
 
@@ -612,7 +668,7 @@ impl BrowserDocument {
                     .map_err(|error| format!("set Blitz canvas {node_id}: {error}"))?;
             }
         }
-        document.resolve(0.0);
+        document.resolve(self.animation_clock.elapsed().as_secs_f64());
         self.epoch = epoch;
         Ok(())
     }
@@ -634,8 +690,8 @@ impl BrowserDocument {
             .ok_or_else(|| format!("native node {native_id} is not connected"))?;
         let node_id = match pseudo {
             "" => Some(element_id),
-            "::before" => document.get_node(element_id).and_then(|node| node.before),
-            "::after" => document.get_node(element_id).and_then(|node| node.after),
+            "::before" => document.get_node(element_id).and_then(|node| node.before()),
+            "::after" => document.get_node(element_id).and_then(|node| node.after()),
             _ => return Err(format!("unsupported pseudo-element {pseudo:?}")),
         };
         let Some(node_id) = node_id else {
@@ -675,9 +731,86 @@ impl BrowserDocument {
             }
         };
         if changed {
-            document.resolve(0.0);
+            document.resolve(self.animation_clock.elapsed().as_secs_f64());
         }
         Ok(changed)
+    }
+
+    pub fn text_input(&mut self, native_id: u64, action: TextInputAction) -> Result<TextInputState, String> {
+        use blitz_traits::events::*;
+        use keyboard_types::{Code, Key, Location, Modifiers};
+        let node_id = *self.nodes.get(&native_id).ok_or("text input is not connected")?;
+        let document = self.document.as_mut().ok_or("browser document is missing")?;
+        let element = document.get_node(node_id).and_then(|n| n.element_data()).ok_or("text input is missing")?;
+        let input = element.text_input_data().ok_or("element has no text editor")?;
+        let disabled = element.attr(LocalName::from("disabled")).is_some();
+        let readonly = element.attr(LocalName::from("readonly")).is_some();
+        let mut mods = Modifiers::empty();
+        mods.set(Modifiers::SHIFT, action.shift);
+        mods.set(Modifiers::CONTROL, action.control);
+        mods.set(Modifiers::ALT, action.alt);
+        mods.set(Modifiers::SUPER, action.meta);
+        if action.key.len() > 32 * 1024 * 1024 { return Err("text input exceeds 32 MiB".into()); }
+        let key = if action.action == "insert" { Key::Character(action.key.clone()) }
+            else { action.key.parse::<Key>().unwrap_or(Key::Unidentified) };
+        let selection_key = matches!(key, Key::ArrowLeft | Key::ArrowRight | Key::ArrowUp | Key::ArrowDown | Key::Home | Key::End)
+            || (action.control || action.meta) && matches!(&key, Key::Character(c) if c.eq_ignore_ascii_case("a") || c.eq_ignore_ascii_case("c"));
+        if action.action == "select" && !disabled {
+            let text = input.editor.raw_text();
+            let byte_offset = |offset: usize| {
+                let mut units = 0;
+                for (byte, character) in text.char_indices() {
+                    if units >= offset { return byte; }
+                    units += character.len_utf16();
+                }
+                text.len()
+            };
+            let anchor = byte_offset(action.anchor);
+            let focus = byte_offset(action.focus);
+            document.set_text_input_selection(node_id, anchor, focus);
+        } else if !disabled && action.action != "query" {
+            if action.action == "imeCommit" && !readonly {
+                document.handle_dom_event(&mut DomEvent::new(node_id, DomEventData::Ime(BlitzImeEvent::Disabled)), |_| {});
+            }
+            let data = match action.action.as_str() {
+                "imePreedit" if !readonly => {
+                    if action.cursor.is_some_and(|(start, end)| !action.key.is_char_boundary(start) || !action.key.is_char_boundary(end)) {
+                        return Err("invalid IME cursor byte offsets".into());
+                    }
+                    DomEventData::Ime(BlitzImeEvent::Preedit(action.key.into(), action.cursor))
+                }
+                "imeCommit" if !readonly => DomEventData::Ime(BlitzImeEvent::Commit(action.key.into())),
+                "imeCancel" => DomEventData::Ime(BlitzImeEvent::Disabled),
+                "key" | "insert" if !readonly || selection_key => DomEventData::KeyDown(BlitzKeyEvent {
+                    key, code: Code::Unidentified, modifiers: mods, location: Location::Standard,
+                    is_auto_repeating: false, is_composing: false, state: KeyState::Pressed, text: None,
+                }),
+                "down" | "move" | "up" => {
+                    if !action.x.is_finite() || !action.y.is_finite() { return Err("invalid text pointer coordinates".into()); }
+                    let pointer = BlitzPointerEvent {
+                        id: BlitzPointerId::Mouse, is_primary: true,
+                        coords: PointerCoords { page_x: action.x, page_y: action.y, screen_x: action.x, screen_y: action.y, client_x: action.x, client_y: action.y },
+                        button: MouseEventButton::Main,
+                        buttons: if action.action == "up" { MouseEventButtons::None } else { MouseEventButtons::Primary },
+                        mods, details: Default::default(), element: Default::default(), active_pointers: Default::default(),
+                    };
+                    match action.action.as_str() { "down" => DomEventData::PointerDown(pointer), "move" => DomEventData::PointerMove(pointer), _ => DomEventData::PointerUp(pointer) }
+                }
+                "key" | "insert" | "imePreedit" | "imeCommit" => return self.text_input(native_id, TextInputAction { action: "query".into(), ..Default::default() }),
+                _ => return Err("invalid text input action".into()),
+            };
+            document.handle_dom_event(&mut DomEvent::new(node_id, data), |_| {});
+        }
+        document.resolve(self.animation_clock.elapsed().as_secs_f64());
+        let input = document.get_node(node_id).and_then(|n| n.element_data()).and_then(|el| el.text_input_data()).ok_or("text editor is missing")?;
+        let text = input.editor.raw_text();
+        let selection = input.editor.raw_selection();
+        Ok(TextInputState {
+            value: text.to_owned(),
+            anchor: text[..selection.anchor().index()].encode_utf16().count(),
+            focus: text[..selection.focus().index()].encode_utf16().count(),
+            cursor_rect: document.text_input_cursor_rect(node_id).map(|rect| DomRect::from_parts(rect.x, rect.y, rect.width, rect.height)),
+        })
     }
 
     fn cursor_for_node(&self, native_id: u64) -> Result<String, String> {
@@ -796,7 +929,7 @@ impl BrowserDocument {
             _ => return Err(format!("invalid pointer state action {action}")),
         };
         if hover_changed || state_changed {
-            document.resolve(0.0);
+            document.resolve(self.animation_clock.elapsed().as_secs_f64());
         }
         Ok(hover_changed || state_changed)
     }
@@ -814,7 +947,7 @@ impl BrowserDocument {
         let current = document
             .get_node(node_id)
             .ok_or_else(|| format!("missing Blitz node {node_id}"))?
-            .scroll_offset;
+            .scroll_offset();
         let target_left = left.max(0.0);
         let target_top = top.max(0.0);
         Ok(document.scroll_node_by_has_changed(
@@ -838,41 +971,18 @@ impl BrowserDocument {
         let node = document
             .get_node(node_id)
             .ok_or_else(|| format!("missing Blitz node {node_id}"))?;
-        let layout = node.final_layout;
+        let layout = node.final_layout();
         let client_width = (layout.size.width - layout.border.left - layout.border.right).max(0.0);
         let client_height =
             (layout.size.height - layout.border.top - layout.border.bottom).max(0.0);
-        let scroll_width = client_width.max(node.scrollable_overflow.x1 as f32);
-        let scroll_height = client_height.max(node.scrollable_overflow.y1 as f32);
+        let scroll_width = client_width.max(node.scrollable_overflow().x1 as f32);
+        let scroll_height = client_height.max(node.scrollable_overflow().y1 as f32);
 
-        let mut parent_id = node.parent;
-        let mut offset_parent_id = None;
-        while let Some(id) = parent_id {
-            let parent = document
-                .get_node(id)
-                .ok_or_else(|| format!("missing Blitz ancestor {id}"))?;
-            let is_body = parent
-                .element_data()
-                .is_some_and(|element| element.name.local.as_ref() == "body");
-            let is_positioned = document.node_is_positioned(id);
-            if is_body || is_positioned {
-                offset_parent_id = Some(id);
-                break;
-            }
-            parent_id = parent.parent;
-        }
-        let rect = document
-            .get_client_bounding_rect(node_id)
-            .ok_or_else(|| format!("Blitz node {node_id} has no client rectangle"))?;
-        let (offset_left, offset_top) = offset_parent_id
-            .and_then(|id| document.get_client_bounding_rect(id))
-            .map_or((rect.x, rect.y), |parent| {
-                (rect.x - parent.x, rect.y - parent.y)
-            });
-        let offset_parent = offset_parent_id.and_then(|id| {
+        let offset = node.offset_top_left();
+        let offset_parent = node.offset_parent().and_then(|parent| {
             self.nodes
                 .iter()
-                .find_map(|(native, blitz)| (*blitz == id).then_some(*native))
+                .find_map(|(native, blitz)| (*blitz == parent.id).then_some(*native))
         });
 
         Ok(DomBoxMetrics {
@@ -882,13 +992,13 @@ impl BrowserDocument {
             client_top: layout.border.top.round() as i32,
             offset_width: layout.size.width.round() as i32,
             offset_height: layout.size.height.round() as i32,
-            offset_left: offset_left.round() as i32,
-            offset_top: offset_top.round() as i32,
+            offset_left: offset.x.round() as i32,
+            offset_top: offset.y.round() as i32,
             offset_parent,
             scroll_width: scroll_width.round() as i32,
             scroll_height: scroll_height.round() as i32,
-            scroll_left: node.scroll_offset.x,
-            scroll_top: node.scroll_offset.y,
+            scroll_left: node.scroll_offset().x,
+            scroll_top: node.scroll_offset().y,
         })
     }
 
@@ -906,7 +1016,7 @@ impl BrowserDocument {
         {
             return Ok(Vec::new());
         }
-        let reverse_nodes: HashMap<usize, u64> = self
+        let reverse_nodes: HashMap<NodeId, u64> = self
             .nodes
             .iter()
             .map(|(native, blitz)| (*blitz, *native))
@@ -1080,7 +1190,7 @@ impl BrowserDocument {
                 scale as f32,
                 ColorScheme::Light,
             ));
-            document.resolve(0.0);
+            document.resolve(self.animation_clock.elapsed().as_secs_f64());
         }
     }
 
@@ -1088,14 +1198,25 @@ impl BrowserDocument {
         self.render_internal(canvases, true)
     }
 
+    pub fn set_canvas_raster(
+        &mut self,
+        native_id: u64,
+        width: u32,
+        height: u32,
+        rgba: Vec<u8>,
+    ) -> Result<(), String> {
+        self.update_canvas_raster(native_id, width, height,
+            RasterRegion { x: 0, y: 0, width, height }, &rgba)
+    }
+
     /// Paint a production HUD layer while preserving transparent pixels so it
     /// can be alpha-composited over the native WebGPU surface.
     pub fn suppress_canvas_paint(&mut self, native_id: u64) -> Result<(), String> {
-        let node_id = self
-            .nodes
-            .get(&native_id)
-            .copied()
-            .ok_or_else(|| format!("native canvas {native_id} is not connected"))?;
+        if let Some(canvas) = self.canvas_pixels.get_mut(&native_id) { canvas.enabled = false; }
+        // A detached WebGPU canvas has no HUD raster to suppress.
+        let Some(node_id) = self.nodes.get(&native_id).copied() else {
+            return Ok(());
+        };
         self.document
             .as_mut()
             .ok_or_else(|| "browser document has not been synchronized".to_string())?
@@ -1135,6 +1256,7 @@ impl BrowserDocument {
         width: u32,
         height: u32,
     ) -> Result<Vec<u8>, String> {
+        self.prepare_canvas_snapshots()?;
         let scale = self.viewport_scale;
         let document = self
             .document
@@ -1152,6 +1274,7 @@ impl BrowserDocument {
         canvases: Vec<CanvasRaster>,
         opaque_page_background: bool,
     ) -> Result<Vec<u8>, String> {
+        self.prepare_canvas_snapshots()?;
         let paint_scale = self.viewport_scale;
         let document = self
             .document
@@ -1299,6 +1422,295 @@ mod tests {
             32,
         );
         assert!(pixels.iter().any(|&value| value != 0));
+    }
+
+    #[test]
+    fn fixed_popup_hits_above_transformed_canvas() {
+        let mut document = HtmlDocument::from_html(
+            "<style>html,body{margin:0;width:100%;height:100%;overflow:hidden}main{position:relative;overflow:hidden;width:100%;height:100%}canvas{width:2048px;height:2048px;transform:scale(1.535)}#popup{position:fixed;left:794px;top:63px;width:160px;max-height:148px;overflow-y:auto;z-index:2147483647;padding:4px;border:1px solid;box-sizing:border-box}#option{height:28px;margin-top:28px}</style><main><canvas></canvas></main><div id='popup'><div id='option'></div></div>",
+            DocumentConfig { viewport: Some(Viewport::new(1750, 1350, 1.0, ColorScheme::Light)), ..Default::default() },
+        );
+        document.set_incremental_layout(true);
+        document.resolve(0.0);
+        let option = document.query_selector("#option").unwrap().unwrap();
+        assert_eq!(document.hit(874.0, 110.0).unwrap().node_id, option);
+        let popup = document.query_selector("#popup").unwrap().unwrap();
+        document.mutate().set_attribute(popup, QualName::new(None, Namespace::from(""), LocalName::from("style")), "transform:translate(300px,200px)");
+        document.resolve(0.1);
+        assert_eq!(document.hit(1174.0, 310.0).unwrap().node_id, option);
+        assert_ne!(document.hit(874.0, 110.0).unwrap().node_id, option);
+    }
+
+    #[test]
+    fn client_rects_include_nested_transforms_and_keep_layout_offsets() {
+        for scale in [1.0, 2.0] {
+            let mut document = HtmlDocument::from_html(
+                "<style>body{margin:0}#parent{position:fixed;left:0;top:0;width:200px;height:100px;transform:translate(33px,32px);transform-origin:0 0}#child{width:80px;height:20px;transform:scale(2);transform-origin:0 0}</style><div id='parent'><div id='child'></div></div>",
+                DocumentConfig { viewport: Some(Viewport::new(800, 500, scale, ColorScheme::Light)), ..Default::default() },
+            );
+            document.resolve(0.0);
+            let parent = document.query_selector("#parent").unwrap().unwrap();
+            let child = document.query_selector("#child").unwrap().unwrap();
+            let rect = document.get_client_bounding_rect(child).unwrap();
+            assert_eq!((rect.x, rect.y, rect.width, rect.height), (33.0, 32.0, 160.0, 40.0));
+            let parent_rect = document.get_client_bounding_rect(parent).unwrap();
+            assert_eq!((parent_rect.x, parent_rect.y), (33.0, 32.0));
+            let offset = document.get_node(child).unwrap().offset_top_left();
+            assert_eq!((offset.x, offset.y), (0.0, 0.0));
+            assert!(document.hits(40.0, 40.0).iter().any(|hit| hit.node_id == child));
+        }
+    }
+
+    #[test]
+    fn native_text_defaults_edit_select_and_preserve_readonly_values() {
+        let mut snapshot: BrowserSnapshot = serde_json::from_value(serde_json::json!({ "nodes": [
+            {"id":1,"kind":"element","localName":"html","attributes":[],"children":[2,3]},
+            {"id":2,"kind":"element","localName":"style","attributes":[],"children":[],"stylesheetText":
+                "body {margin:0} input {width:160px;height:30px;font:16px sans-serif;color:red;background:white}"},
+            {"id":3,"kind":"element","localName":"body","attributes":[],"children":[4]},
+            {"id":4,"kind":"element","localName":"input","children":[],"attributes":[
+                {"localName":"type","value":"text"}, {"localName":"value","value":"hello world"}]}
+        ]})).unwrap();
+        for node in &mut snapshot.nodes {
+            if node.kind == "element" { node.namespace = Some("http://www.w3.org/1999/xhtml".into()); }
+        }
+        let mut browser = BrowserDocument::new(300, 100);
+        browser.sync(1, snapshot.clone(), "file:///tmp/input.html").unwrap();
+        browser.set_focus(Some(4)).unwrap();
+        let before = browser.render_overlay().unwrap();
+        let selected = browser.text_input(4, TextInputAction { action: "key".into(), key: "a".into(), control: true, ..Default::default() }).unwrap();
+        assert_eq!((selected.anchor, selected.focus), (0, 11));
+        assert_ne!(before, browser.render_overlay().unwrap(), "selection must change the raster");
+        let replaced = browser.text_input(4, TextInputAction { action: "key".into(), key: "é".into(), ..Default::default() }).unwrap();
+        assert_eq!(replaced.value, "é");
+        assert_eq!(replaced.focus, 1);
+        assert_ne!(before, browser.render_overlay().unwrap(), "edited glyphs must change the raster");
+        snapshot.nodes[3].attributes[1].value = replaced.value;
+        browser.sync(2, snapshot.clone(), "file:///tmp/input.html").unwrap();
+        assert_eq!(browser.text_input(4, TextInputAction { action: "query".into(), ..Default::default() }).unwrap().focus, 1);
+        let deleted = browser.text_input(4, TextInputAction { action: "key".into(), key: "Backspace".into(), ..Default::default() }).unwrap();
+        assert_eq!(deleted.value, "");
+        let preedit = browser.text_input(4, TextInputAction { action: "imePreedit".into(), key: "に".into(), cursor: Some((3, 3)), ..Default::default() }).unwrap();
+        assert_eq!(preedit.value, "に");
+        assert!(browser.text_input(4, TextInputAction { action: "imePreedit".into(), key: "に".into(), cursor: Some((1, 1)), ..Default::default() }).is_err());
+        let preview = browser.render_overlay().unwrap();
+        snapshot.nodes[3].attributes[1].value = preedit.value;
+        browser.sync(3, snapshot.clone(), "file:///tmp/input.html").unwrap();
+        let committed = browser.text_input(4, TextInputAction { action: "imeCommit".into(), key: "日本".into(), ..Default::default() }).unwrap();
+        assert_eq!(committed.value, "日本", "commit must replace preedit, not append it");
+        assert_ne!(preview, browser.render_overlay().unwrap());
+        browser.text_input(4, TextInputAction { action: "select".into(), anchor: 0, focus: 2, ..Default::default() }).unwrap();
+        let pasted = browser.text_input(4, TextInputAction { action: "insert".into(), key: "a😀é".into(), ..Default::default() }).unwrap();
+        assert_eq!(pasted.value, "a😀é");
+        assert_eq!(pasted.focus, 4);
+        snapshot.nodes[3].attributes[1].value = "hello world".into();
+        snapshot.nodes[3].attributes.push(BrowserAttributeRecord { local_name: "readonly".into(), namespace: None, prefix: None, value: "".into() });
+        browser.sync(4, snapshot, "file:///tmp/input.html").unwrap();
+        browser.text_input(4, TextInputAction { action: "select".into(), anchor: 0, focus: 11, ..Default::default() }).unwrap();
+        let readonly = browser.text_input(4, TextInputAction { action: "key".into(), key: "x".into(), ..Default::default() }).unwrap();
+        assert_eq!(readonly.value, "hello world");
+        browser.text_input(4, TextInputAction { action: "down".into(), x: 8.0, y: 15.0, ..Default::default() }).unwrap();
+        let dragged = browser.text_input(4, TextInputAction { action: "move".into(), x: 280.0, y: 15.0, ..Default::default() }).unwrap();
+        assert_eq!(dragged.focus, 11, "text drag must extend beyond the input border");
+        assert!(dragged.anchor < dragged.focus);
+    }
+
+    #[test]
+    fn text_selection_uses_inverse_transforms_outside_the_input() {
+        for scale in [1.0, 2.0] {
+            let mut snapshot: BrowserSnapshot = serde_json::from_value(serde_json::json!({ "nodes": [
+                {"id":1,"kind":"element","localName":"html","attributes":[],"children":[2,3]},
+                {"id":2,"kind":"element","localName":"style","attributes":[],"children":[],"stylesheetText":
+                    "body{margin:0} input{position:absolute;left:100px;top:100px;width:160px;height:30px;font:16px sans-serif;transform-origin:0 0;transform:rotate(30deg) scale(1.5)}"},
+                {"id":3,"kind":"element","localName":"body","attributes":[],"children":[4]},
+                {"id":4,"kind":"element","localName":"input","children":[],"attributes":[{"localName":"value","value":"hello world"}]}
+            ]})).unwrap();
+            for node in &mut snapshot.nodes { node.namespace = Some("http://www.w3.org/1999/xhtml".into()); }
+            let mut browser = BrowserDocument::new(800, 600);
+            browser.resize_viewport(800, 600, scale);
+            browser.sync(1, snapshot, "file:///tmp/transformed-input.html").unwrap();
+            browser.set_focus(Some(4)).unwrap();
+            let point = |x: f32| (100.0 + 1.5 * (x * 30f32.to_radians().cos() - 15.0 * 0.5), 100.0 + 1.5 * (x * 0.5 + 15.0 * 30f32.to_radians().cos()));
+            let (x, y) = point(5.0);
+            browser.text_input(4, TextInputAction { action: "down".into(), x, y, ..Default::default() }).unwrap();
+            let (x, y) = point(250.0);
+            let selected = browser.text_input(4, TextInputAction { action: "move".into(), x, y, ..Default::default() }).unwrap();
+            assert_eq!(selected.focus, 11, "transformed drag at scale {scale}");
+            assert!(selected.anchor < selected.focus);
+        }
+    }
+
+    #[test]
+    fn number_inputs_paint_values_after_details_open() {
+        for initially_open in [true, false] {
+            let mut document = HtmlDocument::from_html(
+                &format!("<style>body{{margin:0;font:13px sans-serif}}.grid{{display:grid;grid-template-columns:1fr 1fr;gap:5px}}label{{font-size:10px}}input{{width:100%;margin-top:2px;padding:4px;border:1px solid black;color:red;background:white}}</style><details {}><summary>Document</summary><div class='grid'><label>Width<input id='width' type='number' value='2048'></label><label>Height<input id='height' type='number' value='2048'></label></div></details>", if initially_open { "open" } else { "" }),
+                DocumentConfig {
+                    viewport: Some(Viewport::new(300, 160, 1.0, ColorScheme::Light)),
+                    font_ctx: Some(build_browser_font_ctx(
+                        include_bytes!("../vendor/fonts/LiberationSans-Regular.ttf"),
+                        include_bytes!("../vendor/fonts/JetBrainsMonoNerdFontMono-Regular.ttf"),
+                    )),
+                    ..Default::default()
+                },
+            );
+            document.set_incremental_layout(true);
+            document.resolve(0.0);
+            let details = document.query_selector("details").unwrap().unwrap();
+            document.mutate().set_attribute(details, QualName::new(None, Namespace::from(""), LocalName::from("open")), "");
+            document.resolve(0.1);
+            let pixels = render_to_buffer::<VelloCpuImageRenderer, _>(
+                |scene| paint_scene(scene, &mut document, 1.0, 300, 160, 0, 0),
+                300, 160,
+            );
+            for selector in ["#width", "#height"] {
+                let id = document.query_selector(selector).unwrap().unwrap();
+                let rect = document.get_client_bounding_rect(id).unwrap();
+                let mut ink = 0;
+                for y in rect.y.max(0.0) as usize..((rect.y + rect.height) as usize).min(160) {
+                    for x in rect.x.max(0.0) as usize..((rect.x + rect.width) as usize).min(300) {
+                        let pixel = &pixels[(y * 300 + x) * 4..][..4];
+                        if pixel[0] > 100 && pixel[1] < 80 && pixel[2] < 80 { ink += 1; }
+                    }
+                }
+                assert!(ink > 5, "{selector}: missing number glyphs, initially_open={initially_open}, rect={rect:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn native_select_displays_only_its_current_label() {
+        let mut document = HtmlDocument::from_html(
+            "<style>body{margin:0}select{display:inline-block;width:160px;height:30px}</style><select><option id='first' selected>Off</option><option id='second'>Smoothing</option></select>",
+            DocumentConfig {
+                viewport: Some(Viewport::new(200, 80, 1.0, ColorScheme::Light)),
+                font_ctx: Some(build_browser_font_ctx(
+                    include_bytes!("../vendor/fonts/LiberationSans-Regular.ttf"),
+                    include_bytes!("../vendor/fonts/JetBrainsMonoNerdFontMono-Regular.ttf"),
+                )),
+                ..Default::default()
+            },
+        );
+        document.resolve(0.0);
+        let first = document.query_selector("#first").unwrap().unwrap();
+        let second = document.query_selector("#second").unwrap().unwrap();
+        assert!(document.get_client_bounding_rect(first).unwrap().width > 0.0,
+            "first display={:?}, second display={:?}, first layout={:?}",
+            document.computed_property(first, "display"),
+            document.computed_property(second, "display"),
+            document.get_node(first).unwrap().final_layout());
+        assert_eq!(document.get_client_bounding_rect(second).unwrap().width, 0.0);
+        document.mutate().clear_attribute(first, QualName::new(None, Namespace::from(""), LocalName::from("selected")));
+        document.mutate().set_attribute(second, QualName::new(None, Namespace::from(""), LocalName::from("selected")), "");
+        document.resolve(0.1);
+        assert_eq!(document.get_client_bounding_rect(first).unwrap().width, 0.0);
+        assert!(document.get_client_bounding_rect(second).unwrap().width > 0.0);
+    }
+
+    #[test]
+    fn hover_transitions_advance_and_return_to_idle() {
+        let mut snapshot: BrowserSnapshot = serde_json::from_value(serde_json::json!({ "nodes": [
+            {"id":1,"kind":"element","localName":"html","attributes":[],"children":[2,3]},
+            {"id":2,"kind":"element","localName":"style","attributes":[],"children":[],"stylesheetText":
+                "body {margin:0} button {position:absolute;left:40px;top:40px;width:80px;height:40px;border:0;background:rgb(255,0,0);transition:background-color 1s linear} button:hover {background:rgb(0,0,255)}"},
+            {"id":3,"kind":"element","localName":"body","attributes":[],"children":[4]},
+            {"id":4,"kind":"element","localName":"button","attributes":[],"children":[]}
+        ]})).unwrap();
+        for node in &mut snapshot.nodes {
+            node.namespace = Some("http://www.w3.org/1999/xhtml".to_string());
+        }
+        let mut browser = BrowserDocument::new(200, 120);
+        browser.sync(1, snapshot, "file:///tmp/hover.html").unwrap();
+        let initial = browser.render_overlay().unwrap();
+        assert!(!browser.is_animating());
+        browser.set_pointer_state(0, 70.0, 60.0).unwrap();
+        assert!(browser.is_animating());
+        browser.animation_clock -= std::time::Duration::from_millis(500);
+        browser.advance_animations();
+        let middle = browser.render_overlay().unwrap();
+        assert_ne!(middle, initial);
+        assert!(browser.is_animating());
+        browser.animation_clock -= std::time::Duration::from_secs(2);
+        browser.advance_animations();
+        let final_pixels = browser.render_overlay().unwrap();
+        assert_ne!(final_pixels, middle);
+        assert!(!browser.is_animating());
+        assert_eq!(&final_pixels[(60 * 200 + 70) * 4..][..4], &[0, 0, 255, 255]);
+    }
+
+    #[test]
+    fn incremental_layout_matches_full_layout_after_ui_changes() {
+        let mut snapshot: BrowserSnapshot = serde_json::from_value(serde_json::json!({ "nodes": [
+            {"id":1,"kind":"element","localName":"html","attributes":[],"children":[2,3]},
+            {"id":2,"kind":"element","localName":"style","attributes":[],"children":[],"stylesheetText":
+                "body {margin:0} button {width:80px;height:30px} button:hover {width:100px;background:red}"},
+            {"id":3,"kind":"element","localName":"body","attributes":[],"children":[4,6]},
+            {"id":4,"kind":"element","localName":"button","attributes":[],"children":[5]},
+            {"id":5,"kind":"text","text":"Brush","attributes":[],"children":[]},
+            {"id":6,"kind":"element","localName":"input","children":[],"attributes":[
+                {"localName":"type","value":"range"}, {"localName":"value","value":"10"}]}
+        ]})).unwrap();
+        for node in &mut snapshot.nodes {
+            if node.kind == "element" {
+                node.namespace = Some("http://www.w3.org/1999/xhtml".to_string());
+            }
+        }
+        let mut incremental = BrowserDocument::new(240, 100);
+        let mut full = BrowserDocument::new(240, 100);
+        for browser in [&mut incremental, &mut full] {
+            browser
+                .sync(1, snapshot.clone(), "file:///tmp/layout.html")
+                .unwrap();
+            assert!(browser.document.as_ref().unwrap().incremental_layout());
+        }
+        full.document
+            .as_mut()
+            .unwrap()
+            .set_incremental_layout(false);
+        for step in 0..7 {
+            match step {
+                1 => snapshot.nodes[4].text = Some("New label".to_string()),
+                2 => snapshot.nodes[5].attributes[1].value = "90".to_string(),
+                3 => {
+                    snapshot.nodes[1].stylesheet_text = Some(
+                        "body {margin:0} button {width:120px;height:40px;background:blue}"
+                            .to_string(),
+                    )
+                }
+                4 => snapshot.nodes[3].attributes.push(BrowserAttributeRecord {
+                    local_name: "style".to_string(),
+                    namespace: None,
+                    prefix: None,
+                    value: "display:none".to_string(),
+                }),
+                5 => snapshot.nodes[3].attributes.clear(),
+                6 => {
+                    snapshot.nodes[2].children = vec![6];
+                    snapshot.nodes.retain(|node| node.id != 4 && node.id != 5);
+                }
+                _ => {}
+            }
+            for browser in [&mut incremental, &mut full] {
+                browser
+                    .sync(step + 2, snapshot.clone(), "file:///tmp/layout.html")
+                    .unwrap();
+                browser.set_pointer_state(0, 10.0, 10.0).unwrap();
+                if step == 5 {
+                    browser.resize_viewport(260, 100, 1.0);
+                }
+            }
+            assert_eq!(
+                incremental.render_overlay().unwrap(),
+                full.render_overlay().unwrap(),
+                "incremental paint differs at step {step}"
+            );
+            let actual = incremental.rect(6).unwrap();
+            let expected = full.rect(6).unwrap();
+            assert_eq!(
+                (actual.x, actual.y, actual.width, actual.height),
+                (expected.x, expected.y, expected.width, expected.height)
+            );
+        }
     }
 
     #[test]
@@ -1538,6 +1950,147 @@ mod tests {
             document.computed_property(id, "--accent").as_deref(),
             Some("#123456")
         );
+    }
+
+    #[test]
+    fn text_hits_stay_inside_the_text_line() {
+        let mut document = HtmlDocument::from_html(
+            "<style>body{margin:0}button{display:block;width:100px;height:40px;margin-bottom:50px}</style><button id='first'>Brush</button><button id='second'>Clear</button>",
+            DocumentConfig {
+                viewport: Some(Viewport::new(200, 200, 1.0, ColorScheme::Light)),
+                ..Default::default()
+            },
+        );
+        document.resolve(0.0);
+        let first = document.get_element_by_id("first").unwrap();
+        let second = document.get_element_by_id("second").unwrap();
+        for (y, expected) in [(20.0, first), (110.0, second)] {
+            let mut id = document.hit(40.0, y).unwrap().node_id;
+            while document.get_node(id).unwrap().element_data().is_none() {
+                id = document.get_node(id).unwrap().parent.unwrap();
+            }
+            assert_eq!(id, expected);
+        }
+        assert_ne!(document.hit(40.0, 70.0).unwrap().node_id, second);
+    }
+
+    #[test]
+    fn grid_overflow_accepts_wheel_scroll() {
+        let html = format!(
+            "<style>#grid{{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;max-height:238px;width:289px;overflow-y:auto}}button{{height:70px}}</style><div id='grid'>{}</div>",
+            "<button>Brush</button>".repeat(80)
+        );
+        let mut document = HtmlDocument::from_html(
+            &html,
+            DocumentConfig {
+                viewport: Some(Viewport::new(400, 500, 1.0, ColorScheme::Light)),
+                ..Default::default()
+            },
+        );
+        document.resolve(0.0);
+        let id = document.get_element_by_id("grid").unwrap();
+        document.mutate().set_attribute(
+            id,
+            QualName::new(None, Namespace::from(""), LocalName::from("style")),
+            "gap:9px",
+        );
+        document.resolve(0.0);
+        assert!(
+            document.get_node(id).unwrap().scrollable_overflow().y1 > 1500.0,
+            "cached child bounds must retain their parent-relative positions"
+        );
+        assert!(
+            document.scroll_node_by_has_changed(id, 0.0, -200.0, |_| {}),
+            "grid layout: {:?}, overflow: {:?}",
+            document.get_node(id).unwrap().final_layout(),
+            document.get_node(id).unwrap().scrollable_overflow()
+        );
+        assert_eq!(document.get_node(id).unwrap().scroll_offset().y, 200.0);
+    }
+
+    #[test]
+    fn scroll_does_not_change_layout_offsets() {
+        let mut snapshot: BrowserSnapshot = serde_json::from_value(serde_json::json!({ "nodes": [
+            {"id":1,"kind":"element","localName":"html","attributes":[],"children":[2,3]},
+            {"id":2,"kind":"element","localName":"style","attributes":[],"children":[],"stylesheetText":
+                "body{margin:0}#popup{position:fixed;left:40px;top:80px;width:160px;height:100px;padding:4px;border:1px solid;overflow:auto}#row{display:block;width:100px;height:28px;margin-top:168px;margin-bottom:100px}"},
+            {"id":3,"kind":"element","localName":"body","attributes":[],"children":[4]},
+            {"id":4,"kind":"element","localName":"div","attributes":[{"localName":"id","value":"popup"}],"children":[5]},
+            {"id":5,"kind":"element","localName":"button","attributes":[{"localName":"id","value":"row"}],"children":[]}
+        ]})).unwrap();
+        for node in &mut snapshot.nodes {
+            node.namespace = Some("http://www.w3.org/1999/xhtml".to_string());
+        }
+        let mut browser = BrowserDocument::new(400, 400);
+        browser.sync(1, snapshot, "file:///tmp/scroll.html").unwrap();
+        let before = browser.box_metrics(5).unwrap();
+        assert_eq!(before.offset_parent, Some(4));
+        assert_eq!(before.offset_top, 172);
+        assert!(browser.set_scroll(4, 0.0, 168.0).unwrap());
+        let after = browser.box_metrics(5).unwrap();
+        assert_eq!((after.offset_left, after.offset_top), (before.offset_left, before.offset_top));
+    }
+
+    #[test]
+    fn range_has_size_and_a_movable_painted_thumb() {
+        let mut document = HtmlDocument::from_html(
+            "<style>body{margin:0}input{color:red}</style><input id='range' type='range' min='0' max='100' value='0'>",
+            DocumentConfig {
+                viewport: Some(Viewport::new(160, 40, 1.0, ColorScheme::Light)),
+                ..Default::default()
+            },
+        );
+        document.resolve(0.0);
+        let id = document.get_element_by_id("range").unwrap();
+        let rect = document.get_client_bounding_rect(id).unwrap();
+        assert!(rect.width >= 100.0 && rect.height >= 12.0);
+        let before = render_to_buffer::<VelloCpuImageRenderer, _>(
+            |scene| paint_scene(scene, &mut document, 1.0, 160, 40, 0, 0),
+            160,
+            40,
+        );
+        document.mutate().set_attribute(
+            id,
+            QualName::new(None, Namespace::from(""), LocalName::from("value")),
+            "100",
+        );
+        document.resolve(0.0);
+        let after = render_to_buffer::<VelloCpuImageRenderer, _>(
+            |scene| paint_scene(scene, &mut document, 1.0, 160, 40, 0, 0),
+            160,
+            40,
+        );
+        assert_ne!(before, after, "the thumb must move when the value changes");
+    }
+
+    #[test]
+    fn hit_tests_exclude_clipped_and_hidden_controls() {
+        let mut document = HtmlDocument::from_html(
+            "<style>body{margin:0}#clip{width:100px;height:40px;overflow:auto}#child{height:200px}#behind{width:100px;height:40px}#hidden{display:none}</style><div id='clip'><button id='child'>long</button></div><button id='behind'>behind</button><button id='hidden'>hidden</button>",
+            DocumentConfig {
+                viewport: Some(Viewport::new(200, 200, 1.0, ColorScheme::Light)),
+                ..Default::default()
+            },
+        );
+        document.resolve(0.0);
+        let clip = document.get_element_by_id("clip").unwrap();
+        let child = document.get_element_by_id("child").unwrap();
+        let hidden = document.get_element_by_id("hidden").unwrap();
+        for (x, y) in [(10.0, 60.0), (10.0, 100.0)] {
+            let hit = document.hit(x, y).map(|hit| hit.node_id);
+            assert_ne!(hit, Some(child), "a clipped child cannot receive a hit");
+            assert_ne!(hit, Some(hidden), "a hidden button cannot receive a hit");
+        }
+        assert!(document.scroll_node_by_has_changed(clip, 0.0, -80.0, |_| {}));
+        assert_eq!(document.get_node(clip).unwrap().scroll_offset().y, 80.0);
+        assert_ne!(document.hit(10.0, 60.0).map(|hit| hit.node_id), Some(child));
+    }
+
+    #[test]
+    fn detached_surface_canvas_has_no_hud_raster() {
+        let mut browser = BrowserDocument::new(32, 32);
+        assert!(browser.suppress_canvas_paint(1).is_ok());
+        assert!(browser.set_canvas_raster(1, 1, 1, vec![0; 4]).is_err());
     }
 
     #[test]

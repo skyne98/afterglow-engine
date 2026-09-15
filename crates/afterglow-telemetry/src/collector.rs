@@ -4,13 +4,19 @@ use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::io::{self, Write};
 
-use crate::batch::{BATCH_VERSION, BatchHeader};
+use crate::batch::{
+    BATCH_VERSION, BatchError, BatchHeader, ProducerIdentity, encode_batch_into, encoded_batch_len,
+    validate_batch,
+};
 use crate::clock::ClockMapping;
 use crate::descriptor::{Descriptor, DescriptorKind};
 use crate::metrics::{HISTOGRAM_BUCKETS, MetricDescriptor, MetricKind, MetricSample};
 use crate::record::{TracePhase, TraceRecord};
 
-pub const RAW_MAGIC: [u8; 4] = *b"AGTL";
+#[cfg(feature = "collector")]
+mod file;
+
+pub const RAW_MAGIC: [u8; 4] = *b"DGTL";
 pub const RAW_VERSION: u16 = 1;
 
 #[derive(Clone, Debug)]
@@ -53,22 +59,35 @@ struct Source {
     descriptors: Vec<OwnedDescriptor>,
     metric_descriptors: Vec<OwnedMetricDescriptor>,
     records: Vec<TraceRecord>,
+    batches: Vec<BatchHeader>,
+    producer_generation: u32,
+    clock_generation: u32,
     metric_samples: Vec<TimedMetricSample>,
     dropped_records: u64,
+    overwritten_records: u64,
+    sequence_gaps: u64,
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct SourceRegistration<'a> {
     pub source_id: u32,
+    pub producer_generation: u32,
+    pub clock_generation: u32,
     pub process_id: u32,
     pub name: &'a str,
     pub clock: ClockMapping,
-    pub descriptors: &'a [Descriptor],
-    pub metric_descriptors: &'a [MetricDescriptor],
+    pub descriptors: &'a [Descriptor<'a>],
+    pub metric_descriptors: &'a [MetricDescriptor<'a>],
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CollectorError {
+    InvalidLimits,
+    Capacity(&'static str),
+    Allocation,
+    InvalidBatch(BatchError),
+    IdentityMismatch,
+    SequenceOverlap,
     DuplicateSource(u32),
     UnknownSource(u32),
     EpochMismatch {
@@ -113,18 +132,75 @@ pub enum CollectorError {
     },
 }
 
-/// Owns cold diagnostic data after producers freeze their finite captures.
+/// Explicit capacities for one collection. Metadata bytes count UTF-8 text.
+#[derive(Clone, Copy, Debug)]
+#[cfg_attr(
+    feature = "collector",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(deny_unknown_fields)
+)]
+pub struct CollectorLimits {
+    pub sources: usize,
+    pub descriptors: usize,
+    pub metadata_bytes: usize,
+    pub records: usize,
+    pub batches: usize,
+    pub metric_samples: usize,
+    /// Maximum encoded DGTL bytes, including metadata and the file header.
+    pub raw_bytes: usize,
+}
+
+/// Owns bounded cold diagnostic data. Capacity errors keep previous data intact.
 pub struct Collector {
+    session: [u32; 4],
     epoch: u32,
+    limits: CollectorLimits,
     sources: Vec<Source>,
+    descriptors: usize,
+    metadata_bytes: usize,
+    records: usize,
+    batches: usize,
+    metric_samples: usize,
+    raw_bytes: usize,
 }
 
 impl Collector {
-    pub fn new(epoch: u32) -> Self {
-        Self {
-            epoch,
-            sources: Vec::new(),
+    pub fn new(
+        session: [u32; 4],
+        epoch: u32,
+        limits: CollectorLimits,
+    ) -> Result<Self, CollectorError> {
+        if session == [0; 4] {
+            return Err(CollectorError::IdentityMismatch);
         }
+        if limits.raw_bytes < 32 {
+            return Err(CollectorError::InvalidLimits);
+        }
+        if [
+            limits.sources,
+            limits.descriptors,
+            limits.metadata_bytes,
+            limits.records,
+            limits.batches,
+            limits.metric_samples,
+        ]
+        .iter()
+        .any(|&value| value == 0 || value > u32::MAX as usize)
+        {
+            return Err(CollectorError::InvalidLimits);
+        }
+        Ok(Self {
+            session,
+            epoch,
+            limits,
+            sources: Vec::new(),
+            descriptors: 0,
+            metadata_bytes: 0,
+            records: 0,
+            batches: 0,
+            metric_samples: 0,
+            raw_bytes: 32,
+        })
     }
 
     pub fn epoch(&self) -> u32 {
@@ -135,6 +211,12 @@ impl Collector {
         &mut self,
         registration: SourceRegistration<'_>,
     ) -> Result<(), CollectorError> {
+        if self.session == [0; 4]
+            || registration.producer_generation == 0
+            || registration.clock_generation == 0
+        {
+            return Err(CollectorError::IdentityMismatch);
+        }
         if self
             .sources
             .iter()
@@ -142,6 +224,57 @@ impl Collector {
         {
             return Err(CollectorError::DuplicateSource(registration.source_id));
         }
+        if registration.clock.rate_numerator == 0 || registration.clock.rate_denominator == 0 {
+            return Err(CollectorError::InvalidTickRate);
+        }
+        if self.sources.len() == self.limits.sources {
+            return Err(CollectorError::Capacity("sources"));
+        }
+        let descriptor_count = registration
+            .descriptors
+            .len()
+            .checked_add(registration.metric_descriptors.len())
+            .ok_or(CollectorError::Capacity("descriptors"))?;
+        if descriptor_count > self.limits.descriptors - self.descriptors {
+            return Err(CollectorError::Capacity("descriptors"));
+        }
+        let metadata_bytes = registration
+            .descriptors
+            .iter()
+            .flat_map(|d| [d.name, d.category_name, d.argument0.name, d.argument1.name])
+            .chain(
+                registration
+                    .metric_descriptors
+                    .iter()
+                    .flat_map(|d| [d.name, d.category_name]),
+            )
+            .try_fold(registration.name.len(), |total, text| {
+                total.checked_add(text.len())
+            })
+            .ok_or(CollectorError::Capacity("metadata_bytes"))?;
+        if metadata_bytes > self.limits.metadata_bytes - self.metadata_bytes {
+            return Err(CollectorError::Capacity("metadata_bytes"));
+        }
+        let raw_bytes = registration
+            .descriptors
+            .len()
+            .checked_mul(22)
+            .and_then(|bytes| {
+                registration
+                    .metric_descriptors
+                    .len()
+                    .checked_mul(10)
+                    .and_then(|metrics| bytes.checked_add(metrics))
+            })
+            .and_then(|bytes| bytes.checked_add(metadata_bytes))
+            .and_then(|bytes| bytes.checked_add(80))
+            .ok_or(CollectorError::Capacity("raw_bytes"))?;
+        if raw_bytes > self.limits.raw_bytes - self.raw_bytes {
+            return Err(CollectorError::Capacity("raw_bytes"));
+        }
+        self.sources
+            .try_reserve_exact(1)
+            .map_err(|_| CollectorError::Allocation)?;
         let descriptors = registration
             .descriptors
             .iter()
@@ -180,9 +313,17 @@ impl Collector {
             descriptors,
             metric_descriptors,
             records: Vec::new(),
+            batches: Vec::new(),
+            producer_generation: registration.producer_generation,
+            clock_generation: registration.clock_generation,
             metric_samples: Vec::new(),
             dropped_records: 0,
+            overwritten_records: 0,
+            sequence_gaps: 0,
         });
+        self.descriptors += descriptor_count;
+        self.metadata_bytes += metadata_bytes;
+        self.raw_bytes += raw_bytes;
         Ok(())
     }
 
@@ -218,6 +359,21 @@ impl Collector {
         }
         if header.ticks_per_second == 0 {
             return Err(CollectorError::InvalidTickRate);
+        }
+        validate_batch(header, records).map_err(CollectorError::InvalidBatch)?;
+        if header.session != self.session
+            || header.producer_generation != source.producer_generation
+            || header.clock_generation != source.clock_generation
+        {
+            return Err(CollectorError::IdentityMismatch);
+        }
+        if let Some(previous) = source.batches.last()
+            && (header.first_sequence < previous.next_sequence
+                || header.next_sequence <= previous.next_sequence
+                || header.dropped_records < previous.dropped_records
+                || header.overwritten_records < previous.overwritten_records)
+        {
+            return Err(CollectorError::SequenceOverlap);
         }
         let mut previous = source.records.last().map(|record| record.timestamp);
         for record in records {
@@ -269,10 +425,41 @@ impl Collector {
             )?;
             previous = Some(record.timestamp);
         }
+        if records.len() > self.limits.records - self.records {
+            return Err(CollectorError::Capacity("records"));
+        }
+        if self.batches == self.limits.batches {
+            return Err(CollectorError::Capacity("batches"));
+        }
+        let raw_bytes = encoded_batch_len(records.len())
+            .filter(|&bytes| u32::try_from(bytes).is_ok())
+            .and_then(|bytes| bytes.checked_add(4))
+            .ok_or(CollectorError::Capacity("raw_bytes"))?;
+        if raw_bytes > self.limits.raw_bytes - self.raw_bytes {
+            return Err(CollectorError::Capacity("raw_bytes"));
+        }
+        source
+            .records
+            .try_reserve_exact(records.len())
+            .map_err(|_| CollectorError::Allocation)?;
+        source
+            .batches
+            .try_reserve_exact(1)
+            .map_err(|_| CollectorError::Allocation)?;
+        if let Some(previous) = source.batches.last() {
+            source.sequence_gaps = source
+                .sequence_gaps
+                .saturating_add(header.first_sequence - previous.next_sequence);
+        } else {
+            source.sequence_gaps = header.first_sequence - header.overwritten_records;
+        }
         source.records.extend_from_slice(records);
-        source.dropped_records = source
-            .dropped_records
-            .saturating_add(header.dropped_records as u64);
+        source.batches.push(header);
+        source.dropped_records = header.dropped_records;
+        source.overwritten_records = header.overwritten_records;
+        self.records += records.len();
+        self.batches += 1;
+        self.raw_bytes += raw_bytes;
         Ok(())
     }
 
@@ -281,10 +468,11 @@ impl Collector {
     /// allocation-free in [`crate::MetricBank`].
     pub fn ingest_metrics(
         &mut self,
-        source_id: u32,
+        identity: ProducerIdentity,
         timestamp: u64,
         samples: &[MetricSample],
     ) -> Result<(), CollectorError> {
+        let source_id = identity.source_id;
         let Some(source) = self
             .sources
             .iter_mut()
@@ -292,6 +480,22 @@ impl Collector {
         else {
             return Err(CollectorError::UnknownSource(source_id));
         };
+        if identity.session != self.session
+            || identity.generation != source.producer_generation
+            || identity.clock_generation != source.clock_generation
+            || identity.clock_domain != source.clock.clock_domain
+        {
+            return Err(CollectorError::IdentityMismatch);
+        }
+        if let Some(previous) = source.metric_samples.last()
+            && timestamp < previous.timestamp
+        {
+            return Err(CollectorError::TimestampRegression {
+                source: source_id,
+                previous: previous.timestamp,
+                current: timestamp,
+            });
+        }
         source
             .clock
             .map_to_reference_ns(timestamp)
@@ -319,13 +523,34 @@ impl Collector {
                 });
             }
         }
+        if samples.len() > self.limits.metric_samples - self.metric_samples {
+            return Err(CollectorError::Capacity("metric_samples"));
+        }
+        let raw_bytes = samples
+            .len()
+            .checked_mul(24)
+            .ok_or(CollectorError::Capacity("raw_bytes"))?;
+        if raw_bytes > self.limits.raw_bytes - self.raw_bytes {
+            return Err(CollectorError::Capacity("raw_bytes"));
+        }
+        source
+            .metric_samples
+            .try_reserve_exact(samples.len())
+            .map_err(|_| CollectorError::Allocation)?;
         source.metric_samples.extend(
             samples
                 .iter()
                 .copied()
                 .map(|sample| TimedMetricSample { timestamp, sample }),
         );
+        self.metric_samples += samples.len();
+        self.raw_bytes += raw_bytes;
         Ok(())
+    }
+
+    /// Exact encoded DGTL size. Does not serialize or scan retained records.
+    pub fn raw_bytes(&self) -> usize {
+        self.raw_bytes
     }
 
     pub fn source_count(&self) -> usize {
@@ -333,7 +558,7 @@ impl Collector {
     }
 
     pub fn record_count(&self) -> usize {
-        self.sources.iter().map(|source| source.records.len()).sum()
+        self.records
     }
 
     /// Stream Catapult/Chrome Trace JSON. Perfetto opens this format directly.
@@ -356,6 +581,19 @@ impl Collector {
                     "{{\"name\":\"telemetry.clock_uncertainty\",\"cat\":\"telemetry\",\"ph\":\"i\",\"s\":\"t\",\"ts\":0,\"pid\":{},\"tid\":{},\"args\":{{\"nanoseconds\":{}}}}}",
                     source.process_id, source.source_id, source.clock.uncertainty_ns
                 )?;
+            }
+            for (name, count) in [
+                ("records_overwritten", source.overwritten_records),
+                ("sequence_gaps", source.sequence_gaps),
+            ] {
+                if count != 0 {
+                    write_separator(&mut output, &mut first)?;
+                    write!(
+                        output,
+                        "{{\"name\":\"telemetry.{name}\",\"cat\":\"telemetry\",\"ph\":\"i\",\"s\":\"t\",\"ts\":0,\"pid\":{},\"tid\":{},\"args\":{{\"count\":{count}}}}}",
+                        source.process_id, source.source_id
+                    )?;
+                }
             }
             if source.dropped_records != 0 {
                 write_separator(&mut output, &mut first)?;
@@ -406,16 +644,21 @@ impl Collector {
         output.write_all(b"]}")
     }
 
-    /// Stream the lossless versioned `.agt` diagnostic format.
+    /// Stream DGTL with identities and original batch sequence/loss metadata.
     pub fn write_raw(&self, mut output: impl Write) -> io::Result<()> {
         output.write_all(&RAW_MAGIC)?;
         output.write_all(&RAW_VERSION.to_le_bytes())?;
         output.write_all(&BATCH_VERSION.to_le_bytes())?;
         output.write_all(&self.epoch.to_le_bytes())?;
+        for word in self.session {
+            output.write_all(&word.to_le_bytes())?;
+        }
         write_u32(&mut output, self.sources.len())?;
         for source in &self.sources {
             output.write_all(&source.source_id.to_le_bytes())?;
             output.write_all(&source.process_id.to_le_bytes())?;
+            output.write_all(&source.producer_generation.to_le_bytes())?;
+            output.write_all(&source.clock_generation.to_le_bytes())?;
             write_string(&mut output, &source.name)?;
             output.write_all(&source.clock.clock_domain.to_le_bytes())?;
             output.write_all(&source.clock.origin_tick.to_le_bytes())?;
@@ -437,16 +680,21 @@ impl Collector {
                 write_string(&mut output, &descriptor.name)?;
                 output.write_all(&[descriptor.kind as u8, descriptor.unit])?;
             }
-            write_u32(&mut output, source.records.len())?;
-            output.write_all(&source.dropped_records.to_le_bytes())?;
-            for record in &source.records {
-                output.write_all(&record.timestamp.to_le_bytes())?;
-                output.write_all(&record.correlation.to_le_bytes())?;
-                output.write_all(&record.argument0.to_le_bytes())?;
-                output.write_all(&record.argument1.to_le_bytes())?;
-                output.write_all(&record.descriptor.to_le_bytes())?;
-                output.write_all(&[record.phase, record.flags])?;
-                output.write_all(&record.reserved.to_le_bytes())?;
+            write_u32(&mut output, source.batches.len())?;
+            let mut offset = 0;
+            for header in &source.batches {
+                let end = offset + header.record_count as usize;
+                let mut bytes = vec![
+                    0;
+                    encoded_batch_len(header.record_count as usize)
+                        .expect("validated batch length")
+                ];
+                encode_batch_into(*header, &source.records[offset..end], &mut bytes).map_err(
+                    |error| io::Error::new(io::ErrorKind::InvalidData, format!("{error:?}")),
+                )?;
+                write_u32(&mut output, bytes.len())?;
+                output.write_all(&bytes)?;
+                offset = end;
             }
             write_u32(&mut output, source.metric_samples.len())?;
             for timed in &source.metric_samples {

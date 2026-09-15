@@ -12,6 +12,7 @@
     { "source": "src/workers/rpc.ts", "output": "rpc.js", "role": "runtime" },
     { "source": "src/workers/worker.ts", "output": "worker.js", "role": "worker" },
     { "source": "src/workers/storage-worker.ts", "output": "storage-worker.js", "role": "worker" },
+    { "source": "src/workers/diagnostics-worker.ts", "output": "diagnostics-worker.js", "role": "worker" },
     { "source": "src/workers/audio-worker.ts", "output": "audio-worker.js", "role": "worker" },
     { "source": "src/engine/audio/audio-worklet.ts", "output": "engine/audio-worklet.js", "role": "runtime" },
     { "source": "src/engine/assets/asset-store.ts", "output": "engine/asset-store.js", "role": "runtime" },

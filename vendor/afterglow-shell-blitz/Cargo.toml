@@ -7,17 +7,21 @@ members = [
     "packages/blitz-html",
     "packages/blitz-net",
     "packages/blitz-paint",
+    "packages/blitz-vibey-script",
     "packages/blitz-shell",
     "packages/blitz",
     "packages/stylo_taffy",
     "packages/dioxus-native",
     "packages/dioxus-native-dom",
+    "packages/blitz-test-harness",
     "apps/browser",
     "apps/browser/persistence",
     "apps/readme",
     "apps/bump",
     "wpt/runner",
+    "tests/blitz-tests",
     "examples/counter",
+    "examples/transparent",
     "examples/seven_guis",
     "examples/todomvc",
     "examples/wgpu_texture",
@@ -27,37 +31,39 @@ exclude = ["sites"]
 resolver = "2"
 
 [workspace.package]
-version = "0.3.0-beta.1"
+version = "0.3.0-beta.2"
 license = "MIT OR Apache-2.0"
 homepage = "https://github.com/dioxuslabs/blitz"
 repository = "https://github.com/dioxuslabs/blitz"
 categories = ["gui"]
 edition = "2024"
-rust-version = "1.89.0"
+rust-version = "1.91.0"
 
 [workspace.dependencies]
 # Blitz dependencies(in-repo)
-blitz = { version = "=0.3.0-beta.1", path = "./packages/blitz" }
-blitz-dom = { version = "=0.3.0-beta.1", path = "./packages/blitz-dom", default-features = false }
-blitz-html = { version = "=0.3.0-beta.1", path = "./packages/blitz-html", default-features = false }
-blitz-net = { version = "=0.3.0-beta.1", path = "./packages/blitz-net", default-features = false }
-blitz-paint = { version = "=0.3.0-beta.1", path = "./packages/blitz-paint", default-features = false }
-blitz-shell = { version = "=0.3.0-beta.1", path = "./packages/blitz-shell", default-features = false }
-blitz-traits = { version = "=0.3.0-beta.1", path = "./packages/blitz-traits", default-features = false }
-stylo_taffy = { version = "=0.3.0-beta.1", path = "./packages/stylo_taffy", default-features = false }
+blitz = { version = "=0.3.0-beta.2", path = "./packages/blitz" }
+blitz-dom = { version = "=0.3.0-beta.2", path = "./packages/blitz-dom", default-features = false }
+blitz-html = { version = "=0.3.0-beta.2", path = "./packages/blitz-html", default-features = false }
+blitz-net = { version = "=0.3.0-beta.2", path = "./packages/blitz-net", default-features = false }
+blitz-paint = { version = "=0.3.0-beta.2", path = "./packages/blitz-paint", default-features = false }
+blitz-vibey-script = { version = "=0.3.0-beta.2", path = "./packages/blitz-vibey-script", default-features = false }
+blitz-shell = { version = "=0.3.0-beta.2", path = "./packages/blitz-shell", default-features = false }
+blitz-traits = { version = "=0.3.0-beta.2", path = "./packages/blitz-traits", default-features = false }
+stylo_taffy = { version = "=0.3.0-beta.2", path = "./packages/stylo_taffy", default-features = false }
 dioxus-native = { version = "0.7.0", path = "./packages/dioxus-native", default-features = false }
 dioxus-native-dom = { version = "0.7.0", path = "./packages/dioxus-native-dom", default-features = false }
 debug_timer = { version = "0.1.2", path = "./packages/debug_timer" }
 accesskit_xplat = { version = "0.1", path = "./packages/accesskit_xplat", default-features = false }
 browser-persistence = { path = "./apps/browser/persistence" }
+blitz-test-harness = { path = "./packages/blitz-test-harness" }
 
 # Servo dependencies
-style = { version = "0.19.0", package = "stylo" }
-style_traits = { version = "0.19.0", package = "stylo_traits" }
-style_atoms = { version = "0.19.0", package = "stylo_atoms" }
-style_config = { version = "0.19.0", package = "stylo_static_prefs" }
-style_dom = { version = "0.19.0", package = "stylo_dom" }
-selectors = { version = "0.39.0", package = "selectors" }
+style = { version = "0.20.0", package = "stylo" }
+style_traits = { version = "0.20.0", package = "stylo_traits" }
+style_atoms = { version = "0.20.0", package = "stylo_atoms" }
+style_config = { version = "0.20.0", package = "stylo_static_prefs" }
+style_dom = { version = "0.20.0", package = "stylo_dom" }
+selectors = { version = "0.40.0", package = "selectors" }
 cssparser = { version = "0.37.0" }
 
 # HTML5ever dependencies
@@ -70,6 +76,7 @@ euclid = "0.22"
 atomic_refcell = "0.1.13"
 app_units = "0.7.5"
 smallvec = "1"
+thin-vec = "0.2"
 
 # DioxusLabs dependencies
 dioxus = { version = "0.7.3" }
@@ -91,7 +98,7 @@ dioxus-cli-config = { version = "0.7.3" }
 dioxus-core-macro = { version = "0.7.3" }
 
 # Taffy + Parley + Fontations
-taffy = { version = "0.12.1", default-features = false, features = [
+taffy = { git = "https://github.com/DioxusLabs/taffy", rev = "1b918bafcab101dd234ebeb27da0443e24fd9de2", default-features = false, features = [
     "std",
     "flexbox",
     "grid",
@@ -100,20 +107,20 @@ taffy = { version = "0.12.1", default-features = false, features = [
     "calc",
     "detailed_layout_info",
 ] }
-parley = { version = "0.10", default-features = false, features = ["std"] }
-skrifa = { version = "0.42", default-features = false, features = [
+parley = { version = "0.11.1", default-features = false, features = ["std"] }
+skrifa = { version = "0.44", default-features = false, features = [
     "std",
 ] } # Should match parley and vello versions
 
 # AnyRender
-anyrender = { version = "0.11.0" }
-anyrender_serialize = { version = "0.5.0" }
-anyrender_skia = { version = "0.9.0" }
-anyrender_vello = { version = "0.12.0" }
-anyrender_vello_cpu = { version = "0.14.0" }
-anyrender_vello_hybrid = { version = "0.8.0" }
-anyrender_svg = { version = "0.12.0" }
-wgpu_context = { version = "0.7.0" }
+anyrender = { version = "0.13.0" }
+anyrender_serialize = { version = "0.7.0" }
+anyrender_skia = { version = "0.11.0" }
+anyrender_vello = { version = "0.14.0" }
+anyrender_vello_cpu = { version = "0.17.0" }
+anyrender_vello_hybrid = { version = "0.10.0" }
+anyrender_svg = { version = "0.14.0" }
+wgpu_context = { version = "0.9.0" }
 
 # Linebender + Fontations + WGPU + SVG
 color = "0.3"
@@ -121,7 +128,8 @@ linebender_resource_handle = "0.1"
 peniko = "0.6.0"
 kurbo = "0.13.1"
 wgpu = "29"
-usvg = "0.46"
+usvg = "0.48.1"
+svgtypes = "0.16.1" # Should match usvg's version
 
 # Windowing & Input
 raw-window-handle = "0.6.0"
@@ -143,7 +151,7 @@ http-cache-reqwest = { version = "=1.0.0-alpha.6", default-features = false }
 http-cache = { version = "=1.0.0-alpha.6", default-features = false }
 
 # Media & Decoding
-image = { version = "=0.25.6", default-features = false }
+image = { version = "0.25.6", default-features = false }
 wuff = "0.2"
 html-escape = "0.2.13"
 percent-encoding = "2.3.1"
@@ -162,10 +170,14 @@ web-sys = "0.3.98"
 web-time = "1"
 console_error_panic_hook = "0.1"
 
+# JavaScript engine (Boa)
+boa_engine = "0.22"
+boa_runtime = "0.22"
+boa_gc = "0.22"
+
 # Other dependencies
 rustc-hash = "2.1.2"
 bytes = "1.7.1"
-slab = "0.4.9"
 slotmap = "1.0.7"
 tracing = "0.1.40"
 tracing-subscriber = "0.3"
@@ -229,11 +241,11 @@ edition = "2024"
 description = "Top level crate for Blitz"
 license = "MIT OR Apache-2.0"
 keywords = ["dom", "ui", "gui", "react", "wasm"]
-rust-version = "1.89.0"
+rust-version = "1.91.0"
 publish = false
 
 [features]
-logtime = ["log-frame-times", "log-phase-times"]
+log-times = ["log-frame-times", "log-phase-times"]
 log-frame-times = ["dioxus-native/log-frame-times"]
 log-phase-times = ["dioxus-native/log-phase-times"]
 
@@ -248,6 +260,7 @@ blitz-traits = { workspace = true }
 blitz-paint = { workspace = true }
 blitz-shell = { workspace = true }
 blitz-net = { workspace = true }
+blitz-vibey-script = { workspace = true }
 blitz = { workspace = true, features = ["net"] }
 dioxus = { workspace = true }
 dioxus-native = { workspace = true, features = [
@@ -257,6 +270,7 @@ dioxus-native = { workspace = true, features = [
     "prelude",
 ] }
 euclid = { workspace = true }
+url = { workspace = true }
 reqwest = { workspace = true }
 tokio = { workspace = true, features = ["macros"] }
 image = { workspace = true }
@@ -265,6 +279,13 @@ peniko = { workspace = true }
 color = { workspace = true }
 env_logger = "0.11"
 tracing-subscriber = "0.3"
+vello = "0.10"
+vello_cpu = "0.1"
+vello_hybrid = "0.1"
+vello_common = "0.1"
+wgpu = { workspace = true }
+wgpu_context = { workspace = true }
+rustc-hash = { workspace = true }
 
 # [patch.crates-io]
 # anyrender = { path = "../anyrender/crates/anyrender" }
