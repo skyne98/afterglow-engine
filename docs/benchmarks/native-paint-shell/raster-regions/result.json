@@ -1,0 +1,75 @@
+{
+  "results": [
+    {
+      "phase": "raster",
+      "results": [
+        {
+          "dimension": 512,
+          "changedBytes": 16384,
+          "requestedBytes": 16384,
+          "copy": {
+            "meanMs": 0.09052500000000616,
+            "p99Ms": 0.13099999999985812,
+            "maxMs": 0.13200000000006185
+          },
+          "commit": {
+            "meanMs": 0.017166666666669054,
+            "p99Ms": 0.028000000000247383,
+            "maxMs": 0.03300000000001546
+          },
+          "raf": {
+            "meanMs": 16.700924999999998,
+            "p99Ms": 16.753999999999905,
+            "maxMs": 16.75500000000011
+          }
+        },
+        {
+          "dimension": 2048,
+          "changedBytes": 16384,
+          "requestedBytes": 16384,
+          "copy": {
+            "meanMs": 0.09975833333329547,
+            "p99Ms": 0.1790000000000873,
+            "maxMs": 0.1860000000006039
+          },
+          "commit": {
+            "meanMs": 0.017200000000002547,
+            "p99Ms": 0.03899999999975989,
+            "maxMs": 0.04399999999986903
+          },
+          "raf": {
+            "meanMs": 16.756624999999996,
+            "p99Ms": 19.634000000000015,
+            "maxMs": 22.764000000000124
+          }
+        },
+        {
+          "dimension": 4096,
+          "changedBytes": 16384,
+          "requestedBytes": 16384,
+          "copy": {
+            "meanMs": 0.08694166666661356,
+            "p99Ms": 0.1430000000000291,
+            "maxMs": 0.18800000000010186
+          },
+          "commit": {
+            "meanMs": 0.012458333333340003,
+            "p99Ms": 0.02599999999983993,
+            "maxMs": 0.04500000000007276
+          },
+          "raf": {
+            "meanMs": 16.696283333333334,
+            "p99Ms": 16.889999999999418,
+            "maxMs": 17.23700000000099
+          }
+        }
+      ],
+      "limits": "Commit is synchronous CPU time. rAF is frame production, not GPU time or input-to-present latency.",
+      "processMemory": [
+        "VmPeak:\t51361468 kB",
+        "VmHWM:\t  456136 kB",
+        "VmRSS:\t  456136 kB"
+      ]
+    }
+  ]
+}

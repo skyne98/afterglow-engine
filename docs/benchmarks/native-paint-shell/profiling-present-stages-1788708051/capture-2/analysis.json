@@ -1,0 +1,178 @@
+{
+  "records": 31929,
+  "intervals": 13818,
+  "missing_begins": 0,
+  "missing_ends": 2,
+  "gap_count": 2143,
+  "shown_limit": 8,
+  "longest_gaps": [
+    {
+      "start_ns": "11897670964",
+      "end_ns": "11914654527",
+      "gap_ms": 16.983563,
+      "frame_ms": 16.976089,
+      "runtime_ms": 0.006653,
+      "present_ms": 16.890328,
+      "hud_scene_ms": 0.000331,
+      "hud_composite_ms": 0.023003,
+      "surface_present_ms": 16.86512,
+      "state": {
+        "host.focus": 2,
+        "host.occluded": 2,
+        "host.suspended": 0
+      },
+      "state_changes": [],
+      "redraw_requests": [
+        "11897681614"
+      ],
+      "overlapping_rpc": []
+    },
+    {
+      "start_ns": "6146921821",
+      "end_ns": "6161225455",
+      "gap_ms": 14.303634,
+      "frame_ms": 14.291271,
+      "runtime_ms": 0.086582,
+      "present_ms": 14.114478,
+      "hud_scene_ms": 0.00033,
+      "hud_composite_ms": 0.026721,
+      "surface_present_ms": 14.085233,
+      "state": {
+        "host.focus": 2,
+        "host.occluded": 2,
+        "host.suspended": 0
+      },
+      "state_changes": [],
+      "redraw_requests": [
+        "6147009796"
+      ],
+      "overlapping_rpc": []
+    },
+    {
+      "start_ns": "8647281161",
+      "end_ns": "8660823904",
+      "gap_ms": 13.542743,
+      "frame_ms": 13.535339,
+      "runtime_ms": 0.008926,
+      "present_ms": 13.427165,
+      "hud_scene_ms": 0.000411,
+      "hud_composite_ms": 0.028173,
+      "surface_present_ms": 13.396939,
+      "state": {
+        "host.focus": 2,
+        "host.occluded": 2,
+        "host.suspended": 0
+      },
+      "state_changes": [],
+      "redraw_requests": [
+        "8647293865"
+      ],
+      "overlapping_rpc": []
+    },
+    {
+      "start_ns": "16148422688",
+      "end_ns": "16161847529",
+      "gap_ms": 13.424841,
+      "frame_ms": 13.41871,
+      "runtime_ms": 0.006463,
+      "present_ms": 13.326106,
+      "hud_scene_ms": 0.00033,
+      "hud_composite_ms": 0.024526,
+      "surface_present_ms": 13.299977,
+      "state": {
+        "host.focus": 2,
+        "host.occluded": 2,
+        "host.suspended": 0
+      },
+      "state_changes": [],
+      "redraw_requests": [
+        "16148432827"
+      ],
+      "overlapping_rpc": []
+    },
+    {
+      "start_ns": "8147031521",
+      "end_ns": "8160439250",
+      "gap_ms": 13.407729,
+      "frame_ms": 13.401036,
+      "runtime_ms": 0.010049,
+      "present_ms": 13.299476,
+      "hud_scene_ms": 0.00035,
+      "hud_composite_ms": 0.027502,
+      "surface_present_ms": 13.270031,
+      "state": {
+        "host.focus": 2,
+        "host.occluded": 2,
+        "host.suspended": 0
+      },
+      "state_changes": [],
+      "redraw_requests": [
+        "8147045768"
+      ],
+      "overlapping_rpc": []
+    },
+    {
+      "start_ns": "15398300531",
+      "end_ns": "15410903206",
+      "gap_ms": 12.602675,
+      "frame_ms": 12.595451,
+      "runtime_ms": 0.006653,
+      "present_ms": 12.500703,
+      "hud_scene_ms": 0.00032,
+      "hud_composite_ms": 0.025228,
+      "surface_present_ms": 12.473573,
+      "state": {
+        "host.focus": 2,
+        "host.occluded": 2,
+        "host.suspended": 0
+      },
+      "state_changes": [],
+      "redraw_requests": [
+        "15398311111"
+      ],
+      "overlapping_rpc": []
+    },
+    {
+      "start_ns": "11147485736",
+      "end_ns": "11159918362",
+      "gap_ms": 12.432626,
+      "frame_ms": 12.425733,
+      "runtime_ms": 0.007875,
+      "present_ms": 12.336335,
+      "hud_scene_ms": 0.00032,
+      "hud_composite_ms": 0.022342,
+      "surface_present_ms": 12.31226,
+      "state": {
+        "host.focus": 2,
+        "host.occluded": 2,
+        "host.suspended": 0
+      },
+      "state_changes": [],
+      "redraw_requests": [
+        "11147497198"
+      ],
+      "overlapping_rpc": []
+    },
+    {
+      "start_ns": "16398467541",
+      "end_ns": "16410473184",
+      "gap_ms": 12.005643,
+      "frame_ms": 11.991196,
+      "runtime_ms": 0.107401,
+      "present_ms": 11.803182,
+      "hud_scene_ms": 0.000341,
+      "hud_composite_ms": 0.027381,
+      "surface_present_ms": 11.774028,
+      "state": {
+        "host.focus": 2,
+        "host.occluded": 2,
+        "host.suspended": 0
+      },
+      "state_changes": [],
+      "redraw_requests": [
+        "16398574763"
+      ],
+      "overlapping_rpc": []
+    }
+  ]
+}

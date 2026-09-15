@@ -1,0 +1,19 @@
+{
+  "mode": "capture",
+  "events": [
+    {
+      "action": "hide",
+      "observer_ms": 8845.11029,
+      "window": 468,
+      "pid": 3045040,
+      "original_workspace": 1,
+      "hidden_workspace": 9
+    },
+    {
+      "action": "restore",
+      "observer_ms": 13366.958797,
+      "window": 468
+    }
+  ],
+  "error": null
+}

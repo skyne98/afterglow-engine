@@ -1,0 +1,19 @@
+{
+  "mode": "--control",
+  "events": [
+    {
+      "action": "hide",
+      "observer_ms": 6917.229681,
+      "window": 423,
+      "pid": 2566023,
+      "original_workspace": 1,
+      "hidden_workspace": 5
+    },
+    {
+      "action": "restore",
+      "observer_ms": 11444.675022,
+      "window": 423
+    }
+  ],
+  "error": null
+}

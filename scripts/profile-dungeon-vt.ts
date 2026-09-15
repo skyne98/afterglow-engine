@@ -1,19 +1,20 @@
 #!/usr/bin/env bun
 
-const AGTB_HEADER_BYTES = 40;
+import { decodeTelemetryBatch } from '../crates/afterglow-telemetry/web/src/batch.ts';
+import { TELEMETRY_BATCH_HEADER_BYTES } from '../crates/afterglow-telemetry/web/src/telemetry.ts';
 const TRACE_RECORD_BYTES = 40;
 const NS_PER_SECOND = 1_000_000_000;
 
-const TRACE_NAMES = [
-  'frame', 'worker.poll', 'vt.update', 'structural.commands', 'pose.batches',
-  'render.prepare', 'game.update', 'render.passes', 'asset.session.open',
-  'asset.size', 'asset.read', 'asset.read_bulk', 'rpc.call', 'vt.page_load',
-  'vt.bulk_wait', 'asset.bulk_dispatch', 'texture.transcode_queue',
-  'texture.transcode', 'vt.upload', 'cache.read', 'cache.write', 'mesh.optimize',
-  'vt.feedback_detected', 'vt.scheduler_wait', 'vt.page_published',
-] as const;
+import { ENGINE_TRACE_DESCRIPTORS, EngineTraceDescriptor } from '../crates/afterglow-web/web/src/engine/telemetry/catalog.ts';
+const TRACE_NAMES = ENGINE_TRACE_DESCRIPTORS.map(descriptor => descriptor.name);
 
-export interface AgtbHeader {
+export interface DgtbHeader {
+  session: readonly number[];
+  producerGeneration: number;
+  clockGeneration: number;
+  firstSequence: string;
+  nextSequence: string;
+  overwrittenRecords: number;
   sourceId: number;
   epoch: number;
   clockDomain: number;
@@ -38,7 +39,9 @@ export interface TraceStageSummary {
 }
 
 function u64(view: DataView, offset: number): number {
-  return view.getUint32(offset, true) + view.getUint32(offset + 4, true) * 0x1_0000_0000;
+  const value = view.getUint32(offset, true) + view.getUint32(offset + 4, true) * 0x1_0000_0000;
+  if (!Number.isSafeInteger(value)) throw new RangeError('VT analysis needs safe integer values');
+  return value;
 }
 
 function percentile(sorted: readonly number[], fraction: number): number {
@@ -46,41 +49,25 @@ function percentile(sorted: readonly number[], fraction: number): number {
   return sorted[Math.min(sorted.length - 1, Math.floor((sorted.length - 1) * fraction))] ?? 0;
 }
 
-export function validateAgtb(bytes: Uint8Array): AgtbHeader {
-  if (bytes.byteLength < AGTB_HEADER_BYTES) throw new Error('AGTB input is shorter than its header');
-  if (String.fromCharCode(bytes[0]!, bytes[1]!, bytes[2]!, bytes[3]!) !== 'AGTB')
-    throw new Error('AGTB magic mismatch');
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  const version = view.getUint16(4, true);
-  const headerBytes = view.getUint16(6, true);
-  if (version !== 1) throw new Error(`unsupported AGTB version ${version}`);
-  if (headerBytes !== AGTB_HEADER_BYTES) throw new Error(`invalid AGTB header length ${headerBytes}`);
-  const recordCount = view.getUint32(24, true);
-  const expectedBytes = AGTB_HEADER_BYTES + recordCount * TRACE_RECORD_BYTES;
-  if (bytes.byteLength !== expectedBytes)
-    throw new Error(`AGTB length mismatch: expected ${expectedBytes}, got ${bytes.byteLength}`);
-  const ticksPerSecond = u64(view, 32);
-  if (ticksPerSecond !== NS_PER_SECOND)
-    throw new Error(`browser AGTB tick rate must be ${NS_PER_SECOND}, got ${ticksPerSecond}`);
-  return {
-    sourceId: view.getUint32(8, true),
-    epoch: view.getUint32(12, true),
-    clockDomain: view.getUint32(16, true),
-    flags: view.getUint32(20, true),
-    recordCount,
-    droppedRecords: view.getUint32(28, true),
-    ticksPerSecond,
-  };
+export function validateDgtb(bytes: Uint8Array): DgtbHeader {
+  const batch = decodeTelemetryBatch(bytes, 1_000_000);
+  if (batch.ticksPerSecond !== BigInt(NS_PER_SECOND)) throw new Error('Browser DGTB tick rate must be 1000000000');
+  if (batch.dropped > BigInt(Number.MAX_SAFE_INTEGER) || batch.overwritten > BigInt(Number.MAX_SAFE_INTEGER)) throw new RangeError('Loss count exceeds safe integer range');
+  return { sourceId: batch.identity.sourceId, epoch: batch.epoch, clockDomain: batch.identity.clockDomain,
+    session: batch.identity.session, producerGeneration: batch.identity.generation, clockGeneration: batch.identity.clockGeneration,
+    firstSequence: String(batch.firstSequence), nextSequence: String(batch.nextSequence),
+    flags: batch.rolling ? 1 : 0, recordCount: batch.records.length, droppedRecords: Number(batch.dropped),
+    overwrittenRecords: Number(batch.overwritten), ticksPerSecond: Number(batch.ticksPerSecond) };
 }
 
-export function aggregateAgtb(bytes: Uint8Array): {
-  header: AgtbHeader;
+export function aggregateDgtb(bytes: Uint8Array): {
+  header: DgtbHeader;
   unmatchedStarts: number;
   stages: TraceStageSummary[];
   perceptualPriorityBuckets: number[];
   bulkWaitTierStarts: number[];
 } {
-  const header = validateAgtb(bytes);
+  const header = validateDgtb(bytes);
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const starts = new Map<string, number[]>();
   const perceptualPriorityBuckets = new Array<number>(25).fill(0);
@@ -90,19 +77,19 @@ export function aggregateAgtb(bytes: Uint8Array): {
     statuses: {} as Record<string, number>,
   }));
   for (let index = 0; index < header.recordCount; index++) {
-    const base = AGTB_HEADER_BYTES + index * TRACE_RECORD_BYTES;
+    const base = TELEMETRY_BATCH_HEADER_BYTES + index * TRACE_RECORD_BYTES;
     const descriptor = view.getUint32(base + 32, true);
     const stage = raw[descriptor];
     if (!stage) continue;
     stage.records++;
     const phase = view.getUint8(base + 36);
-    if (descriptor === 22 && phase === 1) {
+    if (descriptor === EngineTraceDescriptor.VtFeedbackDetected && phase === 1) {
       const priority = u64(view, base + 16);
       const bucket = Math.floor(priority / 6);
       if (bucket >= 0 && bucket < perceptualPriorityBuckets.length)
         perceptualPriorityBuckets[bucket]++;
     }
-    if (descriptor === 14 && phase === 4) {
+    if (descriptor === EngineTraceDescriptor.VtBulkWait && phase === 4) {
       const tier = u64(view, base + 24);
       if (tier >= 0 && tier < bulkWaitTierStarts.length) bulkWaitTierStarts[tier]++;
     }
@@ -245,7 +232,7 @@ function scenarioExpression(options: Options, epoch: number): string {
 
 async function readTraceBatch(session: CdpSession): Promise<Uint8Array> {
   const length = Number(await session.evaluate('window.__afterglowDungeon.traceBatch()?.byteLength ?? 0'));
-  if (!Number.isInteger(length) || length < AGTB_HEADER_BYTES) throw new Error('frozen trace batch unavailable');
+  if (!Number.isInteger(length) || length < TELEMETRY_BATCH_HEADER_BYTES || length > TELEMETRY_BATCH_HEADER_BYTES + 1_000_000 * TRACE_RECORD_BYTES) throw new Error('Frozen trace batch unavailable or above capacity');
   const output = new Uint8Array(length);
   const chunkBytes = 24 * 1024;
   for (let offset = 0; offset < length; offset += chunkBytes) {
@@ -276,21 +263,21 @@ async function main(): Promise<void> {
     const epoch = Number(new Date().toISOString().slice(0, 10).replaceAll('-', ''));
     const scenario = await session.evaluate(scenarioExpression(options, epoch)) as Record<string, unknown>;
     const batch = await readTraceBatch(session);
-    const aggregate = aggregateAgtb(batch);
+    const aggregate = aggregateDgtb(batch);
     if (aggregate.header.epoch !== epoch) throw new Error(`capture epoch mismatch: ${aggregate.header.epoch} != ${epoch}`);
-    if (aggregate.header.droppedRecords !== 0) throw new Error(`trace dropped ${aggregate.header.droppedRecords} records`);
+    if (aggregate.header.droppedRecords !== 0 || aggregate.header.overwrittenRecords !== 0) throw new Error('Trace contains lost records');
     if (aggregate.unmatchedStarts !== 0) throw new Error(`trace has ${aggregate.unmatchedStarts} unmatched starts`);
     if (scenario.errors !== 0) throw new Error(`Dungeon reported ${scenario.errors} errors`);
     const after = scenario.after as Record<string, number>;
     for (const field of ['pendingPages', 'scheduledRequests', 'readyUploads', 'activeTranscodes', 'queuedTranscodes', 'bulkInFlight']) {
       if ((after[field] ?? 0) !== 0) throw new Error(`final ${field} is ${after[field]}`);
     }
-    await Bun.write(`${options.outputPrefix}.agtb`, batch);
+    await Bun.write(`${options.outputPrefix}.dgtb`, batch);
     await Bun.write(`${options.outputPrefix}.json`, JSON.stringify({
       capturedAt: new Date().toISOString(), adapter: env, ...scenario, aggregate,
     }, null, 2) + '\n');
     console.log(JSON.stringify({
-      agtb: `${options.outputPrefix}.agtb`, json: `${options.outputPrefix}.json`,
+      dgtb: `${options.outputPrefix}.dgtb`, json: `${options.outputPrefix}.json`,
       records: aggregate.header.recordCount, scenario: options.scenario,
     }));
   } finally {

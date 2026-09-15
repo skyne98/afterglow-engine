@@ -1,0 +1,18 @@
+{
+  "events": [
+    {
+      "action": "hide",
+      "observer_ms": 6938.758415,
+      "window": 420,
+      "pid": 2557274,
+      "original_workspace": 1,
+      "hidden_workspace": 4
+    },
+    {
+      "action": "restore",
+      "observer_ms": 11471.667189,
+      "window": 420
+    }
+  ],
+  "error": null
+}

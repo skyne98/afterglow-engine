@@ -1,5 +1,18 @@
 # Engine Memory & Frame Discipline
 
+## Native paint admission
+
+`afterglow-memory` supplies a shared native `EngineMemory` counter with scoped byte reservations.
+The process limit is half of installed RAM, rounded down to 64 MiB blocks, without artist configuration.
+Paint tiles, store capacity, native canvas pixels, snapshots, and source GPU capacity use this same counter.
+The paint cache reuses unpinned disk-backed tiles when shared admission rejects growth.
+
+Reservations cover explicit storage and conservative headroom, not every V8, SQLite, Vello, or driver allocation.
+They do not prove a hard RSS bound or allocation-free gameplay.
+See `docs/api/native-memory.md` for the operations, ownership, and evidence limits.
+
+## Sealed web runtime
+
 Afterglow is migrating engine-authored gameplay hot paths to a sealed runtime
 model:
 

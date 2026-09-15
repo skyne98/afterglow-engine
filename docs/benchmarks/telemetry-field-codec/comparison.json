@@ -1,0 +1,65 @@
+[
+  {
+    "case": "two_u32",
+    "fixed_bytes": 10,
+    "compact_bytes": 10,
+    "fixed_encode_ns": 5.744955,
+    "compact_encode_ns": 6.12547,
+    "fixed_decode_ns": 18.048285,
+    "compact_decode_ns": 19.209915
+  },
+  {
+    "case": "reference",
+    "fixed_bytes": 37,
+    "compact_bytes": 37,
+    "fixed_encode_ns": 5.70663,
+    "compact_encode_ns": 5.145974999999999,
+    "fixed_decode_ns": 11.059795,
+    "compact_decode_ns": 11.04251
+  },
+  {
+    "case": "text_64_empty",
+    "fixed_bytes": 69,
+    "compact_bytes": 5,
+    "fixed_encode_ns": 5.530195,
+    "compact_encode_ns": 5.1587499999999995,
+    "fixed_decode_ns": 34.73266,
+    "compact_decode_ns": 13.01066
+  },
+  {
+    "case": "text_64_short",
+    "fixed_bytes": 69,
+    "compact_bytes": 12,
+    "fixed_encode_ns": 5.73183,
+    "compact_encode_ns": 5.167114999999999,
+    "fixed_decode_ns": 34.695135,
+    "compact_decode_ns": 15.354365
+  },
+  {
+    "case": "text_64_full",
+    "fixed_bytes": 69,
+    "compact_bytes": 69,
+    "fixed_encode_ns": 5.69651,
+    "compact_encode_ns": 5.19006,
+    "fixed_decode_ns": 16.892365,
+    "compact_decode_ns": 17.08542
+  },
+  {
+    "case": "text_1024_empty",
+    "fixed_bytes": 1029,
+    "compact_bytes": 5,
+    "fixed_encode_ns": 6.90488,
+    "compact_encode_ns": 5.159649999999999,
+    "fixed_decode_ns": 404.992935,
+    "compact_decode_ns": 13.02088
+  },
+  {
+    "case": "text_1024_redacted",
+    "fixed_bytes": 1029,
+    "compact_bytes": 1,
+    "fixed_encode_ns": 6.25932,
+    "compact_encode_ns": 2.859875,
+    "fixed_decode_ns": 392.81749,
+    "compact_decode_ns": 6.87357
+  }
+]

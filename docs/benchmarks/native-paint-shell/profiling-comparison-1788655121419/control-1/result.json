@@ -1,0 +1,34 @@
+{
+  "baseline": {
+    "startMs": 2576.722,
+    "endMs": 4261.072,
+    "mean": 6.930679166666666,
+    "p99": 9.676000000000386,
+    "max": 10.126000000000204,
+    "colored": 954
+  },
+  "capture": {
+    "startMs": 6261.401,
+    "endMs": 7990.791,
+    "mean": 7.118454166666667,
+    "p99": 18.613999999999578,
+    "max": 19.86499999999978,
+    "colored": 954
+  },
+  "baselineAfter": {
+    "startMs": 24264.435,
+    "endMs": 26014.896,
+    "mean": 7.206091666666665,
+    "p99": 20.92199999999866,
+    "max": 24.42399999999907,
+    "colored": 954
+  },
+  "stats": {
+    "connected": false,
+    "failures": 0,
+    "batches": 0,
+    "bytes": 0
+  },
+  "recording": false,
+  "target": "native"
+}

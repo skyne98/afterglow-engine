@@ -93,6 +93,17 @@ demo reaches renderer readiness in about 145 ms on the RTX 3090; the pure-rAF
 fallback exceeded 90 seconds. Startup defaults to a 30-second active-time
 deadline, overrideable for diagnostics with `AFTERGLOW_STARTUP_TIMEOUT_MS`.
 
+## Profiling port
+
+On Unix, the command-line host connects to the CLI WebSocket server at `ws://127.0.0.1:8086/` through one native diagnostics worker.
+`AFTERGLOW_DIAGNOSTICS_PORT` selects another server port, or `off` disables profiling.
+No tokens, roles, or JSON configuration file are necessary.
+An unavailable server leaves recording inactive. The shell registers host and paint sources after connection.
+The native WebSocket capture passed with separate host and paint sources and no lost records.
+Controlled timing comparisons and sustained memory checks remain open.
+Bun is necessary to compile the embedded TypeScript capture entry.
+See [Generic Telemetry](../reference/telemetry.md) for the current capture boundary.
+
 ## What is native
 
 - winit owns the OS window and input.

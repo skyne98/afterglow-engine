@@ -139,6 +139,16 @@ describe('import boundary contract', () => {
   test('rejects engine imports outside engine', () => {
     expect(importBoundaryErrors('engine/runtime.ts', "import '../dungeon.ts'", root, new Set())).toHaveLength(1);
   });
+  test('allows the generic telemetry entry but not arbitrary sibling crates', () => {
+    const source = '/project/crates/afterglow-web/web/src';
+    const file = 'engine/telemetry/telemetry.ts';
+    expect(importBoundaryErrors(file,
+      "export * from '../../../../../afterglow-telemetry/web/src/telemetry.ts'", source, new Set())).toEqual([]);
+    expect(importBoundaryErrors(file,
+      "import '../../../../../afterglow-shell/dom_setup.ts'", source, new Set())).toHaveLength(1);
+    expect(importBoundaryErrors(file,
+      "import '../../../../../afterglow-telemetry/web/src/telemetry.test.ts'", source, new Set())).toHaveLength(2);
+  });
   test('rejects visual imports from tests/support', () => {
     expect(importBoundaryErrors('demo.ts', "import './tests/helper.ts'", root, new Set(['demo.ts']))).toHaveLength(2);
   });

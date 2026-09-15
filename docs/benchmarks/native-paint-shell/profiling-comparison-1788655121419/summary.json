@@ -1,0 +1,208 @@
+{
+  "results": [
+    {
+      "name": "control-1",
+      "recording": false,
+      "baseline": {
+        "startMs": 2576.722,
+        "endMs": 4261.072,
+        "mean": 6.930679166666666,
+        "p99": 9.676000000000386,
+        "max": 10.126000000000204,
+        "colored": 954
+      },
+      "capture": {
+        "startMs": 6261.401,
+        "endMs": 7990.791,
+        "mean": 7.118454166666667,
+        "p99": 18.613999999999578,
+        "max": 19.86499999999978,
+        "colored": 954
+      },
+      "baselineAfter": {
+        "startMs": 24264.435,
+        "endMs": 26014.896,
+        "mean": 7.206091666666665,
+        "p99": 20.92199999999866,
+        "max": 24.42399999999907,
+        "colored": 954
+      },
+      "stats": {
+        "connected": false,
+        "failures": 0,
+        "batches": 0,
+        "bytes": 0
+      }
+    },
+    {
+      "name": "capture-1",
+      "recording": true,
+      "baseline": {
+        "startMs": 2578.617,
+        "endMs": 4256.106,
+        "mean": 6.901820833333335,
+        "p99": 9.713000000000193,
+        "max": 10.316000000000258,
+        "colored": 954
+      },
+      "capture": {
+        "startMs": 6256.332,
+        "endMs": 8034.66,
+        "mean": 7.322920833333334,
+        "p99": 20.735000000000582,
+        "max": 37.4970000000003,
+        "colored": 954
+      },
+      "baselineAfter": {
+        "startMs": 24259.572,
+        "endMs": 26016.757,
+        "mean": 7.234412499999992,
+        "p99": 24.032999999999447,
+        "max": 25.97599999999875,
+        "colored": 954
+      },
+      "stats": {
+        "connected": true,
+        "failures": 0,
+        "batches": 36,
+        "bytes": 39016
+      }
+    },
+    {
+      "name": "capture-2",
+      "recording": true,
+      "baseline": {
+        "startMs": 2560.305,
+        "endMs": 4243.816,
+        "mean": 6.927304166666667,
+        "p99": 9.842999999999847,
+        "max": 9.986999999999625,
+        "colored": 954
+      },
+      "capture": {
+        "startMs": 6244.121,
+        "endMs": 7994.468,
+        "mean": 7.206412499999999,
+        "p99": 18.802999999999884,
+        "max": 36.17100000000028,
+        "colored": 954
+      },
+      "baselineAfter": {
+        "startMs": 24633.267,
+        "endMs": 36631.497,
+        "mean": 49.90539583333332,
+        "p99": 1010.8770000000004,
+        "max": 1011.8400000000001,
+        "colored": 954
+      },
+      "stats": {
+        "connected": true,
+        "failures": 0,
+        "batches": 34,
+        "bytes": 38704
+      }
+    },
+    {
+      "name": "control-2",
+      "recording": false,
+      "baseline": {
+        "startMs": 2548.067,
+        "endMs": 4230.637,
+        "mean": 6.9238583333333334,
+        "p99": 9.768999999999778,
+        "max": 10.194999999999709,
+        "colored": 954
+      },
+      "capture": {
+        "startMs": 6231.025,
+        "endMs": 7967.437,
+        "mean": 7.148491666666667,
+        "p99": 19.127000000000407,
+        "max": 21.993000000000393,
+        "colored": 954
+      },
+      "baselineAfter": {
+        "startMs": 24234.105,
+        "endMs": 26012.282,
+        "mean": 7.32332083333334,
+        "p99": 22.939000000002125,
+        "max": 36.88299999999799,
+        "colored": 954
+      },
+      "stats": {
+        "connected": false,
+        "failures": 0,
+        "batches": 0,
+        "bytes": 0
+      }
+    },
+    {
+      "name": "control-3",
+      "recording": false,
+      "baseline": {
+        "startMs": 2531.925,
+        "endMs": 4209.442,
+        "mean": 6.9019666666666675,
+        "p99": 9.882000000000062,
+        "max": 9.960000000000036,
+        "colored": 954
+      },
+      "capture": {
+        "startMs": 6209.731,
+        "endMs": 7932.241,
+        "mean": 7.089979166666664,
+        "p99": 18.25799999999981,
+        "max": 19.61999999999989,
+        "colored": 954
+      },
+      "baselineAfter": {
+        "startMs": 24212.89,
+        "endMs": 25949.339,
+        "mean": 7.148116666666677,
+        "p99": 19.48199999999997,
+        "max": 23.5,
+        "colored": 954
+      },
+      "stats": {
+        "connected": false,
+        "failures": 0,
+        "batches": 0,
+        "bytes": 0
+      }
+    },
+    {
+      "name": "capture-3",
+      "recording": true,
+      "baseline": {
+        "startMs": 2568.982,
+        "endMs": 4246.752,
+        "mean": 6.903316666666666,
+        "p99": 10.074999999999818,
+        "max": 10.114000000000033,
+        "colored": 954
+      },
+      "capture": {
+        "startMs": 6247.051,
+        "endMs": 7997.378,
+        "mean": 7.20595,
+        "p99": 19.20800000000054,
+        "max": 33.12299999999959,
+        "colored": 954
+      },
+      "baselineAfter": {
+        "startMs": 24250.192,
+        "endMs": 25965.83,
+        "mean": 7.061483333333339,
+        "p99": 18.46099999999933,
+        "max": 23.156999999999243,
+        "colored": 954
+      },
+      "stats": {
+        "connected": true,
+        "failures": 0,
+        "batches": 36,
+        "bytes": 39016
+      }
+    }
+  ]
+}

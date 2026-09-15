@@ -11,6 +11,7 @@ const visual = new Set(manifest.artifacts.filter((entry) => entry.role === 'visu
   .map((entry) => entry.source.replace(/^src\//, '')));
 export function importBoundaryErrors(file: string, source: string, wwwRoot: string, visualSources: ReadonlySet<string>): string[] {
   const found: string[] = [], engineRoot = join(wwwRoot, 'engine');
+  const telemetryEntry = resolve(wwwRoot, '../../../afterglow-telemetry/web/src/telemetry.ts');
   for (const match of source.matchAll(/(?:from\s*|import\s*(?:\(\s*)?)['"]([^'"]+)['"]/g)) {
     const specifier = match[1];
     if (!specifier || !specifier.startsWith('.')) continue;
@@ -18,7 +19,7 @@ export function importBoundaryErrors(file: string, source: string, wwwRoot: stri
     const generatedRootClient = relative(join(wwwRoot, 'workers'), target).split('/')[0] !== '..' &&
       target.endsWith('.client.ts');
     if (file.startsWith('engine/') && !file.endsWith('.test.ts') &&
-        relative(engineRoot, target).startsWith('..') && !generatedRootClient)
+        relative(engineRoot, target).startsWith('..') && !generatedRootClient && target !== telemetryEntry)
       found.push(`${file}: engine production source may not import outside engine: ${specifier}`);
     if (visualSources.has(file) && (specifier.includes('/support/') || target.includes('/tests/') || specifier.includes('.test.')))
       found.push(`${file}: visual production source may not import test/support code: ${specifier}`);

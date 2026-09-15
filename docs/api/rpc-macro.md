@@ -37,8 +37,7 @@ Rejected at compile time (a `syn::Error`, never a panic):
 
 ## Reserved method names
 
-- `serve`, `new`, and `transport` are **always** reserved (the server dispatch,
-  the client constructor, and the client transport accessor).
+- `serve`, `new`, `transport`, and `into_transport` are always reserved.
 - `spawn_worker` is reserved **only when `worker = ...` is used** (the generated
   native client constructor). Without `worker`, a method named `spawn_worker`
   is allowed.
@@ -69,6 +68,7 @@ pub struct PhysicsClient<T: Transport> { /* private transport */ }
 impl<T: Transport> PhysicsClient<T> {
     pub fn new(t: T) -> Self;
     pub fn transport(&self) -> &T;
+    pub fn into_transport(self) -> T;
     pub fn step(&self, state: Vec<f32>, dt: f32) -> RpcResult<Vec<f32>>;
     pub fn apply_force(&self, body_id: u32, fx: f32, fy: f32, fz: f32) -> RpcResult<bool>;
 }
@@ -79,6 +79,10 @@ Each method encodes its args as a postcard tuple (`(arg0, arg1, …)`), calls
 payload. Trailing commas force tuple semantics, so a single-argument method
 round-trips the same way as a multi-argument one. Fields stay private; use
 `transport()` for ad-hoc/raw calls.
+`into_transport()` consumes the Rust client and gives its transport to another owner.
+Native async clients also have this operation. They return `AsyncWorkerTransport`,
+or its `Arc` for singleton clients. No worker or ring is copied or restarted.
+A host registry can thus use generated worker startup without a second worker path.
 
 ### Native spawn (only with `worker = Type`)
 

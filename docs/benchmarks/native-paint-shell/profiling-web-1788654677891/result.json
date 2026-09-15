@@ -1,0 +1,111 @@
+{
+  "baseline": {
+    "mean": 6.9454999999999965,
+    "p99": 6.980000000000018,
+    "max": 7,
+    "colored": 954
+  },
+  "capture": {
+    "mean": 6.946145833333334,
+    "p99": 6.980000000000473,
+    "max": 7.105000000000018,
+    "colored": 954
+  },
+  "baselineAfter": {
+    "mean": 6.9509166666666715,
+    "p99": 6.985000000000582,
+    "max": 8.255000000001019,
+    "colored": 954
+  },
+  "stats": {
+    "connected": true,
+    "failures": 0,
+    "batches": 6,
+    "bytes": 2696
+  },
+  "target": "web",
+  "captureFile": {
+    "capture": "/home/fox/Project/afterglow-engine/docs/benchmarks/native-paint-shell/profiling-web-1788654677891/capture-a7f4bafb85be6fa832b74b533ce906f0-1.dgtl",
+    "bytes": 2959,
+    "records": 53,
+    "reason": "duration"
+  },
+  "source": {
+    "id": 1,
+    "name": "afterglow-engine.paint",
+    "process_id": 0,
+    "producer_generation": 1,
+    "clock_generation": 1,
+    "clock": {
+      "domain": 1,
+      "origin_tick": "3276889999",
+      "origin_reference_ns": "3151899999",
+      "rate_numerator": "1",
+      "rate_denominator": "1",
+      "uncertainty_ns": "329999"
+    },
+    "records": 53,
+    "batches": 6,
+    "metric_samples": 0,
+    "dropped_records": "0",
+    "overwritten_records": "0",
+    "sequence_gaps": "0",
+    "descriptors": [
+      {
+        "id": 0,
+        "name": "paint.stroke_sample",
+        "category": "paint",
+        "kind": "Instant",
+        "phase_counts": [
+          0,
+          40,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "argument0": {
+          "name": "sample_count",
+          "type": 1,
+          "unit": 0
+        },
+        "argument1": {
+          "name": "",
+          "type": 0,
+          "unit": 0
+        }
+      },
+      {
+        "id": 1,
+        "name": "paint.worker_message",
+        "category": "paint",
+        "kind": "Instant",
+        "phase_counts": [
+          0,
+          13,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "argument0": {
+          "name": "",
+          "type": 0,
+          "unit": 0
+        },
+        "argument1": {
+          "name": "",
+          "type": 0,
+          "unit": 0
+        }
+      }
+    ],
+    "metrics": []
+  }
+}

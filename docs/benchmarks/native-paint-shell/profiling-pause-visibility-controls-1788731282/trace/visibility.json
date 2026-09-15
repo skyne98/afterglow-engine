@@ -1,0 +1,19 @@
+{
+  "mode": "--strace",
+  "events": [
+    {
+      "action": "hide",
+      "observer_ms": 7281.753374,
+      "window": 424,
+      "pid": 2568605,
+      "original_workspace": 1,
+      "hidden_workspace": 6
+    },
+    {
+      "action": "restore",
+      "observer_ms": 11809.319585,
+      "window": 424
+    }
+  ],
+  "error": null
+}

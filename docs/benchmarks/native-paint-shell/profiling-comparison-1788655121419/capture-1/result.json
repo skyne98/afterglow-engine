@@ -1,0 +1,60 @@
+{
+  "baseline": {
+    "startMs": 2578.617,
+    "endMs": 4256.106,
+    "mean": 6.901820833333335,
+    "p99": 9.713000000000193,
+    "max": 10.316000000000258,
+    "colored": 954
+  },
+  "capture": {
+    "startMs": 6256.332,
+    "endMs": 8034.66,
+    "mean": 7.322920833333334,
+    "p99": 20.735000000000582,
+    "max": 37.4970000000003,
+    "colored": 954
+  },
+  "baselineAfter": {
+    "startMs": 24259.572,
+    "endMs": 26016.757,
+    "mean": 7.234412499999992,
+    "p99": 24.032999999999447,
+    "max": 25.97599999999875,
+    "colored": 954
+  },
+  "stats": {
+    "connected": true,
+    "failures": 0,
+    "batches": 36,
+    "bytes": 39016
+  },
+  "recording": true,
+  "target": "native",
+  "captureFile": "capture-180b9596f99d4650ca9bca84c033ff9b-1.dgtl",
+  "sources": [
+    {
+      "name": "afterglow-shell",
+      "records": 2426,
+      "counts": {
+        "host.present": 2136,
+        "rpc.round_trip": 280,
+        "input.dispatch": 10
+      },
+      "pairs": 140,
+      "dropped": 0,
+      "overwritten": 0
+    },
+    {
+      "name": "afterglow-engine.paint",
+      "records": 44,
+      "counts": {
+        "paint.stroke_sample": 40,
+        "paint.publish": 4
+      },
+      "pairs": 0,
+      "dropped": 0,
+      "overwritten": 0
+    }
+  ]
+}

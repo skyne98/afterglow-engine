@@ -1,0 +1,59 @@
+{
+  "results": [
+    {
+      "phase": "seed",
+      "snapshot": {
+        "width": 512,
+        "height": 384,
+        "hash": 2063070052,
+        "colored": 249,
+        "layers": [
+          "Group 1",
+          "Layer 2",
+          "Layer 1"
+        ]
+      },
+      "processMemory": [
+        "VmPeak:\t51361464 kB",
+        "VmHWM:\t  511796 kB",
+        "VmRSS:\t  511796 kB"
+      ]
+    },
+    {
+      "phase": "restore",
+      "snapshot": {
+        "width": 512,
+        "height": 384,
+        "hash": 2063070052,
+        "colored": 249,
+        "layers": [
+          "Group 1",
+          "Layer 2",
+          "Layer 1"
+        ]
+      },
+      "processMemory": [
+        "VmPeak:\t51361528 kB",
+        "VmHWM:\t  458116 kB",
+        "VmRSS:\t  458116 kB"
+      ]
+    },
+    {
+      "phase": "discard",
+      "snapshot": {
+        "width": 2048,
+        "height": 2048,
+        "hash": 3172769221,
+        "colored": 0,
+        "layers": [
+          "Layer 1"
+        ]
+      },
+      "processMemory": [
+        "VmPeak:\t51361464 kB",
+        "VmHWM:\t  538580 kB",
+        "VmRSS:\t  538580 kB"
+      ]
+    }
+  ]
+}

@@ -5,13 +5,13 @@ import {
   type BigHeader,
   type VirtualTextureDirectory,
 } from '../crates/afterglow-web/web/src/engine/assets/big-format.ts';
-import { validateAgtb } from './profile-dungeon-vt.ts';
-
-const HEADER_BYTES = 40;
+import { validateDgtb } from './profile-dungeon-vt.ts';
+import { TELEMETRY_BATCH_HEADER_BYTES as HEADER_BYTES } from '../crates/afterglow-telemetry/web/src/telemetry.ts';
+import { EngineTraceDescriptor } from '../crates/afterglow-web/web/src/engine/telemetry/catalog.ts';
 const RECORD_BYTES = 40;
-const DESCRIPTOR_BULK_WAIT = 14;
-const DESCRIPTOR_BULK_DISPATCH = 15;
-const DESCRIPTOR_SCHEDULER_WAIT = 23;
+const DESCRIPTOR_BULK_WAIT = EngineTraceDescriptor.VtBulkWait;
+const DESCRIPTOR_BULK_DISPATCH = EngineTraceDescriptor.VtBulkDispatch;
+const DESCRIPTOR_SCHEDULER_WAIT = EngineTraceDescriptor.VtSchedulerWait;
 const PHASE_ASYNC_BEGIN = 4;
 const PHASE_ASYNC_END = 5;
 const SCHEDULER_ADMITTED = 0;
@@ -103,11 +103,14 @@ export interface DungeonVtReplayReport {
 }
 
 function u64(view: DataView, offset: number): number {
-  return view.getUint32(offset, true) + view.getUint32(offset + 4, true) * 0x1_0000_0000;
+  const value = view.getUint32(offset, true) + view.getUint32(offset + 4, true) * 0x1_0000_0000;
+  if (!Number.isSafeInteger(value)) throw new RangeError('VT replay needs safe integer values');
+  return value;
 }
 
 function readRecords(bytes: Uint8Array): TraceRecord[] {
-  const header = validateAgtb(bytes);
+  const header = validateDgtb(bytes);
+  if (header.droppedRecords !== 0 || header.overwrittenRecords !== 0 || header.firstSequence !== '0') throw new Error('VT replay needs a capture without lost records');
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const records = new Array<TraceRecord>(header.recordCount);
   for (let index = 0; index < header.recordCount; index++) {
@@ -476,7 +479,7 @@ export function analyzeDungeonVtReplay(
     sourceRunReductionPercent: callerRuns === 0 ? 0 : (callerRuns - sortedRuns) * 100 / callerRuns,
     sourceSortedBulkRequests: batches.length,
     prioritySensitivity: {
-      caveat: 'Static sensitivity only: AGTB omits feedback refreshes and current resident fallback mip.',
+      caveat: 'Static sensitivity only: the trace omits feedback refreshes and current resident fallback mip.',
       currentPriorityReschedule: summarizeVariant(current, requests),
       mipDeficitFirst: summarizeVariant(mipDeficit, requests),
       mipDeficitAndChannelAffinity: summarizeVariant(grouped, requests),

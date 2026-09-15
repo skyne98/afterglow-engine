@@ -1,0 +1,35 @@
+{
+  "passed": true,
+  "comparedBytes": 131072,
+  "differences": 0,
+  "maximumDifference": 0,
+  "nativeMemory": {
+    "before": 794886144,
+    "after": 795004928,
+    "growth": 118784,
+    "tolerance": 39744307.2,
+    "passed": true
+  },
+  "webMemory": {
+    "before": 1136358400,
+    "after": 1033118720,
+    "growth": -103239680,
+    "tolerance": 56817920,
+    "passed": true
+  },
+  "admitted": true,
+  "diskBounded": true,
+  "nativeFrames": {
+    "count": 86110,
+    "meanMs": 6.968253443270235,
+    "maxMs": 54.988000000000284,
+    "below55": 1
+  },
+  "webFrames": {
+    "count": 36002,
+    "meanMs": 16.66599994444753,
+    "maxMs": 16.67000000004191,
+    "below55": 0
+  },
+  "limits": "Eight display rows, not all document pixels. Memory floors cover the final three minutes. rAF is not GPU presentation."
+}

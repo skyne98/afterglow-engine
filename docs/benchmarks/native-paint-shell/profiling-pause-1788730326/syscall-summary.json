@@ -1,0 +1,181 @@
+{
+  "lines": 27290,
+  "parsedCompletedCalls": 27289,
+  "omittedLines": 1,
+  "clock": "strace realtime; no explicit mapping to the DGTL monotonic clock",
+  "groups": {
+    "futex": {
+      "count": 2491,
+      "totalMs": 27.656000000000137,
+      "maxMs": 6.006
+    },
+    "poll": {
+      "count": 7352,
+      "totalMs": 4155.0080000000025,
+      "maxMs": 27.679
+    },
+    "ioctl": {
+      "count": 4978,
+      "totalMs": 312.2869999999903,
+      "maxMs": 14.017
+    },
+    "ppoll": {
+      "count": 3704,
+      "totalMs": 18285.105999999996,
+      "maxMs": 8.162
+    },
+    "epoll_wait": {
+      "count": 5123,
+      "totalMs": 26.550000000000114,
+      "maxMs": 0.47100000000000003
+    },
+    "epoll_pwait": {
+      "count": 3641,
+      "totalMs": 22.964000000000148,
+      "maxMs": 4.957999999999999
+    }
+  },
+  "shownLimit": 20,
+  "longestCalls": [
+    {
+      "line": 9860,
+      "time": "1788730336.158959",
+      "call": "poll",
+      "ms": 27.679,
+      "text": "1788730336.158959 poll([{fd=66<anon_inode:sync_file>, events=POLLIN|POLLERR}], 1, -1) = 1 ([{fd=66, revents=POLLIN}]) <0.027679>"
+    },
+    {
+      "line": 9936,
+      "time": "1788730336.254838",
+      "call": "poll",
+      "ms": 25.259,
+      "text": "1788730336.254838 poll([{fd=66<anon_inode:sync_file>, events=POLLIN|POLLERR}], 1, -1) = 1 ([{fd=66, revents=POLLIN}]) <0.025259>"
+    },
+    {
+      "line": 541,
+      "time": "1788730328.449467",
+      "call": "ioctl",
+      "ms": 14.017,
+      "text": "1788730328.449467 ioctl(0x1c, 0xc020462a, 0x7ffc516184d0) = 0 <0.014017>"
+    },
+    {
+      "line": 9533,
+      "time": "1788730335.815431",
+      "call": "poll",
+      "ms": 11.888,
+      "text": "1788730335.815431 poll([{fd=66<anon_inode:sync_file>, events=POLLIN|POLLERR}], 1, -1) = 1 ([{fd=66, revents=POLLIN}]) <0.011888>"
+    },
+    {
+      "line": 25731,
+      "time": "1788730352.970461",
+      "call": "poll",
+      "ms": 11.835,
+      "text": "1788730352.970461 poll([{fd=63<anon_inode:sync_file>, events=POLLIN|POLLERR}], 1, -1) = 1 ([{fd=63, revents=POLLIN}]) <0.011835>"
+    },
+    {
+      "line": 26053,
+      "time": "1788730353.314833",
+      "call": "poll",
+      "ms": 11.757,
+      "text": "1788730353.314833 poll([{fd=63<anon_inode:sync_file>, events=POLLIN|POLLERR}], 1, -1) = 1 ([{fd=63, revents=POLLIN}]) <0.011757>"
+    },
+    {
+      "line": 26532,
+      "time": "1788730353.816726",
+      "call": "poll",
+      "ms": 11.756,
+      "text": "1788730353.816726 poll([{fd=63<anon_inode:sync_file>, events=POLLIN|POLLERR}], 1, -1) = 1 ([{fd=63, revents=POLLIN}]) <0.011756>"
+    },
+    {
+      "line": 8697,
+      "time": "1788730334.966385",
+      "call": "poll",
+      "ms": 11.753,
+      "text": "1788730334.966385 poll([{fd=66<anon_inode:sync_file>, events=POLLIN|POLLERR}], 1, -1) = 1 ([{fd=66, revents=POLLIN}]) <0.011753>"
+    },
+    {
+      "line": 26954,
+      "time": "1788730354.254643",
+      "call": "poll",
+      "ms": 11.732,
+      "text": "1788730354.254643 poll([{fd=63<anon_inode:sync_file>, events=POLLIN|POLLERR}], 1, -1) = 1 ([{fd=63, revents=POLLIN}]) <0.011732>"
+    },
+    {
+      "line": 26134,
+      "time": "1788730353.393124",
+      "call": "poll",
+      "ms": 11.667,
+      "text": "1788730353.393124 poll([{fd=63<anon_inode:sync_file>, events=POLLIN|POLLERR}], 1, -1) = 1 ([{fd=63, revents=POLLIN}]) <0.011667>"
+    },
+    {
+      "line": 9122,
+      "time": "1788730335.390683",
+      "call": "poll",
+      "ms": 11.538,
+      "text": "1788730335.390683 poll([{fd=66<anon_inode:sync_file>, events=POLLIN|POLLERR}], 1, -1) = 1 ([{fd=66, revents=POLLIN}]) <0.011538>"
+    },
+    {
+      "line": 26869,
+      "time": "1788730354.176807",
+      "call": "poll",
+      "ms": 11.237,
+      "text": "1788730354.176807 poll([{fd=63<anon_inode:sync_file>, events=POLLIN|POLLERR}], 1, -1) = 1 ([{fd=63, revents=POLLIN}]) <0.011237>"
+    },
+    {
+      "line": 9450,
+      "time": "1788730335.736687",
+      "call": "poll",
+      "ms": 11.088000000000001,
+      "text": "1788730335.736687 poll([{fd=66<anon_inode:sync_file>, events=POLLIN|POLLERR}], 1, -1) = 1 ([{fd=66, revents=POLLIN}]) <0.011088>"
+    },
+    {
+      "line": 25638,
+      "time": "1788730352.891982",
+      "call": "poll",
+      "ms": 11.086,
+      "text": "1788730352.891982 poll([{fd=63<anon_inode:sync_file>, events=POLLIN|POLLERR}], 1, -1) = 1 ([{fd=63, revents=POLLIN}]) <0.011086>"
+    },
+    {
+      "line": 8605,
+      "time": "1788730334.889205",
+      "call": "poll",
+      "ms": 10.885,
+      "text": "1788730334.889205 poll([{fd=66<anon_inode:sync_file>, events=POLLIN|POLLERR}], 1, -1) = 1 ([{fd=66, revents=POLLIN}]) <0.010885>"
+    },
+    {
+      "line": 26459,
+      "time": "1788730353.747834",
+      "call": "poll",
+      "ms": 10.541,
+      "text": "1788730353.747834 poll([{fd=63<anon_inode:sync_file>, events=POLLIN|POLLERR}], 1, -1) = 1 ([{fd=63, revents=POLLIN}]) <0.010541>"
+    },
+    {
+      "line": 9036,
+      "time": "1788730335.313620",
+      "call": "poll",
+      "ms": 10.407,
+      "text": "1788730335.313620 poll([{fd=66<anon_inode:sync_file>, events=POLLIN|POLLERR}], 1, -1) = 1 ([{fd=66, revents=POLLIN}]) <0.010407>"
+    },
+    {
+      "line": 5869,
+      "time": "1788730331.999307",
+      "call": "ppoll",
+      "ms": 8.162,
+      "text": "1788730331.999307 ppoll([{fd=3<UNIX-STREAM:[123636608->123643221]>, events=POLLIN}], 1, NULL, NULL, 8) = 1 ([{fd=3, revents=POLLIN}]) <0.008162>"
+    },
+    {
+      "line": 5068,
+      "time": "1788730331.182268",
+      "call": "poll",
+      "ms": 8.1,
+      "text": "1788730331.182268 poll([{fd=63<anon_inode:sync_file>, events=POLLIN|POLLERR}], 1, -1) = 1 ([{fd=63, revents=POLLIN}]) <0.008100>"
+    },
+    {
+      "line": 6799,
+      "time": "1788730332.957854",
+      "call": "ppoll",
+      "ms": 7.974,
+      "text": "1788730332.957854 ppoll([{fd=3<UNIX-STREAM:[123636608->123643221]>, events=POLLIN}], 1, NULL, NULL, 8) = 1 ([{fd=3, revents=POLLIN}]) <0.007974>"
+    }
+  ]
+}

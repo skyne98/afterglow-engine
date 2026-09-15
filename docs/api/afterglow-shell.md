@@ -88,7 +88,11 @@ readback buffer.
 
 HTML loading extracts the document's `type="importmap"` and
 `type="module"` scripts, resolves `three` and `three/addons/` from that map,
-and evaluates the module unchanged. `--compat-three` is the explicit isolated
+and evaluates every module script unchanged, not only the first script.
+External scripts enter one module graph in document order.
+Each inline script retains a separate module scope and the document base URL.
+Readiness waits for the full graph, including top-level `await`.
+`--compat-three` is the explicit isolated
 compatibility profile: its first successful presentation may satisfy host
 readiness. Authored engine pages omit the flag and become ready only when
 `EngineRuntime` emits `op_afterglow_game_ready` after a complete post-seal game
@@ -100,6 +104,81 @@ owned by `deno_webgpu`. JavaScript command buffers render directly to the
 surface texture; no second graphics device or full-frame CPU readback is used.
 The transparent DOM HUD is emitted as a Vello scene, rasterized on the shared GPU
 device with MSAA16, and composited after the game pass.
+
+## Input timestamps
+
+Native `UIEvent` timestamps use the same monotonic millisecond clock as `performance.now()`.
+This includes pointer events and their coalesced samples.
+Unix timestamps are not valid stroke timestamps.
+
+## Random values
+
+`crypto.getRandomValues()` fills integer typed arrays with OS-backed cryptographic bytes.
+Each call accepts at most 65,536 bytes and returns the same array.
+`crypto.randomUUID()` returns an RFC 4122 version-4 UUID.
+An OS random failure stops the operation without a fallback.
+`crypto.subtle` is not available.
+
+## DOM-only documents
+
+`--document <html-path>` gives a DOM-only application a shell-owned WebGPU surface.
+The document must not create another WebGPU surface.
+The shell clears its surface and composites the Blitz/Vello scene each frame.
+Readiness needs completed module evaluation and a successful presentation.
+A changed HUD or an incomplete screenshot keeps frame scheduling active even without pending RPCs or animation callbacks.
+The host returns to idle after publication and screenshot completion.
+Game startup and `--compat-three` do not use this bootstrap.
+A missing adapter or device loss stops the application without a fallback.
+
+Build and run the native paint editor:
+
+```sh
+cd prototype/character-editor
+bun run build
+cd ../..
+nix-shell shell.nix --run 'CARGO_BUILD_JOBS=$(nproc) cargo run --release -p afterglow-shell -- --document prototype/character-editor/dist/paint/paint-demo.html'
+```
+
+`shell.nix` adds the GTK and desktop GSettings schema directories to `XDG_DATA_DIRS`, before existing data directories.
+Native file dialogs need these compiled schemas. Library paths alone are not sufficient and can cause a GLib abort.
+Check schema access with `nix-shell shell.nix --run 'bash scripts/test-shell-settings.sh'`.
+This check uses memory-only settings and does not change desktop settings.
+
+The native paint probe uses `dist/paint/paint-native-probe.html` instead.
+It checks strokes, native pointer dispatch, undo/redo, brush selection, unchanged canvas pixels after panel clicks, sliders, brush labels, scrolling, and PNG export.
+The probe prints `[native-paint-probe] PASS` only after all checks complete.
+It also records 120 rAF intervals for unchanged frames, hover changes, and slider movement under `[native-ui-cadence]`.
+These short measurements are not physical presentation timing or long-soak evidence.
+Use the release build for UI performance checks, not the unoptimized debug build.
+Three corrected release launches measured 143.99–144.25 FPS for slider movement and 130.04–138.31 FPS for hover changes.
+Hover changes still miss frame deadlines.
+See `docs/benchmarks/native-paint-shell/` for the baseline, corrected results, and evidence limits.
+`AFTERGLOW_CAPTURE_PATH` can capture this page after its module evaluation completes.
+This full probe keeps module evaluation open and does not accept OS input during its checks.
+Its latest run stopped at the composition-undo check. That failure remains open.
+
+The profiling capture and control pages instead complete module evaluation before measurement.
+This permits native input during capture. The capture driver rejects a run before native input readiness.
+Run `nix-shell shell.nix --run 'bun scripts/test-native-paint-menus.ts'` after the release and Vite builds.
+This check uses XWayland/XTest mouse clicks on File, Edit, and View while the capture workload runs without a collector.
+It checks menu state and Escape after native readiness, not physical input-to-pixel latency.
+
+Software Canvas2D uses `context.commit()` to publish its full RGBA raster into Blitz.
+`context.commit(x, y, width, height)` publishes a changed region in canvas pixels.
+The rectangle must contain positive integer dimensions and stay inside the canvas.
+The bridge borrows the existing JavaScript buffer and copies only changed rows into a retained CPU raster.
+The initial publication and a resize copy all source pixels before replacement.
+Each connected canvas has one pending rectangle, which combines changes before the next HUD frame.
+The HUD uses a persistent Vello texture and uploads only that rectangle.
+Vello still copies the full changed texture into its GPU atlas.
+Resize and removal unregister old texture overrides. CPU capture makes an immutable snapshot of current pixels.
+No artist configuration or fixed canvas-count limit was added.
+Hardware dimension limits still apply. Aggregate memory admission and sustained GPU memory checks remain incomplete.
+The region path passed browser tests and an exact hardware GPU check for pixels, capture, resize, and retirement.
+The release raster results are in `docs/benchmarks/native-paint-shell/raster-regions/`.
+Detached canvases remain local for PNG export.
+The native paint service has the name `paint` and runs on one OS thread.
+See `maipointo.md` for its capacities and memory-only history.
 
 ## Browser environment
 
@@ -131,6 +210,59 @@ The shell currently provides:
   deno/winit task continuation. `scheduler.postTask` and `TaskController` are
   intentionally absent.
 
+Horizontal range inputs have a native track and thumb, pointer capture, step limits, and keyboard controls.
+Range changes send `input` events and send `change` after the drag.
+Vertical range inputs remain unsupported.
+Number inputs use the same intrinsic line height as text inputs, including inside initially closed details panels.
+A raster regression checks the displayed digits, not only the stored input value.
+Text controls use the existing Blitz/Parley editor for caret placement, drag selection, replacement, deletion, and keyboard selection.
+The native bridge converts DOM UTF-16 selection offsets to native UTF-8 offsets.
+JavaScript dispatch precedes the default edit action. Canceled `keydown` or `beforeinput` prevents the edit.
+User edits send `input`. A changed value sends `change` on blur or single-line Enter.
+Live values remain separate from the `value` attribute and `defaultValue`.
+Readonly controls permit selection but not edits. Disabled controls reject native edits.
+The local LinkeDOM patch supplies capture/target/bubble phases, listener capture identity, passive listeners, and abort removal.
+Canceled `pointerdown` suppresses compatibility mouse events, not `click`. Capture release precedes click, and secondary buttons send `auxclick`.
+The source comparison and remaining input-quality gates are in `docs/research/native-shell-input-chromium-comparison.md`.
+The current input change adds text clipboard operations, bounded text history, and Winit IME composition through the existing Parley editor.
+Native regression and device checks for this change are pending.
+
+- `navigator.clipboard.readText()` and `writeText(text)` permit application script access without a user action, by explicit user decision.
+- Text copy/cut/paste dispatch clipboard events. Transfers have a 32 MiB UTF-8 limit and one in-flight operation. Native clipboard I/O uses a blocking thread, not the UI thread.
+- Failed clipboard writes do not cut text. A delayed paste does not replace text after focus, selection, or value changes.
+- Ctrl/Cmd+Z, Ctrl+Y, and Ctrl/Cmd+Shift+Z operate on text history in the focused control. History has 512 edits per control and a 32 MiB document accounting limit. Capacity removes old history, not current text.
+- Programmatic value changes clear obsolete text history. Undo/redo retain text and selection, and respect canceled `beforeinput` events.
+- IME preedit uses native Parley composition. Commit forms one history edit. Focus loss cancels transient text and restores the original selection.
+- The native IME candidate area uses the transformed text-editor rectangle. Captured text selection applies inverse CSS transforms.
+- A fixed 64-sample mouse buffer retains host-arrival timestamps and sample order. A full buffer dispatches immediately. `getCoalescedEvents()` returns the retained samples.
+
+These are UI slow paths, not `GameplaySealed` allocation evidence. Clipboard libraries can allocate external input before the shell checks its length.
+Pen backends, physical input latency, cross-platform device checks, and long soaks remain open. Host-arrival timestamps are not hardware timestamps.
+These checks do not establish Chromium parity.
+Wheel input selects a scrollable ancestor on the requested axis and continues at its edge.
+Content scrolling does not move the container client rectangle or change layout-relative offsets.
+The native adapter reverses Winit wheel deltas to match DOM wheel direction and converts physical pixels to CSS pixels.
+Named keyboard keys retain their DOM names, including arrows, Enter, Tab, and Escape.
+Single-select controls display their current label and use one DOM popup for pointer and keyboard selection.
+The native snapshot sends current option selectedness without a change to source DOM attributes.
+This includes the default first option. The label stylesheet does not use `:has()`, which the current Stylo parser rejects.
+Disabled options and groups cannot change the value. Escape cancels popup selection, and Tab closes the popup.
+CSS transitions use a monotonic clock and keep HUD presentation active until the animation stops.
+The updated Taffy layout owns grid overflow rectangles. The old cell-local content-size correction is removed.
+Text hit tests stay inside their line bounds and obey ancestor overflow clips.
+Unchanged stylesheet snapshots do not replace parsed stylesheets.
+Empty mutation callbacks after a synchronous queue drain do not trigger another DOM synchronization.
+Native mouse and pointer events calculate target-relative offsets only when a listener reads them.
+Unused offsets do not force layout after pointer listeners change the DOM.
+DOM interface type tags prevent reactive libraries from replacing native node identity with proxies.
+Style-property mutations reach the native snapshot. Client rectangles include CSS transforms without changes to layout offsets.
+Stacking positions and bounds use the completed layout, including translated popups on their initial frame.
+The paint probe checks File/Edit/View opening, menu placement, item activation, Escape, keyboard opening, and outside clicks.
+
+Blitz uses incremental layout, so unchanged text and layout retain their cached results.
+Cached overflow bounds include the node position and transform before parent calculations.
+Regressions compare incremental and full-layout pixels after text, range, style, visibility, viewport, and child-removal changes.
+
 The surface canvas remains in layout and hit testing but its placeholder raster
 is suppressed from the HUD scene. This preserves unchanged HTML content across
 reactive DOM updates without painting over the WebGPU surface.
@@ -145,10 +277,24 @@ Created → EnvironmentReady → AdapterReady → DeviceReady → CanvasReady
         → Suspended | DeviceLost | Stopped
 ```
 
-The windowed host is a persistent scheduler: winit remains the outer event
-loop, module evaluation advances non-blockingly across redraws, and each host
-turn calls `JsRuntime::poll_event_loop()` rather than running deno_core to idle.
-A coalesced winit waker handles asynchronous runtime progress. Pending rAF work
+Winit owns the outer event loop. Bounded runtime turns advance module
+evaluation, timers, and native responses independently of redraw delivery.
+Each turn calls `JsRuntime::poll_event_loop()` rather than running Deno to idle.
+A coalesced runtime wake marks pending work. Runtime maintenance uses the
+monitor interval and does not poll immediately for every wake.
+Only one shell redraw request remains outstanding at a time.
+The common presentation path calls `Window::pre_present_notify()` after GPU
+submission and immediately before presentation. On Wayland, Winit uses the
+compositor frame callback to control redraw delivery.
+Pending rAF callbacks can wait while the compositor withholds frames.
+Runtime-only turns do not drain those callbacks or present a surface.
+Timers, native workers, diagnostics, and input continue without a redraw.
+On restore, rAF receives the current timestamp, without missed-frame replay.
+Focus loss alone does not stop rendering. Other platforms retain the existing
+monitor-interval limit where `pre_present_notify` has no effect.
+The [pacing repair](../implementation/native-presentation-pacing-plan.md) still
+needs real-driver acceptance. This mechanism cannot guarantee that a driver
+call will not block. Pending rAF work
 references one `ExternalOpsTracker` token, preventing deno_core from falsely
 classifying a top-level rAF await as deadlocked. Each bounded host turn yields
 once to the current-thread Tokio scheduler so lazy deno ops can complete;
@@ -197,8 +343,14 @@ The workspace root patches crates.io dependencies to the shell's pinned copies
 of `deno_webgpu`, wgpu, Naga, Blitz, and Stylo/Taffy. The patch inventory and
 upstream references are maintained in
 `crates/afterglow-shell/vendor/NATIVE_WEBGPU_PATCHES.md`. Blitz is pinned by
-`vendor/afterglow-shell-blitz/THREE_NATIVE_PIN` and carries tested
-browser-layout/paint fixes.
+`vendor/afterglow-shell-blitz/THREE_NATIVE_PIN`.
+The current update uses upstream `main` commit `a50cb8971a03fb4cac697b763f8f5d01ee83cefb` (223 commits after the previous pin).
+It uses Blitz `0.3.0-beta.2`, Stylo `0.20`, anyrender `0.13`, and Vello `0.10`.
+Native node maps keep the full versioned `NodeId`. Raster publication and initial-containing-block corrections remain local patches.
+Upstream now includes the cached-overflow transform correction and no longer uses an incremental-layout feature flag.
+The all-target native API check, release build, and 53 native regression tests passed.
+The RTX 3090 probe passed select, input-value, wheel-zoom, hover-transition, and paint checks and produced a checked screenshot.
+See `docs/benchmarks/native-paint-shell/` for the log, image, and measurement limits.
 
 ## Native service composition
 
@@ -221,6 +373,28 @@ capacity. Each worker retains a confined generational source handle and performs
 BIG range reads plus Basis transcode without exposing encoded page bytes to V8.
 Public web remains capped at two to four WASM workers. No native service uses a
 Web Worker or WASM implementation.
+
+## Profiling port
+
+On Unix, the command-line application composes one native `diagnostics` RPC worker.
+It connects to the CLI WebSocket server at `ws://127.0.0.1:8086/`, without tokens or permission tiers.
+`AFTERGLOW_DIAGNOSTICS_PORT` selects another server port, and `off` disables profiling.
+Port 0 is invalid for the application. Startup logs the server URL.
+An unavailable server leaves recording inactive, with at most one attempt per second.
+The CLI owns capture files. No collector subprocess or JSON bootstrap is necessary.
+This protocol is not Tracy-compatible and does not expose arbitrary code execution.
+A shell-owned timer checks the connection and transfers bounded host and application
+records through the generated native client. Host presentation, input type, and
+asynchronous RPC spans use one fixed 1,024-record buffer. Diagnostics RPC calls are
+excluded. The paint prototype registers a separate stroke/publication source.
+The native WebSocket capture passed with no lost records and separate host/paint sources.
+Controlled timing comparisons and sustained memory checks remain open. See [telemetry](telemetry.md) for capacities,
+clock mapping, connection behavior, and allocation limits.
+
+The build needs Bun to compile `diagnostics.ts` into the embedded capture entry.
+The generated diagnostics client uses the standard web worker staging directory.
+`op_diagnostics_capture(epoch, a, b, c, d)` and `op_diagnostics_drain()` supply only
+host-local snapshots. Worker payloads still use generated RPC and RingBuffer.
 
 ## Native host status
 

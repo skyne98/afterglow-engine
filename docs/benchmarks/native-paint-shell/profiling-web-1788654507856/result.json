@@ -1,0 +1,105 @@
+{
+  "baseline": {
+    "mean": 6.945479166666668,
+    "p99": 6.9500000000000455,
+    "max": 7.0750000000000455,
+    "colored": 954
+  },
+  "capture": {
+    "capture": "/home/fox/Project/afterglow-engine/docs/benchmarks/native-paint-shell/profiling-web-1788654507856/capture-b84ea6717eaa9c5f610aa8692a7fe959-1.dgtl",
+    "bytes": 3059,
+    "records": 53,
+    "reason": "duration"
+  },
+  "baselineAfter": {
+    "mean": 28.51179166666666,
+    "p99": 1013.7949999999983,
+    "max": 1016.630000000001,
+    "colored": 954
+  },
+  "stats": {
+    "connected": true,
+    "failures": 0,
+    "batches": 7,
+    "bytes": 2792
+  },
+  "target": "web",
+  "source": {
+    "id": 1,
+    "name": "afterglow-engine.paint",
+    "process_id": 0,
+    "producer_generation": 1,
+    "clock_generation": 1,
+    "clock": {
+      "domain": 1,
+      "origin_tick": "3335080000",
+      "origin_reference_ns": "3196349999",
+      "rate_numerator": "1",
+      "rate_denominator": "1",
+      "uncertainty_ns": "250000"
+    },
+    "records": 53,
+    "batches": 7,
+    "metric_samples": 0,
+    "dropped_records": "0",
+    "overwritten_records": "0",
+    "sequence_gaps": "0",
+    "descriptors": [
+      {
+        "id": 0,
+        "name": "paint.stroke_sample",
+        "category": "paint",
+        "kind": "Instant",
+        "phase_counts": [
+          0,
+          40,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "argument0": {
+          "name": "sample_count",
+          "type": 1,
+          "unit": 0
+        },
+        "argument1": {
+          "name": "",
+          "type": 0,
+          "unit": 0
+        }
+      },
+      {
+        "id": 1,
+        "name": "paint.worker_message",
+        "category": "paint",
+        "kind": "Instant",
+        "phase_counts": [
+          0,
+          13,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "argument0": {
+          "name": "",
+          "type": 0,
+          "unit": 0
+        },
+        "argument1": {
+          "name": "",
+          "type": 0,
+          "unit": 0
+        }
+      }
+    ],
+    "metrics": []
+  }
+}

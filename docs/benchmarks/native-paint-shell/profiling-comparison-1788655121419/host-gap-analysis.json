@@ -1,0 +1,911 @@
+{
+  "reports": [
+    {
+      "run": "capture-1",
+      "records": 2426,
+      "pending": 0,
+      "longestGaps": [
+        {
+          "start_ms": 6863.611122,
+          "end_ms": 6904.352423,
+          "gap_ms": 40.741301,
+          "overlapping_rpc": [
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.254105,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.251211,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.249497,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.248495,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.246962,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.24581,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.244657,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.243326,
+              "bytes": "16387"
+            },
+            {
+              "method": "0",
+              "worker": "19",
+              "ms": 37.445506,
+              "bytes": "339"
+            }
+          ]
+        },
+        {
+          "start_ms": 6780.289945,
+          "end_ms": 6813.576012,
+          "gap_ms": 33.286067,
+          "overlapping_rpc": [
+            {
+              "method": "0",
+              "worker": "19",
+              "ms": 36.492665,
+              "bytes": "339"
+            }
+          ]
+        },
+        {
+          "start_ms": 6446.897281,
+          "end_ms": 6470.338403,
+          "gap_ms": 23.441122,
+          "overlapping_rpc": [
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 13.200533,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 13.197557,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 13.196135,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 13.195012,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 13.1936,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 13.192498,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 13.191195,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 13.189743,
+              "bytes": "16387"
+            },
+            {
+              "method": "0",
+              "worker": "19",
+              "ms": 19.937015,
+              "bytes": "339"
+            }
+          ]
+        },
+        {
+          "start_ms": 7335.954119,
+          "end_ms": 7356.698852,
+          "gap_ms": 20.744733,
+          "overlapping_rpc": [
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.380964,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.378099,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.376886,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.375264,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.373981,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.369623,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.367889,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.366217,
+              "bytes": "16387"
+            },
+            {
+              "method": "0",
+              "worker": "19",
+              "ms": 17.329103,
+              "bytes": "339"
+            }
+          ]
+        },
+        {
+          "start_ms": 6335.753656,
+          "end_ms": 6356.449398,
+          "gap_ms": 20.695742,
+          "overlapping_rpc": [
+            {
+              "method": "0",
+              "worker": "19",
+              "ms": 27.497938,
+              "bytes": "339"
+            }
+          ]
+        },
+        {
+          "start_ms": 6002.403933,
+          "end_ms": 6022.202949,
+          "gap_ms": 19.799016,
+          "overlapping_rpc": [
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.302948,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.300353,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.29901,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.297497,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.296265,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.295093,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.29396,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.292338,
+              "bytes": "16387"
+            },
+            {
+              "method": "0",
+              "worker": "19",
+              "ms": 16.111835,
+              "bytes": "339"
+            }
+          ]
+        },
+        {
+          "start_ms": 5912.087767,
+          "end_ms": 5930.667862,
+          "gap_ms": 18.580095,
+          "overlapping_rpc": [
+            {
+              "method": "0",
+              "worker": "19",
+              "ms": 18.172779,
+              "bytes": "339"
+            }
+          ]
+        },
+        {
+          "start_ms": 7245.672748,
+          "end_ms": 7263.232535,
+          "gap_ms": 17.559787,
+          "overlapping_rpc": [
+            {
+              "method": "0",
+              "worker": "19",
+              "ms": 17.23165,
+              "bytes": "339"
+            }
+          ]
+        }
+      ],
+      "rpc": {
+        "count": 140,
+        "max_ms": 37.445506
+      }
+    },
+    {
+      "run": "capture-2",
+      "records": 2122,
+      "pending": 0,
+      "longestGaps": [
+        {
+          "start_ms": 16992.234103,
+          "end_ms": 18051.706495,
+          "gap_ms": 1059.472392,
+          "overlapping_rpc": []
+        },
+        {
+          "start_ms": 16929.764138,
+          "end_ms": 16992.234103,
+          "gap_ms": 62.469965,
+          "overlapping_rpc": []
+        },
+        {
+          "start_ms": 6872.36246,
+          "end_ms": 6912.252431,
+          "gap_ms": 39.889971,
+          "overlapping_rpc": [
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.121096,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.117829,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.116207,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.114724,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.113321,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.112049,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.110667,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.109374,
+              "bytes": "16387"
+            },
+            {
+              "method": "0",
+              "worker": "19",
+              "ms": 36.111158,
+              "bytes": "339"
+            }
+          ]
+        },
+        {
+          "start_ms": 6768.085701,
+          "end_ms": 6799.293262,
+          "gap_ms": 31.207561,
+          "overlapping_rpc": [
+            {
+              "method": "0",
+              "worker": "19",
+              "ms": 30.846512,
+              "bytes": "339"
+            }
+          ]
+        },
+        {
+          "start_ms": 6010.996493,
+          "end_ms": 6032.85999,
+          "gap_ms": 21.863497,
+          "overlapping_rpc": [
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.406512,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.404819,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.403076,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.401834,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.400241,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.398638,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.397495,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.396022,
+              "bytes": "16387"
+            },
+            {
+              "method": "0",
+              "worker": "19",
+              "ms": 18.297684,
+              "bytes": "339"
+            }
+          ]
+        },
+        {
+          "start_ms": 6406.938424,
+          "end_ms": 6426.65247,
+          "gap_ms": 19.714046,
+          "overlapping_rpc": [
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.246061,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.243225,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.241562,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.239919,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.238646,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.237325,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.236182,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.23507,
+              "bytes": "16387"
+            },
+            {
+              "method": "0",
+              "worker": "19",
+              "ms": 16.065498,
+              "bytes": "339"
+            }
+          ]
+        },
+        {
+          "start_ms": 7289.161636,
+          "end_ms": 7308.626053,
+          "gap_ms": 19.464417,
+          "overlapping_rpc": [
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.456757,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.454703,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.45345,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.450024,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.448431,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.447269,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.446087,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.444834,
+              "bytes": "16387"
+            },
+            {
+              "method": "0",
+              "worker": "19",
+              "ms": 16.085556,
+              "bytes": "339"
+            }
+          ]
+        },
+        {
+          "start_ms": 6344.474691,
+          "end_ms": 6363.272515,
+          "gap_ms": 18.797824,
+          "overlapping_rpc": [
+            {
+              "method": "0",
+              "worker": "19",
+              "ms": 19.025933,
+              "bytes": "339"
+            }
+          ]
+        }
+      ],
+      "rpc": {
+        "count": 140,
+        "max_ms": 36.111158
+      }
+    },
+    {
+      "run": "capture-3",
+      "records": 2428,
+      "pending": 0,
+      "longestGaps": [
+        {
+          "start_ms": 6836.122834,
+          "end_ms": 6873.515342,
+          "gap_ms": 37.392508,
+          "overlapping_rpc": [
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.249047,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.246491,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.244999,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.243376,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.241953,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.240831,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.239689,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.237925,
+              "bytes": "16387"
+            },
+            {
+              "method": "0",
+              "worker": "19",
+              "ms": 33.065935,
+              "bytes": "339"
+            }
+          ]
+        },
+        {
+          "start_ms": 6752.724949,
+          "end_ms": 6784.301053,
+          "gap_ms": 31.576104,
+          "overlapping_rpc": [
+            {
+              "method": "0",
+              "worker": "19",
+              "ms": 34.156174,
+              "bytes": "339"
+            }
+          ]
+        },
+        {
+          "start_ms": 6398.488419,
+          "end_ms": 6418.283188,
+          "gap_ms": 19.794769,
+          "overlapping_rpc": [
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.220443,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.218239,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.216715,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.215553,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.214321,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.213159,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.211616,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 6.210264,
+              "bytes": "16387"
+            },
+            {
+              "method": "0",
+              "worker": "19",
+              "ms": 16.281725,
+              "bytes": "339"
+            }
+          ]
+        },
+        {
+          "start_ms": 7308.409978,
+          "end_ms": 7328.168368,
+          "gap_ms": 19.75839,
+          "overlapping_rpc": [
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 13.226873,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 13.22499,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 13.223517,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 13.222294,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 13.220802,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 13.21971,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 13.218557,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 13.217456,
+              "bytes": "16387"
+            },
+            {
+              "method": "0",
+              "worker": "19",
+              "ms": 16.221923,
+              "bytes": "339"
+            }
+          ]
+        },
+        {
+          "start_ms": 5995.750671,
+          "end_ms": 6015.38598,
+          "gap_ms": 19.635309,
+          "overlapping_rpc": [
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 5.865315,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 5.861509,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 5.859134,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 5.85715,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 5.855076,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 5.852942,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 5.850688,
+              "bytes": "16387"
+            },
+            {
+              "method": "1",
+              "worker": "19",
+              "ms": 5.848493,
+              "bytes": "16387"
+            },
+            {
+              "method": "0",
+              "worker": "19",
+              "ms": 16.008171,
+              "bytes": "339"
+            }
+          ]
+        },
+        {
+          "start_ms": 7204.26869,
+          "end_ms": 7223.465625,
+          "gap_ms": 19.196935,
+          "overlapping_rpc": [
+            {
+              "method": "0",
+              "worker": "19",
+              "ms": 20.358318,
+              "bytes": "339"
+            }
+          ]
+        },
+        {
+          "start_ms": 5905.365341,
+          "end_ms": 5924.062507,
+          "gap_ms": 18.697166,
+          "overlapping_rpc": [
+            {
+              "method": "0",
+              "worker": "19",
+              "ms": 18.150949,
+              "bytes": "339"
+            }
+          ]
+        },
+        {
+          "start_ms": 6330.571875,
+          "end_ms": 6348.147262,
+          "gap_ms": 17.575387,
+          "overlapping_rpc": [
+            {
+              "method": "0",
+              "worker": "19",
+              "ms": 18.893344,
+              "bytes": "339"
+            }
+          ]
+        }
+      ],
+      "rpc": {
+        "count": 140,
+        "max_ms": 34.156174
+      }
+    }
+  ]
+}

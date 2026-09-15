@@ -1,0 +1,69 @@
+{
+  "baseline": {
+    "startMs": 2546.943,
+    "endMs": 4237.542,
+    "mean": 6.954929166666669,
+    "p99": 10.340000000000146,
+    "max": 13.591999999999643,
+    "colored": 954
+  },
+  "capture": {
+    "startMs": 6244.35,
+    "endMs": 7932.264,
+    "mean": 6.952179166666664,
+    "p99": 11.298999999999978,
+    "max": 18.45799999999963,
+    "colored": 954
+  },
+  "baselineAfter": {
+    "startMs": 24240.695,
+    "endMs": 25942.567,
+    "mean": 7.002616666666669,
+    "p99": 13.31000000000131,
+    "max": 16.151999999998225,
+    "colored": 954
+  },
+  "stats": {
+    "connected": true,
+    "failures": 0,
+    "batches": 33,
+    "bytes": 349768
+  },
+  "recording": true,
+  "target": "native",
+  "captureFile": "capture-b3e79210341f3b4dd2dc05e8794c769d-1.dgtl",
+  "sources": [
+    {
+      "name": "afterglow-shell",
+      "records": 32025,
+      "counts": {
+        "host.focus": 1,
+        "host.occluded": 1,
+        "host.suspended": 1,
+        "host.redraw_request": 2150,
+        "host.runtime_turn": 5943,
+        "host.frame": 4299,
+        "host.present_work": 4300,
+        "host.hud_scene": 4300,
+        "host.hud_composite": 4300,
+        "host.surface_present": 4300,
+        "host.present": 2150,
+        "rpc.round_trip": 280
+      },
+      "pairs": 140,
+      "dropped": 0,
+      "overwritten": 0
+    },
+    {
+      "name": "afterglow-engine.paint",
+      "records": 44,
+      "counts": {
+        "paint.stroke_sample": 40,
+        "paint.publish": 4
+      },
+      "pairs": 0,
+      "dropped": 0,
+      "overwritten": 0
+    }
+  ]
+}

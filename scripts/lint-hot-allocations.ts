@@ -8,6 +8,7 @@ const root = resolve(import.meta.dir, '..');
 const web = join(root, 'crates/afterglow-web/web');
 const sourceRoot = join(web, 'src');
 const engine = join(sourceRoot, 'engine');
+const telemetry = join(root, 'crates/afterglow-telemetry/web/src');
 const effectsPath = join(web, 'contracts/engine-allocation-effects.json');
 const effects = JSON.parse(await readFile(effectsPath, 'utf8')) as {
   version: number;
@@ -48,7 +49,8 @@ const boundaryCalls = Object.keys(effects.budgetedBoundaries).map(name => ({
   name,
   method: name.slice(name.lastIndexOf('.') + 1),
 }));
-for await (const path of glob.scan({ cwd: engine, onlyFiles: true })) {
+for (const directory of [engine, telemetry]) for await (const localPath of glob.scan({ cwd: directory, onlyFiles: true })) {
+  const path = relative(engine, join(directory, localPath));
   if (!path.endsWith('.test.ts')) sourceFiles.add(path);
   const lines = (await readFile(join(engine, path), 'utf8')).split('\n');
   let active: { name: string; line: number } | null = null;
@@ -119,7 +121,8 @@ function declaredEffect(call: ts.CallExpression): string | null {
   const declaration = symbol.valueDeclaration ?? symbol.declarations?.[0];
   if (!declaration) return null;
   const declarationFile = declaration.getSourceFile().fileName;
-  if (!declarationFile.startsWith(sourceRoot) || declarationFile.includes('/node_modules/')) return null;
+  if ((!declarationFile.startsWith(sourceRoot + '/') && !declarationFile.startsWith(telemetry + '/')) ||
+      declarationFile.includes('/node_modules/')) return null;
   const file = relative(engine, declarationFile).replaceAll('\\', '/');
   let qualified = symbol.getName();
   if ((ts.isMethodDeclaration(declaration) || ts.isMethodSignature(declaration)) &&
@@ -135,9 +138,10 @@ function declaredEffect(call: ts.CallExpression): string | null {
 }
 
 const authoredGlob = new Bun.Glob('**/*.ts');
-for await (const path of authoredGlob.scan({ cwd: sourceRoot, onlyFiles: true })) {
-  if (path.startsWith('node_modules/') || path.endsWith('.test.ts') || path.endsWith('.d.ts')) continue;
-  const absolutePath = join(sourceRoot, path);
+for (const directory of [sourceRoot, telemetry]) for await (const localPath of authoredGlob.scan({ cwd: directory, onlyFiles: true })) {
+  if (localPath.startsWith('node_modules/') || localPath.endsWith('.test.ts') || localPath.endsWith('.d.ts')) continue;
+  const absolutePath = join(directory, localPath);
+  const path = relative(sourceRoot, absolutePath);
   const sourceText = await readFile(absolutePath, 'utf8');
   const source = effectProgram.getSourceFile(absolutePath) ??
     ts.createSourceFile(path, sourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);

@@ -1,0 +1,387 @@
+{
+  "records": 31881,
+  "intervals": 13806,
+  "missing_begins": 0,
+  "missing_ends": 2,
+  "unobserved_measurements": [],
+  "gap_count": 2131,
+  "shown_limit": 8,
+  "longest_gaps": [
+    {
+      "start_ns": "5946931455",
+      "end_ns": "5967701962",
+      "gap_ms": 20.770507,
+      "frame_ms": 20.59703,
+      "runtime_ms": 0.116048,
+      "present_ms": 14.378921,
+      "hud_scene_ms": 0.421512,
+      "hud_composite_ms": 0.457551,
+      "surface_present_ms": 13.498315,
+      "state": {
+        "host.focus": 1,
+        "host.occluded": 2,
+        "host.suspended": 0
+      },
+      "state_changes": [],
+      "redraw_requests": [
+        "5947001496"
+      ],
+      "overlapping_rpc": [
+        {
+          "worker": "19",
+          "method": "0",
+          "duration_ms": 27.064379
+        }
+      ]
+    },
+    {
+      "start_ns": "7308311066",
+      "end_ns": "7328765238",
+      "gap_ms": 20.454172,
+      "frame_ms": 16.645091,
+      "runtime_ms": 3.812216,
+      "present_ms": 16.473148,
+      "hud_scene_ms": 0.429648,
+      "hud_composite_ms": 3.391967,
+      "surface_present_ms": 12.650091,
+      "state": {
+        "host.focus": 1,
+        "host.occluded": 2,
+        "host.suspended": 0
+      },
+      "state_changes": [],
+      "redraw_requests": [
+        "7308395224"
+      ],
+      "overlapping_rpc": [
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 6.157255
+        },
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 6.160441
+        },
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 6.158969
+        },
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 6.157616
+        },
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 6.156143
+        },
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 6.154881
+        },
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 6.153778
+        },
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 6.152366
+        },
+        {
+          "worker": "19",
+          "method": "0",
+          "duration_ms": 16.848644
+        }
+      ]
+    },
+    {
+      "start_ns": "6877747008",
+      "end_ns": "6898051940",
+      "gap_ms": 20.304932,
+      "frame_ms": 16.495721,
+      "runtime_ms": 3.866358,
+      "present_ms": 16.281377,
+      "hud_scene_ms": 0.435729,
+      "hud_composite_ms": 3.406164,
+      "surface_present_ms": 12.438012,
+      "state": {
+        "host.focus": 1,
+        "host.occluded": 2,
+        "host.suspended": 0
+      },
+      "state_changes": [],
+      "redraw_requests": [
+        "6877876822"
+      ],
+      "overlapping_rpc": [
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 4.620927
+        },
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 4.62252
+        },
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 4.620816
+        },
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 4.618884
+        },
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 4.61696
+        },
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 4.615356
+        },
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 4.613593
+        },
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 4.61183
+        },
+        {
+          "worker": "19",
+          "method": "0",
+          "duration_ms": 16.795754
+        }
+      ]
+    },
+    {
+      "start_ns": "6460946855",
+      "end_ns": "6481170203",
+      "gap_ms": 20.223348,
+      "frame_ms": 16.705395,
+      "runtime_ms": 3.561195,
+      "present_ms": 16.503705,
+      "hud_scene_ms": 0.401104,
+      "hud_composite_ms": 3.357081,
+      "surface_present_ms": 12.744168,
+      "state": {
+        "host.focus": 1,
+        "host.occluded": 2,
+        "host.suspended": 0
+      },
+      "state_changes": [],
+      "redraw_requests": [
+        "6461062693"
+      ],
+      "overlapping_rpc": [
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 6.280216
+        },
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 6.285016
+        },
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 6.283442
+        },
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 6.28207
+        },
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 6.280608
+        },
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 6.279275
+        },
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 6.277872
+        },
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 6.276429
+        },
+        {
+          "worker": "19",
+          "method": "0",
+          "duration_ms": 16.993095
+        }
+      ]
+    },
+    {
+      "start_ns": "6023358091",
+      "end_ns": "6043508082",
+      "gap_ms": 20.149991,
+      "frame_ms": 16.243747,
+      "runtime_ms": 3.917264,
+      "present_ms": 16.083136,
+      "hud_scene_ms": 0.413256,
+      "hud_composite_ms": 3.368282,
+      "surface_present_ms": 12.300123,
+      "state": {
+        "host.focus": 1,
+        "host.occluded": 2,
+        "host.suspended": 0
+      },
+      "state_changes": [],
+      "redraw_requests": [
+        "6023441748"
+      ],
+      "overlapping_rpc": [
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 6.20267
+        },
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 6.204715
+        },
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 6.203041
+        },
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 6.201498
+        },
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 6.200165
+        },
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 6.198854
+        },
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 6.197731
+        },
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 6.196649
+        },
+        {
+          "worker": "19",
+          "method": "0",
+          "duration_ms": 16.406352
+        }
+      ]
+    },
+    {
+      "start_ns": "7231929444",
+      "end_ns": "7251399747",
+      "gap_ms": 19.470303,
+      "frame_ms": 19.359776,
+      "runtime_ms": 0.108604,
+      "present_ms": 13.999238,
+      "hud_scene_ms": 0.424588,
+      "hud_composite_ms": 0.471807,
+      "surface_present_ms": 13.10126,
+      "state": {
+        "host.focus": 1,
+        "host.occluded": 2,
+        "host.suspended": 0
+      },
+      "state_changes": [],
+      "redraw_requests": [
+        "7232022680"
+      ],
+      "overlapping_rpc": [
+        {
+          "worker": "19",
+          "method": "0",
+          "duration_ms": 21.00095
+        }
+      ]
+    },
+    {
+      "start_ns": "6384583297",
+      "end_ns": "6403773313",
+      "gap_ms": 19.190016,
+      "frame_ms": 19.103002,
+      "runtime_ms": 0.116369,
+      "present_ms": 13.378751,
+      "hud_scene_ms": 0.417064,
+      "hud_composite_ms": 0.519055,
+      "surface_present_ms": 12.440958,
+      "state": {
+        "host.focus": 1,
+        "host.occluded": 2,
+        "host.suspended": 0
+      },
+      "state_changes": [],
+      "redraw_requests": [
+        "6384689126"
+      ],
+      "overlapping_rpc": [
+        {
+          "worker": "19",
+          "method": "0",
+          "duration_ms": 18.792548
+        }
+      ]
+    },
+    {
+      "start_ns": "6808188954",
+      "end_ns": "6827214671",
+      "gap_ms": 19.025717,
+      "frame_ms": 18.91009,
+      "runtime_ms": 0.107452,
+      "present_ms": 13.439586,
+      "hud_scene_ms": 0.41506,
+      "hud_composite_ms": 0.464544,
+      "surface_present_ms": 12.558409,
+      "state": {
+        "host.focus": 1,
+        "host.occluded": 2,
+        "host.suspended": 0
+      },
+      "state_changes": [],
+      "redraw_requests": [
+        "6808284784"
+      ],
+      "overlapping_rpc": [
+        {
+          "worker": "19",
+          "method": "0",
+          "duration_ms": 18.552387
+        }
+      ]
+    }
+  ]
+}

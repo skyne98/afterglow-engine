@@ -244,10 +244,11 @@ Dungeon is a canonical `EngineRuntime` consumer using `RendererHost`,
 `EngineAssets`, one `VirtualTextureSystem` pool, the feedback coordinator, and bounded input/diagnostics. No
 visual demo retains a global bridge or architecture-baseline exception. Its BIG
 session feeds unified feedback, scheduler, page-load, bulk-wait/read, RPC,
-transcode, upload, and page-table publication spans into `runtime.telemetry`. Diagnostic clients
-can call `traceArm()`, run a bounded scenario, call `traceStop()`, and retrieve
-the `AGTB` batch with `traceBatch()` through `window.__afterglowDungeon`. The
-65,536-record Dungeon capture buffer is 2.5 MiB and remains prefix-preserving.
+transcode, upload, and page-table publication spans into `runtime.telemetry`.
+The producer now exports DGTB with explicit session, generation, sequence, and loss metadata.
+The profile and replay parsers reject old AGTB input. Their former browser-global
+capture entry point needs migration before live CLI validation.
+The 65,536-record Dungeon capture buffer is 2.5 MiB and remains prefix-preserving.
 
 The pre-removal cold-cache RTX 3090 nine-pose baseline loaded 973 pages with no
 failures while 582 scenario frames held 6.955 ms p99 and 13.900 ms maximum.

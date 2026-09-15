@@ -1,0 +1,76 @@
+{
+  "results": [
+    {
+      "phase": "raster",
+      "results": [
+        {
+          "dimension": 512,
+          "changedBytes": 16384,
+          "requestedBytes": 16384,
+          "copy": {
+            "meanMs": 0.08859999999999625,
+            "p99Ms": 0.14999999999997726,
+            "maxMs": 0.15300000000002
+          },
+          "commit": {
+            "meanMs": 0.005758333333323643,
+            "p99Ms": 0.028999999999996362,
+            "maxMs": 0.03000000000020009
+          },
+          "raf": {
+            "meanMs": 6.969058333333333,
+            "p99Ms": 7.446000000000026,
+            "maxMs": 8.081000000000131
+          }
+        },
+        {
+          "dimension": 2048,
+          "changedBytes": 16384,
+          "requestedBytes": 16384,
+          "copy": {
+            "meanMs": 0.08363333333336792,
+            "p99Ms": 0.14200000000028012,
+            "maxMs": 0.1449999999999818
+          },
+          "commit": {
+            "meanMs": 0.005641666666633682,
+            "p99Ms": 0.010000000000218279,
+            "maxMs": 0.018000000000029104
+          },
+          "raf": {
+            "meanMs": 6.958666666666667,
+            "p99Ms": 6.999000000000251,
+            "maxMs": 7.001999999999953
+          }
+        },
+        {
+          "dimension": 4096,
+          "changedBytes": 16384,
+          "requestedBytes": 16384,
+          "copy": {
+            "meanMs": 0.0871249999999236,
+            "p99Ms": 0.14699999999993452,
+            "maxMs": 0.1529999999993379
+          },
+          "commit": {
+            "meanMs": 0.005958333333410337,
+            "p99Ms": 0.02599999999983993,
+            "maxMs": 0.027000000000043656
+          },
+          "raf": {
+            "meanMs": 7.218741666666665,
+            "p99Ms": 16.141999999999825,
+            "maxMs": 16.235999999999876
+          }
+        }
+      ],
+      "limits": "Commit is synchronous CPU time. rAF is frame production, not GPU time or input-to-present latency.",
+      "memorySamples": [],
+      "processMemory": [
+        "VmPeak:\t51361504 kB",
+        "VmHWM:\t  459044 kB",
+        "VmRSS:\t  459044 kB"
+      ]
+    }
+  ]
+}

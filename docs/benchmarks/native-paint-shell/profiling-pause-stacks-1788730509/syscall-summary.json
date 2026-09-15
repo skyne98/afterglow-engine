@@ -1,0 +1,161 @@
+{
+  "lines": 291620,
+  "parsedCompletedCalls": 11662,
+  "omittedLines": 279958,
+  "clock": "strace realtime; no explicit mapping to the DGTL monotonic clock",
+  "groups": {
+    "poll": {
+      "count": 7131,
+      "totalMs": 4599.578999999985,
+      "maxMs": 24.980999999999998
+    },
+    "ppoll": {
+      "count": 4531,
+      "totalMs": 15390.653000000184,
+      "maxMs": 7.284
+    }
+  },
+  "shownLimit": 20,
+  "longestCalls": [
+    {
+      "line": 286446,
+      "time": "1788730540.375945",
+      "call": "poll",
+      "ms": 24.980999999999998,
+      "text": "1788730540.375945 poll([{fd=63<anon_inode:sync_file>, events=POLLIN|POLLERR}], 1, -1) = 1 ([{fd=63, revents=POLLIN}]) <0.024981>"
+    },
+    {
+      "line": 276571,
+      "time": "1788730539.479722",
+      "call": "poll",
+      "ms": 11.687,
+      "text": "1788730539.479722 poll([{fd=63<anon_inode:sync_file>, events=POLLIN|POLLERR}], 1, -1) = 1 ([{fd=63, revents=POLLIN}]) <0.011687>"
+    },
+    {
+      "line": 281371,
+      "time": "1788730539.938652",
+      "call": "poll",
+      "ms": 11.209,
+      "text": "1788730539.938652 poll([{fd=63<anon_inode:sync_file>, events=POLLIN|POLLERR}], 1, -1) = 1 ([{fd=63, revents=POLLIN}]) <0.011209>"
+    },
+    {
+      "line": 271896,
+      "time": "1788730539.026385",
+      "call": "poll",
+      "ms": 10.694,
+      "text": "1788730539.026385 poll([{fd=63<anon_inode:sync_file>, events=POLLIN|POLLERR}], 1, -1) = 1 ([{fd=63, revents=POLLIN}]) <0.010694>"
+    },
+    {
+      "line": 159996,
+      "time": "1788730529.729786",
+      "call": "ppoll",
+      "ms": 7.284,
+      "text": "1788730529.729786 ppoll([{fd=3<UNIX-STREAM:[123700241->123523640]>, events=POLLIN}], 1, NULL, NULL, 8) = 1 ([{fd=3, revents=POLLIN}]) <0.007284>"
+    },
+    {
+      "line": 171371,
+      "time": "1788730530.681404",
+      "call": "ppoll",
+      "ms": 7.204000000000001,
+      "text": "1788730530.681404 ppoll([{fd=3<UNIX-STREAM:[123700241->123523640]>, events=POLLIN}], 1, NULL, NULL, 8) = 1 ([{fd=3, revents=POLLIN}]) <0.007204>"
+    },
+    {
+      "line": 95321,
+      "time": "1788730524.021609",
+      "call": "poll",
+      "ms": 7.046,
+      "text": "1788730524.021609 poll([{fd=66<anon_inode:sync_file>, events=POLLIN|POLLERR}], 1, -1) = 1 ([{fd=66, revents=POLLIN}]) <0.007046>"
+    },
+    {
+      "line": 125796,
+      "time": "1788730526.868176",
+      "call": "ppoll",
+      "ms": 6.986,
+      "text": "1788730526.868176 ppoll([{fd=3<UNIX-STREAM:[123700241->123523640]>, events=POLLIN}], 1, NULL, NULL, 8) = 1 ([{fd=3, revents=POLLIN}]) <0.006986>"
+    },
+    {
+      "line": 193971,
+      "time": "1788730532.584449",
+      "call": "ppoll",
+      "ms": 6.929,
+      "text": "1788730532.584449 ppoll([{fd=3<UNIX-STREAM:[123700241->123523640]>, events=POLLIN}], 1, NULL, NULL, 8) = 1 ([{fd=3, revents=POLLIN}]) <0.006929>"
+    },
+    {
+      "line": 47021,
+      "time": "1788730519.401597",
+      "call": "ppoll",
+      "ms": 6.897,
+      "text": "1788730519.401597 ppoll([{fd=3<UNIX-STREAM:[123700241->123523640]>, events=POLLIN}], 1, NULL, NULL, 8) = 1 ([{fd=3, revents=POLLIN}]) <0.006897>"
+    },
+    {
+      "line": 148596,
+      "time": "1788730528.771313",
+      "call": "ppoll",
+      "ms": 6.8500000000000005,
+      "text": "1788730528.771313 ppoll([{fd=3<UNIX-STREAM:[123700241->123523640]>, events=POLLIN}], 1, NULL, NULL, 8) = 1 ([{fd=3, revents=POLLIN}]) <0.006850>"
+    },
+    {
+      "line": 205246,
+      "time": "1788730533.542990",
+      "call": "ppoll",
+      "ms": 6.831,
+      "text": "1788730533.542990 ppoll([{fd=3<UNIX-STREAM:[123700241->123523640]>, events=POLLIN}], 1, NULL, NULL, 8) = 1 ([{fd=3, revents=POLLIN}]) <0.006831>"
+    },
+    {
+      "line": 83321,
+      "time": "1788730522.909202",
+      "call": "ppoll",
+      "ms": 6.808,
+      "text": "1788730522.909202 ppoll([{fd=3<UNIX-STREAM:[123700241->123523640]>, events=POLLIN}], 1, NULL, NULL, 8) = 1 ([{fd=3, revents=POLLIN}]) <0.006808>"
+    },
+    {
+      "line": 264396,
+      "time": "1788730538.363345",
+      "call": "ppoll",
+      "ms": 6.801,
+      "text": "1788730538.363345 ppoll([{fd=3<UNIX-STREAM:[123700241->123523640]>, events=POLLIN}], 1, NULL, NULL, 8) = 1 ([{fd=3, revents=POLLIN}]) <0.006801>"
+    },
+    {
+      "line": 137121,
+      "time": "1788730527.826672",
+      "call": "ppoll",
+      "ms": 6.795,
+      "text": "1788730527.826672 ppoll([{fd=3<UNIX-STREAM:[123700241->123523640]>, events=POLLIN}], 1, NULL, NULL, 8) = 1 ([{fd=3, revents=POLLIN}]) <0.006795>"
+    },
+    {
+      "line": 216871,
+      "time": "1788730534.494568",
+      "call": "ppoll",
+      "ms": 6.787999999999999,
+      "text": "1788730534.494568 ppoll([{fd=3<UNIX-STREAM:[123700241->123523640]>, events=POLLIN}], 1, NULL, NULL, 8) = 1 ([{fd=3, revents=POLLIN}]) <0.006788>"
+    },
+    {
+      "line": 35971,
+      "time": "1788730518.387586",
+      "call": "ppoll",
+      "ms": 6.787,
+      "text": "1788730518.387586 ppoll([{fd=3<UNIX-STREAM:[123700241->123523640]>, events=POLLIN}], 1, NULL, NULL, 8) = 1 ([{fd=3, revents=POLLIN}]) <0.006787>"
+    },
+    {
+      "line": 275521,
+      "time": "1788730539.384299",
+      "call": "ppoll",
+      "ms": 6.755,
+      "text": "1788730539.384299 ppoll([{fd=3<UNIX-STREAM:[123700241->123523640]>, events=POLLIN}], 1, NULL, NULL, 8) = 1 ([{fd=3, revents=POLLIN}]) <0.006755>"
+    },
+    {
+      "line": 239946,
+      "time": "1788730536.418601",
+      "call": "ppoll",
+      "ms": 6.738,
+      "text": "1788730536.418601 ppoll([{fd=3<UNIX-STREAM:[123700241->123523640]>, events=POLLIN}], 1, NULL, NULL, 8) = 1 ([{fd=3, revents=POLLIN}]) <0.006738>"
+    },
+    {
+      "line": 73896,
+      "time": "1788730521.992740",
+      "call": "ppoll",
+      "ms": 6.737,
+      "text": "1788730521.992740 ppoll([{fd=3<UNIX-STREAM:[123700241->123523640]>, events=POLLIN}], 1, NULL, NULL, 8) = 1 ([{fd=3, revents=POLLIN}]) <0.006737>"
+    }
+  ]
+}

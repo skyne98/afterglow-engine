@@ -237,6 +237,11 @@ fn conformance() -> i32 {
         &["scripts/lint-demo-architecture.ts"][..],
         &["scripts/lint-import-boundaries.ts"][..],
         &["scripts/lint-hot-allocations.ts"][..],
+        &[
+            "crates/afterglow-web/web/node_modules/typescript/bin/tsc",
+            "--project",
+            "crates/afterglow-telemetry/tsconfig.json",
+        ][..],
         &["scripts/build-web.ts", "--check"][..],
     ] {
         let status = Command::new("bun")
@@ -293,7 +298,7 @@ fn test_all() -> i32 {
     if stage_web() != 0 {
         return 1;
     }
-    let rust = sh("cargo", &["test", "--workspace"]);
+    let rust = sh("cargo", &["test", "--workspace", "--features", "afterglow-telemetry/collector"]);
     if rust != 0 {
         return rust;
     }
@@ -334,6 +339,7 @@ fn test_all() -> i32 {
         .args([
             "test",
             "crates/afterglow-web/web/src",
+            "crates/afterglow-telemetry/web/src",
             "prototype/steam-audio-wasm/src",
         ])
         .current_dir(workspace_root())

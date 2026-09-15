@@ -20,6 +20,11 @@ assert!(client.apply_force(3, 0.0, 9.8, 0.0)?);
 writes a shutdown frame, wakes the worker, waits up to 2 s, and joins the
 thread.
 
+A host registry can take ownership with `client.into_transport()` after generated
+worker startup. This consumes the client without copying rings or restarting the
+worker. The new owner controls shutdown. Native async singleton clients return
+an `Arc` to their shared transport.
+
 For a service-owned bounded device clock, the lower-level
 `spawn_worker_loop_with_idle` variant executes a non-blocking, allocation-free
 idle hook on that same OS worker thread while the request ring is empty. Native

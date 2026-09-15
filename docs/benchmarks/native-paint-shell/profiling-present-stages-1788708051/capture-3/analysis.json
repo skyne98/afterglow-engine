@@ -1,0 +1,311 @@
+{
+  "records": 32025,
+  "intervals": 13860,
+  "missing_begins": 0,
+  "missing_ends": 2,
+  "gap_count": 2149,
+  "shown_limit": 8,
+  "longest_gaps": [
+    {
+      "start_ns": "9946756276",
+      "end_ns": "9965113952",
+      "gap_ms": 18.357676,
+      "frame_ms": 18.351374,
+      "runtime_ms": 0.006723,
+      "present_ms": 18.260182,
+      "hud_scene_ms": 0.000321,
+      "hud_composite_ms": 0.022061,
+      "surface_present_ms": 18.236428,
+      "state": {
+        "host.focus": 2,
+        "host.occluded": 2,
+        "host.suspended": 0
+      },
+      "state_changes": [],
+      "redraw_requests": [
+        "9946766635"
+      ],
+      "overlapping_rpc": []
+    },
+    {
+      "start_ns": "5515414971",
+      "end_ns": "5528350893",
+      "gap_ms": 12.935922,
+      "frame_ms": 12.91843,
+      "runtime_ms": 0.049503,
+      "present_ms": 12.793435,
+      "hud_scene_ms": 0.000351,
+      "hud_composite_ms": 0.024466,
+      "surface_present_ms": 12.767064,
+      "state": {
+        "host.focus": 2,
+        "host.occluded": 2,
+        "host.suspended": 0
+      },
+      "state_changes": [],
+      "redraw_requests": [
+        "5515462290"
+      ],
+      "overlapping_rpc": []
+    },
+    {
+      "start_ns": "5276180455",
+      "end_ns": "5288561845",
+      "gap_ms": 12.38139,
+      "frame_ms": 12.368525,
+      "runtime_ms": 0.013846,
+      "present_ms": 12.15224,
+      "hud_scene_ms": 0.000851,
+      "hud_composite_ms": 0.050966,
+      "surface_present_ms": 12.097676,
+      "state": {
+        "host.focus": 2,
+        "host.occluded": 2,
+        "host.suspended": 0
+      },
+      "state_changes": [],
+      "redraw_requests": [
+        "5276202226"
+      ],
+      "overlapping_rpc": []
+    },
+    {
+      "start_ns": "6026584726",
+      "end_ns": "6038845348",
+      "gap_ms": 12.260622,
+      "frame_ms": 4.211799,
+      "runtime_ms": 8.13765,
+      "present_ms": 3.78672,
+      "hud_scene_ms": 0.535347,
+      "hud_composite_ms": 1.74463,
+      "surface_present_ms": 1.501923,
+      "state": {
+        "host.focus": 2,
+        "host.occluded": 2,
+        "host.suspended": 0
+      },
+      "state_changes": [],
+      "redraw_requests": [
+        "6026715541"
+      ],
+      "overlapping_rpc": [
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 10.427115
+        },
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 10.425802
+        },
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 10.42455
+        },
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 10.423398
+        },
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 10.422255
+        },
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 10.421124
+        },
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 10.419831
+        },
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 10.418489
+        },
+        {
+          "worker": "19",
+          "method": "0",
+          "duration_ms": 4.38807
+        }
+      ]
+    },
+    {
+      "start_ns": "13023678534",
+      "end_ns": "13034948524",
+      "gap_ms": 11.26999,
+      "frame_ms": 11.25372,
+      "runtime_ms": 0.083267,
+      "present_ms": 11.065135,
+      "hud_scene_ms": 0.00041,
+      "hud_composite_ms": 0.036859,
+      "surface_present_ms": 11.026161,
+      "state": {
+        "host.focus": 2,
+        "host.occluded": 2,
+        "host.suspended": 0
+      },
+      "state_changes": [],
+      "redraw_requests": [
+        "13023761190"
+      ],
+      "overlapping_rpc": []
+    },
+    {
+      "start_ns": "6774765174",
+      "end_ns": "6785932281",
+      "gap_ms": 11.167107,
+      "frame_ms": 11.157098,
+      "runtime_ms": 0.009799,
+      "present_ms": 3.791439,
+      "hud_scene_ms": 1.092885,
+      "hud_composite_ms": 1.548231,
+      "surface_present_ms": 1.13833,
+      "state": {
+        "host.focus": 2,
+        "host.occluded": 2,
+        "host.suspended": 0
+      },
+      "state_changes": [],
+      "redraw_requests": [
+        "6774780704"
+      ],
+      "overlapping_rpc": [
+        {
+          "worker": "19",
+          "method": "0",
+          "duration_ms": 12.631169
+        }
+      ]
+    },
+    {
+      "start_ns": "6015502910",
+      "end_ns": "6026584726",
+      "gap_ms": 11.081816,
+      "frame_ms": 10.410514,
+      "runtime_ms": 0.810033,
+      "present_ms": 10.192664,
+      "hud_scene_ms": 0.000291,
+      "hud_composite_ms": 0.018184,
+      "surface_present_ms": 10.172666,
+      "state": {
+        "host.focus": 2,
+        "host.occluded": 2,
+        "host.suspended": 0
+      },
+      "state_changes": [],
+      "redraw_requests": [
+        "6015652862"
+      ],
+      "overlapping_rpc": [
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 6.460767
+        },
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 6.458664
+        },
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 6.457161
+        },
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 6.455758
+        },
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 6.454656
+        },
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 6.453424
+        },
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 6.45185
+        },
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 6.450308
+        },
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 10.427115
+        },
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 10.425802
+        },
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 10.42455
+        },
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 10.423398
+        },
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 10.422255
+        },
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 10.421124
+        },
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 10.419831
+        },
+        {
+          "worker": "19",
+          "method": "1",
+          "duration_ms": 10.418489
+        }
+      ]
+    },
+    {
+      "start_ns": "6265563500",
+      "end_ns": "6276485426",
+      "gap_ms": 10.921926,
+      "frame_ms": 10.917037,
+      "runtime_ms": 0.004167,
+      "present_ms": 10.855812,
+      "hud_scene_ms": 0.000221,
+      "hud_composite_ms": 0.017012,
+      "surface_present_ms": 10.837567,
+      "state": {
+        "host.focus": 2,
+        "host.occluded": 2,
+        "host.suspended": 0
+      },
+      "state_changes": [],
+      "redraw_requests": [
+        "6265570553"
+      ],
+      "overlapping_rpc": []
+    }
+  ]
+}

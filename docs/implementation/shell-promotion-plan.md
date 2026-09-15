@@ -104,6 +104,11 @@ Remaining product work is packaging policy rather than a second bootstrap API.
 
 ### G4 — Release evidence re-establishment
 
+The [native presentation pacing plan](native-presentation-pacing-plan.md) proposes
+Winit frame-callback integration and runtime progress independent of redraws.
+Its background behavior decision and real-driver acceptance checks remain open.
+It is not an implemented repair or evidence of a nonblocking driver.
+
 Re-create or retarget the removed CEF harnesses against the shell:
 
 - VT feedback validation and 600-frame scenarios;

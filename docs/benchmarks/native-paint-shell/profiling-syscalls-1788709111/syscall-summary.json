@@ -1,0 +1,181 @@
+{
+  "lines": 27664,
+  "parsedCompletedCalls": 27663,
+  "omittedLines": 1,
+  "clock": "strace realtime; no explicit mapping to the DGTL monotonic clock",
+  "groups": {
+    "futex": {
+      "count": 2622,
+      "totalMs": 20.284000000000216,
+      "maxMs": 1.4480000000000002
+    },
+    "poll": {
+      "count": 7354,
+      "totalMs": 4636.542999999999,
+      "maxMs": 13.23
+    },
+    "ioctl": {
+      "count": 4974,
+      "totalMs": 294.4719999999973,
+      "maxMs": 13.645
+    },
+    "ppoll": {
+      "count": 3939,
+      "totalMs": 18605.293000000078,
+      "maxMs": 10.095
+    },
+    "epoll_wait": {
+      "count": 5133,
+      "totalMs": 17.695000000000373,
+      "maxMs": 0.052
+    },
+    "epoll_pwait": {
+      "count": 3641,
+      "totalMs": 11.94300000000011,
+      "maxMs": 0.041999999999999996
+    }
+  },
+  "shownLimit": 20,
+  "longestCalls": [
+    {
+      "line": 542,
+      "time": "1788709111.902299",
+      "call": "ioctl",
+      "ms": 13.645,
+      "text": "1788709111.902299 ioctl(0x1c, 0xc020462a, 0x7ffdfa7df1b0) = 0 <0.013645>"
+    },
+    {
+      "line": 8753,
+      "time": "1788709118.165709",
+      "call": "poll",
+      "ms": 13.23,
+      "text": "1788709118.165709 poll([{fd=66, events=POLLIN|POLLERR}], 1, -1) = 1 ([{fd=66, revents=POLLIN}]) <0.013230>"
+    },
+    {
+      "line": 10013,
+      "time": "1788709119.449880",
+      "call": "poll",
+      "ms": 12.722000000000001,
+      "text": "1788709119.449880 poll([{fd=66, events=POLLIN|POLLERR}], 1, -1) = 1 ([{fd=66, revents=POLLIN}]) <0.012722>"
+    },
+    {
+      "line": 9264,
+      "time": "1788709118.679930",
+      "call": "poll",
+      "ms": 12.501999999999999,
+      "text": "1788709118.679930 poll([{fd=66, events=POLLIN|POLLERR}], 1, -1) = 1 ([{fd=66, revents=POLLIN}]) <0.012502>"
+    },
+    {
+      "line": 10089,
+      "time": "1788709119.527591",
+      "call": "poll",
+      "ms": 12.452,
+      "text": "1788709119.527591 poll([{fd=66, events=POLLIN|POLLERR}], 1, -1) = 1 ([{fd=66, revents=POLLIN}]) <0.012452>"
+    },
+    {
+      "line": 9595,
+      "time": "1788709119.026154",
+      "call": "poll",
+      "ms": 12.276,
+      "text": "1788709119.026154 poll([{fd=66, events=POLLIN|POLLERR}], 1, -1) = 1 ([{fd=66, revents=POLLIN}]) <0.012276>"
+    },
+    {
+      "line": 9671,
+      "time": "1788709119.097116",
+      "call": "poll",
+      "ms": 12.219000000000001,
+      "text": "1788709119.097116 poll([{fd=66, events=POLLIN|POLLERR}], 1, -1) = 1 ([{fd=66, revents=POLLIN}]) <0.012219>"
+    },
+    {
+      "line": 26074,
+      "time": "1788709136.247903",
+      "call": "poll",
+      "ms": 12.212,
+      "text": "1788709136.247903 poll([{fd=63, events=POLLIN|POLLERR}], 1, -1) = 1 ([{fd=63, revents=POLLIN}]) <0.012212>"
+    },
+    {
+      "line": 9180,
+      "time": "1788709118.602827",
+      "call": "poll",
+      "ms": 12.179,
+      "text": "1788709118.602827 poll([{fd=66, events=POLLIN|POLLERR}], 1, -1) = 1 ([{fd=66, revents=POLLIN}]) <0.012179>"
+    },
+    {
+      "line": 26906,
+      "time": "1788709137.086212",
+      "call": "poll",
+      "ms": 12.021,
+      "text": "1788709137.086212 poll([{fd=63, events=POLLIN|POLLERR}], 1, -1) = 1 ([{fd=63, revents=POLLIN}]) <0.012021>"
+    },
+    {
+      "line": 8826,
+      "time": "1788709118.242702",
+      "call": "poll",
+      "ms": 11.988999999999999,
+      "text": "1788709118.242702 poll([{fd=66, events=POLLIN|POLLERR}], 1, -1) = 1 ([{fd=66, revents=POLLIN}]) <0.011989>"
+    },
+    {
+      "line": 27313,
+      "time": "1788709137.510069",
+      "call": "poll",
+      "ms": 11.960999999999999,
+      "text": "1788709137.510069 poll([{fd=63, events=POLLIN|POLLERR}], 1, -1) = 1 ([{fd=63, revents=POLLIN}]) <0.011961>"
+    },
+    {
+      "line": 26503,
+      "time": "1788709136.675936",
+      "call": "poll",
+      "ms": 11.835999999999999,
+      "text": "1788709136.675936 poll([{fd=63, events=POLLIN|POLLERR}], 1, -1) = 1 ([{fd=63, revents=POLLIN}]) <0.011836>"
+    },
+    {
+      "line": 25974,
+      "time": "1788709136.168215",
+      "call": "poll",
+      "ms": 11.798,
+      "text": "1788709136.168215 poll([{fd=63, events=POLLIN|POLLERR}], 1, -1) = 1 ([{fd=63, revents=POLLIN}]) <0.011798>"
+    },
+    {
+      "line": 26830,
+      "time": "1788709137.015673",
+      "call": "poll",
+      "ms": 11.738999999999999,
+      "text": "1788709137.015673 poll([{fd=63, events=POLLIN|POLLERR}], 1, -1) = 1 ([{fd=63, revents=POLLIN}]) <0.011739>"
+    },
+    {
+      "line": 27238,
+      "time": "1788709137.439420",
+      "call": "poll",
+      "ms": 11.684999999999999,
+      "text": "1788709137.439420 poll([{fd=63, events=POLLIN|POLLERR}], 1, -1) = 1 ([{fd=63, revents=POLLIN}]) <0.011685>"
+    },
+    {
+      "line": 26422,
+      "time": "1788709136.592274",
+      "call": "poll",
+      "ms": 11.495999999999999,
+      "text": "1788709136.592274 poll([{fd=63, events=POLLIN|POLLERR}], 1, -1) = 1 ([{fd=63, revents=POLLIN}]) <0.011496>"
+    },
+    {
+      "line": 15397,
+      "time": "1788709125.022372",
+      "call": "ppoll",
+      "ms": 10.095,
+      "text": "1788709125.022372 ppoll([{fd=3, events=POLLIN}], 1, NULL, NULL, 8) = 1 ([{fd=3, revents=POLLIN}]) <0.010095>"
+    },
+    {
+      "line": 5182,
+      "time": "1788709114.465459",
+      "call": "poll",
+      "ms": 8.562,
+      "text": "1788709114.465459 poll([{fd=63, events=POLLIN|POLLERR}], 1, -1) = 1 ([{fd=63, revents=POLLIN}]) <0.008562>"
+    },
+    {
+      "line": 5943,
+      "time": "1788709115.227681",
+      "call": "ppoll",
+      "ms": 8.115,
+      "text": "1788709115.227681 ppoll([{fd=3, events=POLLIN}], 1, NULL, NULL, 8) = 1 ([{fd=3, revents=POLLIN}]) <0.008115>"
+    }
+  ]
+}
