@@ -1,0 +1,11 @@
+[package]
+name = "afterglow-memory"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_SystemInformation"] }

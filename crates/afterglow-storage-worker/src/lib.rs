@@ -1,6 +1,9 @@
 //! Bounded native persistent byte storage. The shell composes this service as a
 //! real OS worker; JavaScript transfers values in bounded RingBuffer chunks.
 
+#[cfg(not(target_arch = "wasm32"))]
+pub mod byte_store;
+
 use afterglow_rpc::{RpcError, RpcResult, ServeFuture};
 use afterglow_rpc_macros::rpc;
 use std::fs::{File, OpenOptions};
@@ -169,12 +172,12 @@ fn verify_generation(base: &Path, slot: u8, max_value_bytes: u64) -> Option<Gene
 }
 
 fn selected_generation(base: &Path, max_value_bytes: u64) -> Option<GenerationInfo> {
-    if let Ok(pointer) = std::fs::read(pointer_path(base)) {
-        if pointer.len() == 1 && pointer[0] <= 1 {
-            if let Some(info) = verify_generation(base, pointer[0], max_value_bytes) {
-                return Some(info);
-            }
-        }
+    if let Ok(pointer) = std::fs::read(pointer_path(base))
+        && pointer.len() == 1
+        && pointer[0] <= 1
+        && let Some(info) = verify_generation(base, pointer[0], max_value_bytes)
+    {
+        return Some(info);
     }
     match (
         verify_generation(base, 0, max_value_bytes),
@@ -444,10 +447,10 @@ impl BlobStorageServer for BlobStorageWorker {
             }
             std::fs::rename(pointer_temp, pointer_path(&base))
                 .map_err(|e| RpcError::Server(e.to_string()))?;
-            if let Some(parent) = base.parent() {
-                if let Ok(directory) = File::open(parent) {
-                    let _ = directory.sync_all();
-                }
+            if let Some(parent) = base.parent()
+                && let Ok(directory) = File::open(parent)
+            {
+                let _ = directory.sync_all();
             }
             Ok(true)
         })();

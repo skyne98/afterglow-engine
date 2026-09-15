@@ -10,7 +10,8 @@ use crate::surface::{DrawDabOp, NULL_DAB_OP, Surface};
 use crate::symmetry::{
     Rectangle, SymmetryData, rectangle_expand_to_include_point, update_symmetry_state,
 };
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use crate::tile_cache::{TileCache, TileRead, TileStorage, TileWrite, WritePin};
 use std::rc::Rc;
 use std::sync::atomic::Ordering;
 
@@ -26,7 +27,12 @@ pub(crate) const INITIAL_RESIDENT_TILES: usize = 4096;
 pub(crate) struct TileBudget {
     used: Cell<usize>,
     limit: Cell<usize>,
+    growth_step: Cell<usize>,
+    job_dispatch: Cell<Option<fn(u32)>>,
     maximum: usize,
+    cache: RefCell<Option<TileCache>>,
+    next_storage_id: Cell<u32>,
+    storage_failed: Cell<bool>,
 }
 
 impl TileBudget {
@@ -35,20 +41,53 @@ impl TileBudget {
         Self {
             used: Cell::new(0),
             limit: Cell::new(initial.clamp(1, maximum)),
+            growth_step: Cell::new(0),
+            job_dispatch: Cell::new(None),
             maximum,
+            cache: RefCell::new(None),
+            next_storage_id: Cell::new(1),
+            storage_failed: Cell::new(false),
         }
     }
 
+    pub(crate) fn set_cache(&self, cache: TileCache) {
+        *self.cache.borrow_mut() = Some(cache);
+    }
+
+    pub(crate) fn take_storage_error(&self) -> bool {
+        self.storage_failed.replace(false)
+    }
+
     pub(crate) fn used(&self) -> usize {
-        self.used.get()
+        self.cache.borrow().as_ref().map_or(self.used.get(), TileCache::resident_tiles)
     }
 
     pub(crate) fn limit(&self) -> usize {
-        self.limit.get()
+        self.cache.borrow().as_ref().map_or(self.limit.get(), TileCache::admitted_tiles)
     }
 
     pub(crate) fn maximum(&self) -> usize {
         self.maximum
+    }
+
+    pub(crate) fn set_job_dispatch(&self, dispatch: Option<fn(u32)>) {
+        self.job_dispatch.set(dispatch);
+    }
+
+    pub(crate) fn set_growth_step(&self, step: usize) {
+        self.growth_step.set(step);
+    }
+
+    fn admit_next(&self) -> bool {
+        if self.used() < self.limit() {
+            return true;
+        }
+        let next = self.limit().saturating_add(self.growth_step.get()).min(self.maximum);
+        if next <= self.used() {
+            return false;
+        }
+        self.limit.set(next);
+        true
     }
 
     pub(crate) fn set_limit(&self, limit: usize) -> bool {
@@ -125,7 +164,10 @@ pub struct WebSurface {
     slot_tx: Vec<i32>,
     slot_ty: Vec<i32>,
     slot_index: Vec<usize>, // slot -> used-tile index
-    tiles: Vec<Option<Box<[u16; TILE_PX]>>>,
+    tiles: Vec<Option<TileStorage>>,
+    cache: Option<TileCache>,
+    storage_id: u32,
+    job_pins: Vec<WritePin>,
     tile_tx: Vec<i32>,
     tile_ty: Vec<i32>,
 
@@ -211,6 +253,10 @@ impl WebSurface {
         while hash_size < tile_capacity * 2 {
             hash_size <<= 1;
         }
+        let storage_id = tile_budget.next_storage_id.get();
+        tile_budget.next_storage_id.set(storage_id.checked_add(1)?);
+        let cache = tile_budget.cache.borrow().clone();
+        let job_pins = Vec::with_capacity(cache.as_ref().map_or(0, |cache| MAX_JOBS.min(cache.maximum_tiles())));
         Some(Self {
             width,
             height,
@@ -222,6 +268,9 @@ impl WebSurface {
             slot_ty: vec![0; hash_size],
             slot_index: vec![0; hash_size],
             tiles: Vec::with_capacity(tile_capacity),
+            cache,
+            storage_id,
+            job_pins,
             tile_tx: Vec::with_capacity(tile_capacity),
             tile_ty: Vec::with_capacity(tile_capacity),
             display_dirty: vec![false; tile_capacity],
@@ -262,7 +311,8 @@ impl WebSurface {
     }
 
     fn grow_metadata(&mut self) -> bool {
-        let target = self.document_tile_count().min(self.tile_budget.limit());
+        let target = if self.cache.is_some() { self.document_tile_count() }
+            else { self.document_tile_count().min(self.tile_budget.limit()) };
         if self.display_dirty.len() < target {
             let add = target - self.display_dirty.len();
             if self.tiles.try_reserve_exact(add).is_err()
@@ -359,7 +409,7 @@ impl WebSurface {
         if let Some(index) = self.find_tile_slot(tx, ty) {
             return Some(index);
         }
-        if self.tile_budget.used() >= self.tile_budget.limit() || !self.grow_metadata() {
+        if (self.cache.is_none() && !self.tile_budget.admit_next()) || !self.grow_metadata() {
             self.capacity_failed = true;
             return None;
         }
@@ -370,15 +420,16 @@ impl WebSurface {
                 continue;
             }
             let index = self.tiles.len();
-            let tile = match Box::try_new([0u16; TILE_PX]) {
-                Ok(tile) => tile,
-                Err(_) => {
-                    self.capacity_failed = true;
-                    return None;
+            let tile = if let Some(cache) = &self.cache {
+                TileStorage::Paged { cache: cache.clone(), key: self.storage_key(tx, ty) }
+            } else {
+                match Box::try_new([0u16; TILE_PX]) {
+                    Ok(tile) => TileStorage::Heap(tile),
+                    Err(_) => { self.capacity_failed = true; return None; }
                 }
             };
             self.tiles.push(Some(tile));
-            self.tile_budget.used.set(self.tile_budget.used() + 1);
+            if self.cache.is_none() { self.tile_budget.used.set(self.tile_budget.used() + 1); }
             self.tile_tx.push(tx);
             self.tile_ty.push(ty);
             self.storage_dirty[index] = true;
@@ -393,19 +444,53 @@ impl WebSurface {
     }
 
     /// `web_surface_get_tile`.
-    pub fn get_tile(&self, tx: i32, ty: i32) -> Option<&[u16; TILE_PX]> {
+    pub fn get_tile(&self, tx: i32, ty: i32) -> Option<TileRead<'_>> {
         let slot = self.find_tile_slot(tx, ty)?;
-        Some(self.tiles[slot].as_ref()?.as_ref())
+        match self.tiles[slot].as_ref()?.read() {
+            Ok(tile) => Some(tile),
+            Err(_) => { self.tile_budget.storage_failed.set(true); None }
+        }
+    }
+
+    fn storage_key(&self, tx: i32, ty: i32) -> u64 {
+        (u64::from(self.storage_id) << 32) | (u64::from(ty as u16) << 16) | u64::from(tx as u16)
+    }
+
+    pub fn storage_id(&self) -> u32 { self.storage_id }
+
+    pub(crate) fn restore_storage_id(&mut self, id: u32) -> bool {
+        if id == 0 || id == u32::MAX || !self.tiles.is_empty() || self.atomic_active { return false; }
+        self.storage_id = id;
+        self.tile_budget.next_storage_id.set(self.tile_budget.next_storage_id.get().max(id + 1));
+        true
+    }
+
+    pub(crate) fn prepare_cache(&mut self, maximum: usize) -> bool {
+        self.tiles.is_empty() && !self.atomic_active && self.cache.is_none()
+            && self.job_pins.try_reserve_exact(MAX_JOBS.min(maximum)).is_ok()
+    }
+
+    pub(crate) fn enable_cache(&mut self, cache: TileCache) {
+        self.cache = Some(cache);
+    }
+
+    /// Register logical storage without loading tile pixels.
+    pub fn register_stored_tile(&mut self, tx: i32, ty: i32) -> bool {
+        if self.cache.is_none() || tx < 0 || ty < 0 || tx >= self.tiles_width || ty >= self.tiles_height { return false; }
+        self.create_tile_slot(tx, ty).is_some()
     }
 
     /// `web_surface_get_or_create_tile`.
-    pub fn get_or_create_tile_mut(&mut self, tx: i32, ty: i32) -> Option<&mut [u16; TILE_PX]> {
+    pub fn get_or_create_tile_mut(&mut self, tx: i32, ty: i32) -> Option<TileWrite<'_>> {
         let slot = match self.find_tile_slot(tx, ty) {
             Some(s) => s,
             None => self.create_tile_slot(tx, ty)?,
         };
         self.storage_dirty[slot] = true;
-        Some(self.tiles[slot].as_mut()?.as_mut())
+        match self.tiles[slot].as_mut()?.write() {
+            Ok(tile) => Some(tile),
+            Err(_) => { self.tile_budget.storage_failed.set(true); None }
+        }
     }
 
     /// `web_surface_has_tile`.
@@ -428,6 +513,12 @@ impl WebSurface {
         let Some(hash_slot) = self.find_hash_slot(tx, ty) else {
             return false;
         };
+        if let Some(cache) = &self.cache {
+            if cache.remove(self.storage_key(tx, ty)).is_err() {
+                self.tile_budget.storage_failed.set(true);
+                return false;
+            }
+        }
         let index = self.slot_index[hash_slot];
         let last = self.tiles.len() - 1;
         self.tiles.swap_remove(index);
@@ -455,9 +546,9 @@ impl WebSurface {
         self.storage_dirty[last] = false;
         self.capture_marks[last] = 0;
         self.slot_used[hash_slot] = false;
-        self.tile_budget
-            .used
-            .set(self.tile_budget.used().saturating_sub(1));
+        if self.cache.is_none() {
+            self.tile_budget.used.set(self.tile_budget.used().saturating_sub(1));
+        }
         self.rebuild_hash();
         true
     }
@@ -490,10 +581,10 @@ impl WebSurface {
         else {
             return false;
         };
-        self.tiles[slot]
-            .as_mut()
-            .unwrap()
-            .copy_from_slice(&source[..TILE_PX]);
+        match self.tiles[slot].as_mut().unwrap().write() {
+            Ok(mut tile) => tile.copy_from_slice(&source[..TILE_PX]),
+            Err(_) => { self.tile_budget.storage_failed.set(true); return false; }
+        }
         self.storage_dirty[slot] = false;
         true
     }
@@ -535,6 +626,17 @@ impl WebSurface {
         std::mem::take(&mut self.captured)
     }
 
+    /// Discard queued serial work after a canceled internal-history stroke.
+    /// The caller must have no tile jobs in flight.
+    pub(crate) fn cancel_atomic(&mut self) {
+        self.op_len = 0;
+        self.jobs_used = 0;
+        self.job_pins.clear();
+        self.atomic_active = false;
+        self.pending_roi.clear();
+        self.num_bboxes_dirtied = 0;
+    }
+
     pub fn take_capture_error(&mut self) -> bool {
         let failed = self.capture_overflow;
         self.capture_overflow = false;
@@ -552,7 +654,7 @@ impl WebSurface {
         if self.capture_marks[slot] == self.capture_generation {
             return true; // already captured this stroke
         }
-        let words = self.tiles[slot].as_ref().unwrap().len();
+        let words = TILE_PX;
         let bytes = words * std::mem::size_of::<u16>();
         if self.captured_bytes.saturating_add(bytes) > self.capture_byte_limit {
             self.capture_overflow = true;
@@ -567,7 +669,10 @@ impl WebSurface {
             self.capture_overflow = true;
             return false;
         }
-        before.extend_from_slice(&self.tiles[slot].as_ref().unwrap()[..]);
+        match self.tiles[slot].as_ref().unwrap().read() {
+            Ok(tile) => before.extend_from_slice(&tile[..]),
+            Err(_) => { self.tile_budget.storage_failed.set(true); return false; }
+        }
         self.capture_marks[slot] = self.capture_generation;
         self.captured_bytes += bytes;
         self.captured.push((tx, ty, before));
@@ -601,14 +706,19 @@ impl WebSurface {
         let mut total = 0;
         loop {
             let count = self.end_atomic_prepare();
-            for index in 0..count {
-                process_job(index as i32, 0);
+            if let Some(dispatch) = self.tile_budget.job_dispatch.get() {
+                dispatch(count);
+            } else {
+                for index in 0..count {
+                    process_job(index as i32, 0);
+                }
             }
             total += count;
             if self.op_len == 0 || count == 0 {
                 break;
             }
         }
+        self.job_pins.clear();
         (std::mem::take(&mut self.pending_roi), total)
     }
 
@@ -627,10 +737,11 @@ impl WebSurface {
     /// instance or via `paint_process_tile_job` on any module instance
     /// sharing the same linear memory (the tile-pool workers).
     pub fn end_atomic_prepare(&mut self) -> u32 {
+        self.job_pins.clear();
         loop {
             self.jobs_used = 0;
             let dirty = self.partition_ops();
-            let count = dirty.len().min(MAX_JOBS);
+            let count = dirty.len().min(MAX_JOBS).min(self.cache.as_ref().map_or(MAX_JOBS, TileCache::maximum_tiles));
             let arena = unsafe { &mut *OP_ARENA.0.get() };
             let mut ops_base = 0usize;
             for (tx, ty) in dirty.iter().take(count) {
@@ -699,9 +810,17 @@ impl WebSurface {
         self.mark_display_dirty(slot);
         self.storage_dirty[slot] = true;
 
+        let tile_addr = match self.tiles[slot].as_mut().unwrap().write() {
+            Ok(TileWrite::Heap(tile)) => tile.as_mut_ptr() as usize,
+            Ok(TileWrite::Paged(mut pin)) => {
+                let address = pin.as_mut_ptr() as usize;
+                self.job_pins.push(pin);
+                address
+            }
+            Err(_) => { self.tile_budget.storage_failed.set(true); return ops_base; }
+        };
         let job = self.jobs_used;
         self.jobs_used += 1;
-        let tile_addr = self.tiles[slot].as_mut().unwrap().as_mut_ptr() as usize;
         let words = &JOB_TABLE[job * JOB_WORDS..(job + 1) * JOB_WORDS];
         words[JOB_OPS_OFF].store(ops_base, Ordering::Relaxed);
         words[JOB_OP_COUNT].store(op_count, Ordering::Relaxed);
@@ -744,9 +863,12 @@ impl WebSurface {
                     prepared = true;
                 }
                 if let Some(index) = slot {
-                    let tile = &mut self.tiles[index].as_mut().unwrap()[..];
+                    let mut tile = match self.tiles[index].as_mut().unwrap().write() {
+                        Ok(tile) => tile,
+                        Err(_) => { self.tile_budget.storage_failed.set(true); continue; }
+                    };
                     crate::surface::process_op(
-                        tile,
+                        &mut tile[..],
                         &mut self.mask[..],
                         tx,
                         ty,
@@ -1147,7 +1269,7 @@ impl WebSurface {
                     const ZERO_TILE: [u16; TILE_PX] = [0; TILE_PX];
                     tile_copy.clear();
                     match self.get_tile(tx, ty) {
-                        Some(t) => tile_copy.extend_from_slice(t),
+                        Some(t) => tile_copy.extend_from_slice(&t[..]),
                         None => tile_copy.extend_from_slice(&ZERO_TILE),
                     }
                     crate::brushmodes::get_color_accumulate(
@@ -1164,9 +1286,13 @@ impl WebSurface {
 
                 const ZERO_TILE: [u16; TILE_PX] = [0; TILE_PX];
                 let slot = self.find_tile_slot(tx, ty);
-                let base = slot
-                    .and_then(|index| self.tiles[index].as_ref().map(|tile| &tile[..]))
-                    .unwrap_or(&ZERO_TILE);
+                let tile = slot.and_then(|index| {
+                    match self.tiles[index].as_ref()?.read() {
+                        Ok(tile) => Some(tile),
+                        Err(_) => { self.tile_budget.storage_failed.set(true); None }
+                    }
+                });
+                let base = tile.as_deref().unwrap_or(&ZERO_TILE);
                 self.smudge_op_indices.clear();
                 for (index, entry) in self.ops[..self.op_len].iter().enumerate() {
                     if entry.tx == tx && entry.ty == ty {
@@ -1240,9 +1366,16 @@ impl WebSurface {
 
     /// `web_surface_clear`.
     pub fn clear_tiles(&mut self) {
-        self.tile_budget
-            .used
-            .set(self.tile_budget.used().saturating_sub(self.tiles.len()));
+        if let Some(cache) = &self.cache {
+            for (&tx, &ty) in self.tile_tx.iter().zip(&self.tile_ty) {
+                if cache.remove(self.storage_key(tx, ty)).is_err() {
+                    self.tile_budget.storage_failed.set(true);
+                    return;
+                }
+            }
+        } else {
+            self.tile_budget.used.set(self.tile_budget.used().saturating_sub(self.tiles.len()));
+        }
         self.tiles.clear();
         self.tile_tx.clear();
         self.tile_ty.clear();
@@ -1282,8 +1415,12 @@ impl WebSurface {
         })
     }
 
-    pub fn used_tile(&self, index: usize) -> Option<&[u16; TILE_PX]> {
-        self.tiles.get(index).and_then(|t| t.as_ref()).map(|b| &**b)
+    pub fn used_tile(&self, index: usize) -> Option<TileRead<'_>> {
+        let tile = self.tiles.get(index)?.as_ref()?;
+        match tile.read() {
+            Ok(tile) => Some(tile),
+            Err(_) => { self.tile_budget.storage_failed.set(true); None }
+        }
     }
 
     pub fn used_tile_is_storage_dirty(&self, index: usize) -> bool {
@@ -1293,9 +1430,9 @@ impl WebSurface {
 
 impl Drop for WebSurface {
     fn drop(&mut self) {
-        self.tile_budget
-            .used
-            .set(self.tile_budget.used().saturating_sub(self.tiles.len()));
+        if self.cache.is_none() {
+            self.tile_budget.used.set(self.tile_budget.used().saturating_sub(self.tiles.len()));
+        }
     }
 }
 
@@ -1378,8 +1515,8 @@ mod tests {
         let _ = sparse.end_atomic();
         assert_eq!(eager.tile_tx, sparse.tile_tx);
         assert_eq!(eager.tile_ty, sparse.tile_ty);
-        for (a, b) in eager.tiles.iter().zip(&sparse.tiles) {
-            assert_eq!(a.as_deref(), b.as_deref());
+        for index in 0..eager.used_tile_count() {
+            assert_eq!(eager.used_tile(index).as_deref(), sparse.used_tile(index).as_deref());
         }
     }
 
@@ -1422,8 +1559,8 @@ mod tests {
         }
         assert_eq!(full.tile_tx, resumed.tile_tx);
         assert_eq!(full.tile_ty, resumed.tile_ty);
-        for (a, b) in full.tiles.iter().zip(&resumed.tiles) {
-            assert_eq!(a.as_deref(), b.as_deref());
+        for index in 0..full.used_tile_count() {
+            assert_eq!(full.used_tile(index).as_deref(), resumed.used_tile(index).as_deref());
         }
     }
 
@@ -1507,6 +1644,45 @@ mod tests {
         assert!(surface.get_or_create_tile_mut(2, 0).is_some());
         assert_eq!(budget.used(), 3);
         assert_eq!(surface.display_dirty.len(), 3);
+    }
+
+    #[test]
+    fn automatic_tile_growth_is_shared_lazy_and_bounded() {
+        let budget = Rc::new(TileBudget::new(1, 4));
+        let mut first = WebSurface::new_with_budget(256, 64, Rc::clone(&budget)).unwrap();
+        let mut second = WebSurface::new_with_budget(256, 64, Rc::clone(&budget)).unwrap();
+        first.get_or_create_tile_mut(0, 0).unwrap()[0] = 123;
+        // Manual admission remains the default for the public-web pager.
+        assert!(second.get_or_create_tile_mut(0, 0).is_none());
+        assert!(second.take_capacity_error());
+        budget.set_growth_step(2);
+        assert_eq!((budget.used(), budget.limit()), (1, 1));
+        second.get_or_create_tile_mut(0, 0).unwrap()[0] = 456;
+        assert_eq!((budget.used(), budget.limit()), (2, 3));
+        first.get_or_create_tile_mut(1, 0).unwrap();
+        second.get_or_create_tile_mut(1, 0).unwrap();
+        assert_eq!((budget.used(), budget.limit()), (4, 4));
+        assert!(first.get_or_create_tile_mut(2, 0).is_none());
+        assert!(first.take_capacity_error());
+        assert_eq!(first.get_tile(0, 0).unwrap()[0], 123);
+        assert_eq!(second.get_tile(0, 0).unwrap()[0], 456);
+        drop(second);
+        assert_eq!(budget.used(), 2);
+        first.get_or_create_tile_mut(2, 0).unwrap();
+        assert_eq!((budget.used(), budget.limit()), (3, 4));
+    }
+
+    #[test]
+    fn automatic_growth_handles_step_overflow_and_can_be_disabled() {
+        let budget = TileBudget::new(1, 3);
+        budget.used.set(1);
+        budget.set_growth_step(usize::MAX);
+        assert!(budget.admit_next());
+        assert_eq!(budget.limit(), 3);
+        assert!(budget.set_limit(1));
+        budget.set_growth_step(0);
+        assert!(!budget.admit_next());
+        assert_eq!(budget.limit(), 1);
     }
 
     #[test]
@@ -1716,13 +1892,10 @@ pub fn process_job(job_index: i32, worker_id: usize) {
     let arena = unsafe { &*OP_ARENA.0.get() };
     let ops = &arena[ops_off..ops_off + op_count];
     let tile = unsafe { std::slice::from_raw_parts_mut(tile_addr as *mut u16, TILE_PX) };
-    let masks = unsafe { &mut *WORKER_MASKS.0.get() };
-    let scratches = unsafe { &mut *WORKER_SCRATCH.0.get() };
-    let wi = (worker_id.min(JOB_WORKERS - 1)) * MASK_LEN;
-    let (m, _) = masks.split_at_mut(wi + MASK_LEN);
-    let (s2, _) = scratches.split_at_mut(wi + MASK_LEN);
-    let mask = &mut m[wi..];
-    let scratch = &mut s2[wi..];
+    let wi = worker_id.min(JOB_WORKERS - 1) * MASK_LEN;
+    // Each worker owns only its slice. Do not borrow the full shared arrays.
+    let mask = unsafe { std::slice::from_raw_parts_mut(WORKER_MASKS.0.get().cast::<u16>().add(wi), MASK_LEN) };
+    let scratch = unsafe { std::slice::from_raw_parts_mut(WORKER_SCRATCH.0.get().cast::<f32>().add(wi), MASK_LEN) };
     for op in ops {
         crate::surface::process_op(tile, mask, tx, ty, op, scratch);
     }
@@ -1749,11 +1922,10 @@ pub fn process_job_work(job_index: i32, worker_id: usize, row_budget: usize) -> 
 
     let arena = unsafe { &*OP_ARENA.0.get() };
     let tile = unsafe { std::slice::from_raw_parts_mut(tile_addr as *mut u16, TILE_PX) };
-    let masks = unsafe { &mut *WORKER_MASKS.0.get() };
-    let scratches = unsafe { &mut *WORKER_SCRATCH.0.get() };
     let wi = worker_id.min(JOB_WORKERS - 1) * MASK_LEN;
-    let mask = &mut masks[wi..wi + MASK_LEN];
-    let scratch = &mut scratches[wi..wi + MASK_LEN];
+    // Each worker owns only its slice. Do not borrow the full shared arrays.
+    let mask = unsafe { std::slice::from_raw_parts_mut(WORKER_MASKS.0.get().cast::<u16>().add(wi), MASK_LEN) };
+    let scratch = unsafe { std::slice::from_raw_parts_mut(WORKER_SCRATCH.0.get().cast::<f32>().add(wi), MASK_LEN) };
     let mut op_index = JOB_OP_PROGRESS[j].load(Ordering::Acquire);
     let mut row = JOB_ROW_PROGRESS[j].load(Ordering::Relaxed);
     let mut budget = row_budget.max(1);

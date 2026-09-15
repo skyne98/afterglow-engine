@@ -14,3 +14,6 @@ afterglow-rpc = { path = "../afterglow-rpc" }
 afterglow-rpc-macros = { path = "../afterglow-rpc-macros" }
 serde.workspace = true
 async-executor.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rusqlite = { version = "0.37", features = ["bundled", "limits"] }

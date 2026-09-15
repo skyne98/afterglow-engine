@@ -1,6 +1,9 @@
 [workspace]
 resolver = "2"
-exclude = ["vendor/afterglow-shell-blitz"]
+exclude = [
+    "vendor/afterglow-shell-blitz",
+    "prototype/character-editor/paint/maipointo",
+]
 members = [
     "crates/afterglow-audio-worker",
     "crates/afterglow-shell",
@@ -14,6 +17,8 @@ members = [
     "crates/afterglow-rpc-macros",
     "crates/afterglow-rpc-demo",
     "crates/afterglow-storage-worker",
+    "crates/afterglow-paint-worker",
+    "crates/afterglow-memory",
     "crates/afterglow-telemetry",
     "crates/afterglow-texture",
     "crates/afterglow-web",
@@ -36,6 +41,7 @@ ureq = { version = "2", features = ["json"] }
 syn = { version = "2", features = ["full"] }
 quote = "1"
 async-executor = "1"
+maipointo = { path = "prototype/character-editor/paint/maipointo", features = ["demo"] }
 
 # afterglow-shell needs narrow native WebGPU patches plus its pinned Blitz
 # browser/layout fixes. Keep these at workspace scope because Cargo ignores

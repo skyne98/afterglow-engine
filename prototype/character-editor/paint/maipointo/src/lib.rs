@@ -36,6 +36,8 @@ pub mod surface;
 pub mod symmetry;
 #[cfg(feature = "demo")]
 pub mod web_surface;
+#[cfg(feature = "demo")]
+pub mod tile_cache;
 
 /// C ABI for the demo's Emscripten wasm module (wasm builds only; the
 /// native test builds have no libmypaint surface symbols to link against).

@@ -19,7 +19,7 @@ export class BlobStorageClient {
       asyncWorkerImports(driver, memory),
     );
     driver.w = instance.exports;
-    instance.exports.afterglow_wasm_init();
+    (instance.exports.afterglow_wasm_init as () => void)();
     return new BlobStorageClient(driver);
   }
 

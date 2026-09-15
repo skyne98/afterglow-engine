@@ -8,6 +8,8 @@ use crate::compositor::{BlendMode, layer_blend_normal_full_tile, layer_blend_ove
 use crate::web_surface::{INITIAL_RESIDENT_TILES, TileBudget, WebSurface};
 use std::rc::Rc;
 
+mod document;
+
 pub const WEB_MAX_LAYERS: usize = 8;
 pub const WEB_MAX_GROUPS: usize = 4;
 pub const WEB_HISTORY_RECORDS: usize = 40;
@@ -122,7 +124,9 @@ pub struct PaintApp {
     history_cursor: usize,
     history_active: bool,
     history_active_layer: usize,
+    history_capture_enabled: bool,
     external_history: bool,
+    history_rolled_back: bool,
 
     composite_tile: Vec<u16>,
     render_scratch: Vec<u16>,
@@ -203,7 +207,9 @@ impl PaintApp {
             history_cursor: 0,
             history_active: false,
             history_active_layer: 0,
+            history_capture_enabled: true,
             external_history: false,
+            history_rolled_back: false,
             composite_tile: vec![0; 64 * 64 * 4],
             render_scratch: vec![0; WEB_MAX_GROUPS * 64 * 64 * 4],
             mip_composite_tile: vec![0; 64 * 64 * 4],
@@ -253,6 +259,33 @@ impl PaintApp {
     pub fn set_resident_tile_limit(&self, limit: usize) -> bool {
         self.tile_budget.set_limit(limit)
     }
+
+    /// Increase the shared tile limit on demand, without exceeding its maximum.
+    /// A zero step keeps manual admission. This method allocates no pixels.
+    pub fn set_resident_tile_growth(&self, step: usize) {
+        self.tile_budget.set_growth_step(step);
+    }
+
+    /// Select a synchronous dispatcher for the current tile job table.
+    /// It must complete each job exactly once before return. Worker IDs must
+    /// be distinct during concurrent calls and below JOB_WORKERS.
+    pub fn set_tile_job_dispatcher(&self, dispatch: Option<fn(u32)>) {
+        self.tile_budget.set_job_dispatch(dispatch);
+    }
+
+    /// Attach storage before the first tile. All layers share the same cache.
+    pub fn set_tile_cache(&mut self, cache: crate::tile_cache::TileCache) -> bool {
+        if self.layers.iter().any(|layer| layer.used_tile_count() != 0)
+            || cache.maximum_tiles() != self.tile_budget.maximum() { return false; }
+        for layer in &mut self.layers {
+            if !layer.prepare_cache(cache.maximum_tiles()) { return false; }
+        }
+        for layer in &mut self.layers { layer.enable_cache(cache.clone()); }
+        self.tile_budget.set_cache(cache);
+        true
+    }
+
+    pub fn take_storage_error(&self) -> bool { self.tile_budget.take_storage_error() }
 
     pub fn active(&mut self) -> &mut WebSurface {
         &mut self.layers[self.active_layer]
@@ -374,7 +407,7 @@ impl PaintApp {
             if group >= WEB_MAX_GROUPS || !self.group_alive[group] || !self.group_visible[group] {
                 return;
             }
-            let tile_words = self.tile_bytes;
+            let tile_words = self.tile_bytes / std::mem::size_of::<u16>();
             if scratch.len() < tile_words {
                 return;
             }
@@ -454,7 +487,7 @@ impl PaintApp {
             && self.layer_mode[0] == BlendMode::Normal
         {
             if let Some(source) = self.layers[0].get_tile(tx, ty) {
-                layer_blend_normal_full_tile(&mut composite, source);
+                layer_blend_normal_full_tile(&mut composite, &source[..]);
             }
             self.composite_tile = composite;
             return &self.composite_tile;
@@ -491,7 +524,7 @@ impl PaintApp {
             self.display_tile.fill(0);
             return Some(&self.display_tile);
         };
-        self.composite_tile.copy_from_slice(tile);
+        self.composite_tile.copy_from_slice(&tile[..]);
         Self::render_display_tile(
             &self.composite_tile,
             &mut self.display_tile,
@@ -506,7 +539,7 @@ impl PaintApp {
             return false;
         }
         let eotf = self.display_eotf;
-        let Some(tile) = self.active().get_or_create_tile_mut(tx, ty) else {
+        let Some(mut tile) = self.active().get_or_create_tile_mut(tx, ty) else {
             return false;
         };
         for pixel in 0..64 * 64 {
@@ -843,7 +876,10 @@ impl PaintApp {
         self.layers
             .get(layer_id)
             .and_then(|surface| surface.get_tile(tx, ty))
-            .map(|tile| tile.as_ptr() as usize)
+            .map(|tile| match tile {
+                crate::tile_cache::TileRead::Heap(pixels) => pixels.as_ptr() as usize,
+                crate::tile_cache::TileRead::Paged(_) => 0,
+            })
             .unwrap_or(0)
     }
 
@@ -901,6 +937,9 @@ impl PaintApp {
     ) {
         self.cooperative_stroke.cancel();
         self.history_begin();
+        if self.history_rolled_back {
+            return;
+        }
         let Some(brush) = self.brush.as_mut() else {
             return;
         };
@@ -908,7 +947,7 @@ impl PaintApp {
         self.pending_captures.clear();
         self.pending_capture_bytes = 0;
         let layer = self.active_layer;
-        self.layers[layer].set_capture_enabled(true);
+        self.layers[layer].set_capture_enabled(self.history_capture_enabled);
         self.layers[layer].begin_atomic();
         brush.request_reset();
         brush.new_stroke();
@@ -927,14 +966,7 @@ impl PaintApp {
         );
         let (roi, _jobs) = self.layers[layer].end_atomic();
         self.dirty_roi = roi;
-        let captured = self.layers[layer].take_captured();
-        for (tx, ty, before) in captured {
-            self.pending_captures.push(PendingCapture {
-                pos: TilePos { tx, ty },
-                layer: self.active_layer,
-                before,
-            });
-        }
+        self.absorb_captures();
     }
 
     /// `stroke_to` -- one motion sample through the budgeted driver.
@@ -987,7 +1019,7 @@ impl PaintApp {
             self.dirty_roi = roi;
         }
         self.absorb_captures();
-        if result < 0 {
+        if result < 0 && self.error_code != 2 {
             self.error_code = 3;
         }
         result
@@ -1012,7 +1044,7 @@ impl PaintApp {
             self.dirty_roi = roi;
         }
         self.absorb_captures();
-        if result < 0 {
+        if result < 0 && self.error_code != 2 {
             self.error_code = 3;
         }
         result
@@ -1034,7 +1066,7 @@ impl PaintApp {
             && self.pending_capture_bytes.saturating_add(added_bytes) > HISTORY_BYTE_BUDGET / 2)
             || self.pending_captures.try_reserve(captured.len()).is_err()
         {
-            self.fail_history(layer);
+            self.fail_history(layer, captured);
             return false;
         }
         for (tx, ty, before) in captured {
@@ -1060,10 +1092,23 @@ impl PaintApp {
             return;
         }
         if capture_failed {
-            self.fail_history(layer);
+            self.fail_history(layer, captured);
             return;
         }
         self.append_captures(layer, captured);
+    }
+
+    /// Select whether this app captures pixel history. The storage owner can
+    /// disable capture when versioned tile storage supplies history instead.
+    /// Change this setting only between strokes.
+    pub fn set_history_capture_enabled(&mut self, enabled: bool) -> bool {
+        if self.history_active || self.batch_open || self.cooperative_stroke.pending() {
+            return false;
+        }
+        self.history_reset_all();
+        self.history_capture_enabled = enabled;
+        for layer in &mut self.layers { layer.set_capture_enabled(false); }
+        true
     }
 
     pub fn set_external_history(&mut self, enabled: bool) {
@@ -1121,6 +1166,8 @@ impl PaintApp {
     }
 
     pub fn history_begin(&mut self) {
+        self.history_rolled_back = false;
+        if !self.history_capture_enabled { return; }
         if self.external_history {
             self.pending_captures.clear();
             self.pending_capture_bytes = 0;
@@ -1130,7 +1177,7 @@ impl PaintApp {
         }
         if self.history_active {
             self.history_commit();
-            if self.history_active {
+            if self.history_active || self.history_rolled_back {
                 return;
             }
         }
@@ -1153,12 +1200,52 @@ impl PaintApp {
         self.history_active_layer = self.active_layer;
     }
 
-    fn fail_history(&mut self, layer: usize) {
+    /// True only after an internal-history failure restored every before-image.
+    pub fn history_failure_rolled_back(&self) -> bool {
+        self.history_rolled_back
+    }
+
+    fn restore_before(surface: &mut WebSurface, tx: i32, ty: i32, before: &[u16]) -> bool {
+        if before.len() != 64 * 64 * 4 {
+            return false;
+        }
+        if before.iter().all(|&word| word == 0) {
+            surface.remove_tile(tx, ty);
+            true
+        } else {
+            surface.write_rgba16_tile_modified(tx, ty, before)
+        }
+    }
+
+    fn fail_history(&mut self, layer: usize, captured: Vec<(i32, i32, Vec<u16>)>) {
         self.error_code = 2;
+        self.layers[layer].set_capture_enabled(false);
+        self.history_rolled_back = false;
+        if !self.external_history {
+            self.cooperative_stroke.cancel();
+            self.batch_open = false;
+            self.layers[layer].cancel_atomic();
+            let mut restored = true;
+            for (tx, ty, before) in captured {
+                restored = Self::restore_before(&mut self.layers[layer], tx, ty, &before) && restored;
+            }
+            for capture in self.pending_captures.drain(..) {
+                restored = Self::restore_before(&mut self.layers[capture.layer],
+                    capture.pos.tx, capture.pos.ty, &capture.before) && restored;
+            }
+            if self.dirty_roi.try_reserve(1).is_ok() {
+                self.dirty_roi.clear();
+                self.dirty_roi.push(crate::symmetry::Rectangle {
+                    x: 0, y: 0, width: self.width, height: self.height,
+                });
+            } else {
+                restored = false;
+            }
+            self.history_rolled_back = restored;
+        }
         self.pending_captures.clear();
         self.pending_capture_bytes = 0;
         self.history_active = false;
-        self.layers[layer].set_capture_enabled(false);
     }
 
     pub fn history_commit(&mut self) {
@@ -1176,17 +1263,15 @@ impl PaintApp {
         let capture_failed = self.layers[layer].take_capture_error();
         let captured = self.layers[layer].take_captured();
         if capture_failed {
-            self.fail_history(layer);
+            self.fail_history(layer, captured);
             return;
         }
         if !self.append_captures(layer, captured) {
             return;
         }
 
-        let pending = std::mem::take(&mut self.pending_captures);
-        self.pending_capture_bytes = 0;
         let mut record_bytes = 0usize;
-        for capture in &pending {
+        for capture in &self.pending_captures {
             record_bytes = record_bytes.saturating_add(
                 capture
                     .before
@@ -1195,7 +1280,7 @@ impl PaintApp {
             );
         }
         if record_bytes > HISTORY_BYTE_BUDGET {
-            self.fail_history(layer);
+            self.fail_history(layer, Vec::new());
             return;
         }
         // Free old history before allocating the new after-images. This keeps
@@ -1211,18 +1296,18 @@ impl PaintApp {
         self.evict_dropped_entries();
 
         let mut record: Vec<HistoryEntry> = Vec::new();
-        if record.try_reserve(pending.len()).is_err() {
-            self.fail_history(layer);
+        if record.try_reserve(self.pending_captures.len()).is_err() {
+            self.fail_history(layer, Vec::new());
             return;
         }
-        for capture in pending {
+        for capture in &self.pending_captures {
             let mut after = Vec::new();
             if after.try_reserve_exact(capture.before.len()).is_err() {
-                self.fail_history(layer);
+                self.fail_history(layer, Vec::new());
                 return;
             }
             if let Some(tile) = self.layers[layer].get_tile(capture.pos.tx, capture.pos.ty) {
-                after.extend_from_slice(tile);
+                after.extend_from_slice(&tile[..]);
             } else {
                 after.resize(capture.before.len(), 0);
             }
@@ -1230,14 +1315,20 @@ impl PaintApp {
                 tx: capture.pos.tx,
                 ty: capture.pos.ty,
                 layer,
-                before: capture.before,
+                before: Vec::new(),
                 after,
             });
         }
         if !record.is_empty() {
-            if self.history_entries.try_reserve(record.len()).is_err() {
-                self.fail_history(layer);
+            if self.history_entries.try_reserve(record.len()).is_err()
+                || self.history_records.try_reserve(1).is_err()
+            {
+                self.fail_history(layer, Vec::new());
                 return;
+            }
+            // Keep all before-images until every fallible allocation succeeds.
+            for (entry, capture) in record.iter_mut().zip(self.pending_captures.drain(..)) {
+                entry.before = capture.before;
             }
             self.history_records.push(HistoryRecord {
                 layer,
@@ -1247,6 +1338,7 @@ impl PaintApp {
             self.history_entries.extend(record);
             self.history_cursor = self.history_records.len();
         }
+        self.pending_capture_bytes = 0;
         self.history_active = false;
     }
 
@@ -1290,7 +1382,7 @@ impl PaintApp {
             .map(|(i, e)| (start + i, e.tx, e.ty))
             .collect();
         for (idx, tx, ty) in positions {
-            let Some(tile) = self.layers[layer].get_or_create_tile_mut(tx, ty) else {
+            let Some(mut tile) = self.layers[layer].get_or_create_tile_mut(tx, ty) else {
                 self.error_code = 1;
                 return false;
             };
@@ -1314,7 +1406,7 @@ impl PaintApp {
             .map(|(i, e)| (start + i, e.tx, e.ty))
             .collect();
         for (idx, tx, ty) in positions {
-            let Some(tile) = self.layers[layer].get_or_create_tile_mut(tx, ty) else {
+            let Some(mut tile) = self.layers[layer].get_or_create_tile_mut(tx, ty) else {
                 self.error_code = 1;
                 return false;
             };
@@ -1382,12 +1474,17 @@ impl PaintApp {
         if self.layer_count <= 1 || layer_id >= self.layer_count {
             return false;
         }
+        // Remove working storage keys before the surface loses its identity.
+        self.layers[layer_id].clear_tiles();
         self.node_remove(layer_id as i32);
         self.layers.remove(layer_id);
         for i in layer_id..self.layer_count - 1 {
             self.layer_visible[i] = self.layer_visible[i + 1];
             self.layer_opacity[i] = self.layer_opacity[i + 1];
             self.layer_mode[i] = self.layer_mode[i + 1];
+            self.layer_parent[i] = self.layer_parent[i + 1];
+            self.layer_next[i] = self.layer_next[i + 1];
+            self.layer_previous[i] = self.layer_previous[i + 1];
         }
         self.layer_count -= 1;
         let removed = layer_id as i32;
@@ -1444,7 +1541,7 @@ impl PaintApp {
     }
 
     pub fn set_layer_group(&mut self, layer_id: usize, group_id: i32) -> bool {
-        if layer_id >= self.layer_count {
+        if layer_id >= self.layer_count || group_id < -1 {
             return false;
         }
         if group_id >= 0
@@ -1534,7 +1631,7 @@ impl PaintApp {
     }
 
     pub fn set_group_parent(&mut self, group_id: usize, parent_id: i32) -> bool {
-        if group_id >= WEB_MAX_GROUPS || !self.group_alive[group_id] {
+        if group_id >= WEB_MAX_GROUPS || !self.group_alive[group_id] || parent_id < -1 {
             return false;
         }
         if parent_id >= 0
@@ -1596,8 +1693,9 @@ mod tests {
     #[test]
     fn repeated_render_reuses_tile_buffers() {
         let mut app = PaintApp::new(2048, 2048).unwrap();
-        let tile = app.active().get_or_create_tile_mut(0, 0).unwrap();
+        let mut tile = app.active().get_or_create_tile_mut(0, 0).unwrap();
         tile[0] = 32768;
+        drop(tile);
         let caps = (
             app.composite_tile.capacity(),
             app.render_scratch.capacity(),
@@ -1625,7 +1723,7 @@ mod tests {
     fn one_layer_render_matches_the_tree_path() {
         let mut app = PaintApp::new(256, 256).unwrap();
         app.set_layer_mode(0, BlendMode::Normal);
-        let tile = app.layers[0].get_or_create_tile_mut(0, 0).unwrap();
+        let mut tile = app.layers[0].get_or_create_tile_mut(0, 0).unwrap();
         for pi in 0..64 * 64 {
             let p = pi * 4;
             let alpha = ((pi * 1877) % 32769) as u16;
@@ -1634,6 +1732,7 @@ mod tests {
             tile[p + 2] = ((pi * 997) as u16).min(alpha);
             tile[p + 3] = alpha;
         }
+        drop(tile);
         let fast = app.render_tile(0, 0).to_vec();
         let second = app.create_layer();
         assert_eq!(second, 1);
@@ -1652,11 +1751,73 @@ mod tests {
         assert!(app.append_captures(0, vec![(0, 0, vec![0; tile_words])]));
         assert_eq!(app.pending_capture_bytes, HISTORY_BYTE_BUDGET / 2);
 
-        assert!(!app.append_captures(0, vec![(1, 0, vec![0])]));
+        assert!(!app.append_captures(0, vec![(1, 0, vec![0; tile_words])]));
         assert_eq!(app.error_code, 2);
         assert_eq!(app.pending_capture_bytes, 0);
         assert!(app.pending_captures.is_empty());
         assert!(!app.history_active);
+    }
+
+    #[test]
+    fn capture_overflow_restores_old_and_new_tiles_and_retains_usable_history() {
+        let _guard = crate::web_surface::JOB_TEST_LOCK.lock().unwrap();
+        let mut app = PaintApp::new(128, 128).unwrap();
+        let words = 64 * 64 * 4;
+        let before = vec![12000; words];
+        let other = vec![18000; words];
+        let changed = vec![24000; words];
+        app.write_layer_rgba16_tile_modified(0, 1, 0, &other);
+        app.history_begin();
+        assert!(app.append_captures(0, vec![(0, 0, vec![0; words])]));
+        app.write_layer_rgba16_tile_modified(0, 0, 0, &before);
+        app.history_commit();
+        assert!(app.history_can_undo());
+
+        app.history_begin();
+        assert!(app.append_captures(0, vec![(0, 0, before.clone())]));
+        app.write_layer_rgba16_tile_modified(0, 0, 0, &changed);
+        app.write_layer_rgba16_tile_modified(0, 1, 0, &changed);
+        app.write_layer_rgba16_tile_modified(0, 0, 1, &changed);
+        app.begin_batch();
+        app.active().draw_dab(96.0, 96.0, 4.0, 1.0, 0.0, 0.0,
+            1.0, 1.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0);
+        // Model the capacity boundary without another 32 MiB of tile copies.
+        app.pending_capture_bytes = HISTORY_BYTE_BUDGET / 2;
+        assert!(!app.append_captures(0, vec![(1, 0, other.clone()), (0, 1, vec![0; words])]));
+        assert_eq!(app.error_code, 2);
+        assert!(app.history_failure_rolled_back());
+        assert_eq!(app.active().get_tile(0, 0).unwrap().as_slice(), before);
+        assert_eq!(app.active().get_tile(1, 0).unwrap().as_slice(), other);
+        assert!(app.active().get_tile(0, 1).is_none());
+        assert!(!app.has_stroke_continuation());
+        app.end_batch();
+        assert_eq!(app.active().end_atomic().1, 0);
+        assert!(app.active().get_tile(1, 1).is_none());
+        assert!(app.history_can_undo());
+        assert!(app.history_undo());
+        assert!(app.active().get_tile(0, 0).unwrap().iter().all(|&word| word == 0));
+        assert!(app.history_redo());
+        assert_eq!(app.active().get_tile(0, 0).unwrap().as_slice(), before);
+
+        app.error_code = 0;
+        app.history_begin();
+        assert!(!app.history_failure_rolled_back());
+        assert!(app.append_captures(0, vec![(0, 0, before.clone())]));
+        app.write_layer_rgba16_tile_modified(0, 0, 0, &changed);
+        app.history_commit();
+        assert_eq!(app.error_code, 0);
+        assert!(app.history_undo());
+        assert_eq!(app.active().get_tile(0, 0).unwrap().as_slice(), before);
+    }
+
+    #[test]
+    fn an_invalid_before_image_cannot_confirm_rollback() {
+        let mut app = PaintApp::new(64, 64).unwrap();
+        app.history_begin();
+        app.pending_capture_bytes = HISTORY_BYTE_BUDGET / 2;
+        assert!(!app.append_captures(0, vec![(0, 0, vec![1])]));
+        assert_eq!(app.error_code, 2);
+        assert!(!app.history_failure_rolled_back());
     }
 
     #[test]

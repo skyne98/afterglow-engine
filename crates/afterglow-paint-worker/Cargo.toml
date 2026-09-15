@@ -1,0 +1,27 @@
+[package]
+name = "afterglow-paint-worker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Native paint RPC worker backed by maipointo"
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+afterglow-memory = { path = "../afterglow-memory" }
+afterglow-rpc = { path = "../afterglow-rpc" }
+afterglow-rpc-macros = { path = "../afterglow-rpc-macros" }
+afterglow-storage-worker = { path = "../afterglow-storage-worker" }
+crc32fast = "1.5"
+maipointo.workspace = true
+serde_json.workspace = true
+async-executor.workspace = true
+rayon = "1.11"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_SystemInformation", "Win32_Storage_FileSystem"] }
