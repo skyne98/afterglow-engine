@@ -19,6 +19,7 @@ members = [
     "crates/afterglow-storage-worker",
     "crates/afterglow-paint-worker",
     "crates/afterglow-memory",
+    "crates/afterglow-diagnostics-worker",
     "crates/afterglow-telemetry",
     "crates/afterglow-texture",
     "crates/afterglow-web",
