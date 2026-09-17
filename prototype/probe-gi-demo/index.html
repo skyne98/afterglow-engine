@@ -1,0 +1,31 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>afterglow — probe GI (dynamic, no bake)</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #05070c; }
+  #view { display: block; width: 100vw; height: 100vh; }
+  #hud { z-index: 10;
+    position: fixed; left: 10px; top: 10px; padding: 8px 10px;
+    color: #dbe6ff; background: rgba(0,0,0,.62); border: 1px solid rgba(120,160,255,.35);
+    border-radius: 8px; font: 12px/1.5 ui-monospace, monospace; white-space: pre;
+  }
+  #help { z-index: 10;
+    position: fixed; right: 10px; top: 10px; padding: 8px 10px; pointer-events: none;
+    color: #b9c7e8; background: rgba(0,0,0,.5); border-radius: 8px;
+    font: 11px/1.5 ui-monospace, monospace; white-space: pre;
+  }
+</style>
+</head>
+<body>
+<canvas id="view"></canvas>
+<div id="hud">starting…</div>
+<div id="help">WASD / Arrows: fly
+Shift: sprint · Space / C: up / down
+wheel: speed · drag: look
+wheel: zoom
+space: pause auto-orbit</div>
+<script type="module" src="./demo.js"></script>
+</body>
+</html>

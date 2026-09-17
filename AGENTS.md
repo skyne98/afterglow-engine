@@ -411,6 +411,44 @@ All engine work must move toward these non-negotiable requirements:
   in CoD, Decima). Recommended afterglow-engine path: Intel TAA resolve +
   k-DOP clip_aabb replacement + Activision 1-sample spatio-temporal bicubic
   (5× cheaper, 3 lines of WGSL).
+- `docs/research/probe-based-gi.md` — Probe-based global illumination survey and
+  engine integration plan (investigated 2026-09-17). **Locked decisions: no bake
+  (probe GI is runtime-only), purely map-agnostic (no per-level settings, no
+  authored volumes, nothing scaling with map size), and delivered in one shot then
+  tuned interactively — there are no phases.** One camera-locked scrolling cascade
+  field (3 cascades × 8×4×8 = 768 resident probes at 1/3/9 m spacing) traced by GPU
+  compute over a runtime-built CWBVH8 BLAS with per-tile BLAS + incremental TLAS,
+  blended into a ping-pong `rgba16float` 2D packed atlas (~3 MB), sampled through
+  Three's `IrradianceNode`. Consequence: probe validity / virtual offset /
+  relocation / dilation move into bootstrap init passes before `GameplaySealed`;
+  there is no zero-cost static tier; thin geometry fails closed by deactivating
+  probes rather than leaking. Includes the RTXGI production detail (self-shadow
+  bias, gamma-5 encoding, probe state machine worth 30–50%, relocation rules,
+  cascades), a frame-budget check against the Dungeon's 6.56–8.29 ms POM scene
+  cost, and an artifact catalogue. **A standalone WebGPU benchmark
+  (`prototype/probe-gi-bench/`) measured the 680M at ~270–490 Mrays/s for a
+  DDGI-shaped 64-rays-per-probe traversal, so a 768-probe full sweep costs
+  ~0.16–0.34 ms and hit shading is free relative to traversal — dynamic probe GI is
+  affordable. This superseded the document's earlier CPU-extrapolated pessimism
+  (the CPU worker path really is dead at ~0.23 Mrays/s, but that is not the path a
+  GPU tracer uses).**
+- `docs/research/probe-gi-placement-leaks-packing.md` — Three probe-GI follow-ups
+  (investigated 2026-09-17). **Adaptive placement**: ADGI's pilot-ray heuristics
+  and MCMC guide (2.36 M probes at 15.6 ms vs Q-DDGI 26.8 ms), IS-DDGI's MIS ray
+  allocation (1.27–2.47× total, 3.29–6.64× tracing), DDGI Resampling's ReSTIR +
+  sparse probes, SHARC's hash-grid eviction (2²² elements, 40–64 B/voxel), Unity's
+  bricks/subdivision/streaming — with a recommended rung order (probe states →
+  importance allocation → cascades → ADGI last). **Leaks and thin walls**: DDGI's
+  self-shadow bias equation, `probeViewBias` scale warning, backface
+  irradiance-0/depth−80%; Unity's invalid-probe / Virtual Offset / Dilation /
+  ProbeOcclusion / brick-subdivision toolkit and the ~152 B baked probe payload.
+  **Cache-efficient packing**: the exact 80-byte CWBVH8 node layout and bit
+  encodings from this engine's own `obvhs` dependency, RTXGI's slice/row/column
+  probe-ray layout with shared-memory blending, a packing comparison (ADGI's
+  9-9-8-bit + 6-bit count, 13+13-bit visibility moments, 4× memory saving), and
+  the verified WebGPU format constraints that force `rgba16float` plus ping-pong
+  blending because this adapter exposes neither `texture-formats-tier1` nor
+  `tier2`.
 - `docs/research/steam-overlay-cef.md` — How the Steam Overlay works (hooks
   Present/SwapBuffers/vkQueuePresentKHR in the game process), why it doesn't
   work with CEF multi-process GPU, and how to fix it (`--in-process-gpu` flag
