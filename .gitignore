@@ -4,3 +4,12 @@ result
 /crates/afterglow-web/www/*.wasm
 /crates/afterglow-web/www/dungeon.big
 /crates/afterglow-web/www/rigged-vt.big
+
+# Local tool state and dependencies
+node_modules/
+/.pi/
+
+# Raw profiler captures: exceed GitHub's 100 MB file limit
+profiling-pause-vulkan-*/
+*.nsys-rep
+*.sqlite

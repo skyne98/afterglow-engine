@@ -28,8 +28,9 @@ The user made the capture-pause investigation the current priority after the CLI
 Field-codec work stays pending.
 A [native stack trace](../benchmarks/native-paint-shell/profiling-pause-stacks-1788730509/README.md)
 places a 24.981 ms fence poll inside NVIDIA driver presentation, below `NativeSwapchain::present`.
-The [Vulkan trace](../benchmarks/native-paint-shell/profiling-pause-vulkan-1788730686/README.md)
+The Vulkan trace capture (`profiling-pause-vulkan-1788730686`, 264 MB)
 confirms long `vkQueuePresentKHR` calls, but its GPU timing relation is not verified.
+The capture is not committed; it exceeds GitHub's 100 MB file limit.
 The [visibility control](../benchmarks/native-paint-shell/profiling-pause-visibility-controls-1788731282/README.md)
 reproduced a 997.555 ms interruption with no collector connected and zero transmitted batches.
 The [socket stack](../benchmarks/native-paint-shell/profiling-pause-visibility-stacks-1788731483/README.md)
